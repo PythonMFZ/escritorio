@@ -294,7 +294,10 @@ class Attachment(SQLModel, table=True):
 
 
 def init_db() -> None:
-    SQLModel.metadata.create_all(engine)
+    # Em produção (Postgres), quem cria/alterar tabelas é o Alembic.
+    # Em dev local (SQLite), criamos automaticamente.
+    if engine.url.get_backend_name().startswith("sqlite"):
+        SQLModel.metadata.create_all(engine)
 
 
 def get_session() -> Session:
