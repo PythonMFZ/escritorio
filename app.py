@@ -2,6 +2,7 @@
 from __future__ import annotations
 from sqlalchemy import func
 from sqlalchemy.exc import OperationalError
+
 import base64
 import hashlib
 import inspect
@@ -35,6 +36,7 @@ from fastapi.staticfiles import StaticFiles
 
 APP_SECRET_KEY = os.getenv("APP_SECRET_KEY") or secrets.token_urlsafe(32)
 DATABASE_URL = os.getenv("DATABASE_URL") or "sqlite:///./app.db"
+ALLOW_COMPANY_SIGNUP = os.getenv("ALLOW_COMPANY_SIGNUP", "0") == "1"
 
 NOTION_TOKEN = os.getenv("NOTION_TOKEN")
 NOTION_DB_NEGOCIOS_ID = os.getenv("NOTION_DB_NEGOCIOS_ID")
@@ -751,10 +753,17 @@ a:hover{ color:#00BFBF; }
         <button class="btn btn-primary w-100">Entrar</button>
       </form>
       <hr class="my-4"/>
-      <div class="d-flex justify-content-between align-items-center">
-        <div class="muted">Primeiro acesso?</div>
-        <a class="btn btn-outline-primary" href="/signup">Criar escritório</a>
-      </div>
+
+{% if allow_company_signup %}
+  <div class="d-flex justify-content-between align-items-center">
+    <div class="muted">Primeiro acesso?</div>
+    <a class="btn btn-outline-primary" href="/signup">Criar escritório</a>
+  </div>
+{% else %}
+  <div class="muted small">
+    Cadastro de escritório desativado. Peça ao administrador para criar seu acesso.
+  </div>
+{% endif %}
     </div>
   </div>
 </div>
@@ -2124,6 +2133,7 @@ def render(
     ctx = context or {}
     ctx.setdefault("title", "App Escritório")
     ctx.setdefault("flash", request.session.pop("flash", None) if hasattr(request, "session") else None)
+    ctx.setdefault("allow_company_signup", ALLOW_COMPANY_SIGNUP)
     return HTMLResponse(templates_env.get_template(template_name).render(**ctx), status_code=status_code)
 
 
@@ -2226,8 +2236,252 @@ async def consultoria_new_page(request: Request, session: Session = Depends(get_
             "clients": clients,
         },
     )
+@app.get("/consultoria/{project_id}/editar", response_class=HTMLResponse)
+@require_role({"admin", "equipe"})
+async def consultoria_edit_project_page(request: Request, session: Session = Depends(get_session), project_id: int = 0) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
 
+    project = session.get(ConsultingProject, int(project_id))
+    if not project or project.company_id != ctx.company.id:
+        return render("error.html", request=request, context={"message": "Projeto não encontrado."}, status_code=404)
 
+    client = session.get(Client, project.client_id)
+    active_client_id = get_active_client_id(request, session, ctx)
+    current_client = get_client_or_none(session, ctx.company.id, active_client_id)
+
+    return render(
+        "consult_edit_project.html",
+        request=request,
+        context={"current_user": ctx.user, "current_company": ctx.company, "role": ctx.membership.role, "current_client": current_client, "project": project, "client": client},
+    )
+
+@app.post("/consultoria/{project_id}/editar")
+@require_role({"admin", "equipe"})
+async def consultoria_edit_project_action(
+    request: Request,
+    session: Session = Depends(get_session),
+    project_id: int = 0,
+    name: str = Form(...),
+    status: str = Form("ativo"),
+    start_date: str = Form(""),
+    due_date: str = Form(""),
+    description: str = Form(""),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    project = session.get(ConsultingProject, int(project_id))
+    if not project or project.company_id != ctx.company.id:
+        set_flash(request, "Projeto não encontrado.")
+        return RedirectResponse("/consultoria", status_code=303)
+
+    status = status.strip().lower()
+    if status not in {"ativo", "pausado", "concluido"}:
+        status = "ativo"
+
+    project.name = name.strip()
+    project.status = status
+    project.start_date = start_date.strip()
+    project.due_date = due_date.strip()
+    project.description = description.strip()
+    project.updated_at = utcnow()
+
+    session.add(project)
+    session.commit()
+
+    set_flash(request, "Projeto atualizado.")
+    return RedirectResponse(f"/consultoria/{project.id}", status_code=303)
+
+@app.post("/consultoria/{project_id}/excluir")
+@require_role({"admin", "equipe"})
+async def consultoria_delete_project(request: Request, session: Session = Depends(get_session), project_id: int = 0) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    project = session.get(ConsultingProject, int(project_id))
+    if not project or project.company_id != ctx.company.id:
+        set_flash(request, "Projeto não encontrado.")
+        return RedirectResponse("/consultoria", status_code=303)
+
+    stages = session.exec(select(ConsultingStage).where(ConsultingStage.project_id == project.id)).all()
+    stage_ids = [s.id for s in stages]
+    if stage_ids:
+        steps = session.exec(select(ConsultingStep).where(ConsultingStep.stage_id.in_(stage_ids))).all()
+        for st in steps:
+            session.delete(st)
+    for s in stages:
+        session.delete(s)
+
+    session.delete(project)
+    session.commit()
+
+    set_flash(request, "Projeto excluído.")
+    return RedirectResponse("/consultoria", status_code=303)
+
+@app.get("/consultoria/stages/{stage_id}/editar", response_class=HTMLResponse)
+@require_role({"admin", "equipe"})
+async def consultoria_edit_stage_page(request: Request, session: Session = Depends(get_session), stage_id: int = 0) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    stage = session.get(ConsultingStage, int(stage_id))
+    if not stage:
+        return render("error.html", request=request, context={"message": "Etapa não encontrada."}, status_code=404)
+
+    project = session.get(ConsultingProject, stage.project_id)
+    if not project or project.company_id != ctx.company.id:
+        return render("error.html", request=request, context={"message": "Projeto inválido."}, status_code=403)
+
+    active_client_id = get_active_client_id(request, session, ctx)
+    current_client = get_client_or_none(session, ctx.company.id, active_client_id)
+
+    return render(
+        "consult_edit_stage.html",
+        request=request,
+        context={"current_user": ctx.user, "current_company": ctx.company, "role": ctx.membership.role, "current_client": current_client, "stage": stage, "project": project},
+    )
+
+@app.post("/consultoria/stages/{stage_id}/editar")
+@require_role({"admin", "equipe"})
+async def consultoria_edit_stage_action(
+    request: Request,
+    session: Session = Depends(get_session),
+    stage_id: int = 0,
+    name: str = Form(...),
+    due_date: str = Form(""),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    stage = session.get(ConsultingStage, int(stage_id))
+    if not stage:
+        set_flash(request, "Etapa não encontrada.")
+        return RedirectResponse("/consultoria", status_code=303)
+
+    project = session.get(ConsultingProject, stage.project_id)
+    if not project or project.company_id != ctx.company.id:
+        set_flash(request, "Projeto inválido.")
+        return RedirectResponse("/consultoria", status_code=303)
+
+    stage.name = name.strip()
+    stage.due_date = due_date.strip()
+    session.add(stage)
+    session.commit()
+
+    set_flash(request, "Etapa atualizada.")
+    return RedirectResponse(f"/consultoria/{project.id}", status_code=303)
+
+@app.post("/consultoria/stages/{stage_id}/excluir")
+@require_role({"admin", "equipe"})
+async def consultoria_delete_stage(request: Request, session: Session = Depends(get_session), stage_id: int = 0) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    stage = session.get(ConsultingStage, int(stage_id))
+    if not stage:
+        set_flash(request, "Etapa não encontrada.")
+        return RedirectResponse("/consultoria", status_code=303)
+
+    project = session.get(ConsultingProject, stage.project_id)
+    if not project or project.company_id != ctx.company.id:
+        set_flash(request, "Projeto inválido.")
+        return RedirectResponse("/consultoria", status_code=303)
+
+    steps = session.exec(select(ConsultingStep).where(ConsultingStep.stage_id == stage.id)).all()
+    for st in steps:
+        session.delete(st)
+    session.delete(stage)
+    session.commit()
+
+    set_flash(request, "Etapa excluída.")
+    return RedirectResponse(f"/consultoria/{project.id}", status_code=303)
+
+@app.get("/consultoria/steps/{step_id}/editar", response_class=HTMLResponse)
+@require_role({"admin", "equipe"})
+async def consultoria_edit_step_page(request: Request, session: Session = Depends(get_session), step_id: int = 0) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    step = session.get(ConsultingStep, int(step_id))
+    if not step:
+        return render("error.html", request=request, context={"message": "Sub-etapa não encontrada."}, status_code=404)
+
+    stage = session.get(ConsultingStage, step.stage_id)
+    project = session.get(ConsultingProject, stage.project_id) if stage else None
+    if not project or project.company_id != ctx.company.id:
+        return render("error.html", request=request, context={"message": "Projeto inválido."}, status_code=403)
+
+    active_client_id = get_active_client_id(request, session, ctx)
+    current_client = get_client_or_none(session, ctx.company.id, active_client_id)
+
+    return render(
+        "consult_edit_step.html",
+        request=request,
+        context={"current_user": ctx.user, "current_company": ctx.company, "role": ctx.membership.role, "current_client": current_client, "step": step, "project": project},
+    )
+
+@app.post("/consultoria/steps/{step_id}/editar")
+@require_role({"admin", "equipe"})
+async def consultoria_edit_step_action(
+    request: Request,
+    session: Session = Depends(get_session),
+    step_id: int = 0,
+    title: str = Form(...),
+    description: str = Form(""),
+    due_date: str = Form(""),
+    weight: float = Form(1.0),
+    client_action: str = Form(""),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    step = session.get(ConsultingStep, int(step_id))
+    if not step:
+        set_flash(request, "Sub-etapa não encontrada.")
+        return RedirectResponse("/consultoria", status_code=303)
+
+    stage = session.get(ConsultingStage, step.stage_id)
+    project = session.get(ConsultingProject, stage.project_id) if stage else None
+    if not project or project.company_id != ctx.company.id:
+        set_flash(request, "Projeto inválido.")
+        return RedirectResponse("/consultoria", status_code=303)
+
+    step.title = title.strip()
+    step.description = description.strip()
+    step.due_date = due_date.strip()
+    step.weight = max(0.1, float(weight))
+    step.client_action = (client_action == "1")
+    step.updated_at = utcnow()
+
+    session.add(step)
+    session.commit()
+
+    set_flash(request, "Sub-etapa atualizada.")
+    return RedirectResponse(f"/consultoria/{project.id}", status_code=303)
+
+@app.post("/consultoria/steps/{step_id}/excluir")
+@require_role({"admin", "equipe"})
+async def consultoria_delete_step(request: Request, session: Session = Depends(get_session), step_id: int = 0) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    step = session.get(ConsultingStep, int(step_id))
+    if not step:
+        set_flash(request, "Sub-etapa não encontrada.")
+        return RedirectResponse("/consultoria", status_code=303)
+
+    stage = session.get(ConsultingStage, step.stage_id)
+    project = session.get(ConsultingProject, stage.project_id) if stage else None
+    if not project or project.company_id != ctx.company.id:
+        set_flash(request, "Projeto inválido.")
+        return RedirectResponse("/consultoria", status_code=303)
+
+    session.delete(step)
+    session.commit()
+
+    set_flash(request, "Sub-etapa excluída.")
+    return RedirectResponse(f"/consultoria/{project.id}", status_code=303)
 @app.post("/consultoria/novo")
 @require_role({"admin", "equipe"})
 async def consultoria_new_action(
