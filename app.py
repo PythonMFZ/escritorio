@@ -49,7 +49,9 @@ pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 engine = create_engine(
     DATABASE_URL,
     echo=False,
-    connect_args={"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {},
+    pool_pre_ping=True,
+    pool_recycle=300,
+    connect_args={"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {"connect_timeout": 5},
 )
 
 _MAX_PASSWORD_BYTES = 1024
@@ -2719,6 +2721,9 @@ async def login_action(
 
 @app.get("/signup", response_class=HTMLResponse)
 async def signup_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
+    if not ALLOW_COMPANY_SIGNUP:
+        set_flash(request, "Cadastro de escritório desativado.")
+        return RedirectResponse("/login", status_code=303)
     if get_current_user(request, session):
         return RedirectResponse("/", status_code=303)
     return render("signup.html", request=request, context={"current_user": None})
@@ -2738,6 +2743,9 @@ async def signup_action(
     pain: str = Form(...),
     notes: str = Form(""),
 ) -> Response:
+    if not ALLOW_COMPANY_SIGNUP:
+        set_flash(request, "Cadastro de escritório desativado.")
+        return RedirectResponse("/login", status_code=303)
     if len(password) < 8:
         set_flash(request, "Senha muito curta (mínimo 8).")
         return RedirectResponse("/signup", status_code=303)
