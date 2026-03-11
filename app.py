@@ -1875,6 +1875,7 @@ a:hover{ color:#00BFBF; }
 {% endblock %}
 """,
 }
+
 TEMPLATES.update({
 "consult_list.html": r"""
 {% extends "base.html" %}
@@ -2147,7 +2148,171 @@ TEMPLATES.update({
 {% endblock %}
 """,
 })
+TEMPLATES.update({
+    "consult_edit_project.html": r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <div class="d-flex justify-content-between align-items-start">
+    <div>
+      <h4 class="mb-1">Editar Projeto</h4>
+      <div class="muted">{{ project.name }}</div>
+    </div>
+    <a class="btn btn-outline-secondary" href="/consultoria/{{ project.id }}">Voltar</a>
+  </div>
+
+  <hr class="my-3"/>
+
+  <form method="post" action="/consultoria/{{ project.id }}/editar">
+    <div class="row g-3">
+      <div class="col-md-8">
+        <label class="form-label">Nome</label>
+        <input class="form-control" name="name" value="{{ project.name }}" required />
+      </div>
+      <div class="col-md-4">
+        <label class="form-label">Status</label>
+        <select class="form-select" name="status">
+          <option value="ativo" {% if project.status=="ativo" %}selected{% endif %}>ativo</option>
+          <option value="pausado" {% if project.status=="pausado" %}selected{% endif %}>pausado</option>
+          <option value="concluido" {% if project.status=="concluido" %}selected{% endif %}>concluido</option>
+        </select>
+      </div>
+
+      <div class="col-md-6">
+        <label class="form-label">Início (AAAA-MM-DD)</label>
+        <input class="form-control mono" name="start_date" value="{{ project.start_date }}" />
+      </div>
+      <div class="col-md-6">
+        <label class="form-label">Prazo final (AAAA-MM-DD)</label>
+        <input class="form-control mono" name="due_date" value="{{ project.due_date }}" />
+      </div>
+
+      <div class="col-12">
+        <label class="form-label">Descrição</label>
+        <textarea class="form-control" name="description" rows="5">{{ project.description }}</textarea>
+      </div>
+    </div>
+
+    <div class="mt-4 d-flex gap-2">
+      <button class="btn btn-primary" type="submit">Salvar</button>
+      <a class="btn btn-outline-secondary" href="/consultoria/{{ project.id }}">Cancelar</a>
+    </div>
+  </form>
+
+  <hr class="my-4"/>
+
+  <form method="post" action="/consultoria/{{ project.id }}/excluir"
+        onsubmit="return confirm('Excluir projeto? Isso apaga etapas e sub-etapas.');">
+    <button class="btn btn-outline-danger" type="submit">Excluir projeto</button>
+  </form>
+</div>
+{% endblock %}
+""",
+
+    "consult_edit_stage.html": r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <div class="d-flex justify-content-between align-items-start">
+    <div>
+      <h4 class="mb-1">Editar Etapa</h4>
+      <div class="muted">{{ stage.name }}</div>
+    </div>
+    <a class="btn btn-outline-secondary" href="/consultoria/{{ project.id }}">Voltar</a>
+  </div>
+
+  <hr class="my-3"/>
+
+  <form method="post" action="/consultoria/stages/{{ stage.id }}/editar">
+    <div class="row g-3">
+      <div class="col-md-8">
+        <label class="form-label">Nome</label>
+        <input class="form-control" name="name" value="{{ stage.name }}" required />
+      </div>
+      <div class="col-md-4">
+        <label class="form-label">Prazo (AAAA-MM-DD)</label>
+        <input class="form-control mono" name="due_date" value="{{ stage.due_date }}" />
+      </div>
+    </div>
+
+    <div class="mt-4 d-flex gap-2">
+      <button class="btn btn-primary" type="submit">Salvar</button>
+      <a class="btn btn-outline-secondary" href="/consultoria/{{ project.id }}">Cancelar</a>
+    </div>
+  </form>
+
+  <hr class="my-4"/>
+
+  <form method="post" action="/consultoria/stages/{{ stage.id }}/excluir"
+        onsubmit="return confirm('Excluir etapa? Isso apaga as sub-etapas.');">
+    <button class="btn btn-outline-danger" type="submit">Excluir etapa</button>
+  </form>
+</div>
+{% endblock %}
+""",
+
+    "consult_edit_step.html": r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <div class="d-flex justify-content-between align-items-start">
+    <div>
+      <h4 class="mb-1">Editar Sub-etapa</h4>
+      <div class="muted">{{ step.title }}</div>
+    </div>
+    <a class="btn btn-outline-secondary" href="/consultoria/{{ project.id }}">Voltar</a>
+  </div>
+
+  <hr class="my-3"/>
+
+  <form method="post" action="/consultoria/steps/{{ step.id }}/editar">
+    <div class="row g-3">
+      <div class="col-md-8">
+        <label class="form-label">Título</label>
+        <input class="form-control" name="title" value="{{ step.title }}" required />
+      </div>
+      <div class="col-md-4">
+        <label class="form-label">Prazo (AAAA-MM-DD)</label>
+        <input class="form-control mono" name="due_date" value="{{ step.due_date }}" />
+      </div>
+
+      <div class="col-12">
+        <label class="form-label">Descrição</label>
+        <input class="form-control" name="description" value="{{ step.description }}" />
+      </div>
+
+      <div class="col-md-4">
+        <label class="form-label">Peso</label>
+        <input class="form-control" name="weight" type="number" step="0.1" min="0.1" value="{{ step.weight }}" />
+      </div>
+
+      <div class="col-md-4">
+        <div class="form-check mt-4">
+          <input class="form-check-input" type="checkbox" name="client_action" value="1" id="ca"
+                 {% if step.client_action %}checked{% endif %}>
+          <label class="form-check-label" for="ca">Ação do cliente</label>
+        </div>
+      </div>
+    </div>
+
+    <div class="mt-4 d-flex gap-2">
+      <button class="btn btn-primary" type="submit">Salvar</button>
+      <a class="btn btn-outline-secondary" href="/consultoria/{{ project.id }}">Cancelar</a>
+    </div>
+  </form>
+
+  <hr class="my-4"/>
+
+  <form method="post" action="/consultoria/steps/{{ step.id }}/excluir"
+        onsubmit="return confirm('Excluir sub-etapa?');">
+    <button class="btn btn-outline-danger" type="submit">Excluir sub-etapa</button>
+  </form>
+</div>
+{% endblock %}
+""",
+})
 templates_env = Environment(loader=DictLoader(TEMPLATES), autoescape=True)
+
 
 
 def render(
