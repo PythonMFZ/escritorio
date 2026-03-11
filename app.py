@@ -570,20 +570,30 @@ TEMPLATES: dict[str, str] = {
       .badge { border-radius: 999px; }
       .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;}
       pre { white-space: pre-wrap; margin: 0; }
-      .btn-primary{
-  background-color:#00BFBF !important;
-  border-color:#00BFBF !important;
-  color:#002222 !important;
+      /* PRIMARY = LARANJA (marca) */
+.btn-primary{
+  background-color:#E07020 !important;
+  border-color:#E07020 !important;
+  color:#ffffff !important;
   font-weight:600;
 }
+.btn-primary:hover{
+  background-color:#C85F1B !important;
+  border-color:#C85F1B !important;
+}
+
+/* OUTLINE PRIMARY = LARANJA */
 .btn-outline-primary{
-  border-color:#00BFBF !important;
-  color:#0B1E1E !important;
+  border-color:#E07020 !important;
+  color:#E07020 !important;
 }
 .btn-outline-primary:hover{
-  background-color:#00BFBF !important;
-  border-color:#00BFBF !important;
+  background-color:#E07020 !important;
+  border-color:#E07020 !important;
+  color:#ffffff !important;
 }
+
+/* Links com teal (opcional) */
 a:hover{ color:#00BFBF; }
     </style>
   </head>
