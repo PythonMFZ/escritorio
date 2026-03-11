@@ -702,7 +702,7 @@ a:hover{ color:#00BFBF; }
     <nav class="navbar navbar-expand-lg bg-white border-bottom">
       <div class="container py-2">
         <a class="navbar-brand d-flex align-items-center gap-2" href="/">
-  <img src="/static/logo.png" alt="Maffezzolli Capital" style="height:32px; width:auto;">
+  <img src="/static/logo.png" alt="Bem-Vindo" style="height:32px; width:auto;">
   <span class="fw-bold" style="color:#0B1E1E;">Maffezzolli Capital</span>
 </a>
         <div class="ms-auto d-flex gap-2 align-items-center">
@@ -1989,6 +1989,15 @@ TEMPLATES.update({
   <div class="d-flex justify-content-between align-items-start">
     <div>
       <h4 class="mb-1">{{ project.name }}</h4>
+      {% if role in ["admin","equipe"] %}
+  <div class="d-flex gap-2 mt-2">
+    <a class="btn btn-outline-primary btn-sm" href="/consultoria/{{ project.id }}/editar">Editar projeto</a>
+    <form method="post" action="/consultoria/{{ project.id }}/excluir"
+          onsubmit="return confirm('Excluir projeto? Isso apaga etapas e sub-etapas.');">
+      <button class="btn btn-outline-danger btn-sm" type="submit">Excluir</button>
+    </form>
+  </div>
+{% endif %}
       <div class="muted">
         Status: <b>{{ project.status }}</b>
         {% if project.due_date %} • Prazo final: <b>{{ project.due_date }}</b>{% endif %}
@@ -2026,6 +2035,15 @@ TEMPLATES.update({
           </h2>
           <div id="c{{ s.id }}" class="accordion-collapse collapse" data-bs-parent="#stagesAcc">
             <div class="accordion-body">
+            {% if role in ["admin","equipe"] %}
+  <div class="d-flex gap-2 mb-3">
+    <a class="btn btn-outline-secondary btn-sm" href="/consultoria/stages/{{ s.id }}/editar">Editar etapa</a>
+    <form method="post" action="/consultoria/stages/{{ s.id }}/excluir"
+          onsubmit="return confirm('Excluir etapa? Isso apaga as sub-etapas.');">
+      <button class="btn btn-outline-danger btn-sm" type="submit">Excluir etapa</button>
+    </form>
+  </div>
+{% endif %}
 
               {% if s.steps %}
                 <div class="list-group mb-3">
@@ -2046,6 +2064,13 @@ TEMPLATES.update({
                         </div>
 
                         <div class="d-flex gap-2">
+                          {% if role in ["admin","equipe"] %}
+  <a class="btn btn-outline-secondary btn-sm" href="/consultoria/steps/{{ st.id }}/editar">Editar</a>
+  <form method="post" action="/consultoria/steps/{{ st.id }}/excluir"
+        onsubmit="return confirm('Excluir sub-etapa?');">
+    <button class="btn btn-outline-danger btn-sm" type="submit">Excluir</button>
+  </form>
+{% endif %}
                           {% if role in ["admin","equipe"] or (role=="cliente" and st.client_action) %}
                             <form method="post" action="/consultoria/steps/{{ st.id }}/toggle">
                               <button class="btn btn-outline-primary btn-sm">{% if st.done %}Desmarcar{% else %}Concluir{% endif %}</button>
