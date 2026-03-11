@@ -570,10 +570,7 @@ TEMPLATES: dict[str, str] = {
       .badge { border-radius: 999px; }
       .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;}
       pre { white-space: pre-wrap; margin: 0; }
-    </style>
-  </head>
-  <body>
-  .btn-primary{
+      .btn-primary{
   background-color:#00BFBF !important;
   border-color:#00BFBF !important;
   color:#002222 !important;
@@ -588,6 +585,9 @@ TEMPLATES: dict[str, str] = {
   border-color:#00BFBF !important;
 }
 a:hover{ color:#00BFBF; }
+    </style>
+  </head>
+  <body>
     <nav class="navbar navbar-expand-lg bg-white border-bottom">
       <div class="container py-2">
         <a class="navbar-brand d-flex align-items-center gap-2" href="/">
