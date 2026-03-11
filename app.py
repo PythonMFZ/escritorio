@@ -1,6 +1,7 @@
 # /app.py
 from __future__ import annotations
-
+from sqlalchemy import func
+from sqlalchemy.exc import OperationalError
 import base64
 import hashlib
 import inspect
@@ -149,6 +150,65 @@ class OnboardingDiagnostic(SQLModel, table=True):
 DOC_STATUSES = {"rascunho", "aguardando_cliente", "cliente_enviou", "concluido"}
 
 
+CONSULT_PROJECT_STATUS = {"ativo", "pausado", "concluido"}
+
+
+class ConsultingProject(SQLModel, table=True):
+    """
+    Projeto de consultoria por cliente.
+    """
+    id: Optional[int] = Field(default=None, primary_key=True)
+
+    company_id: int = Field(index=True, foreign_key="company.id")
+    client_id: int = Field(index=True, foreign_key="client.id")
+    created_by_user_id: int = Field(index=True, foreign_key="user.id")
+
+    name: str
+    description: str = ""
+    status: str = Field(default="ativo", index=True)  # ativo|pausado|concluido
+
+    start_date: str = ""  # AAAA-MM-DD (MVP simples)
+    due_date: str = ""    # AAAA-MM-DD (MVP simples)
+
+    created_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime = Field(default_factory=utcnow)
+
+
+class ConsultingStage(SQLModel, table=True):
+    """
+    Etapa do projeto (ordenada).
+    """
+    id: Optional[int] = Field(default=None, primary_key=True)
+
+    project_id: int = Field(index=True, foreign_key="consultingproject.id")
+
+    name: str
+    order: int = Field(default=1, index=True)
+    due_date: str = ""  # AAAA-MM-DD
+
+    created_at: datetime = Field(default_factory=utcnow)
+
+
+class ConsultingStep(SQLModel, table=True):
+    """
+    Sub-etapa / item de entrega.
+    Progress (%) é calculado pelo total de steps concluídos (ponderado por weight).
+    """
+    id: Optional[int] = Field(default=None, primary_key=True)
+
+    stage_id: int = Field(index=True, foreign_key="consultingstage.id")
+
+    title: str
+    description: str = ""
+    due_date: str = ""  # AAAA-MM-DD
+    weight: float = Field(default=1.0)  # peso para cálculo do %
+    done: bool = Field(default=False, index=True)
+
+    # Se True, o CLIENTE pode marcar como feito (útil para “aguardando cliente”)
+    client_action: bool = Field(default=False, index=True)
+
+    done_at: Optional[datetime] = None
+    updated_at: datetime = Field(default_factory=utcnow)
 class Document(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     company_id: int = Field(index=True, foreign_key="company.id")
@@ -391,7 +451,41 @@ def ensure_company_in_session(request: Request, session: Session, user: User) ->
     request.session["company_id"] = first_membership.company_id
     return first_membership.company_id
 
+def _clamp01(x: float) -> float:
+    return 0.0 if x < 0 else 1.0 if x > 1 else x
 
+
+def compute_project_progress(session: Session, project_id: int) -> float:
+    """
+    Retorna progresso 0..1 somando pesos concluídos / pesos totais.
+    """
+    stage_ids = session.exec(
+        select(ConsultingStage.id).where(ConsultingStage.project_id == project_id)
+    ).all()
+    if not stage_ids:
+        return 0.0
+
+    total = session.exec(
+        select(func.coalesce(func.sum(ConsultingStep.weight), 0.0)).where(ConsultingStep.stage_id.in_(stage_ids))
+    ).one()
+    done = session.exec(
+        select(func.coalesce(func.sum(ConsultingStep.weight), 0.0)).where(
+            ConsultingStep.stage_id.in_(stage_ids),
+            ConsultingStep.done.is_(True),
+        )
+    ).one()
+
+    total_val = float(total or 0.0)
+    if total_val <= 0.0:
+        return 0.0
+    return _clamp01(float(done or 0.0) / total_val)
+
+
+def _next_stage_order(session: Session, project_id: int) -> int:
+    max_order = session.exec(
+        select(func.max(ConsultingStage.order)).where(ConsultingStage.project_id == project_id)
+    ).one()
+    return int(max_order or 0) + 1
 def get_tenant_context(request: Request, session: Session) -> Optional[TenantContext]:
     user = get_current_user(request, session)
     if not user:
@@ -1770,7 +1864,253 @@ a:hover{ color:#00BFBF; }
 {% endblock %}
 """,
 }
+TEMPLATES.update({
+"consult_list.html": r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <div class="d-flex justify-content-between align-items-center">
+    <div>
+      <h4 class="mb-0">Consultoria</h4>
+      <div class="muted">Projetos → Etapas → Sub-etapas → % concluído</div>
+    </div>
+    {% if role in ["admin","equipe"] %}
+      <a class="btn btn-primary" href="/consultoria/novo">Novo projeto</a>
+    {% endif %}
+  </div>
 
+  <hr class="my-3"/>
+
+  {% if projects %}
+    <div class="list-group">
+      {% for p in projects %}
+        <a class="list-group-item list-group-item-action" href="/consultoria/{{ p.id }}">
+          <div class="d-flex justify-content-between">
+            <div class="fw-semibold">{{ p.name }}</div>
+            <span class="badge text-bg-light border">{{ p.status }}</span>
+          </div>
+
+          <div class="muted small mt-1">
+            {% if role in ["admin","equipe"] %}Cliente: {{ p.client_name }} • {% endif %}
+            {% if p.due_date %}Prazo: {{ p.due_date }} • {% endif %}
+            Progresso: {{ p.progress_pct }}%
+          </div>
+
+          <div class="progress mt-2" style="height: 8px;">
+            <div class="progress-bar" role="progressbar" style="width: {{ p.progress_pct }}%;"></div>
+          </div>
+        </a>
+      {% endfor %}
+    </div>
+  {% else %}
+    <div class="muted">Sem projetos ainda.</div>
+  {% endif %}
+</div>
+{% endblock %}
+""",
+
+"consult_new.html": r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <h4>Novo Projeto de Consultoria</h4>
+  <div class="muted">Direcione para um cliente e defina prazos.</div>
+
+  {% if not clients %}
+    <div class="alert alert-warning mt-3">Nenhum cliente cadastrado. Vá em “Membros” e crie um cliente.</div>
+    <a class="btn btn-outline-secondary" href="/consultoria">Voltar</a>
+  {% else %}
+    <form method="post" action="/consultoria/novo" class="mt-3">
+      <div class="row g-3">
+        <div class="col-12">
+          <label class="form-label">Cliente</label>
+          <select class="form-select" name="client_id" required>
+            {% for c in clients %}
+              <option value="{{ c.id }}" {% if current_client and c.id==current_client.id %}selected{% endif %}>{{ c.name }}</option>
+            {% endfor %}
+          </select>
+        </div>
+
+        <div class="col-md-8">
+          <label class="form-label">Nome do projeto</label>
+          <input class="form-control" name="name" required placeholder="Ex: Reestruturação Financeira 2026" />
+        </div>
+
+        <div class="col-md-4">
+          <label class="form-label">Status</label>
+          <select class="form-select" name="status">
+            <option value="ativo">ativo</option>
+            <option value="pausado">pausado</option>
+            <option value="concluido">concluido</option>
+          </select>
+        </div>
+
+        <div class="col-md-6">
+          <label class="form-label">Início (AAAA-MM-DD)</label>
+          <input class="form-control mono" name="start_date" placeholder="2026-03-10" />
+        </div>
+
+        <div class="col-md-6">
+          <label class="form-label">Prazo final (AAAA-MM-DD)</label>
+          <input class="form-control mono" name="due_date" placeholder="2026-06-30" />
+        </div>
+
+        <div class="col-12">
+          <label class="form-label">Descrição</label>
+          <textarea class="form-control" name="description" rows="4"></textarea>
+        </div>
+      </div>
+
+      <div class="mt-4 d-flex gap-2">
+        <button class="btn btn-primary">Criar</button>
+        <a class="btn btn-outline-secondary" href="/consultoria">Cancelar</a>
+      </div>
+    </form>
+  {% endif %}
+</div>
+{% endblock %}
+""",
+
+"consult_detail.html": r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <div class="d-flex justify-content-between align-items-start">
+    <div>
+      <h4 class="mb-1">{{ project.name }}</h4>
+      <div class="muted">
+        Status: <b>{{ project.status }}</b>
+        {% if project.due_date %} • Prazo final: <b>{{ project.due_date }}</b>{% endif %}
+        {% if role in ["admin","equipe"] %} • Cliente: <b>{{ client.name }}</b>{% endif %}
+      </div>
+
+      <div class="mt-2">
+        <div class="muted small">Progresso: <b>{{ progress_pct }}%</b></div>
+        <div class="progress" style="height: 10px;">
+          <div class="progress-bar" role="progressbar" style="width: {{ progress_pct }}%;"></div>
+        </div>
+      </div>
+    </div>
+
+    <a class="btn btn-outline-secondary" href="/consultoria">Voltar</a>
+  </div>
+
+  {% if project.description %}
+    <hr class="my-3"/>
+    <pre>{{ project.description }}</pre>
+  {% endif %}
+
+  <hr class="my-3"/>
+  <h5 class="mb-3">Etapas</h5>
+
+  {% if stages %}
+    <div class="accordion" id="stagesAcc">
+      {% for s in stages %}
+        <div class="accordion-item">
+          <h2 class="accordion-header" id="h{{ s.id }}">
+            <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#c{{ s.id }}">
+              {{ s.order }}. {{ s.name }}
+              {% if s.due_date %}<span class="ms-2 muted small">• prazo: {{ s.due_date }}</span>{% endif %}
+            </button>
+          </h2>
+          <div id="c{{ s.id }}" class="accordion-collapse collapse" data-bs-parent="#stagesAcc">
+            <div class="accordion-body">
+
+              {% if s.steps %}
+                <div class="list-group mb-3">
+                  {% for st in s.steps %}
+                    <div class="list-group-item">
+                      <div class="d-flex justify-content-between align-items-start">
+                        <div>
+                          <div class="fw-semibold">
+                            {% if st.done %}✅{% else %}⬜{% endif %}
+                            {{ st.title }}
+                            {% if st.client_action %}<span class="badge text-bg-light border ms-2">cliente</span>{% endif %}
+                          </div>
+                          {% if st.description %}<div class="muted small mt-1">{{ st.description }}</div>{% endif %}
+                          <div class="muted small">
+                            {% if st.due_date %}Prazo: {{ st.due_date }} • {% endif %}
+                            Peso: {{ st.weight }}
+                          </div>
+                        </div>
+
+                        <div class="d-flex gap-2">
+                          {% if role in ["admin","equipe"] or (role=="cliente" and st.client_action) %}
+                            <form method="post" action="/consultoria/steps/{{ st.id }}/toggle">
+                              <button class="btn btn-outline-primary btn-sm">{% if st.done %}Desmarcar{% else %}Concluir{% endif %}</button>
+                            </form>
+                          {% endif %}
+                        </div>
+                      </div>
+                    </div>
+                  {% endfor %}
+                </div>
+              {% else %}
+                <div class="muted mb-3">Sem sub-etapas.</div>
+              {% endif %}
+
+              {% if role in ["admin","equipe"] %}
+                <form method="post" action="/consultoria/stages/{{ s.id }}/steps" class="card p-3">
+                  <div class="fw-semibold mb-2">Adicionar sub-etapa</div>
+                  <div class="row g-2">
+                    <div class="col-md-6">
+                      <input class="form-control" name="title" required placeholder="Título" />
+                    </div>
+                    <div class="col-md-6">
+                      <input class="form-control mono" name="due_date" placeholder="Prazo AAAA-MM-DD" />
+                    </div>
+                    <div class="col-12">
+                      <input class="form-control" name="description" placeholder="Descrição (opcional)" />
+                    </div>
+                    <div class="col-md-4">
+                      <input class="form-control" name="weight" type="number" step="0.1" min="0.1" value="1.0" />
+                      <div class="form-text">Peso para cálculo do %.</div>
+                    </div>
+                    <div class="col-md-4">
+                      <div class="form-check mt-2">
+                        <input class="form-check-input" type="checkbox" name="client_action" value="1" id="ca{{ s.id }}">
+                        <label class="form-check-label" for="ca{{ s.id }}">Ação do cliente</label>
+                      </div>
+                    </div>
+                    <div class="col-md-4">
+                      <button class="btn btn-primary w-100">Adicionar</button>
+                    </div>
+                  </div>
+                </form>
+              {% endif %}
+
+            </div>
+          </div>
+        </div>
+      {% endfor %}
+    </div>
+  {% else %}
+    <div class="muted">Sem etapas ainda.</div>
+  {% endif %}
+
+  {% if role in ["admin","equipe"] %}
+    <hr class="my-3"/>
+    <form method="post" action="/consultoria/{{ project.id }}/stages" class="card p-3">
+      <div class="fw-semibold mb-2">Adicionar etapa</div>
+      <div class="row g-2">
+        <div class="col-md-8">
+          <input class="form-control" name="name" required placeholder="Nome da etapa" />
+        </div>
+        <div class="col-md-4">
+          <input class="form-control mono" name="due_date" placeholder="Prazo AAAA-MM-DD" />
+        </div>
+        <div class="col-12">
+          <button class="btn btn-primary">Adicionar etapa</button>
+        </div>
+      </div>
+    </form>
+  {% endif %}
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+{% endblock %}
+""",
+})
 templates_env = Environment(loader=DictLoader(TEMPLATES), autoescape=True)
 
 
@@ -1816,7 +2156,292 @@ async def login_page(request: Request, session: Session = Depends(get_session)) 
         return RedirectResponse("/", status_code=303)
     return render("login.html", request=request, context={"current_user": None})
 
+@app.get("/consultoria", response_class=HTMLResponse)
+@require_login
+async def consultoria_list(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
 
+    active_client_id = get_active_client_id(request, session, ctx)
+    current_client = get_client_or_none(session, ctx.company.id, active_client_id)
+
+    q = select(ConsultingProject).where(ConsultingProject.company_id == ctx.company.id).order_by(ConsultingProject.created_at.desc())
+
+    if ctx.membership.role == "cliente":
+        q = q.where(ConsultingProject.client_id == (ctx.membership.client_id or -1))
+    else:
+        if current_client:
+            q = q.where(ConsultingProject.client_id == current_client.id)
+
+    projects = session.exec(q).all()
+
+    out = []
+    for p in projects:
+        c = session.get(Client, p.client_id)
+        progress = compute_project_progress(session, p.id)
+        out.append(
+            {
+                "id": p.id,
+                "name": p.name,
+                "status": p.status,
+                "due_date": p.due_date,
+                "client_name": c.name if c else "—",
+                "progress_pct": int(round(progress * 100)),
+            }
+        )
+
+    return render(
+        "consult_list.html",
+        request=request,
+        context={
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "role": ctx.membership.role,
+            "current_client": current_client,
+            "projects": out,
+        },
+    )
+
+
+@app.get("/consultoria/novo", response_class=HTMLResponse)
+@require_role({"admin", "equipe"})
+async def consultoria_new_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    clients = session.exec(select(Client).where(Client.company_id == ctx.company.id).order_by(Client.created_at)).all()
+    active_client_id = get_active_client_id(request, session, ctx)
+    current_client = get_client_or_none(session, ctx.company.id, active_client_id)
+
+    return render(
+        "consult_new.html",
+        request=request,
+        context={
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "role": ctx.membership.role,
+            "current_client": current_client,
+            "clients": clients,
+        },
+    )
+
+
+@app.post("/consultoria/novo")
+@require_role({"admin", "equipe"})
+async def consultoria_new_action(
+    request: Request,
+    session: Session = Depends(get_session),
+    client_id: int = Form(...),
+    name: str = Form(...),
+    description: str = Form(""),
+    status: str = Form("ativo"),
+    start_date: str = Form(""),
+    due_date: str = Form(""),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    client = get_client_or_none(session, ctx.company.id, int(client_id))
+    if not client:
+        set_flash(request, "Cliente inválido.")
+        return RedirectResponse("/consultoria/novo", status_code=303)
+
+    status = status.strip().lower()
+    if status not in CONSULT_PROJECT_STATUS:
+        status = "ativo"
+
+    proj = ConsultingProject(
+        company_id=ctx.company.id,
+        client_id=client.id,
+        created_by_user_id=ctx.user.id,
+        name=name.strip(),
+        description=description.strip(),
+        status=status,
+        start_date=start_date.strip(),
+        due_date=due_date.strip(),
+        updated_at=utcnow(),
+    )
+    session.add(proj)
+    session.commit()
+    session.refresh(proj)
+
+    set_flash(request, "Projeto criado.")
+    return RedirectResponse(f"/consultoria/{proj.id}", status_code=303)
+
+
+@app.get("/consultoria/{project_id}", response_class=HTMLResponse)
+@require_login
+async def consultoria_detail(request: Request, session: Session = Depends(get_session), project_id: int = 0) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+
+    project = session.get(ConsultingProject, int(project_id))
+    if not project or project.company_id != ctx.company.id:
+        return render("error.html", request=request, context={"message": "Projeto não encontrado."}, status_code=404)
+
+    if not ensure_can_access_client(ctx, project.client_id):
+        return render("error.html", request=request, context={"message": "Sem permissão."}, status_code=403)
+
+    client = session.get(Client, project.client_id)
+    stages = session.exec(
+        select(ConsultingStage).where(ConsultingStage.project_id == project.id).order_by(ConsultingStage.order.asc())
+    ).all()
+
+    stage_ids = [s.id for s in stages]
+    steps = []
+    if stage_ids:
+        steps = session.exec(
+            select(ConsultingStep).where(ConsultingStep.stage_id.in_(stage_ids)).order_by(ConsultingStep.id.asc())
+        ).all()
+
+    steps_by_stage: dict[int, list[ConsultingStep]] = {}
+    for st in steps:
+        steps_by_stage.setdefault(st.stage_id, []).append(st)
+
+    stage_view = []
+    for s in stages:
+        stage_view.append({"id": s.id, "name": s.name, "order": s.order, "due_date": s.due_date, "steps": steps_by_stage.get(s.id, [])})
+
+    progress_pct = int(round(compute_project_progress(session, project.id) * 100))
+
+    active_client_id = get_active_client_id(request, session, ctx)
+    current_client = get_client_or_none(session, ctx.company.id, active_client_id)
+
+    return render(
+        "consult_detail.html",
+        request=request,
+        context={
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "role": ctx.membership.role,
+            "current_client": current_client,
+            "project": project,
+            "client": client,
+            "stages": stage_view,
+            "progress_pct": progress_pct,
+        },
+    )
+
+
+@app.post("/consultoria/{project_id}/stages")
+@require_role({"admin", "equipe"})
+async def consultoria_add_stage(
+    request: Request,
+    session: Session = Depends(get_session),
+    project_id: int = 0,
+    name: str = Form(...),
+    due_date: str = Form(""),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    project = session.get(ConsultingProject, int(project_id))
+    if not project or project.company_id != ctx.company.id:
+        set_flash(request, "Projeto não encontrado.")
+        return RedirectResponse("/consultoria", status_code=303)
+
+    stage = ConsultingStage(
+        project_id=project.id,
+        name=name.strip(),
+        order=_next_stage_order(session, project.id),
+        due_date=due_date.strip(),
+    )
+    session.add(stage)
+    session.commit()
+
+    set_flash(request, "Etapa adicionada.")
+    return RedirectResponse(f"/consultoria/{project.id}", status_code=303)
+
+
+@app.post("/consultoria/stages/{stage_id}/steps")
+@require_role({"admin", "equipe"})
+async def consultoria_add_step(
+    request: Request,
+    session: Session = Depends(get_session),
+    stage_id: int = 0,
+    title: str = Form(...),
+    description: str = Form(""),
+    due_date: str = Form(""),
+    weight: float = Form(1.0),
+    client_action: str = Form(""),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    stage = session.get(ConsultingStage, int(stage_id))
+    if not stage:
+        set_flash(request, "Etapa não encontrada.")
+        return RedirectResponse("/consultoria", status_code=303)
+
+    project = session.exec(select(ConsultingProject).where(ConsultingProject.id == stage.project_id)).first()
+    if not project or project.company_id != ctx.company.id:
+        set_flash(request, "Projeto inválido.")
+        return RedirectResponse("/consultoria", status_code=303)
+
+    step = ConsultingStep(
+        stage_id=stage.id,
+        title=title.strip(),
+        description=description.strip(),
+        due_date=due_date.strip(),
+        weight=max(0.1, float(weight)),
+        client_action=(client_action == "1"),
+        updated_at=utcnow(),
+    )
+    session.add(step)
+    session.commit()
+
+    set_flash(request, "Sub-etapa adicionada.")
+    return RedirectResponse(f"/consultoria/{project.id}", status_code=303)
+
+
+@app.post("/consultoria/steps/{step_id}/toggle")
+@require_login
+async def consultoria_toggle_step(
+    request: Request,
+    session: Session = Depends(get_session),
+    step_id: int = 0,
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+
+    step = session.get(ConsultingStep, int(step_id))
+    if not step:
+        set_flash(request, "Sub-etapa não encontrada.")
+        return RedirectResponse("/consultoria", status_code=303)
+
+    stage = session.get(ConsultingStage, step.stage_id)
+    if not stage:
+        set_flash(request, "Etapa não encontrada.")
+        return RedirectResponse("/consultoria", status_code=303)
+
+    project = session.get(ConsultingProject, stage.project_id)
+    if not project or project.company_id != ctx.company.id:
+        set_flash(request, "Projeto inválido.")
+        return RedirectResponse("/consultoria", status_code=303)
+
+    if not ensure_can_access_client(ctx, project.client_id):
+        set_flash(request, "Sem permissão.")
+        return RedirectResponse("/consultoria", status_code=303)
+
+    # Cliente só pode mexer se for item marcado como "client_action"
+    if ctx.membership.role == "cliente" and not step.client_action:
+        set_flash(request, "Você não pode concluir este item.")
+        return RedirectResponse(f"/consultoria/{project.id}", status_code=303)
+
+    step.done = not step.done
+    step.done_at = utcnow() if step.done else None
+    step.updated_at = utcnow()
+
+    session.add(step)
+    session.commit()
+
+    return RedirectResponse(f"/consultoria/{project.id}", status_code=303)
 @app.post("/login")
 async def login_action(
     request: Request,
@@ -1937,6 +2562,7 @@ async def dashboard(request: Request, session: Session = Depends(get_session)) -
         {"title": "Financeiro", "desc": "Notas/boletos de honorários.", "href": "/financeiro"},
         {"title": "Empresa", "desc": "Dados completos do cliente.", "href": "/empresa"},
         {"title": "Perfil", "desc": "Indicadores do cliente.", "href": "/perfil"},
+        {"title": "Consultoria", "desc": "Projetos, etapas e progresso.", "href": "/consultoria"},
     ]
 
     return render(
