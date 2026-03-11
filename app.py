@@ -26,6 +26,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlmodel import Field, Session, SQLModel, create_engine, select
 from starlette.middleware.sessions import SessionMiddleware
 from starlette.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 # ----------------------------
 # Config
@@ -572,9 +573,27 @@ TEMPLATES: dict[str, str] = {
     </style>
   </head>
   <body>
+  .btn-primary{
+  background-color:#00BFBF !important;
+  border-color:#00BFBF !important;
+  color:#002222 !important;
+  font-weight:600;
+}
+.btn-outline-primary{
+  border-color:#00BFBF !important;
+  color:#0B1E1E !important;
+}
+.btn-outline-primary:hover{
+  background-color:#00BFBF !important;
+  border-color:#00BFBF !important;
+}
+a:hover{ color:#00BFBF; }
     <nav class="navbar navbar-expand-lg bg-white border-bottom">
       <div class="container py-2">
-        <a class="navbar-brand brand" href="/">Escritório</a>
+        <a class="navbar-brand d-flex align-items-center gap-2" href="/">
+  <img src="/static/logo.png" alt="Maffezzolli Capital" style="height:32px; width:auto;">
+  <span class="fw-bold" style="color:#0B1E1E;">Maffezzolli Capital</span>
+</a>
         <div class="ms-auto d-flex gap-2 align-items-center">
           {% if current_user %}
             <span class="badge text-bg-light border">🏢 {{ current_company.name }}</span>
@@ -1763,7 +1782,10 @@ app = FastAPI()
 https_only = os.getenv("SESSION_HTTPS_ONLY", "0") == "1"
 app.add_middleware(SessionMiddleware, secret_key=APP_SECRET_KEY, https_only=https_only, same_site="lax")
 
+STATIC_DIR = Path(__file__).with_name("static").resolve()
+STATIC_DIR.mkdir(parents=True, exist_ok=True)
 
+app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 @app.on_event("startup")
 def _startup() -> None:
     init_db()
