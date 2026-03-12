@@ -1344,14 +1344,9 @@ a:hover{ color:#00BFBF; }
   <div class="muted">Direcione para um cliente.</div>
   {% if not clients %}
     <div class="alert alert-warning mt-3">Nenhum cliente cadastrado. Vá em “Membros”.</div>
-    <div class="d-flex gap-2">
-      <a class="btn btn-outline-secondary" href="/pendencias">Voltar</a>
-      {% if role in ["admin","equipe"] %}
-        <a class="btn btn-outline-primary" href="/pendencias/{{ item.id }}/editar">Editar</a>
-      {% endif %}
-    </div>
+    <a class="btn btn-outline-secondary" href="/pendencias">Voltar</a>
   {% else %}
-    <form method="post" action="/pendencias/novo" enctype="multipart/form-data" class="mt-3">
+    <form method="post" action="/pendencias/cliente/novo" enctype="multipart/form-data" class="mt-3">
       <div class="row g-3">
         <div class="col-12">
           <label class="form-label">Cliente</label>
@@ -1408,7 +1403,15 @@ a:hover{ color:#00BFBF; }
         {% if role in ["admin","equipe"] %} • Cliente: <b>{{ client.name }}</b>{% endif %}
       </div>
     </div>
-    <a class="btn btn-outline-secondary" href="/pendencias">Voltar</a>
+    <div class="d-flex gap-2">
+      <a class="btn btn-outline-secondary" href="/pendencias">Voltar</a>
+      {% if role in ["admin","equipe"] %}
+        <a class="btn btn-outline-primary" href="/pendencias/{{ item.id }}/editar">Editar</a>
+        <form method="post" action="/pendencias/{{ item.id }}/excluir" onsubmit="return confirm('Excluir pendência? Remova anexos antes.');">
+          <button class="btn btn-outline-danger" type="submit">Excluir</button>
+        </form>
+      {% endif %}
+    </div>
   </div>
   <hr class="my-3"/>
   <pre>{{ item.description }}</pre>
@@ -1422,7 +1425,7 @@ a:hover{ color:#00BFBF; }
           <a href="/download/{{ a.id }}">{{ a.original_filename }}</a>
           {% if role in ["admin","equipe"] %}
             <form method="post" action="/attachments/{{ a.id }}/delete" class="ms-2">
-              <input type="hidden" name="next" value="/documentos/{{ doc.id }}">
+              <input type="hidden" name="next" value="/pendencias/{{ item.id }}">
               <button class="btn btn-outline-danger btn-sm" type="submit">Excluir</button>
             </form>
           {% endif %}
@@ -1549,12 +1552,7 @@ a:hover{ color:#00BFBF; }
   <div class="muted">Direcione para um cliente e (se quiser) coloque “aguardando_cliente”.</div>
   {% if not clients %}
     <div class="alert alert-warning mt-3">Nenhum cliente cadastrado. Vá em “Membros”.</div>
-    <div class="d-flex gap-2">
-      <a class="btn btn-outline-secondary" href="/documentos">Voltar</a>
-      {% if role in ["admin","equipe"] %}
-        <a class="btn btn-outline-primary" href="/documentos/{{ doc.id }}/editar">Editar</a>
-      {% endif %}
-    </div>
+    <a class="btn btn-outline-secondary" href="/documentos">Voltar</a>
   {% else %}
     <form method="post" action="/documentos/novo" enctype="multipart/form-data" class="mt-3">
       <div class="row g-3">
@@ -1608,7 +1606,15 @@ a:hover{ color:#00BFBF; }
         {% if role in ["admin","equipe"] %} • Cliente: <b>{{ client.name }}</b>{% endif %}
       </div>
     </div>
-    <a class="btn btn-outline-secondary" href="/documentos">Voltar</a>
+    <div class="d-flex gap-2">
+      <a class="btn btn-outline-secondary" href="/documentos">Voltar</a>
+      {% if role in ["admin","equipe"] %}
+        <a class="btn btn-outline-primary" href="/documentos/{{ doc.id }}/editar">Editar</a>
+        <form method="post" action="/documentos/{{ doc.id }}/excluir" onsubmit="return confirm('Excluir documento? Remova anexos antes.');">
+          <button class="btn btn-outline-danger" type="submit">Excluir</button>
+        </form>
+      {% endif %}
+    </div>
   </div>
 
   <hr class="my-3"/>
@@ -1623,7 +1629,7 @@ a:hover{ color:#00BFBF; }
           <a href="/download/{{ a.id }}">{{ a.original_filename }}</a>
           {% if role in ["admin","equipe"] %}
             <form method="post" action="/attachments/{{ a.id }}/delete" class="ms-2">
-              <input type="hidden" name="next" value="/pendencias/{{ item.id }}">
+              <input type="hidden" name="next" value="/documentos/{{ doc.id }}">
               <button class="btn btn-outline-danger btn-sm" type="submit">Excluir</button>
             </form>
           {% endif %}
@@ -2086,7 +2092,15 @@ a:hover{ color:#00BFBF; }
         {% if role in ["admin","equipe"] %} • Cliente: <b>{{ client.name }}</b>{% endif %}
       </div>
     </div>
-    <a class="btn btn-outline-secondary" href="/financeiro">Voltar</a>
+    <div class="d-flex gap-2">
+      <a class="btn btn-outline-secondary" href="/financeiro">Voltar</a>
+      {% if role in ["admin","equipe"] %}
+        <a class="btn btn-outline-primary" href="/financeiro/{{ inv.id }}/editar">Editar</a>
+        <form method="post" action="/financeiro/{{ inv.id }}/excluir" onsubmit="return confirm('Excluir lançamento? Remova anexos antes.');">
+          <button class="btn btn-outline-danger" type="submit">Excluir</button>
+        </form>
+      {% endif %}
+    </div>
   </div>
 
   <hr class="my-3"/>
@@ -2101,7 +2115,7 @@ a:hover{ color:#00BFBF; }
           <a href="/download/{{ a.id }}">{{ a.original_filename }}</a>
           {% if role in ["admin","equipe"] %}
             <form method="post" action="/attachments/{{ a.id }}/delete" class="ms-2">
-              <input type="hidden" name="next" value="/propostas/{{ prop.id }}">
+              <input type="hidden" name="next" value="/financeiro/{{ inv.id }}">
               <button class="btn btn-outline-danger btn-sm" type="submit">Excluir</button>
             </form>
           {% endif %}
@@ -5799,7 +5813,7 @@ async def pending_new_client_action(
     session.refresh(item)
 
     if description.strip():
-        session.add(PendingMessage(pending_item_id=item.id, user_id=ctx.user.id, message=description.strip()))
+        session.add(PendingMessage(pending_item_id=item.id, author_user_id=ctx.user.id, message=description.strip()))
         session.commit()
 
     if file and file.filename:
@@ -5882,7 +5896,7 @@ async def docs_send_client_action(
     session.refresh(doc)
 
     if message.strip():
-        session.add(DocumentMessage(document_id=doc.id, user_id=ctx.user.id, message=message.strip()))
+        session.add(DocumentMessage(document_id=doc.id, author_user_id=ctx.user.id, message=message.strip()))
         session.commit()
 
     try:
