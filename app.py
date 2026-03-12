@@ -1265,9 +1265,9 @@ a:hover{ color:#00BFBF; }
       <div class="muted">Checklist / solicitações de informação.</div>
     </div>
     {% if role in ["admin","equipe"] %}
-      <a class="btn btn-primary" href="/pendencias/novo">Nova</a>
+      <a class="btn btn-primary" href="/pendencias/cliente/novo">Nova</a>
     {% elif role == "cliente" %}
-      <a class="btn btn-primary" href="/pendencias/nova">Nova</a>
+      <a class="btn btn-primary" href="/pendencias/cliente/nova">Nova</a>
     {% endif %}
   </div>
   <hr class="my-3"/>
@@ -1473,7 +1473,7 @@ a:hover{ color:#00BFBF; }
     {% if role in ["admin","equipe"] %}
       <a class="btn btn-primary" href="/documentos/novo">Novo</a>
     {% elif role == "cliente" %}
-      <a class="btn btn-primary" href="/documentos/enviar">Enviar</a>
+      <a class="btn btn-primary" href="/documentos/cliente/enviar">Enviar</a>
     {% endif %}
   </div>
   <hr class="my-3"/>
@@ -2358,7 +2358,7 @@ TEMPLATES.update({
 <div class="card p-4">
   <h4>Nova Pendência (Cliente)</h4>
   <div class="muted">Crie um pedido/pendência e envie anexos ao escritório.</div>
-  <form method="post" action="/pendencias/nova" enctype="multipart/form-data" class="mt-3">
+  <form method="post" action="/pendencias/cliente/nova" enctype="multipart/form-data" class="mt-3">
     <div class="row g-3">
       <div class="col-12">
         <label class="form-label">Título</label>
@@ -2392,7 +2392,7 @@ TEMPLATES.update({
 <div class="card p-4">
   <h4>Enviar Documento (Cliente)</h4>
   <div class="muted">Envie um documento ao escritório e acompanhe o status.</div>
-  <form method="post" action="/documentos/enviar" enctype="multipart/form-data" class="mt-3">
+  <form method="post" action="/documentos/cliente/enviar" enctype="multipart/form-data" class="mt-3">
     <div class="row g-3">
       <div class="col-12">
         <label class="form-label">Título</label>
@@ -3613,7 +3613,7 @@ async def pending_list(request: Request, session: Session = Depends(get_session)
     )
 
 
-@app.get("/pendencias/novo", response_class=HTMLResponse)
+@app.get("/pendencias/cliente/novo", response_class=HTMLResponse)
 @require_role({"admin", "equipe"})
 async def pending_new_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
     ctx = get_tenant_context(request, session)
@@ -3633,7 +3633,7 @@ async def pending_new_page(request: Request, session: Session = Depends(get_sess
     )
 
 
-@app.post("/pendencias/novo")
+@app.post("/pendencias/cliente/novo")
 @require_role({"admin", "equipe"})
 async def pending_new_action(
     request: Request,
@@ -4913,7 +4913,7 @@ async def delete_attachment(
     return RedirectResponse(next, status_code=303)
 
 
-@app.get("/pendencias/nova", response_class=HTMLResponse)
+@app.get("/pendencias/cliente/nova", response_class=HTMLResponse)
 @require_role({"cliente"})
 async def pending_new_client_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
     ctx = get_tenant_context(request, session)
@@ -4934,7 +4934,7 @@ async def pending_new_client_page(request: Request, session: Session = Depends(g
     )
 
 
-@app.post("/pendencias/nova")
+@app.post("/pendencias/cliente/nova")
 @require_role({"cliente"})
 async def pending_new_client_action(
     request: Request,
@@ -4997,7 +4997,7 @@ async def pending_new_client_action(
     return RedirectResponse(f"/pendencias/{item.id}", status_code=303)
 
 
-@app.get("/documentos/enviar", response_class=HTMLResponse)
+@app.get("/documentos/cliente/enviar", response_class=HTMLResponse)
 @require_role({"cliente"})
 async def docs_send_client_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
     ctx = get_tenant_context(request, session)
@@ -5018,7 +5018,7 @@ async def docs_send_client_page(request: Request, session: Session = Depends(get
     )
 
 
-@app.post("/documentos/enviar")
+@app.post("/documentos/cliente/enviar")
 @require_role({"cliente"})
 async def docs_send_client_action(
     request: Request,
