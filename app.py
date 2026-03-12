@@ -684,6 +684,8 @@ class Attachment(SQLModel, table=True):
     pending_item_id: Optional[int] = Field(default=None, index=True, foreign_key="pendingitem.id")
 
     task_id: Optional[int] = Field(default=None, index=True, foreign_key="task.id")
+    education_lesson_id: Optional[int] = Field(default=None, index=True, foreign_key="educationlesson.id")
+
 
     original_filename: str
     stored_filename: str
@@ -5048,6 +5050,7 @@ async def dashboard(request: Request, session: Session = Depends(get_session)) -
         {"title": "Consultoria", "desc": "Projetos, etapas e progresso.", "href": "/consultoria"},
         {"title": "Tarefas", "desc": "Kanban e prazos.", "href": "/tarefas"},
         {"title": "Reuniões", "desc": "Atas e notas (Notion).", "href": "/reunioes"},
+        {"title": "Educação", "desc": "Cursos e materiais.", "href": "/educacao"},
         {"title": "Agenda", "desc": "Agendamentos (Bookings).", "href": "/agenda"},
     ]
 
@@ -8736,3 +8739,1100 @@ async def meetings_generate_tasks(
     set_flash(request, f"{created} tarefa(s) criada(s).")
     return RedirectResponse("/tarefas", status_code=303)
 
+
+
+
+# ----------------------------
+# Educação (Sprint 1)
+# ----------------------------
+
+class EducationCourse(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+
+    company_id: int = Field(index=True, foreign_key="company.id")
+    created_by_user_id: int = Field(index=True, foreign_key="user.id")
+
+    title: str
+    category: str = ""  # ex: "Onboarding", "Caixa", "Precificação"
+    description: str = ""
+    is_active: bool = Field(default=True, index=True)
+
+    created_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime = Field(default_factory=utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("company_id", "title", name="uq_education_course_company_title"),
+    )
+
+
+class EducationCourseAccess(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+
+    company_id: int = Field(index=True, foreign_key="company.id")
+    course_id: int = Field(index=True, foreign_key="educationcourse.id")
+    client_id: int = Field(index=True, foreign_key="client.id")
+
+    created_at: datetime = Field(default_factory=utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("course_id", "client_id", name="uq_education_course_client"),
+    )
+
+
+class EducationModule(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+
+    course_id: int = Field(index=True, foreign_key="educationcourse.id")
+    title: str
+    order: int = Field(default=1, index=True)
+    description: str = ""
+
+    created_at: datetime = Field(default_factory=utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("course_id", "order", name="uq_education_module_order"),
+    )
+
+
+class EducationLesson(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+
+    module_id: int = Field(index=True, foreign_key="educationmodule.id")
+    title: str
+    order: int = Field(default=1, index=True)
+
+    video_url: str = ""
+    description: str = ""
+
+    created_at: datetime = Field(default_factory=utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("module_id", "order", name="uq_education_lesson_order"),
+    )
+
+
+class EducationLessonProgress(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+
+    company_id: int = Field(index=True, foreign_key="company.id")
+    client_id: int = Field(index=True, foreign_key="client.id")
+    lesson_id: int = Field(index=True, foreign_key="educationlesson.id")
+    user_id: int = Field(index=True, foreign_key="user.id")
+
+    completed: bool = Field(default=True, index=True)
+    completed_at: datetime = Field(default_factory=utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("lesson_id", "user_id", name="uq_education_lesson_user"),
+    )
+
+
+def _youtube_embed_url(url: str) -> str:
+    u = (url or "").strip()
+    if not u:
+        return ""
+    m = re.search(r"(?:youtube\.com/watch\?v=|youtu\.be/)([A-Za-z0-9_-]{6,})", u)
+    if not m:
+        return ""
+    vid = m.group(1)
+    return f"https://www.youtube.com/embed/{vid}"
+
+
+def _education_course_can_access(ctx: TenantContext, session: Session, course: EducationCourse) -> bool:
+    if ctx.membership.role in {"admin", "equipe"}:
+        return True
+    if ctx.membership.role != "cliente":
+        return False
+    cid = ctx.membership.client_id or 0
+    if not cid:
+        return False
+    access = session.exec(
+        select(EducationCourseAccess).where(
+            EducationCourseAccess.company_id == ctx.company.id,
+            EducationCourseAccess.course_id == course.id,
+            EducationCourseAccess.client_id == cid,
+        )
+    ).first()
+    return bool(access)
+
+
+def _education_course_assigned_clients(session: Session, course: EducationCourse) -> list[Client]:
+    accesses = session.exec(
+        select(EducationCourseAccess).where(EducationCourseAccess.course_id == course.id)
+    ).all()
+    client_ids = [a.client_id for a in accesses]
+    if not client_ids:
+        return []
+    return session.exec(select(Client).where(Client.id.in_(client_ids))).all()
+
+
+def _education_course_progress_pct(session: Session, company_id: int, client_id: int, user_id: int, course_id: int) -> int:
+    module_ids = session.exec(
+        select(EducationModule.id).where(EducationModule.course_id == course_id)
+    ).all()
+    if not module_ids:
+        return 0
+    lesson_ids = session.exec(
+        select(EducationLesson.id).where(EducationLesson.module_id.in_(module_ids))
+    ).all()
+    if not lesson_ids:
+        return 0
+    total = len(lesson_ids)
+    done = session.exec(
+        select(func.count(EducationLessonProgress.id)).where(
+            EducationLessonProgress.company_id == company_id,
+            EducationLessonProgress.client_id == client_id,
+            EducationLessonProgress.user_id == user_id,
+            EducationLessonProgress.lesson_id.in_(lesson_ids),
+        )
+    ).one()
+    done_n = int(done or 0)
+    return int(round((done_n / total) * 100))
+
+
+TEMPLATES.update({
+"edu_courses.html": r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <div class="d-flex justify-content-between align-items-center">
+    <div>
+      <h4 class="mb-0">Educação</h4>
+      <div class="muted">Cursos, vídeos e materiais por cliente/necessidade.</div>
+    </div>
+    {% if role in ["admin","equipe"] %}
+      <a class="btn btn-primary" href="/educacao/cursos/novo">Novo curso</a>
+    {% endif %}
+  </div>
+
+  <hr class="my-3"/>
+
+  {% if role in ["admin","equipe"] %}
+    <form method="get" action="/educacao" class="row g-2 align-items-end mb-3">
+      <div class="col-md-6">
+        <label class="form-label">Filtro por cliente (opcional)</label>
+        <select class="form-select" name="client_id" onchange="this.form.submit()">
+          <option value="0" {% if filter_client_id==0 %}selected{% endif %}>Todos</option>
+          {% for c in clients %}
+            <option value="{{ c.id }}" {% if filter_client_id==c.id %}selected{% endif %}>{{ c.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-md-6">
+        {% if filter_client_id %}
+          <a class="btn btn-outline-secondary" href="/educacao">Limpar</a>
+        {% endif %}
+      </div>
+    </form>
+  {% endif %}
+
+  {% if courses %}
+    <div class="list-group">
+      {% for c in courses %}
+        <a class="list-group-item list-group-item-action" href="/educacao/cursos/{{ c.id }}">
+          <div class="d-flex justify-content-between">
+            <div class="fw-semibold">{{ c.title }}</div>
+            <span class="badge text-bg-light border">{{ c.category or "curso" }}</span>
+          </div>
+          <div class="muted small mt-1">
+            {% if c.assigned_count is not none %}Clientes: {{ c.assigned_count }} • {% endif %}
+            {% if c.progress_pct is not none %}Progresso: {{ c.progress_pct }}% • {% endif %}
+            {% if not c.is_active %}Inativo{% else %}Ativo{% endif %}
+          </div>
+        </a>
+      {% endfor %}
+    </div>
+  {% else %}
+    <div class="muted">Nenhum curso disponível.</div>
+  {% endif %}
+</div>
+{% endblock %}
+""",
+
+"edu_course_new.html": r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <div class="d-flex justify-content-between align-items-center">
+    <div>
+      <h4 class="mb-0">Novo Curso</h4>
+      <div class="muted">Crie um curso e libere para clientes específicos.</div>
+    </div>
+    <a class="btn btn-outline-secondary" href="/educacao">Voltar</a>
+  </div>
+
+  <hr class="my-3"/>
+
+  <form method="post" action="/educacao/cursos/novo">
+    <div class="row g-3">
+      <div class="col-md-8">
+        <label class="form-label">Título</label>
+        <input class="form-control" name="title" required />
+      </div>
+      <div class="col-md-4">
+        <label class="form-label">Categoria</label>
+        <input class="form-control" name="category" placeholder="Onboarding, Caixa..." />
+      </div>
+      <div class="col-12">
+        <label class="form-label">Descrição</label>
+        <textarea class="form-control" name="description" rows="4"></textarea>
+      </div>
+      <div class="col-12">
+        <div class="form-check">
+          <input class="form-check-input" type="checkbox" name="is_active" value="1" checked id="active">
+          <label class="form-check-label" for="active">Curso ativo</label>
+        </div>
+      </div>
+    </div>
+
+    <hr class="my-4"/>
+    <h5>Liberar para clientes</h5>
+    <div class="muted mb-2">Marque os clientes que poderão acessar este curso.</div>
+    <div class="row g-2">
+      {% for c in clients %}
+        <div class="col-md-6">
+          <div class="form-check">
+            <input class="form-check-input" type="checkbox" name="client_ids" value="{{ c.id }}" id="c{{ c.id }}">
+            <label class="form-check-label" for="c{{ c.id }}">{{ c.name }}</label>
+          </div>
+        </div>
+      {% endfor %}
+    </div>
+
+    <div class="mt-4 d-flex gap-2">
+      <button class="btn btn-primary" type="submit">Criar</button>
+      <a class="btn btn-outline-secondary" href="/educacao">Cancelar</a>
+    </div>
+  </form>
+
+  <hr class="my-4"/>
+  <div class="alert alert-info mb-0">
+    <b>Vídeos do YouTube:</b> para tocar dentro do app, o vídeo precisa estar <b>Público</b> ou <b>Não listado</b>.
+    Vídeos <b>Privados</b> normalmente não embutem; nesse caso, o app abrirá o link em nova aba.
+  </div>
+</div>
+{% endblock %}
+""",
+
+"edu_course_detail.html": r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <div class="d-flex justify-content-between align-items-start">
+    <div>
+      <h4 class="mb-1">{{ course.title }}</h4>
+      <div class="muted">
+        Categoria: <b>{{ course.category or "—" }}</b> •
+        Status: <b>{% if course.is_active %}ativo{% else %}inativo{% endif %}</b>
+        {% if progress_pct is not none %} • Progresso: <b>{{ progress_pct }}%</b>{% endif %}
+      </div>
+    </div>
+    <div class="d-flex gap-2">
+      <a class="btn btn-outline-secondary" href="/educacao">Voltar</a>
+      {% if role in ["admin","equipe"] %}
+        <a class="btn btn-outline-primary" href="/educacao/cursos/{{ course.id }}/editar">Editar</a>
+      {% endif %}
+    </div>
+  </div>
+
+  {% if course.description %}
+    <hr class="my-3"/>
+    <pre>{{ course.description }}</pre>
+  {% endif %}
+
+  {% if role in ["admin","equipe"] %}
+    <hr class="my-3"/>
+    <div class="muted mb-2"><b>Clientes liberados:</b> {{ assigned_names or "—" }}</div>
+
+    <form method="post" action="/educacao/cursos/{{ course.id }}/modulos" class="card p-3">
+      <div class="fw-semibold mb-2">Adicionar módulo</div>
+      <div class="row g-2">
+        <div class="col-md-8">
+          <input class="form-control" name="title" required placeholder="Ex: Módulo 1 - Caixa" />
+        </div>
+        <div class="col-md-4">
+          <button class="btn btn-primary w-100" type="submit">Adicionar</button>
+        </div>
+        <div class="col-12">
+          <input class="form-control" name="description" placeholder="Descrição (opcional)" />
+        </div>
+      </div>
+    </form>
+  {% endif %}
+
+  <hr class="my-3"/>
+  <h5 class="mb-2">Módulos</h5>
+
+  {% if modules %}
+    <div class="list-group">
+      {% for m in modules %}
+        <a class="list-group-item list-group-item-action" href="/educacao/modulos/{{ m.id }}">
+          <div class="fw-semibold">{{ m.order }}. {{ m.title }}</div>
+          <div class="muted small">{{ m.description }}</div>
+        </a>
+      {% endfor %}
+    </div>
+  {% else %}
+    <div class="muted">Sem módulos ainda.</div>
+  {% endif %}
+
+  {% if role in ["admin","equipe"] %}
+    <hr class="my-4"/>
+    <form method="post" action="/educacao/cursos/{{ course.id }}/excluir"
+          onsubmit="return confirm('Excluir curso? Remova módulos/aulas antes.');">
+      <button class="btn btn-outline-danger" type="submit">Excluir curso</button>
+    </form>
+  {% endif %}
+</div>
+{% endblock %}
+""",
+
+"edu_course_edit.html": r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <div class="d-flex justify-content-between align-items-start">
+    <div>
+      <h4 class="mb-1">Editar Curso</h4>
+      <div class="muted">{{ course.title }}</div>
+    </div>
+    <a class="btn btn-outline-secondary" href="/educacao/cursos/{{ course.id }}">Voltar</a>
+  </div>
+
+  <hr class="my-3"/>
+
+  <form method="post" action="/educacao/cursos/{{ course.id }}/editar">
+    <div class="row g-3">
+      <div class="col-md-8">
+        <label class="form-label">Título</label>
+        <input class="form-control" name="title" value="{{ course.title }}" required />
+      </div>
+      <div class="col-md-4">
+        <label class="form-label">Categoria</label>
+        <input class="form-control" name="category" value="{{ course.category }}" />
+      </div>
+      <div class="col-12">
+        <label class="form-label">Descrição</label>
+        <textarea class="form-control" name="description" rows="4">{{ course.description }}</textarea>
+      </div>
+      <div class="col-12">
+        <div class="form-check">
+          <input class="form-check-input" type="checkbox" name="is_active" value="1" id="active" {% if course.is_active %}checked{% endif %}>
+          <label class="form-check-label" for="active">Curso ativo</label>
+        </div>
+      </div>
+    </div>
+
+    <hr class="my-4"/>
+    <h5>Clientes liberados</h5>
+    <div class="row g-2">
+      {% for c in clients %}
+        <div class="col-md-6">
+          <div class="form-check">
+            <input class="form-check-input" type="checkbox" name="client_ids" value="{{ c.id }}" id="c{{ c.id }}"
+                   {% if c.id in assigned_ids %}checked{% endif %}>
+            <label class="form-check-label" for="c{{ c.id }}">{{ c.name }}</label>
+          </div>
+        </div>
+      {% endfor %}
+    </div>
+
+    <div class="mt-4 d-flex gap-2">
+      <button class="btn btn-primary" type="submit">Salvar</button>
+      <a class="btn btn-outline-secondary" href="/educacao/cursos/{{ course.id }}">Cancelar</a>
+    </div>
+  </form>
+</div>
+{% endblock %}
+""",
+
+"edu_module_detail.html": r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <div class="d-flex justify-content-between align-items-start">
+    <div>
+      <h4 class="mb-1">{{ module.title }}</h4>
+      <div class="muted">Curso: <a href="/educacao/cursos/{{ course.id }}">{{ course.title }}</a></div>
+    </div>
+    <a class="btn btn-outline-secondary" href="/educacao/cursos/{{ course.id }}">Voltar</a>
+  </div>
+
+  {% if module.description %}
+    <hr class="my-3"/>
+    <pre>{{ module.description }}</pre>
+  {% endif %}
+
+  {% if role in ["admin","equipe"] %}
+    <hr class="my-3"/>
+    <form method="post" action="/educacao/modulos/{{ module.id }}/aulas" class="card p-3">
+      <div class="fw-semibold mb-2">Adicionar aula</div>
+      <div class="row g-2">
+        <div class="col-md-6">
+          <input class="form-control" name="title" required placeholder="Título da aula" />
+        </div>
+        <div class="col-md-6">
+          <input class="form-control" name="video_url" placeholder="URL do vídeo (YouTube / outro)" />
+        </div>
+        <div class="col-12">
+          <textarea class="form-control" name="description" rows="3" placeholder="Descrição (opcional)"></textarea>
+        </div>
+        <div class="col-12">
+          <button class="btn btn-primary" type="submit">Adicionar</button>
+        </div>
+      </div>
+    </form>
+  {% endif %}
+
+  <hr class="my-3"/>
+  <h5 class="mb-2">Aulas</h5>
+  {% if lessons %}
+    <div class="list-group">
+      {% for l in lessons %}
+        <a class="list-group-item list-group-item-action" href="/educacao/aulas/{{ l.id }}">
+          <div class="fw-semibold">{{ l.order }}. {{ l.title }}</div>
+          <div class="muted small">{% if l.video_url %}Vídeo configurado{% else %}Sem vídeo{% endif %}</div>
+        </a>
+      {% endfor %}
+    </div>
+  {% else %}
+    <div class="muted">Sem aulas ainda.</div>
+  {% endif %}
+
+  {% if role in ["admin","equipe"] %}
+    <hr class="my-4"/>
+    <form method="post" action="/educacao/modulos/{{ module.id }}/editar" class="card p-3 mb-3">
+      <div class="fw-semibold mb-2">Editar módulo</div>
+      <div class="row g-2">
+        <div class="col-md-8">
+          <input class="form-control" name="title" value="{{ module.title }}" required />
+        </div>
+        <div class="col-md-4">
+          <button class="btn btn-primary w-100" type="submit">Salvar</button>
+        </div>
+        <div class="col-12">
+          <input class="form-control" name="description" value="{{ module.description }}" />
+        </div>
+      </div>
+    </form>
+
+    <form method="post" action="/educacao/modulos/{{ module.id }}/excluir"
+          onsubmit="return confirm('Excluir módulo? Remova aulas antes.');">
+      <button class="btn btn-outline-danger" type="submit">Excluir módulo</button>
+    </form>
+  {% endif %}
+</div>
+{% endblock %}
+""",
+
+"edu_lesson_detail.html": r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <div class="d-flex justify-content-between align-items-start">
+    <div>
+      <h4 class="mb-1">{{ lesson.title }}</h4>
+      <div class="muted">
+        Curso: <a href="/educacao/cursos/{{ course.id }}">{{ course.title }}</a>
+        • Módulo: <a href="/educacao/modulos/{{ module.id }}">{{ module.title }}</a>
+        {% if progress_done %} • <span class="badge text-bg-light border">Concluída</span>{% endif %}
+      </div>
+    </div>
+    <a class="btn btn-outline-secondary" href="/educacao/modulos/{{ module.id }}">Voltar</a>
+  </div>
+
+  <hr class="my-3"/>
+
+  {% if embed_url %}
+    <div class="ratio ratio-16x9 mb-3">
+      <iframe src="{{ embed_url }}" title="Video" loading="lazy" referrerpolicy="no-referrer"></iframe>
+    </div>
+    <a class="btn btn-outline-primary btn-sm" href="{{ lesson.video_url }}" target="_blank" rel="noopener">Abrir no YouTube</a>
+  {% elif lesson.video_url %}
+    <div class="alert alert-warning">
+      Este vídeo não pôde ser embutido. Se estiver <b>Privado</b>, o YouTube não permite player embutido.
+      Use o botão abaixo para abrir.
+    </div>
+    <a class="btn btn-outline-primary" href="{{ lesson.video_url }}" target="_blank" rel="noopener">Abrir vídeo</a>
+  {% else %}
+    <div class="muted">Sem vídeo configurado.</div>
+  {% endif %}
+
+  {% if lesson.description %}
+    <hr class="my-3"/>
+    <pre>{{ lesson.description }}</pre>
+  {% endif %}
+
+  <hr class="my-3"/>
+  <h5>Materiais</h5>
+  {% if attachments %}
+    <ul class="mb-2">
+      {% for a in attachments %}
+        <li class="d-flex justify-content-between align-items-center">
+          <a href="/download/{{ a.id }}">{{ a.original_filename }}</a>
+          {% if role in ["admin","equipe"] %}
+            <form method="post" action="/attachments/{{ a.id }}/delete" class="ms-2">
+              <input type="hidden" name="next" value="/educacao/aulas/{{ lesson.id }}">
+              <button class="btn btn-outline-danger btn-sm" type="submit">Excluir</button>
+            </form>
+          {% endif %}
+        </li>
+      {% endfor %}
+    </ul>
+  {% else %}
+    <div class="muted mb-2">Sem materiais.</div>
+  {% endif %}
+
+  {% if role in ["admin","equipe"] %}
+    <form method="post" action="/educacao/aulas/{{ lesson.id }}/anexar" enctype="multipart/form-data" class="mt-2">
+      <div class="row g-2">
+        <div class="col-md-8">
+          <input class="form-control" type="file" name="file" required />
+        </div>
+        <div class="col-md-4">
+          <button class="btn btn-primary w-100" type="submit">Anexar</button>
+        </div>
+      </div>
+    </form>
+  {% endif %}
+
+  <hr class="my-3"/>
+  <form method="post" action="/educacao/aulas/{{ lesson.id }}/concluir">
+    <button class="btn btn-primary" type="submit">{% if progress_done %}Marcar como não concluída{% else %}Marcar como concluída{% endif %}</button>
+  </form>
+
+  {% if role in ["admin","equipe"] %}
+    <hr class="my-4"/>
+    <form method="post" action="/educacao/aulas/{{ lesson.id }}/editar" class="card p-3 mb-3">
+      <div class="fw-semibold mb-2">Editar aula</div>
+      <div class="row g-2">
+        <div class="col-md-6">
+          <input class="form-control" name="title" value="{{ lesson.title }}" required />
+        </div>
+        <div class="col-md-6">
+          <input class="form-control" name="video_url" value="{{ lesson.video_url }}" />
+        </div>
+        <div class="col-12">
+          <textarea class="form-control" name="description" rows="3">{{ lesson.description }}</textarea>
+        </div>
+        <div class="col-12">
+          <button class="btn btn-primary" type="submit">Salvar</button>
+        </div>
+      </div>
+    </form>
+
+    <form method="post" action="/educacao/aulas/{{ lesson.id }}/excluir"
+          onsubmit="return confirm('Excluir aula? Remova materiais antes.');">
+      <button class="btn btn-outline-danger" type="submit">Excluir aula</button>
+    </form>
+  {% endif %}
+</div>
+{% endblock %}
+""",
+})
+
+
+@app.get("/educacao", response_class=HTMLResponse)
+@require_login
+async def edu_courses(request: Request, session: Session = Depends(get_session), client_id: int = 0) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+
+    active_client_id = get_active_client_id(request, session, ctx)
+    current_client = get_client_or_none(session, ctx.company.id, active_client_id)
+
+    courses_q = select(EducationCourse).where(EducationCourse.company_id == ctx.company.id).order_by(EducationCourse.updated_at.desc())
+
+    clients: list[Client] = []
+    filter_client_id = 0
+    if ctx.membership.role == "cliente":
+        cid = ctx.membership.client_id or 0
+        access_course_ids = session.exec(
+            select(EducationCourseAccess.course_id).where(
+                EducationCourseAccess.company_id == ctx.company.id,
+                EducationCourseAccess.client_id == cid,
+            )
+        ).all()
+        if access_course_ids:
+            courses_q = courses_q.where(EducationCourse.id.in_(access_course_ids))
+        else:
+            courses_q = courses_q.where(EducationCourse.id == -1)
+    else:
+        clients = session.exec(select(Client).where(Client.company_id == ctx.company.id).order_by(Client.created_at)).all()
+        if client_id and client_id > 0:
+            fc = get_client_or_none(session, ctx.company.id, int(client_id))
+            if fc:
+                filter_client_id = fc.id
+                access_course_ids = session.exec(
+                    select(EducationCourseAccess.course_id).where(
+                        EducationCourseAccess.company_id == ctx.company.id,
+                        EducationCourseAccess.client_id == fc.id,
+                    )
+                ).all()
+                if access_course_ids:
+                    courses_q = courses_q.where(EducationCourse.id.in_(access_course_ids))
+                else:
+                    courses_q = courses_q.where(EducationCourse.id == -1)
+
+    courses = session.exec(courses_q).all()
+
+    out = []
+    for c in courses:
+        assigned_count = None
+        progress_pct = None
+        if ctx.membership.role in {"admin", "equipe"}:
+            assigned_count = int(session.exec(select(func.count(EducationCourseAccess.id)).where(EducationCourseAccess.course_id == c.id)).one() or 0)
+        if ctx.membership.role == "cliente":
+            progress_pct = _education_course_progress_pct(session, ctx.company.id, ctx.membership.client_id or 0, ctx.user.id, c.id)
+        out.append({"id": c.id, "title": c.title, "category": c.category, "is_active": c.is_active, "assigned_count": assigned_count, "progress_pct": progress_pct})
+
+    return render(
+        "edu_courses.html",
+        request=request,
+        context={
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "role": ctx.membership.role,
+            "current_client": current_client,
+            "courses": out,
+            "clients": clients,
+            "filter_client_id": filter_client_id,
+        },
+    )
+
+
+@app.get("/educacao/cursos/novo", response_class=HTMLResponse)
+@require_role({"admin", "equipe"})
+async def edu_course_new_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+    clients = session.exec(select(Client).where(Client.company_id == ctx.company.id).order_by(Client.created_at)).all()
+    current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
+    return render("edu_course_new.html", request=request, context={"current_user": ctx.user, "current_company": ctx.company, "role": ctx.membership.role, "current_client": current_client, "clients": clients})
+
+
+@app.post("/educacao/cursos/novo")
+@require_role({"admin", "equipe"})
+async def edu_course_new_action(
+    request: Request,
+    session: Session = Depends(get_session),
+    title: str = Form(...),
+    category: str = Form(""),
+    description: str = Form(""),
+    is_active: str = Form(""),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    form = await request.form()
+    client_ids = [int(x) for x in form.getlist("client_ids") if str(x).isdigit()]
+
+    course = EducationCourse(company_id=ctx.company.id, created_by_user_id=ctx.user.id, title=title.strip(), category=category.strip(), description=description.strip(), is_active=(is_active == "1"), updated_at=utcnow())
+    session.add(course)
+    session.commit()
+    session.refresh(course)
+
+    for cid in client_ids:
+        if get_client_or_none(session, ctx.company.id, cid):
+            session.add(EducationCourseAccess(company_id=ctx.company.id, course_id=course.id, client_id=cid))
+    session.commit()
+
+    set_flash(request, "Curso criado.")
+    return RedirectResponse(f"/educacao/cursos/{course.id}", status_code=303)
+
+
+@app.get("/educacao/cursos/{course_id}", response_class=HTMLResponse)
+@require_login
+async def edu_course_detail(request: Request, session: Session = Depends(get_session), course_id: int = 0) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+
+    course = session.get(EducationCourse, int(course_id))
+    if not course or course.company_id != ctx.company.id:
+        return render("error.html", request=request, context={"message": "Curso não encontrado."}, status_code=404)
+
+    if not _education_course_can_access(ctx, session, course):
+        return render("error.html", request=request, context={"message": "Sem permissão."}, status_code=403)
+
+    modules = session.exec(select(EducationModule).where(EducationModule.course_id == course.id).order_by(EducationModule.order.asc())).all()
+    assigned = _education_course_assigned_clients(session, course)
+    assigned_names = ", ".join(sorted({c.name for c in assigned})) if assigned else ""
+    progress_pct = None
+    if ctx.membership.role == "cliente":
+        progress_pct = _education_course_progress_pct(session, ctx.company.id, ctx.membership.client_id or 0, ctx.user.id, course.id)
+
+    current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
+
+    return render("edu_course_detail.html", request=request, context={"current_user": ctx.user, "current_company": ctx.company, "role": ctx.membership.role, "current_client": current_client, "course": course, "modules": modules, "assigned_names": assigned_names, "progress_pct": progress_pct})
+
+
+@app.post("/educacao/cursos/{course_id}/modulos")
+@require_role({"admin", "equipe"})
+async def edu_course_add_module(request: Request, session: Session = Depends(get_session), course_id: int = 0, title: str = Form(...), description: str = Form("")) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    course = session.get(EducationCourse, int(course_id))
+    if not course or course.company_id != ctx.company.id:
+        set_flash(request, "Curso inválido.")
+        return RedirectResponse("/educacao", status_code=303)
+
+    max_order = session.exec(select(func.max(EducationModule.order)).where(EducationModule.course_id == course.id)).one()
+    order = int(max_order or 0) + 1
+    mod = EducationModule(course_id=course.id, title=title.strip(), order=order, description=description.strip())
+    session.add(mod)
+    session.commit()
+
+    set_flash(request, "Módulo adicionado.")
+    return RedirectResponse(f"/educacao/cursos/{course.id}", status_code=303)
+
+
+@app.get("/educacao/cursos/{course_id}/editar", response_class=HTMLResponse)
+@require_role({"admin", "equipe"})
+async def edu_course_edit_page(request: Request, session: Session = Depends(get_session), course_id: int = 0) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    course = session.get(EducationCourse, int(course_id))
+    if not course or course.company_id != ctx.company.id:
+        return render("error.html", request=request, context={"message": "Curso não encontrado."}, status_code=404)
+
+    clients = session.exec(select(Client).where(Client.company_id == ctx.company.id).order_by(Client.created_at)).all()
+    assigned = session.exec(select(EducationCourseAccess).where(EducationCourseAccess.course_id == course.id)).all()
+    assigned_ids = {a.client_id for a in assigned}
+    current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
+
+    return render("edu_course_edit.html", request=request, context={"current_user": ctx.user, "current_company": ctx.company, "role": ctx.membership.role, "current_client": current_client, "course": course, "clients": clients, "assigned_ids": assigned_ids})
+
+
+@app.post("/educacao/cursos/{course_id}/editar")
+@require_role({"admin", "equipe"})
+async def edu_course_edit_action(request: Request, session: Session = Depends(get_session), course_id: int = 0, title: str = Form(...), category: str = Form(""), description: str = Form(""), is_active: str = Form("")) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    course = session.get(EducationCourse, int(course_id))
+    if not course or course.company_id != ctx.company.id:
+        set_flash(request, "Curso não encontrado.")
+        return RedirectResponse("/educacao", status_code=303)
+
+    form = await request.form()
+    client_ids = {int(x) for x in form.getlist("client_ids") if str(x).isdigit()}
+
+    course.title = title.strip()
+    course.category = category.strip()
+    course.description = description.strip()
+    course.is_active = (is_active == "1")
+    course.updated_at = utcnow()
+    session.add(course)
+
+    existing = session.exec(select(EducationCourseAccess).where(EducationCourseAccess.course_id == course.id)).all()
+    existing_ids = {a.client_id for a in existing}
+    for a in existing:
+        if a.client_id not in client_ids:
+            session.delete(a)
+    for cid in client_ids - existing_ids:
+        if get_client_or_none(session, ctx.company.id, cid):
+            session.add(EducationCourseAccess(company_id=ctx.company.id, course_id=course.id, client_id=cid))
+
+    session.commit()
+    set_flash(request, "Curso atualizado.")
+    return RedirectResponse(f"/educacao/cursos/{course.id}", status_code=303)
+
+
+@app.post("/educacao/cursos/{course_id}/excluir")
+@require_role({"admin", "equipe"})
+async def edu_course_delete(request: Request, session: Session = Depends(get_session), course_id: int = 0) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    course = session.get(EducationCourse, int(course_id))
+    if not course or course.company_id != ctx.company.id:
+        set_flash(request, "Curso não encontrado.")
+        return RedirectResponse("/educacao", status_code=303)
+
+    mods = session.exec(select(EducationModule).where(EducationModule.course_id == course.id)).all()
+    if mods:
+        set_flash(request, "Remova módulos/aulas antes de excluir o curso.")
+        return RedirectResponse(f"/educacao/cursos/{course.id}", status_code=303)
+
+    accesses = session.exec(select(EducationCourseAccess).where(EducationCourseAccess.course_id == course.id)).all()
+    for a in accesses:
+        session.delete(a)
+
+    session.delete(course)
+    session.commit()
+    set_flash(request, "Curso excluído.")
+    return RedirectResponse("/educacao", status_code=303)
+
+
+@app.get("/educacao/modulos/{module_id}", response_class=HTMLResponse)
+@require_login
+async def edu_module_detail(request: Request, session: Session = Depends(get_session), module_id: int = 0) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+
+    module = session.get(EducationModule, int(module_id))
+    if not module:
+        return render("error.html", request=request, context={"message": "Módulo não encontrado."}, status_code=404)
+
+    course = session.exec(select(EducationCourse).where(EducationCourse.id == module.course_id)).first()
+    if not course or course.company_id != ctx.company.id:
+        return render("error.html", request=request, context={"message": "Curso inválido."}, status_code=403)
+
+    if not _education_course_can_access(ctx, session, course):
+        return render("error.html", request=request, context={"message": "Sem permissão."}, status_code=403)
+
+    lessons = session.exec(select(EducationLesson).where(EducationLesson.module_id == module.id).order_by(EducationLesson.order.asc())).all()
+    current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
+
+    return render("edu_module_detail.html", request=request, context={"current_user": ctx.user, "current_company": ctx.company, "role": ctx.membership.role, "current_client": current_client, "module": module, "course": course, "lessons": lessons})
+
+
+@app.post("/educacao/modulos/{module_id}/aulas")
+@require_role({"admin", "equipe"})
+async def edu_module_add_lesson(request: Request, session: Session = Depends(get_session), module_id: int = 0, title: str = Form(...), video_url: str = Form(""), description: str = Form("")) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    module = session.get(EducationModule, int(module_id))
+    if not module:
+        set_flash(request, "Módulo inválido.")
+        return RedirectResponse("/educacao", status_code=303)
+
+    course = session.exec(select(EducationCourse).where(EducationCourse.id == module.course_id)).first()
+    if not course or course.company_id != ctx.company.id:
+        set_flash(request, "Curso inválido.")
+        return RedirectResponse("/educacao", status_code=303)
+
+    max_order = session.exec(select(func.max(EducationLesson.order)).where(EducationLesson.module_id == module.id)).one()
+    order = int(max_order or 0) + 1
+
+    lesson = EducationLesson(module_id=module.id, title=title.strip(), order=order, video_url=video_url.strip(), description=description.strip())
+    session.add(lesson)
+    session.commit()
+
+    set_flash(request, "Aula adicionada.")
+    return RedirectResponse(f"/educacao/modulos/{module.id}", status_code=303)
+
+
+@app.post("/educacao/modulos/{module_id}/editar")
+@require_role({"admin", "equipe"})
+async def edu_module_edit(request: Request, session: Session = Depends(get_session), module_id: int = 0, title: str = Form(...), description: str = Form("")) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    module = session.get(EducationModule, int(module_id))
+    if not module:
+        set_flash(request, "Módulo não encontrado.")
+        return RedirectResponse("/educacao", status_code=303)
+
+    module.title = title.strip()
+    module.description = description.strip()
+    session.add(module)
+    session.commit()
+
+    set_flash(request, "Módulo atualizado.")
+    return RedirectResponse(f"/educacao/modulos/{module.id}", status_code=303)
+
+
+@app.post("/educacao/modulos/{module_id}/excluir")
+@require_role({"admin", "equipe"})
+async def edu_module_delete(request: Request, session: Session = Depends(get_session), module_id: int = 0) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    module = session.get(EducationModule, int(module_id))
+    if not module:
+        set_flash(request, "Módulo não encontrado.")
+        return RedirectResponse("/educacao", status_code=303)
+
+    lessons = session.exec(select(EducationLesson).where(EducationLesson.module_id == module.id)).all()
+    if lessons:
+        set_flash(request, "Remova aulas antes de excluir o módulo.")
+        return RedirectResponse(f"/educacao/modulos/{module.id}", status_code=303)
+
+    course = session.exec(select(EducationCourse).where(EducationCourse.id == module.course_id)).first()
+    session.delete(module)
+    session.commit()
+
+    set_flash(request, "Módulo excluído.")
+    return RedirectResponse(f"/educacao/cursos/{course.id if course else ''}", status_code=303)
+
+
+@app.get("/educacao/aulas/{lesson_id}", response_class=HTMLResponse)
+@require_login
+async def edu_lesson_detail(request: Request, session: Session = Depends(get_session), lesson_id: int = 0) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+
+    lesson = session.get(EducationLesson, int(lesson_id))
+    if not lesson:
+        return render("error.html", request=request, context={"message": "Aula não encontrada."}, status_code=404)
+
+    module = session.get(EducationModule, lesson.module_id)
+    course = session.exec(select(EducationCourse).where(EducationCourse.id == module.course_id)).first() if module else None
+    if not module or not course or course.company_id != ctx.company.id:
+        return render("error.html", request=request, context={"message": "Curso inválido."}, status_code=403)
+
+    if not _education_course_can_access(ctx, session, course):
+        return render("error.html", request=request, context={"message": "Sem permissão."}, status_code=403)
+
+    embed_url = _youtube_embed_url(lesson.video_url)
+
+    attachments_client_id = 0
+    if ctx.membership.role == "cliente":
+        attachments_client_id = ctx.membership.client_id or 0
+    else:
+        attachments_client_id = get_active_client_id(request, session, ctx) or 0
+
+    att_where = [Attachment.company_id == ctx.company.id, Attachment.education_lesson_id == lesson.id]
+    if attachments_client_id:
+        att_where.append(Attachment.client_id == attachments_client_id)
+
+    attachments = session.exec(
+        select(Attachment).where(*att_where).order_by(Attachment.created_at.desc())
+    ).all()
+
+    progress = session.exec(
+        select(EducationLessonProgress).where(
+            EducationLessonProgress.lesson_id == lesson.id,
+            EducationLessonProgress.user_id == ctx.user.id,
+        )
+    ).first()
+    progress_done = bool(progress)
+
+    current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
+
+    return render("edu_lesson_detail.html", request=request, context={"current_user": ctx.user, "current_company": ctx.company, "role": ctx.membership.role, "current_client": current_client, "course": course, "module": module, "lesson": lesson, "embed_url": embed_url, "attachments": attachments, "progress_done": progress_done})
+
+
+@app.post("/educacao/aulas/{lesson_id}/concluir")
+@require_login
+async def edu_lesson_toggle_complete(request: Request, session: Session = Depends(get_session), lesson_id: int = 0) -> Response:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+
+    lesson = session.get(EducationLesson, int(lesson_id))
+    if not lesson:
+        set_flash(request, "Aula não encontrada.")
+        return RedirectResponse("/educacao", status_code=303)
+
+    module = session.get(EducationModule, lesson.module_id)
+    course = session.exec(select(EducationCourse).where(EducationCourse.id == module.course_id)).first() if module else None
+    if not module or not course or course.company_id != ctx.company.id:
+        set_flash(request, "Curso inválido.")
+        return RedirectResponse("/educacao", status_code=303)
+
+    if not _education_course_can_access(ctx, session, course):
+        set_flash(request, "Sem permissão.")
+        return RedirectResponse("/educacao", status_code=303)
+
+    client_id = (ctx.membership.client_id or 0) if ctx.membership.role == "cliente" else (get_active_client_id(request, session, ctx) or 0)
+    if not client_id:
+        set_flash(request, "Selecione um cliente.")
+        return RedirectResponse(f"/educacao/aulas/{lesson.id}", status_code=303)
+
+    existing = session.exec(select(EducationLessonProgress).where(EducationLessonProgress.lesson_id == lesson.id, EducationLessonProgress.user_id == ctx.user.id)).first()
+    if existing:
+        session.delete(existing)
+        session.commit()
+        set_flash(request, "Marcada como não concluída.")
+    else:
+        session.add(EducationLessonProgress(company_id=ctx.company.id, client_id=client_id, lesson_id=lesson.id, user_id=ctx.user.id, completed=True, completed_at=utcnow()))
+        session.commit()
+        set_flash(request, "Aula concluída.")
+
+    return RedirectResponse(f"/educacao/aulas/{lesson.id}", status_code=303)
+
+
+@app.post("/educacao/aulas/{lesson_id}/anexar")
+@require_role({"admin", "equipe"})
+async def edu_lesson_attach(request: Request, session: Session = Depends(get_session), lesson_id: int = 0, file: UploadFile = File(...)) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    lesson = session.get(EducationLesson, int(lesson_id))
+    if not lesson:
+        set_flash(request, "Aula não encontrada.")
+        return RedirectResponse("/educacao", status_code=303)
+
+    try:
+        stored, mime, size = await save_upload(file)
+    except ValueError:
+        set_flash(request, "Arquivo muito grande.")
+        return RedirectResponse(f"/educacao/aulas/{lesson.id}", status_code=303)
+
+    active_client_id = get_active_client_id(request, session, ctx) or 0
+    if not active_client_id:
+        # choose first assigned client if any
+        module = session.get(EducationModule, lesson.module_id)
+        course = session.exec(select(EducationCourse).where(EducationCourse.id == module.course_id)).first() if module else None
+        if course:
+            assigned = _education_course_assigned_clients(session, course)
+            active_client_id = assigned[0].id if assigned else 0
+
+    if not active_client_id:
+        set_flash(request, "Selecione um cliente para anexar material.")
+        return RedirectResponse(f"/educacao/aulas/{lesson.id}", status_code=303)
+
+    session.add(Attachment(company_id=ctx.company.id, client_id=active_client_id, uploaded_by_user_id=ctx.user.id, education_lesson_id=lesson.id, original_filename=file.filename or "arquivo", stored_filename=stored, mime_type=mime, size_bytes=size))
+    session.commit()
+
+    set_flash(request, "Material anexado.")
+    return RedirectResponse(f"/educacao/aulas/{lesson.id}", status_code=303)
+
+
+@app.post("/educacao/aulas/{lesson_id}/editar")
+@require_role({"admin", "equipe"})
+async def edu_lesson_edit(request: Request, session: Session = Depends(get_session), lesson_id: int = 0, title: str = Form(...), video_url: str = Form(""), description: str = Form("")) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    lesson = session.get(EducationLesson, int(lesson_id))
+    if not lesson:
+        set_flash(request, "Aula não encontrada.")
+        return RedirectResponse("/educacao", status_code=303)
+
+    lesson.title = title.strip()
+    lesson.video_url = video_url.strip()
+    lesson.description = description.strip()
+    session.add(lesson)
+    session.commit()
+
+    set_flash(request, "Aula atualizada.")
+    return RedirectResponse(f"/educacao/aulas/{lesson.id}", status_code=303)
+
+
+@app.post("/educacao/aulas/{lesson_id}/excluir")
+@require_role({"admin", "equipe"})
+async def edu_lesson_delete(request: Request, session: Session = Depends(get_session), lesson_id: int = 0) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    lesson = session.get(EducationLesson, int(lesson_id))
+    if not lesson:
+        set_flash(request, "Aula não encontrada.")
+        return RedirectResponse("/educacao", status_code=303)
+
+    atts = session.exec(select(Attachment).where(Attachment.education_lesson_id == lesson.id)).all()
+    if atts:
+        set_flash(request, "Remova materiais antes de excluir a aula.")
+        return RedirectResponse(f"/educacao/aulas/{lesson.id}", status_code=303)
+
+    module = session.get(EducationModule, lesson.module_id)
+    session.delete(lesson)
+    session.commit()
+
+    set_flash(request, "Aula excluída.")
+    return RedirectResponse(f"/educacao/modulos/{module.id if module else ''}", status_code=303)
