@@ -1,6 +1,6 @@
 # /app.py
 from __future__ import annotations
-from sqlalchemy import func
+from sqlalchemy import func, delete
 from sqlalchemy.exc import OperationalError
 
 import base64
@@ -37,6 +37,134 @@ from fastapi.staticfiles import StaticFiles
 APP_SECRET_KEY = os.getenv("APP_SECRET_KEY") or secrets.token_urlsafe(32)
 DATABASE_URL = os.getenv("DATABASE_URL") or "sqlite:///./app.db"
 ALLOW_COMPANY_SIGNUP = os.getenv("ALLOW_COMPANY_SIGNUP", "0") == "1"
+
+BOOKINGS_URL = os.getenv("BOOKINGS_URL") or "https://outlook.office.com/book/ReservasMaffezzolliConsultorRafael@mfzcapital.onmicrosoft.com/?ismsaljsauthenabled"
+
+SERVICE_CATALOG = [
+    {
+        "name": "Advisory - Consultoria Turnaround",
+        "description": "Consultoria em reestruturação de empresas"
+    },
+    {
+        "name": "Advisory - Consultoria Valuation",
+        "description": "Avaliação de empresas"
+    },
+    {
+        "name": "Advisory - Consultoria Estratégica Financeira",
+        "description": "Consultoria em finanças empresariais"
+    },
+    {
+        "name": "IB - Assessoria em Rodada Anjo/Seed/Série A (ECM)",
+        "description": "Conectar startups e empresas em crescimento com investidores de Venture Capital."
+    },
+    {
+        "name": "IB - Roadshow para Captação de Equity (ECM)",
+        "description": "Apresentar a empresa a múltiplos fundos de Private Equity para captações maiores."
+    },
+    {
+        "name": "IB - Estruturação de Debênture (DCM)",
+        "description": "Criar e assessorar a emissão de títulos de dívida da empresa no mercado."
+    },
+    {
+        "name": "IB - Estruturação de CRI/CRA (DCM)",
+        "description": "Títulos de dívida lastreados em recebíveis imobiliários ou do agronegócio."
+    },
+    {
+        "name": "IB - Mandato de Venda (M&A Sell-side)",
+        "description": "Assessorar o dono de uma empresa a vendê-la total ou parcialmente."
+    },
+    {
+        "name": "IB - Mandato de Compra (M&A Buy-side)",
+        "description": "Assessorar uma empresa a comprar outra."
+    },
+    {
+        "name": "Advisory - Plano de Recuperação Judicial",
+        "description": "Foco em preparar o plano, os documentos e a estratégia para a aprovação judicial."
+    },
+    {
+        "name": "Special Sits - Assessoria em M&A de Ativos Estressados (Distressed M&A)",
+        "description": "Conduzimos processos de fusão e aquisição para empresas em situações de crise, focando na agilidade da transação e na maximização de valor para os stakeholders."
+    },
+    {
+        "name": "Special Sits - Intermediação de Créditos de RJ (Recuperação Judicial)",
+        "description": "Conectamos credores que desejam liquidar seus recebíveis com investidores especializados na compra de créditos de empresas em Recuperação Judicial, gerando liquidez imediata."
+    },
+    {
+        "name": "Special Sits - Venda de Créditos Tributários (Precatórios,etc.)",
+        "description": "Estruturamos a venda de ativos tributários (como precatórios e saldos credores de impostos) para monetizar recursos não-líquidos e gerar caixa para a sua empresa."
+    },
+    {
+        "name": "Special Sits - Captação de Financiamento DIP (Debtor-in-Possession)",
+        "description": "Assessoramos empresas em Recuperação Judicial na captação de financiamentos emergenciais (DIP Financing), essenciais para financiar a operação e o plano de reestruturação."
+    },
+    {
+        "name": "BaaS - Capital de Giro",
+        "description": "Intermediamos linhas de capital de giro para financiar as operações do dia a dia da sua empresa e otimizar seu fluxo de caixa."
+    },
+    {
+        "name": "BaaS - Conta Garantida",
+        "description": "Estruturamos o acesso a linhas de crédito rotativo (conta garantida), oferecendo flexibilidade de caixa para as necessidades imediatas do seu negócio."
+    },
+    {
+        "name": "BaaS - Desconto de Duplicatas / Antecipação de Títulos",
+        "description": "Transforme suas vendas a prazo em caixa imediato através da antecipação de recebíveis, como duplicatas e cheques."
+    },
+    {
+        "name": "BaaS - Antecipação de Cartões",
+        "description": "Adiantamos os valores de suas vendas no cartão de crédito, melhorando o fluxo de caixa e o capital de giro da sua empresa."
+    },
+    {
+        "name": "BaaS - Câmbio Pronto (PF e PJ)",
+        "description": "Viabilizamos operações de compra e venda de moeda estrangeira para pessoas físicas e jurídicas com agilidade e taxas competitivas."
+    },
+    {
+        "name": "BaaS - Trade Finance",
+        "description": "Assessoramos na estruturação de operações de Trade Finance (ACC/ACE) para financiar e otimizar suas atividades de comércio exterior."
+    },
+    {
+        "name": "BaaS - Financiamento de Veículos",
+        "description": "Intermediamos as melhores linhas de financiamento para a aquisição de veículos, renovação de frota."
+    },
+    {
+        "name": "BaaS - Consórcio",
+        "description": "Oferecemos acesso a grupos de consórcio para a aquisição planejada de imóveis e veículos como uma alternativa de crédito sem juros."
+    },
+    {
+        "name": "BaaS - Cessão de Crédito",
+        "description": "Coordenamos a venda (cessão) de carteiras de crédito ou recebíveis, transformando ativos de baixa liquidez em caixa para a empresa."
+    },
+    {
+        "name": "BaaS - Auto Equity",
+        "description": "Estruturamos operações de crédito utilizando seus veículos como garantia para obter maiores volumes e taxas mais competitivas."
+    },
+    {
+        "name": "BaaS - Crédito Corporativo Estruturado",
+        "description": "É uma operação de crédito (empréstimo/financiamento) desenhada sob medida para uma necessidade específica de uma empresa, geralmente para valores mais altos ou situações mais complexas que não se encaixam nas linhas de crédito padrão."
+    },
+    {
+        "name": "BaaS - Home Equity (Empréstimo com Garantia de Imóvel)",
+        "description": "É uma modalidade de crédito onde o cliente (Pessoa Física ou Jurídica) utiliza um imóvel que já possui e está quitado (ou parcialmente quitado) como garantia para obter um empréstimo."
+    },
+    {
+        "name": "BaaS - Crédito Habitacional",
+        "description": "Esta é a modalidade mais comum, onde o banco financia a pessoa física que está comprando o imóvel da sua construtora."
+    },
+    {
+        "name": "BaaS - Financiamento à Produção (Plano Empresário)",
+        "description": "Este é um produto específico com um objetivo claro: financiar a construção de um empreendimento imobiliário."
+    },
+    {
+        "name": "BaaS - Analise de Crédito",
+        "description": "Contrate nossa Análise de Crédito e receba um relatório completo  sobre o perfil de risco da sua empresa ou cliente."
+    }
+]
+
+SERVICE_NAME_SET = {x["name"] for x in SERVICE_CATALOG}
+
+def sanitize_service_name(name: str) -> str:
+    s = (name or "").strip()
+    return s if s in SERVICE_NAME_SET else ""
+
 
 NOTION_TOKEN = os.getenv("NOTION_TOKEN")
 NOTION_DB_NEGOCIOS_ID = os.getenv("NOTION_DB_NEGOCIOS_ID")
@@ -261,6 +389,7 @@ class Proposal(SQLModel, table=True):
     kind: str = Field(default="proposta", index=True)  # proposta | solicitacao
     title: str
     description: str = ""  # solicitação do cliente ou notas da proposta
+    service_name: str = Field(default="", index=True)  # produto/serviço
     value_brl: float = 0.0  # usado normalmente para "proposta"
     status: str = Field(default="rascunho", index=True)
 
@@ -702,7 +831,7 @@ a:hover{ color:#00BFBF; }
     <nav class="navbar navbar-expand-lg bg-white border-bottom">
       <div class="container py-2">
         <a class="navbar-brand d-flex align-items-center gap-2" href="/">
-  <img src="/static/logo.png" alt="Bem-Vindo" style="height:32px; width:auto;">
+  <img src="/static/logo.png" alt="Maffezzolli Capital" style="height:32px; width:auto;">
   <span class="fw-bold" style="color:#0B1E1E;">Maffezzolli Capital</span>
 </a>
         <div class="ms-auto d-flex gap-2 align-items-center">
@@ -1137,6 +1266,8 @@ a:hover{ color:#00BFBF; }
     </div>
     {% if role in ["admin","equipe"] %}
       <a class="btn btn-primary" href="/pendencias/novo">Nova</a>
+    {% elif role == "cliente" %}
+      <a class="btn btn-primary" href="/pendencias/nova">Nova</a>
     {% endif %}
   </div>
   <hr class="my-3"/>
@@ -1170,7 +1301,12 @@ a:hover{ color:#00BFBF; }
   <div class="muted">Direcione para um cliente.</div>
   {% if not clients %}
     <div class="alert alert-warning mt-3">Nenhum cliente cadastrado. Vá em “Membros”.</div>
-    <a class="btn btn-outline-secondary" href="/pendencias">Voltar</a>
+    <div class="d-flex gap-2">
+      <a class="btn btn-outline-secondary" href="/pendencias">Voltar</a>
+      {% if role in ["admin","equipe"] %}
+        <a class="btn btn-outline-primary" href="/pendencias/{{ item.id }}/editar">Editar</a>
+      {% endif %}
+    </div>
   {% else %}
     <form method="post" action="/pendencias/novo" enctype="multipart/form-data" class="mt-3">
       <div class="row g-3">
@@ -1239,7 +1375,15 @@ a:hover{ color:#00BFBF; }
   {% if attachments %}
     <ul>
       {% for a in attachments %}
-        <li><a href="/download/{{ a.id }}">{{ a.original_filename }}</a></li>
+        <li class="d-flex justify-content-between align-items-center">
+          <a href="/download/{{ a.id }}">{{ a.original_filename }}</a>
+          {% if role in ["admin","equipe"] %}
+            <form method="post" action="/attachments/{{ a.id }}/delete" class="ms-2">
+              <input type="hidden" name="next" value="/documentos/{{ doc.id }}">
+              <button class="btn btn-outline-danger btn-sm" type="submit">Excluir</button>
+            </form>
+          {% endif %}
+        </li>
       {% endfor %}
     </ul>
   {% else %}
@@ -1328,6 +1472,8 @@ a:hover{ color:#00BFBF; }
     </div>
     {% if role in ["admin","equipe"] %}
       <a class="btn btn-primary" href="/documentos/novo">Novo</a>
+    {% elif role == "cliente" %}
+      <a class="btn btn-primary" href="/documentos/enviar">Enviar</a>
     {% endif %}
   </div>
   <hr class="my-3"/>
@@ -1360,7 +1506,12 @@ a:hover{ color:#00BFBF; }
   <div class="muted">Direcione para um cliente e (se quiser) coloque “aguardando_cliente”.</div>
   {% if not clients %}
     <div class="alert alert-warning mt-3">Nenhum cliente cadastrado. Vá em “Membros”.</div>
-    <a class="btn btn-outline-secondary" href="/documentos">Voltar</a>
+    <div class="d-flex gap-2">
+      <a class="btn btn-outline-secondary" href="/documentos">Voltar</a>
+      {% if role in ["admin","equipe"] %}
+        <a class="btn btn-outline-primary" href="/documentos/{{ doc.id }}/editar">Editar</a>
+      {% endif %}
+    </div>
   {% else %}
     <form method="post" action="/documentos/novo" enctype="multipart/form-data" class="mt-3">
       <div class="row g-3">
@@ -1425,7 +1576,15 @@ a:hover{ color:#00BFBF; }
   {% if attachments %}
     <ul>
       {% for a in attachments %}
-        <li><a href="/download/{{ a.id }}">{{ a.original_filename }}</a></li>
+        <li class="d-flex justify-content-between align-items-center">
+          <a href="/download/{{ a.id }}">{{ a.original_filename }}</a>
+          {% if role in ["admin","equipe"] %}
+            <form method="post" action="/attachments/{{ a.id }}/delete" class="ms-2">
+              <input type="hidden" name="next" value="/pendencias/{{ item.id }}">
+              <button class="btn btn-outline-danger btn-sm" type="submit">Excluir</button>
+            </form>
+          {% endif %}
+        </li>
       {% endfor %}
     </ul>
   {% else %}
@@ -1571,6 +1730,15 @@ a:hover{ color:#00BFBF; }
             <option value="enviada">enviada</option>
           </select>
         </div>
+        <div class="col-12">
+          <label class="form-label">Serviço/Produto</label>
+          <select class="form-select" name="service_name" required>
+            <option value="">Selecione...</option>
+            {% for s in service_catalog %}
+              <option value="{{ s.name }}">{{ s.name }}</option>
+            {% endfor %}
+          </select>
+        </div>
         <div class="col-md-6">
           <label class="form-label">Valor (R$)</label>
           <input class="form-control" name="value_brl" type="number" step="0.01" min="0" value="0" required />
@@ -1607,6 +1775,15 @@ a:hover{ color:#00BFBF; }
         <input class="form-control" name="title" required placeholder="Ex: Preciso de consultoria tributária..." />
       </div>
       <div class="col-12">
+        <label class="form-label">Serviço/Produto</label>
+        <select class="form-select" name="service_name" required>
+          <option value="">Selecione...</option>
+          {% for s in service_catalog %}
+            <option value="{{ s.name }}">{{ s.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-12">
         <label class="form-label">Detalhes</label>
         <textarea class="form-control" name="description" rows="6" required></textarea>
       </div>
@@ -1632,6 +1809,7 @@ a:hover{ color:#00BFBF; }
       <h4 class="mb-1">{{ prop.title }}</h4>
       <div class="muted">
         Tipo: <b>{{ prop.kind }}</b> • Status: <b>{{ prop.status }}</b>
+        {% if prop.service_name %} • Serviço: <b>{{ prop.service_name }}</b>{% endif %}
         {% if prop.kind == "proposta" %} • Valor: <b>R$ {{ "%.2f"|format(prop.value_brl) }}</b>{% endif %}
         {% if role in ["admin","equipe"] %} • Cliente: <b>{{ client.name }}</b>{% endif %}
       </div>
@@ -1647,7 +1825,15 @@ a:hover{ color:#00BFBF; }
   {% if attachments %}
     <ul>
       {% for a in attachments %}
-        <li><a href="/download/{{ a.id }}">{{ a.original_filename }}</a></li>
+        <li class="d-flex justify-content-between align-items-center">
+          <a href="/download/{{ a.id }}">{{ a.original_filename }}</a>
+          {% if role in ["admin","equipe"] %}
+            <form method="post" action="/attachments/{{ a.id }}/delete" class="ms-2">
+              <input type="hidden" name="next" value="/financeiro/{{ inv.id }}">
+              <button class="btn btn-outline-danger btn-sm" type="submit">Excluir</button>
+            </form>
+          {% endif %}
+        </li>
       {% endfor %}
     </ul>
   {% else %}
@@ -1689,6 +1875,15 @@ a:hover{ color:#00BFBF; }
         <select class="form-select" name="status">
           {% for s in allowed_statuses %}
             <option value="{{ s }}" {% if prop.status==s %}selected{% endif %}>{{ s }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-12">
+        <label class="form-label">Serviço/Produto</label>
+        <select class="form-select" name="service_name" required>
+          <option value="">Selecione...</option>
+          {% for s in service_catalog %}
+            <option value="{{ s.name }}" {% if prop.service_name==s.name %}selected{% endif %}>{{ s.name }}</option>
           {% endfor %}
         </select>
       </div>
@@ -1779,7 +1974,12 @@ a:hover{ color:#00BFBF; }
 
   {% if not clients %}
     <div class="alert alert-warning mt-3">Nenhum cliente cadastrado. Vá em “Membros”.</div>
-    <a class="btn btn-outline-secondary" href="/financeiro">Voltar</a>
+    <div class="d-flex gap-2">
+      <a class="btn btn-outline-secondary" href="/financeiro">Voltar</a>
+      {% if role in ["admin","equipe"] %}
+        <a class="btn btn-outline-primary" href="/financeiro/{{ inv.id }}/editar">Editar</a>
+      {% endif %}
+    </div>
   {% else %}
     <form method="post" action="/financeiro/novo" enctype="multipart/form-data" class="mt-3">
       <div class="row g-3">
@@ -1854,7 +2054,15 @@ a:hover{ color:#00BFBF; }
   {% if attachments %}
     <ul>
       {% for a in attachments %}
-        <li><a href="/download/{{ a.id }}">{{ a.original_filename }}</a></li>
+        <li class="d-flex justify-content-between align-items-center">
+          <a href="/download/{{ a.id }}">{{ a.original_filename }}</a>
+          {% if role in ["admin","equipe"] %}
+            <form method="post" action="/attachments/{{ a.id }}/delete" class="ms-2">
+              <input type="hidden" name="next" value="/propostas/{{ prop.id }}">
+              <button class="btn btn-outline-danger btn-sm" type="submit">Excluir</button>
+            </form>
+          {% endif %}
+        </li>
       {% endfor %}
     </ul>
   {% else %}
@@ -1875,7 +2083,6 @@ a:hover{ color:#00BFBF; }
 {% endblock %}
 """,
 }
-
 TEMPLATES.update({
 "consult_list.html": r"""
 {% extends "base.html" %}
@@ -1990,15 +2197,6 @@ TEMPLATES.update({
   <div class="d-flex justify-content-between align-items-start">
     <div>
       <h4 class="mb-1">{{ project.name }}</h4>
-      {% if role in ["admin","equipe"] %}
-  <div class="d-flex gap-2 mt-2">
-    <a class="btn btn-outline-primary btn-sm" href="/consultoria/{{ project.id }}/editar">Editar projeto</a>
-    <form method="post" action="/consultoria/{{ project.id }}/excluir"
-          onsubmit="return confirm('Excluir projeto? Isso apaga etapas e sub-etapas.');">
-      <button class="btn btn-outline-danger btn-sm" type="submit">Excluir</button>
-    </form>
-  </div>
-{% endif %}
       <div class="muted">
         Status: <b>{{ project.status }}</b>
         {% if project.due_date %} • Prazo final: <b>{{ project.due_date }}</b>{% endif %}
@@ -2036,15 +2234,6 @@ TEMPLATES.update({
           </h2>
           <div id="c{{ s.id }}" class="accordion-collapse collapse" data-bs-parent="#stagesAcc">
             <div class="accordion-body">
-            {% if role in ["admin","equipe"] %}
-  <div class="d-flex gap-2 mb-3">
-    <a class="btn btn-outline-secondary btn-sm" href="/consultoria/stages/{{ s.id }}/editar">Editar etapa</a>
-    <form method="post" action="/consultoria/stages/{{ s.id }}/excluir"
-          onsubmit="return confirm('Excluir etapa? Isso apaga as sub-etapas.');">
-      <button class="btn btn-outline-danger btn-sm" type="submit">Excluir etapa</button>
-    </form>
-  </div>
-{% endif %}
 
               {% if s.steps %}
                 <div class="list-group mb-3">
@@ -2065,13 +2254,6 @@ TEMPLATES.update({
                         </div>
 
                         <div class="d-flex gap-2">
-                          {% if role in ["admin","equipe"] %}
-  <a class="btn btn-outline-secondary btn-sm" href="/consultoria/steps/{{ st.id }}/editar">Editar</a>
-  <form method="post" action="/consultoria/steps/{{ st.id }}/excluir"
-        onsubmit="return confirm('Excluir sub-etapa?');">
-    <button class="btn btn-outline-danger btn-sm" type="submit">Excluir</button>
-  </form>
-{% endif %}
                           {% if role in ["admin","equipe"] or (role=="cliente" and st.client_action) %}
                             <form method="post" action="/consultoria/steps/{{ st.id }}/toggle">
                               <button class="btn btn-outline-primary btn-sm">{% if st.done %}Desmarcar{% else %}Concluir{% endif %}</button>
@@ -2148,171 +2330,241 @@ TEMPLATES.update({
 {% endblock %}
 """,
 })
+
 TEMPLATES.update({
-    "consult_edit_project.html": r"""
+"agenda.html": r"""
 {% extends "base.html" %}
 {% block content %}
 <div class="card p-4">
-  <div class="d-flex justify-content-between align-items-start">
+  <div class="d-flex justify-content-between align-items-center">
     <div>
-      <h4 class="mb-1">Editar Projeto</h4>
-      <div class="muted">{{ project.name }}</div>
+      <h4 class="mb-0">Agenda</h4>
+      <div class="muted">Agendamentos (Outlook Bookings)</div>
     </div>
-    <a class="btn btn-outline-secondary" href="/consultoria/{{ project.id }}">Voltar</a>
+    <a class="btn btn-outline-primary" href="{{ bookings_url }}" target="_blank" rel="noopener">Abrir em nova aba</a>
   </div>
-
   <hr class="my-3"/>
+  <div class="ratio ratio-16x9">
+    <iframe src="{{ bookings_url }}" title="Agenda" loading="lazy" referrerpolicy="no-referrer"></iframe>
+  </div>
+  <div class="muted small mt-3">Se o iframe não carregar, clique em “Abrir em nova aba”.</div>
+</div>
+{% endblock %}
+""",
 
-  <form method="post" action="/consultoria/{{ project.id }}/editar">
+"pending_new_client.html": r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <h4>Nova Pendência (Cliente)</h4>
+  <div class="muted">Crie um pedido/pendência e envie anexos ao escritório.</div>
+  <form method="post" action="/pendencias/nova" enctype="multipart/form-data" class="mt-3">
+    <div class="row g-3">
+      <div class="col-12">
+        <label class="form-label">Título</label>
+        <input class="form-control" name="title" required />
+      </div>
+      <div class="col-12">
+        <label class="form-label">Descrição</label>
+        <textarea class="form-control" name="description" rows="4"></textarea>
+      </div>
+      <div class="col-md-6">
+        <label class="form-label">Prazo (opcional)</label>
+        <input class="form-control mono" name="due_date" placeholder="2026-03-31" />
+      </div>
+      <div class="col-12">
+        <label class="form-label">Anexar arquivo (opcional)</label>
+        <input class="form-control" type="file" name="file" />
+      </div>
+    </div>
+    <div class="mt-4 d-flex gap-2">
+      <button class="btn btn-primary" type="submit">Criar</button>
+      <a class="btn btn-outline-secondary" href="/pendencias">Cancelar</a>
+    </div>
+  </form>
+</div>
+{% endblock %}
+""",
+
+"docs_send_client.html": r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <h4>Enviar Documento (Cliente)</h4>
+  <div class="muted">Envie um documento ao escritório e acompanhe o status.</div>
+  <form method="post" action="/documentos/enviar" enctype="multipart/form-data" class="mt-3">
+    <div class="row g-3">
+      <div class="col-12">
+        <label class="form-label">Título</label>
+        <input class="form-control" name="title" required />
+      </div>
+      <div class="col-12">
+        <label class="form-label">Mensagem (opcional)</label>
+        <textarea class="form-control" name="message" rows="3"></textarea>
+      </div>
+      <div class="col-12">
+        <label class="form-label">Arquivo</label>
+        <input class="form-control" type="file" name="file" required />
+      </div>
+    </div>
+    <div class="mt-4 d-flex gap-2">
+      <button class="btn btn-primary" type="submit">Enviar</button>
+      <a class="btn btn-outline-secondary" href="/documentos">Cancelar</a>
+    </div>
+  </form>
+</div>
+{% endblock %}
+""",
+
+"docs_edit.html": r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <div class="d-flex justify-content-between align-items-center">
+    <div>
+      <h4 class="mb-0">Editar Documento</h4>
+      <div class="muted">{{ doc.title }}</div>
+    </div>
+    <a class="btn btn-outline-secondary" href="/documentos/{{ doc.id }}">Voltar</a>
+  </div>
+  <hr class="my-3"/>
+  <form method="post" action="/documentos/{{ doc.id }}/editar">
     <div class="row g-3">
       <div class="col-md-8">
-        <label class="form-label">Nome</label>
-        <input class="form-control" name="name" value="{{ project.name }}" required />
+        <label class="form-label">Título</label>
+        <input class="form-control" name="title" value="{{ doc.title }}" required />
       </div>
       <div class="col-md-4">
         <label class="form-label">Status</label>
         <select class="form-select" name="status">
-          <option value="ativo" {% if project.status=="ativo" %}selected{% endif %}>ativo</option>
-          <option value="pausado" {% if project.status=="pausado" %}selected{% endif %}>pausado</option>
-          <option value="concluido" {% if project.status=="concluido" %}selected{% endif %}>concluido</option>
+          <option value="rascunho" {% if doc.status=="rascunho" %}selected{% endif %}>rascunho</option>
+          <option value="aguardando_cliente" {% if doc.status=="aguardando_cliente" %}selected{% endif %}>aguardando_cliente</option>
+          <option value="cliente_enviou" {% if doc.status=="cliente_enviou" %}selected{% endif %}>cliente_enviou</option>
+          <option value="concluido" {% if doc.status=="concluido" %}selected{% endif %}>concluido</option>
         </select>
       </div>
-
-      <div class="col-md-6">
-        <label class="form-label">Início (AAAA-MM-DD)</label>
-        <input class="form-control mono" name="start_date" value="{{ project.start_date }}" />
-      </div>
-      <div class="col-md-6">
-        <label class="form-label">Prazo final (AAAA-MM-DD)</label>
-        <input class="form-control mono" name="due_date" value="{{ project.due_date }}" />
-      </div>
-
       <div class="col-12">
-        <label class="form-label">Descrição</label>
-        <textarea class="form-control" name="description" rows="5">{{ project.description }}</textarea>
+        <label class="form-label">Conteúdo</label>
+        <textarea class="form-control" name="content" rows="6" required>{{ doc.content }}</textarea>
       </div>
     </div>
-
     <div class="mt-4 d-flex gap-2">
       <button class="btn btn-primary" type="submit">Salvar</button>
-      <a class="btn btn-outline-secondary" href="/consultoria/{{ project.id }}">Cancelar</a>
+      <a class="btn btn-outline-secondary" href="/documentos/{{ doc.id }}">Cancelar</a>
     </div>
   </form>
-
   <hr class="my-4"/>
-
-  <form method="post" action="/consultoria/{{ project.id }}/excluir"
-        onsubmit="return confirm('Excluir projeto? Isso apaga etapas e sub-etapas.');">
-    <button class="btn btn-outline-danger" type="submit">Excluir projeto</button>
+  <form method="post" action="/documentos/{{ doc.id }}/excluir" onsubmit="return confirm('Excluir documento? Remova anexos antes.');">
+    <button class="btn btn-outline-danger" type="submit">Excluir documento</button>
   </form>
 </div>
 {% endblock %}
 """,
 
-    "consult_edit_stage.html": r"""
+"pending_edit.html": r"""
 {% extends "base.html" %}
 {% block content %}
 <div class="card p-4">
-  <div class="d-flex justify-content-between align-items-start">
+  <div class="d-flex justify-content-between align-items-center">
     <div>
-      <h4 class="mb-1">Editar Etapa</h4>
-      <div class="muted">{{ stage.name }}</div>
+      <h4 class="mb-0">Editar Pendência</h4>
+      <div class="muted">{{ item.title }}</div>
     </div>
-    <a class="btn btn-outline-secondary" href="/consultoria/{{ project.id }}">Voltar</a>
+    <a class="btn btn-outline-secondary" href="/pendencias/{{ item.id }}">Voltar</a>
   </div>
-
   <hr class="my-3"/>
-
-  <form method="post" action="/consultoria/stages/{{ stage.id }}/editar">
-    <div class="row g-3">
-      <div class="col-md-8">
-        <label class="form-label">Nome</label>
-        <input class="form-control" name="name" value="{{ stage.name }}" required />
-      </div>
-      <div class="col-md-4">
-        <label class="form-label">Prazo (AAAA-MM-DD)</label>
-        <input class="form-control mono" name="due_date" value="{{ stage.due_date }}" />
-      </div>
-    </div>
-
-    <div class="mt-4 d-flex gap-2">
-      <button class="btn btn-primary" type="submit">Salvar</button>
-      <a class="btn btn-outline-secondary" href="/consultoria/{{ project.id }}">Cancelar</a>
-    </div>
-  </form>
-
-  <hr class="my-4"/>
-
-  <form method="post" action="/consultoria/stages/{{ stage.id }}/excluir"
-        onsubmit="return confirm('Excluir etapa? Isso apaga as sub-etapas.');">
-    <button class="btn btn-outline-danger" type="submit">Excluir etapa</button>
-  </form>
-</div>
-{% endblock %}
-""",
-
-    "consult_edit_step.html": r"""
-{% extends "base.html" %}
-{% block content %}
-<div class="card p-4">
-  <div class="d-flex justify-content-between align-items-start">
-    <div>
-      <h4 class="mb-1">Editar Sub-etapa</h4>
-      <div class="muted">{{ step.title }}</div>
-    </div>
-    <a class="btn btn-outline-secondary" href="/consultoria/{{ project.id }}">Voltar</a>
-  </div>
-
-  <hr class="my-3"/>
-
-  <form method="post" action="/consultoria/steps/{{ step.id }}/editar">
+  <form method="post" action="/pendencias/{{ item.id }}/editar">
     <div class="row g-3">
       <div class="col-md-8">
         <label class="form-label">Título</label>
-        <input class="form-control" name="title" value="{{ step.title }}" required />
+        <input class="form-control" name="title" value="{{ item.title }}" required />
       </div>
       <div class="col-md-4">
-        <label class="form-label">Prazo (AAAA-MM-DD)</label>
-        <input class="form-control mono" name="due_date" value="{{ step.due_date }}" />
+        <label class="form-label">Status</label>
+        <select class="form-select" name="status">
+          <option value="aberto" {% if item.status=="aberto" %}selected{% endif %}>aberto</option>
+          <option value="aguardando_cliente" {% if item.status=="aguardando_cliente" %}selected{% endif %}>aguardando_cliente</option>
+          <option value="cliente_enviou" {% if item.status=="cliente_enviou" %}selected{% endif %}>cliente_enviou</option>
+          <option value="concluido" {% if item.status=="concluido" %}selected{% endif %}>concluido</option>
+        </select>
       </div>
-
+      <div class="col-md-6">
+        <label class="form-label">Prazo (AAAA-MM-DD)</label>
+        <input class="form-control mono" name="due_date" value="{{ item.due_date }}" />
+      </div>
       <div class="col-12">
         <label class="form-label">Descrição</label>
-        <input class="form-control" name="description" value="{{ step.description }}" />
-      </div>
-
-      <div class="col-md-4">
-        <label class="form-label">Peso</label>
-        <input class="form-control" name="weight" type="number" step="0.1" min="0.1" value="{{ step.weight }}" />
-      </div>
-
-      <div class="col-md-4">
-        <div class="form-check mt-4">
-          <input class="form-check-input" type="checkbox" name="client_action" value="1" id="ca"
-                 {% if step.client_action %}checked{% endif %}>
-          <label class="form-check-label" for="ca">Ação do cliente</label>
-        </div>
+        <textarea class="form-control" name="description" rows="5">{{ item.description }}</textarea>
       </div>
     </div>
-
     <div class="mt-4 d-flex gap-2">
       <button class="btn btn-primary" type="submit">Salvar</button>
-      <a class="btn btn-outline-secondary" href="/consultoria/{{ project.id }}">Cancelar</a>
+      <a class="btn btn-outline-secondary" href="/pendencias/{{ item.id }}">Cancelar</a>
     </div>
   </form>
-
   <hr class="my-4"/>
+  <form method="post" action="/pendencias/{{ item.id }}/excluir" onsubmit="return confirm('Excluir pendência? Remova anexos antes.');">
+    <button class="btn btn-outline-danger" type="submit">Excluir pendência</button>
+  </form>
+</div>
+{% endblock %}
+""",
 
-  <form method="post" action="/consultoria/steps/{{ step.id }}/excluir"
-        onsubmit="return confirm('Excluir sub-etapa?');">
-    <button class="btn btn-outline-danger" type="submit">Excluir sub-etapa</button>
+"fin_edit.html": r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <div class="d-flex justify-content-between align-items-center">
+    <div>
+      <h4 class="mb-0">Editar Financeiro</h4>
+      <div class="muted">{{ inv.title }}</div>
+    </div>
+    <a class="btn btn-outline-secondary" href="/financeiro/{{ inv.id }}">Voltar</a>
+  </div>
+  <hr class="my-3"/>
+  <form method="post" action="/financeiro/{{ inv.id }}/editar">
+    <div class="row g-3">
+      <div class="col-md-8">
+        <label class="form-label">Título</label>
+        <input class="form-control" name="title" value="{{ inv.title }}" required />
+      </div>
+      <div class="col-md-4">
+        <label class="form-label">Status</label>
+        <select class="form-select" name="status">
+          <option value="emitido" {% if inv.status=="emitido" %}selected{% endif %}>emitido</option>
+          <option value="pago" {% if inv.status=="pago" %}selected{% endif %}>pago</option>
+          <option value="atrasado" {% if inv.status=="atrasado" %}selected{% endif %}>atrasado</option>
+          <option value="cancelado" {% if inv.status=="cancelado" %}selected{% endif %}>cancelado</option>
+        </select>
+      </div>
+      <div class="col-md-4">
+        <label class="form-label">Valor (R$)</label>
+        <input class="form-control" name="amount_brl" type="number" step="0.01" min="0" value="{{ inv.amount_brl }}" />
+      </div>
+      <div class="col-md-4">
+        <label class="form-label">Vencimento (AAAA-MM-DD)</label>
+        <input class="form-control mono" name="due_date" value="{{ inv.due_date }}" />
+      </div>
+      <div class="col-12">
+        <label class="form-label">Notas</label>
+        <textarea class="form-control" name="notes" rows="4">{{ inv.notes }}</textarea>
+      </div>
+    </div>
+    <div class="mt-4 d-flex gap-2">
+      <button class="btn btn-primary" type="submit">Salvar</button>
+      <a class="btn btn-outline-secondary" href="/financeiro/{{ inv.id }}">Cancelar</a>
+    </div>
+  </form>
+  <hr class="my-4"/>
+  <form method="post" action="/financeiro/{{ inv.id }}/excluir" onsubmit="return confirm('Excluir lançamento? Remova anexos antes.');">
+    <button class="btn btn-outline-danger" type="submit">Excluir lançamento</button>
   </form>
 </div>
 {% endblock %}
 """,
 })
-templates_env = Environment(loader=DictLoader(TEMPLATES), autoescape=True)
 
+templates_env = Environment(loader=DictLoader(TEMPLATES), autoescape=True)
 
 
 def render(
@@ -2326,6 +2578,8 @@ def render(
     ctx.setdefault("title", "App Escritório")
     ctx.setdefault("flash", request.session.pop("flash", None) if hasattr(request, "session") else None)
     ctx.setdefault("allow_company_signup", ALLOW_COMPANY_SIGNUP)
+    ctx.setdefault("service_catalog", SERVICE_CATALOG)
+    ctx.setdefault("bookings_url", BOOKINGS_URL)
     return HTMLResponse(templates_env.get_template(template_name).render(**ctx), status_code=status_code)
 
 
@@ -2911,9 +3165,6 @@ async def login_action(
 
 @app.get("/signup", response_class=HTMLResponse)
 async def signup_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
-    if not ALLOW_COMPANY_SIGNUP:
-        set_flash(request, "Cadastro de escritório desativado.")
-        return RedirectResponse("/login", status_code=303)
     if get_current_user(request, session):
         return RedirectResponse("/", status_code=303)
     return render("signup.html", request=request, context={"current_user": None})
@@ -2933,9 +3184,6 @@ async def signup_action(
     pain: str = Form(...),
     notes: str = Form(""),
 ) -> Response:
-    if not ALLOW_COMPANY_SIGNUP:
-        set_flash(request, "Cadastro de escritório desativado.")
-        return RedirectResponse("/login", status_code=303)
     if len(password) < 8:
         set_flash(request, "Senha muito curta (mínimo 8).")
         return RedirectResponse("/signup", status_code=303)
@@ -3015,6 +3263,7 @@ async def dashboard(request: Request, session: Session = Depends(get_session)) -
         {"title": "Empresa", "desc": "Dados completos do cliente.", "href": "/empresa"},
         {"title": "Perfil", "desc": "Indicadores do cliente.", "href": "/perfil"},
         {"title": "Consultoria", "desc": "Projetos, etapas e progresso.", "href": "/consultoria"},
+        {"title": "Agenda", "desc": "Agendamentos (Bookings).", "href": "/agenda"},
     ]
 
     return render(
@@ -4007,6 +4256,7 @@ async def props_new_staff_action(
     client_id: int = Form(...),
     title: str = Form(...),
     description: str = Form(""),
+    service_name: str = Form(""),
     value_brl: float = Form(0.0),
     status: str = Form("rascunho"),
     file: UploadFile | None = File(default=None),
@@ -4023,6 +4273,11 @@ async def props_new_staff_action(
     if status not in _proposal_allowed_statuses("proposta"):
         status = "rascunho"
 
+    service_name = sanitize_service_name(service_name)
+    if not service_name:
+        set_flash(request, "Selecione um serviço/produto.")
+        return RedirectResponse("/propostas/nova", status_code=303)
+
     prop = Proposal(
         company_id=ctx.company.id,
         client_id=client.id,
@@ -4030,6 +4285,7 @@ async def props_new_staff_action(
         kind="proposta",
         title=title.strip(),
         description=description.strip(),
+        service_name=service_name,
         value_brl=max(0.0, float(value_brl)),
         status=status,
         updated_at=utcnow(),
@@ -4087,6 +4343,7 @@ async def props_new_client_action(
     request: Request,
     session: Session = Depends(get_session),
     title: str = Form(...),
+    service_name: str = Form(""),
     description: str = Form(...),
     file: UploadFile | None = File(default=None),
 ) -> Response:
@@ -4098,6 +4355,11 @@ async def props_new_client_action(
         set_flash(request, "Seu usuário não está vinculado a um cliente.")
         return RedirectResponse("/propostas", status_code=303)
 
+    service_name = sanitize_service_name(service_name)
+    if not service_name:
+        set_flash(request, "Selecione um serviço/produto.")
+        return RedirectResponse("/propostas/solicitacao", status_code=303)
+
     prop = Proposal(
         company_id=ctx.company.id,
         client_id=client_id,
@@ -4105,6 +4367,7 @@ async def props_new_client_action(
         kind="solicitacao",
         title=title.strip(),
         description=description.strip(),
+        service_name=service_name,
         value_brl=0.0,
         status="aberta",
         updated_at=utcnow(),
@@ -4195,6 +4458,7 @@ async def props_update_staff(
     prop_id: int = 0,
     kind: str = Form(...),
     status: str = Form(...),
+    service_name: str = Form(""),
     value_brl: float = Form(0.0),
     message: str = Form(""),
 ) -> Response:
@@ -4217,6 +4481,7 @@ async def props_update_staff(
 
     prop.kind = kind
     prop.status = status
+    prop.service_name = sanitize_service_name(service_name)
     prop.value_brl = max(0.0, float(value_brl))
     prop.updated_at = utcnow()
     session.add(prop)
@@ -4227,6 +4492,33 @@ async def props_update_staff(
     session.commit()
     set_flash(request, "Atualizado.")
     return RedirectResponse(f"/propostas/{prop.id}", status_code=303)
+
+
+
+@app.post("/propostas/{prop_id}/excluir")
+@require_role({"admin", "equipe"})
+async def props_delete_staff(request: Request, session: Session = Depends(get_session), prop_id: int = 0) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    prop = session.get(Proposal, int(prop_id))
+    if not prop or prop.company_id != ctx.company.id:
+        set_flash(request, "Proposta não encontrada.")
+        return RedirectResponse("/propostas", status_code=303)
+
+    atts = session.exec(select(Attachment).where(Attachment.proposal_id == prop.id)).all()
+    if atts:
+        set_flash(request, "Remova os anexos antes de excluir a proposta.")
+        return RedirectResponse(f"/propostas/{prop.id}", status_code=303)
+
+    msgs = session.exec(select(ProposalMessage).where(ProposalMessage.proposal_id == prop.id)).all()
+    for m in msgs:
+        session.delete(m)
+
+    session.delete(prop)
+    session.commit()
+    set_flash(request, "Proposta excluída.")
+    return RedirectResponse("/propostas", status_code=303)
 
 
 @app.post("/propostas/{prop_id}/anexar")
@@ -4558,6 +4850,481 @@ async def download_attachment(request: Request, session: Session = Depends(get_s
         return render("error.html", request=request, context={"message": "Arquivo não está mais no servidor."}, status_code=404)
 
     return FileResponse(path=str(path), media_type=att.mime_type, filename=att.original_filename)
+
+
+
+# ----------------------------
+# Extras: Agenda + Attachments + Edit/Delete + Client create
+# ----------------------------
+
+def _delete_attachment_file(att: Attachment) -> None:
+    path = UPLOAD_DIR / att.stored_filename
+    try:
+        if path.exists():
+            path.unlink()
+    except Exception:
+        pass
+
+
+@app.get("/agenda", response_class=HTMLResponse)
+@require_login
+async def agenda_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+
+    active_client_id = get_active_client_id(request, session, ctx)
+    current_client = get_client_or_none(session, ctx.company.id, active_client_id)
+
+    return render(
+        "agenda.html",
+        request=request,
+        context={
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "role": ctx.membership.role,
+            "current_client": current_client,
+        },
+    )
+
+
+@app.post("/attachments/{attachment_id}/delete")
+@require_role({"admin", "equipe"})
+async def delete_attachment(
+    request: Request,
+    session: Session = Depends(get_session),
+    attachment_id: int = 0,
+    next: str = Form("/"),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    att = session.get(Attachment, int(attachment_id))
+    if not att or att.company_id != ctx.company.id:
+        set_flash(request, "Anexo não encontrado.")
+        return RedirectResponse(next, status_code=303)
+
+    _delete_attachment_file(att)
+    session.delete(att)
+    session.commit()
+
+    set_flash(request, "Anexo excluído.")
+    return RedirectResponse(next, status_code=303)
+
+
+@app.get("/pendencias/nova", response_class=HTMLResponse)
+@require_role({"cliente"})
+async def pending_new_client_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    active_client_id = get_active_client_id(request, session, ctx)
+    current_client = get_client_or_none(session, ctx.company.id, active_client_id)
+
+    return render(
+        "pending_new_client.html",
+        request=request,
+        context={
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "role": ctx.membership.role,
+            "current_client": current_client,
+        },
+    )
+
+
+@app.post("/pendencias/nova")
+@require_role({"cliente"})
+async def pending_new_client_action(
+    request: Request,
+    session: Session = Depends(get_session),
+    title: str = Form(...),
+    description: str = Form(""),
+    due_date: str = Form(""),
+    file: UploadFile | None = File(default=None),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    client_id = ctx.membership.client_id or 0
+    client = get_client_or_none(session, ctx.company.id, client_id)
+    if not client:
+        set_flash(request, "Seu usuário não está vinculado a um cliente.")
+        return RedirectResponse("/pendencias", status_code=303)
+
+    item = PendingItem(
+        company_id=ctx.company.id,
+        client_id=client.id,
+        created_by_user_id=ctx.user.id,
+        title=title.strip(),
+        description=description.strip(),
+        status="cliente_enviou",
+        due_date=due_date.strip(),
+        created_at=utcnow(),
+        updated_at=utcnow(),
+    )
+    session.add(item)
+    session.commit()
+    session.refresh(item)
+
+    if description.strip():
+        session.add(PendingMessage(pending_item_id=item.id, user_id=ctx.user.id, message=description.strip()))
+        session.commit()
+
+    if file and file.filename:
+        try:
+            stored, mime, size = await save_upload(file)
+        except ValueError:
+            set_flash(request, "Arquivo muito grande.")
+            return RedirectResponse(f"/pendencias/{item.id}", status_code=303)
+
+        session.add(
+            Attachment(
+                company_id=ctx.company.id,
+                client_id=item.client_id,
+                uploaded_by_user_id=ctx.user.id,
+                pending_item_id=item.id,
+                original_filename=file.filename or "arquivo",
+                stored_filename=stored,
+                mime_type=mime,
+                size_bytes=size,
+            )
+        )
+        session.commit()
+
+    set_flash(request, "Pendência criada.")
+    return RedirectResponse(f"/pendencias/{item.id}", status_code=303)
+
+
+@app.get("/documentos/enviar", response_class=HTMLResponse)
+@require_role({"cliente"})
+async def docs_send_client_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    active_client_id = get_active_client_id(request, session, ctx)
+    current_client = get_client_or_none(session, ctx.company.id, active_client_id)
+
+    return render(
+        "docs_send_client.html",
+        request=request,
+        context={
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "role": ctx.membership.role,
+            "current_client": current_client,
+        },
+    )
+
+
+@app.post("/documentos/enviar")
+@require_role({"cliente"})
+async def docs_send_client_action(
+    request: Request,
+    session: Session = Depends(get_session),
+    title: str = Form(...),
+    message: str = Form(""),
+    file: UploadFile = File(...),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    client_id = ctx.membership.client_id or 0
+    client = get_client_or_none(session, ctx.company.id, client_id)
+    if not client:
+        set_flash(request, "Seu usuário não está vinculado a um cliente.")
+        return RedirectResponse("/documentos", status_code=303)
+
+    content = message.strip() or "Enviado pelo cliente."
+    doc = Document(
+        company_id=ctx.company.id,
+        client_id=client.id,
+        created_by_user_id=ctx.user.id,
+        title=title.strip(),
+        content=content,
+        status="cliente_enviou",
+        created_at=utcnow(),
+        updated_at=utcnow(),
+    )
+    session.add(doc)
+    session.commit()
+    session.refresh(doc)
+
+    if message.strip():
+        session.add(DocumentMessage(document_id=doc.id, user_id=ctx.user.id, message=message.strip()))
+        session.commit()
+
+    try:
+        stored, mime, size = await save_upload(file)
+    except ValueError:
+        set_flash(request, "Arquivo muito grande.")
+        return RedirectResponse(f"/documentos/{doc.id}", status_code=303)
+
+    session.add(
+        Attachment(
+            company_id=ctx.company.id,
+            client_id=doc.client_id,
+            uploaded_by_user_id=ctx.user.id,
+            document_id=doc.id,
+            original_filename=file.filename or "arquivo",
+            stored_filename=stored,
+            mime_type=mime,
+            size_bytes=size,
+        )
+    )
+    session.commit()
+
+    set_flash(request, "Documento enviado.")
+    return RedirectResponse(f"/documentos/{doc.id}", status_code=303)
+
+
+@app.get("/documentos/{doc_id}/editar", response_class=HTMLResponse)
+@require_role({"admin", "equipe"})
+async def docs_edit_page(request: Request, session: Session = Depends(get_session), doc_id: int = 0) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    doc = session.get(Document, int(doc_id))
+    if not doc or doc.company_id != ctx.company.id:
+        return render("error.html", request=request, context={"message": "Documento não encontrado."}, status_code=404)
+
+    active_client_id = get_active_client_id(request, session, ctx)
+    current_client = get_client_or_none(session, ctx.company.id, active_client_id)
+
+    return render(
+        "docs_edit.html",
+        request=request,
+        context={
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "role": ctx.membership.role,
+            "current_client": current_client,
+            "doc": doc,
+        },
+    )
+
+
+@app.post("/documentos/{doc_id}/editar")
+@require_role({"admin", "equipe"})
+async def docs_edit_action(
+    request: Request,
+    session: Session = Depends(get_session),
+    doc_id: int = 0,
+    title: str = Form(...),
+    content: str = Form(...),
+    status: str = Form("rascunho"),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    doc = session.get(Document, int(doc_id))
+    if not doc or doc.company_id != ctx.company.id:
+        set_flash(request, "Documento não encontrado.")
+        return RedirectResponse("/documentos", status_code=303)
+
+    doc.title = title.strip()
+    doc.content = content.strip()
+    doc.status = status.strip().lower()
+    doc.updated_at = utcnow()
+    session.add(doc)
+    session.commit()
+
+    set_flash(request, "Documento atualizado.")
+    return RedirectResponse(f"/documentos/{doc.id}", status_code=303)
+
+
+@app.post("/documentos/{doc_id}/excluir")
+@require_role({"admin", "equipe"})
+async def docs_delete_action(request: Request, session: Session = Depends(get_session), doc_id: int = 0) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    doc = session.get(Document, int(doc_id))
+    if not doc or doc.company_id != ctx.company.id:
+        set_flash(request, "Documento não encontrado.")
+        return RedirectResponse("/documentos", status_code=303)
+
+    atts = session.exec(select(Attachment).where(Attachment.document_id == doc.id)).all()
+    if atts:
+        set_flash(request, "Remova os anexos antes de excluir o documento.")
+        return RedirectResponse(f"/documentos/{doc.id}", status_code=303)
+
+    msgs = session.exec(select(DocumentMessage).where(DocumentMessage.document_id == doc.id)).all()
+    for m in msgs:
+        session.delete(m)
+
+    session.delete(doc)
+    session.commit()
+
+    set_flash(request, "Documento excluído.")
+    return RedirectResponse("/documentos", status_code=303)
+
+
+@app.get("/pendencias/{item_id}/editar", response_class=HTMLResponse)
+@require_role({"admin", "equipe"})
+async def pending_edit_page(request: Request, session: Session = Depends(get_session), item_id: int = 0) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    item = session.get(PendingItem, int(item_id))
+    if not item or item.company_id != ctx.company.id:
+        return render("error.html", request=request, context={"message": "Pendência não encontrada."}, status_code=404)
+
+    active_client_id = get_active_client_id(request, session, ctx)
+    current_client = get_client_or_none(session, ctx.company.id, active_client_id)
+
+    return render(
+        "pending_edit.html",
+        request=request,
+        context={
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "role": ctx.membership.role,
+            "current_client": current_client,
+            "item": item,
+        },
+    )
+
+
+@app.post("/pendencias/{item_id}/editar")
+@require_role({"admin", "equipe"})
+async def pending_edit_action(
+    request: Request,
+    session: Session = Depends(get_session),
+    item_id: int = 0,
+    title: str = Form(...),
+    description: str = Form(""),
+    due_date: str = Form(""),
+    status: str = Form("aberto"),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    item = session.get(PendingItem, int(item_id))
+    if not item or item.company_id != ctx.company.id:
+        set_flash(request, "Pendência não encontrada.")
+        return RedirectResponse("/pendencias", status_code=303)
+
+    item.title = title.strip()
+    item.description = description.strip()
+    item.due_date = due_date.strip()
+    item.status = status.strip().lower()
+    item.updated_at = utcnow()
+    session.add(item)
+    session.commit()
+
+    set_flash(request, "Pendência atualizada.")
+    return RedirectResponse(f"/pendencias/{item.id}", status_code=303)
+
+
+@app.post("/pendencias/{item_id}/excluir")
+@require_role({"admin", "equipe"})
+async def pending_delete_action(request: Request, session: Session = Depends(get_session), item_id: int = 0) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    item = session.get(PendingItem, int(item_id))
+    if not item or item.company_id != ctx.company.id:
+        set_flash(request, "Pendência não encontrada.")
+        return RedirectResponse("/pendencias", status_code=303)
+
+    atts = session.exec(select(Attachment).where(Attachment.pending_item_id == item.id)).all()
+    if atts:
+        set_flash(request, "Remova os anexos antes de excluir a pendência.")
+        return RedirectResponse(f"/pendencias/{item.id}", status_code=303)
+
+    msgs = session.exec(select(PendingMessage).where(PendingMessage.pending_item_id == item.id)).all()
+    for m in msgs:
+        session.delete(m)
+
+    session.delete(item)
+    session.commit()
+
+    set_flash(request, "Pendência excluída.")
+    return RedirectResponse("/pendencias", status_code=303)
+
+
+@app.get("/financeiro/{inv_id}/editar", response_class=HTMLResponse)
+@require_role({"admin", "equipe"})
+async def fin_edit_page(request: Request, session: Session = Depends(get_session), inv_id: int = 0) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    inv = session.get(FinanceInvoice, int(inv_id))
+    if not inv or inv.company_id != ctx.company.id:
+        return render("error.html", request=request, context={"message": "Lançamento não encontrado."}, status_code=404)
+
+    active_client_id = get_active_client_id(request, session, ctx)
+    current_client = get_client_or_none(session, ctx.company.id, active_client_id)
+
+    return render(
+        "fin_edit.html",
+        request=request,
+        context={
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "role": ctx.membership.role,
+            "current_client": current_client,
+            "inv": inv,
+        },
+    )
+
+
+@app.post("/financeiro/{inv_id}/editar")
+@require_role({"admin", "equipe"})
+async def fin_edit_action(
+    request: Request,
+    session: Session = Depends(get_session),
+    inv_id: int = 0,
+    title: str = Form(...),
+    status: str = Form("emitido"),
+    amount_brl: float = Form(0.0),
+    due_date: str = Form(""),
+    notes: str = Form(""),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    inv = session.get(FinanceInvoice, int(inv_id))
+    if not inv or inv.company_id != ctx.company.id:
+        set_flash(request, "Lançamento não encontrado.")
+        return RedirectResponse("/financeiro", status_code=303)
+
+    inv.title = title.strip()
+    inv.status = status.strip().lower()
+    inv.amount_brl = max(0.0, float(amount_brl))
+    inv.due_date = due_date.strip()
+    inv.notes = notes.strip()
+    inv.updated_at = utcnow()
+    session.add(inv)
+    session.commit()
+
+    set_flash(request, "Financeiro atualizado.")
+    return RedirectResponse(f"/financeiro/{inv.id}", status_code=303)
+
+
+@app.post("/financeiro/{inv_id}/excluir")
+@require_role({"admin", "equipe"})
+async def fin_delete_action(request: Request, session: Session = Depends(get_session), inv_id: int = 0) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    inv = session.get(FinanceInvoice, int(inv_id))
+    if not inv or inv.company_id != ctx.company.id:
+        set_flash(request, "Lançamento não encontrado.")
+        return RedirectResponse("/financeiro", status_code=303)
+
+    atts = session.exec(select(Attachment).where(Attachment.finance_invoice_id == inv.id)).all()
+    if atts:
+        set_flash(request, "Remova os anexos antes de excluir o lançamento.")
+        return RedirectResponse(f"/financeiro/{inv.id}", status_code=303)
+
+    session.delete(inv)
+    session.commit()
+
+    set_flash(request, "Lançamento excluído.")
+    return RedirectResponse("/financeiro", status_code=303)
 
 
 # ----------------------------
