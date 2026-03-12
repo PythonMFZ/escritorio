@@ -555,6 +555,68 @@ class ProposalMessage(SQLModel, table=True):
 FIN_STATUSES = {"emitido", "pago", "atrasado", "cancelado"}
 
 
+# ----------------------------
+# CRM (Negócios / Funil)
+# ----------------------------
+
+CRM_STAGES = [
+    {"key": "qualificacao", "label": "Qualificação", "order": 1},
+    {"key": "criar_proposta", "label": "Criar Proposta", "order": 2},
+    {"key": "proposta_enviada", "label": "Proposta Enviada", "order": 3},
+    {"key": "negociacao", "label": "Em Negociação", "order": 4},
+    {"key": "pausado", "label": "Pausado", "order": 5},
+    {"key": "ganho", "label": "Fechado (Ganho)", "order": 6},
+    {"key": "perdido", "label": "Fechado (Perdido)", "order": 7},
+]
+
+CRM_STAGE_KEYS = {s["key"] for s in CRM_STAGES}
+
+
+class BusinessDeal(SQLModel, table=True):
+    """Negócio (oportunidade) do CRM."""
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+
+    company_id: int = Field(index=True, foreign_key="company.id")
+    client_id: int = Field(index=True, foreign_key="client.id")
+    created_by_user_id: int = Field(index=True, foreign_key="user.id")
+
+    owner_user_id: Optional[int] = Field(default=None, index=True, foreign_key="user.id")
+
+    title: str
+    demand: str = ""  # demanda inicial
+    notes: str = ""
+
+    stage: str = Field(default="qualificacao", index=True)
+
+    service_name: str = Field(default="", index=True)
+
+    value_estimate_brl: float = 0.0
+    probability_pct: int = 0  # 0..100
+
+    next_step: str = ""
+    next_step_date: str = ""  # AAAA-MM-DD
+
+    source: str = ""  # origem
+
+    # Ligações (opcionais)
+    proposal_id: Optional[int] = Field(default=None, index=True, foreign_key="proposal.id")
+    consulting_project_id: Optional[int] = Field(default=None, index=True, foreign_key="consultingproject.id")
+
+    created_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime = Field(default_factory=utcnow)
+
+
+class BusinessDealNote(SQLModel, table=True):
+    """Notas/comentários do negócio."""
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    deal_id: int = Field(index=True, foreign_key="businessdeal.id")
+    author_user_id: int = Field(index=True, foreign_key="user.id")
+
+    message: str
+    created_at: datetime = Field(default_factory=utcnow)
+
 class FinanceInvoice(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     company_id: int = Field(index=True, foreign_key="company.id")
@@ -3396,6 +3458,399 @@ TEMPLATES.update({
 """,
 })
 
+
+TEMPLATES.update({
+"crm_list.html": r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <div class="d-flex justify-content-between align-items-center">
+    <div>
+      <h4 class="mb-0">CRM (Negócios)</h4>
+      <div class="muted">Funil comercial</div>
+    </div>
+    {% if role in ["admin","equipe"] %}
+      <a class="btn btn-primary" href="/negocios/novo">Novo negócio</a>
+    {% endif %}
+  </div>
+
+  <hr class="my-3"/>
+
+  <form method="get" action="/negocios" class="row g-2 align-items-end mb-3">
+    <div class="col-md-4">
+      <label class="form-label">Cliente</label>
+      <select class="form-select" name="client_id">
+        <option value="0" {% if filter_client_id==0 %}selected{% endif %}>Todos</option>
+        {% for c in clients %}
+          <option value="{{ c.id }}" {% if filter_client_id==c.id %}selected{% endif %}>{{ c.name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-md-4">
+      <label class="form-label">Responsável</label>
+      <select class="form-select" name="owner_user_id">
+        <option value="0" {% if filter_owner_user_id==0 %}selected{% endif %}>Todos</option>
+        <option value="-1" {% if filter_owner_user_id==-1 %}selected{% endif %}>Sem responsável</option>
+        {% for u in owners %}
+          <option value="{{ u.id }}" {% if filter_owner_user_id==u.id %}selected{% endif %}>{{ u.name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-md-4">
+      <label class="form-label">Etapa</label>
+      <select class="form-select" name="stage">
+        <option value="" {% if not filter_stage %}selected{% endif %}>Todas</option>
+        {% for s in stages %}
+          <option value="{{ s.key }}" {% if filter_stage==s.key %}selected{% endif %}>{{ s.label }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-12 d-flex gap-2">
+      <button class="btn btn-outline-primary" type="submit">Filtrar</button>
+      <a class="btn btn-outline-secondary" href="/negocios">Limpar</a>
+    </div>
+  </form>
+
+  <div class="row g-3">
+    {% for col in columns %}
+      <div class="col-lg-4">
+        <div class="card p-3">
+          <div class="d-flex justify-content-between align-items-center">
+            <div class="fw-semibold">{{ col.label }}</div>
+            <span class="badge text-bg-light border">{{ col.count }}</span>
+          </div>
+          <hr class="my-2"/>
+          {% if col.deals %}
+            <div class="d-flex flex-column gap-2">
+              {% for d in col.deals %}
+                <a class="card p-3" href="/negocios/{{ d.id }}" style="border:1px solid rgba(0,0,0,.08); border-radius:14px;">
+                  <div class="fw-semibold">{{ d.title }}</div>
+                  <div class="muted small">{{ d.client_name }}{% if d.service_name %} • {{ d.service_name }}{% endif %}</div>
+                  <div class="muted small">
+                    {% if d.next_step_date %}Próx: {{ d.next_step_date }} • {% endif %}
+                    {% if d.owner_name %}Resp: {{ d.owner_name }}{% endif %}
+                  </div>
+                  {% if d.value_estimate_brl and d.value_estimate_brl>0 %}
+                    <div class="muted small">R$ {{ "%.2f"|format(d.value_estimate_brl) }}</div>
+                  {% endif %}
+                </a>
+              {% endfor %}
+            </div>
+          {% else %}
+            <div class="muted small">Sem negócios.</div>
+          {% endif %}
+        </div>
+      </div>
+    {% endfor %}
+  </div>
+</div>
+{% endblock %}
+""",
+
+"crm_new.html": r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <h4>Novo Negócio</h4>
+  <div class="muted">Cadastre a oportunidade e acompanhe no funil.</div>
+
+  <form method="post" action="/negocios/novo" class="mt-3">
+    <div class="row g-3">
+      <div class="col-md-6">
+        <label class="form-label">Cliente</label>
+        <select class="form-select" name="client_id" required>
+          {% for c in clients %}
+            <option value="{{ c.id }}">{{ c.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-md-6">
+        <label class="form-label">Responsável</label>
+        <select class="form-select" name="owner_user_id">
+          <option value="0">Sem responsável</option>
+          {% for u in owners %}
+            <option value="{{ u.id }}">{{ u.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <div class="col-12">
+        <label class="form-label">Título</label>
+        <input class="form-control" name="title" required placeholder="Ex: Captação / Valuation / Turnaround..." />
+      </div>
+
+      <div class="col-md-6">
+        <label class="form-label">Serviço/Produto</label>
+        <select class="form-select" name="service_name" required>
+          <option value="">Selecione...</option>
+          {% for s in service_catalog %}
+            <option value="{{ s.name }}">{{ s.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <div class="col-md-6">
+        <label class="form-label">Etapa</label>
+        <select class="form-select" name="stage">
+          {% for s in stages %}
+            <option value="{{ s.key }}">{{ s.label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <div class="col-12">
+        <label class="form-label">Demanda inicial</label>
+        <textarea class="form-control" name="demand" rows="3"></textarea>
+      </div>
+
+      <div class="col-md-4">
+        <label class="form-label">Valor estimado (R$)</label>
+        <input class="form-control" type="number" step="0.01" min="0" name="value_estimate_brl" value="0" />
+      </div>
+      <div class="col-md-4">
+        <label class="form-label">Probabilidade (%)</label>
+        <input class="form-control" type="number" min="0" max="100" name="probability_pct" value="0" />
+      </div>
+      <div class="col-md-4">
+        <label class="form-label">Origem</label>
+        <input class="form-control" name="source" placeholder="Indicação, inbound, etc." />
+      </div>
+
+      <div class="col-md-8">
+        <label class="form-label">Próximo passo</label>
+        <input class="form-control" name="next_step" />
+      </div>
+      <div class="col-md-4">
+        <label class="form-label">Data do próximo passo</label>
+        <input class="form-control mono" name="next_step_date" placeholder="AAAA-MM-DD" />
+      </div>
+
+      <div class="col-12">
+        <label class="form-label">Notas internas</label>
+        <textarea class="form-control" name="notes" rows="3"></textarea>
+      </div>
+    </div>
+
+    <div class="mt-4 d-flex gap-2">
+      <button class="btn btn-primary" type="submit">Criar</button>
+      <a class="btn btn-outline-secondary" href="/negocios">Cancelar</a>
+    </div>
+  </form>
+</div>
+{% endblock %}
+""",
+
+"crm_detail.html": r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <div class="d-flex justify-content-between align-items-start">
+    <div>
+      <h4 class="mb-1">{{ deal.title }}</h4>
+      <div class="muted">
+        Cliente: <b>{{ client.name }}</b>
+        {% if deal.service_name %} • Serviço: <b>{{ deal.service_name }}</b>{% endif %}
+      </div>
+      <div class="muted small mt-1">
+        Etapa: <b>{{ stage_label }}</b>
+        {% if owner_name %} • Responsável: <b>{{ owner_name }}</b>{% endif %}
+        {% if deal.next_step_date %} • Próx: <b>{{ deal.next_step_date }}</b>{% endif %}
+      </div>
+      {% if deal.value_estimate_brl and deal.value_estimate_brl>0 %}
+        <div class="muted small mt-1">Valor estimado: <b>R$ {{ "%.2f"|format(deal.value_estimate_brl) }}</b> • Prob.: <b>{{ deal.probability_pct }}%</b></div>
+      {% endif %}
+    </div>
+    <div class="d-flex gap-2">
+      <a class="btn btn-outline-secondary" href="/negocios">Voltar</a>
+      <a class="btn btn-outline-primary" href="/negocios/{{ deal.id }}/editar">Editar</a>
+    </div>
+  </div>
+
+  <hr class="my-3"/>
+
+  <div class="row g-3">
+    <div class="col-md-8">
+      <h6 class="mb-2">Demanda</h6>
+      <pre>{{ deal.demand or "—" }}</pre>
+
+      <h6 class="mt-4 mb-2">Notas internas</h6>
+      <pre>{{ deal.notes or "—" }}</pre>
+
+      <hr class="my-3"/>
+
+      <h6 class="mb-2">Timeline</h6>
+      {% if notes %}
+        <div class="list-group">
+          {% for n in notes %}
+            <div class="list-group-item">
+              <div class="small muted">{{ n.created_at }} • {{ n.author_name }}</div>
+              <div>{{ n.message }}</div>
+            </div>
+          {% endfor %}
+        </div>
+      {% else %}
+        <div class="muted">Sem notas.</div>
+      {% endif %}
+
+      <form method="post" action="/negocios/{{ deal.id }}/nota" class="mt-3">
+        <label class="form-label">Adicionar nota</label>
+        <textarea class="form-control" name="message" rows="3" required></textarea>
+        <button class="btn btn-primary mt-2" type="submit">Adicionar</button>
+      </form>
+    </div>
+
+    <div class="col-md-4">
+      <div class="card p-3">
+        <div class="fw-semibold mb-2">Ações</div>
+
+        <form method="post" action="/negocios/{{ deal.id }}/stage" class="mb-3">
+          <label class="form-label">Mover etapa</label>
+          <select class="form-select" name="stage">
+            {% for s in stages %}
+              <option value="{{ s.key }}" {% if deal.stage==s.key %}selected{% endif %}>{{ s.label }}</option>
+            {% endfor %}
+          </select>
+          <button class="btn btn-outline-primary w-100 mt-2">Atualizar</button>
+        </form>
+
+        <form method="post" action="/negocios/{{ deal.id }}/next" class="mb-3">
+          <label class="form-label">Próximo passo</label>
+          <input class="form-control mb-2" name="next_step" value="{{ deal.next_step }}" />
+          <input class="form-control mono" name="next_step_date" value="{{ deal.next_step_date }}" placeholder="AAAA-MM-DD" />
+          <button class="btn btn-outline-primary w-100 mt-2">Salvar</button>
+        </form>
+
+        {% if deal.proposal_id %}
+          <a class="btn btn-outline-secondary w-100 mb-2" href="/propostas/{{ deal.proposal_id }}">Abrir proposta</a>
+        {% else %}
+          <form method="post" action="/negocios/{{ deal.id }}/criar-proposta" class="mb-2">
+            <button class="btn btn-outline-secondary w-100">Criar proposta</button>
+          </form>
+        {% endif %}
+
+        {% if deal.consulting_project_id %}
+          <a class="btn btn-outline-secondary w-100 mb-2" href="/consultoria/{{ deal.consulting_project_id }}">Abrir projeto</a>
+        {% else %}
+          <form method="post" action="/negocios/{{ deal.id }}/criar-projeto" class="mb-2">
+            <button class="btn btn-outline-secondary w-100">Criar projeto (consultoria)</button>
+          </form>
+        {% endif %}
+
+        <hr class="my-2"/>
+
+        <form method="post" action="/negocios/{{ deal.id }}/excluir" onsubmit="return confirm('Excluir negócio?');">
+          <label class="form-label">Para excluir, digite EXCLUIR</label>
+          <input class="form-control" name="confirm" placeholder="EXCLUIR" />
+          <button class="btn btn-outline-danger w-100 mt-2" type="submit">Excluir</button>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+""",
+
+"crm_edit.html": r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <div class="d-flex justify-content-between align-items-start">
+    <div>
+      <h4 class="mb-1">Editar Negócio</h4>
+      <div class="muted">{{ deal.title }}</div>
+    </div>
+    <a class="btn btn-outline-secondary" href="/negocios/{{ deal.id }}">Voltar</a>
+  </div>
+
+  <hr class="my-3"/>
+
+  <form method="post" action="/negocios/{{ deal.id }}/editar">
+    <div class="row g-3">
+      <div class="col-md-6">
+        <label class="form-label">Cliente</label>
+        <select class="form-select" name="client_id" required>
+          {% for c in clients %}
+            <option value="{{ c.id }}" {% if c.id==deal.client_id %}selected{% endif %}>{{ c.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-md-6">
+        <label class="form-label">Responsável</label>
+        <select class="form-select" name="owner_user_id">
+          <option value="0" {% if not deal.owner_user_id %}selected{% endif %}>Sem responsável</option>
+          {% for u in owners %}
+            <option value="{{ u.id }}" {% if deal.owner_user_id==u.id %}selected{% endif %}>{{ u.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <div class="col-12">
+        <label class="form-label">Título</label>
+        <input class="form-control" name="title" value="{{ deal.title }}" required />
+      </div>
+
+      <div class="col-md-6">
+        <label class="form-label">Serviço/Produto</label>
+        <select class="form-select" name="service_name" required>
+          <option value="">Selecione...</option>
+          {% for s in service_catalog %}
+            <option value="{{ s.name }}" {% if deal.service_name==s.name %}selected{% endif %}>{{ s.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <div class="col-md-6">
+        <label class="form-label">Etapa</label>
+        <select class="form-select" name="stage">
+          {% for s in stages %}
+            <option value="{{ s.key }}" {% if deal.stage==s.key %}selected{% endif %}>{{ s.label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <div class="col-12">
+        <label class="form-label">Demanda</label>
+        <textarea class="form-control" name="demand" rows="3">{{ deal.demand }}</textarea>
+      </div>
+
+      <div class="col-md-4">
+        <label class="form-label">Valor estimado (R$)</label>
+        <input class="form-control" type="number" step="0.01" min="0" name="value_estimate_brl" value="{{ deal.value_estimate_brl }}" />
+      </div>
+      <div class="col-md-4">
+        <label class="form-label">Probabilidade (%)</label>
+        <input class="form-control" type="number" min="0" max="100" name="probability_pct" value="{{ deal.probability_pct }}" />
+      </div>
+      <div class="col-md-4">
+        <label class="form-label">Origem</label>
+        <input class="form-control" name="source" value="{{ deal.source }}" />
+      </div>
+
+      <div class="col-md-8">
+        <label class="form-label">Próximo passo</label>
+        <input class="form-control" name="next_step" value="{{ deal.next_step }}" />
+      </div>
+      <div class="col-md-4">
+        <label class="form-label">Data do próximo passo</label>
+        <input class="form-control mono" name="next_step_date" value="{{ deal.next_step_date }}" placeholder="AAAA-MM-DD" />
+      </div>
+
+      <div class="col-12">
+        <label class="form-label">Notas internas</label>
+        <textarea class="form-control" name="notes" rows="3">{{ deal.notes }}</textarea>
+      </div>
+    </div>
+
+    <div class="mt-4 d-flex gap-2">
+      <button class="btn btn-primary" type="submit">Salvar</button>
+      <a class="btn btn-outline-secondary" href="/negocios/{{ deal.id }}">Cancelar</a>
+    </div>
+  </form>
+</div>
+{% endblock %}
+""",
+})
+
 templates_env = Environment(loader=DictLoader(TEMPLATES), autoescape=True)
 
 
@@ -4091,6 +4546,7 @@ async def dashboard(request: Request, session: Session = Depends(get_session)) -
         {"title": "Pendências", "desc": "Checklist / pedidos de documentos.", "href": "/pendencias"},
         {"title": "Documentos", "desc": "Contratos e docs importantes.", "href": "/documentos"},
         {"title": "Propostas", "desc": "Propostas e solicitações.", "href": "/propostas"},
+        {"title": "CRM", "desc": "Negócios e funil comercial.", "href": "/negocios"},
         {"title": "Financeiro", "desc": "Notas/boletos de honorários.", "href": "/financeiro"},
         {"title": "Empresa", "desc": "Dados completos do cliente.", "href": "/empresa"},
         {"title": "Perfil", "desc": "Indicadores do cliente.", "href": "/perfil"},
@@ -6923,6 +7379,564 @@ async def fin_delete_action(request: Request, session: Session = Depends(get_ses
 
     set_flash(request, "Lançamento excluído.")
     return RedirectResponse("/financeiro", status_code=303)
+
+
+
+# ----------------------------
+# CRM routes (Negócios)
+# ----------------------------
+
+def _crm_stage_label(stage_key: str) -> str:
+    for s in CRM_STAGES:
+        if s["key"] == stage_key:
+            return s["label"]
+    return stage_key or "—"
+
+
+def _crm_stage_key_or_default(stage_key: str) -> str:
+    k = (stage_key or "").strip().lower()
+    return k if k in CRM_STAGE_KEYS else "qualificacao"
+
+
+def _owner_users_for_company(session: Session, company_id: int) -> list[dict[str, Any]]:
+    members = session.exec(select(Membership).where(Membership.company_id == company_id)).all()
+    out = []
+    seen = set()
+    for m in members:
+        if m.user_id in seen:
+            continue
+        u = session.get(User, m.user_id)
+        if u:
+            out.append({"id": u.id, "name": u.name})
+            seen.add(u.id)
+    out.sort(key=lambda x: x["name"].lower())
+    return out
+
+
+@app.get("/crm")
+@require_role({"admin", "equipe"})
+async def crm_alias() -> Response:
+    return RedirectResponse("/negocios", status_code=303)
+
+
+@app.get("/negocios", response_class=HTMLResponse)
+@require_role({"admin", "equipe"})
+async def crm_list(
+    request: Request,
+    session: Session = Depends(get_session),
+    client_id: int = 0,
+    owner_user_id: int = 0,
+    stage: str = "",
+) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    clients = session.exec(select(Client).where(Client.company_id == ctx.company.id).order_by(Client.created_at)).all()
+    owners = _owner_users_for_company(session, ctx.company.id)
+
+    q = select(BusinessDeal).where(BusinessDeal.company_id == ctx.company.id).order_by(BusinessDeal.updated_at.desc())
+
+    filter_client_id = int(client_id or 0)
+    if filter_client_id > 0:
+        c = get_client_or_none(session, ctx.company.id, filter_client_id)
+        if not c:
+            set_flash(request, "Cliente inválido para filtro.")
+            return RedirectResponse("/negocios", status_code=303)
+        q = q.where(BusinessDeal.client_id == c.id)
+
+    filter_owner_user_id = int(owner_user_id or 0)
+    if filter_owner_user_id == -1:
+        q = q.where(BusinessDeal.owner_user_id.is_(None))
+    elif filter_owner_user_id > 0:
+        q = q.where(BusinessDeal.owner_user_id == filter_owner_user_id)
+
+    filter_stage = (stage or "").strip().lower()
+    if filter_stage:
+        if filter_stage not in CRM_STAGE_KEYS:
+            set_flash(request, "Etapa inválida para filtro.")
+            return RedirectResponse("/negocios", status_code=303)
+        q = q.where(BusinessDeal.stage == filter_stage)
+
+    deals = session.exec(q).all()
+
+    client_name_by_id = {c.id: c.name for c in clients}
+    owner_name_by_id = {o["id"]: o["name"] for o in owners}
+
+    by_stage: dict[str, list[dict[str, Any]]] = {s["key"]: [] for s in CRM_STAGES}
+    for d in deals:
+        by_stage.setdefault(d.stage, [])
+        by_stage[d.stage].append(
+            {
+                "id": d.id,
+                "title": d.title,
+                "client_name": client_name_by_id.get(d.client_id, "—"),
+                "owner_name": owner_name_by_id.get(d.owner_user_id or 0, ""),
+                "service_name": d.service_name,
+                "next_step_date": d.next_step_date,
+                "value_estimate_brl": d.value_estimate_brl,
+            }
+        )
+
+    columns = []
+    for s in CRM_STAGES:
+        lst = by_stage.get(s["key"], [])
+        columns.append({"key": s["key"], "label": s["label"], "deals": lst, "count": len(lst)})
+
+    active_client_id = get_active_client_id(request, session, ctx)
+    current_client = get_client_or_none(session, ctx.company.id, active_client_id)
+
+    return render(
+        "crm_list.html",
+        request=request,
+        context={
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "role": ctx.membership.role,
+            "current_client": current_client,
+            "clients": clients,
+            "owners": owners,
+            "stages": CRM_STAGES,
+            "columns": columns,
+            "filter_client_id": filter_client_id,
+            "filter_owner_user_id": filter_owner_user_id,
+            "filter_stage": filter_stage,
+        },
+    )
+
+
+@app.get("/negocios/novo", response_class=HTMLResponse)
+@require_role({"admin", "equipe"})
+async def crm_new_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    clients = session.exec(select(Client).where(Client.company_id == ctx.company.id).order_by(Client.created_at)).all()
+    owners = _owner_users_for_company(session, ctx.company.id)
+
+    if not clients:
+        set_flash(request, "Cadastre um cliente antes de criar um negócio.")
+        return RedirectResponse("/negocios", status_code=303)
+
+    active_client_id = get_active_client_id(request, session, ctx)
+    current_client = get_client_or_none(session, ctx.company.id, active_client_id)
+
+    return render(
+        "crm_new.html",
+        request=request,
+        context={
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "role": ctx.membership.role,
+            "current_client": current_client,
+            "clients": clients,
+            "owners": owners,
+            "stages": CRM_STAGES,
+        },
+    )
+
+
+@app.post("/negocios/novo")
+@require_role({"admin", "equipe"})
+async def crm_new_action(
+    request: Request,
+    session: Session = Depends(get_session),
+    client_id: int = Form(...),
+    owner_user_id: int = Form(0),
+    title: str = Form(...),
+    service_name: str = Form(""),
+    stage: str = Form("qualificacao"),
+    demand: str = Form(""),
+    notes: str = Form(""),
+    value_estimate_brl: float = Form(0.0),
+    probability_pct: int = Form(0),
+    source: str = Form(""),
+    next_step: str = Form(""),
+    next_step_date: str = Form(""),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    client = get_client_or_none(session, ctx.company.id, int(client_id))
+    if not client:
+        set_flash(request, "Cliente inválido.")
+        return RedirectResponse("/negocios/novo", status_code=303)
+
+    service_name = sanitize_service_name(service_name)
+    if not service_name:
+        set_flash(request, "Selecione um serviço/produto.")
+        return RedirectResponse("/negocios/novo", status_code=303)
+
+    stage = _crm_stage_key_or_default(stage)
+
+    ouid = int(owner_user_id or 0)
+    owner = None
+    if ouid > 0:
+        owner = session.get(User, ouid)
+        if not owner:
+            set_flash(request, "Responsável inválido.")
+            return RedirectResponse("/negocios/novo", status_code=303)
+
+    prob = max(0, min(100, int(probability_pct or 0)))
+
+    deal = BusinessDeal(
+        company_id=ctx.company.id,
+        client_id=client.id,
+        created_by_user_id=ctx.user.id,
+        owner_user_id=(owner.id if owner else None),
+        title=title.strip(),
+        demand=demand.strip(),
+        notes=notes.strip(),
+        stage=stage,
+        service_name=service_name,
+        value_estimate_brl=max(0.0, float(value_estimate_brl)),
+        probability_pct=prob,
+        next_step=next_step.strip(),
+        next_step_date=next_step_date.strip(),
+        source=source.strip(),
+        updated_at=utcnow(),
+    )
+    session.add(deal)
+    session.commit()
+    session.refresh(deal)
+
+    session.add(BusinessDealNote(deal_id=deal.id, author_user_id=ctx.user.id, message="Negócio criado."))
+    session.commit()
+
+    set_flash(request, "Negócio criado.")
+    return RedirectResponse(f"/negocios/{deal.id}", status_code=303)
+
+
+@app.get("/negocios/{deal_id}", response_class=HTMLResponse)
+@require_role({"admin", "equipe"})
+async def crm_detail(request: Request, session: Session = Depends(get_session), deal_id: int = 0) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    deal = session.get(BusinessDeal, int(deal_id))
+    if not deal or deal.company_id != ctx.company.id:
+        return render("error.html", request=request, context={"message": "Negócio não encontrado."}, status_code=404)
+
+    client = session.get(Client, deal.client_id)
+    owner = session.get(User, deal.owner_user_id) if deal.owner_user_id else None
+
+    notes = session.exec(
+        select(BusinessDealNote).where(BusinessDealNote.deal_id == deal.id).order_by(BusinessDealNote.created_at.desc())
+    ).all()
+
+    note_view = []
+    for n in notes:
+        au = session.get(User, n.author_user_id)
+        note_view.append({"id": n.id, "message": n.message, "created_at": n.created_at, "author_name": au.name if au else "—"})
+
+    active_client_id = get_active_client_id(request, session, ctx)
+    current_client = get_client_or_none(session, ctx.company.id, active_client_id)
+
+    return render(
+        "crm_detail.html",
+        request=request,
+        context={
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "role": ctx.membership.role,
+            "current_client": current_client,
+            "deal": deal,
+            "client": client,
+            "owner_name": owner.name if owner else "",
+            "stage_label": _crm_stage_label(deal.stage),
+            "stages": CRM_STAGES,
+            "notes": note_view,
+        },
+    )
+
+
+@app.get("/negocios/{deal_id}/editar", response_class=HTMLResponse)
+@require_role({"admin", "equipe"})
+async def crm_edit_page(request: Request, session: Session = Depends(get_session), deal_id: int = 0) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    deal = session.get(BusinessDeal, int(deal_id))
+    if not deal or deal.company_id != ctx.company.id:
+        return render("error.html", request=request, context={"message": "Negócio não encontrado."}, status_code=404)
+
+    clients = session.exec(select(Client).where(Client.company_id == ctx.company.id).order_by(Client.created_at)).all()
+    owners = _owner_users_for_company(session, ctx.company.id)
+
+    active_client_id = get_active_client_id(request, session, ctx)
+    current_client = get_client_or_none(session, ctx.company.id, active_client_id)
+
+    return render(
+        "crm_edit.html",
+        request=request,
+        context={
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "role": ctx.membership.role,
+            "current_client": current_client,
+            "deal": deal,
+            "clients": clients,
+            "owners": owners,
+            "stages": CRM_STAGES,
+        },
+    )
+
+
+@app.post("/negocios/{deal_id}/editar")
+@require_role({"admin", "equipe"})
+async def crm_edit_action(
+    request: Request,
+    session: Session = Depends(get_session),
+    deal_id: int = 0,
+    client_id: int = Form(...),
+    owner_user_id: int = Form(0),
+    title: str = Form(...),
+    service_name: str = Form(""),
+    stage: str = Form("qualificacao"),
+    demand: str = Form(""),
+    notes: str = Form(""),
+    value_estimate_brl: float = Form(0.0),
+    probability_pct: int = Form(0),
+    source: str = Form(""),
+    next_step: str = Form(""),
+    next_step_date: str = Form(""),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    deal = session.get(BusinessDeal, int(deal_id))
+    if not deal or deal.company_id != ctx.company.id:
+        set_flash(request, "Negócio não encontrado.")
+        return RedirectResponse("/negocios", status_code=303)
+
+    client = get_client_or_none(session, ctx.company.id, int(client_id))
+    if not client:
+        set_flash(request, "Cliente inválido.")
+        return RedirectResponse(f"/negocios/{deal.id}/editar", status_code=303)
+
+    service_name = sanitize_service_name(service_name)
+    if not service_name:
+        set_flash(request, "Selecione um serviço/produto.")
+        return RedirectResponse(f"/negocios/{deal.id}/editar", status_code=303)
+
+    stage = _crm_stage_key_or_default(stage)
+
+    ouid = int(owner_user_id or 0)
+    owner_id = None
+    if ouid > 0:
+        ou = session.get(User, ouid)
+        if not ou:
+            set_flash(request, "Responsável inválido.")
+            return RedirectResponse(f"/negocios/{deal.id}/editar", status_code=303)
+        owner_id = ou.id
+
+    deal.client_id = client.id
+    deal.owner_user_id = owner_id
+    deal.title = title.strip()
+    deal.service_name = service_name
+    deal.stage = stage
+    deal.demand = demand.strip()
+    deal.notes = notes.strip()
+    deal.value_estimate_brl = max(0.0, float(value_estimate_brl))
+    deal.probability_pct = max(0, min(100, int(probability_pct or 0)))
+    deal.source = source.strip()
+    deal.next_step = next_step.strip()
+    deal.next_step_date = next_step_date.strip()
+    deal.updated_at = utcnow()
+    session.add(deal)
+    session.commit()
+
+    session.add(BusinessDealNote(deal_id=deal.id, author_user_id=ctx.user.id, message="Negócio atualizado."))
+    session.commit()
+
+    set_flash(request, "Negócio atualizado.")
+    return RedirectResponse(f"/negocios/{deal.id}", status_code=303)
+
+
+@app.post("/negocios/{deal_id}/stage")
+@require_role({"admin", "equipe"})
+async def crm_update_stage(
+    request: Request,
+    session: Session = Depends(get_session),
+    deal_id: int = 0,
+    stage: str = Form(""),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    deal = session.get(BusinessDeal, int(deal_id))
+    if not deal or deal.company_id != ctx.company.id:
+        set_flash(request, "Negócio não encontrado.")
+        return RedirectResponse("/negocios", status_code=303)
+
+    deal.stage = _crm_stage_key_or_default(stage)
+    deal.updated_at = utcnow()
+    session.add(deal)
+    session.commit()
+
+    session.add(BusinessDealNote(deal_id=deal.id, author_user_id=ctx.user.id, message=f"Etapa alterada para: {_crm_stage_label(deal.stage)}."))
+    session.commit()
+
+    return RedirectResponse(f"/negocios/{deal.id}", status_code=303)
+
+
+@app.post("/negocios/{deal_id}/next")
+@require_role({"admin", "equipe"})
+async def crm_update_next(
+    request: Request,
+    session: Session = Depends(get_session),
+    deal_id: int = 0,
+    next_step: str = Form(""),
+    next_step_date: str = Form(""),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    deal = session.get(BusinessDeal, int(deal_id))
+    if not deal or deal.company_id != ctx.company.id:
+        set_flash(request, "Negócio não encontrado.")
+        return RedirectResponse("/negocios", status_code=303)
+
+    deal.next_step = (next_step or "").strip()
+    deal.next_step_date = (next_step_date or "").strip()
+    deal.updated_at = utcnow()
+    session.add(deal)
+    session.commit()
+
+    session.add(BusinessDealNote(deal_id=deal.id, author_user_id=ctx.user.id, message="Próximo passo atualizado."))
+    session.commit()
+
+    return RedirectResponse(f"/negocios/{deal.id}", status_code=303)
+
+
+@app.post("/negocios/{deal_id}/nota")
+@require_role({"admin", "equipe"})
+async def crm_add_note(
+    request: Request,
+    session: Session = Depends(get_session),
+    deal_id: int = 0,
+    message: str = Form(...),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    deal = session.get(BusinessDeal, int(deal_id))
+    if not deal or deal.company_id != ctx.company.id:
+        set_flash(request, "Negócio não encontrado.")
+        return RedirectResponse("/negocios", status_code=303)
+
+    msg = (message or "").strip()
+    if not msg:
+        return RedirectResponse(f"/negocios/{deal.id}", status_code=303)
+
+    session.add(BusinessDealNote(deal_id=deal.id, author_user_id=ctx.user.id, message=msg))
+    deal.updated_at = utcnow()
+    session.add(deal)
+    session.commit()
+
+    return RedirectResponse(f"/negocios/{deal.id}", status_code=303)
+
+
+@app.post("/negocios/{deal_id}/criar-proposta")
+@require_role({"admin", "equipe"})
+async def crm_create_proposal(request: Request, session: Session = Depends(get_session), deal_id: int = 0) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    deal = session.get(BusinessDeal, int(deal_id))
+    if not deal or deal.company_id != ctx.company.id:
+        set_flash(request, "Negócio não encontrado.")
+        return RedirectResponse("/negocios", status_code=303)
+
+    if deal.proposal_id:
+        return RedirectResponse(f"/propostas/{deal.proposal_id}", status_code=303)
+
+    prop = Proposal(
+        company_id=ctx.company.id,
+        client_id=deal.client_id,
+        created_by_user_id=ctx.user.id,
+        kind="proposta",
+        title=deal.title,
+        description=deal.demand or deal.notes,
+        service_name=deal.service_name,
+        value_brl=max(0.0, float(deal.value_estimate_brl)),
+        status="rascunho",
+        created_at=utcnow(),
+        updated_at=utcnow(),
+    )
+    session.add(prop)
+    session.commit()
+    session.refresh(prop)
+
+    deal.proposal_id = prop.id
+    deal.updated_at = utcnow()
+    session.add(deal)
+    session.add(BusinessDealNote(deal_id=deal.id, author_user_id=ctx.user.id, message=f"Proposta criada (#{prop.id})."))
+    session.commit()
+
+    set_flash(request, "Proposta criada.")
+    return RedirectResponse(f"/propostas/{prop.id}", status_code=303)
+
+
+@app.post("/negocios/{deal_id}/criar-projeto")
+@require_role({"admin", "equipe"})
+async def crm_create_project(request: Request, session: Session = Depends(get_session), deal_id: int = 0) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    deal = session.get(BusinessDeal, int(deal_id))
+    if not deal or deal.company_id != ctx.company.id:
+        set_flash(request, "Negócio não encontrado.")
+        return RedirectResponse("/negocios", status_code=303)
+
+    if deal.consulting_project_id:
+        return RedirectResponse(f"/consultoria/{deal.consulting_project_id}", status_code=303)
+
+    proj = ConsultingProject(
+        company_id=ctx.company.id,
+        client_id=deal.client_id,
+        created_by_user_id=ctx.user.id,
+        name=deal.title,
+        description=deal.demand or deal.notes,
+        status="ativo",
+        start_date="",
+        due_date="",
+        updated_at=utcnow(),
+    )
+    session.add(proj)
+    session.commit()
+    session.refresh(proj)
+
+    deal.consulting_project_id = proj.id
+    deal.updated_at = utcnow()
+    session.add(deal)
+    session.add(BusinessDealNote(deal_id=deal.id, author_user_id=ctx.user.id, message=f"Projeto criado (#{proj.id})."))
+    session.commit()
+
+    set_flash(request, "Projeto criado.")
+    return RedirectResponse(f"/consultoria/{proj.id}", status_code=303)
+
+
+@app.post("/negocios/{deal_id}/excluir")
+@require_role({"admin", "equipe"})
+async def crm_delete(request: Request, session: Session = Depends(get_session), deal_id: int = 0, confirm: str = Form("")) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    deal = session.get(BusinessDeal, int(deal_id))
+    if not deal or deal.company_id != ctx.company.id:
+        set_flash(request, "Negócio não encontrado.")
+        return RedirectResponse("/negocios", status_code=303)
+
+    if (confirm or "").strip().upper() != "EXCLUIR":
+        set_flash(request, "Confirmação inválida. Digite EXCLUIR.")
+        return RedirectResponse(f"/negocios/{deal.id}", status_code=303)
+
+    session.exec(delete(BusinessDealNote).where(BusinessDealNote.deal_id == deal.id))
+    session.exec(delete(BusinessDeal).where(BusinessDeal.id == deal.id))
+    session.commit()
+
+    set_flash(request, "Negócio excluído.")
+    return RedirectResponse("/negocios", status_code=303)
 
 
 # ----------------------------
