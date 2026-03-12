@@ -5384,7 +5384,11 @@ async def tasks_list(
 
 @app.get("/tarefas/nova", response_class=HTMLResponse)
 @require_role({"admin", "equipe"})
-async def tasks_new_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
+async def tasks_new_page(
+    request: Request,
+    session: Session = Depends(get_session),
+    client_id: int = 0,  # <-- ADICIONE ISTO (vem da querystring ?client_id=)
+) -> HTMLResponse:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
