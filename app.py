@@ -275,6 +275,106 @@ class OnboardingDiagnostic(SQLModel, table=True):
     created_at: datetime = Field(default_factory=utcnow)
 
 
+
+
+# ----------------------------
+# Perfil: Snapshots (evolução)
+# ----------------------------
+
+class ClientSnapshot(SQLModel, table=True):
+    """
+    "Foto do momento" do cliente + score (evolução).
+    Cada submissão vira um registro para compararmos ao longo do tempo.
+    """
+    id: Optional[int] = Field(default=None, primary_key=True)
+
+    company_id: int = Field(index=True, foreign_key="company.id")
+    client_id: int = Field(index=True, foreign_key="client.id")
+    created_by_user_id: int = Field(index=True, foreign_key="user.id")
+
+    # KPIs (foto do momento)
+    revenue_monthly_brl: float = 0.0
+    debt_total_brl: float = 0.0
+    cash_balance_brl: float = 0.0
+    employees_count: int = 0
+
+    # Pesquisa
+    nps_score: int = 0  # 0..10
+    notes: str = ""
+
+    # Respostas do checklist (JSON)
+    answers_json: str = Field(default="{}")
+
+    # Scores 0..100
+    score_process: float = 0.0
+    score_financial: float = 0.0
+    score_total: float = 0.0
+
+    created_at: datetime = Field(default_factory=utcnow)
+
+
+PROFILE_SURVEY_V1 = [
+    {"id": "dre_mensal", "section": "Processos", "q": "Você fecha DRE mensalmente?", "type": "bool", "w": 10},
+    {"id": "fluxo_90d", "section": "Processos", "q": "Você tem fluxo de caixa projetado (90 dias)?", "type": "bool", "w": 12},
+    {"id": "contas_pagar_receber", "section": "Processos", "q": "Contas a pagar/receber controladas diariamente?", "type": "bool", "w": 10},
+    {"id": "conciliacao_bancaria", "section": "Processos", "q": "Você faz conciliação bancária (mínimo semanal)?", "type": "bool", "w": 8},
+    {"id": "inadimplencia", "section": "Processos", "q": "Você mede inadimplência e tem rotina de cobrança?", "type": "bool", "w": 8},
+    {"id": "dividas_mapa", "section": "Processos", "q": "Você tem mapa de dívidas (saldo, taxa, prazo)?", "type": "bool", "w": 10},
+    {"id": "orcamento", "section": "Processos", "q": "Existe orçamento anual e acompanhamento mensal?", "type": "bool", "w": 10},
+    {"id": "kpis", "section": "Processos", "q": "Você acompanha KPIs (margem, caixa, giro) com frequência?", "type": "bool", "w": 10},
+    {"id": "precificacao", "section": "Processos", "q": "Você revisa precificação/margem periodicamente?", "type": "bool", "w": 8},
+    {"id": "tributario_ok", "section": "Risco", "q": "Obrigações fiscais estão em dia?", "type": "bool", "w": 10},
+    {"id": "contratos_ok", "section": "Risco", "q": "Contratos principais estão organizados e acessíveis?", "type": "bool", "w": 6},
+    {"id": "centro_custo", "section": "Risco", "q": "Existe centro de custos / plano de contas estruturado?", "type": "bool", "w": 8},
+]
+
+
+def _clamp_0_100(x: float) -> float:
+    return 0.0 if x < 0 else 100.0 if x > 100 else x
+
+
+def _parse_bool(val: Any) -> bool:
+    return str(val) in {"1", "true", "True", "on", "yes", "sim"}
+
+
+def score_process_from_answers(answers: dict[str, Any]) -> float:
+    total_w = sum(q["w"] for q in PROFILE_SURVEY_V1)
+    if total_w <= 0:
+        return 0.0
+    got = 0.0
+    for q in PROFILE_SURVEY_V1:
+        if bool(answers.get(q["id"])):
+            got += q["w"]
+    return round((got / total_w) * 100.0, 2)
+
+
+def score_financial_simple(revenue_monthly: float, debt_total: float, cash_balance: float) -> float:
+    """
+    Score financeiro simples (0..100) baseado em:
+      - dívida / faturamento mensal (menor melhor)
+      - caixa / faturamento mensal (maior melhor)
+    """
+    rev = max(0.0, float(revenue_monthly))
+    if rev <= 0:
+        return 0.0
+    debt = max(0.0, float(debt_total))
+    cash = max(0.0, float(cash_balance))
+
+    debt_ratio = debt / max(1.0, rev)
+    cash_ratio = cash / max(1.0, rev)
+
+    debt_score = 100.0 * max(0.0, min(1.0, 1.0 / (1.0 + debt_ratio)))  # 0 => 100, 1 => 50
+    cash_score = 100.0 * max(0.0, min(1.0, cash_ratio))                # 1 => 100
+
+    return round((0.6 * debt_score + 0.4 * cash_score), 2)
+
+
+def score_total(process_score: float, financial_score: float, nps_score: int) -> float:
+    nps01 = max(0, min(10, int(nps_score))) / 10.0  # 0..1
+    nps100 = nps01 * 100.0
+    return round(_clamp_0_100(0.5 * float(process_score) + 0.4 * float(financial_score) + 0.1 * float(nps100)), 2)
+
+
 # ----------------------------
 # Documentos (contratos, termos etc.)
 # ----------------------------
@@ -3026,6 +3126,276 @@ TEMPLATES.update({
 })
 
 
+
+
+# ----------------------------
+# Perfil: templates (override + novos)
+# ----------------------------
+TEMPLATES.update({
+    "perfil.html": r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="row g-3">
+  <div class="col-lg-5">
+    <div class="card p-4">
+      <h4 class="mb-1">Meu Perfil</h4>
+      <div class="muted mb-3">Dados do usuário</div>
+      <div><span class="muted">Nome:</span> <b>{{ current_user.name }}</b></div>
+      <div><span class="muted">E-mail:</span> <span class="mono">{{ current_user.email }}</span></div>
+      <div><span class="muted">Role:</span> <b>{{ role }}</b></div>
+    </div>
+
+    {% if current_client %}
+      <div class="card p-4 mt-3">
+        <div class="d-flex justify-content-between align-items-start">
+          <div>
+            <h5 class="mb-1">Evolução</h5>
+            <div class="muted">Score 0–100 (processos + financeiro + NPS)</div>
+          </div>
+          <a class="btn btn-primary btn-sm" href="/perfil/avaliacao/nova">Nova avaliação</a>
+        </div>
+
+        {% if latest_score is not none %}
+          <div class="mt-3">
+            <div class="d-flex justify-content-between">
+              <div class="fw-semibold">Score atual</div>
+              <div class="fw-semibold">{{ "%.1f"|format(latest_score) }}</div>
+            </div>
+            {% if delta is not none %}
+              <div class="muted small">Variação vs. anterior: <b>{{ delta }}</b></div>
+            {% else %}
+              <div class="muted small">Ainda sem comparação (precisa de 2 avaliações).</div>
+            {% endif %}
+          </div>
+        {% else %}
+          <div class="alert alert-info mt-3">Nenhuma avaliação registrada ainda.</div>
+        {% endif %}
+      </div>
+    {% endif %}
+  </div>
+
+  <div class="col-lg-7">
+    <div class="card p-4">
+      <h4 class="mb-1">Indicadores do Cliente</h4>
+      <div class="muted mb-3">Faturamento, endividamento, caixa etc.</div>
+
+      {% if not current_client %}
+        <div class="alert alert-warning">Nenhum cliente selecionado/vinculado.</div>
+      {% else %}
+        <div class="mb-2"><span class="muted">Cliente:</span> <b>{{ current_client.name }}</b></div>
+
+        <form method="post" action="/perfil">
+          <div class="row g-3">
+            <div class="col-md-6">
+              <label class="form-label">Faturamento mensal (R$)</label>
+              <input class="form-control" name="revenue_monthly_brl" type="number" step="0.01" min="0"
+                     value="{{ current_client.revenue_monthly_brl }}" />
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">Endividamento total (R$)</label>
+              <input class="form-control" name="debt_total_brl" type="number" step="0.01" min="0"
+                     value="{{ current_client.debt_total_brl }}" />
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">Saldo em caixa (R$)</label>
+              <input class="form-control" name="cash_balance_brl" type="number" step="0.01" min="0"
+                     value="{{ current_client.cash_balance_brl }}" />
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">Funcionários</label>
+              <input class="form-control" name="employees_count" type="number" min="0"
+                     value="{{ current_client.employees_count }}" />
+            </div>
+          </div>
+          <div class="mt-4">
+            <button class="btn btn-primary">Salvar</button>
+            <a class="btn btn-outline-secondary" href="/empresa">Editar dados da empresa</a>
+            <a class="btn btn-outline-primary" href="/perfil/avaliacao/nova">Nova avaliação</a>
+          </div>
+        </form>
+
+        <hr class="my-4"/>
+        <h6 class="mb-2">Histórico de avaliações</h6>
+
+        {% if snapshots %}
+          <div class="table-responsive">
+            <table class="table table-sm align-middle">
+              <thead>
+                <tr>
+                  <th>Data</th>
+                  <th>Total</th>
+                  <th>Processos</th>
+                  <th>Financeiro</th>
+                  <th>NPS</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for s in snapshots %}
+                  <tr>
+                    <td class="mono">{{ s.created_at }}</td>
+                    <td><b>{{ "%.1f"|format(s.score_total) }}</b></td>
+                    <td>{{ "%.1f"|format(s.score_process) }}</td>
+                    <td>{{ "%.1f"|format(s.score_financial) }}</td>
+                    <td>{{ s.nps_score }}</td>
+                    <td><a class="btn btn-outline-secondary btn-sm" href="/perfil/avaliacao/{{ s.id }}">Ver</a></td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        {% else %}
+          <div class="muted">Sem avaliações ainda.</div>
+        {% endif %}
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endblock %}
+""",
+
+    "perfil_snapshot_new.html": r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <div class="d-flex justify-content-between align-items-center">
+    <div>
+      <h4 class="mb-0">Nova Avaliação do Cliente</h4>
+      <div class="muted">“Foto do momento” + score de evolução</div>
+    </div>
+    <a class="btn btn-outline-secondary" href="/perfil">Voltar</a>
+  </div>
+
+  <hr class="my-3"/>
+
+  {% if not current_client %}
+    <div class="alert alert-warning">Nenhum cliente selecionado.</div>
+  {% else %}
+    <div class="mb-2"><span class="muted">Cliente:</span> <b>{{ current_client.name }}</b></div>
+
+    <form method="post" action="/perfil/avaliacao/nova">
+      <h5 class="mt-3">Números (do momento)</h5>
+      <div class="row g-3">
+        <div class="col-md-6">
+          <label class="form-label">Faturamento mensal (R$)</label>
+          <input class="form-control" name="revenue_monthly_brl" type="number" step="0.01" min="0" value="{{ current_client.revenue_monthly_brl }}" />
+        </div>
+        <div class="col-md-6">
+          <label class="form-label">Dívida total (R$)</label>
+          <input class="form-control" name="debt_total_brl" type="number" step="0.01" min="0" value="{{ current_client.debt_total_brl }}" />
+        </div>
+        <div class="col-md-6">
+          <label class="form-label">Caixa (R$)</label>
+          <input class="form-control" name="cash_balance_brl" type="number" step="0.01" min="0" value="{{ current_client.cash_balance_brl }}" />
+        </div>
+        <div class="col-md-6">
+          <label class="form-label">Funcionários</label>
+          <input class="form-control" name="employees_count" type="number" min="0" value="{{ current_client.employees_count }}" />
+        </div>
+        <div class="col-md-6">
+          <label class="form-label">NPS (0 a 10)</label>
+          <input class="form-control" name="nps_score" type="number" min="0" max="10" value="0" />
+          <div class="form-text">0 = nada provável recomendar / 10 = muito provável.</div>
+        </div>
+        <div class="col-12">
+          <label class="form-label">Observações (opcional)</label>
+          <textarea class="form-control" name="notes" rows="3" placeholder="Contexto, mudanças recentes, dor principal..."></textarea>
+        </div>
+      </div>
+
+      <hr class="my-4"/>
+
+      <h5>Processos (checklist)</h5>
+      <div class="muted mb-2">Marque o que já está implementado hoje.</div>
+
+      <div class="row g-2">
+        {% for q in survey %}
+          <div class="col-12">
+            <div class="form-check">
+              <input class="form-check-input" type="checkbox" name="{{ q.id }}" value="1" id="{{ q.id }}">
+              <label class="form-check-label" for="{{ q.id }}">{{ q.q }}</label>
+            </div>
+          </div>
+        {% endfor %}
+      </div>
+
+      <div class="mt-4 d-flex gap-2">
+        <button class="btn btn-primary" type="submit">Salvar avaliação</button>
+        <a class="btn btn-outline-secondary" href="/perfil">Cancelar</a>
+      </div>
+    </form>
+  {% endif %}
+</div>
+{% endblock %}
+""",
+
+    "perfil_snapshot_detail.html": r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <div class="d-flex justify-content-between align-items-start">
+    <div>
+      <h4 class="mb-1">Avaliação</h4>
+      <div class="muted">Cliente: <b>{{ client.name }}</b> • <span class="mono">{{ snap.created_at }}</span></div>
+    </div>
+    <a class="btn btn-outline-secondary" href="/perfil">Voltar</a>
+  </div>
+
+  <hr class="my-3"/>
+
+  <div class="row g-3">
+    <div class="col-md-4">
+      <div class="card p-3">
+        <div class="muted small">Score total</div>
+        <div class="fs-4 fw-bold">{{ "%.1f"|format(snap.score_total) }}</div>
+      </div>
+    </div>
+    <div class="col-md-4">
+      <div class="card p-3">
+        <div class="muted small">Processos</div>
+        <div class="fs-4 fw-bold">{{ "%.1f"|format(snap.score_process) }}</div>
+      </div>
+    </div>
+    <div class="col-md-4">
+      <div class="card p-3">
+        <div class="muted small">Financeiro</div>
+        <div class="fs-4 fw-bold">{{ "%.1f"|format(snap.score_financial) }}</div>
+      </div>
+    </div>
+  </div>
+
+  <hr class="my-3"/>
+
+  <h6>Números</h6>
+  <div class="row g-2">
+    <div class="col-md-3"><span class="muted">Faturamento:</span> R$ {{ "%.2f"|format(snap.revenue_monthly_brl) }}</div>
+    <div class="col-md-3"><span class="muted">Dívida:</span> R$ {{ "%.2f"|format(snap.debt_total_brl) }}</div>
+    <div class="col-md-3"><span class="muted">Caixa:</span> R$ {{ "%.2f"|format(snap.cash_balance_brl) }}</div>
+    <div class="col-md-3"><span class="muted">Funcionários:</span> {{ snap.employees_count }}</div>
+    <div class="col-md-3"><span class="muted">NPS:</span> {{ snap.nps_score }}</div>
+  </div>
+
+  {% if snap.notes %}
+    <hr class="my-3"/>
+    <h6>Observações</h6>
+    <pre>{{ snap.notes }}</pre>
+  {% endif %}
+
+  <hr class="my-3"/>
+  <h6>Checklist</h6>
+  <ul class="mb-0">
+    {% for q in survey %}
+      <li>
+        {% if answers.get(q.id) %}✅{% else %}⬜{% endif %}
+        {{ q.q }}
+      </li>
+    {% endfor %}
+  </ul>
+</div>
+{% endblock %}
+""",
+})
+
 templates_env = Environment(loader=DictLoader(TEMPLATES), autoescape=True)
 
 
@@ -3977,6 +4347,24 @@ async def perfil_page(request: Request, session: Session = Depends(get_session))
         return RedirectResponse("/login", status_code=303)
 
     current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
+
+    snapshots: list[ClientSnapshot] = []
+    latest_score: Optional[float] = None
+    delta: Optional[float] = None
+
+    if current_client and ensure_can_access_client(ctx, current_client.id):
+        snaps = session.exec(
+            select(ClientSnapshot)
+            .where(ClientSnapshot.company_id == ctx.company.id, ClientSnapshot.client_id == current_client.id)
+            .order_by(ClientSnapshot.created_at.desc())
+            .limit(12)
+        ).all()
+        snapshots = list(snaps)
+        if snapshots:
+            latest_score = float(snapshots[0].score_total)
+        if len(snapshots) >= 2:
+            delta = round(float(snapshots[0].score_total) - float(snapshots[1].score_total), 2)
+
     return render(
         "perfil.html",
         request=request,
@@ -3985,9 +4373,11 @@ async def perfil_page(request: Request, session: Session = Depends(get_session))
             "current_company": ctx.company,
             "role": ctx.membership.role,
             "current_client": current_client,
+            "snapshots": snapshots,
+            "latest_score": latest_score,
+            "delta": delta,
         },
     )
-
 
 @app.post("/perfil")
 @require_login
@@ -4025,6 +4415,157 @@ async def perfil_save(
     set_flash(request, "Indicadores atualizados.")
     return RedirectResponse("/perfil", status_code=303)
 
+
+
+
+# ----------------------------
+# Perfil: Avaliação / Snapshot
+# ----------------------------
+
+@app.get("/perfil/avaliacao/nova", response_class=HTMLResponse)
+@require_login
+async def perfil_snapshot_new_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+
+    current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
+    if not current_client:
+        set_flash(request, "Nenhum cliente selecionado/vinculado.")
+        return RedirectResponse("/perfil", status_code=303)
+
+    if not ensure_can_access_client(ctx, current_client.id):
+        set_flash(request, "Sem permissão.")
+        return RedirectResponse("/perfil", status_code=303)
+
+    return render(
+        "perfil_snapshot_new.html",
+        request=request,
+        context={
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "role": ctx.membership.role,
+            "current_client": current_client,
+            "survey": PROFILE_SURVEY_V1,
+        },
+    )
+
+
+@app.post("/perfil/avaliacao/nova")
+@require_login
+async def perfil_snapshot_new_action(
+    request: Request,
+    session: Session = Depends(get_session),
+    revenue_monthly_brl: float = Form(0.0),
+    debt_total_brl: float = Form(0.0),
+    cash_balance_brl: float = Form(0.0),
+    employees_count: int = Form(0),
+    nps_score: int = Form(0),
+    notes: str = Form(""),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+
+    current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
+    if not current_client:
+        set_flash(request, "Nenhum cliente selecionado/vinculado.")
+        return RedirectResponse("/perfil", status_code=303)
+
+    if not ensure_can_access_client(ctx, current_client.id):
+        set_flash(request, "Sem permissão.")
+        return RedirectResponse("/perfil", status_code=303)
+
+    form = await request.form()
+    answers: dict[str, Any] = {}
+    for q in PROFILE_SURVEY_V1:
+        key = q["id"]
+        answers[key] = _parse_bool(form.get(key))
+
+    proc = score_process_from_answers(answers)
+    fin = score_financial_simple(revenue_monthly_brl, debt_total_brl, cash_balance_brl)
+    tot = score_total(proc, fin, nps_score)
+
+    snap = ClientSnapshot(
+        company_id=ctx.company.id,
+        client_id=current_client.id,
+        created_by_user_id=ctx.user.id,
+        revenue_monthly_brl=max(0.0, float(revenue_monthly_brl)),
+        debt_total_brl=max(0.0, float(debt_total_brl)),
+        cash_balance_brl=max(0.0, float(cash_balance_brl)),
+        employees_count=max(0, int(employees_count)),
+        nps_score=max(0, min(10, int(nps_score))),
+        notes=(notes or "").strip(),
+        answers_json=json.dumps(answers, ensure_ascii=False),
+        score_process=proc,
+        score_financial=fin,
+        score_total=tot,
+    )
+    session.add(snap)
+
+    # Atualiza os indicadores atuais do cliente (mantém a tela antiga consistente)
+    current_client.revenue_monthly_brl = snap.revenue_monthly_brl
+    current_client.debt_total_brl = snap.debt_total_brl
+    current_client.cash_balance_brl = snap.cash_balance_brl
+    current_client.employees_count = snap.employees_count
+    current_client.updated_at = utcnow()
+    session.add(current_client)
+
+    session.commit()
+    set_flash(request, "Avaliação registrada.")
+    return RedirectResponse("/perfil", status_code=303)
+
+
+@app.get("/perfil/avaliacao/{snapshot_id}", response_class=HTMLResponse)
+@require_login
+async def perfil_snapshot_detail(request: Request, session: Session = Depends(get_session), snapshot_id: int = 0) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+
+    snap = session.get(ClientSnapshot, int(snapshot_id))
+    if not snap or snap.company_id != ctx.company.id:
+        return render(
+            "error.html",
+            request=request,
+            context={"current_user": ctx.user, "current_company": ctx.company, "role": ctx.membership.role, "current_client": None, "message": "Avaliação não encontrada."},
+            status_code=404,
+        )
+
+    if not ensure_can_access_client(ctx, snap.client_id):
+        return render(
+            "error.html",
+            request=request,
+            context={"current_user": ctx.user, "current_company": ctx.company, "role": ctx.membership.role, "current_client": None, "message": "Sem permissão."},
+            status_code=403,
+        )
+
+    client = session.get(Client, snap.client_id)
+    answers = {}
+    try:
+        answers = json.loads(snap.answers_json or "{}")
+    except Exception:
+        answers = {}
+
+    current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
+
+    return render(
+        "perfil_snapshot_detail.html",
+        request=request,
+        context={
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "role": ctx.membership.role,
+            "current_client": current_client,
+            "client": client,
+            "snap": snap,
+            "survey": PROFILE_SURVEY_V1,
+            "answers": answers,
+        },
+    )
 
 # ----------------------------
 # Pendências
