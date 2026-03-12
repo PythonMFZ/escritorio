@@ -341,6 +341,49 @@ class ConsultingStep(SQLModel, table=True):
 
     done_at: Optional[datetime] = None
     updated_at: datetime = Field(default_factory=utcnow)
+
+
+TASK_STATUS = {"nao_iniciada", "em_andamento", "concluida"}
+TASK_PRIORITY = {"baixa", "media", "alta"}
+
+
+class Task(SQLModel, table=True):
+    """
+    Tarefa vinculada a um cliente (e opcionalmente atribuída a um usuário).
+    """
+    id: Optional[int] = Field(default=None, primary_key=True)
+
+    company_id: int = Field(index=True, foreign_key="company.id")
+    client_id: int = Field(index=True, foreign_key="client.id")
+    created_by_user_id: int = Field(index=True, foreign_key="user.id")
+    assignee_user_id: Optional[int] = Field(default=None, index=True, foreign_key="user.id")
+
+    title: str
+    description: str = ""
+
+    status: str = Field(default="nao_iniciada", index=True)  # nao_iniciada | em_andamento | concluida
+    priority: str = Field(default="media", index=True)       # baixa | media | alta
+    due_date: str = ""  # AAAA-MM-DD
+
+    visible_to_client: bool = Field(default=False, index=True)
+    client_action: bool = Field(default=False, index=True)   # cliente pode marcar como concluído?
+
+    created_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime = Field(default_factory=utcnow)
+
+
+class TaskComment(SQLModel, table=True):
+    """
+    Comentário de tarefa (timeline simples).
+    """
+    id: Optional[int] = Field(default=None, primary_key=True)
+
+    task_id: int = Field(index=True, foreign_key="task.id")
+    author_user_id: int = Field(index=True, foreign_key="user.id")
+    message: str
+
+    created_at: datetime = Field(default_factory=utcnow)
+
 class Document(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     company_id: int = Field(index=True, foreign_key="company.id")
@@ -2564,6 +2607,341 @@ TEMPLATES.update({
 """,
 })
 
+
+TEMPLATES.update({
+"tasks_list.html": r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <div class="d-flex justify-content-between align-items-center">
+    <div>
+      <h4 class="mb-0">Tarefas</h4>
+      <div class="muted">Kanban por status • prazos • prioridade</div>
+    </div>
+    {% if role in ["admin","equipe"] %}
+      <a class="btn btn-primary" href="/tarefas/nova">Nova tarefa</a>
+    {% endif %}
+  </div>
+
+  <hr class="my-3"/>
+
+  <div class="row g-3">
+    {% for col in columns %}
+      <div class="col-12 col-lg-4">
+        <div class="card p-3 h-100">
+          <div class="fw-semibold mb-2">{{ col.label }} <span class="muted">({{ col.count }})</span></div>
+          {% if col.tasks %}
+            <div class="vstack gap-2">
+              {% for t in col.tasks %}
+                <a class="card p-3" href="/tarefas/{{ t.id }}">
+                  <div class="d-flex justify-content-between align-items-start">
+                    <div class="fw-semibold">{{ t.title }}</div>
+                    <span class="badge text-bg-light border">{{ t.priority }}</span>
+                  </div>
+                  <div class="muted small mt-1">
+                    {% if t.due_date %}Prazo: {{ t.due_date }} • {% endif %}
+                    {% if t.assignee_name %}Resp: {{ t.assignee_name }}{% endif %}
+                  </div>
+                  {% if t.visible_to_client %}
+                    <div class="mt-2"><span class="badge text-bg-light border">visível ao cliente</span></div>
+                  {% endif %}
+                </a>
+              {% endfor %}
+            </div>
+          {% else %}
+            <div class="muted small">Sem tarefas.</div>
+          {% endif %}
+        </div>
+      </div>
+    {% endfor %}
+  </div>
+</div>
+{% endblock %}
+""",
+
+"tasks_new.html": r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <h4>Nova tarefa</h4>
+  <div class="muted">Crie uma tarefa para um cliente, defina prazo, prioridade e visibilidade.</div>
+
+  {% if not clients %}
+    <div class="alert alert-warning mt-3">Nenhum cliente cadastrado.</div>
+    <a class="btn btn-outline-secondary" href="/tarefas">Voltar</a>
+  {% else %}
+    <form method="post" action="/tarefas/nova" class="mt-3">
+      <div class="row g-3">
+        <div class="col-md-6">
+          <label class="form-label">Cliente</label>
+          <select class="form-select" name="client_id" required>
+            {% for c in clients %}
+              <option value="{{ c.id }}" {% if current_client and c.id==current_client.id %}selected{% endif %}>{{ c.name }}</option>
+            {% endfor %}
+          </select>
+        </div>
+
+        <div class="col-md-6">
+          <label class="form-label">Responsável (opcional)</label>
+          <select class="form-select" name="assignee_user_id">
+            <option value="">—</option>
+            {% for u in assignees %}
+              <option value="{{ u.id }}">{{ u.name }} ({{ u.role }})</option>
+            {% endfor %}
+          </select>
+        </div>
+
+        <div class="col-12">
+          <label class="form-label">Título</label>
+          <input class="form-control" name="title" required />
+        </div>
+
+        <div class="col-12">
+          <label class="form-label">Descrição</label>
+          <textarea class="form-control" name="description" rows="4"></textarea>
+        </div>
+
+        <div class="col-md-4">
+          <label class="form-label">Status</label>
+          <select class="form-select" name="status">
+            <option value="nao_iniciada">nao_iniciada</option>
+            <option value="em_andamento">em_andamento</option>
+            <option value="concluida">concluida</option>
+          </select>
+        </div>
+
+        <div class="col-md-4">
+          <label class="form-label">Prioridade</label>
+          <select class="form-select" name="priority">
+            <option value="baixa">baixa</option>
+            <option value="media" selected>media</option>
+            <option value="alta">alta</option>
+          </select>
+        </div>
+
+        <div class="col-md-4">
+          <label class="form-label">Prazo (AAAA-MM-DD)</label>
+          <input class="form-control mono" name="due_date" />
+        </div>
+
+        <div class="col-md-6">
+          <div class="form-check mt-4">
+            <input class="form-check-input" type="checkbox" name="visible_to_client" value="1" id="vis">
+            <label class="form-check-label" for="vis">Visível ao cliente</label>
+          </div>
+        </div>
+
+        <div class="col-md-6">
+          <div class="form-check mt-4">
+            <input class="form-check-input" type="checkbox" name="client_action" value="1" id="ca">
+            <label class="form-check-label" for="ca">Cliente pode concluir</label>
+          </div>
+        </div>
+      </div>
+
+      <div class="mt-4 d-flex gap-2">
+        <button class="btn btn-primary" type="submit">Criar</button>
+        <a class="btn btn-outline-secondary" href="/tarefas">Cancelar</a>
+      </div>
+    </form>
+  {% endif %}
+</div>
+{% endblock %}
+""",
+
+"tasks_detail.html": r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <div class="d-flex justify-content-between align-items-start">
+    <div>
+      <h4 class="mb-1">{{ task.title }}</h4>
+      <div class="muted">
+        Status: <b>{{ task.status }}</b> • Prioridade: <b>{{ task.priority }}</b>
+        {% if task.due_date %} • Prazo: <b>{{ task.due_date }}</b>{% endif %}
+        {% if assignee_name %} • Resp: <b>{{ assignee_name }}</b>{% endif %}
+      </div>
+      {% if task.visible_to_client %}<div class="mt-2"><span class="badge text-bg-light border">visível ao cliente</span></div>{% endif %}
+    </div>
+    <div class="d-flex gap-2">
+      <a class="btn btn-outline-secondary" href="/tarefas">Voltar</a>
+      {% if role in ["admin","equipe"] %}
+        <a class="btn btn-outline-primary" href="/tarefas/{{ task.id }}/editar">Editar</a>
+      {% endif %}
+    </div>
+  </div>
+
+  {% if task.description %}
+    <hr class="my-3"/>
+    <pre>{{ task.description }}</pre>
+  {% endif %}
+
+  <hr class="my-3"/>
+  <div class="d-flex gap-2 flex-wrap">
+    {% if role in ["admin","equipe"] %}
+      <form method="post" action="/tarefas/{{ task.id }}/status">
+        <input type="hidden" name="status" value="nao_iniciada"/>
+        <button class="btn btn-outline-secondary btn-sm" type="submit">Não iniciada</button>
+      </form>
+      <form method="post" action="/tarefas/{{ task.id }}/status">
+        <input type="hidden" name="status" value="em_andamento"/>
+        <button class="btn btn-outline-secondary btn-sm" type="submit">Em andamento</button>
+      </form>
+      <form method="post" action="/tarefas/{{ task.id }}/status">
+        <input type="hidden" name="status" value="concluida"/>
+        <button class="btn btn-outline-secondary btn-sm" type="submit">Concluída</button>
+      </form>
+    {% endif %}
+
+    {% if role=="cliente" and task.client_action %}
+      <form method="post" action="/tarefas/{{ task.id }}/toggle">
+        <button class="btn btn-outline-primary btn-sm" type="submit">
+          {% if task.status=="concluida" %}Desmarcar conclusão{% else %}Marcar como concluída{% endif %}
+        </button>
+      </form>
+    {% endif %}
+  </div>
+
+  {% if role in ["admin","equipe"] %}
+    <hr class="my-3"/>
+    <form method="post" action="/tarefas/{{ task.id }}/excluir" class="card p-3">
+      <div class="fw-semibold">Excluir (seguro)</div>
+      <div class="muted small">Para excluir, digite <b>EXCLUIR</b> e confirme.</div>
+      <div class="row g-2 align-items-end mt-2">
+        <div class="col-md-6">
+          <input class="form-control" name="confirm" placeholder="EXCLUIR" required />
+        </div>
+        <div class="col-md-3">
+          <button class="btn btn-outline-danger w-100" type="submit">Excluir</button>
+        </div>
+      </div>
+    </form>
+  {% endif %}
+
+  <hr class="my-3"/>
+  <h5>Comentários</h5>
+
+  {% if comments %}
+    <div class="list-group mb-3">
+      {% for c in comments %}
+        <div class="list-group-item">
+          <div class="d-flex justify-content-between">
+            <div class="fw-semibold">{{ c.author_name }}</div>
+            <div class="muted small">{{ c.created_at }}</div>
+          </div>
+          <div class="mt-1">{{ c.message }}</div>
+        </div>
+      {% endfor %}
+    </div>
+  {% else %}
+    <div class="muted mb-3">Sem comentários.</div>
+  {% endif %}
+
+  <form method="post" action="/tarefas/{{ task.id }}/comentario" class="card p-3">
+    <label class="form-label fw-semibold">Adicionar comentário</label>
+    <textarea class="form-control" name="message" rows="3" required></textarea>
+    <div class="mt-2">
+      <button class="btn btn-primary" type="submit">Enviar</button>
+    </div>
+  </form>
+</div>
+{% endblock %}
+""",
+
+"tasks_edit.html": r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <div class="d-flex justify-content-between align-items-start">
+    <div>
+      <h4 class="mb-1">Editar tarefa</h4>
+      <div class="muted">{{ task.title }}</div>
+    </div>
+    <a class="btn btn-outline-secondary" href="/tarefas/{{ task.id }}">Voltar</a>
+  </div>
+
+  <hr class="my-3"/>
+
+  <form method="post" action="/tarefas/{{ task.id }}/editar">
+    <div class="row g-3">
+      <div class="col-md-6">
+        <label class="form-label">Cliente</label>
+        <select class="form-select" name="client_id" required>
+          {% for c in clients %}
+            <option value="{{ c.id }}" {% if c.id==task.client_id %}selected{% endif %}>{{ c.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <div class="col-md-6">
+        <label class="form-label">Responsável (opcional)</label>
+        <select class="form-select" name="assignee_user_id">
+          <option value="">—</option>
+          {% for u in assignees %}
+            <option value="{{ u.id }}" {% if task.assignee_user_id==u.id %}selected{% endif %}>{{ u.name }} ({{ u.role }})</option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <div class="col-12">
+        <label class="form-label">Título</label>
+        <input class="form-control" name="title" value="{{ task.title }}" required />
+      </div>
+
+      <div class="col-12">
+        <label class="form-label">Descrição</label>
+        <textarea class="form-control" name="description" rows="4">{{ task.description }}</textarea>
+      </div>
+
+      <div class="col-md-4">
+        <label class="form-label">Status</label>
+        <select class="form-select" name="status">
+          <option value="nao_iniciada" {% if task.status=="nao_iniciada" %}selected{% endif %}>nao_iniciada</option>
+          <option value="em_andamento" {% if task.status=="em_andamento" %}selected{% endif %}>em_andamento</option>
+          <option value="concluida" {% if task.status=="concluida" %}selected{% endif %}>concluida</option>
+        </select>
+      </div>
+
+      <div class="col-md-4">
+        <label class="form-label">Prioridade</label>
+        <select class="form-select" name="priority">
+          <option value="baixa" {% if task.priority=="baixa" %}selected{% endif %}>baixa</option>
+          <option value="media" {% if task.priority=="media" %}selected{% endif %}>media</option>
+          <option value="alta" {% if task.priority=="alta" %}selected{% endif %}>alta</option>
+        </select>
+      </div>
+
+      <div class="col-md-4">
+        <label class="form-label">Prazo (AAAA-MM-DD)</label>
+        <input class="form-control mono" name="due_date" value="{{ task.due_date }}" />
+      </div>
+
+      <div class="col-md-6">
+        <div class="form-check mt-4">
+          <input class="form-check-input" type="checkbox" name="visible_to_client" value="1" id="vis" {% if task.visible_to_client %}checked{% endif %}>
+          <label class="form-check-label" for="vis">Visível ao cliente</label>
+        </div>
+      </div>
+
+      <div class="col-md-6">
+        <div class="form-check mt-4">
+          <input class="form-check-input" type="checkbox" name="client_action" value="1" id="ca" {% if task.client_action %}checked{% endif %}>
+          <label class="form-check-label" for="ca">Cliente pode concluir</label>
+        </div>
+      </div>
+    </div>
+
+    <div class="mt-4 d-flex gap-2">
+      <button class="btn btn-primary" type="submit">Salvar</button>
+      <a class="btn btn-outline-secondary" href="/tarefas/{{ task.id }}">Cancelar</a>
+    </div>
+  </form>
+</div>
+{% endblock %}
+""",
+})
+
+
 templates_env = Environment(loader=DictLoader(TEMPLATES), autoescape=True)
 
 
@@ -3263,6 +3641,7 @@ async def dashboard(request: Request, session: Session = Depends(get_session)) -
         {"title": "Empresa", "desc": "Dados completos do cliente.", "href": "/empresa"},
         {"title": "Perfil", "desc": "Indicadores do cliente.", "href": "/perfil"},
         {"title": "Consultoria", "desc": "Projetos, etapas e progresso.", "href": "/consultoria"},
+        {"title": "Tarefas", "desc": "Kanban e prazos.", "href": "/tarefas"},
         {"title": "Agenda", "desc": "Agendamentos (Bookings).", "href": "/agenda"},
     ]
 
@@ -4887,6 +5266,412 @@ async def agenda_page(request: Request, session: Session = Depends(get_session))
             "current_client": current_client,
         },
     )
+
+
+
+# ----------------------------
+# Tarefas (Kanban)
+# ----------------------------
+
+def _task_can_view(ctx: TenantContext, task: Task) -> bool:
+    if task.company_id != ctx.company.id:
+        return False
+    if ctx.membership.role in ["admin", "equipe"]:
+        return True
+    # cliente
+    return bool(ctx.membership.client_id) and task.client_id == ctx.membership.client_id and task.visible_to_client
+
+
+def _task_assignee_label(session: Session, user_id: Optional[int]) -> str:
+    if not user_id:
+        return ""
+    u = session.get(User, int(user_id))
+    return u.name if u else ""
+
+
+@app.get("/tarefas", response_class=HTMLResponse)
+@require_login
+async def tasks_list(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+
+    active_client_id = get_active_client_id(request, session, ctx)
+    current_client = get_client_or_none(session, ctx.company.id, active_client_id)
+
+    q = select(Task).where(Task.company_id == ctx.company.id).order_by(Task.updated_at.desc())
+
+    if ctx.membership.role == "cliente":
+        q = q.where(Task.client_id == (ctx.membership.client_id or -1), Task.visible_to_client.is_(True))
+    else:
+        if current_client:
+            q = q.where(Task.client_id == current_client.id)
+
+    tasks = session.exec(q).all()
+
+    # Build view models
+    view = []
+    for t in tasks:
+        view.append(
+            {
+                "id": t.id,
+                "title": t.title,
+                "status": t.status,
+                "priority": t.priority,
+                "due_date": t.due_date,
+                "visible_to_client": t.visible_to_client,
+                "assignee_name": _task_assignee_label(session, t.assignee_user_id),
+            }
+        )
+
+    by_status = {"nao_iniciada": [], "em_andamento": [], "concluida": []}
+    for t in view:
+        by_status.setdefault(t["status"], by_status["nao_iniciada"]).append(t)
+
+    columns = [
+        {"key": "nao_iniciada", "label": "Não iniciada", "tasks": by_status.get("nao_iniciada", []), "count": len(by_status.get("nao_iniciada", []))},
+        {"key": "em_andamento", "label": "Em andamento", "tasks": by_status.get("em_andamento", []), "count": len(by_status.get("em_andamento", []))},
+        {"key": "concluida", "label": "Concluída", "tasks": by_status.get("concluida", []), "count": len(by_status.get("concluida", []))},
+    ]
+
+    return render(
+        "tasks_list.html",
+        request=request,
+        context={
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "role": ctx.membership.role,
+            "current_client": current_client,
+            "columns": columns,
+        },
+    )
+
+
+@app.get("/tarefas/nova", response_class=HTMLResponse)
+@require_role({"admin", "equipe"})
+async def tasks_new_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    clients = session.exec(select(Client).where(Client.company_id == ctx.company.id).order_by(Client.created_at)).all()
+
+    # staff assignees (admin/equipe) + current user always
+    memberships = session.exec(select(Membership).where(Membership.company_id == ctx.company.id)).all()
+    assignees = []
+    for m in memberships:
+        u = session.get(User, m.user_id)
+        if not u:
+            continue
+        assignees.append({"id": u.id, "name": u.name, "role": m.role})
+
+    active_client_id = get_active_client_id(request, session, ctx)
+    current_client = get_client_or_none(session, ctx.company.id, active_client_id)
+
+    return render(
+        "tasks_new.html",
+        request=request,
+        context={
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "role": ctx.membership.role,
+            "current_client": current_client,
+            "clients": clients,
+            "assignees": assignees,
+        },
+    )
+
+
+@app.post("/tarefas/nova")
+@require_role({"admin", "equipe"})
+async def tasks_new_action(
+    request: Request,
+    session: Session = Depends(get_session),
+    client_id: int = Form(...),
+    assignee_user_id: str = Form(""),
+    title: str = Form(...),
+    description: str = Form(""),
+    status: str = Form("nao_iniciada"),
+    priority: str = Form("media"),
+    due_date: str = Form(""),
+    visible_to_client: str = Form(""),
+    client_action: str = Form(""),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    client = get_client_or_none(session, ctx.company.id, int(client_id))
+    if not client:
+        set_flash(request, "Cliente inválido.")
+        return RedirectResponse("/tarefas/nova", status_code=303)
+
+    status = status.strip().lower()
+    if status not in TASK_STATUS:
+        status = "nao_iniciada"
+
+    priority = priority.strip().lower()
+    if priority not in TASK_PRIORITY:
+        priority = "media"
+
+    assignee = int(assignee_user_id) if assignee_user_id.strip().isdigit() else None
+
+    task = Task(
+        company_id=ctx.company.id,
+        client_id=client.id,
+        created_by_user_id=ctx.user.id,
+        assignee_user_id=assignee,
+        title=title.strip(),
+        description=description.strip(),
+        status=status,
+        priority=priority,
+        due_date=due_date.strip(),
+        visible_to_client=(visible_to_client == "1"),
+        client_action=(client_action == "1"),
+        created_at=utcnow(),
+        updated_at=utcnow(),
+    )
+    session.add(task)
+    session.commit()
+    session.refresh(task)
+
+    set_flash(request, "Tarefa criada.")
+    return RedirectResponse(f"/tarefas/{task.id}", status_code=303)
+
+
+@app.get("/tarefas/{task_id}", response_class=HTMLResponse)
+@require_login
+async def tasks_detail(request: Request, session: Session = Depends(get_session), task_id: int = 0) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+
+    task = session.get(Task, int(task_id))
+    if not task or not _task_can_view(ctx, task):
+        return render("error.html", request=request, context={"message": "Tarefa não encontrada ou sem permissão."}, status_code=404)
+
+    active_client_id = get_active_client_id(request, session, ctx)
+    current_client = get_client_or_none(session, ctx.company.id, active_client_id)
+
+    comments = session.exec(select(TaskComment).where(TaskComment.task_id == task.id).order_by(TaskComment.created_at.asc())).all()
+    out_comments = []
+    for c in comments:
+        u = session.get(User, c.author_user_id)
+        out_comments.append({"author_name": u.name if u else "—", "message": c.message, "created_at": c.created_at.strftime("%Y-%m-%d %H:%M")})
+
+    assignee_name = _task_assignee_label(session, task.assignee_user_id)
+
+    return render(
+        "tasks_detail.html",
+        request=request,
+        context={
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "role": ctx.membership.role,
+            "current_client": current_client,
+            "task": task,
+            "assignee_name": assignee_name,
+            "comments": out_comments,
+        },
+    )
+
+
+@app.post("/tarefas/{task_id}/comentario")
+@require_login
+async def tasks_add_comment(
+    request: Request,
+    session: Session = Depends(get_session),
+    task_id: int = 0,
+    message: str = Form(...),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+
+    task = session.get(Task, int(task_id))
+    if not task or not _task_can_view(ctx, task):
+        set_flash(request, "Sem permissão.")
+        return RedirectResponse("/tarefas", status_code=303)
+
+    msg = message.strip()
+    if not msg:
+        return RedirectResponse(f"/tarefas/{task.id}", status_code=303)
+
+    session.add(TaskComment(task_id=task.id, author_user_id=ctx.user.id, message=msg))
+    session.commit()
+
+    return RedirectResponse(f"/tarefas/{task.id}", status_code=303)
+
+
+@app.post("/tarefas/{task_id}/toggle")
+@require_role({"cliente"})
+async def tasks_toggle_client(request: Request, session: Session = Depends(get_session), task_id: int = 0) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    task = session.get(Task, int(task_id))
+    if not task or not _task_can_view(ctx, task):
+        set_flash(request, "Sem permissão.")
+        return RedirectResponse("/tarefas", status_code=303)
+
+    if not task.client_action:
+        set_flash(request, "Você não pode concluir esta tarefa.")
+        return RedirectResponse(f"/tarefas/{task.id}", status_code=303)
+
+    task.status = "nao_iniciada" if task.status == "concluida" else "concluida"
+    task.updated_at = utcnow()
+    session.add(task)
+    session.commit()
+
+    return RedirectResponse(f"/tarefas/{task.id}", status_code=303)
+
+
+@app.post("/tarefas/{task_id}/status")
+@require_role({"admin", "equipe"})
+async def tasks_set_status(request: Request, session: Session = Depends(get_session), task_id: int = 0, status: str = Form(...)) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    task = session.get(Task, int(task_id))
+    if not task or task.company_id != ctx.company.id:
+        set_flash(request, "Tarefa não encontrada.")
+        return RedirectResponse("/tarefas", status_code=303)
+
+    status = status.strip().lower()
+    if status not in TASK_STATUS:
+        status = "nao_iniciada"
+
+    task.status = status
+    task.updated_at = utcnow()
+    session.add(task)
+    session.commit()
+
+    return RedirectResponse(f"/tarefas/{task.id}", status_code=303)
+
+
+@app.get("/tarefas/{task_id}/editar", response_class=HTMLResponse)
+@require_role({"admin", "equipe"})
+async def tasks_edit_page(request: Request, session: Session = Depends(get_session), task_id: int = 0) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    task = session.get(Task, int(task_id))
+    if not task or task.company_id != ctx.company.id:
+        return render("error.html", request=request, context={"message": "Tarefa não encontrada."}, status_code=404)
+
+    clients = session.exec(select(Client).where(Client.company_id == ctx.company.id).order_by(Client.created_at)).all()
+    memberships = session.exec(select(Membership).where(Membership.company_id == ctx.company.id)).all()
+    assignees = []
+    for m in memberships:
+        u = session.get(User, m.user_id)
+        if not u:
+            continue
+        assignees.append({"id": u.id, "name": u.name, "role": m.role})
+
+    active_client_id = get_active_client_id(request, session, ctx)
+    current_client = get_client_or_none(session, ctx.company.id, active_client_id)
+
+    return render(
+        "tasks_edit.html",
+        request=request,
+        context={
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "role": ctx.membership.role,
+            "current_client": current_client,
+            "task": task,
+            "clients": clients,
+            "assignees": assignees,
+        },
+    )
+
+
+@app.post("/tarefas/{task_id}/editar")
+@require_role({"admin", "equipe"})
+async def tasks_edit_action(
+    request: Request,
+    session: Session = Depends(get_session),
+    task_id: int = 0,
+    client_id: int = Form(...),
+    assignee_user_id: str = Form(""),
+    title: str = Form(...),
+    description: str = Form(""),
+    status: str = Form("nao_iniciada"),
+    priority: str = Form("media"),
+    due_date: str = Form(""),
+    visible_to_client: str = Form(""),
+    client_action: str = Form(""),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    task = session.get(Task, int(task_id))
+    if not task or task.company_id != ctx.company.id:
+        set_flash(request, "Tarefa não encontrada.")
+        return RedirectResponse("/tarefas", status_code=303)
+
+    client = get_client_or_none(session, ctx.company.id, int(client_id))
+    if not client:
+        set_flash(request, "Cliente inválido.")
+        return RedirectResponse(f"/tarefas/{task.id}/editar", status_code=303)
+
+    status = status.strip().lower()
+    if status not in TASK_STATUS:
+        status = "nao_iniciada"
+
+    priority = priority.strip().lower()
+    if priority not in TASK_PRIORITY:
+        priority = "media"
+
+    assignee = int(assignee_user_id) if assignee_user_id.strip().isdigit() else None
+
+    task.client_id = client.id
+    task.assignee_user_id = assignee
+    task.title = title.strip()
+    task.description = description.strip()
+    task.status = status
+    task.priority = priority
+    task.due_date = due_date.strip()
+    task.visible_to_client = (visible_to_client == "1")
+    task.client_action = (client_action == "1")
+    task.updated_at = utcnow()
+
+    session.add(task)
+    session.commit()
+
+    set_flash(request, "Tarefa atualizada.")
+    return RedirectResponse(f"/tarefas/{task.id}", status_code=303)
+
+
+@app.post("/tarefas/{task_id}/excluir")
+@require_role({"admin", "equipe"})
+async def tasks_delete_action(
+    request: Request,
+    session: Session = Depends(get_session),
+    task_id: int = 0,
+    confirm: str = Form(""),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    task = session.get(Task, int(task_id))
+    if not task or task.company_id != ctx.company.id:
+        set_flash(request, "Tarefa não encontrada.")
+        return RedirectResponse("/tarefas", status_code=303)
+
+    if confirm.strip().upper() != "EXCLUIR":
+        set_flash(request, "Confirmação inválida. Digite EXCLUIR.")
+        return RedirectResponse(f"/tarefas/{task.id}", status_code=303)
+
+    # delete comments first
+    session.exec(delete(TaskComment).where(TaskComment.task_id == task.id))
+    session.exec(delete(Task).where(Task.id == task.id))
+    session.commit()
+
+    set_flash(request, "Tarefa excluída.")
+    return RedirectResponse("/tarefas", status_code=303)
+
 
 
 @app.post("/attachments/{attachment_id}/delete")
