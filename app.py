@@ -2619,12 +2619,29 @@ TEMPLATES.update({
       <div class="muted">Kanban por status • prazos • prioridade</div>
     </div>
     {% if role in ["admin","equipe"] %}
-      <a class="btn btn-primary" href="/tarefas/nova">Nova tarefa</a>
-    {% endif %}
+  <a class="btn btn-primary" href="/tarefas/nova{% if filter_client_id %}?client_id={{ filter_client_id }}{% endif %}">Nova tarefa</a>
+{% endif %}
   </div>
 
   <hr class="my-3"/>
-
+{% if role in ["admin","equipe"] %}
+  <form method="get" action="/tarefas" class="row g-2 align-items-end mb-3">
+    <div class="col-md-6">
+      <label class="form-label">Cliente (filtro)</label>
+      <select class="form-select" name="client_id" onchange="this.form.submit()">
+        <option value="0" {% if filter_client_id==0 %}selected{% endif %}>Todos</option>
+        {% for c in clients %}
+          <option value="{{ c.id }}" {% if filter_client_id==c.id %}selected{% endif %}>{{ c.name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-md-6 d-flex gap-2">
+      {% if filter_client_id %}
+        <a class="btn btn-outline-secondary" href="/tarefas">Limpar filtro</a>
+      {% endif %}
+    </div>
+  </form>
+{% endif %}
   <div class="row g-3">
     {% for col in columns %}
       <div class="col-12 col-lg-4">
@@ -2676,7 +2693,7 @@ TEMPLATES.update({
           <label class="form-label">Cliente</label>
           <select class="form-select" name="client_id" required>
             {% for c in clients %}
-              <option value="{{ c.id }}" {% if current_client and c.id==current_client.id %}selected{% endif %}>{{ c.name }}</option>
+              <option value="{{ c.id }}" {% if prefill_client and c.id==prefill_client.id %}selected{% endif %}>{{ c.name }}</option>
             {% endfor %}
           </select>
         </div>
@@ -5291,7 +5308,11 @@ def _task_assignee_label(session: Session, user_id: Optional[int]) -> str:
 
 @app.get("/tarefas", response_class=HTMLResponse)
 @require_login
-async def tasks_list(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
+async def tasks_list(
+    request: Request,
+    session: Session = Depends(get_session),
+    client_id: int = 0,  # filtro opcional p/ admin/equipe (0 = todos)
+) -> HTMLResponse:
     ctx = get_tenant_context(request, session)
     if not ctx:
         request.session.clear()
@@ -5302,15 +5323,26 @@ async def tasks_list(request: Request, session: Session = Depends(get_session)) 
 
     q = select(Task).where(Task.company_id == ctx.company.id).order_by(Task.updated_at.desc())
 
+    clients = []
+    filter_client_id = 0
+
     if ctx.membership.role == "cliente":
         q = q.where(Task.client_id == (ctx.membership.client_id or -1), Task.visible_to_client.is_(True))
     else:
-        if current_client:
-            q = q.where(Task.client_id == current_client.id)
+        clients = session.exec(
+            select(Client).where(Client.company_id == ctx.company.id).order_by(Client.created_at)
+        ).all()
+
+        if client_id and client_id > 0:
+            fc = get_client_or_none(session, ctx.company.id, int(client_id))
+            if not fc:
+                set_flash(request, "Cliente inválido para filtro.")
+                return RedirectResponse("/tarefas", status_code=303)
+            filter_client_id = fc.id
+            q = q.where(Task.client_id == fc.id)
 
     tasks = session.exec(q).all()
 
-    # Build view models
     view = []
     for t in tasks:
         view.append(
@@ -5342,7 +5374,9 @@ async def tasks_list(request: Request, session: Session = Depends(get_session)) 
             "current_user": ctx.user,
             "current_company": ctx.company,
             "role": ctx.membership.role,
-            "current_client": current_client,
+            "current_client": current_client,  # continua útil na navbar
+            "clients": clients,
+            "filter_client_id": filter_client_id,
             "columns": columns,
         },
     )
@@ -5368,6 +5402,12 @@ async def tasks_new_page(request: Request, session: Session = Depends(get_sessio
     active_client_id = get_active_client_id(request, session, ctx)
     current_client = get_client_or_none(session, ctx.company.id, active_client_id)
 
+    prefill_client = current_client
+    if client_id and client_id > 0:
+        fc = get_client_or_none(session, ctx.company.id, int(client_id))
+        if fc:
+            prefill_client = fc
+
     return render(
         "tasks_new.html",
         request=request,
@@ -5376,6 +5416,7 @@ async def tasks_new_page(request: Request, session: Session = Depends(get_sessio
             "current_company": ctx.company,
             "role": ctx.membership.role,
             "current_client": current_client,
+            "prefill_client": prefill_client,
             "clients": clients,
             "assignees": assignees,
         },
