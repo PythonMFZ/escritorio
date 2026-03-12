@@ -5047,6 +5047,7 @@ async def dashboard(request: Request, session: Session = Depends(get_session)) -
         {"title": "Perfil", "desc": "Indicadores do cliente.", "href": "/perfil"},
         {"title": "Consultoria", "desc": "Projetos, etapas e progresso.", "href": "/consultoria"},
         {"title": "Tarefas", "desc": "Kanban e prazos.", "href": "/tarefas"},
+        {"title": "Reuniões", "desc": "Atas e notas (Notion).", "href": "/reunioes"},
         {"title": "Agenda", "desc": "Agendamentos (Bookings).", "href": "/agenda"},
     ]
 
