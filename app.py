@@ -12,7 +12,7 @@ import re
 import secrets
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from functools import wraps
 from pathlib import Path
 from typing import Any, Callable, Optional
@@ -516,6 +516,8 @@ class Attachment(SQLModel, table=True):
     proposal_id: Optional[int] = Field(default=None, index=True, foreign_key="proposal.id")
     finance_invoice_id: Optional[int] = Field(default=None, index=True, foreign_key="financeinvoice.id")
     pending_item_id: Optional[int] = Field(default=None, index=True, foreign_key="pendingitem.id")
+
+    task_id: Optional[int] = Field(default=None, index=True, foreign_key="task.id")
 
     original_filename: str
     stored_filename: str
@@ -2630,32 +2632,80 @@ TEMPLATES.update({
   <div class="d-flex justify-content-between align-items-center">
     <div>
       <h4 class="mb-0">Tarefas</h4>
-      <div class="muted">Kanban por status • prazos • prioridade</div>
+      <div class="muted">Kanban por status • filtros • prazos • prioridade</div>
     </div>
     {% if role in ["admin","equipe"] %}
-  <a class="btn btn-primary" href="/tarefas/nova{% if filter_client_id %}?client_id={{ filter_client_id }}{% endif %}">Nova tarefa</a>
-{% endif %}
+      <a class="btn btn-primary" href="/tarefas/nova{% if filter_client_id %}?client_id={{ filter_client_id }}{% endif %}">Nova tarefa</a>
+    {% endif %}
   </div>
 
   <hr class="my-3"/>
-{% if role in ["admin","equipe"] %}
-  <form method="get" action="/tarefas" class="row g-2 align-items-end mb-3">
-    <div class="col-md-6">
-      <label class="form-label">Cliente (filtro)</label>
-      <select class="form-select" name="client_id" onchange="this.form.submit()">
-        <option value="0" {% if filter_client_id==0 %}selected{% endif %}>Todos</option>
-        {% for c in clients %}
-          <option value="{{ c.id }}" {% if filter_client_id==c.id %}selected{% endif %}>{{ c.name }}</option>
-        {% endfor %}
-      </select>
-    </div>
-    <div class="col-md-6 d-flex gap-2">
-      {% if filter_client_id %}
-        <a class="btn btn-outline-secondary" href="/tarefas">Limpar filtro</a>
-      {% endif %}
-    </div>
-  </form>
-{% endif %}
+
+  {% if role in ["admin","equipe"] %}
+    <form method="get" action="/tarefas" class="row g-2 align-items-end mb-3">
+      <div class="col-md-3">
+        <label class="form-label">Cliente</label>
+        <select class="form-select" name="client_id">
+          <option value="0" {% if filter_client_id==0 %}selected{% endif %}>Todos</option>
+          {% for c in clients %}
+            <option value="{{ c.id }}" {% if filter_client_id==c.id %}selected{% endif %}>{{ c.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <div class="col-md-3">
+        <label class="form-label">Responsável</label>
+        <select class="form-select" name="assignee_user_id">
+          <option value="0" {% if filter_assignee_user_id==0 %}selected{% endif %}>Todos</option>
+          <option value="-1" {% if filter_assignee_user_id==-1 %}selected{% endif %}>Sem responsável</option>
+          {% for u in assignees %}
+            <option value="{{ u.id }}" {% if filter_assignee_user_id==u.id %}selected{% endif %}>{{ u.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <div class="col-md-2">
+        <label class="form-label">Status</label>
+        <select class="form-select" name="status">
+          <option value="" {% if not filter_status %}selected{% endif %}>Todos</option>
+          <option value="nao_iniciada" {% if filter_status=="nao_iniciada" %}selected{% endif %}>nao_iniciada</option>
+          <option value="em_andamento" {% if filter_status=="em_andamento" %}selected{% endif %}>em_andamento</option>
+          <option value="concluida" {% if filter_status=="concluida" %}selected{% endif %}>concluida</option>
+        </select>
+      </div>
+
+      <div class="col-md-2">
+        <label class="form-label">Prioridade</label>
+        <select class="form-select" name="priority">
+          <option value="" {% if not filter_priority %}selected{% endif %}>Todas</option>
+          <option value="baixa" {% if filter_priority=="baixa" %}selected{% endif %}>baixa</option>
+          <option value="media" {% if filter_priority=="media" %}selected{% endif %}>media</option>
+          <option value="alta" {% if filter_priority=="alta" %}selected{% endif %}>alta</option>
+        </select>
+      </div>
+
+      <div class="col-md-2">
+        <label class="form-label">Prazo</label>
+        <select class="form-select" name="due">
+          <option value="" {% if not filter_due %}selected{% endif %}>Todos</option>
+          <option value="atrasadas" {% if filter_due=="atrasadas" %}selected{% endif %}>atrasadas</option>
+          <option value="hoje" {% if filter_due=="hoje" %}selected{% endif %}>hoje</option>
+          <option value="7dias" {% if filter_due=="7dias" %}selected{% endif %}>7 dias</option>
+          <option value="sem_prazo" {% if filter_due=="sem_prazo" %}selected{% endif %}>sem prazo</option>
+        </select>
+      </div>
+
+      <div class="col-12 d-flex gap-2 align-items-center mt-1">
+        <div class="form-check">
+          <input class="form-check-input" type="checkbox" name="mine" value="1" id="mine" {% if filter_mine==1 %}checked{% endif %}>
+          <label class="form-check-label" for="mine">Minhas</label>
+        </div>
+        <button class="btn btn-outline-primary" type="submit">Aplicar</button>
+        <a class="btn btn-outline-secondary" href="/tarefas">Limpar</a>
+      </div>
+    </form>
+  {% endif %}
+
   <div class="row g-3">
     {% for col in columns %}
       <div class="col-12 col-lg-4">
@@ -2670,6 +2720,9 @@ TEMPLATES.update({
                     <span class="badge text-bg-light border">{{ t.priority }}</span>
                   </div>
                   <div class="muted small mt-1">
+                    {% if role in ["admin","equipe"] and filter_client_id==0 and t.client_name %}
+                      Cliente: {{ t.client_name }} •
+                    {% endif %}
                     {% if t.due_date %}Prazo: {{ t.due_date }} • {% endif %}
                     {% if t.assignee_name %}Resp: {{ t.assignee_name }}{% endif %}
                   </div>
@@ -5325,7 +5378,12 @@ def _task_assignee_label(session: Session, user_id: Optional[int]) -> str:
 async def tasks_list(
     request: Request,
     session: Session = Depends(get_session),
-    client_id: int = 0,  # filtro opcional p/ admin/equipe (0 = todos)
+    client_id: int = 0,          # 0=todos (staff)
+    assignee_user_id: int = 0,   # 0=todos, -1=sem responsável (staff)
+    status: str = "",            # "", nao_iniciada, em_andamento, concluida
+    priority: str = "",          # "", baixa, media, alta
+    due: str = "",               # "", atrasadas, hoje, 7dias, sem_prazo
+    mine: int = 0,               # 1=apenas minhas (staff)
 ) -> HTMLResponse:
     ctx = get_tenant_context(request, session)
     if not ctx:
@@ -5335,17 +5393,48 @@ async def tasks_list(
     active_client_id = get_active_client_id(request, session, ctx)
     current_client = get_client_or_none(session, ctx.company.id, active_client_id)
 
-    q = select(Task).where(Task.company_id == ctx.company.id).order_by(Task.updated_at.desc())
+    q = select(Task).where(Task.company_id == ctx.company.id)
 
-    clients = []
+    clients: list[Client] = []
+    assignees: list[dict[str, Any]] = []
     filter_client_id = 0
+    filter_assignee_user_id = 0
+    filter_status = ""
+    filter_priority = ""
+    filter_due = ""
+    filter_mine = 0
 
     if ctx.membership.role == "cliente":
-        q = q.where(Task.client_id == (ctx.membership.client_id or -1), Task.visible_to_client.is_(True))
+        q = q.where(
+            Task.client_id == (ctx.membership.client_id or -1),
+            Task.visible_to_client.is_(True),
+        ).order_by(Task.updated_at.desc())
     else:
+        # listas de filtro
         clients = session.exec(
             select(Client).where(Client.company_id == ctx.company.id).order_by(Client.created_at)
         ).all()
+
+        memberships = session.exec(select(Membership).where(Membership.company_id == ctx.company.id)).all()
+        for m in memberships:
+            u = session.get(User, m.user_id)
+            if not u:
+                continue
+            if m.role in {"admin", "equipe"}:
+                assignees.append({"id": u.id, "name": u.name, "role": m.role})
+
+        # aplicar filtros
+        if mine == 1:
+            filter_mine = 1
+            filter_assignee_user_id = ctx.user.id
+            q = q.where(Task.assignee_user_id == ctx.user.id)
+        else:
+            if assignee_user_id == -1:
+                filter_assignee_user_id = -1
+                q = q.where(Task.assignee_user_id.is_(None))
+            elif assignee_user_id and assignee_user_id > 0:
+                filter_assignee_user_id = int(assignee_user_id)
+                q = q.where(Task.assignee_user_id == int(assignee_user_id))
 
         if client_id and client_id > 0:
             fc = get_client_or_none(session, ctx.company.id, int(client_id))
@@ -5354,6 +5443,34 @@ async def tasks_list(
                 return RedirectResponse("/tarefas", status_code=303)
             filter_client_id = fc.id
             q = q.where(Task.client_id == fc.id)
+
+        status = (status or "").strip().lower()
+        if status in TASK_STATUS:
+            filter_status = status
+            q = q.where(Task.status == status)
+
+        priority = (priority or "").strip().lower()
+        if priority in TASK_PRIORITY:
+            filter_priority = priority
+            q = q.where(Task.priority == priority)
+
+        due = (due or "").strip().lower()
+        today = datetime.now(timezone.utc).date()
+        today_s = today.isoformat()
+        end_s = (today + timedelta(days=7)).isoformat()
+
+        if due in {"atrasadas", "hoje", "7dias", "sem_prazo"}:
+            filter_due = due
+            if due == "sem_prazo":
+                q = q.where((Task.due_date == "") | (Task.due_date.is_(None)))
+            elif due == "hoje":
+                q = q.where(Task.due_date == today_s)
+            elif due == "7dias":
+                q = q.where(Task.due_date >= today_s, Task.due_date <= end_s)
+            elif due == "atrasadas":
+                q = q.where(Task.due_date != "", Task.due_date < today_s, Task.status != "concluida")
+
+        q = q.order_by(Task.updated_at.desc())
 
     tasks = session.exec(q).all()
 
@@ -5368,6 +5485,7 @@ async def tasks_list(
                 "due_date": t.due_date,
                 "visible_to_client": t.visible_to_client,
                 "assignee_name": _task_assignee_label(session, t.assignee_user_id),
+                "client_name": (session.get(Client, t.client_id).name if session.get(Client, t.client_id) else ""),
             }
         )
 
@@ -5388,9 +5506,15 @@ async def tasks_list(
             "current_user": ctx.user,
             "current_company": ctx.company,
             "role": ctx.membership.role,
-            "current_client": current_client,  # continua útil na navbar
+            "current_client": current_client,
             "clients": clients,
+            "assignees": assignees,
             "filter_client_id": filter_client_id,
+            "filter_assignee_user_id": filter_assignee_user_id,
+            "filter_status": filter_status,
+            "filter_priority": filter_priority,
+            "filter_due": filter_due,
+            "filter_mine": filter_mine,
             "columns": columns,
         },
     )
@@ -5507,16 +5631,46 @@ async def tasks_detail(request: Request, session: Session = Depends(get_session)
 
     task = session.get(Task, int(task_id))
     if not task or not _task_can_view(ctx, task):
-        return render("error.html", request=request, context={"message": "Tarefa não encontrada ou sem permissão."}, status_code=404)
+        return render(
+            "error.html",
+            request=request,
+            context={"message": "Tarefa não encontrada ou sem permissão."},
+            status_code=404,
+        )
 
     active_client_id = get_active_client_id(request, session, ctx)
     current_client = get_client_or_none(session, ctx.company.id, active_client_id)
 
-    comments = session.exec(select(TaskComment).where(TaskComment.task_id == task.id).order_by(TaskComment.created_at.asc())).all()
+    comments = session.exec(
+        select(TaskComment)
+        .where(TaskComment.task_id == task.id)
+        .order_by(TaskComment.created_at.asc())
+    ).all()
     out_comments = []
     for c in comments:
         u = session.get(User, c.author_user_id)
-        out_comments.append({"author_name": u.name if u else "—", "message": c.message, "created_at": c.created_at.strftime("%Y-%m-%d %H:%M")})
+        out_comments.append(
+            {
+                "author_name": u.name if u else "—",
+                "message": c.message,
+                "created_at": c.created_at.strftime("%Y-%m-%d %H:%M"),
+            }
+        )
+
+    attachments = session.exec(
+        select(Attachment)
+        .where(Attachment.task_id == task.id)
+        .order_by(Attachment.created_at.asc())
+    ).all()
+    out_attachments = []
+    for a in attachments:
+        out_attachments.append(
+            {
+                "id": a.id,
+                "original_filename": a.original_filename,
+                "created_at": a.created_at.strftime("%Y-%m-%d %H:%M"),
+            }
+        )
 
     assignee_name = _task_assignee_label(session, task.assignee_user_id)
 
@@ -5531,6 +5685,7 @@ async def tasks_detail(request: Request, session: Session = Depends(get_session)
             "task": task,
             "assignee_name": assignee_name,
             "comments": out_comments,
+            "attachments": out_attachments,
         },
     )
 
@@ -5562,6 +5717,57 @@ async def tasks_add_comment(
 
     return RedirectResponse(f"/tarefas/{task.id}", status_code=303)
 
+
+
+@app.post("/tarefas/{task_id}/anexar")
+@require_login
+async def tasks_attach_file(
+    request: Request,
+    session: Session = Depends(get_session),
+    task_id: int = 0,
+    file: UploadFile = File(...),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+
+    task = session.get(Task, int(task_id))
+    if not task or not _task_can_view(ctx, task):
+        set_flash(request, "Tarefa não encontrada ou sem permissão.")
+        return RedirectResponse("/tarefas", status_code=303)
+
+    # Cliente só anexa se a tarefa for visível a ele
+    if ctx.membership.role == "cliente" and not task.visible_to_client:
+        set_flash(request, "Sem permissão.")
+        return RedirectResponse("/tarefas", status_code=303)
+
+    if not file or not file.filename:
+        set_flash(request, "Selecione um arquivo.")
+        return RedirectResponse(f"/tarefas/{task.id}", status_code=303)
+
+    try:
+        stored, mime, size = await save_upload(file)
+    except ValueError:
+        set_flash(request, "Arquivo muito grande.")
+        return RedirectResponse(f"/tarefas/{task.id}", status_code=303)
+
+    session.add(
+        Attachment(
+            company_id=ctx.company.id,
+            client_id=task.client_id,
+            uploaded_by_user_id=ctx.user.id,
+            task_id=task.id,
+            original_filename=file.filename or "arquivo",
+            stored_filename=stored,
+            mime_type=mime,
+            size_bytes=size,
+        )
+    )
+    session.commit()
+
+    set_flash(request, "Anexo enviado.")
+    return RedirectResponse(f"/tarefas/{task.id}", status_code=303)
 
 @app.post("/tarefas/{task_id}/toggle")
 @require_role({"cliente"})
@@ -5721,6 +5927,13 @@ async def tasks_delete_action(
 
     if confirm.strip().upper() != "EXCLUIR":
         set_flash(request, "Confirmação inválida. Digite EXCLUIR.")
+        return RedirectResponse(f"/tarefas/{task.id}", status_code=303)
+
+
+    # Segurança: não excluir se ainda houver anexos
+    has_att = session.exec(select(Attachment.id).where(Attachment.task_id == task.id)).first()
+    if has_att:
+        set_flash(request, "Remova os anexos antes de excluir a tarefa.")
         return RedirectResponse(f"/tarefas/{task.id}", status_code=303)
 
     # delete comments first
