@@ -169,6 +169,10 @@ def sanitize_service_name(name: str) -> str:
 NOTION_TOKEN = os.getenv("NOTION_TOKEN")
 NOTION_DB_NEGOCIOS_ID = os.getenv("NOTION_DB_NEGOCIOS_ID")
 
+NOTION_VERSION = os.getenv("NOTION_VERSION", "2026-03-11")
+NOTION_API_BASE = "https://api.notion.com/v1"
+
+
 UPLOAD_DIR = Path(os.getenv("UPLOAD_DIR") or "./uploads").resolve()
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -986,6 +990,268 @@ async def save_upload(upload: UploadFile) -> tuple[str, str, int]:
 # ----------------------------
 # Templates
 # ----------------------------
+
+
+# =========================
+# Meetings (Notion AI Meeting Notes sync)
+# =========================
+
+class Meeting(SQLModel, table=True):
+    """Meeting record linked to a client; can be synced from a Notion AI Meeting Notes page."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+
+    company_id: int = Field(index=True, foreign_key="company.id")
+    client_id: int = Field(index=True, foreign_key="client.id")
+    created_by_user_id: int = Field(index=True, foreign_key="user.id")
+
+    title: str = ""
+    meeting_date: str = ""  # AAAA-MM-DD (simple)
+    source: str = Field(default="notion", index=True)
+
+    notion_page_id: str = Field(default="", index=True)  # normalized UUID (with hyphens)
+    notion_url: str = ""
+    notion_meeting_block_id: str = Field(default="", index=True)
+    notion_status: str = Field(default="", index=True)
+
+    summary_text: str = ""
+    notes_text: str = ""
+    transcript_text: str = ""
+    action_items_text: str = ""
+
+    raw_json: str = Field(default="{}")
+    last_synced_at: Optional[datetime] = None
+
+    created_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime = Field(default_factory=utcnow)
+
+
+class MeetingMessage(SQLModel, table=True):
+    """Thread messages about a meeting (internal + client)."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+
+    meeting_id: int = Field(index=True, foreign_key="meeting.id")
+    author_user_id: int = Field(index=True, foreign_key="user.id")
+
+    message: str
+    created_at: datetime = Field(default_factory=utcnow)
+
+
+_MEETING_NOTION_STATUSES = {
+    "transcription_not_started",
+    "transcription_paused",
+    "transcription_in_progress",
+    "summary_in_progress",
+    "notes_ready",
+}
+
+
+def _normalize_uuid(raw: str) -> str:
+    s = (raw or "").strip()
+    # Extract 32 hex chars if URL-like
+    m = re.search(r"([0-9a-fA-F]{32})", s)
+    if m:
+        s = m.group(1)
+    s = s.replace("-", "").lower()
+    if len(s) != 32 or not re.fullmatch(r"[0-9a-f]{32}", s):
+        return ""
+    return f"{s[0:8]}-{s[8:12]}-{s[12:16]}-{s[16:20]}-{s[20:32]}"
+
+
+def _notion_headers() -> dict[str, str]:
+    if not NOTION_TOKEN:
+        raise RuntimeError("NOTION_TOKEN não está configurado.")
+    return {
+        "Authorization": f"Bearer {NOTION_TOKEN}",
+        "Notion-Version": NOTION_VERSION,
+    }
+
+
+async def _notion_get_json(path: str, *, params: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+    url = f"{NOTION_API_BASE}{path}"
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        r = await client.get(url, headers=_notion_headers(), params=params or {})
+        r.raise_for_status()
+        data = r.json()
+        return data if isinstance(data, dict) else {}
+
+
+async def _notion_list_block_children_all(block_id: str) -> list[dict[str, Any]]:
+    results: list[dict[str, Any]] = []
+    cursor: Optional[str] = None
+    while True:
+        params = {"page_size": 100}
+        if cursor:
+            params["start_cursor"] = cursor
+        data = await _notion_get_json(f"/blocks/{block_id}/children", params=params)
+        chunk = data.get("results") or []
+        if isinstance(chunk, list):
+            results.extend([x for x in chunk if isinstance(x, dict)])
+        if not data.get("has_more"):
+            break
+        cursor = data.get("next_cursor")
+        if not cursor:
+            break
+    return results
+
+
+def _rt_plain(rich_text: Any) -> str:
+    if not isinstance(rich_text, list):
+        return ""
+    parts: list[str] = []
+    for rt in rich_text:
+        if not isinstance(rt, dict):
+            continue
+        pt = rt.get("plain_text")
+        if isinstance(pt, str):
+            parts.append(pt)
+        else:
+            t = rt.get("text", {})
+            if isinstance(t, dict) and isinstance(t.get("content"), str):
+                parts.append(t["content"])
+    return "".join(parts).strip()
+
+
+async def _notion_blocks_to_lines(block_id: str, *, depth: int = 0, max_depth: int = 4) -> list[str]:
+    if depth > max_depth:
+        return []
+    blocks = await _notion_list_block_children_all(block_id)
+    out: list[str] = []
+    for b in blocks:
+        btype = b.get("type")
+        if not isinstance(btype, str):
+            continue
+        data = b.get(btype, {}) if isinstance(b.get(btype), dict) else {}
+
+        line = ""
+        if btype in {"paragraph", "quote", "callout"}:
+            line = _rt_plain(data.get("rich_text") or data.get("text"))
+            if btype == "quote" and line:
+                line = f"> {line}"
+            if btype == "callout" and line:
+                line = f"💬 {line}"
+        elif btype in {"heading_1", "heading_2", "heading_3"}:
+            h = _rt_plain(data.get("rich_text") or data.get("text"))
+            if h:
+                prefix = "#" if btype == "heading_1" else "##" if btype == "heading_2" else "###"
+                line = f"{prefix} {h}"
+        elif btype in {"bulleted_list_item", "numbered_list_item"}:
+            t = _rt_plain(data.get("rich_text") or data.get("text"))
+            if t:
+                bullet = "-" if btype == "bulleted_list_item" else "1."
+                line = f"{bullet} {t}"
+        elif btype == "to_do":
+            t = _rt_plain(data.get("rich_text") or data.get("text"))
+            checked = bool(data.get("checked"))
+            box = "☑" if checked else "☐"
+            if t:
+                line = f"{box} {t}"
+        elif btype == "toggle":
+            t = _rt_plain(data.get("rich_text") or data.get("text"))
+            if t:
+                line = f"▸ {t}"
+        elif btype == "code":
+            t = _rt_plain(data.get("rich_text") or data.get("text"))
+            lang = data.get("language") if isinstance(data.get("language"), str) else ""
+            if t:
+                line = f"```{lang}\n{t}\n```"
+        else:
+            # Fallback for other blocks that have rich_text
+            if isinstance(data, dict):
+                t = _rt_plain(data.get("rich_text") or data.get("text"))
+                if t:
+                    line = t
+
+        if line:
+            out.append(("  " * depth) + line)
+
+        if b.get("has_children") and isinstance(b.get("id"), str):
+            child_lines = await _notion_blocks_to_lines(b["id"], depth=depth + 1, max_depth=max_depth)
+            out.extend(child_lines)
+
+    return [x for x in out if isinstance(x, str) and x.strip()]
+
+
+def _extract_action_items_from_lines(lines: list[str]) -> str:
+    if not lines:
+        return ""
+    actions: list[str] = []
+    in_actions = False
+    for ln in lines:
+        low = ln.lower()
+        if low.startswith("#") and ("action" in low or "ação" in low or "acoes" in low or "ações" in low):
+            in_actions = True
+            continue
+        if low.startswith("#") and in_actions:
+            # next heading ends action section
+            in_actions = False
+        if in_actions:
+            if ln.strip().startswith(("-", "☐", "☑", "1.")):
+                actions.append(ln.strip())
+        else:
+            # also accept to-do items anywhere
+            if ln.strip().startswith(("☐", "☑")):
+                actions.append(ln.strip())
+    return "\n".join(actions).strip()
+
+
+async def _notion_find_meeting_notes_block(page_id: str) -> Optional[dict[str, Any]]:
+    # BFS up to a small depth: page children -> nested children
+    queue = [(page_id, 0)]
+    seen: set[str] = set()
+    while queue:
+        bid, depth = queue.pop(0)
+        if bid in seen:
+            continue
+        seen.add(bid)
+        blocks = await _notion_list_block_children_all(bid)
+        for b in blocks:
+            btype = b.get("type")
+            if btype in {"meeting_notes", "transcription"}:
+                return b
+        if depth < 3:
+            for b in blocks:
+                if b.get("has_children") and isinstance(b.get("id"), str):
+                    queue.append((b["id"], depth + 1))
+    return None
+
+
+async def notion_sync_meeting_from_page(page_id_or_url: str) -> dict[str, Any]:
+    page_id = _normalize_uuid(page_id_or_url)
+    if not page_id:
+        raise ValueError("Não foi possível extrair o ID da página do Notion.")
+    meeting_block = await _notion_find_meeting_notes_block(page_id)
+    if not meeting_block:
+        raise ValueError("Não encontrei um bloco de AI Meeting Notes nessa página (meeting_notes/transcription).")
+
+    block_id = meeting_block.get("id", "")
+    prop = meeting_block.get("meeting_notes") or meeting_block.get("transcription") or {}
+    title = _rt_plain(prop.get("title")) if isinstance(prop, dict) else ""
+    status = prop.get("status") if isinstance(prop, dict) and isinstance(prop.get("status"), str) else ""
+    children = prop.get("children") if isinstance(prop, dict) else {}
+    if not isinstance(children, dict):
+        children = {}
+
+    summary_block_id = children.get("summary_block_id") if isinstance(children.get("summary_block_id"), str) else ""
+    notes_block_id = children.get("notes_block_id") if isinstance(children.get("notes_block_id"), str) else ""
+    transcript_block_id = children.get("transcript_block_id") if isinstance(children.get("transcript_block_id"), str) else ""
+
+    summary_lines = await _notion_blocks_to_lines(summary_block_id) if summary_block_id else []
+    notes_lines = await _notion_blocks_to_lines(notes_block_id) if notes_block_id else []
+    transcript_lines = await _notion_blocks_to_lines(transcript_block_id) if transcript_block_id else []
+
+    action_items = _extract_action_items_from_lines(summary_lines + notes_lines)
+
+    return {
+        "page_id": page_id,
+        "meeting_block_id": block_id,
+        "title": title,
+        "status": status,
+        "summary_text": "\n".join(summary_lines).strip(),
+        "notes_text": "\n".join(notes_lines).strip(),
+        "transcript_text": "\n".join(transcript_lines).strip(),
+        "action_items_text": action_items,
+        "raw": meeting_block,
+    }
 
 TEMPLATES: dict[str, str] = {
     "base.html": r"""
@@ -3850,6 +4116,235 @@ TEMPLATES.update({
 {% endblock %}
 """,
 })
+
+
+# Extra templates: Meetings
+TEMPLATES.update({
+    "meetings_list.html": r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <div class="d-flex justify-content-between align-items-center">
+    <div>
+      <h4 class="mb-0">Reuniões</h4>
+      <div class="muted">Sincronização com Notion AI Meeting Notes</div>
+    </div>
+    {% if role in ["admin","equipe"] %}
+      <a class="btn btn-primary" href="/reunioes/nova">Nova reunião</a>
+    {% endif %}
+  </div>
+
+  <hr class="my-3"/>
+
+  {% if role in ["admin","equipe"] %}
+  <form method="get" action="/reunioes" class="row g-2 align-items-end mb-3">
+    <div class="col-md-6">
+      <label class="form-label">Cliente (filtro)</label>
+      <select class="form-select" name="client_id" onchange="this.form.submit()">
+        <option value="0" {% if filter_client_id==0 %}selected{% endif %}>Todos</option>
+        {% for c in clients %}
+          <option value="{{ c.id }}" {% if filter_client_id==c.id %}selected{% endif %}>{{ c.name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-md-6 d-flex gap-2">
+      {% if filter_client_id %}
+        <a class="btn btn-outline-secondary" href="/reunioes">Limpar filtro</a>
+      {% endif %}
+    </div>
+  </form>
+  {% endif %}
+
+  {% if meetings %}
+    <div class="list-group">
+      {% for m in meetings %}
+        <a class="list-group-item list-group-item-action" href="/reunioes/{{ m.id }}">
+          <div class="d-flex justify-content-between">
+            <div class="fw-semibold">{{ m.title or "Reunião" }}</div>
+            <span class="badge text-bg-light border">{{ m.notion_status or "—" }}</span>
+          </div>
+          <div class="muted small mt-1">
+            {% if role in ["admin","equipe"] %}Cliente: {{ m.client_name }} • {% endif %}
+            {% if m.meeting_date %}Data: {{ m.meeting_date }} • {% endif %}
+            {% if m.last_synced_at %}Sync: {{ m.last_synced_at }}{% endif %}
+          </div>
+        </a>
+      {% endfor %}
+    </div>
+  {% else %}
+    <div class="muted">Nenhuma reunião cadastrada.</div>
+  {% endif %}
+</div>
+{% endblock %}
+""",
+
+    "meetings_new.html": r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <div class="d-flex justify-content-between align-items-center">
+    <div>
+      <h4 class="mb-0">Nova Reunião</h4>
+      <div class="muted">Cole o link (ou ID) da página do Notion que contém AI Meeting Notes.</div>
+    </div>
+    <a class="btn btn-outline-secondary" href="/reunioes">Voltar</a>
+  </div>
+
+  <hr class="my-3"/>
+
+  {% if not notion_enabled %}
+    <div class="alert alert-warning">
+      NOTION_TOKEN não configurado. Configure no Render/ambiente para usar sync.
+    </div>
+  {% endif %}
+
+  <form method="post" action="/reunioes/nova">
+    <div class="row g-3">
+      <div class="col-md-6">
+        <label class="form-label">Cliente</label>
+        <select class="form-select" name="client_id" required>
+          {% for c in clients %}
+            <option value="{{ c.id }}" {% if current_client and c.id==current_client.id %}selected{% endif %}>{{ c.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <div class="col-md-6">
+        <label class="form-label">Data (AAAA-MM-DD)</label>
+        <input class="form-control mono" name="meeting_date" placeholder="2026-03-12" />
+      </div>
+
+      <div class="col-12">
+        <label class="form-label">Link ou ID da página do Notion</label>
+        <input class="form-control" name="notion_page" required placeholder="https://www.notion.so/... ou 32-hex" />
+        <div class="form-text">A integração precisa ter acesso à página (Compartilhar → Conexões → sua integração).</div>
+      </div>
+
+      <div class="col-12">
+        <label class="form-label">Título (opcional)</label>
+        <input class="form-control" name="title" placeholder="Ex: Reunião de alinhamento" />
+      </div>
+
+      <div class="col-12 form-check">
+        <input class="form-check-input" type="checkbox" value="1" id="sync_now" name="sync_now" checked>
+        <label class="form-check-label" for="sync_now">Sincronizar agora</label>
+      </div>
+    </div>
+
+    <div class="mt-4 d-flex gap-2">
+      <button class="btn btn-primary" type="submit">Criar</button>
+      <a class="btn btn-outline-secondary" href="/reunioes">Cancelar</a>
+    </div>
+  </form>
+</div>
+{% endblock %}
+""",
+
+    "meetings_detail.html": r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <div class="d-flex justify-content-between align-items-start">
+    <div>
+      <h4 class="mb-1">{{ meeting.title or "Reunião" }}</h4>
+      <div class="muted">
+        {% if role in ["admin","equipe"] %}Cliente: <b>{{ client.name }}</b> • {% endif %}
+        {% if meeting.meeting_date %}Data: <b>{{ meeting.meeting_date }}</b> • {% endif %}
+        Status Notion: <b>{{ meeting.notion_status or "—" }}</b>
+      </div>
+      {% if meeting.notion_url %}
+        <div class="small mt-1"><a href="{{ meeting.notion_url }}" target="_blank" rel="noopener">Abrir no Notion</a></div>
+      {% endif %}
+      {% if meeting.last_synced_at %}
+        <div class="muted small mt-1">Última sincronização: {{ meeting.last_synced_at }}</div>
+      {% endif %}
+    </div>
+
+    <div class="d-flex gap-2">
+      <a class="btn btn-outline-secondary" href="/reunioes">Voltar</a>
+      {% if role in ["admin","equipe"] %}
+        <form method="post" action="/reunioes/{{ meeting.id }}/sync">
+          <button class="btn btn-outline-primary" type="submit">Sincronizar</button>
+        </form>
+      {% endif %}
+    </div>
+  </div>
+
+  {% if role in ["admin","equipe"] and meeting.action_items_text %}
+    <hr class="my-3"/>
+    <form method="post" action="/reunioes/{{ meeting.id }}/gerar_tarefas" class="card p-3">
+      <div class="fw-semibold mb-2">Gerar tarefas a partir de Action Items</div>
+      <div class="row g-2">
+        <div class="col-md-6">
+          <label class="form-label">Responsável (opcional)</label>
+          <select class="form-select" name="assignee_user_id">
+            <option value="0">Sem responsável</option>
+            {% for a in assignees %}
+              <option value="{{ a.id }}">{{ a.name }} ({{ a.role }})</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="col-md-6">
+          <label class="form-label">Visibilidade</label>
+          <select class="form-select" name="visible_to_client">
+            <option value="0">Interno</option>
+            <option value="1">Visível ao cliente</option>
+          </select>
+        </div>
+        <div class="col-12">
+          <button class="btn btn-primary" type="submit">Gerar tarefas</button>
+        </div>
+      </div>
+    </form>
+  {% endif %}
+
+  <hr class="my-3"/>
+
+  <div class="accordion" id="accM">
+    <div class="accordion-item">
+      <h2 class="accordion-header" id="hSum">
+        <button class="accordion-button" type="button" data-bs-toggle="collapse" data-bs-target="#cSum">Resumo</button>
+      </h2>
+      <div id="cSum" class="accordion-collapse collapse show" data-bs-parent="#accM">
+        <div class="accordion-body"><pre>{{ meeting.summary_text or "—" }}</pre></div>
+      </div>
+    </div>
+
+    <div class="accordion-item">
+      <h2 class="accordion-header" id="hAct">
+        <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#cAct">Action Items</button>
+      </h2>
+      <div id="cAct" class="accordion-collapse collapse" data-bs-parent="#accM">
+        <div class="accordion-body"><pre>{{ meeting.action_items_text or "—" }}</pre></div>
+      </div>
+    </div>
+
+    <div class="accordion-item">
+      <h2 class="accordion-header" id="hNotes">
+        <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#cNotes">Notas</button>
+      </h2>
+      <div id="cNotes" class="accordion-collapse collapse" data-bs-parent="#accM">
+        <div class="accordion-body"><pre>{{ meeting.notes_text or "—" }}</pre></div>
+      </div>
+    </div>
+
+    <div class="accordion-item">
+      <h2 class="accordion-header" id="hTr">
+        <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#cTr">Transcrição</button>
+      </h2>
+      <div id="cTr" class="accordion-collapse collapse" data-bs-parent="#accM">
+        <div class="accordion-body"><pre>{{ meeting.transcript_text or "—" }}</pre></div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+{% endblock %}
+""",
+})
+
 
 templates_env = Environment(loader=DictLoader(TEMPLATES), autoescape=True)
 
@@ -7955,4 +8450,288 @@ async def _alias_props() -> Response:
 @app.get("/finance")
 async def _alias_fin() -> Response:
     return RedirectResponse("/financeiro", status_code=307)
+
+
+
+
+# =========================
+# Meetings routes
+# =========================
+
+@app.get("/reunioes", response_class=HTMLResponse)
+@require_login
+async def meetings_list(
+    request: Request,
+    session: Session = Depends(get_session),
+    client_id: int = 0,
+) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+
+    active_client_id = get_active_client_id(request, session, ctx)
+    current_client = get_client_or_none(session, ctx.company.id, active_client_id)
+
+    q = select(Meeting).where(Meeting.company_id == ctx.company.id).order_by(Meeting.created_at.desc())
+
+    clients: list[Client] = []
+    filter_client_id = 0
+
+    if ctx.membership.role == "cliente":
+        q = q.where(Meeting.client_id == (ctx.membership.client_id or -1))
+    else:
+        clients = session.exec(select(Client).where(Client.company_id == ctx.company.id).order_by(Client.created_at)).all()
+        if client_id and client_id > 0:
+            fc = get_client_or_none(session, ctx.company.id, int(client_id))
+            if not fc:
+                set_flash(request, "Cliente inválido.")
+                return RedirectResponse("/reunioes", status_code=303)
+            filter_client_id = fc.id
+            q = q.where(Meeting.client_id == fc.id)
+
+    meetings = session.exec(q).all()
+    out = []
+    for m in meetings:
+        c = session.get(Client, m.client_id)
+        out.append(
+            {
+                "id": m.id,
+                "title": m.title,
+                "meeting_date": m.meeting_date,
+                "notion_status": m.notion_status,
+                "last_synced_at": m.last_synced_at.isoformat(timespec="minutes") if m.last_synced_at else "",
+                "client_name": c.name if c else "—",
+            }
+        )
+
+    return render(
+        "meetings_list.html",
+        request=request,
+        context={
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "role": ctx.membership.role,
+            "current_client": current_client,
+            "clients": clients,
+            "filter_client_id": filter_client_id,
+            "meetings": out,
+        },
+    )
+
+
+@app.get("/reunioes/nova", response_class=HTMLResponse)
+@require_role({"admin", "equipe"})
+async def meetings_new_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    clients = session.exec(select(Client).where(Client.company_id == ctx.company.id).order_by(Client.created_at)).all()
+    active_client_id = get_active_client_id(request, session, ctx)
+    current_client = get_client_or_none(session, ctx.company.id, active_client_id)
+
+    return render(
+        "meetings_new.html",
+        request=request,
+        context={
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "role": ctx.membership.role,
+            "current_client": current_client,
+            "clients": clients,
+            "notion_enabled": bool(NOTION_TOKEN),
+        },
+    )
+
+
+@app.post("/reunioes/nova")
+@require_role({"admin", "equipe"})
+async def meetings_new_action(
+    request: Request,
+    session: Session = Depends(get_session),
+    client_id: int = Form(...),
+    meeting_date: str = Form(""),
+    notion_page: str = Form(...),
+    title: str = Form(""),
+    sync_now: str = Form(""),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    client = get_client_or_none(session, ctx.company.id, int(client_id))
+    if not client:
+        set_flash(request, "Cliente inválido.")
+        return RedirectResponse("/reunioes/nova", status_code=303)
+
+    page_id = _normalize_uuid(notion_page)
+    if not page_id:
+        set_flash(request, "Link/ID do Notion inválido.")
+        return RedirectResponse("/reunioes/nova", status_code=303)
+
+    mt = Meeting(
+        company_id=ctx.company.id,
+        client_id=client.id,
+        created_by_user_id=ctx.user.id,
+        title=title.strip(),
+        meeting_date=meeting_date.strip(),
+        notion_page_id=page_id,
+        notion_url=notion_page.strip(),
+        updated_at=utcnow(),
+    )
+    session.add(mt)
+    session.commit()
+    session.refresh(mt)
+
+    if sync_now == "1":
+        try:
+            data = await notion_sync_meeting_from_page(page_id)
+            mt.title = mt.title or data.get("title", "") or "Reunião"
+            mt.notion_meeting_block_id = data.get("meeting_block_id", "") or ""
+            mt.notion_status = data.get("status", "") or ""
+            mt.summary_text = data.get("summary_text", "") or ""
+            mt.notes_text = data.get("notes_text", "") or ""
+            mt.transcript_text = data.get("transcript_text", "") or ""
+            mt.action_items_text = data.get("action_items_text", "") or ""
+            mt.raw_json = json.dumps(data.get("raw", {}), ensure_ascii=False)
+            mt.last_synced_at = utcnow()
+            mt.updated_at = utcnow()
+            session.add(mt)
+            session.commit()
+            set_flash(request, "Reunião criada e sincronizada.")
+        except Exception as e:
+            set_flash(request, f"Reunião criada, mas falhou ao sincronizar: {e}")
+
+    return RedirectResponse(f"/reunioes/{mt.id}", status_code=303)
+
+
+@app.get("/reunioes/{meeting_id}", response_class=HTMLResponse)
+@require_login
+async def meetings_detail(request: Request, session: Session = Depends(get_session), meeting_id: int = 0) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+
+    mt = session.get(Meeting, int(meeting_id))
+    if not mt or mt.company_id != ctx.company.id:
+        return render("error.html", request=request, context={"message": "Reunião não encontrada."}, status_code=404)
+
+    if not ensure_can_access_client(ctx, mt.client_id):
+        return render("error.html", request=request, context={"message": "Sem permissão."}, status_code=403)
+
+    client = session.get(Client, mt.client_id)
+
+    # assignees for task generation
+    assignees = []
+    if ctx.membership.role in {"admin", "equipe"}:
+        memberships = session.exec(select(Membership).where(Membership.company_id == ctx.company.id)).all()
+        for m in memberships:
+            u = session.get(User, m.user_id)
+            if u:
+                assignees.append({"id": u.id, "name": u.name, "role": m.role})
+
+    active_client_id = get_active_client_id(request, session, ctx)
+    current_client = get_client_or_none(session, ctx.company.id, active_client_id)
+
+    return render(
+        "meetings_detail.html",
+        request=request,
+        context={
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "role": ctx.membership.role,
+            "current_client": current_client,
+            "meeting": mt,
+            "client": client,
+            "assignees": assignees,
+        },
+    )
+
+
+@app.post("/reunioes/{meeting_id}/sync")
+@require_role({"admin", "equipe"})
+async def meetings_sync(request: Request, session: Session = Depends(get_session), meeting_id: int = 0) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    mt = session.get(Meeting, int(meeting_id))
+    if not mt or mt.company_id != ctx.company.id:
+        set_flash(request, "Reunião não encontrada.")
+        return RedirectResponse("/reunioes", status_code=303)
+
+    try:
+        data = await notion_sync_meeting_from_page(mt.notion_page_id or mt.notion_url)
+        mt.title = mt.title or data.get("title", "") or "Reunião"
+        mt.notion_meeting_block_id = data.get("meeting_block_id", "") or ""
+        mt.notion_status = data.get("status", "") or ""
+        mt.summary_text = data.get("summary_text", "") or ""
+        mt.notes_text = data.get("notes_text", "") or ""
+        mt.transcript_text = data.get("transcript_text", "") or ""
+        mt.action_items_text = data.get("action_items_text", "") or ""
+        mt.raw_json = json.dumps(data.get("raw", {}), ensure_ascii=False)
+        mt.last_synced_at = utcnow()
+        mt.updated_at = utcnow()
+        session.add(mt)
+        session.commit()
+        set_flash(request, "Sincronização concluída.")
+    except Exception as e:
+        set_flash(request, f"Falha ao sincronizar: {e}")
+
+    return RedirectResponse(f"/reunioes/{mt.id}", status_code=303)
+
+
+@app.post("/reunioes/{meeting_id}/gerar_tarefas")
+@require_role({"admin", "equipe"})
+async def meetings_generate_tasks(
+    request: Request,
+    session: Session = Depends(get_session),
+    meeting_id: int = 0,
+    assignee_user_id: int = Form(0),
+    visible_to_client: int = Form(0),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    mt = session.get(Meeting, int(meeting_id))
+    if not mt or mt.company_id != ctx.company.id:
+        set_flash(request, "Reunião não encontrada.")
+        return RedirectResponse("/reunioes", status_code=303)
+
+    lines = [ln.strip() for ln in (mt.action_items_text or "").splitlines() if ln.strip()]
+    # remove heading markers/bullets
+    cleaned: list[str] = []
+    for ln in lines:
+        ln = re.sub(r"^(\-|\d+\.|☐|☑)\s*", "", ln).strip()
+        if ln:
+            cleaned.append(ln)
+
+    if not cleaned:
+        set_flash(request, "Sem Action Items para gerar tarefas.")
+        return RedirectResponse(f"/reunioes/{mt.id}", status_code=303)
+
+    assignee = int(assignee_user_id) if assignee_user_id else 0
+    vis = bool(int(visible_to_client)) if visible_to_client is not None else False
+
+    created = 0
+    for title in cleaned[:30]:
+        t = Task(
+            company_id=ctx.company.id,
+            client_id=mt.client_id,
+            created_by_user_id=ctx.user.id,
+            assignee_user_id=assignee if assignee > 0 else None,
+            title=title,
+            description=f"Gerado da reunião #{mt.id}",
+            status="nao_iniciada",
+            priority="media",
+            due_date="",
+            visible_to_client=vis,
+            client_action=vis,  # se visível, cliente pode marcar (ajuste se quiser)
+            updated_at=utcnow(),
+        )
+        session.add(t)
+        created += 1
+
+    session.commit()
+    set_flash(request, f"{created} tarefa(s) criada(s).")
+    return RedirectResponse("/tarefas", status_code=303)
 
