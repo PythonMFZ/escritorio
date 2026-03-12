@@ -6183,6 +6183,8 @@ async def _alias_docs() -> Response:
 async def _alias_props() -> Response:
     return RedirectResponse("/propostas", status_code=307)
 
+
 @app.get("/finance")
 async def _alias_fin() -> Response:
     return RedirectResponse("/financeiro", status_code=307)
+
