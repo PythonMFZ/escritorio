@@ -8835,7 +8835,7 @@ def _youtube_embed_url(url: str) -> str:
     if not m:
         return ""
     vid = m.group(1)
-    return f"https://www.youtube.com/embed/{vid}"
+    return f"https://www.youtube-nocookie.com/embed/{vid}"
 
 
 def _education_course_can_access(ctx: TenantContext, session: Session, course: EducationCourse) -> bool:
@@ -9245,7 +9245,14 @@ TEMPLATES.update({
 
   {% if embed_url %}
     <div class="ratio ratio-16x9 mb-3">
-      <iframe src="{{ embed_url }}" title="Video" loading="lazy" referrerpolicy="no-referrer"></iframe>
+      <iframe
+  src="{{ embed_url }}"
+  title="Video"
+  loading="lazy"
+  referrerpolicy="origin-when-cross-origin"
+  allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+  allowfullscreen>
+</iframe>
     </div>
     <a class="btn btn-outline-primary btn-sm" href="{{ lesson.video_url }}" target="_blank" rel="noopener">Abrir no YouTube</a>
   {% elif lesson.video_url %}
