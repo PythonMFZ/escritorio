@@ -8075,7 +8075,6 @@ async def negocios_new_action(
     new_client_phone: str = Form(""),
     new_client_notes: str = Form(""),
     title: str = Form(...),
-    stage: str = Form(...),
     service_name: str = Form(""),
     stage: str = Form("qualificacao"),
     demand: str = Form(""),
