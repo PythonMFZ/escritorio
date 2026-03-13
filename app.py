@@ -1505,41 +1505,12 @@ a:hover{ color:#00BFBF; }
   {% else %}
     <form method="post" action="/client/switch">
       <div class="mb-3">
-        <label class="form-label">Cliente (existente)</label>
-<select class="form-select" name="client_id">
-  <option value="0">Selecionar (opcional)</option>
-  {% for c in clients %}
-    <option value="{{ c.id }}">{{ c.name }}</option>
-  {% endfor %}
-</select>
-
-<details class="mt-3">
-  <summary class="small">+ Criar cliente rápido (Lead)</summary>
-  <div class="row g-2 mt-2">
-    <div class="col-12">
-      <label class="form-label">Nome da empresa (Lead)</label>
-      <input class="form-control" name="new_client_name" placeholder="Ex: Empresa ABC Ltda" />
-      <div class="form-text">Preencha aqui se ainda não existe cliente cadastrado.</div>
-    </div>
-    <div class="col-md-6">
-      <label class="form-label">CNPJ (opcional)</label>
-      <input class="form-control" name="new_client_cnpj" placeholder="00.000.000/0000-00" />
-    </div>
-    <div class="col-md-6">
-      <label class="form-label">E-mail (opcional)</label>
-      <input class="form-control" name="new_client_email" type="email" placeholder="contato@empresa.com" />
-    </div>
-    <div class="col-md-6">
-      <label class="form-label">Telefone (opcional)</label>
-      <input class="form-control" name="new_client_phone" placeholder="(xx) xxxxx-xxxx" />
-    </div>
-    <div class="col-md-6">
-      <label class="form-label">Observações (opcional)</label>
-      <input class="form-control" name="new_client_notes" placeholder="Origem do lead, contexto..." />
-    </div>
-  </div>
-</details>
-
+        <label class="form-label">Cliente</label>
+        <select class="form-select" name="client_id">
+          {% for c in clients %}
+            <option value="{{ c.id }}" {% if current_client and c.id==current_client.id %}selected{% endif %}>{{ c.name }}</option>
+          {% endfor %}
+        </select>
       </div>
       <button class="btn btn-primary">Selecionar</button>
       <a class="btn btn-outline-secondary" href="/">Cancelar</a>
@@ -3855,39 +3826,40 @@ TEMPLATES.update({
     <div class="row g-3">
       <div class="col-md-6">
         <label class="form-label">Cliente (existente)</label>
-<select class="form-select" name="client_id">
-  <option value="0">Selecionar (opcional)</option>
-  {% for c in clients %}
-    <option value="{{ c.id }}">{{ c.name }}</option>
-  {% endfor %}
-</select>
+        <select class="form-select" name="client_id">
+          <option value="0">Selecionar (opcional)</option>
+          {% for c in clients %}
+            <option value="{{ c.id }}">{{ c.name }}</option>
+          {% endfor %}
+        </select>
 
-<details class="mt-3">
-  <summary class="small">+ Criar cliente rápido (Lead)</summary>
-  <div class="row g-2 mt-2">
-    <div class="col-12">
-      <label class="form-label">Nome da empresa (Lead)</label>
-      <input class="form-control" name="new_client_name" placeholder="Ex: Empresa ABC Ltda" />
-      <div class="form-text">Se preencher aqui, o sistema cria o lead automaticamente.</div>
-    </div>
-    <div class="col-md-6">
-      <label class="form-label">CNPJ (opcional)</label>
-      <input class="form-control" name="new_client_cnpj" placeholder="00.000.000/0000-00" />
-    </div>
-    <div class="col-md-6">
-      <label class="form-label">E-mail (opcional)</label>
-      <input class="form-control" name="new_client_email" type="email" placeholder="contato@empresa.com" />
-    </div>
-    <div class="col-md-6">
-      <label class="form-label">Telefone (opcional)</label>
-      <input class="form-control" name="new_client_phone" placeholder="(xx) xxxxx-xxxx" />
-    </div>
-    <div class="col-md-6">
-      <label class="form-label">Observações (opcional)</label>
-      <input class="form-control" name="new_client_notes" placeholder="Origem do lead, contexto..." />
-    </div>
-  </div>
-</details>
+        <details class="mt-3">
+          <summary class="small">+ Criar cliente rápido (Lead)</summary>
+          <div class="row g-2 mt-2">
+            <div class="col-12">
+              <label class="form-label">Nome da empresa (Lead)</label>
+              <input class="form-control" name="new_client_name" placeholder="Ex: Empresa ABC Ltda" />
+              <div class="form-text">Se preencher aqui, o sistema cria o lead automaticamente.</div>
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">CNPJ (opcional)</label>
+              <input class="form-control" name="new_client_cnpj" placeholder="00.000.000/0000-00" />
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">E-mail (opcional)</label>
+              <input class="form-control" name="new_client_email" type="email" placeholder="contato@empresa.com" />
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">Telefone (opcional)</label>
+              <input class="form-control" name="new_client_phone" placeholder="(xx) xxxxx-xxxx" />
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">Observações (opcional)</label>
+              <input class="form-control" name="new_client_notes" placeholder="Origem do lead, contexto..." />
+            </div>
+          </div>
+        </details>
+      </div>
       <div class="col-md-6">
         <label class="form-label">Responsável</label>
         <select class="form-select" name="owner_user_id">
@@ -8068,9 +8040,7 @@ async def crm_new_page(request: Request, session: Session = Depends(get_session)
     clients = session.exec(select(Client).where(Client.company_id == ctx.company.id).order_by(Client.created_at)).all()
     owners = _owner_users_for_company(session, ctx.company.id)
 
-    if not clients:
-        set_flash(request, "Cadastre um cliente antes de criar um negócio.")
-        return RedirectResponse("/negocios", status_code=303)
+    # Permite abrir a tela mesmo sem clientes cadastrados (para criar Lead no CRM).
 
     active_client_id = get_active_client_id(request, session, ctx)
     current_client = get_client_or_none(session, ctx.company.id, active_client_id)
@@ -8092,7 +8062,7 @@ async def crm_new_page(request: Request, session: Session = Depends(get_session)
 
 @app.post("/negocios/novo")
 @require_role({"admin", "equipe"})
-async def negocios_new_action(
+async def crm_new_action(
     request: Request,
     session: Session = Depends(get_session),
 
@@ -8103,6 +8073,7 @@ async def negocios_new_action(
     new_client_phone: str = Form(""),
     new_client_notes: str = Form(""),
 
+    owner_user_id: int = Form(0),
     title: str = Form(...),
     service_name: str = Form(""),
     stage: str = Form("qualificacao"),
@@ -8116,70 +8087,21 @@ async def negocios_new_action(
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
-    import re
-
-    def _norm_cnpj(cnpj: str) -> str:
-        return re.sub(r"\D+", "", (cnpj or "")).strip()
 
     new_client_name = (new_client_name or "").strip()
     new_client_email = (new_client_email or "").strip()
     new_client_phone = (new_client_phone or "").strip()
     new_client_notes = (new_client_notes or "").strip()
-    new_client_cnpj_norm = _norm_cnpj(new_client_cnpj)
-
-    client = None
+    new_client_cnpj_norm = re.sub(r"\D+", "", (new_client_cnpj or "")).strip()
 
     if new_client_name:
-        # Evita duplicar pelo CNPJ (se informado)
-        if new_client_cnpj_norm:
-            existing = session.exec(
-                select(Client).where(Client.company_id == ctx.company.id, Client.cnpj == new_client_cnpj_norm)
-            ).first()
-            if existing:
-                client = existing
-
-        if not client:
-            lead_notes = f"[LEAD CRM] {new_client_notes}".strip()
-
-            client = Client(
-                company_id=ctx.company.id,
-                name=new_client_name,
-                cnpj=new_client_cnpj_norm,
-                email=new_client_email,
-                phone=new_client_phone,
-                notes=lead_notes,
-                updated_at=utcnow(),
-            )
-            session.add(client)
-            session.commit()
-            session.refresh(client)
-
-    else:
-        if int(client_id or 0) <= 0:
-            set_flash(request, "Selecione um cliente existente OU crie um lead.")
-            return RedirectResponse("/negocios/novo", status_code=303)
-
-        client = get_client_or_none(session, ctx.company.id, int(client_id))
-        if not client:
-            set_flash(request, "Cliente inválido.")
-            return RedirectResponse("/negocios/novo", status_code=303)
-
-    # ✅ daqui pra baixo, crie o negócio usando client.id
-    # deal = BusinessDeal(... client_id=client.id, ...)
-
-    new_client_name = (new_client_name or "").strip()
-    client = None
-
-    if new_client_name:
-        lead_notes = (new_client_notes or "").strip()
-        lead_notes = f"[LEAD CRM] {lead_notes}".strip()
-
+        lead_notes = f"[LEAD CRM] {new_client_notes}".strip()
         client = Client(
             company_id=ctx.company.id,
             name=new_client_name,
-            cnpj=(new_client_cnpj or "").strip(),
-            email=(new_client_email or "").strip(),
-            phone=(new_client_phone or "").strip(),
+            cnpj=new_client_cnpj_norm,
+            email=new_client_email,
+            phone=new_client_phone,
             notes=lead_notes,
             updated_at=utcnow(),
         )
@@ -9381,14 +9303,7 @@ TEMPLATES.update({
 
   {% if embed_url %}
     <div class="ratio ratio-16x9 mb-3">
-      <iframe
-  src="{{ embed_url }}"
-  title="Video"
-  loading="lazy"
-  referrerpolicy="origin-when-cross-origin"
-  allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
-  allowfullscreen>
-</iframe>
+      <iframe src="{{ embed_url }}" title="Video" loading="lazy" referrerpolicy="origin-when-cross-origin" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowfullscreen></iframe>
     </div>
     <a class="btn btn-outline-primary btn-sm" href="{{ lesson.video_url }}" target="_blank" rel="noopener">Abrir no YouTube</a>
   {% elif lesson.video_url %}
