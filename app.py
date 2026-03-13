@@ -168,6 +168,11 @@ def sanitize_service_name(name: str) -> str:
 
 NOTION_TOKEN = os.getenv("NOTION_TOKEN")
 NOTION_DB_NEGOCIOS_ID = os.getenv("NOTION_DB_NEGOCIOS_ID")
+DIRECTDATA_TOKEN = os.getenv("DIRECTDATA_TOKEN")
+DIRECTDATA_SCR_URL = os.getenv("DIRECTDATA_SCR_URL") or "https://apiv3.directd.com.br/api/SCRDetalhada"
+DIRECTDATA_ASYNC = os.getenv("DIRECTDATA_ASYNC", "1") == "1"
+DIRECTDATA_TIMEOUT_S = float(os.getenv("DIRECTDATA_TIMEOUT_S", "30"))
+CREDIT_CONSENT_MAX_DAYS = int(os.getenv("CREDIT_CONSENT_MAX_DAYS", "180"))
 
 NOTION_VERSION = os.getenv("NOTION_VERSION", "2026-03-11")
 NOTION_API_BASE = "https://api.notion.com/v1"
@@ -387,6 +392,93 @@ DOC_STATUSES = {"rascunho", "aguardando_cliente", "cliente_enviou", "concluido"}
 
 
 CONSULT_PROJECT_STATUS = {"ativo", "pausado", "concluido"}
+
+# ----------------------------
+# Crédito (Direct Data - SCR Detalhada) + Autorização LGPD
+# ----------------------------
+
+CREDIT_CONSENT_KIND_SCR = "scr_directdata"
+CREDIT_CONSENT_STATUSES = {"pendente", "valida", "expirada", "revogada"}
+CREDIT_REPORT_STATUSES = {"processing", "done", "error"}
+
+
+class CreditConsent(SQLModel, table=True):
+    """
+    Consentimento/LGPD para consulta de crédito (ex.: SCR via Direct Data).
+
+    - O cliente pode enviar a autorização assinada (upload).
+    - Admin/Equipe pode consultar SCR apenas quando houver consentimento válido.
+    """
+    id: Optional[int] = Field(default=None, primary_key=True)
+
+    company_id: int = Field(index=True, foreign_key="company.id")
+    client_id: int = Field(index=True, foreign_key="client.id")
+    created_by_user_id: int = Field(index=True, foreign_key="user.id")
+
+    kind: str = Field(default=CREDIT_CONSENT_KIND_SCR, index=True)
+    status: str = Field(default="valida", index=True)
+
+    signed_by_name: str = ""
+    signed_by_document: str = ""  # CPF/CNPJ do signatário (opcional)
+    signed_at: datetime = Field(default_factory=utcnow)
+    expires_at: datetime = Field(default_factory=utcnow)
+
+    notes: str = ""
+    created_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime = Field(default_factory=utcnow)
+
+
+class CreditReport(SQLModel, table=True):
+    """
+    Resultado (ou processamento) de uma consulta SCR.
+
+    - status=processing: aguardando término (async)
+    - status=done: JSON final armazenado
+    - status=error: falha ao consultar
+    """
+    id: Optional[int] = Field(default=None, primary_key=True)
+
+    company_id: int = Field(index=True, foreign_key="company.id")
+    client_id: int = Field(index=True, foreign_key="client.id")
+    created_by_user_id: int = Field(index=True, foreign_key="user.id")
+
+    provider: str = Field(default="directdata", index=True)
+    document_type: str = Field(default="cnpj", index=True)  # cnpj | cpf
+    document_value: str = Field(default="", index=True)  # sem formatação
+
+    async_enabled: bool = True
+
+    status: str = Field(default="processing", index=True)
+    http_status: int = 0
+    message: str = ""
+
+    consulta_uid: str = Field(default="", index=True)
+    resultado_id: int = 0
+
+    # Campos resumidos para UI
+    score: str = ""
+    faixa_risco: str = ""
+    risco_total_brl: float = 0.0
+
+    carteira_total_brl: float = 0.0
+    carteira_vencer_brl: float = 0.0
+    carteira_vencido_brl: float = 0.0
+    carteira_prejuizo_brl: float = 0.0
+
+    quantidade_instituicoes: int = 0
+    quantidade_operacoes: int = 0
+
+    obrigacao_assumida: str = ""
+    obrigacao_resumida: str = ""
+
+    potential_score: float = 0.0
+    potential_label: str = Field(default="baixo", index=True)  # baixo|medio|alto
+
+    raw_json: str = Field(default="")  # JSON completo (texto)
+
+    created_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime = Field(default_factory=utcnow)
+
 
 
 class ConsultingProject(SQLModel, table=True):
@@ -685,6 +777,8 @@ class Attachment(SQLModel, table=True):
 
     task_id: Optional[int] = Field(default=None, index=True, foreign_key="task.id")
     education_lesson_id: Optional[int] = Field(default=None, index=True, foreign_key="educationlesson.id")
+    credit_consent_id: Optional[int] = Field(default=None, index=True, foreign_key="creditconsent.id")
+    credit_report_id: Optional[int] = Field(default=None, index=True, foreign_key="creditreport.id")
 
 
     original_filename: str
@@ -4376,6 +4470,238 @@ TEMPLATES.update({
 })
 
 
+
+TEMPLATES.update({
+    "credit_list.html": r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <div class="d-flex justify-content-between align-items-center">
+    <div>
+      <h4 class="mb-0">Crédito (SCR)</h4>
+      <div class="muted">Consulta SCR Detalhada (Direct Data) + autorização LGPD</div>
+    </div>
+  </div>
+
+  <hr class="my-3"/>
+
+  {% if not current_client %}
+    <div class="alert alert-warning mb-0">
+      Selecione um cliente para usar o módulo de crédito.
+    </div>
+  {% else %}
+    <div class="mb-3">
+      <span class="muted">Cliente:</span> <b>{{ current_client.name }}</b>
+      {% if current_client.cnpj %}<span class="muted ms-2">CNPJ:</span> <span class="mono">{{ current_client.cnpj }}</span>{% endif %}
+    </div>
+
+    <div class="card p-3 mb-4">
+      <div class="fw-semibold mb-1">Autorização (LGPD)</div>
+      <div class="muted mb-2">Anexe o termo/autorização do cliente antes de consultar o SCR.</div>
+
+      {% if consent and consent.status == "valida" %}
+        <div class="small">
+          <div><span class="muted">Assinado por:</span> {{ consent.signed_by_name or "—" }}</div>
+          <div><span class="muted">Data:</span> {{ consent.signed_at }}</div>
+          <div><span class="muted">Válido até:</span> {{ consent.expires_at }}</div>
+        </div>
+        {% if consent_file %}
+          <div class="mt-2">
+            <a class="btn btn-outline-primary btn-sm" href="/download/{{ consent_file.id }}">Baixar autorização</a>
+          </div>
+        {% endif %}
+      {% else %}
+        <form method="post" action="/credito/consent" enctype="multipart/form-data" class="mt-2">
+          <div class="row g-2">
+            <div class="col-md-6">
+              <label class="form-label">Nome do signatário</label>
+              <input class="form-control" name="signed_by_name" required />
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">Documento do signatário (CPF/CNPJ)</label>
+              <input class="form-control mono" name="signed_by_document" />
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">Data da assinatura</label>
+              <input class="form-control mono" name="signed_at" placeholder="AAAA-MM-DD" />
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">Arquivo (PDF/Imagem)</label>
+              <input class="form-control" type="file" name="file" required />
+            </div>
+            <div class="col-12">
+              <label class="form-label">Observações</label>
+              <input class="form-control" name="notes" placeholder="Origem, contexto, etc." />
+            </div>
+          </div>
+          <div class="mt-3">
+            <button class="btn btn-primary">Enviar autorização</button>
+          </div>
+        </form>
+      {% endif %}
+    </div>
+
+    {% if role in ["admin","equipe"] %}
+      <div class="card p-3 mb-4">
+        <div class="fw-semibold mb-2">Consulta SCR</div>
+
+        {% if not consent or consent.status != "valida" %}
+          <div class="alert alert-warning mb-0">Envie uma autorização válida para habilitar a consulta.</div>
+        {% else %}
+          <form method="post" action="/credito/consultar" class="row g-2 align-items-end">
+            <div class="col-md-3">
+              <label class="form-label">Tipo</label>
+              <select class="form-select" name="document_type">
+                <option value="cnpj" selected>CNPJ</option>
+                <option value="cpf">CPF</option>
+              </select>
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">Documento (sem formatação)</label>
+              <input class="form-control mono" name="document_value" value="{{ current_client.cnpj }}" placeholder="CNPJ/CPF" />
+            </div>
+            <div class="col-md-3">
+              <button class="btn btn-primary w-100">Consultar</button>
+            </div>
+          </form>
+          <div class="muted small mt-2">A consulta usa modo assíncrono (poll) para evitar timeouts.</div>
+        {% endif %}
+      </div>
+    {% endif %}
+
+    <div class="fw-semibold mb-2">Histórico</div>
+    {% if reports|length == 0 %}
+      <div class="muted">Nenhuma consulta ainda.</div>
+    {% else %}
+      <div class="table-responsive">
+        <table class="table align-middle">
+          <thead>
+            <tr>
+              <th>Data</th>
+              <th>Status</th>
+              <th>Potencial</th>
+              <th>Total (R$)</th>
+              <th>Vencido (R$)</th>
+              <th>Inst.</th>
+              <th>Score</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+          {% for r in reports %}
+            <tr>
+              <td class="small mono">{{ r.created_at }}</td>
+              <td><span class="badge text-bg-secondary">{{ r.status }}</span></td>
+              <td><span class="badge text-bg-{% if r.potential_label=='alto' %}danger{% elif r.potential_label=='medio' %}warning{% else %}success{% endif %}">{{ r.potential_label }}</span></td>
+              <td class="mono">{{ '%.2f'|format(r.carteira_total_brl) }}</td>
+              <td class="mono">{{ '%.2f'|format(r.carteira_vencido_brl) }}</td>
+              <td class="mono">{{ r.quantidade_instituicoes }}</td>
+              <td>{{ r.score }}</td>
+              <td class="text-end">
+                <a class="btn btn-outline-primary btn-sm" href="/credito/{{ r.id }}">Abrir</a>
+                {% if role in ["admin","equipe"] and r.status == "processing" %}
+                  <form method="post" action="/credito/{{ r.id }}/atualizar" class="d-inline">
+                    <button class="btn btn-outline-secondary btn-sm">Atualizar</button>
+                  </form>
+                {% endif %}
+              </td>
+            </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% endif %}
+
+  {% endif %}
+</div>
+{% endblock %}
+""",
+    "credit_report_detail.html": r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <div class="d-flex justify-content-between align-items-start">
+    <div>
+      <h4 class="mb-1">Relatório SCR</h4>
+      <div class="muted">Consulta #{{ report.id }} • {{ report.provider }}</div>
+    </div>
+    <a class="btn btn-outline-secondary" href="/credito">Voltar</a>
+  </div>
+
+  <hr class="my-3"/>
+
+  <div class="row g-3">
+    <div class="col-md-3">
+      <div class="muted small">Status</div>
+      <div><span class="badge text-bg-secondary">{{ report.status }}</span></div>
+    </div>
+    <div class="col-md-3">
+      <div class="muted small">Potencial</div>
+      <div><span class="badge text-bg-{% if report.potential_label=='alto' %}danger{% elif report.potential_label=='medio' %}warning{% else %}success{% endif %}">{{ report.potential_label }}</span> <span class="muted">({{ report.potential_score }})</span></div>
+    </div>
+    <div class="col-md-3">
+      <div class="muted small">Score / Risco</div>
+      <div>{{ report.score }} • {{ report.faixa_risco }}</div>
+    </div>
+    <div class="col-md-3">
+      <div class="muted small">Instituições / Operações</div>
+      <div>{{ report.quantidade_instituicoes }} / {{ report.quantidade_operacoes }}</div>
+    </div>
+
+    <div class="col-md-3">
+      <div class="muted small">Carteira total (R$)</div>
+      <div class="mono">{{ '%.2f'|format(report.carteira_total_brl) }}</div>
+    </div>
+    <div class="col-md-3">
+      <div class="muted small">A vencer (R$)</div>
+      <div class="mono">{{ '%.2f'|format(report.carteira_vencer_brl) }}</div>
+    </div>
+    <div class="col-md-3">
+      <div class="muted small">Vencido (R$)</div>
+      <div class="mono">{{ '%.2f'|format(report.carteira_vencido_brl) }}</div>
+    </div>
+    <div class="col-md-3">
+      <div class="muted small">Prejuízo (R$)</div>
+      <div class="mono">{{ '%.2f'|format(report.carteira_prejuizo_brl) }}</div>
+    </div>
+
+    {% if report.message %}
+    <div class="col-12">
+      <div class="alert alert-info mb-0">{{ report.message }}</div>
+    </div>
+    {% endif %}
+  </div>
+
+  {% if role in ["admin","equipe"] %}
+    <div class="mt-4 d-flex gap-2 flex-wrap">
+      {% if report.status == "processing" %}
+        <form method="post" action="/credito/{{ report.id }}/atualizar">
+          <button class="btn btn-outline-secondary">Atualizar</button>
+        </form>
+      {% endif %}
+      {% if report.status == "done" %}
+        <form method="post" action="/credito/{{ report.id }}/criar_negocio">
+          <button class="btn btn-primary">Criar negócio no CRM</button>
+        </form>
+        <form method="post" action="/credito/{{ report.id }}/gerar_tarefas">
+          <button class="btn btn-outline-primary">Gerar tarefas</button>
+        </form>
+      {% endif %}
+    </div>
+  {% endif %}
+
+  {% if report.raw_json %}
+    <hr class="my-4"/>
+    <details>
+      <summary class="small">Ver JSON completo</summary>
+      <pre class="mt-2" style="max-height: 420px; overflow:auto;"><code>{{ report.raw_json }}</code></pre>
+    </details>
+  {% endif %}
+</div>
+{% endblock %}
+""",
+})
+
 templates_env = Environment(loader=DictLoader(TEMPLATES), autoescape=True)
 
 
@@ -5072,6 +5398,7 @@ async def dashboard(request: Request, session: Session = Depends(get_session)) -
         {"title": "Documentos", "desc": "Contratos e docs importantes.", "href": "/documentos"},
         {"title": "Propostas", "desc": "Propostas e solicitações.", "href": "/propostas"},
         {"title": "CRM", "desc": "Negócios e funil comercial.", "href": "/negocios"},
+        {"title": "Crédito", "desc": "SCR (Direct Data).", "href": "/credito"},
         {"title": "Financeiro", "desc": "Notas/boletos de honorários.", "href": "/financeiro"},
         {"title": "Empresa", "desc": "Dados completos do cliente.", "href": "/empresa"},
         {"title": "Perfil", "desc": "Indicadores do cliente.", "href": "/perfil"},
@@ -9894,3 +10221,602 @@ async def edu_lesson_delete(request: Request, session: Session = Depends(get_ses
 
     set_flash(request, "Aula excluída.")
     return RedirectResponse(f"/educacao/modulos/{module.id if module else ''}", status_code=303)
+
+# ----------------------------
+# Crédito (SCR Direct Data)
+# ----------------------------
+
+
+def _digits_only(value: str) -> str:
+    return re.sub(r"\D+", "", value or "").strip()
+
+
+def _parse_brl_amount(value: Any) -> float:
+    """
+    Converte strings de valor (ex.: "1.234,56", "1234.56", "R$ 1.234") para float.
+    """
+    if value is None:
+        return 0.0
+    if isinstance(value, (int, float)):
+        return float(value)
+    s = str(value).strip()
+    if not s:
+        return 0.0
+    s = s.replace("R$", "").replace(" ", "")
+    # Se tiver ambos '.' e ',', assume '.' milhar e ',' decimal
+    if "," in s and "." in s:
+        s = s.replace(".", "").replace(",", ".")
+    else:
+        # Se só tiver ',', assume decimal
+        if "," in s:
+            s = s.replace(".", "").replace(",", ".")
+    # Remove qualquer coisa que não seja número/ponto/sinal
+    s = re.sub(r"[^0-9.\-]+", "", s)
+    try:
+        return float(s)
+    except Exception:
+        return 0.0
+
+
+def _calc_potential(report: CreditReport) -> tuple[float, str]:
+    score = 0.0
+
+    total = report.carteira_total_brl
+    vencido = report.carteira_vencido_brl
+    preju = report.carteira_prejuizo_brl
+    inst = report.quantidade_instituicoes
+
+    if total >= 1_000_000:
+        score += 35
+    elif total >= 500_000:
+        score += 25
+    elif total >= 200_000:
+        score += 15
+    elif total >= 50_000:
+        score += 8
+
+    if inst >= 8:
+        score += 18
+    elif inst >= 5:
+        score += 12
+    elif inst >= 3:
+        score += 7
+
+    if vencido >= 100_000:
+        score += 25
+    elif vencido >= 20_000:
+        score += 15
+    elif vencido > 0:
+        score += 8
+
+    if preju > 0:
+        score += 8
+
+    # Clamps
+    score = max(0.0, min(100.0, round(score, 1)))
+
+    if score >= 70:
+        label = "alto"
+    elif score >= 40:
+        label = "medio"
+    else:
+        label = "baixo"
+
+    return score, label
+
+
+def _directdata_scr_request(*, document_type: str, document_value: str) -> tuple[int, dict[str, Any] | None, str]:
+    if not DIRECTDATA_TOKEN:
+        return 0, None, "DIRECTDATA_TOKEN não configurado."
+    doc = _digits_only(document_value)
+    if not doc:
+        return 0, None, "Documento inválido."
+
+    params: dict[str, Any] = {"Token": DIRECTDATA_TOKEN}
+    if document_type == "cpf":
+        params["CPF"] = doc
+    else:
+        params["CNPJ"] = doc
+
+    if DIRECTDATA_ASYNC:
+        params["async"] = "habilitar"
+
+    try:
+        resp = httpx.get(DIRECTDATA_SCR_URL, params=params, timeout=DIRECTDATA_TIMEOUT_S)
+    except Exception as e:
+        return 0, None, f"Falha ao consultar Direct Data: {e}"
+
+    try:
+        data = resp.json()
+    except Exception:
+        data = None
+
+    msg = ""
+    if isinstance(data, dict):
+        meta = data.get("metaDados") or {}
+        msg = str(meta.get("mensagem") or meta.get("resultado") or "")[:500]
+    return resp.status_code, data if isinstance(data, dict) else None, msg
+
+
+def _get_client_for_credit(ctx: TenantContext, request: Request, session: Session) -> Client | None:
+    if ctx.membership.role == "cliente":
+        if not ctx.membership.client_id:
+            return None
+        return get_client_or_none(session, ctx.company.id, int(ctx.membership.client_id))
+    active_client_id = get_active_client_id(request, session, ctx)
+    if not active_client_id:
+        return None
+    return get_client_or_none(session, ctx.company.id, int(active_client_id))
+
+
+def _get_latest_consent(session: Session, *, company_id: int, client_id: int) -> CreditConsent | None:
+    return session.exec(
+        select(CreditConsent)
+        .where(CreditConsent.company_id == company_id, CreditConsent.client_id == client_id, CreditConsent.kind == CREDIT_CONSENT_KIND_SCR)
+        .order_by(CreditConsent.created_at.desc())
+    ).first()
+
+
+def _refresh_consent_status(consent: CreditConsent) -> None:
+    now = utcnow()
+    if consent.status == "revogada":
+        return
+    if consent.expires_at and now > consent.expires_at:
+        consent.status = "expirada"
+    else:
+        consent.status = "valida"
+
+
+@app.get("/credito", response_class=HTMLResponse)
+@require_login
+async def credit_home(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+
+    current_client = _get_client_for_credit(ctx, request, session)
+
+    consent = None
+    consent_file = None
+    reports: list[CreditReport] = []
+
+    if current_client and ensure_can_access_client(ctx, current_client.id):
+        consent = _get_latest_consent(session, company_id=ctx.company.id, client_id=current_client.id)
+        if consent:
+            _refresh_consent_status(consent)
+            consent.updated_at = utcnow()
+            session.add(consent)
+            session.commit()
+            consent_file = session.exec(
+                select(Attachment)
+                .where(Attachment.company_id == ctx.company.id, Attachment.client_id == current_client.id, Attachment.credit_consent_id == consent.id)
+                .order_by(Attachment.created_at.desc())
+            ).first()
+
+        reports = session.exec(
+            select(CreditReport)
+            .where(CreditReport.company_id == ctx.company.id, CreditReport.client_id == current_client.id)
+            .order_by(CreditReport.created_at.desc())
+            .limit(30)
+        ).all()
+    else:
+        if ctx.membership.role != "cliente":
+            set_flash(request, "Selecione um cliente para acessar Crédito.")
+
+    return render(
+        "credit_list.html",
+        request=request,
+        context={
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "role": ctx.membership.role,
+            "current_client": current_client,
+            "consent": consent,
+            "consent_file": consent_file,
+            "reports": reports,
+        },
+    )
+
+
+@app.post("/credito/consent")
+@require_login
+async def credit_upload_consent(
+    request: Request,
+    session: Session = Depends(get_session),
+    signed_by_name: str = Form(...),
+    signed_by_document: str = Form(""),
+    signed_at: str = Form(""),
+    notes: str = Form(""),
+    file: UploadFile = File(...),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+
+    current_client = _get_client_for_credit(ctx, request, session)
+    if not current_client or not ensure_can_access_client(ctx, current_client.id):
+        set_flash(request, "Cliente inválido.")
+        return RedirectResponse("/credito", status_code=303)
+
+    signed_at_dt = utcnow()
+    if signed_at.strip():
+        try:
+            signed_at_dt = datetime.fromisoformat(signed_at.strip()).replace(tzinfo=timezone.utc)
+        except Exception:
+            pass
+
+    expires_at = signed_at_dt + timedelta(days=CREDIT_CONSENT_MAX_DAYS)
+
+    consent = CreditConsent(
+        company_id=ctx.company.id,
+        client_id=current_client.id,
+        created_by_user_id=ctx.user.id,
+        kind=CREDIT_CONSENT_KIND_SCR,
+        status="valida",
+        signed_by_name=signed_by_name.strip(),
+        signed_by_document=_digits_only(signed_by_document),
+        signed_at=signed_at_dt,
+        expires_at=expires_at,
+        notes=notes.strip(),
+        created_at=utcnow(),
+        updated_at=utcnow(),
+    )
+    session.add(consent)
+    session.commit()
+    session.refresh(consent)
+
+    try:
+        stored, mime, size = await save_upload(file)
+    except ValueError:
+        set_flash(request, "Arquivo muito grande.")
+        return RedirectResponse("/credito", status_code=303)
+
+    att = Attachment(
+        company_id=ctx.company.id,
+        client_id=current_client.id,
+        uploaded_by_user_id=ctx.user.id,
+        credit_consent_id=consent.id,
+        original_filename=file.filename or "autorizacao",
+        stored_filename=stored,
+        mime_type=mime,
+        size_bytes=size,
+    )
+    session.add(att)
+    session.commit()
+
+    set_flash(request, "Autorização enviada.")
+    return RedirectResponse("/credito", status_code=303)
+
+
+@app.post("/credito/consultar")
+@require_role({"admin", "equipe"})
+async def credit_consult(
+    request: Request,
+    session: Session = Depends(get_session),
+    document_type: str = Form("cnpj"),
+    document_value: str = Form(""),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    current_client = _get_client_for_credit(ctx, request, session)
+    if not current_client:
+        set_flash(request, "Selecione um cliente.")
+        return RedirectResponse("/credito", status_code=303)
+
+    consent = _get_latest_consent(session, company_id=ctx.company.id, client_id=current_client.id)
+    if not consent:
+        set_flash(request, "Envie uma autorização LGPD antes de consultar.")
+        return RedirectResponse("/credito", status_code=303)
+    _refresh_consent_status(consent)
+    if consent.status != "valida":
+        set_flash(request, "Autorização expirada/revogada. Envie uma nova.")
+        return RedirectResponse("/credito", status_code=303)
+
+    doc_val = document_value.strip() or (current_client.cnpj if document_type == "cnpj" else "")
+    doc_val = _digits_only(doc_val)
+
+    report = CreditReport(
+        company_id=ctx.company.id,
+        client_id=current_client.id,
+        created_by_user_id=ctx.user.id,
+        provider="directdata",
+        document_type=("cpf" if document_type == "cpf" else "cnpj"),
+        document_value=doc_val,
+        async_enabled=DIRECTDATA_ASYNC,
+        status="processing",
+        created_at=utcnow(),
+        updated_at=utcnow(),
+    )
+    session.add(report)
+    session.commit()
+    session.refresh(report)
+
+    code, data, msg = _directdata_scr_request(document_type=report.document_type, document_value=report.document_value)
+    report.http_status = int(code or 0)
+    report.message = msg
+
+    if not data:
+        report.status = "error"
+        report.message = report.message or "Sem resposta JSON."
+        report.updated_at = utcnow()
+        session.add(report)
+        session.commit()
+        set_flash(request, "Falha ao consultar.")
+        return RedirectResponse(f"/credito/{report.id}", status_code=303)
+
+    meta = data.get("metaDados") or {}
+    ret = data.get("retorno") or {}
+
+    report.consulta_uid = str(meta.get("consultaUid") or "")
+    try:
+        report.resultado_id = int(meta.get("resultadoId") or 0)
+    except Exception:
+        report.resultado_id = 0
+
+    report.raw_json = json.dumps(data, ensure_ascii=False, indent=2)
+
+    # Atualiza status
+    if code == 200 and isinstance(ret, dict) and ret:
+        report.status = "done"
+    elif code in (201, 202):
+        report.status = "processing"
+    else:
+        report.status = "error"
+
+    # Extrai resumo se existir
+    if isinstance(ret, dict) and ret:
+        report.score = str(ret.get("score") or "")
+        report.faixa_risco = str(ret.get("faixaRisco") or "")
+        report.obrigacao_assumida = str(ret.get("obrigacaoAssumida") or "")
+        report.obrigacao_resumida = str(ret.get("obrigacaoResumida") or "")
+
+        try:
+            report.quantidade_instituicoes = int(ret.get("quantidadeInstituicoes") or 0)
+        except Exception:
+            report.quantidade_instituicoes = 0
+        try:
+            report.quantidade_operacoes = int(ret.get("quantidadeOperacoes") or 0)
+        except Exception:
+            report.quantidade_operacoes = 0
+
+        report.risco_total_brl = _parse_brl_amount(ret.get("riscoTotal"))
+
+        carteira = ret.get("carteiraCredito") or {}
+        if isinstance(carteira, dict):
+            report.carteira_total_brl = _parse_brl_amount(carteira.get("total"))
+            report.carteira_vencer_brl = _parse_brl_amount(carteira.get("vencer"))
+            report.carteira_vencido_brl = _parse_brl_amount(carteira.get("vencido"))
+            report.carteira_prejuizo_brl = _parse_brl_amount(carteira.get("prejuizo"))
+
+        pscore, plabel = _calc_potential(report)
+        report.potential_score = pscore
+        report.potential_label = plabel
+
+    report.updated_at = utcnow()
+    session.add(report)
+    session.commit()
+
+    if report.status == "error":
+        set_flash(request, f"Falha na consulta ({report.http_status}).")
+    elif report.status == "processing":
+        set_flash(request, "Consulta em processamento. Clique em Atualizar em instantes.")
+    else:
+        set_flash(request, "Consulta concluída.")
+
+    return RedirectResponse(f"/credito/{report.id}", status_code=303)
+
+
+@app.get("/credito/{report_id}", response_class=HTMLResponse)
+@require_login
+async def credit_report_detail(request: Request, session: Session = Depends(get_session), report_id: int = 0) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+
+    report = session.get(CreditReport, int(report_id))
+    if not report or report.company_id != ctx.company.id:
+        set_flash(request, "Relatório não encontrado.")
+        return RedirectResponse("/credito", status_code=303)
+
+    if not ensure_can_access_client(ctx, report.client_id):
+        set_flash(request, "Sem permissão.")
+        return RedirectResponse("/credito", status_code=303)
+
+    return render(
+        "credit_report_detail.html",
+        request=request,
+        context={
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "role": ctx.membership.role,
+            "current_client": get_client_or_none(session, ctx.company.id, report.client_id),
+            "report": report,
+        },
+    )
+
+
+@app.post("/credito/{report_id}/atualizar")
+@require_role({"admin", "equipe"})
+async def credit_report_refresh(request: Request, session: Session = Depends(get_session), report_id: int = 0) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    report = session.get(CreditReport, int(report_id))
+    if not report or report.company_id != ctx.company.id:
+        set_flash(request, "Relatório não encontrado.")
+        return RedirectResponse("/credito", status_code=303)
+
+    code, data, msg = _directdata_scr_request(document_type=report.document_type, document_value=report.document_value)
+    report.http_status = int(code or 0)
+    report.message = msg
+
+    if data:
+        meta = data.get("metaDados") or {}
+        ret = data.get("retorno") or {}
+
+        report.consulta_uid = str(meta.get("consultaUid") or report.consulta_uid)
+        try:
+            report.resultado_id = int(meta.get("resultadoId") or report.resultado_id)
+        except Exception:
+            pass
+
+        report.raw_json = json.dumps(data, ensure_ascii=False, indent=2)
+
+        if code == 200 and isinstance(ret, dict) and ret:
+            report.status = "done"
+        elif code in (201, 202):
+            report.status = "processing"
+        else:
+            report.status = "error"
+
+        if isinstance(ret, dict) and ret:
+            report.score = str(ret.get("score") or report.score)
+            report.faixa_risco = str(ret.get("faixaRisco") or report.faixa_risco)
+
+            try:
+                report.quantidade_instituicoes = int(ret.get("quantidadeInstituicoes") or report.quantidade_instituicoes)
+            except Exception:
+                pass
+            try:
+                report.quantidade_operacoes = int(ret.get("quantidadeOperacoes") or report.quantidade_operacoes)
+            except Exception:
+                pass
+
+            report.risco_total_brl = _parse_brl_amount(ret.get("riscoTotal"))
+
+            carteira = ret.get("carteiraCredito") or {}
+            if isinstance(carteira, dict):
+                report.carteira_total_brl = _parse_brl_amount(carteira.get("total"))
+                report.carteira_vencer_brl = _parse_brl_amount(carteira.get("vencer"))
+                report.carteira_vencido_brl = _parse_brl_amount(carteira.get("vencido"))
+                report.carteira_prejuizo_brl = _parse_brl_amount(carteira.get("prejuizo"))
+
+            pscore, plabel = _calc_potential(report)
+            report.potential_score = pscore
+            report.potential_label = plabel
+    else:
+        report.status = "error"
+        report.message = report.message or "Sem resposta JSON."
+
+    report.updated_at = utcnow()
+    session.add(report)
+    session.commit()
+
+    if report.status == "done":
+        set_flash(request, "Consulta concluída.")
+    elif report.status == "processing":
+        set_flash(request, "Ainda em processamento. Tente novamente em instantes.")
+    else:
+        set_flash(request, f"Falha ao atualizar ({report.http_status}).")
+
+    return RedirectResponse(f"/credito/{report.id}", status_code=303)
+
+
+@app.post("/credito/{report_id}/criar_negocio")
+@require_role({"admin", "equipe"})
+async def credit_report_create_deal(request: Request, session: Session = Depends(get_session), report_id: int = 0) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    report = session.get(CreditReport, int(report_id))
+    if not report or report.company_id != ctx.company.id:
+        set_flash(request, "Relatório não encontrado.")
+        return RedirectResponse("/credito", status_code=303)
+
+    if report.status != "done":
+        set_flash(request, "Finalize a consulta antes de criar negócio.")
+        return RedirectResponse(f"/credito/{report.id}", status_code=303)
+
+    client = get_client_or_none(session, ctx.company.id, report.client_id)
+    if not client:
+        set_flash(request, "Cliente inválido.")
+        return RedirectResponse(f"/credito/{report.id}", status_code=303)
+
+    title = f"Reperfilamento de crédito — {client.name}"
+    demand = "Avaliar SCR e oportunidades de reperfilamento/melhoria de custo de dívida."
+    notes = (
+        f"[SCR] Total: R$ {report.carteira_total_brl:.2f} | Vencido: R$ {report.carteira_vencido_brl:.2f} | "
+        f"Instituições: {report.quantidade_instituicoes} | Score: {report.score} | Potencial: {report.potential_label}"
+    )
+
+    deal = BusinessDeal(
+        company_id=ctx.company.id,
+        client_id=client.id,
+        created_by_user_id=ctx.user.id,
+        owner_user_id=ctx.user.id,
+        title=title,
+        demand=demand,
+        notes=notes,
+        stage="qualificacao",
+        service_name="Outro / Personalizado",
+        value_estimate_brl=max(0.0, report.carteira_total_brl * 0.01),
+        probability_pct=30 if report.potential_label == "alto" else 15,
+        next_step="Agendar call e solicitar contratos/CCBs.",
+        next_step_date="",
+        source="SCR/Direct Data",
+        created_at=utcnow(),
+        updated_at=utcnow(),
+    )
+    session.add(deal)
+    session.commit()
+    session.refresh(deal)
+
+    set_flash(request, "Negócio criado no CRM.")
+    return RedirectResponse(f"/negocios/{deal.id}", status_code=303)
+
+
+@app.post("/credito/{report_id}/gerar_tarefas")
+@require_role({"admin", "equipe"})
+async def credit_report_generate_tasks(request: Request, session: Session = Depends(get_session), report_id: int = 0) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    report = session.get(CreditReport, int(report_id))
+    if not report or report.company_id != ctx.company.id:
+        set_flash(request, "Relatório não encontrado.")
+        return RedirectResponse("/credito", status_code=303)
+
+    if report.status != "done":
+        set_flash(request, "Finalize a consulta antes de gerar tarefas.")
+        return RedirectResponse(f"/credito/{report.id}", status_code=303)
+
+    client = get_client_or_none(session, ctx.company.id, report.client_id)
+    if not client:
+        set_flash(request, "Cliente inválido.")
+        return RedirectResponse(f"/credito/{report.id}", status_code=303)
+
+    defaults = [
+        ("Solicitar contratos/CCBs das operações", "Pedir ao cliente os contratos/CCBs e condições atuais."),
+        ("Agendar reunião de diagnóstico", "Reunião para entender estrutura de dívida e objetivos."),
+        ("Montar mapa de dívidas (saldo/taxa/prazo/garantias)", "Consolidar dados para simulações."),
+        ("Simular alternativas de reperfilamento", "Comparar cenários e preparar proposta."),
+    ]
+
+    created = 0
+    for title, desc in defaults:
+        t = Task(
+            company_id=ctx.company.id,
+            client_id=client.id,
+            created_by_user_id=ctx.user.id,
+            assignee_user_id=ctx.user.id,
+            title=title,
+            description=desc,
+            status="nao_iniciada",
+            priority="media",
+            due_date="",
+            visible_to_client=(title.startswith("Solicitar") or title.startswith("Agendar")),
+            client_action=(title.startswith("Solicitar")),
+            created_at=utcnow(),
+            updated_at=utcnow(),
+        )
+        session.add(t)
+        created += 1
+
+    session.commit()
+    set_flash(request, f"{created} tarefas criadas.")
+    return RedirectResponse("/tarefas", status_code=303)
+
