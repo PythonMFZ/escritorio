@@ -1505,12 +1505,41 @@ a:hover{ color:#00BFBF; }
   {% else %}
     <form method="post" action="/client/switch">
       <div class="mb-3">
-        <label class="form-label">Cliente</label>
-        <select class="form-select" name="client_id">
-          {% for c in clients %}
-            <option value="{{ c.id }}" {% if current_client and c.id==current_client.id %}selected{% endif %}>{{ c.name }}</option>
-          {% endfor %}
-        </select>
+        <label class="form-label">Cliente (existente)</label>
+<select class="form-select" name="client_id">
+  <option value="0">Selecionar (opcional)</option>
+  {% for c in clients %}
+    <option value="{{ c.id }}">{{ c.name }}</option>
+  {% endfor %}
+</select>
+
+<details class="mt-3">
+  <summary class="small">+ Criar cliente rápido (Lead)</summary>
+  <div class="row g-2 mt-2">
+    <div class="col-12">
+      <label class="form-label">Nome da empresa (Lead)</label>
+      <input class="form-control" name="new_client_name" placeholder="Ex: Empresa ABC Ltda" />
+      <div class="form-text">Preencha aqui se ainda não existe cliente cadastrado.</div>
+    </div>
+    <div class="col-md-6">
+      <label class="form-label">CNPJ (opcional)</label>
+      <input class="form-control" name="new_client_cnpj" placeholder="00.000.000/0000-00" />
+    </div>
+    <div class="col-md-6">
+      <label class="form-label">E-mail (opcional)</label>
+      <input class="form-control" name="new_client_email" type="email" placeholder="contato@empresa.com" />
+    </div>
+    <div class="col-md-6">
+      <label class="form-label">Telefone (opcional)</label>
+      <input class="form-control" name="new_client_phone" placeholder="(xx) xxxxx-xxxx" />
+    </div>
+    <div class="col-md-6">
+      <label class="form-label">Observações (opcional)</label>
+      <input class="form-control" name="new_client_notes" placeholder="Origem do lead, contexto..." />
+    </div>
+  </div>
+</details>
+
       </div>
       <button class="btn btn-primary">Selecionar</button>
       <a class="btn btn-outline-secondary" href="/">Cancelar</a>
@@ -8036,12 +8065,17 @@ async def crm_new_page(request: Request, session: Session = Depends(get_session)
 
 @app.post("/negocios/novo")
 @require_role({"admin", "equipe"})
-async def crm_new_action(
+async def negocios_new_action(
     request: Request,
     session: Session = Depends(get_session),
-    client_id: int = Form(...),
-    owner_user_id: int = Form(0),
+    client_id: int = Form(0),
+    new_client_name: str = Form(""),
+    new_client_cnpj: str = Form(""),
+    new_client_email: str = Form(""),
+    new_client_phone: str = Form(""),
+    new_client_notes: str = Form(""),
     title: str = Form(...),
+    stage: str = Form(...),
     service_name: str = Form(""),
     stage: str = Form("qualificacao"),
     demand: str = Form(""),
@@ -8055,10 +8089,34 @@ async def crm_new_action(
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
-    client = get_client_or_none(session, ctx.company.id, int(client_id))
-    if not client:
-        set_flash(request, "Cliente inválido.")
-        return RedirectResponse("/negocios/novo", status_code=303)
+    new_client_name = (new_client_name or "").strip()
+    client = None
+
+    if new_client_name:
+        lead_notes = (new_client_notes or "").strip()
+        lead_notes = f"[LEAD CRM] {lead_notes}".strip()
+
+        client = Client(
+            company_id=ctx.company.id,
+            name=new_client_name,
+            cnpj=(new_client_cnpj or "").strip(),
+            email=(new_client_email or "").strip(),
+            phone=(new_client_phone or "").strip(),
+            notes=lead_notes,
+            updated_at=utcnow(),
+        )
+        session.add(client)
+        session.commit()
+        session.refresh(client)
+    else:
+        if int(client_id or 0) <= 0:
+            set_flash(request, "Selecione um cliente existente OU crie um lead.")
+            return RedirectResponse("/negocios/novo", status_code=303)
+
+        client = get_client_or_none(session, ctx.company.id, int(client_id))
+        if not client:
+            set_flash(request, "Cliente inválido.")
+            return RedirectResponse("/negocios/novo", status_code=303)
 
     service_name = sanitize_service_name(service_name)
     if not service_name:
