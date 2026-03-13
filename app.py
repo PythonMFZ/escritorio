@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 import httpx
-from fastapi import Depends, FastAPI, File, Form, Request, Response, UploadFile
+from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, Request, Response, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse
 from jinja2 import Environment
 from jinja2.loaders import DictLoader
@@ -169,7 +169,7 @@ def sanitize_service_name(name: str) -> str:
 NOTION_TOKEN = os.getenv("NOTION_TOKEN")
 NOTION_DB_NEGOCIOS_ID = os.getenv("NOTION_DB_NEGOCIOS_ID")
 DIRECTDATA_TOKEN = os.getenv("DIRECTDATA_TOKEN")
-DIRECTDATA_SCR_URL = os.getenv("DIRECTDATA_SCR_URL") or "https://apiv3.directd.com.br/api/SCRDetalhada"
+DIRECTDATA_SCR_URL = os.getenv("DIRECTDATA_SCR_URL") or "https://apiv3.directd.com.br/api/SCRBacenDetalhada"
 DIRECTDATA_ASYNC = os.getenv("DIRECTDATA_ASYNC", "1") == "1"
 DIRECTDATA_TIMEOUT_S = float(os.getenv("DIRECTDATA_TIMEOUT_S", "30"))
 CREDIT_CONSENT_MAX_DAYS = int(os.getenv("CREDIT_CONSENT_MAX_DAYS", "180"))
@@ -5377,6 +5377,16 @@ async def logout(request: Request) -> Response:
     return RedirectResponse("/login", status_code=303)
 
 
+
+# ----------------------------
+# Health
+# ----------------------------
+
+@app.get("/healthz")
+async def healthz() -> dict[str, str]:
+    return {"status": "ok"}
+
+
 # ----------------------------
 # Dashboard
 # ----------------------------
@@ -10305,14 +10315,18 @@ def _calc_potential(report: CreditReport) -> tuple[float, str]:
     return score, label
 
 
-def _directdata_scr_request(*, document_type: str, document_value: str) -> tuple[int, dict[str, Any] | None, str]:
+async def _directdata_scr_request(*, document_type: str, document_value: str) -> tuple[int, dict[str, Any] | None, str]:
+    """Consulta Direct Data (SCR) via HTTP (assíncrono).
+
+    Usamos AsyncClient para não travar o worker (Render).
+    """
     if not DIRECTDATA_TOKEN:
         return 0, None, "DIRECTDATA_TOKEN não configurado."
     doc = _digits_only(document_value)
     if not doc:
         return 0, None, "Documento inválido."
 
-    params: dict[str, Any] = {"Token": DIRECTDATA_TOKEN}
+    params: dict[str, Any] = {"TOKEN": DIRECTDATA_TOKEN}
     if document_type == "cpf":
         params["CPF"] = doc
     else:
@@ -10321,8 +10335,10 @@ def _directdata_scr_request(*, document_type: str, document_value: str) -> tuple
     if DIRECTDATA_ASYNC:
         params["async"] = "habilitar"
 
+    timeout = httpx.Timeout(DIRECTDATA_TIMEOUT_S, connect=min(5.0, float(DIRECTDATA_TIMEOUT_S)))
     try:
-        resp = httpx.get(DIRECTDATA_SCR_URL, params=params, timeout=DIRECTDATA_TIMEOUT_S)
+        async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+            resp = await client.get(DIRECTDATA_SCR_URL, params=params)
     except Exception as e:
         return 0, None, f"Falha ao consultar Direct Data: {e}"
 
@@ -10335,7 +10351,83 @@ def _directdata_scr_request(*, document_type: str, document_value: str) -> tuple
     if isinstance(data, dict):
         meta = data.get("metaDados") or {}
         msg = str(meta.get("mensagem") or meta.get("resultado") or "")[:500]
+
     return resp.status_code, data if isinstance(data, dict) else None, msg
+
+
+def _apply_directdata_response_to_report(report: "CreditReport", *, code: int, data: dict[str, Any] | None, msg: str) -> None:
+    """Atualiza o CreditReport com a resposta Direct Data (sem commit)."""
+    report.http_status = int(code or 0)
+    report.message = (msg or "")[:500]
+
+    if not data:
+        report.status = "error"
+        report.message = report.message or "Sem resposta JSON."
+        report.updated_at = utcnow()
+        return
+
+    meta = data.get("metaDados") or {}
+    ret = data.get("retorno") or {}
+
+    report.consulta_uid = str(meta.get("consultaUid") or report.consulta_uid)
+    try:
+        report.resultado_id = int(meta.get("resultadoId") or report.resultado_id)
+    except Exception:
+        pass
+
+    report.raw_json = json.dumps(data, ensure_ascii=False, indent=2)
+
+    if code == 200 and isinstance(ret, dict) and ret:
+        report.status = "done"
+    elif code in (201, 202):
+        report.status = "processing"
+    else:
+        report.status = "error"
+
+    if isinstance(ret, dict) and ret:
+        report.score = str(ret.get("score") or report.score)
+        report.faixa_risco = str(ret.get("faixaRisco") or report.faixa_risco)
+        report.obrigacao_assumida = str(ret.get("obrigacaoAssumida") or report.obrigacao_assumida)
+        report.obrigacao_resumida = str(ret.get("obrigacaoResumida") or report.obrigacao_resumida)
+
+        try:
+            report.quantidade_instituicoes = int(ret.get("quantidadeInstituicoes") or report.quantidade_instituicoes)
+        except Exception:
+            pass
+        try:
+            report.quantidade_operacoes = int(ret.get("quantidadeOperacoes") or report.quantidade_operacoes)
+        except Exception:
+            pass
+
+        report.risco_total_brl = _parse_brl_amount(ret.get("riscoTotal"))
+
+        carteira = ret.get("carteiraCredito") or {}
+        if isinstance(carteira, dict):
+            report.carteira_total_brl = _parse_brl_amount(carteira.get("total"))
+            report.carteira_vencer_brl = _parse_brl_amount(carteira.get("vencer"))
+            report.carteira_vencido_brl = _parse_brl_amount(carteira.get("vencido"))
+            report.carteira_prejuizo_brl = _parse_brl_amount(carteira.get("prejuizo"))
+
+        pscore, plabel = _calc_potential(report)
+        report.potential_score = pscore
+        report.potential_label = plabel
+
+    report.updated_at = utcnow()
+
+
+async def _credit_run_scr_and_update(report_id: int) -> None:
+    """Roda a consulta SCR e persiste o resultado sem travar a requisição."""
+    try:
+        with Session(engine) as s:
+            report = s.get(CreditReport, int(report_id))
+            if not report:
+                return
+            code, data, msg = await _directdata_scr_request(document_type=report.document_type, document_value=report.document_value)
+            _apply_directdata_response_to_report(report, code=int(code or 0), data=data, msg=msg)
+            s.add(report)
+            s.commit()
+    except Exception as e:
+        print(f"[credit] background update failed report_id={report_id}: {e}")
 
 
 def _get_client_for_credit(ctx: TenantContext, request: Request, session: Session) -> Client | None:
@@ -10494,6 +10586,7 @@ async def credit_upload_consent(
 @require_role({"admin", "equipe"})
 async def credit_consult(
     request: Request,
+    background_tasks: BackgroundTasks,
     session: Session = Depends(get_session),
     document_type: str = Form("cnpj"),
     document_value: str = Form(""),
@@ -10533,79 +10626,10 @@ async def credit_consult(
     session.add(report)
     session.commit()
     session.refresh(report)
+    # Dispara em background para não travar o request (Render).
+    background_tasks.add_task(_credit_run_scr_and_update, report.id)
 
-    code, data, msg = _directdata_scr_request(document_type=report.document_type, document_value=report.document_value)
-    report.http_status = int(code or 0)
-    report.message = msg
-
-    if not data:
-        report.status = "error"
-        report.message = report.message or "Sem resposta JSON."
-        report.updated_at = utcnow()
-        session.add(report)
-        session.commit()
-        set_flash(request, "Falha ao consultar.")
-        return RedirectResponse(f"/credito/{report.id}", status_code=303)
-
-    meta = data.get("metaDados") or {}
-    ret = data.get("retorno") or {}
-
-    report.consulta_uid = str(meta.get("consultaUid") or "")
-    try:
-        report.resultado_id = int(meta.get("resultadoId") or 0)
-    except Exception:
-        report.resultado_id = 0
-
-    report.raw_json = json.dumps(data, ensure_ascii=False, indent=2)
-
-    # Atualiza status
-    if code == 200 and isinstance(ret, dict) and ret:
-        report.status = "done"
-    elif code in (201, 202):
-        report.status = "processing"
-    else:
-        report.status = "error"
-
-    # Extrai resumo se existir
-    if isinstance(ret, dict) and ret:
-        report.score = str(ret.get("score") or "")
-        report.faixa_risco = str(ret.get("faixaRisco") or "")
-        report.obrigacao_assumida = str(ret.get("obrigacaoAssumida") or "")
-        report.obrigacao_resumida = str(ret.get("obrigacaoResumida") or "")
-
-        try:
-            report.quantidade_instituicoes = int(ret.get("quantidadeInstituicoes") or 0)
-        except Exception:
-            report.quantidade_instituicoes = 0
-        try:
-            report.quantidade_operacoes = int(ret.get("quantidadeOperacoes") or 0)
-        except Exception:
-            report.quantidade_operacoes = 0
-
-        report.risco_total_brl = _parse_brl_amount(ret.get("riscoTotal"))
-
-        carteira = ret.get("carteiraCredito") or {}
-        if isinstance(carteira, dict):
-            report.carteira_total_brl = _parse_brl_amount(carteira.get("total"))
-            report.carteira_vencer_brl = _parse_brl_amount(carteira.get("vencer"))
-            report.carteira_vencido_brl = _parse_brl_amount(carteira.get("vencido"))
-            report.carteira_prejuizo_brl = _parse_brl_amount(carteira.get("prejuizo"))
-
-        pscore, plabel = _calc_potential(report)
-        report.potential_score = pscore
-        report.potential_label = plabel
-
-    report.updated_at = utcnow()
-    session.add(report)
-    session.commit()
-
-    if report.status == "error":
-        set_flash(request, f"Falha na consulta ({report.http_status}).")
-    elif report.status == "processing":
-        set_flash(request, "Consulta em processamento. Clique em Atualizar em instantes.")
-    else:
-        set_flash(request, "Consulta concluída.")
-
+    set_flash(request, "Consulta iniciada. Aguarde e clique em Atualizar em instantes.")
     return RedirectResponse(f"/credito/{report.id}", status_code=303)
 
 
@@ -10641,7 +10665,7 @@ async def credit_report_detail(request: Request, session: Session = Depends(get_
 
 @app.post("/credito/{report_id}/atualizar")
 @require_role({"admin", "equipe"})
-async def credit_report_refresh(request: Request, session: Session = Depends(get_session), report_id: int = 0) -> Response:
+async def credit_report_refresh(request: Request, background_tasks: BackgroundTasks, session: Session = Depends(get_session), report_id: int = 0) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
@@ -10650,69 +10674,14 @@ async def credit_report_refresh(request: Request, session: Session = Depends(get
         set_flash(request, "Relatório não encontrado.")
         return RedirectResponse("/credito", status_code=303)
 
-    code, data, msg = _directdata_scr_request(document_type=report.document_type, document_value=report.document_value)
-    report.http_status = int(code or 0)
-    report.message = msg
-
-    if data:
-        meta = data.get("metaDados") or {}
-        ret = data.get("retorno") or {}
-
-        report.consulta_uid = str(meta.get("consultaUid") or report.consulta_uid)
-        try:
-            report.resultado_id = int(meta.get("resultadoId") or report.resultado_id)
-        except Exception:
-            pass
-
-        report.raw_json = json.dumps(data, ensure_ascii=False, indent=2)
-
-        if code == 200 and isinstance(ret, dict) and ret:
-            report.status = "done"
-        elif code in (201, 202):
-            report.status = "processing"
-        else:
-            report.status = "error"
-
-        if isinstance(ret, dict) and ret:
-            report.score = str(ret.get("score") or report.score)
-            report.faixa_risco = str(ret.get("faixaRisco") or report.faixa_risco)
-
-            try:
-                report.quantidade_instituicoes = int(ret.get("quantidadeInstituicoes") or report.quantidade_instituicoes)
-            except Exception:
-                pass
-            try:
-                report.quantidade_operacoes = int(ret.get("quantidadeOperacoes") or report.quantidade_operacoes)
-            except Exception:
-                pass
-
-            report.risco_total_brl = _parse_brl_amount(ret.get("riscoTotal"))
-
-            carteira = ret.get("carteiraCredito") or {}
-            if isinstance(carteira, dict):
-                report.carteira_total_brl = _parse_brl_amount(carteira.get("total"))
-                report.carteira_vencer_brl = _parse_brl_amount(carteira.get("vencer"))
-                report.carteira_vencido_brl = _parse_brl_amount(carteira.get("vencido"))
-                report.carteira_prejuizo_brl = _parse_brl_amount(carteira.get("prejuizo"))
-
-            pscore, plabel = _calc_potential(report)
-            report.potential_score = pscore
-            report.potential_label = plabel
-    else:
-        report.status = "error"
-        report.message = report.message or "Sem resposta JSON."
-
+    # Atualiza em background (evita travar o worker).
+    report.status = "processing"
     report.updated_at = utcnow()
     session.add(report)
     session.commit()
 
-    if report.status == "done":
-        set_flash(request, "Consulta concluída.")
-    elif report.status == "processing":
-        set_flash(request, "Ainda em processamento. Tente novamente em instantes.")
-    else:
-        set_flash(request, f"Falha ao atualizar ({report.http_status}).")
-
+    background_tasks.add_task(_credit_run_scr_and_update, report.id)
+    set_flash(request, "Atualização iniciada. Recarregue em instantes.")
     return RedirectResponse(f"/credito/{report.id}", status_code=303)
 
 
