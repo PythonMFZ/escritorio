@@ -21,7 +21,7 @@ from urllib.parse import urlparse
 
 import httpx
 from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, Request, Response, UploadFile
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 from jinja2 import Environment
 from jinja2.loaders import DictLoader
 from passlib.context import CryptContext
@@ -191,6 +191,9 @@ CONTA_AZUL_API_BASE = os.getenv("CONTA_AZUL_API_BASE") or "https://api-v2.contaa
 CONTA_AZUL_SYNC_DAYS_BACK = int(os.getenv("CONTA_AZUL_SYNC_DAYS_BACK", "180"))
 CONTA_AZUL_SYNC_DAYS_FORWARD = int(os.getenv("CONTA_AZUL_SYNC_DAYS_FORWARD", "30"))
 CONTA_AZUL_SYNC_MAX_ITEMS = int(os.getenv("CONTA_AZUL_SYNC_MAX_ITEMS", "200"))
+
+CONTA_AZUL_DEBUG = os.getenv("CONTA_AZUL_DEBUG", "0") == "1"
+CONTA_AZUL_HTTP_TIMEOUT_S = float(os.getenv("CONTA_AZUL_HTTP_TIMEOUT_S", "20"))
 PUBLIC_BASE_URL = (os.getenv("PUBLIC_BASE_URL") or "").rstrip("/")
 PUBLIC_BASE_URL_FORCE = os.getenv("PUBLIC_BASE_URL_FORCE", "0") == "1"
 CREDIT_CONSENT_LINK_TTL_HOURS = int(os.getenv("CREDIT_CONSENT_LINK_TTL_HOURS", "168"))  # 7 dias
@@ -1195,6 +1198,19 @@ def ensure_contaazul_tables() -> bool:
 
 def _contaazul_configured() -> bool:
     return bool(CONTA_AZUL_CLIENT_ID and CONTA_AZUL_CLIENT_SECRET)
+
+
+def _ca_log(msg: str) -> None:
+    if CONTA_AZUL_DEBUG:
+        try:
+            print(f"[contaazul] {msg}")
+        except Exception:
+            pass
+
+
+def _ca_trunc(text: str, max_len: int = 700) -> str:
+    s = (text or "").strip().replace("\n", " ").replace("\r", " ")
+    return s if len(s) <= max_len else (s[:max_len] + "…")
 
 
 def _contaazul_basic_auth_value() -> str:
@@ -8657,6 +8673,45 @@ async def contaazul_settings(request: Request, session: Session = Depends(get_se
     )
 
 
+@app.get("/integrations/contaazul/diag")
+@require_role({"admin", "equipe"})
+async def contaazul_diag(request: Request, session: Session = Depends(get_session)) -> JSONResponse:
+    """Diagnóstico rápido da integração Conta Azul (sem tocar em dados financeiros)."""
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    table_ok = bool(ensure_contaazul_tables())
+    configured = bool(_contaazul_configured())
+    redirect_uri = _contaazul_redirect_uri(request)
+
+    auth = _contaazul_get_auth(session, ctx.company.id) if table_ok else None
+
+    # Ping simples (opcional) para verificar reachability do auth server
+    ping = {"ok": False, "status": None}
+    try:
+        async with httpx.AsyncClient(timeout=min(6.0, CONTA_AZUL_HTTP_TIMEOUT_S), follow_redirects=True) as client:
+            r = await client.get(CONTA_AZUL_AUTH_URL)
+        ping = {"ok": r.status_code < 500, "status": int(r.status_code)}
+    except Exception as e:
+        ping = {"ok": False, "status": None, "error": str(e)}
+
+    return JSONResponse(
+        {
+            "configured": configured,
+            "client_id_set": bool(CONTA_AZUL_CLIENT_ID),
+            "client_secret_set": bool(CONTA_AZUL_CLIENT_SECRET),
+            "redirect_uri": redirect_uri,
+            "auth_url": CONTA_AZUL_AUTH_URL,
+            "token_url": CONTA_AZUL_TOKEN_URL,
+            "api_base": CONTA_AZUL_API_BASE,
+            "tables_ok": table_ok,
+            "connected": bool(auth and auth.refresh_token),
+            "token_expires_at": (auth.expires_at.isoformat() if auth else None),
+            "ping_auth": ping,
+        }
+    )
+
+
 @app.get("/integrations/contaazul/connect")
 @require_role({"admin", "equipe"})
 async def contaazul_connect(request: Request, session: Session = Depends(get_session)) -> Response:
@@ -8683,6 +8738,7 @@ async def contaazul_connect(request: Request, session: Session = Depends(get_ses
         "scope": CONTA_AZUL_SCOPE,
     }
     url = httpx.URL(CONTA_AZUL_AUTH_URL).copy_merge_params(params)
+    _ca_log(f"redirecting to auth url redirect_uri={redirect_uri} scope={CONTA_AZUL_SCOPE}")
     return RedirectResponse(str(url), status_code=302)
 
 
@@ -8707,13 +8763,15 @@ async def contaazul_callback(request: Request, session: Session = Depends(get_se
     data = {"code": code, "grant_type": "authorization_code", "redirect_uri": redirect_uri}
 
     try:
-        with httpx.Client(timeout=30.0, follow_redirects=True) as client:
-            resp = client.post(CONTA_AZUL_TOKEN_URL, headers=headers, data=data)
+        async with httpx.AsyncClient(timeout=CONTA_AZUL_HTTP_TIMEOUT_S, follow_redirects=True) as client:
+            resp = await client.post(CONTA_AZUL_TOKEN_URL, headers=headers, data=data)
         if resp.status_code >= 400:
-            set_flash(request, f"Falha ao conectar Conta Azul (HTTP {resp.status_code}).")
+            _ca_log(f"token exchange failed status={resp.status_code} body={_ca_trunc(resp.text)}")
+            set_flash(request, f"Falha ao conectar Conta Azul (HTTP {resp.status_code}): {_ca_trunc(resp.text, 180)}")
             return RedirectResponse("/integrations/contaazul", status_code=303)
         payload = resp.json()
     except Exception as e:
+        _ca_log(f"token exchange exception: {e}")
         set_flash(request, f"Falha ao conectar Conta Azul: {e}")
         return RedirectResponse("/integrations/contaazul", status_code=303)
 
