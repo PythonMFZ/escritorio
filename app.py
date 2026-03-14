@@ -10947,8 +10947,8 @@ async def credit_home(request: Request, session: Session = Depends(get_session))
         if ctx.membership.role != "cliente":
             set_flash(request, "Selecione um cliente para acessar Crédito.")
 
-    consent_link_url = ""
-    if consent and consent.status == "pendente":
+    consent_link_url = str(request.session.get("consent_link_url") or "")
+    if (not consent_link_url) and consent and consent.status == "pendente":
         meta = _unpack_consent_link_note(consent.notes)
         if meta and meta.get("token"):
             try:
@@ -11074,7 +11074,7 @@ async def credit_generate_consent_link(
                     token = str(meta["token"])
                     url = f"{_public_base_url(request)}/consent/aceite/{token}"
                     request.session["consent_link_url"] = url
-                    set_flash(request, "Link de aceite gerado (reutilizado).")
+                    set_flash(request, f"Link de aceite: {url}")
                     return RedirectResponse("/credito", status_code=303)
                 except Exception:
                     pass
@@ -11112,7 +11112,7 @@ async def credit_generate_consent_link(
 
     url = f"{_public_base_url(request)}/consent/aceite/{token}"
     request.session["consent_link_url"] = url
-    set_flash(request, "Link de aceite gerado.")
+    set_flash(request, f"Link de aceite: {url}")
     return RedirectResponse("/credito", status_code=303)
 
 
