@@ -40,6 +40,10 @@ APP_SECRET_KEY = os.getenv("APP_SECRET_KEY") or secrets.token_urlsafe(32)
 DATABASE_URL = os.getenv("DATABASE_URL") or "sqlite:///./app.db"
 ALLOW_COMPANY_SIGNUP = os.getenv("ALLOW_COMPANY_SIGNUP", "0") == "1"
 
+CLIENT_INVITE_TTL_HOURS = int(os.getenv("CLIENT_INVITE_TTL_HOURS", "168"))  # 7 dias
+CLIENT_INVITE_REQUIRE_LAST4 = os.getenv("CLIENT_INVITE_REQUIRE_LAST4",
+                                        "1") == "1"  # valida últimos 4 dígitos do CNPJ/CPF quando disponível
+
 BOOKINGS_URL = os.getenv(
     "BOOKINGS_URL") or "https://outlook.office.com/book/ReservasMaffezzolliConsultorRafael@mfzcapital.onmicrosoft.com/?ismsaljsauthenabled"
 
@@ -181,7 +185,8 @@ PUBLIC_BASE_URL = (os.getenv("PUBLIC_BASE_URL") or "").rstrip("/")
 PUBLIC_BASE_URL_FORCE = os.getenv("PUBLIC_BASE_URL_FORCE", "0") == "1"
 CREDIT_CONSENT_LINK_TTL_HOURS = int(os.getenv("CREDIT_CONSENT_LINK_TTL_HOURS", "168"))  # 7 dias
 CREDIT_CONSENT_TERM_VERSION = os.getenv("CREDIT_CONSENT_TERM_VERSION", "2026-03-14")
-DIRECTDATA_ASYNC_RESULT_URL = os.getenv("DIRECTDATA_ASYNC_RESULT_URL") or "https://apiv3.directd.com.br/api/Historico/ObterRetornoConsultaAsync"
+DIRECTDATA_ASYNC_RESULT_URL = os.getenv(
+    "DIRECTDATA_ASYNC_RESULT_URL") or "https://apiv3.directd.com.br/api/Historico/ObterRetornoConsultaAsync"
 DIRECTDATA_POLL_MIN_INTERVAL_S = float(os.getenv("DIRECTDATA_POLL_MIN_INTERVAL_S", "6"))
 
 NOTION_VERSION = os.getenv("NOTION_VERSION", "2026-03-11")
@@ -206,6 +211,7 @@ _MAX_UPLOAD_BYTES = 20 * 1024 * 1024  # 20MB (ajuste se quiser)
 
 def utcnow() -> datetime:
     return datetime.now(timezone.utc)
+
 
 def _b64url_encode(data: bytes) -> str:
     return base64.urlsafe_b64encode(data).decode("utf-8").rstrip("=")
@@ -255,7 +261,8 @@ def _request_origin(request: Request) -> str:
     x-forwarded-host quando Host estiver ausente.
     """
     proto = (request.headers.get("x-forwarded-proto") or request.url.scheme or "https").split(",")[0].strip()
-    host = (request.headers.get("host") or request.headers.get("x-forwarded-host") or request.url.netloc).split(",")[0].strip()
+    host = (request.headers.get("host") or request.headers.get("x-forwarded-host") or request.url.netloc).split(",")[
+        0].strip()
     return f"{proto}://{host}".rstrip("/")
 
 
@@ -272,7 +279,6 @@ def _request_path_prefix(request: Request) -> str:
     if not raw or raw == "/":
         return ""
     return "/" + raw.strip("/")
-
 
 
 def _public_base_url(request: Request) -> str:
@@ -329,6 +335,60 @@ def _unpack_consent_link_note(notes: str) -> Optional[dict[str, Any]]:
         return None
 
 
+INVITE_LINK_NOTE_PREFIX = "INVITE_LINK_JSON:"
+
+
+def _sign_invite_token(payload: dict[str, Any]) -> str:
+    """Assina token de convite (HMAC-SHA256) com APP_SECRET_KEY."""
+    raw = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    b64 = _b64url_encode(raw)
+    sig = _hmac_sha256_hex(APP_SECRET_KEY, raw)
+    return f"{b64}.{sig}"
+
+
+def _verify_invite_token(token: str) -> dict[str, Any]:
+    """Valida token de convite e retorna payload (dict)."""
+    tok = (token or "").strip()
+    if "." not in tok:
+        raise ValueError("token inválido")
+    b64, sig = tok.split(".", 1)
+    raw = _b64url_decode(b64)
+    expected = _hmac_sha256_hex(APP_SECRET_KEY, raw)
+    if not hmac.compare_digest(expected, sig):
+        raise ValueError("assinatura inválida")
+    payload = json.loads(raw.decode("utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError("payload inválido")
+    exp = int(payload.get("exp") or 0)
+    if exp and utcnow().timestamp() > exp:
+        raise ValueError("token expirado")
+    return payload
+
+
+def _pack_invite_link_note(*, token: str, created_by_user_id: int, expires_at: datetime) -> str:
+    obj = {
+        "token": token,
+        "created_by_user_id": int(created_by_user_id or 0),
+        "expires_at": expires_at.isoformat(),
+    }
+    return INVITE_LINK_NOTE_PREFIX + json.dumps(obj, ensure_ascii=False)
+
+
+def _unpack_invite_link_note(notes: str) -> Optional[dict[str, Any]]:
+    s = (notes or "").strip()
+    if not s.startswith(INVITE_LINK_NOTE_PREFIX):
+        return None
+    try:
+        return json.loads(s[len(INVITE_LINK_NOTE_PREFIX):])
+    except Exception:
+        return None
+
+
+def _build_invite_url(request: Request, *, token: str) -> str:
+    base = _public_base_url(request)
+    return f"{base}/convite/{token}".rstrip("/")
+
+
 def _request_ip(request: Request) -> str:
     xf = request.headers.get("x-forwarded-for")
     if xf:
@@ -341,7 +401,6 @@ def _request_ip(request: Request) -> str:
 def _terms_sha256() -> str:
     raw = f"{CREDIT_CONSENT_TERM_VERSION}|{CREDIT_CONSENT_TERMS_HTML}".encode("utf-8")
     return hashlib.sha256(raw).hexdigest()
-
 
 
 def _normalize_password(password: str) -> str:
@@ -974,6 +1033,41 @@ def init_db() -> None:
         SQLModel.metadata.create_all(engine)
 
 
+class ClientInvite(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    company_id: int = Field(index=True, foreign_key="company.id")
+    client_id: int = Field(index=True, foreign_key="client.id")
+    created_by_user_id: int = Field(index=True, foreign_key="user.id")
+
+    invited_email: str = ""
+    status: str = Field(default="pendente", index=True)  # pendente | aceito | revogado | expirado
+    token_nonce: str = Field(default_factory=lambda: secrets.token_urlsafe(16), index=True)
+
+    expires_at: datetime
+    accepted_at: Optional[datetime] = None
+    accepted_user_id: Optional[int] = Field(default=None, index=True, foreign_key="user.id")
+
+    notes: str = ""
+    created_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime = Field(default_factory=utcnow)
+
+
+def ensure_client_invite_table() -> bool:
+    """Garante que a tabela ClientInvite existe.
+
+    Em produção (Postgres) o app pode rodar sem Alembic. Criar só esta tabela é
+    idempotente (checkfirst=True). Se falhar (permissão), retornamos False e o
+    deploy precisa de migração manual.
+    """
+    try:
+        ClientInvite.__table__.create(engine, checkfirst=True)
+        return True
+    except Exception as e:
+        try:
+            print(f"[invite] failed to ensure ClientInvite table: {e}")
+        except Exception:
+            pass
+        return False
 
 
 def ensure_credit_consent_table() -> bool:
@@ -993,7 +1087,10 @@ def ensure_credit_consent_table() -> bool:
             pass
         return False
 
+
 pass
+
+
 def get_session() -> Session:
     with Session(engine) as session:
         yield session
@@ -1808,6 +1905,73 @@ a:hover{ color:#00BFBF; }
       <button class="btn btn-primary">Selecionar</button>
       <a class="btn btn-outline-secondary" href="/">Cancelar</a>
     </form>
+
+    {% if current_client and role in ["admin","equipe"] %}
+      <hr class="my-4"/>
+      <h5 class="mb-1">Convite para o Portal do Cliente</h5>
+      <div class="muted mb-3">Gere um link para o cliente criar usuário (sem OTP).</div>
+
+      <form method="post" action="/client/invite" class="row g-2 align-items-end">
+        <input type="hidden" name="client_id" value="{{ current_client.id }}"/>
+        <div class="col-md-7">
+          <label class="form-label">E-mail do cliente (opcional)</label>
+          <input class="form-control" name="invited_email" placeholder="financeiro@cliente.com.br" value=""/>
+        </div>
+        <div class="col-md-3">
+          <button class="btn btn-primary w-100">Gerar link</button>
+        </div>
+      </form>
+
+      {% if invite_link_url %}
+        <div class="mt-3">
+          <label class="form-label">Link do convite</label>
+          <div class="input-group">
+            <input class="form-control" value="{{ invite_link_url }}" readonly/>
+            <button class="btn btn-outline-secondary" type="button"
+              onclick="navigator.clipboard && navigator.clipboard.writeText('{{ invite_link_url }}')">
+              Copiar
+            </button>
+          </div>
+          <div class="muted small mt-1">Envie este link ao cliente. Ele expira automaticamente.</div>
+        </div>
+      {% endif %}
+
+      {% if recent_invites %}
+        <div class="mt-3">
+          <div class="fw-semibold mb-2">Convites recentes</div>
+          <div class="table-responsive">
+            <table class="table table-sm">
+              <thead>
+                <tr>
+                  <th>Criado</th>
+                  <th>Status</th>
+                  <th>E-mail</th>
+                  <th>Expira</th>
+                  <th>Link</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for inv in recent_invites %}
+                  <tr>
+                    <td class="small">{{ inv.created_at }}</td>
+                    <td><span class="badge text-bg-light border">{{ inv.status }}</span></td>
+                    <td class="small">{{ inv.invited_email or "-" }}</td>
+                    <td class="small">{{ inv.expires_at }}</td>
+                    <td class="small">
+                      {% if inv.link_url %}
+                        <a href="{{ inv.link_url }}" target="_blank">Abrir</a>
+                      {% else %}
+                        -
+                      {% endif %}
+                    </td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      {% endif %}
+    {% endif %}
   {% endif %}
 </div>
 {% endblock %}
@@ -4965,7 +5129,72 @@ TEMPLATES.update({
 {% endblock %}
 """,
 
-"success.html": r"""{% extends "base.html" %}
+    "invite_signup.html": r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="container py-4">
+  <div class="card p-4">
+    <h4 class="mb-1">Criar acesso do cliente</h4>
+    <div class="muted mb-3">
+      Você foi convidado(a) para acessar a plataforma.
+      <div class="small mt-1">Empresa: <b>{{ company.name }}</b> • Cliente: <b>{{ client.name }}</b></div>
+    </div>
+
+    {% if error %}
+      <div class="alert alert-danger">{{ error }}</div>
+    {% endif %}
+
+    <form method="post" action="/convite/{{ token }}">
+      <div class="row g-2">
+        <div class="col-md-6">
+          <label class="form-label">Seu nome</label>
+          <input class="form-control" name="name" value="{{ form.name or '' }}" required/>
+        </div>
+        <div class="col-md-6">
+          <label class="form-label">E-mail</label>
+          <input class="form-control" name="email" type="email" value="{{ form.email or invited_email or '' }}" required/>
+        </div>
+
+        <div class="col-md-6">
+          <label class="form-label">Senha</label>
+          <input class="form-control" name="password" type="password" minlength="8" required/>
+          <div class="muted small mt-1">Mínimo 8 caracteres.</div>
+        </div>
+        <div class="col-md-6">
+          <label class="form-label">Confirmar senha</label>
+          <input class="form-control" name="password2" type="password" minlength="8" required/>
+        </div>
+
+        {% if require_last4 %}
+          <div class="col-md-6">
+            <label class="form-label">Últimos 4 dígitos do CNPJ/CPF</label>
+            <input class="form-control" name="doc_last4" inputmode="numeric" maxlength="4" placeholder="0000" required/>
+            <div class="muted small mt-1">Usamos isso para reduzir fraudes (sem OTP).</div>
+          </div>
+        {% endif %}
+
+        <div class="col-12 mt-2">
+          <div class="form-check">
+            <input class="form-check-input" type="checkbox" name="accept" id="accept" required/>
+            <label class="form-check-label" for="accept">
+              Li e aceito os termos de uso e a política de privacidade.
+            </label>
+          </div>
+        </div>
+      </div>
+
+      <button class="btn btn-primary mt-3">Criar acesso</button>
+    </form>
+
+    <div class="muted small mt-3">
+      Se este convite não foi solicitado por você, feche esta página.
+    </div>
+  </div>
+</div>
+{% endblock %}
+""",
+
+    "success.html": r"""{% extends "base.html" %}
 {% block content %}
 <div class="container py-4">
   <div class="card p-4">
@@ -5089,11 +5318,14 @@ async def consultoria_new_page(request: Request, session: Session = Depends(get_
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
-    # Garante tabela em ambientes sem Alembic
+    # Garante tabelas em ambientes sem Alembic
     if not ensure_credit_consent_table():
         set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
         return RedirectResponse("/credito", status_code=303)
 
+    if not ensure_client_invite_table():
+        set_flash(request, "Sistema de convites não está configurado (migração pendente no banco).")
+        return RedirectResponse("/client/switch", status_code=303)
 
     clients = session.exec(select(Client).where(Client.company_id == ctx.company.id).order_by(Client.created_at)).all()
     active_client_id = get_active_client_id(request, session, ctx)
@@ -5123,7 +5355,6 @@ async def consultoria_edit_project_page(request: Request, session: Session = Dep
     if not ensure_credit_consent_table():
         set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
         return RedirectResponse("/credito", status_code=303)
-
 
     project = session.get(ConsultingProject, int(project_id))
     if not project or project.company_id != ctx.company.id:
@@ -5161,7 +5392,6 @@ async def consultoria_edit_project_action(
         set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
         return RedirectResponse("/credito", status_code=303)
 
-
     project = session.get(ConsultingProject, int(project_id))
     if not project or project.company_id != ctx.company.id:
         set_flash(request, "Projeto não encontrado.")
@@ -5197,7 +5427,6 @@ async def consultoria_delete_project(request: Request, session: Session = Depend
         set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
         return RedirectResponse("/credito", status_code=303)
 
-
     project = session.get(ConsultingProject, int(project_id))
     if not project or project.company_id != ctx.company.id:
         set_flash(request, "Projeto não encontrado.")
@@ -5230,7 +5459,6 @@ async def consultoria_edit_stage_page(request: Request, session: Session = Depen
     if not ensure_credit_consent_table():
         set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
         return RedirectResponse("/credito", status_code=303)
-
 
     stage = session.get(ConsultingStage, int(stage_id))
     if not stage:
@@ -5268,7 +5496,6 @@ async def consultoria_edit_stage_action(
         set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
         return RedirectResponse("/credito", status_code=303)
 
-
     stage = session.get(ConsultingStage, int(stage_id))
     if not stage:
         set_flash(request, "Etapa não encontrada.")
@@ -5299,7 +5526,6 @@ async def consultoria_delete_stage(request: Request, session: Session = Depends(
     if not ensure_credit_consent_table():
         set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
         return RedirectResponse("/credito", status_code=303)
-
 
     stage = session.get(ConsultingStage, int(stage_id))
     if not stage:
@@ -5332,7 +5558,6 @@ async def consultoria_edit_step_page(request: Request, session: Session = Depend
     if not ensure_credit_consent_table():
         set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
         return RedirectResponse("/credito", status_code=303)
-
 
     step = session.get(ConsultingStep, int(step_id))
     if not step:
@@ -5374,7 +5599,6 @@ async def consultoria_edit_step_action(
         set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
         return RedirectResponse("/credito", status_code=303)
 
-
     step = session.get(ConsultingStep, int(step_id))
     if not step:
         set_flash(request, "Sub-etapa não encontrada.")
@@ -5411,7 +5635,6 @@ async def consultoria_delete_step(request: Request, session: Session = Depends(g
     if not ensure_credit_consent_table():
         set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
         return RedirectResponse("/credito", status_code=303)
-
 
     step = session.get(ConsultingStep, int(step_id))
     if not step:
@@ -5450,7 +5673,6 @@ async def consultoria_new_action(
     if not ensure_credit_consent_table():
         set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
         return RedirectResponse("/credito", status_code=303)
-
 
     client = get_client_or_none(session, ctx.company.id, int(client_id))
     if not client:
@@ -5555,7 +5777,6 @@ async def consultoria_add_stage(
         set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
         return RedirectResponse("/credito", status_code=303)
 
-
     project = session.get(ConsultingProject, int(project_id))
     if not project or project.company_id != ctx.company.id:
         set_flash(request, "Projeto não encontrado.")
@@ -5593,7 +5814,6 @@ async def consultoria_add_step(
     if not ensure_credit_consent_table():
         set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
         return RedirectResponse("/credito", status_code=303)
-
 
     stage = session.get(ConsultingStage, int(stage_id))
     if not stage:
@@ -5834,22 +6054,52 @@ async def client_switch_page(request: Request, session: Session = Depends(get_se
         set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
         return RedirectResponse("/credito", status_code=303)
 
-
     clients = session.exec(select(Client).where(Client.company_id == ctx.company.id).order_by(Client.created_at)).all()
     active_client_id = get_active_client_id(request, session, ctx)
     current_client = get_client_or_none(session, ctx.company.id, active_client_id)
 
-    return render(
-        "client_switch.html",
-        request=request,
-        context={
-            "current_user": ctx.user,
-            "current_company": ctx.company,
-            "role": ctx.membership.role,
-            "current_client": current_client,
-            "clients": clients,
-        },
-    )
+    invite_link_url = (request.session.get("last_invite_url") or "").strip()
+
+    recent_invites: list[dict[str, Any]] = []
+    if current_client:
+        invs = session.exec(
+            select(ClientInvite)
+            .where(
+                (ClientInvite.company_id == ctx.company.id)
+                & (ClientInvite.client_id == current_client.id)
+            )
+            .order_by(ClientInvite.created_at.desc())
+            .limit(5)
+        ).all()
+        for inv in invs:
+            note = _unpack_invite_link_note(inv.notes)
+            tok = (note or {}).get("token") if isinstance(note, dict) else None
+            link_url = _build_invite_url(request, token=str(tok)) if tok else ""
+            recent_invites.append(
+                {
+                    "id": inv.id,
+                    "created_at": inv.created_at.isoformat(),
+                    "expires_at": inv.expires_at.isoformat(),
+                    "status": inv.status,
+                    "invited_email": inv.invited_email,
+                    "link_url": link_url,
+                }
+            )
+
+
+return render(
+    "client_switch.html",
+    request=request,
+    context={
+        "current_user": ctx.user,
+        "current_company": ctx.company,
+        "role": ctx.membership.role,
+        "current_client": current_client,
+        "clients": clients,
+        "invite_link_url": invite_link_url,
+        "recent_invites": recent_invites,
+    },
+)
 
 
 @app.post("/client/switch")
@@ -5867,7 +6117,6 @@ async def client_switch_action(
         set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
         return RedirectResponse("/credito", status_code=303)
 
-
     client = get_client_or_none(session, ctx.company.id, int(client_id))
     if not client:
         set_flash(request, "Cliente inválido.")
@@ -5875,6 +6124,291 @@ async def client_switch_action(
 
     request.session["selected_client_id"] = client.id
     set_flash(request, f"Cliente selecionado: {client.name}")
+    return RedirectResponse("/", status_code=303)
+
+
+# ----------------------------
+# Convites: clientes criarem acesso (sem OTP)
+# ----------------------------
+
+
+def _invite_is_expired(inv: ClientInvite) -> bool:
+    try:
+        return bool(inv.expires_at and utcnow() > inv.expires_at)
+    except Exception:
+        return False
+
+
+def _expire_invite_if_needed(session: Session, inv: ClientInvite) -> None:
+    if inv.status == "pendente" and _invite_is_expired(inv):
+        inv.status = "expirado"
+        inv.updated_at = utcnow()
+        session.add(inv)
+        session.commit()
+
+
+@app.post("/client/invite")
+@require_role({"admin", "equipe"})
+async def client_invite_create(
+        request: Request,
+        session: Session = Depends(get_session),
+        client_id: int = Form(...),
+        invited_email: str = Form(""),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    if not ensure_client_invite_table():
+        set_flash(request, "Sistema de convites não está configurado (migração pendente no banco).")
+        return RedirectResponse("/client/switch", status_code=303)
+
+    client = get_client_or_none(session, ctx.company.id, int(client_id))
+    if not client:
+        set_flash(request, "Cliente inválido.")
+        return RedirectResponse("/client/switch", status_code=303)
+
+    expires_at = utcnow() + timedelta(hours=CLIENT_INVITE_TTL_HOURS)
+    email = invited_email.strip().lower()
+
+    inv = ClientInvite(
+        company_id=ctx.company.id,
+        client_id=client.id,
+        created_by_user_id=ctx.user.id,
+        invited_email=email,
+        status="pendente",
+        expires_at=expires_at,
+        created_at=utcnow(),
+        updated_at=utcnow(),
+    )
+    session.add(inv)
+    session.commit()
+    session.refresh(inv)
+
+    payload = {
+        "invite_id": inv.id,
+        "nonce": inv.token_nonce,
+        "iat": int(utcnow().timestamp()),
+        "exp": int(expires_at.timestamp()),
+    }
+    token = _sign_invite_token(payload)
+    inv.notes = _pack_invite_link_note(token=token, created_by_user_id=ctx.user.id, expires_at=expires_at)
+    inv.updated_at = utcnow()
+    session.add(inv)
+    session.commit()
+
+    url = _build_invite_url(request, token=token)
+    request.session["last_invite_url"] = url
+
+    set_flash(request, f"Link de convite: {url}")
+    return RedirectResponse("/client/switch", status_code=303)
+
+
+def _digits_last4(value: str) -> str:
+    s = _digits_only(value)
+    return s[-4:] if len(s) >= 4 else ""
+
+
+@app.get("/convite/{token}", response_class=HTMLResponse)
+async def invite_signup_page(
+        request: Request,
+        token: str,
+        session: Session = Depends(get_session),
+) -> HTMLResponse:
+    if not ensure_client_invite_table():
+        return render(
+            "success.html",
+            request=request,
+            context={"current_user": None, "message": "Cadastro indisponível (migração pendente no banco)."},
+            status_code=503,
+        )
+
+    try:
+        payload = _verify_invite_token(token)
+        invite_id = int(payload.get("invite_id") or 0)
+        nonce = str(payload.get("nonce") or "")
+    except Exception:
+        return render(
+            "success.html",
+            request=request,
+            context={"current_user": None, "message": "Convite inválido ou expirado."},
+            status_code=400,
+        )
+
+    inv = session.get(ClientInvite, invite_id) if invite_id else None
+    if not inv or inv.token_nonce != nonce:
+        return render(
+            "success.html",
+            request=request,
+            context={"current_user": None, "message": "Convite inválido."},
+            status_code=400,
+        )
+
+    _expire_invite_if_needed(session, inv)
+    if inv.status != "pendente":
+        msg = "Convite já utilizado." if inv.status == "aceito" else "Convite expirado."
+        return render("success.html", request=request, context={"current_user": None, "message": msg})
+
+    company = session.get(Company, inv.company_id)
+    client = session.get(Client, inv.client_id)
+    if not company or not client:
+        return render(
+            "success.html",
+            request=request,
+            context={"current_user": None, "message": "Convite inválido (cadastros não encontrados)."},
+            status_code=400,
+        )
+
+    require_last4 = bool(CLIENT_INVITE_REQUIRE_LAST4 and _digits_last4(client.cnpj))
+
+    return render(
+        "invite_signup.html",
+        request=request,
+        context={
+            "current_user": None,
+            "company": company,
+            "client": client,
+            "token": token,
+            "invited_email": inv.invited_email,
+            "require_last4": bool(require_last4),
+            "error": "",
+            "form": {"name": "", "email": inv.invited_email},
+        },
+    )
+
+
+@app.post("/convite/{token}")
+async def invite_signup_action(
+        request: Request,
+        token: str,
+        session: Session = Depends(get_session),
+        name: str = Form(...),
+        email: str = Form(...),
+        password: str = Form(...),
+        password2: str = Form(...),
+        doc_last4: str = Form(""),
+        accept: Optional[str] = Form(None),
+) -> Response:
+    if not ensure_client_invite_table():
+        return render(
+            "success.html",
+            request=request,
+            context={"current_user": None, "message": "Cadastro indisponível (migração pendente no banco)."},
+            status_code=503,
+        )
+
+    def render_form(company: Company, client: Client, inv: ClientInvite, msg: str) -> HTMLResponse:
+        require_last4 = bool(CLIENT_INVITE_REQUIRE_LAST4 and _digits_last4(client.cnpj))
+        return render(
+            "invite_signup.html",
+            request=request,
+            context={
+                "current_user": None,
+                "company": company,
+                "client": client,
+                "token": token,
+                "invited_email": inv.invited_email,
+                "require_last4": bool(require_last4),
+                "error": msg,
+                "form": {"name": name, "email": email},
+            },
+            status_code=400,
+        )
+
+    try:
+        payload = _verify_invite_token(token)
+        invite_id = int(payload.get("invite_id") or 0)
+        nonce = str(payload.get("nonce") or "")
+    except Exception:
+        return render(
+            "success.html",
+            request=request,
+            context={"current_user": None, "message": "Convite inválido ou expirado."},
+            status_code=400,
+        )
+
+    inv = session.get(ClientInvite, invite_id) if invite_id else None
+    if not inv or inv.token_nonce != nonce:
+        return render(
+            "success.html",
+            request=request,
+            context={"current_user": None, "message": "Convite inválido."},
+            status_code=400,
+        )
+
+    _expire_invite_if_needed(session, inv)
+    if inv.status != "pendente":
+        msg = "Convite já utilizado." if inv.status == "aceito" else "Convite expirado."
+        return render("success.html", request=request, context={"current_user": None, "message": msg})
+
+    company = session.get(Company, inv.company_id)
+    client = session.get(Client, inv.client_id)
+    if not company or not client:
+        return render(
+            "success.html",
+            request=request,
+            context={"current_user": None, "message": "Convite inválido (cadastros não encontrados)."},
+            status_code=400,
+        )
+
+    if not accept:
+        return render_form(company, client, inv, "Você precisa aceitar os termos para continuar.")
+
+    if password != password2:
+        return render_form(company, client, inv, "As senhas não conferem.")
+
+    if len(password) < 8:
+        return render_form(company, client, inv, "Senha muito curta (mínimo 8).")
+
+    if inv.invited_email and email.strip().lower() != inv.invited_email.strip().lower():
+        return render_form(company, client, inv, "Este convite é válido apenas para o e-mail convidado.")
+
+    require_last4 = bool(CLIENT_INVITE_REQUIRE_LAST4 and _digits_last4(client.cnpj))
+    if require_last4:
+        expected = _digits_last4(client.cnpj)
+        provided = _digits_only(doc_last4)[-4:]
+        if not provided or provided != expected:
+            return render_form(company, client, inv, "Últimos 4 dígitos do documento não conferem.")
+
+    em = email.strip().lower()
+    nm = name.strip()
+    if not nm or not em:
+        return render_form(company, client, inv, "Nome e e-mail são obrigatórios.")
+
+    user = session.exec(select(User).where(User.email == em)).first()
+    if user:
+        if not verify_password(password, user.password_hash):
+            return render_form(company, client, inv,
+                               "E-mail já cadastrado. Informe a senha correta para associar este convite.")
+    else:
+        user = User(name=nm, email=em, password_hash=hash_password(password))
+        session.add(user)
+        try:
+            session.commit()
+        except IntegrityError:
+            session.rollback()
+            return render_form(company, client, inv, "Este e-mail já está cadastrado.")
+        session.refresh(user)
+
+    membership = get_membership(session, user.id, company.id)
+    if membership:
+        membership.role = "cliente"
+        membership.client_id = client.id
+    else:
+        membership = Membership(user_id=user.id, company_id=company.id, role="cliente", client_id=client.id)
+        session.add(membership)
+
+    inv.status = "aceito"
+    inv.accepted_at = utcnow()
+    inv.accepted_user_id = user.id
+    inv.updated_at = utcnow()
+
+    session.add(inv)
+    session.commit()
+
+    request.session["user_id"] = user.id
+    request.session["company_id"] = company.id
+    request.session["selected_client_id"] = client.id
+    set_flash(request, "Cadastro concluído. Bem-vindo(a)!")
     return RedirectResponse("/", status_code=303)
 
 
@@ -5893,7 +6427,6 @@ async def members_page(request: Request, session: Session = Depends(get_session)
     if not ensure_credit_consent_table():
         set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
         return RedirectResponse("/credito", status_code=303)
-
 
     mems = session.exec(select(Membership).where(Membership.company_id == ctx.company.id)).all()
     rows = []
@@ -5944,7 +6477,6 @@ async def members_add_action(
     if not ensure_credit_consent_table():
         set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
         return RedirectResponse("/credito", status_code=303)
-
 
     role = role.strip().lower()
     if role not in {"admin", "equipe", "cliente"}:
@@ -6396,7 +6928,6 @@ async def pending_new_action(
         set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
         return RedirectResponse("/credito", status_code=303)
 
-
     client = get_client_or_none(session, ctx.company.id, int(client_id))
     if not client:
         set_flash(request, "Cliente inválido.")
@@ -6507,7 +7038,6 @@ async def pending_update_status(
         set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
         return RedirectResponse("/credito", status_code=303)
 
-
     item = session.get(PendingItem, int(item_id))
     if not item or item.company_id != ctx.company.id:
         set_flash(request, "Pendência não encontrada.")
@@ -6542,7 +7072,6 @@ async def pending_attach_admin(
     if not ensure_credit_consent_table():
         set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
         return RedirectResponse("/credito", status_code=303)
-
 
     item = session.get(PendingItem, int(item_id))
     if not item or item.company_id != ctx.company.id:
@@ -6595,7 +7124,6 @@ async def pending_attach_client(
     if not ensure_credit_consent_table():
         set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
         return RedirectResponse("/credito", status_code=303)
-
 
     item = session.get(PendingItem, int(item_id))
     if not item or item.company_id != ctx.company.id:
@@ -6732,7 +7260,6 @@ async def docs_new_action(
         set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
         return RedirectResponse("/credito", status_code=303)
 
-
     client = get_client_or_none(session, ctx.company.id, int(client_id))
     if not client:
         set_flash(request, "Cliente inválido.")
@@ -6839,7 +7366,6 @@ async def docs_update_status(
         set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
         return RedirectResponse("/credito", status_code=303)
 
-
     doc = session.get(Document, int(doc_id))
     if not doc or doc.company_id != ctx.company.id:
         set_flash(request, "Documento não encontrado.")
@@ -6875,7 +7401,6 @@ async def docs_attach_admin(
     if not ensure_credit_consent_table():
         set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
         return RedirectResponse("/credito", status_code=303)
-
 
     doc = session.get(Document, int(doc_id))
     if not doc or doc.company_id != ctx.company.id:
@@ -6927,7 +7452,6 @@ async def docs_attach_client(
     if not ensure_credit_consent_table():
         set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
         return RedirectResponse("/credito", status_code=303)
-
 
     doc = session.get(Document, int(doc_id))
     if not doc or doc.company_id != ctx.company.id:
@@ -7074,7 +7598,6 @@ async def props_new_staff_action(
         set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
         return RedirectResponse("/credito", status_code=303)
 
-
     client = get_client_or_none(session, ctx.company.id, int(client_id))
     if not client:
         set_flash(request, "Cliente inválido.")
@@ -7171,7 +7694,6 @@ async def props_new_client_action(
     if not ensure_credit_consent_table():
         set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
         return RedirectResponse("/credito", status_code=303)
-
 
     client_id = ctx.membership.client_id
     if not client_id:
@@ -7294,7 +7816,6 @@ async def props_update_staff(
         set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
         return RedirectResponse("/credito", status_code=303)
 
-
     prop = session.get(Proposal, int(prop_id))
     if not prop or prop.company_id != ctx.company.id:
         set_flash(request, "Item não encontrado.")
@@ -7335,7 +7856,6 @@ async def props_delete_staff(request: Request, session: Session = Depends(get_se
         set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
         return RedirectResponse("/credito", status_code=303)
 
-
     prop = session.get(Proposal, int(prop_id))
     if not prop or prop.company_id != ctx.company.id:
         set_flash(request, "Proposta não encontrada.")
@@ -7371,7 +7891,6 @@ async def props_attach_staff(
     if not ensure_credit_consent_table():
         set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
         return RedirectResponse("/credito", status_code=303)
-
 
     prop = session.get(Proposal, int(prop_id))
     if not prop or prop.company_id != ctx.company.id:
@@ -7417,7 +7936,6 @@ async def props_client_upload(
     if not ensure_credit_consent_table():
         set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
         return RedirectResponse("/credito", status_code=303)
-
 
     prop = session.get(Proposal, int(prop_id))
     if not prop or prop.company_id != ctx.company.id:
@@ -7557,7 +8075,6 @@ async def fin_new_action(
         set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
         return RedirectResponse("/credito", status_code=303)
 
-
     client = get_client_or_none(session, ctx.company.id, int(client_id))
     if not client:
         set_flash(request, "Cliente inválido.")
@@ -7658,7 +8175,6 @@ async def fin_attach(
     if not ensure_credit_consent_table():
         set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
         return RedirectResponse("/credito", status_code=303)
-
 
     inv = session.get(FinanceInvoice, int(inv_id))
     if not inv or inv.company_id != ctx.company.id:
@@ -7941,7 +8457,6 @@ async def tasks_new_page(
         set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
         return RedirectResponse("/credito", status_code=303)
 
-
     clients = session.exec(select(Client).where(Client.company_id == ctx.company.id).order_by(Client.created_at)).all()
 
     # staff assignees (admin/equipe) + current user always
@@ -7999,7 +8514,6 @@ async def tasks_new_action(
     if not ensure_credit_consent_table():
         set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
         return RedirectResponse("/credito", status_code=303)
-
 
     client = get_client_or_none(session, ctx.company.id, int(client_id))
     if not client:
@@ -8198,7 +8712,6 @@ async def tasks_toggle_client(request: Request, session: Session = Depends(get_s
         set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
         return RedirectResponse("/credito", status_code=303)
 
-
     task = session.get(Task, int(task_id))
     if not task or not _task_can_view(ctx, task):
         set_flash(request, "Sem permissão.")
@@ -8228,7 +8741,6 @@ async def tasks_set_status(request: Request, session: Session = Depends(get_sess
         set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
         return RedirectResponse("/credito", status_code=303)
 
-
     task = session.get(Task, int(task_id))
     if not task or task.company_id != ctx.company.id:
         set_flash(request, "Tarefa não encontrada.")
@@ -8256,7 +8768,6 @@ async def tasks_edit_page(request: Request, session: Session = Depends(get_sessi
     if not ensure_credit_consent_table():
         set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
         return RedirectResponse("/credito", status_code=303)
-
 
     task = session.get(Task, int(task_id))
     if not task or task.company_id != ctx.company.id:
@@ -8313,7 +8824,6 @@ async def tasks_edit_action(
         set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
         return RedirectResponse("/credito", status_code=303)
 
-
     task = session.get(Task, int(task_id))
     if not task or task.company_id != ctx.company.id:
         set_flash(request, "Tarefa não encontrada.")
@@ -8368,7 +8878,6 @@ async def tasks_delete_action(
         set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
         return RedirectResponse("/credito", status_code=303)
 
-
     task = session.get(Task, int(task_id))
     if not task or task.company_id != ctx.company.id:
         set_flash(request, "Tarefa não encontrada.")
@@ -8409,7 +8918,6 @@ async def delete_attachment(
         set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
         return RedirectResponse("/credito", status_code=303)
 
-
     att = session.get(Attachment, int(attachment_id))
     if not att or att.company_id != ctx.company.id:
         set_flash(request, "Anexo não encontrado.")
@@ -8433,7 +8941,6 @@ async def pending_new_client_page(request: Request, session: Session = Depends(g
     if not ensure_credit_consent_table():
         set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
         return RedirectResponse("/credito", status_code=303)
-
 
     active_client_id = get_active_client_id(request, session, ctx)
     current_client = get_client_or_none(session, ctx.company.id, active_client_id)
@@ -8467,7 +8974,6 @@ async def pending_new_client_action(
     if not ensure_credit_consent_table():
         set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
         return RedirectResponse("/credito", status_code=303)
-
 
     client_id = ctx.membership.client_id or 0
     client = get_client_or_none(session, ctx.company.id, client_id)
@@ -8530,7 +9036,6 @@ async def docs_send_client_page(request: Request, session: Session = Depends(get
         set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
         return RedirectResponse("/credito", status_code=303)
 
-
     active_client_id = get_active_client_id(request, session, ctx)
     current_client = get_client_or_none(session, ctx.company.id, active_client_id)
 
@@ -8562,7 +9067,6 @@ async def docs_send_client_action(
     if not ensure_credit_consent_table():
         set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
         return RedirectResponse("/credito", status_code=303)
-
 
     client_id = ctx.membership.client_id or 0
     client = get_client_or_none(session, ctx.company.id, client_id)
@@ -8624,7 +9128,6 @@ async def docs_edit_page(request: Request, session: Session = Depends(get_sessio
         set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
         return RedirectResponse("/credito", status_code=303)
 
-
     doc = session.get(Document, int(doc_id))
     if not doc or doc.company_id != ctx.company.id:
         return render("error.html", request=request, context={"message": "Documento não encontrado."}, status_code=404)
@@ -8663,7 +9166,6 @@ async def docs_edit_action(
         set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
         return RedirectResponse("/credito", status_code=303)
 
-
     doc = session.get(Document, int(doc_id))
     if not doc or doc.company_id != ctx.company.id:
         set_flash(request, "Documento não encontrado.")
@@ -8690,7 +9192,6 @@ async def docs_delete_action(request: Request, session: Session = Depends(get_se
     if not ensure_credit_consent_table():
         set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
         return RedirectResponse("/credito", status_code=303)
-
 
     doc = session.get(Document, int(doc_id))
     if not doc or doc.company_id != ctx.company.id:
@@ -8724,7 +9225,6 @@ async def pending_edit_page(request: Request, session: Session = Depends(get_ses
     if not ensure_credit_consent_table():
         set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
         return RedirectResponse("/credito", status_code=303)
-
 
     item = session.get(PendingItem, int(item_id))
     if not item or item.company_id != ctx.company.id:
@@ -8765,7 +9265,6 @@ async def pending_edit_action(
         set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
         return RedirectResponse("/credito", status_code=303)
 
-
     item = session.get(PendingItem, int(item_id))
     if not item or item.company_id != ctx.company.id:
         set_flash(request, "Pendência não encontrada.")
@@ -8794,7 +9293,6 @@ async def pending_delete_action(request: Request, session: Session = Depends(get
     if not ensure_credit_consent_table():
         set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
         return RedirectResponse("/credito", status_code=303)
-
 
     item = session.get(PendingItem, int(item_id))
     if not item or item.company_id != ctx.company.id:
@@ -8827,7 +9325,6 @@ async def fin_edit_page(request: Request, session: Session = Depends(get_session
     if not ensure_credit_consent_table():
         set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
         return RedirectResponse("/credito", status_code=303)
-
 
     inv = session.get(FinanceInvoice, int(inv_id))
     if not inv or inv.company_id != ctx.company.id:
@@ -8869,7 +9366,6 @@ async def fin_edit_action(
         set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
         return RedirectResponse("/credito", status_code=303)
 
-
     inv = session.get(FinanceInvoice, int(inv_id))
     if not inv or inv.company_id != ctx.company.id:
         set_flash(request, "Lançamento não encontrado.")
@@ -8898,7 +9394,6 @@ async def fin_delete_action(request: Request, session: Session = Depends(get_ses
     if not ensure_credit_consent_table():
         set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
         return RedirectResponse("/credito", status_code=303)
-
 
     inv = session.get(FinanceInvoice, int(inv_id))
     if not inv or inv.company_id != ctx.company.id:
@@ -8970,7 +9465,6 @@ async def crm_list(
     if not ensure_credit_consent_table():
         set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
         return RedirectResponse("/credito", status_code=303)
-
 
     clients = session.exec(select(Client).where(Client.company_id == ctx.company.id).order_by(Client.created_at)).all()
     owners = _owner_users_for_company(session, ctx.company.id)
@@ -9056,7 +9550,6 @@ async def crm_new_page(request: Request, session: Session = Depends(get_session)
         set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
         return RedirectResponse("/credito", status_code=303)
 
-
     clients = session.exec(select(Client).where(Client.company_id == ctx.company.id).order_by(Client.created_at)).all()
     owners = _owner_users_for_company(session, ctx.company.id)
 
@@ -9112,7 +9605,6 @@ async def crm_new_action(
     if not ensure_credit_consent_table():
         set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
         return RedirectResponse("/credito", status_code=303)
-
 
     new_client_name = (new_client_name or "").strip()
     new_client_email = (new_client_email or "").strip()
@@ -9200,7 +9692,6 @@ async def crm_detail(request: Request, session: Session = Depends(get_session), 
         set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
         return RedirectResponse("/credito", status_code=303)
 
-
     deal = session.get(BusinessDeal, int(deal_id))
     if not deal or deal.company_id != ctx.company.id:
         return render("error.html", request=request, context={"message": "Negócio não encontrado."}, status_code=404)
@@ -9249,7 +9740,6 @@ async def crm_edit_page(request: Request, session: Session = Depends(get_session
     if not ensure_credit_consent_table():
         set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
         return RedirectResponse("/credito", status_code=303)
-
 
     deal = session.get(BusinessDeal, int(deal_id))
     if not deal or deal.company_id != ctx.company.id:
@@ -9303,7 +9793,6 @@ async def crm_edit_action(
     if not ensure_credit_consent_table():
         set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
         return RedirectResponse("/credito", status_code=303)
-
 
     deal = session.get(BusinessDeal, int(deal_id))
     if not deal or deal.company_id != ctx.company.id:
@@ -9370,7 +9859,6 @@ async def crm_update_stage(
         set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
         return RedirectResponse("/credito", status_code=303)
 
-
     deal = session.get(BusinessDeal, int(deal_id))
     if not deal or deal.company_id != ctx.company.id:
         set_flash(request, "Negócio não encontrado.")
@@ -9405,7 +9893,6 @@ async def crm_update_next(
         set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
         return RedirectResponse("/credito", status_code=303)
 
-
     deal = session.get(BusinessDeal, int(deal_id))
     if not deal or deal.company_id != ctx.company.id:
         set_flash(request, "Negócio não encontrado.")
@@ -9439,7 +9926,6 @@ async def crm_add_note(
         set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
         return RedirectResponse("/credito", status_code=303)
 
-
     deal = session.get(BusinessDeal, int(deal_id))
     if not deal or deal.company_id != ctx.company.id:
         set_flash(request, "Negócio não encontrado.")
@@ -9467,7 +9953,6 @@ async def crm_create_proposal(request: Request, session: Session = Depends(get_s
     if not ensure_credit_consent_table():
         set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
         return RedirectResponse("/credito", status_code=303)
-
 
     deal = session.get(BusinessDeal, int(deal_id))
     if not deal or deal.company_id != ctx.company.id:
@@ -9515,7 +10000,6 @@ async def crm_create_project(request: Request, session: Session = Depends(get_se
         set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
         return RedirectResponse("/credito", status_code=303)
 
-
     deal = session.get(BusinessDeal, int(deal_id))
     if not deal or deal.company_id != ctx.company.id:
         set_flash(request, "Negócio não encontrado.")
@@ -9560,7 +10044,6 @@ async def crm_delete(request: Request, session: Session = Depends(get_session), 
     if not ensure_credit_consent_table():
         set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
         return RedirectResponse("/credito", status_code=303)
-
 
     deal = session.get(BusinessDeal, int(deal_id))
     if not deal or deal.company_id != ctx.company.id:
@@ -9676,7 +10159,6 @@ async def meetings_new_page(request: Request, session: Session = Depends(get_ses
         set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
         return RedirectResponse("/credito", status_code=303)
 
-
     clients = session.exec(select(Client).where(Client.company_id == ctx.company.id).order_by(Client.created_at)).all()
     active_client_id = get_active_client_id(request, session, ctx)
     current_client = get_client_or_none(session, ctx.company.id, active_client_id)
@@ -9713,7 +10195,6 @@ async def meetings_new_action(
     if not ensure_credit_consent_table():
         set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
         return RedirectResponse("/credito", status_code=303)
-
 
     client = get_client_or_none(session, ctx.company.id, int(client_id))
     if not client:
@@ -9817,7 +10298,6 @@ async def meetings_sync(request: Request, session: Session = Depends(get_session
         set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
         return RedirectResponse("/credito", status_code=303)
 
-
     mt = session.get(Meeting, int(meeting_id))
     if not mt or mt.company_id != ctx.company.id:
         set_flash(request, "Reunião não encontrada.")
@@ -9860,7 +10340,6 @@ async def meetings_generate_tasks(
     if not ensure_credit_consent_table():
         set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
         return RedirectResponse("/credito", status_code=303)
-
 
     mt = session.get(Meeting, int(meeting_id))
     if not mt or mt.company_id != ctx.company.id:
@@ -10609,7 +11088,6 @@ async def edu_course_new_action(
         set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
         return RedirectResponse("/credito", status_code=303)
 
-
     form = await request.form()
     client_ids = [int(x) for x in form.getlist("client_ids") if str(x).isdigit()]
 
@@ -10674,7 +11152,6 @@ async def edu_course_add_module(request: Request, session: Session = Depends(get
         set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
         return RedirectResponse("/credito", status_code=303)
 
-
     course = session.get(EducationCourse, int(course_id))
     if not course or course.company_id != ctx.company.id:
         set_flash(request, "Curso inválido.")
@@ -10703,7 +11180,6 @@ async def edu_course_edit_page(request: Request, session: Session = Depends(get_
         set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
         return RedirectResponse("/credito", status_code=303)
 
-
     course = session.get(EducationCourse, int(course_id))
     if not course or course.company_id != ctx.company.id:
         return render("error.html", request=request, context={"message": "Curso não encontrado."}, status_code=404)
@@ -10731,7 +11207,6 @@ async def edu_course_edit_action(request: Request, session: Session = Depends(ge
     if not ensure_credit_consent_table():
         set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
         return RedirectResponse("/credito", status_code=303)
-
 
     course = session.get(EducationCourse, int(course_id))
     if not course or course.company_id != ctx.company.id:
@@ -10772,7 +11247,6 @@ async def edu_course_delete(request: Request, session: Session = Depends(get_ses
     if not ensure_credit_consent_table():
         set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
         return RedirectResponse("/credito", status_code=303)
-
 
     course = session.get(EducationCourse, int(course_id))
     if not course or course.company_id != ctx.company.id:
@@ -10836,7 +11310,6 @@ async def edu_module_add_lesson(request: Request, session: Session = Depends(get
         set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
         return RedirectResponse("/credito", status_code=303)
 
-
     module = session.get(EducationModule, int(module_id))
     if not module:
         set_flash(request, "Módulo inválido.")
@@ -10872,7 +11345,6 @@ async def edu_module_edit(request: Request, session: Session = Depends(get_sessi
         set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
         return RedirectResponse("/credito", status_code=303)
 
-
     module = session.get(EducationModule, int(module_id))
     if not module:
         set_flash(request, "Módulo não encontrado.")
@@ -10897,7 +11369,6 @@ async def edu_module_delete(request: Request, session: Session = Depends(get_ses
     if not ensure_credit_consent_table():
         set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
         return RedirectResponse("/credito", status_code=303)
-
 
     module = session.get(EducationModule, int(module_id))
     if not module:
@@ -10997,7 +11468,7 @@ async def edu_lesson_toggle_complete(request: Request, session: Session = Depend
         return RedirectResponse("/educacao", status_code=303)
 
     client_id = (ctx.membership.client_id or 0) if ctx.membership.role == "cliente" else (
-                get_active_client_id(request, session, ctx) or 0)
+            get_active_client_id(request, session, ctx) or 0)
     if not client_id:
         set_flash(request, "Selecione um cliente.")
         return RedirectResponse(f"/educacao/aulas/{lesson.id}", status_code=303)
@@ -11028,7 +11499,6 @@ async def edu_lesson_attach(request: Request, session: Session = Depends(get_ses
     if not ensure_credit_consent_table():
         set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
         return RedirectResponse("/credito", status_code=303)
-
 
     lesson = session.get(EducationLesson, int(lesson_id))
     if not lesson:
@@ -11076,7 +11546,6 @@ async def edu_lesson_edit(request: Request, session: Session = Depends(get_sessi
         set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
         return RedirectResponse("/credito", status_code=303)
 
-
     lesson = session.get(EducationLesson, int(lesson_id))
     if not lesson:
         set_flash(request, "Aula não encontrada.")
@@ -11102,7 +11571,6 @@ async def edu_lesson_delete(request: Request, session: Session = Depends(get_ses
     if not ensure_credit_consent_table():
         set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
         return RedirectResponse("/credito", status_code=303)
-
 
     lesson = session.get(EducationLesson, int(lesson_id))
     if not lesson:
@@ -11228,7 +11696,6 @@ def _calc_potential(report: CreditReport) -> tuple[float, str]:
     return score, label
 
 
-
 async def _directdata_scr_poll_request(*, consulta_uid: str) -> tuple[int, dict[str, Any] | None, str]:
     """Obtém o retorno de uma consulta assíncrona já iniciada na Direct Data.
 
@@ -11265,13 +11732,14 @@ async def _directdata_scr_poll_request(*, consulta_uid: str) -> tuple[int, dict[
 
 def _directdata_meta_is_processing(meta: dict[str, Any]) -> bool:
     """Heurística: identifica respostas ainda em processamento via metaDados."""
-    txt = f"{meta.get('mensagem','')} {meta.get('resultado','')}".lower()
+    txt = f"{meta.get('mensagem', '')} {meta.get('resultado', '')}".lower()
     if not txt.strip():
         return False
     return any(k in txt for k in ("process", "aguard", "fila", "assíncr", "assincr", "gerando"))
 
 
-async def _directdata_scr_request(*, document_type: str, document_value: str, consulta_uid: str = "") -> tuple[int, dict[str, Any] | None, str]:
+async def _directdata_scr_request(*, document_type: str, document_value: str, consulta_uid: str = "") -> tuple[
+    int, dict[str, Any] | None, str]:
     """Consulta Direct Data (SCR) via HTTP (assíncrono).
 
     Usamos AsyncClient para não travar o worker (Render).
@@ -11426,7 +11894,6 @@ def _get_latest_consent(session: Session, *, company_id: int, client_id: int) ->
         except Exception:
             pass
         return None
-
 
 
 def _as_aware_utc(dt: Optional[datetime]) -> Optional[datetime]:
@@ -11600,7 +12067,6 @@ async def credit_home(request: Request, session: Session = Depends(get_session))
             except Exception:
                 consent_link_url = ""
 
-
     for r in reports:
         _coerce_credit_report_nullable_fields(r)
 
@@ -11706,7 +12172,6 @@ async def credit_generate_consent_link(
         set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
         return RedirectResponse("/credito", status_code=303)
 
-
     current_client = _get_client_for_credit(ctx, request, session)
     if not current_client:
         set_flash(request, "Selecione um cliente.")
@@ -11769,7 +12234,8 @@ async def credit_generate_consent_link(
             session.add(consent)
             session.commit()
         except OperationalError:
-            set_flash(request, "Erro ao gravar autorização (tabela não criada no banco). Verifique migrations/permissões do DB.")
+            set_flash(request,
+                      "Erro ao gravar autorização (tabela não criada no banco). Verifique migrations/permissões do DB.")
             return RedirectResponse("/credito", status_code=303)
 
     url = f"{_public_base_url(request)}/consent/aceite/{token}"
@@ -11976,7 +12442,6 @@ async def consent_accept_submit(
 
 
 @app.post("/credito/consultar")
-
 @require_role({"admin", "equipe"})
 async def credit_consult(
         request: Request,
@@ -11992,7 +12457,6 @@ async def credit_consult(
     if not ensure_credit_consent_table():
         set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
         return RedirectResponse("/credito", status_code=303)
-
 
     current_client = _get_client_for_credit(ctx, request, session)
     if not current_client:
@@ -12079,7 +12543,6 @@ async def credit_report_refresh(request: Request, background_tasks: BackgroundTa
         set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
         return RedirectResponse("/credito", status_code=303)
 
-
     report = session.get(CreditReport, int(report_id))
     if not report or report.company_id != ctx.company.id:
         set_flash(request, "Relatório não encontrado.")
@@ -12145,7 +12608,6 @@ async def credit_report_create_deal(request: Request, session: Session = Depends
         set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
         return RedirectResponse("/credito", status_code=303)
 
-
     report = session.get(CreditReport, int(report_id))
     if not report or report.company_id != ctx.company.id:
         set_flash(request, "Relatório não encontrado.")
@@ -12206,7 +12668,6 @@ async def credit_report_generate_tasks(request: Request, session: Session = Depe
     if not ensure_credit_consent_table():
         set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
         return RedirectResponse("/credito", status_code=303)
-
 
     report = session.get(CreditReport, int(report_id))
     if not report or report.company_id != ctx.company.id:
