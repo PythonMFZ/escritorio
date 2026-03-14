@@ -178,6 +178,7 @@ DIRECTDATA_ASYNC = os.getenv("DIRECTDATA_ASYNC", "1") == "1"
 DIRECTDATA_TIMEOUT_S = float(os.getenv("DIRECTDATA_TIMEOUT_S", "30"))
 CREDIT_CONSENT_MAX_DAYS = int(os.getenv("CREDIT_CONSENT_MAX_DAYS", "180"))
 PUBLIC_BASE_URL = (os.getenv("PUBLIC_BASE_URL") or "").rstrip("/")
+PUBLIC_BASE_URL_FORCE = os.getenv("PUBLIC_BASE_URL_FORCE", "0") == "1"
 CREDIT_CONSENT_LINK_TTL_HOURS = int(os.getenv("CREDIT_CONSENT_LINK_TTL_HOURS", "168"))  # 7 dias
 CREDIT_CONSENT_TERM_VERSION = os.getenv("CREDIT_CONSENT_TERM_VERSION", "2026-03-14")
 DIRECTDATA_ASYNC_RESULT_URL = os.getenv("DIRECTDATA_ASYNC_RESULT_URL") or "https://apiv3.directd.com.br/api/Historico/ObterRetornoConsultaAsync"
@@ -248,21 +249,44 @@ def _verify_consent_token(token: str) -> dict[str, Any]:
 
 
 def _request_origin(request: Request) -> str:
+    """Origem pública do request.
+
+    Preferimos o header Host (mais fiel em custom domains). Só caímos em
+    x-forwarded-host quando Host estiver ausente.
+    """
     proto = (request.headers.get("x-forwarded-proto") or request.url.scheme or "https").split(",")[0].strip()
-    host = (request.headers.get("x-forwarded-host") or request.headers.get("host") or request.url.netloc).split(",")[0].strip()
+    host = (request.headers.get("host") or request.headers.get("x-forwarded-host") or request.url.netloc).split(",")[0].strip()
     return f"{proto}://{host}".rstrip("/")
+
+
+def _request_path_prefix(request: Request) -> str:
+    """Prefixo público do caminho (ex.: /staging).
+
+    Alguns proxies publicam o app em subpath e informam isso via X-Forwarded-Prefix.
+    Se não houver header, usamos root_path.
+    """
+    raw = (request.headers.get("x-forwarded-prefix") or "").split(",")[0].strip()
+    if not raw:
+        raw = str(request.scope.get("root_path") or "").strip()
+    raw = raw.strip()
+    if not raw or raw == "/":
+        return ""
+    return "/" + raw.strip("/")
+
 
 
 def _public_base_url(request: Request) -> str:
     """Base público para links.
 
-    - Por padrão, usa o host efetivo do request (considerando X-Forwarded-*), e inclui root_path.
-    - Se PUBLIC_BASE_URL estiver definido, só usa se o host bater com o host atual, a não ser que
-      PUBLIC_BASE_URL_FORCE=1.
+    Regras:
+    - Usa o host efetivo do request (X-Forwarded-Proto/Host) + prefixo (X-Forwarded-Prefix/root_path).
+    - Se PUBLIC_BASE_URL estiver definido:
+        - PUBLIC_BASE_URL_FORCE=1 => sempre usa PUBLIC_BASE_URL
+        - caso contrário, usa PUBLIC_BASE_URL somente quando o host bater com o host atual.
     """
     origin = _request_origin(request)
-    root_path = (request.scope.get("root_path") or "").rstrip("/")
-    request_base = (origin + root_path).rstrip("/")
+    prefix = _request_path_prefix(request).rstrip("/")
+    request_base = (origin + prefix).rstrip("/")
 
     if not PUBLIC_BASE_URL:
         return request_base
@@ -277,9 +301,7 @@ def _public_base_url(request: Request) -> str:
     except Exception:
         pass
 
-    # Evita gerar link quebrado quando PUBLIC_BASE_URL aponta para outro site (ex.: site institucional).
     return request_base
-
 
 
 CONSENT_LINK_NOTE_PREFIX = "CONSENT_LINK_JSON:"
@@ -952,6 +974,20 @@ def init_db() -> None:
         SQLModel.metadata.create_all(engine)
 
 
+
+
+def ensure_credit_consent_table() -> None:
+    """Garante que a tabela CreditConsent existe.
+
+    Em produção (Postgres) o app pode rodar sem Alembic. Criar só esta tabela é
+    idempotente (checkfirst=True) e evita 500 em /credito/consent_link.
+    """
+    try:
+        CreditConsent.__table__.create(engine, checkfirst=True)
+    except Exception:
+        # Se o usuário do DB não tiver permissão de CREATE TABLE, a migração
+        # deve ser feita via Alembic/SQL manual.
+        pass
 def get_session() -> Session:
     with Session(engine) as session:
         yield session
@@ -4960,6 +4996,7 @@ app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 @app.on_event("startup")
 def _startup() -> None:
     init_db()
+    ensure_credit_consent_table()
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 
@@ -5031,6 +5068,9 @@ async def consultoria_new_page(request: Request, session: Session = Depends(get_
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
+    # Garante tabela em ambientes sem Alembic
+    ensure_credit_consent_table()
+
     clients = session.exec(select(Client).where(Client.company_id == ctx.company.id).order_by(Client.created_at)).all()
     active_client_id = get_active_client_id(request, session, ctx)
     current_client = get_client_or_none(session, ctx.company.id, active_client_id)
@@ -5054,6 +5094,9 @@ async def consultoria_edit_project_page(request: Request, session: Session = Dep
                                         project_id: int = 0) -> HTMLResponse:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    ensure_credit_consent_table()
 
     project = session.get(ConsultingProject, int(project_id))
     if not project or project.company_id != ctx.company.id:
@@ -5086,6 +5129,9 @@ async def consultoria_edit_project_action(
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
+    # Garante tabela em ambientes sem Alembic
+    ensure_credit_consent_table()
+
     project = session.get(ConsultingProject, int(project_id))
     if not project or project.company_id != ctx.company.id:
         set_flash(request, "Projeto não encontrado.")
@@ -5116,6 +5162,9 @@ async def consultoria_delete_project(request: Request, session: Session = Depend
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
+    # Garante tabela em ambientes sem Alembic
+    ensure_credit_consent_table()
+
     project = session.get(ConsultingProject, int(project_id))
     if not project or project.company_id != ctx.company.id:
         set_flash(request, "Projeto não encontrado.")
@@ -5143,6 +5192,9 @@ async def consultoria_edit_stage_page(request: Request, session: Session = Depen
                                       stage_id: int = 0) -> HTMLResponse:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    ensure_credit_consent_table()
 
     stage = session.get(ConsultingStage, int(stage_id))
     if not stage:
@@ -5175,6 +5227,9 @@ async def consultoria_edit_stage_action(
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
+    # Garante tabela em ambientes sem Alembic
+    ensure_credit_consent_table()
+
     stage = session.get(ConsultingStage, int(stage_id))
     if not stage:
         set_flash(request, "Etapa não encontrada.")
@@ -5200,6 +5255,9 @@ async def consultoria_delete_stage(request: Request, session: Session = Depends(
                                    stage_id: int = 0) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    ensure_credit_consent_table()
 
     stage = session.get(ConsultingStage, int(stage_id))
     if not stage:
@@ -5227,6 +5285,9 @@ async def consultoria_edit_step_page(request: Request, session: Session = Depend
                                      step_id: int = 0) -> HTMLResponse:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    ensure_credit_consent_table()
 
     step = session.get(ConsultingStep, int(step_id))
     if not step:
@@ -5263,6 +5324,9 @@ async def consultoria_edit_step_action(
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
+    # Garante tabela em ambientes sem Alembic
+    ensure_credit_consent_table()
+
     step = session.get(ConsultingStep, int(step_id))
     if not step:
         set_flash(request, "Sub-etapa não encontrada.")
@@ -5294,6 +5358,9 @@ async def consultoria_delete_step(request: Request, session: Session = Depends(g
                                   step_id: int = 0) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    ensure_credit_consent_table()
 
     step = session.get(ConsultingStep, int(step_id))
     if not step:
@@ -5327,6 +5394,9 @@ async def consultoria_new_action(
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    ensure_credit_consent_table()
 
     client = get_client_or_none(session, ctx.company.id, int(client_id))
     if not client:
@@ -5426,6 +5496,9 @@ async def consultoria_add_stage(
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
+    # Garante tabela em ambientes sem Alembic
+    ensure_credit_consent_table()
+
     project = session.get(ConsultingProject, int(project_id))
     if not project or project.company_id != ctx.company.id:
         set_flash(request, "Projeto não encontrado.")
@@ -5458,6 +5531,9 @@ async def consultoria_add_step(
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    ensure_credit_consent_table()
 
     stage = session.get(ConsultingStage, int(stage_id))
     if not stage:
@@ -5693,6 +5769,9 @@ async def client_switch_page(request: Request, session: Session = Depends(get_se
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
+    # Garante tabela em ambientes sem Alembic
+    ensure_credit_consent_table()
+
     clients = session.exec(select(Client).where(Client.company_id == ctx.company.id).order_by(Client.created_at)).all()
     active_client_id = get_active_client_id(request, session, ctx)
     current_client = get_client_or_none(session, ctx.company.id, active_client_id)
@@ -5720,6 +5799,9 @@ async def client_switch_action(
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
+    # Garante tabela em ambientes sem Alembic
+    ensure_credit_consent_table()
+
     client = get_client_or_none(session, ctx.company.id, int(client_id))
     if not client:
         set_flash(request, "Cliente inválido.")
@@ -5740,6 +5822,9 @@ async def client_switch_action(
 async def members_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    ensure_credit_consent_table()
 
     mems = session.exec(select(Membership).where(Membership.company_id == ctx.company.id)).all()
     rows = []
@@ -5785,6 +5870,9 @@ async def members_add_action(
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    ensure_credit_consent_table()
 
     role = role.strip().lower()
     if role not in {"admin", "equipe", "cliente"}:
@@ -6195,6 +6283,9 @@ async def pending_list(request: Request, session: Session = Depends(get_session)
 async def pending_new_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    ensure_credit_consent_table()
     clients = session.exec(select(Client).where(Client.company_id == ctx.company.id).order_by(Client.created_at)).all()
     current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
     return render(
@@ -6224,6 +6315,9 @@ async def pending_new_action(
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    ensure_credit_consent_table()
 
     client = get_client_or_none(session, ctx.company.id, int(client_id))
     if not client:
@@ -6330,6 +6424,9 @@ async def pending_update_status(
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
+    # Garante tabela em ambientes sem Alembic
+    ensure_credit_consent_table()
+
     item = session.get(PendingItem, int(item_id))
     if not item or item.company_id != ctx.company.id:
         set_flash(request, "Pendência não encontrada.")
@@ -6359,6 +6456,9 @@ async def pending_attach_admin(
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    ensure_credit_consent_table()
 
     item = session.get(PendingItem, int(item_id))
     if not item or item.company_id != ctx.company.id:
@@ -6406,6 +6506,9 @@ async def pending_attach_client(
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    ensure_credit_consent_table()
 
     item = session.get(PendingItem, int(item_id))
     if not item or item.company_id != ctx.company.id:
@@ -6502,6 +6605,9 @@ async def docs_list(request: Request, session: Session = Depends(get_session)) -
 async def docs_new_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    ensure_credit_consent_table()
     clients = session.exec(select(Client).where(Client.company_id == ctx.company.id).order_by(Client.created_at)).all()
     current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
     return render(
@@ -6530,6 +6636,9 @@ async def docs_new_action(
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    ensure_credit_consent_table()
 
     client = get_client_or_none(session, ctx.company.id, int(client_id))
     if not client:
@@ -6632,6 +6741,9 @@ async def docs_update_status(
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
+    # Garante tabela em ambientes sem Alembic
+    ensure_credit_consent_table()
+
     doc = session.get(Document, int(doc_id))
     if not doc or doc.company_id != ctx.company.id:
         set_flash(request, "Documento não encontrado.")
@@ -6662,6 +6774,9 @@ async def docs_attach_admin(
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    ensure_credit_consent_table()
 
     doc = session.get(Document, int(doc_id))
     if not doc or doc.company_id != ctx.company.id:
@@ -6708,6 +6823,9 @@ async def docs_attach_client(
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    ensure_credit_consent_table()
 
     doc = session.get(Document, int(doc_id))
     if not doc or doc.company_id != ctx.company.id:
@@ -6812,6 +6930,9 @@ async def props_list(request: Request, session: Session = Depends(get_session)) 
 async def props_new_staff_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    ensure_credit_consent_table()
     clients = session.exec(select(Client).where(Client.company_id == ctx.company.id).order_by(Client.created_at)).all()
     current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
     return render(
@@ -6842,6 +6963,9 @@ async def props_new_staff_action(
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    ensure_credit_consent_table()
 
     client = get_client_or_none(session, ctx.company.id, int(client_id))
     if not client:
@@ -6903,6 +7027,9 @@ async def props_new_staff_action(
 async def props_new_client_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    ensure_credit_consent_table()
     current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
     return render(
         "props_new_client.html",
@@ -6928,6 +7055,9 @@ async def props_new_client_action(
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    ensure_credit_consent_table()
 
     client_id = ctx.membership.client_id
     if not client_id:
@@ -7045,6 +7175,9 @@ async def props_update_staff(
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
+    # Garante tabela em ambientes sem Alembic
+    ensure_credit_consent_table()
+
     prop = session.get(Proposal, int(prop_id))
     if not prop or prop.company_id != ctx.company.id:
         set_flash(request, "Item não encontrado.")
@@ -7080,6 +7213,9 @@ async def props_delete_staff(request: Request, session: Session = Depends(get_se
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
+    # Garante tabela em ambientes sem Alembic
+    ensure_credit_consent_table()
+
     prop = session.get(Proposal, int(prop_id))
     if not prop or prop.company_id != ctx.company.id:
         set_flash(request, "Proposta não encontrada.")
@@ -7110,6 +7246,9 @@ async def props_attach_staff(
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    ensure_credit_consent_table()
 
     prop = session.get(Proposal, int(prop_id))
     if not prop or prop.company_id != ctx.company.id:
@@ -7150,6 +7289,9 @@ async def props_client_upload(
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    ensure_credit_consent_table()
 
     prop = session.get(Proposal, int(prop_id))
     if not prop or prop.company_id != ctx.company.id:
@@ -7247,6 +7389,9 @@ async def fin_list(request: Request, session: Session = Depends(get_session)) ->
 async def fin_new_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    ensure_credit_consent_table()
     clients = session.exec(select(Client).where(Client.company_id == ctx.company.id).order_by(Client.created_at)).all()
     current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
     return render(
@@ -7277,6 +7422,9 @@ async def fin_new_action(
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    ensure_credit_consent_table()
 
     client = get_client_or_none(session, ctx.company.id, int(client_id))
     if not client:
@@ -7373,6 +7521,9 @@ async def fin_attach(
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    ensure_credit_consent_table()
 
     inv = session.get(FinanceInvoice, int(inv_id))
     if not inv or inv.company_id != ctx.company.id:
@@ -7650,6 +7801,9 @@ async def tasks_new_page(
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
+    # Garante tabela em ambientes sem Alembic
+    ensure_credit_consent_table()
+
     clients = session.exec(select(Client).where(Client.company_id == ctx.company.id).order_by(Client.created_at)).all()
 
     # staff assignees (admin/equipe) + current user always
@@ -7702,6 +7856,9 @@ async def tasks_new_action(
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    ensure_credit_consent_table()
 
     client = get_client_or_none(session, ctx.company.id, int(client_id))
     if not client:
@@ -7895,6 +8052,9 @@ async def tasks_toggle_client(request: Request, session: Session = Depends(get_s
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
+    # Garante tabela em ambientes sem Alembic
+    ensure_credit_consent_table()
+
     task = session.get(Task, int(task_id))
     if not task or not _task_can_view(ctx, task):
         set_flash(request, "Sem permissão.")
@@ -7919,6 +8079,9 @@ async def tasks_set_status(request: Request, session: Session = Depends(get_sess
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
+    # Garante tabela em ambientes sem Alembic
+    ensure_credit_consent_table()
+
     task = session.get(Task, int(task_id))
     if not task or task.company_id != ctx.company.id:
         set_flash(request, "Tarefa não encontrada.")
@@ -7941,6 +8104,9 @@ async def tasks_set_status(request: Request, session: Session = Depends(get_sess
 async def tasks_edit_page(request: Request, session: Session = Depends(get_session), task_id: int = 0) -> HTMLResponse:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    ensure_credit_consent_table()
 
     task = session.get(Task, int(task_id))
     if not task or task.company_id != ctx.company.id:
@@ -7992,6 +8158,9 @@ async def tasks_edit_action(
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
+    # Garante tabela em ambientes sem Alembic
+    ensure_credit_consent_table()
+
     task = session.get(Task, int(task_id))
     if not task or task.company_id != ctx.company.id:
         set_flash(request, "Tarefa não encontrada.")
@@ -8041,6 +8210,9 @@ async def tasks_delete_action(
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
+    # Garante tabela em ambientes sem Alembic
+    ensure_credit_consent_table()
+
     task = session.get(Task, int(task_id))
     if not task or task.company_id != ctx.company.id:
         set_flash(request, "Tarefa não encontrada.")
@@ -8076,6 +8248,9 @@ async def delete_attachment(
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
+    # Garante tabela em ambientes sem Alembic
+    ensure_credit_consent_table()
+
     att = session.get(Attachment, int(attachment_id))
     if not att or att.company_id != ctx.company.id:
         set_flash(request, "Anexo não encontrado.")
@@ -8094,6 +8269,9 @@ async def delete_attachment(
 async def pending_new_client_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    ensure_credit_consent_table()
 
     active_client_id = get_active_client_id(request, session, ctx)
     current_client = get_client_or_none(session, ctx.company.id, active_client_id)
@@ -8122,6 +8300,9 @@ async def pending_new_client_action(
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    ensure_credit_consent_table()
 
     client_id = ctx.membership.client_id or 0
     client = get_client_or_none(session, ctx.company.id, client_id)
@@ -8179,6 +8360,9 @@ async def docs_send_client_page(request: Request, session: Session = Depends(get
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
+    # Garante tabela em ambientes sem Alembic
+    ensure_credit_consent_table()
+
     active_client_id = get_active_client_id(request, session, ctx)
     current_client = get_client_or_none(session, ctx.company.id, active_client_id)
 
@@ -8205,6 +8389,9 @@ async def docs_send_client_action(
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    ensure_credit_consent_table()
 
     client_id = ctx.membership.client_id or 0
     client = get_client_or_none(session, ctx.company.id, client_id)
@@ -8261,6 +8448,9 @@ async def docs_edit_page(request: Request, session: Session = Depends(get_sessio
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
+    # Garante tabela em ambientes sem Alembic
+    ensure_credit_consent_table()
+
     doc = session.get(Document, int(doc_id))
     if not doc or doc.company_id != ctx.company.id:
         return render("error.html", request=request, context={"message": "Documento não encontrado."}, status_code=404)
@@ -8294,6 +8484,9 @@ async def docs_edit_action(
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
+    # Garante tabela em ambientes sem Alembic
+    ensure_credit_consent_table()
+
     doc = session.get(Document, int(doc_id))
     if not doc or doc.company_id != ctx.company.id:
         set_flash(request, "Documento não encontrado.")
@@ -8315,6 +8508,9 @@ async def docs_edit_action(
 async def docs_delete_action(request: Request, session: Session = Depends(get_session), doc_id: int = 0) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    ensure_credit_consent_table()
 
     doc = session.get(Document, int(doc_id))
     if not doc or doc.company_id != ctx.company.id:
@@ -8343,6 +8539,9 @@ async def pending_edit_page(request: Request, session: Session = Depends(get_ses
                             item_id: int = 0) -> HTMLResponse:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    ensure_credit_consent_table()
 
     item = session.get(PendingItem, int(item_id))
     if not item or item.company_id != ctx.company.id:
@@ -8378,6 +8577,9 @@ async def pending_edit_action(
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
+    # Garante tabela em ambientes sem Alembic
+    ensure_credit_consent_table()
+
     item = session.get(PendingItem, int(item_id))
     if not item or item.company_id != ctx.company.id:
         set_flash(request, "Pendência não encontrada.")
@@ -8401,6 +8603,9 @@ async def pending_delete_action(request: Request, session: Session = Depends(get
                                 item_id: int = 0) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    ensure_credit_consent_table()
 
     item = session.get(PendingItem, int(item_id))
     if not item or item.company_id != ctx.company.id:
@@ -8428,6 +8633,9 @@ async def pending_delete_action(request: Request, session: Session = Depends(get
 async def fin_edit_page(request: Request, session: Session = Depends(get_session), inv_id: int = 0) -> HTMLResponse:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    ensure_credit_consent_table()
 
     inv = session.get(FinanceInvoice, int(inv_id))
     if not inv or inv.company_id != ctx.company.id:
@@ -8464,6 +8672,9 @@ async def fin_edit_action(
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
+    # Garante tabela em ambientes sem Alembic
+    ensure_credit_consent_table()
+
     inv = session.get(FinanceInvoice, int(inv_id))
     if not inv or inv.company_id != ctx.company.id:
         set_flash(request, "Lançamento não encontrado.")
@@ -8487,6 +8698,9 @@ async def fin_edit_action(
 async def fin_delete_action(request: Request, session: Session = Depends(get_session), inv_id: int = 0) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    ensure_credit_consent_table()
 
     inv = session.get(FinanceInvoice, int(inv_id))
     if not inv or inv.company_id != ctx.company.id:
@@ -8553,6 +8767,9 @@ async def crm_list(
 ) -> HTMLResponse:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    ensure_credit_consent_table()
 
     clients = session.exec(select(Client).where(Client.company_id == ctx.company.id).order_by(Client.created_at)).all()
     owners = _owner_users_for_company(session, ctx.company.id)
@@ -8633,6 +8850,9 @@ async def crm_new_page(request: Request, session: Session = Depends(get_session)
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
+    # Garante tabela em ambientes sem Alembic
+    ensure_credit_consent_table()
+
     clients = session.exec(select(Client).where(Client.company_id == ctx.company.id).order_by(Client.created_at)).all()
     owners = _owner_users_for_company(session, ctx.company.id)
 
@@ -8683,6 +8903,9 @@ async def crm_new_action(
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    ensure_credit_consent_table()
 
     new_client_name = (new_client_name or "").strip()
     new_client_email = (new_client_email or "").strip()
@@ -8765,6 +8988,9 @@ async def crm_detail(request: Request, session: Session = Depends(get_session), 
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
+    # Garante tabela em ambientes sem Alembic
+    ensure_credit_consent_table()
+
     deal = session.get(BusinessDeal, int(deal_id))
     if not deal or deal.company_id != ctx.company.id:
         return render("error.html", request=request, context={"message": "Negócio não encontrado."}, status_code=404)
@@ -8808,6 +9034,9 @@ async def crm_detail(request: Request, session: Session = Depends(get_session), 
 async def crm_edit_page(request: Request, session: Session = Depends(get_session), deal_id: int = 0) -> HTMLResponse:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    ensure_credit_consent_table()
 
     deal = session.get(BusinessDeal, int(deal_id))
     if not deal or deal.company_id != ctx.company.id:
@@ -8856,6 +9085,9 @@ async def crm_edit_action(
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    ensure_credit_consent_table()
 
     deal = session.get(BusinessDeal, int(deal_id))
     if not deal or deal.company_id != ctx.company.id:
@@ -8917,6 +9149,9 @@ async def crm_update_stage(
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
+    # Garante tabela em ambientes sem Alembic
+    ensure_credit_consent_table()
+
     deal = session.get(BusinessDeal, int(deal_id))
     if not deal or deal.company_id != ctx.company.id:
         set_flash(request, "Negócio não encontrado.")
@@ -8946,6 +9181,9 @@ async def crm_update_next(
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
+    # Garante tabela em ambientes sem Alembic
+    ensure_credit_consent_table()
+
     deal = session.get(BusinessDeal, int(deal_id))
     if not deal or deal.company_id != ctx.company.id:
         set_flash(request, "Negócio não encontrado.")
@@ -8974,6 +9212,9 @@ async def crm_add_note(
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
+    # Garante tabela em ambientes sem Alembic
+    ensure_credit_consent_table()
+
     deal = session.get(BusinessDeal, int(deal_id))
     if not deal or deal.company_id != ctx.company.id:
         set_flash(request, "Negócio não encontrado.")
@@ -8996,6 +9237,9 @@ async def crm_add_note(
 async def crm_create_proposal(request: Request, session: Session = Depends(get_session), deal_id: int = 0) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    ensure_credit_consent_table()
 
     deal = session.get(BusinessDeal, int(deal_id))
     if not deal or deal.company_id != ctx.company.id:
@@ -9038,6 +9282,9 @@ async def crm_create_project(request: Request, session: Session = Depends(get_se
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
+    # Garante tabela em ambientes sem Alembic
+    ensure_credit_consent_table()
+
     deal = session.get(BusinessDeal, int(deal_id))
     if not deal or deal.company_id != ctx.company.id:
         set_flash(request, "Negócio não encontrado.")
@@ -9077,6 +9324,9 @@ async def crm_delete(request: Request, session: Session = Depends(get_session), 
                      confirm: str = Form("")) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    ensure_credit_consent_table()
 
     deal = session.get(BusinessDeal, int(deal_id))
     if not deal or deal.company_id != ctx.company.id:
@@ -9187,6 +9437,9 @@ async def meetings_new_page(request: Request, session: Session = Depends(get_ses
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
+    # Garante tabela em ambientes sem Alembic
+    ensure_credit_consent_table()
+
     clients = session.exec(select(Client).where(Client.company_id == ctx.company.id).order_by(Client.created_at)).all()
     active_client_id = get_active_client_id(request, session, ctx)
     current_client = get_client_or_none(session, ctx.company.id, active_client_id)
@@ -9218,6 +9471,9 @@ async def meetings_new_action(
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    ensure_credit_consent_table()
 
     client = get_client_or_none(session, ctx.company.id, int(client_id))
     if not client:
@@ -9316,6 +9572,9 @@ async def meetings_sync(request: Request, session: Session = Depends(get_session
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
+    # Garante tabela em ambientes sem Alembic
+    ensure_credit_consent_table()
+
     mt = session.get(Meeting, int(meeting_id))
     if not mt or mt.company_id != ctx.company.id:
         set_flash(request, "Reunião não encontrada.")
@@ -9353,6 +9612,9 @@ async def meetings_generate_tasks(
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    ensure_credit_consent_table()
 
     mt = session.get(Meeting, int(meeting_id))
     if not mt or mt.company_id != ctx.company.id:
@@ -10070,6 +10332,9 @@ async def edu_courses(request: Request, session: Session = Depends(get_session),
 async def edu_course_new_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    ensure_credit_consent_table()
     clients = session.exec(select(Client).where(Client.company_id == ctx.company.id).order_by(Client.created_at)).all()
     current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
     return render("edu_course_new.html", request=request,
@@ -10089,6 +10354,9 @@ async def edu_course_new_action(
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    ensure_credit_consent_table()
 
     form = await request.form()
     client_ids = [int(x) for x in form.getlist("client_ids") if str(x).isdigit()]
@@ -10149,6 +10417,9 @@ async def edu_course_add_module(request: Request, session: Session = Depends(get
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
+    # Garante tabela em ambientes sem Alembic
+    ensure_credit_consent_table()
+
     course = session.get(EducationCourse, int(course_id))
     if not course or course.company_id != ctx.company.id:
         set_flash(request, "Curso inválido.")
@@ -10172,6 +10443,9 @@ async def edu_course_edit_page(request: Request, session: Session = Depends(get_
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
+    # Garante tabela em ambientes sem Alembic
+    ensure_credit_consent_table()
+
     course = session.get(EducationCourse, int(course_id))
     if not course or course.company_id != ctx.company.id:
         return render("error.html", request=request, context={"message": "Curso não encontrado."}, status_code=404)
@@ -10194,6 +10468,9 @@ async def edu_course_edit_action(request: Request, session: Session = Depends(ge
                                  is_active: str = Form("")) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    ensure_credit_consent_table()
 
     course = session.get(EducationCourse, int(course_id))
     if not course or course.company_id != ctx.company.id:
@@ -10229,6 +10506,9 @@ async def edu_course_edit_action(request: Request, session: Session = Depends(ge
 async def edu_course_delete(request: Request, session: Session = Depends(get_session), course_id: int = 0) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    ensure_credit_consent_table()
 
     course = session.get(EducationCourse, int(course_id))
     if not course or course.company_id != ctx.company.id:
@@ -10287,6 +10567,9 @@ async def edu_module_add_lesson(request: Request, session: Session = Depends(get
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
+    # Garante tabela em ambientes sem Alembic
+    ensure_credit_consent_table()
+
     module = session.get(EducationModule, int(module_id))
     if not module:
         set_flash(request, "Módulo inválido.")
@@ -10317,6 +10600,9 @@ async def edu_module_edit(request: Request, session: Session = Depends(get_sessi
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
+    # Garante tabela em ambientes sem Alembic
+    ensure_credit_consent_table()
+
     module = session.get(EducationModule, int(module_id))
     if not module:
         set_flash(request, "Módulo não encontrado.")
@@ -10336,6 +10622,9 @@ async def edu_module_edit(request: Request, session: Session = Depends(get_sessi
 async def edu_module_delete(request: Request, session: Session = Depends(get_session), module_id: int = 0) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    ensure_credit_consent_table()
 
     module = session.get(EducationModule, int(module_id))
     if not module:
@@ -10462,6 +10751,9 @@ async def edu_lesson_attach(request: Request, session: Session = Depends(get_ses
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
+    # Garante tabela em ambientes sem Alembic
+    ensure_credit_consent_table()
+
     lesson = session.get(EducationLesson, int(lesson_id))
     if not lesson:
         set_flash(request, "Aula não encontrada.")
@@ -10503,6 +10795,9 @@ async def edu_lesson_edit(request: Request, session: Session = Depends(get_sessi
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
+    # Garante tabela em ambientes sem Alembic
+    ensure_credit_consent_table()
+
     lesson = session.get(EducationLesson, int(lesson_id))
     if not lesson:
         set_flash(request, "Aula não encontrada.")
@@ -10523,6 +10818,9 @@ async def edu_lesson_edit(request: Request, session: Session = Depends(get_sessi
 async def edu_lesson_delete(request: Request, session: Session = Depends(get_session), lesson_id: int = 0) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    ensure_credit_consent_table()
 
     lesson = session.get(EducationLesson, int(lesson_id))
     if not lesson:
@@ -10978,6 +11276,10 @@ async def credit_home(request: Request, session: Session = Depends(get_session))
             set_flash(request, "Selecione um cliente para acessar Crédito.")
 
     consent_link_url = str(request.session.get("consent_link_url") or "")
+    base = _public_base_url(request)
+    # Se o link em sessão está com host antigo (ex.: domínio errado), recalcula.
+    if consent_link_url and not consent_link_url.startswith(base + "/consent/aceite/"):
+        consent_link_url = ""
     if (not consent_link_url) and consent and consent.status == "pendente":
         meta = _unpack_consent_link_note(consent.notes)
         if meta and meta.get("token"):
@@ -11088,12 +11390,19 @@ async def credit_generate_consent_link(
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
+    # Garante tabela em ambientes sem Alembic
+    ensure_credit_consent_table()
+
     current_client = _get_client_for_credit(ctx, request, session)
     if not current_client:
         set_flash(request, "Selecione um cliente.")
         return RedirectResponse("/credito", status_code=303)
 
-    latest = _get_latest_consent(session, company_id=ctx.company.id, client_id=current_client.id)
+    try:
+        latest = _get_latest_consent(session, company_id=ctx.company.id, client_id=current_client.id)
+    except OperationalError:
+        ensure_credit_consent_table()
+        latest = None
     if latest:
         _refresh_consent_status(latest)
         if latest.status == "pendente":
@@ -11137,8 +11446,17 @@ async def credit_generate_consent_link(
         created_at=now,
         updated_at=now,
     )
-    session.add(consent)
-    session.commit()
+    try:
+        session.add(consent)
+        session.commit()
+    except OperationalError as e:
+        ensure_credit_consent_table()
+        try:
+            session.add(consent)
+            session.commit()
+        except OperationalError:
+            set_flash(request, "Erro ao gravar autorização (tabela não criada no banco). Verifique migrations/permissões do DB.")
+            return RedirectResponse("/credito", status_code=303)
 
     url = f"{_public_base_url(request)}/consent/aceite/{token}"
     request.session["consent_link_url"] = url
@@ -11339,6 +11657,9 @@ async def credit_consult(
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
+    # Garante tabela em ambientes sem Alembic
+    ensure_credit_consent_table()
+
     current_client = _get_client_for_credit(ctx, request, session)
     if not current_client:
         set_flash(request, "Selecione um cliente.")
@@ -11419,6 +11740,9 @@ async def credit_report_refresh(request: Request, background_tasks: BackgroundTa
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
+    # Garante tabela em ambientes sem Alembic
+    ensure_credit_consent_table()
+
     report = session.get(CreditReport, int(report_id))
     if not report or report.company_id != ctx.company.id:
         set_flash(request, "Relatório não encontrado.")
@@ -11479,6 +11803,9 @@ async def credit_report_create_deal(request: Request, session: Session = Depends
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
+    # Garante tabela em ambientes sem Alembic
+    ensure_credit_consent_table()
+
     report = session.get(CreditReport, int(report_id))
     if not report or report.company_id != ctx.company.id:
         set_flash(request, "Relatório não encontrado.")
@@ -11534,6 +11861,9 @@ async def credit_report_generate_tasks(request: Request, session: Session = Depe
                                        report_id: int = 0) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    ensure_credit_consent_table()
 
     report = session.get(CreditReport, int(report_id))
     if not report or report.company_id != ctx.company.id:
