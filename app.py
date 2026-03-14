@@ -1339,122 +1339,195 @@ def _contaazul_upsert_person_map(session: Session, *, company_id: int, client: C
 def contaazul_sync_client_job(company_id: int, client_id: int) -> None:
     """Sincroniza boletos/receitas e notas do Conta Azul para o Financeiro do cliente.
 
-    Usa polling (Conta Azul não suporta webhooks no momento)."""
+    Observação importante: o mapeamento do "cliente" no Conta Azul (Pessoa) pode falhar se o
+    documento/e-mail estiver diferente. Neste caso, fazemos fallback por documento (quando possível)
+    para NFS-e e registramos logs (quando CONTA_AZUL_DEBUG=1)."""
+
     if not _contaazul_configured():
         return
+
     with Session(engine) as session:
         if not ensure_contaazul_tables():
+            _ca_log("tables missing; abort")
             return
+
         auth = _contaazul_get_auth(session, company_id)
         if not auth or not auth.refresh_token:
+            _ca_log("not connected; abort")
             return
+
         client = session.get(Client, client_id)
         if not client or client.company_id != company_id:
+            _ca_log(f"client not found or not in company: client_id={client_id}")
             return
 
-        person_id = _contaazul_get_mapped_person_id(session, company_id=company_id,
-                                                    client_id=client.id) or _contaazul_find_person_id(session,
-                                                                                                      company_id=company_id,
-                                                                                                      client=client)
+        doc = _digits_only(client.cnpj)
+        email = (client.finance_email or client.email or "").strip()
+
+        person_id = (
+                _contaazul_get_mapped_person_id(session, company_id=company_id, client_id=client.id)
+                or _contaazul_find_person_id(session, company_id=company_id, client=client)
+        )
         if not person_id:
-            print(f"[contaazul] person not found for client_id={client_id}")
-            return
-        _contaazul_upsert_person_map(session, company_id=company_id, client=client, person_id=person_id)
+            _ca_log(f"person not found for client_id={client_id} doc={doc or '—'} email={email or '—'}")
+        else:
+            _contaazul_upsert_person_map(session, company_id=company_id, client=client, person_id=person_id)
 
         today = utcnow().date()
-        start = today - timedelta(days=max(1, int(CONTA_AZUL_SYNC_DAYS_BACK)))
-        end = today + timedelta(days=max(0, int(CONTA_AZUL_SYNC_DAYS_FORWARD)))
+        start_venc = today - timedelta(days=max(1, int(CONTA_AZUL_SYNC_DAYS_BACK)))
+        end_venc = today + timedelta(days=max(0, int(CONTA_AZUL_SYNC_DAYS_FORWARD)))
 
-        installment_ids: list[str] = []
-        page = 1
-        page_size = 100
-        while len(installment_ids) < CONTA_AZUL_SYNC_MAX_ITEMS:
-            params = [
-                ("pagina", page),
-                ("tamanho_pagina", page_size),
-                ("data_vencimento_de", start.isoformat()),
-                ("data_vencimento_ate", end.isoformat()),
-                ("ids_clientes", person_id),
-            ]
-            payload = _contaazul_get_json(session, company_id,
-                                          "/v1/financeiro/eventos-financeiros/contas-a-receber/buscar", params=params)
-            itens = (payload.get("itens") or []) if isinstance(payload, dict) else []
-            if not itens:
-                break
-            for it in itens:
-                iid = str(it.get("id") or "").strip()
-                if iid:
-                    installment_ids.append(iid)
-                if len(installment_ids) >= CONTA_AZUL_SYNC_MAX_ITEMS:
+        # ----------------------------
+        # Contas a receber / Parcelas
+        # ----------------------------
+        if person_id:
+            installment_ids: list[str] = []
+            page = 1
+            page_size = 100
+            while len(installment_ids) < CONTA_AZUL_SYNC_MAX_ITEMS:
+                params = [
+                    ("pagina", page),
+                    ("tamanho_pagina", page_size),
+                    ("data_vencimento_de", start_venc.isoformat()),
+                    ("data_vencimento_ate", end_venc.isoformat()),
+                    ("ids_clientes", person_id),
+                ]
+                try:
+                    payload = _contaazul_get_json(
+                        session,
+                        company_id,
+                        "/v1/financeiro/eventos-financeiros/contas-a-receber/buscar",
+                        params=params,
+                    )
+                except Exception as e:
+                    _ca_log(f"receivables search failed: {e}")
                     break
-            page += 1
 
-        for iid in installment_ids:
-            try:
-                det = _contaazul_get_json(session, company_id, f"/v1/financeiro/eventos-financeiros/parcelas/{iid}")
-            except Exception as e:
-                print(f"[contaazul] failed installment {iid}: {e}")
-                continue
+                itens = (payload.get("itens") or []) if isinstance(payload, dict) else []
+                if not itens:
+                    break
 
-            if not isinstance(det, dict):
-                continue
+                for it in itens:
+                    iid = str((it or {}).get("id") or "").strip()
+                    if iid:
+                        installment_ids.append(iid)
+                    if len(installment_ids) >= CONTA_AZUL_SYNC_MAX_ITEMS:
+                        break
+                page += 1
 
-            fatura = det.get("fatura") or {}
-            invoice_type = str(fatura.get("tipo_fatura") or "")
-            invoice_number = str(fatura.get("numero") or "")
+            _ca_log(f"receivables: found {len(installment_ids)} parcelas for person_id={person_id}")
 
-            boleto_status = ""
-            payment_url = ""
-            solicitacoes = det.get("solicitacoes_cobrancas") or []
-            if isinstance(solicitacoes, list) and solicitacoes:
-                last = solicitacoes[-1] if isinstance(solicitacoes[-1], dict) else {}
-                boleto_status = str(last.get("status_solicitacao_cobranca") or "")
-                notif = last.get("notificacao_cobranca") or {}
-                body = str(notif.get("corpo") or "")
-                payment_url = _extract_first_url(body)
+            for iid in installment_ids:
+                try:
+                    det = _contaazul_get_json(session, company_id, f"/v1/financeiro/eventos-financeiros/parcelas/{iid}")
+                except Exception as e:
+                    _ca_log(f"failed installment {iid}: {e}")
+                    continue
 
-            rec = session.exec(
-                select(ContaAzulReceivable).where(
-                    ContaAzulReceivable.company_id == company_id, ContaAzulReceivable.installment_id == iid
-                )
-            ).first()
-            if not rec:
-                rec = ContaAzulReceivable(company_id=company_id, client_id=client_id, installment_id=iid)
+                if not isinstance(det, dict):
+                    continue
 
-            rec.client_id = client_id
-            rec.description = str(det.get("descricao") or "")
-            rec.due_date = str(det.get("data_vencimento") or "")
-            rec.status = str(det.get("status") or "")
-            rec.amount_total = float(det.get("valor_total_liquido") or 0.0)
-            rec.amount_open = float(det.get("nao_pago") or 0.0)
-            rec.amount_paid = float(det.get("valor_pago") or 0.0)
-            rec.payment_method = str(det.get("metodo_pagamento") or "")
-            rec.invoice_type = invoice_type
-            rec.invoice_number = invoice_number
-            rec.boleto_status = boleto_status
-            rec.payment_url = payment_url
-            rec.raw_json = json.dumps(det, ensure_ascii=False)
-            rec.updated_at = utcnow()
-            session.add(rec)
-            session.commit()
+                fatura = det.get("fatura") or {}
+                invoice_type = str(fatura.get("tipo_fatura") or "")
+                invoice_number = str(fatura.get("numero") or "")
 
+                boleto_status = ""
+                payment_url = ""
+                solicitacoes = det.get("solicitacoes_cobrancas") or []
+                if isinstance(solicitacoes, list) and solicitacoes:
+                    last = solicitacoes[-1] if isinstance(solicitacoes[-1], dict) else {}
+                    boleto_status = str(last.get("status_solicitacao_cobranca") or "")
+                    notif = last.get("notificacao_cobranca") or {}
+                    body = str(notif.get("corpo") or "")
+                    payment_url = _extract_first_url(body)
+
+                rec = session.exec(
+                    select(ContaAzulReceivable).where(
+                        ContaAzulReceivable.company_id == company_id, ContaAzulReceivable.installment_id == iid
+                    )
+                ).first()
+                if not rec:
+                    rec = ContaAzulReceivable(company_id=company_id, client_id=client_id, installment_id=iid)
+
+                rec.client_id = client_id
+                rec.description = str(det.get("descricao") or "")
+                rec.due_date = str(det.get("data_vencimento") or "")
+                rec.status = str(det.get("status") or "")
+                rec.amount_total = float(det.get("valor_total_liquido") or 0.0)
+                rec.amount_open = float(det.get("nao_pago") or 0.0)
+                rec.amount_paid = float(det.get("valor_pago") or 0.0)
+                rec.payment_method = str(det.get("metodo_pagamento") or "")
+                rec.invoice_type = invoice_type
+                rec.invoice_number = invoice_number
+                rec.boleto_status = boleto_status
+                rec.payment_url = payment_url
+                rec.raw_json = json.dumps(det, ensure_ascii=False)
+                rec.updated_at = utcnow()
+                session.add(rec)
+                session.commit()
+
+        # ----------------------------
+        # Notas fiscais de serviço (NFS-e)
+        # ----------------------------
+        nfse_saved = 0
         nfse_days = max(1, int(CONTA_AZUL_SYNC_DAYS_BACK))
         cursor = today - timedelta(days=nfse_days)
-        while cursor <= today:
+        while cursor <= today and nfse_saved < CONTA_AZUL_SYNC_MAX_ITEMS:
             w_start = cursor
-            w_end = min(today, cursor + timedelta(days=14))
-            params = [
-                ("pagina", 1),
+            w_end = min(today, cursor + timedelta(days=14))  # docs: range máximo 15 dias
+            base_params = [
                 ("tamanho_pagina", 100),
                 ("data_competencia_de", w_start.isoformat()),
                 ("data_competencia_ate", w_end.isoformat()),
-                ("id_cliente", person_id),
             ]
-            payload = _contaazul_get_json(session, company_id, "/v1/notas-fiscais-servico", params=params)
-            itens = (payload.get("itens") or []) if isinstance(payload, dict) else []
-            for it in itens:
-                if not isinstance(it, dict):
-                    continue
+
+            def _fetch_nfse_page(page_no: int, *, use_person: bool) -> list[dict[str, Any]]:
+                params = [("pagina", page_no)] + base_params
+                if use_person and person_id:
+                    params.append(("id_cliente", person_id))
+                payload = _contaazul_get_json(session, company_id, "/v1/notas-fiscais-servico", params=params)
+                return (payload.get("itens") or []) if isinstance(payload, dict) else []
+
+            page = 1
+            window_items: list[dict[str, Any]] = []
+            # primeiro tenta com person_id (se houver)
+            if person_id:
+                while nfse_saved < CONTA_AZUL_SYNC_MAX_ITEMS:
+                    try:
+                        itens = _fetch_nfse_page(page, use_person=True)
+                    except Exception as e:
+                        _ca_log(f"nfse fetch (person) failed {w_start}..{w_end}: {e}")
+                        itens = []
+                    if not itens:
+                        break
+                    window_items.extend([it for it in itens if isinstance(it, dict)])
+                    if len(itens) < 100:
+                        break
+                    page += 1
+
+            # fallback: se veio vazio e temos doc, busca sem filtro e filtra pelo documento_cliente
+            if not window_items and doc:
+                page = 1
+                while nfse_saved < CONTA_AZUL_SYNC_MAX_ITEMS:
+                    try:
+                        itens = _fetch_nfse_page(page, use_person=False)
+                    except Exception as e:
+                        _ca_log(f"nfse fetch (doc fallback) failed {w_start}..{w_end}: {e}")
+                        break
+                    if not itens:
+                        break
+                    for it in itens:
+                        if not isinstance(it, dict):
+                            continue
+                        if _digits_only(str(it.get("documento_cliente") or "")) == doc:
+                            window_items.append(it)
+                    if len(itens) < 100:
+                        break
+                    page += 1
+
+            if window_items:
+                _ca_log(f"nfse window {w_start}..{w_end}: {len(window_items)} itens")
+            for it in window_items:
                 ext_id = str(it.get("id") or "")
                 if not ext_id:
                     continue
@@ -1468,6 +1541,7 @@ def contaazul_sync_client_job(company_id: int, client_id: int) -> None:
                 if not inv:
                     inv = ContaAzulInvoice(company_id=company_id, client_id=client_id, invoice_type="NFSE",
                                            external_id=ext_id)
+
                 inv.client_id = client_id
                 inv.number = str(it.get("numero_nfse") or "")
                 inv.issue_date = str(it.get("data_competencia") or "")
@@ -1477,49 +1551,76 @@ def contaazul_sync_client_job(company_id: int, client_id: int) -> None:
                 inv.updated_at = utcnow()
                 session.add(inv)
                 session.commit()
+                nfse_saved += 1
+                if nfse_saved >= CONTA_AZUL_SYNC_MAX_ITEMS:
+                    break
+
             cursor = w_end + timedelta(days=1)
 
-        doc = _digits_only(client.cnpj)
+        # ----------------------------
+        # Notas fiscais de produto (NF-e)
+        # ----------------------------
+        nfe_saved = 0
         if doc:
             cursor = today - timedelta(days=max(1, int(CONTA_AZUL_SYNC_DAYS_BACK)))
-            while cursor <= today:
+            while cursor <= today and (nfse_saved + nfe_saved) < CONTA_AZUL_SYNC_MAX_ITEMS:
                 w_start = cursor
                 w_end = min(today, cursor + timedelta(days=29))
-                params = {
-                    "data_inicial": w_start.isoformat(),
-                    "data_final": w_end.isoformat(),
-                    "documento_tomador": doc,
-                    "pagina": 1,
-                    "tamanho_pagina": 100,
-                }
-                payload = _contaazul_get_json(session, company_id, "/v1/notas-fiscais", params=params)
-                itens = (payload.get("itens") or []) if isinstance(payload, dict) else []
-                for it in itens:
-                    if not isinstance(it, dict):
-                        continue
-                    chave = str(it.get("chave_acesso") or "")
-                    if not chave:
-                        continue
-                    inv = session.exec(
-                        select(ContaAzulInvoice).where(
-                            ContaAzulInvoice.company_id == company_id,
-                            ContaAzulInvoice.invoice_type == "NFE",
-                            ContaAzulInvoice.external_id == chave,
-                        )
-                    ).first()
-                    if not inv:
-                        inv = ContaAzulInvoice(company_id=company_id, client_id=client_id, invoice_type="NFE",
-                                               external_id=chave)
-                    inv.client_id = client_id
-                    inv.number = str(it.get("numero_nota") or "")
-                    inv.issue_date = str(it.get("data_emissao") or "")
-                    inv.status = str(it.get("status") or "")
-                    inv.amount = 0.0
-                    inv.raw_json = json.dumps(it, ensure_ascii=False)
-                    inv.updated_at = utcnow()
-                    session.add(inv)
-                    session.commit()
+                page = 1
+                while (nfse_saved + nfe_saved) < CONTA_AZUL_SYNC_MAX_ITEMS:
+                    params = {
+                        "data_inicial": w_start.isoformat(),
+                        "data_final": w_end.isoformat(),
+                        "documento_tomador": doc,
+                        "pagina": page,
+                        "tamanho_pagina": 100,
+                    }
+                    try:
+                        payload = _contaazul_get_json(session, company_id, "/v1/notas-fiscais", params=params)
+                    except Exception as e:
+                        _ca_log(f"nfe fetch failed {w_start}..{w_end}: {e}")
+                        break
+
+                    itens = (payload.get("itens") or []) if isinstance(payload, dict) else []
+                    if not itens:
+                        break
+
+                    for it in itens:
+                        if not isinstance(it, dict):
+                            continue
+                        chave = str(it.get("chave_acesso") or it.get("chave") or "").strip()
+                        if not chave:
+                            continue
+                        inv = session.exec(
+                            select(ContaAzulInvoice).where(
+                                ContaAzulInvoice.company_id == company_id,
+                                ContaAzulInvoice.invoice_type == "NFE",
+                                ContaAzulInvoice.external_id == chave,
+                            )
+                        ).first()
+                        if not inv:
+                            inv = ContaAzulInvoice(company_id=company_id, client_id=client_id, invoice_type="NFE",
+                                                   external_id=chave)
+                        inv.client_id = client_id
+                        inv.number = str(it.get("numero_nota") or it.get("numero") or "")
+                        inv.issue_date = str(it.get("data_emissao") or "")
+                        inv.status = str(it.get("status") or "")
+                        inv.amount = 0.0
+                        inv.raw_json = json.dumps(it, ensure_ascii=False)
+                        inv.updated_at = utcnow()
+                        session.add(inv)
+                        session.commit()
+                        nfe_saved += 1
+                        if (nfse_saved + nfe_saved) >= CONTA_AZUL_SYNC_MAX_ITEMS:
+                            break
+
+                    if len(itens) < 100:
+                        break
+                    page += 1
+
                 cursor = w_end + timedelta(days=1)
+
+        _ca_log(f"sync done client_id={client_id}: nfse={nfse_saved} nfe={nfe_saved}")
 
         auth.last_sync_at = utcnow()
         _contaazul_save_auth(session, auth)
@@ -9052,6 +9153,104 @@ async def contaazul_vincular_manual(
 # ----------------------------
 # Financeiro (Notas/Boletos)
 # ----------------------------
+
+
+@app.get("/financeiro/contaazul/test", response_class=JSONResponse)
+@require_role({"admin", "equipe"})
+async def contaazul_test_mapping(request: Request, session: Session = Depends(get_session)) -> JSONResponse:
+    """Diagnóstico rápido do mapeamento e filtros do Conta Azul para o cliente selecionado."""
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    if not ensure_contaazul_tables():
+        return JSONResponse({"ok": False, "error": "contaazul_tables_missing"}, status_code=500)
+
+    if not _contaazul_configured():
+        return JSONResponse({"ok": False, "error": "contaazul_not_configured"}, status_code=400)
+
+    auth = _contaazul_get_auth(session, ctx.company.id)
+    if not auth or not auth.refresh_token:
+        return JSONResponse({"ok": False, "error": "contaazul_not_connected"}, status_code=400)
+
+    current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
+    if not current_client:
+        return JSONResponse({"ok": False, "error": "no_selected_client"}, status_code=400)
+
+    doc = _digits_only(current_client.cnpj)
+    email = (current_client.finance_email or current_client.email or "").strip()
+    mapped = _contaazul_get_mapped_person_id(session, company_id=ctx.company.id, client_id=current_client.id)
+    found = mapped or _contaazul_find_person_id(session, company_id=ctx.company.id, client=current_client)
+
+    today = utcnow().date()
+    w_start = (today - timedelta(days=14)).isoformat()
+    w_end = today.isoformat()
+
+    out: dict[str, Any] = {
+        "ok": True,
+        "client": {"id": current_client.id, "name": current_client.name, "doc": doc, "email": email},
+        "person_id": {"mapped": mapped, "found": found},
+        "range_nfse": {"de": w_start, "ate": w_end},
+        "counts": {},
+        "samples": {},
+    }
+
+    # NFS-e com person_id
+    if found:
+        try:
+            payload = _contaazul_get_json(
+                session,
+                ctx.company.id,
+                "/v1/notas-fiscais-servico",
+                params=[
+                    ("pagina", 1),
+                    ("tamanho_pagina", 10),
+                    ("data_competencia_de", w_start),
+                    ("data_competencia_ate", w_end),
+                    ("id_cliente", found),
+                ],
+            )
+            itens = (payload.get("itens") or []) if isinstance(payload, dict) else []
+            out["counts"]["nfse_by_person"] = len(itens)
+            out["samples"]["nfse_by_person"] = itens[:1]
+        except Exception as e:
+            out["counts"]["nfse_by_person_error"] = str(e)[:300]
+
+    # NFS-e sem filtro (só pra validar se existem notas no período)
+    try:
+        payload = _contaazul_get_json(
+            session,
+            ctx.company.id,
+            "/v1/notas-fiscais-servico",
+            params=[
+                ("pagina", 1),
+                ("tamanho_pagina", 10),
+                ("data_competencia_de", w_start),
+                ("data_competencia_ate", w_end),
+            ],
+        )
+        itens = (payload.get("itens") or []) if isinstance(payload, dict) else []
+        out["counts"]["nfse_any"] = len(itens)
+        out["samples"]["nfse_any"] = itens[:1]
+    except Exception as e:
+        out["counts"]["nfse_any_error"] = str(e)[:300]
+
+    # NF-e por documento
+    if doc:
+        try:
+            payload = _contaazul_get_json(
+                session,
+                ctx.company.id,
+                "/v1/notas-fiscais",
+                params={"data_inicial": w_start, "data_final": w_end, "pagina": 1, "tamanho_pagina": 10,
+                        "documento_tomador": doc},
+            )
+            itens = (payload.get("itens") or []) if isinstance(payload, dict) else []
+            out["counts"]["nfe_by_doc"] = len(itens)
+            out["samples"]["nfe_by_doc"] = itens[:1]
+        except Exception as e:
+            out["counts"]["nfe_by_doc_error"] = str(e)[:300]
+
+    return JSONResponse(out)
 
 
 @app.get("/financeiro", response_class=HTMLResponse)
