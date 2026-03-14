@@ -181,6 +181,16 @@ DIRECTDATA_SCR_URL = os.getenv("DIRECTDATA_SCR_URL") or "https://apiv3.directd.c
 DIRECTDATA_ASYNC = os.getenv("DIRECTDATA_ASYNC", "1") == "1"
 DIRECTDATA_TIMEOUT_S = float(os.getenv("DIRECTDATA_TIMEOUT_S", "30"))
 CREDIT_CONSENT_MAX_DAYS = int(os.getenv("CREDIT_CONSENT_MAX_DAYS", "180"))
+
+CONTA_AZUL_CLIENT_ID = os.getenv("CONTA_AZUL_CLIENT_ID") or ""
+CONTA_AZUL_CLIENT_SECRET = os.getenv("CONTA_AZUL_CLIENT_SECRET") or ""
+CONTA_AZUL_SCOPE = os.getenv("CONTA_AZUL_SCOPE") or "openid profile aws.cognito.signin.user.admin"
+CONTA_AZUL_AUTH_URL = os.getenv("CONTA_AZUL_AUTH_URL") or "https://auth.contaazul.com/login"
+CONTA_AZUL_TOKEN_URL = os.getenv("CONTA_AZUL_TOKEN_URL") or "https://auth.contaazul.com/oauth2/token"
+CONTA_AZUL_API_BASE = os.getenv("CONTA_AZUL_API_BASE") or "https://api-v2.contaazul.com"
+CONTA_AZUL_SYNC_DAYS_BACK = int(os.getenv("CONTA_AZUL_SYNC_DAYS_BACK", "180"))
+CONTA_AZUL_SYNC_DAYS_FORWARD = int(os.getenv("CONTA_AZUL_SYNC_DAYS_FORWARD", "30"))
+CONTA_AZUL_SYNC_MAX_ITEMS = int(os.getenv("CONTA_AZUL_SYNC_MAX_ITEMS", "200"))
 PUBLIC_BASE_URL = (os.getenv("PUBLIC_BASE_URL") or "").rstrip("/")
 PUBLIC_BASE_URL_FORCE = os.getenv("PUBLIC_BASE_URL_FORCE", "0") == "1"
 CREDIT_CONSENT_LINK_TTL_HOURS = int(os.getenv("CREDIT_CONSENT_LINK_TTL_HOURS", "168"))  # 7 dias
@@ -1088,6 +1098,405 @@ def ensure_credit_consent_table() -> bool:
         return False
 
 
+# ----------------------------
+# Integração: Conta Azul (OAuth + Sync)
+# ----------------------------
+
+class ContaAzulAuth(SQLModel, table=True):
+    __table_args__ = (UniqueConstraint("company_id", name="uq_contaazul_company"),)
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    company_id: int = Field(index=True, foreign_key="company.id")
+
+    access_token: str = ""
+    refresh_token: str = ""
+    token_type: str = "Bearer"
+    expires_at: datetime = Field(default_factory=utcnow)
+
+    last_sync_at: Optional[datetime] = None
+    created_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime = Field(default_factory=utcnow)
+
+
+class ContaAzulPersonMap(SQLModel, table=True):
+    __table_args__ = (UniqueConstraint("company_id", "client_id", name="uq_contaazul_personmap"),)
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    company_id: int = Field(index=True, foreign_key="company.id")
+    client_id: int = Field(index=True, foreign_key="client.id")
+
+    contaazul_person_id: str = Field(default="", index=True)
+    documento: str = ""
+    email: str = ""
+
+    created_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime = Field(default_factory=utcnow)
+
+
+class ContaAzulInvoice(SQLModel, table=True):
+    __table_args__ = (UniqueConstraint("company_id", "invoice_type", "external_id", name="uq_contaazul_invoice"),)
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    company_id: int = Field(index=True, foreign_key="company.id")
+    client_id: int = Field(index=True, foreign_key="client.id")
+
+    invoice_type: str = Field(index=True)  # NFE | NFSE
+    external_id: str = Field(index=True)  # chave_acesso (NFE) ou uuid (NFSE)
+    number: str = ""
+    issue_date: str = ""  # ISO string
+    status: str = Field(default="", index=True)
+    amount: float = 0.0
+
+    raw_json: str = ""
+    updated_at: datetime = Field(default_factory=utcnow)
+
+
+class ContaAzulReceivable(SQLModel, table=True):
+    __table_args__ = (UniqueConstraint("company_id", "installment_id", name="uq_contaazul_receivable"),)
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    company_id: int = Field(index=True, foreign_key="company.id")
+    client_id: int = Field(index=True, foreign_key="client.id")
+
+    installment_id: str = Field(index=True)  # uuid
+    description: str = ""
+    due_date: str = ""
+    status: str = Field(default="", index=True)
+
+    amount_total: float = 0.0
+    amount_open: float = 0.0
+    amount_paid: float = 0.0
+
+    payment_method: str = ""
+    invoice_type: str = ""  # NFE | NFSE | ...
+    invoice_number: str = ""
+
+    boleto_status: str = ""
+    payment_url: str = ""
+
+    raw_json: str = ""
+    updated_at: datetime = Field(default_factory=utcnow)
+
+
+def ensure_contaazul_tables() -> bool:
+    try:
+        ContaAzulAuth.__table__.create(engine, checkfirst=True)
+        ContaAzulPersonMap.__table__.create(engine, checkfirst=True)
+        ContaAzulInvoice.__table__.create(engine, checkfirst=True)
+        ContaAzulReceivable.__table__.create(engine, checkfirst=True)
+        return True
+    except Exception as e:
+        try:
+            print(f"[contaazul] failed to ensure tables: {e}")
+        except Exception:
+            pass
+        return False
+
+
+def _contaazul_configured() -> bool:
+    return bool(CONTA_AZUL_CLIENT_ID and CONTA_AZUL_CLIENT_SECRET)
+
+
+def _contaazul_basic_auth_value() -> str:
+    raw = f"{CONTA_AZUL_CLIENT_ID}:{CONTA_AZUL_CLIENT_SECRET}".encode("utf-8")
+    return base64.b64encode(raw).decode("utf-8")
+
+
+def _contaazul_redirect_uri(request: Request) -> str:
+    return _public_base_url(request).rstrip("/") + "/integrations/contaazul/callback"
+
+
+def _extract_first_url(text: str) -> str:
+    if not text:
+        return ""
+    m = re.search(r"(https?://\S+)", text)
+    return (m.group(1).rstrip(").,;") if m else "")
+
+
+def _contaazul_get_auth(session: Session, company_id: int) -> Optional[ContaAzulAuth]:
+    return session.exec(select(ContaAzulAuth).where(ContaAzulAuth.company_id == company_id)).first()
+
+
+def _contaazul_save_auth(session: Session, auth: ContaAzulAuth) -> None:
+    auth.updated_at = utcnow()
+    session.add(auth)
+    session.commit()
+
+
+def _contaazul_refresh(session: Session, auth: ContaAzulAuth) -> ContaAzulAuth:
+    headers = {
+        "Authorization": f"Basic {_contaazul_basic_auth_value()}",
+        "Content-Type": "application/x-www-form-urlencoded",
+    }
+    data = {"grant_type": "refresh_token", "refresh_token": auth.refresh_token}
+    with httpx.Client(timeout=30.0, follow_redirects=True) as client:
+        resp = client.post(CONTA_AZUL_TOKEN_URL, headers=headers, data=data)
+    if resp.status_code >= 400:
+        raise RuntimeError(f"Conta Azul refresh failed: HTTP {resp.status_code} {resp.text[:400]}")
+    payload = resp.json()
+    auth.access_token = str(payload.get("access_token") or "")
+    auth.refresh_token = str(payload.get("refresh_token") or auth.refresh_token)
+    auth.token_type = str(payload.get("token_type") or "Bearer")
+    exp = int(payload.get("expires_in") or 3600)
+    auth.expires_at = utcnow() + timedelta(seconds=max(60, exp))
+    _contaazul_save_auth(session, auth)
+    return auth
+
+
+def _contaazul_bearer_headers(session: Session, company_id: int) -> dict[str, str]:
+    auth = _contaazul_get_auth(session, company_id)
+    if not auth or not auth.access_token or not auth.refresh_token:
+        raise RuntimeError("Conta Azul não conectada.")
+    if utcnow() >= (auth.expires_at - timedelta(seconds=60)):
+        auth = _contaazul_refresh(session, auth)
+    return {"Authorization": f"Bearer {auth.access_token}"}
+
+
+def _contaazul_get_json(session: Session, company_id: int, path: str, params: Any = None) -> Any:
+    base = CONTA_AZUL_API_BASE.rstrip("/")
+    url = base + path
+    headers = _contaazul_bearer_headers(session, company_id)
+    with httpx.Client(timeout=30.0, follow_redirects=True) as client:
+        resp = client.get(url, headers=headers, params=params)
+        if resp.status_code == 401:
+            auth = _contaazul_get_auth(session, company_id)
+            if auth:
+                _contaazul_refresh(session, auth)
+            headers = _contaazul_bearer_headers(session, company_id)
+            resp = client.get(url, headers=headers, params=params)
+    if resp.status_code >= 400:
+        raise RuntimeError(f"Conta Azul API error: GET {path} HTTP {resp.status_code} {resp.text[:400]}")
+    return resp.json()
+
+
+def _contaazul_find_person_id(session: Session, *, company_id: int, client: Client) -> str:
+    doc = _digits_only(client.cnpj)
+    if doc:
+        payload = _contaazul_get_json(
+            session,
+            company_id,
+            "/v1/pessoas",
+            params={"documentos": doc, "tamanho_pagina": 10, "pagina": 1, "tipo_perfil": "Cliente"},
+        )
+        items = (payload.get("items") or []) if isinstance(payload, dict) else []
+        if items:
+            return str(items[0].get("id") or "")
+    email = (client.finance_email or client.email or "").strip()
+    if email:
+        payload = _contaazul_get_json(
+            session,
+            company_id,
+            "/v1/pessoas",
+            params={"emails": email, "tamanho_pagina": 10, "pagina": 1, "tipo_perfil": "Cliente"},
+        )
+        items = (payload.get("items") or []) if isinstance(payload, dict) else []
+        if items:
+            return str(items[0].get("id") or "")
+    return ""
+
+
+def _contaazul_upsert_person_map(session: Session, *, company_id: int, client: Client, person_id: str) -> None:
+    pm = session.exec(
+        select(ContaAzulPersonMap).where(
+            ContaAzulPersonMap.company_id == company_id, ContaAzulPersonMap.client_id == client.id
+        )
+    ).first()
+    if not pm:
+        pm = ContaAzulPersonMap(company_id=company_id, client_id=client.id, contaazul_person_id=person_id)
+    pm.contaazul_person_id = person_id
+    pm.documento = _digits_only(client.cnpj)
+    pm.email = (client.finance_email or client.email or "").strip()
+    pm.updated_at = utcnow()
+    session.add(pm)
+    session.commit()
+
+
+def contaazul_sync_client_job(company_id: int, client_id: int) -> None:
+    """Sincroniza boletos/receitas e notas do Conta Azul para o Financeiro do cliente.
+
+    Usa polling (Conta Azul não suporta webhooks no momento)."""
+    if not _contaazul_configured():
+        return
+    with Session(engine) as session:
+        if not ensure_contaazul_tables():
+            return
+        auth = _contaazul_get_auth(session, company_id)
+        if not auth or not auth.refresh_token:
+            return
+        client = session.get(Client, client_id)
+        if not client or client.company_id != company_id:
+            return
+
+        person_id = _contaazul_find_person_id(session, company_id=company_id, client=client)
+        if not person_id:
+            print(f"[contaazul] person not found for client_id={client_id}")
+            return
+        _contaazul_upsert_person_map(session, company_id=company_id, client=client, person_id=person_id)
+
+        today = utcnow().date()
+        start = today - timedelta(days=max(1, int(CONTA_AZUL_SYNC_DAYS_BACK)))
+        end = today + timedelta(days=max(0, int(CONTA_AZUL_SYNC_DAYS_FORWARD)))
+
+        installment_ids: list[str] = []
+        page = 1
+        page_size = 100
+        while len(installment_ids) < CONTA_AZUL_SYNC_MAX_ITEMS:
+            params = [
+                ("pagina", page),
+                ("tamanho_pagina", page_size),
+                ("data_vencimento_de", start.isoformat()),
+                ("data_vencimento_ate", end.isoformat()),
+                ("ids_clientes", person_id),
+            ]
+            payload = _contaazul_get_json(session, company_id,
+                                          "/v1/financeiro/eventos-financeiros/contas-a-receber/buscar", params=params)
+            itens = (payload.get("itens") or []) if isinstance(payload, dict) else []
+            if not itens:
+                break
+            for it in itens:
+                iid = str(it.get("id") or "").strip()
+                if iid:
+                    installment_ids.append(iid)
+                if len(installment_ids) >= CONTA_AZUL_SYNC_MAX_ITEMS:
+                    break
+            page += 1
+
+        for iid in installment_ids:
+            try:
+                det = _contaazul_get_json(session, company_id, f"/v1/financeiro/eventos-financeiros/parcelas/{iid}")
+            except Exception as e:
+                print(f"[contaazul] failed installment {iid}: {e}")
+                continue
+
+            if not isinstance(det, dict):
+                continue
+
+            fatura = det.get("fatura") or {}
+            invoice_type = str(fatura.get("tipo_fatura") or "")
+            invoice_number = str(fatura.get("numero") or "")
+
+            boleto_status = ""
+            payment_url = ""
+            solicitacoes = det.get("solicitacoes_cobrancas") or []
+            if isinstance(solicitacoes, list) and solicitacoes:
+                last = solicitacoes[-1] if isinstance(solicitacoes[-1], dict) else {}
+                boleto_status = str(last.get("status_solicitacao_cobranca") or "")
+                notif = last.get("notificacao_cobranca") or {}
+                body = str(notif.get("corpo") or "")
+                payment_url = _extract_first_url(body)
+
+            rec = session.exec(
+                select(ContaAzulReceivable).where(
+                    ContaAzulReceivable.company_id == company_id, ContaAzulReceivable.installment_id == iid
+                )
+            ).first()
+            if not rec:
+                rec = ContaAzulReceivable(company_id=company_id, client_id=client_id, installment_id=iid)
+
+            rec.client_id = client_id
+            rec.description = str(det.get("descricao") or "")
+            rec.due_date = str(det.get("data_vencimento") or "")
+            rec.status = str(det.get("status") or "")
+            rec.amount_total = float(det.get("valor_total_liquido") or 0.0)
+            rec.amount_open = float(det.get("nao_pago") or 0.0)
+            rec.amount_paid = float(det.get("valor_pago") or 0.0)
+            rec.payment_method = str(det.get("metodo_pagamento") or "")
+            rec.invoice_type = invoice_type
+            rec.invoice_number = invoice_number
+            rec.boleto_status = boleto_status
+            rec.payment_url = payment_url
+            rec.raw_json = json.dumps(det, ensure_ascii=False)
+            rec.updated_at = utcnow()
+            session.add(rec)
+            session.commit()
+
+        nfse_days = max(1, int(CONTA_AZUL_SYNC_DAYS_BACK))
+        cursor = today - timedelta(days=nfse_days)
+        while cursor <= today:
+            w_start = cursor
+            w_end = min(today, cursor + timedelta(days=14))
+            params = [
+                ("pagina", 1),
+                ("tamanho_pagina", 100),
+                ("data_competencia_de", w_start.isoformat()),
+                ("data_competencia_ate", w_end.isoformat()),
+                ("id_cliente", person_id),
+            ]
+            payload = _contaazul_get_json(session, company_id, "/v1/notas-fiscais-servico", params=params)
+            itens = (payload.get("itens") or []) if isinstance(payload, dict) else []
+            for it in itens:
+                if not isinstance(it, dict):
+                    continue
+                ext_id = str(it.get("id") or "")
+                if not ext_id:
+                    continue
+                inv = session.exec(
+                    select(ContaAzulInvoice).where(
+                        ContaAzulInvoice.company_id == company_id,
+                        ContaAzulInvoice.invoice_type == "NFSE",
+                        ContaAzulInvoice.external_id == ext_id,
+                    )
+                ).first()
+                if not inv:
+                    inv = ContaAzulInvoice(company_id=company_id, client_id=client_id, invoice_type="NFSE",
+                                           external_id=ext_id)
+                inv.client_id = client_id
+                inv.number = str(it.get("numero_nfse") or "")
+                inv.issue_date = str(it.get("data_competencia") or "")
+                inv.status = str(it.get("status") or "")
+                inv.amount = float(it.get("valor_total_nfse") or 0.0)
+                inv.raw_json = json.dumps(it, ensure_ascii=False)
+                inv.updated_at = utcnow()
+                session.add(inv)
+                session.commit()
+            cursor = w_end + timedelta(days=1)
+
+        doc = _digits_only(client.cnpj)
+        if doc:
+            cursor = today - timedelta(days=max(1, int(CONTA_AZUL_SYNC_DAYS_BACK)))
+            while cursor <= today:
+                w_start = cursor
+                w_end = min(today, cursor + timedelta(days=29))
+                params = {
+                    "data_inicial": w_start.isoformat(),
+                    "data_final": w_end.isoformat(),
+                    "documento_tomador": doc,
+                    "pagina": 1,
+                    "tamanho_pagina": 100,
+                }
+                payload = _contaazul_get_json(session, company_id, "/v1/notas-fiscais", params=params)
+                itens = (payload.get("itens") or []) if isinstance(payload, dict) else []
+                for it in itens:
+                    if not isinstance(it, dict):
+                        continue
+                    chave = str(it.get("chave_acesso") or "")
+                    if not chave:
+                        continue
+                    inv = session.exec(
+                        select(ContaAzulInvoice).where(
+                            ContaAzulInvoice.company_id == company_id,
+                            ContaAzulInvoice.invoice_type == "NFE",
+                            ContaAzulInvoice.external_id == chave,
+                        )
+                    ).first()
+                    if not inv:
+                        inv = ContaAzulInvoice(company_id=company_id, client_id=client_id, invoice_type="NFE",
+                                               external_id=chave)
+                    inv.client_id = client_id
+                    inv.number = str(it.get("numero_nota") or "")
+                    inv.issue_date = str(it.get("data_emissao") or "")
+                    inv.status = str(it.get("status") or "")
+                    inv.amount = 0.0
+                    inv.raw_json = json.dumps(it, ensure_ascii=False)
+                    inv.updated_at = utcnow()
+                    session.add(inv)
+                    session.commit()
+                cursor = w_end + timedelta(days=1)
+
+        auth.last_sync_at = utcnow()
+        _contaazul_save_auth(session, auth)
+
+
 pass
 
 
@@ -1697,7 +2106,7 @@ a:hover{ color:#00BFBF; }
       <div class="container py-2">
         <a class="navbar-brand d-flex align-items-center gap-2" href="/">
   <img src="/static/logo.png" alt="Maffezzolli Capital" style="height:44px; width:auto;">
-<span class="fw-semibold" style="color:#0B1E1E; font-size:0.95rem; letter-spacing:0.2px; opacity:0.9;">Bem-vindo</span>
+  <span class="fw-semibold" style="color:#0B1E1E; font-size:0.95rem; letter-spacing:0.2px; opacity:0.9;">Bem-vindo</span>
 </a>
         <div class="ms-auto d-flex gap-2 align-items-center">
           {% if current_user %}
@@ -3029,6 +3438,154 @@ a:hover{ color:#00BFBF; }
 {% endblock %}
 """,
 }
+
+TEMPLATES.update({
+    "contaazul_settings.html": r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <div class="d-flex justify-content-between align-items-start">
+    <div>
+      <h4 class="mb-1">Integração: Conta Azul</h4>
+      <div class="muted">Sincroniza notas e cobranças (boletos) para aparecerem no Financeiro.</div>
+    </div>
+    <a class="btn btn-outline-secondary" href="/financeiro">Voltar</a>
+  </div>
+
+  <hr class="my-3"/>
+
+  {% if not configured %}
+    <div class="alert alert-warning">
+      Configure as variáveis no Render: <code>CONTA_AZUL_CLIENT_ID</code> e <code>CONTA_AZUL_CLIENT_SECRET</code>.
+    </div>
+  {% endif %}
+
+  <div class="mb-2">
+    <div class="muted small">Redirect URI (cadastre no Portal do Desenvolvedor Conta Azul):</div>
+    <div class="mono">{{ redirect_uri }}</div>
+  </div>
+
+  {% if connected %}
+    <div class="alert alert-success">Conectado{% if last_sync %} • Última sync: {{ last_sync }}{% endif %}</div>
+    <form method="post" action="/integrations/contaazul/disconnect" onsubmit="return confirm('Desconectar Conta Azul?');">
+      <button class="btn btn-outline-danger">Desconectar</button>
+    </form>
+  {% else %}
+    <div class="alert alert-info">Ainda não conectado.</div>
+    <a class="btn btn-primary" href="/integrations/contaazul/connect">Conectar Conta Azul</a>
+  {% endif %}
+</div>
+{% endblock %}
+""",
+    "fin_list.html": r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <div class="d-flex justify-content-between align-items-center">
+    <div>
+      <h4 class="mb-0">Financeiro</h4>
+      <div class="muted">Notas/Boletos de honorários (manual) + sincronizado do Conta Azul.</div>
+    </div>
+    <div class="d-flex gap-2">
+      {% if role in ["admin","equipe"] %}
+        <a class="btn btn-outline-secondary" href="/integrations/contaazul">Conta Azul</a>
+        {% if ca_connected %}
+          <form method="post" action="/financeiro/contaazul/sync">
+            <button class="btn btn-outline-primary" type="submit">Sincronizar</button>
+          </form>
+        {% endif %}
+        <a class="btn btn-primary" href="/financeiro/novo">Nova cobrança</a>
+      {% endif %}
+    </div>
+  </div>
+
+  {% if ca_configured and role in ["admin","equipe"] and not ca_connected %}
+    <div class="alert alert-warning mt-3">
+      Conta Azul não conectado. Vá em <a href="/integrations/contaazul">Integrações → Conta Azul</a>.
+    </div>
+  {% endif %}
+
+  {% if ca_last_sync %}
+    <div class="muted small mt-2">Conta Azul: última sync em {{ ca_last_sync }}</div>
+  {% endif %}
+
+  <hr class="my-3"/>
+  <h6 class="mb-2">Cobranças (manual)</h6>
+  {% if items %}
+    <div class="list-group">
+      {% for it in items %}
+        <a class="list-group-item list-group-item-action" href="/financeiro/{{ it.id }}">
+          <div class="d-flex justify-content-between">
+            <div class="fw-semibold">{{ it.title }}</div>
+            <span class="badge text-bg-light border">{{ it.status }}</span>
+          </div>
+          <div class="muted small">
+            {% if role in ["admin","equipe"] %}Cliente: {{ it.client_name }} • {% endif %}
+            Valor: R$ {{ "%.2f"|format(it.amount_brl) }} •
+            {% if it.due_date %}Venc: {{ it.due_date }} • {% endif %}
+            {{ it.created_at }}
+          </div>
+        </a>
+      {% endfor %}
+    </div>
+  {% else %}
+    <div class="muted">Sem cobranças manuais.</div>
+  {% endif %}
+
+  <hr class="my-4"/>
+  <h6 class="mb-2">Conta Azul: Boletos / Contas a receber</h6>
+  {% if ca_receivables %}
+    <div class="list-group">
+      {% for r in ca_receivables %}
+        <div class="list-group-item">
+          <div class="d-flex justify-content-between">
+            <div class="fw-semibold">{{ r.description }}</div>
+            <span class="badge text-bg-light border">{{ r.status }}</span>
+          </div>
+          <div class="muted small mt-1">
+            Valor: R$ {{ "%.2f"|format(r.amount_total) }} • Aberto: R$ {{ "%.2f"|format(r.amount_open) }}
+            {% if r.due_date %} • Venc: {{ r.due_date }}{% endif %}
+            {% if r.invoice_type or r.invoice_number %} • {{ r.invoice_type }} {{ r.invoice_number }}{% endif %}
+            {% if r.boleto_status %} • Boleto: {{ r.boleto_status }}{% endif %}
+          </div>
+          {% if r.payment_url %}
+            <div class="mt-2">
+              <a class="btn btn-sm btn-outline-primary" href="{{ r.payment_url }}" target="_blank" rel="noopener">Abrir link de pagamento</a>
+            </div>
+          {% endif %}
+        </div>
+      {% endfor %}
+    </div>
+  {% else %}
+    <div class="muted">Sem itens sincronizados.</div>
+  {% endif %}
+
+  <hr class="my-4"/>
+  <h6 class="mb-2">Conta Azul: Notas fiscais</h6>
+  {% if ca_invoices %}
+    <div class="list-group">
+      {% for n in ca_invoices %}
+        <div class="list-group-item">
+          <div class="d-flex justify-content-between">
+            <div class="fw-semibold">{{ n.invoice_type }} {{ n.number }}</div>
+            <span class="badge text-bg-light border">{{ n.status }}</span>
+          </div>
+          <div class="muted small mt-1">
+            {% if n.issue_date %}Emissão/Competência: {{ n.issue_date }} • {% endif %}
+            {% if n.amount %}Valor: R$ {{ "%.2f"|format(n.amount) }} • {% endif %}
+            ID: {{ n.external_id }}
+          </div>
+        </div>
+      {% endfor %}
+    </div>
+  {% else %}
+    <div class="muted">Sem notas sincronizadas.</div>
+  {% endif %}
+</div>
+{% endblock %}
+""",
+})
+
 TEMPLATES.update({
     "consult_list.html": r"""
 {% extends "base.html" %}
@@ -8067,6 +8624,157 @@ async def props_client_upload(
 
 
 # ----------------------------
+# Integrações: Conta Azul
+# ----------------------------
+
+@app.get("/integrations/contaazul", response_class=HTMLResponse)
+@require_role({"admin", "equipe"})
+async def contaazul_settings(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    configured = _contaazul_configured()
+    connected = False
+    last_sync = None
+    if ensure_contaazul_tables():
+        auth = _contaazul_get_auth(session, ctx.company.id)
+        connected = bool(auth and auth.refresh_token)
+        last_sync = auth.last_sync_at if auth else None
+
+    return render(
+        "contaazul_settings.html",
+        request=request,
+        context={
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "role": ctx.membership.role,
+            "current_client": get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx)),
+            "configured": configured,
+            "connected": connected,
+            "last_sync": last_sync,
+            "redirect_uri": _contaazul_redirect_uri(request),
+        },
+    )
+
+
+@app.get("/integrations/contaazul/connect")
+@require_role({"admin", "equipe"})
+async def contaazul_connect(request: Request, session: Session = Depends(get_session)) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    if not ensure_contaazul_tables():
+        set_flash(request, "Banco sem migração para Conta Azul (crie as tabelas no Postgres).")
+        return RedirectResponse("/integrations/contaazul", status_code=303)
+
+    if not _contaazul_configured():
+        set_flash(request, "Configure CONTA_AZUL_CLIENT_ID e CONTA_AZUL_CLIENT_SECRET no Render.")
+        return RedirectResponse("/integrations/contaazul", status_code=303)
+
+    state = secrets.token_urlsafe(16)
+    request.session["contaazul_oauth_state"] = state
+
+    redirect_uri = _contaazul_redirect_uri(request)
+    params = {
+        "response_type": "code",
+        "client_id": CONTA_AZUL_CLIENT_ID,
+        "redirect_uri": redirect_uri,
+        "state": state,
+        "scope": CONTA_AZUL_SCOPE,
+    }
+    url = httpx.URL(CONTA_AZUL_AUTH_URL).copy_merge_params(params)
+    return RedirectResponse(str(url), status_code=302)
+
+
+@app.get("/integrations/contaazul/callback")
+@require_role({"admin", "equipe"})
+async def contaazul_callback(request: Request, session: Session = Depends(get_session)) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    code = (request.query_params.get("code") or "").strip()
+    state = (request.query_params.get("state") or "").strip()
+    expected = (request.session.get("contaazul_oauth_state") or "").strip()
+    request.session.pop("contaazul_oauth_state", None)
+
+    if not code or not expected or state != expected:
+        set_flash(request, "Callback inválido (state/code).")
+        return RedirectResponse("/integrations/contaazul", status_code=303)
+
+    redirect_uri = _contaazul_redirect_uri(request)
+    headers = {"Authorization": f"Basic {_contaazul_basic_auth_value()}",
+               "Content-Type": "application/x-www-form-urlencoded"}
+    data = {"code": code, "grant_type": "authorization_code", "redirect_uri": redirect_uri}
+
+    try:
+        with httpx.Client(timeout=30.0, follow_redirects=True) as client:
+            resp = client.post(CONTA_AZUL_TOKEN_URL, headers=headers, data=data)
+        if resp.status_code >= 400:
+            set_flash(request, f"Falha ao conectar Conta Azul (HTTP {resp.status_code}).")
+            return RedirectResponse("/integrations/contaazul", status_code=303)
+        payload = resp.json()
+    except Exception as e:
+        set_flash(request, f"Falha ao conectar Conta Azul: {e}")
+        return RedirectResponse("/integrations/contaazul", status_code=303)
+
+    auth = _contaazul_get_auth(session, ctx.company.id) or ContaAzulAuth(company_id=ctx.company.id)
+    auth.access_token = str(payload.get("access_token") or "")
+    auth.refresh_token = str(payload.get("refresh_token") or "")
+    auth.token_type = str(payload.get("token_type") or "Bearer")
+    exp = int(payload.get("expires_in") or 3600)
+    auth.expires_at = utcnow() + timedelta(seconds=max(60, exp))
+    auth.updated_at = utcnow()
+    session.add(auth)
+    session.commit()
+
+    set_flash(request, "Conta Azul conectada.")
+    return RedirectResponse("/integrations/contaazul", status_code=303)
+
+
+@app.post("/integrations/contaazul/disconnect")
+@require_role({"admin", "equipe"})
+async def contaazul_disconnect(request: Request, session: Session = Depends(get_session)) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+    auth = _contaazul_get_auth(session, ctx.company.id)
+    if auth:
+        session.delete(auth)
+        session.commit()
+    set_flash(request, "Conta Azul desconectada.")
+    return RedirectResponse("/integrations/contaazul", status_code=303)
+
+
+@app.post("/financeiro/contaazul/sync")
+@require_role({"admin", "equipe"})
+async def contaazul_sync_now(request: Request, background_tasks: BackgroundTasks,
+                             session: Session = Depends(get_session)) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    if not ensure_contaazul_tables():
+        set_flash(request, "Banco sem migração para Conta Azul (crie as tabelas no Postgres).")
+        return RedirectResponse("/financeiro", status_code=303)
+
+    if not _contaazul_configured():
+        set_flash(request, "Configure CONTA_AZUL_CLIENT_ID e CONTA_AZUL_CLIENT_SECRET no Render.")
+        return RedirectResponse("/financeiro", status_code=303)
+
+    auth = _contaazul_get_auth(session, ctx.company.id)
+    if not auth or not auth.refresh_token:
+        set_flash(request, "Conecte a Conta Azul antes de sincronizar.")
+        return RedirectResponse("/integrations/contaazul", status_code=303)
+
+    current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
+    if not current_client:
+        set_flash(request, "Selecione um cliente antes de sincronizar.")
+        return RedirectResponse("/financeiro", status_code=303)
+
+    background_tasks.add_task(contaazul_sync_client_job, ctx.company.id, current_client.id)
+    set_flash(request, "Sincronização Conta Azul iniciada. Recarregue em instantes.")
+    return RedirectResponse("/financeiro", status_code=303)
+
+
+# ----------------------------
 # Financeiro (Notas/Boletos)
 # ----------------------------
 
@@ -8085,10 +8793,12 @@ async def fin_list(request: Request, session: Session = Depends(get_session)) ->
         FinanceInvoice.created_at.desc())
     if ctx.membership.role == "cliente":
         invoices = session.exec(q.where(FinanceInvoice.client_id == (ctx.membership.client_id or -1))).all()
+        target_client_id = int(ctx.membership.client_id or 0)
     else:
         if current_client:
             q = q.where(FinanceInvoice.client_id == current_client.id)
         invoices = session.exec(q).all()
+        target_client_id = int(current_client.id if current_client else 0)
 
     out = []
     for it in invoices:
@@ -8105,6 +8815,60 @@ async def fin_list(request: Request, session: Session = Depends(get_session)) ->
             }
         )
 
+    ca_connected = False
+    ca_last_sync = None
+    ca_receivables = []
+    ca_invoices = []
+    if ensure_contaazul_tables():
+        auth = _contaazul_get_auth(session, ctx.company.id)
+        ca_connected = bool(auth and auth.refresh_token)
+        ca_last_sync = auth.last_sync_at if auth else None
+
+        if ca_connected and target_client_id:
+            recs = session.exec(
+                select(ContaAzulReceivable)
+                .where(ContaAzulReceivable.company_id == ctx.company.id,
+                       ContaAzulReceivable.client_id == target_client_id)
+                .order_by(ContaAzulReceivable.due_date.desc())
+                .limit(200)
+            ).all()
+            for r in recs:
+                ca_receivables.append(
+                    {
+                        "installment_id": r.installment_id,
+                        "description": r.description or "—",
+                        "due_date": r.due_date,
+                        "status": r.status,
+                        "amount_total": r.amount_total,
+                        "amount_open": r.amount_open,
+                        "payment_method": r.payment_method,
+                        "invoice_type": r.invoice_type,
+                        "invoice_number": r.invoice_number,
+                        "boleto_status": r.boleto_status,
+                        "payment_url": r.payment_url,
+                        "updated_at": r.updated_at,
+                    }
+                )
+
+            invs = session.exec(
+                select(ContaAzulInvoice)
+                .where(ContaAzulInvoice.company_id == ctx.company.id, ContaAzulInvoice.client_id == target_client_id)
+                .order_by(ContaAzulInvoice.issue_date.desc())
+                .limit(200)
+            ).all()
+            for inv in invs:
+                ca_invoices.append(
+                    {
+                        "invoice_type": inv.invoice_type,
+                        "external_id": inv.external_id,
+                        "number": inv.number,
+                        "issue_date": inv.issue_date,
+                        "status": inv.status,
+                        "amount": inv.amount,
+                        "updated_at": inv.updated_at,
+                    }
+                )
+
     return render(
         "fin_list.html",
         request=request,
@@ -8114,6 +8878,11 @@ async def fin_list(request: Request, session: Session = Depends(get_session)) ->
             "role": ctx.membership.role,
             "current_client": current_client,
             "items": out,
+            "ca_configured": _contaazul_configured(),
+            "ca_connected": ca_connected,
+            "ca_last_sync": ca_last_sync,
+            "ca_receivables": ca_receivables,
+            "ca_invoices": ca_invoices,
         },
     )
 
