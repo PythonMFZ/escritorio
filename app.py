@@ -38,7 +38,8 @@ APP_SECRET_KEY = os.getenv("APP_SECRET_KEY") or secrets.token_urlsafe(32)
 DATABASE_URL = os.getenv("DATABASE_URL") or "sqlite:///./app.db"
 ALLOW_COMPANY_SIGNUP = os.getenv("ALLOW_COMPANY_SIGNUP", "0") == "1"
 
-BOOKINGS_URL = os.getenv("BOOKINGS_URL") or "https://outlook.office.com/book/ReservasMaffezzolliConsultorRafael@mfzcapital.onmicrosoft.com/?ismsaljsauthenabled"
+BOOKINGS_URL = os.getenv(
+    "BOOKINGS_URL") or "https://outlook.office.com/book/ReservasMaffezzolliConsultorRafael@mfzcapital.onmicrosoft.com/?ismsaljsauthenabled"
 
 SERVICE_CATALOG = [
     {
@@ -161,6 +162,7 @@ SERVICE_CATALOG = [
 
 SERVICE_NAME_SET = {x["name"] for x in SERVICE_CATALOG}
 
+
 def sanitize_service_name(name: str) -> str:
     s = (name or "").strip()
     return s if s in SERVICE_NAME_SET else ""
@@ -176,7 +178,6 @@ CREDIT_CONSENT_MAX_DAYS = int(os.getenv("CREDIT_CONSENT_MAX_DAYS", "180"))
 
 NOTION_VERSION = os.getenv("NOTION_VERSION", "2026-03-11")
 NOTION_API_BASE = "https://api.notion.com/v1"
-
 
 UPLOAD_DIR = Path(os.getenv("UPLOAD_DIR") or "./uploads").resolve()
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
@@ -284,8 +285,6 @@ class OnboardingDiagnostic(SQLModel, table=True):
     created_at: datetime = Field(default_factory=utcnow)
 
 
-
-
 # ----------------------------
 # Perfil: Snapshots (evolução)
 # ----------------------------
@@ -324,17 +323,27 @@ class ClientSnapshot(SQLModel, table=True):
 
 PROFILE_SURVEY_V1 = [
     {"id": "dre_mensal", "section": "Processos", "q": "Você fecha DRE mensalmente?", "type": "bool", "w": 10},
-    {"id": "fluxo_90d", "section": "Processos", "q": "Você tem fluxo de caixa projetado (90 dias)?", "type": "bool", "w": 12},
-    {"id": "contas_pagar_receber", "section": "Processos", "q": "Contas a pagar/receber controladas diariamente?", "type": "bool", "w": 10},
-    {"id": "conciliacao_bancaria", "section": "Processos", "q": "Você faz conciliação bancária (mínimo semanal)?", "type": "bool", "w": 8},
-    {"id": "inadimplencia", "section": "Processos", "q": "Você mede inadimplência e tem rotina de cobrança?", "type": "bool", "w": 8},
-    {"id": "dividas_mapa", "section": "Processos", "q": "Você tem mapa de dívidas (saldo, taxa, prazo)?", "type": "bool", "w": 10},
-    {"id": "orcamento", "section": "Processos", "q": "Existe orçamento anual e acompanhamento mensal?", "type": "bool", "w": 10},
-    {"id": "kpis", "section": "Processos", "q": "Você acompanha KPIs (margem, caixa, giro) com frequência?", "type": "bool", "w": 10},
-    {"id": "precificacao", "section": "Processos", "q": "Você revisa precificação/margem periodicamente?", "type": "bool", "w": 8},
+    {"id": "fluxo_90d", "section": "Processos", "q": "Você tem fluxo de caixa projetado (90 dias)?", "type": "bool",
+     "w": 12},
+    {"id": "contas_pagar_receber", "section": "Processos", "q": "Contas a pagar/receber controladas diariamente?",
+     "type": "bool", "w": 10},
+    {"id": "conciliacao_bancaria", "section": "Processos", "q": "Você faz conciliação bancária (mínimo semanal)?",
+     "type": "bool", "w": 8},
+    {"id": "inadimplencia", "section": "Processos", "q": "Você mede inadimplência e tem rotina de cobrança?",
+     "type": "bool", "w": 8},
+    {"id": "dividas_mapa", "section": "Processos", "q": "Você tem mapa de dívidas (saldo, taxa, prazo)?",
+     "type": "bool", "w": 10},
+    {"id": "orcamento", "section": "Processos", "q": "Existe orçamento anual e acompanhamento mensal?", "type": "bool",
+     "w": 10},
+    {"id": "kpis", "section": "Processos", "q": "Você acompanha KPIs (margem, caixa, giro) com frequência?",
+     "type": "bool", "w": 10},
+    {"id": "precificacao", "section": "Processos", "q": "Você revisa precificação/margem periodicamente?",
+     "type": "bool", "w": 8},
     {"id": "tributario_ok", "section": "Risco", "q": "Obrigações fiscais estão em dia?", "type": "bool", "w": 10},
-    {"id": "contratos_ok", "section": "Risco", "q": "Contratos principais estão organizados e acessíveis?", "type": "bool", "w": 6},
-    {"id": "centro_custo", "section": "Risco", "q": "Existe centro de custos / plano de contas estruturado?", "type": "bool", "w": 8},
+    {"id": "contratos_ok", "section": "Risco", "q": "Contratos principais estão organizados e acessíveis?",
+     "type": "bool", "w": 6},
+    {"id": "centro_custo", "section": "Risco", "q": "Existe centro de custos / plano de contas estruturado?",
+     "type": "bool", "w": 8},
 ]
 
 
@@ -373,7 +382,7 @@ def score_financial_simple(revenue_monthly: float, debt_total: float, cash_balan
     cash_ratio = cash / max(1.0, rev)
 
     debt_score = 100.0 * max(0.0, min(1.0, 1.0 / (1.0 + debt_ratio)))  # 0 => 100, 1 => 50
-    cash_score = 100.0 * max(0.0, min(1.0, cash_ratio))                # 1 => 100
+    cash_score = 100.0 * max(0.0, min(1.0, cash_ratio))  # 1 => 100
 
     return round((0.6 * debt_score + 0.4 * cash_score), 2)
 
@@ -389,7 +398,6 @@ def score_total(process_score: float, financial_score: float, nps_score: int) ->
 # ----------------------------
 
 DOC_STATUSES = {"rascunho", "aguardando_cliente", "cliente_enviou", "concluido"}
-
 
 CONSULT_PROJECT_STATUS = {"ativo", "pausado", "concluido"}
 
@@ -480,7 +488,6 @@ class CreditReport(SQLModel, table=True):
     updated_at: datetime = Field(default_factory=utcnow)
 
 
-
 class ConsultingProject(SQLModel, table=True):
     """
     Projeto de consultoria por cliente.
@@ -496,7 +503,7 @@ class ConsultingProject(SQLModel, table=True):
     status: str = Field(default="ativo", index=True)  # ativo|pausado|concluido
 
     start_date: str = ""  # AAAA-MM-DD (MVP simples)
-    due_date: str = ""    # AAAA-MM-DD (MVP simples)
+    due_date: str = ""  # AAAA-MM-DD (MVP simples)
 
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)
@@ -558,11 +565,11 @@ class Task(SQLModel, table=True):
     description: str = ""
 
     status: str = Field(default="nao_iniciada", index=True)  # nao_iniciada | em_andamento | concluida
-    priority: str = Field(default="media", index=True)       # baixa | media | alta
+    priority: str = Field(default="media", index=True)  # baixa | media | alta
     due_date: str = ""  # AAAA-MM-DD
 
     visible_to_client: bool = Field(default=False, index=True)
-    client_action: bool = Field(default=False, index=True)   # cliente pode marcar como concluído?
+    client_action: bool = Field(default=False, index=True)  # cliente pode marcar como concluído?
 
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)
@@ -579,6 +586,7 @@ class TaskComment(SQLModel, table=True):
     message: str
 
     created_at: datetime = Field(default_factory=utcnow)
+
 
 class Document(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
@@ -650,7 +658,6 @@ class ProposalMessage(SQLModel, table=True):
 
 FIN_STATUSES = {"emitido", "pago", "atrasado", "cancelado"}
 
-
 # ----------------------------
 # CRM (Negócios / Funil)
 # ----------------------------
@@ -712,6 +719,7 @@ class BusinessDealNote(SQLModel, table=True):
 
     message: str
     created_at: datetime = Field(default_factory=utcnow)
+
 
 class FinanceInvoice(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
@@ -779,7 +787,6 @@ class Attachment(SQLModel, table=True):
     education_lesson_id: Optional[int] = Field(default=None, index=True, foreign_key="educationlesson.id")
     credit_consent_id: Optional[int] = Field(default=None, index=True, foreign_key="creditconsent.id")
     credit_report_id: Optional[int] = Field(default=None, index=True, foreign_key="creditreport.id")
-
 
     original_filename: str
     stored_filename: str
@@ -891,6 +898,7 @@ def ensure_company_in_session(request: Request, session: Session, user: User) ->
     request.session["company_id"] = first_membership.company_id
     return first_membership.company_id
 
+
 def _clamp01(x: float) -> float:
     return 0.0 if x < 0 else 1.0 if x > 1 else x
 
@@ -926,6 +934,8 @@ def _next_stage_order(session: Session, project_id: int) -> int:
         select(func.max(ConsultingStage.order)).where(ConsultingStage.project_id == project_id)
     ).one()
     return int(max_order or 0) + 1
+
+
 def get_tenant_context(request: Request, session: Session) -> Optional[TenantContext]:
     user = get_current_user(request, session)
     if not user:
@@ -1329,7 +1339,8 @@ async def notion_sync_meeting_from_page(page_id_or_url: str) -> dict[str, Any]:
 
     summary_block_id = children.get("summary_block_id") if isinstance(children.get("summary_block_id"), str) else ""
     notes_block_id = children.get("notes_block_id") if isinstance(children.get("notes_block_id"), str) else ""
-    transcript_block_id = children.get("transcript_block_id") if isinstance(children.get("transcript_block_id"), str) else ""
+    transcript_block_id = children.get("transcript_block_id") if isinstance(children.get("transcript_block_id"),
+                                                                            str) else ""
 
     summary_lines = await _notion_blocks_to_lines(summary_block_id) if summary_block_id else []
     notes_lines = await _notion_blocks_to_lines(notes_block_id) if notes_block_id else []
@@ -1348,6 +1359,7 @@ async def notion_sync_meeting_from_page(page_id_or_url: str) -> dict[str, Any]:
         "action_items_text": action_items,
         "raw": meeting_block,
     }
+
 
 TEMPLATES: dict[str, str] = {
     "base.html": r"""
@@ -2667,7 +2679,7 @@ a:hover{ color:#00BFBF; }
 """,
 }
 TEMPLATES.update({
-"consult_list.html": r"""
+    "consult_list.html": r"""
 {% extends "base.html" %}
 {% block content %}
 <div class="card p-4">
@@ -2711,7 +2723,7 @@ TEMPLATES.update({
 {% endblock %}
 """,
 
-"consult_new.html": r"""
+    "consult_new.html": r"""
 {% extends "base.html" %}
 {% block content %}
 <div class="card p-4">
@@ -2773,7 +2785,7 @@ TEMPLATES.update({
 {% endblock %}
 """,
 
-"consult_detail.html": r"""
+    "consult_detail.html": r"""
 {% extends "base.html" %}
 {% block content %}
 <div class="card p-4">
@@ -2915,7 +2927,7 @@ TEMPLATES.update({
 })
 
 TEMPLATES.update({
-"agenda.html": r"""
+    "agenda.html": r"""
 {% extends "base.html" %}
 {% block content %}
 <div class="card p-4">
@@ -2935,7 +2947,7 @@ TEMPLATES.update({
 {% endblock %}
 """,
 
-"pending_new_client.html": r"""
+    "pending_new_client.html": r"""
 {% extends "base.html" %}
 {% block content %}
 <div class="card p-4">
@@ -2969,7 +2981,7 @@ TEMPLATES.update({
 {% endblock %}
 """,
 
-"docs_send_client.html": r"""
+    "docs_send_client.html": r"""
 {% extends "base.html" %}
 {% block content %}
 <div class="card p-4">
@@ -2999,7 +3011,7 @@ TEMPLATES.update({
 {% endblock %}
 """,
 
-"docs_edit.html": r"""
+    "docs_edit.html": r"""
 {% extends "base.html" %}
 {% block content %}
 <div class="card p-4">
@@ -3044,7 +3056,7 @@ TEMPLATES.update({
 {% endblock %}
 """,
 
-"pending_edit.html": r"""
+    "pending_edit.html": r"""
 {% extends "base.html" %}
 {% block content %}
 <div class="card p-4">
@@ -3093,7 +3105,7 @@ TEMPLATES.update({
 {% endblock %}
 """,
 
-"fin_edit.html": r"""
+    "fin_edit.html": r"""
 {% extends "base.html" %}
 {% block content %}
 <div class="card p-4">
@@ -3147,9 +3159,8 @@ TEMPLATES.update({
 """,
 })
 
-
 TEMPLATES.update({
-"tasks_list.html": r"""
+    "tasks_list.html": r"""
 {% extends "base.html" %}
 {% block content %}
 <div class="card p-4">
@@ -3267,7 +3278,7 @@ TEMPLATES.update({
 {% endblock %}
 """,
 
-"tasks_new.html": r"""
+    "tasks_new.html": r"""
 {% extends "base.html" %}
 {% block content %}
 <div class="card p-4">
@@ -3357,7 +3368,7 @@ TEMPLATES.update({
 {% endblock %}
 """,
 
-"tasks_detail.html": r"""
+    "tasks_detail.html": r"""
 {% extends "base.html" %}
 {% block content %}
 <div class="card p-4">
@@ -3456,7 +3467,7 @@ TEMPLATES.update({
 {% endblock %}
 """,
 
-"tasks_edit.html": r"""
+    "tasks_edit.html": r"""
 {% extends "base.html" %}
 {% block content %}
 <div class="card p-4">
@@ -3548,9 +3559,6 @@ TEMPLATES.update({
 {% endblock %}
 """,
 })
-
-
-
 
 # ----------------------------
 # Perfil: templates (override + novos)
@@ -3820,9 +3828,8 @@ TEMPLATES.update({
 """,
 })
 
-
 TEMPLATES.update({
-"crm_list.html": r"""
+    "crm_list.html": r"""
 {% extends "base.html" %}
 {% block content %}
 <div class="card p-4">
@@ -3909,7 +3916,7 @@ TEMPLATES.update({
 {% endblock %}
 """,
 
-"crm_new.html": r"""
+    "crm_new.html": r"""
 {% extends "base.html" %}
 {% block content %}
 <div class="card p-4">
@@ -4030,7 +4037,7 @@ TEMPLATES.update({
 {% endblock %}
 """,
 
-"crm_detail.html": r"""
+    "crm_detail.html": r"""
 {% extends "base.html" %}
 {% block content %}
 <div class="card p-4">
@@ -4140,7 +4147,7 @@ TEMPLATES.update({
 {% endblock %}
 """,
 
-"crm_edit.html": r"""
+    "crm_edit.html": r"""
 {% extends "base.html" %}
 {% block content %}
 <div class="card p-4">
@@ -4240,7 +4247,6 @@ TEMPLATES.update({
 {% endblock %}
 """,
 })
-
 
 # Extra templates: Meetings
 TEMPLATES.update({
@@ -4468,8 +4474,6 @@ TEMPLATES.update({
 {% endblock %}
 """,
 })
-
-
 
 TEMPLATES.update({
     "credit_list.html": r"""
@@ -4706,11 +4710,11 @@ templates_env = Environment(loader=DictLoader(TEMPLATES), autoescape=True)
 
 
 def render(
-    template_name: str,
-    *,
-    request: Request,
-    context: Optional[dict[str, Any]] = None,
-    status_code: int = 200,
+        template_name: str,
+        *,
+        request: Request,
+        context: Optional[dict[str, Any]] = None,
+        status_code: int = 200,
 ) -> HTMLResponse:
     ctx = context or {}
     ctx.setdefault("title", "App Escritório")
@@ -4733,6 +4737,8 @@ STATIC_DIR = Path(__file__).with_name("static").resolve()
 STATIC_DIR.mkdir(parents=True, exist_ok=True)
 
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+
 @app.on_event("startup")
 def _startup() -> None:
     init_db()
@@ -4750,6 +4756,7 @@ async def login_page(request: Request, session: Session = Depends(get_session)) 
         return RedirectResponse("/", status_code=303)
     return render("login.html", request=request, context={"current_user": None})
 
+
 @app.get("/consultoria", response_class=HTMLResponse)
 @require_login
 async def consultoria_list(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
@@ -4761,7 +4768,8 @@ async def consultoria_list(request: Request, session: Session = Depends(get_sess
     active_client_id = get_active_client_id(request, session, ctx)
     current_client = get_client_or_none(session, ctx.company.id, active_client_id)
 
-    q = select(ConsultingProject).where(ConsultingProject.company_id == ctx.company.id).order_by(ConsultingProject.created_at.desc())
+    q = select(ConsultingProject).where(ConsultingProject.company_id == ctx.company.id).order_by(
+        ConsultingProject.created_at.desc())
 
     if ctx.membership.role == "cliente":
         q = q.where(ConsultingProject.client_id == (ctx.membership.client_id or -1))
@@ -4820,9 +4828,12 @@ async def consultoria_new_page(request: Request, session: Session = Depends(get_
             "clients": clients,
         },
     )
+
+
 @app.get("/consultoria/{project_id}/editar", response_class=HTMLResponse)
 @require_role({"admin", "equipe"})
-async def consultoria_edit_project_page(request: Request, session: Session = Depends(get_session), project_id: int = 0) -> HTMLResponse:
+async def consultoria_edit_project_page(request: Request, session: Session = Depends(get_session),
+                                        project_id: int = 0) -> HTMLResponse:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
@@ -4837,20 +4848,22 @@ async def consultoria_edit_project_page(request: Request, session: Session = Dep
     return render(
         "consult_edit_project.html",
         request=request,
-        context={"current_user": ctx.user, "current_company": ctx.company, "role": ctx.membership.role, "current_client": current_client, "project": project, "client": client},
+        context={"current_user": ctx.user, "current_company": ctx.company, "role": ctx.membership.role,
+                 "current_client": current_client, "project": project, "client": client},
     )
+
 
 @app.post("/consultoria/{project_id}/editar")
 @require_role({"admin", "equipe"})
 async def consultoria_edit_project_action(
-    request: Request,
-    session: Session = Depends(get_session),
-    project_id: int = 0,
-    name: str = Form(...),
-    status: str = Form("ativo"),
-    start_date: str = Form(""),
-    due_date: str = Form(""),
-    description: str = Form(""),
+        request: Request,
+        session: Session = Depends(get_session),
+        project_id: int = 0,
+        name: str = Form(...),
+        status: str = Form("ativo"),
+        start_date: str = Form(""),
+        due_date: str = Form(""),
+        description: str = Form(""),
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
@@ -4877,9 +4890,11 @@ async def consultoria_edit_project_action(
     set_flash(request, "Projeto atualizado.")
     return RedirectResponse(f"/consultoria/{project.id}", status_code=303)
 
+
 @app.post("/consultoria/{project_id}/excluir")
 @require_role({"admin", "equipe"})
-async def consultoria_delete_project(request: Request, session: Session = Depends(get_session), project_id: int = 0) -> Response:
+async def consultoria_delete_project(request: Request, session: Session = Depends(get_session),
+                                     project_id: int = 0) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
@@ -4903,9 +4918,11 @@ async def consultoria_delete_project(request: Request, session: Session = Depend
     set_flash(request, "Projeto excluído.")
     return RedirectResponse("/consultoria", status_code=303)
 
+
 @app.get("/consultoria/stages/{stage_id}/editar", response_class=HTMLResponse)
 @require_role({"admin", "equipe"})
-async def consultoria_edit_stage_page(request: Request, session: Session = Depends(get_session), stage_id: int = 0) -> HTMLResponse:
+async def consultoria_edit_stage_page(request: Request, session: Session = Depends(get_session),
+                                      stage_id: int = 0) -> HTMLResponse:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
@@ -4923,17 +4940,19 @@ async def consultoria_edit_stage_page(request: Request, session: Session = Depen
     return render(
         "consult_edit_stage.html",
         request=request,
-        context={"current_user": ctx.user, "current_company": ctx.company, "role": ctx.membership.role, "current_client": current_client, "stage": stage, "project": project},
+        context={"current_user": ctx.user, "current_company": ctx.company, "role": ctx.membership.role,
+                 "current_client": current_client, "stage": stage, "project": project},
     )
+
 
 @app.post("/consultoria/stages/{stage_id}/editar")
 @require_role({"admin", "equipe"})
 async def consultoria_edit_stage_action(
-    request: Request,
-    session: Session = Depends(get_session),
-    stage_id: int = 0,
-    name: str = Form(...),
-    due_date: str = Form(""),
+        request: Request,
+        session: Session = Depends(get_session),
+        stage_id: int = 0,
+        name: str = Form(...),
+        due_date: str = Form(""),
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
@@ -4956,9 +4975,11 @@ async def consultoria_edit_stage_action(
     set_flash(request, "Etapa atualizada.")
     return RedirectResponse(f"/consultoria/{project.id}", status_code=303)
 
+
 @app.post("/consultoria/stages/{stage_id}/excluir")
 @require_role({"admin", "equipe"})
-async def consultoria_delete_stage(request: Request, session: Session = Depends(get_session), stage_id: int = 0) -> Response:
+async def consultoria_delete_stage(request: Request, session: Session = Depends(get_session),
+                                   stage_id: int = 0) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
@@ -4981,9 +5002,11 @@ async def consultoria_delete_stage(request: Request, session: Session = Depends(
     set_flash(request, "Etapa excluída.")
     return RedirectResponse(f"/consultoria/{project.id}", status_code=303)
 
+
 @app.get("/consultoria/steps/{step_id}/editar", response_class=HTMLResponse)
 @require_role({"admin", "equipe"})
-async def consultoria_edit_step_page(request: Request, session: Session = Depends(get_session), step_id: int = 0) -> HTMLResponse:
+async def consultoria_edit_step_page(request: Request, session: Session = Depends(get_session),
+                                     step_id: int = 0) -> HTMLResponse:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
@@ -5002,20 +5025,22 @@ async def consultoria_edit_step_page(request: Request, session: Session = Depend
     return render(
         "consult_edit_step.html",
         request=request,
-        context={"current_user": ctx.user, "current_company": ctx.company, "role": ctx.membership.role, "current_client": current_client, "step": step, "project": project},
+        context={"current_user": ctx.user, "current_company": ctx.company, "role": ctx.membership.role,
+                 "current_client": current_client, "step": step, "project": project},
     )
+
 
 @app.post("/consultoria/steps/{step_id}/editar")
 @require_role({"admin", "equipe"})
 async def consultoria_edit_step_action(
-    request: Request,
-    session: Session = Depends(get_session),
-    step_id: int = 0,
-    title: str = Form(...),
-    description: str = Form(""),
-    due_date: str = Form(""),
-    weight: float = Form(1.0),
-    client_action: str = Form(""),
+        request: Request,
+        session: Session = Depends(get_session),
+        step_id: int = 0,
+        title: str = Form(...),
+        description: str = Form(""),
+        due_date: str = Form(""),
+        weight: float = Form(1.0),
+        client_action: str = Form(""),
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
@@ -5044,9 +5069,11 @@ async def consultoria_edit_step_action(
     set_flash(request, "Sub-etapa atualizada.")
     return RedirectResponse(f"/consultoria/{project.id}", status_code=303)
 
+
 @app.post("/consultoria/steps/{step_id}/excluir")
 @require_role({"admin", "equipe"})
-async def consultoria_delete_step(request: Request, session: Session = Depends(get_session), step_id: int = 0) -> Response:
+async def consultoria_delete_step(request: Request, session: Session = Depends(get_session),
+                                  step_id: int = 0) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
@@ -5066,17 +5093,19 @@ async def consultoria_delete_step(request: Request, session: Session = Depends(g
 
     set_flash(request, "Sub-etapa excluída.")
     return RedirectResponse(f"/consultoria/{project.id}", status_code=303)
+
+
 @app.post("/consultoria/novo")
 @require_role({"admin", "equipe"})
 async def consultoria_new_action(
-    request: Request,
-    session: Session = Depends(get_session),
-    client_id: int = Form(...),
-    name: str = Form(...),
-    description: str = Form(""),
-    status: str = Form("ativo"),
-    start_date: str = Form(""),
-    due_date: str = Form(""),
+        request: Request,
+        session: Session = Depends(get_session),
+        client_id: int = Form(...),
+        name: str = Form(...),
+        description: str = Form(""),
+        status: str = Form("ativo"),
+        start_date: str = Form(""),
+        due_date: str = Form(""),
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
@@ -5111,7 +5140,8 @@ async def consultoria_new_action(
 
 @app.get("/consultoria/{project_id}", response_class=HTMLResponse)
 @require_login
-async def consultoria_detail(request: Request, session: Session = Depends(get_session), project_id: int = 0) -> HTMLResponse:
+async def consultoria_detail(request: Request, session: Session = Depends(get_session),
+                             project_id: int = 0) -> HTMLResponse:
     ctx = get_tenant_context(request, session)
     if not ctx:
         request.session.clear()
@@ -5142,7 +5172,8 @@ async def consultoria_detail(request: Request, session: Session = Depends(get_se
 
     stage_view = []
     for s in stages:
-        stage_view.append({"id": s.id, "name": s.name, "order": s.order, "due_date": s.due_date, "steps": steps_by_stage.get(s.id, [])})
+        stage_view.append({"id": s.id, "name": s.name, "order": s.order, "due_date": s.due_date,
+                           "steps": steps_by_stage.get(s.id, [])})
 
     progress_pct = int(round(compute_project_progress(session, project.id) * 100))
 
@@ -5168,11 +5199,11 @@ async def consultoria_detail(request: Request, session: Session = Depends(get_se
 @app.post("/consultoria/{project_id}/stages")
 @require_role({"admin", "equipe"})
 async def consultoria_add_stage(
-    request: Request,
-    session: Session = Depends(get_session),
-    project_id: int = 0,
-    name: str = Form(...),
-    due_date: str = Form(""),
+        request: Request,
+        session: Session = Depends(get_session),
+        project_id: int = 0,
+        name: str = Form(...),
+        due_date: str = Form(""),
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
@@ -5198,14 +5229,14 @@ async def consultoria_add_stage(
 @app.post("/consultoria/stages/{stage_id}/steps")
 @require_role({"admin", "equipe"})
 async def consultoria_add_step(
-    request: Request,
-    session: Session = Depends(get_session),
-    stage_id: int = 0,
-    title: str = Form(...),
-    description: str = Form(""),
-    due_date: str = Form(""),
-    weight: float = Form(1.0),
-    client_action: str = Form(""),
+        request: Request,
+        session: Session = Depends(get_session),
+        stage_id: int = 0,
+        title: str = Form(...),
+        description: str = Form(""),
+        due_date: str = Form(""),
+        weight: float = Form(1.0),
+        client_action: str = Form(""),
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
@@ -5239,9 +5270,9 @@ async def consultoria_add_step(
 @app.post("/consultoria/steps/{step_id}/toggle")
 @require_login
 async def consultoria_toggle_step(
-    request: Request,
-    session: Session = Depends(get_session),
-    step_id: int = 0,
+        request: Request,
+        session: Session = Depends(get_session),
+        step_id: int = 0,
 ) -> Response:
     ctx = get_tenant_context(request, session)
     if not ctx:
@@ -5280,12 +5311,14 @@ async def consultoria_toggle_step(
     session.commit()
 
     return RedirectResponse(f"/consultoria/{project.id}", status_code=303)
+
+
 @app.post("/login")
 async def login_action(
-    request: Request,
-    session: Session = Depends(get_session),
-    email: str = Form(...),
-    password: str = Form(...),
+        request: Request,
+        session: Session = Depends(get_session),
+        email: str = Form(...),
+        password: str = Form(...),
 ) -> Response:
     user = session.exec(select(User).where(User.email == email.strip().lower())).first()
     if not user or not verify_password(password, user.password_hash):
@@ -5310,17 +5343,17 @@ async def signup_page(request: Request, session: Session = Depends(get_session))
 
 @app.post("/signup")
 async def signup_action(
-    request: Request,
-    session: Session = Depends(get_session),
-    name: str = Form(...),
-    company_name: str = Form(...),
-    email: str = Form(...),
-    password: str = Form(...),
-    goal: str = Form(...),
-    revenue: str = Form(...),
-    employees: int = Form(...),
-    pain: str = Form(...),
-    notes: str = Form(""),
+        request: Request,
+        session: Session = Depends(get_session),
+        name: str = Form(...),
+        company_name: str = Form(...),
+        email: str = Form(...),
+        password: str = Form(...),
+        goal: str = Form(...),
+        revenue: str = Form(...),
+        employees: int = Form(...),
+        pain: str = Form(...),
+        notes: str = Form(""),
 ) -> Response:
     if len(password) < 8:
         set_flash(request, "Senha muito curta (mínimo 8).")
@@ -5375,7 +5408,6 @@ async def signup_action(
 async def logout(request: Request) -> Response:
     request.session.clear()
     return RedirectResponse("/login", status_code=303)
-
 
 
 # ----------------------------
@@ -5463,9 +5495,9 @@ async def client_switch_page(request: Request, session: Session = Depends(get_se
 @app.post("/client/switch")
 @require_role({"admin", "equipe"})
 async def client_switch_action(
-    request: Request,
-    session: Session = Depends(get_session),
-    client_id: int = Form(...),
+        request: Request,
+        session: Session = Depends(get_session),
+        client_id: int = Form(...),
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
@@ -5525,13 +5557,13 @@ async def members_page(request: Request, session: Session = Depends(get_session)
 @app.post("/admin/members")
 @require_role({"admin", "equipe"})
 async def members_add_action(
-    request: Request,
-    session: Session = Depends(get_session),
-    name: str = Form(...),
-    email: str = Form(...),
-    password: str = Form(...),
-    role: str = Form(...),
-    client_name: str = Form(""),
+        request: Request,
+        session: Session = Depends(get_session),
+        name: str = Form(...),
+        email: str = Form(...),
+        password: str = Form(...),
+        role: str = Form(...),
+        client_name: str = Form(""),
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
@@ -5612,18 +5644,18 @@ async def empresa_page(request: Request, session: Session = Depends(get_session)
 @app.post("/empresa")
 @require_login
 async def empresa_save(
-    request: Request,
-    session: Session = Depends(get_session),
-    name: str = Form(...),
-    cnpj: str = Form(""),
-    email: str = Form(""),
-    phone: str = Form(""),
-    finance_email: str = Form(""),
-    address: str = Form(""),
-    city: str = Form(""),
-    state: str = Form(""),
-    zip_code: str = Form(""),
-    notes: str = Form(""),
+        request: Request,
+        session: Session = Depends(get_session),
+        name: str = Form(...),
+        cnpj: str = Form(""),
+        email: str = Form(""),
+        phone: str = Form(""),
+        finance_email: str = Form(""),
+        address: str = Form(""),
+        city: str = Form(""),
+        state: str = Form(""),
+        zip_code: str = Form(""),
+        notes: str = Form(""),
 ) -> Response:
     ctx = get_tenant_context(request, session)
     if not ctx:
@@ -5699,15 +5731,16 @@ async def perfil_page(request: Request, session: Session = Depends(get_session))
         },
     )
 
+
 @app.post("/perfil")
 @require_login
 async def perfil_save(
-    request: Request,
-    session: Session = Depends(get_session),
-    revenue_monthly_brl: float = Form(0.0),
-    debt_total_brl: float = Form(0.0),
-    cash_balance_brl: float = Form(0.0),
-    employees_count: int = Form(0),
+        request: Request,
+        session: Session = Depends(get_session),
+        revenue_monthly_brl: float = Form(0.0),
+        debt_total_brl: float = Form(0.0),
+        cash_balance_brl: float = Form(0.0),
+        employees_count: int = Form(0),
 ) -> Response:
     ctx = get_tenant_context(request, session)
     if not ctx:
@@ -5734,8 +5767,6 @@ async def perfil_save(
 
     set_flash(request, "Indicadores atualizados.")
     return RedirectResponse("/perfil", status_code=303)
-
-
 
 
 # ----------------------------
@@ -5775,14 +5806,14 @@ async def perfil_snapshot_new_page(request: Request, session: Session = Depends(
 @app.post("/perfil/avaliacao/nova")
 @require_login
 async def perfil_snapshot_new_action(
-    request: Request,
-    session: Session = Depends(get_session),
-    revenue_monthly_brl: float = Form(0.0),
-    debt_total_brl: float = Form(0.0),
-    cash_balance_brl: float = Form(0.0),
-    employees_count: int = Form(0),
-    nps_score: int = Form(0),
-    notes: str = Form(""),
+        request: Request,
+        session: Session = Depends(get_session),
+        revenue_monthly_brl: float = Form(0.0),
+        debt_total_brl: float = Form(0.0),
+        cash_balance_brl: float = Form(0.0),
+        employees_count: int = Form(0),
+        nps_score: int = Form(0),
+        notes: str = Form(""),
 ) -> Response:
     ctx = get_tenant_context(request, session)
     if not ctx:
@@ -5840,7 +5871,8 @@ async def perfil_snapshot_new_action(
 
 @app.get("/perfil/avaliacao/{snapshot_id}", response_class=HTMLResponse)
 @require_login
-async def perfil_snapshot_detail(request: Request, session: Session = Depends(get_session), snapshot_id: int = 0) -> HTMLResponse:
+async def perfil_snapshot_detail(request: Request, session: Session = Depends(get_session),
+                                 snapshot_id: int = 0) -> HTMLResponse:
     ctx = get_tenant_context(request, session)
     if not ctx:
         request.session.clear()
@@ -5851,7 +5883,8 @@ async def perfil_snapshot_detail(request: Request, session: Session = Depends(ge
         return render(
             "error.html",
             request=request,
-            context={"current_user": ctx.user, "current_company": ctx.company, "role": ctx.membership.role, "current_client": None, "message": "Avaliação não encontrada."},
+            context={"current_user": ctx.user, "current_company": ctx.company, "role": ctx.membership.role,
+                     "current_client": None, "message": "Avaliação não encontrada."},
             status_code=404,
         )
 
@@ -5859,7 +5892,8 @@ async def perfil_snapshot_detail(request: Request, session: Session = Depends(ge
         return render(
             "error.html",
             request=request,
-            context={"current_user": ctx.user, "current_company": ctx.company, "role": ctx.membership.role, "current_client": None, "message": "Sem permissão."},
+            context={"current_user": ctx.user, "current_company": ctx.company, "role": ctx.membership.role,
+                     "current_client": None, "message": "Sem permissão."},
             status_code=403,
         )
 
@@ -5886,6 +5920,7 @@ async def perfil_snapshot_detail(request: Request, session: Session = Depends(ge
             "answers": answers,
         },
     )
+
 
 # ----------------------------
 # Pendências
@@ -5960,14 +5995,14 @@ async def pending_new_page(request: Request, session: Session = Depends(get_sess
 @app.post("/pendencias/cliente/novo")
 @require_role({"admin", "equipe"})
 async def pending_new_action(
-    request: Request,
-    session: Session = Depends(get_session),
-    client_id: int = Form(...),
-    title: str = Form(...),
-    description: str = Form(""),
-    status: str = Form("aberto"),
-    due_date: str = Form(""),
-    file: UploadFile | None = File(default=None),
+        request: Request,
+        session: Session = Depends(get_session),
+        client_id: int = Form(...),
+        title: str = Form(...),
+        description: str = Form(""),
+        status: str = Form("aberto"),
+        due_date: str = Form(""),
+        file: UploadFile | None = File(default=None),
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
@@ -6041,7 +6076,8 @@ async def pending_detail(request: Request, session: Session = Depends(get_sessio
     ).all()
 
     msgs = session.exec(
-        select(PendingMessage).where(PendingMessage.pending_item_id == item.id).order_by(PendingMessage.created_at.desc())
+        select(PendingMessage).where(PendingMessage.pending_item_id == item.id).order_by(
+            PendingMessage.created_at.desc())
     ).all()
     messages = []
     for m in msgs:
@@ -6068,10 +6104,10 @@ async def pending_detail(request: Request, session: Session = Depends(get_sessio
 @app.post("/pendencias/{item_id}/status")
 @require_role({"admin", "equipe"})
 async def pending_update_status(
-    request: Request,
-    session: Session = Depends(get_session),
-    item_id: int = 0,
-    status: str = Form(...),
+        request: Request,
+        session: Session = Depends(get_session),
+        item_id: int = 0,
+        status: str = Form(...),
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
@@ -6097,11 +6133,11 @@ async def pending_update_status(
 @app.post("/pendencias/{item_id}/anexar")
 @require_role({"admin", "equipe"})
 async def pending_attach_admin(
-    request: Request,
-    session: Session = Depends(get_session),
-    item_id: int = 0,
-    message: str = Form(""),
-    file: UploadFile = File(...),
+        request: Request,
+        session: Session = Depends(get_session),
+        item_id: int = 0,
+        message: str = Form(""),
+        file: UploadFile = File(...),
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
@@ -6143,12 +6179,12 @@ async def pending_attach_admin(
 @app.post("/pendencias/{item_id}/cliente-upload")
 @require_role({"cliente"})
 async def pending_attach_client(
-    request: Request,
-    session: Session = Depends(get_session),
-    item_id: int = 0,
-    message: str = Form(""),
-    mark_done: str = Form(""),
-    file: UploadFile | None = File(default=None),
+        request: Request,
+        session: Session = Depends(get_session),
+        item_id: int = 0,
+        message: str = Form(""),
+        mark_done: str = Form(""),
+        file: UploadFile | None = File(default=None),
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
@@ -6226,7 +6262,8 @@ async def docs_list(request: Request, session: Session = Depends(get_session)) -
     for d in docs:
         c = session.get(Client, d.client_id)
         out.append(
-            {"id": d.id, "title": d.title, "status": d.status, "created_at": d.created_at, "client_name": c.name if c else "—"}
+            {"id": d.id, "title": d.title, "status": d.status, "created_at": d.created_at,
+             "client_name": c.name if c else "—"}
         )
 
     return render(
@@ -6265,13 +6302,13 @@ async def docs_new_page(request: Request, session: Session = Depends(get_session
 @app.post("/documentos/novo")
 @require_role({"admin", "equipe"})
 async def docs_new_action(
-    request: Request,
-    session: Session = Depends(get_session),
-    client_id: int = Form(...),
-    title: str = Form(...),
-    content: str = Form(...),
-    status: str = Form("rascunho"),
-    file: UploadFile | None = File(default=None),
+        request: Request,
+        session: Session = Depends(get_session),
+        client_id: int = Form(...),
+        title: str = Form(...),
+        content: str = Form(...),
+        status: str = Form("rascunho"),
+        file: UploadFile | None = File(default=None),
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
@@ -6372,7 +6409,7 @@ async def docs_detail(request: Request, session: Session = Depends(get_session),
 @app.post("/documentos/{doc_id}/status")
 @require_role({"admin", "equipe"})
 async def docs_update_status(
-    request: Request, session: Session = Depends(get_session), doc_id: int = 0, status: str = Form(...)
+        request: Request, session: Session = Depends(get_session), doc_id: int = 0, status: str = Form(...)
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
@@ -6399,11 +6436,11 @@ async def docs_update_status(
 @app.post("/documentos/{doc_id}/anexar")
 @require_role({"admin", "equipe"})
 async def docs_attach_admin(
-    request: Request,
-    session: Session = Depends(get_session),
-    doc_id: int = 0,
-    message: str = Form(""),
-    file: UploadFile = File(...),
+        request: Request,
+        session: Session = Depends(get_session),
+        doc_id: int = 0,
+        message: str = Form(""),
+        file: UploadFile = File(...),
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
@@ -6445,11 +6482,11 @@ async def docs_attach_admin(
 @app.post("/documentos/{doc_id}/cliente-upload")
 @require_role({"cliente"})
 async def docs_attach_client(
-    request: Request,
-    session: Session = Depends(get_session),
-    doc_id: int = 0,
-    message: str = Form(""),
-    file: UploadFile = File(...),
+        request: Request,
+        session: Session = Depends(get_session),
+        doc_id: int = 0,
+        message: str = Form(""),
+        file: UploadFile = File(...),
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
@@ -6575,15 +6612,15 @@ async def props_new_staff_page(request: Request, session: Session = Depends(get_
 @app.post("/propostas/nova")
 @require_role({"admin", "equipe"})
 async def props_new_staff_action(
-    request: Request,
-    session: Session = Depends(get_session),
-    client_id: int = Form(...),
-    title: str = Form(...),
-    description: str = Form(""),
-    service_name: str = Form(""),
-    value_brl: float = Form(0.0),
-    status: str = Form("rascunho"),
-    file: UploadFile | None = File(default=None),
+        request: Request,
+        session: Session = Depends(get_session),
+        client_id: int = Form(...),
+        title: str = Form(...),
+        description: str = Form(""),
+        service_name: str = Form(""),
+        value_brl: float = Form(0.0),
+        status: str = Form("rascunho"),
+        file: UploadFile | None = File(default=None),
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
@@ -6664,12 +6701,12 @@ async def props_new_client_page(request: Request, session: Session = Depends(get
 @app.post("/propostas/solicitacao")
 @require_role({"cliente"})
 async def props_new_client_action(
-    request: Request,
-    session: Session = Depends(get_session),
-    title: str = Form(...),
-    service_name: str = Form(""),
-    description: str = Form(...),
-    file: UploadFile | None = File(default=None),
+        request: Request,
+        session: Session = Depends(get_session),
+        title: str = Form(...),
+        service_name: str = Form(""),
+        description: str = Form(...),
+        file: UploadFile | None = File(default=None),
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
@@ -6748,7 +6785,8 @@ async def props_detail(request: Request, session: Session = Depends(get_session)
     ).all()
 
     msgs = session.exec(
-        select(ProposalMessage).where(ProposalMessage.proposal_id == prop.id).order_by(ProposalMessage.created_at.desc())
+        select(ProposalMessage).where(ProposalMessage.proposal_id == prop.id).order_by(
+            ProposalMessage.created_at.desc())
     ).all()
     messages = []
     for m in msgs:
@@ -6777,14 +6815,14 @@ async def props_detail(request: Request, session: Session = Depends(get_session)
 @app.post("/propostas/{prop_id}/atualizar")
 @require_role({"admin", "equipe"})
 async def props_update_staff(
-    request: Request,
-    session: Session = Depends(get_session),
-    prop_id: int = 0,
-    kind: str = Form(...),
-    status: str = Form(...),
-    service_name: str = Form(""),
-    value_brl: float = Form(0.0),
-    message: str = Form(""),
+        request: Request,
+        session: Session = Depends(get_session),
+        prop_id: int = 0,
+        kind: str = Form(...),
+        status: str = Form(...),
+        service_name: str = Form(""),
+        value_brl: float = Form(0.0),
+        message: str = Form(""),
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
@@ -6818,7 +6856,6 @@ async def props_update_staff(
     return RedirectResponse(f"/propostas/{prop.id}", status_code=303)
 
 
-
 @app.post("/propostas/{prop_id}/excluir")
 @require_role({"admin", "equipe"})
 async def props_delete_staff(request: Request, session: Session = Depends(get_session), prop_id: int = 0) -> Response:
@@ -6848,10 +6885,10 @@ async def props_delete_staff(request: Request, session: Session = Depends(get_se
 @app.post("/propostas/{prop_id}/anexar")
 @require_role({"admin", "equipe"})
 async def props_attach_staff(
-    request: Request,
-    session: Session = Depends(get_session),
-    prop_id: int = 0,
-    file: UploadFile = File(...),
+        request: Request,
+        session: Session = Depends(get_session),
+        prop_id: int = 0,
+        file: UploadFile = File(...),
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
@@ -6887,11 +6924,11 @@ async def props_attach_staff(
 @app.post("/propostas/{prop_id}/cliente-upload")
 @require_role({"cliente"})
 async def props_client_upload(
-    request: Request,
-    session: Session = Depends(get_session),
-    prop_id: int = 0,
-    message: str = Form(""),
-    file: UploadFile | None = File(default=None),
+        request: Request,
+        session: Session = Depends(get_session),
+        prop_id: int = 0,
+        message: str = Form(""),
+        file: UploadFile | None = File(default=None),
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
@@ -6950,7 +6987,8 @@ async def fin_list(request: Request, session: Session = Depends(get_session)) ->
 
     current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
 
-    q = select(FinanceInvoice).where(FinanceInvoice.company_id == ctx.company.id).order_by(FinanceInvoice.created_at.desc())
+    q = select(FinanceInvoice).where(FinanceInvoice.company_id == ctx.company.id).order_by(
+        FinanceInvoice.created_at.desc())
     if ctx.membership.role == "cliente":
         invoices = session.exec(q.where(FinanceInvoice.client_id == (ctx.membership.client_id or -1))).all()
     else:
@@ -7009,15 +7047,15 @@ async def fin_new_page(request: Request, session: Session = Depends(get_session)
 @app.post("/financeiro/novo")
 @require_role({"admin", "equipe"})
 async def fin_new_action(
-    request: Request,
-    session: Session = Depends(get_session),
-    client_id: int = Form(...),
-    title: str = Form(...),
-    amount_brl: float = Form(...),
-    due_date: str = Form(""),
-    status: str = Form("emitido"),
-    notes: str = Form(""),
-    file: UploadFile = File(...),
+        request: Request,
+        session: Session = Depends(get_session),
+        client_id: int = Form(...),
+        title: str = Form(...),
+        amount_brl: float = Form(...),
+        due_date: str = Form(""),
+        status: str = Form("emitido"),
+        notes: str = Form(""),
+        file: UploadFile = File(...),
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
@@ -7110,10 +7148,10 @@ async def fin_detail(request: Request, session: Session = Depends(get_session), 
 @app.post("/financeiro/{inv_id}/anexar")
 @require_role({"admin", "equipe"})
 async def fin_attach(
-    request: Request,
-    session: Session = Depends(get_session),
-    inv_id: int = 0,
-    file: UploadFile = File(...),
+        request: Request,
+        session: Session = Depends(get_session),
+        inv_id: int = 0,
+        file: UploadFile = File(...),
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
@@ -7156,7 +7194,8 @@ async def fin_attach(
 
 @app.get("/download/{attachment_id}")
 @require_login
-async def download_attachment(request: Request, session: Session = Depends(get_session), attachment_id: int = 0) -> Response:
+async def download_attachment(request: Request, session: Session = Depends(get_session),
+                              attachment_id: int = 0) -> Response:
     ctx = get_tenant_context(request, session)
     if not ctx:
         request.session.clear()
@@ -7171,10 +7210,10 @@ async def download_attachment(request: Request, session: Session = Depends(get_s
 
     path = UPLOAD_DIR / att.stored_filename
     if not path.exists():
-        return render("error.html", request=request, context={"message": "Arquivo não está mais no servidor."}, status_code=404)
+        return render("error.html", request=request, context={"message": "Arquivo não está mais no servidor."},
+                      status_code=404)
 
     return FileResponse(path=str(path), media_type=att.mime_type, filename=att.original_filename)
-
 
 
 # ----------------------------
@@ -7213,7 +7252,6 @@ async def agenda_page(request: Request, session: Session = Depends(get_session))
     )
 
 
-
 # ----------------------------
 # Tarefas (Kanban)
 # ----------------------------
@@ -7237,14 +7275,14 @@ def _task_assignee_label(session: Session, user_id: Optional[int]) -> str:
 @app.get("/tarefas", response_class=HTMLResponse)
 @require_login
 async def tasks_list(
-    request: Request,
-    session: Session = Depends(get_session),
-    client_id: int = 0,          # 0=todos (staff)
-    assignee_user_id: int = 0,   # 0=todos, -1=sem responsável (staff)
-    status: str = "",            # "", nao_iniciada, em_andamento, concluida
-    priority: str = "",          # "", baixa, media, alta
-    due: str = "",               # "", atrasadas, hoje, 7dias, sem_prazo
-    mine: int = 0,               # 1=apenas minhas (staff)
+        request: Request,
+        session: Session = Depends(get_session),
+        client_id: int = 0,  # 0=todos (staff)
+        assignee_user_id: int = 0,  # 0=todos, -1=sem responsável (staff)
+        status: str = "",  # "", nao_iniciada, em_andamento, concluida
+        priority: str = "",  # "", baixa, media, alta
+        due: str = "",  # "", atrasadas, hoje, 7dias, sem_prazo
+        mine: int = 0,  # 1=apenas minhas (staff)
 ) -> HTMLResponse:
     ctx = get_tenant_context(request, session)
     if not ctx:
@@ -7355,9 +7393,12 @@ async def tasks_list(
         by_status.setdefault(t["status"], by_status["nao_iniciada"]).append(t)
 
     columns = [
-        {"key": "nao_iniciada", "label": "Não iniciada", "tasks": by_status.get("nao_iniciada", []), "count": len(by_status.get("nao_iniciada", []))},
-        {"key": "em_andamento", "label": "Em andamento", "tasks": by_status.get("em_andamento", []), "count": len(by_status.get("em_andamento", []))},
-        {"key": "concluida", "label": "Concluída", "tasks": by_status.get("concluida", []), "count": len(by_status.get("concluida", []))},
+        {"key": "nao_iniciada", "label": "Não iniciada", "tasks": by_status.get("nao_iniciada", []),
+         "count": len(by_status.get("nao_iniciada", []))},
+        {"key": "em_andamento", "label": "Em andamento", "tasks": by_status.get("em_andamento", []),
+         "count": len(by_status.get("em_andamento", []))},
+        {"key": "concluida", "label": "Concluída", "tasks": by_status.get("concluida", []),
+         "count": len(by_status.get("concluida", []))},
     ]
 
     return render(
@@ -7384,9 +7425,9 @@ async def tasks_list(
 @app.get("/tarefas/nova", response_class=HTMLResponse)
 @require_role({"admin", "equipe"})
 async def tasks_new_page(
-    request: Request,
-    session: Session = Depends(get_session),
-    client_id: int = 0,  # <-- ADICIONE ISTO (vem da querystring ?client_id=)
+        request: Request,
+        session: Session = Depends(get_session),
+        client_id: int = 0,  # <-- ADICIONE ISTO (vem da querystring ?client_id=)
 ) -> HTMLResponse:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
@@ -7429,17 +7470,17 @@ async def tasks_new_page(
 @app.post("/tarefas/nova")
 @require_role({"admin", "equipe"})
 async def tasks_new_action(
-    request: Request,
-    session: Session = Depends(get_session),
-    client_id: int = Form(...),
-    assignee_user_id: str = Form(""),
-    title: str = Form(...),
-    description: str = Form(""),
-    status: str = Form("nao_iniciada"),
-    priority: str = Form("media"),
-    due_date: str = Form(""),
-    visible_to_client: str = Form(""),
-    client_action: str = Form(""),
+        request: Request,
+        session: Session = Depends(get_session),
+        client_id: int = Form(...),
+        assignee_user_id: str = Form(""),
+        title: str = Form(...),
+        description: str = Form(""),
+        status: str = Form("nao_iniciada"),
+        priority: str = Form("media"),
+        due_date: str = Form(""),
+        visible_to_client: str = Form(""),
+        client_action: str = Form(""),
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
@@ -7554,10 +7595,10 @@ async def tasks_detail(request: Request, session: Session = Depends(get_session)
 @app.post("/tarefas/{task_id}/comentario")
 @require_login
 async def tasks_add_comment(
-    request: Request,
-    session: Session = Depends(get_session),
-    task_id: int = 0,
-    message: str = Form(...),
+        request: Request,
+        session: Session = Depends(get_session),
+        task_id: int = 0,
+        message: str = Form(...),
 ) -> Response:
     ctx = get_tenant_context(request, session)
     if not ctx:
@@ -7579,14 +7620,13 @@ async def tasks_add_comment(
     return RedirectResponse(f"/tarefas/{task.id}", status_code=303)
 
 
-
 @app.post("/tarefas/{task_id}/anexar")
 @require_login
 async def tasks_attach_file(
-    request: Request,
-    session: Session = Depends(get_session),
-    task_id: int = 0,
-    file: UploadFile = File(...),
+        request: Request,
+        session: Session = Depends(get_session),
+        task_id: int = 0,
+        file: UploadFile = File(...),
 ) -> Response:
     ctx = get_tenant_context(request, session)
     if not ctx:
@@ -7630,6 +7670,7 @@ async def tasks_attach_file(
     set_flash(request, "Anexo enviado.")
     return RedirectResponse(f"/tarefas/{task.id}", status_code=303)
 
+
 @app.post("/tarefas/{task_id}/toggle")
 @require_role({"cliente"})
 async def tasks_toggle_client(request: Request, session: Session = Depends(get_session), task_id: int = 0) -> Response:
@@ -7655,7 +7696,8 @@ async def tasks_toggle_client(request: Request, session: Session = Depends(get_s
 
 @app.post("/tarefas/{task_id}/status")
 @require_role({"admin", "equipe"})
-async def tasks_set_status(request: Request, session: Session = Depends(get_session), task_id: int = 0, status: str = Form(...)) -> Response:
+async def tasks_set_status(request: Request, session: Session = Depends(get_session), task_id: int = 0,
+                           status: str = Form(...)) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
@@ -7716,18 +7758,18 @@ async def tasks_edit_page(request: Request, session: Session = Depends(get_sessi
 @app.post("/tarefas/{task_id}/editar")
 @require_role({"admin", "equipe"})
 async def tasks_edit_action(
-    request: Request,
-    session: Session = Depends(get_session),
-    task_id: int = 0,
-    client_id: int = Form(...),
-    assignee_user_id: str = Form(""),
-    title: str = Form(...),
-    description: str = Form(""),
-    status: str = Form("nao_iniciada"),
-    priority: str = Form("media"),
-    due_date: str = Form(""),
-    visible_to_client: str = Form(""),
-    client_action: str = Form(""),
+        request: Request,
+        session: Session = Depends(get_session),
+        task_id: int = 0,
+        client_id: int = Form(...),
+        assignee_user_id: str = Form(""),
+        title: str = Form(...),
+        description: str = Form(""),
+        status: str = Form("nao_iniciada"),
+        priority: str = Form("media"),
+        due_date: str = Form(""),
+        visible_to_client: str = Form(""),
+        client_action: str = Form(""),
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
@@ -7773,10 +7815,10 @@ async def tasks_edit_action(
 @app.post("/tarefas/{task_id}/excluir")
 @require_role({"admin", "equipe"})
 async def tasks_delete_action(
-    request: Request,
-    session: Session = Depends(get_session),
-    task_id: int = 0,
-    confirm: str = Form(""),
+        request: Request,
+        session: Session = Depends(get_session),
+        task_id: int = 0,
+        confirm: str = Form(""),
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
@@ -7789,7 +7831,6 @@ async def tasks_delete_action(
     if confirm.strip().upper() != "EXCLUIR":
         set_flash(request, "Confirmação inválida. Digite EXCLUIR.")
         return RedirectResponse(f"/tarefas/{task.id}", status_code=303)
-
 
     # Segurança: não excluir se ainda houver anexos
     has_att = session.exec(select(Attachment.id).where(Attachment.task_id == task.id)).first()
@@ -7806,14 +7847,13 @@ async def tasks_delete_action(
     return RedirectResponse("/tarefas", status_code=303)
 
 
-
 @app.post("/attachments/{attachment_id}/delete")
 @require_role({"admin", "equipe"})
 async def delete_attachment(
-    request: Request,
-    session: Session = Depends(get_session),
-    attachment_id: int = 0,
-    next: str = Form("/"),
+        request: Request,
+        session: Session = Depends(get_session),
+        attachment_id: int = 0,
+        next: str = Form("/"),
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
@@ -7855,12 +7895,12 @@ async def pending_new_client_page(request: Request, session: Session = Depends(g
 @app.post("/pendencias/cliente/nova")
 @require_role({"cliente"})
 async def pending_new_client_action(
-    request: Request,
-    session: Session = Depends(get_session),
-    title: str = Form(...),
-    description: str = Form(""),
-    due_date: str = Form(""),
-    file: UploadFile | None = File(default=None),
+        request: Request,
+        session: Session = Depends(get_session),
+        title: str = Form(...),
+        description: str = Form(""),
+        due_date: str = Form(""),
+        file: UploadFile | None = File(default=None),
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
@@ -7939,11 +7979,11 @@ async def docs_send_client_page(request: Request, session: Session = Depends(get
 @app.post("/documentos/cliente/enviar")
 @require_role({"cliente"})
 async def docs_send_client_action(
-    request: Request,
-    session: Session = Depends(get_session),
-    title: str = Form(...),
-    message: str = Form(""),
-    file: UploadFile = File(...),
+        request: Request,
+        session: Session = Depends(get_session),
+        title: str = Form(...),
+        message: str = Form(""),
+        file: UploadFile = File(...),
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
@@ -8026,12 +8066,12 @@ async def docs_edit_page(request: Request, session: Session = Depends(get_sessio
 @app.post("/documentos/{doc_id}/editar")
 @require_role({"admin", "equipe"})
 async def docs_edit_action(
-    request: Request,
-    session: Session = Depends(get_session),
-    doc_id: int = 0,
-    title: str = Form(...),
-    content: str = Form(...),
-    status: str = Form("rascunho"),
+        request: Request,
+        session: Session = Depends(get_session),
+        doc_id: int = 0,
+        title: str = Form(...),
+        content: str = Form(...),
+        status: str = Form("rascunho"),
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
@@ -8081,7 +8121,8 @@ async def docs_delete_action(request: Request, session: Session = Depends(get_se
 
 @app.get("/pendencias/{item_id}/editar", response_class=HTMLResponse)
 @require_role({"admin", "equipe"})
-async def pending_edit_page(request: Request, session: Session = Depends(get_session), item_id: int = 0) -> HTMLResponse:
+async def pending_edit_page(request: Request, session: Session = Depends(get_session),
+                            item_id: int = 0) -> HTMLResponse:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
@@ -8108,13 +8149,13 @@ async def pending_edit_page(request: Request, session: Session = Depends(get_ses
 @app.post("/pendencias/{item_id}/editar")
 @require_role({"admin", "equipe"})
 async def pending_edit_action(
-    request: Request,
-    session: Session = Depends(get_session),
-    item_id: int = 0,
-    title: str = Form(...),
-    description: str = Form(""),
-    due_date: str = Form(""),
-    status: str = Form("aberto"),
+        request: Request,
+        session: Session = Depends(get_session),
+        item_id: int = 0,
+        title: str = Form(...),
+        description: str = Form(""),
+        due_date: str = Form(""),
+        status: str = Form("aberto"),
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
@@ -8138,7 +8179,8 @@ async def pending_edit_action(
 
 @app.post("/pendencias/{item_id}/excluir")
 @require_role({"admin", "equipe"})
-async def pending_delete_action(request: Request, session: Session = Depends(get_session), item_id: int = 0) -> Response:
+async def pending_delete_action(request: Request, session: Session = Depends(get_session),
+                                item_id: int = 0) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
@@ -8192,14 +8234,14 @@ async def fin_edit_page(request: Request, session: Session = Depends(get_session
 @app.post("/financeiro/{inv_id}/editar")
 @require_role({"admin", "equipe"})
 async def fin_edit_action(
-    request: Request,
-    session: Session = Depends(get_session),
-    inv_id: int = 0,
-    title: str = Form(...),
-    status: str = Form("emitido"),
-    amount_brl: float = Form(0.0),
-    due_date: str = Form(""),
-    notes: str = Form(""),
+        request: Request,
+        session: Session = Depends(get_session),
+        inv_id: int = 0,
+        title: str = Form(...),
+        status: str = Form("emitido"),
+        amount_brl: float = Form(0.0),
+        due_date: str = Form(""),
+        notes: str = Form(""),
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
@@ -8245,7 +8287,6 @@ async def fin_delete_action(request: Request, session: Session = Depends(get_ses
     return RedirectResponse("/financeiro", status_code=303)
 
 
-
 # ----------------------------
 # CRM routes (Negócios)
 # ----------------------------
@@ -8286,11 +8327,11 @@ async def crm_alias() -> Response:
 @app.get("/negocios", response_class=HTMLResponse)
 @require_role({"admin", "equipe"})
 async def crm_list(
-    request: Request,
-    session: Session = Depends(get_session),
-    client_id: int = 0,
-    owner_user_id: int = 0,
-    stage: str = "",
+        request: Request,
+        session: Session = Depends(get_session),
+        client_id: int = 0,
+        owner_user_id: int = 0,
+        stage: str = "",
 ) -> HTMLResponse:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
@@ -8400,27 +8441,27 @@ async def crm_new_page(request: Request, session: Session = Depends(get_session)
 @app.post("/negocios/novo")
 @require_role({"admin", "equipe"})
 async def crm_new_action(
-    request: Request,
-    session: Session = Depends(get_session),
+        request: Request,
+        session: Session = Depends(get_session),
 
-    client_id: int = Form(0),
-    new_client_name: str = Form(""),
-    new_client_cnpj: str = Form(""),
-    new_client_email: str = Form(""),
-    new_client_phone: str = Form(""),
-    new_client_notes: str = Form(""),
+        client_id: int = Form(0),
+        new_client_name: str = Form(""),
+        new_client_cnpj: str = Form(""),
+        new_client_email: str = Form(""),
+        new_client_phone: str = Form(""),
+        new_client_notes: str = Form(""),
 
-    owner_user_id: int = Form(0),
-    title: str = Form(...),
-    service_name: str = Form(""),
-    stage: str = Form("qualificacao"),
-    demand: str = Form(""),
-    notes: str = Form(""),
-    value_estimate_brl: float = Form(0.0),
-    probability_pct: int = Form(0),
-    source: str = Form(""),
-    next_step: str = Form(""),
-    next_step_date: str = Form(""),
+        owner_user_id: int = Form(0),
+        title: str = Form(...),
+        service_name: str = Form(""),
+        stage: str = Form("qualificacao"),
+        demand: str = Form(""),
+        notes: str = Form(""),
+        value_estimate_brl: float = Form(0.0),
+        probability_pct: int = Form(0),
+        source: str = Form(""),
+        next_step: str = Form(""),
+        next_step_date: str = Form(""),
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
@@ -8520,7 +8561,8 @@ async def crm_detail(request: Request, session: Session = Depends(get_session), 
     note_view = []
     for n in notes:
         au = session.get(User, n.author_user_id)
-        note_view.append({"id": n.id, "message": n.message, "created_at": n.created_at, "author_name": au.name if au else "—"})
+        note_view.append(
+            {"id": n.id, "message": n.message, "created_at": n.created_at, "author_name": au.name if au else "—"})
 
     active_client_id = get_active_client_id(request, session, ctx)
     current_client = get_client_or_none(session, ctx.company.id, active_client_id)
@@ -8578,21 +8620,21 @@ async def crm_edit_page(request: Request, session: Session = Depends(get_session
 @app.post("/negocios/{deal_id}/editar")
 @require_role({"admin", "equipe"})
 async def crm_edit_action(
-    request: Request,
-    session: Session = Depends(get_session),
-    deal_id: int = 0,
-    client_id: int = Form(...),
-    owner_user_id: int = Form(0),
-    title: str = Form(...),
-    service_name: str = Form(""),
-    stage: str = Form("qualificacao"),
-    demand: str = Form(""),
-    notes: str = Form(""),
-    value_estimate_brl: float = Form(0.0),
-    probability_pct: int = Form(0),
-    source: str = Form(""),
-    next_step: str = Form(""),
-    next_step_date: str = Form(""),
+        request: Request,
+        session: Session = Depends(get_session),
+        deal_id: int = 0,
+        client_id: int = Form(...),
+        owner_user_id: int = Form(0),
+        title: str = Form(...),
+        service_name: str = Form(""),
+        stage: str = Form("qualificacao"),
+        demand: str = Form(""),
+        notes: str = Form(""),
+        value_estimate_brl: float = Form(0.0),
+        probability_pct: int = Form(0),
+        source: str = Form(""),
+        next_step: str = Form(""),
+        next_step_date: str = Form(""),
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
@@ -8649,10 +8691,10 @@ async def crm_edit_action(
 @app.post("/negocios/{deal_id}/stage")
 @require_role({"admin", "equipe"})
 async def crm_update_stage(
-    request: Request,
-    session: Session = Depends(get_session),
-    deal_id: int = 0,
-    stage: str = Form(""),
+        request: Request,
+        session: Session = Depends(get_session),
+        deal_id: int = 0,
+        stage: str = Form(""),
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
@@ -8667,7 +8709,8 @@ async def crm_update_stage(
     session.add(deal)
     session.commit()
 
-    session.add(BusinessDealNote(deal_id=deal.id, author_user_id=ctx.user.id, message=f"Etapa alterada para: {_crm_stage_label(deal.stage)}."))
+    session.add(BusinessDealNote(deal_id=deal.id, author_user_id=ctx.user.id,
+                                 message=f"Etapa alterada para: {_crm_stage_label(deal.stage)}."))
     session.commit()
 
     return RedirectResponse(f"/negocios/{deal.id}", status_code=303)
@@ -8676,11 +8719,11 @@ async def crm_update_stage(
 @app.post("/negocios/{deal_id}/next")
 @require_role({"admin", "equipe"})
 async def crm_update_next(
-    request: Request,
-    session: Session = Depends(get_session),
-    deal_id: int = 0,
-    next_step: str = Form(""),
-    next_step_date: str = Form(""),
+        request: Request,
+        session: Session = Depends(get_session),
+        deal_id: int = 0,
+        next_step: str = Form(""),
+        next_step_date: str = Form(""),
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
@@ -8705,10 +8748,10 @@ async def crm_update_next(
 @app.post("/negocios/{deal_id}/nota")
 @require_role({"admin", "equipe"})
 async def crm_add_note(
-    request: Request,
-    session: Session = Depends(get_session),
-    deal_id: int = 0,
-    message: str = Form(...),
+        request: Request,
+        session: Session = Depends(get_session),
+        deal_id: int = 0,
+        message: str = Form(...),
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
@@ -8812,7 +8855,8 @@ async def crm_create_project(request: Request, session: Session = Depends(get_se
 
 @app.post("/negocios/{deal_id}/excluir")
 @require_role({"admin", "equipe"})
-async def crm_delete(request: Request, session: Session = Depends(get_session), deal_id: int = 0, confirm: str = Form("")) -> Response:
+async def crm_delete(request: Request, session: Session = Depends(get_session), deal_id: int = 0,
+                     confirm: str = Form("")) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
@@ -8841,6 +8885,7 @@ async def crm_delete(request: Request, session: Session = Depends(get_session), 
 async def _alias_docs() -> Response:
     return RedirectResponse("/documentos", status_code=307)
 
+
 @app.get("/proposals")
 async def _alias_props() -> Response:
     return RedirectResponse("/propostas", status_code=307)
@@ -8851,8 +8896,6 @@ async def _alias_fin() -> Response:
     return RedirectResponse("/financeiro", status_code=307)
 
 
-
-
 # =========================
 # Meetings routes
 # =========================
@@ -8860,9 +8903,9 @@ async def _alias_fin() -> Response:
 @app.get("/reunioes", response_class=HTMLResponse)
 @require_login
 async def meetings_list(
-    request: Request,
-    session: Session = Depends(get_session),
-    client_id: int = 0,
+        request: Request,
+        session: Session = Depends(get_session),
+        client_id: int = 0,
 ) -> HTMLResponse:
     ctx = get_tenant_context(request, session)
     if not ctx:
@@ -8880,7 +8923,8 @@ async def meetings_list(
     if ctx.membership.role == "cliente":
         q = q.where(Meeting.client_id == (ctx.membership.client_id or -1))
     else:
-        clients = session.exec(select(Client).where(Client.company_id == ctx.company.id).order_by(Client.created_at)).all()
+        clients = session.exec(
+            select(Client).where(Client.company_id == ctx.company.id).order_by(Client.created_at)).all()
         if client_id and client_id > 0:
             fc = get_client_or_none(session, ctx.company.id, int(client_id))
             if not fc:
@@ -8946,13 +8990,13 @@ async def meetings_new_page(request: Request, session: Session = Depends(get_ses
 @app.post("/reunioes/nova")
 @require_role({"admin", "equipe"})
 async def meetings_new_action(
-    request: Request,
-    session: Session = Depends(get_session),
-    client_id: int = Form(...),
-    meeting_date: str = Form(""),
-    notion_page: str = Form(...),
-    title: str = Form(""),
-    sync_now: str = Form(""),
+        request: Request,
+        session: Session = Depends(get_session),
+        client_id: int = Form(...),
+        meeting_date: str = Form(""),
+        notion_page: str = Form(...),
+        title: str = Form(""),
+        sync_now: str = Form(""),
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
@@ -9005,7 +9049,8 @@ async def meetings_new_action(
 
 @app.get("/reunioes/{meeting_id}", response_class=HTMLResponse)
 @require_login
-async def meetings_detail(request: Request, session: Session = Depends(get_session), meeting_id: int = 0) -> HTMLResponse:
+async def meetings_detail(request: Request, session: Session = Depends(get_session),
+                          meeting_id: int = 0) -> HTMLResponse:
     ctx = get_tenant_context(request, session)
     if not ctx:
         request.session.clear()
@@ -9082,11 +9127,11 @@ async def meetings_sync(request: Request, session: Session = Depends(get_session
 @app.post("/reunioes/{meeting_id}/gerar_tarefas")
 @require_role({"admin", "equipe"})
 async def meetings_generate_tasks(
-    request: Request,
-    session: Session = Depends(get_session),
-    meeting_id: int = 0,
-    assignee_user_id: int = Form(0),
-    visible_to_client: int = Form(0),
+        request: Request,
+        session: Session = Depends(get_session),
+        meeting_id: int = 0,
+        assignee_user_id: int = Form(0),
+        visible_to_client: int = Form(0),
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
@@ -9133,8 +9178,6 @@ async def meetings_generate_tasks(
     session.commit()
     set_flash(request, f"{created} tarefa(s) criada(s).")
     return RedirectResponse("/tarefas", status_code=303)
-
-
 
 
 # ----------------------------
@@ -9261,7 +9304,8 @@ def _education_course_assigned_clients(session: Session, course: EducationCourse
     return session.exec(select(Client).where(Client.id.in_(client_ids))).all()
 
 
-def _education_course_progress_pct(session: Session, company_id: int, client_id: int, user_id: int, course_id: int) -> int:
+def _education_course_progress_pct(session: Session, company_id: int, client_id: int, user_id: int,
+                                   course_id: int) -> int:
     module_ids = session.exec(
         select(EducationModule.id).where(EducationModule.course_id == course_id)
     ).all()
@@ -9286,7 +9330,7 @@ def _education_course_progress_pct(session: Session, company_id: int, client_id:
 
 
 TEMPLATES.update({
-"edu_courses.html": r"""
+    "edu_courses.html": r"""
 {% extends "base.html" %}
 {% block content %}
 <div class="card p-4">
@@ -9344,7 +9388,7 @@ TEMPLATES.update({
 {% endblock %}
 """,
 
-"edu_course_new.html": r"""
+    "edu_course_new.html": r"""
 {% extends "base.html" %}
 {% block content %}
 <div class="card p-4">
@@ -9409,7 +9453,7 @@ TEMPLATES.update({
 {% endblock %}
 """,
 
-"edu_course_detail.html": r"""
+    "edu_course_detail.html": r"""
 {% extends "base.html" %}
 {% block content %}
 <div class="card p-4">
@@ -9482,7 +9526,7 @@ TEMPLATES.update({
 {% endblock %}
 """,
 
-"edu_course_edit.html": r"""
+    "edu_course_edit.html": r"""
 {% extends "base.html" %}
 {% block content %}
 <div class="card p-4">
@@ -9541,7 +9585,7 @@ TEMPLATES.update({
 {% endblock %}
 """,
 
-"edu_module_detail.html": r"""
+    "edu_module_detail.html": r"""
 {% extends "base.html" %}
 {% block content %}
 <div class="card p-4">
@@ -9620,7 +9664,7 @@ TEMPLATES.update({
 {% endblock %}
 """,
 
-"edu_lesson_detail.html": r"""
+    "edu_lesson_detail.html": r"""
 {% extends "base.html" %}
 {% block content %}
 <div class="card p-4">
@@ -9738,7 +9782,8 @@ async def edu_courses(request: Request, session: Session = Depends(get_session),
     active_client_id = get_active_client_id(request, session, ctx)
     current_client = get_client_or_none(session, ctx.company.id, active_client_id)
 
-    courses_q = select(EducationCourse).where(EducationCourse.company_id == ctx.company.id).order_by(EducationCourse.updated_at.desc())
+    courses_q = select(EducationCourse).where(EducationCourse.company_id == ctx.company.id).order_by(
+        EducationCourse.updated_at.desc())
 
     clients: list[Client] = []
     filter_client_id = 0
@@ -9755,7 +9800,8 @@ async def edu_courses(request: Request, session: Session = Depends(get_session),
         else:
             courses_q = courses_q.where(EducationCourse.id == -1)
     else:
-        clients = session.exec(select(Client).where(Client.company_id == ctx.company.id).order_by(Client.created_at)).all()
+        clients = session.exec(
+            select(Client).where(Client.company_id == ctx.company.id).order_by(Client.created_at)).all()
         if client_id and client_id > 0:
             fc = get_client_or_none(session, ctx.company.id, int(client_id))
             if fc:
@@ -9778,10 +9824,13 @@ async def edu_courses(request: Request, session: Session = Depends(get_session),
         assigned_count = None
         progress_pct = None
         if ctx.membership.role in {"admin", "equipe"}:
-            assigned_count = int(session.exec(select(func.count(EducationCourseAccess.id)).where(EducationCourseAccess.course_id == c.id)).one() or 0)
+            assigned_count = int(session.exec(
+                select(func.count(EducationCourseAccess.id)).where(EducationCourseAccess.course_id == c.id)).one() or 0)
         if ctx.membership.role == "cliente":
-            progress_pct = _education_course_progress_pct(session, ctx.company.id, ctx.membership.client_id or 0, ctx.user.id, c.id)
-        out.append({"id": c.id, "title": c.title, "category": c.category, "is_active": c.is_active, "assigned_count": assigned_count, "progress_pct": progress_pct})
+            progress_pct = _education_course_progress_pct(session, ctx.company.id, ctx.membership.client_id or 0,
+                                                          ctx.user.id, c.id)
+        out.append({"id": c.id, "title": c.title, "category": c.category, "is_active": c.is_active,
+                    "assigned_count": assigned_count, "progress_pct": progress_pct})
 
     return render(
         "edu_courses.html",
@@ -9805,18 +9854,20 @@ async def edu_course_new_page(request: Request, session: Session = Depends(get_s
     assert ctx is not None
     clients = session.exec(select(Client).where(Client.company_id == ctx.company.id).order_by(Client.created_at)).all()
     current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
-    return render("edu_course_new.html", request=request, context={"current_user": ctx.user, "current_company": ctx.company, "role": ctx.membership.role, "current_client": current_client, "clients": clients})
+    return render("edu_course_new.html", request=request,
+                  context={"current_user": ctx.user, "current_company": ctx.company, "role": ctx.membership.role,
+                           "current_client": current_client, "clients": clients})
 
 
 @app.post("/educacao/cursos/novo")
 @require_role({"admin", "equipe"})
 async def edu_course_new_action(
-    request: Request,
-    session: Session = Depends(get_session),
-    title: str = Form(...),
-    category: str = Form(""),
-    description: str = Form(""),
-    is_active: str = Form(""),
+        request: Request,
+        session: Session = Depends(get_session),
+        title: str = Form(...),
+        category: str = Form(""),
+        description: str = Form(""),
+        is_active: str = Form(""),
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
@@ -9824,7 +9875,9 @@ async def edu_course_new_action(
     form = await request.form()
     client_ids = [int(x) for x in form.getlist("client_ids") if str(x).isdigit()]
 
-    course = EducationCourse(company_id=ctx.company.id, created_by_user_id=ctx.user.id, title=title.strip(), category=category.strip(), description=description.strip(), is_active=(is_active == "1"), updated_at=utcnow())
+    course = EducationCourse(company_id=ctx.company.id, created_by_user_id=ctx.user.id, title=title.strip(),
+                             category=category.strip(), description=description.strip(), is_active=(is_active == "1"),
+                             updated_at=utcnow())
     session.add(course)
     session.commit()
     session.refresh(course)
@@ -9840,7 +9893,8 @@ async def edu_course_new_action(
 
 @app.get("/educacao/cursos/{course_id}", response_class=HTMLResponse)
 @require_login
-async def edu_course_detail(request: Request, session: Session = Depends(get_session), course_id: int = 0) -> HTMLResponse:
+async def edu_course_detail(request: Request, session: Session = Depends(get_session),
+                            course_id: int = 0) -> HTMLResponse:
     ctx = get_tenant_context(request, session)
     if not ctx:
         request.session.clear()
@@ -9853,21 +9907,27 @@ async def edu_course_detail(request: Request, session: Session = Depends(get_ses
     if not _education_course_can_access(ctx, session, course):
         return render("error.html", request=request, context={"message": "Sem permissão."}, status_code=403)
 
-    modules = session.exec(select(EducationModule).where(EducationModule.course_id == course.id).order_by(EducationModule.order.asc())).all()
+    modules = session.exec(select(EducationModule).where(EducationModule.course_id == course.id).order_by(
+        EducationModule.order.asc())).all()
     assigned = _education_course_assigned_clients(session, course)
     assigned_names = ", ".join(sorted({c.name for c in assigned})) if assigned else ""
     progress_pct = None
     if ctx.membership.role == "cliente":
-        progress_pct = _education_course_progress_pct(session, ctx.company.id, ctx.membership.client_id or 0, ctx.user.id, course.id)
+        progress_pct = _education_course_progress_pct(session, ctx.company.id, ctx.membership.client_id or 0,
+                                                      ctx.user.id, course.id)
 
     current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
 
-    return render("edu_course_detail.html", request=request, context={"current_user": ctx.user, "current_company": ctx.company, "role": ctx.membership.role, "current_client": current_client, "course": course, "modules": modules, "assigned_names": assigned_names, "progress_pct": progress_pct})
+    return render("edu_course_detail.html", request=request,
+                  context={"current_user": ctx.user, "current_company": ctx.company, "role": ctx.membership.role,
+                           "current_client": current_client, "course": course, "modules": modules,
+                           "assigned_names": assigned_names, "progress_pct": progress_pct})
 
 
 @app.post("/educacao/cursos/{course_id}/modulos")
 @require_role({"admin", "equipe"})
-async def edu_course_add_module(request: Request, session: Session = Depends(get_session), course_id: int = 0, title: str = Form(...), description: str = Form("")) -> Response:
+async def edu_course_add_module(request: Request, session: Session = Depends(get_session), course_id: int = 0,
+                                title: str = Form(...), description: str = Form("")) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
@@ -9876,7 +9936,8 @@ async def edu_course_add_module(request: Request, session: Session = Depends(get
         set_flash(request, "Curso inválido.")
         return RedirectResponse("/educacao", status_code=303)
 
-    max_order = session.exec(select(func.max(EducationModule.order)).where(EducationModule.course_id == course.id)).one()
+    max_order = session.exec(
+        select(func.max(EducationModule.order)).where(EducationModule.course_id == course.id)).one()
     order = int(max_order or 0) + 1
     mod = EducationModule(course_id=course.id, title=title.strip(), order=order, description=description.strip())
     session.add(mod)
@@ -9888,7 +9949,8 @@ async def edu_course_add_module(request: Request, session: Session = Depends(get
 
 @app.get("/educacao/cursos/{course_id}/editar", response_class=HTMLResponse)
 @require_role({"admin", "equipe"})
-async def edu_course_edit_page(request: Request, session: Session = Depends(get_session), course_id: int = 0) -> HTMLResponse:
+async def edu_course_edit_page(request: Request, session: Session = Depends(get_session),
+                               course_id: int = 0) -> HTMLResponse:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
@@ -9901,12 +9963,17 @@ async def edu_course_edit_page(request: Request, session: Session = Depends(get_
     assigned_ids = {a.client_id for a in assigned}
     current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
 
-    return render("edu_course_edit.html", request=request, context={"current_user": ctx.user, "current_company": ctx.company, "role": ctx.membership.role, "current_client": current_client, "course": course, "clients": clients, "assigned_ids": assigned_ids})
+    return render("edu_course_edit.html", request=request,
+                  context={"current_user": ctx.user, "current_company": ctx.company, "role": ctx.membership.role,
+                           "current_client": current_client, "course": course, "clients": clients,
+                           "assigned_ids": assigned_ids})
 
 
 @app.post("/educacao/cursos/{course_id}/editar")
 @require_role({"admin", "equipe"})
-async def edu_course_edit_action(request: Request, session: Session = Depends(get_session), course_id: int = 0, title: str = Form(...), category: str = Form(""), description: str = Form(""), is_active: str = Form("")) -> Response:
+async def edu_course_edit_action(request: Request, session: Session = Depends(get_session), course_id: int = 0,
+                                 title: str = Form(...), category: str = Form(""), description: str = Form(""),
+                                 is_active: str = Form("")) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
@@ -9967,7 +10034,8 @@ async def edu_course_delete(request: Request, session: Session = Depends(get_ses
 
 @app.get("/educacao/modulos/{module_id}", response_class=HTMLResponse)
 @require_login
-async def edu_module_detail(request: Request, session: Session = Depends(get_session), module_id: int = 0) -> HTMLResponse:
+async def edu_module_detail(request: Request, session: Session = Depends(get_session),
+                            module_id: int = 0) -> HTMLResponse:
     ctx = get_tenant_context(request, session)
     if not ctx:
         request.session.clear()
@@ -9984,15 +10052,20 @@ async def edu_module_detail(request: Request, session: Session = Depends(get_ses
     if not _education_course_can_access(ctx, session, course):
         return render("error.html", request=request, context={"message": "Sem permissão."}, status_code=403)
 
-    lessons = session.exec(select(EducationLesson).where(EducationLesson.module_id == module.id).order_by(EducationLesson.order.asc())).all()
+    lessons = session.exec(select(EducationLesson).where(EducationLesson.module_id == module.id).order_by(
+        EducationLesson.order.asc())).all()
     current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
 
-    return render("edu_module_detail.html", request=request, context={"current_user": ctx.user, "current_company": ctx.company, "role": ctx.membership.role, "current_client": current_client, "module": module, "course": course, "lessons": lessons})
+    return render("edu_module_detail.html", request=request,
+                  context={"current_user": ctx.user, "current_company": ctx.company, "role": ctx.membership.role,
+                           "current_client": current_client, "module": module, "course": course, "lessons": lessons})
 
 
 @app.post("/educacao/modulos/{module_id}/aulas")
 @require_role({"admin", "equipe"})
-async def edu_module_add_lesson(request: Request, session: Session = Depends(get_session), module_id: int = 0, title: str = Form(...), video_url: str = Form(""), description: str = Form("")) -> Response:
+async def edu_module_add_lesson(request: Request, session: Session = Depends(get_session), module_id: int = 0,
+                                title: str = Form(...), video_url: str = Form(""),
+                                description: str = Form("")) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
@@ -10006,10 +10079,12 @@ async def edu_module_add_lesson(request: Request, session: Session = Depends(get
         set_flash(request, "Curso inválido.")
         return RedirectResponse("/educacao", status_code=303)
 
-    max_order = session.exec(select(func.max(EducationLesson.order)).where(EducationLesson.module_id == module.id)).one()
+    max_order = session.exec(
+        select(func.max(EducationLesson.order)).where(EducationLesson.module_id == module.id)).one()
     order = int(max_order or 0) + 1
 
-    lesson = EducationLesson(module_id=module.id, title=title.strip(), order=order, video_url=video_url.strip(), description=description.strip())
+    lesson = EducationLesson(module_id=module.id, title=title.strip(), order=order, video_url=video_url.strip(),
+                             description=description.strip())
     session.add(lesson)
     session.commit()
 
@@ -10019,7 +10094,8 @@ async def edu_module_add_lesson(request: Request, session: Session = Depends(get
 
 @app.post("/educacao/modulos/{module_id}/editar")
 @require_role({"admin", "equipe"})
-async def edu_module_edit(request: Request, session: Session = Depends(get_session), module_id: int = 0, title: str = Form(...), description: str = Form("")) -> Response:
+async def edu_module_edit(request: Request, session: Session = Depends(get_session), module_id: int = 0,
+                          title: str = Form(...), description: str = Form("")) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
@@ -10063,7 +10139,8 @@ async def edu_module_delete(request: Request, session: Session = Depends(get_ses
 
 @app.get("/educacao/aulas/{lesson_id}", response_class=HTMLResponse)
 @require_login
-async def edu_lesson_detail(request: Request, session: Session = Depends(get_session), lesson_id: int = 0) -> HTMLResponse:
+async def edu_lesson_detail(request: Request, session: Session = Depends(get_session),
+                            lesson_id: int = 0) -> HTMLResponse:
     ctx = get_tenant_context(request, session)
     if not ctx:
         request.session.clear()
@@ -10074,7 +10151,8 @@ async def edu_lesson_detail(request: Request, session: Session = Depends(get_ses
         return render("error.html", request=request, context={"message": "Aula não encontrada."}, status_code=404)
 
     module = session.get(EducationModule, lesson.module_id)
-    course = session.exec(select(EducationCourse).where(EducationCourse.id == module.course_id)).first() if module else None
+    course = session.exec(
+        select(EducationCourse).where(EducationCourse.id == module.course_id)).first() if module else None
     if not module or not course or course.company_id != ctx.company.id:
         return render("error.html", request=request, context={"message": "Curso inválido."}, status_code=403)
 
@@ -10107,12 +10185,16 @@ async def edu_lesson_detail(request: Request, session: Session = Depends(get_ses
 
     current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
 
-    return render("edu_lesson_detail.html", request=request, context={"current_user": ctx.user, "current_company": ctx.company, "role": ctx.membership.role, "current_client": current_client, "course": course, "module": module, "lesson": lesson, "embed_url": embed_url, "attachments": attachments, "progress_done": progress_done})
+    return render("edu_lesson_detail.html", request=request,
+                  context={"current_user": ctx.user, "current_company": ctx.company, "role": ctx.membership.role,
+                           "current_client": current_client, "course": course, "module": module, "lesson": lesson,
+                           "embed_url": embed_url, "attachments": attachments, "progress_done": progress_done})
 
 
 @app.post("/educacao/aulas/{lesson_id}/concluir")
 @require_login
-async def edu_lesson_toggle_complete(request: Request, session: Session = Depends(get_session), lesson_id: int = 0) -> Response:
+async def edu_lesson_toggle_complete(request: Request, session: Session = Depends(get_session),
+                                     lesson_id: int = 0) -> Response:
     ctx = get_tenant_context(request, session)
     if not ctx:
         request.session.clear()
@@ -10124,7 +10206,8 @@ async def edu_lesson_toggle_complete(request: Request, session: Session = Depend
         return RedirectResponse("/educacao", status_code=303)
 
     module = session.get(EducationModule, lesson.module_id)
-    course = session.exec(select(EducationCourse).where(EducationCourse.id == module.course_id)).first() if module else None
+    course = session.exec(
+        select(EducationCourse).where(EducationCourse.id == module.course_id)).first() if module else None
     if not module or not course or course.company_id != ctx.company.id:
         set_flash(request, "Curso inválido.")
         return RedirectResponse("/educacao", status_code=303)
@@ -10133,18 +10216,21 @@ async def edu_lesson_toggle_complete(request: Request, session: Session = Depend
         set_flash(request, "Sem permissão.")
         return RedirectResponse("/educacao", status_code=303)
 
-    client_id = (ctx.membership.client_id or 0) if ctx.membership.role == "cliente" else (get_active_client_id(request, session, ctx) or 0)
+    client_id = (ctx.membership.client_id or 0) if ctx.membership.role == "cliente" else (
+                get_active_client_id(request, session, ctx) or 0)
     if not client_id:
         set_flash(request, "Selecione um cliente.")
         return RedirectResponse(f"/educacao/aulas/{lesson.id}", status_code=303)
 
-    existing = session.exec(select(EducationLessonProgress).where(EducationLessonProgress.lesson_id == lesson.id, EducationLessonProgress.user_id == ctx.user.id)).first()
+    existing = session.exec(select(EducationLessonProgress).where(EducationLessonProgress.lesson_id == lesson.id,
+                                                                  EducationLessonProgress.user_id == ctx.user.id)).first()
     if existing:
         session.delete(existing)
         session.commit()
         set_flash(request, "Marcada como não concluída.")
     else:
-        session.add(EducationLessonProgress(company_id=ctx.company.id, client_id=client_id, lesson_id=lesson.id, user_id=ctx.user.id, completed=True, completed_at=utcnow()))
+        session.add(EducationLessonProgress(company_id=ctx.company.id, client_id=client_id, lesson_id=lesson.id,
+                                            user_id=ctx.user.id, completed=True, completed_at=utcnow()))
         session.commit()
         set_flash(request, "Aula concluída.")
 
@@ -10153,7 +10239,8 @@ async def edu_lesson_toggle_complete(request: Request, session: Session = Depend
 
 @app.post("/educacao/aulas/{lesson_id}/anexar")
 @require_role({"admin", "equipe"})
-async def edu_lesson_attach(request: Request, session: Session = Depends(get_session), lesson_id: int = 0, file: UploadFile = File(...)) -> Response:
+async def edu_lesson_attach(request: Request, session: Session = Depends(get_session), lesson_id: int = 0,
+                            file: UploadFile = File(...)) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
@@ -10172,7 +10259,8 @@ async def edu_lesson_attach(request: Request, session: Session = Depends(get_ses
     if not active_client_id:
         # choose first assigned client if any
         module = session.get(EducationModule, lesson.module_id)
-        course = session.exec(select(EducationCourse).where(EducationCourse.id == module.course_id)).first() if module else None
+        course = session.exec(
+            select(EducationCourse).where(EducationCourse.id == module.course_id)).first() if module else None
         if course:
             assigned = _education_course_assigned_clients(session, course)
             active_client_id = assigned[0].id if assigned else 0
@@ -10181,7 +10269,9 @@ async def edu_lesson_attach(request: Request, session: Session = Depends(get_ses
         set_flash(request, "Selecione um cliente para anexar material.")
         return RedirectResponse(f"/educacao/aulas/{lesson.id}", status_code=303)
 
-    session.add(Attachment(company_id=ctx.company.id, client_id=active_client_id, uploaded_by_user_id=ctx.user.id, education_lesson_id=lesson.id, original_filename=file.filename or "arquivo", stored_filename=stored, mime_type=mime, size_bytes=size))
+    session.add(Attachment(company_id=ctx.company.id, client_id=active_client_id, uploaded_by_user_id=ctx.user.id,
+                           education_lesson_id=lesson.id, original_filename=file.filename or "arquivo",
+                           stored_filename=stored, mime_type=mime, size_bytes=size))
     session.commit()
 
     set_flash(request, "Material anexado.")
@@ -10190,7 +10280,8 @@ async def edu_lesson_attach(request: Request, session: Session = Depends(get_ses
 
 @app.post("/educacao/aulas/{lesson_id}/editar")
 @require_role({"admin", "equipe"})
-async def edu_lesson_edit(request: Request, session: Session = Depends(get_session), lesson_id: int = 0, title: str = Form(...), video_url: str = Form(""), description: str = Form("")) -> Response:
+async def edu_lesson_edit(request: Request, session: Session = Depends(get_session), lesson_id: int = 0,
+                          title: str = Form(...), video_url: str = Form(""), description: str = Form("")) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
@@ -10232,6 +10323,7 @@ async def edu_lesson_delete(request: Request, session: Session = Depends(get_ses
     set_flash(request, "Aula excluída.")
     return RedirectResponse(f"/educacao/modulos/{module.id if module else ''}", status_code=303)
 
+
 # ----------------------------
 # Crédito (SCR Direct Data)
 # ----------------------------
@@ -10243,15 +10335,26 @@ def _digits_only(value: str) -> str:
 
 def _parse_brl_amount(value: Any) -> float:
     """
-    Converte strings de valor (ex.: "1.234,56", "1234.56", "R$ 1.234") para float.
+    Converte strings de valor (ex.: "1.234,56", "1234.56", "R$ 1.234", "1.234.567") para float.
+
+    Regras:
+      - Se tiver '.' e ',' -> '.' é milhar, ',' é decimal.
+      - Se tiver só ',' -> ',' é decimal, '.' (se existir) é milhar.
+      - Se tiver só '.' e MAIS DE UM '.' -> assume milhar (remove todos os '.').
+      - Caso contrário tenta float direto após limpar caracteres.
     """
     if value is None:
         return 0.0
     if isinstance(value, (int, float)):
-        return float(value)
+        try:
+            return float(value)
+        except Exception:
+            return 0.0
+
     s = str(value).strip()
     if not s:
         return 0.0
+
     s = s.replace("R$", "").replace(" ", "")
     # Se tiver ambos '.' e ',', assume '.' milhar e ',' decimal
     if "," in s and "." in s:
@@ -10260,12 +10363,24 @@ def _parse_brl_amount(value: Any) -> float:
         # Se só tiver ',', assume decimal
         if "," in s:
             s = s.replace(".", "").replace(",", ".")
+        else:
+            # Só '.' (ou nenhum): se houver mais de um '.', assume milhar e remove todos
+            if s.count(".") > 1:
+                s = s.replace(".", "")
+
     # Remove qualquer coisa que não seja número/ponto/sinal
     s = re.sub(r"[^0-9.\-]+", "", s)
+    if not s or s == "-" or s == ".":
+        return 0.0
+
     try:
         return float(s)
     except Exception:
-        return 0.0
+        # Último fallback: remove todos os pontos e tenta novamente
+        try:
+            return float(s.replace(".", ""))
+        except Exception:
+            return 0.0
 
 
 def _calc_potential(report: CreditReport) -> tuple[float, str]:
@@ -10355,7 +10470,8 @@ async def _directdata_scr_request(*, document_type: str, document_value: str) ->
     return resp.status_code, data if isinstance(data, dict) else None, msg
 
 
-def _apply_directdata_response_to_report(report: "CreditReport", *, code: int, data: dict[str, Any] | None, msg: str) -> None:
+def _apply_directdata_response_to_report(report: "CreditReport", *, code: int, data: dict[str, Any] | None,
+                                         msg: str) -> None:
     """Atualiza o CreditReport com a resposta Direct Data (sem commit)."""
     report.http_status = int(code or 0)
     report.message = (msg or "")[:500]
@@ -10422,7 +10538,8 @@ async def _credit_run_scr_and_update(report_id: int) -> None:
             report = s.get(CreditReport, int(report_id))
             if not report:
                 return
-            code, data, msg = await _directdata_scr_request(document_type=report.document_type, document_value=report.document_value)
+            code, data, msg = await _directdata_scr_request(document_type=report.document_type,
+                                                            document_value=report.document_value)
             _apply_directdata_response_to_report(report, code=int(code or 0), data=data, msg=msg)
             s.add(report)
             s.commit()
@@ -10444,49 +10561,92 @@ def _get_client_for_credit(ctx: TenantContext, request: Request, session: Sessio
 def _get_latest_consent(session: Session, *, company_id: int, client_id: int) -> CreditConsent | None:
     return session.exec(
         select(CreditConsent)
-        .where(CreditConsent.company_id == company_id, CreditConsent.client_id == client_id, CreditConsent.kind == CREDIT_CONSENT_KIND_SCR)
+        .where(CreditConsent.company_id == company_id, CreditConsent.client_id == client_id,
+               CreditConsent.kind == CREDIT_CONSENT_KIND_SCR)
         .order_by(CreditConsent.created_at.desc())
     ).first()
+
+
+def _as_aware_utc(dt: Optional[datetime]) -> Optional[datetime]:
+    """Garante datetime timezone-aware em UTC.
+
+    Muitos bancos/ORMs podem retornar datetimes "naive" (sem tzinfo). Para evitar
+    TypeError ao comparar com utcnow() (aware), assumimos UTC quando tzinfo=None.
+    """
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    try:
+        return dt.astimezone(timezone.utc)
+    except Exception:
+        return dt
 
 
 def _refresh_consent_status(consent: CreditConsent) -> None:
     now = utcnow()
     if consent.status == "revogada":
         return
-    if consent.expires_at and now > consent.expires_at:
+
+    expires_at = _as_aware_utc(consent.expires_at)
+    if expires_at and now > expires_at:
         consent.status = "expirada"
     else:
         consent.status = "valida"
 
 
 def _coerce_credit_report_nullable_fields(r: "CreditReport") -> None:
-    """Garante que campos numéricos/texto não venham como NULL do banco.
+    """Normaliza campos potencialmente nulos/strings para evitar 500 na UI.
 
-    Isso evita erros no Jinja ao formatar (ex.: '%.2f') quando a coluna no Postgres
-    foi criada como nullable em alguma migração.
+    Na prática, podem existir registros antigos com campos numéricos salvos como string
+    (ex.: '1.234,56'). Este helper garante que o template não quebre.
     """
-    # Inteiros
-    r.quantidade_instituicoes = int(r.quantidade_instituicoes or 0)
-    r.quantidade_operacoes = int(r.quantidade_operacoes or 0)
-    r.http_status = int(r.http_status or 0)
-    r.resultado_id = int(r.resultado_id or 0)
 
-    # Floats
-    r.risco_total_brl = float(r.risco_total_brl or 0.0)
-    r.carteira_total_brl = float(r.carteira_total_brl or 0.0)
-    r.carteira_vencer_brl = float(r.carteira_vencer_brl or 0.0)
-    r.carteira_vencido_brl = float(r.carteira_vencido_brl or 0.0)
-    r.carteira_prejuizo_brl = float(r.carteira_prejuizo_brl or 0.0)
-    r.potential_score = float(r.potential_score or 0.0)
+    def _safe_int(v: Any, default: int = 0) -> int:
+        if v is None:
+            return default
+        if isinstance(v, bool):
+            return int(v)
+        if isinstance(v, int):
+            return v
+        try:
+            return int(v)
+        except Exception:
+            try:
+                s = str(v).strip()
+                if not s:
+                    return default
+                s = re.sub(r"[^0-9\-]+", "", s)
+                if not s or s == "-":
+                    return default
+                return int(s)
+            except Exception:
+                return default
+
+    # Inteiros
+    r.quantidade_instituicoes = _safe_int(getattr(r, "quantidade_instituicoes", 0), 0)
+    r.quantidade_operacoes = _safe_int(getattr(r, "quantidade_operacoes", 0), 0)
+    r.http_status = _safe_int(getattr(r, "http_status", 0), 0)
+    r.resultado_id = _safe_int(getattr(r, "resultado_id", 0), 0)
+
+    # Floats (aceita strings BR)
+    r.risco_total_brl = _parse_brl_amount(getattr(r, "risco_total_brl", 0.0))
+    r.carteira_total_brl = _parse_brl_amount(getattr(r, "carteira_total_brl", 0.0))
+    r.carteira_vencer_brl = _parse_brl_amount(getattr(r, "carteira_vencer_brl", 0.0))
+    r.carteira_vencido_brl = _parse_brl_amount(getattr(r, "carteira_vencido_brl", 0.0))
+    r.carteira_prejuizo_brl = _parse_brl_amount(getattr(r, "carteira_prejuizo_brl", 0.0))
+    r.potential_score = _parse_brl_amount(getattr(r, "potential_score", 0.0))
 
     # Strings
-    r.score = (r.score or "")
-    r.faixa_risco = (r.faixa_risco or "")
-    r.obrigacao_assumida = (r.obrigacao_assumida or "")
-    r.obrigacao_resumida = (r.obrigacao_resumida or "")
-    r.message = (r.message or "")
-    r.status = (r.status or "processing")
-    r.potential_label = (r.potential_label or "baixo")
+    r.score = (getattr(r, "score", "") or "")
+    r.faixa_risco = (getattr(r, "faixa_risco", "") or "")
+    r.obrigacao_assumida = (getattr(r, "obrigacao_assumida", "") or "")
+    r.obrigacao_resumida = (getattr(r, "obrigacao_resumida", "") or "")
+    r.message = (getattr(r, "message", "") or "")
+    r.status = (getattr(r, "status", "") or "processing")
+    r.potential_label = (getattr(r, "potential_label", "") or "baixo")
+
+
 @app.get("/credito", response_class=HTMLResponse)
 @require_login
 async def credit_home(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
@@ -10502,24 +10662,47 @@ async def credit_home(request: Request, session: Session = Depends(get_session))
     reports: list[CreditReport] = []
 
     if current_client and ensure_can_access_client(ctx, current_client.id):
-        consent = _get_latest_consent(session, company_id=ctx.company.id, client_id=current_client.id)
-        if consent:
-            _refresh_consent_status(consent)
-            consent.updated_at = utcnow()
-            session.add(consent)
-            session.commit()
-            consent_file = session.exec(
-                select(Attachment)
-                .where(Attachment.company_id == ctx.company.id, Attachment.client_id == current_client.id, Attachment.credit_consent_id == consent.id)
-                .order_by(Attachment.created_at.desc())
-            ).first()
+        try:
+            consent = _get_latest_consent(session, company_id=ctx.company.id, client_id=current_client.id)
+            if consent:
+                prev_status = consent.status
+                _refresh_consent_status(consent)
+                # Só persiste se mudar status (evita commits desnecessários a cada page load)
+                if consent.status != prev_status:
+                    consent.updated_at = utcnow()
+                    session.add(consent)
+                    session.commit()
+                consent_file = session.exec(
+                    select(Attachment)
+                    .where(
+                        Attachment.company_id == ctx.company.id,
+                        Attachment.client_id == current_client.id,
+                        Attachment.credit_consent_id == consent.id,
+                    )
+                    .order_by(Attachment.created_at.desc())
+                ).first()
 
-        reports = session.exec(
-            select(CreditReport)
-            .where(CreditReport.company_id == ctx.company.id, CreditReport.client_id == current_client.id)
-            .order_by(CreditReport.created_at.desc())
-            .limit(30)
-        ).all()
+            reports = session.exec(
+                select(CreditReport)
+                .where(CreditReport.company_id == ctx.company.id, CreditReport.client_id == current_client.id)
+                .order_by(CreditReport.created_at.desc())
+                .limit(30)
+            ).all()
+        except Exception as e:
+            # Evita 500 silencioso no Render: mostra mensagem amigável e mantém log
+            print(f"[credit] erro ao carregar tela /credito: {type(e).__name__}: {e}")
+            return render(
+                "error.html",
+                request=request,
+                context={
+                    "current_user": ctx.user,
+                    "current_company": ctx.company,
+                    "role": ctx.membership.role,
+                    "current_client": current_client,
+                    "message": f"Erro no módulo de crédito: {type(e).__name__}: {e}",
+                },
+                status_code=500,
+            )
     else:
         if ctx.membership.role != "cliente":
             set_flash(request, "Selecione um cliente para acessar Crédito.")
@@ -10545,13 +10728,13 @@ async def credit_home(request: Request, session: Session = Depends(get_session))
 @app.post("/credito/consent")
 @require_login
 async def credit_upload_consent(
-    request: Request,
-    session: Session = Depends(get_session),
-    signed_by_name: str = Form(...),
-    signed_by_document: str = Form(""),
-    signed_at: str = Form(""),
-    notes: str = Form(""),
-    file: UploadFile = File(...),
+        request: Request,
+        session: Session = Depends(get_session),
+        signed_by_name: str = Form(...),
+        signed_by_document: str = Form(""),
+        signed_at: str = Form(""),
+        notes: str = Form(""),
+        file: UploadFile = File(...),
 ) -> Response:
     ctx = get_tenant_context(request, session)
     if not ctx:
@@ -10616,11 +10799,11 @@ async def credit_upload_consent(
 @app.post("/credito/consultar")
 @require_role({"admin", "equipe"})
 async def credit_consult(
-    request: Request,
-    background_tasks: BackgroundTasks,
-    session: Session = Depends(get_session),
-    document_type: str = Form("cnpj"),
-    document_value: str = Form(""),
+        request: Request,
+        background_tasks: BackgroundTasks,
+        session: Session = Depends(get_session),
+        document_type: str = Form("cnpj"),
+        document_value: str = Form(""),
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
@@ -10666,7 +10849,8 @@ async def credit_consult(
 
 @app.get("/credito/{report_id}", response_class=HTMLResponse)
 @require_login
-async def credit_report_detail(request: Request, session: Session = Depends(get_session), report_id: int = 0) -> HTMLResponse:
+async def credit_report_detail(request: Request, session: Session = Depends(get_session),
+                               report_id: int = 0) -> HTMLResponse:
     ctx = get_tenant_context(request, session)
     if not ctx:
         request.session.clear()
@@ -10680,6 +10864,8 @@ async def credit_report_detail(request: Request, session: Session = Depends(get_
     if not ensure_can_access_client(ctx, report.client_id):
         set_flash(request, "Sem permissão.")
         return RedirectResponse("/credito", status_code=303)
+    _coerce_credit_report_nullable_fields(report)
+
     _coerce_credit_report_nullable_fields(report)
 
     return render(
@@ -10697,7 +10883,8 @@ async def credit_report_detail(request: Request, session: Session = Depends(get_
 
 @app.post("/credito/{report_id}/atualizar")
 @require_role({"admin", "equipe"})
-async def credit_report_refresh(request: Request, background_tasks: BackgroundTasks, session: Session = Depends(get_session), report_id: int = 0) -> Response:
+async def credit_report_refresh(request: Request, background_tasks: BackgroundTasks,
+                                session: Session = Depends(get_session), report_id: int = 0) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
@@ -10719,7 +10906,8 @@ async def credit_report_refresh(request: Request, background_tasks: BackgroundTa
 
 @app.post("/credito/{report_id}/criar_negocio")
 @require_role({"admin", "equipe"})
-async def credit_report_create_deal(request: Request, session: Session = Depends(get_session), report_id: int = 0) -> Response:
+async def credit_report_create_deal(request: Request, session: Session = Depends(get_session),
+                                    report_id: int = 0) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
@@ -10727,6 +10915,8 @@ async def credit_report_create_deal(request: Request, session: Session = Depends
     if not report or report.company_id != ctx.company.id:
         set_flash(request, "Relatório não encontrado.")
         return RedirectResponse("/credito", status_code=303)
+
+    _coerce_credit_report_nullable_fields(report)
 
     if report.status != "done":
         set_flash(request, "Finalize a consulta antes de criar negócio.")
@@ -10772,7 +10962,8 @@ async def credit_report_create_deal(request: Request, session: Session = Depends
 
 @app.post("/credito/{report_id}/gerar_tarefas")
 @require_role({"admin", "equipe"})
-async def credit_report_generate_tasks(request: Request, session: Session = Depends(get_session), report_id: int = 0) -> Response:
+async def credit_report_generate_tasks(request: Request, session: Session = Depends(get_session),
+                                       report_id: int = 0) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
@@ -10780,6 +10971,8 @@ async def credit_report_generate_tasks(request: Request, session: Session = Depe
     if not report or report.company_id != ctx.company.id:
         set_flash(request, "Relatório não encontrado.")
         return RedirectResponse("/credito", status_code=303)
+
+    _coerce_credit_report_nullable_fields(report)
 
     if report.status != "done":
         set_flash(request, "Finalize a consulta antes de gerar tarefas.")
