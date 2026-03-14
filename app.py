@@ -5181,6 +5181,28 @@ TEMPLATES.update({
             </label>
           </div>
         </div>
+        <div class="col-12 mt-3">
+          <hr class="my-3"/>
+          <h6 class="mb-2">Autorização para consulta ao SCR (Bacen)</h6>
+          <div class="muted small mb-2">
+            Para concluir o cadastro, precisamos do seu aceite eletrônico para consulta de crédito e tratamento de dados conforme termo abaixo.
+          </div>
+
+          <div class="border rounded p-3 bg-light" style="max-height: 260px; overflow: auto;">
+            {{ consent_terms_html|safe }}
+          </div>
+
+          <div class="form-check mt-2">
+            <input class="form-check-input" type="checkbox" name="scr_accept" id="scr_accept" required/>
+            <label class="form-check-label" for="scr_accept">
+              Li o termo acima e autorizo a consulta ao SCR (Bacen) e o tratamento de dados para análise de crédito.
+            </label>
+          </div>
+
+          <div class="muted small mt-2">
+            Registraremos evidências do aceite (data/hora, IP e navegador) para fins de auditoria.
+          </div>
+        </div>
       </div>
 
       <button class="btn btn-primary mt-3">Criar acesso</button>
@@ -6259,6 +6281,9 @@ async def invite_signup_page(
 
     require_last4 = bool(CLIENT_INVITE_REQUIRE_LAST4 and _digits_last4(client.cnpj))
 
+    consent_terms_html = templates_env.from_string(CREDIT_CONSENT_TERMS_HTML).render(
+        term_version=CREDIT_CONSENT_TERM_VERSION)
+
     return render(
         "invite_signup.html",
         request=request,
@@ -6266,6 +6291,8 @@ async def invite_signup_page(
             "current_user": None,
             "company": company,
             "client": client,
+            "consent_terms_html": consent_terms_html,
+            "consent_term_version": CREDIT_CONSENT_TERM_VERSION,
             "token": token,
             "invited_email": inv.invited_email,
             "require_last4": bool(require_last4),
@@ -6286,6 +6313,7 @@ async def invite_signup_action(
         password2: str = Form(...),
         doc_last4: str = Form(""),
         accept: Optional[str] = Form(None),
+        scr_accept: Optional[str] = Form(None),
 ) -> Response:
     if not ensure_client_invite_table():
         return render(
@@ -6297,6 +6325,8 @@ async def invite_signup_action(
 
     def render_form(company: Company, client: Client, inv: ClientInvite, msg: str) -> HTMLResponse:
         require_last4 = bool(CLIENT_INVITE_REQUIRE_LAST4 and _digits_last4(client.cnpj))
+        consent_terms_html = templates_env.from_string(CREDIT_CONSENT_TERMS_HTML).render(
+            term_version=CREDIT_CONSENT_TERM_VERSION)
         return render(
             "invite_signup.html",
             request=request,
@@ -6304,6 +6334,8 @@ async def invite_signup_action(
                 "current_user": None,
                 "company": company,
                 "client": client,
+                "consent_terms_html": consent_terms_html,
+                "consent_term_version": CREDIT_CONSENT_TERM_VERSION,
                 "token": token,
                 "invited_email": inv.invited_email,
                 "require_last4": bool(require_last4),
@@ -6352,6 +6384,10 @@ async def invite_signup_action(
     if not accept:
         return render_form(company, client, inv, "Você precisa aceitar os termos para continuar.")
 
+    if not scr_accept:
+        return render_form(company, client, inv,
+                           "Você precisa autorizar a consulta ao SCR (Bacen) para concluir o cadastro.")
+
     if password != password2:
         return render_form(company, client, inv, "As senhas não conferem.")
 
@@ -6397,12 +6433,67 @@ async def invite_signup_action(
         session.add(membership)
 
     inv.status = "aceito"
-    inv.accepted_at = utcnow()
     inv.accepted_user_id = user.id
-    inv.updated_at = utcnow()
 
+    # Registra a autorização SCR/Bacen junto do cadastro (clickwrap, sem OTP)
+    if not ensure_credit_consent_table():
+        session.rollback()
+        return render_form(company, client, inv, "Sistema de aceite indisponível (migração pendente no banco).")
+
+    now = utcnow()
+    expires_at_consent = now + timedelta(days=int(CREDIT_CONSENT_MAX_DAYS))
+
+    evidence = {
+        "method": "invite-clickwrap",
+        "term_version": CREDIT_CONSENT_TERM_VERSION,
+        "term_sha256": _terms_sha256(),
+        "ip": _request_ip(request),
+        "user_agent": request.headers.get("user-agent") or "",
+        "accepted_at_utc": now.isoformat(),
+        "invite_id": int(inv.id or 0),
+        "accepted_user_id": int(user.id or 0),
+        "invited_email": (inv.invited_email or "").strip().lower(),
+    }
+
+    latest = _get_latest_consent(session, company_id=company.id, client_id=client.id)
+    if latest:
+        _refresh_consent_status(latest)
+        if latest.status != "valida":
+            latest.kind = CREDIT_CONSENT_KIND_SCR
+            latest.status = "valida"
+            latest.signed_by_name = nm
+            latest.signed_by_document = _digits_only(client.cnpj or "")
+            latest.signed_at = now
+            latest.expires_at = expires_at_consent
+            latest.updated_at = now
+            latest.notes = "[aceite-eletronico]\n" + json.dumps(evidence, ensure_ascii=False)
+            session.add(latest)
+    else:
+        consent = CreditConsent(
+            company_id=company.id,
+            client_id=client.id,
+            created_by_user_id=int(inv.created_by_user_id or user.id or 0),
+            kind=CREDIT_CONSENT_KIND_SCR,
+            status="valida",
+            signed_by_name=nm,
+            signed_by_document=_digits_only(client.cnpj or ""),
+            signed_at=now,
+            expires_at=expires_at_consent,
+            notes="[aceite-eletronico]\n" + json.dumps(evidence, ensure_ascii=False),
+            created_at=now,
+            updated_at=now,
+        )
+        session.add(consent)
+
+    inv.accepted_at = now
+    inv.updated_at = now
     session.add(inv)
-    session.commit()
+
+    try:
+        session.commit()
+    except Exception:
+        session.rollback()
+        return render_form(company, client, inv, "Erro ao concluir cadastro. Tente novamente.")
 
     request.session["user_id"] = user.id
     request.session["company_id"] = company.id
