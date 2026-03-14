@@ -4964,6 +4964,21 @@ TEMPLATES.update({
 </div>
 {% endblock %}
 """,
+
+"success.html": r"""{% extends "base.html" %}
+{% block content %}
+<div class="container py-4">
+  <div class="card p-4">
+    <div class="d-flex align-items-center gap-2 mb-2">
+      <span class="badge bg-success">OK</span>
+      <div class="fw-semibold">Confirmação</div>
+    </div>
+    <div class="muted">{{ message or "Operação concluída." }}</div>
+    <div class="muted small mt-3">Você pode fechar esta página.</div>
+  </div>
+</div>
+{% endblock %}
+""",
 })
 
 templates_env = Environment(loader=DictLoader(TEMPLATES), autoescape=True)
@@ -11431,15 +11446,32 @@ def _as_aware_utc(dt: Optional[datetime]) -> Optional[datetime]:
 
 
 def _refresh_consent_status(consent: CreditConsent) -> None:
+    """Atualiza status apenas quando fizer sentido (não promove 'pendente' para 'valida').
+
+    Regras:
+    - pendente: vira expirada se passou do expires_at; caso contrário permanece pendente.
+    - valida: vira expirada se passou do expires_at.
+    - revogada: permanece revogada.
+    - expirada: permanece expirada.
+    """
     now = utcnow()
-    if consent.status == "revogada":
+    status = (consent.status or "").strip().lower() or "pendente"
+
+    if status == "revogada":
+        consent.status = "revogada"
         return
 
     expires_at = _as_aware_utc(consent.expires_at)
     if expires_at and now > expires_at:
         consent.status = "expirada"
-    else:
+        return
+
+    if status in ("valida",):
         consent.status = "valida"
+        return
+
+    # Default: não aceito ainda
+    consent.status = "pendente"
 
 
 def _coerce_credit_report_nullable_fields(r: "CreditReport") -> None:
