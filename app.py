@@ -1696,8 +1696,8 @@ a:hover{ color:#00BFBF; }
     <nav class="navbar navbar-expand-lg bg-white border-bottom">
       <div class="container py-2">
         <a class="navbar-brand d-flex align-items-center gap-2" href="/">
-  <img src="/static/logo.png" alt="Maffezzolli Capital" style="height:32px; width:auto;">
-  <span class="fw-bold" style="color:#0B1E1E;">Maffezzolli Capital</span>
+  <img src="/static/logo.png" alt="Maffezzolli Capital" style="height:44px; width:auto;">
+<span class="fw-semibold" style="color:#0B1E1E; font-size:0.95rem; letter-spacing:0.2px; opacity:0.9;">Bem-vindo</span>
 </a>
         <div class="ms-auto d-flex gap-2 align-items-center">
           {% if current_user %}
