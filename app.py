@@ -6049,10 +6049,10 @@ async def client_switch_page(request: Request, session: Session = Depends(get_se
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
-    # Garante tabela em ambientes sem Alembic
-    if not ensure_credit_consent_table():
-        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
-        return RedirectResponse("/credito", status_code=303)
+    # Garante tabela de convites em ambientes sem Alembic
+    if not ensure_client_invite_table():
+        set_flash(request, "Sistema de convites não está configurado (migração pendente no banco).")
+        return RedirectResponse("/", status_code=303)
 
     clients = session.exec(select(Client).where(Client.company_id == ctx.company.id).order_by(Client.created_at)).all()
     active_client_id = get_active_client_id(request, session, ctx)
@@ -6086,20 +6086,19 @@ async def client_switch_page(request: Request, session: Session = Depends(get_se
                 }
             )
 
-
-return render(
-    "client_switch.html",
-    request=request,
-    context={
-        "current_user": ctx.user,
-        "current_company": ctx.company,
-        "role": ctx.membership.role,
-        "current_client": current_client,
-        "clients": clients,
-        "invite_link_url": invite_link_url,
-        "recent_invites": recent_invites,
-    },
-)
+    return render(
+        "client_switch.html",
+        request=request,
+        context={
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "role": ctx.membership.role,
+            "current_client": current_client,
+            "clients": clients,
+            "invite_link_url": invite_link_url,
+            "recent_invites": recent_invites,
+        },
+    )
 
 
 @app.post("/client/switch")
