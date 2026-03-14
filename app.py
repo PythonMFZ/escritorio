@@ -8971,8 +8971,19 @@ async def contaazul_sync_now(request: Request, background_tasks: BackgroundTasks
         set_flash(request, "Selecione um cliente antes de sincronizar.")
         return RedirectResponse("/financeiro", status_code=303)
 
+    # Pré-checagem: se não houver doc/e-mail e não houver vínculo salvo, o sync sempre retornará vazio.
+    pid_saved = _contaazul_get_mapped_person_id(session, company_id=ctx.company.id, client_id=current_client.id)
+    doc = _digits_only(current_client.cnpj)
+    email = (current_client.finance_email or current_client.email or "").strip()
+    if not pid_saved and not doc and not email:
+        set_flash(request,
+                  "Este cliente não tem CNPJ/CPF nem e-mail no cadastro. Preencha isso ou cole o UUID (person_id) manualmente antes de sincronizar.")
+        return RedirectResponse("/financeiro", status_code=303)
+
     background_tasks.add_task(contaazul_sync_client_job, ctx.company.id, current_client.id)
     set_flash(request, "Sincronização Conta Azul iniciada. Recarregue em instantes.")
+
+    return RedirectResponse("/financeiro", status_code=303)
 
 
 @app.post("/financeiro/contaazul/auto_vincular")
@@ -9035,8 +9046,6 @@ async def contaazul_vincular_manual(
 
     _contaazul_upsert_person_map(session, company_id=ctx.company.id, client=current_client, person_id=pid)
     set_flash(request, f"Vínculo salvo. person_id={pid}")
-    return RedirectResponse("/financeiro", status_code=303)
-
     return RedirectResponse("/financeiro", status_code=303)
 
 
