@@ -175,6 +175,8 @@ DIRECTDATA_SCR_URL = os.getenv("DIRECTDATA_SCR_URL") or "https://apiv3.directd.c
 DIRECTDATA_ASYNC = os.getenv("DIRECTDATA_ASYNC", "1") == "1"
 DIRECTDATA_TIMEOUT_S = float(os.getenv("DIRECTDATA_TIMEOUT_S", "30"))
 CREDIT_CONSENT_MAX_DAYS = int(os.getenv("CREDIT_CONSENT_MAX_DAYS", "180"))
+DIRECTDATA_ASYNC_RESULT_URL = os.getenv("DIRECTDATA_ASYNC_RESULT_URL") or "https://apiv3.directd.com.br/api/Historico/ObterRetornoConsultaAsync"
+DIRECTDATA_POLL_MIN_INTERVAL_S = float(os.getenv("DIRECTDATA_POLL_MIN_INTERVAL_S", "6"))
 
 NOTION_VERSION = os.getenv("NOTION_VERSION", "2026-03-11")
 NOTION_API_BASE = "https://api.notion.com/v1"
@@ -10430,11 +10432,57 @@ def _calc_potential(report: CreditReport) -> tuple[float, str]:
     return score, label
 
 
-async def _directdata_scr_request(*, document_type: str, document_value: str) -> tuple[int, dict[str, Any] | None, str]:
+
+async def _directdata_scr_poll_request(*, consulta_uid: str) -> tuple[int, dict[str, Any] | None, str]:
+    """Obtém o retorno de uma consulta assíncrona já iniciada na Direct Data.
+
+    Quando usamos `async=habilitar`, a primeira chamada pode retornar somente `metaDados`
+    com `consultaUid`. Para evitar nova cobrança, este poll busca o resultado final usando
+    o endpoint de histórico (ObterRetornoConsultaAsync).
+    """
+    if not DIRECTDATA_TOKEN:
+        return 0, None, "DIRECTDATA_TOKEN não configurado."
+    uid = (consulta_uid or "").strip()
+    if not uid:
+        return 0, None, "consultaUid ausente."
+
+    params: dict[str, Any] = {"TOKEN": DIRECTDATA_TOKEN, "consultaUid": uid}
+    timeout = httpx.Timeout(DIRECTDATA_TIMEOUT_S, connect=min(5.0, float(DIRECTDATA_TIMEOUT_S)))
+    try:
+        async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+            resp = await client.get(DIRECTDATA_ASYNC_RESULT_URL, params=params)
+    except Exception as e:
+        return 0, None, f"Falha ao consultar Direct Data (poll): {e}"
+
+    try:
+        data = resp.json()
+    except Exception:
+        data = None
+
+    msg = ""
+    if isinstance(data, dict):
+        meta = data.get("metaDados") or {}
+        msg = str(meta.get("mensagem") or meta.get("resultado") or "")[:500]
+
+    return int(resp.status_code or 0), data if isinstance(data, dict) else None, msg
+
+
+def _directdata_meta_is_processing(meta: dict[str, Any]) -> bool:
+    """Heurística: identifica respostas ainda em processamento via metaDados."""
+    txt = f"{meta.get('mensagem','')} {meta.get('resultado','')}".lower()
+    if not txt.strip():
+        return False
+    return any(k in txt for k in ("process", "aguard", "fila", "assíncr", "assincr", "gerando"))
+
+
+async def _directdata_scr_request(*, document_type: str, document_value: str, consulta_uid: str = "") -> tuple[int, dict[str, Any] | None, str]:
     """Consulta Direct Data (SCR) via HTTP (assíncrono).
 
     Usamos AsyncClient para não travar o worker (Render).
     """
+    if consulta_uid:
+        return await _directdata_scr_poll_request(consulta_uid=consulta_uid)
+
     if not DIRECTDATA_TOKEN:
         return 0, None, "DIRECTDATA_TOKEN não configurado."
     doc = _digits_only(document_value)
@@ -10493,9 +10541,13 @@ def _apply_directdata_response_to_report(report: "CreditReport", *, code: int, d
 
     report.raw_json = json.dumps(data, ensure_ascii=False, indent=2)
 
-    if code == 200 and isinstance(ret, dict) and ret:
+    processing_hint = False
+    if isinstance(meta, dict):
+        processing_hint = _directdata_meta_is_processing(meta)
+
+    if code == 200 and not processing_hint:
         report.status = "done"
-    elif code in (201, 202):
+    elif code in (201, 202) or processing_hint:
         report.status = "processing"
     else:
         report.status = "error"
@@ -10538,8 +10590,10 @@ async def _credit_run_scr_and_update(report_id: int) -> None:
             report = s.get(CreditReport, int(report_id))
             if not report:
                 return
+            consulta_uid = report.consulta_uid if report.status == "processing" else ""
             code, data, msg = await _directdata_scr_request(document_type=report.document_type,
-                                                            document_value=report.document_value)
+                                                            document_value=report.document_value,
+                                                            consulta_uid=consulta_uid)
             _apply_directdata_response_to_report(report, code=int(code or 0), data=data, msg=msg)
             s.add(report)
             s.commit()
@@ -10893,14 +10947,51 @@ async def credit_report_refresh(request: Request, background_tasks: BackgroundTa
         set_flash(request, "Relatório não encontrado.")
         return RedirectResponse("/credito", status_code=303)
 
-    # Atualiza em background (evita travar o worker).
-    report.status = "processing"
-    report.updated_at = utcnow()
+    now = utcnow()
+    force = (request.query_params.get("force") or "").strip() == "1"
+
+    # Por padrão, "Atualizar" só consulta o status (poll) e NÃO inicia nova cobrança.
+    if report.status != "processing" and not force:
+        set_flash(request, "Relatório já finalizado. Para nova consulta, use 'Consultar' novamente.")
+        return RedirectResponse(f"/credito/{report.id}", status_code=303)
+
+    # Evita storm de cliques / refresh em sequência (reduz consumo)
+    try:
+        if (now - _as_aware_utc(report.updated_at)).total_seconds() < DIRECTDATA_POLL_MIN_INTERVAL_S:
+            set_flash(request, "Aguarde alguns segundos antes de atualizar novamente.")
+            return RedirectResponse(f"/credito/{report.id}", status_code=303)
+    except Exception:
+        pass
+
+    if force:
+        # Reconsulta do zero (pode gerar nova cobrança)
+        report.status = "processing"
+        report.consulta_uid = ""
+        report.resultado_id = 0
+        report.http_status = 0
+        report.message = ""
+        report.raw_json = ""
+        report.updated_at = now
+        session.add(report)
+        session.commit()
+        background_tasks.add_task(_credit_run_scr_and_update, report.id)
+        set_flash(request, "Reconsulta iniciada (nova chamada). Recarregue em instantes.")
+        return RedirectResponse(f"/credito/{report.id}", status_code=303)
+
+    # Se ainda não temos consultaUid, não dispare uma nova chamada (evita cobrar de novo)
+    if not (report.consulta_uid or "").strip():
+        report.updated_at = now
+        session.add(report)
+        session.commit()
+        set_flash(request, "Consulta ainda iniciando (sem consultaUid). Aguarde alguns segundos e atualize novamente.")
+        return RedirectResponse(f"/credito/{report.id}", status_code=303)
+
+    report.updated_at = now
     session.add(report)
     session.commit()
 
     background_tasks.add_task(_credit_run_scr_and_update, report.id)
-    set_flash(request, "Atualização iniciada. Recarregue em instantes.")
+    set_flash(request, "Verificando processamento (sem nova cobrança). Recarregue em instantes.")
     return RedirectResponse(f"/credito/{report.id}", status_code=303)
 
 
