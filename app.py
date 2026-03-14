@@ -17,6 +17,7 @@ from datetime import datetime, timezone, timedelta
 from functools import wraps
 from pathlib import Path
 from typing import Any, Callable, Optional
+from urllib.parse import urlparse
 
 import httpx
 from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, Request, Response, UploadFile
@@ -246,10 +247,39 @@ def _verify_consent_token(token: str) -> dict[str, Any]:
     return payload
 
 
+def _request_origin(request: Request) -> str:
+    proto = (request.headers.get("x-forwarded-proto") or request.url.scheme or "https").split(",")[0].strip()
+    host = (request.headers.get("x-forwarded-host") or request.headers.get("host") or request.url.netloc).split(",")[0].strip()
+    return f"{proto}://{host}".rstrip("/")
+
+
 def _public_base_url(request: Request) -> str:
-    if PUBLIC_BASE_URL:
-        return PUBLIC_BASE_URL
-    return str(request.base_url).rstrip("/")
+    """Base público para links.
+
+    - Por padrão, usa o host efetivo do request (considerando X-Forwarded-*), e inclui root_path.
+    - Se PUBLIC_BASE_URL estiver definido, só usa se o host bater com o host atual, a não ser que
+      PUBLIC_BASE_URL_FORCE=1.
+    """
+    origin = _request_origin(request)
+    root_path = (request.scope.get("root_path") or "").rstrip("/")
+    request_base = (origin + root_path).rstrip("/")
+
+    if not PUBLIC_BASE_URL:
+        return request_base
+
+    public = PUBLIC_BASE_URL.rstrip("/")
+    if PUBLIC_BASE_URL_FORCE:
+        return public
+
+    try:
+        if urlparse(public).netloc == urlparse(request_base).netloc:
+            return public
+    except Exception:
+        pass
+
+    # Evita gerar link quebrado quando PUBLIC_BASE_URL aponta para outro site (ex.: site institucional).
+    return request_base
+
 
 
 CONSENT_LINK_NOTE_PREFIX = "CONSENT_LINK_JSON:"
