@@ -5,6 +5,7 @@ from sqlalchemy.exc import OperationalError
 
 import base64
 import hashlib
+import hmac
 import inspect
 import json
 import os
@@ -175,6 +176,9 @@ DIRECTDATA_SCR_URL = os.getenv("DIRECTDATA_SCR_URL") or "https://apiv3.directd.c
 DIRECTDATA_ASYNC = os.getenv("DIRECTDATA_ASYNC", "1") == "1"
 DIRECTDATA_TIMEOUT_S = float(os.getenv("DIRECTDATA_TIMEOUT_S", "30"))
 CREDIT_CONSENT_MAX_DAYS = int(os.getenv("CREDIT_CONSENT_MAX_DAYS", "180"))
+PUBLIC_BASE_URL = (os.getenv("PUBLIC_BASE_URL") or "").rstrip("/")
+CREDIT_CONSENT_LINK_TTL_HOURS = int(os.getenv("CREDIT_CONSENT_LINK_TTL_HOURS", "168"))  # 7 dias
+CREDIT_CONSENT_TERM_VERSION = os.getenv("CREDIT_CONSENT_TERM_VERSION", "2026-03-14")
 DIRECTDATA_ASYNC_RESULT_URL = os.getenv("DIRECTDATA_ASYNC_RESULT_URL") or "https://apiv3.directd.com.br/api/Historico/ObterRetornoConsultaAsync"
 DIRECTDATA_POLL_MIN_INTERVAL_S = float(os.getenv("DIRECTDATA_POLL_MIN_INTERVAL_S", "6"))
 
@@ -200,6 +204,92 @@ _MAX_UPLOAD_BYTES = 20 * 1024 * 1024  # 20MB (ajuste se quiser)
 
 def utcnow() -> datetime:
     return datetime.now(timezone.utc)
+
+def _b64url_encode(data: bytes) -> str:
+    return base64.urlsafe_b64encode(data).decode("utf-8").rstrip("=")
+
+
+def _b64url_decode(data: str) -> bytes:
+    s = (data or "").strip()
+    if not s:
+        return b""
+    pad = "=" * ((4 - (len(s) % 4)) % 4)
+    return base64.urlsafe_b64decode((s + pad).encode("utf-8"))
+
+
+def _hmac_sha256_hex(key: str, msg: bytes) -> str:
+    return hmac.new(key.encode("utf-8"), msg, hashlib.sha256).hexdigest()
+
+
+def _sign_consent_token(payload: dict[str, Any]) -> str:
+    raw = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    b64 = _b64url_encode(raw)
+    sig = _hmac_sha256_hex(APP_SECRET_KEY, raw)
+    return f"{b64}.{sig}"
+
+
+def _verify_consent_token(token: str) -> dict[str, Any]:
+    tok = (token or "").strip()
+    if "." not in tok:
+        raise ValueError("token inválido")
+    b64, sig = tok.split(".", 1)
+    raw = _b64url_decode(b64)
+    expected = _hmac_sha256_hex(APP_SECRET_KEY, raw)
+    if not hmac.compare_digest(expected, sig):
+        raise ValueError("assinatura inválida")
+    payload = json.loads(raw.decode("utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError("payload inválido")
+    exp = int(payload.get("exp") or 0)
+    if exp and utcnow().timestamp() > exp:
+        raise ValueError("token expirado")
+    return payload
+
+
+def _public_base_url(request: Request) -> str:
+    if PUBLIC_BASE_URL:
+        return PUBLIC_BASE_URL
+    return str(request.base_url).rstrip("/")
+
+
+CONSENT_LINK_NOTE_PREFIX = "CONSENT_LINK_JSON:"
+
+
+def _pack_consent_link_note(*, token: str, created_by_user_id: int, expires_at: datetime) -> str:
+    obj = {
+        "token": token,
+        "created_by_user_id": int(created_by_user_id or 0),
+        "expires_at": expires_at.isoformat(),
+        "term_version": CREDIT_CONSENT_TERM_VERSION,
+    }
+    return CONSENT_LINK_NOTE_PREFIX + json.dumps(obj, ensure_ascii=False)
+
+
+def _unpack_consent_link_note(notes: str) -> Optional[dict[str, Any]]:
+    s = (notes or "").strip()
+    if not s.startswith(CONSENT_LINK_NOTE_PREFIX):
+        return None
+    raw = s[len(CONSENT_LINK_NOTE_PREFIX):].strip()
+    try:
+        obj = json.loads(raw)
+        return obj if isinstance(obj, dict) else None
+    except Exception:
+        return None
+
+
+def _request_ip(request: Request) -> str:
+    xf = request.headers.get("x-forwarded-for")
+    if xf:
+        return xf.split(",")[0].strip()
+    if request.client:
+        return request.client.host or ""
+    return ""
+
+
+def _terms_sha256() -> str:
+    raw = f"{CREDIT_CONSENT_TERM_VERSION}|{CREDIT_CONSENT_TERMS_HTML}".encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()
+
 
 
 def _normalize_password(password: str) -> str:
@@ -410,6 +500,29 @@ CONSULT_PROJECT_STATUS = {"ativo", "pausado", "concluido"}
 CREDIT_CONSENT_KIND_SCR = "scr_directdata"
 CREDIT_CONSENT_STATUSES = {"pendente", "valida", "expirada", "revogada"}
 CREDIT_REPORT_STATUSES = {"processing", "done", "error"}
+
+CREDIT_CONSENT_TERMS_HTML = r"""
+<div class="small">
+  <p><b>TERMO DE AUTORIZAÇÃO E CIÊNCIA (LGPD / SCR)</b></p>
+  <p>
+    Eu, titular dos dados, <b>autorizo</b> a realização de consulta e obtenção de informações em bases de crédito,
+    incluindo o <b>Sistema de Informações de Crédito (SCR)</b> do Banco Central do Brasil, por meio de provedor
+    contratado (ex.: Direct Data), para fins de análise de crédito e/ou formalização de operações.
+  </p>
+  <p>
+    Declaro estar ciente de que meus dados pessoais poderão ser tratados para: (i) análise e proteção do crédito;
+    (ii) prevenção a fraudes; (iii) cumprimento de obrigações legais/regulatórias; e (iv) registro e guarda de
+    evidências desta autorização em meio eletrônico.
+  </p>
+  <p>
+    Esta autorização é <b>específica</b> para consultas relacionadas ao meu cadastro, podendo ser revogada a qualquer momento,
+    observado que consultas já realizadas e obrigações legais de guarda poderão permanecer.
+  </p>
+  <p class="muted">
+    Versão do termo: {{ term_version }} • Data/hora do aceite (UTC) será registrada.
+  </p>
+</div>
+"""
 
 
 class CreditConsent(SQLModel, table=True):
@@ -4504,6 +4617,25 @@ TEMPLATES.update({
     <div class="card p-3 mb-4">
       <div class="fw-semibold mb-1">Autorização (LGPD)</div>
       <div class="muted mb-2">Anexe o termo/autorização do cliente antes de consultar o SCR.</div>
+<div class="mt-2">
+  <div class="d-flex flex-wrap gap-2 align-items-center">
+    {% if role in ["admin","equipe"] %}
+      <form method="post" action="/credito/consent_link">
+        <button class="btn btn-outline-primary btn-sm">Gerar link de aceite (sem OTP)</button>
+      </form>
+    {% endif %}
+    {% if consent_link_url %}
+      <div class="small">
+        <div class="muted">Link de aceite:</div>
+        <div class="d-flex gap-2 align-items-center">
+          <input class="form-control form-control-sm mono" style="min-width: 320px;" readonly value="{{ consent_link_url }}"/>
+          <button class="btn btn-outline-secondary btn-sm" type="button" onclick="navigator.clipboard.writeText('{{ consent_link_url }}')">Copiar</button>
+        </div>
+      </div>
+    {% endif %}
+  </div>
+</div>
+
 
       {% if consent and consent.status == "valida" %}
         <div class="small">
@@ -4516,6 +4648,8 @@ TEMPLATES.update({
             <a class="btn btn-outline-primary btn-sm" href="/download/{{ consent_file.id }}">Baixar autorização</a>
           </div>
         {% endif %}
+      {% elif consent and consent.status == "pendente" %}
+        <div class="alert alert-info mb-0">Aguardando aceite eletrônico do cliente. Você pode reenviar o link acima.</div>
       {% else %}
         <form method="post" action="/credito/consent" enctype="multipart/form-data" class="mt-2">
           <div class="row g-2">
@@ -4552,7 +4686,7 @@ TEMPLATES.update({
         <div class="fw-semibold mb-2">Consulta SCR</div>
 
         {% if not consent or consent.status != "valida" %}
-          <div class="alert alert-warning mb-0">Envie uma autorização válida para habilitar a consulta.</div>
+          <div class="alert alert-warning mb-0">Envie uma autorização válida (PDF) ou obtenha o aceite eletrônico para habilitar a consulta.</div>
         {% else %}
           <form method="post" action="/credito/consultar" class="row g-2 align-items-end">
             <div class="col-md-3">
@@ -4703,6 +4837,58 @@ TEMPLATES.update({
       <pre class="mt-2" style="max-height: 420px; overflow:auto;"><code>{{ report.raw_json }}</code></pre>
     </details>
   {% endif %}
+</div>
+{% endblock %}
+""",
+})
+
+TEMPLATES.update({
+    "consent_accept.html": r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <h4 class="mb-1">Autorização (LGPD / SCR)</h4>
+  <div class="muted">Aceite eletrônico para consulta de crédito (SCR) e tratamento de dados.</div>
+
+  <hr class="my-3"/>
+
+  <div class="mb-3">
+    <div><span class="muted">Empresa:</span> <b>{{ company.name }}</b></div>
+    <div><span class="muted">Cliente:</span> <b>{{ client.name }}</b></div>
+    {% if client.cnpj %}<div><span class="muted">Documento:</span> <span class="mono">{{ client.cnpj }}</span></div>{% endif %}
+  </div>
+
+  <div class="border rounded p-3 bg-light">
+    {{ terms_html|safe }}
+  </div>
+
+  <form method="post" class="mt-3">
+    <div class="form-check">
+      <input class="form-check-input" type="checkbox" value="1" id="agree" name="agree" required>
+      <label class="form-check-label" for="agree">
+        Li e concordo com o termo acima e autorizo a consulta.
+      </label>
+    </div>
+
+    <div class="row g-2 mt-2">
+      <div class="col-md-6">
+        <label class="form-label">Confirme seu nome (opcional)</label>
+        <input class="form-control" name="signed_by_name" value="{{ client.name }}" />
+      </div>
+      <div class="col-md-6">
+        <label class="form-label">Confirme os 4 últimos dígitos do documento (opcional)</label>
+        <input class="form-control mono" name="doc_last4" maxlength="4" placeholder="0000" />
+      </div>
+    </div>
+
+    <div class="mt-3 d-flex gap-2">
+      <button class="btn btn-primary">Aceitar</button>
+    </div>
+
+    <div class="muted small mt-3">
+      Ao aceitar, registraremos evidências do aceite (data/hora, IP, navegador) e manteremos a autorização pelo prazo aplicável.
+    </div>
+  </form>
 </div>
 {% endblock %}
 """,
@@ -10850,7 +11036,256 @@ async def credit_upload_consent(
     return RedirectResponse("/credito", status_code=303)
 
 
+@app.post("/credito/consent_link")
+@require_role({"admin", "equipe"})
+async def credit_generate_consent_link(
+        request: Request,
+        session: Session = Depends(get_session),
+) -> Response:
+    """Gera (ou reutiliza) um link público de aceite eletrônico (sem OTP)."""
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    current_client = _get_client_for_credit(ctx, request, session)
+    if not current_client:
+        set_flash(request, "Selecione um cliente.")
+        return RedirectResponse("/credito", status_code=303)
+
+    latest = _get_latest_consent(session, company_id=ctx.company.id, client_id=current_client.id)
+    if latest:
+        _refresh_consent_status(latest)
+        if latest.status == "pendente":
+            meta = _unpack_consent_link_note(latest.notes)
+            if meta and meta.get("token"):
+                try:
+                    _verify_consent_token(str(meta["token"]))
+                    token = str(meta["token"])
+                    url = f"{_public_base_url(request)}/consent/aceite/{token}"
+                    request.session["consent_link_url"] = url
+                    set_flash(request, "Link de aceite gerado (reutilizado).")
+                    return RedirectResponse("/credito", status_code=303)
+                except Exception:
+                    pass
+
+    now = utcnow()
+    exp_dt = now + timedelta(hours=int(CREDIT_CONSENT_LINK_TTL_HOURS))
+    payload = {
+        "company_id": ctx.company.id,
+        "client_id": current_client.id,
+        "created_by_user_id": ctx.user.id,
+        "kind": CREDIT_CONSENT_KIND_SCR,
+        "iat": int(now.timestamp()),
+        "exp": int(exp_dt.timestamp()),
+        "nonce": secrets.token_urlsafe(12),
+        "term_version": CREDIT_CONSENT_TERM_VERSION,
+    }
+    token = _sign_consent_token(payload)
+
+    consent = CreditConsent(
+        company_id=ctx.company.id,
+        client_id=current_client.id,
+        created_by_user_id=ctx.user.id,
+        kind=CREDIT_CONSENT_KIND_SCR,
+        status="pendente",
+        signed_by_name="",
+        signed_by_document="",
+        signed_at=now,
+        expires_at=exp_dt,
+        notes=_pack_consent_link_note(token=token, created_by_user_id=ctx.user.id, expires_at=exp_dt),
+        created_at=now,
+        updated_at=now,
+    )
+    session.add(consent)
+    session.commit()
+
+    url = f"{_public_base_url(request)}/consent/aceite/{token}"
+    request.session["consent_link_url"] = url
+    set_flash(request, "Link de aceite gerado.")
+    return RedirectResponse("/credito", status_code=303)
+
+
+@app.get("/consent/aceite/{token}", response_class=HTMLResponse)
+async def consent_accept_page(
+        request: Request,
+        session: Session = Depends(get_session),
+        token: str = "",
+) -> HTMLResponse:
+    """Página pública para aceite eletrônico (sem login)."""
+    try:
+        payload = _verify_consent_token(token)
+    except Exception as e:
+        return render(
+            "error.html",
+            request=request,
+            context={
+                "current_user": None,
+                "current_company": None,
+                "role": "public",
+                "message": f"Link inválido/expirado: {e}",
+            },
+            status_code=400,
+        )
+
+    company = session.get(Company, int(payload.get("company_id") or 0))
+    client = session.get(Client, int(payload.get("client_id") or 0))
+    if not company or not client:
+        return render(
+            "error.html",
+            request=request,
+            context={
+                "current_user": None,
+                "current_company": None,
+                "role": "public",
+                "message": "Link inválido: cliente/empresa não encontrados.",
+            },
+            status_code=404,
+        )
+
+    latest = _get_latest_consent(session, company_id=company.id, client_id=client.id)
+    if latest:
+        _refresh_consent_status(latest)
+        if latest.status == "valida":
+            return render(
+                "success.html",
+                request=request,
+                context={
+                    "current_user": None,
+                    "current_company": company,
+                    "role": "public",
+                    "message": "Autorização já registrada. Obrigado!",
+                },
+            )
+
+    terms_html = templates_env.from_string(CREDIT_CONSENT_TERMS_HTML).render(term_version=CREDIT_CONSENT_TERM_VERSION)
+
+    return render(
+        "consent_accept.html",
+        request=request,
+        context={
+            "current_user": None,
+            "current_company": company,
+            "role": "public",
+            "company": company,
+            "client": client,
+            "terms_html": terms_html,
+            "term_version": CREDIT_CONSENT_TERM_VERSION,
+        },
+    )
+
+
+@app.post("/consent/aceite/{token}")
+async def consent_accept_submit(
+        request: Request,
+        session: Session = Depends(get_session),
+        token: str = "",
+        agree: str = Form(""),
+        signed_by_name: str = Form(""),
+        doc_last4: str = Form(""),
+) -> Response:
+    """Registra o aceite eletrônico como um CreditConsent válido."""
+    try:
+        payload = _verify_consent_token(token)
+    except Exception as e:
+        set_flash(request, f"Link inválido/expirado: {e}")
+        return RedirectResponse(f"/consent/aceite/{token}", status_code=303)
+
+    if not str(agree).strip():
+        set_flash(request, "É necessário marcar o aceite.")
+        return RedirectResponse(f"/consent/aceite/{token}", status_code=303)
+
+    company_id = int(payload.get("company_id") or 0)
+    client_id = int(payload.get("client_id") or 0)
+    created_by_user_id = int(payload.get("created_by_user_id") or 0)
+
+    company = session.get(Company, company_id)
+    client = session.get(Client, client_id)
+    if not company or not client:
+        set_flash(request, "Link inválido: cliente/empresa não encontrados.")
+        return RedirectResponse(f"/consent/aceite/{token}", status_code=303)
+
+    dl4 = _digits_only(doc_last4)[-4:]
+    if dl4:
+        doc = _digits_only(client.cnpj or "")
+        if doc and not doc.endswith(dl4):
+            set_flash(request, "Os 4 últimos dígitos não conferem.")
+            return RedirectResponse(f"/consent/aceite/{token}", status_code=303)
+
+    now = utcnow()
+    expires_at = now + timedelta(days=CREDIT_CONSENT_MAX_DAYS)
+
+    evidence = {
+        "method": "clickwrap",
+        "term_version": CREDIT_CONSENT_TERM_VERSION,
+        "term_sha256": _terms_sha256(),
+        "token_iat": int(payload.get("iat") or 0),
+        "token_exp": int(payload.get("exp") or 0),
+        "ip": _request_ip(request),
+        "user_agent": request.headers.get("user-agent") or "",
+        "accepted_at_utc": now.isoformat(),
+    }
+
+    latest = _get_latest_consent(session, company_id=company_id, client_id=client_id)
+    if latest:
+        _refresh_consent_status(latest)
+        if latest.status == "pendente":
+            latest.status = "valida"
+            latest.signed_by_name = (signed_by_name or client.name or "").strip()
+            latest.signed_by_document = _digits_only(client.cnpj or "")
+            latest.signed_at = now
+            latest.expires_at = expires_at
+            latest.updated_at = now
+            latest.notes = "[aceite-eletronico]\n" + json.dumps(evidence, ensure_ascii=False)
+            session.add(latest)
+            session.commit()
+        elif latest.status != "valida":
+            consent = CreditConsent(
+                company_id=company_id,
+                client_id=client_id,
+                created_by_user_id=created_by_user_id or 0,
+                kind=CREDIT_CONSENT_KIND_SCR,
+                status="valida",
+                signed_by_name=(signed_by_name or client.name or "").strip(),
+                signed_by_document=_digits_only(client.cnpj or ""),
+                signed_at=now,
+                expires_at=expires_at,
+                notes="[aceite-eletronico]\n" + json.dumps(evidence, ensure_ascii=False),
+                created_at=now,
+                updated_at=now,
+            )
+            session.add(consent)
+            session.commit()
+    else:
+        consent = CreditConsent(
+            company_id=company_id,
+            client_id=client_id,
+            created_by_user_id=created_by_user_id or 0,
+            kind=CREDIT_CONSENT_KIND_SCR,
+            status="valida",
+            signed_by_name=(signed_by_name or client.name or "").strip(),
+            signed_by_document=_digits_only(client.cnpj or ""),
+            signed_at=now,
+            expires_at=expires_at,
+            notes="[aceite-eletronico]\n" + json.dumps(evidence, ensure_ascii=False),
+            created_at=now,
+            updated_at=now,
+        )
+        session.add(consent)
+        session.commit()
+
+    return render(
+        "success.html",
+        request=request,
+        context={
+            "current_user": None,
+            "current_company": company,
+            "role": "public",
+            "message": "Autorização registrada com sucesso. Você já pode fechar esta página.",
+        },
+    )
+
+
 @app.post("/credito/consultar")
+
 @require_role({"admin", "equipe"})
 async def credit_consult(
         request: Request,
@@ -10869,7 +11304,7 @@ async def credit_consult(
 
     consent = _get_latest_consent(session, company_id=ctx.company.id, client_id=current_client.id)
     if not consent:
-        set_flash(request, "Envie uma autorização LGPD antes de consultar.")
+        set_flash(request, "Envie uma autorização (PDF) ou gere um link de aceite eletrônico antes de consultar.")
         return RedirectResponse("/credito", status_code=303)
     _refresh_consent_status(consent)
     if consent.status != "valida":
