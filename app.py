@@ -1285,6 +1285,15 @@ def _contaazul_get_json(session: Session, company_id: int, path: str, params: An
     return resp.json()
 
 
+def _contaazul_get_mapped_person_id(session: Session, *, company_id: int, client_id: int) -> str:
+    pm = session.exec(
+        select(ContaAzulPersonMap).where(
+            ContaAzulPersonMap.company_id == company_id, ContaAzulPersonMap.client_id == client_id
+        )
+    ).first()
+    return str((pm.contaazul_person_id or "") if pm else "").strip()
+
+
 def _contaazul_find_person_id(session: Session, *, company_id: int, client: Client) -> str:
     doc = _digits_only(client.cnpj)
     if doc:
@@ -1343,7 +1352,10 @@ def contaazul_sync_client_job(company_id: int, client_id: int) -> None:
         if not client or client.company_id != company_id:
             return
 
-        person_id = _contaazul_find_person_id(session, company_id=company_id, client=client)
+        person_id = _contaazul_get_mapped_person_id(session, company_id=company_id,
+                                                    client_id=client.id) or _contaazul_find_person_id(session,
+                                                                                                      company_id=company_id,
+                                                                                                      client=client)
         if not person_id:
             print(f"[contaazul] person not found for client_id={client_id}")
             return
@@ -3297,7 +3309,7 @@ a:hover{ color:#00BFBF; }
   <div class="d-flex justify-content-between align-items-center">
     <div>
       <h4 class="mb-0">Financeiro</h4>
-      <div class="muted">Notas/Boletos de honorários (download pelo cliente).</div>
+      <div class="muted">Notas/Boletos de honorários (manual) + sincronizado do Conta Azul.</div>
     </div>
     {% if role in ["admin","equipe"] %}
       <a class="btn btn-primary" href="/financeiro/novo">Nova cobrança</a>
@@ -3305,6 +3317,7 @@ a:hover{ color:#00BFBF; }
   </div>
 
   <hr class="my-3"/>
+
   {% if items %}
     <div class="list-group">
       {% for it in items %}
@@ -3323,7 +3336,138 @@ a:hover{ color:#00BFBF; }
       {% endfor %}
     </div>
   {% else %}
-    <div class="muted">Sem cobranças.</div>
+    <div class="muted">Sem cobranças manuais.</div>
+  {% endif %}
+</div>
+
+<div class="card p-4 mt-3">
+  <div class="d-flex justify-content-between align-items-center">
+    <div>
+      <h5 class="mb-0">Conta Azul</h5>
+      <div class="muted small">Sincroniza notas fiscais e contas a receber do ERP (filtrado pelo cliente selecionado).</div>
+    </div>
+    {% if role in ["admin","equipe"] %}
+      <a class="btn btn-outline-secondary" href="/integrations/contaazul">Configurar</a>
+    {% endif %}
+  </div>
+
+  <hr class="my-3"/>
+
+  {% if not ca_configured %}
+    <div class="alert alert-warning">
+      Configure <code>CONTA_AZUL_CLIENT_ID</code> e <code>CONTA_AZUL_CLIENT_SECRET</code> no Render.
+    </div>
+  {% elif not ca_connected %}
+    <div class="alert alert-info">
+      Conta Azul não conectada. <a href="/integrations/contaazul">Clique aqui para conectar</a>.
+    </div>
+  {% else %}
+    <div class="d-flex flex-wrap align-items-center gap-2">
+      <span class="badge text-bg-light border">Conectado</span>
+      {% if ca_last_sync %}<span class="muted small">Última sync: {{ ca_last_sync }}</span>{% endif %}
+      {% if role in ["admin","equipe"] %}
+        <form method="post" action="/financeiro/contaazul/sync">
+          <button class="btn btn-sm btn-outline-primary">Sincronizar agora</button>
+        </form>
+      {% endif %}
+    </div>
+
+    {% if role in ["admin","equipe"] and current_client %}
+      <div class="border rounded p-3 mt-3">
+        <div class="fw-semibold mb-1">Vínculo do cliente (Conta Azul)</div>
+        <div class="muted small">
+          Cliente: <b>{{ current_client.name }}</b> • Doc: {{ ca_client_doc or "—" }} • E-mail: {{ ca_client_email or "—" }}
+        </div>
+        <div class="mono small mt-1">person_id: {{ ca_person_id or "—" }}</div>
+
+        <div class="d-flex flex-wrap gap-2 mt-2">
+          <form method="post" action="/financeiro/contaazul/auto_vincular">
+            <button class="btn btn-sm btn-outline-secondary">Auto-vincular</button>
+          </form>
+
+          <form method="post" action="/financeiro/contaazul/vincular" class="d-flex gap-2">
+            <input name="person_id" class="form-control form-control-sm" placeholder="UUID do cliente no Conta Azul (Pessoa)" style="min-width: 280px;" />
+            <button class="btn btn-sm btn-outline-primary">Salvar vínculo</button>
+          </form>
+        </div>
+
+        <div class="muted small mt-2">
+          Se não aparecer nada após sincronizar, geralmente o documento/e-mail do cliente no Conta Azul está diferente. Nesse caso, cole o UUID da pessoa (Cliente) do Conta Azul aqui.
+        </div>
+      </div>
+    {% endif %}
+
+    <div class="mt-4">
+      <h6 class="mb-2">Contas a receber / Boletos</h6>
+      {% if ca_receivables %}
+        <div class="table-responsive">
+          <table class="table table-sm align-middle">
+            <thead>
+              <tr>
+                <th>Venc.</th>
+                <th>Descrição</th>
+                <th>Status</th>
+                <th>Aberto</th>
+                <th>Pago</th>
+                <th>Fatura</th>
+                <th>Link</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for r in ca_receivables %}
+                <tr>
+                  <td class="mono small">{{ r.due_date }}</td>
+                  <td>{{ r.description }}</td>
+                  <td><span class="badge text-bg-light border">{{ r.status }}</span></td>
+                  <td>R$ {{ "%.2f"|format(r.amount_open) }}</td>
+                  <td>R$ {{ "%.2f"|format(r.amount_paid) }}</td>
+                  <td class="mono small">{% if r.invoice_number %}{{ r.invoice_type }} #{{ r.invoice_number }}{% else %}—{% endif %}</td>
+                  <td>
+                    {% if r.payment_url %}
+                      <a class="btn btn-sm btn-outline-primary" href="{{ r.payment_url }}" target="_blank" rel="noopener">Abrir</a>
+                    {% else %}
+                      —
+                    {% endif %}
+                  </td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      {% else %}
+        <div class="muted small">Nenhuma parcela encontrada. Clique em “Sincronizar agora”.</div>
+      {% endif %}
+    </div>
+
+    <div class="mt-4">
+      <h6 class="mb-2">Notas fiscais</h6>
+      {% if ca_invoices %}
+        <div class="table-responsive">
+          <table class="table table-sm align-middle">
+            <thead>
+              <tr>
+                <th>Data</th>
+                <th>Número</th>
+                <th>Tipo</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for n in ca_invoices %}
+                <tr>
+                  <td class="mono small">{{ n.issue_date }}</td>
+                  <td class="mono small">{{ n.number or "—" }}</td>
+                  <td class="mono small">{{ n.invoice_type }}</td>
+                  <td><span class="badge text-bg-light border">{{ n.status }}</span></td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      {% else %}
+        <div class="muted small">Nenhuma nota encontrada. Clique em “Sincronizar agora”.</div>
+      {% endif %}
+    </div>
   {% endif %}
 </div>
 {% endblock %}
@@ -8829,6 +8973,70 @@ async def contaazul_sync_now(request: Request, background_tasks: BackgroundTasks
 
     background_tasks.add_task(contaazul_sync_client_job, ctx.company.id, current_client.id)
     set_flash(request, "Sincronização Conta Azul iniciada. Recarregue em instantes.")
+
+
+@app.post("/financeiro/contaazul/auto_vincular")
+@require_role({"admin", "equipe"})
+async def contaazul_auto_vincular(request: Request, session: Session = Depends(get_session)) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    if not ensure_contaazul_tables():
+        set_flash(request, "Banco sem migração para Conta Azul (crie as tabelas no Postgres).")
+        return RedirectResponse("/financeiro", status_code=303)
+
+    if not _contaazul_configured():
+        set_flash(request, "Configure CONTA_AZUL_CLIENT_ID e CONTA_AZUL_CLIENT_SECRET no Render.")
+        return RedirectResponse("/financeiro", status_code=303)
+
+    auth = _contaazul_get_auth(session, ctx.company.id)
+    if not auth or not auth.refresh_token:
+        set_flash(request, "Conecte a Conta Azul antes de vincular.")
+        return RedirectResponse("/integrations/contaazul", status_code=303)
+
+    current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
+    if not current_client:
+        set_flash(request, "Selecione um cliente antes de vincular.")
+        return RedirectResponse("/financeiro", status_code=303)
+
+    person_id = _contaazul_find_person_id(session, company_id=ctx.company.id, client=current_client)
+    if not person_id:
+        set_flash(request, "Não encontrei este cliente na Conta Azul por CNPJ/CPF ou e-mail. Cole o UUID manualmente.")
+        return RedirectResponse("/financeiro", status_code=303)
+
+    _contaazul_upsert_person_map(session, company_id=ctx.company.id, client=current_client, person_id=person_id)
+    set_flash(request, f"Vínculo atualizado. person_id={person_id}")
+    return RedirectResponse("/financeiro", status_code=303)
+
+
+@app.post("/financeiro/contaazul/vincular")
+@require_role({"admin", "equipe"})
+async def contaazul_vincular_manual(
+        request: Request,
+        session: Session = Depends(get_session),
+        person_id: str = Form(""),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    pid = (person_id or "").strip()
+    if not pid or not re.fullmatch(r"[0-9a-fA-F-]{32,36}", pid):
+        set_flash(request, "UUID inválido. Cole o ID (UUID) do cliente (Pessoa) no Conta Azul.")
+        return RedirectResponse("/financeiro", status_code=303)
+
+    if not ensure_contaazul_tables():
+        set_flash(request, "Banco sem migração para Conta Azul (crie as tabelas no Postgres).")
+        return RedirectResponse("/financeiro", status_code=303)
+
+    current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
+    if not current_client:
+        set_flash(request, "Selecione um cliente antes de vincular.")
+        return RedirectResponse("/financeiro", status_code=303)
+
+    _contaazul_upsert_person_map(session, company_id=ctx.company.id, client=current_client, person_id=pid)
+    set_flash(request, f"Vínculo salvo. person_id={pid}")
+    return RedirectResponse("/financeiro", status_code=303)
+
     return RedirectResponse("/financeiro", status_code=303)
 
 
@@ -8927,6 +9135,16 @@ async def fin_list(request: Request, session: Session = Depends(get_session)) ->
                     }
                 )
 
+    ca_person_id = ""
+    ca_client_doc = ""
+    ca_client_email = ""
+    if ensure_contaazul_tables() and target_client_id:
+        tc = session.get(Client, int(target_client_id))
+        if tc and tc.company_id == ctx.company.id:
+            ca_client_doc = _digits_only(tc.cnpj)
+            ca_client_email = (tc.finance_email or tc.email or "").strip()
+            ca_person_id = _contaazul_get_mapped_person_id(session, company_id=ctx.company.id, client_id=tc.id)
+
     return render(
         "fin_list.html",
         request=request,
@@ -8941,6 +9159,9 @@ async def fin_list(request: Request, session: Session = Depends(get_session)) ->
             "ca_last_sync": ca_last_sync,
             "ca_receivables": ca_receivables,
             "ca_invoices": ca_invoices,
+            "ca_person_id": ca_person_id,
+            "ca_client_doc": ca_client_doc,
+            "ca_client_email": ca_client_email,
         },
     )
 
