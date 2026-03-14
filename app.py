@@ -10947,6 +10947,17 @@ async def credit_home(request: Request, session: Session = Depends(get_session))
         if ctx.membership.role != "cliente":
             set_flash(request, "Selecione um cliente para acessar Crédito.")
 
+    consent_link_url = ""
+    if consent and consent.status == "pendente":
+        meta = _unpack_consent_link_note(consent.notes)
+        if meta and meta.get("token"):
+            try:
+                _verify_consent_token(str(meta["token"]))
+                consent_link_url = f"{_public_base_url(request)}/consent/aceite/{str(meta['token'])}"
+            except Exception:
+                consent_link_url = ""
+
+
     for r in reports:
         _coerce_credit_report_nullable_fields(r)
 
@@ -10960,6 +10971,7 @@ async def credit_home(request: Request, session: Session = Depends(get_session))
             "current_client": current_client,
             "consent": consent,
             "consent_file": consent_file,
+            "consent_link_url": consent_link_url,
             "reports": reports,
         },
     )
