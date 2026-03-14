@@ -2404,7 +2404,7 @@ a:hover{ color:#00BFBF; }
           <a href="/download/{{ a.id }}">{{ a.original_filename }}</a>
           {% if role in ["admin","equipe"] %}
             <form method="post" action="/attachments/{{ a.id }}/delete" class="ms-2">
-              <input type="hidden" name="next" value="/financeiro/{{ inv.id }}">
+              <input type="hidden" name="next" value="/propostas/{{ prop.id }}">
               <button class="btn btn-outline-danger btn-sm" type="submit">Excluir</button>
             </form>
           {% endif %}
@@ -2641,7 +2641,7 @@ a:hover{ color:#00BFBF; }
           <a href="/download/{{ a.id }}">{{ a.original_filename }}</a>
           {% if role in ["admin","equipe"] %}
             <form method="post" action="/attachments/{{ a.id }}/delete" class="ms-2">
-              <input type="hidden" name="next" value="/financeiro/{{ inv.id }}">
+              <input type="hidden" name="next" value="/propostas/{{ prop.id }}">
               <button class="btn btn-outline-danger btn-sm" type="submit">Excluir</button>
             </form>
           {% endif %}
@@ -10459,6 +10459,34 @@ def _refresh_consent_status(consent: CreditConsent) -> None:
         consent.status = "valida"
 
 
+def _coerce_credit_report_nullable_fields(r: "CreditReport") -> None:
+    """Garante que campos numéricos/texto não venham como NULL do banco.
+
+    Isso evita erros no Jinja ao formatar (ex.: '%.2f') quando a coluna no Postgres
+    foi criada como nullable em alguma migração.
+    """
+    # Inteiros
+    r.quantidade_instituicoes = int(r.quantidade_instituicoes or 0)
+    r.quantidade_operacoes = int(r.quantidade_operacoes or 0)
+    r.http_status = int(r.http_status or 0)
+    r.resultado_id = int(r.resultado_id or 0)
+
+    # Floats
+    r.risco_total_brl = float(r.risco_total_brl or 0.0)
+    r.carteira_total_brl = float(r.carteira_total_brl or 0.0)
+    r.carteira_vencer_brl = float(r.carteira_vencer_brl or 0.0)
+    r.carteira_vencido_brl = float(r.carteira_vencido_brl or 0.0)
+    r.carteira_prejuizo_brl = float(r.carteira_prejuizo_brl or 0.0)
+    r.potential_score = float(r.potential_score or 0.0)
+
+    # Strings
+    r.score = (r.score or "")
+    r.faixa_risco = (r.faixa_risco or "")
+    r.obrigacao_assumida = (r.obrigacao_assumida or "")
+    r.obrigacao_resumida = (r.obrigacao_resumida or "")
+    r.message = (r.message or "")
+    r.status = (r.status or "processing")
+    r.potential_label = (r.potential_label or "baixo")
 @app.get("/credito", response_class=HTMLResponse)
 @require_login
 async def credit_home(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
@@ -10495,6 +10523,9 @@ async def credit_home(request: Request, session: Session = Depends(get_session))
     else:
         if ctx.membership.role != "cliente":
             set_flash(request, "Selecione um cliente para acessar Crédito.")
+
+    for r in reports:
+        _coerce_credit_report_nullable_fields(r)
 
     return render(
         "credit_list.html",
@@ -10649,6 +10680,7 @@ async def credit_report_detail(request: Request, session: Session = Depends(get_
     if not ensure_can_access_client(ctx, report.client_id):
         set_flash(request, "Sem permissão.")
         return RedirectResponse("/credito", status_code=303)
+    _coerce_credit_report_nullable_fields(report)
 
     return render(
         "credit_report_detail.html",
@@ -10721,7 +10753,7 @@ async def credit_report_create_deal(request: Request, session: Session = Depends
         demand=demand,
         notes=notes,
         stage="qualificacao",
-        service_name="Outro / Personalizado",
+        service_name="BaaS - Analise de Crédito",
         value_estimate_brl=max(0.0, report.carteira_total_brl * 0.01),
         probability_pct=30 if report.potential_label == "alto" else 15,
         next_step="Agendar call e solicitar contratos/CCBs.",
