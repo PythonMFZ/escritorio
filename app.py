@@ -976,18 +976,24 @@ def init_db() -> None:
 
 
 
-def ensure_credit_consent_table() -> None:
+def ensure_credit_consent_table() -> bool:
     """Garante que a tabela CreditConsent existe.
 
     Em produção (Postgres) o app pode rodar sem Alembic. Criar só esta tabela é
-    idempotente (checkfirst=True) e evita 500 em /credito/consent_link.
+    idempotente (checkfirst=True). Se falhar (permissão), retornamos False e o
+    deploy precisa de migração manual.
     """
     try:
         CreditConsent.__table__.create(engine, checkfirst=True)
-    except Exception:
-        # Se o usuário do DB não tiver permissão de CREATE TABLE, a migração
-        # deve ser feita via Alembic/SQL manual.
-        pass
+        return True
+    except Exception as e:
+        try:
+            print(f"[consent] failed to ensure CreditConsent table: {e}")
+        except Exception:
+            pass
+        return False
+
+pass
 def get_session() -> Session:
     with Session(engine) as session:
         yield session
@@ -5069,7 +5075,10 @@ async def consultoria_new_page(request: Request, session: Session = Depends(get_
     assert ctx is not None
 
     # Garante tabela em ambientes sem Alembic
-    ensure_credit_consent_table()
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
 
     clients = session.exec(select(Client).where(Client.company_id == ctx.company.id).order_by(Client.created_at)).all()
     active_client_id = get_active_client_id(request, session, ctx)
@@ -5096,7 +5105,10 @@ async def consultoria_edit_project_page(request: Request, session: Session = Dep
     assert ctx is not None
 
     # Garante tabela em ambientes sem Alembic
-    ensure_credit_consent_table()
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
 
     project = session.get(ConsultingProject, int(project_id))
     if not project or project.company_id != ctx.company.id:
@@ -5130,7 +5142,10 @@ async def consultoria_edit_project_action(
     assert ctx is not None
 
     # Garante tabela em ambientes sem Alembic
-    ensure_credit_consent_table()
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
 
     project = session.get(ConsultingProject, int(project_id))
     if not project or project.company_id != ctx.company.id:
@@ -5163,7 +5178,10 @@ async def consultoria_delete_project(request: Request, session: Session = Depend
     assert ctx is not None
 
     # Garante tabela em ambientes sem Alembic
-    ensure_credit_consent_table()
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
 
     project = session.get(ConsultingProject, int(project_id))
     if not project or project.company_id != ctx.company.id:
@@ -5194,7 +5212,10 @@ async def consultoria_edit_stage_page(request: Request, session: Session = Depen
     assert ctx is not None
 
     # Garante tabela em ambientes sem Alembic
-    ensure_credit_consent_table()
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
 
     stage = session.get(ConsultingStage, int(stage_id))
     if not stage:
@@ -5228,7 +5249,10 @@ async def consultoria_edit_stage_action(
     assert ctx is not None
 
     # Garante tabela em ambientes sem Alembic
-    ensure_credit_consent_table()
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
 
     stage = session.get(ConsultingStage, int(stage_id))
     if not stage:
@@ -5257,7 +5281,10 @@ async def consultoria_delete_stage(request: Request, session: Session = Depends(
     assert ctx is not None
 
     # Garante tabela em ambientes sem Alembic
-    ensure_credit_consent_table()
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
 
     stage = session.get(ConsultingStage, int(stage_id))
     if not stage:
@@ -5287,7 +5314,10 @@ async def consultoria_edit_step_page(request: Request, session: Session = Depend
     assert ctx is not None
 
     # Garante tabela em ambientes sem Alembic
-    ensure_credit_consent_table()
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
 
     step = session.get(ConsultingStep, int(step_id))
     if not step:
@@ -5325,7 +5355,10 @@ async def consultoria_edit_step_action(
     assert ctx is not None
 
     # Garante tabela em ambientes sem Alembic
-    ensure_credit_consent_table()
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
 
     step = session.get(ConsultingStep, int(step_id))
     if not step:
@@ -5360,7 +5393,10 @@ async def consultoria_delete_step(request: Request, session: Session = Depends(g
     assert ctx is not None
 
     # Garante tabela em ambientes sem Alembic
-    ensure_credit_consent_table()
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
 
     step = session.get(ConsultingStep, int(step_id))
     if not step:
@@ -5396,7 +5432,10 @@ async def consultoria_new_action(
     assert ctx is not None
 
     # Garante tabela em ambientes sem Alembic
-    ensure_credit_consent_table()
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
 
     client = get_client_or_none(session, ctx.company.id, int(client_id))
     if not client:
@@ -5497,7 +5536,10 @@ async def consultoria_add_stage(
     assert ctx is not None
 
     # Garante tabela em ambientes sem Alembic
-    ensure_credit_consent_table()
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
 
     project = session.get(ConsultingProject, int(project_id))
     if not project or project.company_id != ctx.company.id:
@@ -5533,7 +5575,10 @@ async def consultoria_add_step(
     assert ctx is not None
 
     # Garante tabela em ambientes sem Alembic
-    ensure_credit_consent_table()
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
 
     stage = session.get(ConsultingStage, int(stage_id))
     if not stage:
@@ -5770,7 +5815,10 @@ async def client_switch_page(request: Request, session: Session = Depends(get_se
     assert ctx is not None
 
     # Garante tabela em ambientes sem Alembic
-    ensure_credit_consent_table()
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
 
     clients = session.exec(select(Client).where(Client.company_id == ctx.company.id).order_by(Client.created_at)).all()
     active_client_id = get_active_client_id(request, session, ctx)
@@ -5800,7 +5848,10 @@ async def client_switch_action(
     assert ctx is not None
 
     # Garante tabela em ambientes sem Alembic
-    ensure_credit_consent_table()
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
 
     client = get_client_or_none(session, ctx.company.id, int(client_id))
     if not client:
@@ -5824,7 +5875,10 @@ async def members_page(request: Request, session: Session = Depends(get_session)
     assert ctx is not None
 
     # Garante tabela em ambientes sem Alembic
-    ensure_credit_consent_table()
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
 
     mems = session.exec(select(Membership).where(Membership.company_id == ctx.company.id)).all()
     rows = []
@@ -5872,7 +5926,10 @@ async def members_add_action(
     assert ctx is not None
 
     # Garante tabela em ambientes sem Alembic
-    ensure_credit_consent_table()
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
 
     role = role.strip().lower()
     if role not in {"admin", "equipe", "cliente"}:
@@ -6285,7 +6342,10 @@ async def pending_new_page(request: Request, session: Session = Depends(get_sess
     assert ctx is not None
 
     # Garante tabela em ambientes sem Alembic
-    ensure_credit_consent_table()
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
     clients = session.exec(select(Client).where(Client.company_id == ctx.company.id).order_by(Client.created_at)).all()
     current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
     return render(
@@ -6317,7 +6377,10 @@ async def pending_new_action(
     assert ctx is not None
 
     # Garante tabela em ambientes sem Alembic
-    ensure_credit_consent_table()
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
 
     client = get_client_or_none(session, ctx.company.id, int(client_id))
     if not client:
@@ -6425,7 +6488,10 @@ async def pending_update_status(
     assert ctx is not None
 
     # Garante tabela em ambientes sem Alembic
-    ensure_credit_consent_table()
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
 
     item = session.get(PendingItem, int(item_id))
     if not item or item.company_id != ctx.company.id:
@@ -6458,7 +6524,10 @@ async def pending_attach_admin(
     assert ctx is not None
 
     # Garante tabela em ambientes sem Alembic
-    ensure_credit_consent_table()
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
 
     item = session.get(PendingItem, int(item_id))
     if not item or item.company_id != ctx.company.id:
@@ -6508,7 +6577,10 @@ async def pending_attach_client(
     assert ctx is not None
 
     # Garante tabela em ambientes sem Alembic
-    ensure_credit_consent_table()
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
 
     item = session.get(PendingItem, int(item_id))
     if not item or item.company_id != ctx.company.id:
@@ -6607,7 +6679,10 @@ async def docs_new_page(request: Request, session: Session = Depends(get_session
     assert ctx is not None
 
     # Garante tabela em ambientes sem Alembic
-    ensure_credit_consent_table()
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
     clients = session.exec(select(Client).where(Client.company_id == ctx.company.id).order_by(Client.created_at)).all()
     current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
     return render(
@@ -6638,7 +6713,10 @@ async def docs_new_action(
     assert ctx is not None
 
     # Garante tabela em ambientes sem Alembic
-    ensure_credit_consent_table()
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
 
     client = get_client_or_none(session, ctx.company.id, int(client_id))
     if not client:
@@ -6742,7 +6820,10 @@ async def docs_update_status(
     assert ctx is not None
 
     # Garante tabela em ambientes sem Alembic
-    ensure_credit_consent_table()
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
 
     doc = session.get(Document, int(doc_id))
     if not doc or doc.company_id != ctx.company.id:
@@ -6776,7 +6857,10 @@ async def docs_attach_admin(
     assert ctx is not None
 
     # Garante tabela em ambientes sem Alembic
-    ensure_credit_consent_table()
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
 
     doc = session.get(Document, int(doc_id))
     if not doc or doc.company_id != ctx.company.id:
@@ -6825,7 +6909,10 @@ async def docs_attach_client(
     assert ctx is not None
 
     # Garante tabela em ambientes sem Alembic
-    ensure_credit_consent_table()
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
 
     doc = session.get(Document, int(doc_id))
     if not doc or doc.company_id != ctx.company.id:
@@ -6932,7 +7019,10 @@ async def props_new_staff_page(request: Request, session: Session = Depends(get_
     assert ctx is not None
 
     # Garante tabela em ambientes sem Alembic
-    ensure_credit_consent_table()
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
     clients = session.exec(select(Client).where(Client.company_id == ctx.company.id).order_by(Client.created_at)).all()
     current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
     return render(
@@ -6965,7 +7055,10 @@ async def props_new_staff_action(
     assert ctx is not None
 
     # Garante tabela em ambientes sem Alembic
-    ensure_credit_consent_table()
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
 
     client = get_client_or_none(session, ctx.company.id, int(client_id))
     if not client:
@@ -7029,7 +7122,10 @@ async def props_new_client_page(request: Request, session: Session = Depends(get
     assert ctx is not None
 
     # Garante tabela em ambientes sem Alembic
-    ensure_credit_consent_table()
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
     current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
     return render(
         "props_new_client.html",
@@ -7057,7 +7153,10 @@ async def props_new_client_action(
     assert ctx is not None
 
     # Garante tabela em ambientes sem Alembic
-    ensure_credit_consent_table()
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
 
     client_id = ctx.membership.client_id
     if not client_id:
@@ -7176,7 +7275,10 @@ async def props_update_staff(
     assert ctx is not None
 
     # Garante tabela em ambientes sem Alembic
-    ensure_credit_consent_table()
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
 
     prop = session.get(Proposal, int(prop_id))
     if not prop or prop.company_id != ctx.company.id:
@@ -7214,7 +7316,10 @@ async def props_delete_staff(request: Request, session: Session = Depends(get_se
     assert ctx is not None
 
     # Garante tabela em ambientes sem Alembic
-    ensure_credit_consent_table()
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
 
     prop = session.get(Proposal, int(prop_id))
     if not prop or prop.company_id != ctx.company.id:
@@ -7248,7 +7353,10 @@ async def props_attach_staff(
     assert ctx is not None
 
     # Garante tabela em ambientes sem Alembic
-    ensure_credit_consent_table()
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
 
     prop = session.get(Proposal, int(prop_id))
     if not prop or prop.company_id != ctx.company.id:
@@ -7291,7 +7399,10 @@ async def props_client_upload(
     assert ctx is not None
 
     # Garante tabela em ambientes sem Alembic
-    ensure_credit_consent_table()
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
 
     prop = session.get(Proposal, int(prop_id))
     if not prop or prop.company_id != ctx.company.id:
@@ -7391,7 +7502,10 @@ async def fin_new_page(request: Request, session: Session = Depends(get_session)
     assert ctx is not None
 
     # Garante tabela em ambientes sem Alembic
-    ensure_credit_consent_table()
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
     clients = session.exec(select(Client).where(Client.company_id == ctx.company.id).order_by(Client.created_at)).all()
     current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
     return render(
@@ -7424,7 +7538,10 @@ async def fin_new_action(
     assert ctx is not None
 
     # Garante tabela em ambientes sem Alembic
-    ensure_credit_consent_table()
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
 
     client = get_client_or_none(session, ctx.company.id, int(client_id))
     if not client:
@@ -7523,7 +7640,10 @@ async def fin_attach(
     assert ctx is not None
 
     # Garante tabela em ambientes sem Alembic
-    ensure_credit_consent_table()
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
 
     inv = session.get(FinanceInvoice, int(inv_id))
     if not inv or inv.company_id != ctx.company.id:
@@ -7802,7 +7922,10 @@ async def tasks_new_page(
     assert ctx is not None
 
     # Garante tabela em ambientes sem Alembic
-    ensure_credit_consent_table()
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
 
     clients = session.exec(select(Client).where(Client.company_id == ctx.company.id).order_by(Client.created_at)).all()
 
@@ -7858,7 +7981,10 @@ async def tasks_new_action(
     assert ctx is not None
 
     # Garante tabela em ambientes sem Alembic
-    ensure_credit_consent_table()
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
 
     client = get_client_or_none(session, ctx.company.id, int(client_id))
     if not client:
@@ -8053,7 +8179,10 @@ async def tasks_toggle_client(request: Request, session: Session = Depends(get_s
     assert ctx is not None
 
     # Garante tabela em ambientes sem Alembic
-    ensure_credit_consent_table()
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
 
     task = session.get(Task, int(task_id))
     if not task or not _task_can_view(ctx, task):
@@ -8080,7 +8209,10 @@ async def tasks_set_status(request: Request, session: Session = Depends(get_sess
     assert ctx is not None
 
     # Garante tabela em ambientes sem Alembic
-    ensure_credit_consent_table()
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
 
     task = session.get(Task, int(task_id))
     if not task or task.company_id != ctx.company.id:
@@ -8106,7 +8238,10 @@ async def tasks_edit_page(request: Request, session: Session = Depends(get_sessi
     assert ctx is not None
 
     # Garante tabela em ambientes sem Alembic
-    ensure_credit_consent_table()
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
 
     task = session.get(Task, int(task_id))
     if not task or task.company_id != ctx.company.id:
@@ -8159,7 +8294,10 @@ async def tasks_edit_action(
     assert ctx is not None
 
     # Garante tabela em ambientes sem Alembic
-    ensure_credit_consent_table()
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
 
     task = session.get(Task, int(task_id))
     if not task or task.company_id != ctx.company.id:
@@ -8211,7 +8349,10 @@ async def tasks_delete_action(
     assert ctx is not None
 
     # Garante tabela em ambientes sem Alembic
-    ensure_credit_consent_table()
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
 
     task = session.get(Task, int(task_id))
     if not task or task.company_id != ctx.company.id:
@@ -8249,7 +8390,10 @@ async def delete_attachment(
     assert ctx is not None
 
     # Garante tabela em ambientes sem Alembic
-    ensure_credit_consent_table()
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
 
     att = session.get(Attachment, int(attachment_id))
     if not att or att.company_id != ctx.company.id:
@@ -8271,7 +8415,10 @@ async def pending_new_client_page(request: Request, session: Session = Depends(g
     assert ctx is not None
 
     # Garante tabela em ambientes sem Alembic
-    ensure_credit_consent_table()
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
 
     active_client_id = get_active_client_id(request, session, ctx)
     current_client = get_client_or_none(session, ctx.company.id, active_client_id)
@@ -8302,7 +8449,10 @@ async def pending_new_client_action(
     assert ctx is not None
 
     # Garante tabela em ambientes sem Alembic
-    ensure_credit_consent_table()
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
 
     client_id = ctx.membership.client_id or 0
     client = get_client_or_none(session, ctx.company.id, client_id)
@@ -8361,7 +8511,10 @@ async def docs_send_client_page(request: Request, session: Session = Depends(get
     assert ctx is not None
 
     # Garante tabela em ambientes sem Alembic
-    ensure_credit_consent_table()
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
 
     active_client_id = get_active_client_id(request, session, ctx)
     current_client = get_client_or_none(session, ctx.company.id, active_client_id)
@@ -8391,7 +8544,10 @@ async def docs_send_client_action(
     assert ctx is not None
 
     # Garante tabela em ambientes sem Alembic
-    ensure_credit_consent_table()
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
 
     client_id = ctx.membership.client_id or 0
     client = get_client_or_none(session, ctx.company.id, client_id)
@@ -8449,7 +8605,10 @@ async def docs_edit_page(request: Request, session: Session = Depends(get_sessio
     assert ctx is not None
 
     # Garante tabela em ambientes sem Alembic
-    ensure_credit_consent_table()
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
 
     doc = session.get(Document, int(doc_id))
     if not doc or doc.company_id != ctx.company.id:
@@ -8485,7 +8644,10 @@ async def docs_edit_action(
     assert ctx is not None
 
     # Garante tabela em ambientes sem Alembic
-    ensure_credit_consent_table()
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
 
     doc = session.get(Document, int(doc_id))
     if not doc or doc.company_id != ctx.company.id:
@@ -8510,7 +8672,10 @@ async def docs_delete_action(request: Request, session: Session = Depends(get_se
     assert ctx is not None
 
     # Garante tabela em ambientes sem Alembic
-    ensure_credit_consent_table()
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
 
     doc = session.get(Document, int(doc_id))
     if not doc or doc.company_id != ctx.company.id:
@@ -8541,7 +8706,10 @@ async def pending_edit_page(request: Request, session: Session = Depends(get_ses
     assert ctx is not None
 
     # Garante tabela em ambientes sem Alembic
-    ensure_credit_consent_table()
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
 
     item = session.get(PendingItem, int(item_id))
     if not item or item.company_id != ctx.company.id:
@@ -8578,7 +8746,10 @@ async def pending_edit_action(
     assert ctx is not None
 
     # Garante tabela em ambientes sem Alembic
-    ensure_credit_consent_table()
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
 
     item = session.get(PendingItem, int(item_id))
     if not item or item.company_id != ctx.company.id:
@@ -8605,7 +8776,10 @@ async def pending_delete_action(request: Request, session: Session = Depends(get
     assert ctx is not None
 
     # Garante tabela em ambientes sem Alembic
-    ensure_credit_consent_table()
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
 
     item = session.get(PendingItem, int(item_id))
     if not item or item.company_id != ctx.company.id:
@@ -8635,7 +8809,10 @@ async def fin_edit_page(request: Request, session: Session = Depends(get_session
     assert ctx is not None
 
     # Garante tabela em ambientes sem Alembic
-    ensure_credit_consent_table()
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
 
     inv = session.get(FinanceInvoice, int(inv_id))
     if not inv or inv.company_id != ctx.company.id:
@@ -8673,7 +8850,10 @@ async def fin_edit_action(
     assert ctx is not None
 
     # Garante tabela em ambientes sem Alembic
-    ensure_credit_consent_table()
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
 
     inv = session.get(FinanceInvoice, int(inv_id))
     if not inv or inv.company_id != ctx.company.id:
@@ -8700,7 +8880,10 @@ async def fin_delete_action(request: Request, session: Session = Depends(get_ses
     assert ctx is not None
 
     # Garante tabela em ambientes sem Alembic
-    ensure_credit_consent_table()
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
 
     inv = session.get(FinanceInvoice, int(inv_id))
     if not inv or inv.company_id != ctx.company.id:
@@ -8769,7 +8952,10 @@ async def crm_list(
     assert ctx is not None
 
     # Garante tabela em ambientes sem Alembic
-    ensure_credit_consent_table()
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
 
     clients = session.exec(select(Client).where(Client.company_id == ctx.company.id).order_by(Client.created_at)).all()
     owners = _owner_users_for_company(session, ctx.company.id)
@@ -8851,7 +9037,10 @@ async def crm_new_page(request: Request, session: Session = Depends(get_session)
     assert ctx is not None
 
     # Garante tabela em ambientes sem Alembic
-    ensure_credit_consent_table()
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
 
     clients = session.exec(select(Client).where(Client.company_id == ctx.company.id).order_by(Client.created_at)).all()
     owners = _owner_users_for_company(session, ctx.company.id)
@@ -8905,7 +9094,10 @@ async def crm_new_action(
     assert ctx is not None
 
     # Garante tabela em ambientes sem Alembic
-    ensure_credit_consent_table()
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
 
     new_client_name = (new_client_name or "").strip()
     new_client_email = (new_client_email or "").strip()
@@ -8989,7 +9181,10 @@ async def crm_detail(request: Request, session: Session = Depends(get_session), 
     assert ctx is not None
 
     # Garante tabela em ambientes sem Alembic
-    ensure_credit_consent_table()
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
 
     deal = session.get(BusinessDeal, int(deal_id))
     if not deal or deal.company_id != ctx.company.id:
@@ -9036,7 +9231,10 @@ async def crm_edit_page(request: Request, session: Session = Depends(get_session
     assert ctx is not None
 
     # Garante tabela em ambientes sem Alembic
-    ensure_credit_consent_table()
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
 
     deal = session.get(BusinessDeal, int(deal_id))
     if not deal or deal.company_id != ctx.company.id:
@@ -9087,7 +9285,10 @@ async def crm_edit_action(
     assert ctx is not None
 
     # Garante tabela em ambientes sem Alembic
-    ensure_credit_consent_table()
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
 
     deal = session.get(BusinessDeal, int(deal_id))
     if not deal or deal.company_id != ctx.company.id:
@@ -9150,7 +9351,10 @@ async def crm_update_stage(
     assert ctx is not None
 
     # Garante tabela em ambientes sem Alembic
-    ensure_credit_consent_table()
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
 
     deal = session.get(BusinessDeal, int(deal_id))
     if not deal or deal.company_id != ctx.company.id:
@@ -9182,7 +9386,10 @@ async def crm_update_next(
     assert ctx is not None
 
     # Garante tabela em ambientes sem Alembic
-    ensure_credit_consent_table()
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
 
     deal = session.get(BusinessDeal, int(deal_id))
     if not deal or deal.company_id != ctx.company.id:
@@ -9213,7 +9420,10 @@ async def crm_add_note(
     assert ctx is not None
 
     # Garante tabela em ambientes sem Alembic
-    ensure_credit_consent_table()
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
 
     deal = session.get(BusinessDeal, int(deal_id))
     if not deal or deal.company_id != ctx.company.id:
@@ -9239,7 +9449,10 @@ async def crm_create_proposal(request: Request, session: Session = Depends(get_s
     assert ctx is not None
 
     # Garante tabela em ambientes sem Alembic
-    ensure_credit_consent_table()
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
 
     deal = session.get(BusinessDeal, int(deal_id))
     if not deal or deal.company_id != ctx.company.id:
@@ -9283,7 +9496,10 @@ async def crm_create_project(request: Request, session: Session = Depends(get_se
     assert ctx is not None
 
     # Garante tabela em ambientes sem Alembic
-    ensure_credit_consent_table()
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
 
     deal = session.get(BusinessDeal, int(deal_id))
     if not deal or deal.company_id != ctx.company.id:
@@ -9326,7 +9542,10 @@ async def crm_delete(request: Request, session: Session = Depends(get_session), 
     assert ctx is not None
 
     # Garante tabela em ambientes sem Alembic
-    ensure_credit_consent_table()
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
 
     deal = session.get(BusinessDeal, int(deal_id))
     if not deal or deal.company_id != ctx.company.id:
@@ -9438,7 +9657,10 @@ async def meetings_new_page(request: Request, session: Session = Depends(get_ses
     assert ctx is not None
 
     # Garante tabela em ambientes sem Alembic
-    ensure_credit_consent_table()
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
 
     clients = session.exec(select(Client).where(Client.company_id == ctx.company.id).order_by(Client.created_at)).all()
     active_client_id = get_active_client_id(request, session, ctx)
@@ -9473,7 +9695,10 @@ async def meetings_new_action(
     assert ctx is not None
 
     # Garante tabela em ambientes sem Alembic
-    ensure_credit_consent_table()
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
 
     client = get_client_or_none(session, ctx.company.id, int(client_id))
     if not client:
@@ -9573,7 +9798,10 @@ async def meetings_sync(request: Request, session: Session = Depends(get_session
     assert ctx is not None
 
     # Garante tabela em ambientes sem Alembic
-    ensure_credit_consent_table()
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
 
     mt = session.get(Meeting, int(meeting_id))
     if not mt or mt.company_id != ctx.company.id:
@@ -9614,7 +9842,10 @@ async def meetings_generate_tasks(
     assert ctx is not None
 
     # Garante tabela em ambientes sem Alembic
-    ensure_credit_consent_table()
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
 
     mt = session.get(Meeting, int(meeting_id))
     if not mt or mt.company_id != ctx.company.id:
@@ -10334,7 +10565,10 @@ async def edu_course_new_page(request: Request, session: Session = Depends(get_s
     assert ctx is not None
 
     # Garante tabela em ambientes sem Alembic
-    ensure_credit_consent_table()
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
     clients = session.exec(select(Client).where(Client.company_id == ctx.company.id).order_by(Client.created_at)).all()
     current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
     return render("edu_course_new.html", request=request,
@@ -10356,7 +10590,10 @@ async def edu_course_new_action(
     assert ctx is not None
 
     # Garante tabela em ambientes sem Alembic
-    ensure_credit_consent_table()
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
 
     form = await request.form()
     client_ids = [int(x) for x in form.getlist("client_ids") if str(x).isdigit()]
@@ -10418,7 +10655,10 @@ async def edu_course_add_module(request: Request, session: Session = Depends(get
     assert ctx is not None
 
     # Garante tabela em ambientes sem Alembic
-    ensure_credit_consent_table()
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
 
     course = session.get(EducationCourse, int(course_id))
     if not course or course.company_id != ctx.company.id:
@@ -10444,7 +10684,10 @@ async def edu_course_edit_page(request: Request, session: Session = Depends(get_
     assert ctx is not None
 
     # Garante tabela em ambientes sem Alembic
-    ensure_credit_consent_table()
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
 
     course = session.get(EducationCourse, int(course_id))
     if not course or course.company_id != ctx.company.id:
@@ -10470,7 +10713,10 @@ async def edu_course_edit_action(request: Request, session: Session = Depends(ge
     assert ctx is not None
 
     # Garante tabela em ambientes sem Alembic
-    ensure_credit_consent_table()
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
 
     course = session.get(EducationCourse, int(course_id))
     if not course or course.company_id != ctx.company.id:
@@ -10508,7 +10754,10 @@ async def edu_course_delete(request: Request, session: Session = Depends(get_ses
     assert ctx is not None
 
     # Garante tabela em ambientes sem Alembic
-    ensure_credit_consent_table()
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
 
     course = session.get(EducationCourse, int(course_id))
     if not course or course.company_id != ctx.company.id:
@@ -10568,7 +10817,10 @@ async def edu_module_add_lesson(request: Request, session: Session = Depends(get
     assert ctx is not None
 
     # Garante tabela em ambientes sem Alembic
-    ensure_credit_consent_table()
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
 
     module = session.get(EducationModule, int(module_id))
     if not module:
@@ -10601,7 +10853,10 @@ async def edu_module_edit(request: Request, session: Session = Depends(get_sessi
     assert ctx is not None
 
     # Garante tabela em ambientes sem Alembic
-    ensure_credit_consent_table()
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
 
     module = session.get(EducationModule, int(module_id))
     if not module:
@@ -10624,7 +10879,10 @@ async def edu_module_delete(request: Request, session: Session = Depends(get_ses
     assert ctx is not None
 
     # Garante tabela em ambientes sem Alembic
-    ensure_credit_consent_table()
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
 
     module = session.get(EducationModule, int(module_id))
     if not module:
@@ -10752,7 +11010,10 @@ async def edu_lesson_attach(request: Request, session: Session = Depends(get_ses
     assert ctx is not None
 
     # Garante tabela em ambientes sem Alembic
-    ensure_credit_consent_table()
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
 
     lesson = session.get(EducationLesson, int(lesson_id))
     if not lesson:
@@ -10796,7 +11057,10 @@ async def edu_lesson_edit(request: Request, session: Session = Depends(get_sessi
     assert ctx is not None
 
     # Garante tabela em ambientes sem Alembic
-    ensure_credit_consent_table()
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
 
     lesson = session.get(EducationLesson, int(lesson_id))
     if not lesson:
@@ -10820,7 +11084,10 @@ async def edu_lesson_delete(request: Request, session: Session = Depends(get_ses
     assert ctx is not None
 
     # Garante tabela em ambientes sem Alembic
-    ensure_credit_consent_table()
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
 
     lesson = session.get(EducationLesson, int(lesson_id))
     if not lesson:
@@ -11127,12 +11394,24 @@ def _get_client_for_credit(ctx: TenantContext, request: Request, session: Sessio
 
 
 def _get_latest_consent(session: Session, *, company_id: int, client_id: int) -> CreditConsent | None:
-    return session.exec(
-        select(CreditConsent)
-        .where(CreditConsent.company_id == company_id, CreditConsent.client_id == client_id,
-               CreditConsent.kind == CREDIT_CONSENT_KIND_SCR)
-        .order_by(CreditConsent.created_at.desc())
-    ).first()
+    try:
+        return session.exec(
+            select(CreditConsent)
+            .where(
+                CreditConsent.company_id == company_id,
+                CreditConsent.client_id == client_id,
+                CreditConsent.kind == CREDIT_CONSENT_KIND_SCR,
+            )
+            .order_by(CreditConsent.created_at.desc())
+        ).first()
+    except Exception as e:
+        # Tabela ausente / permissão / migração pendente: não derruba o fluxo público.
+        try:
+            print(f"[consent] failed to query latest consent: {e}")
+        except Exception:
+            pass
+        return None
+
 
 
 def _as_aware_utc(dt: Optional[datetime]) -> Optional[datetime]:
@@ -11391,7 +11670,10 @@ async def credit_generate_consent_link(
     assert ctx is not None
 
     # Garante tabela em ambientes sem Alembic
-    ensure_credit_consent_table()
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
 
     current_client = _get_client_for_credit(ctx, request, session)
     if not current_client:
@@ -11501,6 +11783,19 @@ async def consent_accept_page(
             status_code=404,
         )
 
+    if not ensure_credit_consent_table():
+        return render(
+            "error.html",
+            request=request,
+            context={
+                "current_user": None,
+                "current_company": company,
+                "role": "public",
+                "message": "Sistema de aceite ainda não está configurado (tabela ausente). Avise a empresa responsável.",
+            },
+            status_code=500,
+        )
+
     latest = _get_latest_consent(session, company_id=company.id, client_id=client.id)
     if latest:
         _refresh_consent_status(latest)
@@ -11584,6 +11879,10 @@ async def consent_accept_submit(
         "accepted_at_utc": now.isoformat(),
     }
 
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (tabela ausente).")
+        return RedirectResponse(f"/consent/aceite/{token}", status_code=303)
+
     latest = _get_latest_consent(session, company_id=company_id, client_id=client_id)
     if latest:
         _refresh_consent_status(latest)
@@ -11658,7 +11957,10 @@ async def credit_consult(
     assert ctx is not None
 
     # Garante tabela em ambientes sem Alembic
-    ensure_credit_consent_table()
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
 
     current_client = _get_client_for_credit(ctx, request, session)
     if not current_client:
@@ -11741,7 +12043,10 @@ async def credit_report_refresh(request: Request, background_tasks: BackgroundTa
     assert ctx is not None
 
     # Garante tabela em ambientes sem Alembic
-    ensure_credit_consent_table()
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
 
     report = session.get(CreditReport, int(report_id))
     if not report or report.company_id != ctx.company.id:
@@ -11804,7 +12109,10 @@ async def credit_report_create_deal(request: Request, session: Session = Depends
     assert ctx is not None
 
     # Garante tabela em ambientes sem Alembic
-    ensure_credit_consent_table()
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
 
     report = session.get(CreditReport, int(report_id))
     if not report or report.company_id != ctx.company.id:
@@ -11863,7 +12171,10 @@ async def credit_report_generate_tasks(request: Request, session: Session = Depe
     assert ctx is not None
 
     # Garante tabela em ambientes sem Alembic
-    ensure_credit_consent_table()
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
 
     report = session.get(CreditReport, int(report_id))
     if not report or report.company_id != ctx.company.id:
