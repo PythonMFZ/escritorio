@@ -21,7 +21,7 @@ from typing import Any, Callable, Optional
 from urllib.parse import urlparse
 
 import httpx
-from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, Request, Response, UploadFile
+from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, HTTPException, Request, Response, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 from jinja2 import Environment
 from jinja2.loaders import DictLoader
@@ -3515,10 +3515,12 @@ a:hover{ color:#00BFBF; }
                 <th>Venc.</th>
                 <th>Descrição</th>
                 <th>Status</th>
+                <th>Download</th>
                 <th>Aberto</th>
                 <th>Pago</th>
                 <th>Fatura</th>
                 <th>Link</th>
+                <th>Download</th>
               </tr>
             </thead>
             <tbody>
@@ -3536,6 +3538,9 @@ a:hover{ color:#00BFBF; }
                     {% else %}
                       —
                     {% endif %}
+                  </td>
+                  <td>
+                    <a class="btn btn-sm btn-outline-secondary" href="/financeiro/contaazul/receivable/{{ r.id }}/fatura.pdf" target="_blank" rel="noopener">PDF</a>
                   </td>
                 </tr>
               {% endfor %}
@@ -3558,6 +3563,7 @@ a:hover{ color:#00BFBF; }
                 <th>Número</th>
                 <th>Tipo</th>
                 <th>Status</th>
+                <th>Download</th>
               </tr>
             </thead>
             <tbody>
@@ -3567,6 +3573,15 @@ a:hover{ color:#00BFBF; }
                   <td class="mono small">{{ n.number or "—" }}</td>
                   <td class="mono small">{{ n.invoice_type }}</td>
                   <td><span class="badge text-bg-light border">{{ n.status }}</span></td>
+                  <td>
+                    {% if n.invoice_type.upper() == "NFSE" %}
+                      <a class="btn btn-sm btn-outline-secondary" href="/financeiro/contaazul/invoice/{{ n.id }}/pdf" target="_blank" rel="noopener">PDF</a>
+                    {% elif n.invoice_type.upper() == "NFE" %}
+                      <a class="btn btn-sm btn-outline-secondary" href="/financeiro/contaazul/invoice/{{ n.id }}/xml" target="_blank" rel="noopener">XML</a>
+                    {% else %}
+                      —
+                    {% endif %}
+                  </td>
                 </tr>
               {% endfor %}
             </tbody>
@@ -9313,6 +9328,208 @@ async def contaazul_test_mapping(request: Request, session: Session = Depends(ge
     except Exception as e:
         _ca_log(f"test endpoint failed: {e}")
         return JSONResponse({"ok": False, "error": str(e)[:500]}, status_code=500)
+
+
+# ---------------------------
+# Conta Azul: downloads
+# ---------------------------
+
+async def _contaazul_get_bytes(
+        session: Session,
+        company_id: int,
+        path: str,
+        *,
+        params: Any = None,
+        accept: str | None = None,
+        timeout_s: float = 60.0,
+) -> tuple[bytes, str]:
+    """Fetch raw bytes from Conta Azul API (PDF/XML).
+
+    Uses the same bearer + refresh logic used by JSON calls, but returns bytes and content-type.
+    """
+    base = CONTA_AZUL_API_BASE.rstrip("/")
+    url = base + path
+    headers = _contaazul_bearer_headers(session, company_id)
+    if accept:
+        headers["Accept"] = accept
+
+    async with httpx.AsyncClient(timeout=timeout_s, follow_redirects=True) as client:
+        resp = await client.get(url, headers=headers, params=params)
+        if resp.status_code == 401:
+            auth = _contaazul_get_auth(session, company_id)
+            if auth:
+                _contaazul_refresh(session, auth)
+            headers = _contaazul_bearer_headers(session, company_id)
+            if accept:
+                headers["Accept"] = accept
+            resp = await client.get(url, headers=headers, params=params)
+
+    if resp.status_code >= 400:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Conta Azul API error: GET {path} HTTP {resp.status_code}",
+        )
+    ctype = (resp.headers.get("content-type") or "application/octet-stream").split(";")[0].strip()
+    return resp.content, ctype
+
+
+def _pdf_fatura_bytes(*, company_name: str, client_name: str, receivable: ContaAzulReceivable) -> bytes:
+    """Gera um PDF simples (fatura) localmente.
+
+    Observação: a API aberta do Conta Azul não expõe um endpoint documentado para baixar o PDF do boleto.
+    Este PDF é um comprovante/fatura com os dados + link de pagamento (quando existir).
+    """
+    from io import BytesIO
+    from reportlab.lib.pagesizes import A4
+    from reportlab.pdfgen import canvas
+
+    buf = BytesIO()
+    c = canvas.Canvas(buf, pagesize=A4)
+    w, h = A4
+
+    y = h - 60
+    c.setFont("Helvetica-Bold", 14)
+    c.drawString(40, y, "Fatura / Cobrança")
+    y -= 22
+
+    c.setFont("Helvetica", 10)
+    c.drawString(40, y, f"Empresa: {company_name}")
+    y -= 14
+    c.drawString(40, y, f"Cliente: {client_name}")
+    y -= 14
+    c.drawString(40, y, f"Descrição: {receivable.description or '—'}")
+    y -= 14
+    c.drawString(40, y, f"Vencimento: {receivable.due_date or '—'}   Status: {receivable.status or '—'}")
+    y -= 14
+    c.drawString(40, y, f"Valor em aberto: R$ {receivable.amount_open:.2f}   Pago: R$ {receivable.amount_paid:.2f}")
+    y -= 14
+    if receivable.invoice_number:
+        c.drawString(40, y, f"Referência: {receivable.invoice_type} #{receivable.invoice_number}")
+        y -= 14
+
+    if receivable.payment_url:
+        y -= 6
+        c.setFont("Helvetica-Bold", 10)
+        c.drawString(40, y, "Link de pagamento:")
+        y -= 12
+        c.setFont("Helvetica", 9)
+        # quebra simples em linhas
+        url = receivable.payment_url.strip()
+        chunk = 90
+        for i in range(0, len(url), chunk):
+            c.drawString(40, y, url[i: i + chunk])
+            y -= 11
+
+    c.showPage()
+    c.save()
+    return buf.getvalue()
+
+
+@app.get("/financeiro/contaazul/invoice/{invoice_id}/xml")
+@require_login
+async def contaazul_invoice_xml(
+        invoice_id: int, request: Request, session: Session = Depends(get_session)
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+
+    inv = session.get(ContaAzulInvoice, invoice_id)
+    if not inv or inv.company_id != ctx["company_id"]:
+        raise HTTPException(status_code=404, detail="Nota não encontrada.")
+
+    if ctx["role"] == "cliente" and inv.client_id != ctx["client_id"]:
+        raise HTTPException(status_code=403, detail="Sem permissão.")
+
+    if (inv.invoice_type or "").upper() != "NFE":
+        raise HTTPException(status_code=400, detail="Esta nota não é NF-e.")
+
+    # OpenAPI: GET /v1/notas-fiscais/{chave} retorna XML.
+    chave = (inv.external_id or "").strip()
+    if not chave:
+        raise HTTPException(status_code=400, detail="Chave de acesso ausente.")
+
+    content, ctype = await _contaazul_get_bytes(session, ctx["company_id"], f"/v1/notas-fiscais/{chave}",
+                                                accept="application/xml")
+    filename = f"nfe_{(inv.number or chave)}.xml"
+    return Response(
+        content=content,
+        media_type=ctype or "application/xml",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@app.get("/financeiro/contaazul/invoice/{invoice_id}/pdf")
+@require_login
+async def contaazul_invoice_pdf(
+        invoice_id: int, request: Request, session: Session = Depends(get_session)
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+
+    inv = session.get(ContaAzulInvoice, invoice_id)
+    if not inv or inv.company_id != ctx["company_id"]:
+        raise HTTPException(status_code=404, detail="Nota não encontrada.")
+
+    if ctx["role"] == "cliente" and inv.client_id != ctx["client_id"]:
+        raise HTTPException(status_code=403, detail="Sem permissão.")
+
+    if (inv.invoice_type or "").upper() != "NFSE":
+        raise HTTPException(status_code=400, detail="Esta nota não é NFS-e.")
+
+    # A API aberta de notas fiscais não expõe download do DANFSE; alternativa: PDF da venda.
+    # Endpoint: GET /v1/venda/{id}/imprimir.
+    try:
+        payload = json.loads(inv.raw_json or "{}")
+    except Exception:
+        payload = {}
+    sale_id = (payload.get("id_venda") or "").strip()
+    if not sale_id:
+        raise HTTPException(status_code=404, detail="Sem id_venda para gerar PDF.")
+
+    content, ctype = await _contaazul_get_bytes(session, ctx["company_id"], f"/v1/venda/{sale_id}/imprimir",
+                                                accept="application/pdf")
+    filename = f"nfse_{(inv.number or inv.external_id)}.pdf"
+    return Response(
+        content=content,
+        media_type=ctype or "application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@app.get("/financeiro/contaazul/receivable/{rid}/fatura.pdf")
+@require_login
+async def contaazul_receivable_fatura_pdf(
+        rid: int, request: Request, session: Session = Depends(get_session)
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+
+    r = session.get(ContaAzulReceivable, rid)
+    if not r or r.company_id != ctx["company_id"]:
+        raise HTTPException(status_code=404, detail="Cobrança não encontrada.")
+
+    if ctx["role"] == "cliente" and r.client_id != ctx["client_id"]:
+        raise HTTPException(status_code=403, detail="Sem permissão.")
+
+    company = session.get(Company, ctx["company_id"])
+    client = session.get(Client, r.client_id)
+    pdf = _pdf_fatura_bytes(
+        company_name=(company.name if company else "Empresa"),
+        client_name=(client.name if client else "Cliente"),
+        receivable=r,
+    )
+    filename = f"fatura_{r.installment_id}.pdf"
+    return Response(
+        content=pdf,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @app.get("/financeiro", response_class=HTMLResponse)
