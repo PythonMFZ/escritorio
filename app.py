@@ -8,6 +8,7 @@ import hashlib
 import hmac
 import inspect
 import json
+import html
 import os
 import re
 import secrets
@@ -9165,54 +9166,79 @@ async def contaazul_vincular_manual(
 @app.get("/financeiro/contaazul/test", response_class=JSONResponse)
 @require_role({"admin", "equipe"})
 async def contaazul_test_mapping(request: Request, session: Session = Depends(get_session)) -> JSONResponse:
-    """Diagnóstico rápido do mapeamento e filtros do Conta Azul para o cliente selecionado."""
-    ctx = get_tenant_context(request, session)
-    assert ctx is not None
+    """Diagnóstico rápido do mapeamento e filtros do Conta Azul para o cliente selecionado.
 
-    if not ensure_contaazul_tables():
-        return JSONResponse({"ok": False, "error": "contaazul_tables_missing"}, status_code=500)
+    Este endpoint nunca deve "estourar" 500 sem corpo; ele retorna JSON com o erro.
+    """
+    try:
+        ctx = get_tenant_context(request, session)
+        if not ctx:
+            return JSONResponse({"ok": False, "error": "no_context"}, status_code=401)
 
-    if not _contaazul_configured():
-        return JSONResponse({"ok": False, "error": "contaazul_not_configured"}, status_code=400)
+        if not ensure_contaazul_tables():
+            return JSONResponse({"ok": False, "error": "contaazul_tables_missing"}, status_code=500)
 
-    auth = _contaazul_get_auth(session, ctx.company.id)
-    if not auth or not auth.refresh_token:
-        return JSONResponse({"ok": False, "error": "contaazul_not_connected"}, status_code=400)
+        if not _contaazul_configured():
+            return JSONResponse({"ok": False, "error": "contaazul_not_configured"}, status_code=400)
 
-    current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
-    if not current_client:
-        return JSONResponse({"ok": False, "error": "no_selected_client"}, status_code=400)
+        auth = _contaazul_get_auth(session, ctx.company.id)
+        if not auth or not auth.refresh_token:
+            return JSONResponse({"ok": False, "error": "contaazul_not_connected"}, status_code=400)
 
-    doc = _digits_only(current_client.cnpj)
-    email = (current_client.finance_email or current_client.email or "").strip()
-    mapped = _contaazul_get_mapped_person_id(session, company_id=ctx.company.id, client_id=current_client.id)
-    found = mapped or _contaazul_find_person_id(session, company_id=ctx.company.id, client=current_client)
+        current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
+        if not current_client:
+            return JSONResponse({"ok": False, "error": "no_selected_client"}, status_code=400)
 
-    today = utcnow().date()
-    d = (request.query_params.get("d") or "").strip()
-    if d:
-        try:
-            dd = datetime.strptime(d, "%Y-%m-%d").date()
-            w_start = dd.isoformat()
-            w_end = dd.isoformat()
-        except Exception:
+        doc = _digits_only(current_client.cnpj)
+        email = (current_client.finance_email or current_client.email or "").strip()
+        mapped = _contaazul_get_mapped_person_id(session, company_id=ctx.company.id, client_id=current_client.id)
+        found = mapped or _contaazul_find_person_id(session, company_id=ctx.company.id, client=current_client)
+
+        today = utcnow().date()
+        d = (request.query_params.get("d") or "").strip()
+        if d:
+            try:
+                dd = datetime.strptime(d, "%Y-%m-%d").date()
+                w_start = dd.isoformat()
+                w_end = dd.isoformat()
+            except Exception:
+                w_start = (today - timedelta(days=14)).isoformat()
+                w_end = today.isoformat()
+        else:
             w_start = (today - timedelta(days=14)).isoformat()
             w_end = today.isoformat()
-    else:
-        w_start = (today - timedelta(days=14)).isoformat()
-        w_end = today.isoformat()
 
-    out: dict[str, Any] = {
-        "ok": True,
-        "client": {"id": current_client.id, "name": current_client.name, "doc": doc, "email": email},
-        "person_id": {"mapped": mapped, "found": found},
-        "range_nfse": {"de": w_start, "ate": w_end},
-        "counts": {},
-        "samples": {},
-    }
+        out: dict[str, Any] = {
+            "ok": True,
+            "client": {"id": current_client.id, "name": current_client.name, "doc": doc, "email": email},
+            "person_id": {"mapped": mapped, "found": found},
+            "range_nfse": {"de": w_start, "ate": w_end},
+            "counts": {},
+            "samples": {},
+        }
 
-    # NFS-e com person_id
-    if found:
+        # NFS-e com person_id
+        if found:
+            try:
+                payload = _contaazul_get_json(
+                    session,
+                    ctx.company.id,
+                    "/v1/notas-fiscais-servico",
+                    params=[
+                        ("pagina", 1),
+                        ("tamanho_pagina", 10),
+                        ("data_competencia_de", w_start),
+                        ("data_competencia_ate", w_end),
+                        ("id_cliente", found),
+                    ],
+                )
+                itens = (payload.get("itens") or []) if isinstance(payload, dict) else []
+                out["counts"]["nfse_by_person"] = len(itens)
+                out["samples"]["nfse_by_person"] = itens[:1]
+            except Exception as e:
+                out["counts"]["nfse_by_person_error"] = str(e)[:500]
+
+        # NFS-e sem filtro (só pra validar se existem notas no período)
         try:
             payload = _contaazul_get_json(
                 session,
@@ -9223,86 +9249,70 @@ async def contaazul_test_mapping(request: Request, session: Session = Depends(ge
                     ("tamanho_pagina", 10),
                     ("data_competencia_de", w_start),
                     ("data_competencia_ate", w_end),
-                    ("id_cliente", found),
                 ],
             )
             itens = (payload.get("itens") or []) if isinstance(payload, dict) else []
-            out["counts"]["nfse_by_person"] = len(itens)
-            out["samples"]["nfse_by_person"] = itens[:1]
+            out["counts"]["nfse_any"] = len(itens)
+            out["samples"]["nfse_any"] = itens[:1]
         except Exception as e:
-            out["counts"]["nfse_by_person_error"] = str(e)[:300]
+            out["counts"]["nfse_any_error"] = str(e)[:500]
 
-    # NFS-e sem filtro (só pra validar se existem notas no período)
-    try:
-        payload = _contaazul_get_json(
-            session,
-            ctx.company.id,
-            "/v1/notas-fiscais-servico",
-            params=[
-                ("pagina", 1),
-                ("tamanho_pagina", 10),
-                ("data_competencia_de", w_start),
-                ("data_competencia_ate", w_end),
-            ],
-        )
-        itens = (payload.get("itens") or []) if isinstance(payload, dict) else []
-        out["counts"]["nfse_any"] = len(itens)
-        out["samples"]["nfse_any"] = itens[:1]
-    except Exception as e:
-        out["counts"]["nfse_any_error"] = str(e)[:300]
+        # NFS-e filtrada por documento (varre páginas) — vínculo por CNPJ
+        if doc:
+            try:
+                page = 1
+                count_total = 0
+                first_match: dict[str, Any] | None = None
+                while page <= 10:
+                    payload = _contaazul_get_json(
+                        session,
+                        ctx.company.id,
+                        "/v1/notas-fiscais-servico",
+                        params=[
+                            ("pagina", page),
+                            ("tamanho_pagina", 100),
+                            ("data_competencia_de", w_start),
+                            ("data_competencia_ate", w_end),
+                        ],
+                    )
+                    itens = (payload.get("itens") or []) if isinstance(payload, dict) else []
+                    if not itens:
+                        break
+                    for it in itens:
+                        if not isinstance(it, dict):
+                            continue
+                        if _digits_only(str(it.get("documento_cliente") or "")) == doc:
+                            count_total += 1
+                            if first_match is None:
+                                first_match = it
+                    if len(itens) < 100:
+                        break
+                    page += 1
+                out["counts"]["nfse_doc_matches"] = count_total
+                out["samples"]["nfse_doc_matches"] = [first_match] if first_match else []
+            except Exception as e:
+                out["counts"]["nfse_doc_matches_error"] = str(e)[:500]
 
-    # NFS-e filtrada por documento (varre páginas) — útil quando o vínculo é "sempre CNPJ"
-    if doc:
-        try:
-            page = 1
-            count_total = 0
-            first_match: dict[str, Any] | None = None
-            while page <= 10:
+        # NF-e por documento
+        if doc:
+            try:
                 payload = _contaazul_get_json(
                     session,
                     ctx.company.id,
-                    "/v1/notas-fiscais-servico",
-                    params=[
-                        ("pagina", page),
-                        ("tamanho_pagina", 100),
-                        ("data_competencia_de", w_start),
-                        ("data_competencia_ate", w_end),
-                    ],
+                    "/v1/notas-fiscais",
+                    params={"data_inicial": w_start, "data_final": w_end, "pagina": 1, "tamanho_pagina": 10,
+                            "documento_tomador": doc},
                 )
                 itens = (payload.get("itens") or []) if isinstance(payload, dict) else []
-                if not itens:
-                    break
-                for it in itens:
-                    if not isinstance(it, dict):
-                        continue
-                    if _digits_only(str(it.get("documento_cliente") or "")) == doc:
-                        count_total += 1
-                        if first_match is None:
-                            first_match = it
-                if len(itens) < 100:
-                    break
-                page += 1
-            out["counts"]["nfse_doc_matches"] = count_total
-            out["samples"]["nfse_doc_matches"] = [first_match] if first_match else []
-        except Exception as e:
-            out["counts"]["nfse_doc_matches_error"] = str(e)[:300]
-    # NF-e por documento
-    if doc:
-        try:
-            payload = _contaazul_get_json(
-                session,
-                ctx.company.id,
-                "/v1/notas-fiscais",
-                params={"data_inicial": w_start, "data_final": w_end, "pagina": 1, "tamanho_pagina": 10,
-                        "documento_tomador": doc},
-            )
-            itens = (payload.get("itens") or []) if isinstance(payload, dict) else []
-            out["counts"]["nfe_by_doc"] = len(itens)
-            out["samples"]["nfe_by_doc"] = itens[:1]
-        except Exception as e:
-            out["counts"]["nfe_by_doc_error"] = str(e)[:300]
+                out["counts"]["nfe_by_doc"] = len(itens)
+                out["samples"]["nfe_by_doc"] = itens[:1]
+            except Exception as e:
+                out["counts"]["nfe_by_doc_error"] = str(e)[:500]
 
-    return JSONResponse(out)
+        return JSONResponse(out)
+    except Exception as e:
+        _ca_log(f"test endpoint failed: {e}")
+        return JSONResponse({"ok": False, "error": str(e)[:500]}, status_code=500)
 
 
 @app.get("/financeiro", response_class=HTMLResponse)
@@ -9312,6 +9322,76 @@ async def fin_list(request: Request, session: Session = Depends(get_session)) ->
     if not ctx:
         request.session.clear()
         return RedirectResponse("/login", status_code=303)
+
+
+@app.get("/financeiro/contaazul/debug", response_class=HTMLResponse)
+@require_role({"admin", "equipe"})
+async def contaazul_debug_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
+    """Página HTML simples para depurar NFS-e/NF-e sem depender do JSON na UI."""
+    try:
+        ctx = get_tenant_context(request, session)
+        if not ctx:
+            return RedirectResponse("/login", status_code=303)
+
+        if not ensure_contaazul_tables():
+            return HTMLResponse("<h3>Conta Azul</h3><p>Banco sem tabelas da integração.</p>", status_code=500)
+
+        if not _contaazul_configured():
+            return HTMLResponse("<h3>Conta Azul</h3><p>Faltam env vars CONTA_AZUL_CLIENT_ID/SECRET.</p>",
+                                status_code=400)
+
+        auth = _contaazul_get_auth(session, ctx.company.id)
+        if not auth or not auth.refresh_token:
+            return HTMLResponse("<h3>Conta Azul</h3><p>Integração não conectada (sem refresh_token).</p>",
+                                status_code=400)
+
+        current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
+        if not current_client:
+            return HTMLResponse("<h3>Conta Azul</h3><p>Selecione um cliente (Trocar cliente) e volte aqui.</p>",
+                                status_code=400)
+
+        doc = _digits_only(current_client.cnpj)
+        d = (request.query_params.get("d") or "").strip() or utcnow().date().isoformat()
+
+        # Chamada "crua" (sem filtro por cliente) para verificar se o Conta Azul está retornando NFS-e no dia.
+        payload_any = _contaazul_get_json(
+            session,
+            ctx.company.id,
+            "/v1/notas-fiscais-servico",
+            params=[("pagina", 1), ("tamanho_pagina", 100), ("data_competencia_de", d), ("data_competencia_ate", d)],
+        )
+        itens_any = (payload_any.get("itens") or []) if isinstance(payload_any, dict) else []
+        matches = []
+        if doc:
+            for it in itens_any:
+                if isinstance(it, dict) and _digits_only(str(it.get("documento_cliente") or "")) == doc:
+                    matches.append(it)
+
+        out = {
+            "date": d,
+            "client": {"id": current_client.id, "name": current_client.name, "doc": doc},
+            "nfse_any_count": len(itens_any),
+            "nfse_doc_matches_count": len(matches),
+            "nfse_doc_first": matches[:1],
+            "nfse_any_first": itens_any[:1],
+        }
+
+        pre = html.escape(json.dumps(out, ensure_ascii=False, indent=2))
+        form = f"""
+            <h2>Conta Azul • Debug NFS-e</h2>
+            <p><b>Cliente:</b> {html.escape(current_client.name)} • <b>CNPJ:</b> {html.escape(doc or '—')}</p>
+            <form method="get">
+              <label>Data competência (YYYY-MM-DD):</label>
+              <input name="d" value="{html.escape(d)}" style="padding:6px; width:180px;" />
+              <button style="padding:6px 10px;">Testar</button>
+              <a href="/financeiro" style="margin-left:10px;">Voltar</a>
+            </form>
+            <pre style="margin-top:16px; padding:12px; background:#0b1220; color:#e5e7eb; border-radius:10px; overflow:auto;">{pre}</pre>
+        """
+        return HTMLResponse(form)
+    except Exception as e:
+        _ca_log(f"debug page failed: {e}")
+        return HTMLResponse(f"<h3>Erro</h3><pre>{html.escape(str(e))}</pre>", status_code=500)
 
     current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
 
