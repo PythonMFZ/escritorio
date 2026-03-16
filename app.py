@@ -1636,9 +1636,6 @@ def contaazul_sync_client_job(company_id: int, client_id: int) -> None:
         _contaazul_save_auth(session, auth)
 
 
-pass
-
-
 def get_session() -> Session:
     with Session(engine) as session:
         yield session
@@ -9325,6 +9322,107 @@ async def fin_list(request: Request, session: Session = Depends(get_session)) ->
     if not ctx:
         request.session.clear()
         return RedirectResponse("/login", status_code=303)
+
+    role = ctx.membership.role
+
+    current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
+    if role == "cliente":
+        current_client = session.get(Client, ctx.membership.client_id) if ctx.membership.client_id else None
+
+    # ----------------------------
+    # Cobranças manuais
+    # ----------------------------
+    q = select(FinanceInvoice).where(FinanceInvoice.company_id == ctx.company.id)
+
+    if current_client:
+        q = q.where(FinanceInvoice.client_id == current_client.id)
+    elif role == "cliente":
+        # Cliente sem vínculo → não deve ver nada
+        q = q.where(FinanceInvoice.client_id == -1)
+
+    q = q.order_by(FinanceInvoice.created_at.desc()).limit(200)
+    invs = session.exec(q).all()
+
+    client_name_by_id: dict[int, str] = {}
+    if role in ["admin", "equipe"] and invs:
+        ids = sorted({int(i.client_id) for i in invs})
+        if ids:
+            for c in session.exec(select(Client).where(Client.id.in_(ids))).all():
+                client_name_by_id[int(c.id)] = c.name
+
+    items: list[dict[str, Any]] = []
+    for inv in invs:
+        created_at = inv.created_at.strftime("%Y-%m-%d %H:%M") if isinstance(inv.created_at, datetime) else str(
+            inv.created_at)
+        items.append(
+            {
+                "id": inv.id,
+                "title": inv.title,
+                "status": inv.status,
+                "amount_brl": float(inv.amount_brl or 0.0),
+                "due_date": (inv.due_date or "").strip(),
+                "created_at": created_at,
+                "client_name": client_name_by_id.get(int(inv.client_id), ""),
+            }
+        )
+
+    # ----------------------------
+    # Conta Azul
+    # ----------------------------
+    ca_configured = _contaazul_configured()
+    ca_connected = False
+    ca_last_sync = ""
+    ca_person_id = ""
+    ca_client_doc = _digits_only(current_client.cnpj) if current_client else ""
+    ca_client_email = ((current_client.finance_email or current_client.email or "").strip() if current_client else "")
+
+    ca_invoices: list[ContaAzulInvoice] = []
+    ca_receivables: list[ContaAzulReceivable] = []
+
+    if ca_configured and ensure_contaazul_tables():
+        auth = _contaazul_get_auth(session, ctx.company.id)
+        ca_connected = bool(auth and auth.refresh_token)
+        if auth and auth.last_sync_at:
+            ca_last_sync = _as_aware_utc(auth.last_sync_at).strftime("%Y-%m-%d %H:%M")
+
+        if current_client:
+            ca_person_id = _contaazul_get_mapped_person_id(session, company_id=ctx.company.id,
+                                                           client_id=current_client.id)
+
+            ca_invoices = session.exec(
+                select(ContaAzulInvoice)
+                .where(ContaAzulInvoice.company_id == ctx.company.id, ContaAzulInvoice.client_id == current_client.id)
+                .order_by(ContaAzulInvoice.issue_date.desc())
+                .limit(200)
+            ).all()
+
+            ca_receivables = session.exec(
+                select(ContaAzulReceivable)
+                .where(ContaAzulReceivable.company_id == ctx.company.id,
+                       ContaAzulReceivable.client_id == current_client.id)
+                .order_by(ContaAzulReceivable.due_date.asc())
+                .limit(200)
+            ).all()
+
+    return render(
+        "fin_list.html",
+        request=request,
+        context={
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "role": role,
+            "current_client": current_client,
+            "items": items,
+            "ca_configured": ca_configured,
+            "ca_connected": ca_connected,
+            "ca_last_sync": ca_last_sync,
+            "ca_person_id": ca_person_id,
+            "ca_client_doc": ca_client_doc,
+            "ca_client_email": ca_client_email,
+            "ca_invoices": ca_invoices,
+            "ca_receivables": ca_receivables,
+        },
+    )
 
 
 @app.get("/financeiro/contaazul/debug", response_class=HTMLResponse)
