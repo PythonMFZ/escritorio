@@ -9320,85 +9320,26 @@ async def contaazul_test_mapping(request: Request, session: Session = Depends(ge
 @app.get("/financeiro", response_class=HTMLResponse)
 @require_login
 async def fin_list(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
+    """
+    Aba Financeiro.
+
+    - Admin/Equipe: lista cobranças manuais (opcionalmente filtradas pelo cliente selecionado)
+      + mostra dados sincronizados do Conta Azul para o cliente selecionado.
+    - Cliente: vê somente suas cobranças manuais e seu espelho do Conta Azul.
+    """
     ctx = get_tenant_context(request, session)
     if not ctx:
         request.session.clear()
         return RedirectResponse("/login", status_code=303)
 
-
-@app.get("/financeiro/contaazul/debug", response_class=HTMLResponse)
-@require_role({"admin", "equipe"})
-async def contaazul_debug_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
-    """Página HTML simples para depurar NFS-e/NF-e sem depender do JSON na UI."""
-    try:
-        ctx = get_tenant_context(request, session)
-        if not ctx:
-            return RedirectResponse("/login", status_code=303)
-
-        if not ensure_contaazul_tables():
-            return HTMLResponse("<h3>Conta Azul</h3><p>Banco sem tabelas da integração.</p>", status_code=500)
-
-        if not _contaazul_configured():
-            return HTMLResponse("<h3>Conta Azul</h3><p>Faltam env vars CONTA_AZUL_CLIENT_ID/SECRET.</p>",
-                                status_code=400)
-
-        auth = _contaazul_get_auth(session, ctx.company.id)
-        if not auth or not auth.refresh_token:
-            return HTMLResponse("<h3>Conta Azul</h3><p>Integração não conectada (sem refresh_token).</p>",
-                                status_code=400)
-
-        current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
-        if not current_client:
-            return HTMLResponse("<h3>Conta Azul</h3><p>Selecione um cliente (Trocar cliente) e volte aqui.</p>",
-                                status_code=400)
-
-        doc = _digits_only(current_client.cnpj)
-        d = (request.query_params.get("d") or "").strip() or utcnow().date().isoformat()
-
-        # Chamada "crua" (sem filtro por cliente) para verificar se o Conta Azul está retornando NFS-e no dia.
-        payload_any = _contaazul_get_json(
-            session,
-            ctx.company.id,
-            "/v1/notas-fiscais-servico",
-            params=[("pagina", 1), ("tamanho_pagina", 100), ("data_competencia_de", d), ("data_competencia_ate", d)],
-        )
-        itens_any = (payload_any.get("itens") or []) if isinstance(payload_any, dict) else []
-        matches = []
-        if doc:
-            for it in itens_any:
-                if isinstance(it, dict) and _digits_only(str(it.get("documento_cliente") or "")) == doc:
-                    matches.append(it)
-
-        out = {
-            "date": d,
-            "client": {"id": current_client.id, "name": current_client.name, "doc": doc},
-            "nfse_any_count": len(itens_any),
-            "nfse_doc_matches_count": len(matches),
-            "nfse_doc_first": matches[:1],
-            "nfse_any_first": itens_any[:1],
-        }
-
-        pre = html.escape(json.dumps(out, ensure_ascii=False, indent=2))
-        form = f"""
-            <h2>Conta Azul • Debug NFS-e</h2>
-            <p><b>Cliente:</b> {html.escape(current_client.name)} • <b>CNPJ:</b> {html.escape(doc or '—')}</p>
-            <form method="get">
-              <label>Data competência (YYYY-MM-DD):</label>
-              <input name="d" value="{html.escape(d)}" style="padding:6px; width:180px;" />
-              <button style="padding:6px 10px;">Testar</button>
-              <a href="/financeiro" style="margin-left:10px;">Voltar</a>
-            </form>
-            <pre style="margin-top:16px; padding:12px; background:#0b1220; color:#e5e7eb; border-radius:10px; overflow:auto;">{pre}</pre>
-        """
-        return HTMLResponse(form)
-    except Exception as e:
-        _ca_log(f"debug page failed: {e}")
-        return HTMLResponse(f"<h3>Erro</h3><pre>{html.escape(str(e))}</pre>", status_code=500)
-
     current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
 
-    q = select(FinanceInvoice).where(FinanceInvoice.company_id == ctx.company.id).order_by(
-        FinanceInvoice.created_at.desc())
+    q = (
+        select(FinanceInvoice)
+        .where(FinanceInvoice.company_id == ctx.company.id)
+        .order_by(FinanceInvoice.created_at.desc())
+    )
+
     if ctx.membership.role == "cliente":
         invoices = session.exec(q.where(FinanceInvoice.client_id == (ctx.membership.client_id or -1))).all()
         target_client_id = int(ctx.membership.client_id or 0)
@@ -9408,7 +9349,7 @@ async def contaazul_debug_page(request: Request, session: Session = Depends(get_
         invoices = session.exec(q).all()
         target_client_id = int(current_client.id if current_client else 0)
 
-    out = []
+    out: list[dict[str, Any]] = []
     for it in invoices:
         c = session.get(Client, it.client_id)
         out.append(
@@ -9425,8 +9366,8 @@ async def contaazul_debug_page(request: Request, session: Session = Depends(get_
 
     ca_connected = False
     ca_last_sync = None
-    ca_receivables = []
-    ca_invoices = []
+    ca_receivables: list[dict[str, Any]] = []
+    ca_invoices: list[dict[str, Any]] = []
     if ensure_contaazul_tables():
         auth = _contaazul_get_auth(session, ctx.company.id)
         ca_connected = bool(auth and auth.refresh_token)
@@ -9435,8 +9376,10 @@ async def contaazul_debug_page(request: Request, session: Session = Depends(get_
         if ca_connected and target_client_id:
             recs = session.exec(
                 select(ContaAzulReceivable)
-                .where(ContaAzulReceivable.company_id == ctx.company.id,
-                       ContaAzulReceivable.client_id == target_client_id)
+                .where(
+                    ContaAzulReceivable.company_id == ctx.company.id,
+                    ContaAzulReceivable.client_id == target_client_id,
+                )
                 .order_by(ContaAzulReceivable.due_date.desc())
                 .limit(200)
             ).all()
@@ -9449,6 +9392,7 @@ async def contaazul_debug_page(request: Request, session: Session = Depends(get_
                         "status": r.status,
                         "amount_total": r.amount_total,
                         "amount_open": r.amount_open,
+                        "amount_paid": r.amount_paid,
                         "payment_method": r.payment_method,
                         "invoice_type": r.invoice_type,
                         "invoice_number": r.invoice_number,
@@ -9460,7 +9404,10 @@ async def contaazul_debug_page(request: Request, session: Session = Depends(get_
 
             invs = session.exec(
                 select(ContaAzulInvoice)
-                .where(ContaAzulInvoice.company_id == ctx.company.id, ContaAzulInvoice.client_id == target_client_id)
+                .where(
+                    ContaAzulInvoice.company_id == ctx.company.id,
+                    ContaAzulInvoice.client_id == target_client_id,
+                )
                 .order_by(ContaAzulInvoice.issue_date.desc())
                 .limit(200)
             ).all()
@@ -9506,6 +9453,81 @@ async def contaazul_debug_page(request: Request, session: Session = Depends(get_
             "ca_client_email": ca_client_email,
         },
     )
+
+
+@app.get("/financeiro/contaazul/debug", response_class=HTMLResponse)
+@require_role({"admin", "equipe"})
+async def contaazul_debug_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
+    """Página HTML simples para depurar NFS-e/NF-e sem depender do JSON na UI."""
+    try:
+        ctx = get_tenant_context(request, session)
+        if not ctx:
+            return RedirectResponse("/login", status_code=303)
+
+        if not ensure_contaazul_tables():
+            return HTMLResponse("<h3>Conta Azul</h3><p>Banco sem tabelas da integração.</p>", status_code=500)
+
+        if not _contaazul_configured():
+            return HTMLResponse(
+                "<h3>Conta Azul</h3><p>Faltam env vars CONTA_AZUL_CLIENT_ID/SECRET.</p>",
+                status_code=400,
+            )
+
+        auth = _contaazul_get_auth(session, ctx.company.id)
+        if not auth or not auth.refresh_token:
+            return HTMLResponse(
+                "<h3>Conta Azul</h3><p>Integração não conectada (sem refresh_token).</p>",
+                status_code=400,
+            )
+
+        current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
+        if not current_client:
+            return HTMLResponse(
+                "<h3>Conta Azul</h3><p>Selecione um cliente (Trocar cliente) e volte aqui.</p>",
+                status_code=400,
+            )
+
+        doc = _digits_only(current_client.cnpj)
+        d = (request.query_params.get("d") or "").strip() or utcnow().date().isoformat()
+
+        payload_any = _contaazul_get_json(
+            session,
+            ctx.company.id,
+            "/v1/notas-fiscais-servico",
+            params=[("pagina", 1), ("tamanho_pagina", 100), ("data_competencia_de", d), ("data_competencia_ate", d)],
+        )
+        itens_any = (payload_any.get("itens") or []) if isinstance(payload_any, dict) else []
+        matches: list[dict[str, Any]] = []
+        if doc:
+            for it in itens_any:
+                if isinstance(it, dict) and _digits_only(str(it.get("documento_cliente") or "")) == doc:
+                    matches.append(it)
+
+        out = {
+            "date": d,
+            "client": {"id": current_client.id, "name": current_client.name, "doc": doc},
+            "nfse_any_count": len(itens_any),
+            "nfse_doc_matches_count": len(matches),
+            "nfse_doc_first": matches[:1],
+            "nfse_any_first": itens_any[:1],
+        }
+
+        pre = html.escape(json.dumps(out, ensure_ascii=False, indent=2))
+        form = f"""
+            <h2>Conta Azul • Debug NFS-e</h2>
+            <p><b>Cliente:</b> {html.escape(current_client.name)} • <b>CNPJ:</b> {html.escape(doc or '—')}</p>
+            <form method="get">
+              <label>Data competência (YYYY-MM-DD):</label>
+              <input name="d" value="{html.escape(d)}" style="padding:6px; width:180px;" />
+              <button style="padding:6px 10px;">Testar</button>
+              <a href="/financeiro" style="margin-left:10px;">Voltar</a>
+            </form>
+            <pre style="margin-top:16px; padding:12px; background:#0b1220; color:#e5e7eb; border-radius:10px; overflow:auto;">{pre}</pre>
+        """
+        return HTMLResponse(form)
+    except Exception as e:
+        _ca_log(f"debug page failed: {e}")
+        return HTMLResponse(f"<h3>Erro</h3><pre>{html.escape(str(e))}</pre>", status_code=500)
 
 
 @app.get("/financeiro/novo", response_class=HTMLResponse)
