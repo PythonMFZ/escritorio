@@ -1264,7 +1264,8 @@ def _contaazul_bearer_headers(session: Session, company_id: int) -> dict[str, st
     auth = _contaazul_get_auth(session, company_id)
     if not auth or not auth.access_token or not auth.refresh_token:
         raise RuntimeError("Conta Azul não conectada.")
-    if utcnow() >= (auth.expires_at - timedelta(seconds=60)):
+        exp_at = _as_aware_utc(auth.expires_at) or utcnow()
+    if utcnow() >= (exp_at - timedelta(seconds=60)):
         auth = _contaazul_refresh(session, auth)
     return {"Authorization": f"Bearer {auth.access_token}"}
 
@@ -6981,7 +6982,8 @@ async def client_switch_action(
 
 def _invite_is_expired(inv: ClientInvite) -> bool:
     try:
-        return bool(inv.expires_at and utcnow() > inv.expires_at)
+        exp_at = _as_aware_utc(inv.expires_at)
+        return bool(exp_at and utcnow() > exp_at)
     except Exception:
         return False
 
@@ -8959,7 +8961,7 @@ async def contaazul_diag(request: Request, session: Session = Depends(get_sessio
             "api_base": CONTA_AZUL_API_BASE,
             "tables_ok": table_ok,
             "connected": bool(auth and auth.refresh_token),
-            "token_expires_at": (auth.expires_at.isoformat() if auth else None),
+            "token_expires_at": ((_as_aware_utc(auth.expires_at).isoformat()) if auth and auth.expires_at else None),
             "ping_auth": ping,
         }
     )
