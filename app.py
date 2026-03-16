@@ -1505,22 +1505,29 @@ def contaazul_sync_client_job(company_id: int, client_id: int) -> None:
                         break
                     page += 1
 
-            # fallback: se veio vazio e temos doc, busca sem filtro e filtra pelo documento_cliente
-            if not window_items and doc:
+            # por CNPJ/CPF (doc): o endpoint NÃO filtra por documento, então buscamos no período e filtramos localmente.
+            # (garante que o vínculo seja sempre o documento, mesmo que person_id esteja errado/desatualizado)
+            if doc:
+                seen_ids = {str(it.get("id") or "") for it in window_items if isinstance(it, dict)}
                 page = 1
                 while nfse_saved < CONTA_AZUL_SYNC_MAX_ITEMS:
                     try:
                         itens = _fetch_nfse_page(page, use_person=False)
                     except Exception as e:
-                        _ca_log(f"nfse fetch (doc fallback) failed {w_start}..{w_end}: {e}")
+                        _ca_log(f"nfse fetch (doc filter) failed {w_start}..{w_end}: {e}")
                         break
                     if not itens:
                         break
                     for it in itens:
                         if not isinstance(it, dict):
                             continue
-                        if _digits_only(str(it.get("documento_cliente") or "")) == doc:
-                            window_items.append(it)
+                        if _digits_only(str(it.get("documento_cliente") or "")) != doc:
+                            continue
+                        ext = str(it.get("id") or "")
+                        if not ext or ext in seen_ids:
+                            continue
+                        window_items.append(it)
+                        seen_ids.add(ext)
                     if len(itens) < 100:
                         break
                     page += 1
@@ -9182,8 +9189,18 @@ async def contaazul_test_mapping(request: Request, session: Session = Depends(ge
     found = mapped or _contaazul_find_person_id(session, company_id=ctx.company.id, client=current_client)
 
     today = utcnow().date()
-    w_start = (today - timedelta(days=14)).isoformat()
-    w_end = today.isoformat()
+    d = (request.query_params.get("d") or "").strip()
+    if d:
+        try:
+            dd = datetime.strptime(d, "%Y-%m-%d").date()
+            w_start = dd.isoformat()
+            w_end = dd.isoformat()
+        except Exception:
+            w_start = (today - timedelta(days=14)).isoformat()
+            w_end = today.isoformat()
+    else:
+        w_start = (today - timedelta(days=14)).isoformat()
+        w_end = today.isoformat()
 
     out: dict[str, Any] = {
         "ok": True,
@@ -9234,6 +9251,41 @@ async def contaazul_test_mapping(request: Request, session: Session = Depends(ge
     except Exception as e:
         out["counts"]["nfse_any_error"] = str(e)[:300]
 
+    # NFS-e filtrada por documento (varre páginas) — útil quando o vínculo é "sempre CNPJ"
+    if doc:
+        try:
+            page = 1
+            count_total = 0
+            first_match: dict[str, Any] | None = None
+            while page <= 10:
+                payload = _contaazul_get_json(
+                    session,
+                    ctx.company.id,
+                    "/v1/notas-fiscais-servico",
+                    params=[
+                        ("pagina", page),
+                        ("tamanho_pagina", 100),
+                        ("data_competencia_de", w_start),
+                        ("data_competencia_ate", w_end),
+                    ],
+                )
+                itens = (payload.get("itens") or []) if isinstance(payload, dict) else []
+                if not itens:
+                    break
+                for it in itens:
+                    if not isinstance(it, dict):
+                        continue
+                    if _digits_only(str(it.get("documento_cliente") or "")) == doc:
+                        count_total += 1
+                        if first_match is None:
+                            first_match = it
+                if len(itens) < 100:
+                    break
+                page += 1
+            out["counts"]["nfse_doc_matches"] = count_total
+            out["samples"]["nfse_doc_matches"] = [first_match] if first_match else []
+        except Exception as e:
+            out["counts"]["nfse_doc_matches_error"] = str(e)[:300]
     # NF-e por documento
     if doc:
         try:
