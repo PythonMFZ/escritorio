@@ -9444,10 +9444,10 @@ async def contaazul_invoice_xml(
         return RedirectResponse("/login", status_code=303)
 
     inv = session.get(ContaAzulInvoice, invoice_id)
-    if not inv or inv.company_id != ctx["company_id"]:
+    if not inv or inv.company_id != ctx.company.id:
         raise HTTPException(status_code=404, detail="Nota não encontrada.")
 
-    if ctx["role"] == "cliente" and inv.client_id != ctx["client_id"]:
+    if ctx.membership.role == "cliente" and inv.client_id != ctx.membership.client_id:
         raise HTTPException(status_code=403, detail="Sem permissão.")
 
     if (inv.invoice_type or "").upper() != "NFE":
@@ -9458,7 +9458,7 @@ async def contaazul_invoice_xml(
     if not chave:
         raise HTTPException(status_code=400, detail="Chave de acesso ausente.")
 
-    content, ctype = await _contaazul_get_bytes(session, ctx["company_id"], f"/v1/notas-fiscais/{chave}",
+    content, ctype = await _contaazul_get_bytes(session, ctx.company.id, f"/v1/notas-fiscais/{chave}",
                                                 accept="application/xml")
     filename = f"nfe_{(inv.number or chave)}.xml"
     return Response(
@@ -9479,10 +9479,10 @@ async def contaazul_invoice_pdf(
         return RedirectResponse("/login", status_code=303)
 
     inv = session.get(ContaAzulInvoice, invoice_id)
-    if not inv or inv.company_id != ctx["company_id"]:
+    if not inv or inv.company_id != ctx.company.id:
         raise HTTPException(status_code=404, detail="Nota não encontrada.")
 
-    if ctx["role"] == "cliente" and inv.client_id != ctx["client_id"]:
+    if ctx.membership.role == "cliente" and inv.client_id != ctx.membership.client_id:
         raise HTTPException(status_code=403, detail="Sem permissão.")
 
     if (inv.invoice_type or "").upper() != "NFSE":
@@ -9498,7 +9498,7 @@ async def contaazul_invoice_pdf(
     if not sale_id:
         raise HTTPException(status_code=404, detail="Sem id_venda para gerar PDF.")
 
-    content, ctype = await _contaazul_get_bytes(session, ctx["company_id"], f"/v1/venda/{sale_id}/imprimir",
+    content, ctype = await _contaazul_get_bytes(session, ctx.company.id, f"/v1/venda/{sale_id}/imprimir",
                                                 accept="application/pdf")
     filename = f"nfse_{(inv.number or inv.external_id)}.pdf"
     return Response(
@@ -9519,13 +9519,13 @@ async def contaazul_receivable_fatura_pdf(
         return RedirectResponse("/login", status_code=303)
 
     r = session.get(ContaAzulReceivable, rid)
-    if not r or r.company_id != ctx["company_id"]:
+    if not r or r.company_id != ctx.company.id:
         raise HTTPException(status_code=404, detail="Cobrança não encontrada.")
 
-    if ctx["role"] == "cliente" and r.client_id != ctx["client_id"]:
+    if ctx.membership.role == "cliente" and r.client_id != ctx.membership.client_id:
         raise HTTPException(status_code=403, detail="Sem permissão.")
 
-    company = session.get(Company, ctx["company_id"])
+    company = session.get(Company, ctx.company.id)
     client = session.get(Client, r.client_id)
     pdf = _pdf_fatura_bytes(
         company_name=(company.name if company else "Empresa"),
