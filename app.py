@@ -3410,7 +3410,7 @@ a:hover{ color:#00BFBF; }
 {% endblock %}
 """,
     # ---------------- Financeiro ----------------
-    "fin_list_old.html": r"""
+    "fin_list.html": r"""
 {% extends "base.html" %}
 {% block content %}
 <div class="card p-4">
@@ -3769,13 +3769,31 @@ TEMPLATES.update({
       <h4 class="mb-0">Financeiro</h4>
       <div class="muted">Notas/Boletos de honorários (manual) + sincronizado do Conta Azul.</div>
     </div>
-    {% if role in ["admin","equipe"] %}
-      <a class="btn btn-primary" href="/financeiro/novo">Nova cobrança</a>
-    {% endif %}
+    <div class="d-flex gap-2">
+      {% if role in ["admin","equipe"] %}
+        <a class="btn btn-outline-secondary" href="/integrations/contaazul">Conta Azul</a>
+        {% if ca_connected %}
+          <form method="post" action="/financeiro/contaazul/sync">
+            <button class="btn btn-outline-primary" type="submit">Sincronizar</button>
+          </form>
+        {% endif %}
+        <a class="btn btn-primary" href="/financeiro/novo">Nova cobrança</a>
+      {% endif %}
+    </div>
   </div>
 
-  <hr class="my-3"/>
+  {% if ca_configured and role in ["admin","equipe"] and not ca_connected %}
+    <div class="alert alert-warning mt-3">
+      Conta Azul não conectado. Vá em <a href="/integrations/contaazul">Integrações → Conta Azul</a>.
+    </div>
+  {% endif %}
 
+  {% if ca_last_sync %}
+    <div class="muted small mt-2">Conta Azul: última sync em {{ ca_last_sync }}</div>
+  {% endif %}
+
+  <hr class="my-3"/>
+  <h6 class="mb-2">Cobranças (manual)</h6>
   {% if items %}
     <div class="list-group">
       {% for it in items %}
@@ -3796,151 +3814,55 @@ TEMPLATES.update({
   {% else %}
     <div class="muted">Sem cobranças manuais.</div>
   {% endif %}
-</div>
 
-<div class="card p-4 mt-3">
-  <div class="d-flex justify-content-between align-items-center">
-    <div>
-      <h5 class="mb-0">Conta Azul</h5>
-      <div class="muted small">Sincroniza notas fiscais e contas a receber do ERP (filtrado pelo cliente selecionado).</div>
-    </div>
-    {% if role in ["admin","equipe"] %}
-      <a class="btn btn-outline-secondary" href="/integrations/contaazul">Configurar</a>
-    {% endif %}
-  </div>
-
-  <hr class="my-3"/>
-
-  {% if not ca_configured %}
-    <div class="alert alert-warning">
-      Configure <code>CONTA_AZUL_CLIENT_ID</code> e <code>CONTA_AZUL_CLIENT_SECRET</code> no Render.
-    </div>
-  {% elif not ca_connected %}
-    <div class="alert alert-info">
-      Conta Azul não conectada. <a href="/integrations/contaazul">Clique aqui para conectar</a>.
+  <hr class="my-4"/>
+  <h6 class="mb-2">Conta Azul: Boletos / Contas a receber</h6>
+  {% if ca_receivables %}
+    <div class="list-group">
+      {% for r in ca_receivables %}
+        <div class="list-group-item">
+          <div class="d-flex justify-content-between">
+            <div class="fw-semibold">{{ r.description }}</div>
+            <span class="badge text-bg-light border">{{ r.status }}</span>
+          </div>
+          <div class="muted small mt-1">
+            Valor: R$ {{ "%.2f"|format(r.amount_total) }} • Aberto: R$ {{ "%.2f"|format(r.amount_open) }}
+            {% if r.due_date %} • Venc: {{ r.due_date }}{% endif %}
+            {% if r.invoice_type or r.invoice_number %} • {{ r.invoice_type }} {{ r.invoice_number }}{% endif %}
+            {% if r.boleto_status %} • Boleto: {{ r.boleto_status }}{% endif %}
+          </div>
+          {% if r.payment_url %}
+            <div class="mt-2">
+              <a class="btn btn-sm btn-outline-primary" href="{{ r.payment_url }}" target="_blank" rel="noopener">Abrir link de pagamento</a>
+            </div>
+          {% endif %}
+        </div>
+      {% endfor %}
     </div>
   {% else %}
-    <div class="d-flex flex-wrap align-items-center gap-2">
-      <span class="badge text-bg-light border">Conectado</span>
-      {% if ca_last_sync %}<span class="muted small">Última sync: {{ ca_last_sync }}</span>{% endif %}
-      {% if role in ["admin","equipe"] %}
-        <form method="post" action="/financeiro/contaazul/sync">
-          <button class="btn btn-sm btn-outline-primary">Sincronizar agora</button>
-        </form>
-      {% endif %}
+    <div class="muted">Sem itens sincronizados.</div>
+  {% endif %}
+
+  <hr class="my-4"/>
+  <h6 class="mb-2">Conta Azul: Notas fiscais</h6>
+  {% if ca_invoices %}
+    <div class="list-group">
+      {% for n in ca_invoices %}
+        <div class="list-group-item">
+          <div class="d-flex justify-content-between">
+            <div class="fw-semibold">{{ n.invoice_type }} {{ n.number }}</div>
+            <span class="badge text-bg-light border">{{ n.status }}</span>
+          </div>
+          <div class="muted small mt-1">
+            {% if n.issue_date %}Emissão/Competência: {{ n.issue_date }} • {% endif %}
+            {% if n.amount %}Valor: R$ {{ "%.2f"|format(n.amount) }} • {% endif %}
+            ID: {{ n.external_id }}
+          </div>
+        </div>
+      {% endfor %}
     </div>
-
-    {% if role in ["admin","equipe"] and current_client %}
-      <div class="border rounded p-3 mt-3">
-        <div class="fw-semibold mb-1">Vínculo do cliente (Conta Azul)</div>
-        <div class="muted small">
-          Cliente: <b>{{ current_client.name }}</b> • Doc: {{ ca_client_doc or "—" }} • E-mail: {{ ca_client_email or "—" }}
-        </div>
-        <div class="mono small mt-1">person_id: {{ ca_person_id or "—" }}</div>
-
-        <div class="d-flex flex-wrap gap-2 mt-2">
-          <form method="post" action="/financeiro/contaazul/auto_vincular">
-            <button class="btn btn-sm btn-outline-secondary">Auto-vincular</button>
-          </form>
-
-          <form method="post" action="/financeiro/contaazul/vincular" class="d-flex gap-2">
-            <input name="person_id" class="form-control form-control-sm" placeholder="UUID do cliente no Conta Azul (Pessoa)" style="min-width: 280px;" />
-            <button class="btn btn-sm btn-outline-primary">Salvar vínculo</button>
-          </form>
-        </div>
-
-        <div class="muted small mt-2">
-          Se não aparecer nada após sincronizar, geralmente o documento/e-mail do cliente no Conta Azul está diferente. Nesse caso, cole o UUID da pessoa (Cliente) do Conta Azul aqui.
-        </div>
-      </div>
-    {% endif %}
-
-    <div class="mt-4">
-      <h6 class="mb-2">Contas a receber / Boletos</h6>
-      {% if ca_receivables %}
-        <div class="table-responsive">
-          <table class="table table-sm align-middle">
-            <thead>
-              <tr>
-                <th>Venc.</th>
-                <th>Descrição</th>
-                <th>Status</th>
-                <th>Download</th>
-                <th>Aberto</th>
-                <th>Pago</th>
-                <th>Fatura</th>
-                <th>Link</th>
-                <th>Download</th>
-              </tr>
-            </thead>
-            <tbody>
-              {% for r in ca_receivables %}
-                <tr>
-                  <td class="mono small">{{ r.due_date }}</td>
-                  <td>{{ r.description }}</td>
-                  <td><span class="badge text-bg-light border">{{ r.status }}</span></td>
-                  <td>R$ {{ "%.2f"|format(r.amount_open) }}</td>
-                  <td>R$ {{ "%.2f"|format(r.amount_paid) }}</td>
-                  <td class="mono small">{% if r.invoice_number %}{{ r.invoice_type }} #{{ r.invoice_number }}{% else %}—{% endif %}</td>
-                  <td>
-                    {% if r.payment_url %}
-                      <a class="btn btn-sm btn-outline-primary" href="{{ r.payment_url }}" target="_blank" rel="noopener">Abrir</a>
-                    {% else %}
-                      —
-                    {% endif %}
-                  </td>
-                  <td>
-                    <a class="btn btn-sm btn-outline-secondary" href="/financeiro/contaazul/receivable/{{ r.id }}/fatura.pdf" target="_blank" rel="noopener">Baixar PDF</a>
-                  </td>
-                </tr>
-              {% endfor %}
-            </tbody>
-          </table>
-        </div>
-      {% else %}
-        <div class="muted small">Nenhuma parcela encontrada. Clique em “Sincronizar agora”.</div>
-      {% endif %}
-    </div>
-
-    <div class="mt-4">
-      <h6 class="mb-2">Notas fiscais</h6>
-      {% if ca_invoices %}
-        <div class="table-responsive">
-          <table class="table table-sm align-middle">
-            <thead>
-              <tr>
-                <th>Data</th>
-                <th>Número</th>
-                <th>Tipo</th>
-                <th>Status</th>
-                <th>Download</th>
-              </tr>
-            </thead>
-            <tbody>
-              {% for n in ca_invoices %}
-                <tr>
-                  <td class="mono small">{{ n.issue_date }}</td>
-                  <td class="mono small">{{ n.number or "—" }}</td>
-                  <td class="mono small">{{ n.invoice_type }}</td>
-                  <td><span class="badge text-bg-light border">{{ n.status }}</span></td>
-                  <td>
-                    {% if n.invoice_type.upper() == "NFSE" %}
-                      <a class="btn btn-sm btn-outline-secondary" href="/financeiro/contaazul/invoice/{{ n.id }}/pdf" target="_blank" rel="noopener">Baixar PDF</a>
-                    {% elif n.invoice_type.upper() == "NFE" %}
-                      <a class="btn btn-sm btn-outline-secondary" href="/financeiro/contaazul/invoice/{{ n.id }}/xml" target="_blank" rel="noopener">Baixar XML</a>
-                    {% else %}
-                      —
-                    {% endif %}
-                  </td>
-                </tr>
-              {% endfor %}
-            </tbody>
-          </table>
-        </div>
-      {% else %}
-        <div class="muted small">Nenhuma nota encontrada. Clique em “Sincronizar agora”.</div>
-      {% endif %}
-    </div>
+  {% else %}
+    <div class="muted">Sem notas sincronizadas.</div>
   {% endif %}
 </div>
 {% endblock %}
