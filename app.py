@@ -3831,11 +3831,12 @@ TEMPLATES.update({
             {% if r.invoice_type or r.invoice_number %} • {{ r.invoice_type }} {{ r.invoice_number }}{% endif %}
             {% if r.boleto_status %} • Boleto: {{ r.boleto_status }}{% endif %}
           </div>
-          {% if r.payment_url %}
-            <div class="mt-2">
+          <div class="mt-2 d-flex flex-wrap gap-2">
+            {% if r.payment_url %}
               <a class="btn btn-sm btn-outline-primary" href="{{ r.payment_url }}" target="_blank" rel="noopener">Abrir link de pagamento</a>
-            </div>
-          {% endif %}
+            {% endif %}
+            <a class="btn btn-sm btn-outline-secondary" href="/financeiro/contaazul/receivable/{{ r.id }}/fatura.pdf" target="_blank" rel="noopener">Baixar PDF</a>
+          </div>
         </div>
       {% endfor %}
     </div>
@@ -3857,6 +3858,13 @@ TEMPLATES.update({
             {% if n.issue_date %}Emissão/Competência: {{ n.issue_date }} • {% endif %}
             {% if n.amount %}Valor: R$ {{ "%.2f"|format(n.amount) }} • {% endif %}
             ID: {{ n.external_id }}
+          </div>
+          <div class="mt-2 d-flex flex-wrap gap-2">
+            {% if (n.invoice_type or "").upper() == "NFSE" %}
+              <a class="btn btn-sm btn-outline-secondary" href="/financeiro/contaazul/invoice/{{ n.id }}/pdf" target="_blank" rel="noopener">Baixar PDF</a>
+            {% elif (n.invoice_type or "").upper() == "NFE" %}
+              <a class="btn btn-sm btn-outline-secondary" href="/financeiro/contaazul/invoice/{{ n.id }}/xml" target="_blank" rel="noopener">Baixar XML</a>
+            {% endif %}
           </div>
         </div>
       {% endfor %}
