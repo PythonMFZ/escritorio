@@ -6877,6 +6877,7 @@ async def dashboard(request: Request, session: Session = Depends(get_session)) -
         {"title": "Propostas", "desc": "Propostas e solicitações.", "href": "/propostas"},
         {"title": "CRM", "desc": "Negócios e funil comercial.", "href": "/negocios"},
         {"title": "Crédito", "desc": "SCR (Direct Data).", "href": "/credito"},
+        {"title": "Simulador", "desc": "Simulação de empréstimos (PDF).", "href": "/simulador"},
         {"title": "Financeiro", "desc": "Notas/boletos de honorários.", "href": "/financeiro"},
         {"title": "Empresa", "desc": "Dados completos do cliente.", "href": "/empresa"},
         {"title": "Perfil", "desc": "Indicadores do cliente.", "href": "/perfil"},
