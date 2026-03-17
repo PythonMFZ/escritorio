@@ -1060,9 +1060,27 @@ class Attachment(SQLModel, table=True):
 # ----------------------------
 
 
+def ensure_ui_tables() -> None:
+    """Create UI tables (banner/news) if missing.
+
+    Safe to call on Postgres too (checkfirst=True) to avoid missing-table 500s when
+    Alembic migrations were not applied.
+    """
+    try:
+        SQLModel.metadata.create_all(
+            engine,
+            tables=[UiBannerSlide.__table__, UiNewsFeed.__table__],
+            checkfirst=True,
+        )
+    except Exception:
+        pass
+
+
 def init_db() -> None:
     # Em produção (Postgres), quem cria/alterar tabelas é o Alembic.
-    # Em dev local (SQLite), criamos automaticamente.
+    # Porém, para features novas sem migration (ex.: UI banner/notícias), garantimos as tabelas.
+    ensure_ui_tables()
+    # Em dev local (SQLite), criamos automaticamente tudo.
     if engine.url.get_backend_name().startswith("sqlite"):
         SQLModel.metadata.create_all(engine)
 
@@ -6378,6 +6396,18 @@ def render(
     ctx.setdefault("allow_company_signup", ALLOW_COMPANY_SIGNUP)
     ctx.setdefault("service_catalog", SERVICE_CATALOG)
     ctx.setdefault("bookings_url", BOOKINGS_URL)
+
+    # Inject tenant context defaults for templates that expect them.
+    try:
+        with Session(engine) as _db:
+            _t = get_tenant_context(request, _db)
+            if _t:
+                ctx.setdefault("current_user", _t.user)
+                ctx.setdefault("current_company", _t.company)
+                ctx.setdefault("current_client", _t.client)
+                ctx.setdefault("role", _t.membership.role)
+    except Exception:
+        pass
     return HTMLResponse(templates_env.get_template(template_name).render(**ctx), status_code=status_code)
 
 
@@ -6398,6 +6428,7 @@ app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 @app.on_event("startup")
 def _startup() -> None:
     init_db()
+    ensure_ui_tables()
     ensure_credit_consent_table()
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -7168,6 +7199,7 @@ async def dashboard(request: Request, session: Session = Depends(get_session)) -
         {"title": "CRM", "desc": "Negócios e funil comercial.", "href": "/negocios"},
         {"title": "Crédito", "desc": "SCR (Direct Data).", "href": "/credito"},
         {"title": "Simulador", "desc": "Simulação de empréstimos (PDF).", "href": "/simulador"},
+        {"title": "UI", "desc": "Banner e notícias (admin).", "href": "/admin/ui"},
         {"title": "Financeiro", "desc": "Notas/boletos de honorários.", "href": "/financeiro"},
         {"title": "Empresa", "desc": "Dados completos do cliente.", "href": "/empresa"},
         {"title": "Perfil", "desc": "Indicadores do cliente.", "href": "/perfil"},
@@ -15610,17 +15642,39 @@ async def _ui_load_news(company_id: int, session: Session, limit: int = 10) -> l
     if cached is not None:
         return cached
 
-    feeds = session.exec(
-        select(UiNewsFeed).where(UiNewsFeed.company_id == company_id, UiNewsFeed.is_active == True).order_by(UiNewsFeed.sort_order, UiNewsFeed.id)
-    ).all()
+    ensure_ui_tables()
+
+    try:
+        feeds = session.exec(
+            select(UiNewsFeed)
+            .where(UiNewsFeed.company_id == company_id, UiNewsFeed.is_active == True)
+            .order_by(UiNewsFeed.sort_order, UiNewsFeed.id)
+        ).all()
+    except Exception:
+        _ui_cache_set(company_id, "news", [])
+        return []
 
     if not feeds:
-        for f in _DEFAULT_NEWS_FEEDS:
-            session.add(UiNewsFeed(company_id=company_id, name=f["name"], url=f["url"], sort_order=f["sort_order"], is_active=True))
-        session.commit()
-        feeds = session.exec(
-            select(UiNewsFeed).where(UiNewsFeed.company_id == company_id, UiNewsFeed.is_active == True).order_by(UiNewsFeed.sort_order, UiNewsFeed.id)
-        ).all()
+        try:
+            for f in _DEFAULT_NEWS_FEEDS:
+                session.add(
+                    UiNewsFeed(
+                        company_id=company_id,
+                        name=f["name"],
+                        url=f["url"],
+                        sort_order=f["sort_order"],
+                        is_active=True,
+                    )
+                )
+            session.commit()
+            feeds = session.exec(
+                select(UiNewsFeed)
+                .where(UiNewsFeed.company_id == company_id, UiNewsFeed.is_active == True)
+                .order_by(UiNewsFeed.sort_order, UiNewsFeed.id)
+            ).all()
+        except Exception:
+            _ui_cache_set(company_id, "news", [])
+            return []
 
     all_items: list[dict[str, Any]] = []
     for f in feeds:
@@ -15637,37 +15691,48 @@ async def _ui_load_news(company_id: int, session: Session, limit: int = 10) -> l
             dedup[u] = it
 
     items2 = list(dedup.values())
-    items2.sort(key=lambda x: x.get("published_dt") or datetime(1970, 1, 1, tzinfo=timezone.utc), reverse=True)
-    items2 = items2[:max(1, min(limit, 30))]
+    items2.sort(
+        key=lambda x: x.get("published_dt") or datetime(1970, 1, 1, tzinfo=timezone.utc),
+        reverse=True,
+    )
+    items2 = items2[: max(1, min(limit, 30))]
 
     out = []
     sao_paulo_tz = timezone(timedelta(hours=-3))
     for it in items2:
         dt = it.get("published_dt")
-        out.append({
-            "title": it.get("title") or "",
-            "url": it.get("url") or "",
-            "source": it.get("source") or "",
-            "published": dt.astimezone(sao_paulo_tz).strftime("%d/%m %H:%M") if isinstance(dt, datetime) else "",
-        })
+        out.append(
+            {
+                "title": it.get("title") or "",
+                "url": it.get("url") or "",
+                "source": it.get("source") or "",
+                "published": dt.astimezone(sao_paulo_tz).strftime("%d/%m %H:%M") if isinstance(dt, datetime) else "",
+            }
+        )
 
     _ui_cache_set(company_id, "news", out)
     return out
-
 
 def _ui_load_banner(company_id: int, session: Session) -> list[dict[str, Any]]:
     cached = _ui_cache_get(company_id, "banner")
     if cached is not None:
         return cached
 
-    slides = session.exec(
-        select(UiBannerSlide).where(UiBannerSlide.company_id == company_id, UiBannerSlide.is_active == True).order_by(UiBannerSlide.sort_order, UiBannerSlide.id)
-    ).all()
+    ensure_ui_tables()
+
+    try:
+        slides = session.exec(
+            select(UiBannerSlide)
+            .where(UiBannerSlide.company_id == company_id, UiBannerSlide.is_active == True)
+            .order_by(UiBannerSlide.sort_order, UiBannerSlide.id)
+        ).all()
+    except Exception:
+        _ui_cache_set(company_id, "banner", [])
+        return []
 
     out = [{"title": s.title, "image_url": s.image_url, "link_path": s.link_path} for s in slides]
     _ui_cache_set(company_id, "banner", out)
     return out
-
 
 @app.get("/api/ui/banner", response_class=JSONResponse)
 @require_login
@@ -15689,8 +15754,22 @@ async def api_ui_news(request: Request, limit: int = 10, session: Session = Depe
 async def admin_ui_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
     ctx = get_tenant_context(request, session)
     company_id = ctx.company.id
-    slides = session.exec(select(UiBannerSlide).where(UiBannerSlide.company_id == company_id).order_by(UiBannerSlide.sort_order, UiBannerSlide.id)).all()
-    feeds = session.exec(select(UiNewsFeed).where(UiNewsFeed.company_id == company_id).order_by(UiNewsFeed.sort_order, UiNewsFeed.id)).all()
+    ensure_ui_tables()
+    try:
+        slides = session.exec(
+            select(UiBannerSlide)
+            .where(UiBannerSlide.company_id == company_id)
+            .order_by(UiBannerSlide.sort_order, UiBannerSlide.id)
+        ).all()
+        feeds = session.exec(
+            select(UiNewsFeed)
+            .where(UiNewsFeed.company_id == company_id)
+            .order_by(UiNewsFeed.sort_order, UiNewsFeed.id)
+        ).all()
+    except Exception:
+        request.session["flash"] = {"kind": "danger", "msg": "Não foi possível carregar/salvar UI (tabelas ausentes ou banco sem permissão)."}
+        slides = []
+        feeds = []
     return render("admin_ui.html", request=request, context={
         "title": "Configurações de UI",
         "slides": slides,
