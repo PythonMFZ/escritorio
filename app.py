@@ -491,6 +491,26 @@ class Membership(SQLModel, table=True):
     client_id: Optional[int] = Field(default=None, index=True, foreign_key="client.id")
     created_at: datetime = Field(default_factory=utcnow)
 
+class UiBannerSlide(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    company_id: int = Field(index=True, foreign_key="company.id")
+    title: str = Field(default="")
+    image_url: str = Field(index=False)  # /static/banners/.. or external
+    link_path: str = Field(default="/")
+    sort_order: int = Field(default=0, index=True)
+    is_active: bool = Field(default=True, index=True)
+    created_at: datetime = Field(default_factory=utcnow)
+
+
+class UiNewsFeed(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    company_id: int = Field(index=True, foreign_key="company.id")
+    name: str
+    url: str
+    sort_order: int = Field(default=0, index=True)
+    is_active: bool = Field(default=True, index=True)
+    created_at: datetime = Field(default_factory=utcnow)
+
 
 class OnboardingDiagnostic(SQLModel, table=True):
     __table_args__ = (UniqueConstraint("user_id", "company_id", name="uq_diag_user_company"),)
@@ -2263,14 +2283,111 @@ a:hover{ color:#00BFBF; }
     </nav>
 
     <main class="container my-4">
-      {% if flash %}
-        <div class="alert alert-info">{{ flash }}</div>
-      {% endif %}
+  {% if flash %}
+    <div class="alert alert-info">{{ flash }}</div>
+  {% endif %}
+
+  <!-- Banner (carrossel) -->
+  <div id="mc-banner" class="mb-3"></div>
+
+  <div class="row g-3">
+    <div class="col-12 col-lg-9">
       {% block content %}{% endblock %}
       <div class="mt-5 muted small">
         <div>Uploads protegidos por login (download via rota).</div>
       </div>
-    </main>
+    </div>
+
+    <div class="col-12 col-lg-3">
+      <div class="card p-3">
+        <div class="d-flex align-items-center justify-content-between">
+          <div class="fw-semibold">📰 Notícias (economia)</div>
+          {% if role == "admin" %}
+            <a class="small" href="/admin/ui">Configurar</a>
+          {% endif %}
+        </div>
+        <div class="muted small mt-1">Atualiza automaticamente.</div>
+        <div id="mc-news" class="mt-2"></div>
+      </div>
+    </div>
+  </div>
+</main>
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+(function(){
+  const esc = (s) => String(s || "").replace(/[&<>"']/g, (c) => ({
+    "&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"
+  }[c]));
+
+  async function loadBanner(){
+    const holder = document.getElementById("mc-banner");
+    if (!holder) return;
+    try{
+      const res = await fetch("/api/ui/banner", { headers: { "Accept": "application/json" }, credentials: "same-origin" });
+      if (!res.ok) return;
+      const slides = await res.json();
+      if (!Array.isArray(slides) || slides.length === 0) { holder.innerHTML = ""; return; }
+
+      const cid = "mcCarousel";
+      const indicators = slides.map((_,i)=>`<button type="button" data-bs-target="#${cid}" data-bs-slide-to="${i}" ${i===0?'class="active" aria-current="true"':''} aria-label="Slide ${i+1}"></button>`).join("");
+      const items = slides.map((s,i)=>{
+        const img = esc(s.image_url);
+        const link = esc(s.link_path || "/");
+        const title = esc(s.title || "");
+        return `
+          <div class="carousel-item ${i===0?'active':''}">
+            <a href="${link}" style="display:block;">
+              <img src="${img}" class="d-block w-100" alt="${title}" style="border-radius:16px; max-height:240px; object-fit:cover;">
+            </a>
+            ${title ? `<div class="carousel-caption d-none d-md-block"><h6 class="bg-dark bg-opacity-50 d-inline-block px-2 py-1 rounded">${title}</h6></div>` : ``}
+          </div>`;
+      }).join("");
+
+      holder.innerHTML = `
+        <div id="${cid}" class="carousel slide" data-bs-ride="carousel">
+          <div class="carousel-indicators">${indicators}</div>
+          <div class="carousel-inner">${items}</div>
+          <button class="carousel-control-prev" type="button" data-bs-target="#${cid}" data-bs-slide="prev">
+            <span class="carousel-control-prev-icon" aria-hidden="true"></span>
+            <span class="visually-hidden">Anterior</span>
+          </button>
+          <button class="carousel-control-next" type="button" data-bs-target="#${cid}" data-bs-slide="next">
+            <span class="carousel-control-next-icon" aria-hidden="true"></span>
+            <span class="visually-hidden">Próximo</span>
+          </button>
+        </div>`;
+    }catch(e){
+    }
+  }
+
+  async function loadNews(){
+    const holder = document.getElementById("mc-news");
+    if (!holder) return;
+    holder.innerHTML = '<div class="muted small">Carregando…</div>';
+    try{
+      const res = await fetch("/api/ui/news?limit=10", { headers: { "Accept": "application/json" }, credentials: "same-origin" });
+      if (!res.ok) { holder.innerHTML = '<div class="muted small">Sem notícias no momento.</div>'; return; }
+      const items = await res.json();
+      if (!Array.isArray(items) || items.length === 0) { holder.innerHTML = '<div class="muted small">Sem notícias no momento.</div>'; return; }
+      holder.innerHTML = `
+        <div class="list-group list-group-flush">
+          ${items.map(it => `
+            <a class="list-group-item list-group-item-action small" href="${esc(it.url)}" target="_blank" rel="noopener">
+              <div class="fw-semibold">${esc(it.title)}</div>
+              <div class="muted" style="font-size:.8rem;">${esc(it.source || "")}${it.published ? " • " + esc(it.published) : ""}</div>
+            </a>`).join("")}
+        </div>`;
+    }catch(e){
+      holder.innerHTML = '<div class="muted small">Sem notícias no momento.</div>';
+    }
+  }
+
+  window.addEventListener("DOMContentLoaded", function(){
+    loadBanner();
+    loadNews();
+  });
+})();
+</script>
   </body>
 </html>
 """,
@@ -6073,6 +6190,179 @@ TEMPLATES.update({
 })
 
 templates_env = Environment(loader=DictLoader(TEMPLATES), autoescape=True)
+
+TEMPLATES.update({"admin_ui.html": r"""{% extends "base.html" %}
+{% block content %}
+<div class="d-flex align-items-center justify-content-between">
+  <div>
+    <h4 class="mb-0">Configurações de UI</h4>
+    <div class="muted small">Banner do topo e feeds de notícias.</div>
+  </div>
+</div>
+
+<div class="row g-3 mt-2">
+
+  <div class="col-12">
+    <div class="card p-3">
+      <div class="fw-semibold mb-2">Banner (carrossel)</div>
+
+      <form method="post" action="/admin/ui/banner/add" enctype="multipart/form-data" class="row g-2">
+        <div class="col-md-3">
+          <label class="form-label small muted">Título</label>
+          <input class="form-control" name="title" placeholder="Ex.: Simule seu crédito">
+        </div>
+        <div class="col-md-3">
+          <label class="form-label small muted">Link interno</label>
+          <input class="form-control" name="link_path" placeholder="/simulador" value="/simulador">
+        </div>
+        <div class="col-md-3">
+          <label class="form-label small muted">Imagem (URL)</label>
+          <input class="form-control" name="image_url" placeholder="https://...">
+          <div class="form-text">Ou envie um arquivo.</div>
+        </div>
+        <div class="col-md-3">
+          <label class="form-label small muted">Upload</label>
+          <input class="form-control" type="file" name="image_file" accept="image/*">
+        </div>
+        <div class="col-md-2">
+          <label class="form-label small muted">Ordem</label>
+          <input class="form-control" name="sort_order" value="0">
+        </div>
+        <div class="col-md-2 d-flex align-items-end">
+          <div class="form-check">
+            <input class="form-check-input" type="checkbox" name="is_active" checked>
+            <label class="form-check-label small">Ativo</label>
+          </div>
+        </div>
+        <div class="col-md-8 d-flex align-items-end gap-2">
+          <button class="btn btn-primary" type="submit">Adicionar</button>
+          <a class="btn btn-outline-secondary" href="/">Voltar</a>
+        </div>
+      </form>
+
+      <hr class="my-3"/>
+
+      {% if slides %}
+        <div class="table-responsive">
+          <table class="table table-sm align-middle">
+            <thead>
+              <tr class="muted small">
+                <th>#</th><th>Preview</th><th>Título</th><th>Link</th><th>Ordem</th><th>Status</th><th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for s in slides %}
+              <tr>
+                <td class="mono">{{ s.id }}</td>
+                <td style="width:140px;">
+                  <img src="{{ s.image_url }}" style="height:44px; width:120px; object-fit:cover; border-radius:10px;" />
+                </td>
+                <td>{{ s.title }}</td>
+                <td class="mono">{{ s.link_path }}</td>
+                <td>{{ s.sort_order }}</td>
+                <td>
+                  {% if s.is_active %}
+                    <span class="badge text-bg-success">Ativo</span>
+                  {% else %}
+                    <span class="badge text-bg-secondary">Inativo</span>
+                  {% endif %}
+                </td>
+                <td class="text-end">
+                  <form method="post" action="/admin/ui/banner/{{ s.id }}/toggle" style="display:inline;">
+                    <button class="btn btn-sm btn-outline-primary" type="submit">Alternar</button>
+                  </form>
+                  <form method="post" action="/admin/ui/banner/{{ s.id }}/delete" style="display:inline;" onsubmit="return confirm('Remover slide?');">
+                    <button class="btn btn-sm btn-outline-danger" type="submit">Excluir</button>
+                  </form>
+                </td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      {% else %}
+        <div class="muted small">Nenhum slide cadastrado.</div>
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="col-12">
+    <div class="card p-3">
+      <div class="fw-semibold mb-2">Feeds de notícias</div>
+
+      <form method="post" action="/admin/ui/feed/add" class="row g-2">
+        <div class="col-md-3">
+          <label class="form-label small muted">Nome</label>
+          <input class="form-control" name="name" placeholder="Ex.: Money Times" required>
+        </div>
+        <div class="col-md-7">
+          <label class="form-label small muted">URL do RSS/Atom</label>
+          <input class="form-control" name="url" placeholder="https://..." required>
+        </div>
+        <div class="col-md-2">
+          <label class="form-label small muted">Ordem</label>
+          <input class="form-control" name="sort_order" value="0">
+        </div>
+        <div class="col-md-2 d-flex align-items-end">
+          <div class="form-check">
+            <input class="form-check-input" type="checkbox" name="is_active" checked>
+            <label class="form-check-label small">Ativo</label>
+          </div>
+        </div>
+        <div class="col-md-10 d-flex align-items-end">
+          <button class="btn btn-primary" type="submit">Adicionar feed</button>
+        </div>
+      </form>
+
+      <hr class="my-3"/>
+
+      {% if feeds %}
+        <div class="table-responsive">
+          <table class="table table-sm align-middle">
+            <thead>
+              <tr class="muted small">
+                <th>#</th><th>Nome</th><th>URL</th><th>Ordem</th><th>Status</th><th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for f in feeds %}
+              <tr>
+                <td class="mono">{{ f.id }}</td>
+                <td>{{ f.name }}</td>
+                <td class="mono">{{ f.url }}</td>
+                <td>{{ f.sort_order }}</td>
+                <td>
+                  {% if f.is_active %}
+                    <span class="badge text-bg-success">Ativo</span>
+                  {% else %}
+                    <span class="badge text-bg-secondary">Inativo</span>
+                  {% endif %}
+                </td>
+                <td class="text-end">
+                  <form method="post" action="/admin/ui/feed/{{ f.id }}/toggle" style="display:inline;">
+                    <button class="btn btn-sm btn-outline-primary" type="submit">Alternar</button>
+                  </form>
+                  <form method="post" action="/admin/ui/feed/{{ f.id }}/delete" style="display:inline;" onsubmit="return confirm('Remover feed?');">
+                    <button class="btn btn-sm btn-outline-danger" type="submit">Excluir</button>
+                  </form>
+                </td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      {% else %}
+        <div class="muted small">Nenhum feed cadastrado.</div>
+      {% endif %}
+      <div class="muted small mt-2">
+        Dica: use feeds RSS/Atom oficiais sempre que possível.
+      </div>
+    </div>
+  </div>
+
+</div>
+{% endblock %}""",})
+
 
 
 def render(
@@ -15197,3 +15487,344 @@ async def simulador_pdf(
     pdf_bytes = render_loan_pdf(res)
     headers = {"Content-Disposition": 'inline; filename="simulacao_emprestimo_maffezzolli.pdf"'}
     return StreamingResponse(io.BytesIO(pdf_bytes), media_type="application/pdf", headers=headers)
+
+
+# ----------------------------
+# UI Banner + News (v1)
+# ----------------------------
+
+import xml.etree.ElementTree as ET
+from email.utils import parsedate_to_datetime
+
+_UI_CACHE: dict[tuple[int, str], tuple[float, Any]] = {}
+_UI_CACHE_TTL_BANNER_SEC = 60
+_UI_CACHE_TTL_NEWS_SEC = 600
+
+BANNERS_DIR = STATIC_DIR / "banners"
+BANNERS_DIR.mkdir(parents=True, exist_ok=True)
+
+_DEFAULT_NEWS_FEEDS = [
+    {"name": "UOL Economia", "url": "http://www3.uol.com.br/xml/midiaindoor/economia.xml", "sort_order": 0},
+    {"name": "Money Times", "url": "https://www.moneytimes.com.br/feed/", "sort_order": 10},
+    {"name": "BM&C News", "url": "https://bmcnews.com.br/feed/", "sort_order": 20},
+    {"name": "InfoMoney", "url": "https://www.infomoney.com.br/feed/", "sort_order": 30},
+]
+
+
+def _ui_cache_get(company_id: int, key: str) -> Any:
+    now = datetime.now(timezone.utc).timestamp()
+    k = (company_id, key)
+    item = _UI_CACHE.get(k)
+    if not item:
+        return None
+    ts, data = item
+    ttl = _UI_CACHE_TTL_BANNER_SEC if key == "banner" else _UI_CACHE_TTL_NEWS_SEC
+    if (now - ts) > ttl:
+        _UI_CACHE.pop(k, None)
+        return None
+    return data
+
+
+def _ui_cache_set(company_id: int, key: str, data: Any) -> None:
+    now = datetime.now(timezone.utc).timestamp()
+    _UI_CACHE[(company_id, key)] = (now, data)
+
+
+def _ui_cache_bust(company_id: int) -> None:
+    for k in list(_UI_CACHE.keys()):
+        if k[0] == company_id:
+            _UI_CACHE.pop(k, None)
+
+
+def _ui_safe_int(v: Any, default: int = 0) -> int:
+    try:
+        return int(str(v).strip())
+    except Exception:
+        return default
+
+
+def _ui_parse_date(s: str) -> Optional[datetime]:
+    s = (s or "").strip()
+    if not s:
+        return None
+    try:
+        dt = parsedate_to_datetime(s)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc)
+    except Exception:
+        return None
+
+
+def _ui_parse_rss_atom(xml_bytes: bytes) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    if not xml_bytes:
+        return items
+
+    try:
+        root = ET.fromstring(xml_bytes)
+    except Exception:
+        return items
+
+    channel = root.find("channel")
+    if channel is not None:
+        source = (channel.findtext("title") or "").strip()
+        for it in channel.findall("item"):
+            title = (it.findtext("title") or "").strip()
+            link = (it.findtext("link") or "").strip()
+            pub = _ui_parse_date(it.findtext("pubDate") or "")
+            if title and link:
+                items.append({"title": title, "url": link, "published_dt": pub, "source": source})
+        return items
+
+    ns = {"atom": "http://www.w3.org/2005/Atom"}
+    entries = root.findall("entry") or root.findall("atom:entry", ns)
+    source = (root.findtext("title") or root.findtext("atom:title", default="", namespaces=ns) or "").strip()
+    for e in entries:
+        title = (e.findtext("title") or e.findtext("atom:title", default="", namespaces=ns) or "").strip()
+        link_el = e.find("link") or e.find("atom:link", ns)
+        link = (link_el.attrib.get("href") if link_el is not None else "") or ""
+        pub = _ui_parse_date((e.findtext("updated") or e.findtext("atom:updated", default="", namespaces=ns) or "").strip())
+        if title and link:
+            items.append({"title": title, "url": link.strip(), "published_dt": pub, "source": source})
+    return items
+
+
+async def _ui_fetch_bytes(url: str) -> bytes:
+    url = (url or "").strip()
+    if not url:
+        return b""
+    headers = {"User-Agent": "MaffezzolliCapitalApp/1.0 (+rss)"}
+    try:
+        async with httpx.AsyncClient(timeout=12, headers=headers, follow_redirects=True) as client:
+            r = await client.get(url)
+            if 200 <= r.status_code < 300:
+                return r.content or b""
+    except Exception:
+        return b""
+    return b""
+
+
+async def _ui_load_news(company_id: int, session: Session, limit: int = 10) -> list[dict[str, Any]]:
+    cached = _ui_cache_get(company_id, "news")
+    if cached is not None:
+        return cached
+
+    feeds = session.exec(
+        select(UiNewsFeed).where(UiNewsFeed.company_id == company_id, UiNewsFeed.is_active == True).order_by(UiNewsFeed.sort_order, UiNewsFeed.id)
+    ).all()
+
+    if not feeds:
+        for f in _DEFAULT_NEWS_FEEDS:
+            session.add(UiNewsFeed(company_id=company_id, name=f["name"], url=f["url"], sort_order=f["sort_order"], is_active=True))
+        session.commit()
+        feeds = session.exec(
+            select(UiNewsFeed).where(UiNewsFeed.company_id == company_id, UiNewsFeed.is_active == True).order_by(UiNewsFeed.sort_order, UiNewsFeed.id)
+        ).all()
+
+    all_items: list[dict[str, Any]] = []
+    for f in feeds:
+        xml = await _ui_fetch_bytes(f.url)
+        parsed = _ui_parse_rss_atom(xml)
+        for it in parsed[:25]:
+            it["source"] = it.get("source") or f.name
+            all_items.append(it)
+
+    dedup: dict[str, dict[str, Any]] = {}
+    for it in all_items:
+        u = it.get("url") or ""
+        if u and u not in dedup:
+            dedup[u] = it
+
+    items2 = list(dedup.values())
+    items2.sort(key=lambda x: x.get("published_dt") or datetime(1970, 1, 1, tzinfo=timezone.utc), reverse=True)
+    items2 = items2[:max(1, min(limit, 30))]
+
+    out = []
+    sao_paulo_tz = timezone(timedelta(hours=-3))
+    for it in items2:
+        dt = it.get("published_dt")
+        out.append({
+            "title": it.get("title") or "",
+            "url": it.get("url") or "",
+            "source": it.get("source") or "",
+            "published": dt.astimezone(sao_paulo_tz).strftime("%d/%m %H:%M") if isinstance(dt, datetime) else "",
+        })
+
+    _ui_cache_set(company_id, "news", out)
+    return out
+
+
+def _ui_load_banner(company_id: int, session: Session) -> list[dict[str, Any]]:
+    cached = _ui_cache_get(company_id, "banner")
+    if cached is not None:
+        return cached
+
+    slides = session.exec(
+        select(UiBannerSlide).where(UiBannerSlide.company_id == company_id, UiBannerSlide.is_active == True).order_by(UiBannerSlide.sort_order, UiBannerSlide.id)
+    ).all()
+
+    out = [{"title": s.title, "image_url": s.image_url, "link_path": s.link_path} for s in slides]
+    _ui_cache_set(company_id, "banner", out)
+    return out
+
+
+@app.get("/api/ui/banner", response_class=JSONResponse)
+@require_login
+async def api_ui_banner(request: Request, session: Session = Depends(get_session)) -> JSONResponse:
+    ctx = get_tenant_context(request, session)
+    return JSONResponse(_ui_load_banner(ctx.company.id, session))
+
+
+@app.get("/api/ui/news", response_class=JSONResponse)
+@require_login
+async def api_ui_news(request: Request, limit: int = 10, session: Session = Depends(get_session)) -> JSONResponse:
+    ctx = get_tenant_context(request, session)
+    items = await _ui_load_news(ctx.company.id, session, limit=limit)
+    return JSONResponse(items)
+
+
+@app.get("/admin/ui", response_class=HTMLResponse)
+@require_role({"admin"})
+async def admin_ui_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    company_id = ctx.company.id
+    slides = session.exec(select(UiBannerSlide).where(UiBannerSlide.company_id == company_id).order_by(UiBannerSlide.sort_order, UiBannerSlide.id)).all()
+    feeds = session.exec(select(UiNewsFeed).where(UiNewsFeed.company_id == company_id).order_by(UiNewsFeed.sort_order, UiNewsFeed.id)).all()
+    return render("admin_ui.html", request=request, context={
+        "title": "Configurações de UI",
+        "slides": slides,
+        "feeds": feeds,
+        "current_user": ctx.user,
+        "current_company": ctx.company,
+        "role": ctx.membership.role,
+        "current_client": ctx.client,
+    })
+
+
+@app.post("/admin/ui/banner/add")
+@require_role({"admin"})
+async def admin_ui_banner_add(
+    request: Request,
+    title: str = Form(""),
+    link_path: str = Form("/"),
+    image_url: str = Form(""),
+    sort_order: int = Form(0),
+    is_active: Optional[str] = Form(None),
+    image_file: Optional[UploadFile] = File(None),
+    session: Session = Depends(get_session),
+):
+    ctx = get_tenant_context(request, session)
+    company_id = ctx.company.id
+
+    img = (image_url or "").strip()
+    if (not img) and image_file and image_file.filename:
+        content = await image_file.read()
+        if len(content) > 3 * 1024 * 1024:
+            raise HTTPException(status_code=400, detail="Imagem muito grande (max 3MB).")
+        ext = (Path(image_file.filename).suffix or ".png").lower()
+        fname = f"{uuid.uuid4().hex}{ext}"
+        fpath = BANNERS_DIR / fname
+        fpath.write_bytes(content)
+        img = f"/static/banners/{fname}"
+
+    if not img:
+        raise HTTPException(status_code=400, detail="Informe a URL da imagem ou envie um arquivo.")
+
+    slide = UiBannerSlide(
+        company_id=company_id,
+        title=(title or "").strip(),
+        image_url=img,
+        link_path=(link_path or "/").strip() or "/",
+        sort_order=_ui_safe_int(sort_order, 0),
+        is_active=bool(is_active),
+    )
+    session.add(slide)
+    session.commit()
+    _ui_cache_bust(company_id)
+    request.session["flash"] = "Slide adicionado."
+    return RedirectResponse("/admin/ui", status_code=303)
+
+
+@app.post("/admin/ui/banner/{slide_id}/toggle")
+@require_role({"admin"})
+async def admin_ui_banner_toggle(slide_id: int, request: Request, session: Session = Depends(get_session)):
+    ctx = get_tenant_context(request, session)
+    company_id = ctx.company.id
+    s = session.get(UiBannerSlide, slide_id)
+    if not s or s.company_id != company_id:
+        raise HTTPException(status_code=404, detail="Slide não encontrado.")
+    s.is_active = not s.is_active
+    session.add(s)
+    session.commit()
+    _ui_cache_bust(company_id)
+    return RedirectResponse("/admin/ui", status_code=303)
+
+
+@app.post("/admin/ui/banner/{slide_id}/delete")
+@require_role({"admin"})
+async def admin_ui_banner_delete(slide_id: int, request: Request, session: Session = Depends(get_session)):
+    ctx = get_tenant_context(request, session)
+    company_id = ctx.company.id
+    s = session.get(UiBannerSlide, slide_id)
+    if not s or s.company_id != company_id:
+        raise HTTPException(status_code=404, detail="Slide não encontrado.")
+    session.delete(s)
+    session.commit()
+    _ui_cache_bust(company_id)
+    return RedirectResponse("/admin/ui", status_code=303)
+
+
+@app.post("/admin/ui/feed/add")
+@require_role({"admin"})
+async def admin_ui_feed_add(
+    request: Request,
+    name: str = Form(...),
+    url: str = Form(...),
+    sort_order: int = Form(0),
+    is_active: Optional[str] = Form(None),
+    session: Session = Depends(get_session),
+):
+    ctx = get_tenant_context(request, session)
+    company_id = ctx.company.id
+    feed = UiNewsFeed(
+        company_id=company_id,
+        name=(name or "").strip(),
+        url=(url or "").strip(),
+        sort_order=_ui_safe_int(sort_order, 0),
+        is_active=bool(is_active),
+    )
+    session.add(feed)
+    session.commit()
+    _ui_cache_bust(company_id)
+    request.session["flash"] = "Feed adicionado."
+    return RedirectResponse("/admin/ui", status_code=303)
+
+
+@app.post("/admin/ui/feed/{feed_id}/toggle")
+@require_role({"admin"})
+async def admin_ui_feed_toggle(feed_id: int, request: Request, session: Session = Depends(get_session)):
+    ctx = get_tenant_context(request, session)
+    company_id = ctx.company.id
+    f = session.get(UiNewsFeed, feed_id)
+    if not f or f.company_id != company_id:
+        raise HTTPException(status_code=404, detail="Feed não encontrado.")
+    f.is_active = not f.is_active
+    session.add(f)
+    session.commit()
+    _ui_cache_bust(company_id)
+    return RedirectResponse("/admin/ui", status_code=303)
+
+
+@app.post("/admin/ui/feed/{feed_id}/delete")
+@require_role({"admin"})
+async def admin_ui_feed_delete(feed_id: int, request: Request, session: Session = Depends(get_session)):
+    ctx = get_tenant_context(request, session)
+    company_id = ctx.company.id
+    f = session.get(UiNewsFeed, feed_id)
+    if not f or f.company_id != company_id:
+        raise HTTPException(status_code=404, detail="Feed não encontrado.")
+    session.delete(f)
+    session.commit()
+    _ui_cache_bust(company_id)
+    return RedirectResponse("/admin/ui", status_code=303)
