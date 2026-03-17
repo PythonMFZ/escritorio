@@ -3,93 +3,6 @@ from __future__ import annotations
 from sqlalchemy import func, delete
 from sqlalchemy.exc import OperationalError
 
-# === CNPJ_AUTOFILL_V2 ===
-import time
-from typing import Any, TypedDict
-from starlette.concurrency import run_in_threadpool
-
-_CNPJ_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
-_CNPJ_CACHE_TTL_SEC = 60 * 60 * 24  # 24h
-
-
-class CnpjLookupResult(TypedDict, total=False):
-    legal_name: str
-    trade_name: str
-    street: str
-    number: str
-    neighborhood: str
-    city: str
-    state: str
-    zip_code: str
-    phone: str
-
-
-def normalize_cnpj(raw: str) -> str:
-    return re.sub(r"\D+", "", raw or "").strip()
-
-
-def _fetch_cnpj_data_sync(cnpj: str) -> CnpjLookupResult:
-    cnpj = normalize_cnpj(cnpj)
-    if len(cnpj) != 14:
-        raise HTTPException(status_code=400, detail="CNPJ inválido (precisa ter 14 dígitos).")
-
-    now = time.time()
-    cached = _CNPJ_CACHE.get(cnpj)
-    if cached and (now - cached[0]) < _CNPJ_CACHE_TTL_SEC:
-        return cached[1]  # type: ignore[return-value]
-
-    # Provider 1: BrasilAPI
-    try:
-        r = requests.get(f"https://brasilapi.com.br/api/cnpj/v1/{cnpj}", timeout=10)
-        if r.status_code == 200:
-            j = r.json()
-            out: CnpjLookupResult = {
-                "legal_name": j.get("razao_social") or "",
-                "trade_name": j.get("nome_fantasia") or "",
-                "street": j.get("logradouro") or "",
-                "number": j.get("numero") or "",
-                "neighborhood": j.get("bairro") or "",
-                "city": j.get("municipio") or "",
-                "state": j.get("uf") or "",
-                "zip_code": normalize_cnpj(j.get("cep") or ""),
-                "phone": j.get("ddd_telefone_1") or "",
-            }
-            _CNPJ_CACHE[cnpj] = (now, out)
-            return out
-    except Exception:
-        pass
-
-    # Provider 2: CNPJ.ws public
-    try:
-        r = requests.get(f"https://publica.cnpj.ws/cnpj/{cnpj}", timeout=10)
-        if r.status_code == 200:
-            j = r.json()
-            estab = j.get("estabelecimento") or {}
-            end = estab.get("endereco") or {}
-            out: CnpjLookupResult = {
-                "legal_name": j.get("razao_social") or "",
-                "trade_name": estab.get("nome_fantasia") or "",
-                "street": end.get("logradouro") or "",
-                "number": end.get("numero") or "",
-                "neighborhood": end.get("bairro") or "",
-                "city": (end.get("cidade") or {}).get("nome") or "",
-                "state": (end.get("estado") or {}).get("sigla") or "",
-                "zip_code": normalize_cnpj(end.get("cep") or ""),
-                "phone": (estab.get("ddd1") or "") + (estab.get("telefone1") or ""),
-            }
-            _CNPJ_CACHE[cnpj] = (now, out)
-            return out
-    except Exception:
-        pass
-
-    raise HTTPException(status_code=404, detail="CNPJ não encontrado.")
-
-
-async def fetch_cnpj_data(cnpj: str) -> CnpjLookupResult:
-    """Async wrapper (no new deps)"""
-    return await run_in_threadpool(_fetch_cnpj_data_sync, cnpj)
-# === /CNPJ_AUTOFILL_V2 ===
-
 import base64
 import hashlib
 import hmac
@@ -2748,65 +2661,6 @@ a:hover{ color:#00BFBF; }
     </form>
   {% endif %}
 </div>
-<script>
-(function () {
-  const cnpjEl = document.querySelector('input[name="cnpj"]');
-  if (!cnpjEl) return;
-
-  const pick = (d, a, b) => (d && (d[a] ?? d[b])) || "";
-
-  const setVal = (name, value) => {
-    const el = document.querySelector(`[name="${name}"]`);
-    if (el && value) el.value = value;
-  };
-
-  let last = "";
-
-  const lookup = async () => {
-    const cnpj = (cnpjEl.value || "").replace(/\D+/g, "");
-    if (cnpj.length !== 14) return;
-    if (cnpj === last) return;
-    last = cnpj;
-
-    try {
-      const res = await fetch(`/api/cnpj/${cnpj}`, {
-        headers: { "Accept": "application/json" },
-        credentials: "same-origin",
-      });
-
-      if (!res.ok) {
-        console.warn("CNPJ lookup falhou", res.status);
-        return;
-      }
-
-      const d = await res.json();
-
-      const legalName = pick(d, "legal_name", "razao_social");
-      const street = pick(d, "street", "logradouro");
-      const number = pick(d, "number", "numero");
-      const neighborhood = pick(d, "neighborhood", "bairro");
-      const city = pick(d, "city", "municipio");
-      const state = pick(d, "state", "uf");
-      const zip = (pick(d, "zip_code", "cep") || "").toString().replace(/\D+/g, "");
-      const phone = pick(d, "phone", "ddd_telefone_1");
-
-      const nameEl = document.querySelector('input[name="name"]');
-      if (nameEl && !nameEl.value && legalName) nameEl.value = legalName;
-
-      setVal("address", [street, number, neighborhood].filter(Boolean).join(", "));
-      setVal("city", city);
-      setVal("state", state);
-      setVal("zip_code", zip);
-      setVal("phone", phone);
-    } catch (e) {
-      console.warn("CNPJ lookup exception", e);
-    }
-  };
-
-  cnpjEl.addEventListener("blur", lookup);
-  window.addEventListener("DOMContentLoaded", lookup);
-})();
-</script>
 {% endblock %}
 """,
     "perfil.html": r"""
@@ -3977,12 +3831,11 @@ TEMPLATES.update({
             {% if r.invoice_type or r.invoice_number %} • {{ r.invoice_type }} {{ r.invoice_number }}{% endif %}
             {% if r.boleto_status %} • Boleto: {{ r.boleto_status }}{% endif %}
           </div>
-          <div class="mt-2 d-flex flex-wrap gap-2">
-            {% if r.payment_url %}
+          {% if r.payment_url %}
+            <div class="mt-2">
               <a class="btn btn-sm btn-outline-primary" href="{{ r.payment_url }}" target="_blank" rel="noopener">Abrir link de pagamento</a>
-            {% endif %}
-            <a class="btn btn-sm btn-outline-secondary" href="/financeiro/contaazul/receivable/{{ r.id }}/fatura.pdf" target="_blank" rel="noopener">Baixar PDF</a>
-          </div>
+            </div>
+          {% endif %}
         </div>
       {% endfor %}
     </div>
@@ -4004,13 +3857,6 @@ TEMPLATES.update({
             {% if n.issue_date %}Emissão/Competência: {{ n.issue_date }} • {% endif %}
             {% if n.amount %}Valor: R$ {{ "%.2f"|format(n.amount) }} • {% endif %}
             ID: {{ n.external_id }}
-          </div>
-          <div class="mt-2 d-flex flex-wrap gap-2">
-            {% if (n.invoice_type or "").upper() == "NFSE" %}
-              <a class="btn btn-sm btn-outline-secondary" href="/financeiro/contaazul/invoice/{{ n.id }}/pdf" target="_blank" rel="noopener">Baixar PDF</a>
-            {% elif (n.invoice_type or "").upper() == "NFE" %}
-              <a class="btn btn-sm btn-outline-secondary" href="/financeiro/contaazul/invoice/{{ n.id }}/xml" target="_blank" rel="noopener">Baixar XML</a>
-            {% endif %}
           </div>
         </div>
       {% endfor %}
@@ -6250,14 +6096,6 @@ def render(
 # ----------------------------
 
 app = FastAPI()
-
-@app.get("/api/cnpj/{cnpj}", response_class=JSONResponse)
-@require_login
-async def api_cnpj_lookup(request: Request, cnpj: str, session: Session = Depends(get_session)) -> JSONResponse:
-    _ = get_tenant_context(request, session)
-    data = await fetch_cnpj_data(cnpj)
-    return JSONResponse(data)
-
 https_only = os.getenv("SESSION_HTTPS_ONLY", "0") == "1"
 app.add_middleware(SessionMiddleware, secret_key=APP_SECRET_KEY, https_only=https_only, same_site="lax")
 
@@ -9598,10 +9436,10 @@ async def contaazul_invoice_xml(
         return RedirectResponse("/login", status_code=303)
 
     inv = session.get(ContaAzulInvoice, invoice_id)
-    if not inv or inv.company_id != ctx.company.id:
+    if not inv or inv.company_id != ctx["company_id"]:
         raise HTTPException(status_code=404, detail="Nota não encontrada.")
 
-    if ctx.membership.role == "cliente" and inv.client_id != ctx.membership.client_id:
+    if ctx["role"] == "cliente" and inv.client_id != ctx["client_id"]:
         raise HTTPException(status_code=403, detail="Sem permissão.")
 
     if (inv.invoice_type or "").upper() != "NFE":
@@ -9612,7 +9450,7 @@ async def contaazul_invoice_xml(
     if not chave:
         raise HTTPException(status_code=400, detail="Chave de acesso ausente.")
 
-    content, ctype = await _contaazul_get_bytes(session, ctx.company.id, f"/v1/notas-fiscais/{chave}",
+    content, ctype = await _contaazul_get_bytes(session, ctx["company_id"], f"/v1/notas-fiscais/{chave}",
                                                 accept="application/xml")
     filename = f"nfe_{(inv.number or chave)}.xml"
     return Response(
@@ -9633,10 +9471,10 @@ async def contaazul_invoice_pdf(
         return RedirectResponse("/login", status_code=303)
 
     inv = session.get(ContaAzulInvoice, invoice_id)
-    if not inv or inv.company_id != ctx.company.id:
+    if not inv or inv.company_id != ctx["company_id"]:
         raise HTTPException(status_code=404, detail="Nota não encontrada.")
 
-    if ctx.membership.role == "cliente" and inv.client_id != ctx.membership.client_id:
+    if ctx["role"] == "cliente" and inv.client_id != ctx["client_id"]:
         raise HTTPException(status_code=403, detail="Sem permissão.")
 
     if (inv.invoice_type or "").upper() != "NFSE":
@@ -9652,7 +9490,7 @@ async def contaazul_invoice_pdf(
     if not sale_id:
         raise HTTPException(status_code=404, detail="Sem id_venda para gerar PDF.")
 
-    content, ctype = await _contaazul_get_bytes(session, ctx.company.id, f"/v1/venda/{sale_id}/imprimir",
+    content, ctype = await _contaazul_get_bytes(session, ctx["company_id"], f"/v1/venda/{sale_id}/imprimir",
                                                 accept="application/pdf")
     filename = f"nfse_{(inv.number or inv.external_id)}.pdf"
     return Response(
@@ -9673,13 +9511,13 @@ async def contaazul_receivable_fatura_pdf(
         return RedirectResponse("/login", status_code=303)
 
     r = session.get(ContaAzulReceivable, rid)
-    if not r or r.company_id != ctx.company.id:
+    if not r or r.company_id != ctx["company_id"]:
         raise HTTPException(status_code=404, detail="Cobrança não encontrada.")
 
-    if ctx.membership.role == "cliente" and r.client_id != ctx.membership.client_id:
+    if ctx["role"] == "cliente" and r.client_id != ctx["client_id"]:
         raise HTTPException(status_code=403, detail="Sem permissão.")
 
-    company = session.get(Company, ctx.company.id)
+    company = session.get(Company, ctx["company_id"])
     client = session.get(Client, r.client_id)
     pdf = _pdf_fatura_bytes(
         company_name=(company.name if company else "Empresa"),
@@ -14674,3 +14512,687 @@ async def credit_report_generate_tasks(request: Request, session: Session = Depe
     set_flash(request, f"{created} tarefas criadas.")
     return RedirectResponse("/tarefas", status_code=303)
 
+
+
+# ==============================
+# SIMULADOR DE EMPRÉSTIMOS + PDF
+# ==============================
+from dataclasses import dataclass
+from datetime import date, datetime
+from decimal import Decimal, ROUND_HALF_UP
+from enum import Enum
+import calendar
+import io
+from typing import Any, Optional, TypedDict
+
+from fastapi import Form
+from fastapi.responses import StreamingResponse
+
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.units import mm
+from reportlab.pdfgen import canvas as rl_canvas
+from reportlab.lib.utils import ImageReader
+
+
+class LoanAmortization(str, Enum):
+    PRICE = "price"          # parcela fixa (Sistema Francês)
+    SAC = "sac"              # amortização constante
+    AMERICANO = "americano"  # juros + balloon
+
+
+class LoanRateBase(str, Enum):
+    AM = "am"  # ao mês
+    AA = "aa"  # ao ano
+
+
+def _dec(x: Any) -> Decimal:
+    if x is None:
+        return Decimal("0")
+    if isinstance(x, Decimal):
+        return x
+    s = str(x).strip()
+    if not s:
+        return Decimal("0")
+    # "1.234,56" -> "1234.56"
+    s = s.replace(".", "").replace(",", ".")
+    return Decimal(s)
+
+
+def _d2(x: Decimal) -> Decimal:
+    return x.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+
+def _normalize_pct_to_rate(pct_str: str) -> Decimal:
+    """
+    Entrada esperada em %:
+      - "1,79" => 0.0179
+      - "12"   => 0.12
+    """
+    pct = _dec(pct_str)
+    return pct / Decimal("100")
+
+
+def _annual_to_monthly_rate(rate_aa: Decimal) -> Decimal:
+    # (1+i_a)^(1/12)-1
+    return Decimal(str((1.0 + float(rate_aa)) ** (1.0 / 12.0) - 1.0))
+
+
+def _month_add(dt: date, months: int) -> date:
+    y = dt.year + (dt.month - 1 + months) // 12
+    m = (dt.month - 1 + months) % 12 + 1
+    last = calendar.monthrange(y, m)[1]
+    d = min(dt.day, last)
+    return date(y, m, d)
+
+
+def _brl(x: Decimal) -> str:
+    s = f"{x:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    return f"R$ {s}"
+
+
+@dataclass(frozen=True)
+class LoanInput:
+    loan_type: str
+    amortization: LoanAmortization
+    rate: Decimal
+    rate_base: LoanRateBase
+    term_months: int
+
+    principal: Decimal
+    collateral_value: Decimal
+    ltv_pct: Decimal
+
+    start_date: date
+    grace_months: int
+    io_months: int
+
+    fee_amount: Decimal
+    monthly_insurance: Decimal
+    monthly_admin_fee: Decimal
+
+    borrower_name: str
+    notes: str
+
+
+@dataclass(frozen=True)
+class LoanRow:
+    n: int
+    due_date: date
+    payment: Decimal
+    interest: Decimal
+    amort: Decimal
+    fees: Decimal
+    insurance: Decimal
+    balance: Decimal
+
+
+@dataclass(frozen=True)
+class LoanSimResult:
+    inp: LoanInput
+    schedule: list[LoanRow]
+    monthly_rate: Decimal
+    total_payment: Decimal
+    total_interest: Decimal
+    total_amort: Decimal
+    total_fees: Decimal
+    total_insurance: Decimal
+    first_payment: Decimal
+
+
+def build_loan_input(
+    *,
+    loan_type: str,
+    amortization: str,
+    rate_pct: str,
+    rate_base: str,
+    term_months: int,
+    principal: str,
+    collateral_value: str,
+    ltv_pct: str,
+    start_date: date,
+    grace_months: int,
+    io_months: int,
+    fee_amount: str,
+    monthly_insurance: str,
+    monthly_admin_fee: str,
+    borrower_name: str,
+    notes: str,
+) -> LoanInput:
+    amort = LoanAmortization(amortization)
+    rb = LoanRateBase(rate_base)
+
+    principal_d = _d2(_dec(principal))
+    collateral_d = _d2(_dec(collateral_value))
+    ltv_d = _d2(_dec(ltv_pct))
+
+    if principal_d <= 0 and collateral_d > 0 and ltv_d > 0:
+        principal_d = _d2(collateral_d * (ltv_d / Decimal("100")))
+
+    if ltv_d <= 0 and principal_d > 0 and collateral_d > 0:
+        ltv_d = _d2((principal_d / collateral_d) * Decimal("100"))
+
+    if term_months <= 0:
+        raise ValueError("Prazo inválido.")
+    if principal_d <= 0:
+        raise ValueError("Informe valor do empréstimo (ou valor do bem + LTV).")
+
+    return LoanInput(
+        loan_type=(loan_type or "").strip() or "Empréstimo",
+        amortization=amort,
+        rate=_normalize_pct_to_rate(rate_pct),
+        rate_base=rb,
+        term_months=int(term_months),
+        principal=principal_d,
+        collateral_value=collateral_d,
+        ltv_pct=ltv_d,
+        start_date=start_date,
+        grace_months=max(0, int(grace_months or 0)),
+        io_months=max(0, int(io_months or 0)),
+        fee_amount=_d2(_dec(fee_amount)),
+        monthly_insurance=_d2(_dec(monthly_insurance)),
+        monthly_admin_fee=_d2(_dec(monthly_admin_fee)),
+        borrower_name=(borrower_name or "").strip(),
+        notes=(notes or "").strip(),
+    )
+
+
+def simulate_loan(inp: LoanInput) -> LoanSimResult:
+    if inp.rate_base == LoanRateBase.AM:
+        i = inp.rate
+    else:
+        i = _annual_to_monthly_rate(inp.rate)
+
+    i = Decimal(str(float(i)))
+    principal = inp.principal
+    bal = principal
+
+    grace = inp.grace_months
+    io_only = inp.io_months
+    amort_months = max(1, inp.term_months - grace - io_only)
+
+    price_pmt = Decimal("0")
+    if inp.amortization == LoanAmortization.PRICE:
+        if i == 0:
+            price_pmt = _d2(principal / Decimal(amort_months))
+        else:
+            denom = Decimal("1") - Decimal(str((1.0 + float(i)) ** (-amort_months)))
+            price_pmt = _d2(principal * i / denom)
+
+    sac_amort = Decimal("0")
+    if inp.amortization == LoanAmortization.SAC:
+        sac_amort = _d2(principal / Decimal(amort_months))
+
+    schedule: list[LoanRow] = []
+    total_interest = Decimal("0")
+    total_payment = Decimal("0")
+    total_amort = Decimal("0")
+    total_fees = Decimal("0")
+    total_ins = Decimal("0")
+
+    for n in range(1, inp.term_months + 1):
+        due = _month_add(inp.start_date, n)
+        fees = inp.monthly_admin_fee
+        ins = inp.monthly_insurance
+
+        if n <= grace + io_only:
+            interest = _d2(bal * i)
+            amort = Decimal("0")
+            base_pmt = _d2(interest)
+        else:
+            if inp.amortization == LoanAmortization.AMERICANO:
+                interest = _d2(bal * i)
+                amort = _d2(bal) if n == inp.term_months else Decimal("0")
+                base_pmt = _d2(interest + amort)
+            elif inp.amortization == LoanAmortization.SAC:
+                interest = _d2(bal * i)
+                amort = sac_amort if sac_amort <= bal else _d2(bal)
+                base_pmt = _d2(interest + amort)
+            else:
+                interest = _d2(bal * i)
+                amort = _d2(price_pmt - interest)
+                if amort > bal:
+                    amort = _d2(bal)
+                if amort < 0:
+                    amort = Decimal("0")
+                base_pmt = _d2(interest + amort)
+
+        bal = _d2(bal - amort)
+        if bal < 0:
+            bal = Decimal("0")
+
+        payment = _d2(base_pmt + fees + ins)
+
+        schedule.append(
+            LoanRow(
+                n=n,
+                due_date=due,
+                payment=payment,
+                interest=interest,
+                amort=amort,
+                fees=fees,
+                insurance=ins,
+                balance=bal,
+            )
+        )
+
+        total_interest += interest
+        total_amort += amort
+        total_fees += fees
+        total_ins += ins
+        total_payment += payment
+
+    total_fees += inp.fee_amount
+    total_payment += inp.fee_amount
+
+    first_payment = schedule[0].payment if schedule else Decimal("0")
+
+    return LoanSimResult(
+        inp=inp,
+        schedule=schedule,
+        monthly_rate=_d2(i),
+        total_payment=_d2(total_payment),
+        total_interest=_d2(total_interest),
+        total_amort=_d2(total_amort),
+        total_fees=_d2(total_fees),
+        total_insurance=_d2(total_ins),
+        first_payment=_d2(first_payment),
+    )
+
+
+def render_loan_pdf(res: LoanSimResult) -> bytes:
+    buf = io.BytesIO()
+    c = rl_canvas.Canvas(buf, pagesize=A4)
+    w, h = A4
+
+    # Logo
+    logo_path = (STATIC_DIR / "logo.png") if "STATIC_DIR" in globals() else None
+    if logo_path and logo_path.exists():
+        try:
+            img = ImageReader(str(logo_path))
+            c.drawImage(img, 20 * mm, h - 32 * mm, width=45 * mm, height=16 * mm, mask="auto")
+        except Exception:
+            pass
+
+    c.setFont("Helvetica-Bold", 14)
+    c.drawString(70 * mm, h - 24 * mm, "Simulação de Empréstimo")
+    c.setFont("Helvetica", 9)
+    c.drawRightString(w - 20 * mm, h - 24 * mm, datetime.now().strftime("%d/%m/%Y %H:%M"))
+
+    y = h - 38 * mm
+
+    def kv(key: str, val: str) -> None:
+        nonlocal y
+        c.setFont("Helvetica-Bold", 9)
+        c.drawString(20 * mm, y, key)
+        c.setFont("Helvetica", 9)
+        c.drawString(58 * mm, y, val)
+        y -= 5 * mm
+
+    inp = res.inp
+    kv("Cliente:", inp.borrower_name or "-")
+    kv("Tipo:", inp.loan_type)
+    kv("Amortização:", inp.amortization.value.upper())
+    kv("Prazo:", f"{inp.term_months} meses")
+    kv("Taxa:", f"{(inp.rate * Decimal('100')):.4f} {'a.m.' if inp.rate_base==LoanRateBase.AM else 'a.a.'}")
+    kv("Taxa mensal (calc):", f"{(res.monthly_rate * Decimal('100')):.4f} a.m.")
+    kv("Valor empréstimo:", _brl(inp.principal))
+    if inp.collateral_value > 0:
+        kv("Valor do bem:", _brl(inp.collateral_value))
+        kv("LTV:", f"{inp.ltv_pct:.2f}%")
+    kv("Carência (juros):", f"{inp.grace_months} meses")
+    kv("Juros-only extra:", f"{inp.io_months} meses")
+    kv("Parcela inicial:", _brl(res.first_payment))
+    y -= 2 * mm
+
+    c.setFont("Helvetica-Bold", 10)
+    c.drawString(20 * mm, y, "Totais")
+    y -= 6 * mm
+    kv("Total pago:", _brl(res.total_payment))
+    kv("Total juros:", _brl(res.total_interest))
+    kv("Total amortização:", _brl(res.total_amort))
+    kv("Tarifas/Taxas:", _brl(res.total_fees))
+    kv("Seguros:", _brl(res.total_insurance))
+
+    # Disclaimer obrigatório
+    y -= 2 * mm
+    c.setFont("Helvetica-Bold", 9)
+    c.drawString(20 * mm, y, "Aviso:")
+    y -= 5 * mm
+    c.setFont("Helvetica", 8)
+    disclaimer = (
+        "Esta é apenas uma SIMULAÇÃO e não constitui proposta de crédito. "
+        "A concessão está sujeita à análise de crédito, políticas internas, "
+        "condições de mercado e aprovação final."
+    )
+    # wrap lines
+    max_w = w - 40 * mm
+    words = disclaimer.split()
+    line = ""
+    lines = []
+    for wd in words:
+        test = (line + " " + wd).strip()
+        if c.stringWidth(test, "Helvetica", 8) <= max_w:
+            line = test
+        else:
+            lines.append(line)
+            line = wd
+    if line:
+        lines.append(line)
+    for ln in lines:
+        c.drawString(20 * mm, y, ln)
+        y -= 4.2 * mm
+
+    if inp.notes:
+        y -= 2 * mm
+        c.setFont("Helvetica-Bold", 9)
+        c.drawString(20 * mm, y, "Observações:")
+        y -= 5 * mm
+        c.setFont("Helvetica", 8)
+        # simple wrap
+        words = inp.notes.split()
+        line = ""
+        for wd in words:
+            test = (line + " " + wd).strip()
+            if c.stringWidth(test, "Helvetica", 8) <= max_w:
+                line = test
+            else:
+                c.drawString(20 * mm, y, line)
+                y -= 4.2 * mm
+                line = wd
+        if line:
+            c.drawString(20 * mm, y, line)
+
+    # Table pages
+    c.showPage()
+
+    def table_header(title: str) -> float:
+        # logo on every page
+        if logo_path and logo_path.exists():
+            try:
+                img = ImageReader(str(logo_path))
+                c.drawImage(img, 20 * mm, h - 28 * mm, width=40 * mm, height=14 * mm, mask="auto")
+            except Exception:
+                pass
+        c.setFont("Helvetica-Bold", 12)
+        c.drawString(65 * mm, h - 22 * mm, title)
+        c.setFont("Helvetica", 8)
+        c.drawRightString(w - 20 * mm, h - 22 * mm, datetime.now().strftime("%d/%m/%Y %H:%M"))
+        y0 = h - 34 * mm
+        c.setFont("Helvetica-Bold", 8)
+        cols = [("#", 20*mm), ("Venc.", 30*mm), ("Parcela", 55*mm), ("Juros", 85*mm), ("Amort.", 110*mm), ("Encargos", 135*mm), ("Saldo", 165*mm)]
+        for name, x in cols:
+            c.drawString(x, y0, name)
+        c.line(20*mm, y0-2*mm, w-20*mm, y0-2*mm)
+        return y0 - 7*mm
+
+    y = table_header("Cronograma de Pagamentos")
+    c.setFont("Helvetica", 8)
+    rows_per_page = 34
+
+    for idx, row in enumerate(res.schedule, start=1):
+        if (idx - 1) % rows_per_page == 0 and idx != 1:
+            # footer disclaimer on page
+            c.setFont("Helvetica-Oblique", 7)
+            c.drawString(20*mm, 12*mm, "Simulação – não constitui proposta de crédito. Sujeito à análise e aprovação.")
+            c.showPage()
+            y = table_header("Cronograma (cont.)")
+            c.setFont("Helvetica", 8)
+
+        encargos = _d2(row.fees + row.insurance)
+        c.drawString(20*mm, y, str(row.n))
+        c.drawString(30*mm, y, row.due_date.strftime("%d/%m/%Y"))
+        c.drawRightString(77*mm, y, _brl(row.payment))
+        c.drawRightString(107*mm, y, _brl(row.interest))
+        c.drawRightString(132*mm, y, _brl(row.amort))
+        c.drawRightString(157*mm, y, _brl(encargos))
+        c.drawRightString(w-20*mm, y, _brl(row.balance))
+        y -= 5 * mm
+
+    c.setFont("Helvetica-Oblique", 7)
+    c.drawString(20*mm, 12*mm, "Simulação – não constitui proposta de crédito. Sujeito à análise e aprovação.")
+    c.save()
+    return buf.getvalue()
+
+
+SIMULADOR_TEMPLATE = r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="container" style="max-width: 980px;">
+  <h3 class="mt-3">Simulador de Empréstimo</h3>
+  <form method="post" action="/simulador/pdf" class="card p-3 mt-3">
+    <div class="row g-2">
+      <div class="col-md-6">
+        <label class="form-label">Cliente (nome)</label>
+        <input class="form-control" name="borrower_name" placeholder="Nome do cliente">
+      </div>
+      <div class="col-md-6">
+        <label class="form-label">Tipo de empréstimo</label>
+        <input class="form-control" name="loan_type" placeholder="Ex.: Crédito com garantia, Consignado, Capital de giro">
+      </div>
+
+      <div class="col-md-4">
+        <label class="form-label">Amortização</label>
+        <select class="form-select" name="amortization">
+          <option value="price">PRICE (parcela fixa)</option>
+          <option value="sac">SAC (amortização constante)</option>
+          <option value="americano">Americano (juros + quitação final)</option>
+        </select>
+      </div>
+
+      <div class="col-md-4">
+        <label class="form-label">Taxa (%)</label>
+        <input class="form-control" name="rate_pct" placeholder="Ex.: 1,79" value="1,79">
+        <div class="form-text">Informe em percentual. Ex: "1,79" = 1,79%</div>
+      </div>
+
+      <div class="col-md-4">
+        <label class="form-label">Base</label>
+        <select class="form-select" name="rate_base">
+          <option value="am">ao mês</option>
+          <option value="aa">ao ano</option>
+        </select>
+      </div>
+
+      <div class="col-md-4">
+        <label class="form-label">Prazo (meses)</label>
+        <input class="form-control" name="term_months" value="24">
+      </div>
+
+      <div class="col-md-4">
+        <label class="form-label">Carência (meses – juros only)</label>
+        <input class="form-control" name="grace_months" value="0">
+      </div>
+
+      <div class="col-md-4">
+        <label class="form-label">Juros-only extra (meses)</label>
+        <input class="form-control" name="io_months" value="0">
+      </div>
+
+      <div class="col-md-4">
+        <label class="form-label">Valor do empréstimo (R$)</label>
+        <input class="form-control" name="principal" placeholder="Ex.: 100000">
+        <div class="form-text">Se preencher valor do bem + LTV, pode deixar em branco.</div>
+      </div>
+
+      <div class="col-md-4">
+        <label class="form-label">Valor do bem (garantia) (R$)</label>
+        <input class="form-control" name="collateral_value" placeholder="Ex.: 200000">
+      </div>
+
+      <div class="col-md-4">
+        <label class="form-label">LTV (%)</label>
+        <input class="form-control" name="ltv_pct" placeholder="Ex.: 50">
+      </div>
+
+      <div class="col-md-4">
+        <label class="form-label">Tarifa de abertura (R$)</label>
+        <input class="form-control" name="fee_amount" value="0">
+      </div>
+
+      <div class="col-md-4">
+        <label class="form-label">Seguro mensal (R$)</label>
+        <input class="form-control" name="monthly_insurance" value="0">
+      </div>
+
+      <div class="col-md-4">
+        <label class="form-label">Taxa admin mensal (R$)</label>
+        <input class="form-control" name="monthly_admin_fee" value="0">
+      </div>
+
+      <div class="col-12">
+        <label class="form-label">Observações</label>
+        <textarea class="form-control" name="notes" rows="3" placeholder="Condições, garantias, CET, etc."></textarea>
+      </div>
+
+      <div class="col-12 d-flex gap-2 mt-2">
+        <button class="btn btn-primary" type="submit">Gerar PDF</button>
+        <button class="btn btn-outline-secondary" type="submit" formaction="/simulador/json">Gerar JSON</button>
+      </div>
+    </div>
+  </form>
+
+  <p class="text-muted mt-3" style="font-size: 0.9rem;">
+    * Esta é apenas uma simulação e não constitui proposta de crédito. Sujeito à análise e aprovação.
+  </p>
+</div>
+{% endblock %}
+"""
+
+
+@app.get("/simulador", response_class=HTMLResponse)
+@require_login
+async def simulador_page(request: Request) -> HTMLResponse:
+    if "simulador.html" not in TEMPLATES:
+        TEMPLATES["simulador.html"] = SIMULADOR_TEMPLATE
+    return render(request, "simulador.html", {"title": "Simulador"})
+
+
+@app.post("/simulador/json", response_class=JSONResponse)
+@require_login
+async def simulador_json(
+    request: Request,
+    loan_type: str = Form("Empréstimo"),
+    amortization: str = Form("price"),
+    rate_pct: str = Form("1,79"),
+    rate_base: str = Form("am"),
+    term_months: int = Form(24),
+    principal: str = Form(""),
+    collateral_value: str = Form(""),
+    ltv_pct: str = Form(""),
+    grace_months: int = Form(0),
+    io_months: int = Form(0),
+    fee_amount: str = Form("0"),
+    monthly_insurance: str = Form("0"),
+    monthly_admin_fee: str = Form("0"),
+    borrower_name: str = Form(""),
+    notes: str = Form(""),
+    session: Session = Depends(get_session),
+) -> JSONResponse:
+    _ = get_tenant_context(request, session)
+    inp = build_loan_input(
+        loan_type=loan_type,
+        amortization=amortization,
+        rate_pct=rate_pct,
+        rate_base=rate_base,
+        term_months=term_months,
+        principal=principal,
+        collateral_value=collateral_value,
+        ltv_pct=ltv_pct,
+        start_date=date.today(),
+        grace_months=grace_months,
+        io_months=io_months,
+        fee_amount=fee_amount,
+        monthly_insurance=monthly_insurance,
+        monthly_admin_fee=monthly_admin_fee,
+        borrower_name=borrower_name,
+        notes=notes,
+    )
+    res = simulate_loan(inp)
+    return JSONResponse({
+        "inputs": {
+            "loan_type": inp.loan_type,
+            "amortization": inp.amortization.value,
+            "rate": float(inp.rate),
+            "rate_base": inp.rate_base.value,
+            "term_months": inp.term_months,
+            "principal": float(inp.principal),
+            "collateral_value": float(inp.collateral_value),
+            "ltv_pct": float(inp.ltv_pct),
+            "grace_months": inp.grace_months,
+            "io_months": inp.io_months,
+            "fee_amount": float(inp.fee_amount),
+            "monthly_insurance": float(inp.monthly_insurance),
+            "monthly_admin_fee": float(inp.monthly_admin_fee),
+            "borrower_name": inp.borrower_name,
+            "notes": inp.notes,
+        },
+        "totals": {
+            "monthly_rate": float(res.monthly_rate),
+            "first_payment": float(res.first_payment),
+            "total_payment": float(res.total_payment),
+            "total_interest": float(res.total_interest),
+            "total_amort": float(res.total_amort),
+            "total_fees": float(res.total_fees),
+            "total_insurance": float(res.total_insurance),
+        },
+        "schedule": [
+            {
+                "n": r.n,
+                "due_date": r.due_date.isoformat(),
+                "payment": float(r.payment),
+                "interest": float(r.interest),
+                "amort": float(r.amort),
+                "fees": float(r.fees),
+                "insurance": float(r.insurance),
+                "balance": float(r.balance),
+            }
+            for r in res.schedule
+        ]
+    })
+
+
+@app.post("/simulador/pdf")
+@require_login
+async def simulador_pdf(
+    request: Request,
+    loan_type: str = Form("Empréstimo"),
+    amortization: str = Form("price"),
+    rate_pct: str = Form("1,79"),
+    rate_base: str = Form("am"),
+    term_months: int = Form(24),
+    principal: str = Form(""),
+    collateral_value: str = Form(""),
+    ltv_pct: str = Form(""),
+    grace_months: int = Form(0),
+    io_months: int = Form(0),
+    fee_amount: str = Form("0"),
+    monthly_insurance: str = Form("0"),
+    monthly_admin_fee: str = Form("0"),
+    borrower_name: str = Form(""),
+    notes: str = Form(""),
+    session: Session = Depends(get_session),
+):
+    _ = get_tenant_context(request, session)
+
+    inp = build_loan_input(
+        loan_type=loan_type,
+        amortization=amortization,
+        rate_pct=rate_pct,
+        rate_base=rate_base,
+        term_months=term_months,
+        principal=principal,
+        collateral_value=collateral_value,
+        ltv_pct=ltv_pct,
+        start_date=date.today(),
+        grace_months=grace_months,
+        io_months=io_months,
+        fee_amount=fee_amount,
+        monthly_insurance=monthly_insurance,
+        monthly_admin_fee=monthly_admin_fee,
+        borrower_name=borrower_name,
+        notes=notes,
+    )
+    res = simulate_loan(inp)
+    pdf_bytes = render_loan_pdf(res)
+    headers = {"Content-Disposition": 'inline; filename="simulacao_emprestimo_maffezzolli.pdf"'}
+    return StreamingResponse(io.BytesIO(pdf_bytes), media_type="application/pdf", headers=headers)
