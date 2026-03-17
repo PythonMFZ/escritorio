@@ -21,6 +21,87 @@ from typing import Any, Callable, Optional
 from urllib.parse import urlparse
 
 import httpx
+
+import time
+from typing import Any, TypedDict
+
+_CNPJ_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
+_CNPJ_CACHE_TTL_SEC = 60 * 60 * 24  # 24h
+
+
+class CnpjLookupResult(TypedDict, total=False):
+    legal_name: str
+    trade_name: str
+    street: str
+    number: str
+    neighborhood: str
+    city: str
+    state: str
+    zip_code: str
+    phone: str
+
+
+def normalize_cnpj(raw: str) -> str:
+    return re.sub(r"\D+", "", raw or "").strip()
+
+
+async def fetch_cnpj_data(cnpj: str) -> CnpjLookupResult:
+    """Fetch public company data by CNPJ. Uses BrasilAPI then CNPJ.ws."""
+    cnpj = normalize_cnpj(cnpj)
+    if len(cnpj) != 14:
+        raise HTTPException(status_code=400, detail="CNPJ inválido (precisa ter 14 dígitos).")
+
+    now = time.time()
+    cached = _CNPJ_CACHE.get(cnpj)
+    if cached and (now - cached[0]) < _CNPJ_CACHE_TTL_SEC:
+        return cached[1]  # type: ignore[return-value]
+
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            r = await client.get(f"https://brasilapi.com.br/api/cnpj/v1/{cnpj}")
+            if r.status_code == 200:
+                j = r.json()
+                out: CnpjLookupResult = {
+                    "legal_name": j.get("razao_social") or "",
+                    "trade_name": j.get("nome_fantasia") or "",
+                    "street": j.get("logradouro") or "",
+                    "number": j.get("numero") or "",
+                    "neighborhood": j.get("bairro") or "",
+                    "city": j.get("municipio") or "",
+                    "state": j.get("uf") or "",
+                    "zip_code": normalize_cnpj(j.get("cep") or ""),
+                    "phone": j.get("ddd_telefone_1") or "",
+                }
+                _CNPJ_CACHE[cnpj] = (now, out)
+                return out
+    except Exception:
+        pass
+
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            r = await client.get(f"https://publica.cnpj.ws/cnpj/{cnpj}")
+            if r.status_code == 200:
+                j = r.json()
+                estab = j.get("estabelecimento") or {}
+                end = estab.get("endereco") or {}
+                out: CnpjLookupResult = {
+                    "legal_name": j.get("razao_social") or "",
+                    "trade_name": estab.get("nome_fantasia") or "",
+                    "street": end.get("logradouro") or "",
+                    "number": end.get("numero") or "",
+                    "neighborhood": end.get("bairro") or "",
+                    "city": (end.get("cidade") or {}).get("nome") or "",
+                    "state": (end.get("estado") or {}).get("sigla") or "",
+                    "zip_code": normalize_cnpj(end.get("cep") or ""),
+                    "phone": (estab.get("ddd1") or "") + (estab.get("telefone1") or ""),
+                }
+                _CNPJ_CACHE[cnpj] = (now, out)
+                return out
+    except Exception:
+        pass
+
+    raise HTTPException(status_code=404, detail="CNPJ não encontrado.")
+
 from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, HTTPException, Request, Response, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 from jinja2 import Environment
@@ -437,154 +518,6 @@ def verify_password(password: str, password_hash: str) -> bool:
 
 
 # ----------------------------
-# CNPJ Autocomplete (BrasilAPI / CNPJ.ws)
-# ----------------------------
-
-_CNPJ_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
-_CNPJ_CACHE_TTL_SEC = 60 * 60 * 24
-
-
-def normalize_cnpj(raw: str) -> str:
-    return re.sub(r"\D+", "", raw or "").strip()
-
-
-async def fetch_cnpj_data(cnpj: str) -> dict[str, Any]:
-    cnpj = normalize_cnpj(cnpj)
-    if len(cnpj) != 14:
-        raise HTTPException(status_code=400, detail="CNPJ inválido (precisa ter 14 dígitos).")
-
-    now = datetime.now().timestamp()
-    cached = _CNPJ_CACHE.get(cnpj)
-    if cached and (now - cached[0]) < _CNPJ_CACHE_TTL_SEC:
-        return cached[1]
-
-    # Provider 1: BrasilAPI
-    try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            r = await client.get(f"https://brasilapi.com.br/api/cnpj/v1/{cnpj}")
-            if r.status_code == 200:
-                j = r.json()
-                out = {
-                    "legal_name": j.get("razao_social") or "",
-                    "trade_name": j.get("nome_fantasia") or "",
-                    "street": j.get("logradouro") or "",
-                    "number": j.get("numero") or "",
-                    "neighborhood": j.get("bairro") or "",
-                    "city": j.get("municipio") or "",
-                    "state": j.get("uf") or "",
-                    "zip_code": normalize_cnpj(j.get("cep") or ""),
-                    "phone": j.get("ddd_telefone_1") or "",
-                }
-                _CNPJ_CACHE[cnpj] = (now, out)
-                return out
-    except Exception:
-        pass
-
-    # Provider 2: CNPJ.ws public
-    try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            r = await client.get(f"https://publica.cnpj.ws/cnpj/{cnpj}")
-            if r.status_code == 200:
-                j = r.json()
-                estab = j.get("estabelecimento") or {}
-                end = estab.get("endereco") or {}
-                out = {
-                    "legal_name": j.get("razao_social") or "",
-                    "trade_name": estab.get("nome_fantasia") or "",
-                    "street": end.get("logradouro") or "",
-                    "number": end.get("numero") or "",
-                    "neighborhood": end.get("bairro") or "",
-                    "city": (end.get("cidade") or {}).get("nome") or "",
-                    "state": (end.get("estado") or {}).get("sigla") or "",
-                    "zip_code": normalize_cnpj(end.get("cep") or ""),
-                    "phone": ((estab.get("ddd1") or "") + (estab.get("telefone1") or ""))[:30],
-                }
-                _CNPJ_CACHE[cnpj] = (now, out)
-                return out
-    except Exception:
-        pass
-
-    raise HTTPException(status_code=404, detail="CNPJ não encontrado.")
-
-
-# ----------------------------
-# Client Upsert (evita duplicidade CRM x Cliente)
-# ----------------------------
-
-def _find_client_by_identity(session: Session, company_id: int, *, cnpj: str, email: str, name: str) -> Optional[
-    Client]:
-    cnpj_n = normalize_cnpj(cnpj)
-    email_n = (email or "").strip().lower()
-    name_n = (name or "").strip().lower()
-
-    if cnpj_n:
-        c = session.exec(select(Client).where(Client.company_id == company_id, Client.cnpj == cnpj_n)).first()
-        if c:
-            return c
-    if email_n:
-        c = session.exec(
-            select(Client).where(Client.company_id == company_id, func.lower(Client.email) == email_n)).first()
-        if c:
-            return c
-    if name_n:
-        c = session.exec(
-            select(Client).where(Client.company_id == company_id, func.lower(Client.name) == name_n)).first()
-        if c:
-            return c
-    return None
-
-
-def upsert_client_from_lead(
-        session: Session,
-        *,
-        company_id: int,
-        name: str,
-        cnpj: str = "",
-        email: str = "",
-        phone: str = "",
-        notes: str = "",
-) -> Client:
-    name = (name or "").strip()
-    if not name:
-        raise ValueError("name obrigatório")
-
-    cnpj_n = normalize_cnpj(cnpj)
-    email_n = (email or "").strip().lower()
-    phone = (phone or "").strip()
-    notes = (notes or "").strip()
-
-    existing = _find_client_by_identity(session, company_id, cnpj=cnpj_n, email=email_n, name=name)
-    if existing:
-        if cnpj_n and not existing.cnpj:
-            existing.cnpj = cnpj_n
-        if email_n and not existing.email:
-            existing.email = email_n
-        if phone and not existing.phone:
-            existing.phone = phone
-        if notes:
-            existing.notes = (existing.notes + "\n" + notes).strip() if existing.notes else notes
-        existing.updated_at = utcnow()
-        session.add(existing)
-        session.commit()
-        session.refresh(existing)
-        return existing
-
-    client = Client(
-        company_id=company_id,
-        name=name,
-        cnpj=cnpj_n,
-        email=email_n,
-        phone=phone,
-        notes=notes,
-        updated_at=utcnow(),
-    )
-    session.add(client)
-    session.commit()
-    session.refresh(client)
-    return client
-
-
-# ----------------------------
 # Models
 # ----------------------------
 
@@ -637,25 +570,6 @@ class Membership(SQLModel, table=True):
     company_id: int = Field(index=True, foreign_key="company.id")
     role: str = Field(default="cliente", index=True)  # admin | equipe | cliente
     client_id: Optional[int] = Field(default=None, index=True, foreign_key="client.id")
-    created_at: datetime = Field(default_factory=utcnow)
-
-
-class MembershipSettings(SQLModel, table=True):
-    """Config de acesso por membro (evita migração no Postgres).
-
-    - is_active: se False, o usuário não consegue entrar.
-    - tabs_json: lista JSON com abas permitidas (ex.: ["dashboard","crm"]).
-    """
-
-    __table_args__ = (UniqueConstraint("membership_id", name="uq_membership_settings_membership"),)
-
-    id: Optional[int] = Field(default=None, primary_key=True)
-    membership_id: int = Field(index=True, foreign_key="membership.id")
-
-    is_active: bool = Field(default=True, index=True)
-    tabs_json: str = Field(default="")  # JSON array[str]
-
-    updated_at: datetime = Field(default_factory=utcnow)
     created_at: datetime = Field(default_factory=utcnow)
 
 
@@ -1267,114 +1181,6 @@ def ensure_credit_consent_table() -> bool:
         except Exception:
             pass
         return False
-
-
-def ensure_membership_settings_table() -> bool:
-    """Garante a tabela MembershipSettings (checkfirst=True)."""
-    try:
-        MembershipSettings.__table__.create(engine, checkfirst=True)
-        return True
-    except Exception as e:
-        try:
-            print(f"[acl] failed to ensure MembershipSettings table: {e}")
-        except Exception:
-            pass
-        return False
-
-
-ALL_TABS: list[tuple[str, str]] = [
-    ("dashboard", "Dashboard"),
-    ("crm", "CRM"),
-    ("consultoria", "Consultoria"),
-    ("pendencias", "Pendências"),
-    ("documentos", "Documentos"),
-    ("propostas", "Propostas"),
-    ("financeiro", "Financeiro"),
-    ("credito", "Crédito"),
-    ("empresa", "Empresa"),
-    ("admin", "Admin"),
-]
-
-DEFAULT_TABS_ADMIN = {k for k, _ in ALL_TABS}
-DEFAULT_TABS_EQUIPE = {k for k, _ in ALL_TABS if k != "admin"}
-DEFAULT_TABS_CLIENTE = {"dashboard", "consultoria", "pendencias", "documentos", "propostas", "financeiro", "credito",
-                        "empresa"}
-
-TAB_ROUTE_PREFIXES: list[tuple[str, str]] = [
-    ("/negocios", "crm"),
-    ("/consultoria", "consultoria"),
-    ("/pendencias", "pendencias"),
-    ("/documentos", "documentos"),
-    ("/propostas", "propostas"),
-    ("/financeiro", "financeiro"),
-    ("/credito", "credito"),
-    ("/empresa", "empresa"),
-    ("/perfil", "empresa"),
-    ("/admin", "admin"),
-]
-
-
-def _tab_for_path(path: str) -> str:
-    p = (path or "").strip() or "/"
-    for pref, tab in TAB_ROUTE_PREFIXES:
-        if p == pref or p.startswith(pref + "/") or p.startswith(pref + "?"):
-            return tab
-    return "dashboard"
-
-
-def _effective_member_settings(session: Session, membership_id: int) -> MembershipSettings:
-    ms = session.exec(select(MembershipSettings).where(MembershipSettings.membership_id == membership_id)).first()
-    if ms:
-        return ms
-    ms = MembershipSettings(membership_id=membership_id, is_active=True, tabs_json="")
-    session.add(ms)
-    try:
-        session.commit()
-    except Exception:
-        session.rollback()
-    return ms
-
-
-def _effective_tabs(session: Session, membership: Membership) -> set[str]:
-    role = (membership.role or "").lower()
-    default = DEFAULT_TABS_CLIENTE
-    if role == "admin":
-        default = DEFAULT_TABS_ADMIN
-    elif role == "equipe":
-        default = DEFAULT_TABS_EQUIPE
-
-    if not ensure_membership_settings_table():
-        return set(default)
-
-    ms = session.exec(
-        select(MembershipSettings).where(MembershipSettings.membership_id == (membership.id or 0))).first()
-    if not ms:
-        return set(default)
-
-    raw = (ms.tabs_json or "").strip()
-    if not raw:
-        return set(default)
-    try:
-        arr = json.loads(raw)
-        if isinstance(arr, list):
-            tabs = {str(x) for x in arr if str(x)}
-            # nunca permita perder acesso ao dashboard
-            tabs.add("dashboard")
-            # admin sempre pode acessar admin
-            if role == "admin":
-                tabs.add("admin")
-            return tabs
-    except Exception:
-        return set(default)
-    return set(default)
-
-
-def _is_active_member(session: Session, membership: Membership) -> bool:
-    if not ensure_membership_settings_table():
-        return True
-    ms = session.exec(
-        select(MembershipSettings).where(MembershipSettings.membership_id == (membership.id or 0))).first()
-    return bool(ms.is_active) if ms else True
 
 
 # ----------------------------
@@ -2064,37 +1870,10 @@ def require_login(handler: Callable[..., Any]) -> Callable[..., Any]:
     @wraps(handler)
     async def wrapper(*args: Any, **kwargs: Any) -> Any:
         request: Request = kwargs.get("request") or (args[0] if args else None)
-        session: Session | None = kwargs.get("session")
         if request is None:
             raise RuntimeError("Request não encontrado no handler.")
         if session_user_id(request) is None:
             return RedirectResponse("/login", status_code=303)
-
-        try:
-            if session is None:
-                with Session(engine) as s:
-                    ctx = get_tenant_context(request, s)
-                    if ctx and not _is_active_member(s, ctx.membership):
-                        request.session.clear()
-                        return RedirectResponse("/login", status_code=303)
-                    tab = _tab_for_path(request.url.path)
-                    tabs = _effective_tabs(s, ctx.membership) if ctx else set()
-                    if ctx and tab and tab not in tabs:
-                        return render("error.html", request=request,
-                                      context={"message": "Sem permissão para acessar esta aba."}, status_code=403)
-            else:
-                ctx = get_tenant_context(request, session)
-                if ctx and not _is_active_member(session, ctx.membership):
-                    request.session.clear()
-                    return RedirectResponse("/login", status_code=303)
-                tab = _tab_for_path(request.url.path)
-                tabs = _effective_tabs(session, ctx.membership) if ctx else set()
-                if ctx and tab and tab not in tabs:
-                    return render("error.html", request=request,
-                                  context={"message": "Sem permissão para acessar esta aba."}, status_code=403)
-        except Exception:
-            pass
-
         return await handler(*args, **kwargs)
 
     wrapper.__signature__ = inspect.signature(handler)
@@ -2114,16 +1893,6 @@ def require_role(allowed: set[str]) -> Callable[[Callable[..., Any]], Callable[.
             if not ctx:
                 request.session.clear()
                 return RedirectResponse("/login", status_code=303)
-
-            if not _is_active_member(session, ctx.membership):
-                request.session.clear()
-                return RedirectResponse("/login", status_code=303)
-
-            tab = _tab_for_path(request.url.path)
-            tabs = _effective_tabs(session, ctx.membership)
-            if tab and tab not in tabs:
-                return render("error.html", request=request,
-                              context={"message": "Sem permissão para acessar esta aba."}, status_code=403)
 
             if ctx.membership.role not in allowed:
                 return render(
@@ -2714,8 +2483,8 @@ a:hover{ color:#00BFBF; }
       </div>
       {% if role in ["admin","equipe"] %}
         <div class="mt-3 d-flex gap-2">
-          {% if can("admin") %}<a class="btn btn-outline-primary btn-sm" href="/admin/members">Gerenciar membros</a>{% endif %}
-          {% if can("empresa") %}<a class="btn btn-outline-secondary btn-sm" href="/client/switch">Trocar cliente</a>{% endif %}
+          <a class="btn btn-outline-primary btn-sm" href="/admin/members">Gerenciar membros</a>
+          <a class="btn btn-outline-secondary btn-sm" href="/client/switch">Trocar cliente</a>
         </div>
       {% endif %}
     </div>
@@ -2840,7 +2609,7 @@ a:hover{ color:#00BFBF; }
   <div class="d-flex justify-content-between align-items-center">
     <div>
       <h4 class="mb-0">Membros</h4>
-      <div class="muted">Crie equipe e clientes. Configure acesso por abas e ative/inative usuários.</div>
+      <div class="muted">Crie equipe e clientes (cada cliente vincula um “Client”).</div>
     </div>
     <a class="btn btn-outline-secondary" href="/">Voltar</a>
   </div>
@@ -2848,88 +2617,24 @@ a:hover{ color:#00BFBF; }
   <hr class="my-3"/>
 
   <div class="row g-4">
-    <div class="col-lg-8">
-      <h6>Lista + Permissões</h6>
-      <div class="table-responsive">
-        <table class="table table-sm align-middle">
-          <thead>
-            <tr>
-              <th>Usuário</th>
-              <th>Role</th>
-              <th>Cliente</th>
-              <th>Ativo</th>
-              <th>Abas</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {% for row in rows %}
-              <tr>
-                <td>
-                  <div class="fw-semibold">{{ row.user.name }}</div>
-                  <div class="muted small">{{ row.user.email }}</div>
-                </td>
-                <td><span class="badge text-bg-light border">{{ row.membership.role }}</span></td>
-                <td class="small">
-                  {% if row.membership.role == "cliente" %}
-                    {{ row.client_name or "—" }}
-                  {% else %}
-                    —
-                  {% endif %}
-                </td>
-
-                <td>
-                  {% if role == "admin" %}
-                    <form method="post" action="/admin/members/{{ row.membership.id }}/settings">
-                      <input type="hidden" name="tabs" value="" />
-                      <input type="hidden" name="is_active" value="0" />
-                      <div class="form-check form-switch">
-                        <input class="form-check-input" type="checkbox" name="is_active" value="1"
-                          {% if row.settings.is_active %}checked{% endif %}>
-                      </div>
-                  {% else %}
-                    <span class="badge text-bg-light border">{% if row.settings.is_active %}sim{% else %}não{% endif %}</span>
-                  {% endif %}
-                </td>
-
-                <td style="min-width:320px;">
-                  {% if role == "admin" %}
-                    <div class="d-flex flex-wrap gap-2">
-                      {% for k, label in tabs_all %}
-                        {% if k != "admin" or row.membership.role == "admin" %}
-                          <label class="form-check form-check-inline small m-0">
-                            <input class="form-check-input" type="checkbox" name="tabs" value="{{ k }}"
-                              {% if k in row.tabs %}checked{% endif %}>
-                            <span class="form-check-label">{{ label }}</span>
-                          </label>
-                        {% endif %}
-                      {% endfor %}
-                    </div>
-                  {% else %}
-                    <div class="muted small">{{ row.tabs|join(", ") }}</div>
-                  {% endif %}
-                </td>
-
-                <td class="text-end">
-                  {% if role == "admin" %}
-                    <button class="btn btn-sm btn-outline-primary">Salvar</button>
-                    </form>
-                  {% else %}
-                    —
-                  {% endif %}
-                </td>
-              </tr>
-            {% endfor %}
-          </tbody>
-        </table>
-      </div>
-
-      <div class="muted small">
-        Dica: se desativar um membro, ele será desconectado no próximo request.
+    <div class="col-lg-7">
+      <h6>Lista</h6>
+      <div class="list-group">
+        {% for row in rows %}
+          <div class="list-group-item">
+            <div class="d-flex justify-content-between">
+              <div class="fw-semibold">{{ row.user.name }} <span class="muted">({{ row.user.email }})</span></div>
+              <span class="badge text-bg-light border">{{ row.membership.role }}</span>
+            </div>
+            {% if row.membership.role == "cliente" %}
+              <div class="muted small mt-1">Cliente vinculado: {{ row.client_name or "—" }}</div>
+            {% endif %}
+          </div>
+        {% endfor %}
       </div>
     </div>
 
-    <div class="col-lg-4">
+    <div class="col-lg-5">
       <h6>Adicionar</h6>
       <form method="post" action="/admin/members">
         <div class="mb-2">
@@ -2952,10 +2657,9 @@ a:hover{ color:#00BFBF; }
             <option value="admin">admin</option>
           </select>
         </div>
-        <div class="mb-2">
-          <label class="form-label">Cliente (se role=cliente)</label>
-          <input class="form-control" name="client_name" placeholder="Razão social do cliente" />
-          <div class="form-text">Se já existir lead/cliente com mesmo nome/CNPJ/e-mail, o sistema reaproveita (evita duplicado).</div>
+        <div class="mb-3">
+          <label class="form-label">Nome do cliente (empresa atendida) — se role=cliente</label>
+          <input class="form-control" name="client_name" placeholder="Ex: ACME LTDA" />
         </div>
         <button class="btn btn-primary w-100">Adicionar</button>
       </form>
@@ -2963,7 +2667,6 @@ a:hover{ color:#00BFBF; }
   </div>
 </div>
 {% endblock %}
-
 """,
     "empresa.html": r"""
 {% extends "base.html" %}
@@ -3039,7 +2742,6 @@ a:hover{ color:#00BFBF; }
     </form>
   {% endif %}
 </div>
-
 <script>
 (function(){
   const cnpjEl = document.querySelector('input[name="cnpj"]');
@@ -3047,7 +2749,7 @@ a:hover{ color:#00BFBF; }
 
   const setVal = (name, value) => {
     const el = document.querySelector(`[name="${name}"]`);
-    if (el && value && !el.value) el.value = value;
+    if (el && value) el.value = value;
   };
 
   let last = "";
@@ -3058,8 +2760,11 @@ a:hover{ color:#00BFBF; }
     last = cnpj;
 
     try {
-      const res = await fetch(`/api/cnpj/${cnpj}`);
-      if (!res.ok) return;
+      const res = await fetch(`/api/cnpj/${cnpj}`, { headers: { "Accept": "application/json" } });
+      if (!res.ok) {
+        console.warn("CNPJ lookup falhou", res.status);
+        return;
+      }
       const d = await res.json();
 
       const nameEl = document.querySelector('input[name="name"]');
@@ -3070,11 +2775,12 @@ a:hover{ color:#00BFBF; }
       setVal("state", d.state);
       setVal("zip_code", d.zip_code);
       setVal("phone", d.phone);
-    } catch(e) {}
+    } catch(e) {
+      console.warn("CNPJ lookup exception", e);
+    }
   });
 })();
 </script>
-
 {% endblock %}
 """,
     "perfil.html": r"""
@@ -6510,23 +6216,6 @@ def render(
     ctx.setdefault("allow_company_signup", ALLOW_COMPANY_SIGNUP)
     ctx.setdefault("service_catalog", SERVICE_CATALOG)
     ctx.setdefault("bookings_url", BOOKINGS_URL)
-
-    # ACL por abas (templates + proteção por URL via require_login/require_role)
-    ctx.setdefault("tabs_all", ALL_TABS)
-    ctx.setdefault("tabs_allowed", set(k for k, _ in ALL_TABS))
-    ctx.setdefault("can", lambda _key: True)
-
-    try:
-        if hasattr(request, "session") and request.session.get("user_id") and request.session.get("company_id"):
-            with Session(engine) as s:
-                tctx = get_tenant_context(request, s)
-                if tctx and (tctx.membership.id is not None):
-                    tabs = _effective_tabs(s, tctx.membership)
-                    ctx["tabs_allowed"] = tabs
-                    ctx["can"] = (lambda key, _tabs=tabs: key in _tabs)
-    except Exception:
-        pass
-
     return HTMLResponse(templates_env.get_template(template_name).render(**ctx), status_code=status_code)
 
 
@@ -6548,26 +6237,12 @@ app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 def _startup() -> None:
     init_db()
     ensure_credit_consent_table()
-    ensure_membership_settings_table()
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 
 # ----------------------------
 # Auth routes
 # ----------------------------
-
-
-# ----------------------------
-# API: CNPJ lookup (autocomplete)
-# ----------------------------
-
-@app.get("/api/cnpj/{cnpj}", response_class=JSONResponse)
-@require_role({"admin", "equipe"})
-async def api_cnpj_lookup(request: Request, session: Session = Depends(get_session), cnpj: str = "") -> JSONResponse:
-    ctx = get_tenant_context(request, session)
-    assert ctx is not None
-    data = await fetch_cnpj_data(cnpj)
-    return JSONResponse(data)
 
 
 @app.get("/login", response_class=HTMLResponse)
@@ -7340,13 +7015,6 @@ async def dashboard(request: Request, session: Session = Depends(get_session)) -
         {"title": "Agenda", "desc": "Agendamentos (Bookings).", "href": "/agenda"},
     ]
 
-    tabs_allowed = _effective_tabs(session, ctx.membership)
-
-    def _item_tab(href: str) -> str:
-        return _tab_for_path(href or "/")
-
-    items = [it for it in items if _item_tab(it.get("href", "/")) in tabs_allowed]
-
     return render(
         "dashboard.html",
         request=request,
@@ -7830,12 +7498,7 @@ async def members_page(request: Request, session: Session = Depends(get_session)
             c = session.get(Client, m.client_id)
             if c and c.company_id == ctx.company.id:
                 client_name = c.name
-
-        ms = _effective_member_settings(session, int(m.id or 0)) if (m.id is not None) else MembershipSettings(
-            membership_id=0)
-        tabs = _effective_tabs(session, m)
-
-        rows.append({"membership": m, "user": u, "client_name": client_name, "settings": ms, "tabs": tabs})
+        rows.append({"membership": m, "user": u, "client_name": client_name})
 
     rows.sort(key=lambda x: (x["membership"].role, x["user"].name.lower()))
 
@@ -7902,12 +7565,10 @@ async def members_add_action(
     if role == "cliente":
         cn = client_name.strip()
         if cn:
-            client = upsert_client_from_lead(
-                session,
-                company_id=ctx.company.id,
-                name=cn,
-                notes="[CLIENTE] vinculado via criação de membro",
-            )
+            client = Client(company_id=ctx.company.id, name=cn)
+            session.add(client)
+            session.commit()
+            session.refresh(client)
             membership.client_id = client.id
             request.session["selected_client_id"] = client.id
 
@@ -7920,44 +7581,6 @@ async def members_add_action(
         return RedirectResponse("/admin/members", status_code=303)
 
     set_flash(request, f"Membro adicionado: {email_norm} ({role}).")
-
-
-@app.post("/admin/members/{membership_id}/settings")
-@require_role({"admin"})
-async def members_settings_save(
-        request: Request,
-        session: Session = Depends(get_session),
-        membership_id: int = 0,
-        is_active: str = Form(""),
-        tabs: list[str] = Form(default=[]),
-) -> Response:
-    ctx = get_tenant_context(request, session)
-    assert ctx is not None
-
-    if not ensure_membership_settings_table():
-        set_flash(request, "Banco sem migração para ACL (MembershipSettings).")
-        return RedirectResponse("/admin/members", status_code=303)
-
-    m = session.get(Membership, int(membership_id))
-    if not m or m.company_id != ctx.company.id:
-        set_flash(request, "Membro inválido.")
-        return RedirectResponse("/admin/members", status_code=303)
-
-    ms = session.exec(select(MembershipSettings).where(MembershipSettings.membership_id == m.id)).first()
-    if not ms:
-        ms = MembershipSettings(membership_id=int(m.id or 0))
-
-    ms.is_active = (is_active == "1")
-    clean_tabs = {t for t in (tabs or []) if t in {k for k, _ in ALL_TABS}}
-    clean_tabs.add("dashboard")
-    if (m.role or "").lower() == "admin":
-        clean_tabs.add("admin")
-    ms.tabs_json = json.dumps(sorted(clean_tabs), ensure_ascii=False)
-    ms.updated_at = utcnow()
-    session.add(ms)
-    session.commit()
-
-    set_flash(request, "Permissões atualizadas.")
     return RedirectResponse("/admin/members", status_code=303)
 
 
@@ -11915,15 +11538,18 @@ async def crm_new_action(
 
     if new_client_name:
         lead_notes = f"[LEAD CRM] {new_client_notes}".strip()
-        client = upsert_client_from_lead(
-            session,
+        client = Client(
             company_id=ctx.company.id,
             name=new_client_name,
             cnpj=new_client_cnpj_norm,
             email=new_client_email,
             phone=new_client_phone,
             notes=lead_notes,
+            updated_at=utcnow(),
         )
+        session.add(client)
+        session.commit()
+        session.refresh(client)
     else:
         if int(client_id or 0) <= 0:
             set_flash(request, "Selecione um cliente existente OU crie um lead.")
