@@ -6404,7 +6404,8 @@ def render(
             if _t:
                 ctx.setdefault("current_user", _t.user)
                 ctx.setdefault("current_company", _t.company)
-                ctx.setdefault("current_client", _t.client)
+                active_client_id = get_active_client_id(request, _db, _t)
+                ctx.setdefault("current_client", get_client_or_none(_db, _t.company.id, active_client_id))
                 ctx.setdefault("role", _t.membership.role)
     except Exception:
         pass
@@ -15754,6 +15755,9 @@ async def api_ui_news(request: Request, limit: int = 10, session: Session = Depe
 async def admin_ui_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
     ctx = get_tenant_context(request, session)
     company_id = ctx.company.id
+    active_client_id = get_active_client_id(request, session, ctx)
+    current_client = get_client_or_none(session, company_id, active_client_id)
+
     ensure_ui_tables()
     try:
         slides = session.exec(
@@ -15777,7 +15781,7 @@ async def admin_ui_page(request: Request, session: Session = Depends(get_session
         "current_user": ctx.user,
         "current_company": ctx.company,
         "role": ctx.membership.role,
-        "current_client": ctx.client,
+        "current_client": current_client,
     })
 
 
