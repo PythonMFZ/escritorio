@@ -2774,13 +2774,55 @@ a:hover{ color:#00BFBF; }
       const d = await res.json();
 
       const nameEl = document.querySelector('input[name="name"]');
-      if (nameEl && !nameEl.value && d.legal_name) nameEl.value = d.legal_name;
+      <script>
+(function(){
+  const cnpjEl = document.querySelector('input[name="cnpj"]');
+  if (!cnpjEl) return;
 
-      setVal("address", [d.street, d.number, d.neighborhood].filter(Boolean).join(", "));
-      setVal("city", d.city);
-      setVal("state", d.state);
-      setVal("zip_code", d.zip_code);
-      setVal("phone", d.phone);
+  const setVal = (name, value) => {
+    const el = document.querySelector(`[name="${name}"]`);
+    if (el && value) el.value = value;
+  };
+
+  const pick = (d, a, b) => (d && (d[a] ?? d[b])) || "";
+
+  let last = "";
+  const lookup = async () => {
+    const cnpj = (cnpjEl.value || "").replace(/\D+/g, "");
+    if (cnpj.length !== 14) return;
+    if (cnpj === last) return;
+    last = cnpj;
+
+    const res = await fetch(`/api/cnpj/${cnpj}`, { headers: { "Accept": "application/json" } });
+    if (!res.ok) {
+      console.warn("CNPJ lookup falhou", res.status);
+      return;
+    }
+
+    const d = await res.json();
+
+    const legalName = pick(d, "legal_name", "razao_social");
+    const street = pick(d, "street", "logradouro");
+    const number = pick(d, "number", "numero");
+    const neighborhood = pick(d, "neighborhood", "bairro");
+    const city = pick(d, "city", "municipio");
+    const state = pick(d, "state", "uf");
+    const zip = (pick(d, "zip_code", "cep") || "").replace(/\D+/g, "");
+    const phone = pick(d, "phone", "ddd_telefone_1");
+
+    const nameEl = document.querySelector('input[name="name"]');
+    if (nameEl && !nameEl.value && legalName) nameEl.value = legalName;
+
+    setVal("address", [street, number, neighborhood].filter(Boolean).join(", "));
+    setVal("city", city);
+    setVal("state", state);
+    setVal("zip_code", zip);
+    setVal("phone", phone);
+  };
+
+  cnpjEl.addEventListener("blur", lookup);
+})();
+</script>
     } catch(e) {
       console.warn("CNPJ lookup exception", e);
     }
