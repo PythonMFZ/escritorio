@@ -3,27 +3,10 @@ from __future__ import annotations
 from sqlalchemy import func, delete
 from sqlalchemy.exc import OperationalError
 
-import base64
-import hashlib
-import hmac
-import inspect
-import json
-import html
-import os
-import re
-import secrets
-import uuid
-from dataclasses import dataclass
-from datetime import datetime, timezone, timedelta
-from functools import wraps
-from pathlib import Path
-from typing import Any, Callable, Optional
-from urllib.parse import urlparse
-
-import httpx
-
+# === CNPJ_AUTOFILL_V2 ===
 import time
 from typing import Any, TypedDict
+from starlette.concurrency import run_in_threadpool
 
 _CNPJ_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
 _CNPJ_CACHE_TTL_SEC = 60 * 60 * 24  # 24h
@@ -45,8 +28,7 @@ def normalize_cnpj(raw: str) -> str:
     return re.sub(r"\D+", "", raw or "").strip()
 
 
-async def fetch_cnpj_data(cnpj: str) -> CnpjLookupResult:
-    """Fetch public company data by CNPJ. Uses BrasilAPI then CNPJ.ws."""
+def _fetch_cnpj_data_sync(cnpj: str) -> CnpjLookupResult:
     cnpj = normalize_cnpj(cnpj)
     if len(cnpj) != 14:
         raise HTTPException(status_code=400, detail="CNPJ inválido (precisa ter 14 dígitos).")
@@ -56,52 +38,76 @@ async def fetch_cnpj_data(cnpj: str) -> CnpjLookupResult:
     if cached and (now - cached[0]) < _CNPJ_CACHE_TTL_SEC:
         return cached[1]  # type: ignore[return-value]
 
+    # Provider 1: BrasilAPI
     try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            r = await client.get(f"https://brasilapi.com.br/api/cnpj/v1/{cnpj}")
-            if r.status_code == 200:
-                j = r.json()
-                out: CnpjLookupResult = {
-                    "legal_name": j.get("razao_social") or "",
-                    "trade_name": j.get("nome_fantasia") or "",
-                    "street": j.get("logradouro") or "",
-                    "number": j.get("numero") or "",
-                    "neighborhood": j.get("bairro") or "",
-                    "city": j.get("municipio") or "",
-                    "state": j.get("uf") or "",
-                    "zip_code": normalize_cnpj(j.get("cep") or ""),
-                    "phone": j.get("ddd_telefone_1") or "",
-                }
-                _CNPJ_CACHE[cnpj] = (now, out)
-                return out
+        r = requests.get(f"https://brasilapi.com.br/api/cnpj/v1/{cnpj}", timeout=10)
+        if r.status_code == 200:
+            j = r.json()
+            out: CnpjLookupResult = {
+                "legal_name": j.get("razao_social") or "",
+                "trade_name": j.get("nome_fantasia") or "",
+                "street": j.get("logradouro") or "",
+                "number": j.get("numero") or "",
+                "neighborhood": j.get("bairro") or "",
+                "city": j.get("municipio") or "",
+                "state": j.get("uf") or "",
+                "zip_code": normalize_cnpj(j.get("cep") or ""),
+                "phone": j.get("ddd_telefone_1") or "",
+            }
+            _CNPJ_CACHE[cnpj] = (now, out)
+            return out
     except Exception:
         pass
 
+    # Provider 2: CNPJ.ws public
     try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            r = await client.get(f"https://publica.cnpj.ws/cnpj/{cnpj}")
-            if r.status_code == 200:
-                j = r.json()
-                estab = j.get("estabelecimento") or {}
-                end = estab.get("endereco") or {}
-                out: CnpjLookupResult = {
-                    "legal_name": j.get("razao_social") or "",
-                    "trade_name": estab.get("nome_fantasia") or "",
-                    "street": end.get("logradouro") or "",
-                    "number": end.get("numero") or "",
-                    "neighborhood": end.get("bairro") or "",
-                    "city": (end.get("cidade") or {}).get("nome") or "",
-                    "state": (end.get("estado") or {}).get("sigla") or "",
-                    "zip_code": normalize_cnpj(end.get("cep") or ""),
-                    "phone": (estab.get("ddd1") or "") + (estab.get("telefone1") or ""),
-                }
-                _CNPJ_CACHE[cnpj] = (now, out)
-                return out
+        r = requests.get(f"https://publica.cnpj.ws/cnpj/{cnpj}", timeout=10)
+        if r.status_code == 200:
+            j = r.json()
+            estab = j.get("estabelecimento") or {}
+            end = estab.get("endereco") or {}
+            out: CnpjLookupResult = {
+                "legal_name": j.get("razao_social") or "",
+                "trade_name": estab.get("nome_fantasia") or "",
+                "street": end.get("logradouro") or "",
+                "number": end.get("numero") or "",
+                "neighborhood": end.get("bairro") or "",
+                "city": (end.get("cidade") or {}).get("nome") or "",
+                "state": (end.get("estado") or {}).get("sigla") or "",
+                "zip_code": normalize_cnpj(end.get("cep") or ""),
+                "phone": (estab.get("ddd1") or "") + (estab.get("telefone1") or ""),
+            }
+            _CNPJ_CACHE[cnpj] = (now, out)
+            return out
     except Exception:
         pass
 
     raise HTTPException(status_code=404, detail="CNPJ não encontrado.")
 
+
+async def fetch_cnpj_data(cnpj: str) -> CnpjLookupResult:
+    """Async wrapper (no new deps)"""
+    return await run_in_threadpool(_fetch_cnpj_data_sync, cnpj)
+# === /CNPJ_AUTOFILL_V2 ===
+
+import base64
+import hashlib
+import hmac
+import inspect
+import json
+import html
+import os
+import re
+import secrets
+import uuid
+from dataclasses import dataclass
+from datetime import datetime, timezone, timedelta
+from functools import wraps
+from pathlib import Path
+from typing import Any, Callable, Optional
+from urllib.parse import urlparse
+
+import httpx
 from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, HTTPException, Request, Response, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 from jinja2 import Environment
@@ -6224,6 +6230,14 @@ def render(
 # ----------------------------
 
 app = FastAPI()
+
+@app.get("/api/cnpj/{cnpj}", response_class=JSONResponse)
+@require_login
+async def api_cnpj_lookup(request: Request, cnpj: str, session: Session = Depends(get_session)) -> JSONResponse:
+    _ = get_tenant_context(request, session)
+    data = await fetch_cnpj_data(cnpj)
+    return JSONResponse(data)
+
 https_only = os.getenv("SESSION_HTTPS_ONLY", "0") == "1"
 app.add_middleware(SessionMiddleware, secret_key=APP_SECRET_KEY, https_only=https_only, same_site="lax")
 
