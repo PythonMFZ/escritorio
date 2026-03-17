@@ -14834,8 +14834,8 @@ def render_loan_pdf(res: LoanSimResult) -> bytes:
     kv("Tipo:", inp.loan_type)
     kv("Amortização:", inp.amortization.value.upper())
     kv("Prazo:", f"{inp.term_months} meses")
-    kv("Taxa:", f"{(inp.rate * Decimal('100')):.4f} {'a.m.' if inp.rate_base==LoanRateBase.AM else 'a.a.'}")
-    kv("Taxa mensal (calc):", f"{(res.monthly_rate * Decimal('100')):.4f} a.m.")
+    kv("Taxa:", f"{(inp.rate * Decimal("100")):.2f} {'a.m.' if inp.rate_base==LoanRateBase.AM else 'a.a.'}")
+    kv("Taxa mensal (calc):", f"{(res.monthly_rate * Decimal("100")):.2f} a.m.")
     kv("Valor empréstimo:", _brl(inp.principal))
     if inp.collateral_value > 0:
         kv("Valor do bem:", _brl(inp.collateral_value))
