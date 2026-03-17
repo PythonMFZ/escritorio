@@ -511,6 +511,25 @@ class UiNewsFeed(SQLModel, table=True):
     is_active: bool = Field(default=True, index=True)
     created_at: datetime = Field(default_factory=utcnow)
 
+class AdminEntityState(SQLModel, table=True):
+    """Admin-managed state for entities (soft deactivate/delete) without altering core tables.
+
+    We avoid schema migrations by storing state in a separate table and treating missing rows as active.
+    """
+    __table_args__ = (UniqueConstraint("entity_type", "entity_id", name="uq_admin_entity_state"),)
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    entity_type: str = Field(index=True)  # company | client | membership | user
+    entity_id: int = Field(index=True)
+    company_id: Optional[int] = Field(default=None, index=True)
+
+    is_active: bool = Field(default=True, index=True)
+    is_deleted: bool = Field(default=False, index=True)
+
+    updated_at: datetime = Field(default_factory=utcnow, index=True)
+    updated_by_user_id: Optional[int] = Field(default=None, index=True)
+    deleted_at: Optional[datetime] = Field(default=None, index=True)
+
 
 class OnboardingDiagnostic(SQLModel, table=True):
     __table_args__ = (UniqueConstraint("user_id", "company_id", name="uq_diag_user_company"),)
@@ -1069,7 +1088,7 @@ def ensure_ui_tables() -> None:
     try:
         SQLModel.metadata.create_all(
             engine,
-            tables=[UiBannerSlide.__table__, UiNewsFeed.__table__],
+            tables=[UiBannerSlide.__table__, UiNewsFeed.__table__, AdminEntityState.__table__],
             checkfirst=True,
         )
     except Exception:
@@ -1820,7 +1839,75 @@ def get_tenant_context(request: Request, session: Session) -> Optional[TenantCon
     if not company:
         return None
 
+    if not entity_is_allowed(session, entity_type="user", entity_id=user.id):
+        return None
+    if not entity_is_allowed(session, entity_type="company", entity_id=company.id):
+        return None
+    if membership.id is not None and not entity_is_allowed(session, entity_type="membership", entity_id=membership.id):
+        return None
+
+    if membership.role == "cliente" and membership.client_id and not entity_is_allowed(session, entity_type="client", entity_id=membership.client_id):
+        return None
+
     return TenantContext(user=user, company=company, membership=membership)
+
+SUPERADMIN_EMAILS: set[str] = {
+    e.strip().lower() for e in (os.getenv("SUPERADMIN_EMAILS", "") or "").split(",") if e.strip()
+}
+
+
+def is_superadmin(user: User) -> bool:
+    """Global superadmin (optional). Set SUPERADMIN_EMAILS='a@b.com,c@d.com'."""
+    return (user.email or "").strip().lower() in SUPERADMIN_EMAILS if SUPERADMIN_EMAILS else False
+
+
+def _get_state(session: Session, *, entity_type: str, entity_id: int) -> Optional[AdminEntityState]:
+    return session.exec(
+        select(AdminEntityState).where(
+            AdminEntityState.entity_type == entity_type,
+            AdminEntityState.entity_id == int(entity_id),
+        )
+    ).first()
+
+
+def entity_is_allowed(session: Session, *, entity_type: str, entity_id: int) -> bool:
+    """Missing row => allowed."""
+    st = _get_state(session, entity_type=entity_type, entity_id=entity_id)
+    if not st:
+        return True
+    if st.is_deleted:
+        return False
+    return bool(st.is_active)
+
+
+def set_entity_state(
+    session: Session,
+    *,
+    entity_type: str,
+    entity_id: int,
+    company_id: Optional[int],
+    is_active: Optional[bool] = None,
+    is_deleted: Optional[bool] = None,
+    updated_by_user_id: Optional[int] = None,
+) -> AdminEntityState:
+    st = _get_state(session, entity_type=entity_type, entity_id=entity_id)
+    if not st:
+        st = AdminEntityState(entity_type=entity_type, entity_id=int(entity_id), company_id=company_id)
+    if is_active is not None:
+        st.is_active = bool(is_active)
+    if is_deleted is not None:
+        st.is_deleted = bool(is_deleted)
+        if st.is_deleted:
+            st.deleted_at = utcnow()
+            st.is_active = False
+        else:
+            st.deleted_at = None
+    st.updated_at = utcnow()
+    st.updated_by_user_id = updated_by_user_id
+    session.add(st)
+    session.commit()
+    session.refresh(st)
+    return st
 
 
 def require_login(handler: Callable[..., Any]) -> Callable[..., Any]:
@@ -1888,12 +1975,13 @@ def _get_selected_client_for_staff(request: Request, session: Session, company_i
     cid = _safe_int(request.session.get("selected_client_id"))
     if cid:
         c = session.get(Client, cid)
-        if c and c.company_id == company_id:
+        if c and c.company_id == company_id and entity_is_allowed(session, entity_type="client", entity_id=c.id):
             return cid
 
-    first_client = session.exec(
+    clients = session.exec(
         select(Client).where(Client.company_id == company_id).order_by(Client.created_at)
-    ).first()
+    ).all()
+    first_client = next((c for c in clients if c.id and entity_is_allowed(session, entity_type="client", entity_id=c.id)), None)
     if not first_client:
         return None
 
@@ -7201,6 +7289,7 @@ async def dashboard(request: Request, session: Session = Depends(get_session)) -
         {"title": "Crédito", "desc": "SCR (Direct Data).", "href": "/credito"},
         {"title": "Simulador", "desc": "Simulação de empréstimos (PDF).", "href": "/simulador"},
         {"title": "UI", "desc": "Banner e notícias (admin).", "href": "/admin/ui"},
+        {"title": "Gestão", "desc": "Ativar/inativar/excluir clientes/membros.", "href": "/admin/gestao"},
         {"title": "Financeiro", "desc": "Notas/boletos de honorários.", "href": "/financeiro"},
         {"title": "Empresa", "desc": "Dados completos do cliente.", "href": "/empresa"},
         {"title": "Perfil", "desc": "Indicadores do cliente.", "href": "/perfil"},
@@ -15911,3 +16000,346 @@ async def admin_ui_feed_delete(feed_id: int, request: Request, session: Session 
     session.commit()
     _ui_cache_bust(company_id)
     return RedirectResponse("/admin/ui", status_code=303)
+
+
+TEMPLATES.update({
+    "admin_registry.html": r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="container" style="max-width: 1200px;">
+  <div class="d-flex align-items-center justify-content-between mt-3">
+    <h3>Admin - Gestão</h3>
+    <div class="d-flex gap-2">
+      <a class="btn btn-sm btn-outline-secondary" href="/admin/members">Membros</a>
+      <a class="btn btn-sm btn-outline-secondary" href="/admin/ui">UI (Banner/Notícias)</a>
+    </div>
+  </div>
+
+  <p class="text-muted" style="font-size: .95rem;">
+    Aqui você pode <b>inativar</b> ou <b>excluir</b> (soft delete) empresas, clientes e membros.
+  </p>
+
+  <ul class="nav nav-tabs mt-3" role="tablist">
+    <li class="nav-item" role="presentation">
+      <button class="nav-link active" data-bs-toggle="tab" data-bs-target="#tab-companies" type="button" role="tab">Empresas</button>
+    </li>
+    <li class="nav-item" role="presentation">
+      <button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-clients" type="button" role="tab">Clientes</button>
+    </li>
+    <li class="nav-item" role="presentation">
+      <button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-members" type="button" role="tab">Membros</button>
+    </li>
+  </ul>
+
+  <div class="tab-content border border-top-0 p-3 bg-white">
+    <div class="tab-pane fade show active" id="tab-companies" role="tabpanel">
+      {% if not is_superadmin %}
+        <div class="alert alert-info">Mostrando apenas sua empresa (superadmin pode ver todas).</div>
+      {% endif %}
+      <div class="table-responsive">
+        <table class="table table-sm align-middle">
+          <thead><tr><th>ID</th><th>Nome</th><th>Criada</th><th>Status</th><th style="width: 260px;">Ações</th></tr></thead>
+          <tbody>
+          {% for c in companies %}
+            <tr>
+              <td>{{ c.id }}</td>
+              <td>{{ c.name }}</td>
+              <td>{{ c.created_at.strftime("%d/%m/%Y") if c.created_at else "" }}</td>
+              <td>
+                {% set st = company_states.get(c.id) %}
+                {% if st and st.is_deleted %}<span class="badge bg-danger">Excluída</span>
+                {% elif st and not st.is_active %}<span class="badge bg-warning text-dark">Inativa</span>
+                {% else %}<span class="badge bg-success">Ativa</span>{% endif %}
+              </td>
+              <td class="d-flex gap-2">
+                <form method="post" action="/admin/entity/company/{{ c.id }}/toggle">
+                  <button class="btn btn-sm btn-outline-primary" type="submit">Ativar/Inativar</button>
+                </form>
+                <form method="post" action="/admin/entity/company/{{ c.id }}/delete" onsubmit="return confirm('Excluir empresa (soft)?');">
+                  <button class="btn btn-sm btn-outline-danger" type="submit">Excluir</button>
+                </form>
+                {% if is_superadmin %}
+                <form method="post" action="/admin/entity/company/{{ c.id }}/hard_delete" onsubmit="return confirm('Excluir DEFINITIVO? Pode falhar se houver dependências.');">
+                  <button class="btn btn-sm btn-danger" type="submit">Excluir definitivo</button>
+                </form>
+                {% endif %}
+              </td>
+            </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="tab-pane fade" id="tab-clients" role="tabpanel">
+      <div class="table-responsive">
+        <table class="table table-sm align-middle">
+          <thead><tr><th>ID</th><th>Empresa</th><th>Nome</th><th>CNPJ</th><th>Email</th><th>Status</th><th style="width: 240px;">Ações</th></tr></thead>
+          <tbody>
+          {% for cl in clients %}
+            <tr>
+              <td>{{ cl.id }}</td>
+              <td>{{ company_by_id.get(cl.company_id, '-') }}</td>
+              <td>{{ cl.name }}</td>
+              <td>{{ cl.cnpj }}</td>
+              <td>{{ cl.email }}</td>
+              <td>
+                {% set st = client_states.get(cl.id) %}
+                {% if st and st.is_deleted %}<span class="badge bg-danger">Excluído</span>
+                {% elif st and not st.is_active %}<span class="badge bg-warning text-dark">Inativo</span>
+                {% else %}<span class="badge bg-success">Ativo</span>{% endif %}
+              </td>
+              <td class="d-flex gap-2">
+                <form method="post" action="/admin/entity/client/{{ cl.id }}/toggle">
+                  <button class="btn btn-sm btn-outline-primary" type="submit">Ativar/Inativar</button>
+                </form>
+                <form method="post" action="/admin/entity/client/{{ cl.id }}/delete" onsubmit="return confirm('Excluir cliente (soft)?');">
+                  <button class="btn btn-sm btn-outline-danger" type="submit">Excluir</button>
+                </form>
+                {% if is_superadmin %}
+                <form method="post" action="/admin/entity/client/{{ cl.id }}/hard_delete" onsubmit="return confirm('Excluir DEFINITIVO? Pode falhar se houver dependências.');">
+                  <button class="btn btn-sm btn-danger" type="submit">Excluir definitivo</button>
+                </form>
+                {% endif %}
+              </td>
+            </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="tab-pane fade" id="tab-members" role="tabpanel">
+      <div class="table-responsive">
+        <table class="table table-sm align-middle">
+          <thead><tr><th>ID</th><th>Empresa</th><th>Usuário</th><th>Email</th><th>Role</th><th>Cliente</th><th>Status</th><th style="width: 220px;">Ações</th></tr></thead>
+          <tbody>
+          {% for m in members %}
+            <tr>
+              <td>{{ m.id }}</td>
+              <td>{{ company_by_id.get(m.company_id, '-') }}</td>
+              <td>{{ user_by_id.get(m.user_id, {}).get("name", "-") }}</td>
+              <td>{{ user_by_id.get(m.user_id, {}).get("email", "-") }}</td>
+              <td>{{ m.role }}</td>
+              <td>{{ client_by_id.get(m.client_id, "-") }}</td>
+              <td>
+                {% set st = membership_states.get(m.id) %}
+                {% if st and st.is_deleted %}<span class="badge bg-danger">Excluído</span>
+                {% elif st and not st.is_active %}<span class="badge bg-warning text-dark">Inativo</span>
+                {% else %}<span class="badge bg-success">Ativo</span>{% endif %}
+              </td>
+              <td class="d-flex gap-2">
+                <form method="post" action="/admin/entity/membership/{{ m.id }}/toggle">
+                  <button class="btn btn-sm btn-outline-primary" type="submit">Ativar/Inativar</button>
+                </form>
+                <form method="post" action="/admin/entity/membership/{{ m.id }}/delete" onsubmit="return confirm('Excluir membro (soft)?');">
+                  <button class="btn btn-sm btn-outline-danger" type="submit">Excluir</button>
+                </form>
+              </td>
+            </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      <div class="alert alert-secondary mt-2" style="font-size:.9rem;">
+        Inativar/excluir membro bloqueia acesso (require_role não permite entrar).
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+""",
+})
+
+@app.get("/admin/gestao", response_class=HTMLResponse)
+@require_role({"admin"})
+async def admin_gestao(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+
+    superadmin = is_superadmin(ctx.user)
+
+    if superadmin:
+        companies = session.exec(select(Company).order_by(Company.created_at)).all()
+        clients = session.exec(select(Client).order_by(Client.created_at)).all()
+        members = session.exec(select(Membership).order_by(Membership.created_at)).all()
+    else:
+        companies = [ctx.company]
+        clients = session.exec(select(Client).where(Client.company_id == ctx.company.id).order_by(Client.created_at)).all()
+        members = session.exec(select(Membership).where(Membership.company_id == ctx.company.id).order_by(Membership.created_at)).all()
+
+    company_ids = [c.id for c in companies if c.id]
+    client_ids = [c.id for c in clients if c.id]
+    member_ids = [m.id for m in members if m.id]
+    user_ids = sorted({m.user_id for m in members if m.user_id})
+
+    def fetch_states(entity_type: str, ids: list[int]) -> dict[int, AdminEntityState]:
+        if not ids:
+            return {}
+        rows = session.exec(
+            select(AdminEntityState).where(
+                AdminEntityState.entity_type == entity_type,
+                AdminEntityState.entity_id.in_(ids),
+            )
+        ).all()
+        return {r.entity_id: r for r in rows}
+
+    company_states = fetch_states("company", company_ids)
+    client_states = fetch_states("client", client_ids)
+    membership_states = fetch_states("membership", member_ids)
+    user_states = fetch_states("user", user_ids)
+
+    users = session.exec(select(User).where(User.id.in_(user_ids))).all() if user_ids else []
+    user_by_id = {u.id: {"name": u.name, "email": u.email, "state": user_states.get(u.id)} for u in users if u.id}
+
+    client_by_id = {c.id: c.name for c in clients if c.id}
+    company_by_id = {c.id: c.name for c in companies if c.id}
+
+    return render(
+        "admin_registry.html",
+        request=request,
+        context={
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "role": ctx.membership.role,
+            "current_client": None,
+            "companies": companies,
+            "clients": clients,
+            "members": members,
+            "company_states": company_states,
+            "client_states": client_states,
+            "membership_states": membership_states,
+            "user_by_id": user_by_id,
+            "client_by_id": client_by_id,
+            "company_by_id": company_by_id,
+            "is_superadmin": superadmin,
+        },
+    )
+
+
+def _admin_check_scope(ctx: TenantContext, session: Session, entity_type: str, entity_id: int) -> Optional[str]:
+    if is_superadmin(ctx.user):
+        return None
+    if entity_type == "company":
+        return "Apenas superadmin pode alterar empresa."
+    if entity_type == "client":
+        obj = session.get(Client, entity_id)
+        if not obj or obj.company_id != ctx.company.id:
+            return "Cliente fora do escopo."
+        return None
+    if entity_type == "membership":
+        obj = session.get(Membership, entity_id)
+        if not obj or obj.company_id != ctx.company.id:
+            return "Membro fora do escopo."
+        return None
+    if entity_type == "user":
+        return "Apenas superadmin pode alterar usuários."
+    return "Tipo inválido."
+
+
+def _derive_company_id_for_state(session: Session, entity_type: str, entity_id: int, fallback_company_id: int) -> Optional[int]:
+    if entity_type == "company":
+        return int(entity_id)
+    if entity_type == "client":
+        cl = session.get(Client, entity_id)
+        return cl.company_id if cl else fallback_company_id
+    if entity_type == "membership":
+        m = session.get(Membership, entity_id)
+        return m.company_id if m else fallback_company_id
+    return None
+
+
+@app.post("/admin/entity/{entity_type}/{entity_id}/toggle")
+@require_role({"admin"})
+async def admin_entity_toggle(request: Request, entity_type: str, entity_id: int, session: Session = Depends(get_session)):
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+
+    et = (entity_type or "").strip().lower()
+    if et not in {"company", "client", "membership", "user"}:
+        request.session["flash"] = {"kind": "danger", "message": "Tipo inválido."}
+        return RedirectResponse("/admin/gestao", status_code=303)
+
+    err = _admin_check_scope(ctx, session, et, int(entity_id))
+    if err:
+        request.session["flash"] = {"kind": "danger", "message": err}
+        return RedirectResponse("/admin/gestao", status_code=303)
+
+    current = _get_state(session, entity_type=et, entity_id=int(entity_id))
+    new_active = True if (not current) else (not bool(current.is_active))
+    set_entity_state(
+        session,
+        entity_type=et,
+        entity_id=int(entity_id),
+        company_id=_derive_company_id_for_state(session, et, int(entity_id), ctx.company.id),
+        is_active=new_active,
+        is_deleted=False,
+        updated_by_user_id=ctx.user.id,
+    )
+    request.session["flash"] = {"kind": "success", "message": f"{et} atualizado."}
+    return RedirectResponse("/admin/gestao", status_code=303)
+
+
+@app.post("/admin/entity/{entity_type}/{entity_id}/delete")
+@require_role({"admin"})
+async def admin_entity_delete(request: Request, entity_type: str, entity_id: int, session: Session = Depends(get_session)):
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+
+    et = (entity_type or "").strip().lower()
+    if et not in {"company", "client", "membership", "user"}:
+        request.session["flash"] = {"kind": "danger", "message": "Tipo inválido."}
+        return RedirectResponse("/admin/gestao", status_code=303)
+
+    err = _admin_check_scope(ctx, session, et, int(entity_id))
+    if err:
+        request.session["flash"] = {"kind": "danger", "message": err}
+        return RedirectResponse("/admin/gestao", status_code=303)
+
+    set_entity_state(
+        session,
+        entity_type=et,
+        entity_id=int(entity_id),
+        company_id=_derive_company_id_for_state(session, et, int(entity_id), ctx.company.id),
+        is_deleted=True,
+        updated_by_user_id=ctx.user.id,
+    )
+    request.session["flash"] = {"kind": "success", "message": f"{et} excluído (soft)."}
+    return RedirectResponse("/admin/gestao", status_code=303)
+
+
+@app.post("/admin/entity/{entity_type}/{entity_id}/hard_delete")
+@require_role({"admin"})
+async def admin_entity_hard_delete(request: Request, entity_type: str, entity_id: int, session: Session = Depends(get_session)):
+    ctx = get_tenant_context(request, session)
+    if not ctx or not is_superadmin(ctx.user):
+        request.session["flash"] = {"kind": "danger", "message": "Apenas superadmin."}
+        return RedirectResponse("/admin/gestao", status_code=303)
+
+    et = (entity_type or "").strip().lower()
+    try:
+        if et == "client":
+            obj = session.get(Client, entity_id)
+            if obj:
+                session.delete(obj)
+                session.commit()
+        elif et == "company":
+            obj = session.get(Company, entity_id)
+            if obj:
+                session.delete(obj)
+                session.commit()
+        else:
+            request.session["flash"] = {"kind": "warning", "message": "Hard delete disponível apenas para company/client."}
+            return RedirectResponse("/admin/gestao", status_code=303)
+    except Exception as e:
+        request.session["flash"] = {"kind": "danger", "message": f"Falha hard delete: {e}"}
+        return RedirectResponse("/admin/gestao", status_code=303)
+
+    request.session["flash"] = {"kind": "success", "message": f"{et} excluído definitivamente."}
+    return RedirectResponse("/admin/gestao", status_code=303)
