@@ -15065,7 +15065,7 @@ SIMULADOR_TEMPLATE = r"""
 async def simulador_page(request: Request) -> HTMLResponse:
     if "simulador.html" not in TEMPLATES:
         TEMPLATES["simulador.html"] = SIMULADOR_TEMPLATE
-    return render(request, "simulador.html", {"title": "Simulador"})
+    return render("simulador.html", request=request, context={"title": "Simulador"})
 
 
 @app.post("/simulador/json", response_class=JSONResponse)
