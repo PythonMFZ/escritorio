@@ -2058,42 +2058,59 @@ def get_membership_allowed_features(session: Session, *, company_id: int, member
     if not membership.id:
         return base
 
-    row = session.exec(
-        select(MembershipFeatureAccess).where(
-            MembershipFeatureAccess.company_id == company_id,
-            MembershipFeatureAccess.membership_id == membership.id,
-        )
-    ).first()
+    try:
+        row = session.exec(
+            select(MembershipFeatureAccess).where(
+                MembershipFeatureAccess.company_id == company_id,
+                MembershipFeatureAccess.membership_id == membership.id,
+            )
+        ).first()
+    except Exception:
+        try:
+            ensure_feature_access_tables()
+        except Exception:
+            pass
+        return base
+
     if row:
         lst = _parse_json_list(row.features_json)
         if lst:
             return set(lst)
     return base
 
-
 def get_client_allowed_features(session: Session, *, company_id: int, client_id: int) -> Optional[set[str]]:
-    row = session.exec(
-        select(ClientFeatureAccess).where(
-            ClientFeatureAccess.company_id == company_id,
-            ClientFeatureAccess.client_id == client_id,
-        )
-    ).first()
+    try:
+        row = session.exec(
+            select(ClientFeatureAccess).where(
+                ClientFeatureAccess.company_id == company_id,
+                ClientFeatureAccess.client_id == client_id,
+            )
+        ).first()
+    except Exception:
+        try:
+            ensure_feature_access_tables()
+        except Exception:
+            pass
+        return None
+
     if not row:
         return None
     lst = _parse_json_list(row.features_json)
     return set(lst) if lst else None
 
-
 def effective_allowed_features(session: Session, *, ctx: TenantContext, current_client: Optional[Client]) -> set[str]:
-    allowed = get_membership_allowed_features(session, company_id=ctx.company.id, membership=ctx.membership)
+    try:
+        allowed = get_membership_allowed_features(session, company_id=ctx.company.id, membership=ctx.membership)
 
-    if ctx.membership.role == "cliente" and current_client and current_client.id:
-        client_allowed = get_client_allowed_features(session, company_id=ctx.company.id, client_id=current_client.id)
-        if client_allowed is not None:
-            allowed = allowed.intersection(client_allowed)
+        if ctx.membership.role == "cliente" and current_client and current_client.id:
+            client_allowed = get_client_allowed_features(session, company_id=ctx.company.id, client_id=current_client.id)
+            if client_allowed is not None:
+                allowed = allowed.intersection(client_allowed)
 
-    return {k for k in allowed if k in FEATURE_KEYS}
-
+        return {k for k in allowed if k in FEATURE_KEYS}
+    except Exception:
+        base = set(ROLE_DEFAULT_FEATURES.get(ctx.membership.role, set()))
+        return {k for k in base if k in FEATURE_KEYS}
 
 def resolve_feature_key(path: str) -> Optional[str]:
     if path.startswith("/static/") or path.startswith("/login") or path.startswith("/logout"):
@@ -6839,7 +6856,10 @@ async def feature_access_middleware(request: Request, call_next: Callable[..., A
         active_client_id = get_active_client_id(request, session, ctx)
         current_client = get_client_or_none(session, ctx.company.id, active_client_id)
 
-        allowed = effective_allowed_features(session, ctx=ctx, current_client=current_client)
+        try:
+            allowed = effective_allowed_features(session, ctx=ctx, current_client=current_client)
+        except Exception:
+            allowed = set(ROLE_DEFAULT_FEATURES.get(ctx.membership.role, set()))
 
         roles = FEATURE_VISIBLE_ROLES.get(key)
         if roles and ctx.membership.role not in roles:
