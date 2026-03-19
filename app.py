@@ -491,7 +491,6 @@ class Membership(SQLModel, table=True):
     client_id: Optional[int] = Field(default=None, index=True, foreign_key="client.id")
     created_at: datetime = Field(default_factory=utcnow)
 
-
 class UiBannerSlide(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     company_id: int = Field(index=True, foreign_key="company.id")
@@ -512,7 +511,6 @@ class UiNewsFeed(SQLModel, table=True):
     is_active: bool = Field(default=True, index=True)
     created_at: datetime = Field(default_factory=utcnow)
 
-
 class AdminEntityState(SQLModel, table=True):
     """Admin-managed state for entities (soft deactivate/delete) without altering core tables.
 
@@ -531,7 +529,6 @@ class AdminEntityState(SQLModel, table=True):
     updated_at: datetime = Field(default_factory=utcnow, index=True)
     updated_by_user_id: Optional[int] = Field(default=None, index=True)
     deleted_at: Optional[datetime] = Field(default=None, index=True)
-
 
 class MembershipFeatureAccess(SQLModel, table=True):
     """Per-member feature visibility/access controls (JSON list of feature keys).
@@ -943,7 +940,6 @@ class Proposal(SQLModel, table=True):
     client_id: int = Field(index=True, foreign_key="client.id")
     created_by_user_id: int = Field(index=True, foreign_key="user.id")
 
-
 class LoanSimulation(SQLModel, table=True):
     """Histórico de simulações de empréstimo (por cliente)."""
 
@@ -1149,8 +1145,7 @@ def ensure_ui_tables() -> None:
     try:
         SQLModel.metadata.create_all(
             engine,
-            tables=[UiBannerSlide.__table__, UiNewsFeed.__table__, AdminEntityState.__table__, LoanSimulation.__table__,
-                    ProposalMessage.__table__],
+            tables=[UiBannerSlide.__table__, UiNewsFeed.__table__, AdminEntityState.__table__, LoanSimulation.__table__, ProposalMessage.__table__],
             checkfirst=True,
         )
     except Exception:
@@ -1908,12 +1903,10 @@ def get_tenant_context(request: Request, session: Session) -> Optional[TenantCon
     if membership.id is not None and not entity_is_allowed(session, entity_type="membership", entity_id=membership.id):
         return None
 
-    if membership.role == "cliente" and membership.client_id and not entity_is_allowed(session, entity_type="client",
-                                                                                       entity_id=membership.client_id):
+    if membership.role == "cliente" and membership.client_id and not entity_is_allowed(session, entity_type="client", entity_id=membership.client_id):
         return None
 
     return TenantContext(user=user, company=company, membership=membership)
-
 
 SUPERADMIN_EMAILS: set[str] = {
     e.strip().lower() for e in (os.getenv("SUPERADMIN_EMAILS", "") or "").split(",") if e.strip()
@@ -1932,7 +1925,6 @@ def _get_state(session: Session, *, entity_type: str, entity_id: int) -> Optiona
             AdminEntityState.entity_id == int(entity_id),
         )
     ).first()
-
 
 def normalize_cnpj_digits(value: str) -> str:
     return re.sub(r"\D+", "", value or "").strip()
@@ -1953,8 +1945,7 @@ def _client_is_orphan_lead(session: Session, company_id: int, client: Client) ->
     if _client_is_soft_deleted(session, client.id):
         return False
 
-    if session.exec(
-            select(Membership).where(Membership.company_id == company_id, Membership.client_id == client.id)).first():
+    if session.exec(select(Membership).where(Membership.company_id == company_id, Membership.client_id == client.id)).first():
         return False
 
     link_models = [
@@ -2018,8 +2009,7 @@ def _reassign_client_fk(session: Session, company_id: int, from_client_id: int, 
 
     for model in models:
         try:
-            rows = session.exec(
-                select(model).where(model.company_id == company_id, model.client_id == from_client_id)).all()
+            rows = session.exec(select(model).where(model.company_id == company_id, model.client_id == from_client_id)).all()
         except Exception:
             continue
         for r in rows:
@@ -2061,14 +2051,14 @@ def entity_is_allowed(session: Session, *, entity_type: str, entity_id: int) -> 
 
 
 def set_entity_state(
-        session: Session,
-        *,
-        entity_type: str,
-        entity_id: int,
-        company_id: Optional[int],
-        is_active: Optional[bool] = None,
-        is_deleted: Optional[bool] = None,
-        updated_by_user_id: Optional[int] = None,
+    session: Session,
+    *,
+    entity_type: str,
+    entity_id: int,
+    company_id: Optional[int],
+    is_active: Optional[bool] = None,
+    is_deleted: Optional[bool] = None,
+    updated_by_user_id: Optional[int] = None,
 ) -> AdminEntityState:
     st = _get_state(session, entity_type=entity_type, entity_id=entity_id)
     if not st:
@@ -2230,7 +2220,6 @@ def get_membership_allowed_features(session: Session, *, company_id: int, member
             return set(lst)
     return base
 
-
 def get_client_allowed_features(session: Session, *, company_id: int, client_id: int) -> Optional[set[str]]:
     try:
         row = session.exec(
@@ -2251,14 +2240,12 @@ def get_client_allowed_features(session: Session, *, company_id: int, client_id:
     lst = _parse_json_list(row.features_json)
     return set(lst) if lst else None
 
-
 def effective_allowed_features(session: Session, *, ctx: TenantContext, current_client: Optional[Client]) -> set[str]:
     try:
         allowed = get_membership_allowed_features(session, company_id=ctx.company.id, membership=ctx.membership)
 
         if ctx.membership.role == "cliente" and current_client and current_client.id:
-            client_allowed = get_client_allowed_features(session, company_id=ctx.company.id,
-                                                         client_id=current_client.id)
+            client_allowed = get_client_allowed_features(session, company_id=ctx.company.id, client_id=current_client.id)
             if client_allowed is not None:
                 allowed = allowed.intersection(client_allowed)
 
@@ -2266,7 +2253,6 @@ def effective_allowed_features(session: Session, *, ctx: TenantContext, current_
     except Exception:
         base = set(ROLE_DEFAULT_FEATURES.get(ctx.membership.role, set()))
         return {k for k in base if k in FEATURE_KEYS}
-
 
 def resolve_feature_key(path: str) -> Optional[str]:
     if path.startswith("/static/") or path.startswith("/login") or path.startswith("/logout"):
@@ -2301,7 +2287,6 @@ def resolve_feature_key(path: str) -> Optional[str]:
             return key
     return None
 
-
 def _is_staff(role: str) -> bool:
     return role in {"admin", "equipe"}
 
@@ -2323,8 +2308,7 @@ def _get_selected_client_for_staff(request: Request, session: Session, company_i
     clients = session.exec(
         select(Client).where(Client.company_id == company_id).order_by(Client.created_at)
     ).all()
-    first_client = next(
-        (c for c in clients if c.id and entity_is_allowed(session, entity_type="client", entity_id=c.id)), None)
+    first_client = next((c for c in clients if c.id and entity_is_allowed(session, entity_type="client", entity_id=c.id)), None)
     if not first_client:
         return None
 
@@ -6950,7 +6934,8 @@ TEMPLATES.update({"admin_ui.html": r"""{% extends "base.html" %}
   </div>
 
 </div>
-{% endblock %}""", })
+{% endblock %}""",})
+
 
 
 def render(
@@ -6994,7 +6979,6 @@ STATIC_DIR = Path(__file__).with_name("static").resolve()
 STATIC_DIR.mkdir(parents=True, exist_ok=True)
 
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
-
 
 @app.middleware("http")
 async def feature_access_middleware(request: Request, call_next: Callable[..., Any]) -> Response:
@@ -7051,6 +7035,8 @@ async def feature_access_middleware(request: Request, call_next: Callable[..., A
         return await call_next(request)
     finally:
         session.close()
+
+
 
 
 # Install SessionMiddleware last so request.session is available inside BaseHTTPMiddleware.
@@ -8336,13 +8322,13 @@ async def members_page(request: Request, session: Session = Depends(get_session)
 
     rows.sort(key=lambda x: (x["membership"].role, x["user"].name.lower()))
 
+
     clients = session.exec(select(Client).where(Client.company_id == ctx.company.id).order_by(Client.created_at)).all()
 
     for row in rows:
         m = row["membership"]
         row["is_active"] = entity_is_allowed(session, entity_type="membership", entity_id=m.id) if m.id else True
-        row["allowed_features"] = sorted(
-            get_membership_allowed_features(session, company_id=ctx.company.id, membership=m))
+        row["allowed_features"] = sorted(get_membership_allowed_features(session, company_id=ctx.company.id, membership=m))
 
     active_client_id = get_active_client_id(request, session, ctx)
     current_client = get_client_or_none(session, ctx.company.id, active_client_id)
@@ -8451,9 +8437,9 @@ async def members_add_action(
 @app.post("/admin/members/{membership_id}/features")
 @require_role({"admin", "equipe"})
 async def member_features_update(
-        request: Request,
-        membership_id: int,
-        session: Session = Depends(get_session),
+    request: Request,
+    membership_id: int,
+    session: Session = Depends(get_session),
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
@@ -8487,10 +8473,10 @@ async def member_features_update(
 @app.post("/admin/members/{membership_id}/link-client")
 @require_role({"admin", "equipe"})
 async def member_link_client(
-        request: Request,
-        membership_id: int,
-        session: Session = Depends(get_session),
-        client_id: str = Form(""),
+    request: Request,
+    membership_id: int,
+    session: Session = Depends(get_session),
+    client_id: str = Form(""),
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
@@ -8524,9 +8510,9 @@ async def member_link_client(
 @app.get("/admin/clients/{client_id}/access", response_class=HTMLResponse)
 @require_role({"admin", "equipe"})
 async def client_access_page(
-        request: Request,
-        client_id: int,
-        session: Session = Depends(get_session),
+    request: Request,
+    client_id: int,
+    session: Session = Depends(get_session),
 ) -> HTMLResponse:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
@@ -8584,9 +8570,9 @@ async def client_access_page(
 @app.post("/admin/clients/{client_id}/access")
 @require_role({"admin", "equipe"})
 async def client_access_save(
-        request: Request,
-        client_id: int,
-        session: Session = Depends(get_session),
+    request: Request,
+    client_id: int,
+    session: Session = Depends(get_session),
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
@@ -8615,7 +8601,6 @@ async def client_access_save(
 
     set_flash(request, "Permissões do cliente atualizadas.")
     return RedirectResponse(f"/admin/clients/{client_id}/access", status_code=303)
-
 
 # ----------------------------
 # Empresa / Perfil
@@ -9607,47 +9592,40 @@ async def props_list(request: Request, session: Session = Depends(get_session)) 
 
     current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
 
-    try:
+    q = select(Proposal).where(Proposal.company_id == ctx.company.id).order_by(Proposal.created_at.desc())
+    if ctx.membership.role == "cliente":
+        items = session.exec(q.where(Proposal.client_id == (ctx.membership.client_id or -1))).all()
+    else:
+        if current_client:
+            q = q.where(Proposal.client_id == current_client.id)
+        items = session.exec(q).all()
 
+    out = []
+    for p in items:
+        c = session.get(Client, p.client_id)
+        out.append(
+            {
+                "id": p.id,
+                "kind": p.kind,
+                "title": p.title,
+                "status": p.status,
+                "value_brl": p.value_brl,
+                "created_at": p.created_at,
+                "client_name": c.name if c else "—",
+            }
+        )
 
-q = select(Proposal).where(Proposal.company_id == ctx.company.id).order_by(Proposal.created_at.desc())
-if ctx.membership.role == "cliente":
-    items = session.exec(q.where(Proposal.client_id == (ctx.membership.client_id or -1))).all()
-else:
-    if current_client:
-        q = q.where(Proposal.client_id == current_client.id)
-    items = session.exec(q).all()
-
-
-except Exception as e:
-return render("error.html", request=request, context={"message": f"Erro ao carregar propostas: {e}"}, status_code=500)
-
-out = []
-for p in items:
-    c = session.get(Client, p.client_id)
-    out.append(
-        {
-            "id": p.id,
-            "kind": p.kind,
-            "title": p.title,
-            "status": p.status,
-            "value_brl": p.value_brl,
-            "created_at": p.created_at,
-            "client_name": c.name if c else "—",
-        }
+    return render(
+        "props_list.html",
+        request=request,
+        context={
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "role": ctx.membership.role,
+            "current_client": current_client,
+            "items": out,
+        },
     )
-
-return render(
-    "props_list.html",
-    request=request,
-    context={
-        "current_user": ctx.user,
-        "current_company": ctx.company,
-        "role": ctx.membership.role,
-        "current_client": current_client,
-        "items": out,
-    },
-)
 
 
 @app.get("/propostas/nova", response_class=HTMLResponse)
@@ -15681,6 +15659,7 @@ async def credit_report_generate_tasks(request: Request, session: Session = Depe
     return RedirectResponse("/tarefas", status_code=303)
 
 
+
 # ==============================
 # SIMULADOR DE EMPRÉSTIMOS + PDF
 # ==============================
@@ -15702,8 +15681,8 @@ from reportlab.lib.utils import ImageReader
 
 
 class LoanAmortization(str, Enum):
-    PRICE = "price"  # parcela fixa (Sistema Francês)
-    SAC = "sac"  # amortização constante
+    PRICE = "price"          # parcela fixa (Sistema Francês)
+    SAC = "sac"              # amortização constante
     AMERICANO = "americano"  # juros + balloon
 
 
@@ -15807,23 +15786,23 @@ class LoanSimResult:
 
 
 def build_loan_input(
-        *,
-        loan_type: str,
-        amortization: str,
-        rate_pct: str,
-        rate_base: str,
-        term_months: int,
-        principal: str,
-        collateral_value: str,
-        ltv_pct: str,
-        start_date: date,
-        grace_months: int,
-        io_months: int,
-        fee_amount: str,
-        monthly_insurance: str,
-        monthly_admin_fee: str,
-        borrower_name: str,
-        notes: str,
+    *,
+    loan_type: str,
+    amortization: str,
+    rate_pct: str,
+    rate_base: str,
+    term_months: int,
+    principal: str,
+    collateral_value: str,
+    ltv_pct: str,
+    start_date: date,
+    grace_months: int,
+    io_months: int,
+    fee_amount: str,
+    monthly_insurance: str,
+    monthly_admin_fee: str,
+    borrower_name: str,
+    notes: str,
 ) -> LoanInput:
     amort = LoanAmortization(amortization)
     rb = LoanRateBase(rate_base)
@@ -15874,13 +15853,13 @@ def _resolve_sim_client_id(ctx: TenantContext, request: Request, session: Sessio
 
 
 def _save_loan_simulation(
-        session: Session,
-        *,
-        ctx: TenantContext,
-        client_id: int,
-        inp: LoanSimInputs,
-        res: LoanSimResult,
-        schedule_json: str = "",
+    session: Session,
+    *,
+    ctx: TenantContext,
+    client_id: int,
+    inp: LoanSimInputs,
+    res: LoanSimResult,
+    schedule_json: str = "",
 ) -> LoanSimulation:
     sim = LoanSimulation(
         company_id=ctx.company.id,
@@ -15913,7 +15892,6 @@ def _save_loan_simulation(
     session.commit()
     session.refresh(sim)
     return sim
-
 
 def simulate_loan(inp: LoanInput) -> LoanSimResult:
     if inp.rate_base == LoanRateBase.AM:
@@ -16052,7 +16030,7 @@ def render_loan_pdf(res: LoanSimResult) -> bytes:
     kv("Tipo:", inp.loan_type)
     kv("Amortização:", inp.amortization.value.upper())
     kv("Prazo:", f"{inp.term_months} meses")
-    kv("Taxa:", f"{(inp.rate * Decimal("100")):.2f} {'a.m.' if inp.rate_base == LoanRateBase.AM else 'a.a.'}")
+    kv("Taxa:", f"{(inp.rate * Decimal("100")):.2f} {'a.m.' if inp.rate_base==LoanRateBase.AM else 'a.a.'}")
     kv("Taxa mensal (calc):", f"{(res.monthly_rate * Decimal("100")):.2f} a.m.")
     kv("Valor empréstimo:", _brl(inp.principal))
     if inp.collateral_value > 0:
@@ -16138,12 +16116,11 @@ def render_loan_pdf(res: LoanSimResult) -> bytes:
         c.drawRightString(w - 20 * mm, h - 22 * mm, datetime.now().strftime("%d/%m/%Y %H:%M"))
         y0 = h - 34 * mm
         c.setFont("Helvetica-Bold", 8)
-        cols = [("#", 20 * mm), ("Venc.", 30 * mm), ("Parcela", 55 * mm), ("Juros", 85 * mm), ("Amort.", 110 * mm),
-                ("Encargos", 135 * mm), ("Saldo", 165 * mm)]
+        cols = [("#", 20*mm), ("Venc.", 30*mm), ("Parcela", 55*mm), ("Juros", 85*mm), ("Amort.", 110*mm), ("Encargos", 135*mm), ("Saldo", 165*mm)]
         for name, x in cols:
             c.drawString(x, y0, name)
-        c.line(20 * mm, y0 - 2 * mm, w - 20 * mm, y0 - 2 * mm)
-        return y0 - 7 * mm
+        c.line(20*mm, y0-2*mm, w-20*mm, y0-2*mm)
+        return y0 - 7*mm
 
     y = table_header("Cronograma de Pagamentos")
     c.setFont("Helvetica", 8)
@@ -16153,24 +16130,23 @@ def render_loan_pdf(res: LoanSimResult) -> bytes:
         if (idx - 1) % rows_per_page == 0 and idx != 1:
             # footer disclaimer on page
             c.setFont("Helvetica-Oblique", 7)
-            c.drawString(20 * mm, 12 * mm,
-                         "Simulação – não constitui proposta de crédito. Sujeito à análise e aprovação.")
+            c.drawString(20*mm, 12*mm, "Simulação – não constitui proposta de crédito. Sujeito à análise e aprovação.")
             c.showPage()
             y = table_header("Cronograma (cont.)")
             c.setFont("Helvetica", 8)
 
         encargos = _d2(row.fees + row.insurance)
-        c.drawString(20 * mm, y, str(row.n))
-        c.drawString(30 * mm, y, row.due_date.strftime("%d/%m/%Y"))
-        c.drawRightString(77 * mm, y, _brl(row.payment))
-        c.drawRightString(107 * mm, y, _brl(row.interest))
-        c.drawRightString(132 * mm, y, _brl(row.amort))
-        c.drawRightString(157 * mm, y, _brl(encargos))
-        c.drawRightString(w - 20 * mm, y, _brl(row.balance))
+        c.drawString(20*mm, y, str(row.n))
+        c.drawString(30*mm, y, row.due_date.strftime("%d/%m/%Y"))
+        c.drawRightString(77*mm, y, _brl(row.payment))
+        c.drawRightString(107*mm, y, _brl(row.interest))
+        c.drawRightString(132*mm, y, _brl(row.amort))
+        c.drawRightString(157*mm, y, _brl(encargos))
+        c.drawRightString(w-20*mm, y, _brl(row.balance))
         y -= 5 * mm
 
     c.setFont("Helvetica-Oblique", 7)
-    c.drawString(20 * mm, 12 * mm, "Simulação – não constitui proposta de crédito. Sujeito à análise e aprovação.")
+    c.drawString(20*mm, 12*mm, "Simulação – não constitui proposta de crédito. Sujeito à análise e aprovação.")
     c.save()
     return buf.getvalue()
 
@@ -16292,23 +16268,23 @@ async def simulador_page(request: Request) -> HTMLResponse:
 @app.post("/simulador/json", response_class=JSONResponse)
 @require_login
 async def simulador_json(
-        request: Request,
-        loan_type: str = Form("Empréstimo"),
-        amortization: str = Form("price"),
-        rate_pct: str = Form("1,79"),
-        rate_base: str = Form("am"),
-        term_months: int = Form(24),
-        principal: str = Form(""),
-        collateral_value: str = Form(""),
-        ltv_pct: str = Form(""),
-        grace_months: int = Form(0),
-        io_months: int = Form(0),
-        fee_amount: str = Form("0"),
-        monthly_insurance: str = Form("0"),
-        monthly_admin_fee: str = Form("0"),
-        borrower_name: str = Form(""),
-        notes: str = Form(""),
-        session: Session = Depends(get_session),
+    request: Request,
+    loan_type: str = Form("Empréstimo"),
+    amortization: str = Form("price"),
+    rate_pct: str = Form("1,79"),
+    rate_base: str = Form("am"),
+    term_months: int = Form(24),
+    principal: str = Form(""),
+    collateral_value: str = Form(""),
+    ltv_pct: str = Form(""),
+    grace_months: int = Form(0),
+    io_months: int = Form(0),
+    fee_amount: str = Form("0"),
+    monthly_insurance: str = Form("0"),
+    monthly_admin_fee: str = Form("0"),
+    borrower_name: str = Form(""),
+    notes: str = Form(""),
+    session: Session = Depends(get_session),
 ) -> JSONResponse:
     _ = get_tenant_context(request, session)
     inp = build_loan_input(
@@ -16376,23 +16352,23 @@ async def simulador_json(
 @app.post("/simulador/pdf")
 @require_login
 async def simulador_pdf(
-        request: Request,
-        loan_type: str = Form("Empréstimo"),
-        amortization: str = Form("price"),
-        rate_pct: str = Form("1,79"),
-        rate_base: str = Form("am"),
-        term_months: int = Form(24),
-        principal: str = Form(""),
-        collateral_value: str = Form(""),
-        ltv_pct: str = Form(""),
-        grace_months: int = Form(0),
-        io_months: int = Form(0),
-        fee_amount: str = Form("0"),
-        monthly_insurance: str = Form("0"),
-        monthly_admin_fee: str = Form("0"),
-        borrower_name: str = Form(""),
-        notes: str = Form(""),
-        session: Session = Depends(get_session),
+    request: Request,
+    loan_type: str = Form("Empréstimo"),
+    amortization: str = Form("price"),
+    rate_pct: str = Form("1,79"),
+    rate_base: str = Form("am"),
+    term_months: int = Form(24),
+    principal: str = Form(""),
+    collateral_value: str = Form(""),
+    ltv_pct: str = Form(""),
+    grace_months: int = Form(0),
+    io_months: int = Form(0),
+    fee_amount: str = Form("0"),
+    monthly_insurance: str = Form("0"),
+    monthly_admin_fee: str = Form("0"),
+    borrower_name: str = Form(""),
+    notes: str = Form(""),
+    session: Session = Depends(get_session),
 ):
     _ = get_tenant_context(request, session)
 
@@ -16515,8 +16491,7 @@ def _ui_parse_rss_atom(xml_bytes: bytes) -> list[dict[str, Any]]:
         title = (e.findtext("title") or e.findtext("atom:title", default="", namespaces=ns) or "").strip()
         link_el = e.find("link") or e.find("atom:link", ns)
         link = (link_el.attrib.get("href") if link_el is not None else "") or ""
-        pub = _ui_parse_date(
-            (e.findtext("updated") or e.findtext("atom:updated", default="", namespaces=ns) or "").strip())
+        pub = _ui_parse_date((e.findtext("updated") or e.findtext("atom:updated", default="", namespaces=ns) or "").strip())
         if title and link:
             items.append({"title": title, "url": link.strip(), "published_dt": pub, "source": source})
     return items
@@ -16613,7 +16588,6 @@ async def _ui_load_news(company_id: int, session: Session, limit: int = 10) -> l
     _ui_cache_set(company_id, "news", out)
     return out
 
-
 def _ui_load_banner(company_id: int, session: Session) -> list[dict[str, Any]]:
     cached = _ui_cache_get(company_id, "banner")
     if cached is not None:
@@ -16636,26 +16610,27 @@ def _ui_load_banner(company_id: int, session: Session) -> list[dict[str, Any]]:
     return out
 
 
+
 @app.post("/simulador/proposta")
 @require_login
 async def simulador_gerar_proposta(
-        request: Request,
-        loan_type: str = Form("Empréstimo"),
-        amortization: str = Form("price"),
-        rate: str = Form("1,79"),
-        rate_base: str = Form("am"),
-        term_months: int = Form(24),
-        principal: str = Form(""),
-        collateral_value: str = Form(""),
-        ltv_pct: str = Form(""),
-        grace_months: int = Form(0),
-        io_months: int = Form(0),
-        fee_amount: str = Form("0"),
-        monthly_insurance: str = Form("0"),
-        monthly_admin_fee: str = Form("0"),
-        borrower_name: str = Form(""),
-        notes: str = Form(""),
-        session: Session = Depends(get_session),
+    request: Request,
+    loan_type: str = Form("Empréstimo"),
+    amortization: str = Form("price"),
+    rate: str = Form("1,79"),
+    rate_base: str = Form("am"),
+    term_months: int = Form(24),
+    principal: str = Form(""),
+    collateral_value: str = Form(""),
+    ltv_pct: str = Form(""),
+    grace_months: int = Form(0),
+    io_months: int = Form(0),
+    fee_amount: str = Form("0"),
+    monthly_insurance: str = Form("0"),
+    monthly_admin_fee: str = Form("0"),
+    borrower_name: str = Form(""),
+    notes: str = Form(""),
+    session: Session = Depends(get_session),
 ) -> RedirectResponse:
     """Gera simulação e cria Proposta + Negócio no CRM (cliente selecionado)."""
     ctx = get_tenant_context(request, session)
@@ -16693,7 +16668,7 @@ async def simulador_gerar_proposta(
         f"Tipo: {sim.loan_type}",
         f"Amortização: {(sim.amortization or '').upper()}",
         f"Prazo: {sim.term_months} meses",
-        f"Taxa: {sim.rate_nominal * 100:.2f}% {('a.m.' if sim.rate_base == 'am' else 'a.a.')}",
+        f"Taxa: {sim.rate_nominal*100:.2f}% {('a.m.' if sim.rate_base=='am' else 'a.a.')}",
         "",
         "⚠️ Esta proposta é baseada em simulação e depende de análise e aprovação de crédito.",
     ]
@@ -16773,8 +16748,7 @@ async def simulador_historico(request: Request, session: Session = Depends(get_s
 
 @app.post("/simulador/{sim_id}/converter")
 @require_login
-async def simulador_converter_em_proposta(sim_id: int, request: Request,
-                                          session: Session = Depends(get_session)) -> RedirectResponse:
+async def simulador_converter_em_proposta(sim_id: int, request: Request, session: Session = Depends(get_session)) -> RedirectResponse:
     ctx = get_tenant_context(request, session)
     if not ctx:
         request.session.clear()
@@ -16799,7 +16773,7 @@ async def simulador_converter_em_proposta(sim_id: int, request: Request,
         f"Tipo: {sim.loan_type}",
         f"Amortização: {(sim.amortization or '').upper()}",
         f"Prazo: {sim.term_months} meses",
-        f"Taxa: {sim.rate_nominal * 100:.2f}% {('a.m.' if sim.rate_base == 'am' else 'a.a.')}",
+        f"Taxa: {sim.rate_nominal*100:.2f}% {('a.m.' if sim.rate_base=='am' else 'a.a.')}",
         "",
         "⚠️ Esta proposta é baseada em simulação e depende de análise e aprovação de crédito.",
     ]
@@ -16885,8 +16859,7 @@ async def admin_ui_page(request: Request, session: Session = Depends(get_session
             .order_by(UiNewsFeed.sort_order, UiNewsFeed.id)
         ).all()
     except Exception:
-        request.session["flash"] = {"kind": "danger",
-                                    "msg": "Não foi possível carregar/salvar UI (tabelas ausentes ou banco sem permissão)."}
+        request.session["flash"] = {"kind": "danger", "msg": "Não foi possível carregar/salvar UI (tabelas ausentes ou banco sem permissão)."}
         slides = []
         feeds = []
     return render("admin_ui.html", request=request, context={
@@ -16903,14 +16876,14 @@ async def admin_ui_page(request: Request, session: Session = Depends(get_session
 @app.post("/admin/ui/banner/add")
 @require_role({"admin"})
 async def admin_ui_banner_add(
-        request: Request,
-        title: str = Form(""),
-        link_path: str = Form("/"),
-        image_url: str = Form(""),
-        sort_order: int = Form(0),
-        is_active: Optional[str] = Form(None),
-        image_file: Optional[UploadFile] = File(None),
-        session: Session = Depends(get_session),
+    request: Request,
+    title: str = Form(""),
+    link_path: str = Form("/"),
+    image_url: str = Form(""),
+    sort_order: int = Form(0),
+    is_active: Optional[str] = Form(None),
+    image_file: Optional[UploadFile] = File(None),
+    session: Session = Depends(get_session),
 ):
     ctx = get_tenant_context(request, session)
     company_id = ctx.company.id
@@ -16976,12 +16949,12 @@ async def admin_ui_banner_delete(slide_id: int, request: Request, session: Sessi
 @app.post("/admin/ui/feed/add")
 @require_role({"admin"})
 async def admin_ui_feed_add(
-        request: Request,
-        name: str = Form(...),
-        url: str = Form(...),
-        sort_order: int = Form(0),
-        is_active: Optional[str] = Form(None),
-        session: Session = Depends(get_session),
+    request: Request,
+    name: str = Form(...),
+    url: str = Form(...),
+    sort_order: int = Form(0),
+    is_active: Optional[str] = Form(None),
+    session: Session = Depends(get_session),
 ):
     ctx = get_tenant_context(request, session)
     company_id = ctx.company.id
@@ -17196,7 +17169,6 @@ TEMPLATES.update({
 """,
 })
 
-
 @app.get("/admin/gestao", response_class=HTMLResponse)
 @require_role({"admin"})
 async def admin_gestao(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
@@ -17213,10 +17185,8 @@ async def admin_gestao(request: Request, session: Session = Depends(get_session)
         members = session.exec(select(Membership).order_by(Membership.created_at)).all()
     else:
         companies = [ctx.company]
-        clients = session.exec(
-            select(Client).where(Client.company_id == ctx.company.id).order_by(Client.created_at)).all()
-        members = session.exec(
-            select(Membership).where(Membership.company_id == ctx.company.id).order_by(Membership.created_at)).all()
+        clients = session.exec(select(Client).where(Client.company_id == ctx.company.id).order_by(Client.created_at)).all()
+        members = session.exec(select(Membership).where(Membership.company_id == ctx.company.id).order_by(Membership.created_at)).all()
 
     company_ids = [c.id for c in companies if c.id]
     client_ids = [c.id for c in clients if c.id]
@@ -17287,8 +17257,7 @@ def _admin_check_scope(ctx: TenantContext, session: Session, entity_type: str, e
     return "Tipo inválido."
 
 
-def _derive_company_id_for_state(session: Session, entity_type: str, entity_id: int, fallback_company_id: int) -> \
-Optional[int]:
+def _derive_company_id_for_state(session: Session, entity_type: str, entity_id: int, fallback_company_id: int) -> Optional[int]:
     if entity_type == "company":
         return int(entity_id)
     if entity_type == "client":
@@ -17298,6 +17267,7 @@ Optional[int]:
         m = session.get(Membership, entity_id)
         return m.company_id if m else fallback_company_id
     return None
+
 
 
 @app.post("/admin/gestao/clients/cleanup_leads")
@@ -17318,8 +17288,7 @@ async def admin_cleanup_orphan_leads(request: Request, session: Session = Depend
         clients = session.exec(select(Client).where(Client.company_id == company_id)).all()
         for c in clients:
             if _client_is_orphan_lead(session, company_id, c):
-                _soft_delete_client(session, company_id=company_id, client_id=c.id,
-                                    user_id=ctx.user.id)  # type: ignore[arg-type]
+                _soft_delete_client(session, company_id=company_id, client_id=c.id, user_id=ctx.user.id)  # type: ignore[arg-type]
                 deleted += 1
             scanned += 1
 
@@ -17382,22 +17351,19 @@ async def admin_merge_duplicates_by_cnpj(request: Request, session: Session = De
                 canonical.updated_at = utcnow()
                 session.add(canonical)
 
-                _soft_delete_client(session, company_id=company_id, client_id=dup.id,
-                                    user_id=ctx.user.id)  # type: ignore[arg-type]
+                _soft_delete_client(session, company_id=company_id, client_id=dup.id, user_id=ctx.user.id)  # type: ignore[arg-type]
                 removed_clients += 1
 
             merged_groups += 1
 
     session.commit()
-    set_flash(request,
-              f"Mescla por CNPJ concluída. Grupos mesclados: {merged_groups}. Clientes removidos: {removed_clients}. Referências movidas: {moved_refs}.")
+    set_flash(request, f"Mescla por CNPJ concluída. Grupos mesclados: {merged_groups}. Clientes removidos: {removed_clients}. Referências movidas: {moved_refs}.")
     return RedirectResponse("/admin/gestao", status_code=303)
 
 
 @app.post("/admin/entity/{entity_type}/{entity_id}/toggle")
 @require_role({"admin"})
-async def admin_entity_toggle(request: Request, entity_type: str, entity_id: int,
-                              session: Session = Depends(get_session)):
+async def admin_entity_toggle(request: Request, entity_type: str, entity_id: int, session: Session = Depends(get_session)):
     ctx = get_tenant_context(request, session)
     if not ctx:
         request.session.clear()
@@ -17430,8 +17396,7 @@ async def admin_entity_toggle(request: Request, entity_type: str, entity_id: int
 
 @app.post("/admin/entity/{entity_type}/{entity_id}/delete")
 @require_role({"admin"})
-async def admin_entity_delete(request: Request, entity_type: str, entity_id: int,
-                              session: Session = Depends(get_session)):
+async def admin_entity_delete(request: Request, entity_type: str, entity_id: int, session: Session = Depends(get_session)):
     ctx = get_tenant_context(request, session)
     if not ctx:
         request.session.clear()
@@ -17461,8 +17426,7 @@ async def admin_entity_delete(request: Request, entity_type: str, entity_id: int
 
 @app.post("/admin/entity/{entity_type}/{entity_id}/hard_delete")
 @require_role({"admin"})
-async def admin_entity_hard_delete(request: Request, entity_type: str, entity_id: int,
-                                   session: Session = Depends(get_session)):
+async def admin_entity_hard_delete(request: Request, entity_type: str, entity_id: int, session: Session = Depends(get_session)):
     ctx = get_tenant_context(request, session)
     if not ctx or not is_superadmin(ctx.user):
         request.session["flash"] = {"kind": "danger", "message": "Apenas superadmin."}
@@ -17481,8 +17445,7 @@ async def admin_entity_hard_delete(request: Request, entity_type: str, entity_id
                 session.delete(obj)
                 session.commit()
         else:
-            request.session["flash"] = {"kind": "warning",
-                                        "message": "Hard delete disponível apenas para company/client."}
+            request.session["flash"] = {"kind": "warning", "message": "Hard delete disponível apenas para company/client."}
             return RedirectResponse("/admin/gestao", status_code=303)
     except Exception as e:
         request.session["flash"] = {"kind": "danger", "message": f"Falha hard delete: {e}"}
