@@ -1897,6 +1897,119 @@ def _get_state(session: Session, *, entity_type: str, entity_id: int) -> Optiona
         )
     ).first()
 
+def normalize_cnpj_digits(value: str) -> str:
+    return re.sub(r"\D+", "", value or "").strip()
+
+
+def _client_is_soft_deleted(session: Session, client_id: int) -> bool:
+    st = _get_state(session, entity_type="client", entity_id=client_id)
+    return bool(st and st.is_deleted)
+
+
+def _client_is_orphan_lead(session: Session, company_id: int, client: Client) -> bool:
+    if client.company_id != company_id:
+        return False
+    if "[LEAD CRM]" not in (client.notes or ""):
+        return False
+    if not client.id:
+        return False
+    if _client_is_soft_deleted(session, client.id):
+        return False
+
+    if session.exec(select(Membership).where(Membership.company_id == company_id, Membership.client_id == client.id)).first():
+        return False
+
+    link_models = [
+        BusinessDeal,
+        BusinessDealNote,
+        Proposal,
+        ConsultingProject,
+        Task,
+        Document,
+        FinanceInvoice,
+        PendingItem,
+        Attachment,
+        ClientInvite,
+        CreditConsent,
+        CreditReport,
+        ContaAzulPersonMap,
+        ContaAzulInvoice,
+        ContaAzulReceivable,
+        Meeting,
+        EducationCourseAccess,
+        EducationLessonProgress,
+        ClientSnapshot,
+    ]
+    for model in link_models:
+        try:
+            if session.exec(select(model).where(model.company_id == company_id, model.client_id == client.id)).first():
+                return False
+        except Exception:
+            pass
+
+    return True
+
+
+def _reassign_client_fk(session: Session, company_id: int, from_client_id: int, to_client_id: int) -> int:
+    if from_client_id == to_client_id:
+        return 0
+
+    moved = 0
+    models = [
+        Membership,
+        ClientSnapshot,
+        CreditConsent,
+        CreditReport,
+        ConsultingProject,
+        Task,
+        Document,
+        Proposal,
+        BusinessDeal,
+        BusinessDealNote,
+        FinanceInvoice,
+        PendingItem,
+        Attachment,
+        ClientInvite,
+        ContaAzulPersonMap,
+        ContaAzulInvoice,
+        ContaAzulReceivable,
+        Meeting,
+        EducationCourseAccess,
+        EducationLessonProgress,
+    ]
+
+    for model in models:
+        try:
+            rows = session.exec(select(model).where(model.company_id == company_id, model.client_id == from_client_id)).all()
+        except Exception:
+            continue
+        for r in rows:
+            r.client_id = to_client_id
+            session.add(r)
+            moved += 1
+    return moved
+
+
+def _soft_delete_client(session: Session, *, company_id: int, client_id: int, user_id: int) -> None:
+    st = _get_state(session, entity_type="client", entity_id=client_id)
+    if st is None:
+        st = AdminEntityState(
+            entity_type="client",
+            entity_id=client_id,
+            company_id=company_id,
+            is_active=False,
+            is_deleted=True,
+            deleted_at=utcnow(),
+            updated_by_user_id=user_id,
+        )
+    else:
+        st.is_active = False
+        st.is_deleted = True
+        st.deleted_at = utcnow()
+        st.updated_by_user_id = user_id
+        st.updated_at = utcnow()
+    session.add(st)
+
 
 def entity_is_allowed(session: Session, *, entity_type: str, entity_id: int) -> bool:
     """Missing row => allowed."""
@@ -16663,6 +16776,25 @@ TEMPLATES.update({
     </div>
 
     <div class="tab-pane fade" id="tab-clients" role="tabpanel">
+
+  <div class="card p-3 mt-3">
+    <div class="d-flex flex-wrap gap-2 align-items-center justify-content-between">
+      <div>
+        <div class="fw-bold">Limpeza de Clientes (seguro)</div>
+        <div class="text-muted" style="font-size:.9rem;">
+          Remove apenas <b>leads órfãos</b> (CRM rápido) e mescla duplicados por <b>CNPJ</b> via soft delete.
+        </div>
+      </div>
+      <div class="d-flex gap-2 flex-wrap">
+        <form method="post" action="/admin/gestao/clients/cleanup_leads" onsubmit="return confirm('Excluir (soft delete) leads órfãos do CRM rápido?');">
+          <button class="btn btn-sm btn-outline-danger" type="submit">Excluir leads órfãos</button>
+        </form>
+        <form method="post" action="/admin/gestao/clients/merge_by_cnpj" onsubmit="return confirm('Mesclar duplicados por CNPJ? Isso move referências e faz soft delete dos duplicados.');">
+          <button class="btn btn-sm btn-outline-primary" type="submit">Mesclar duplicados por CNPJ</button>
+        </form>
+      </div>
+    </div>
+  </div>
       <div class="table-responsive">
         <table class="table table-sm align-middle">
           <thead><tr><th>ID</th><th>Empresa</th><th>Nome</th><th>CNPJ</th><th>Email</th><th>Status</th><th style="width: 240px;">Ações</th></tr></thead>
@@ -16840,6 +16972,98 @@ def _derive_company_id_for_state(session: Session, entity_type: str, entity_id: 
         m = session.get(Membership, entity_id)
         return m.company_id if m else fallback_company_id
     return None
+
+
+
+@app.post("/admin/gestao/clients/cleanup_leads")
+@require_role({"admin"})
+async def admin_cleanup_orphan_leads(request: Request, session: Session = Depends(get_session)) -> RedirectResponse:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+
+    superadmin = is_superadmin(ctx.user)
+    company_ids = [c.id for c in session.exec(select(Company)).all() if c.id] if superadmin else [ctx.company.id]
+
+    deleted = 0
+    scanned = 0
+
+    for company_id in company_ids:
+        clients = session.exec(select(Client).where(Client.company_id == company_id)).all()
+        for c in clients:
+            if _client_is_orphan_lead(session, company_id, c):
+                _soft_delete_client(session, company_id=company_id, client_id=c.id, user_id=ctx.user.id)  # type: ignore[arg-type]
+                deleted += 1
+            scanned += 1
+
+    session.commit()
+    set_flash(request, f"Leads órfãos analisados: {scanned}. Leads removidos (soft delete): {deleted}.")
+    return RedirectResponse("/admin/gestao", status_code=303)
+
+
+@app.post("/admin/gestao/clients/merge_by_cnpj")
+@require_role({"admin"})
+async def admin_merge_duplicates_by_cnpj(request: Request, session: Session = Depends(get_session)) -> RedirectResponse:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+
+    superadmin = is_superadmin(ctx.user)
+    company_ids = [c.id for c in session.exec(select(Company)).all() if c.id] if superadmin else [ctx.company.id]
+
+    merged_groups = 0
+    removed_clients = 0
+    moved_refs = 0
+
+    for company_id in company_ids:
+        clients = session.exec(select(Client).where(Client.company_id == company_id)).all()
+        buckets: dict[str, list[Client]] = {}
+        for c in clients:
+            if not c.id:
+                continue
+            if _client_is_soft_deleted(session, c.id):
+                continue
+            cnpj = normalize_cnpj_digits(c.cnpj)
+            if not cnpj:
+                continue
+            buckets.setdefault(cnpj, []).append(c)
+
+        for cnpj, group in buckets.items():
+            if len(group) <= 1:
+                continue
+            group_sorted = sorted(group, key=lambda x: (x.created_at, x.id or 0))
+            canonical = group_sorted[0]
+            for dup in group_sorted[1:]:
+                moved_refs += _reassign_client_fk(session, company_id, dup.id, canonical.id)  # type: ignore[arg-type]
+
+                if not canonical.email and dup.email:
+                    canonical.email = dup.email
+                if not canonical.phone and dup.phone:
+                    canonical.phone = dup.phone
+                if not canonical.address and dup.address:
+                    canonical.address = dup.address
+                if not canonical.city and dup.city:
+                    canonical.city = dup.city
+                if not canonical.state and dup.state:
+                    canonical.state = dup.state
+                if not canonical.zip_code and dup.zip_code:
+                    canonical.zip_code = dup.zip_code
+                if dup.notes and dup.notes not in (canonical.notes or ""):
+                    canonical.notes = ((canonical.notes or "") + "\n" + dup.notes).strip()
+
+                canonical.updated_at = utcnow()
+                session.add(canonical)
+
+                _soft_delete_client(session, company_id=company_id, client_id=dup.id, user_id=ctx.user.id)  # type: ignore[arg-type]
+                removed_clients += 1
+
+            merged_groups += 1
+
+    session.commit()
+    set_flash(request, f"Mescla por CNPJ concluída. Grupos mesclados: {merged_groups}. Clientes removidos: {removed_clients}. Referências movidas: {moved_refs}.")
+    return RedirectResponse("/admin/gestao", status_code=303)
 
 
 @app.post("/admin/entity/{entity_type}/{entity_id}/toggle")
