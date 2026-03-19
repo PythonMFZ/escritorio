@@ -26,7 +26,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 from jinja2 import Environment
 from jinja2.loaders import DictLoader
 from passlib.context import CryptContext
-from sqlalchemy import UniqueConstraint
+from sqlalchemy import UniqueConstraint, func
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Field, Session, SQLModel, create_engine, select
 from starlette.middleware.sessions import SessionMiddleware
@@ -529,6 +529,34 @@ class AdminEntityState(SQLModel, table=True):
     updated_at: datetime = Field(default_factory=utcnow, index=True)
     updated_by_user_id: Optional[int] = Field(default=None, index=True)
     deleted_at: Optional[datetime] = Field(default=None, index=True)
+
+class MembershipFeatureAccess(SQLModel, table=True):
+    """Per-member feature visibility/access controls (JSON list of feature keys).
+
+    Missing row or empty list => defaults by role.
+    """
+    __table_args__ = (UniqueConstraint("company_id", "membership_id", name="uq_member_feature_access"),)
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    company_id: int = Field(index=True)
+    membership_id: int = Field(index=True)
+    features_json: str = Field(default="")
+    updated_at: datetime = Field(default_factory=utcnow, index=True)
+
+
+class ClientFeatureAccess(SQLModel, table=True):
+    """Per-client feature visibility/access controls (JSON list of feature keys).
+
+    Applied only to role=cliente (and to memberships linked to this client).
+    Missing row or empty list => defaults for client role.
+    """
+    __table_args__ = (UniqueConstraint("company_id", "client_id", name="uq_client_feature_access"),)
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    company_id: int = Field(index=True)
+    client_id: int = Field(index=True)
+    features_json: str = Field(default="")
+    updated_at: datetime = Field(default_factory=utcnow, index=True)
 
 
 class OnboardingDiagnostic(SQLModel, table=True):
@@ -1960,6 +1988,146 @@ def require_role(allowed: set[str]) -> Callable[[Callable[..., Any]], Callable[.
     return decorator
 
 
+FEATURE_KEYS: dict[str, dict[str, str]] = {
+    "ui": {"title": "UI", "desc": "Banner e notícias (admin).", "href": "/admin/ui"},
+    "gestao": {"title": "Gestão", "desc": "Ativar/inativar/excluir clientes/membros.", "href": "/admin/gestao"},
+    "crm": {"title": "CRM", "desc": "Negócios e funil comercial.", "href": "/negocios"},
+    "credito": {"title": "Crédito", "desc": "SCR (Direct Data).", "href": "/credito"},
+    "empresa": {"title": "Empresa", "desc": "Dados completos do cliente.", "href": "/empresa"},
+    "perfil": {"title": "Perfil", "desc": "Indicadores do cliente.", "href": "/perfil"},
+    "financeiro": {"title": "Financeiro", "desc": "Notas/boletos de honorários.", "href": "/financeiro"},
+    "documentos": {"title": "Documentos", "desc": "Contratos e docs importantes.", "href": "/documentos"},
+    "consultoria": {"title": "Consultoria", "desc": "Projetos, etapas e progresso.", "href": "/consultoria"},
+    "reunioes": {"title": "Reuniões", "desc": "Atas e notas (Notion).", "href": "/reunioes"},
+    "tarefas": {"title": "Tarefas", "desc": "Kanban e prazos.", "href": "/tarefas"},
+    "simulador": {"title": "Simulador", "desc": "Simulação de empréstimos (PDF).", "href": "/simulador"},
+    "propostas": {"title": "Propostas", "desc": "Propostas e solicitações.", "href": "/propostas"},
+    "pendencias": {"title": "Pendências", "desc": "Checklist / pedidos de documentos.", "href": "/pendencias"},
+    "agenda": {"title": "Agenda", "desc": "Agendamentos (Bookings).", "href": "/agenda"},
+    "educacao": {"title": "Educação", "desc": "Cursos e materiais.", "href": "/educacao"},
+}
+
+FEATURE_GROUPS: list[dict[str, Any]] = [
+    {"key": "admin", "title": "Admin", "features": ["ui", "gestao", "credito", "crm"]},
+    {"key": "minha_empresa", "title": "Minha Empresa", "features": ["empresa", "perfil", "financeiro", "documentos"]},
+    {"key": "meu_projeto", "title": "Meu Projeto", "features": ["consultoria", "reunioes", "tarefas"]},
+    {"key": "minhas_propostas", "title": "Minhas Propostas", "features": ["simulador", "propostas"]},
+]
+
+FEATURE_STANDALONE: list[str] = ["pendencias", "agenda", "educacao"]
+
+FEATURE_VISIBLE_ROLES: dict[str, set[str]] = {
+    "ui": {"admin"},
+    "gestao": {"admin"},
+    "crm": {"admin", "equipe"},
+}
+
+ROLE_DEFAULT_FEATURES: dict[str, set[str]] = {
+    "admin": set(FEATURE_KEYS.keys()),
+    "equipe": set(FEATURE_KEYS.keys()),
+    "cliente": set(FEATURE_KEYS.keys()) - {"ui", "gestao", "crm"},
+}
+
+
+def ensure_feature_access_tables() -> None:
+    try:
+        SQLModel.metadata.create_all(
+            engine,
+            tables=[MembershipFeatureAccess.__table__, ClientFeatureAccess.__table__],
+            checkfirst=True,
+        )
+    except Exception:
+        pass
+
+
+def _parse_json_list(raw: str) -> list[str]:
+    raw = (raw or "").strip()
+    if not raw:
+        return []
+    try:
+        v = json.loads(raw)
+        if isinstance(v, list):
+            return [str(x) for x in v]
+    except Exception:
+        pass
+    return []
+
+
+def get_membership_allowed_features(session: Session, *, company_id: int, membership: Membership) -> set[str]:
+    base = set(ROLE_DEFAULT_FEATURES.get(membership.role, set()))
+    if not membership.id:
+        return base
+
+    row = session.exec(
+        select(MembershipFeatureAccess).where(
+            MembershipFeatureAccess.company_id == company_id,
+            MembershipFeatureAccess.membership_id == membership.id,
+        )
+    ).first()
+    if row:
+        lst = _parse_json_list(row.features_json)
+        if lst:
+            return set(lst)
+    return base
+
+
+def get_client_allowed_features(session: Session, *, company_id: int, client_id: int) -> Optional[set[str]]:
+    row = session.exec(
+        select(ClientFeatureAccess).where(
+            ClientFeatureAccess.company_id == company_id,
+            ClientFeatureAccess.client_id == client_id,
+        )
+    ).first()
+    if not row:
+        return None
+    lst = _parse_json_list(row.features_json)
+    return set(lst) if lst else None
+
+
+def effective_allowed_features(session: Session, *, ctx: TenantContext, current_client: Optional[Client]) -> set[str]:
+    allowed = get_membership_allowed_features(session, company_id=ctx.company.id, membership=ctx.membership)
+
+    if ctx.membership.role == "cliente" and current_client and current_client.id:
+        client_allowed = get_client_allowed_features(session, company_id=ctx.company.id, client_id=current_client.id)
+        if client_allowed is not None:
+            allowed = allowed.intersection(client_allowed)
+
+    return {k for k in allowed if k in FEATURE_KEYS}
+
+
+def resolve_feature_key(path: str) -> Optional[str]:
+    if path.startswith("/static/") or path.startswith("/login") or path.startswith("/logout"):
+        return None
+    if path.startswith("/api/"):
+        return None
+    if path in {"/", "/health"}:
+        return None
+
+    mapping = [
+        ("/admin/ui", "ui"),
+        ("/admin/gestao", "gestao"),
+        ("/admin/members", "gestao"),
+        ("/admin/clients", "gestao"),
+        ("/negocios", "crm"),
+        ("/credito", "credito"),
+        ("/empresa", "empresa"),
+        ("/perfil", "perfil"),
+        ("/financeiro", "financeiro"),
+        ("/documentos", "documentos"),
+        ("/consultoria", "consultoria"),
+        ("/reunioes", "reunioes"),
+        ("/tarefas", "tarefas"),
+        ("/simulador", "simulador"),
+        ("/propostas", "propostas"),
+        ("/pendencias", "pendencias"),
+        ("/agenda", "agenda"),
+        ("/educacao", "educacao"),
+    ]
+    for prefix, key in mapping:
+        if path == prefix or path.startswith(prefix + "/"):
+            return key
+    return None
+
 def _is_staff(role: str) -> bool:
     return role in {"admin", "equipe"}
 
@@ -2632,7 +2800,54 @@ a:hover{ color:#00BFBF; }
     </div>
   </div>
 
-  {% for item in items %}
+  {% if tabs %}
+  <div class="col-12">
+    <ul class="nav nav-pills gap-2" id="dashTabs" role="tablist">
+      {% for t in tabs %}
+        <li class="nav-item" role="presentation">
+          <button class="nav-link {% if loop.first %}active{% endif %}" id="tab-{{ t.key }}" data-bs-toggle="pill"
+                  data-bs-target="#pane-{{ t.key }}" type="button" role="tab">
+            {{ t.title }}
+          </button>
+        </li>
+      {% endfor %}
+    </ul>
+
+    <div class="tab-content mt-3">
+      {% for t in tabs %}
+        <div class="tab-pane fade {% if loop.first %}show active{% endif %}" id="pane-{{ t.key }}" role="tabpanel">
+          <div class="row g-3">
+            {% for item in t.items %}
+              <div class="col-md-6 col-lg-4">
+                <a href="{{ item.href }}">
+                  <div class="card p-4 h-100">
+                    <div class="d-flex justify-content-between align-items-start">
+                      <div>
+                        <div class="fw-semibold">{{ item.title }}</div>
+                        <div class="muted small mt-1">{{ item.desc }}</div>
+                      </div>
+                      <span class="badge text-bg-light border">→</span>
+                    </div>
+                  </div>
+                </a>
+              </div>
+            {% endfor %}
+          </div>
+        </div>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+
+  {% if standalone %}
+  <div class="col-12 mt-2">
+    <div class="d-flex align-items-center justify-content-between">
+      <div class="fw-semibold">Acesso rápido</div>
+      <div class="muted small">Pendências / Agenda / Educação</div>
+    </div>
+  </div>
+
+  {% for item in standalone %}
     <div class="col-md-6 col-lg-4">
       <a href="{{ item.href }}">
         <div class="card p-4 h-100">
@@ -2647,7 +2862,27 @@ a:hover{ color:#00BFBF; }
       </a>
     </div>
   {% endfor %}
+  {% endif %}
 </div>
+
+<script>
+(function(){
+  const tabs = document.getElementById("dashTabs");
+  if (!tabs) return;
+
+  const key = "dash_active_tab";
+  const saved = localStorage.getItem(key);
+  if (saved) {
+    const btn = document.getElementById("tab-" + saved);
+    if (btn) btn.click();
+  }
+  tabs.addEventListener("click", (e) => {
+    const btn = e.target.closest("button[id^='tab-']");
+    if (!btn) return;
+    localStorage.setItem(key, btn.id.replace("tab-",""));
+  });
+})();
+</script>
 {% endblock %}
 """,
     "client_switch.html": r"""
@@ -2751,7 +2986,7 @@ a:hover{ color:#00BFBF; }
   <div class="d-flex justify-content-between align-items-center">
     <div>
       <h4 class="mb-0">Membros</h4>
-      <div class="muted">Crie equipe e clientes (cada cliente vincula um “Client”).</div>
+      <div class="muted">Crie equipe e clientes. Vários membros podem estar vinculados ao mesmo cliente.</div>
     </div>
     <a class="btn btn-outline-secondary" href="/">Voltar</a>
   </div>
@@ -2764,13 +2999,73 @@ a:hover{ color:#00BFBF; }
       <div class="list-group">
         {% for row in rows %}
           <div class="list-group-item">
-            <div class="d-flex justify-content-between">
-              <div class="fw-semibold">{{ row.user.name }} <span class="muted">({{ row.user.email }})</span></div>
-              <span class="badge text-bg-light border">{{ row.membership.role }}</span>
+            <div class="d-flex justify-content-between align-items-start gap-3">
+              <div style="min-width: 0;">
+                <div class="fw-semibold">{{ row.user.name }} <span class="muted">({{ row.user.email }})</span></div>
+                <div class="muted small mt-1">
+                  Role: <b>{{ row.membership.role }}</b>
+                  {% if row.membership.role == "cliente" %}
+                    · Cliente: <b>{{ row.client_name or "—" }}</b>
+                  {% endif %}
+                  · Status: {% if row.is_active %}<span class="badge text-bg-success">ativo</span>{% else %}<span class="badge text-bg-secondary">inativo</span>{% endif %}
+                </div>
+              </div>
+
+              <div class="text-end">
+                {% if row.membership.role == "cliente" %}
+                <form class="d-inline" method="post" action="/admin/members/{{ row.membership.id }}/link-client">
+                  <select class="form-select form-select-sm" name="client_id" style="min-width: 220px;">
+                    <option value="">(sem cliente)</option>
+                    {% for c in clients %}
+                      <option value="{{ c.id }}" {% if row.membership.client_id==c.id %}selected{% endif %}>{{ c.name }}</option>
+                    {% endfor %}
+                  </select>
+                  <button class="btn btn-sm btn-outline-primary mt-2 w-100">Vincular</button>
+                </form>
+                {% endif %}
+              </div>
             </div>
-            {% if row.membership.role == "cliente" %}
-              <div class="muted small mt-1">Cliente vinculado: {{ row.client_name or "—" }}</div>
-            {% endif %}
+
+            <details class="mt-3">
+              <summary class="muted small">Permissões (abas)</summary>
+              <form method="post" action="/admin/members/{{ row.membership.id }}/features" class="mt-2">
+                <div class="row g-2">
+                  {% for g in feature_groups %}
+                    <div class="col-12">
+                      <div class="fw-semibold small">{{ g.title }}</div>
+                      <div class="d-flex flex-wrap gap-2 mt-1">
+                        {% for fk in g.features %}
+                          {% set f = feature_keys[fk] %}
+                          <label class="form-check form-check-inline">
+                            <input class="form-check-input" type="checkbox" name="features" value="{{ fk }}"
+                              {% if fk in row.allowed_features %}checked{% endif %}>
+                            <span class="form-check-label">{{ f.title }}</span>
+                          </label>
+                        {% endfor %}
+                      </div>
+                    </div>
+                  {% endfor %}
+
+                  <div class="col-12 mt-2">
+                    <div class="fw-semibold small">Acesso rápido</div>
+                    <div class="d-flex flex-wrap gap-2 mt-1">
+                      {% for fk in feature_standalone %}
+                        {% set f = feature_keys[fk] %}
+                        <label class="form-check form-check-inline">
+                          <input class="form-check-input" type="checkbox" name="features" value="{{ fk }}"
+                            {% if fk in row.allowed_features %}checked{% endif %}>
+                          <span class="form-check-label">{{ f.title }}</span>
+                        </label>
+                      {% endfor %}
+                    </div>
+                  </div>
+
+                  <div class="col-12 mt-2">
+                    <button class="btn btn-sm btn-primary">Salvar permissões</button>
+                  </div>
+                </div>
+              </form>
+            </details>
           </div>
         {% endfor %}
       </div>
@@ -2799,10 +3094,23 @@ a:hover{ color:#00BFBF; }
             <option value="admin">admin</option>
           </select>
         </div>
+
+        <div class="mb-2">
+          <label class="form-label">Vincular ao cliente (opcional)</label>
+          <select class="form-select" name="client_id">
+            <option value="">(não vincular)</option>
+            {% for c in clients %}
+              <option value="{{ c.id }}">{{ c.name }}</option>
+            {% endfor %}
+          </select>
+          <div class="form-text">Útil para ter múltiplos usuários do mesmo cliente.</div>
+        </div>
+
         <div class="mb-3">
-          <label class="form-label">Nome do cliente (empresa atendida) — se role=cliente</label>
+          <label class="form-label">Criar novo cliente (se não selecionou acima)</label>
           <input class="form-control" name="client_name" placeholder="Ex: ACME LTDA" />
         </div>
+
         <button class="btn btn-primary w-100">Adicionar</button>
       </form>
     </div>
@@ -6513,11 +6821,66 @@ STATIC_DIR.mkdir(parents=True, exist_ok=True)
 
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
+@app.middleware("http")
+async def feature_access_middleware(request: Request, call_next: Callable[..., Any]) -> Response:
+    key = resolve_feature_key(request.url.path)
+    if key is None:
+        return await call_next(request)
+
+    if session_user_id(request) is None:
+        return await call_next(request)
+
+    session = Session(engine)
+    try:
+        ctx = get_tenant_context(request, session)
+        if not ctx:
+            return await call_next(request)
+
+        active_client_id = get_active_client_id(request, session, ctx)
+        current_client = get_client_or_none(session, ctx.company.id, active_client_id)
+
+        allowed = effective_allowed_features(session, ctx=ctx, current_client=current_client)
+
+        roles = FEATURE_VISIBLE_ROLES.get(key)
+        if roles and ctx.membership.role not in roles:
+            return render(
+                "error.html",
+                request=request,
+                context={
+                    "current_user": ctx.user,
+                    "current_company": ctx.company,
+                    "role": ctx.membership.role,
+                    "current_client": current_client,
+                    "message": "Você não tem permissão para acessar esta área.",
+                },
+                status_code=403,
+            )
+
+        if key not in allowed:
+            return render(
+                "error.html",
+                request=request,
+                context={
+                    "current_user": ctx.user,
+                    "current_company": ctx.company,
+                    "role": ctx.membership.role,
+                    "current_client": current_client,
+                    "message": "Acesso não habilitado para este usuário/cliente.",
+                },
+                status_code=403,
+            )
+
+        return await call_next(request)
+    finally:
+        session.close()
+
+
 
 @app.on_event("startup")
 def _startup() -> None:
     init_db()
     ensure_ui_tables()
+    ensure_feature_access_tables()
     ensure_credit_consent_table()
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -7281,24 +7644,28 @@ async def dashboard(request: Request, session: Session = Depends(get_session)) -
     active_client_id = get_active_client_id(request, session, ctx)
     current_client = get_client_or_none(session, ctx.company.id, active_client_id)
 
-    items = [
-        {"title": "Pendências", "desc": "Checklist / pedidos de documentos.", "href": "/pendencias"},
-        {"title": "Documentos", "desc": "Contratos e docs importantes.", "href": "/documentos"},
-        {"title": "Propostas", "desc": "Propostas e solicitações.", "href": "/propostas"},
-        {"title": "CRM", "desc": "Negócios e funil comercial.", "href": "/negocios"},
-        {"title": "Crédito", "desc": "SCR (Direct Data).", "href": "/credito"},
-        {"title": "Simulador", "desc": "Simulação de empréstimos (PDF).", "href": "/simulador"},
-        {"title": "UI", "desc": "Banner e notícias (admin).", "href": "/admin/ui"},
-        {"title": "Gestão", "desc": "Ativar/inativar/excluir clientes/membros.", "href": "/admin/gestao"},
-        {"title": "Financeiro", "desc": "Notas/boletos de honorários.", "href": "/financeiro"},
-        {"title": "Empresa", "desc": "Dados completos do cliente.", "href": "/empresa"},
-        {"title": "Perfil", "desc": "Indicadores do cliente.", "href": "/perfil"},
-        {"title": "Consultoria", "desc": "Projetos, etapas e progresso.", "href": "/consultoria"},
-        {"title": "Tarefas", "desc": "Kanban e prazos.", "href": "/tarefas"},
-        {"title": "Reuniões", "desc": "Atas e notas (Notion).", "href": "/reunioes"},
-        {"title": "Educação", "desc": "Cursos e materiais.", "href": "/educacao"},
-        {"title": "Agenda", "desc": "Agendamentos (Bookings).", "href": "/agenda"},
-    ]
+    allowed = effective_allowed_features(session, ctx=ctx, current_client=current_client)
+
+    def _is_visible(feature_key: str) -> bool:
+        roles = FEATURE_VISIBLE_ROLES.get(feature_key)
+        if roles and ctx.membership.role not in roles:
+            return False
+        return feature_key in allowed
+
+    tabs = []
+    for g in FEATURE_GROUPS:
+        feats = [fk for fk in g["features"] if _is_visible(fk)]
+        if not feats:
+            continue
+        tabs.append(
+            {
+                "key": g["key"],
+                "title": g["title"],
+                "items": [dict(FEATURE_KEYS[fk], key=fk) for fk in feats],
+            }
+        )
+
+    standalone = [dict(FEATURE_KEYS[fk], key=fk) for fk in FEATURE_STANDALONE if _is_visible(fk)]
 
     return render(
         "dashboard.html",
@@ -7308,7 +7675,8 @@ async def dashboard(request: Request, session: Session = Depends(get_session)) -
             "current_company": ctx.company,
             "role": ctx.membership.role,
             "current_client": current_client,
-            "items": items,
+            "tabs": tabs,
+            "standalone": standalone,
         },
     )
 
@@ -7787,6 +8155,14 @@ async def members_page(request: Request, session: Session = Depends(get_session)
 
     rows.sort(key=lambda x: (x["membership"].role, x["user"].name.lower()))
 
+
+    clients = session.exec(select(Client).where(Client.company_id == ctx.company.id).order_by(Client.created_at)).all()
+
+    for row in rows:
+        m = row["membership"]
+        row["is_active"] = entity_is_allowed(session, entity_type="membership", entity_id=m.id) if m.id else True
+        row["allowed_features"] = sorted(get_membership_allowed_features(session, company_id=ctx.company.id, membership=m))
+
     active_client_id = get_active_client_id(request, session, ctx)
     current_client = get_client_or_none(session, ctx.company.id, active_client_id)
 
@@ -7799,6 +8175,11 @@ async def members_page(request: Request, session: Session = Depends(get_session)
             "role": ctx.membership.role,
             "current_client": current_client,
             "rows": rows,
+            "clients": clients,
+            "feature_groups": FEATURE_GROUPS,
+            "feature_standalone": FEATURE_STANDALONE,
+            "feature_keys": FEATURE_KEYS,
+
         },
     )
 
@@ -7812,6 +8193,7 @@ async def members_add_action(
         email: str = Form(...),
         password: str = Form(...),
         role: str = Form(...),
+        client_id: str = Form(""),
         client_name: str = Form(""),
 ) -> Response:
     ctx = get_tenant_context(request, session)
@@ -7848,14 +8230,30 @@ async def members_add_action(
     membership = Membership(user_id=user.id, company_id=ctx.company.id, role=role)
 
     if role == "cliente":
-        cn = client_name.strip()
-        if cn:
-            client = Client(company_id=ctx.company.id, name=cn)
-            session.add(client)
-            session.commit()
-            session.refresh(client)
-            membership.client_id = client.id
-            request.session["selected_client_id"] = client.id
+        cid = _safe_int(client_id)
+        if cid:
+            c = session.get(Client, cid)
+            if not c or c.company_id != ctx.company.id:
+                set_flash(request, "Cliente inválido.")
+                return RedirectResponse("/admin/members", status_code=303)
+            membership.client_id = c.id
+            request.session["selected_client_id"] = c.id
+        else:
+            cn = client_name.strip()
+            if cn:
+                existing = session.exec(
+                    select(Client).where(Client.company_id == ctx.company.id, func.lower(Client.name) == cn.lower())
+                ).first()
+                if existing:
+                    membership.client_id = existing.id
+                    request.session["selected_client_id"] = existing.id
+                else:
+                    client = Client(company_id=ctx.company.id, name=cn)
+                    session.add(client)
+                    session.commit()
+                    session.refresh(client)
+                    membership.client_id = client.id
+                    request.session["selected_client_id"] = client.id
 
     session.add(membership)
     try:
@@ -7868,6 +8266,174 @@ async def members_add_action(
     set_flash(request, f"Membro adicionado: {email_norm} ({role}).")
     return RedirectResponse("/admin/members", status_code=303)
 
+
+@app.post("/admin/members/{membership_id}/features")
+@require_role({"admin", "equipe"})
+async def member_features_update(
+    request: Request,
+    membership_id: int,
+    session: Session = Depends(get_session),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    m = session.get(Membership, membership_id)
+    if not m or m.company_id != ctx.company.id:
+        set_flash(request, "Membro não encontrado.")
+        return RedirectResponse("/admin/members", status_code=303)
+
+    form = await request.form()
+    features = [str(x) for x in form.getlist("features") if str(x) in FEATURE_KEYS]
+
+    row = session.exec(
+        select(MembershipFeatureAccess).where(
+            MembershipFeatureAccess.company_id == ctx.company.id,
+            MembershipFeatureAccess.membership_id == membership_id,
+        )
+    ).first()
+    if not row:
+        row = MembershipFeatureAccess(company_id=ctx.company.id, membership_id=membership_id)
+
+    row.features_json = json.dumps(sorted(set(features)))
+    row.updated_at = utcnow()
+    session.add(row)
+    session.commit()
+
+    set_flash(request, "Permissões atualizadas.")
+    return RedirectResponse("/admin/members", status_code=303)
+
+
+@app.post("/admin/members/{membership_id}/link-client")
+@require_role({"admin", "equipe"})
+async def member_link_client(
+    request: Request,
+    membership_id: int,
+    session: Session = Depends(get_session),
+    client_id: str = Form(""),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    m = session.get(Membership, membership_id)
+    if not m or m.company_id != ctx.company.id:
+        set_flash(request, "Membro não encontrado.")
+        return RedirectResponse("/admin/members", status_code=303)
+
+    if m.role != "cliente":
+        set_flash(request, "Apenas membros role=cliente podem ser vinculados a um cliente.")
+        return RedirectResponse("/admin/members", status_code=303)
+
+    cid = _safe_int(client_id)
+    if cid:
+        c = session.get(Client, cid)
+        if not c or c.company_id != ctx.company.id:
+            set_flash(request, "Cliente inválido.")
+            return RedirectResponse("/admin/members", status_code=303)
+        m.client_id = c.id
+        request.session["selected_client_id"] = c.id
+    else:
+        m.client_id = None
+
+    session.add(m)
+    session.commit()
+    set_flash(request, "Vínculo atualizado.")
+    return RedirectResponse("/admin/members", status_code=303)
+
+
+@app.get("/admin/clients/{client_id}/access", response_class=HTMLResponse)
+@require_role({"admin", "equipe"})
+async def client_access_page(
+    request: Request,
+    client_id: int,
+    session: Session = Depends(get_session),
+) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    c = session.get(Client, client_id)
+    if not c or c.company_id != ctx.company.id:
+        return render(
+            "error.html",
+            request=request,
+            context={
+                "current_user": ctx.user,
+                "current_company": ctx.company,
+                "role": ctx.membership.role,
+                "current_client": None,
+                "message": "Cliente não encontrado.",
+            },
+            status_code=404,
+        )
+
+    row = session.exec(
+        select(ClientFeatureAccess).where(
+            ClientFeatureAccess.company_id == ctx.company.id,
+            ClientFeatureAccess.client_id == client_id,
+        )
+    ).first()
+    allowed = set(_parse_json_list(row.features_json)) if row else ROLE_DEFAULT_FEATURES["cliente"]
+
+    mems = session.exec(
+        select(Membership).where(Membership.company_id == ctx.company.id, Membership.client_id == client_id)
+    ).all()
+    users = []
+    for m in mems:
+        u = session.get(User, m.user_id)
+        if u:
+            users.append({"user": u, "membership": m})
+
+    return render(
+        "client_access.html",
+        request=request,
+        context={
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "role": ctx.membership.role,
+            "current_client": c,
+            "client": c,
+            "allowed": sorted(allowed),
+            "feature_groups": FEATURE_GROUPS,
+            "feature_standalone": FEATURE_STANDALONE,
+            "feature_keys": FEATURE_KEYS,
+            "linked_users": users,
+        },
+    )
+
+
+@app.post("/admin/clients/{client_id}/access")
+@require_role({"admin", "equipe"})
+async def client_access_save(
+    request: Request,
+    client_id: int,
+    session: Session = Depends(get_session),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    c = session.get(Client, client_id)
+    if not c or c.company_id != ctx.company.id:
+        set_flash(request, "Cliente não encontrado.")
+        return RedirectResponse("/admin/gestao", status_code=303)
+
+    form = await request.form()
+    features = [str(x) for x in form.getlist("features") if str(x) in FEATURE_KEYS]
+
+    row = session.exec(
+        select(ClientFeatureAccess).where(
+            ClientFeatureAccess.company_id == ctx.company.id,
+            ClientFeatureAccess.client_id == client_id,
+        )
+    ).first()
+    if not row:
+        row = ClientFeatureAccess(company_id=ctx.company.id, client_id=client_id)
+
+    row.features_json = json.dumps(sorted(set(features)))
+    row.updated_at = utcnow()
+    session.add(row)
+    session.commit()
+
+    set_flash(request, "Permissões do cliente atualizadas.")
+    return RedirectResponse(f"/admin/clients/{client_id}/access", status_code=303)
 
 # ----------------------------
 # Empresa / Perfil
