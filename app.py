@@ -16158,10 +16158,34 @@ SIMULADOR_TEMPLATE = r"""
   <h3 class="mt-3">Simulador de Empréstimo</h3>
   <form method="post" action="/simulador/pdf" class="card p-3 mt-3">
     <div class="row g-2">
+      {% if role in ["admin","equipe"] %}
+      <div class="col-md-6">
+        <label class="form-label">Cliente selecionado</label>
+        <input class="form-control" value="{{ current_client.name if current_client else '' }}" readonly>
+        <div class="form-text">{% if not current_client %}Selecione um cliente no topo antes de gerar proposta.{% else %}A simulação/proposta será vinculada a este cliente.{% endif %}</div>
+        <input type="hidden" name="client_id" value="{{ current_client.id if current_client else '' }}">
+      </div>
+      <div class="col-md-6">
+        <label class="form-label">Cliente (nome no PDF)</label>
+        <input class="form-control" name="borrower_name" value="{{ current_client.name if current_client else '' }}" placeholder="Nome do cliente">
+      </div>
+{% else %}
       <div class="col-md-6">
         <label class="form-label">Cliente (nome)</label>
         <input class="form-control" name="borrower_name" placeholder="Nome do cliente">
+        <input type="hidden" name="client_id" value="">
       </div>
+      <div class="col-md-6">
+        <label class="form-label">Tipo de empréstimo</label>
+        <input class="form-control" name="loan_type" placeholder="Ex.: Crédito com garantia, Consignado, Capital de giro">
+      </div>
+{% endif %}
+{% if role in ["admin","equipe"] %}
+      <div class="col-md-6">
+        <label class="form-label">Tipo de empréstimo</label>
+        <input class="form-control" name="loan_type" placeholder="Ex.: Crédito com garantia, Consignado, Capital de giro">
+      </div>
+{% endif %}
       <div class="col-md-6">
         <label class="form-label">Tipo de empréstimo</label>
         <input class="form-control" name="loan_type" placeholder="Ex.: Crédito com garantia, Consignado, Capital de giro">
@@ -16259,12 +16283,28 @@ SIMULADOR_TEMPLATE = r"""
 
 @app.get("/simulador", response_class=HTMLResponse)
 @require_login
-async def simulador_page(request: Request) -> HTMLResponse:
+async def simulador_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+
     if "simulador.html" not in TEMPLATES:
         TEMPLATES["simulador.html"] = SIMULADOR_TEMPLATE
-    return render("simulador.html", request=request, context={"title": "Simulador"})
 
+    current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
 
+    return render(
+        "simulador.html",
+        request=request,
+        context={
+            "title": "Simulador",
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "role": ctx.membership.role,
+            "current_client": current_client,
+        },
+    )
 @app.post("/simulador/json", response_class=JSONResponse)
 @require_login
 async def simulador_json(
@@ -16615,6 +16655,7 @@ def _ui_load_banner(company_id: int, session: Session) -> list[dict[str, Any]]:
 @require_login
 async def simulador_gerar_proposta(
     request: Request,
+    client_id: str = Form(""),
     loan_type: str = Form("Empréstimo"),
     amortization: str = Form("price"),
     rate: str = Form("1,79"),
@@ -16658,8 +16699,17 @@ async def simulador_gerar_proposta(
     )
     res = simulate_loan(inp)
 
-    client_id = _resolve_sim_client_id(ctx, request, session)
-    sim = _save_loan_simulation(session, ctx=ctx, client_id=client_id, inp=inp, res=res)
+    resolved_client_id = None
+    try:
+        resolved_client_id = int(client_id) if str(client_id).strip() else _resolve_sim_client_id(ctx, request, session)
+    except Exception:
+        resolved_client_id = None
+    if not resolved_client_id:
+        set_flash(request, "Selecione um cliente antes de gerar proposta.")
+        return RedirectResponse("/simulador", status_code=303)
+
+    sim = _save_loan_simulation(session, ctx=ctx, client_id=resolved_client_id, inp=inp, res=res)
+(session, ctx=ctx, client_id=client_id, inp=inp, res=res)
 
     title = f"Proposta - {sim.loan_type} (R$ {sim.principal_brl:,.0f})".replace(",", ".")
     desc_lines = [
@@ -16726,12 +16776,14 @@ async def simulador_historico(request: Request, session: Session = Depends(get_s
         request.session.clear()
         return RedirectResponse("/login", status_code=303)
 
-    client_id = _resolve_sim_client_id(ctx, request, session)
-    sims = session.exec(
-        select(LoanSimulation)
-        .where(LoanSimulation.company_id == ctx.company.id, LoanSimulation.client_id == client_id)
-        .order_by(LoanSimulation.created_at.desc())
-    ).all()
+        try:
+            try:
+        client_id = _resolve_sim_client_id(ctx, request, session)
+        _ = _save_loan_simulation(session, ctx=ctx, client_id=client_id, inp=inp, res=res)
+    except HTTPException:
+        pass
+
+
 
     return render(
         "simulador_historico.html",
