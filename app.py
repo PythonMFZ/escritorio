@@ -2834,7 +2834,7 @@ a:hover{ color:#00BFBF; }
       {% for t in tabs %}
         <div class="tab-pane fade {% if loop.first %}show active{% endif %}" id="pane-{{ t.key }}" role="tabpanel">
           <div class="row g-3">
-            {% for item in t.items %}
+            {% for item in t["items"] %}
               <div class="col-md-6 col-lg-4">
                 <a href="{{ item.href }}">
                   <div class="card p-4 h-100">
