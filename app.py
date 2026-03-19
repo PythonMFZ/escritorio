@@ -940,6 +940,35 @@ class Proposal(SQLModel, table=True):
     client_id: int = Field(index=True, foreign_key="client.id")
     created_by_user_id: int = Field(index=True, foreign_key="user.id")
 
+class LoanSimulation(SQLModel, table=True):
+    """Histórico de simulações de empréstimo (por cliente)."""
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+
+    company_id: int = Field(index=True, foreign_key="company.id")
+    client_id: int = Field(index=True, foreign_key="client.id")
+    created_by_user_id: int = Field(index=True, foreign_key="user.id")
+
+    loan_type: str = Field(default="Empréstimo", index=True)
+    amortization: str = Field(default="price", index=True)
+    term_months: int = 0
+
+    principal_brl: float = 0.0
+    rate_base: str = Field(default="am", index=True)  # am | aa
+    rate_nominal: float = 0.0  # decimal (ex.: 0.0179)
+    rate_monthly_calc: float = 0.0  # decimal
+
+    inputs_json: str = Field(default="")
+    totals_json: str = Field(default="")
+    schedule_json: str = Field(default="")
+
+    status: str = Field(default="simulacao", index=True)  # simulacao | convertida
+    proposal_id: Optional[int] = Field(default=None, index=True, foreign_key="proposal.id")
+    deal_id: Optional[int] = Field(default=None, index=True, foreign_key="businessdeal.id")
+
+    created_at: datetime = Field(default_factory=utcnow, index=True)
+    updated_at: datetime = Field(default_factory=utcnow, index=True)
+
     kind: str = Field(default="proposta", index=True)  # proposta | solicitacao
     title: str
     description: str = ""  # solicitação do cliente ou notas da proposta
@@ -1116,7 +1145,7 @@ def ensure_ui_tables() -> None:
     try:
         SQLModel.metadata.create_all(
             engine,
-            tables=[UiBannerSlide.__table__, UiNewsFeed.__table__, AdminEntityState.__table__],
+            tables=[UiBannerSlide.__table__, UiNewsFeed.__table__, AdminEntityState.__table__, LoanSimulation.__table__],
             checkfirst=True,
         )
     except Exception:
@@ -15813,6 +15842,57 @@ def build_loan_input(
     )
 
 
+def _resolve_sim_client_id(ctx: TenantContext, request: Request, session: Session) -> int:
+    """Client to attach simulation to (cliente: membership.client_id; others: selected client)."""
+    if (ctx.membership.role or "").lower() == "cliente" and ctx.membership.client_id:
+        return int(ctx.membership.client_id)
+    cid = get_active_client_id(request, ctx.membership)
+    if not cid:
+        raise HTTPException(status_code=400, detail="Selecione um cliente antes de simular.")
+    return int(cid)
+
+
+def _save_loan_simulation(
+    session: Session,
+    *,
+    ctx: TenantContext,
+    client_id: int,
+    inp: LoanSimInputs,
+    res: LoanSimResult,
+    schedule_json: str = "",
+) -> LoanSimulation:
+    sim = LoanSimulation(
+        company_id=ctx.company.id,
+        client_id=client_id,
+        created_by_user_id=ctx.user.id,
+        loan_type=inp.loan_type,
+        amortization=inp.amortization.value,
+        term_months=inp.term_months,
+        principal_brl=float(inp.principal),
+        rate_base=inp.rate_base.value,
+        rate_nominal=float(inp.rate),
+        rate_monthly_calc=float(res.monthly_rate),
+        inputs_json=json.dumps(inp.to_dict(), ensure_ascii=False),
+        totals_json=json.dumps(
+            {
+                "total_payment": float(res.total_payment),
+                "total_interest": float(res.total_interest),
+                "total_amort": float(res.total_amort),
+                "total_fees": float(res.total_fees),
+                "total_insurance": float(res.total_insurance),
+                "first_payment": float(res.first_payment),
+            },
+            ensure_ascii=False,
+        ),
+        schedule_json=schedule_json,
+        status="simulacao",
+        updated_at=utcnow(),
+    )
+    session.add(sim)
+    session.commit()
+    session.refresh(sim)
+    return sim
+
 def simulate_loan(inp: LoanInput) -> LoanSimResult:
     if inp.rate_base == LoanRateBase.AM:
         i = inp.rate
@@ -16527,6 +16607,112 @@ def _ui_load_banner(company_id: int, session: Session) -> list[dict[str, Any]]:
     out = [{"title": s.title, "image_url": s.image_url, "link_path": s.link_path} for s in slides]
     _ui_cache_set(company_id, "banner", out)
     return out
+
+
+@app.get("/simulador/historico", response_class=HTMLResponse)
+@require_login
+async def simulador_historico(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+
+    client_id = _resolve_sim_client_id(ctx, request, session)
+    sims = session.exec(
+        select(LoanSimulation)
+        .where(LoanSimulation.company_id == ctx.company.id, LoanSimulation.client_id == client_id)
+        .order_by(LoanSimulation.created_at.desc())
+    ).all()
+
+    return render(
+        "simulador_historico.html",
+        request=request,
+        context={
+            "title": "Histórico de simulações",
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "role": ctx.membership.role,
+            "sims": sims,
+        },
+    )
+
+
+@app.post("/simulador/{sim_id}/converter")
+@require_login
+async def simulador_converter_em_proposta(sim_id: int, request: Request, session: Session = Depends(get_session)) -> RedirectResponse:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+
+    sim = session.get(LoanSimulation, int(sim_id))
+    if not sim or sim.company_id != ctx.company.id:
+        raise HTTPException(status_code=404, detail="Simulação não encontrada.")
+
+    client_id = _resolve_sim_client_id(ctx, request, session)
+    if sim.client_id != client_id:
+        raise HTTPException(status_code=403, detail="Sem permissão.")
+
+    if sim.proposal_id:
+        set_flash(request, "Simulação já convertida em proposta.")
+        return RedirectResponse("/propostas", status_code=303)
+
+    title = f"Proposta - {sim.loan_type} (R$ {sim.principal_brl:,.0f})".replace(",", ".")
+    desc_lines = [
+        "Proposta gerada automaticamente a partir de simulação.",
+        "",
+        f"Tipo: {sim.loan_type}",
+        f"Amortização: {(sim.amortization or '').upper()}",
+        f"Prazo: {sim.term_months} meses",
+        f"Taxa: {sim.rate_nominal*100:.2f}% {('a.m.' if sim.rate_base=='am' else 'a.a.')}",
+        "",
+        "⚠️ Esta proposta é baseada em simulação e depende de análise e aprovação de crédito.",
+    ]
+
+    proposal = Proposal(
+        company_id=ctx.company.id,
+        client_id=sim.client_id,
+        created_by_user_id=ctx.user.id,
+        kind="proposta",
+        title=title,
+        description="\n".join(desc_lines),
+        service_name="Empréstimo",
+        value_brl=float(sim.principal_brl),
+        status="rascunho",
+        updated_at=utcnow(),
+    )
+    session.add(proposal)
+    session.commit()
+    session.refresh(proposal)
+
+    deal = BusinessDeal(
+        company_id=ctx.company.id,
+        client_id=sim.client_id,
+        created_by_user_id=ctx.user.id,
+        title=title,
+        demand="Proposta gerada via simulador.",
+        notes="\n".join(desc_lines),
+        stage="proposta",
+        service_name="Empréstimo",
+        value_estimate_brl=float(sim.principal_brl),
+        probability_pct=50,
+        proposal_id=proposal.id,
+        updated_at=utcnow(),
+    )
+    session.add(deal)
+    session.commit()
+    session.refresh(deal)
+
+    sim.proposal_id = proposal.id
+    sim.deal_id = deal.id
+    sim.status = "convertida"
+    sim.updated_at = utcnow()
+    session.add(sim)
+    session.commit()
+
+    set_flash(request, "Proposta criada e vinculada ao CRM.")
+    return RedirectResponse("/propostas", status_code=303)
+
 
 @app.get("/api/ui/banner", response_class=JSONResponse)
 @require_login
