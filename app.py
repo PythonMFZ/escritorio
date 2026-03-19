@@ -6831,7 +6831,7 @@ def render(
 
 app = FastAPI()
 https_only = os.getenv("SESSION_HTTPS_ONLY", "0") == "1"
-app.add_middleware(SessionMiddleware, secret_key=APP_SECRET_KEY, https_only=https_only, same_site="lax")
+# NOTE: SessionMiddleware must wrap feature_access_middleware, installed later.
 
 STATIC_DIR = Path(__file__).with_name("static").resolve()
 STATIC_DIR.mkdir(parents=True, exist_ok=True)
@@ -6894,6 +6894,11 @@ async def feature_access_middleware(request: Request, call_next: Callable[..., A
     finally:
         session.close()
 
+
+
+
+# Install SessionMiddleware last so request.session is available inside BaseHTTPMiddleware.
+app.add_middleware(SessionMiddleware, secret_key=APP_SECRET_KEY, https_only=https_only, same_site="lax")
 
 
 @app.on_event("startup")
