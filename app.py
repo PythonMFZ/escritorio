@@ -15710,7 +15710,7 @@ class LoanSimInputs:
             p = _to_decimal(v)
             return p / Decimal("100")
 
-        return build_loan_inputs(
+        return build_loan_input(
             loan_type=form.get("loan_type", "Empréstimo"),
             amortization=form.get("amortization", "price"),
             rate=_rate_percent_to_decimal(form.get("rate", "1,79")),
