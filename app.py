@@ -15998,6 +15998,17 @@ SIMULADOR_TEMPLATE = r"""
         <label class="form-label">Cliente (nome)</label>
         <input class="form-control" name="borrower_name" placeholder="Nome do cliente">
       </div>
+
+      <div class="col-md-6">
+        <label class="form-label">Cliente (opcional)</label>
+        <select class="form-select" name="client_id" id="sim_client_id">
+          <option value="">-- (sem cliente) --</option>
+          {% for c in clients %}
+            <option value="{{ c.id }}">{{ c.name }}</option>
+          {% endfor %}
+        </select>
+        <div class="form-text">Selecione para habilitar “Gerar Proposta” (gera também um card no CRM).</div>
+      </div>
       <div class="col-md-6">
         <label class="form-label">Tipo de empréstimo</label>
         <input class="form-control" name="loan_type" placeholder="Ex.: Crédito com garantia, Consignado, Capital de giro">
@@ -16079,6 +16090,16 @@ SIMULADOR_TEMPLATE = r"""
 
       <div class="col-12 d-flex gap-2 mt-2">
         <button class="btn btn-primary" type="submit">Gerar PDF</button>
+
+        <button class="btn btn-success"
+                type="submit"
+                formaction="/simulador/proposta"
+                formtarget="_blank"
+                rel="noopener"
+                id="btn_proposta"
+                disabled>
+          Gerar Proposta
+        </button>
         <button class="btn btn-outline-secondary" type="submit" formaction="/simulador/json">Gerar JSON</button>
       </div>
     </div>
@@ -16088,6 +16109,20 @@ SIMULADOR_TEMPLATE = r"""
     * Esta é apenas uma simulação e não constitui proposta de crédito. Sujeito à análise e aprovação.
   </p>
 </div>
+<script>
+(function(){
+  const sel = document.getElementById("sim_client_id");
+  const btn = document.getElementById("btn_proposta");
+  if (!sel || !btn) return;
+
+  const toggle = () => {
+    btn.disabled = !sel.value;
+  };
+
+  sel.addEventListener("change", toggle);
+  toggle();
+})();
+</script>
 {% endblock %}
 """
 
@@ -16097,7 +16132,19 @@ SIMULADOR_TEMPLATE = r"""
 async def simulador_page(request: Request) -> HTMLResponse:
     if "simulador.html" not in TEMPLATES:
         TEMPLATES["simulador.html"] = SIMULADOR_TEMPLATE
-    return render("simulador.html", request=request, context={"title": "Simulador"})
+    ctx = get_tenant_context(request, Session(engine)) if False else None
+    # (ctx already validated by require_login)
+    clients = []
+    try:
+        # session available via dependency in other routes; here we use a short-lived session
+        db = Session(engine)
+        tctx = get_tenant_context(request, db)
+        if tctx:
+            clients = db.exec(select(Client).where(Client.company_id == tctx.company.id).order_by(Client.name)).all()
+        db.close()
+    except Exception:
+        clients = []
+    return render("simulador.html", request=request, context={"title": "Simulador", "clients": clients})
 
 
 @app.post("/simulador/json", response_class=JSONResponse)
@@ -16443,6 +16490,131 @@ def _ui_load_banner(company_id: int, session: Session) -> list[dict[str, Any]]:
     out = [{"title": s.title, "image_url": s.image_url, "link_path": s.link_path} for s in slides]
     _ui_cache_set(company_id, "banner", out)
     return out
+
+
+
+@app.post("/simulador/proposta")
+@require_login
+async def simulador_criar_proposta(
+    request: Request,
+    session: Session = Depends(get_session),
+    # client selection
+    client_id: str = Form(""),
+    # simulation params (same as simulador/pdf)
+    loan_type: str = Form("Empréstimo"),
+    amortization: str = Form("price"),
+    rate: str = Form("1,79"),
+    rate_base: str = Form("am"),
+    term_months: int = Form(24),
+    principal: str = Form(""),
+    collateral_value: str = Form(""),
+    ltv_pct: str = Form(""),
+    grace_months: int = Form(0),
+    io_months: int = Form(0),
+    fee_amount: str = Form("0"),
+    monthly_insurance: str = Form("0"),
+    monthly_admin_fee: str = Form("0"),
+    borrower_name: str = Form(""),
+    notes: str = Form(""),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    # valida client_id
+    cid = (client_id or "").strip()
+    if not cid:
+        set_flash(request, "Selecione um cliente para gerar proposta.")
+        return RedirectResponse("/simulador", status_code=303)
+
+    try:
+        cid_int = int(cid)
+    except Exception:
+        set_flash(request, "Cliente inválido.")
+        return RedirectResponse("/simulador", status_code=303)
+
+    client = session.get(Client, cid_int)
+    if not client or client.company_id != ctx.company.id:
+        set_flash(request, "Cliente não encontrado.")
+        return RedirectResponse("/simulador", status_code=303)
+
+    # Portal: cliente só pode gerar proposta para si mesmo
+    if ctx.membership.role == "cliente" and (ctx.membership.client_id or 0) != client.id:
+        raise HTTPException(status_code=403, detail="Sem permissão para este cliente.")
+
+    # Constrói inputs + simula (para preencher descrição/valor)
+    inp = LoanSimInputs.from_form(
+        loan_type=loan_type,
+        amortization=amortization,
+        rate=rate,
+        rate_base=rate_base,
+        term_months=term_months,
+        principal=principal,
+        collateral_value=collateral_value,
+        ltv_pct=ltv_pct,
+        grace_months=grace_months,
+        io_months=io_months,
+        fee_amount=fee_amount,
+        monthly_insurance=monthly_insurance,
+        monthly_admin_fee=monthly_admin_fee,
+        borrower_name=borrower_name,
+        notes=notes,
+    )
+    sim = simulate_loan(inp)
+
+    # Cria proposta (SEM depender do CRM)
+    title = f"Proposta - {client.name} - {inp.loan_type}"
+    desc = (
+        f"Simulação de crédito ({inp.amortization.value.upper()}):\n"
+        f"Valor: {float(inp.principal):.2f} | Prazo: {inp.term_months} meses | "
+        f"Taxa base: {inp.rate_base.value} | Taxa: {float(inp.rate)*100:.2f}%\n"
+        f"LTV: {float(inp.ltv_pct):.2f}% | Carência: {inp.grace_months}m | IO-only: {inp.io_months}m\n"
+    )
+    if inp.notes:
+        desc += "\nObservações:\n" + inp.notes.strip()
+
+    prop = Proposal(
+        company_id=ctx.company.id,
+        client_id=client.id,
+        created_by_user_id=ctx.user.id,
+        kind="proposta",
+        title=title,
+        description=desc,
+        service_name=inp.loan_type,
+        value_brl=max(0.0, float(inp.principal)),
+        status="rascunho",
+        created_at=utcnow(),
+        updated_at=utcnow(),
+    )
+    session.add(prop)
+    session.commit()
+    session.refresh(prop)
+
+    # Regra: tudo que nasce em Propostas (via simulador) cria também um card no CRM.
+    deal = BusinessDeal(
+        company_id=ctx.company.id,
+        client_id=client.id,
+        created_by_user_id=ctx.user.id,
+        owner_user_id=ctx.user.id,
+        title=f"Simulação/Proposta: {inp.loan_type}",
+        demand="Crédito",
+        notes=desc,
+        stage="qualificacao",
+        service_name=inp.loan_type,
+        value_estimate_brl=max(0.0, float(inp.principal)),
+        probability_pct=30,
+        source="simulador",
+        proposal_id=prop.id,
+        created_at=utcnow(),
+        updated_at=utcnow(),
+    )
+    session.add(deal)
+    session.commit()
+    session.refresh(deal)
+    session.add(BusinessDealNote(deal_id=deal.id, author_user_id=ctx.user.id, message=f"Proposta criada (#{prop.id}) via Simulador."))
+    session.commit()
+
+    set_flash(request, "Proposta criada e card gerado no CRM.")
+    return RedirectResponse(f"/propostas/{prop.id}", status_code=303)
 
 @app.get("/api/ui/banner", response_class=JSONResponse)
 @require_login
