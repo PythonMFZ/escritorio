@@ -1,6 +1,6 @@
 # /app.py
 from __future__ import annotations
-from sqlalchemy import func, delete
+from sqlalchemy import func, delete, text
 from sqlalchemy.exc import OperationalError
 
 import base64
@@ -941,7 +941,7 @@ class Proposal(SQLModel, table=True):
     created_by_user_id: int = Field(index=True, foreign_key="user.id")
 
     kind: str = Field(default="proposta", index=True)  # proposta | solicitacao
-    title: str
+    title: str = Field(default="")
     description: str = ""  # solicitação do cliente ou notas da proposta
     service_name: str = Field(default="", index=True)  # produto/serviço
     value_brl: float = 0.0  # usado normalmente para "proposta"
@@ -1149,10 +1149,35 @@ def ensure_ui_tables() -> None:
         pass
 
 
+def ensure_proposals_schema() -> None:
+    """Best-effort schema fix for Postgres when Alembic isn't used.
+
+    Ensures proposal table has the columns used by the app (created_at/title/status/etc).
+    Safe and idempotent (ADD COLUMN IF NOT EXISTS).
+    """
+    try:
+        if not engine.url.get_backend_name().startswith("postgres"):
+            return
+        with engine.begin() as conn:
+            conn.execute(text("ALTER TABLE proposal ADD COLUMN IF NOT EXISTS kind TEXT DEFAULT 'proposta'"))
+            conn.execute(text("ALTER TABLE proposal ADD COLUMN IF NOT EXISTS title TEXT DEFAULT ''"))
+            conn.execute(text("ALTER TABLE proposal ADD COLUMN IF NOT EXISTS description TEXT DEFAULT ''"))
+            conn.execute(text("ALTER TABLE proposal ADD COLUMN IF NOT EXISTS service_name TEXT DEFAULT ''"))
+            conn.execute(text("ALTER TABLE proposal ADD COLUMN IF NOT EXISTS value_brl DOUBLE PRECISION DEFAULT 0"))
+            conn.execute(text("ALTER TABLE proposal ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'rascunho'"))
+            conn.execute(text("ALTER TABLE proposal ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT NOW()"))
+            conn.execute(text("ALTER TABLE proposal ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NOW()"))
+            conn.execute(text("UPDATE proposal SET created_at = NOW() WHERE created_at IS NULL"))
+            conn.execute(text("UPDATE proposal SET updated_at = NOW() WHERE updated_at IS NULL"))
+    except Exception:
+        # never block startup
+        pass
+
 def init_db() -> None:
     # Em produção (Postgres), quem cria/alterar tabelas é o Alembic.
     # Porém, para features novas sem migration (ex.: UI banner/notícias), garantimos as tabelas.
     ensure_ui_tables()
+    ensure_proposals_schema()
     # Em dev local (SQLite), criamos automaticamente tudo.
     if engine.url.get_backend_name().startswith("sqlite"):
         SQLModel.metadata.create_all(engine)
@@ -7044,6 +7069,7 @@ app.add_middleware(SessionMiddleware, secret_key=APP_SECRET_KEY, https_only=http
 def _startup() -> None:
     init_db()
     ensure_ui_tables()
+    ensure_proposals_schema()
     ensure_feature_access_tables()
     ensure_credit_consent_table()
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
@@ -9589,7 +9615,7 @@ async def props_list(request: Request, session: Session = Depends(get_session)) 
 
     current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
 
-    q = select(Proposal).where(Proposal.company_id == ctx.company.id).order_by(Proposal.created_at.desc())
+    q = select(Proposal).where(Proposal.company_id == ctx.company.id).order_by((Proposal.created_at if hasattr(Proposal, 'created_at') else Proposal.id).desc())
     if ctx.membership.role == "cliente":
         items = session.exec(q.where(Proposal.client_id == (ctx.membership.client_id or -1))).all()
     else:
@@ -16555,6 +16581,7 @@ async def _ui_load_news(company_id: int, session: Session, limit: int = 10) -> l
         return cached
 
     ensure_ui_tables()
+    ensure_proposals_schema()
 
     try:
         feeds = session.exec(
@@ -16631,6 +16658,7 @@ def _ui_load_banner(company_id: int, session: Session) -> list[dict[str, Any]]:
         return cached
 
     ensure_ui_tables()
+    ensure_proposals_schema()
 
     try:
         slides = session.exec(
@@ -16894,6 +16922,7 @@ async def admin_ui_page(request: Request, session: Session = Depends(get_session
     current_client = get_client_or_none(session, company_id, active_client_id)
 
     ensure_ui_tables()
+    ensure_proposals_schema()
     try:
         slides = session.exec(
             select(UiBannerSlide)
