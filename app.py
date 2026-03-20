@@ -15711,7 +15711,7 @@ class LoanSimInputs:
     @classmethod
     def from_form(cls, **form) -> "LoanInputs":
         def _rate_percent_to_decimal(v: str) -> Decimal:
-                        p = _dec(v)
+            p = _dec(v)
             return p / Decimal("100")
 
         return build_loan_input(
