@@ -947,45 +947,6 @@ class Proposal(SQLModel, table=True):
     value_brl: float = 0.0  # usado normalmente para "proposta"
     status: str = Field(default="rascunho", index=True)
 
-    created_at: datetime = Field(default_factory=utcnow, index=True)
-    updated_at: datetime = Field(default_factory=utcnow, index=True)
-
-class LoanSimulation(SQLModel, table=True):
-    """Histórico de simulações de empréstimo (por cliente)."""
-
-    id: Optional[int] = Field(default=None, primary_key=True)
-
-    company_id: int = Field(index=True, foreign_key="company.id")
-    client_id: int = Field(index=True, foreign_key="client.id")
-    created_by_user_id: int = Field(index=True, foreign_key="user.id")
-
-    loan_type: str = Field(default="Empréstimo", index=True)
-    amortization: str = Field(default="price", index=True)
-    term_months: int = 0
-
-    principal_brl: float = 0.0
-    rate_base: str = Field(default="am", index=True)  # am | aa
-    rate_nominal: float = 0.0  # decimal (ex.: 0.0179)
-    rate_monthly_calc: float = 0.0  # decimal
-
-    inputs_json: str = Field(default="")
-    totals_json: str = Field(default="")
-    schedule_json: str = Field(default="")
-
-    status: str = Field(default="simulacao", index=True)  # simulacao | convertida
-    proposal_id: Optional[int] = Field(default=None, index=True, foreign_key="proposal.id")
-    deal_id: Optional[int] = Field(default=None, index=True, foreign_key="businessdeal.id")
-
-    created_at: datetime = Field(default_factory=utcnow, index=True)
-    updated_at: datetime = Field(default_factory=utcnow, index=True)
-
-    kind: str = Field(default="proposta", index=True)  # proposta | solicitacao
-    title: str
-    description: str = ""  # solicitação do cliente ou notas da proposta
-    service_name: str = Field(default="", index=True)  # produto/serviço
-    value_brl: float = 0.0  # usado normalmente para "proposta"
-    status: str = Field(default="rascunho", index=True)
-
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)
 
@@ -1155,7 +1116,7 @@ def ensure_ui_tables() -> None:
     try:
         SQLModel.metadata.create_all(
             engine,
-            tables=[UiBannerSlide.__table__, UiNewsFeed.__table__, AdminEntityState.__table__, LoanSimulation.__table__, ProposalMessage.__table__],
+            tables=[UiBannerSlide.__table__, UiNewsFeed.__table__, AdminEntityState.__table__],
             checkfirst=True,
         )
     except Exception:
@@ -1935,119 +1896,6 @@ def _get_state(session: Session, *, entity_type: str, entity_id: int) -> Optiona
             AdminEntityState.entity_id == int(entity_id),
         )
     ).first()
-
-def normalize_cnpj_digits(value: str) -> str:
-    return re.sub(r"\D+", "", value or "").strip()
-
-
-def _client_is_soft_deleted(session: Session, client_id: int) -> bool:
-    st = _get_state(session, entity_type="client", entity_id=client_id)
-    return bool(st and st.is_deleted)
-
-
-def _client_is_orphan_lead(session: Session, company_id: int, client: Client) -> bool:
-    if client.company_id != company_id:
-        return False
-    if "[LEAD CRM]" not in (client.notes or ""):
-        return False
-    if not client.id:
-        return False
-    if _client_is_soft_deleted(session, client.id):
-        return False
-
-    if session.exec(select(Membership).where(Membership.company_id == company_id, Membership.client_id == client.id)).first():
-        return False
-
-    link_models = [
-        BusinessDeal,
-        BusinessDealNote,
-        Proposal,
-        ConsultingProject,
-        Task,
-        Document,
-        FinanceInvoice,
-        PendingItem,
-        Attachment,
-        ClientInvite,
-        CreditConsent,
-        CreditReport,
-        ContaAzulPersonMap,
-        ContaAzulInvoice,
-        ContaAzulReceivable,
-        Meeting,
-        EducationCourseAccess,
-        EducationLessonProgress,
-        ClientSnapshot,
-    ]
-    for model in link_models:
-        try:
-            if session.exec(select(model).where(model.company_id == company_id, model.client_id == client.id)).first():
-                return False
-        except Exception:
-            pass
-
-    return True
-
-
-def _reassign_client_fk(session: Session, company_id: int, from_client_id: int, to_client_id: int) -> int:
-    if from_client_id == to_client_id:
-        return 0
-
-    moved = 0
-    models = [
-        Membership,
-        ClientSnapshot,
-        CreditConsent,
-        CreditReport,
-        ConsultingProject,
-        Task,
-        Document,
-        Proposal,
-        BusinessDeal,
-        BusinessDealNote,
-        FinanceInvoice,
-        PendingItem,
-        Attachment,
-        ClientInvite,
-        ContaAzulPersonMap,
-        ContaAzulInvoice,
-        ContaAzulReceivable,
-        Meeting,
-        EducationCourseAccess,
-        EducationLessonProgress,
-    ]
-
-    for model in models:
-        try:
-            rows = session.exec(select(model).where(model.company_id == company_id, model.client_id == from_client_id)).all()
-        except Exception:
-            continue
-        for r in rows:
-            r.client_id = to_client_id
-            session.add(r)
-            moved += 1
-    return moved
-
-
-def _soft_delete_client(session: Session, *, company_id: int, client_id: int, user_id: int) -> None:
-    st = _get_state(session, entity_type="client", entity_id=client_id)
-    if st is None:
-        st = AdminEntityState(
-            entity_type="client",
-            entity_id=client_id,
-            company_id=company_id,
-            is_active=False,
-            is_deleted=True,
-            deleted_at=utcnow(),
-            updated_by_user_id=user_id,
-        )
-    else:
-        st.is_active = False
-        st.is_deleted = True
-        st.deleted_at = utcnow()
-        st.updated_by_user_id = user_id
-        st.updated_at = utcnow()
-    session.add(st)
 
 
 def entity_is_allowed(session: Session, *, entity_type: str, entity_id: int) -> bool:
@@ -9602,7 +9450,7 @@ async def props_list(request: Request, session: Session = Depends(get_session)) 
 
     current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
 
-    q = select(Proposal).where(Proposal.company_id == ctx.company.id).order_by(Proposal.id.desc())
+    q = select(Proposal).where(Proposal.company_id == ctx.company.id).order_by(Proposal.created_at.desc())
     if ctx.membership.role == "cliente":
         items = session.exec(q.where(Proposal.client_id == (ctx.membership.client_id or -1))).all()
     else:
@@ -15852,56 +15700,34 @@ def build_loan_input(
     )
 
 
-def _resolve_sim_client_id(ctx: TenantContext, request: Request, session: Session) -> int:
-    """Client to attach simulation to (cliente: membership.client_id; others: selected client)."""
-    if (ctx.membership.role or "").lower() == "cliente" and ctx.membership.client_id:
-        return int(ctx.membership.client_id)
-    cid = get_active_client_id(request, ctx.membership)
-    if not cid:
-        raise HTTPException(status_code=400, detail="Selecione um cliente antes de simular.")
-    return int(cid)
+# --- Adapter: compatibilidade com /simulador/proposta ---
+class LoanSimInputs:
+    """Compat layer: rotas antigas chamam LoanSimInputs.from_form(...)."""
 
+    @classmethod
+    def from_form(cls, **form) -> "LoanInputs":
+        def _rate_percent_to_decimal(v: str) -> Decimal:
+            p = _to_decimal(v)
+            return p / Decimal("100")
 
-def _save_loan_simulation(
-    session: Session,
-    *,
-    ctx: TenantContext,
-    client_id: int,
-    inp: LoanSimInputs,
-    res: LoanSimResult,
-    schedule_json: str = "",
-) -> LoanSimulation:
-    sim = LoanSimulation(
-        company_id=ctx.company.id,
-        client_id=client_id,
-        created_by_user_id=ctx.user.id,
-        loan_type=inp.loan_type,
-        amortization=inp.amortization.value,
-        term_months=inp.term_months,
-        principal_brl=float(inp.principal),
-        rate_base=inp.rate_base.value,
-        rate_nominal=float(inp.rate),
-        rate_monthly_calc=float(res.monthly_rate),
-        inputs_json=json.dumps(inp.to_dict(), ensure_ascii=False),
-        totals_json=json.dumps(
-            {
-                "total_payment": float(res.total_payment),
-                "total_interest": float(res.total_interest),
-                "total_amort": float(res.total_amort),
-                "total_fees": float(res.total_fees),
-                "total_insurance": float(res.total_insurance),
-                "first_payment": float(res.first_payment),
-            },
-            ensure_ascii=False,
-        ),
-        schedule_json=schedule_json,
-        status="simulacao",
-        updated_at=utcnow(),
-    )
-    session.add(sim)
-    session.commit()
-    session.refresh(sim)
-    return sim
+        return build_loan_inputs(
+            loan_type=form.get("loan_type", "Empréstimo"),
+            amortization=form.get("amortization", "price"),
+            rate=_rate_percent_to_decimal(form.get("rate", "1,79")),
+            rate_base=form.get("rate_base", "am"),
+            term_months=int(form.get("term_months", 24) or 24),
+            principal=form.get("principal", ""),
+            collateral_value=form.get("collateral_value", ""),
+            ltv_pct=form.get("ltv_pct", ""),
+            start_date=date.today(),
+            grace_months=int(form.get("grace_months", 0) or 0),
+            io_months=int(form.get("io_months", 0) or 0),
+            fee_amount=form.get("fee_amount", "0"),
+            monthly_insurance=form.get("monthly_insurance", "0"),
+            monthly_admin_fee=form.get("monthly_admin_fee", "0"),
+            borrower_name=form.get("borrower_name", ""),
+            notes=form.get("notes", ""),
+        )
 
 def simulate_loan(inp: LoanInput) -> LoanSimResult:
     if inp.rate_base == LoanRateBase.AM:
@@ -16168,34 +15994,10 @@ SIMULADOR_TEMPLATE = r"""
   <h3 class="mt-3">Simulador de Empréstimo</h3>
   <form method="post" action="/simulador/pdf" class="card p-3 mt-3">
     <div class="row g-2">
-      {% if role in ["admin","equipe"] %}
-      <div class="col-md-6">
-        <label class="form-label">Cliente selecionado</label>
-        <input class="form-control" value="{{ current_client.name if current_client else '' }}" readonly>
-        <div class="form-text">{% if not current_client %}Selecione um cliente no topo antes de gerar proposta.{% else %}A simulação/proposta será vinculada a este cliente.{% endif %}</div>
-        <input type="hidden" name="client_id" value="{{ current_client.id if current_client else '' }}">
-      </div>
-      <div class="col-md-6">
-        <label class="form-label">Cliente (nome no PDF)</label>
-        <input class="form-control" name="borrower_name" value="{{ current_client.name if current_client else '' }}" placeholder="Nome do cliente">
-      </div>
-{% else %}
       <div class="col-md-6">
         <label class="form-label">Cliente (nome)</label>
         <input class="form-control" name="borrower_name" placeholder="Nome do cliente">
-        <input type="hidden" name="client_id" value="">
       </div>
-      <div class="col-md-6">
-        <label class="form-label">Tipo de empréstimo</label>
-        <input class="form-control" name="loan_type" placeholder="Ex.: Crédito com garantia, Consignado, Capital de giro">
-      </div>
-{% endif %}
-{% if role in ["admin","equipe"] %}
-      <div class="col-md-6">
-        <label class="form-label">Tipo de empréstimo</label>
-        <input class="form-control" name="loan_type" placeholder="Ex.: Crédito com garantia, Consignado, Capital de giro">
-      </div>
-{% endif %}
       <div class="col-md-6">
         <label class="form-label">Tipo de empréstimo</label>
         <input class="form-control" name="loan_type" placeholder="Ex.: Crédito com garantia, Consignado, Capital de giro">
@@ -16277,7 +16079,6 @@ SIMULADOR_TEMPLATE = r"""
 
       <div class="col-12 d-flex gap-2 mt-2">
         <button class="btn btn-primary" type="submit">Gerar PDF</button>
-        <button class="btn btn-success" type="submit" formaction="/simulador/proposta">Gerar Proposta</button>
         <button class="btn btn-outline-secondary" type="submit" formaction="/simulador/json">Gerar JSON</button>
       </div>
     </div>
@@ -16293,28 +16094,12 @@ SIMULADOR_TEMPLATE = r"""
 
 @app.get("/simulador", response_class=HTMLResponse)
 @require_login
-async def simulador_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
-    ctx = get_tenant_context(request, session)
-    if not ctx:
-        request.session.clear()
-        return RedirectResponse("/login", status_code=303)
-
+async def simulador_page(request: Request) -> HTMLResponse:
     if "simulador.html" not in TEMPLATES:
         TEMPLATES["simulador.html"] = SIMULADOR_TEMPLATE
+    return render("simulador.html", request=request, context={"title": "Simulador"})
 
-    current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
 
-    return render(
-        "simulador.html",
-        request=request,
-        context={
-            "title": "Simulador",
-            "current_user": ctx.user,
-            "current_company": ctx.company,
-            "role": ctx.membership.role,
-            "current_client": current_client,
-        },
-    )
 @app.post("/simulador/json", response_class=JSONResponse)
 @require_login
 async def simulador_json(
@@ -16659,230 +16444,6 @@ def _ui_load_banner(company_id: int, session: Session) -> list[dict[str, Any]]:
     _ui_cache_set(company_id, "banner", out)
     return out
 
-
-
-@app.post("/simulador/proposta")
-@require_login
-async def simulador_gerar_proposta(
-    request: Request,
-    client_id: str = Form(""),
-    loan_type: str = Form("Empréstimo"),
-    amortization: str = Form("price"),
-    rate: str = Form("1,79"),
-    rate_base: str = Form("am"),
-    term_months: int = Form(24),
-    principal: str = Form(""),
-    collateral_value: str = Form(""),
-    ltv_pct: str = Form(""),
-    grace_months: int = Form(0),
-    io_months: int = Form(0),
-    fee_amount: str = Form("0"),
-    monthly_insurance: str = Form("0"),
-    monthly_admin_fee: str = Form("0"),
-    borrower_name: str = Form(""),
-    notes: str = Form(""),
-    session: Session = Depends(get_session),
-) -> RedirectResponse:
-    """Gera simulação e cria Proposta + Negócio no CRM (cliente selecionado)."""
-    ctx = get_tenant_context(request, session)
-    if not ctx:
-        request.session.clear()
-        return RedirectResponse("/login", status_code=303)
-
-    inp = LoanSimInputs.from_form(
-        loan_type=loan_type,
-        amortization=amortization,
-        rate_str=rate,
-        rate_base=rate_base,
-        term_months=term_months,
-        principal=principal,
-        collateral_value=collateral_value,
-        ltv_pct=ltv_pct,
-        start_date=date.today(),
-        grace_months=grace_months,
-        io_months=io_months,
-        fee_amount=fee_amount,
-        monthly_insurance=monthly_insurance,
-        monthly_admin_fee=monthly_admin_fee,
-        borrower_name=borrower_name,
-        notes=notes,
-    )
-    res = simulate_loan(inp)
-
-    resolved_client_id = None
-    try:
-        resolved_client_id = int(client_id) if str(client_id).strip() else _resolve_sim_client_id(ctx, request, session)
-    except Exception:
-        resolved_client_id = None
-    if not resolved_client_id:
-        set_flash(request, "Selecione um cliente antes de gerar proposta.")
-        return RedirectResponse("/simulador", status_code=303)
-
-    sim = _save_loan_simulation(session, ctx=ctx, client_id=resolved_client_id, inp=inp, res=res)
-
-    title = f"Proposta - {sim.loan_type} (R$ {sim.principal_brl:,.0f})".replace(",", ".")
-    desc_lines = [
-        "Proposta gerada automaticamente a partir de simulação.",
-        "",
-        f"Tipo: {sim.loan_type}",
-        f"Amortização: {(sim.amortization or '').upper()}",
-        f"Prazo: {sim.term_months} meses",
-        f"Taxa: {sim.rate_nominal*100:.2f}% {('a.m.' if sim.rate_base=='am' else 'a.a.')}",
-        "",
-        "⚠️ Esta proposta é baseada em simulação e depende de análise e aprovação de crédito.",
-    ]
-
-    proposal = Proposal(
-        company_id=ctx.company.id,
-        client_id=sim.client_id,
-        created_by_user_id=ctx.user.id,
-        kind="proposta",
-        title=title,
-        description="\n".join(desc_lines),
-        service_name="Empréstimo",
-        value_brl=float(sim.principal_brl),
-        status="rascunho",
-        updated_at=utcnow(),
-    )
-    session.add(proposal)
-    session.commit()
-    session.refresh(proposal)
-
-    deal = BusinessDeal(
-        company_id=ctx.company.id,
-        client_id=sim.client_id,
-        created_by_user_id=ctx.user.id,
-        title=title,
-        demand="Proposta gerada via simulador.",
-        notes="\n".join(desc_lines),
-        stage="proposta",
-        service_name="Empréstimo",
-        value_estimate_brl=float(sim.principal_brl),
-        probability_pct=50,
-        proposal_id=proposal.id,
-        updated_at=utcnow(),
-    )
-    session.add(deal)
-    session.commit()
-    session.refresh(deal)
-
-    sim.proposal_id = proposal.id
-    sim.deal_id = deal.id
-    sim.status = "convertida"
-    sim.updated_at = utcnow()
-    session.add(sim)
-    session.commit()
-
-    set_flash(request, "Proposta criada e vinculada ao CRM.")
-    return RedirectResponse(f"/propostas/{proposal.id}", status_code=303)
-
-
-@app.get("/simulador/historico", response_class=HTMLResponse)
-@require_login
-async def simulador_historico(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
-    ctx = get_tenant_context(request, session)
-    if not ctx:
-        request.session.clear()
-        return RedirectResponse("/login", status_code=303)
-
-    client_id = _resolve_sim_client_id(ctx, request, session)
-    sims = session.exec(
-        select(LoanSimulation)
-        .where(LoanSimulation.company_id == ctx.company.id, LoanSimulation.client_id == client_id)
-        .order_by(LoanSimulation.created_at.desc())
-    ).all()
-
-    current_client = get_client_or_none(session, ctx.company.id, client_id)
-
-    return render(
-        "simulador_historico.html",
-        request=request,
-        context={
-            "title": "Histórico de simulações",
-            "current_user": ctx.user,
-            "current_company": ctx.company,
-            "role": ctx.membership.role,
-            "current_client": current_client,
-            "sims": sims,
-        },
-    )
-@app.post("/simulador/{sim_id}/converter")
-@require_login
-async def simulador_converter_em_proposta(sim_id: int, request: Request, session: Session = Depends(get_session)) -> RedirectResponse:
-    ctx = get_tenant_context(request, session)
-    if not ctx:
-        request.session.clear()
-        return RedirectResponse("/login", status_code=303)
-
-    sim = session.get(LoanSimulation, int(sim_id))
-    if not sim or sim.company_id != ctx.company.id:
-        raise HTTPException(status_code=404, detail="Simulação não encontrada.")
-
-    client_id = _resolve_sim_client_id(ctx, request, session)
-    if sim.client_id != client_id:
-        raise HTTPException(status_code=403, detail="Sem permissão.")
-
-    if sim.proposal_id:
-        set_flash(request, "Simulação já convertida em proposta.")
-        return RedirectResponse("/propostas", status_code=303)
-
-    title = f"Proposta - {sim.loan_type} (R$ {sim.principal_brl:,.0f})".replace(",", ".")
-    desc_lines = [
-        "Proposta gerada automaticamente a partir de simulação.",
-        "",
-        f"Tipo: {sim.loan_type}",
-        f"Amortização: {(sim.amortization or '').upper()}",
-        f"Prazo: {sim.term_months} meses",
-        f"Taxa: {sim.rate_nominal*100:.2f}% {('a.m.' if sim.rate_base=='am' else 'a.a.')}",
-        "",
-        "⚠️ Esta proposta é baseada em simulação e depende de análise e aprovação de crédito.",
-    ]
-
-    proposal = Proposal(
-        company_id=ctx.company.id,
-        client_id=sim.client_id,
-        created_by_user_id=ctx.user.id,
-        kind="proposta",
-        title=title,
-        description="\n".join(desc_lines),
-        service_name="Empréstimo",
-        value_brl=float(sim.principal_brl),
-        status="rascunho",
-        updated_at=utcnow(),
-    )
-    session.add(proposal)
-    session.commit()
-    session.refresh(proposal)
-
-    deal = BusinessDeal(
-        company_id=ctx.company.id,
-        client_id=sim.client_id,
-        created_by_user_id=ctx.user.id,
-        title=title,
-        demand="Proposta gerada via simulador.",
-        notes="\n".join(desc_lines),
-        stage="proposta",
-        service_name="Empréstimo",
-        value_estimate_brl=float(sim.principal_brl),
-        probability_pct=50,
-        proposal_id=proposal.id,
-        updated_at=utcnow(),
-    )
-    session.add(deal)
-    session.commit()
-    session.refresh(deal)
-
-    sim.proposal_id = proposal.id
-    sim.deal_id = deal.id
-    sim.status = "convertida"
-    sim.updated_at = utcnow()
-    session.add(sim)
-    session.commit()
-
-    set_flash(request, "Proposta criada e vinculada ao CRM.")
-    return RedirectResponse("/propostas", status_code=303)
-
-
 @app.get("/api/ui/banner", response_class=JSONResponse)
 @require_login
 async def api_ui_banner(request: Request, session: Session = Depends(get_session)) -> JSONResponse:
@@ -17131,25 +16692,6 @@ TEMPLATES.update({
     </div>
 
     <div class="tab-pane fade" id="tab-clients" role="tabpanel">
-
-  <div class="card p-3 mt-3">
-    <div class="d-flex flex-wrap gap-2 align-items-center justify-content-between">
-      <div>
-        <div class="fw-bold">Limpeza de Clientes (seguro)</div>
-        <div class="text-muted" style="font-size:.9rem;">
-          Remove apenas <b>leads órfãos</b> (CRM rápido) e mescla duplicados por <b>CNPJ</b> via soft delete.
-        </div>
-      </div>
-      <div class="d-flex gap-2 flex-wrap">
-        <form method="post" action="/admin/gestao/clients/cleanup_leads" onsubmit="return confirm('Excluir (soft delete) leads órfãos do CRM rápido?');">
-          <button class="btn btn-sm btn-outline-danger" type="submit">Excluir leads órfãos</button>
-        </form>
-        <form method="post" action="/admin/gestao/clients/merge_by_cnpj" onsubmit="return confirm('Mesclar duplicados por CNPJ? Isso move referências e faz soft delete dos duplicados.');">
-          <button class="btn btn-sm btn-outline-primary" type="submit">Mesclar duplicados por CNPJ</button>
-        </form>
-      </div>
-    </div>
-  </div>
       <div class="table-responsive">
         <table class="table table-sm align-middle">
           <thead><tr><th>ID</th><th>Empresa</th><th>Nome</th><th>CNPJ</th><th>Email</th><th>Status</th><th style="width: 240px;">Ações</th></tr></thead>
@@ -17327,98 +16869,6 @@ def _derive_company_id_for_state(session: Session, entity_type: str, entity_id: 
         m = session.get(Membership, entity_id)
         return m.company_id if m else fallback_company_id
     return None
-
-
-
-@app.post("/admin/gestao/clients/cleanup_leads")
-@require_role({"admin"})
-async def admin_cleanup_orphan_leads(request: Request, session: Session = Depends(get_session)) -> RedirectResponse:
-    ctx = get_tenant_context(request, session)
-    if not ctx:
-        request.session.clear()
-        return RedirectResponse("/login", status_code=303)
-
-    superadmin = is_superadmin(ctx.user)
-    company_ids = [c.id for c in session.exec(select(Company)).all() if c.id] if superadmin else [ctx.company.id]
-
-    deleted = 0
-    scanned = 0
-
-    for company_id in company_ids:
-        clients = session.exec(select(Client).where(Client.company_id == company_id)).all()
-        for c in clients:
-            if _client_is_orphan_lead(session, company_id, c):
-                _soft_delete_client(session, company_id=company_id, client_id=c.id, user_id=ctx.user.id)  # type: ignore[arg-type]
-                deleted += 1
-            scanned += 1
-
-    session.commit()
-    set_flash(request, f"Leads órfãos analisados: {scanned}. Leads removidos (soft delete): {deleted}.")
-    return RedirectResponse("/admin/gestao", status_code=303)
-
-
-@app.post("/admin/gestao/clients/merge_by_cnpj")
-@require_role({"admin"})
-async def admin_merge_duplicates_by_cnpj(request: Request, session: Session = Depends(get_session)) -> RedirectResponse:
-    ctx = get_tenant_context(request, session)
-    if not ctx:
-        request.session.clear()
-        return RedirectResponse("/login", status_code=303)
-
-    superadmin = is_superadmin(ctx.user)
-    company_ids = [c.id for c in session.exec(select(Company)).all() if c.id] if superadmin else [ctx.company.id]
-
-    merged_groups = 0
-    removed_clients = 0
-    moved_refs = 0
-
-    for company_id in company_ids:
-        clients = session.exec(select(Client).where(Client.company_id == company_id)).all()
-        buckets: dict[str, list[Client]] = {}
-        for c in clients:
-            if not c.id:
-                continue
-            if _client_is_soft_deleted(session, c.id):
-                continue
-            cnpj = normalize_cnpj_digits(c.cnpj)
-            if not cnpj:
-                continue
-            buckets.setdefault(cnpj, []).append(c)
-
-        for cnpj, group in buckets.items():
-            if len(group) <= 1:
-                continue
-            group_sorted = sorted(group, key=lambda x: (x.created_at, x.id or 0))
-            canonical = group_sorted[0]
-            for dup in group_sorted[1:]:
-                moved_refs += _reassign_client_fk(session, company_id, dup.id, canonical.id)  # type: ignore[arg-type]
-
-                if not canonical.email and dup.email:
-                    canonical.email = dup.email
-                if not canonical.phone and dup.phone:
-                    canonical.phone = dup.phone
-                if not canonical.address and dup.address:
-                    canonical.address = dup.address
-                if not canonical.city and dup.city:
-                    canonical.city = dup.city
-                if not canonical.state and dup.state:
-                    canonical.state = dup.state
-                if not canonical.zip_code and dup.zip_code:
-                    canonical.zip_code = dup.zip_code
-                if dup.notes and dup.notes not in (canonical.notes or ""):
-                    canonical.notes = ((canonical.notes or "") + "\n" + dup.notes).strip()
-
-                canonical.updated_at = utcnow()
-                session.add(canonical)
-
-                _soft_delete_client(session, company_id=company_id, client_id=dup.id, user_id=ctx.user.id)  # type: ignore[arg-type]
-                removed_clients += 1
-
-            merged_groups += 1
-
-    session.commit()
-    set_flash(request, f"Mescla por CNPJ concluída. Grupos mesclados: {merged_groups}. Clientes removidos: {removed_clients}. Referências movidas: {moved_refs}.")
-    return RedirectResponse("/admin/gestao", status_code=303)
 
 
 @app.post("/admin/entity/{entity_type}/{entity_id}/toggle")
