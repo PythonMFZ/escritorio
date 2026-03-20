@@ -15549,6 +15549,10 @@ class LoanRateBase(str, Enum):
     AA = "aa"  # ao ano
 
 
+def _to_decimal(v: str) -> Decimal:
+    """Compat alias for older simulator code."""
+    return _dec(v)
+
 def _dec(x: Any) -> Decimal:
     if x is None:
         return Decimal("0")
@@ -15707,7 +15711,7 @@ class LoanSimInputs:
     @classmethod
     def from_form(cls, **form) -> "LoanInputs":
         def _rate_percent_to_decimal(v: str) -> Decimal:
-            p = _to_decimal(v)
+                        p = _dec(v)
             return p / Decimal("100")
 
         return build_loan_input(
