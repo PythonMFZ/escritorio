@@ -15709,28 +15709,25 @@ class LoanSimInputs:
     """Compat layer: rotas antigas chamam LoanSimInputs.from_form(...)."""
 
     @classmethod
-    def from_form(cls, **form) -> "LoanInputs":
-        def _rate_percent_to_decimal(v: str) -> Decimal:
-            p = _dec(v)
-            return p / Decimal("100")
-
+    def from_form(cls, **form) -> "LoanInput":
+        # build_loan_input espera taxa em percentual (string), ex: "1,79" -> 1.79%
         return build_loan_input(
             loan_type=form.get("loan_type", "Empréstimo"),
             amortization=form.get("amortization", "price"),
-            rate=_rate_percent_to_decimal(form.get("rate", "1,79")),
+            rate_pct=str(form.get("rate", "1,79") or "1,79"),
             rate_base=form.get("rate_base", "am"),
             term_months=int(form.get("term_months", 24) or 24),
-            principal=form.get("principal", ""),
-            collateral_value=form.get("collateral_value", ""),
-            ltv_pct=form.get("ltv_pct", ""),
+            principal=str(form.get("principal", "") or ""),
+            collateral_value=str(form.get("collateral_value", "") or ""),
+            ltv_pct=str(form.get("ltv_pct", "") or ""),
             start_date=date.today(),
             grace_months=int(form.get("grace_months", 0) or 0),
             io_months=int(form.get("io_months", 0) or 0),
-            fee_amount=form.get("fee_amount", "0"),
-            monthly_insurance=form.get("monthly_insurance", "0"),
-            monthly_admin_fee=form.get("monthly_admin_fee", "0"),
-            borrower_name=form.get("borrower_name", ""),
-            notes=form.get("notes", ""),
+            fee_amount=str(form.get("fee_amount", "0") or "0"),
+            monthly_insurance=str(form.get("monthly_insurance", "0") or "0"),
+            monthly_admin_fee=str(form.get("monthly_admin_fee", "0") or "0"),
+            borrower_name=str(form.get("borrower_name", "") or ""),
+            notes=str(form.get("notes", "") or ""),
         )
 
 def simulate_loan(inp: LoanInput) -> LoanSimResult:
