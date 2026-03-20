@@ -6805,6 +6805,7 @@ def render(
         status_code: int = 200,
 ) -> HTMLResponse:
     ctx = context or {}
+    ctx["request"] = request
     ctx.setdefault("title", "App Escritório")
     ctx.setdefault("flash", request.session.pop("flash", None) if hasattr(request, "session") else None)
     ctx.setdefault("allow_company_signup", ALLOW_COMPANY_SIGNUP)
