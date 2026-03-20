@@ -16775,14 +16775,14 @@ async def simulador_historico(request: Request, session: Session = Depends(get_s
         request.session.clear()
         return RedirectResponse("/login", status_code=303)
 
-        try:
-            try:
-        client_id = _resolve_sim_client_id(ctx, request, session)
-        _ = _save_loan_simulation(session, ctx=ctx, client_id=client_id, inp=inp, res=res)
-    except HTTPException:
-        pass
+    client_id = _resolve_sim_client_id(ctx, request, session)
+    sims = session.exec(
+        select(LoanSimulation)
+        .where(LoanSimulation.company_id == ctx.company.id, LoanSimulation.client_id == client_id)
+        .order_by(LoanSimulation.created_at.desc())
+    ).all()
 
-
+    current_client = get_client_or_none(session, ctx.company.id, client_id)
 
     return render(
         "simulador_historico.html",
@@ -16792,11 +16792,10 @@ async def simulador_historico(request: Request, session: Session = Depends(get_s
             "current_user": ctx.user,
             "current_company": ctx.company,
             "role": ctx.membership.role,
+            "current_client": current_client,
             "sims": sims,
         },
     )
-
-
 @app.post("/simulador/{sim_id}/converter")
 @require_login
 async def simulador_converter_em_proposta(sim_id: int, request: Request, session: Session = Depends(get_session)) -> RedirectResponse:
