@@ -940,18 +940,15 @@ class Proposal(SQLModel, table=True):
     client_id: int = Field(index=True, foreign_key="client.id")
     created_by_user_id: int = Field(index=True, foreign_key="user.id")
 
-class LoanSimulation(SQLModel, table=True):
-    """Histórico de simulações de empréstimo (por cliente)."""
+    kind: str = Field(default="proposta", index=True)  # proposta | solicitacao
+    title: str
+    description: str = ""  # solicitação do cliente ou notas da proposta
+    service_name: str = Field(default="", index=True)  # produto/serviço
+    value_brl: float = 0.0  # usado normalmente para "proposta"
+    status: str = Field(default="rascunho", index=True)
 
-    id: Optional[int] = Field(default=None, primary_key=True)
-
-    company_id: int = Field(index=True, foreign_key="company.id")
-    client_id: int = Field(index=True, foreign_key="client.id")
-    created_by_user_id: int = Field(index=True, foreign_key="user.id")
-
-    loan_type: str = Field(default="Empréstimo", index=True)
-    amortization: str = Field(default="price", index=True)
-    term_months: int = 0
+    created_at: datetime = Field(default_factory=utcnow, index=True)
+    updated_at: datetime = Field(default_factory=utcnow, index=True)
 
     principal_brl: float = 0.0
     rate_base: str = Field(default="am", index=True)  # am | aa
