@@ -16709,7 +16709,6 @@ async def simulador_gerar_proposta(
         return RedirectResponse("/simulador", status_code=303)
 
     sim = _save_loan_simulation(session, ctx=ctx, client_id=resolved_client_id, inp=inp, res=res)
-(session, ctx=ctx, client_id=client_id, inp=inp, res=res)
 
     title = f"Proposta - {sim.loan_type} (R$ {sim.principal_brl:,.0f})".replace(",", ".")
     desc_lines = [
