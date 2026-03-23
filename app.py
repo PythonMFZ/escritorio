@@ -17678,7 +17678,43 @@ TEMPLATES.setdefault("consulta_run.html", r"""
     <div class="d-flex justify-content-between align-items-start flex-wrap gap-2">
       <div>
         <div class="text-muted">Status</div>
-        <div><strong>{{ run.status }}</s
+        <div><strong>{{ run.status }}</strong></div>
+
+        {% if run.status == "PENDING" %}
+          <div class="text-muted" style="font-size:.9rem;">Consulta em processamento. Você pode atualizar o resultado.</div>
+          <div class="mt-2">
+            <a class="btn btn-sm btn-outline-primary" href="/consultas/run/{{ run.id }}">Atualizar resultado</a>
+          </div>
+        {% endif %}
+
+        {% if run.status == "READY" %}
+          <div class="mt-2 d-flex gap-2 flex-wrap">
+            <a class="btn btn-sm btn-primary" href="/consultas/run/{{ run.id }}/pdf" target="_blank" rel="noopener">Baixar PDF</a>
+          </div>
+        {% endif %}
+      </div>
+
+      <div class="text-end">
+        <div class="text-muted">Documento</div>
+        <div><strong>{{ run.subject_doc|default("") }}</strong></div>
+      </div>
+    </div>
+
+    <hr>
+
+    {% if run.status == "READY" %}
+      <div class="alert alert-success mb-0">Consulta finalizada. Use o botão <strong>Baixar PDF</strong> para gerar o relatório.</div>
+    {% elif run.status == "PENDING" %}
+      <div class="alert alert-warning mb-0">Em processamento (Direct Data). Aguarde alguns segundos e clique em <strong>Atualizar resultado</strong>.</div>
+    {% else %}
+      <div class="alert alert-danger mb-0">{{ run.error }}</div>
+    {% endif %}
+  </div>
+  {% endif %}
+</div>
+{% endblock %}
+""")
+
 TEMPLATES.setdefault("consultas_historico.html", r"""
 {% extends "base.html" %}
 {% block content %}
@@ -17729,114 +17765,6 @@ TEMPLATES.setdefault("consultas_historico.html", r"""
 </div>
 {% endblock %}
 """)
-
-trong></div>
-        {% if run.status == "PENDING" %}
-          <div class="text-muted" style="font-size:.9rem;">Consulta em processamento. Você pode atualizar o resultado.</div>
-          <div class="mt-2">
-            <a class="btn btn-sm btn-outline-primary" href="/consultas/run/{{ run.id }}">Atualizar resultado</a>
-          </div>
-        {% endif %}
-        {% if run.status == "READY" %}
-          <div class="mt-2 d-flex gap-2 flex-wrap">
-            <a class="btn btn-sm btn-primary" href="/consultas/run/{{ run.id }}/pdf" target="_blank" rel="noopener">Baixar PDF</a>
-          </div>
-        {% endif %}
-      </div>
-      <div class="text-end">
-        <div class="text-muted">Documento</div>
-        <div><strong>{{ run.subject_doc|default("") }}</strong></div>
-      </div>
-    </div>
-
-    <hr>
-
-    {% if run.status == "READY" %}
-      <div class="alert alert-success mb-0">Consulta finalizada. Use o botão <strong>Baixar PDF</strong> para gerar o relatório.</div>
-    {% elif run.status == "PENDING" %}
-      <div class="alert alert-warning mb-0">Em processamento (Direct Data). Aguarde alguns segundos e clique em <strong>Atualizar resultado</strong>.</div>
-    {% else %}
-      <div class="alert alert-danger mb-0">{{ run.error }}</div>
-    {% endif %}
-  </div>
-  {% endif %}
-</div>
-{% endblock %}
-
-""")
-
-TEMPLATES.setdefault("admin_consultas.html", r"""
-{% extends "base.html" %}
-{% block content %}
-<div class="container" style="max-width: 1100px;">
-  <div class="d-flex align-items-center justify-content-between mt-3">
-    <h3>Admin - Consultas</h3>
-    <a class="btn btn-outline-secondary btn-sm" href="/consultas">Voltar</a>
-  </div>
-
-  <div class="card p-3 mt-3">
-    <h5 class="mb-2">Criar/Editar Produto</h5>
-    <form method="post" action="/admin/consultas/save" class="row g-2">
-      <div class="col-md-3">
-        <label class="form-label">Código</label>
-        <input class="form-control" name="code" required>
-      </div>
-      <div class="col-md-3">
-        <label class="form-label">Nome</label>
-        <input class="form-control" name="label" required>
-      </div>
-      <div class="col-md-2">
-        <label class="form-label">Custo Direct (R$)</label>
-        <input class="form-control" name="provider_cost" value="3,90">
-      </div>
-      <div class="col-md-2">
-        <label class="form-label">Markup (%)</label>
-        <input class="form-control" name="markup_pct" value="50">
-      </div>
-      <div class="col-md-2 d-flex align-items-end">
-        <button class="btn btn-primary w-100" type="submit">Salvar</button>
-      </div>
-    </form>
-  </div>
-
-  <div class="card p-3 mt-3">
-    <h5 class="mb-2">Produtos</h5>
-    <div class="table-responsive">
-      <table class="table table-sm">
-        <thead>
-          <tr>
-            <th>Código</th><th>Nome</th>
-            <th class="text-end">Custo</th>
-            <th class="text-end">Markup</th>
-            <th class="text-end">Preço</th>
-            <th>Ativo</th><th></th>
-          </tr>
-        </thead>
-        <tbody>
-          {% for p in products %}
-          <tr>
-            <td>{{ p.code }}</td>
-            <td>{{ p.label }}</td>
-            <td class="text-end">{{ "%.2f"|format(p.provider_cost_cents/100) }}</td>
-            <td class="text-end">{{ p.markup_pct }}%</td>
-            <td class="text-end">{{ "%.2f"|format(p.price_cents/100) }}</td>
-            <td>{{ "sim" if p.enabled else "não" }}</td>
-            <td class="text-end">
-              <form method="post" action="/admin/consultas/toggle" style="display:inline;">
-                <input type="hidden" name="code" value="{{ p.code }}">
-                <button class="btn btn-sm btn-outline-secondary" type="submit">{{ "Inativar" if p.enabled else "Ativar" }}</button>
-              </form>
-            </td>
-          </tr>
-          {% endfor %}
-        </tbody>
-      </table>
-    </div>
-  </div>
-</div>
-{% endblock %}
-""")
-
 
 @app.get("/creditos", response_class=HTMLResponse)
 @require_login
