@@ -18317,6 +18317,7 @@ async def consultas_run_pdf(request: Request, session: Session = Depends(get_ses
     })
 
 @app.get("/consultas/historico", response_class=HTMLResponse)
+@app.get("/consultas/historico/", response_class=HTMLResponse)
 @require_login
 async def consultas_historico(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
     ctx = get_tenant_context(request, session)
@@ -18337,7 +18338,7 @@ async def consultas_historico(request: Request, session: Session = Depends(get_s
         select(QueryRun)
         .where(QueryRun.company_id == ctx.company.id, QueryRun.client_id == client.id)
         .order_by(QueryRun.id.desc())
-        .limit(200)
+        .limit(500)
     ).all()
 
     products = {p.code: p.label for p in session.exec(select(QueryProduct).where(QueryProduct.company_id == ctx.company.id)).all()}
@@ -18352,7 +18353,7 @@ async def consultas_historico(request: Request, session: Session = Depends(get_s
             "price_cents": r.price_cents,
         })
 
-    return render("consultas_historico.html", request=request, context={"title": "Histórico", "runs": view})
+    return render("consultas_historico.html", request=request, context={"title": "Histórico de Consultas", "runs": view})
 
 @app.get("/admin/consultas", response_class=HTMLResponse)
 @require_role({"admin", "equipe"})
@@ -18440,3 +18441,6 @@ async def admin_consultas_toggle(request: Request, session: Session = Depends(ge
     return RedirectResponse("/admin/consultas", status_code=303)
 
 # === /CREDIT_WALLET_MODULE_V1 ===
+@app.get("/__routes")
+async def __routes() -> list[str]:
+    return sorted({getattr(r, "path", "") for r in app.router.routes})
