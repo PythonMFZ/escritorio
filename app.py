@@ -17656,17 +17656,18 @@ TEMPLATES.setdefault("consulta_run.html", r"""
 
   <div class="card p-3 mt-3">
     <div class="text-muted">Saldo: <strong>{{ wallet_balance }}</strong> créditos</div>
-    <div class="text-muted">Preço: <strong>{{ "%.2f"|format(product.price_cents/100) }}</strong> créditos</div>
+    <div class="text-muted">Preço desta consulta: <strong>{{ "%.2f"|format(product.price_cents/100) }}</strong> créditos</div>
 
     <form method="post" action="/consultas/{{ product.code }}/run" class="mt-3">
       <div class="row g-2">
         <div class="col-md-6">
           <label class="form-label">CPF/CNPJ</label>
-          <input class="form-control" name="doc" required>
+          <input class="form-control" name="doc" placeholder="Digite CPF/CNPJ" required>
         </div>
         <div class="col-12">
           <button class="btn btn-primary" type="submit">Executar</button>
           <a class="btn btn-outline-secondary" href="/creditos">Recarregar</a>
+          <a class="btn btn-outline-secondary" href="/consultas/historico">Histórico</a>
         </div>
       </div>
     </form>
@@ -17674,16 +17675,94 @@ TEMPLATES.setdefault("consulta_run.html", r"""
 
   {% if run %}
   <div class="card p-3 mt-3">
-    <div class="text-muted">Status: <strong>{{ run.status }}</strong></div>
+    <div class="d-flex justify-content-between align-items-start flex-wrap gap-2">
+      <div>
+        <div class="text-muted">Status</div>
+        <div><strong>{{ run.status }}</s
+TEMPLATES.setdefault("consultas_historico.html", r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="container" style="max-width: 1100px;">
+  <div class="d-flex align-items-center justify-content-between mt-3">
+    <h3>Histórico de Consultas</h3>
+    <a class="btn btn-outline-secondary btn-sm" href="/consultas">Voltar</a>
+  </div>
+
+  <div class="card p-3 mt-3">
+    <div class="table-responsive">
+      <table class="table table-sm align-middle">
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Data</th>
+            <th>Consulta</th>
+            <th>Doc</th>
+            <th>Status</th>
+            <th class="text-end">Preço</th>
+            <th class="text-end"></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in runs %}
+          <tr>
+            <td>{{ r.id }}</td>
+            <td>{{ r.created_at.strftime("%d/%m/%Y %H:%M") }}</td>
+            <td>{{ r.label }}</td>
+            <td>{{ r.doc_masked }}</td>
+            <td><strong>{{ r.status }}</strong></td>
+            <td class="text-end">{{ "%.2f"|format(r.price_cents/100) }}</td>
+            <td class="text-end">
+              <a class="btn btn-sm btn-outline-primary" href="/consultas/run/{{ r.id }}">Abrir</a>
+              {% if r.status == "READY" %}
+                <a class="btn btn-sm btn-primary" href="/consultas/run/{{ r.id }}/pdf" target="_blank" rel="noopener">PDF</a>
+              {% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+          {% if not runs %}
+            <tr><td colspan="7" class="text-muted">Sem consultas.</td></tr>
+          {% endif %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}
+""")
+
+trong></div>
+        {% if run.status == "PENDING" %}
+          <div class="text-muted" style="font-size:.9rem;">Consulta em processamento. Você pode atualizar o resultado.</div>
+          <div class="mt-2">
+            <a class="btn btn-sm btn-outline-primary" href="/consultas/run/{{ run.id }}">Atualizar resultado</a>
+          </div>
+        {% endif %}
+        {% if run.status == "READY" %}
+          <div class="mt-2 d-flex gap-2 flex-wrap">
+            <a class="btn btn-sm btn-primary" href="/consultas/run/{{ run.id }}/pdf" target="_blank" rel="noopener">Baixar PDF</a>
+          </div>
+        {% endif %}
+      </div>
+      <div class="text-end">
+        <div class="text-muted">Documento</div>
+        <div><strong>{{ run.subject_doc|default("") }}</strong></div>
+      </div>
+    </div>
+
+    <hr>
+
     {% if run.status == "READY" %}
-      <pre style="white-space:pre-wrap;">{{ run.result_json }}</pre>
+      <div class="alert alert-success mb-0">Consulta finalizada. Use o botão <strong>Baixar PDF</strong> para gerar o relatório.</div>
+    {% elif run.status == "PENDING" %}
+      <div class="alert alert-warning mb-0">Em processamento (Direct Data). Aguarde alguns segundos e clique em <strong>Atualizar resultado</strong>.</div>
     {% else %}
-      <div class="text-danger">{{ run.error }}</div>
+      <div class="alert alert-danger mb-0">{{ run.error }}</div>
     {% endif %}
   </div>
   {% endif %}
 </div>
 {% endblock %}
+
 """)
 
 TEMPLATES.setdefault("admin_consultas.html", r"""
@@ -18027,7 +18106,7 @@ async def consultas_run(request: Request, session: Session = Depends(get_session
         md = (data.get("metaDados") or {})
         run.provider_uid = md.get("consultaUid") or run.provider_uid
 
-        if _dd_is_processing(data) and run.provider_uid:
+        if (_dd_is_processing(data) or ((data.get("metaDados") or {}).get("resultado","").lower().find("process")!=-1)) and run.provider_uid:
             ok, final_data, _ = await _directdata_wait_result(run.provider_uid, timeout_s=60)
             if ok and final_data is not None:
                 data = final_data
@@ -18152,6 +18231,44 @@ async def consultas_run_pdf(request: Request, session: Session = Depends(get_ses
     return StreamingResponse(io.BytesIO(pdf_bytes), media_type="application/pdf", headers={
         "Content-Disposition": f'attachment; filename="{filename}"'
     })
+
+@app.get("/consultas/historico", response_class=HTMLResponse)
+@require_login
+async def consultas_historico(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    client_id = get_active_client_id(request, session, ctx)
+    if not client_id and getattr(ctx.membership, "client_id", None):
+        client_id = int(ctx.membership.client_id)
+    if not client_id:
+        set_flash(request, "Selecione um cliente para ver o histórico.")
+        return RedirectResponse("/", status_code=303)
+
+    client = session.get(Client, int(client_id))
+    if not client or client.company_id != ctx.company.id:
+        raise HTTPException(status_code=404, detail="Cliente inválido.")
+
+    runs = session.exec(
+        select(QueryRun)
+        .where(QueryRun.company_id == ctx.company.id, QueryRun.client_id == client.id)
+        .order_by(QueryRun.id.desc())
+        .limit(200)
+    ).all()
+
+    products = {p.code: p.label for p in session.exec(select(QueryProduct).where(QueryProduct.company_id == ctx.company.id)).all()}
+    view = []
+    for r in runs:
+        view.append({
+            "id": r.id,
+            "created_at": r.created_at,
+            "label": products.get(r.product_code, r.product_code),
+            "doc_masked": _mask_doc(r.subject_doc),
+            "status": r.status,
+            "price_cents": r.price_cents,
+        })
+
+    return render("consultas_historico.html", request=request, context={"title": "Histórico", "runs": view})
 
 @app.get("/admin/consultas", response_class=HTMLResponse)
 @require_role({"admin", "equipe"})
