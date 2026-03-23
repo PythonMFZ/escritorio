@@ -17765,6 +17765,7 @@ TEMPLATES.setdefault("consultas.html", r"""
     <h3>Consultas</h3>
     <div class="d-flex gap-2">
       <a class="btn btn-outline-secondary btn-sm" href="/creditos">Créditos</a>
+      <a class="btn btn-outline-secondary btn-sm" href="/consultas/historico">Histórico</a>
       {% if role in ["admin","equipe"] %}
         <a class="btn btn-outline-primary btn-sm" href="/admin/consultas">Admin Consultas</a>
       {% endif %}
@@ -17822,6 +17823,7 @@ TEMPLATES.setdefault("consulta_run.html", r"""
         <div class="col-12">
           <button class="btn btn-primary" type="submit">Executar</button>
           <a class="btn btn-outline-secondary" href="/creditos">Recarregar</a>
+          <a class="btn btn-outline-secondary" href="/consultas/historico">Histórico</a>
           <a class="btn btn-outline-secondary" href="/consultas/historico">Histórico</a>
         </div>
       </div>
