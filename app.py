@@ -17383,27 +17383,39 @@ def _seed_credit_products(session: Session, company_id: int) -> None:
 
 
 async def _directdata_call_real(*, product_code: str, doc_digits: str) -> tuple[int, dict[str, Any] | None, str]:
-    """Chama Direct Data para produtos do catálogo (MVP: SCR)."""
+    """Chama Direct Data para produtos do catálogo (SCR + Score)."""
     doc = _digits_only(doc_digits)
     if not doc:
         return 0, None, "Documento inválido."
 
-    if product_code in {"directdata.scr_detalhada", "directdata.scr_analitico"}:
-        doc_type = "cpf" if len(doc) == 11 else "cnpj"
-        return await _directdata_scr_request(document_type=doc_type, document_value=doc)
+    doc_type = "cpf" if len(doc) == 11 else "cnpj"
 
-# === CONSULTAS_PDF_REPORT_V1 ===
-from reportlab.lib.pagesizes import A4
-from reportlab.lib.units import mm
-from reportlab.pdfgen import canvas
-from reportlab.lib.utils import ImageReader
-from reportlab.platypus import Paragraph
-from reportlab.lib.styles import getSampleStyleSheet
+    # SCR Resumido
+    if product_code == "directdata.scr_resumido":
+        url = os.getenv("DIRECTDATA_SCR_RESUMIDO_URL") or _directdata_url_for("/api/SCRBacen")
+        if not url:
+            return 0, None, "DIRECTDATA_SCR_RESUMIDO_URL/DIRECTDATA_BASE_URL não configurado."
+        # Usa mesmo formato do SCR
+        return await _directdata_scr_request(document_type=doc_type, document_value=doc, url_override=url)
 
-def _dd_is_processing(data: dict) -> bool:
-    md = (data or {}).get("metaDados") or {}
-    resultado = (md.get("resultado") or "").lower()
-    return (data.get("retorno") is None) or ("process" in resultado)
+    # SCR Detalhada
+    if product_code == "directdata.scr_detalhada":
+        url = os.getenv("DIRECTDATA_SCR_URL") or _directdata_url_for("/api/SCRBacenDetalhada")
+        if not url:
+            return 0, None, "DIRECTDATA_SCR_URL/DIRECTDATA_BASE_URL não configurado."
+        return await _directdata_scr_request(document_type=doc_type, document_value=doc, url_override=url)
+
+    # Score
+    if product_code == "directdata.score":
+        url = os.getenv("DIRECTDATA_SCORE_URL") or _directdata_url_for("/api/Score")
+        if not url:
+            return 0, None, "DIRECTDATA_SCORE_URL/DIRECTDATA_BASE_URL não configurado."
+        # Direct Data Score: normalmente aceita CPF/CNPJ no mesmo padrão (CPF/CNPJ)
+        key = "CPF" if doc_type == "cpf" else "CNPJ"
+        return await _directdata_generic_request(url=url, params={key: doc})
+
+    return 0, None, f"Produto não mapeado para Direct Data: {product_code}"
+
 
 async def _directdata_wait_result(consulta_uid: str, *, timeout_s: int = 60) -> tuple[bool, dict | None, str]:
     """
