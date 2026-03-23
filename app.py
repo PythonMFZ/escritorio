@@ -6833,6 +6833,15 @@ def render(
 # ----------------------------
 
 app = FastAPI()
+
+@app.get("/__routes", include_in_schema=False)
+async def __routes() -> list[str]:
+    return sorted({getattr(r, "path", "") for r in app.router.routes})
+
+@app.get("/__build", include_in_schema=False)
+async def __build() -> dict:
+    return {"build": "stable_debug_v2"}
+
 https_only = os.getenv("SESSION_HTTPS_ONLY", "0") == "1"
 # NOTE: SessionMiddleware must wrap feature_access_middleware, installed later.
 
@@ -6843,6 +6852,17 @@ app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 @app.middleware("http")
 async def feature_access_middleware(request: Request, call_next: Callable[..., Any]) -> Response:
+    path = request.url.path
+    if (
+        path.startswith("/__")
+        or path.startswith("/health")
+        or path.startswith("/healthz")
+        or path.startswith("/static")
+        or path.startswith("/api/ui/")
+        or path.startswith("/stripe/webhook")
+    ):
+        return await call_next(request)
+
     key = resolve_feature_key(request.url.path)
     if key is None:
         return await call_next(request)
@@ -17765,7 +17785,6 @@ TEMPLATES.setdefault("consultas.html", r"""
     <h3>Consultas</h3>
     <div class="d-flex gap-2">
       <a class="btn btn-outline-secondary btn-sm" href="/creditos">Créditos</a>
-      <a class="btn btn-outline-secondary btn-sm" href="/consultas/historico">Histórico</a>
       {% if role in ["admin","equipe"] %}
         <a class="btn btn-outline-primary btn-sm" href="/admin/consultas">Admin Consultas</a>
       {% endif %}
@@ -18320,19 +18339,12 @@ async def consultas_run_pdf(request: Request, session: Session = Depends(get_ses
 @app.get("/consultas/historico/", response_class=HTMLResponse)
 @require_login
 async def consultas_historico(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
-    """
-    Lista todas as consultas já feitas e permite baixar PDF posteriormente.
-
-    Importante: esta rota **nunca retorna 404**. Quando não houver cliente selecionado/vinculado,
-    ela retorna uma lista vazia e uma mensagem orientativa.
-    """
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
     active_client_id = get_active_client_id(request, session, ctx)
     member_client_id = getattr(ctx.membership, "client_id", None)
 
-    # Define conjunto de runs com fallback seguro
     runs = []
     info_msg = ""
 
@@ -18342,32 +18354,31 @@ async def consultas_historico(request: Request, session: Session = Depends(get_s
                 info_msg = "Seu usuário não está vinculado a um cliente."
                 runs = []
             else:
-                client_id = int(member_client_id)
+                cid = int(member_client_id)
                 runs = session.exec(
                     select(QueryRun)
-                    .where(QueryRun.company_id == ctx.company.id, QueryRun.client_id == client_id)
+                    .where(QueryRun.company_id == ctx.company.id, QueryRun.client_id == cid)
                     .order_by(QueryRun.id.desc())
                     .limit(500)
                 ).all()
         else:
             if active_client_id:
-                client_id = int(active_client_id)
+                cid = int(active_client_id)
                 runs = session.exec(
                     select(QueryRun)
-                    .where(QueryRun.company_id == ctx.company.id, QueryRun.client_id == client_id)
+                    .where(QueryRun.company_id == ctx.company.id, QueryRun.client_id == cid)
                     .order_by(QueryRun.id.desc())
                     .limit(500)
                 ).all()
             else:
-                info_msg = "Nenhum cliente selecionado. Exibindo consultas da empresa."
                 runs = session.exec(
                     select(QueryRun)
                     .where(QueryRun.company_id == ctx.company.id)
                     .order_by(QueryRun.id.desc())
                     .limit(500)
                 ).all()
+                info_msg = "Exibindo consultas da empresa (nenhum cliente selecionado)."
     except Exception as e:
-        # não derruba a página
         info_msg = f"Erro ao carregar histórico: {e}"
         runs = []
 
@@ -18383,15 +18394,8 @@ async def consultas_historico(request: Request, session: Session = Depends(get_s
             "price_cents": r.price_cents,
         })
 
-    return render(
-        "consultas_historico.html",
-        request=request,
-        context={
-            "title": "Histórico de Consultas",
-            "runs": view,
-            "info_msg": info_msg,
-        },
-    )
+    return render("consultas_historico.html", request=request, context={"title": "Histórico de Consultas", "runs": view, "info_msg": info_msg})
+
 
 @app.get("/admin/consultas", response_class=HTMLResponse)
 @require_role({"admin", "equipe"})
