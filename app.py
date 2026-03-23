@@ -17436,6 +17436,15 @@ def _pdf_draw_wrapped(c: canvas.Canvas, text: str, x: float, y: float, max_width
         y -= line_h
     return y
 
+def _mask_doc(doc: str) -> str:
+    """Mascara CPF/CNPJ para exibição em relatórios."""
+    d = re.sub(r"\D+", "", doc or "")
+    if len(d) == 11:
+        return f"{d[:3]}.***.***-{d[-2:]}"
+    if len(d) == 14:
+        return f"{d[:2]}.***.***/****-{d[-2:]}"
+    return d
+
 def build_consulta_pdf(*, company_name: str, client_name: str, product_label: str, product_code: str, subject_doc: str, data: dict) -> bytes:
     """
     Gera um relatório PDF da consulta (sem mostrar JSON cru).
