@@ -18048,7 +18048,7 @@ async def consultas_run(request: Request, session: Session = Depends(get_session
                 session.commit()
                 # render pendente
                 w = _get_or_create_wallet(session, company_id=ctx.company.id, client_id=client.id)
-                product_view = {"code": p.code, "label": p.label, "category": p.category, "price_cents": int(price)}
+                product_view = {"code": p.code, "label": p.label, "category": p.category, "price_cents": int(run.price_cents)}
                 return render("consulta_run.html", request=request, context={
                     "title": p.label,
                     "product": product_view,
@@ -18113,7 +18113,7 @@ async def consultas_run_view(request: Request, session: Session = Depends(get_se
     price_cents = run.price_cents
 
     w = _get_or_create_wallet(session, company_id=ctx.company.id, client_id=client.id)
-    product_view = {"code": run.product_code, "label": label, "category": (p.category if p else "credito"), "price_cents": int(price)}
+    product_view = {"code": run.product_code, "label": label, "category": (p.category if p else "credito"), "price_cents": int(run.price_cents)}
     return render("consulta_run.html", request=request, context={
         "title": label,
         "product": product_view,
