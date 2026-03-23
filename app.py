@@ -18106,6 +18106,67 @@ async def consultas_home(request: Request, session: Session = Depends(get_sessio
     })
 
 
+@app.get("/consultas/historico", response_class=HTMLResponse)
+@app.get("/consultas/historico/", response_class=HTMLResponse)
+@require_login
+async def consultas_historico(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    active_client_id = get_active_client_id(request, session, ctx)
+    member_client_id = getattr(ctx.membership, "client_id", None)
+
+    runs = []
+    info_msg = ""
+
+    try:
+        if ctx.membership.role == "cliente":
+            if not member_client_id:
+                info_msg = "Seu usuário não está vinculado a um cliente."
+                runs = []
+            else:
+                cid = int(member_client_id)
+                runs = session.exec(
+                    select(QueryRun)
+                    .where(QueryRun.company_id == ctx.company.id, QueryRun.client_id == cid)
+                    .order_by(QueryRun.id.desc())
+                    .limit(500)
+                ).all()
+        else:
+            if active_client_id:
+                cid = int(active_client_id)
+                runs = session.exec(
+                    select(QueryRun)
+                    .where(QueryRun.company_id == ctx.company.id, QueryRun.client_id == cid)
+                    .order_by(QueryRun.id.desc())
+                    .limit(500)
+                ).all()
+            else:
+                runs = session.exec(
+                    select(QueryRun)
+                    .where(QueryRun.company_id == ctx.company.id)
+                    .order_by(QueryRun.id.desc())
+                    .limit(500)
+                ).all()
+                info_msg = "Exibindo consultas da empresa (nenhum cliente selecionado)."
+    except Exception as e:
+        info_msg = f"Erro ao carregar histórico: {e}"
+        runs = []
+
+    products = {p.code: p.label for p in session.exec(select(QueryProduct).where(QueryProduct.company_id == ctx.company.id)).all()}
+    view = []
+    for r in runs:
+        view.append({
+            "id": r.id,
+            "created_at": r.created_at,
+            "label": products.get(r.product_code, r.product_code),
+            "doc_masked": _mask_doc(r.subject_doc),
+            "status": r.status,
+            "price_cents": r.price_cents,
+        })
+
+    return render("consultas_historico.html", request=request, context={"title": "Histórico de Consultas", "runs": view, "info_msg": info_msg})
+
 @app.get("/consultas/{code}", response_class=HTMLResponse)
 @require_login
 async def consultas_product(request: Request, session: Session = Depends(get_session), code: str = "") -> HTMLResponse:
@@ -18334,67 +18395,6 @@ async def consultas_run_pdf(request: Request, session: Session = Depends(get_ses
     return StreamingResponse(io.BytesIO(pdf_bytes), media_type="application/pdf", headers={
         "Content-Disposition": f'attachment; filename="{filename}"'
     })
-
-@app.get("/consultas/historico", response_class=HTMLResponse)
-@app.get("/consultas/historico/", response_class=HTMLResponse)
-@require_login
-async def consultas_historico(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
-    ctx = get_tenant_context(request, session)
-    assert ctx is not None
-
-    active_client_id = get_active_client_id(request, session, ctx)
-    member_client_id = getattr(ctx.membership, "client_id", None)
-
-    runs = []
-    info_msg = ""
-
-    try:
-        if ctx.membership.role == "cliente":
-            if not member_client_id:
-                info_msg = "Seu usuário não está vinculado a um cliente."
-                runs = []
-            else:
-                cid = int(member_client_id)
-                runs = session.exec(
-                    select(QueryRun)
-                    .where(QueryRun.company_id == ctx.company.id, QueryRun.client_id == cid)
-                    .order_by(QueryRun.id.desc())
-                    .limit(500)
-                ).all()
-        else:
-            if active_client_id:
-                cid = int(active_client_id)
-                runs = session.exec(
-                    select(QueryRun)
-                    .where(QueryRun.company_id == ctx.company.id, QueryRun.client_id == cid)
-                    .order_by(QueryRun.id.desc())
-                    .limit(500)
-                ).all()
-            else:
-                runs = session.exec(
-                    select(QueryRun)
-                    .where(QueryRun.company_id == ctx.company.id)
-                    .order_by(QueryRun.id.desc())
-                    .limit(500)
-                ).all()
-                info_msg = "Exibindo consultas da empresa (nenhum cliente selecionado)."
-    except Exception as e:
-        info_msg = f"Erro ao carregar histórico: {e}"
-        runs = []
-
-    products = {p.code: p.label for p in session.exec(select(QueryProduct).where(QueryProduct.company_id == ctx.company.id)).all()}
-    view = []
-    for r in runs:
-        view.append({
-            "id": r.id,
-            "created_at": r.created_at,
-            "label": products.get(r.product_code, r.product_code),
-            "doc_masked": _mask_doc(r.subject_doc),
-            "status": r.status,
-            "price_cents": r.price_cents,
-        })
-
-    return render("consultas_historico.html", request=request, context={"title": "Histórico de Consultas", "runs": view, "info_msg": info_msg})
 
 
 @app.get("/admin/consultas", response_class=HTMLResponse)
