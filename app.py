@@ -17824,7 +17824,6 @@ TEMPLATES.setdefault("consulta_run.html", r"""
           <button class="btn btn-primary" type="submit">Executar</button>
           <a class="btn btn-outline-secondary" href="/creditos">Recarregar</a>
           <a class="btn btn-outline-secondary" href="/consultas/historico">Histórico</a>
-          <a class="btn btn-outline-secondary" href="/consultas/historico">Histórico</a>
         </div>
       </div>
     </form>
