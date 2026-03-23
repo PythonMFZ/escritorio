@@ -17311,6 +17311,24 @@ def _wallet_debit_or_402(session: Session, *, company_id: int, client_id: int, a
         note=note,
     )
 
+def _wallet_refund(session: Session, *, company_id: int, client_id: int, amount_cents: int, run_id: int, note: str) -> None:
+    """Estorna créditos quando a consulta falha após débito."""
+    w = _get_or_create_wallet(session, company_id=company_id, client_id=client_id)
+    w.balance_cents += int(amount_cents)
+    w.updated_at = utcnow()
+    session.add(w)
+    session.commit()
+    _wallet_add_ledger(
+        session,
+        company_id=company_id,
+        client_id=client_id,
+        kind="CONSULT_RELEASED",
+        amount_cents=int(amount_cents),
+        ref_type="query_run",
+        ref_id=str(run_id),
+        note=note,
+    )
+
 
 def _seed_credit_products(session: Session, company_id: int) -> None:
     if session.exec(select(QueryProduct).where(QueryProduct.company_id == company_id)).first():
@@ -17339,13 +17357,17 @@ def _seed_credit_products(session: Session, company_id: int) -> None:
     session.commit()
 
 
-def _directdata_call_stub(product_code: str, doc_digits: str) -> dict[str, Any]:
-    return {
-        "provider": "directdata",
-        "product_code": product_code,
-        "doc": doc_digits,
-        "message": "MVP: integrar Direct Data (token/base_url) e mapear endpoints por produto.",
-    }
+async def _directdata_call_real(*, product_code: str, doc_digits: str) -> tuple[int, dict[str, Any] | None, str]:
+    """Chama Direct Data para produtos do catálogo (MVP: SCR)."""
+    doc = _digits_only(doc_digits)
+    if not doc:
+        return 0, None, "Documento inválido."
+
+    if product_code in {"directdata.scr_detalhada", "directdata.scr_analitico"}:
+        doc_type = "cpf" if len(doc) == 11 else "cnpj"
+        return await _directdata_scr_request(document_type=doc_type, document_value=doc)
+
+    return 0, None, f"Produto não mapeado para Direct Data: {product_code}"
 
 
 TEMPLATES.setdefault("creditos.html", r"""
@@ -17841,13 +17863,18 @@ async def consultas_run(request: Request, session: Session = Depends(get_session
     )
 
     try:
-        payload = _directdata_call_stub(p.code, norm_doc)
+        status, data, msg = await _directdata_call_real(product_code=p.code, doc_digits=norm_doc)
+        if status and data is not None:
+            payload = data
+        else:
+            raise RuntimeError(msg or f"Falha Direct Data status={status}")
         run.result_json = json.dumps(payload, ensure_ascii=False, indent=2)
         run.status = "READY"
         run.updated_at = utcnow()
         session.add(run)
         session.commit()
     except Exception as e:
+        _wallet_refund(session, company_id=ctx.company.id, client_id=client.id, amount_cents=price_cents, run_id=run.id, note=f"Estorno por falha Direct Data: {p.code}")
         run.status = "FAILED"
         run.error = str(e)
         run.updated_at = utcnow()
