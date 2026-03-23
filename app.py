@@ -15539,6 +15539,10 @@ from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import mm
 from reportlab.pdfgen import canvas as rl_canvas
 from reportlab.lib.utils import ImageReader
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+from reportlab.lib import colors
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.enums import TA_LEFT, TA_RIGHT
 
 
 class LoanAmortization(str, Enum):
@@ -17445,88 +17449,229 @@ def _mask_doc(doc: str) -> str:
         return f"{d[:2]}.***.***/****-{d[-2:]}"
     return d
 
-def build_consulta_pdf(*, company_name: str, client_name: str, product_label: str, product_code: str, subject_doc: str, data: dict) -> bytes:
-    """
-    Gera um relatório PDF da consulta (sem mostrar JSON cru).
-    Inclui logo e disclaimer.
-    """
-    buf = io.BytesIO()
-    c = canvas.Canvas(buf, pagesize=A4)
-    w, h = A4
+def _as_str(v: object) -> str:
+    if v is None:
+        return "-"
+    s = str(v).strip()
+    return s if s else "-"
 
-    # Header with logo
-    y = h - 18*mm
-    logo_path = os.path.join(STATIC_DIR, "logo.png") if "STATIC_DIR" in globals() else "static/logo.png"
+
+def _money(v: object) -> str:
+    if v is None:
+        return "-"
+    s = str(v).strip()
+    return s if s else "-"
+
+
+def _num(v: object) -> str:
+    if v is None:
+        return "-"
+    return str(v)
+
+
+def _draw_logo_on_canvas(c: canvas.Canvas, logo_path: str) -> None:
     try:
-        if os.path.exists(logo_path):
-            c.drawImage(ImageReader(logo_path), 20*mm, y-8*mm, width=40*mm, height=12*mm, mask='auto')
+        if logo_path and os.path.exists(logo_path):
+            c.drawImage(ImageReader(logo_path), 18 * mm, (A4[1] - 18 * mm), width=38 * mm, height=12 * mm, mask="auto")
     except Exception:
         pass
 
-    c.setFont("Helvetica-Bold", 14)
-    c.drawRightString(w - 20*mm, y, "Relatório de Consulta (Direct Data)")
-    y -= 12*mm
 
-    c.setFont("Helvetica", 9)
-    c.drawString(20*mm, y, f"Empresa: {company_name}")
-    c.drawRightString(w - 20*mm, y, f"Data: {utcnow().strftime('%d/%m/%Y %H:%M')}")
-    y -= 5*mm
-    c.drawString(20*mm, y, f"Cliente: {client_name}")
-    y -= 5*mm
-    c.drawString(20*mm, y, f"Consulta: {product_label}  ({product_code})")
-    y -= 5*mm
-    c.drawString(20*mm, y, f"Documento: {_mask_doc(subject_doc)}")
-    y -= 8*mm
+def build_consulta_pdf(
+    *,
+    company_name: str,
+    client_name: str,
+    product_label: str,
+    product_code: str,
+    subject_doc: str,
+    data: dict,
+) -> bytes:
+    """
+    Relatório PDF tratado (sem "print de JSON").
 
-    # Disclaimer
-    c.setFont("Helvetica-Oblique", 8.5)
-    disclaimer = ("Este relatório é gerado automaticamente a partir de bases de terceiros (Direct Data) "
-                  "e constitui apenas uma consulta/levantamento de informações. Não é uma proposta de crédito, "
-                  "não representa aprovação e está sujeito à análise interna, políticas e validações adicionais.")
-    y = _pdf_draw_wrapped(c, disclaimer, 20*mm, y, w-40*mm, 4.2*mm, max_lines=4)
-    y -= 6*mm
+    - Traz resumo executivo e tabelas (SCR Detalhada/Analítica).
+    - Mantém disclaimer de consulta.
+    - Não exibe JSON cru ao cliente.
+    """
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(
+        buf,
+        pagesize=A4,
+        leftMargin=18 * mm,
+        rightMargin=18 * mm,
+        topMargin=16 * mm,
+        bottomMargin=16 * mm,
+        title="Relatório de Consulta",
+        author=company_name,
+    )
 
-    # Metadata summary
+    styles = getSampleStyleSheet()
+    h1 = ParagraphStyle("h1", parent=styles["Heading1"], fontName="Helvetica-Bold", fontSize=14, spaceAfter=6)
+    h2 = ParagraphStyle("h2", parent=styles["Heading2"], fontName="Helvetica-Bold", fontSize=11, spaceBefore=10, spaceAfter=6)
+    p = ParagraphStyle("p", parent=styles["BodyText"], fontName="Helvetica", fontSize=9, leading=12)
+    small = ParagraphStyle("small", parent=styles["BodyText"], fontName="Helvetica-Oblique", fontSize=8, leading=10)
+
+    story: list = []
+
+    logo_path = os.path.join(STATIC_DIR, "logo.png") if "STATIC_DIR" in globals() else "static/logo.png"
+
+    story.append(Paragraph("Relatório de Consulta (Direct Data)", h1))
+    story.append(Spacer(1, 4))
+
+    story.append(Paragraph(f"<b>Empresa:</b> {company_name}", p))
+    story.append(Paragraph(f"<b>Cliente:</b> {client_name}", p))
+    story.append(Paragraph(f"<b>Consulta:</b> {product_label} <font size=8 color='#666'>({product_code})</font>", p))
+    story.append(Paragraph(f"<b>Documento:</b> {_mask_doc(subject_doc)}", p))
+    story.append(Spacer(1, 6))
+
+    disclaimer = (
+        "Este relatório é gerado automaticamente a partir de bases de terceiros (Direct Data) "
+        "e constitui apenas uma consulta/levantamento de informações. "
+        "Não é uma proposta de crédito, não representa aprovação e está sujeito à análise interna, "
+        "políticas e validações adicionais."
+    )
+    story.append(Paragraph(disclaimer, small))
+    story.append(Spacer(1, 10))
+
     md = (data or {}).get("metaDados") or {}
-    c.setFont("Helvetica-Bold", 10)
-    c.drawString(20*mm, y, "Resumo da execução")
-    y -= 6*mm
-    c.setFont("Helvetica", 9)
-    for k in ["consultaNome", "consultaUid", "usuario", "resultado", "data", "tempoExecucaoMs"]:
-        if k in md and md.get(k) is not None:
-            c.drawString(20*mm, y, f"{k}: {md.get(k)}")
-            y -= 5*mm
-            if y < 30*mm:
-                c.showPage()
-                y = h - 20*mm
-                c.setFont("Helvetica", 9)
+    retorno = (data or {}).get("retorno") or {}
 
-    # Retorno (pretty but not raw JSON label)
-    retorno = (data or {}).get("retorno")
-    c.setFont("Helvetica-Bold", 10)
-    c.drawString(20*mm, y, "Dados retornados")
-    y -= 6*mm
-    c.setFont("Helvetica", 9)
+    story.append(Paragraph("Resumo da execução", h2))
+    exec_rows = [
+        ["Consulta", _as_str(md.get("consultaNome"))],
+        ["UID", _as_str(md.get("consultaUid"))],
+        ["Resultado", _as_str(md.get("resultado"))],
+        ["Data", _as_str(md.get("data"))],
+        ["Tempo (ms)", _num(md.get("tempoExecucaoMs"))],
+    ]
+    t = Table(exec_rows, colWidths=[35 * mm, 140 * mm])
+    t.setStyle(
+        TableStyle(
+            [
+                ("FONT", (0, 0), (-1, -1), "Helvetica", 9),
+                ("FONT", (0, 0), (0, -1), "Helvetica-Bold", 9),
+                ("ROWBACKGROUNDS", (0, 0), (-1, -1), [colors.whitesmoke, colors.white]),
+                ("INNERGRID", (0, 0), (-1, -1), 0.25, colors.lightgrey),
+                ("BOX", (0, 0), (-1, -1), 0.25, colors.lightgrey),
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 6),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+                ("TOPPADDING", (0, 0), (-1, -1), 4),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+            ]
+        )
+    )
+    story.append(t)
 
-    if retorno is None:
-        c.drawString(20*mm, y, "Consulta ainda não retornou dados.")
-    else:
-        # Show a compact pretty print
-        pretty = json.dumps(retorno, ensure_ascii=False, indent=2)
-        # limit very large outputs per page
-        for line in pretty.splitlines():
-            if y < 20*mm:
-                c.showPage()
-                y = h - 20*mm
-                c.setFont("Helvetica", 9)
-            # truncate extremely long lines
-            if len(line) > 150:
-                line = line[:150] + "…"
-            c.drawString(20*mm, y, line)
-            y -= 4.2*mm
+    if not retorno:
+        story.append(Spacer(1, 10))
+        story.append(Paragraph("A consulta ainda não retornou dados.", p))
+        doc.build(story, onFirstPage=lambda c, d: _draw_logo_on_canvas(c, logo_path))
+        return buf.getvalue()
 
-    c.showPage()
-    c.save()
+    story.append(Paragraph("Resumo executivo (SCR)", h2))
+    score = _as_str(retorno.get("score"))
+    faixa = _as_str(retorno.get("faixaRisco"))
+    risco_total = _money(retorno.get("riscoTotal"))
+    qtd_inst = _num(retorno.get("quantidadeInstituicoes"))
+    qtd_ops = _num(retorno.get("quantidadeOperacoes"))
+    rel_ini = _as_str(retorno.get("dataInicioRelacionamento"))
+
+    exec2_rows = [
+        ["Score", score],
+        ["Faixa de risco", faixa],
+        ["Risco total", risco_total],
+        ["Instituições / Operações", f"{qtd_inst} / {qtd_ops}"],
+        ["Início relacionamento", rel_ini],
+    ]
+    t2 = Table(exec2_rows, colWidths=[55 * mm, 120 * mm])
+    t2.setStyle(
+        TableStyle(
+            [
+                ("FONT", (0, 0), (-1, -1), "Helvetica", 9),
+                ("FONT", (0, 0), (0, -1), "Helvetica-Bold", 9),
+                ("INNERGRID", (0, 0), (-1, -1), 0.25, colors.lightgrey),
+                ("BOX", (0, 0), (-1, -1), 0.25, colors.lightgrey),
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 6),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+                ("TOPPADDING", (0, 0), (-1, -1), 4),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+            ]
+        )
+    )
+    story.append(t2)
+
+    carteira = retorno.get("carteiraCredito") or {}
+    story.append(Paragraph("Carteira de crédito", h2))
+    cart_rows = [
+        ["Total", _money(carteira.get("total"))],
+        ["A vencer", _money(carteira.get("vencer"))],
+        ["Vencido", _money(carteira.get("vencido"))],
+        ["Limite", _money(carteira.get("limite"))],
+        ["Prejuízo", _money(carteira.get("prejuizo"))],
+    ]
+    t3 = Table(cart_rows, colWidths=[55 * mm, 120 * mm])
+    t3.setStyle(
+        TableStyle(
+            [
+                ("FONT", (0, 0), (-1, -1), "Helvetica", 9),
+                ("FONT", (0, 0), (0, -1), "Helvetica-Bold", 9),
+                ("ROWBACKGROUNDS", (0, 0), (-1, -1), [colors.white, colors.whitesmoke]),
+                ("INNERGRID", (0, 0), (-1, -1), 0.25, colors.lightgrey),
+                ("BOX", (0, 0), (-1, -1), 0.25, colors.lightgrey),
+                ("LEFTPADDING", (0, 0), (-1, -1), 6),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+                ("TOPPADDING", (0, 0), (-1, -1), 4),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+            ]
+        )
+    )
+    story.append(t3)
+
+    modalidades = retorno.get("modalidades") or []
+    story.append(Paragraph("Modalidades (resumo)", h2))
+    mod_rows = [["Código", "Modalidade", "A vencer", "Vencido", "Cambial"]]
+    for m in modalidades:
+        av = (m.get("aVencer") or {}).get("total")
+        vc = (m.get("vencido") or {}).get("total")
+        mod_rows.append(
+            [
+                _as_str(m.get("codigoModalidade")),
+                _as_str(m.get("descricaoModalidade")),
+                _money(av),
+                _money(vc),
+                _as_str(m.get("variacaoCambial")),
+            ]
+        )
+    t4 = Table(mod_rows, colWidths=[20 * mm, 85 * mm, 30 * mm, 30 * mm, 20 * mm])
+    t4.setStyle(
+        TableStyle(
+            [
+                ("FONT", (0, 0), (-1, 0), "Helvetica-Bold", 9),
+                ("FONT", (0, 1), (-1, -1), "Helvetica", 8.5),
+                ("BACKGROUND", (0, 0), (-1, 0), colors.whitesmoke),
+                ("INNERGRID", (0, 0), (-1, -1), 0.25, colors.lightgrey),
+                ("BOX", (0, 0), (-1, -1), 0.25, colors.lightgrey),
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 5),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 5),
+                ("TOPPADDING", (0, 0), (-1, -1), 3),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+            ]
+        )
+    )
+    story.append(t4)
+
+    story.append(Paragraph("Notas e interpretação", h2))
+    for line in [
+        "• O score e a faixa de risco são indicadores auxiliares; a decisão final depende de análise interna.",
+        "• Valores “a vencer” e “vencido” ajudam a identificar comportamento de pagamento e concentração de risco.",
+        "• Recomenda-se validar com documentos e informações fornecidas pelo cliente e políticas internas.",
+    ]:
+        story.append(Paragraph(line, p))
+
+    doc.build(story, onFirstPage=lambda c, d: _draw_logo_on_canvas(c, logo_path))
     return buf.getvalue()
 
 # === /CONSULTAS_PDF_REPORT_V1 ===
