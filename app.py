@@ -17367,6 +17367,162 @@ async def _directdata_call_real(*, product_code: str, doc_digits: str) -> tuple[
         doc_type = "cpf" if len(doc) == 11 else "cnpj"
         return await _directdata_scr_request(document_type=doc_type, document_value=doc)
 
+# === CONSULTAS_PDF_REPORT_V1 ===
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.units import mm
+from reportlab.pdfgen import canvas
+from reportlab.lib.utils import ImageReader
+from reportlab.platypus import Paragraph
+from reportlab.lib.styles import getSampleStyleSheet
+
+def _dd_is_processing(data: dict) -> bool:
+    md = (data or {}).get("metaDados") or {}
+    resultado = (md.get("resultado") or "").lower()
+    return (data.get("retorno") is None) or ("process" in resultado)
+
+async def _directdata_wait_result(consulta_uid: str, *, timeout_s: int = 60) -> tuple[bool, dict | None, str]:
+    """
+    Poll Direct Data async result endpoint until retorno != None or timeout.
+    Uses env DIRECTDATA_ASYNC_RESULT_URL and DIRECTDATA_POLL_MIN_INTERVAL_S.
+    """
+    url = os.getenv("DIRECTDATA_ASYNC_RESULT_URL") or ""
+    token = os.getenv("DIRECTDATA_TOKEN") or ""
+    if not url or not token:
+        return False, None, "Direct Data async result URL/token não configurado."
+
+    interval = int(os.getenv("DIRECTDATA_POLL_MIN_INTERVAL_S") or 6)
+    start = utcnow()
+    deadline = start.timestamp() + float(timeout_s)
+
+    last_msg = ""
+    while utcnow().timestamp() < deadline:
+        try:
+            # Direct Data uses TOKEN query param; attempt both consultaUid and ConsultaUid
+            params = {"TOKEN": token, "consultaUid": consulta_uid}
+            async with httpx.AsyncClient(timeout=20) as client:
+                r = await client.get(url, params=params)
+                if r.status_code != 200:
+                    last_msg = f"HTTP {r.status_code}"
+                else:
+                    data = r.json()
+                    if isinstance(data, dict) and not _dd_is_processing(data):
+                        return True, data, "OK"
+                    last_msg = ((data or {}).get("metaDados") or {}).get("resultado") or "Em Processamento"
+        except Exception as e:
+            last_msg = str(e)
+
+        await asyncio.sleep(max(2, interval))
+
+    return False, None, f"Timeout aguardando processamento ({last_msg})"
+
+def _pdf_draw_wrapped(c: canvas.Canvas, text: str, x: float, y: float, max_width: float, line_h: float, max_lines: int = 999) -> float:
+    styles = getSampleStyleSheet()
+    # simple wrapping without heavy platypus table
+    words = (text or "").split()
+    line = ""
+    lines = []
+    for w in words:
+        test = (line + " " + w).strip()
+        if c.stringWidth(test, "Helvetica", 9) <= max_width:
+            line = test
+        else:
+            lines.append(line)
+            line = w
+    if line:
+        lines.append(line)
+    for ln in lines[:max_lines]:
+        c.drawString(x, y, ln)
+        y -= line_h
+    return y
+
+def build_consulta_pdf(*, company_name: str, client_name: str, product_label: str, product_code: str, subject_doc: str, data: dict) -> bytes:
+    """
+    Gera um relatório PDF da consulta (sem mostrar JSON cru).
+    Inclui logo e disclaimer.
+    """
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=A4)
+    w, h = A4
+
+    # Header with logo
+    y = h - 18*mm
+    logo_path = os.path.join(STATIC_DIR, "logo.png") if "STATIC_DIR" in globals() else "static/logo.png"
+    try:
+        if os.path.exists(logo_path):
+            c.drawImage(ImageReader(logo_path), 20*mm, y-8*mm, width=40*mm, height=12*mm, mask='auto')
+    except Exception:
+        pass
+
+    c.setFont("Helvetica-Bold", 14)
+    c.drawRightString(w - 20*mm, y, "Relatório de Consulta (Direct Data)")
+    y -= 12*mm
+
+    c.setFont("Helvetica", 9)
+    c.drawString(20*mm, y, f"Empresa: {company_name}")
+    c.drawRightString(w - 20*mm, y, f"Data: {utcnow().strftime('%d/%m/%Y %H:%M')}")
+    y -= 5*mm
+    c.drawString(20*mm, y, f"Cliente: {client_name}")
+    y -= 5*mm
+    c.drawString(20*mm, y, f"Consulta: {product_label}  ({product_code})")
+    y -= 5*mm
+    c.drawString(20*mm, y, f"Documento: {_mask_doc(subject_doc)}")
+    y -= 8*mm
+
+    # Disclaimer
+    c.setFont("Helvetica-Oblique", 8.5)
+    disclaimer = ("Este relatório é gerado automaticamente a partir de bases de terceiros (Direct Data) "
+                  "e constitui apenas uma consulta/levantamento de informações. Não é uma proposta de crédito, "
+                  "não representa aprovação e está sujeito à análise interna, políticas e validações adicionais.")
+    y = _pdf_draw_wrapped(c, disclaimer, 20*mm, y, w-40*mm, 4.2*mm, max_lines=4)
+    y -= 6*mm
+
+    # Metadata summary
+    md = (data or {}).get("metaDados") or {}
+    c.setFont("Helvetica-Bold", 10)
+    c.drawString(20*mm, y, "Resumo da execução")
+    y -= 6*mm
+    c.setFont("Helvetica", 9)
+    for k in ["consultaNome", "consultaUid", "usuario", "resultado", "data", "tempoExecucaoMs"]:
+        if k in md and md.get(k) is not None:
+            c.drawString(20*mm, y, f"{k}: {md.get(k)}")
+            y -= 5*mm
+            if y < 30*mm:
+                c.showPage()
+                y = h - 20*mm
+                c.setFont("Helvetica", 9)
+
+    # Retorno (pretty but not raw JSON label)
+    retorno = (data or {}).get("retorno")
+    c.setFont("Helvetica-Bold", 10)
+    c.drawString(20*mm, y, "Dados retornados")
+    y -= 6*mm
+    c.setFont("Helvetica", 9)
+
+    if retorno is None:
+        c.drawString(20*mm, y, "Consulta ainda não retornou dados.")
+    else:
+        # Show a compact pretty print
+        pretty = json.dumps(retorno, ensure_ascii=False, indent=2)
+        # limit very large outputs per page
+        for line in pretty.splitlines():
+            if y < 20*mm:
+                c.showPage()
+                y = h - 20*mm
+                c.setFont("Helvetica", 9)
+            # truncate extremely long lines
+            if len(line) > 150:
+                line = line[:150] + "…"
+            c.drawString(20*mm, y, line)
+            y -= 4.2*mm
+
+    c.showPage()
+    c.save()
+    return buf.getvalue()
+
+# === /CONSULTAS_PDF_REPORT_V1 ===
+
+
+
     return 0, None, f"Produto não mapeado para Direct Data: {product_code}"
 
 
@@ -17864,16 +18020,42 @@ async def consultas_run(request: Request, session: Session = Depends(get_session
 
     try:
         status, data, msg = await _directdata_call_real(product_code=p.code, doc_digits=norm_doc)
-        if status and data is not None:
-            payload = data
-        else:
+        if not status or data is None:
             raise RuntimeError(msg or f"Falha Direct Data status={status}")
-        run.result_json = json.dumps(payload, ensure_ascii=False, indent=2)
+
+        # Se veio "Em Processamento", aguarda e atualiza com resultado final
+        md = (data.get("metaDados") or {})
+        run.provider_uid = md.get("consultaUid") or run.provider_uid
+
+        if _dd_is_processing(data) and run.provider_uid:
+            ok, final_data, _ = await _directdata_wait_result(run.provider_uid, timeout_s=60)
+            if ok and final_data is not None:
+                data = final_data
+            else:
+                # mantém pendente; usuário pode atualizar depois
+                run.status = "PENDING"
+                run.result_json = json.dumps(data, ensure_ascii=False, indent=2)
+                run.updated_at = utcnow()
+                session.add(run)
+                session.commit()
+                # render pendente
+                w = _get_or_create_wallet(session, company_id=ctx.company.id, client_id=client.id)
+                product_view = {"code": p.code, "label": p.label, "category": p.category, "price_cents": int(price_cents)}
+                return render("consulta_run.html", request=request, context={
+                    "title": p.label,
+                    "product": product_view,
+                    "wallet_balance": f"{w.balance_cents/100:.2f}",
+                    "run": run,
+                    "client": client,
+                })
+
+        # pronto
+        run.result_json = json.dumps(data, ensure_ascii=False, indent=2)
         run.status = "READY"
         run.updated_at = utcnow()
         session.add(run)
         session.commit()
-    except Exception as e:
+except Exception as e:
         _wallet_refund(session, company_id=ctx.company.id, client_id=client.id, amount_cents=price_cents, run_id=run.id, note=f"Estorno por falha Direct Data: {p.code}")
         run.status = "FAILED"
         run.error = str(e)
@@ -17890,6 +18072,86 @@ async def consultas_run(request: Request, session: Session = Depends(get_session
         "run": run,
     })
 
+
+@app.get("/consultas/run/{run_id}", response_class=HTMLResponse)
+@require_login
+async def consultas_run_view(request: Request, session: Session = Depends(get_session), run_id: int = 0) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+    run = session.get(QueryRun, int(run_id))
+    if not run or run.company_id != ctx.company.id:
+        raise HTTPException(status_code=404, detail="Consulta não encontrada.")
+
+    client = session.get(Client, int(run.client_id))
+    if not client or client.company_id != ctx.company.id:
+        raise HTTPException(status_code=404, detail="Cliente inválido.")
+
+    # Atualiza se pendente e tem provider_uid
+    if run.status == "PENDING" and run.provider_uid:
+        ok, final_data, msg = await _directdata_wait_result(run.provider_uid, timeout_s=30)
+        if ok and final_data is not None:
+            run.result_json = json.dumps(final_data, ensure_ascii=False, indent=2)
+            run.status = "READY"
+            run.updated_at = utcnow()
+            session.add(run)
+            session.commit()
+        else:
+            # mantém pendente; não estorna aqui
+            pass
+
+    # recuperar product
+    p = session.exec(select(QueryProduct).where(QueryProduct.company_id == ctx.company.id, QueryProduct.code == run.product_code)).first()
+    label = p.label if p else run.product_code
+    price_cents = run.price_cents
+
+    w = _get_or_create_wallet(session, company_id=ctx.company.id, client_id=client.id)
+    product_view = {"code": run.product_code, "label": label, "category": (p.category if p else "credito"), "price_cents": int(price_cents)}
+    return render("consulta_run.html", request=request, context={
+        "title": label,
+        "product": product_view,
+        "wallet_balance": f"{w.balance_cents/100:.2f}",
+        "run": run,
+        "client": client,
+    })
+
+
+@app.get("/consultas/run/{run_id}/pdf")
+@require_login
+async def consultas_run_pdf(request: Request, session: Session = Depends(get_session), run_id: int = 0) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+    run = session.get(QueryRun, int(run_id))
+    if not run or run.company_id != ctx.company.id:
+        raise HTTPException(status_code=404, detail="Consulta não encontrada.")
+
+    client = session.get(Client, int(run.client_id))
+    if not client or client.company_id != ctx.company.id:
+        raise HTTPException(status_code=404, detail="Cliente inválido.")
+
+    if run.status != "READY":
+        raise HTTPException(status_code=409, detail="Consulta ainda não finalizada.")
+
+    p = session.exec(select(QueryProduct).where(QueryProduct.company_id == ctx.company.id, QueryProduct.code == run.product_code)).first()
+    label = p.label if p else run.product_code
+
+    data = {}
+    try:
+        data = json.loads(run.result_json or "{}")
+    except Exception:
+        data = {}
+
+    pdf_bytes = build_consulta_pdf(
+        company_name=ctx.company.name,
+        client_name=client.name,
+        product_label=label,
+        product_code=run.product_code,
+        subject_doc=run.subject_doc,
+        data=data,
+    )
+    filename = f"relatorio_{run.product_code}_{run.id}.pdf".replace("/", "_")
+    return StreamingResponse(io.BytesIO(pdf_bytes), media_type="application/pdf", headers={
+        "Content-Disposition": f'attachment; filename="{filename}"'
+    })
 
 @app.get("/admin/consultas", response_class=HTMLResponse)
 @require_role({"admin", "equipe"})
