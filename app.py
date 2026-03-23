@@ -18321,48 +18321,55 @@ async def consultas_run_pdf(request: Request, session: Session = Depends(get_ses
 @require_login
 async def consultas_historico(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
     """
-    Lista todas as consultas já feitas.
+    Lista todas as consultas já feitas e permite baixar PDF posteriormente.
 
-    - Portal (role=cliente): lista apenas as consultas do próprio cliente (membership.client_id).
-    - Admin/Equipe: se houver cliente ativo, filtra por cliente; senão lista por empresa.
+    Importante: esta rota **nunca retorna 404**. Quando não houver cliente selecionado/vinculado,
+    ela retorna uma lista vazia e uma mensagem orientativa.
     """
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
-    # Resolve escopo
     active_client_id = get_active_client_id(request, session, ctx)
     member_client_id = getattr(ctx.membership, "client_id", None)
 
-    # cliente (portal): sempre filtra para o próprio client_id
-    if ctx.membership.role == "cliente":
-        if not member_client_id:
-            set_flash(request, "Seu usuário não está vinculado a um cliente.")
-            return RedirectResponse("/", status_code=303)
-        client_id = int(member_client_id)
-        runs = session.exec(
-            select(QueryRun)
-            .where(QueryRun.company_id == ctx.company.id, QueryRun.client_id == client_id)
-            .order_by(QueryRun.id.desc())
-            .limit(500)
-        ).all()
-    else:
-        # admin/equipe
-        if active_client_id:
-            client_id = int(active_client_id)
-            runs = session.exec(
-                select(QueryRun)
-                .where(QueryRun.company_id == ctx.company.id, QueryRun.client_id == client_id)
-                .order_by(QueryRun.id.desc())
-                .limit(500)
-            ).all()
+    # Define conjunto de runs com fallback seguro
+    runs = []
+    info_msg = ""
+
+    try:
+        if ctx.membership.role == "cliente":
+            if not member_client_id:
+                info_msg = "Seu usuário não está vinculado a um cliente."
+                runs = []
+            else:
+                client_id = int(member_client_id)
+                runs = session.exec(
+                    select(QueryRun)
+                    .where(QueryRun.company_id == ctx.company.id, QueryRun.client_id == client_id)
+                    .order_by(QueryRun.id.desc())
+                    .limit(500)
+                ).all()
         else:
-            # sem cliente selecionado: lista por empresa (todas)
-            runs = session.exec(
-                select(QueryRun)
-                .where(QueryRun.company_id == ctx.company.id)
-                .order_by(QueryRun.id.desc())
-                .limit(500)
-            ).all()
+            if active_client_id:
+                client_id = int(active_client_id)
+                runs = session.exec(
+                    select(QueryRun)
+                    .where(QueryRun.company_id == ctx.company.id, QueryRun.client_id == client_id)
+                    .order_by(QueryRun.id.desc())
+                    .limit(500)
+                ).all()
+            else:
+                info_msg = "Nenhum cliente selecionado. Exibindo consultas da empresa."
+                runs = session.exec(
+                    select(QueryRun)
+                    .where(QueryRun.company_id == ctx.company.id)
+                    .order_by(QueryRun.id.desc())
+                    .limit(500)
+                ).all()
+    except Exception as e:
+        # não derruba a página
+        info_msg = f"Erro ao carregar histórico: {e}"
+        runs = []
 
     products = {p.code: p.label for p in session.exec(select(QueryProduct).where(QueryProduct.company_id == ctx.company.id)).all()}
     view = []
@@ -18376,7 +18383,15 @@ async def consultas_historico(request: Request, session: Session = Depends(get_s
             "price_cents": r.price_cents,
         })
 
-    return render("consultas_historico.html", request=request, context={"title": "Histórico de Consultas", "runs": view})
+    return render(
+        "consultas_historico.html",
+        request=request,
+        context={
+            "title": "Histórico de Consultas",
+            "runs": view,
+            "info_msg": info_msg,
+        },
+    )
 
 @app.get("/admin/consultas", response_class=HTMLResponse)
 @require_role({"admin", "equipe"})
