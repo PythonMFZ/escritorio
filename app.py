@@ -17406,7 +17406,7 @@ async def _directdata_call_real(*, product_code: str, doc_digits: str) -> tuple[
         return await _directdata_scr_request(document_type=doc_type, document_value=doc, url_override=url)
 
     # Score
-    if product_code == "directdata.score":
+    if product_code in {"directdata.score", "directdata.score_quod"}:
         url = os.getenv("DIRECTDATA_SCORE_URL") or _directdata_url_for("/api/Score")
         if not url:
             return 0, None, "DIRECTDATA_SCORE_URL/DIRECTDATA_BASE_URL não configurado."
