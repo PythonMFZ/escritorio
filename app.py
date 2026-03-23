@@ -18063,7 +18063,7 @@ async def consultas_run(request: Request, session: Session = Depends(get_session
         session.add(run)
         session.commit()
     except Exception as e:
-        _wallet_refund(session, company_id=ctx.company.id, client_id=client.id, amount_cents=price_cents, run_id=run.id, note=f"Estorno por falha Direct Data: {p.code}")
+        _wallet_refund(session, company_id=ctx.company.id, client_id=client.id, amount_cents=run.price_cents, run_id=run.id, note=f"Estorno por falha Direct Data: {p.code}")
         run.status = "FAILED"
         run.error = str(e)
         run.updated_at = utcnow()
