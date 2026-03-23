@@ -18320,26 +18320,49 @@ async def consultas_run_pdf(request: Request, session: Session = Depends(get_ses
 @app.get("/consultas/historico/", response_class=HTMLResponse)
 @require_login
 async def consultas_historico(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
+    """
+    Lista todas as consultas já feitas.
+
+    - Portal (role=cliente): lista apenas as consultas do próprio cliente (membership.client_id).
+    - Admin/Equipe: se houver cliente ativo, filtra por cliente; senão lista por empresa.
+    """
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
-    client_id = get_active_client_id(request, session, ctx)
-    if not client_id and getattr(ctx.membership, "client_id", None):
-        client_id = int(ctx.membership.client_id)
-    if not client_id:
-        set_flash(request, "Selecione um cliente para ver o histórico.")
-        return RedirectResponse("/", status_code=303)
+    # Resolve escopo
+    active_client_id = get_active_client_id(request, session, ctx)
+    member_client_id = getattr(ctx.membership, "client_id", None)
 
-    client = session.get(Client, int(client_id))
-    if not client or client.company_id != ctx.company.id:
-        raise HTTPException(status_code=404, detail="Cliente inválido.")
-
-    runs = session.exec(
-        select(QueryRun)
-        .where(QueryRun.company_id == ctx.company.id, QueryRun.client_id == client.id)
-        .order_by(QueryRun.id.desc())
-        .limit(500)
-    ).all()
+    # cliente (portal): sempre filtra para o próprio client_id
+    if ctx.membership.role == "cliente":
+        if not member_client_id:
+            set_flash(request, "Seu usuário não está vinculado a um cliente.")
+            return RedirectResponse("/", status_code=303)
+        client_id = int(member_client_id)
+        runs = session.exec(
+            select(QueryRun)
+            .where(QueryRun.company_id == ctx.company.id, QueryRun.client_id == client_id)
+            .order_by(QueryRun.id.desc())
+            .limit(500)
+        ).all()
+    else:
+        # admin/equipe
+        if active_client_id:
+            client_id = int(active_client_id)
+            runs = session.exec(
+                select(QueryRun)
+                .where(QueryRun.company_id == ctx.company.id, QueryRun.client_id == client_id)
+                .order_by(QueryRun.id.desc())
+                .limit(500)
+            ).all()
+        else:
+            # sem cliente selecionado: lista por empresa (todas)
+            runs = session.exec(
+                select(QueryRun)
+                .where(QueryRun.company_id == ctx.company.id)
+                .order_by(QueryRun.id.desc())
+                .limit(500)
+            ).all()
 
     products = {p.code: p.label for p in session.exec(select(QueryProduct).where(QueryProduct.company_id == ctx.company.id)).all()}
     view = []
@@ -18441,6 +18464,3 @@ async def admin_consultas_toggle(request: Request, session: Session = Depends(ge
     return RedirectResponse("/admin/consultas", status_code=303)
 
 # === /CREDIT_WALLET_MODULE_V1 ===
-@app.get("/__routes")
-async def __routes() -> list[str]:
-    return sorted({getattr(r, "path", "") for r in app.router.routes})
