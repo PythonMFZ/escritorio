@@ -17395,6 +17395,11 @@ def _directdata_url_for(path: str, fallback: str = "") -> str:
     return fallback
 
 
+def _dd_is_processing(data: dict) -> bool:
+    md = (data or {}).get("metaDados") or {}
+    resultado = (md.get("resultado") or "").lower()
+    return (data.get("retorno") is None) or ("process" in resultado)
+
 async def _directdata_generic_request(*, url: str, params: dict[str, str], timeout_s: int = 30) -> tuple[int, dict[str, Any] | None, str]:
     """
     Request GET genérico para Direct Data.
