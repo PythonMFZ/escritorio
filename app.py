@@ -13,6 +13,9 @@ import asyncio
 import re
 import secrets
 import uuid
+import smtplib
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
 from dataclasses import dataclass
 from datetime import datetime, timezone, timedelta
 from functools import wraps
@@ -325,6 +328,57 @@ def _public_base_url(request: Request) -> str:
 
 
 CONSENT_LINK_NOTE_PREFIX = "CONSENT_LINK_JSON:"
+
+
+# ----------------------------
+# E-mail (SMTP) - usado para links de aceite SCR nas Consultas
+# ----------------------------
+
+SMTP_HOST = os.getenv("SMTP_HOST", "").strip()
+SMTP_PORT = int(os.getenv("SMTP_PORT", "587") or "587")
+SMTP_USERNAME = os.getenv("SMTP_USERNAME", "").strip()
+SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "").strip()
+SMTP_FROM = os.getenv("SMTP_FROM", "").strip() or SMTP_USERNAME
+SMTP_USE_SSL = (os.getenv("SMTP_USE_SSL", "").strip() == "1") or (SMTP_PORT == 465)
+
+
+def _smtp_send_email(*, to_email: str, subject: str, html_body: str, text_body: str = "") -> None:
+    """Envia e-mail via SMTP.
+
+    Requer variáveis de ambiente:
+      - SMTP_HOST, SMTP_PORT
+      - SMTP_USERNAME, SMTP_PASSWORD (se necessário)
+      - SMTP_FROM (opcional; padrão SMTP_USERNAME)
+    """
+    if not SMTP_HOST or not SMTP_FROM:
+        raise RuntimeError("SMTP não configurado (SMTP_HOST/SMTP_FROM ausentes).")
+
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = subject
+    msg["From"] = SMTP_FROM
+    msg["To"] = to_email
+
+    if text_body:
+        msg.attach(MIMEText(text_body, "plain", "utf-8"))
+    msg.attach(MIMEText(html_body, "html", "utf-8"))
+
+    if SMTP_USE_SSL:
+        with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, timeout=20) as s:
+            if SMTP_USERNAME and SMTP_PASSWORD:
+                s.login(SMTP_USERNAME, SMTP_PASSWORD)
+            s.sendmail(SMTP_FROM, [to_email], msg.as_string())
+        return
+
+    with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=20) as s:
+        s.ehlo()
+        try:
+            s.starttls()
+            s.ehlo()
+        except Exception:
+            pass
+        if SMTP_USERNAME and SMTP_PASSWORD:
+            s.login(SMTP_USERNAME, SMTP_PASSWORD)
+        s.sendmail(SMTP_FROM, [to_email], msg.as_string())
 
 
 def _pack_consent_link_note(*, token: str, created_by_user_id: int, expires_at: datetime) -> str:
@@ -737,6 +791,57 @@ class CreditConsent(SQLModel, table=True):
     signed_by_document: str = ""  # CPF/CNPJ do signatário (opcional)
     signed_at: datetime = Field(default_factory=utcnow)
     expires_at: datetime = Field(default_factory=utcnow)
+
+    notes: str = ""
+    created_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime = Field(default_factory=utcnow)
+
+
+
+
+# ----------------------------
+# Consultas (SCR) - Aceite por CPF/CNPJ (e-mail + clickwrap)
+# ----------------------------
+
+CONSULTA_CONSENT_KIND_SCR = "consultas_scr_directdata"
+CONSULTA_CONSENT_STATUSES = {"pendente", "valida", "expirada", "revogada"}
+
+# Produtos de SCR que exigem aceite do titular do CPF/CNPJ consultado.
+SCR_CONSULTA_PRODUCT_CODES = {
+    "directdata.scr_resumido",
+    "directdata.scr_analitico",  # alias legado -> resumido
+    "directdata.scr_detalhada",
+}
+
+
+class ConsultaScrConsent(SQLModel, table=True):
+    """Aceite (LGPD/SCR) por CPF/CNPJ para liberar consultas SCR no módulo de Consultas.
+
+    Fluxo:
+      1) gerar link + enviar por e-mail
+      2) titular acessa link -> clickwrap
+      3) consulta liberada enquanto o aceite estiver válido
+
+    Escopo: company_id + subject_doc (CPF/CNPJ consultado).
+    """
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+
+    company_id: int = Field(index=True, foreign_key="company.id")
+    requested_by_client_id: int = Field(index=True, foreign_key="client.id")
+    created_by_user_id: int = Field(index=True, foreign_key="user.id")
+
+    subject_doc: str = Field(default="", index=True)  # CPF/CNPJ (somente dígitos)
+    invited_email: str = Field(default="", index=True)
+
+    status: str = Field(default="pendente", index=True)  # pendente|valida|expirada|revogada
+    token_nonce: str = Field(default_factory=lambda: secrets.token_urlsafe(16), index=True)
+
+    signed_by_name: str = ""
+    signed_at: Optional[datetime] = None
+
+    expires_at: datetime = Field(default_factory=utcnow)
+    accepted_at: Optional[datetime] = None
 
     notes: str = ""
     created_at: datetime = Field(default_factory=utcnow)
@@ -1187,6 +1292,51 @@ def ensure_credit_consent_table() -> bool:
         return False
 
 
+
+
+def ensure_consulta_scr_consent_table() -> bool:
+    """Garante que a tabela ConsultaScrConsent existe (ambientes sem Alembic)."""
+    try:
+        ConsultaScrConsent.__table__.create(engine, checkfirst=True)
+        return True
+    except Exception as e:
+        try:
+            print(f"[consulta-consent] failed to ensure ConsultaScrConsent table: {e}")
+        except Exception:
+            pass
+        return False
+
+
+def _refresh_consulta_scr_consent_status(consent: ConsultaScrConsent) -> None:
+    try:
+        now = utcnow()
+        if consent.status in {"pendente", "valida"} and _as_aware_utc(consent.expires_at) < now:
+            consent.status = "expirada"
+    except Exception:
+        pass
+
+
+def _get_latest_consulta_scr_consent(session: Session, *, company_id: int, subject_doc: str) -> Optional[ConsultaScrConsent]:
+    d = _digits_only(subject_doc)
+    if not d:
+        return None
+    return session.exec(
+        select(ConsultaScrConsent)
+        .where(ConsultaScrConsent.company_id == int(company_id), ConsultaScrConsent.subject_doc == d)
+        .order_by(ConsultaScrConsent.created_at.desc())
+    ).first()
+
+
+def _has_valid_consulta_scr_consent(session: Session, *, company_id: int, subject_doc: str) -> bool:
+    c = _get_latest_consulta_scr_consent(session, company_id=int(company_id), subject_doc=subject_doc)
+    if not c:
+        return False
+    _refresh_consulta_scr_consent_status(c)
+    return c.status == "valida"
+
+
+def _is_scr_consulta_product(code: str) -> bool:
+    return (code or "").strip() in SCR_CONSULTA_PRODUCT_CODES
 # ----------------------------
 # Integração: Conta Azul (OAuth + Sync)
 # ----------------------------
@@ -6623,6 +6773,66 @@ TEMPLATES.update({
 })
 
 templates_env = Environment(loader=DictLoader(TEMPLATES), autoescape=True)
+
+
+TEMPLATES.setdefault("consulta_consent_accept.html", r"""{% extends "base.html" %}
+{% block content %}
+<div class="container py-4" style="max-width: 900px;">
+  <div class="card p-4">
+    <div class="d-flex align-items-center justify-content-between">
+      <div>
+        <div class="fw-semibold">Aceite para consulta ao SCR (Bacen)</div>
+        <div class="muted small">{{ company.name }}</div>
+      </div>
+      <span class="badge bg-secondary">Público</span>
+    </div>
+
+    <hr class="my-3"/>
+
+    <div class="mb-2">
+      <div class="muted small">Documento (CPF/CNPJ) consultado:</div>
+      <div class="fw-semibold mono">{{ doc_masked }}</div>
+    </div>
+
+    <div class="border rounded p-3 bg-light" style="max-height: 260px; overflow:auto;">
+      {{ terms_html|safe }}
+    </div>
+
+    {% if error %}
+      <div class="alert alert-danger mt-3 mb-0">{{ error }}</div>
+    {% endif %}
+
+    <form method="post" action="/consultas/consent/aceite/{{ token }}" class="mt-3">
+      <div class="row g-2">
+        <div class="col-md-8">
+          <label class="form-label">Seu nome</label>
+          <input class="form-control" name="signed_by_name" value="{{ form.name }}" required>
+        </div>
+        <div class="col-md-4">
+          <label class="form-label">4 últimos dígitos</label>
+          <input class="form-control" name="doc_last4" placeholder="XXXX" maxlength="4" inputmode="numeric">
+          <div class="form-text">Para confirmar que você é o titular do documento.</div>
+        </div>
+        <div class="col-12">
+          <div class="form-check mt-1">
+            <input class="form-check-input" type="checkbox" name="agree" id="agree" required>
+            <label class="form-check-label" for="agree">Li o termo e autorizo a consulta ao SCR.</label>
+          </div>
+          <div class="muted small mt-2">
+            Registraremos evidências do aceite (data/hora, IP e navegador) para auditoria.
+          </div>
+        </div>
+        <div class="col-12">
+          <button class="btn btn-primary" type="submit">Confirmar aceite</button>
+        </div>
+      </div>
+    </form>
+
+    <div class="muted small mt-3">Você pode fechar esta página após confirmar.</div>
+  </div>
+</div>
+{% endblock %}
+""")
 
 TEMPLATES.update({"admin_ui.html": r"""{% extends "base.html" %}
 {% block content %}
@@ -18231,12 +18441,96 @@ TEMPLATES.setdefault("consulta_run.html", r"""
       <div class="row g-2">
         <div class="col-md-6">
           <label class="form-label">CPF/CNPJ</label>
-          <input class="form-control" name="doc" placeholder="Digite CPF/CNPJ" required>
+          <input class="form-control" name="doc" placeholder="Digite CPF/CNPJ" value="{{ doc_value|default('') }}" required>
+          {% if product_is_scr %}
+            <div class="form-text">
+              Para SCR, é obrigatório o aceite do titular do CPF/CNPJ antes da consulta.
+            </div>
+          {% endif %}
         </div>
+
+        {% if product_is_scr %}
+          <div class="col-md-6">
+            <label class="form-label">Aceite SCR (e-mail)</label>
+
+            {% if doc_value %}
+              {% if scr_consent_status == "valida" %}
+                <div class="alert alert-success py-2 mb-0">
+                  <div class="d-flex align-items-center justify-content-between">
+                    <div>
+                      <strong>Aceite válido</strong>
+                      {% if scr_consent_expires_at %}
+                        <span class="muted small">até {{ scr_consent_expires_at.strftime("%d/%m/%Y") }}</span>
+                      {% endif %}
+                    </div>
+                    <span class="badge bg-success">OK</span>
+                  </div>
+                </div>
+              {% elif scr_consent_status == "pendente" %}
+                <div class="alert alert-warning py-2 mb-0">
+                  <div class="d-flex align-items-center justify-content-between">
+                    <div><strong>Aguardando aceite</strong></div>
+                    <span class="badge bg-warning text-dark">Pendente</span>
+                  </div>
+                  <div class="muted small mt-1">Envie o link ao titular e aguarde confirmar.</div>
+                </div>
+              {% else %}
+                <div class="alert alert-warning py-2 mb-0">
+                  <div class="d-flex align-items-center justify-content-between">
+                    <div><strong>Aceite não registrado</strong></div>
+                    <span class="badge bg-secondary">Necessário</span>
+                  </div>
+                  <div class="muted small mt-1">Gere e envie o link de aceite por e-mail.</div>
+                </div>
+              {% endif %}
+            {% else %}
+              <div class="alert alert-light py-2 mb-0">
+                <div class="muted small">Digite um CPF/CNPJ acima para solicitar o aceite.</div>
+              </div>
+            {% endif %}
+          </div>
+
+          {% if doc_value and scr_consent_status != "valida" %}
+            <div class="col-12">
+              <div class="card p-3 bg-light border">
+                <div class="fw-semibold">Enviar e-mail de aceite</div>
+                <form method="post" action="/consultas/consent_link" class="row g-2 mt-1">
+                  <input type="hidden" name="code" value="{{ product.code }}">
+                  <input type="hidden" name="doc" value="{{ doc_value }}">
+                  <div class="col-md-6">
+                    <input class="form-control" name="email" placeholder="E-mail do titular" required>
+                    <div class="form-text">Este e-mail receberá o link público de aceite.</div>
+                  </div>
+                  <div class="col-md-6 d-flex align-items-start gap-2">
+                    <button class="btn btn-outline-primary" type="submit">Enviar link</button>
+                    {% if consulta_consent_link_url %}
+                      <button class="btn btn-outline-secondary" type="button"
+                              onclick="navigator.clipboard.writeText('{{ consulta_consent_link_url }}');">
+                        Copiar link
+                      </button>
+                    {% endif %}
+                  </div>
+
+                  {% if consulta_consent_link_url %}
+                    <div class="col-12">
+                      <label class="form-label small muted mb-1">Link (manual)</label>
+                      <input class="form-control form-control-sm mono" readonly value="{{ consulta_consent_link_url }}">
+                    </div>
+                  {% endif %}
+                </form>
+              </div>
+            </div>
+          {% endif %}
+        {% endif %}
+
         <div class="col-12">
-          <button class="btn btn-primary" type="submit">Executar</button>
+          {% set disable_run = (product_is_scr and doc_value and scr_consent_status != "valida") %}
+          <button class="btn btn-primary" type="submit" {% if disable_run %}disabled{% endif %}>Executar</button>
           <a class="btn btn-outline-secondary" href="/creditos">Recarregar</a>
           <a class="btn btn-outline-secondary" href="/consultas/historico">Histórico</a>
+          {% if disable_run %}
+            <div class="muted small mt-2">A consulta SCR será liberada automaticamente após o aceite.</div>
+          {% endif %}
         </div>
       </div>
     </form>
@@ -18283,6 +18577,7 @@ TEMPLATES.setdefault("consulta_run.html", r"""
 </div>
 {% endblock %}
 """)
+
 
 TEMPLATES.setdefault("consultas_historico.html", r"""
 {% extends "base.html" %}
@@ -18458,6 +18753,307 @@ async def stripe_webhook(request: Request, session: Session = Depends(get_sessio
     return Response(status_code=200)
 
 
+
+
+# ----------------------------
+# Consultas: Aceite SCR por CPF/CNPJ (link + e-mail)
+# ----------------------------
+
+def _build_consulta_consent_url(request: Request, *, token: str) -> str:
+    return f"{_public_base_url(request)}/consultas/consent/aceite/{token}"
+
+
+@app.post("/consultas/consent_link")
+@require_login
+async def consultas_generate_consent_link(
+        request: Request,
+        session: Session = Depends(get_session),
+        code: str = Form(...),
+        doc: str = Form(""),
+        email: str = Form(""),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    active_client_id = get_active_client_id(request, session, ctx)
+    if not active_client_id and getattr(ctx.membership, "client_id", None):
+        active_client_id = int(ctx.membership.client_id)
+    if not active_client_id:
+        set_flash(request, "Selecione um cliente.")
+        return RedirectResponse("/consultas", status_code=303)
+
+    norm_doc = _digits_only(doc or "")
+    if not norm_doc:
+        set_flash(request, "Informe um CPF/CNPJ válido para solicitar o aceite.")
+        return RedirectResponse(f"/consultas/{code}", status_code=303)
+
+    if not _is_scr_consulta_product(code):
+        set_flash(request, "Este produto não exige aceite SCR.")
+        return RedirectResponse(f"/consultas/{code}?doc={norm_doc}", status_code=303)
+
+    if not ensure_consulta_scr_consent_table():
+        set_flash(request, "Sistema de aceite SCR não está configurado (migração pendente no banco).")
+        return RedirectResponse(f"/consultas/{code}?doc={norm_doc}", status_code=303)
+
+    # Reutiliza link pendente, se existir
+    latest = _get_latest_consulta_scr_consent(session, company_id=ctx.company.id, subject_doc=norm_doc)
+    link_url = ""
+    if latest:
+        _refresh_consulta_scr_consent_status(latest)
+        if latest.status == "valida":
+            set_flash(request, "Aceite já está válido para este CPF/CNPJ.")
+            return RedirectResponse(f"/consultas/{code}?doc={norm_doc}", status_code=303)
+        if latest.status == "pendente":
+            meta = _unpack_consent_link_note(latest.notes)
+            if meta and meta.get("token"):
+                try:
+                    _verify_consent_token(str(meta["token"]))
+                    link_url = _build_consulta_consent_url(request, token=str(meta["token"]))
+                except Exception:
+                    link_url = ""
+
+    now = utcnow()
+    exp_dt = now + timedelta(hours=int(CREDIT_CONSENT_LINK_TTL_HOURS))
+
+    if not link_url:
+        nonce = secrets.token_urlsafe(12)
+        payload = {
+            "scope": "consultas_scr",
+            "company_id": int(ctx.company.id),
+            "requested_by_client_id": int(active_client_id),
+            "created_by_user_id": int(ctx.user.id),
+            "subject_doc": norm_doc,
+            "iat": int(now.timestamp()),
+            "exp": int(exp_dt.timestamp()),
+            "nonce": nonce,
+            "term_version": CREDIT_CONSENT_TERM_VERSION,
+        }
+        token = _sign_consent_token(payload)
+
+        consent = ConsultaScrConsent(
+            company_id=ctx.company.id,
+            requested_by_client_id=int(active_client_id),
+            created_by_user_id=ctx.user.id,
+            subject_doc=norm_doc,
+            invited_email=(email or "").strip().lower(),
+            status="pendente",
+            token_nonce=nonce,
+            signed_by_name="",
+            signed_at=None,
+            expires_at=exp_dt,
+            accepted_at=None,
+            notes=_pack_consent_link_note(token=token, created_by_user_id=ctx.user.id, expires_at=exp_dt),
+            created_at=now,
+            updated_at=now,
+        )
+        session.add(consent)
+        try:
+            session.commit()
+        except OperationalError:
+            ensure_consulta_scr_consent_table()
+            session.add(consent)
+            session.commit()
+
+        link_url = _build_consulta_consent_url(request, token=token)
+
+    # tenta enviar e-mail (se configurado)
+    to_email = (email or "").strip().lower()
+    if to_email and "@" in to_email:
+        try:
+            subj = f"Aceite para consulta ao SCR (Bacen) - {ctx.company.name}"
+            html_body = f"""
+            <p>Olá,</p>
+            <p>Para liberar a consulta ao <b>SCR (Bacen)</b> do CPF/CNPJ <b>{_mask_doc(norm_doc)}</b>,
+            pedimos que você registre seu aceite no link abaixo:</p>
+            <p><a href="{link_url}">{link_url}</a></p>
+            <p>Se você não reconhece esta solicitação, ignore este e-mail.</p>
+            """
+            text_body = f"Para liberar a consulta ao SCR do documento {_mask_doc(norm_doc)}, acesse:\n{link_url}\n"
+            _smtp_send_email(to_email=to_email, subject=subj, html_body=html_body, text_body=text_body)
+            set_flash(request, f"E-mail de aceite enviado para {to_email}.")
+        except Exception as e:
+            set_flash(request, f"Não foi possível enviar e-mail (SMTP). Copie o link manualmente. Erro: {e}")
+    else:
+        set_flash(request, "E-mail inválido. Copie o link manualmente.")
+
+    request.session["consulta_consent_link_url"] = link_url
+    return RedirectResponse(f"/consultas/{code}?doc={norm_doc}", status_code=303)
+
+
+@app.get("/consultas/consent/aceite/{token}", response_class=HTMLResponse)
+async def consultas_consent_accept_page(
+        request: Request,
+        token: str,
+        session: Session = Depends(get_session),
+) -> HTMLResponse:
+    try:
+        payload = _verify_consent_token(token)
+    except Exception as e:
+        return render("error.html", request=request, context={"current_user": None, "current_company": None, "role": "public",
+                                                            "message": f"Link inválido/expirado: {e}"}, status_code=400)
+
+    if str(payload.get("scope") or "") != "consultas_scr":
+        return render("error.html", request=request, context={"current_user": None, "current_company": None, "role": "public",
+                                                            "message": "Link inválido para este fluxo."}, status_code=400)
+
+    company_id = int(payload.get("company_id") or 0)
+    subject_doc = _digits_only(str(payload.get("subject_doc") or ""))
+    nonce = str(payload.get("nonce") or "")
+
+    company = session.get(Company, company_id) if company_id else None
+    if not company or not subject_doc:
+        return render("error.html", request=request, context={"current_user": None, "current_company": None, "role": "public",
+                                                            "message": "Link inválido: empresa/documento não encontrados."}, status_code=404)
+
+    if not ensure_consulta_scr_consent_table():
+        return render("error.html", request=request, context={"current_user": None, "current_company": company, "role": "public",
+                                                            "message": "Sistema de aceite ainda não está configurado (tabela ausente)."}, status_code=500)
+
+    consent = session.exec(
+        select(ConsultaScrConsent)
+        .where(
+            ConsultaScrConsent.company_id == company_id,
+            ConsultaScrConsent.subject_doc == subject_doc,
+            ConsultaScrConsent.token_nonce == nonce,
+        )
+        .order_by(ConsultaScrConsent.created_at.desc())
+    ).first()
+
+    if not consent:
+        return render("error.html", request=request, context={"current_user": None, "current_company": company, "role": "public",
+                                                            "message": "Solicitação de aceite não encontrada."}, status_code=404)
+
+    _refresh_consulta_scr_consent_status(consent)
+    if consent.status == "valida":
+        return render("success.html", request=request, context={"current_user": None, "current_company": company, "role": "public",
+                                                               "message": "Autorização já registrada. Obrigado!"})
+
+    terms_html = templates_env.from_string(CREDIT_CONSENT_TERMS_HTML).render(term_version=CREDIT_CONSENT_TERM_VERSION)
+
+    return render(
+        "consulta_consent_accept.html",
+        request=request,
+        context={
+            "current_user": None,
+            "current_company": company,
+            "role": "public",
+            "company": company,
+            "doc_masked": _mask_doc(subject_doc),
+            "terms_html": terms_html,
+            "token": token,
+            "error": "",
+            "form": {"name": ""},
+        },
+    )
+
+
+@app.post("/consultas/consent/aceite/{token}")
+async def consultas_consent_accept_submit(
+        request: Request,
+        token: str,
+        session: Session = Depends(get_session),
+        agree: str = Form(""),
+        signed_by_name: str = Form(""),
+        doc_last4: str = Form(""),
+) -> Response:
+    def render_form(company: Company, subject_doc: str, msg: str) -> HTMLResponse:
+        terms_html = templates_env.from_string(CREDIT_CONSENT_TERMS_HTML).render(term_version=CREDIT_CONSENT_TERM_VERSION)
+        return render(
+            "consulta_consent_accept.html",
+            request=request,
+            context={
+                "current_user": None,
+                "current_company": company,
+                "role": "public",
+                "company": company,
+                "doc_masked": _mask_doc(subject_doc),
+                "terms_html": terms_html,
+                "token": token,
+                "error": msg,
+                "form": {"name": signed_by_name or ""},
+            },
+            status_code=400,
+        )
+
+    try:
+        payload = _verify_consent_token(token)
+    except Exception as e:
+        return render("error.html", request=request, context={"current_user": None, "current_company": None, "role": "public",
+                                                            "message": f"Link inválido/expirado: {e}"}, status_code=400)
+
+    if str(payload.get("scope") or "") != "consultas_scr":
+        return render("error.html", request=request, context={"current_user": None, "current_company": None, "role": "public",
+                                                            "message": "Link inválido para este fluxo."}, status_code=400)
+
+    company_id = int(payload.get("company_id") or 0)
+    subject_doc = _digits_only(str(payload.get("subject_doc") or ""))
+    nonce = str(payload.get("nonce") or "")
+
+    company = session.get(Company, company_id) if company_id else None
+    if not company or not subject_doc:
+        return render("error.html", request=request, context={"current_user": None, "current_company": None, "role": "public",
+                                                            "message": "Link inválido: empresa/documento não encontrados."}, status_code=404)
+
+    if not str(agree).strip():
+        return render_form(company, subject_doc, "É necessário marcar o aceite.")
+
+    dl4 = _digits_only(doc_last4)[-4:]
+    if dl4 and not subject_doc.endswith(dl4):
+        return render_form(company, subject_doc, "Os 4 últimos dígitos não conferem.")
+
+    if not ensure_consulta_scr_consent_table():
+        return render("error.html", request=request, context={"current_user": None, "current_company": company, "role": "public",
+                                                            "message": "Sistema de aceite não está configurado (tabela ausente)."}, status_code=500)
+
+    consent = session.exec(
+        select(ConsultaScrConsent)
+        .where(
+            ConsultaScrConsent.company_id == company_id,
+            ConsultaScrConsent.subject_doc == subject_doc,
+            ConsultaScrConsent.token_nonce == nonce,
+        )
+        .order_by(ConsultaScrConsent.created_at.desc())
+    ).first()
+    if not consent:
+        return render("error.html", request=request, context={"current_user": None, "current_company": company, "role": "public",
+                                                            "message": "Solicitação de aceite não encontrada."}, status_code=404)
+
+    now = utcnow()
+    expires_at = now + timedelta(days=int(CREDIT_CONSENT_MAX_DAYS))
+
+    evidence = {
+        "method": "clickwrap",
+        "scope": "consultas_scr",
+        "term_version": CREDIT_CONSENT_TERM_VERSION,
+        "term_sha256": _terms_sha256(),
+        "token_iat": int(payload.get("iat") or 0),
+        "token_exp": int(payload.get("exp") or 0),
+        "ip": _request_ip(request),
+        "user_agent": request.headers.get("user-agent") or "",
+        "accepted_at_utc": now.isoformat(),
+        "subject_doc_masked": _mask_doc(subject_doc),
+    }
+
+    consent.status = "valida"
+    consent.signed_by_name = (signed_by_name or "").strip() or "Titular"
+    consent.signed_at = now
+    consent.expires_at = expires_at
+    consent.accepted_at = now
+    consent.updated_at = now
+    consent.notes = "[aceite-eletronico]\n" + json.dumps(evidence, ensure_ascii=False)
+    session.add(consent)
+    session.commit()
+
+    return render(
+        "success.html",
+        request=request,
+        context={
+            "current_user": None,
+            "current_company": company,
+            "role": "public",
+            "message": "Autorização registrada com sucesso. Você já pode fechar esta página.",
+        },
+    )
 @app.get("/consultas", response_class=HTMLResponse)
 @require_login
 async def consultas_home(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
@@ -18591,6 +19187,41 @@ async def consultas_product(request: Request, session: Session = Depends(get_ses
     if not p:
         raise HTTPException(status_code=404, detail="Consulta não encontrada.")
 
+    doc_value = _digits_only(str(request.query_params.get("doc") or ""))
+    product_is_scr = _is_scr_consulta_product(p.code)
+
+    scr_consent_status = ""
+    scr_consent_expires_at = None
+    consent_link_url = ""
+
+    if product_is_scr and doc_value and ensure_consulta_scr_consent_table():
+        try:
+            cst = _get_latest_consulta_scr_consent(session, company_id=ctx.company.id, subject_doc=doc_value)
+            if cst:
+                prev = cst.status
+                _refresh_consulta_scr_consent_status(cst)
+                if cst.status != prev:
+                    cst.updated_at = utcnow()
+                    session.add(cst)
+                    session.commit()
+                scr_consent_status = cst.status
+                if cst.status == "valida":
+                    scr_consent_expires_at = cst.expires_at
+                elif cst.status == "pendente":
+                    meta = _unpack_consent_link_note(cst.notes)
+                    if meta and meta.get("token"):
+                        try:
+                            _verify_consent_token(str(meta["token"]))
+                            consent_link_url = _build_consulta_consent_url(request, token=str(meta["token"]))
+                        except Exception:
+                            consent_link_url = ""
+        except Exception:
+            pass
+
+    # fallback: mostra o último link gerado (se houver)
+    if not consent_link_url:
+        consent_link_url = str(request.session.get("consulta_consent_link_url") or "")
+
     w = _get_or_create_wallet(session, company_id=ctx.company.id, client_id=client.id)
     pv = {"code": p.code, "label": p.label, "price_cents": _price_cents(p.provider_cost_cents, p.markup_pct)}
     return render("consulta_run.html", request=request, context={
@@ -18598,8 +19229,12 @@ async def consultas_product(request: Request, session: Session = Depends(get_ses
         "product": pv,
         "wallet_balance": f"{w.balance_cents/100:.2f}",
         "run": None,
+        "doc_value": doc_value,
+        "product_is_scr": bool(product_is_scr),
+        "scr_consent_status": scr_consent_status,
+        "scr_consent_expires_at": scr_consent_expires_at,
+        "consulta_consent_link_url": consent_link_url,
     })
-
 
 @app.post("/consultas/{code}/run", response_class=HTMLResponse)
 @require_login
@@ -18632,6 +19267,16 @@ async def consultas_run(request: Request, session: Session = Depends(get_session
     if not norm_doc:
         set_flash(request, "Documento inválido.")
         return RedirectResponse(f"/consultas/{code}", status_code=303)
+
+
+    # SCR exige aceite do titular do CPF/CNPJ consultado (link + e-mail)
+    if _is_scr_consulta_product(p.code):
+        if not ensure_consulta_scr_consent_table():
+            set_flash(request, "Sistema de aceite SCR não está configurado (migração pendente no banco).")
+            return RedirectResponse(f"/consultas/{code}?doc={norm_doc}", status_code=303)
+        if not _has_valid_consulta_scr_consent(session, company_id=ctx.company.id, subject_doc=norm_doc):
+            set_flash(request, "Antes de consultar SCR, envie o e-mail de aceite e aguarde o titular confirmar.")
+            return RedirectResponse(f"/consultas/{code}?doc={norm_doc}", status_code=303)
 
     price = _price_cents(p.provider_cost_cents, p.markup_pct)
 
@@ -18688,6 +19333,12 @@ async def consultas_run(request: Request, session: Session = Depends(get_session
                     "product": product_view,
                     "wallet_balance": f"{w.balance_cents/100:.2f}",
                     "run": run,
+
+"doc_value": norm_doc,
+"product_is_scr": bool(_is_scr_consulta_product(p.code)),
+"scr_consent_status": ("valida" if _is_scr_consulta_product(p.code) else ""),
+"scr_consent_expires_at": None,
+"consulta_consent_link_url": str(request.session.get("consulta_consent_link_url") or ""),
                     "client": client,
                 })
 
@@ -18712,7 +19363,15 @@ async def consultas_run(request: Request, session: Session = Depends(get_session
         "product": pv,
         "wallet_balance": f"{w.balance_cents/100:.2f}",
         "run": run,
+
+"doc_value": norm_doc,
+"product_is_scr": bool(_is_scr_consulta_product(p.code)),
+"scr_consent_status": ("valida" if _is_scr_consulta_product(p.code) else ""),
+"scr_consent_expires_at": None,
+"consulta_consent_link_url": str(request.session.get("consulta_consent_link_url") or ""),
     })
+
+
 
 
 @app.get("/consultas/run/{run_id}", response_class=HTMLResponse)
