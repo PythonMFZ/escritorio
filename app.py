@@ -14561,7 +14561,7 @@ def _directdata_meta_is_processing(meta: dict[str, Any]) -> bool:
     return any(k in txt for k in ("process", "aguard", "fila", "assíncr", "assincr", "gerando"))
 
 
-async def _directdata_scr_request(*, document_type: str, document_value: str, consulta_uid: str = "") -> tuple[
+async def _directdata_scr_request(*, document_type: str, document_value: str, consulta_uid: str = "", url_override: str | None = None) -> tuple[
     int, dict[str, Any] | None, str]:
     """Consulta Direct Data (SCR) via HTTP (assíncrono).
 
@@ -14588,7 +14588,8 @@ async def _directdata_scr_request(*, document_type: str, document_value: str, co
     timeout = httpx.Timeout(DIRECTDATA_TIMEOUT_S, connect=min(5.0, float(DIRECTDATA_TIMEOUT_S)))
     try:
         async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
-            resp = await client.get(DIRECTDATA_SCR_URL, params=params)
+            target_url = url_override or DIRECTDATA_SCR_URL
+            resp = await client.get(target_url, params=params)
     except Exception as e:
         return 0, None, f"Falha ao consultar Direct Data: {e}"
 
@@ -17783,47 +17784,102 @@ def _build_scr_pdf(
 # === /CONSULTAS_PDF_REPORT_V1 ===
 
 def _extract_score_fields(data: Any) -> dict[str, str]:
-    """Extrai campos de Score de formatos diferentes do retorno Direct Data."""
-    root = data if isinstance(data, dict) else {}
-    retorno = root.get("retorno") if isinstance(root.get("retorno"), dict) else {}
-    md = root.get("metaDados") if isinstance(root.get("metaDados"), dict) else {}
+    """Extrai campos do Score (QUOD) do retorno da Direct Data.
 
-    def pick(src: dict, *keys: str) -> str:
+    A resposta mais comum segue a documentação oficial:
+    retorno.pessoaFisica|pessoaJuridica.{score, faixaScore, capacidadePagamento, perfil, ...}
+    """
+    root: dict[str, Any] = data if isinstance(data, dict) else {}
+
+    def _get_ci(obj: Any, key: str) -> Any:
+        if not isinstance(obj, dict):
+            return None
+        if key in obj:
+            return obj.get(key)
+        lk = key.lower()
+        for k, v in obj.items():
+            if isinstance(k, str) and k.lower() == lk:
+                return v
+        return None
+
+    def _as_text(v: Any) -> str:
+        if v is None:
+            return "-"
+        if isinstance(v, (int, float)):
+            return str(v)
+        s = str(v).strip()
+        return s if s else "-"
+
+    def _pick(obj: Any, *keys: str) -> str:
+        if not isinstance(obj, dict):
+            return "-"
         for k in keys:
-            v = src.get(k)
+            v = _get_ci(obj, k)
             if v is None:
                 continue
-            s = str(v).strip()
-            if s:
-                return s
+            if isinstance(v, dict):
+                vv = _get_ci(v, "valor") or _get_ci(v, "value")
+                if vv is not None:
+                    return _as_text(vv)
+            if isinstance(v, list):
+                if v:
+                    return _as_text(v[0])
+                continue
+            txt = _as_text(v)
+            if txt != "-":
+                return txt
         return "-"
 
-    # tenta no retorno; se vazio, tenta no root
-    score = pick(retorno, "score", "pontuacao", "pontuacaoScore", "scoreValor", "valorScore", "nota")
-    if score == "-":
-        score = pick(root, "score", "pontuacao", "pontuacaoScore", "scoreValor", "valorScore", "nota")
+    md = _get_ci(root, "metaDados")
+    md = md if isinstance(md, dict) else {}
+    retorno = _get_ci(root, "retorno")
+    if isinstance(retorno, list) and retorno:
+        retorno = retorno[0] if isinstance(retorno[0], dict) else {}
+    retorno = retorno if isinstance(retorno, dict) else {}
 
-    faixa = pick(retorno, "faixaRisco", "faixa", "rating", "classificacao", "faixaScore")
-    if faixa == "-":
-        faixa = pick(root, "faixaRisco", "faixa", "rating", "classificacao", "faixaScore")
+    pf = _get_ci(retorno, "pessoaFisica")
+    pj = _get_ci(retorno, "pessoaJuridica")
+    pf = pf if isinstance(pf, dict) else {}
+    pj = pj if isinstance(pj, dict) else {}
 
-    pd = pick(retorno, "probabilidadeInadimplencia", "probDefault", "inadimplencia", "pd", "prob_inadimplencia")
-    if pd == "-":
-        pd = pick(root, "probabilidadeInadimplencia", "probDefault", "inadimplencia", "pd", "prob_inadimplencia")
+    # Escolhe o bloco mais informativo (PF/PJ)
+    entity: dict[str, Any] = pf if _pick(pf, "score", "pontuacao", "nota") != "-" else pj
+    if entity is None:
+        entity = {}
 
-    modelo = pick(retorno, "modelo", "versaoModelo", "modeloScore", "nomeModelo")
-    if modelo == "-":
-        modelo = pick(root, "modelo", "versaoModelo", "modeloScore", "nomeModelo")
+    score = _pick(entity, "score", "pontuacao", "pontuacaoScore", "scoreValor", "valorScore", "nota")
+    faixa = _pick(entity, "faixaScore", "faixaRisco", "faixa", "rating", "classificacao", "faixaScore")
+    capacidade = _pick(entity, "capacidadePagamento", "capacidadeDePagamento")
+    perfil = _pick(entity, "perfil")
+    observacao = _pick(retorno, "observacao")
 
-    fonte = pick(retorno, "fonte", "bureau", "origem", "provider")
-    if fonte == "-":
-        fonte = pick(root, "fonte", "bureau", "origem", "provider")
+    motivos = _get_ci(entity, "motivos")
+    if isinstance(motivos, list):
+        motivos_txt = "\n".join([f"• {str(x).strip()}" for x in motivos if str(x).strip()]) or "-"
+    else:
+        motivos_txt = _as_text(motivos)
 
-    uid = pick(md, "consultaUid")
-    consulta_nome = pick(md, "consultaNome")
-    resultado = pick(md, "resultado")
-    data_exec = pick(md, "data")
-    tempo_ms = pick(md, "tempoExecucaoMs")
+    # Indicadores de negócio (quando PJ)
+    indicadores = _get_ci(entity, "indicadoresNegocio") or _get_ci(entity, "indicadores")
+    indicadores_txt = "-"
+    if isinstance(indicadores, list) and indicadores:
+        lines: list[str] = []
+        for it in indicadores[:10]:
+            if not isinstance(it, dict):
+                continue
+            ind = _pick(it, "indicador", "titulo", "nome")
+            risco = _pick(it, "risco")
+            status = _pick(it, "status")
+            obs = _pick(it, "observacao")
+            parts = [x for x in [ind, f"risco={risco}" if risco != "-" else "-", f"status={status}" if status != "-" else "-", obs] if x and x != "-"]
+            if parts:
+                lines.append(" - ".join(parts))
+        indicadores_txt = "\n".join([f"• {l}" for l in lines]) if lines else "-"
+
+    # Campos que podem existir em variações/versões de APIs
+    pd = _pick(root, "probabilidadeInadimplencia", "probDefault", "inadimplencia", "pd", "prob_inadimplencia")
+    modelo = _pick(root, "modelo", "versaoModelo", "modeloScore", "nomeModelo")
+    fonte = _pick(root, "fonte", "bureau", "origem", "provider")
 
     return {
         "score": score,
@@ -17831,12 +17887,18 @@ def _extract_score_fields(data: Any) -> dict[str, str]:
         "prob_default": pd,
         "modelo": modelo,
         "fonte": fonte,
-        "uid": uid,
-        "consulta_nome": consulta_nome,
-        "resultado": resultado,
-        "data_exec": data_exec,
-        "tempo_ms": tempo_ms,
+        "uid": _pick(md, "consultaUid"),
+        "consulta_nome": _pick(md, "consultaNome"),
+        "resultado": _pick(md, "resultado"),
+        "data_exec": _pick(md, "data"),
+        "tempo_ms": _pick(md, "tempoExecucaoMs"),
+        "capacidade_pagamento": capacidade,
+        "perfil": perfil,
+        "observacao": observacao,
+        "motivos": motivos_txt,
+        "indicadores": indicadores_txt,
     }
+
 
 
 def _build_score_pdf(
@@ -17944,6 +18006,47 @@ def _build_score_pdf(
         )
     )
     story.append(t_score)
+
+    # Detalhes (quando retornados pela Direct Data)
+    details_rows: list[list[str]] = []
+    if fields.get("capacidade_pagamento", "-") != "-":
+        details_rows.append(["Capacidade de pagamento", fields["capacidade_pagamento"]])
+    if fields.get("perfil", "-") != "-":
+        details_rows.append(["Perfil", fields["perfil"]])
+    if fields.get("observacao", "-") != "-":
+        details_rows.append(["Observação", fields["observacao"]])
+
+    if details_rows:
+        story.append(Spacer(1, 10))
+        story.append(Paragraph("Detalhes retornados", h2))
+        t_det = Table(details_rows, colWidths=[55 * mm, 120 * mm])
+        t_det.setStyle(
+            TableStyle(
+                [
+                    ("FONT", (0, 0), (-1, -1), "Helvetica", 9),
+                    ("FONT", (0, 0), (0, -1), "Helvetica-Bold", 9),
+                    ("BACKGROUND", (0, 0), (-1, 0), colors.whitesmoke),
+                    ("INNERGRID", (0, 0), (-1, -1), 0.25, colors.lightgrey),
+                    ("BOX", (0, 0), (-1, -1), 0.25, colors.lightgrey),
+                    ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                    ("LEFTPADDING", (0, 0), (-1, -1), 6),
+                    ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+                    ("TOPPADDING", (0, 0), (-1, -1), 4),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+                ]
+            )
+        )
+        story.append(t_det)
+
+    if fields.get("motivos", "-") != "-" and fields.get("motivos"):
+        story.append(Spacer(1, 10))
+        story.append(Paragraph("Motivos", h2))
+        story.append(Paragraph(html.escape(fields["motivos"]).replace("\n", "<br/>"), p))
+
+    if fields.get("indicadores", "-") != "-" and fields.get("indicadores"):
+        story.append(Spacer(1, 10))
+        story.append(Paragraph("Indicadores de negócio", h2))
+        story.append(Paragraph(html.escape(fields["indicadores"]).replace("\n", "<br/>"), p))
 
     story.append(Spacer(1, 10))
     story.append(Paragraph("Notas e interpretação", h2))
