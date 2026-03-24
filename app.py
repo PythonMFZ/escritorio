@@ -17382,6 +17382,52 @@ def _seed_credit_products(session: Session, company_id: int) -> None:
     session.commit()
 
 
+def _directdata_url_for(path: str, fallback: str = "") -> str:
+    """
+    Resolve URL de uma consulta Direct Data.
+    Prioridade: env específica -> DIRECTDATA_BASE_URL + path -> fallback.
+    """
+    base = (os.getenv("DIRECTDATA_BASE_URL") or "").rstrip("/")
+    if base and path.startswith("/"):
+        return f"{base}{path}"
+    if base:
+        return f"{base}/{path.lstrip('/')}"
+    return fallback
+
+
+async def _directdata_generic_request(*, url: str, params: dict[str, str], timeout_s: int = 30) -> tuple[int, dict[str, Any] | None, str]:
+    """
+    Request GET genérico para Direct Data.
+    - Inclui TOKEN via query param.
+    - Suporta async/poll quando retorno traz metaDados.consultaUid e/ou resultado 'Em Processamento'.
+    """
+    token = os.getenv("DIRECTDATA_TOKEN") or ""
+    if not token:
+        return 0, None, "DIRECTDATA_TOKEN não configurado."
+    if not url:
+        return 0, None, "URL Direct Data não configurada."
+
+    q = {"TOKEN": token, **{k: v for k, v in (params or {}).items() if v is not None}}
+    try:
+        async with httpx.AsyncClient(timeout=timeout_s) as client:
+            r = await client.get(url, params=q)
+        if r.status_code != 200:
+            return r.status_code, None, f"HTTP {r.status_code}"
+        data = r.json()
+        if not isinstance(data, dict):
+            return r.status_code, None, "Resposta inválida (não é JSON objeto)."
+
+        md = (data.get("metaDados") or {})
+        uid = md.get("consultaUid")
+        if uid and (_dd_is_processing(data) or (str(md.get("resultado") or "").lower().find("process") != -1)):
+            ok, final_data, msg = await _directdata_wait_result(str(uid), timeout_s=60)
+            if ok and final_data is not None:
+                return 200, final_data, "OK"
+            return 200, data, msg or "Em Processamento"
+        return 200, data, "OK"
+    except Exception as e:
+        return 0, None, str(e)
+
 async def _directdata_call_real(*, product_code: str, doc_digits: str) -> tuple[int, dict[str, Any] | None, str]:
     """Chama Direct Data para produtos do catálogo (SCR + Score)."""
     doc = _digits_only(doc_digits)
