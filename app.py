@@ -18494,15 +18494,14 @@ TEMPLATES.setdefault("consulta_run.html", r"""
             <div class="col-12">
               <div class="card p-3 bg-light border">
                 <div class="fw-semibold">Enviar e-mail de aceite</div>
-                <form method="post" action="/consultas/consent_link" class="row g-2 mt-1">
+                <div class="row g-2 mt-1">
                   <input type="hidden" name="code" value="{{ product.code }}">
-                  <input type="hidden" name="doc" value="{{ doc_value }}">
-                  <div class="col-md-6">
-                    <input class="form-control" name="email" placeholder="E-mail do titular" required>
+                                    <div class="col-md-6">
+                    <input class="form-control" name="email" placeholder="E-mail do titular">
                     <div class="form-text">Este e-mail receberá o link público de aceite.</div>
                   </div>
                   <div class="col-md-6 d-flex align-items-start gap-2">
-                    <button class="btn btn-outline-primary" type="submit">Enviar link</button>
+                    <button class="btn btn-outline-primary" type="submit" formaction="/consultas/consent_link" formmethod="post">Enviar link</button>
                     {% if consulta_consent_link_url %}
                       <button class="btn btn-outline-secondary" type="button"
                               onclick="navigator.clipboard.writeText('{{ consulta_consent_link_url }}');">
@@ -18517,7 +18516,7 @@ TEMPLATES.setdefault("consulta_run.html", r"""
                       <input class="form-control form-control-sm mono" readonly value="{{ consulta_consent_link_url }}">
                     </div>
                   {% endif %}
-                </form>
+                </div>
               </div>
             </div>
           {% endif %}
