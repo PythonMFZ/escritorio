@@ -18776,3 +18776,18 @@ async def admin_consultas_toggle(request: Request, session: Session = Depends(ge
     return RedirectResponse("/admin/consultas", status_code=303)
 
 # === /CREDIT_WALLET_MODULE_V1 ===
+
+
+# ----------------------------
+# Entrypoint (local / platforms that run `python app.py`)
+# ----------------------------
+
+if __name__ == "__main__":
+    import uvicorn
+
+    uvicorn.run(
+        "app:app",
+        host="0.0.0.0",
+        port=int(os.getenv("PORT", "8000")),
+        log_level=os.getenv("LOG_LEVEL", "info").lower(),
+    )
