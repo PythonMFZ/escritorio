@@ -13,12 +13,11 @@ import asyncio
 import re
 import secrets
 import uuid
-import time
 from dataclasses import dataclass
 from datetime import datetime, timezone, timedelta
 from functools import wraps
 from pathlib import Path
-from typing import Any, Callable, Optional, TypedDict
+from typing import Any, Callable, Optional
 from urllib.parse import urlparse
 
 import httpx
@@ -174,95 +173,6 @@ SERVICE_NAME_SET = {x["name"] for x in SERVICE_CATALOG}
 def sanitize_service_name(name: str) -> str:
     s = (name or "").strip()
     return s if s in SERVICE_NAME_SET else ""
-
-
-# ----------------------------
-# CNPJ Autocomplete (BrasilAPI / CNPJ.ws)
-# ----------------------------
-
-_CNPJ_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
-_CNPJ_CACHE_TTL_SEC = 60 * 60 * 24  # 24h
-
-
-class CnpjLookupResult(TypedDict, total=False):
-    legal_name: str
-    trade_name: str
-    street: str
-    number: str
-    neighborhood: str
-    city: str
-    state: str
-    zip_code: str
-    phone: str
-
-
-def normalize_cnpj(raw: str) -> str:
-    return re.sub(r"\D+", "", raw or "").strip()
-
-
-async def fetch_cnpj_data(cnpj: str) -> CnpjLookupResult:
-    """Busca dados públicos de CNPJ e normaliza campos para o front.
-
-    Provider order:
-      1) BrasilAPI (free/public)
-      2) CNPJ.ws public (rate limited)
-    """
-    cnpj = normalize_cnpj(cnpj)
-    if len(cnpj) != 14:
-        raise HTTPException(status_code=400, detail="CNPJ inválido (precisa ter 14 dígitos).")
-
-    now = time.time()
-    cached = _CNPJ_CACHE.get(cnpj)
-    if cached and (now - cached[0]) < _CNPJ_CACHE_TTL_SEC:
-        return cached[1]  # type: ignore[return-value]
-
-    # Provider 1: BrasilAPI
-    try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            r = await client.get(f"https://brasilapi.com.br/api/cnpj/v1/{cnpj}")
-            if r.status_code == 200:
-                j = r.json()
-                out: CnpjLookupResult = {
-                    "legal_name": j.get("razao_social") or "",
-                    "trade_name": j.get("nome_fantasia") or "",
-                    "street": j.get("logradouro") or "",
-                    "number": j.get("numero") or "",
-                    "neighborhood": j.get("bairro") or "",
-                    "city": j.get("municipio") or "",
-                    "state": j.get("uf") or "",
-                    "zip_code": normalize_cnpj(j.get("cep") or ""),
-                    "phone": j.get("ddd_telefone_1") or "",
-                }
-                _CNPJ_CACHE[cnpj] = (now, dict(out))
-                return out
-    except Exception:
-        pass
-
-    # Provider 2: CNPJ.ws public (3/min)
-    try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            r = await client.get(f"https://publica.cnpj.ws/cnpj/{cnpj}")
-            if r.status_code == 200:
-                j = r.json()
-                estab = j.get("estabelecimento") or {}
-                end = estab.get("endereco") or {}
-                out = {
-                    "legal_name": j.get("razao_social") or "",
-                    "trade_name": estab.get("nome_fantasia") or "",
-                    "street": end.get("logradouro") or "",
-                    "number": end.get("numero") or "",
-                    "neighborhood": end.get("bairro") or "",
-                    "city": (end.get("cidade") or {}).get("nome") or "",
-                    "state": (end.get("estado") or {}).get("sigla") or "",
-                    "zip_code": normalize_cnpj(end.get("cep") or ""),
-                    "phone": f"{(estab.get('ddd1') or '')}{(estab.get('telefone1') or '')}",
-                }
-                _CNPJ_CACHE[cnpj] = (now, dict(out))
-                return out  # type: ignore[return-value]
-    except Exception:
-        pass
-
-    raise HTTPException(status_code=404, detail="CNPJ não encontrado nos provedores disponíveis.")
 
 
 NOTION_TOKEN = os.getenv("NOTION_TOKEN")
@@ -2248,96 +2158,6 @@ def _safe_int(value: Any) -> Optional[int]:
         return None
 
 
-def _norm_name(value: str) -> str:
-    return re.sub(r"\s+", " ", (value or "").strip()).casefold()
-
-
-def find_client_by_identity(
-    session: Session,
-    company_id: int,
-    *,
-    cnpj: str = "",
-    email: str = "",
-    name: str = "",
-) -> Optional[Client]:
-    cnpj_n = normalize_cnpj(cnpj)
-    if cnpj_n:
-        c = session.exec(
-            select(Client).where(Client.company_id == company_id, Client.cnpj == cnpj_n)
-        ).first()
-        if c:
-            return c
-
-    email_n = (email or "").strip().lower()
-    if email_n:
-        c = session.exec(
-            select(Client).where(Client.company_id == company_id, func.lower(Client.email) == email_n)
-        ).first()
-        if c:
-            return c
-
-    name_n = _norm_name(name)
-    if not name_n:
-        return None
-
-    clients = session.exec(select(Client).where(Client.company_id == company_id)).all()
-    for c in clients:
-        if _norm_name(c.name) == name_n:
-            return c
-    return None
-
-
-def upsert_client_from_lead(
-    session: Session,
-    *,
-    company_id: int,
-    name: str,
-    cnpj: str = "",
-    email: str = "",
-    phone: str = "",
-    notes: str = "",
-) -> Client:
-    """Evita duplicidade: reaproveita cadastro existente por CNPJ/email/nome."""
-    name = (name or "").strip()
-    if not name:
-        raise ValueError("name obrigatório")
-
-    cnpj_n = normalize_cnpj(cnpj)
-    email_n = (email or "").strip().lower()
-    phone = (phone or "").strip()
-    notes = (notes or "").strip()
-
-    existing = find_client_by_identity(session, company_id, cnpj=cnpj_n, email=email_n, name=name)
-    if existing:
-        if cnpj_n and not (existing.cnpj or "").strip():
-            existing.cnpj = cnpj_n
-        if email_n and not (existing.email or "").strip():
-            existing.email = email_n
-        if phone and not (existing.phone or "").strip():
-            existing.phone = phone
-        if notes:
-            existing.notes = (existing.notes + "\n" + notes).strip() if existing.notes else notes
-        existing.updated_at = utcnow()
-        session.add(existing)
-        session.commit()
-        session.refresh(existing)
-        return existing
-
-    client = Client(
-        company_id=company_id,
-        name=name,
-        cnpj=cnpj_n,
-        email=email_n,
-        phone=phone,
-        notes=notes,
-        updated_at=utcnow(),
-    )
-    session.add(client)
-    session.commit()
-    session.refresh(client)
-    return client
-
-
 def _get_selected_client_for_staff(request: Request, session: Session, company_id: int) -> Optional[int]:
     cid = _safe_int(request.session.get("selected_client_id"))
     if cid:
@@ -3391,49 +3211,6 @@ a:hover{ color:#00BFBF; }
     </form>
   {% endif %}
 </div>
-<script>
-(function(){
-  const cnpjEl = document.querySelector('input[name="cnpj"]');
-  if (!cnpjEl) return;
-
-  const setVal = (name, value) => {
-    const el = document.querySelector(`[name="${name}"]`);
-    if (el && value) el.value = value;
-  };
-
-  let last = "";
-
-  const lookup = async () => {
-    const cnpj = (cnpjEl.value || "").replace(/\D+/g, "");
-    if (cnpj.length !== 14) return;
-    if (cnpj === last) return;
-    last = cnpj;
-
-    try {
-      const res = await fetch(`/api/cnpj/${cnpj}`, { headers: { "Accept": "application/json" }, credentials: "same-origin" });
-      if (!res.ok) {
-        console.warn("CNPJ lookup falhou", res.status);
-        return;
-      }
-      const d = await res.json();
-
-      const nameEl = document.querySelector('input[name="name"]');
-      if (nameEl && !nameEl.value && d.legal_name) nameEl.value = d.legal_name;
-
-      setVal("address", [d.street, d.number, d.neighborhood].filter(Boolean).join(", "));
-      setVal("city", d.city);
-      setVal("state", d.state);
-      setVal("zip_code", d.zip_code);
-      setVal("phone", d.phone);
-    } catch(e) {
-      console.warn("CNPJ lookup exception", e);
-    }
-  };
-
-  cnpjEl.addEventListener("blur", lookup);
-  window.addEventListener("DOMContentLoaded", lookup);
-})();
-</script>
 {% endblock %}
 """,
     "perfil.html": r"""
@@ -8512,16 +8289,19 @@ async def members_add_action(
         else:
             cn = client_name.strip()
             if cn:
-
-                client = upsert_client_from_lead(
-                    session,
-                    company_id=ctx.company.id,
-                    name=cn,
-                    notes="[CLIENTE] vinculado via criação de membro",
-                )
-                membership.client_id = client.id
-                request.session["selected_client_id"] = client.id
-
+                existing = session.exec(
+                    select(Client).where(Client.company_id == ctx.company.id, func.lower(Client.name) == cn.lower())
+                ).first()
+                if existing:
+                    membership.client_id = existing.id
+                    request.session["selected_client_id"] = existing.id
+                else:
+                    client = Client(company_id=ctx.company.id, name=cn)
+                    session.add(client)
+                    session.commit()
+                    session.refresh(client)
+                    membership.client_id = client.id
+                    request.session["selected_client_id"] = client.id
 
     session.add(membership)
     try:
@@ -12657,15 +12437,18 @@ async def crm_new_action(
 
     if new_client_name:
         lead_notes = f"[LEAD CRM] {new_client_notes}".strip()
-        client = upsert_client_from_lead(
-            session,
+        client = Client(
             company_id=ctx.company.id,
             name=new_client_name,
             cnpj=new_client_cnpj_norm,
             email=new_client_email,
             phone=new_client_phone,
             notes=lead_notes,
+            updated_at=utcnow(),
         )
+        session.add(client)
+        session.commit()
+        session.refresh(client)
     else:
         if int(client_id or 0) <= 0:
             set_flash(request, "Selecione um cliente existente OU crie um lead.")
@@ -16861,19 +16644,6 @@ async def simulador_criar_proposta(
     set_flash(request, "Proposta criada e card gerado no CRM.")
     return RedirectResponse(f"/propostas/{prop.id}", status_code=303)
 
-
-@app.get("/api/cnpj/{cnpj}", response_class=JSONResponse)
-@require_login
-async def api_cnpj_lookup(
-    request: Request,
-    cnpj: str,
-    session: Session = Depends(get_session),
-) -> JSONResponse:
-    # dados públicos: liberamos para qualquer usuário logado (cliente/equipe/admin)
-    _ = get_tenant_context(request, session)  # valida sessão/tenant
-    data = await fetch_cnpj_data(cnpj)
-    return JSONResponse(data)
-
 @app.get("/api/ui/banner", response_class=JSONResponse)
 @require_login
 async def api_ui_banner(request: Request, session: Session = Depends(get_session)) -> JSONResponse:
@@ -17592,7 +17362,6 @@ def _seed_credit_products(session: Session, company_id: int) -> None:
         ("directdata.scr_analitico", "SCR Analítico", 390),
         ("directdata.scr_detalhada", "SCR Detalhada", 490),
         ("directdata.score_quod", "Score (QUOD)", 198),
-        ("directdata.cadastral_pf", "Cadastral PF (básico)", 36),
     ]
     for code, label, cost in defaults:
         session.add(
@@ -17610,6 +17379,30 @@ def _seed_credit_products(session: Session, company_id: int) -> None:
             )
         )
     session.commit()
+
+
+def _disable_unwanted_products(session: Session, company_id: int) -> None:
+    """
+    Desativa produtos que não devem aparecer no cardápio público de Consultas.
+
+    - Idempotente: pode ser chamado em toda visita ao /consultas.
+    - Mantém o produto no Admin (/admin/consultas), mas evita aparecer/rodar no menu do cliente.
+    """
+    try:
+        p = session.exec(
+            select(QueryProduct).where(
+                QueryProduct.company_id == company_id,
+                QueryProduct.code == "directdata.cadastral_pf",
+            )
+        ).first()
+        if p and p.enabled:
+            p.enabled = False
+            p.updated_at = utcnow()
+            session.add(p)
+            session.commit()
+    except Exception:
+        return
+
 
 
 def _directdata_url_for(path: str, fallback: str = "") -> str:
@@ -17672,7 +17465,7 @@ async def _directdata_call_real(*, product_code: str, doc_digits: str) -> tuple[
     doc_type = "cpf" if len(doc) == 11 else "cnpj"
 
     # SCR Resumido
-    if product_code == "directdata.scr_resumido":
+    if product_code in {"directdata.scr_resumido", "directdata.scr_analitico"}:
         url = os.getenv("DIRECTDATA_SCR_RESUMIDO_URL") or _directdata_url_for("/api/SCRBacen")
         if not url:
             return 0, None, "DIRECTDATA_SCR_RESUMIDO_URL/DIRECTDATA_BASE_URL não configurado."
@@ -17790,7 +17583,7 @@ def _draw_logo_on_canvas(c: canvas.Canvas, logo_path: str) -> None:
         pass
 
 
-def build_consulta_pdf(
+def _build_scr_pdf(
     *,
     company_name: str,
     client_name: str,
@@ -17988,6 +17781,211 @@ def build_consulta_pdf(
     return buf.getvalue()
 
 # === /CONSULTAS_PDF_REPORT_V1 ===
+
+def _extract_score_fields(data: Any) -> dict[str, str]:
+    """Extrai campos de Score de formatos diferentes do retorno Direct Data."""
+    root = data if isinstance(data, dict) else {}
+    retorno = root.get("retorno") if isinstance(root.get("retorno"), dict) else {}
+    md = root.get("metaDados") if isinstance(root.get("metaDados"), dict) else {}
+
+    def pick(src: dict, *keys: str) -> str:
+        for k in keys:
+            v = src.get(k)
+            if v is None:
+                continue
+            s = str(v).strip()
+            if s:
+                return s
+        return "-"
+
+    # tenta no retorno; se vazio, tenta no root
+    score = pick(retorno, "score", "pontuacao", "pontuacaoScore", "scoreValor", "valorScore", "nota")
+    if score == "-":
+        score = pick(root, "score", "pontuacao", "pontuacaoScore", "scoreValor", "valorScore", "nota")
+
+    faixa = pick(retorno, "faixaRisco", "faixa", "rating", "classificacao", "faixaScore")
+    if faixa == "-":
+        faixa = pick(root, "faixaRisco", "faixa", "rating", "classificacao", "faixaScore")
+
+    pd = pick(retorno, "probabilidadeInadimplencia", "probDefault", "inadimplencia", "pd", "prob_inadimplencia")
+    if pd == "-":
+        pd = pick(root, "probabilidadeInadimplencia", "probDefault", "inadimplencia", "pd", "prob_inadimplencia")
+
+    modelo = pick(retorno, "modelo", "versaoModelo", "modeloScore", "nomeModelo")
+    if modelo == "-":
+        modelo = pick(root, "modelo", "versaoModelo", "modeloScore", "nomeModelo")
+
+    fonte = pick(retorno, "fonte", "bureau", "origem", "provider")
+    if fonte == "-":
+        fonte = pick(root, "fonte", "bureau", "origem", "provider")
+
+    uid = pick(md, "consultaUid")
+    consulta_nome = pick(md, "consultaNome")
+    resultado = pick(md, "resultado")
+    data_exec = pick(md, "data")
+    tempo_ms = pick(md, "tempoExecucaoMs")
+
+    return {
+        "score": score,
+        "faixa": faixa,
+        "prob_default": pd,
+        "modelo": modelo,
+        "fonte": fonte,
+        "uid": uid,
+        "consulta_nome": consulta_nome,
+        "resultado": resultado,
+        "data_exec": data_exec,
+        "tempo_ms": tempo_ms,
+    }
+
+
+def _build_score_pdf(
+    *,
+    company_name: str,
+    client_name: str,
+    product_label: str,
+    product_code: str,
+    subject_doc: str,
+    data: dict,
+) -> bytes:
+    """PDF específico para Score (não usa layout SCR)."""
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(
+        buf,
+        pagesize=A4,
+        leftMargin=18 * mm,
+        rightMargin=18 * mm,
+        topMargin=16 * mm,
+        bottomMargin=16 * mm,
+        title="Relatório de Score",
+        author=company_name,
+    )
+
+    styles = getSampleStyleSheet()
+    h1 = ParagraphStyle("h1", parent=styles["Heading1"], fontName="Helvetica-Bold", fontSize=14, spaceAfter=6)
+    h2 = ParagraphStyle("h2", parent=styles["Heading2"], fontName="Helvetica-Bold", fontSize=11, spaceBefore=10, spaceAfter=6)
+    p = ParagraphStyle("p", parent=styles["BodyText"], fontName="Helvetica", fontSize=9, leading=12)
+    small = ParagraphStyle("small", parent=styles["BodyText"], fontName="Helvetica-Oblique", fontSize=8, leading=10)
+
+    story: list = []
+    logo_path = os.path.join(STATIC_DIR, "logo.png") if "STATIC_DIR" in globals() else "static/logo.png"
+
+    fields = _extract_score_fields(data)
+
+    story.append(Paragraph("Relatório de Consulta (Direct Data)", h1))
+    story.append(Paragraph(f"Empresa: {html.escape(company_name)}", p))
+    story.append(Paragraph(f"Cliente: {html.escape(client_name)}", p))
+    story.append(Paragraph(f"Consulta: {html.escape(product_label)} ({html.escape(product_code)})", p))
+    story.append(Paragraph(f"Documento: {_mask_doc(subject_doc)}", p))
+    story.append(Spacer(1, 8))
+
+    story.append(
+        Paragraph(
+            "Este relatório é gerado automaticamente a partir de bases de terceiros (Direct Data) e constitui apenas "
+            "uma consulta/levantamento de informações. Não é uma proposta de crédito, não representa aprovação e está "
+            "sujeito à análise interna, políticas e validações adicionais.",
+            small,
+        )
+    )
+
+    story.append(Spacer(1, 10))
+    story.append(Paragraph("Resumo da execução", h2))
+
+    exec_rows = [
+        ["Consulta", fields["consulta_nome"] if fields["consulta_nome"] != "-" else product_label],
+        ["UID", fields["uid"]],
+        ["Resultado", fields["resultado"]],
+        ["Data", fields["data_exec"]],
+        ["Tempo (ms)", fields["tempo_ms"]],
+    ]
+    t_exec = Table(exec_rows, colWidths=[35 * mm, 140 * mm])
+    t_exec.setStyle(
+        TableStyle(
+            [
+                ("FONT", (0, 0), (-1, -1), "Helvetica", 9),
+                ("FONT", (0, 0), (0, -1), "Helvetica-Bold", 9),
+                ("INNERGRID", (0, 0), (-1, -1), 0.25, colors.lightgrey),
+                ("BOX", (0, 0), (-1, -1), 0.25, colors.lightgrey),
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 6),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+                ("TOPPADDING", (0, 0), (-1, -1), 4),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+            ]
+        )
+    )
+    story.append(t_exec)
+
+    story.append(Spacer(1, 10))
+    story.append(Paragraph("Resumo executivo (Score)", h2))
+
+    score_rows = [
+        ["Score", fields["score"]],
+        ["Faixa de risco", fields["faixa"]],
+        ["Prob. inadimplência (PD)", fields["prob_default"]],
+        ["Modelo", fields["modelo"]],
+        ["Fonte", fields["fonte"]],
+    ]
+    t_score = Table(score_rows, colWidths=[55 * mm, 120 * mm])
+    t_score.setStyle(
+        TableStyle(
+            [
+                ("FONT", (0, 0), (-1, -1), "Helvetica", 9),
+                ("FONT", (0, 0), (0, -1), "Helvetica-Bold", 9),
+                ("BACKGROUND", (0, 0), (-1, 0), colors.whitesmoke),
+                ("INNERGRID", (0, 0), (-1, -1), 0.25, colors.lightgrey),
+                ("BOX", (0, 0), (-1, -1), 0.25, colors.lightgrey),
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 6),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+                ("TOPPADDING", (0, 0), (-1, -1), 4),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+            ]
+        )
+    )
+    story.append(t_score)
+
+    story.append(Spacer(1, 10))
+    story.append(Paragraph("Notas e interpretação", h2))
+    for line in [
+        "• O score e a faixa de risco são indicadores auxiliares; a decisão final depende de análise interna.",
+        "• Recomenda-se validar com documentos e informações fornecidas pelo cliente e políticas internas.",
+    ]:
+        story.append(Paragraph(line, p))
+
+    doc.build(story, onFirstPage=lambda c, d: _draw_logo_on_canvas(c, logo_path))
+    return buf.getvalue()
+
+
+def build_consulta_pdf(
+    *,
+    company_name: str,
+    client_name: str,
+    product_label: str,
+    product_code: str,
+    subject_doc: str,
+    data: dict,
+) -> bytes:
+    """Wrapper: escolhe layout correto (Score vs SCR)."""
+    if "score" in (product_code or ""):
+        return _build_score_pdf(
+            company_name=company_name,
+            client_name=client_name,
+            product_label=product_label,
+            product_code=product_code,
+            subject_doc=subject_doc,
+            data=data,
+        )
+    return _build_scr_pdf(
+        company_name=company_name,
+        client_name=client_name,
+        product_label=product_label,
+        product_code=product_code,
+        subject_doc=subject_doc,
+        data=data,
+    )
+
+
 
 
 
@@ -18380,9 +18378,12 @@ async def consultas_home(request: Request, session: Session = Depends(get_sessio
 
     _seed_credit_products(session, ctx.company.id)
 
+    _disable_unwanted_products(session, ctx.company.id)
+
     products = session.exec(select(QueryProduct).where(
         QueryProduct.company_id == ctx.company.id,
         QueryProduct.enabled == True,  # noqa
+        QueryProduct.code != "directdata.cadastral_pf",
     ).order_by(QueryProduct.label)).all()
 
     enriched = [{
@@ -18482,6 +18483,7 @@ async def consultas_product(request: Request, session: Session = Depends(get_ses
         QueryProduct.company_id == ctx.company.id,
         QueryProduct.code == code,
         QueryProduct.enabled == True,  # noqa
+        QueryProduct.code != "directdata.cadastral_pf",
     )).first()
     if not p:
         raise HTTPException(status_code=404, detail="Consulta não encontrada.")
@@ -18518,6 +18520,7 @@ async def consultas_run(request: Request, session: Session = Depends(get_session
         QueryProduct.company_id == ctx.company.id,
         QueryProduct.code == code,
         QueryProduct.enabled == True,  # noqa
+        QueryProduct.code != "directdata.cadastral_pf",
     )).first()
     if not p:
         raise HTTPException(status_code=404, detail="Consulta não encontrada.")
@@ -18776,18 +18779,3 @@ async def admin_consultas_toggle(request: Request, session: Session = Depends(ge
     return RedirectResponse("/admin/consultas", status_code=303)
 
 # === /CREDIT_WALLET_MODULE_V1 ===
-
-
-# ----------------------------
-# Entrypoint (local / platforms that run `python app.py`)
-# ----------------------------
-
-if __name__ == "__main__":
-    import uvicorn
-
-    uvicorn.run(
-        "app:app",
-        host="0.0.0.0",
-        port=int(os.getenv("PORT", "8000")),
-        log_level=os.getenv("LOG_LEVEL", "info").lower(),
-    )
