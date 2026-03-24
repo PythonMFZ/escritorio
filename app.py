@@ -13,11 +13,12 @@ import asyncio
 import re
 import secrets
 import uuid
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone, timedelta
 from functools import wraps
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Optional, TypedDict
 from urllib.parse import urlparse
 
 import httpx
@@ -173,6 +174,95 @@ SERVICE_NAME_SET = {x["name"] for x in SERVICE_CATALOG}
 def sanitize_service_name(name: str) -> str:
     s = (name or "").strip()
     return s if s in SERVICE_NAME_SET else ""
+
+
+# ----------------------------
+# CNPJ Autocomplete (BrasilAPI / CNPJ.ws)
+# ----------------------------
+
+_CNPJ_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
+_CNPJ_CACHE_TTL_SEC = 60 * 60 * 24  # 24h
+
+
+class CnpjLookupResult(TypedDict, total=False):
+    legal_name: str
+    trade_name: str
+    street: str
+    number: str
+    neighborhood: str
+    city: str
+    state: str
+    zip_code: str
+    phone: str
+
+
+def normalize_cnpj(raw: str) -> str:
+    return re.sub(r"\D+", "", raw or "").strip()
+
+
+async def fetch_cnpj_data(cnpj: str) -> CnpjLookupResult:
+    """Busca dados públicos de CNPJ e normaliza campos para o front.
+
+    Provider order:
+      1) BrasilAPI (free/public)
+      2) CNPJ.ws public (rate limited)
+    """
+    cnpj = normalize_cnpj(cnpj)
+    if len(cnpj) != 14:
+        raise HTTPException(status_code=400, detail="CNPJ inválido (precisa ter 14 dígitos).")
+
+    now = time.time()
+    cached = _CNPJ_CACHE.get(cnpj)
+    if cached and (now - cached[0]) < _CNPJ_CACHE_TTL_SEC:
+        return cached[1]  # type: ignore[return-value]
+
+    # Provider 1: BrasilAPI
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            r = await client.get(f"https://brasilapi.com.br/api/cnpj/v1/{cnpj}")
+            if r.status_code == 200:
+                j = r.json()
+                out: CnpjLookupResult = {
+                    "legal_name": j.get("razao_social") or "",
+                    "trade_name": j.get("nome_fantasia") or "",
+                    "street": j.get("logradouro") or "",
+                    "number": j.get("numero") or "",
+                    "neighborhood": j.get("bairro") or "",
+                    "city": j.get("municipio") or "",
+                    "state": j.get("uf") or "",
+                    "zip_code": normalize_cnpj(j.get("cep") or ""),
+                    "phone": j.get("ddd_telefone_1") or "",
+                }
+                _CNPJ_CACHE[cnpj] = (now, dict(out))
+                return out
+    except Exception:
+        pass
+
+    # Provider 2: CNPJ.ws public (3/min)
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            r = await client.get(f"https://publica.cnpj.ws/cnpj/{cnpj}")
+            if r.status_code == 200:
+                j = r.json()
+                estab = j.get("estabelecimento") or {}
+                end = estab.get("endereco") or {}
+                out = {
+                    "legal_name": j.get("razao_social") or "",
+                    "trade_name": estab.get("nome_fantasia") or "",
+                    "street": end.get("logradouro") or "",
+                    "number": end.get("numero") or "",
+                    "neighborhood": end.get("bairro") or "",
+                    "city": (end.get("cidade") or {}).get("nome") or "",
+                    "state": (end.get("estado") or {}).get("sigla") or "",
+                    "zip_code": normalize_cnpj(end.get("cep") or ""),
+                    "phone": f"{(estab.get('ddd1') or '')}{(estab.get('telefone1') or '')}",
+                }
+                _CNPJ_CACHE[cnpj] = (now, dict(out))
+                return out  # type: ignore[return-value]
+    except Exception:
+        pass
+
+    raise HTTPException(status_code=404, detail="CNPJ não encontrado nos provedores disponíveis.")
 
 
 NOTION_TOKEN = os.getenv("NOTION_TOKEN")
@@ -2158,6 +2248,96 @@ def _safe_int(value: Any) -> Optional[int]:
         return None
 
 
+def _norm_name(value: str) -> str:
+    return re.sub(r"\s+", " ", (value or "").strip()).casefold()
+
+
+def find_client_by_identity(
+    session: Session,
+    company_id: int,
+    *,
+    cnpj: str = "",
+    email: str = "",
+    name: str = "",
+) -> Optional[Client]:
+    cnpj_n = normalize_cnpj(cnpj)
+    if cnpj_n:
+        c = session.exec(
+            select(Client).where(Client.company_id == company_id, Client.cnpj == cnpj_n)
+        ).first()
+        if c:
+            return c
+
+    email_n = (email or "").strip().lower()
+    if email_n:
+        c = session.exec(
+            select(Client).where(Client.company_id == company_id, func.lower(Client.email) == email_n)
+        ).first()
+        if c:
+            return c
+
+    name_n = _norm_name(name)
+    if not name_n:
+        return None
+
+    clients = session.exec(select(Client).where(Client.company_id == company_id)).all()
+    for c in clients:
+        if _norm_name(c.name) == name_n:
+            return c
+    return None
+
+
+def upsert_client_from_lead(
+    session: Session,
+    *,
+    company_id: int,
+    name: str,
+    cnpj: str = "",
+    email: str = "",
+    phone: str = "",
+    notes: str = "",
+) -> Client:
+    """Evita duplicidade: reaproveita cadastro existente por CNPJ/email/nome."""
+    name = (name or "").strip()
+    if not name:
+        raise ValueError("name obrigatório")
+
+    cnpj_n = normalize_cnpj(cnpj)
+    email_n = (email or "").strip().lower()
+    phone = (phone or "").strip()
+    notes = (notes or "").strip()
+
+    existing = find_client_by_identity(session, company_id, cnpj=cnpj_n, email=email_n, name=name)
+    if existing:
+        if cnpj_n and not (existing.cnpj or "").strip():
+            existing.cnpj = cnpj_n
+        if email_n and not (existing.email or "").strip():
+            existing.email = email_n
+        if phone and not (existing.phone or "").strip():
+            existing.phone = phone
+        if notes:
+            existing.notes = (existing.notes + "\n" + notes).strip() if existing.notes else notes
+        existing.updated_at = utcnow()
+        session.add(existing)
+        session.commit()
+        session.refresh(existing)
+        return existing
+
+    client = Client(
+        company_id=company_id,
+        name=name,
+        cnpj=cnpj_n,
+        email=email_n,
+        phone=phone,
+        notes=notes,
+        updated_at=utcnow(),
+    )
+    session.add(client)
+    session.commit()
+    session.refresh(client)
+    return client
+
+
 def _get_selected_client_for_staff(request: Request, session: Session, company_id: int) -> Optional[int]:
     cid = _safe_int(request.session.get("selected_client_id"))
     if cid:
@@ -3211,6 +3391,49 @@ a:hover{ color:#00BFBF; }
     </form>
   {% endif %}
 </div>
+<script>
+(function(){
+  const cnpjEl = document.querySelector('input[name="cnpj"]');
+  if (!cnpjEl) return;
+
+  const setVal = (name, value) => {
+    const el = document.querySelector(`[name="${name}"]`);
+    if (el && value) el.value = value;
+  };
+
+  let last = "";
+
+  const lookup = async () => {
+    const cnpj = (cnpjEl.value || "").replace(/\D+/g, "");
+    if (cnpj.length !== 14) return;
+    if (cnpj === last) return;
+    last = cnpj;
+
+    try {
+      const res = await fetch(`/api/cnpj/${cnpj}`, { headers: { "Accept": "application/json" }, credentials: "same-origin" });
+      if (!res.ok) {
+        console.warn("CNPJ lookup falhou", res.status);
+        return;
+      }
+      const d = await res.json();
+
+      const nameEl = document.querySelector('input[name="name"]');
+      if (nameEl && !nameEl.value && d.legal_name) nameEl.value = d.legal_name;
+
+      setVal("address", [d.street, d.number, d.neighborhood].filter(Boolean).join(", "));
+      setVal("city", d.city);
+      setVal("state", d.state);
+      setVal("zip_code", d.zip_code);
+      setVal("phone", d.phone);
+    } catch(e) {
+      console.warn("CNPJ lookup exception", e);
+    }
+  };
+
+  cnpjEl.addEventListener("blur", lookup);
+  window.addEventListener("DOMContentLoaded", lookup);
+})();
+</script>
 {% endblock %}
 """,
     "perfil.html": r"""
@@ -8289,19 +8512,16 @@ async def members_add_action(
         else:
             cn = client_name.strip()
             if cn:
-                existing = session.exec(
-                    select(Client).where(Client.company_id == ctx.company.id, func.lower(Client.name) == cn.lower())
-                ).first()
-                if existing:
-                    membership.client_id = existing.id
-                    request.session["selected_client_id"] = existing.id
-                else:
-                    client = Client(company_id=ctx.company.id, name=cn)
-                    session.add(client)
-                    session.commit()
-                    session.refresh(client)
-                    membership.client_id = client.id
-                    request.session["selected_client_id"] = client.id
+
+                client = upsert_client_from_lead(
+                    session,
+                    company_id=ctx.company.id,
+                    name=cn,
+                    notes="[CLIENTE] vinculado via criação de membro",
+                )
+                membership.client_id = client.id
+                request.session["selected_client_id"] = client.id
+
 
     session.add(membership)
     try:
@@ -12437,18 +12657,15 @@ async def crm_new_action(
 
     if new_client_name:
         lead_notes = f"[LEAD CRM] {new_client_notes}".strip()
-        client = Client(
+        client = upsert_client_from_lead(
+            session,
             company_id=ctx.company.id,
             name=new_client_name,
             cnpj=new_client_cnpj_norm,
             email=new_client_email,
             phone=new_client_phone,
             notes=lead_notes,
-            updated_at=utcnow(),
         )
-        session.add(client)
-        session.commit()
-        session.refresh(client)
     else:
         if int(client_id or 0) <= 0:
             set_flash(request, "Selecione um cliente existente OU crie um lead.")
@@ -16643,6 +16860,19 @@ async def simulador_criar_proposta(
 
     set_flash(request, "Proposta criada e card gerado no CRM.")
     return RedirectResponse(f"/propostas/{prop.id}", status_code=303)
+
+
+@app.get("/api/cnpj/{cnpj}", response_class=JSONResponse)
+@require_login
+async def api_cnpj_lookup(
+    request: Request,
+    cnpj: str,
+    session: Session = Depends(get_session),
+) -> JSONResponse:
+    # dados públicos: liberamos para qualquer usuário logado (cliente/equipe/admin)
+    _ = get_tenant_context(request, session)  # valida sessão/tenant
+    data = await fetch_cnpj_data(cnpj)
+    return JSONResponse(data)
 
 @app.get("/api/ui/banner", response_class=JSONResponse)
 @require_login
