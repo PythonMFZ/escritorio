@@ -2189,9 +2189,20 @@ FEATURE_KEYS: dict[str, dict[str, str]] = {
     "educacao": {"title": "Educação", "desc": "Cursos e materiais.", "href": "/educacao"},
 }
 
+# Open Finance (Pluggy)
+FEATURE_KEYS.setdefault(
+    "openfinance",
+    {
+        "title": "Open Finance",
+        "desc": "Contratos de crédito (Pluggy / Open Finance).",
+        "href": "/openfinance",
+    },
+)
+
+
 FEATURE_GROUPS: list[dict[str, Any]] = [
     {"key": "admin", "title": "Admin", "features": ["ui", "gestao", "credito", "crm"]},
-    {"key": "minha_empresa", "title": "Minha Empresa", "features": ["empresa", "perfil", "financeiro", "documentos", "consultas", "creditos"]},
+    {"key": "minha_empresa", "title": "Minha Empresa", "features": ["empresa", "perfil", "financeiro", "documentos", "consultas", "openfinance", "creditos"]},
     {"key": "meu_projeto", "title": "Meu Projeto", "features": ["consultoria", "reunioes", "tarefas"]},
     {"key": "minhas_propostas", "title": "Minhas Propostas", "features": ["simulador", "propostas"]},
 ]
@@ -2210,6 +2221,9 @@ ROLE_DEFAULT_FEATURES: dict[str, set[str]] = {
     "cliente": set(FEATURE_KEYS.keys()) - {"ui", "gestao", "crm"},
 }
 
+ROLE_DEFAULT_FEATURES["admin"].add("openfinance")
+ROLE_DEFAULT_FEATURES["equipe"].add("openfinance")
+
 # Open Finance (Pluggy) - Loans module
 # ----------------------------
 
@@ -2220,6 +2234,17 @@ PLUGGY_INCLUDE_SANDBOX = os.getenv("PLUGGY_INCLUDE_SANDBOX", "0") == "1"
 PLUGGY_CONNECT_JS_URL = (os.getenv("PLUGGY_CONNECT_JS_URL") or "https://cdn.pluggy.ai/pluggy-connect/v2.8.2/pluggy-connect.js").strip()
 PLUGGY_HTTP_TIMEOUT_S = float(os.getenv("PLUGGY_HTTP_TIMEOUT_S", "20") or "20")
 PLUGGY_WEBHOOK_KEY = (os.getenv("PLUGGY_WEBHOOK_KEY") or "").strip()
+PLUGGY_WEBHOOK_TRUSTED_IPS = {
+    ip.strip() for ip in (os.getenv("PLUGGY_WEBHOOK_TRUSTED_IPS") or "177.71.238.212").split(",") if ip.strip()
+}
+
+
+def _get_request_ip(request: Request) -> str:
+    xff = request.headers.get("x-forwarded-for") or ""
+    if xff:
+        return xff.split(",")[0].strip()
+    return (request.client.host if request.client else "") or ""
+
 
 FEATURE_KEYS.setdefault(
     "openfinance",
@@ -7984,6 +8009,15 @@ def render(
 # ----------------------------
 
 app = FastAPI()
+
+
+def _pluggy_schedule_sync_loans(*, company_id: int, subject_doc: str, item_id: str) -> None:
+    async def _runner() -> None:
+        with Session(engine) as s:
+            await pluggy_sync_loans(session=s, company_id=company_id, subject_doc=subject_doc, item_id=item_id)
+
+    asyncio.create_task(_runner())
+
 
 @app.get("/__routes", include_in_schema=False)
 async def __routes() -> list[str]:
@@ -20917,11 +20951,13 @@ async def pluggy_api_item_success(request: Request, payload: dict[str, Any], ses
 @app.api_route("/webhooks/pluggy", methods=["POST", "GET", "HEAD"])
 @app.api_route("/api/webhooks/pluggy", methods=["POST", "GET", "HEAD"])
 async def pluggy_webhook(request: Request, k: str = "", session: Session = Depends(get_session)) -> JSONResponse:
-    if PLUGGY_WEBHOOK_KEY and (k or "") != PLUGGY_WEBHOOK_KEY:
-        raise HTTPException(status_code=401, detail="unauthorized")
-
     if request.method != "POST":
         return JSONResponse({"ok": True})
+
+    req_ip = _get_request_ip(request)
+    if PLUGGY_WEBHOOK_KEY and (k or "") != PLUGGY_WEBHOOK_KEY:
+        if req_ip not in PLUGGY_WEBHOOK_TRUSTED_IPS:
+            raise HTTPException(status_code=401, detail="unauthorized")
 
     body = await request.json()
     event = str(body.get("event") or "").strip()
@@ -20969,10 +21005,10 @@ async def pluggy_webhook(request: Request, k: str = "", session: Session = Depen
 
     if event in ("item/created", "item/updated"):
         try:
-            await pluggy_sync_loans(session=session, company_id=company_id, subject_doc=doc_digits, item_id=item_id)
+            _pluggy_schedule_sync_loans(company_id=company_id, subject_doc=doc_digits, item_id=item_id)
         except Exception as e:
             if conn:
-                conn.last_error = f"Webhook sync falhou: {e}"
+                conn.last_error = f"Webhook schedule falhou: {e}"
                 conn.updated_at = utcnow()
                 session.add(conn)
                 session.commit()
