@@ -2194,7 +2194,7 @@ FEATURE_KEYS.setdefault(
     "openfinance",
     {
         "title": "Open Finance",
-        "desc": "Contratos de crédito (Pluggy / Open Finance).",
+        "desc": "Contratos de crédito (Klavi / Open Finance).",
         "href": "/openfinance",
     },
 )
@@ -2244,21 +2244,37 @@ KLAVI_SECRET_KEY = (os.getenv("KLAVI_SECRET_KEY") or "").strip()
 KLAVI_HTTP_TIMEOUT_S = float(os.getenv("KLAVI_HTTP_TIMEOUT_S", "25") or "25")
 
 def _klavi_normalize_phone(phone: str) -> str:
-    """Normaliza telefone para E.164 (BR), pois o /links do Klavi valida formato."""
+    """Normaliza telefone para E.164 no padrão BR (+55...).
+
+    A API do Klavi pode retornar HTTP 400 "Invalid phone" quando o campo `phone`
+    está fora do padrão. Como o campo é opcional, em caso de falha o caller deve
+    omitir `phone` do payload.
+    """
     raw = (phone or "").strip()
     if not raw:
-        return raw
-    if raw.startswith("+"):
-        return raw
-    digits = _digits(raw)
+        return ""
+
+    digits = _digits(raw).lstrip("0")
     if not digits:
-        return raw
-    # Brasil: DDD+numero (10/11 dígitos)
-    if len(digits) in (10, 11):
-        return "+55" + digits
-    if digits.startswith("55") and len(digits) in (12, 13):
-        return "+" + digits
-    return "+" + digits
+        raise ValueError("Invalid phone")
+
+    # Open Finance Brasil: +55 + DDD + número (10 ou 11 dígitos após 55)
+    if digits.startswith("55"):
+        rest = digits[2:]
+        if len(rest) not in (10, 11):
+            raise ValueError("Invalid phone")
+        digits = "55" + rest
+    else:
+        if len(digits) in (10, 11):
+            digits = "55" + digits
+        else:
+            raise ValueError("Invalid phone")
+
+    e164 = "+" + digits
+    if not re.fullmatch(r"\+55\d{10,11}", e164):
+        raise ValueError("Invalid phone")
+    return e164
+
 PLUGGY_WEBHOOK_KEY = (os.getenv("PLUGGY_WEBHOOK_KEY") or "").strip()
 PLUGGY_WEBHOOK_TRUSTED_IPS = {
     ip.strip() for ip in (os.getenv("PLUGGY_WEBHOOK_TRUSTED_IPS") or "177.71.238.212").split(",") if ip.strip()
@@ -20975,6 +20991,17 @@ async def openfinance_home(request: Request, doc: str = "", email: str = "", ses
     doc_digits = _digits(doc)
     email_default = (email or "").strip() or (client.finance_email or client.email or "").strip()
 
+    provider = (os.getenv("OPENFINANCE_PROVIDER_DEFAULT") or "klavi").strip().lower()
+    if provider == "klavi":
+        from urllib.parse import urlencode
+        q: dict[str, str] = {}
+        if doc:
+            q["doc"] = doc
+        if email:
+            q["email"] = email
+        qs = ("?" + urlencode(q)) if q else ""
+        return RedirectResponse(f"/openfinance/klavi{qs}", status_code=303)
+
     conn = None
     loans: list[PluggyLoan] = []
     offers = session.exec(select(PluggyOffer).where(PluggyOffer.company_id == ctx.company.id).order_by(PluggyOffer.created_at.desc())).all()
@@ -21214,15 +21241,23 @@ async def openfinance_klavi_start(
     # Create Link (requires Authorization bearer access token)
     link_payload: dict[str, Any] = {
         "email": email_v,
-        "phone": _klavi_normalize_phone(phone_v),
-        "redirectUrl": f"{base}/openfinance/klavi/retorno?doc={doc_digits}",
-        "productsCallbackUrl": {"global": f"{base}/webhooks/klavi/products"},
-        "externalInfo": {"company_id": int(ctx.company.id or 0), "doc": doc_digits, "client_id": int(client.id or 0)},
+        "redirecturl": f"{base}/openfinance/klavi/retorno?doc={doc_digits}",
+        "productscallbackurl": {"all": f"{base}/webhooks/klavi/products"},
+        "externalinfo": {"company_id": int(ctx.company.id or 0), "doc": doc_digits, "client_id": int(client.id or 0)},
     }
+
+    if (phone_v or "").strip():
+        try:
+            phone_norm = _klavi_normalize_phone(phone_v)
+            if phone_norm:
+                link_payload["phone"] = phone_norm
+        except ValueError:
+            set_flash(request, "Klavi: telefone inválido. Use DDD+numero (ex: 11999999999). Prosseguindo sem telefone.")
+
     if len(doc_digits) == 11:
-        link_payload["personalTaxId"] = doc_digits
+        link_payload["personaltaxid"] = doc_digits
     else:
-        link_payload["businessTaxId"] = doc_digits
+        link_payload["businesstaxid"] = doc_digits
 
     try:
         link_data = await _klavi_post_json(path="/data/v1/links", bearer=access_token, payload=link_payload)
@@ -21308,16 +21343,24 @@ async def openfinance_klavi_consent(
 
     base = _public_base_url(request)
     consent_payload: dict[str, Any] = {
-        "externalTrackId": f"mc:{int(ctx.company.id or 0)}:{doc_digits}:{int(utcnow().timestamp())}",
-        "institutionCode": str(institution_code or "").strip(),
-        "redirectUrl": f"{base}/openfinance/klavi/retorno?doc={doc_digits}",
-        "phone": _klavi_normalize_phone(flow.phone or ""),
+        "externaltrackid": f"mc:{int(ctx.company.id or 0)}:{doc_digits}:{int(utcnow().timestamp())}",
+        "institutioncode": str(institution_code or "").strip(),
+        "redirecturl": f"{base}/openfinance/klavi/retorno?doc={doc_digits}",
         "email": (flow.email or "").strip(),
     }
+
+    if (flow.phone or "").strip():
+        try:
+            phone_norm = _klavi_normalize_phone(flow.phone or "")
+            if phone_norm:
+                consent_payload["phone"] = phone_norm
+        except ValueError:
+            set_flash(request, "Klavi: telefone inválido. Prosseguindo sem telefone.")
+
     if len(doc_digits) == 11:
-        consent_payload["personalTaxId"] = doc_digits
+        consent_payload["personaltaxid"] = doc_digits
     else:
-        consent_payload["businessTaxId"] = doc_digits
+        consent_payload["businesstaxid"] = doc_digits
 
     try:
         consent_data = await _klavi_post_json(path="/data/v1/consents", bearer=flow.link_token, payload=consent_payload)
