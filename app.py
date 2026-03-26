@@ -2242,6 +2242,23 @@ KLAVI_API_BASE = (os.getenv("KLAVI_API_BASE") or ("https://api-sandbox.klavi.ai"
 KLAVI_ACCESS_KEY = (os.getenv("KLAVI_ACCESS_KEY") or "").strip()
 KLAVI_SECRET_KEY = (os.getenv("KLAVI_SECRET_KEY") or "").strip()
 KLAVI_HTTP_TIMEOUT_S = float(os.getenv("KLAVI_HTTP_TIMEOUT_S", "25") or "25")
+
+def _klavi_normalize_phone(phone: str) -> str:
+    """Normaliza telefone para E.164 (BR), pois o /links do Klavi valida formato."""
+    raw = (phone or "").strip()
+    if not raw:
+        return raw
+    if raw.startswith("+"):
+        return raw
+    digits = _digits(raw)
+    if not digits:
+        return raw
+    # Brasil: DDD+numero (10/11 dígitos)
+    if len(digits) in (10, 11):
+        return "+55" + digits
+    if digits.startswith("55") and len(digits) in (12, 13):
+        return "+" + digits
+    return "+" + digits
 PLUGGY_WEBHOOK_KEY = (os.getenv("PLUGGY_WEBHOOK_KEY") or "").strip()
 PLUGGY_WEBHOOK_TRUSTED_IPS = {
     ip.strip() for ip in (os.getenv("PLUGGY_WEBHOOK_TRUSTED_IPS") or "177.71.238.212").split(",") if ip.strip()
@@ -21197,17 +21214,25 @@ async def openfinance_klavi_start(
     # Create Link (requires Authorization bearer access token)
     link_payload: dict[str, Any] = {
         "email": email_v,
-        "phone": phone_v,
-        "redirecturl": f"{base}/openfinance/klavi/retorno?doc={doc_digits}",
-        "productscallbackurl": {"all": f"{base}/webhooks/klavi/products"},
-        "externalinfo": {"company_id": int(ctx.company.id or 0), "doc": doc_digits, "client_id": int(client.id or 0)},
+        "phone": _klavi_normalize_phone(phone_v),
+        "redirectUrl": f"{base}/openfinance/klavi/retorno?doc={doc_digits}",
+        "productsCallbackUrl": {"global": f"{base}/webhooks/klavi/products"},
+        "externalInfo": {"company_id": int(ctx.company.id or 0), "doc": doc_digits, "client_id": int(client.id or 0)},
     }
     if len(doc_digits) == 11:
-        link_payload["personaltaxid"] = doc_digits
+        link_payload["personalTaxId"] = doc_digits
     else:
-        link_payload["businesstaxid"] = doc_digits
+        link_payload["businessTaxId"] = doc_digits
 
-    link_data = await _klavi_post_json(path="/data/v1/links", bearer=access_token, payload=link_payload)
+    try:
+        link_data = await _klavi_post_json(path="/data/v1/links", bearer=access_token, payload=link_payload)
+    except httpx.HTTPStatusError as e:
+        body = (e.response.text or "").strip()
+        set_flash(request, f"Klavi: erro ao criar Link (HTTP {e.response.status_code}). {body[:300]}")
+        return RedirectResponse(f"/openfinance/klavi?doc={doc_digits}&email={email_v}", status_code=303)
+    except Exception as e:
+        set_flash(request, f"Klavi: erro ao criar Link. {type(e).__name__}: {str(e)[:300]}")
+        return RedirectResponse(f"/openfinance/klavi?doc={doc_digits}&email={email_v}", status_code=303)
 
     link_id = str(link_data.get("linkid") or link_data.get("linkId") or "").strip()
     link_token = str(link_data.get("linktoken") or link_data.get("linkToken") or "").strip()
@@ -21283,18 +21308,36 @@ async def openfinance_klavi_consent(
 
     base = _public_base_url(request)
     consent_payload: dict[str, Any] = {
-        "externaltrackid": f"mc:{int(ctx.company.id or 0)}:{doc_digits}:{int(utcnow().timestamp())}",
-        "institutioncode": str(institution_code or "").strip(),
-        "redirecturl": f"{base}/openfinance/klavi/retorno?doc={doc_digits}",
-        "phone": flow.phone,
-        "email": flow.email,
+        "externalTrackId": f"mc:{int(ctx.company.id or 0)}:{doc_digits}:{int(utcnow().timestamp())}",
+        "institutionCode": str(institution_code or "").strip(),
+        "redirectUrl": f"{base}/openfinance/klavi/retorno?doc={doc_digits}",
+        "phone": _klavi_normalize_phone(flow.phone or ""),
+        "email": (flow.email or "").strip(),
     }
     if len(doc_digits) == 11:
-        consent_payload["personaltaxid"] = doc_digits
+        consent_payload["personalTaxId"] = doc_digits
     else:
-        consent_payload["businesstaxid"] = doc_digits
+        consent_payload["businessTaxId"] = doc_digits
 
-    consent_data = await _klavi_post_json(path="/data/v1/consents", bearer=flow.link_token, payload=consent_payload)
+    try:
+        consent_data = await _klavi_post_json(path="/data/v1/consents", bearer=flow.link_token, payload=consent_payload)
+    except httpx.HTTPStatusError as e:
+        body = (e.response.text or "").strip()
+        set_flash(request, f"Klavi: erro ao criar Consent (HTTP {e.response.status_code}). {body[:300]}")
+        flow.last_error = body[:900]
+        flow.consent_status = "consent_error"
+        flow.updated_at = utcnow()
+        session.add(flow)
+        session.commit()
+        return RedirectResponse(f"/openfinance/klavi?doc={doc_digits}", status_code=303)
+    except Exception as e:
+        set_flash(request, f"Klavi: erro ao criar Consent. {type(e).__name__}: {str(e)[:300]}")
+        flow.last_error = f"{type(e).__name__}: {str(e)[:900]}"
+        flow.consent_status = "consent_error"
+        flow.updated_at = utcnow()
+        session.add(flow)
+        session.commit()
+        return RedirectResponse(f"/openfinance/klavi?doc={doc_digits}", status_code=303)
 
     consent_id = str(consent_data.get("consentid") or consent_data.get("consentId") or "").strip()
     consent_redirect_url = str(consent_data.get("consentredirecturl") or consent_data.get("consentRedirectUrl") or "").strip()
