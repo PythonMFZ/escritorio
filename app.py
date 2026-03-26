@@ -2729,846 +2729,9 @@ def _compute_opportunities_for_doc(*, session: Session, company_id: int, subject
     return inserted
 
 
-# ----------------------------
-# Templates (Open Finance)
-# ----------------------------
 
-TEMPLATES.setdefault("openfinance.html", r"""{% extends "base.html" %}
-{% block content %}
-<div class="d-flex align-items-center justify-content-between mb-3">
-  <div>
-    <div class="h4 mb-0">🌐 Open Finance (Pluggy) — Contratos</div>
-    <div class="muted">Conecte a conta do titular e importe contratos (Loans) para comparar ofertas.</div>
-  </div>
-  <a class="btn btn-outline-secondary" href="/">Voltar</a>
-</div>
 
-<div class="card p-3 mb-3">
-  <form method="get" action="/openfinance" class="row g-2 align-items-end">
-    <div class="col-md-4">
-      <label class="form-label">CPF/CNPJ</label>
-      <input class="form-control mono" name="doc" value="{{ doc or '' }}" placeholder="Somente números ou com máscara" required>
-    </div>
-    <div class="col-md-4">
-      <label class="form-label">E-mail do titular (para enviar link)</label>
-      <input class="form-control" name="email" value="{{ email_default or '' }}" placeholder="email@exemplo.com">
-      <div class="form-text">Opcional se o próprio titular estiver logado.</div>
-    </div>
-    <div class="col-md-4 d-flex gap-2">
-      <button class="btn btn-primary w-100" type="submit">Abrir</button>
-      {% if doc %}
-        <button class="btn btn-outline-primary" type="submit" formmethod="post" formaction="/openfinance/sync">Sincronizar</button>
-      {% endif %}
-    </div>
-  </form>
-</div>
 
-{% if doc %}
-  <div class="row g-3">
-    <div class="col-12 col-lg-5">
-      <div class="card p-3">
-        <div class="fw-semibold mb-1">Status da conexão</div>
-        {% if conn %}
-          <div class="muted small">Item:</div>
-          <div class="mono">{{ conn.pluggy_item_id }}</div>
-          <div class="muted small mt-2">Status:</div>
-          <div><span class="badge text-bg-light border">{{ conn.status }}</span></div>
-          <div class="muted small mt-2">Última sincronização:</div>
-          <div>{{ conn.last_synced_at or "-" }}</div>
-          {% if conn.last_error %}
-            <div class="alert alert-warning mt-3 mb-0">{{ conn.last_error }}</div>
-          {% endif %}
-        {% else %}
-          <div class="muted">Nenhuma conexão ainda para este documento.</div>
-        {% endif %}
-
-        <hr>
-
-        {% if role in ["admin","equipe"] %}
-          <div class="fw-semibold">Enviar link de conexão ao titular</div>
-          <form method="post" action="/openfinance/invite" class="row g-2 mt-1">
-            <input type="hidden" name="doc" value="{{ doc }}">
-            <div class="col-12">
-              <label class="form-label">E-mail</label>
-              <input class="form-control" name="email" value="{{ email_default or '' }}" required>
-            </div>
-            <div class="col-12 d-flex gap-2">
-              <button class="btn btn-primary" type="submit">Enviar link</button>
-              {% if invite_link %}
-                <button class="btn btn-outline-secondary" type="button" onclick="navigator.clipboard.writeText('{{ invite_link }}'); alert('Link copiado!');">Copiar link</button>
-              {% endif %}
-            </div>
-          </form>
-          {% if invite_link %}
-            <div class="mt-2 small muted">Link: <span class="mono">{{ invite_link }}</span></div>
-          {% endif %}
-        {% else %}
-          <div class="fw-semibold">Conectar agora</div>
-          {% if self_connect_link %}
-            <a class="btn btn-primary mt-2" href="{{ self_connect_link }}">Abrir Pluggy Connect</a>
-          {% else %}
-            <div class="muted small">Peça para o administrador/equipe gerar um link.</div>
-          {% endif %}
-        {% endif %}
-      </div>
-
-      <div class="card p-3 mt-3">
-        <div class="fw-semibold mb-2">Catálogo de ofertas</div>
-        {% if role in ["admin","equipe"] %}
-          <form method="post" action="/openfinance/offers/add" class="row g-2">
-            <div class="col-12">
-              <label class="form-label">Nome da oferta</label>
-              <input class="form-control" name="label" placeholder="Ex.: Refinanciamento Banco X" required>
-            </div>
-            <div class="col-md-6">
-              <label class="form-label">CET a.a. (%)</label>
-              <input class="form-control" name="cet_aa_pct" inputmode="decimal" placeholder="Ex.: 28.5" required>
-            </div>
-            <div class="col-md-6">
-              <label class="form-label">Tipo (opcional)</label>
-              <input class="form-control" name="product_type" placeholder="Ex.: PERSONAL_LOAN">
-            </div>
-            <div class="col-md-6">
-              <label class="form-label">Prazo mín (meses)</label>
-              <input class="form-control" name="term_min" inputmode="numeric" placeholder="0">
-            </div>
-            <div class="col-md-6">
-              <label class="form-label">Prazo máx (meses)</label>
-              <input class="form-control" name="term_max" inputmode="numeric" placeholder="0">
-            </div>
-            <div class="col-12">
-              <button class="btn btn-outline-primary w-100" type="submit">Adicionar oferta</button>
-            </div>
-          </form>
-        {% endif %}
-
-        <div class="mt-2">
-          {% if offers %}
-            <ul class="list-group">
-              {% for o in offers %}
-                <li class="list-group-item d-flex justify-content-between align-items-center">
-                  <div>
-                    <div class="fw-semibold">{{ o.label }}</div>
-                    <div class="muted small">CET a.a.: {{ (o.cet_aa * 100) | round(2) }}% {% if o.product_type %}• {{ o.product_type }}{% endif %}</div>
-                  </div>
-                  <span class="badge text-bg-light border">{% if o.is_active %}ativa{% else %}inativa{% endif %}</span>
-                </li>
-              {% endfor %}
-            </ul>
-          {% else %}
-            <div class="muted small">Nenhuma oferta cadastrada ainda.</div>
-          {% endif %}
-        </div>
-      </div>
-    </div>
-
-    <div class="col-12 col-lg-7">
-      <div class="card p-3">
-        <div class="d-flex justify-content-between align-items-center">
-          <div class="fw-semibold">Contratos (Loans)</div>
-          <form method="post" action="/openfinance/opportunities/generate">
-            <input type="hidden" name="doc" value="{{ doc }}">
-            <button class="btn btn-outline-success btn-sm" type="submit">Gerar oportunidades</button>
-          </form>
-        </div>
-
-        {% if loans %}
-          <div class="table-responsive mt-2">
-            <table class="table table-sm align-middle">
-              <thead>
-                <tr>
-                  <th>Contrato</th>
-                  <th>CET a.a.</th>
-                  <th>Saldo</th>
-                  <th>Parcela</th>
-                  <th>Prazo (rem/total)</th>
-                </tr>
-              </thead>
-              <tbody>
-                {% for l in loans %}
-                  <tr>
-                    <td class="mono">{{ l.contract_number or l.pluggy_loan_id }}</td>
-                    <td>{{ (l.cet_aa * 100) | round(2) }}%</td>
-                    <td>R$ {{ l.outstanding_brl | round(2) }}</td>
-                    <td>R$ {{ l.installment_brl | round(2) }}</td>
-                    <td>{{ l.term_remaining_months }}/{{ l.term_total_months }}</td>
-                  </tr>
-                {% endfor %}
-              </tbody>
-            </table>
-          </div>
-        {% else %}
-          <div class="muted small mt-2">Sem contratos importados ainda. Conecte e sincronize.</div>
-        {% endif %}
-      </div>
-
-      <div class="card p-3 mt-3">
-        <div class="fw-semibold mb-2">Oportunidades (comparação)</div>
-        {% if opportunities %}
-          <div class="table-responsive">
-            <table class="table table-sm align-middle">
-              <thead>
-                <tr>
-                  <th>Contrato</th>
-                  <th>Oferta</th>
-                  <th>Parcela atual</th>
-                  <th>Nova parcela</th>
-                  <th>Economia/mês</th>
-                  <th>Economia total</th>
-                </tr>
-              </thead>
-              <tbody>
-                {% for o in opportunities %}
-                  <tr>
-                    <td class="mono">{{ o.pluggy_loan_id }}</td>
-                    <td>{{ o.offer_label }}</td>
-                    <td>R$ {{ o.old_payment_brl | round(2) }}</td>
-                    <td>R$ {{ o.new_payment_brl | round(2) }}</td>
-                    <td>R$ {{ o.monthly_savings_brl | round(2) }}</td>
-                    <td>R$ {{ o.total_savings_brl | round(2) }}</td>
-                  </tr>
-                {% endfor %}
-              </tbody>
-            </table>
-          </div>
-          <div class="muted small">Cálculo aproximado (PRICE/SAC médio) usando CET anual informado.</div>
-        {% else %}
-          <div class="muted small">Sem oportunidades ainda (adicione ofertas e clique em “Gerar oportunidades”).</div>
-        {% endif %}
-      </div>
-    </div>
-  </div>
-{% endif %}
-{% endblock %}
-""")
-
-TEMPLATES.setdefault("openfinance_connect.html", r"""{% extends "base.html" %}
-{% block content %}
-<div class="container py-4" style="max-width: 920px;">
-  <div class="d-flex justify-content-between align-items-start">
-    <div>
-      <div class="h4 mb-0">🌐 Conectar Open Finance</div>
-      <div class="muted">Conecte sua instituição para importar seus contratos (Loans).</div>
-    </div>
-    <a class="btn btn-outline-secondary" href="/">Fechar</a>
-  </div>
-
-  <div class="card p-3 mt-3">
-    <div class="row g-3">
-      <div class="col-md-6">
-        <div class="muted small">Documento</div>
-        <div class="mono fw-semibold">{{ doc_masked }}</div>
-      </div>
-      <div class="col-md-6">
-        <div class="muted small">E-mail</div>
-        <div class="fw-semibold">{{ invited_email }}</div>
-      </div>
-    </div>
-
-    {% if error %}
-      <div class="alert alert-danger mt-3 mb-0">{{ error }}</div>
-    {% endif %}
-
-    <hr>
-
-    <div class="row g-2">
-      <div class="col-md-8">
-        <label class="form-label">Seu nome (para registro)</label>
-        <input class="form-control" id="signed_by_name" placeholder="Nome completo" required>
-      </div>
-      <div class="col-md-4">
-        <label class="form-label">4 últimos dígitos</label>
-        <input class="form-control mono" id="doc_last4" maxlength="4" inputmode="numeric" placeholder="XXXX">
-      </div>
-      <div class="col-12">
-        <div class="form-check mt-1">
-          <input class="form-check-input" type="checkbox" value="1" id="chk">
-          <label class="form-check-label" for="chk">
-            Confirmo que sou o titular e autorizo a conexão para análise de melhores ofertas de crédito.
-          </label>
-        </div>
-      </div>
-      <div class="col-12 d-flex gap-2">
-        <button class="btn btn-primary" id="btnConnect" type="button">Conectar instituição</button>
-        <span class="muted small align-self-center" id="status"></span>
-      </div>
-    </div>
-  </div>
-
-  <div class="mt-3 muted small">
-    Após concluir a conexão, você pode fechar esta página.
-  </div>
-</div>
-
-<script src="{{ pluggy_js_url }}"></script>
-<script>
-(function(){
-  const token = {{ token|tojson }};
-  const statusEl = document.getElementById("status");
-  const btn = document.getElementById("btnConnect");
-
-  function setStatus(msg){ statusEl.textContent = msg || ""; }
-
-  async function postJSON(url, payload){
-    const r = await fetch(url, {
-      method: "POST",
-      headers: {"Content-Type":"application/json", "Accept":"application/json"},
-      body: JSON.stringify(payload || {})
-    });
-    const t = await r.text();
-    let j = {};
-    try { j = JSON.parse(t); } catch(e) {}
-    if(!r.ok){
-      const err = (j && (j.detail || j.error)) ? (j.detail || j.error) : t;
-      throw new Error(err || ("HTTP "+r.status));
-    }
-    return j;
-  }
-
-  btn.addEventListener("click", async function(){
-    try{
-      const name = (document.getElementById("signed_by_name").value || "").trim();
-      const last4 = (document.getElementById("doc_last4").value || "").trim();
-      const chk = document.getElementById("chk").checked;
-
-      if(!name){ alert("Informe seu nome."); return; }
-      if(!chk){ alert("Marque a autorização para continuar."); return; }
-
-      btn.disabled = true;
-      setStatus("Gerando token de conexão...");
-
-      const tk = await postJSON("/api/pluggy/connect_token", { token, signed_by_name: name, doc_last4: last4 });
-      const accessToken = tk.accessToken;
-
-      setStatus("Abrindo Pluggy Connect...");
-
-      const pc = new PluggyConnect({
-        connectToken: accessToken,
-        includeSandbox: !!tk.includeSandbox,
-        onSuccess: async (itemData) => {
-          try{
-            setStatus("Salvando conexão e importando contratos...");
-            await postJSON("/api/pluggy/item_success", { token, itemData });
-            setStatus("Concluído! Você pode fechar esta página.");
-          }catch(e){
-            console.error(e);
-            setStatus("Conectou, mas falhou ao registrar no sistema: " + (e.message || e));
-          }
-        },
-        onError: (error) => {
-          console.error(error);
-          setStatus("Erro no Pluggy Connect: " + (error && (error.message || JSON.stringify(error))) );
-          btn.disabled = false;
-        }
-      });
-
-      pc.init();
-    }catch(e){
-      console.error(e);
-      alert(e.message || String(e));
-      btn.disabled = false;
-      setStatus("");
-    }
-  });
-})();
-</script>
-{% endblock %}
-""")
-
-
-# ----------------------------
-# Routes (Open Finance)
-# ----------------------------
-
-def _mask_doc(doc_digits: str) -> str:
-    d = _digits(doc_digits)
-    if len(d) == 11:
-        return f"{d[0:3]}.{d[3:6]}.{d[6:9]}-{d[9:11]}"
-    if len(d) == 14:
-        return f"{d[0:2]}.{d[2:5]}.{d[5:8]}/{d[8:12]}-{d[12:14]}"
-    return d
-
-
-def _openfinance_require_client(request: Request, session: Session, ctx: TenantContext) -> Optional[Client]:
-    active_client_id = get_active_client_id(request, session, ctx)
-    if not active_client_id and getattr(ctx.membership, "client_id", None):
-        active_client_id = int(ctx.membership.client_id)
-    if not active_client_id:
-        return None
-    return get_client_or_none(session, ctx.company.id, int(active_client_id))
-
-
-
-def ensure_feature_access_tables() -> None:
-    try:
-        SQLModel.metadata.create_all(
-            engine,
-            tables=[MembershipFeatureAccess.__table__, ClientFeatureAccess.__table__],
-            checkfirst=True,
-        )
-    except Exception:
-        pass
-
-
-def _parse_json_list(raw: str) -> list[str]:
-    raw = (raw or "").strip()
-    if not raw:
-        return []
-    try:
-        v = json.loads(raw)
-        if isinstance(v, list):
-            return [str(x) for x in v]
-    except Exception:
-        pass
-    return []
-
-
-def get_membership_allowed_features(session: Session, *, company_id: int, membership: Membership) -> set[str]:
-    base = set(ROLE_DEFAULT_FEATURES.get(membership.role, set()))
-    if not membership.id:
-        return base
-
-    try:
-        row = session.exec(
-            select(MembershipFeatureAccess).where(
-                MembershipFeatureAccess.company_id == company_id,
-                MembershipFeatureAccess.membership_id == membership.id,
-            )
-        ).first()
-    except Exception:
-        try:
-            ensure_feature_access_tables()
-        except Exception:
-            pass
-        return base
-
-    if row:
-        lst = _parse_json_list(row.features_json)
-        if lst:
-            return set(lst)
-    return base
-
-def get_client_allowed_features(session: Session, *, company_id: int, client_id: int) -> Optional[set[str]]:
-    try:
-        row = session.exec(
-            select(ClientFeatureAccess).where(
-                ClientFeatureAccess.company_id == company_id,
-                ClientFeatureAccess.client_id == client_id,
-            )
-        ).first()
-    except Exception:
-        try:
-            ensure_feature_access_tables()
-        except Exception:
-            pass
-        return None
-
-    if not row:
-        return None
-    lst = _parse_json_list(row.features_json)
-    return set(lst) if lst else None
-
-def effective_allowed_features(session: Session, *, ctx: TenantContext, current_client: Optional[Client]) -> set[str]:
-    try:
-        allowed = get_membership_allowed_features(session, company_id=ctx.company.id, membership=ctx.membership)
-
-        if ctx.membership.role == "cliente" and current_client and current_client.id:
-            client_allowed = get_client_allowed_features(session, company_id=ctx.company.id, client_id=current_client.id)
-            if client_allowed is not None:
-                allowed = allowed.intersection(client_allowed)
-
-        return {k for k in allowed if k in FEATURE_KEYS}
-    except Exception:
-        base = set(ROLE_DEFAULT_FEATURES.get(ctx.membership.role, set()))
-        return {k for k in base if k in FEATURE_KEYS}
-
-def resolve_feature_key(path: str) -> Optional[str]:
-    if path.startswith("/static/") or path.startswith("/login") or path.startswith("/logout"):
-        return None
-    if path.startswith("/api/"):
-        return None
-    if path in {"/", "/health"}:
-        return None
-
-    mapping = [
-        ("/admin/ui", "ui"),
-        ("/admin/gestao", "gestao"),
-        ("/admin/members", "gestao"),
-        ("/admin/clients", "gestao"),
-        ("/negocios", "crm"),
-        ("/credito", "credito"),
-        ("/empresa", "empresa"),
-        ("/perfil", "perfil"),
-        ("/financeiro", "financeiro"),
-        ("/documentos", "documentos"),
-        ("/consultoria", "consultoria"),
-        ("/reunioes", "reunioes"),
-        ("/tarefas", "tarefas"),
-        ("/simulador", "simulador"),
-        ("/propostas", "propostas"),
-        ("/pendencias", "pendencias"),
-        ("/agenda", "agenda"),
-        ("/educacao", "educacao"),
-    ]
-    for prefix, key in mapping:
-        if path == prefix or path.startswith(prefix + "/"):
-            return key
-    return None
-
-def _is_staff(role: str) -> bool:
-    return role in {"admin", "equipe"}
-
-
-def _safe_int(value: Any) -> Optional[int]:
-    try:
-        return int(value)
-    except Exception:
-        return None
-
-
-def _get_selected_client_for_staff(request: Request, session: Session, company_id: int) -> Optional[int]:
-    cid = _safe_int(request.session.get("selected_client_id"))
-    if cid:
-        c = session.get(Client, cid)
-        if c and c.company_id == company_id and entity_is_allowed(session, entity_type="client", entity_id=c.id):
-            return cid
-
-    clients = session.exec(
-        select(Client).where(Client.company_id == company_id).order_by(Client.created_at)
-    ).all()
-    first_client = next((c for c in clients if c.id and entity_is_allowed(session, entity_type="client", entity_id=c.id)), None)
-    if not first_client:
-        return None
-
-    request.session["selected_client_id"] = first_client.id
-    return first_client.id
-
-
-def get_active_client_id(request: Request, session: Session, ctx: TenantContext) -> Optional[int]:
-    if ctx.membership.role == "cliente":
-        return ctx.membership.client_id
-    return _get_selected_client_for_staff(request, session, ctx.company.id)
-
-
-def get_client_or_none(session: Session, company_id: int, client_id: Optional[int]) -> Optional[Client]:
-    if not client_id:
-        return None
-    c = session.get(Client, int(client_id))
-    if not c or c.company_id != company_id:
-        return None
-    return c
-
-
-def ensure_can_access_client(ctx: TenantContext, client_id: int) -> bool:
-    if _is_staff(ctx.membership.role):
-        return True
-    return ctx.membership.client_id == client_id
-
-
-# ----------------------------
-# Uploads
-# ----------------------------
-
-_FILENAME_RE = re.compile(r"[^A-Za-z0-9._-]+")
-
-
-def safe_filename(name: str) -> str:
-    name = name.strip().replace(" ", "_")
-    name = _FILENAME_RE.sub("_", name)
-    return name[:180] if len(name) > 180 else name
-
-
-async def save_upload(upload: UploadFile) -> tuple[str, str, int]:
-    original = upload.filename or "arquivo"
-    stored = f"{uuid.uuid4().hex}_{safe_filename(original)}"
-    path = UPLOAD_DIR / stored
-
-    size = 0
-    with path.open("wb") as f:
-        while True:
-            chunk = await upload.read(1024 * 1024)
-            if not chunk:
-                break
-            size += len(chunk)
-            if size > _MAX_UPLOAD_BYTES:
-                try:
-                    f.close()
-                finally:
-                    if path.exists():
-                        path.unlink(missing_ok=True)
-                raise ValueError("Arquivo excede o limite de tamanho.")
-            f.write(chunk)
-
-    mime = upload.content_type or "application/octet-stream"
-    return stored, mime, size
-
-
-# ----------------------------
-# Templates
-# ----------------------------
-
-
-# =========================
-# Meetings (Notion AI Meeting Notes sync)
-# =========================
-
-class Meeting(SQLModel, table=True):
-    """Meeting record linked to a client; can be synced from a Notion AI Meeting Notes page."""
-    id: Optional[int] = Field(default=None, primary_key=True)
-
-    company_id: int = Field(index=True, foreign_key="company.id")
-    client_id: int = Field(index=True, foreign_key="client.id")
-    created_by_user_id: int = Field(index=True, foreign_key="user.id")
-
-    title: str = ""
-    meeting_date: str = ""  # AAAA-MM-DD (simple)
-    source: str = Field(default="notion", index=True)
-
-    notion_page_id: str = Field(default="", index=True)  # normalized UUID (with hyphens)
-    notion_url: str = ""
-    notion_meeting_block_id: str = Field(default="", index=True)
-    notion_status: str = Field(default="", index=True)
-
-    summary_text: str = ""
-    notes_text: str = ""
-    transcript_text: str = ""
-    action_items_text: str = ""
-
-    raw_json: str = Field(default="{}")
-    last_synced_at: Optional[datetime] = None
-
-    created_at: datetime = Field(default_factory=utcnow)
-    updated_at: datetime = Field(default_factory=utcnow)
-
-
-class MeetingMessage(SQLModel, table=True):
-    """Thread messages about a meeting (internal + client)."""
-    id: Optional[int] = Field(default=None, primary_key=True)
-
-    meeting_id: int = Field(index=True, foreign_key="meeting.id")
-    author_user_id: int = Field(index=True, foreign_key="user.id")
-
-    message: str
-    created_at: datetime = Field(default_factory=utcnow)
-
-
-_MEETING_NOTION_STATUSES = {
-    "transcription_not_started",
-    "transcription_paused",
-    "transcription_in_progress",
-    "summary_in_progress",
-    "notes_ready",
-}
-
-
-def _normalize_uuid(raw: str) -> str:
-    s = (raw or "").strip()
-    # Extract 32 hex chars if URL-like
-    m = re.search(r"([0-9a-fA-F]{32})", s)
-    if m:
-        s = m.group(1)
-    s = s.replace("-", "").lower()
-    if len(s) != 32 or not re.fullmatch(r"[0-9a-f]{32}", s):
-        return ""
-    return f"{s[0:8]}-{s[8:12]}-{s[12:16]}-{s[16:20]}-{s[20:32]}"
-
-
-def _notion_headers() -> dict[str, str]:
-    if not NOTION_TOKEN:
-        raise RuntimeError("NOTION_TOKEN não está configurado.")
-    return {
-        "Authorization": f"Bearer {NOTION_TOKEN}",
-        "Notion-Version": NOTION_VERSION,
-    }
-
-
-async def _notion_get_json(path: str, *, params: Optional[dict[str, Any]] = None) -> dict[str, Any]:
-    url = f"{NOTION_API_BASE}{path}"
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        r = await client.get(url, headers=_notion_headers(), params=params or {})
-        r.raise_for_status()
-        data = r.json()
-        return data if isinstance(data, dict) else {}
-
-
-async def _notion_list_block_children_all(block_id: str) -> list[dict[str, Any]]:
-    results: list[dict[str, Any]] = []
-    cursor: Optional[str] = None
-    while True:
-        params = {"page_size": 100}
-        if cursor:
-            params["start_cursor"] = cursor
-        data = await _notion_get_json(f"/blocks/{block_id}/children", params=params)
-        chunk = data.get("results") or []
-        if isinstance(chunk, list):
-            results.extend([x for x in chunk if isinstance(x, dict)])
-        if not data.get("has_more"):
-            break
-        cursor = data.get("next_cursor")
-        if not cursor:
-            break
-    return results
-
-
-def _rt_plain(rich_text: Any) -> str:
-    if not isinstance(rich_text, list):
-        return ""
-    parts: list[str] = []
-    for rt in rich_text:
-        if not isinstance(rt, dict):
-            continue
-        pt = rt.get("plain_text")
-        if isinstance(pt, str):
-            parts.append(pt)
-        else:
-            t = rt.get("text", {})
-            if isinstance(t, dict) and isinstance(t.get("content"), str):
-                parts.append(t["content"])
-    return "".join(parts).strip()
-
-
-async def _notion_blocks_to_lines(block_id: str, *, depth: int = 0, max_depth: int = 4) -> list[str]:
-    if depth > max_depth:
-        return []
-    blocks = await _notion_list_block_children_all(block_id)
-    out: list[str] = []
-    for b in blocks:
-        btype = b.get("type")
-        if not isinstance(btype, str):
-            continue
-        data = b.get(btype, {}) if isinstance(b.get(btype), dict) else {}
-
-        line = ""
-        if btype in {"paragraph", "quote", "callout"}:
-            line = _rt_plain(data.get("rich_text") or data.get("text"))
-            if btype == "quote" and line:
-                line = f"> {line}"
-            if btype == "callout" and line:
-                line = f"💬 {line}"
-        elif btype in {"heading_1", "heading_2", "heading_3"}:
-            h = _rt_plain(data.get("rich_text") or data.get("text"))
-            if h:
-                prefix = "#" if btype == "heading_1" else "##" if btype == "heading_2" else "###"
-                line = f"{prefix} {h}"
-        elif btype in {"bulleted_list_item", "numbered_list_item"}:
-            t = _rt_plain(data.get("rich_text") or data.get("text"))
-            if t:
-                bullet = "-" if btype == "bulleted_list_item" else "1."
-                line = f"{bullet} {t}"
-        elif btype == "to_do":
-            t = _rt_plain(data.get("rich_text") or data.get("text"))
-            checked = bool(data.get("checked"))
-            box = "☑" if checked else "☐"
-            if t:
-                line = f"{box} {t}"
-        elif btype == "toggle":
-            t = _rt_plain(data.get("rich_text") or data.get("text"))
-            if t:
-                line = f"▸ {t}"
-        elif btype == "code":
-            t = _rt_plain(data.get("rich_text") or data.get("text"))
-            lang = data.get("language") if isinstance(data.get("language"), str) else ""
-            if t:
-                line = f"```{lang}\n{t}\n```"
-        else:
-            # Fallback for other blocks that have rich_text
-            if isinstance(data, dict):
-                t = _rt_plain(data.get("rich_text") or data.get("text"))
-                if t:
-                    line = t
-
-        if line:
-            out.append(("  " * depth) + line)
-
-        if b.get("has_children") and isinstance(b.get("id"), str):
-            child_lines = await _notion_blocks_to_lines(b["id"], depth=depth + 1, max_depth=max_depth)
-            out.extend(child_lines)
-
-    return [x for x in out if isinstance(x, str) and x.strip()]
-
-
-def _extract_action_items_from_lines(lines: list[str]) -> str:
-    if not lines:
-        return ""
-    actions: list[str] = []
-    in_actions = False
-    for ln in lines:
-        low = ln.lower()
-        if low.startswith("#") and ("action" in low or "ação" in low or "acoes" in low or "ações" in low):
-            in_actions = True
-            continue
-        if low.startswith("#") and in_actions:
-            # next heading ends action section
-            in_actions = False
-        if in_actions:
-            if ln.strip().startswith(("-", "☐", "☑", "1.")):
-                actions.append(ln.strip())
-        else:
-            # also accept to-do items anywhere
-            if ln.strip().startswith(("☐", "☑")):
-                actions.append(ln.strip())
-    return "\n".join(actions).strip()
-
-
-async def _notion_find_meeting_notes_block(page_id: str) -> Optional[dict[str, Any]]:
-    # BFS up to a small depth: page children -> nested children
-    queue = [(page_id, 0)]
-    seen: set[str] = set()
-    while queue:
-        bid, depth = queue.pop(0)
-        if bid in seen:
-            continue
-        seen.add(bid)
-        blocks = await _notion_list_block_children_all(bid)
-        for b in blocks:
-            btype = b.get("type")
-            if btype in {"meeting_notes", "transcription"}:
-                return b
-        if depth < 3:
-            for b in blocks:
-                if b.get("has_children") and isinstance(b.get("id"), str):
-                    queue.append((b["id"], depth + 1))
-    return None
-
-
-async def notion_sync_meeting_from_page(page_id_or_url: str) -> dict[str, Any]:
-    page_id = _normalize_uuid(page_id_or_url)
-    if not page_id:
-        raise ValueError("Não foi possível extrair o ID da página do Notion.")
-    meeting_block = await _notion_find_meeting_notes_block(page_id)
-    if not meeting_block:
-        raise ValueError("Não encontrei um bloco de AI Meeting Notes nessa página (meeting_notes/transcription).")
-
-    block_id = meeting_block.get("id", "")
-    prop = meeting_block.get("meeting_notes") or meeting_block.get("transcription") or {}
-    title = _rt_plain(prop.get("title")) if isinstance(prop, dict) else ""
-    status = prop.get("status") if isinstance(prop, dict) and isinstance(prop.get("status"), str) else ""
-    children = prop.get("children") if isinstance(prop, dict) else {}
-    if not isinstance(children, dict):
-        children = {}
-
-    summary_block_id = children.get("summary_block_id") if isinstance(children.get("summary_block_id"), str) else ""
-    notes_block_id = children.get("notes_block_id") if isinstance(children.get("notes_block_id"), str) else ""
-    transcript_block_id = children.get("transcript_block_id") if isinstance(children.get("transcript_block_id"),
-                                                                            str) else ""
-
-    summary_lines = await _notion_blocks_to_lines(summary_block_id) if summary_block_id else []
-    notes_lines = await _notion_blocks_to_lines(notes_block_id) if notes_block_id else []
-    transcript_lines = await _notion_blocks_to_lines(transcript_block_id) if transcript_block_id else []
-
-    action_items = _extract_action_items_from_lines(summary_lines + notes_lines)
-
-    return {
-        "page_id": page_id,
-        "meeting_block_id": block_id,
-        "title": title,
-        "status": status,
-        "summary_text": "\n".join(summary_lines).strip(),
-        "notes_text": "\n".join(notes_lines).strip(),
-        "transcript_text": "\n".join(transcript_lines).strip(),
-        "action_items_text": action_items,
-        "raw": meeting_block,
-    }
 
 
 TEMPLATES: dict[str, str] = {
@@ -7708,6 +6871,849 @@ TEMPLATES.update({
 })
 
 templates_env = Environment(loader=DictLoader(TEMPLATES), autoescape=True)
+
+
+# ----------------------------
+# Templates (Open Finance)
+# ----------------------------
+
+TEMPLATES.setdefault("openfinance.html", r"""{% extends "base.html" %}
+{% block content %}
+<div class="d-flex align-items-center justify-content-between mb-3">
+  <div>
+    <div class="h4 mb-0">🌐 Open Finance (Pluggy) — Contratos</div>
+    <div class="muted">Conecte a conta do titular e importe contratos (Loans) para comparar ofertas.</div>
+  </div>
+  <a class="btn btn-outline-secondary" href="/">Voltar</a>
+</div>
+
+<div class="card p-3 mb-3">
+  <form method="get" action="/openfinance" class="row g-2 align-items-end">
+    <div class="col-md-4">
+      <label class="form-label">CPF/CNPJ</label>
+      <input class="form-control mono" name="doc" value="{{ doc or '' }}" placeholder="Somente números ou com máscara" required>
+    </div>
+    <div class="col-md-4">
+      <label class="form-label">E-mail do titular (para enviar link)</label>
+      <input class="form-control" name="email" value="{{ email_default or '' }}" placeholder="email@exemplo.com">
+      <div class="form-text">Opcional se o próprio titular estiver logado.</div>
+    </div>
+    <div class="col-md-4 d-flex gap-2">
+      <button class="btn btn-primary w-100" type="submit">Abrir</button>
+      {% if doc %}
+        <button class="btn btn-outline-primary" type="submit" formmethod="post" formaction="/openfinance/sync">Sincronizar</button>
+      {% endif %}
+    </div>
+  </form>
+</div>
+
+{% if doc %}
+  <div class="row g-3">
+    <div class="col-12 col-lg-5">
+      <div class="card p-3">
+        <div class="fw-semibold mb-1">Status da conexão</div>
+        {% if conn %}
+          <div class="muted small">Item:</div>
+          <div class="mono">{{ conn.pluggy_item_id }}</div>
+          <div class="muted small mt-2">Status:</div>
+          <div><span class="badge text-bg-light border">{{ conn.status }}</span></div>
+          <div class="muted small mt-2">Última sincronização:</div>
+          <div>{{ conn.last_synced_at or "-" }}</div>
+          {% if conn.last_error %}
+            <div class="alert alert-warning mt-3 mb-0">{{ conn.last_error }}</div>
+          {% endif %}
+        {% else %}
+          <div class="muted">Nenhuma conexão ainda para este documento.</div>
+        {% endif %}
+
+        <hr>
+
+        {% if role in ["admin","equipe"] %}
+          <div class="fw-semibold">Enviar link de conexão ao titular</div>
+          <form method="post" action="/openfinance/invite" class="row g-2 mt-1">
+            <input type="hidden" name="doc" value="{{ doc }}">
+            <div class="col-12">
+              <label class="form-label">E-mail</label>
+              <input class="form-control" name="email" value="{{ email_default or '' }}" required>
+            </div>
+            <div class="col-12 d-flex gap-2">
+              <button class="btn btn-primary" type="submit">Enviar link</button>
+              {% if invite_link %}
+                <button class="btn btn-outline-secondary" type="button" onclick="navigator.clipboard.writeText('{{ invite_link }}'); alert('Link copiado!');">Copiar link</button>
+              {% endif %}
+            </div>
+          </form>
+          {% if invite_link %}
+            <div class="mt-2 small muted">Link: <span class="mono">{{ invite_link }}</span></div>
+          {% endif %}
+        {% else %}
+          <div class="fw-semibold">Conectar agora</div>
+          {% if self_connect_link %}
+            <a class="btn btn-primary mt-2" href="{{ self_connect_link }}">Abrir Pluggy Connect</a>
+          {% else %}
+            <div class="muted small">Peça para o administrador/equipe gerar um link.</div>
+          {% endif %}
+        {% endif %}
+      </div>
+
+      <div class="card p-3 mt-3">
+        <div class="fw-semibold mb-2">Catálogo de ofertas</div>
+        {% if role in ["admin","equipe"] %}
+          <form method="post" action="/openfinance/offers/add" class="row g-2">
+            <div class="col-12">
+              <label class="form-label">Nome da oferta</label>
+              <input class="form-control" name="label" placeholder="Ex.: Refinanciamento Banco X" required>
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">CET a.a. (%)</label>
+              <input class="form-control" name="cet_aa_pct" inputmode="decimal" placeholder="Ex.: 28.5" required>
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">Tipo (opcional)</label>
+              <input class="form-control" name="product_type" placeholder="Ex.: PERSONAL_LOAN">
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">Prazo mín (meses)</label>
+              <input class="form-control" name="term_min" inputmode="numeric" placeholder="0">
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">Prazo máx (meses)</label>
+              <input class="form-control" name="term_max" inputmode="numeric" placeholder="0">
+            </div>
+            <div class="col-12">
+              <button class="btn btn-outline-primary w-100" type="submit">Adicionar oferta</button>
+            </div>
+          </form>
+        {% endif %}
+
+        <div class="mt-2">
+          {% if offers %}
+            <ul class="list-group">
+              {% for o in offers %}
+                <li class="list-group-item d-flex justify-content-between align-items-center">
+                  <div>
+                    <div class="fw-semibold">{{ o.label }}</div>
+                    <div class="muted small">CET a.a.: {{ (o.cet_aa * 100) | round(2) }}% {% if o.product_type %}• {{ o.product_type }}{% endif %}</div>
+                  </div>
+                  <span class="badge text-bg-light border">{% if o.is_active %}ativa{% else %}inativa{% endif %}</span>
+                </li>
+              {% endfor %}
+            </ul>
+          {% else %}
+            <div class="muted small">Nenhuma oferta cadastrada ainda.</div>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+
+    <div class="col-12 col-lg-7">
+      <div class="card p-3">
+        <div class="d-flex justify-content-between align-items-center">
+          <div class="fw-semibold">Contratos (Loans)</div>
+          <form method="post" action="/openfinance/opportunities/generate">
+            <input type="hidden" name="doc" value="{{ doc }}">
+            <button class="btn btn-outline-success btn-sm" type="submit">Gerar oportunidades</button>
+          </form>
+        </div>
+
+        {% if loans %}
+          <div class="table-responsive mt-2">
+            <table class="table table-sm align-middle">
+              <thead>
+                <tr>
+                  <th>Contrato</th>
+                  <th>CET a.a.</th>
+                  <th>Saldo</th>
+                  <th>Parcela</th>
+                  <th>Prazo (rem/total)</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for l in loans %}
+                  <tr>
+                    <td class="mono">{{ l.contract_number or l.pluggy_loan_id }}</td>
+                    <td>{{ (l.cet_aa * 100) | round(2) }}%</td>
+                    <td>R$ {{ l.outstanding_brl | round(2) }}</td>
+                    <td>R$ {{ l.installment_brl | round(2) }}</td>
+                    <td>{{ l.term_remaining_months }}/{{ l.term_total_months }}</td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        {% else %}
+          <div class="muted small mt-2">Sem contratos importados ainda. Conecte e sincronize.</div>
+        {% endif %}
+      </div>
+
+      <div class="card p-3 mt-3">
+        <div class="fw-semibold mb-2">Oportunidades (comparação)</div>
+        {% if opportunities %}
+          <div class="table-responsive">
+            <table class="table table-sm align-middle">
+              <thead>
+                <tr>
+                  <th>Contrato</th>
+                  <th>Oferta</th>
+                  <th>Parcela atual</th>
+                  <th>Nova parcela</th>
+                  <th>Economia/mês</th>
+                  <th>Economia total</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for o in opportunities %}
+                  <tr>
+                    <td class="mono">{{ o.pluggy_loan_id }}</td>
+                    <td>{{ o.offer_label }}</td>
+                    <td>R$ {{ o.old_payment_brl | round(2) }}</td>
+                    <td>R$ {{ o.new_payment_brl | round(2) }}</td>
+                    <td>R$ {{ o.monthly_savings_brl | round(2) }}</td>
+                    <td>R$ {{ o.total_savings_brl | round(2) }}</td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+          <div class="muted small">Cálculo aproximado (PRICE/SAC médio) usando CET anual informado.</div>
+        {% else %}
+          <div class="muted small">Sem oportunidades ainda (adicione ofertas e clique em “Gerar oportunidades”).</div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+{% endif %}
+{% endblock %}
+""")
+
+TEMPLATES.setdefault("openfinance_connect.html", r"""{% extends "base.html" %}
+{% block content %}
+<div class="container py-4" style="max-width: 920px;">
+  <div class="d-flex justify-content-between align-items-start">
+    <div>
+      <div class="h4 mb-0">🌐 Conectar Open Finance</div>
+      <div class="muted">Conecte sua instituição para importar seus contratos (Loans).</div>
+    </div>
+    <a class="btn btn-outline-secondary" href="/">Fechar</a>
+  </div>
+
+  <div class="card p-3 mt-3">
+    <div class="row g-3">
+      <div class="col-md-6">
+        <div class="muted small">Documento</div>
+        <div class="mono fw-semibold">{{ doc_masked }}</div>
+      </div>
+      <div class="col-md-6">
+        <div class="muted small">E-mail</div>
+        <div class="fw-semibold">{{ invited_email }}</div>
+      </div>
+    </div>
+
+    {% if error %}
+      <div class="alert alert-danger mt-3 mb-0">{{ error }}</div>
+    {% endif %}
+
+    <hr>
+
+    <div class="row g-2">
+      <div class="col-md-8">
+        <label class="form-label">Seu nome (para registro)</label>
+        <input class="form-control" id="signed_by_name" placeholder="Nome completo" required>
+      </div>
+      <div class="col-md-4">
+        <label class="form-label">4 últimos dígitos</label>
+        <input class="form-control mono" id="doc_last4" maxlength="4" inputmode="numeric" placeholder="XXXX">
+      </div>
+      <div class="col-12">
+        <div class="form-check mt-1">
+          <input class="form-check-input" type="checkbox" value="1" id="chk">
+          <label class="form-check-label" for="chk">
+            Confirmo que sou o titular e autorizo a conexão para análise de melhores ofertas de crédito.
+          </label>
+        </div>
+      </div>
+      <div class="col-12 d-flex gap-2">
+        <button class="btn btn-primary" id="btnConnect" type="button">Conectar instituição</button>
+        <span class="muted small align-self-center" id="status"></span>
+      </div>
+    </div>
+  </div>
+
+  <div class="mt-3 muted small">
+    Após concluir a conexão, você pode fechar esta página.
+  </div>
+</div>
+
+<script src="{{ pluggy_js_url }}"></script>
+<script>
+(function(){
+  const token = {{ token|tojson }};
+  const statusEl = document.getElementById("status");
+  const btn = document.getElementById("btnConnect");
+
+  function setStatus(msg){ statusEl.textContent = msg || ""; }
+
+  async function postJSON(url, payload){
+    const r = await fetch(url, {
+      method: "POST",
+      headers: {"Content-Type":"application/json", "Accept":"application/json"},
+      body: JSON.stringify(payload || {})
+    });
+    const t = await r.text();
+    let j = {};
+    try { j = JSON.parse(t); } catch(e) {}
+    if(!r.ok){
+      const err = (j && (j.detail || j.error)) ? (j.detail || j.error) : t;
+      throw new Error(err || ("HTTP "+r.status));
+    }
+    return j;
+  }
+
+  btn.addEventListener("click", async function(){
+    try{
+      const name = (document.getElementById("signed_by_name").value || "").trim();
+      const last4 = (document.getElementById("doc_last4").value || "").trim();
+      const chk = document.getElementById("chk").checked;
+
+      if(!name){ alert("Informe seu nome."); return; }
+      if(!chk){ alert("Marque a autorização para continuar."); return; }
+
+      btn.disabled = true;
+      setStatus("Gerando token de conexão...");
+
+      const tk = await postJSON("/api/pluggy/connect_token", { token, signed_by_name: name, doc_last4: last4 });
+      const accessToken = tk.accessToken;
+
+      setStatus("Abrindo Pluggy Connect...");
+
+      const pc = new PluggyConnect({
+        connectToken: accessToken,
+        includeSandbox: !!tk.includeSandbox,
+        onSuccess: async (itemData) => {
+          try{
+            setStatus("Salvando conexão e importando contratos...");
+            await postJSON("/api/pluggy/item_success", { token, itemData });
+            setStatus("Concluído! Você pode fechar esta página.");
+          }catch(e){
+            console.error(e);
+            setStatus("Conectou, mas falhou ao registrar no sistema: " + (e.message || e));
+          }
+        },
+        onError: (error) => {
+          console.error(error);
+          setStatus("Erro no Pluggy Connect: " + (error && (error.message || JSON.stringify(error))) );
+          btn.disabled = false;
+        }
+      });
+
+      pc.init();
+    }catch(e){
+      console.error(e);
+      alert(e.message || String(e));
+      btn.disabled = false;
+      setStatus("");
+    }
+  });
+})();
+</script>
+{% endblock %}
+""")
+
+
+# ----------------------------
+# Routes (Open Finance)
+# ----------------------------
+
+def _mask_doc(doc_digits: str) -> str:
+    d = _digits(doc_digits)
+    if len(d) == 11:
+        return f"{d[0:3]}.{d[3:6]}.{d[6:9]}-{d[9:11]}"
+    if len(d) == 14:
+        return f"{d[0:2]}.{d[2:5]}.{d[5:8]}/{d[8:12]}-{d[12:14]}"
+    return d
+
+
+def _openfinance_require_client(request: Request, session: Session, ctx: TenantContext) -> Optional[Client]:
+    active_client_id = get_active_client_id(request, session, ctx)
+    if not active_client_id and getattr(ctx.membership, "client_id", None):
+        active_client_id = int(ctx.membership.client_id)
+    if not active_client_id:
+        return None
+    return get_client_or_none(session, ctx.company.id, int(active_client_id))
+
+
+
+def ensure_feature_access_tables() -> None:
+    try:
+        SQLModel.metadata.create_all(
+            engine,
+            tables=[MembershipFeatureAccess.__table__, ClientFeatureAccess.__table__],
+            checkfirst=True,
+        )
+    except Exception:
+        pass
+
+
+def _parse_json_list(raw: str) -> list[str]:
+    raw = (raw or "").strip()
+    if not raw:
+        return []
+    try:
+        v = json.loads(raw)
+        if isinstance(v, list):
+            return [str(x) for x in v]
+    except Exception:
+        pass
+    return []
+
+
+def get_membership_allowed_features(session: Session, *, company_id: int, membership: Membership) -> set[str]:
+    base = set(ROLE_DEFAULT_FEATURES.get(membership.role, set()))
+    if not membership.id:
+        return base
+
+    try:
+        row = session.exec(
+            select(MembershipFeatureAccess).where(
+                MembershipFeatureAccess.company_id == company_id,
+                MembershipFeatureAccess.membership_id == membership.id,
+            )
+        ).first()
+    except Exception:
+        try:
+            ensure_feature_access_tables()
+        except Exception:
+            pass
+        return base
+
+    if row:
+        lst = _parse_json_list(row.features_json)
+        if lst:
+            return set(lst)
+    return base
+
+def get_client_allowed_features(session: Session, *, company_id: int, client_id: int) -> Optional[set[str]]:
+    try:
+        row = session.exec(
+            select(ClientFeatureAccess).where(
+                ClientFeatureAccess.company_id == company_id,
+                ClientFeatureAccess.client_id == client_id,
+            )
+        ).first()
+    except Exception:
+        try:
+            ensure_feature_access_tables()
+        except Exception:
+            pass
+        return None
+
+    if not row:
+        return None
+    lst = _parse_json_list(row.features_json)
+    return set(lst) if lst else None
+
+def effective_allowed_features(session: Session, *, ctx: TenantContext, current_client: Optional[Client]) -> set[str]:
+    try:
+        allowed = get_membership_allowed_features(session, company_id=ctx.company.id, membership=ctx.membership)
+
+        if ctx.membership.role == "cliente" and current_client and current_client.id:
+            client_allowed = get_client_allowed_features(session, company_id=ctx.company.id, client_id=current_client.id)
+            if client_allowed is not None:
+                allowed = allowed.intersection(client_allowed)
+
+        return {k for k in allowed if k in FEATURE_KEYS}
+    except Exception:
+        base = set(ROLE_DEFAULT_FEATURES.get(ctx.membership.role, set()))
+        return {k for k in base if k in FEATURE_KEYS}
+
+def resolve_feature_key(path: str) -> Optional[str]:
+    if path.startswith("/static/") or path.startswith("/login") or path.startswith("/logout"):
+        return None
+    if path.startswith("/api/"):
+        return None
+    if path in {"/", "/health"}:
+        return None
+
+    mapping = [
+        ("/admin/ui", "ui"),
+        ("/admin/gestao", "gestao"),
+        ("/admin/members", "gestao"),
+        ("/admin/clients", "gestao"),
+        ("/negocios", "crm"),
+        ("/credito", "credito"),
+        ("/empresa", "empresa"),
+        ("/perfil", "perfil"),
+        ("/financeiro", "financeiro"),
+        ("/documentos", "documentos"),
+        ("/consultoria", "consultoria"),
+        ("/reunioes", "reunioes"),
+        ("/tarefas", "tarefas"),
+        ("/simulador", "simulador"),
+        ("/propostas", "propostas"),
+        ("/pendencias", "pendencias"),
+        ("/agenda", "agenda"),
+        ("/educacao", "educacao"),
+    ]
+    for prefix, key in mapping:
+        if path == prefix or path.startswith(prefix + "/"):
+            return key
+    return None
+
+def _is_staff(role: str) -> bool:
+    return role in {"admin", "equipe"}
+
+
+def _safe_int(value: Any) -> Optional[int]:
+    try:
+        return int(value)
+    except Exception:
+        return None
+
+
+def _get_selected_client_for_staff(request: Request, session: Session, company_id: int) -> Optional[int]:
+    cid = _safe_int(request.session.get("selected_client_id"))
+    if cid:
+        c = session.get(Client, cid)
+        if c and c.company_id == company_id and entity_is_allowed(session, entity_type="client", entity_id=c.id):
+            return cid
+
+    clients = session.exec(
+        select(Client).where(Client.company_id == company_id).order_by(Client.created_at)
+    ).all()
+    first_client = next((c for c in clients if c.id and entity_is_allowed(session, entity_type="client", entity_id=c.id)), None)
+    if not first_client:
+        return None
+
+    request.session["selected_client_id"] = first_client.id
+    return first_client.id
+
+
+def get_active_client_id(request: Request, session: Session, ctx: TenantContext) -> Optional[int]:
+    if ctx.membership.role == "cliente":
+        return ctx.membership.client_id
+    return _get_selected_client_for_staff(request, session, ctx.company.id)
+
+
+def get_client_or_none(session: Session, company_id: int, client_id: Optional[int]) -> Optional[Client]:
+    if not client_id:
+        return None
+    c = session.get(Client, int(client_id))
+    if not c or c.company_id != company_id:
+        return None
+    return c
+
+
+def ensure_can_access_client(ctx: TenantContext, client_id: int) -> bool:
+    if _is_staff(ctx.membership.role):
+        return True
+    return ctx.membership.client_id == client_id
+
+
+# ----------------------------
+# Uploads
+# ----------------------------
+
+_FILENAME_RE = re.compile(r"[^A-Za-z0-9._-]+")
+
+
+def safe_filename(name: str) -> str:
+    name = name.strip().replace(" ", "_")
+    name = _FILENAME_RE.sub("_", name)
+    return name[:180] if len(name) > 180 else name
+
+
+async def save_upload(upload: UploadFile) -> tuple[str, str, int]:
+    original = upload.filename or "arquivo"
+    stored = f"{uuid.uuid4().hex}_{safe_filename(original)}"
+    path = UPLOAD_DIR / stored
+
+    size = 0
+    with path.open("wb") as f:
+        while True:
+            chunk = await upload.read(1024 * 1024)
+            if not chunk:
+                break
+            size += len(chunk)
+            if size > _MAX_UPLOAD_BYTES:
+                try:
+                    f.close()
+                finally:
+                    if path.exists():
+                        path.unlink(missing_ok=True)
+                raise ValueError("Arquivo excede o limite de tamanho.")
+            f.write(chunk)
+
+    mime = upload.content_type or "application/octet-stream"
+    return stored, mime, size
+
+
+# ----------------------------
+# Templates
+# ----------------------------
+
+
+# =========================
+# Meetings (Notion AI Meeting Notes sync)
+# =========================
+
+class Meeting(SQLModel, table=True):
+    """Meeting record linked to a client; can be synced from a Notion AI Meeting Notes page."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+
+    company_id: int = Field(index=True, foreign_key="company.id")
+    client_id: int = Field(index=True, foreign_key="client.id")
+    created_by_user_id: int = Field(index=True, foreign_key="user.id")
+
+    title: str = ""
+    meeting_date: str = ""  # AAAA-MM-DD (simple)
+    source: str = Field(default="notion", index=True)
+
+    notion_page_id: str = Field(default="", index=True)  # normalized UUID (with hyphens)
+    notion_url: str = ""
+    notion_meeting_block_id: str = Field(default="", index=True)
+    notion_status: str = Field(default="", index=True)
+
+    summary_text: str = ""
+    notes_text: str = ""
+    transcript_text: str = ""
+    action_items_text: str = ""
+
+    raw_json: str = Field(default="{}")
+    last_synced_at: Optional[datetime] = None
+
+    created_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime = Field(default_factory=utcnow)
+
+
+class MeetingMessage(SQLModel, table=True):
+    """Thread messages about a meeting (internal + client)."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+
+    meeting_id: int = Field(index=True, foreign_key="meeting.id")
+    author_user_id: int = Field(index=True, foreign_key="user.id")
+
+    message: str
+    created_at: datetime = Field(default_factory=utcnow)
+
+
+_MEETING_NOTION_STATUSES = {
+    "transcription_not_started",
+    "transcription_paused",
+    "transcription_in_progress",
+    "summary_in_progress",
+    "notes_ready",
+}
+
+
+def _normalize_uuid(raw: str) -> str:
+    s = (raw or "").strip()
+    # Extract 32 hex chars if URL-like
+    m = re.search(r"([0-9a-fA-F]{32})", s)
+    if m:
+        s = m.group(1)
+    s = s.replace("-", "").lower()
+    if len(s) != 32 or not re.fullmatch(r"[0-9a-f]{32}", s):
+        return ""
+    return f"{s[0:8]}-{s[8:12]}-{s[12:16]}-{s[16:20]}-{s[20:32]}"
+
+
+def _notion_headers() -> dict[str, str]:
+    if not NOTION_TOKEN:
+        raise RuntimeError("NOTION_TOKEN não está configurado.")
+    return {
+        "Authorization": f"Bearer {NOTION_TOKEN}",
+        "Notion-Version": NOTION_VERSION,
+    }
+
+
+async def _notion_get_json(path: str, *, params: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+    url = f"{NOTION_API_BASE}{path}"
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        r = await client.get(url, headers=_notion_headers(), params=params or {})
+        r.raise_for_status()
+        data = r.json()
+        return data if isinstance(data, dict) else {}
+
+
+async def _notion_list_block_children_all(block_id: str) -> list[dict[str, Any]]:
+    results: list[dict[str, Any]] = []
+    cursor: Optional[str] = None
+    while True:
+        params = {"page_size": 100}
+        if cursor:
+            params["start_cursor"] = cursor
+        data = await _notion_get_json(f"/blocks/{block_id}/children", params=params)
+        chunk = data.get("results") or []
+        if isinstance(chunk, list):
+            results.extend([x for x in chunk if isinstance(x, dict)])
+        if not data.get("has_more"):
+            break
+        cursor = data.get("next_cursor")
+        if not cursor:
+            break
+    return results
+
+
+def _rt_plain(rich_text: Any) -> str:
+    if not isinstance(rich_text, list):
+        return ""
+    parts: list[str] = []
+    for rt in rich_text:
+        if not isinstance(rt, dict):
+            continue
+        pt = rt.get("plain_text")
+        if isinstance(pt, str):
+            parts.append(pt)
+        else:
+            t = rt.get("text", {})
+            if isinstance(t, dict) and isinstance(t.get("content"), str):
+                parts.append(t["content"])
+    return "".join(parts).strip()
+
+
+async def _notion_blocks_to_lines(block_id: str, *, depth: int = 0, max_depth: int = 4) -> list[str]:
+    if depth > max_depth:
+        return []
+    blocks = await _notion_list_block_children_all(block_id)
+    out: list[str] = []
+    for b in blocks:
+        btype = b.get("type")
+        if not isinstance(btype, str):
+            continue
+        data = b.get(btype, {}) if isinstance(b.get(btype), dict) else {}
+
+        line = ""
+        if btype in {"paragraph", "quote", "callout"}:
+            line = _rt_plain(data.get("rich_text") or data.get("text"))
+            if btype == "quote" and line:
+                line = f"> {line}"
+            if btype == "callout" and line:
+                line = f"💬 {line}"
+        elif btype in {"heading_1", "heading_2", "heading_3"}:
+            h = _rt_plain(data.get("rich_text") or data.get("text"))
+            if h:
+                prefix = "#" if btype == "heading_1" else "##" if btype == "heading_2" else "###"
+                line = f"{prefix} {h}"
+        elif btype in {"bulleted_list_item", "numbered_list_item"}:
+            t = _rt_plain(data.get("rich_text") or data.get("text"))
+            if t:
+                bullet = "-" if btype == "bulleted_list_item" else "1."
+                line = f"{bullet} {t}"
+        elif btype == "to_do":
+            t = _rt_plain(data.get("rich_text") or data.get("text"))
+            checked = bool(data.get("checked"))
+            box = "☑" if checked else "☐"
+            if t:
+                line = f"{box} {t}"
+        elif btype == "toggle":
+            t = _rt_plain(data.get("rich_text") or data.get("text"))
+            if t:
+                line = f"▸ {t}"
+        elif btype == "code":
+            t = _rt_plain(data.get("rich_text") or data.get("text"))
+            lang = data.get("language") if isinstance(data.get("language"), str) else ""
+            if t:
+                line = f"```{lang}\n{t}\n```"
+        else:
+            # Fallback for other blocks that have rich_text
+            if isinstance(data, dict):
+                t = _rt_plain(data.get("rich_text") or data.get("text"))
+                if t:
+                    line = t
+
+        if line:
+            out.append(("  " * depth) + line)
+
+        if b.get("has_children") and isinstance(b.get("id"), str):
+            child_lines = await _notion_blocks_to_lines(b["id"], depth=depth + 1, max_depth=max_depth)
+            out.extend(child_lines)
+
+    return [x for x in out if isinstance(x, str) and x.strip()]
+
+
+def _extract_action_items_from_lines(lines: list[str]) -> str:
+    if not lines:
+        return ""
+    actions: list[str] = []
+    in_actions = False
+    for ln in lines:
+        low = ln.lower()
+        if low.startswith("#") and ("action" in low or "ação" in low or "acoes" in low or "ações" in low):
+            in_actions = True
+            continue
+        if low.startswith("#") and in_actions:
+            # next heading ends action section
+            in_actions = False
+        if in_actions:
+            if ln.strip().startswith(("-", "☐", "☑", "1.")):
+                actions.append(ln.strip())
+        else:
+            # also accept to-do items anywhere
+            if ln.strip().startswith(("☐", "☑")):
+                actions.append(ln.strip())
+    return "\n".join(actions).strip()
+
+
+async def _notion_find_meeting_notes_block(page_id: str) -> Optional[dict[str, Any]]:
+    # BFS up to a small depth: page children -> nested children
+    queue = [(page_id, 0)]
+    seen: set[str] = set()
+    while queue:
+        bid, depth = queue.pop(0)
+        if bid in seen:
+            continue
+        seen.add(bid)
+        blocks = await _notion_list_block_children_all(bid)
+        for b in blocks:
+            btype = b.get("type")
+            if btype in {"meeting_notes", "transcription"}:
+                return b
+        if depth < 3:
+            for b in blocks:
+                if b.get("has_children") and isinstance(b.get("id"), str):
+                    queue.append((b["id"], depth + 1))
+    return None
+
+
+async def notion_sync_meeting_from_page(page_id_or_url: str) -> dict[str, Any]:
+    page_id = _normalize_uuid(page_id_or_url)
+    if not page_id:
+        raise ValueError("Não foi possível extrair o ID da página do Notion.")
+    meeting_block = await _notion_find_meeting_notes_block(page_id)
+    if not meeting_block:
+        raise ValueError("Não encontrei um bloco de AI Meeting Notes nessa página (meeting_notes/transcription).")
+
+    block_id = meeting_block.get("id", "")
+    prop = meeting_block.get("meeting_notes") or meeting_block.get("transcription") or {}
+    title = _rt_plain(prop.get("title")) if isinstance(prop, dict) else ""
+    status = prop.get("status") if isinstance(prop, dict) and isinstance(prop.get("status"), str) else ""
+    children = prop.get("children") if isinstance(prop, dict) else {}
+    if not isinstance(children, dict):
+        children = {}
+
+    summary_block_id = children.get("summary_block_id") if isinstance(children.get("summary_block_id"), str) else ""
+    notes_block_id = children.get("notes_block_id") if isinstance(children.get("notes_block_id"), str) else ""
+    transcript_block_id = children.get("transcript_block_id") if isinstance(children.get("transcript_block_id"),
+                                                                            str) else ""
+
+    summary_lines = await _notion_blocks_to_lines(summary_block_id) if summary_block_id else []
+    notes_lines = await _notion_blocks_to_lines(notes_block_id) if notes_block_id else []
+    transcript_lines = await _notion_blocks_to_lines(transcript_block_id) if transcript_block_id else []
+
+    action_items = _extract_action_items_from_lines(summary_lines + notes_lines)
+
+    return {
+        "page_id": page_id,
+        "meeting_block_id": block_id,
+        "title": title,
+        "status": status,
+        "summary_text": "\n".join(summary_lines).strip(),
+        "notes_text": "\n".join(notes_lines).strip(),
+        "transcript_text": "\n".join(transcript_lines).strip(),
+        "action_items_text": action_items,
+        "raw": meeting_block,
+    }
+
 
 
 TEMPLATES.setdefault("consulta_consent_accept.html", r"""{% extends "base.html" %}
