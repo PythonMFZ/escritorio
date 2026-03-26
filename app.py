@@ -2671,7 +2671,7 @@ async def klavi_request_loans_report(*, doc_digits: str, flow: KlaviFlow) -> str
         "linkId": flow.link_id,
         "consentId": [flow.consent_id] if flow.consent_id else [],
         "products": ["loans"],
-        "productsCallbackUrl": {"all": f"{PUBLIC_BASE_URL}/webhooks/klavi/products"} if PUBLIC_BASE_URL else {},
+        "productsCallbackUrl": {"global": f"{PUBLIC_BASE_URL}/webhooks/klavi/products"} if PUBLIC_BASE_URL else {},
     }
 
     if len(doc_digits) == 11:
@@ -21241,9 +21241,9 @@ async def openfinance_klavi_start(
     # Create Link (requires Authorization bearer access token)
     link_payload: dict[str, Any] = {
         "email": email_v,
-        "redirecturl": f"{base}/openfinance/klavi/retorno?doc={doc_digits}",
-        "productscallbackurl": {"all": f"{base}/webhooks/klavi/products"},
-        "externalinfo": {"company_id": int(ctx.company.id or 0), "doc": doc_digits, "client_id": int(client.id or 0)},
+        "redirectUrl": f"{base}/openfinance/klavi/retorno?doc={doc_digits}",
+        "productsCallbackUrl": {"global": f"{base}/webhooks/klavi/products"},
+        "externalInfo": {"company_id": int(ctx.company.id or 0), "doc": doc_digits, "client_id": int(client.id or 0)},
     }
 
     if (phone_v or "").strip():
@@ -21255,9 +21255,9 @@ async def openfinance_klavi_start(
             set_flash(request, "Klavi: telefone inválido. Use DDD+numero (ex: 11999999999). Prosseguindo sem telefone.")
 
     if len(doc_digits) == 11:
-        link_payload["personaltaxid"] = doc_digits
+        link_payload["personalTaxId"] = doc_digits
     else:
-        link_payload["businesstaxid"] = doc_digits
+        link_payload["businessTaxId"] = doc_digits
 
     try:
         link_data = await _klavi_post_json(path="/data/v1/links", bearer=access_token, payload=link_payload)
@@ -21337,15 +21337,16 @@ async def openfinance_klavi_consent(
         set_flash(request, "Fluxo Klavi não iniciado. Refaça o passo 1.")
         return RedirectResponse(f"/openfinance/klavi?doc={doc_digits}", status_code=303)
 
-    if utcnow() > (flow.link_expires_at or utcnow()):
+    exp_at = _as_aware_utc(getattr(flow, 'link_expires_at', None)) or utcnow()
+    if utcnow() > exp_at:
         set_flash(request, "LinkToken expirou. Refaça o passo 1.")
         return RedirectResponse(f"/openfinance/klavi?doc={doc_digits}", status_code=303)
 
     base = _public_base_url(request)
     consent_payload: dict[str, Any] = {
-        "externaltrackid": f"mc:{int(ctx.company.id or 0)}:{doc_digits}:{int(utcnow().timestamp())}",
-        "institutioncode": str(institution_code or "").strip(),
-        "redirecturl": f"{base}/openfinance/klavi/retorno?doc={doc_digits}",
+        "externalTrackId": f"mc:{int(ctx.company.id or 0)}:{doc_digits}:{int(utcnow().timestamp())}",
+        "institutionCode": str(institution_code or "").strip(),
+        "redirectUrl": f"{base}/openfinance/klavi/retorno?doc={doc_digits}",
         "email": (flow.email or "").strip(),
     }
 
@@ -21358,9 +21359,9 @@ async def openfinance_klavi_consent(
             set_flash(request, "Klavi: telefone inválido. Prosseguindo sem telefone.")
 
     if len(doc_digits) == 11:
-        consent_payload["personaltaxid"] = doc_digits
+        consent_payload["personalTaxId"] = doc_digits
     else:
-        consent_payload["businesstaxid"] = doc_digits
+        consent_payload["businessTaxId"] = doc_digits
 
     try:
         consent_data = await _klavi_post_json(path="/data/v1/consents", bearer=flow.link_token, payload=consent_payload)
@@ -21801,7 +21802,7 @@ def _klavi_extract_meta(payload: Any) -> tuple[int, str, str]:
     link_id = ""
 
     if isinstance(payload, dict):
-        ext = payload.get("externalinfo") or payload.get("externalInfo") or {}
+        ext = payload.get("externalInfo") or payload.get("externalInfo") or {}
         if isinstance(ext, dict):
             try:
                 company_id = int(ext.get("company_id") or ext.get("companyId") or 0)
@@ -21810,13 +21811,13 @@ def _klavi_extract_meta(payload: Any) -> tuple[int, str, str]:
             doc_digits = _digits(str(ext.get("doc") or ""))
         link_id = str(payload.get("linkid") or payload.get("linkId") or "").strip()
 
-        for k in ("personaltaxid", "personalTaxId", "businesstaxid", "businessTaxId", "taxid", "taxId"):
+        for k in ("personalTaxId", "personalTaxId", "businessTaxId", "businessTaxId", "taxid", "taxId"):
             if not doc_digits:
                 doc_digits = _digits(str(payload.get(k) or ""))
 
     if not doc_digits:
         for d in _deep_iter_dicts(payload):
-            for k in ("personaltaxid", "personalTaxId", "businesstaxid", "businessTaxId", "taxid", "taxId"):
+            for k in ("personalTaxId", "personalTaxId", "businessTaxId", "businessTaxId", "taxid", "taxId"):
                 if k in d:
                     doc_digits = _digits(str(d.get(k) or ""))
                     if doc_digits:
