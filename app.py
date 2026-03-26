@@ -2000,6 +2000,36 @@ def _next_stage_order(session: Session, project_id: int) -> int:
     return int(max_order or 0) + 1
 
 
+def _move_stage_to_order(session: Session, stage: "ConsultingStage", new_order: int) -> None:
+    """Move stage within its project to `new_order` (1-based), normalizing all orders."""
+    new_order = int(new_order or stage.order or 1)
+
+    stages = session.exec(
+        select(ConsultingStage)
+        .where(ConsultingStage.project_id == stage.project_id)
+        .order_by(ConsultingStage.order.asc(), ConsultingStage.id.asc())
+    ).all()
+
+    ids = [s.id for s in stages if s.id != stage.id]
+    if not ids:
+        stage.order = 1
+        session.add(stage)
+        session.commit()
+        return
+
+    new_order = max(1, min(new_order, len(ids) + 1))
+    ids.insert(new_order - 1, stage.id)
+
+    desired = {sid: idx + 1 for idx, sid in enumerate(ids)}
+    for s in stages:
+        s.order = desired.get(s.id, s.order)
+        session.add(s)
+
+    session.commit()
+
+
+
+
 def get_tenant_context(request: Request, session: Session) -> Optional[TenantContext]:
     user = get_current_user(request, session)
     if not user:
@@ -2179,6 +2209,894 @@ ROLE_DEFAULT_FEATURES: dict[str, set[str]] = {
     "equipe": set(FEATURE_KEYS.keys()),
     "cliente": set(FEATURE_KEYS.keys()) - {"ui", "gestao", "crm"},
 }
+
+# Open Finance (Pluggy) - Loans module
+# ----------------------------
+
+PLUGGY_API_BASE = (os.getenv("PLUGGY_API_BASE") or "https://api.pluggy.ai").rstrip("/")
+PLUGGY_CLIENT_ID = (os.getenv("PLUGGY_CLIENT_ID") or "").strip()
+PLUGGY_CLIENT_SECRET = (os.getenv("PLUGGY_CLIENT_SECRET") or "").strip()
+PLUGGY_INCLUDE_SANDBOX = os.getenv("PLUGGY_INCLUDE_SANDBOX", "0") == "1"
+PLUGGY_CONNECT_JS_URL = (os.getenv("PLUGGY_CONNECT_JS_URL") or "https://cdn.pluggy.ai/pluggy-connect/v2.8.2/pluggy-connect.js").strip()
+PLUGGY_HTTP_TIMEOUT_S = float(os.getenv("PLUGGY_HTTP_TIMEOUT_S", "20") or "20")
+PLUGGY_WEBHOOK_KEY = (os.getenv("PLUGGY_WEBHOOK_KEY") or "").strip()
+
+FEATURE_KEYS.setdefault(
+    "openfinance",
+    {"title": "Open Finance", "desc": "Contratos/Empréstimos (Pluggy).", "href": "/openfinance"},
+)
+FEATURE_ALLOWED_ROLES.setdefault("openfinance", {"admin", "equipe", "cliente"})
+for _r in ("admin", "equipe", "cliente"):
+    ROLE_DEFAULT_FEATURES.setdefault(_r, set()).add("openfinance")
+
+
+class PluggyConnectInvite(SQLModel, table=True):
+    """Convite para o titular conectar sua conta via Pluggy Connect (Open Finance)."""
+    __table_args__ = (UniqueConstraint("company_id", "token_nonce", name="uq_pluggy_invite_company_nonce"),)
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+
+    company_id: int = Field(index=True, foreign_key="company.id")
+    requested_by_client_id: Optional[int] = Field(default=None, index=True, foreign_key="client.id")
+    created_by_user_id: Optional[int] = Field(default=None, index=True, foreign_key="user.id")
+
+    subject_doc: str = Field(default="", index=True)  # CPF/CNPJ (somente dígitos)
+    invited_email: str = Field(default="", index=True)
+
+    status: str = Field(default="pendente", index=True)  # pendente|conectando|valida|expirada|revogada
+    token_nonce: str = Field(default_factory=lambda: secrets.token_urlsafe(16), index=True)
+
+    signed_by_name: str = ""
+    accepted_at: Optional[datetime] = None
+    expires_at: datetime = Field(default_factory=utcnow)
+
+    created_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime = Field(default_factory=utcnow)
+
+
+class PluggyConnection(SQLModel, table=True):
+    """Associação Company+Documento -> Item Pluggy (Open Finance)."""
+    __table_args__ = (
+        UniqueConstraint("company_id", "subject_doc", name="uq_pluggy_conn_company_doc"),
+        UniqueConstraint("pluggy_item_id", name="uq_pluggy_conn_item_id"),
+    )
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    company_id: int = Field(index=True, foreign_key="company.id")
+    requested_by_client_id: Optional[int] = Field(default=None, index=True, foreign_key="client.id")
+
+    subject_doc: str = Field(default="", index=True)  # CPF/CNPJ digits
+    client_user_id: str = Field(default="", index=True)
+
+    pluggy_item_id: str = Field(default="", index=True)
+    connector_id: Optional[int] = Field(default=None, index=True)
+    status: str = Field(default="unknown", index=True)  # connected|updating|error|unknown
+    last_event: str = ""
+    last_error: str = ""
+
+    consent_expires_at: Optional[datetime] = None
+    last_synced_at: Optional[datetime] = None
+
+    raw_item_json: str = ""
+
+    created_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime = Field(default_factory=utcnow)
+
+
+class PluggyLoan(SQLModel, table=True):
+    """Snapshot do empréstimo/contrato obtido do Pluggy (Loans)."""
+    __table_args__ = (
+        UniqueConstraint("company_id", "pluggy_loan_id", name="uq_pluggy_loan_company_loanid"),
+    )
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    company_id: int = Field(index=True, foreign_key="company.id")
+
+    subject_doc: str = Field(default="", index=True)
+    pluggy_item_id: str = Field(default="", index=True)
+    pluggy_loan_id: str = Field(default="", index=True)
+
+    contract_number: str = ""
+    ipoc_code: str = ""
+
+    lender_name: str = ""
+    product_type: str = ""
+    amortization_type: str = ""  # PRICE|SAC|...
+
+    principal_brl: float = 0.0
+    outstanding_brl: float = 0.0
+    installment_brl: float = 0.0
+
+    term_total_months: int = 0
+    term_remaining_months: int = 0
+
+    cet_aa: float = 0.0
+    interest_aa: float = 0.0
+
+    fetched_at: datetime = Field(default_factory=utcnow)
+    raw_json: str = ""
+
+
+class PluggyOffer(SQLModel, table=True):
+    """Catálogo manual de ofertas (para comparar portabilidade/refin)."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    company_id: int = Field(index=True, foreign_key="company.id")
+
+    label: str
+    lender_name: str = ""
+    product_type: str = ""  # opcional: filtra tipo
+    cet_aa: float = 0.0  # ex: 0.35 == 35% a.a.
+    term_min_months: int = 0
+    term_max_months: int = 0
+
+    is_active: bool = True
+    notes: str = ""
+
+    created_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime = Field(default_factory=utcnow)
+
+
+class PluggyOpportunity(SQLModel, table=True):
+    """Resultado de comparação (Loan x Offer)."""
+    __table_args__ = (UniqueConstraint("company_id", "subject_doc", "pluggy_loan_id", "offer_id", name="uq_pluggy_opp_unique"),)
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    company_id: int = Field(index=True, foreign_key="company.id")
+    subject_doc: str = Field(default="", index=True)
+
+    pluggy_loan_id: str = Field(default="", index=True)
+    offer_id: int = Field(index=True, foreign_key="pluggyoffer.id")
+
+    term_months: int = 0
+    old_payment_brl: float = 0.0
+    new_payment_brl: float = 0.0
+    monthly_savings_brl: float = 0.0
+    total_savings_brl: float = 0.0
+
+    method: str = ""  # PRICE|SAC_AVG|...
+    created_at: datetime = Field(default_factory=utcnow)
+
+
+def ensure_pluggy_tables() -> bool:
+    """Garante tabelas do módulo Pluggy (ambientes sem Alembic)."""
+    ok = True
+    for tbl in (
+        PluggyConnectInvite.__table__,
+        PluggyConnection.__table__,
+        PluggyLoan.__table__,
+        PluggyOffer.__table__,
+        PluggyOpportunity.__table__,
+    ):
+        try:
+            tbl.create(engine, checkfirst=True)
+        except Exception as e:
+            ok = False
+            try:
+                print(f"[pluggy] failed to ensure table {tbl.name}: {e}")
+            except Exception:
+                pass
+    return ok
+
+
+@dataclass
+class _PluggyApiKeyCache:
+    api_key: str = ""
+    exp_ts: float = 0.0
+
+
+_PLUGGY_KEY_CACHE = _PluggyApiKeyCache()
+
+
+def _digits(value: str) -> str:
+    return re.sub(r"\\D+", "", (value or "")).strip()
+
+
+def _pluggy_client_user_id(*, company_id: int, subject_doc: str) -> str:
+    # Fácil de reverter no webhook.
+    return f"mc:{company_id}:{subject_doc}"
+
+
+async def _pluggy_get_api_key() -> str:
+    """Retorna API Key Pluggy (cache ~2h)."""
+    now = utcnow().timestamp()
+    if _PLUGGY_KEY_CACHE.api_key and now < (_PLUGGY_KEY_CACHE.exp_ts - 60):
+        return _PLUGGY_KEY_CACHE.api_key
+
+    if not PLUGGY_CLIENT_ID or not PLUGGY_CLIENT_SECRET:
+        raise RuntimeError("PLUGGY_CLIENT_ID/PLUGGY_CLIENT_SECRET não configurados.")
+
+    url = f"{PLUGGY_API_BASE}/auth"
+    payload = {"clientId": PLUGGY_CLIENT_ID, "clientSecret": PLUGGY_CLIENT_SECRET}
+    async with httpx.AsyncClient(timeout=PLUGGY_HTTP_TIMEOUT_S) as client:
+        r = await client.post(url, json=payload, headers={"accept": "application/json"})
+        r.raise_for_status()
+        data = r.json() if r.content else {}
+    api_key = str(data.get("apiKey") or data.get("api_key") or data.get("token") or "").strip()
+    if not api_key:
+        raise RuntimeError("Resposta inesperada do Pluggy /auth (apiKey ausente).")
+    _PLUGGY_KEY_CACHE.api_key = api_key
+    _PLUGGY_KEY_CACHE.exp_ts = now + 2 * 60 * 60
+    return api_key
+
+
+async def _pluggy_create_connect_token(*, request: Request, company_id: int, subject_doc: str, update_item_id: str | None) -> str:
+    api_key = await _pluggy_get_api_key()
+    url = f"{PLUGGY_API_BASE}/connect_token"
+
+    webhook_url = ""
+    try:
+        base = _public_base_url(request)
+        if base and PLUGGY_WEBHOOK_KEY:
+            webhook_url = f"{base}/webhooks/pluggy?k={PLUGGY_WEBHOOK_KEY}"
+    except Exception:
+        webhook_url = ""
+
+    options: dict[str, Any] = {
+        "clientUserId": _pluggy_client_user_id(company_id=company_id, subject_doc=subject_doc),
+        "avoidDuplicates": True,
+    }
+    if webhook_url:
+        options["webhookUrl"] = webhook_url
+    if update_item_id:
+        options["itemId"] = update_item_id  # update mode (docs: create connect token with itemId)
+
+    payload = {"options": options}
+
+    async with httpx.AsyncClient(timeout=PLUGGY_HTTP_TIMEOUT_S) as client:
+        r = await client.post(
+            url,
+            json=payload,
+            headers={
+                "accept": "application/json",
+                "content-type": "application/json",
+                "X-API-KEY": api_key,
+            },
+        )
+        r.raise_for_status()
+        data = r.json() if r.content else {}
+
+    access_token = str(data.get("accessToken") or data.get("access_token") or data.get("token") or "").strip()
+    if not access_token:
+        raise RuntimeError("Resposta inesperada do Pluggy /connect_token (accessToken ausente).")
+    return access_token
+
+
+async def _pluggy_fetch_loans(*, item_id: str) -> list[dict[str, Any]]:
+    api_key = await _pluggy_get_api_key()
+    url = f"{PLUGGY_API_BASE}/loans"
+    async with httpx.AsyncClient(timeout=PLUGGY_HTTP_TIMEOUT_S) as client:
+        r = await client.get(url, params={"itemId": item_id}, headers={"accept": "application/json", "X-API-KEY": api_key})
+        r.raise_for_status()
+        data = r.json() if r.content else {}
+    if isinstance(data, list):
+        return data
+    if isinstance(data, dict):
+        v = data.get("results") or data.get("data") or data.get("loans")
+        if isinstance(v, list):
+            return v
+    return []
+
+
+def _to_float_rate(v: Any) -> float:
+    try:
+        x = float(v)
+    except Exception:
+        return 0.0
+    # CET/juros podem vir como 35.2 (percent) ou 0.352 (decimal)
+    if x > 1.5:
+        return x / 100.0
+    return x
+
+
+def _pmt_price(principal: float, annual_rate: float, n: int) -> float:
+    import math
+    if principal <= 0 or n <= 0:
+        return 0.0
+    r = (1.0 + max(0.0, annual_rate)) ** (1.0 / 12.0) - 1.0
+    if abs(r) < 1e-9:
+        return principal / n
+    return principal * r / (1.0 - (1.0 + r) ** (-n))
+
+
+def _pmt_sac_avg(principal: float, annual_rate: float, n: int) -> float:
+    """Pagamento médio aproximado em SAC (principal amortização fixa)."""
+    import math
+    if principal <= 0 or n <= 0:
+        return 0.0
+    r = (1.0 + max(0.0, annual_rate)) ** (1.0 / 12.0) - 1.0
+    # Total de juros no SAC: P*r*(n+1)/2
+    total = principal + (principal * r * (n + 1) / 2.0)
+    return total / n
+
+
+def _extract_loan_fields(raw: dict[str, Any]) -> dict[str, Any]:
+    """Extrai campos essenciais do Loan (best-effort)."""
+    loan_id = str(raw.get("id") or raw.get("loanId") or "").strip()
+    contract_number = str(raw.get("contractNumber") or raw.get("contract_number") or "").strip()
+    ipoc = str(raw.get("ipocCode") or raw.get("ipoc") or "").strip()
+
+    lender = str(raw.get("lenderName") or raw.get("institutionName") or raw.get("providerName") or "").strip()
+    product_type = str(raw.get("type") or raw.get("productType") or raw.get("modality") or "").strip()
+
+    amort = str(
+        (raw.get("amortizationScheduled") or {}).get("type")
+        if isinstance(raw.get("amortizationScheduled"), dict)
+        else (raw.get("amortizationType") or raw.get("amortization") or "")
+    ).strip()
+
+    principal = float(raw.get("contractAmount") or raw.get("principal") or 0.0) if str(raw.get("contractAmount") or raw.get("principal") or "").strip() else 0.0
+
+    # outstanding balance pode aparecer em payments.contractOutstandingBalance
+    outstanding = 0.0
+    pay = raw.get("payments") or {}
+    if isinstance(pay, dict):
+        ob = pay.get("contractOutstandingBalance") or pay.get("outstandingBalance") or pay.get("balance")
+        try:
+            outstanding = float(ob or 0.0)
+        except Exception:
+            outstanding = 0.0
+
+    inst = raw.get("installments") or {}
+    term_total = 0
+    term_remaining = 0
+    inst_amount = 0.0
+    if isinstance(inst, dict):
+        for k in ("totalNumber", "total", "numberOfInstallments"):
+            if inst.get(k) is not None:
+                try:
+                    term_total = int(inst.get(k))
+                except Exception:
+                    pass
+        for k in ("remainingNumber", "remaining", "remainingInstallments"):
+            if inst.get(k) is not None:
+                try:
+                    term_remaining = int(inst.get(k))
+                except Exception:
+                    pass
+        for k in ("amount", "installmentAmount", "value"):
+            if inst.get(k) is not None:
+                try:
+                    inst_amount = float(inst.get(k))
+                except Exception:
+                    pass
+
+    cet = _to_float_rate(raw.get("CET") or raw.get("cet") or raw.get("cetAnnual") or 0.0)
+
+    interest_aa = 0.0
+    ir = raw.get("interestRates") or raw.get("interestRate") or {}
+    if isinstance(ir, dict):
+        interest_aa = _to_float_rate(ir.get("annual") or ir.get("value") or ir.get("rate") or 0.0)
+    else:
+        interest_aa = _to_float_rate(ir)
+
+    return {
+        "loan_id": loan_id,
+        "contract_number": contract_number,
+        "ipoc_code": ipoc,
+        "lender_name": lender,
+        "product_type": product_type,
+        "amortization_type": amort,
+        "principal_brl": principal,
+        "outstanding_brl": outstanding,
+        "installment_brl": inst_amount,
+        "term_total": term_total,
+        "term_remaining": term_remaining,
+        "cet_aa": cet,
+        "interest_aa": interest_aa,
+    }
+
+
+async def pluggy_sync_loans(*, session: Session, company_id: int, subject_doc: str, item_id: str) -> int:
+    """Baixa loans do Pluggy e faz upsert de snapshots."""
+    loans = await _pluggy_fetch_loans(item_id=item_id)
+    now = utcnow()
+    updated = 0
+
+    for raw in loans:
+        if not isinstance(raw, dict):
+            continue
+        f = _extract_loan_fields(raw)
+        loan_id = f["loan_id"]
+        if not loan_id:
+            continue
+
+        row = session.exec(
+            select(PluggyLoan).where(
+                PluggyLoan.company_id == company_id,
+                PluggyLoan.pluggy_loan_id == loan_id,
+            )
+        ).first()
+        if not row:
+            row = PluggyLoan(company_id=company_id, pluggy_loan_id=loan_id)
+
+        row.subject_doc = subject_doc
+        row.pluggy_item_id = item_id
+        row.contract_number = f["contract_number"]
+        row.ipoc_code = f["ipoc_code"]
+        row.lender_name = f["lender_name"]
+        row.product_type = f["product_type"]
+        row.amortization_type = f["amortization_type"]
+        row.principal_brl = float(f["principal_brl"] or 0.0)
+        row.outstanding_brl = float(f["outstanding_brl"] or 0.0)
+        row.installment_brl = float(f["installment_brl"] or 0.0)
+        row.term_total_months = int(f["term_total"] or 0)
+        row.term_remaining_months = int(f["term_remaining"] or 0)
+        row.cet_aa = float(f["cet_aa"] or 0.0)
+        row.interest_aa = float(f["interest_aa"] or 0.0)
+        row.fetched_at = now
+        try:
+            row.raw_json = json.dumps(raw, ensure_ascii=False)
+        except Exception:
+            row.raw_json = ""
+
+        session.add(row)
+        updated += 1
+
+    # atualiza conexão
+    conn = session.exec(
+        select(PluggyConnection).where(
+            PluggyConnection.company_id == company_id,
+            PluggyConnection.subject_doc == subject_doc,
+            PluggyConnection.pluggy_item_id == item_id,
+        )
+    ).first()
+    if conn:
+        conn.last_synced_at = now
+        conn.updated_at = now
+        session.add(conn)
+
+    session.commit()
+    return updated
+
+
+def _compute_opportunities_for_doc(*, session: Session, company_id: int, subject_doc: str) -> int:
+    """Gera oportunidades (Loan x Offer) e faz upsert."""
+    loans = session.exec(
+        select(PluggyLoan).where(PluggyLoan.company_id == company_id, PluggyLoan.subject_doc == subject_doc)
+    ).all()
+    offers = session.exec(
+        select(PluggyOffer).where(PluggyOffer.company_id == company_id, PluggyOffer.is_active == True)
+    ).all()
+    if not loans or not offers:
+        return 0
+
+    inserted = 0
+    for loan in loans:
+        n = int(loan.term_remaining_months or loan.term_total_months or 0)
+        if n <= 0:
+            continue
+
+        principal = float(loan.outstanding_brl or loan.principal_brl or 0.0)
+        if principal <= 0:
+            continue
+
+        old_rate = float(loan.cet_aa or loan.interest_aa or 0.0)
+        amort = (loan.amortization_type or "").upper().strip()
+
+        if "SAC" in amort:
+            old_pmt = _pmt_sac_avg(principal, old_rate, n)
+            method = "SAC_AVG"
+        else:
+            old_pmt = _pmt_price(principal, old_rate, n)
+            method = "PRICE"
+
+        if old_pmt <= 0 and loan.installment_brl > 0:
+            old_pmt = float(loan.installment_brl)
+            method = (method + "+OBS") if method else "OBS"
+
+        for offer in offers:
+            if offer.product_type and loan.product_type and offer.product_type.strip().lower() not in loan.product_type.strip().lower():
+                continue
+            if offer.term_min_months and n < int(offer.term_min_months):
+                continue
+            if offer.term_max_months and n > int(offer.term_max_months):
+                continue
+
+            new_pmt = _pmt_price(principal, float(offer.cet_aa or 0.0), n)
+            if new_pmt <= 0:
+                continue
+
+            monthly_sav = old_pmt - new_pmt
+            total_sav = monthly_sav * n
+
+            row = session.exec(
+                select(PluggyOpportunity).where(
+                    PluggyOpportunity.company_id == company_id,
+                    PluggyOpportunity.subject_doc == subject_doc,
+                    PluggyOpportunity.pluggy_loan_id == loan.pluggy_loan_id,
+                    PluggyOpportunity.offer_id == int(offer.id or 0),
+                )
+            ).first()
+            if not row:
+                row = PluggyOpportunity(
+                    company_id=company_id,
+                    subject_doc=subject_doc,
+                    pluggy_loan_id=loan.pluggy_loan_id,
+                    offer_id=int(offer.id or 0),
+                )
+                inserted += 1
+
+            row.term_months = n
+            row.old_payment_brl = float(old_pmt)
+            row.new_payment_brl = float(new_pmt)
+            row.monthly_savings_brl = float(monthly_sav)
+            row.total_savings_brl = float(total_sav)
+            row.method = method
+            row.created_at = utcnow()
+            session.add(row)
+
+    session.commit()
+    return inserted
+
+
+# ----------------------------
+# Templates (Open Finance)
+# ----------------------------
+
+TEMPLATES.setdefault("openfinance.html", r"""{% extends "base.html" %}
+{% block content %}
+<div class="d-flex align-items-center justify-content-between mb-3">
+  <div>
+    <div class="h4 mb-0">🌐 Open Finance (Pluggy) — Contratos</div>
+    <div class="muted">Conecte a conta do titular e importe contratos (Loans) para comparar ofertas.</div>
+  </div>
+  <a class="btn btn-outline-secondary" href="/">Voltar</a>
+</div>
+
+<div class="card p-3 mb-3">
+  <form method="get" action="/openfinance" class="row g-2 align-items-end">
+    <div class="col-md-4">
+      <label class="form-label">CPF/CNPJ</label>
+      <input class="form-control mono" name="doc" value="{{ doc or '' }}" placeholder="Somente números ou com máscara" required>
+    </div>
+    <div class="col-md-4">
+      <label class="form-label">E-mail do titular (para enviar link)</label>
+      <input class="form-control" name="email" value="{{ email_default or '' }}" placeholder="email@exemplo.com">
+      <div class="form-text">Opcional se o próprio titular estiver logado.</div>
+    </div>
+    <div class="col-md-4 d-flex gap-2">
+      <button class="btn btn-primary w-100" type="submit">Abrir</button>
+      {% if doc %}
+        <button class="btn btn-outline-primary" type="submit" formmethod="post" formaction="/openfinance/sync">Sincronizar</button>
+      {% endif %}
+    </div>
+  </form>
+</div>
+
+{% if doc %}
+  <div class="row g-3">
+    <div class="col-12 col-lg-5">
+      <div class="card p-3">
+        <div class="fw-semibold mb-1">Status da conexão</div>
+        {% if conn %}
+          <div class="muted small">Item:</div>
+          <div class="mono">{{ conn.pluggy_item_id }}</div>
+          <div class="muted small mt-2">Status:</div>
+          <div><span class="badge text-bg-light border">{{ conn.status }}</span></div>
+          <div class="muted small mt-2">Última sincronização:</div>
+          <div>{{ conn.last_synced_at or "-" }}</div>
+          {% if conn.last_error %}
+            <div class="alert alert-warning mt-3 mb-0">{{ conn.last_error }}</div>
+          {% endif %}
+        {% else %}
+          <div class="muted">Nenhuma conexão ainda para este documento.</div>
+        {% endif %}
+
+        <hr>
+
+        {% if role in ["admin","equipe"] %}
+          <div class="fw-semibold">Enviar link de conexão ao titular</div>
+          <form method="post" action="/openfinance/invite" class="row g-2 mt-1">
+            <input type="hidden" name="doc" value="{{ doc }}">
+            <div class="col-12">
+              <label class="form-label">E-mail</label>
+              <input class="form-control" name="email" value="{{ email_default or '' }}" required>
+            </div>
+            <div class="col-12 d-flex gap-2">
+              <button class="btn btn-primary" type="submit">Enviar link</button>
+              {% if invite_link %}
+                <button class="btn btn-outline-secondary" type="button" onclick="navigator.clipboard.writeText('{{ invite_link }}'); alert('Link copiado!');">Copiar link</button>
+              {% endif %}
+            </div>
+          </form>
+          {% if invite_link %}
+            <div class="mt-2 small muted">Link: <span class="mono">{{ invite_link }}</span></div>
+          {% endif %}
+        {% else %}
+          <div class="fw-semibold">Conectar agora</div>
+          {% if self_connect_link %}
+            <a class="btn btn-primary mt-2" href="{{ self_connect_link }}">Abrir Pluggy Connect</a>
+          {% else %}
+            <div class="muted small">Peça para o administrador/equipe gerar um link.</div>
+          {% endif %}
+        {% endif %}
+      </div>
+
+      <div class="card p-3 mt-3">
+        <div class="fw-semibold mb-2">Catálogo de ofertas</div>
+        {% if role in ["admin","equipe"] %}
+          <form method="post" action="/openfinance/offers/add" class="row g-2">
+            <div class="col-12">
+              <label class="form-label">Nome da oferta</label>
+              <input class="form-control" name="label" placeholder="Ex.: Refinanciamento Banco X" required>
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">CET a.a. (%)</label>
+              <input class="form-control" name="cet_aa_pct" inputmode="decimal" placeholder="Ex.: 28.5" required>
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">Tipo (opcional)</label>
+              <input class="form-control" name="product_type" placeholder="Ex.: PERSONAL_LOAN">
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">Prazo mín (meses)</label>
+              <input class="form-control" name="term_min" inputmode="numeric" placeholder="0">
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">Prazo máx (meses)</label>
+              <input class="form-control" name="term_max" inputmode="numeric" placeholder="0">
+            </div>
+            <div class="col-12">
+              <button class="btn btn-outline-primary w-100" type="submit">Adicionar oferta</button>
+            </div>
+          </form>
+        {% endif %}
+
+        <div class="mt-2">
+          {% if offers %}
+            <ul class="list-group">
+              {% for o in offers %}
+                <li class="list-group-item d-flex justify-content-between align-items-center">
+                  <div>
+                    <div class="fw-semibold">{{ o.label }}</div>
+                    <div class="muted small">CET a.a.: {{ (o.cet_aa * 100) | round(2) }}% {% if o.product_type %}• {{ o.product_type }}{% endif %}</div>
+                  </div>
+                  <span class="badge text-bg-light border">{% if o.is_active %}ativa{% else %}inativa{% endif %}</span>
+                </li>
+              {% endfor %}
+            </ul>
+          {% else %}
+            <div class="muted small">Nenhuma oferta cadastrada ainda.</div>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+
+    <div class="col-12 col-lg-7">
+      <div class="card p-3">
+        <div class="d-flex justify-content-between align-items-center">
+          <div class="fw-semibold">Contratos (Loans)</div>
+          <form method="post" action="/openfinance/opportunities/generate">
+            <input type="hidden" name="doc" value="{{ doc }}">
+            <button class="btn btn-outline-success btn-sm" type="submit">Gerar oportunidades</button>
+          </form>
+        </div>
+
+        {% if loans %}
+          <div class="table-responsive mt-2">
+            <table class="table table-sm align-middle">
+              <thead>
+                <tr>
+                  <th>Contrato</th>
+                  <th>CET a.a.</th>
+                  <th>Saldo</th>
+                  <th>Parcela</th>
+                  <th>Prazo (rem/total)</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for l in loans %}
+                  <tr>
+                    <td class="mono">{{ l.contract_number or l.pluggy_loan_id }}</td>
+                    <td>{{ (l.cet_aa * 100) | round(2) }}%</td>
+                    <td>R$ {{ l.outstanding_brl | round(2) }}</td>
+                    <td>R$ {{ l.installment_brl | round(2) }}</td>
+                    <td>{{ l.term_remaining_months }}/{{ l.term_total_months }}</td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        {% else %}
+          <div class="muted small mt-2">Sem contratos importados ainda. Conecte e sincronize.</div>
+        {% endif %}
+      </div>
+
+      <div class="card p-3 mt-3">
+        <div class="fw-semibold mb-2">Oportunidades (comparação)</div>
+        {% if opportunities %}
+          <div class="table-responsive">
+            <table class="table table-sm align-middle">
+              <thead>
+                <tr>
+                  <th>Contrato</th>
+                  <th>Oferta</th>
+                  <th>Parcela atual</th>
+                  <th>Nova parcela</th>
+                  <th>Economia/mês</th>
+                  <th>Economia total</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for o in opportunities %}
+                  <tr>
+                    <td class="mono">{{ o.pluggy_loan_id }}</td>
+                    <td>{{ o.offer_label }}</td>
+                    <td>R$ {{ o.old_payment_brl | round(2) }}</td>
+                    <td>R$ {{ o.new_payment_brl | round(2) }}</td>
+                    <td>R$ {{ o.monthly_savings_brl | round(2) }}</td>
+                    <td>R$ {{ o.total_savings_brl | round(2) }}</td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+          <div class="muted small">Cálculo aproximado (PRICE/SAC médio) usando CET anual informado.</div>
+        {% else %}
+          <div class="muted small">Sem oportunidades ainda (adicione ofertas e clique em “Gerar oportunidades”).</div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+{% endif %}
+{% endblock %}
+""")
+
+TEMPLATES.setdefault("openfinance_connect.html", r"""{% extends "base.html" %}
+{% block content %}
+<div class="container py-4" style="max-width: 920px;">
+  <div class="d-flex justify-content-between align-items-start">
+    <div>
+      <div class="h4 mb-0">🌐 Conectar Open Finance</div>
+      <div class="muted">Conecte sua instituição para importar seus contratos (Loans).</div>
+    </div>
+    <a class="btn btn-outline-secondary" href="/">Fechar</a>
+  </div>
+
+  <div class="card p-3 mt-3">
+    <div class="row g-3">
+      <div class="col-md-6">
+        <div class="muted small">Documento</div>
+        <div class="mono fw-semibold">{{ doc_masked }}</div>
+      </div>
+      <div class="col-md-6">
+        <div class="muted small">E-mail</div>
+        <div class="fw-semibold">{{ invited_email }}</div>
+      </div>
+    </div>
+
+    {% if error %}
+      <div class="alert alert-danger mt-3 mb-0">{{ error }}</div>
+    {% endif %}
+
+    <hr>
+
+    <div class="row g-2">
+      <div class="col-md-8">
+        <label class="form-label">Seu nome (para registro)</label>
+        <input class="form-control" id="signed_by_name" placeholder="Nome completo" required>
+      </div>
+      <div class="col-md-4">
+        <label class="form-label">4 últimos dígitos</label>
+        <input class="form-control mono" id="doc_last4" maxlength="4" inputmode="numeric" placeholder="XXXX">
+      </div>
+      <div class="col-12">
+        <div class="form-check mt-1">
+          <input class="form-check-input" type="checkbox" value="1" id="chk">
+          <label class="form-check-label" for="chk">
+            Confirmo que sou o titular e autorizo a conexão para análise de melhores ofertas de crédito.
+          </label>
+        </div>
+      </div>
+      <div class="col-12 d-flex gap-2">
+        <button class="btn btn-primary" id="btnConnect" type="button">Conectar instituição</button>
+        <span class="muted small align-self-center" id="status"></span>
+      </div>
+    </div>
+  </div>
+
+  <div class="mt-3 muted small">
+    Após concluir a conexão, você pode fechar esta página.
+  </div>
+</div>
+
+<script src="{{ pluggy_js_url }}"></script>
+<script>
+(function(){
+  const token = {{ token|tojson }};
+  const statusEl = document.getElementById("status");
+  const btn = document.getElementById("btnConnect");
+
+  function setStatus(msg){ statusEl.textContent = msg || ""; }
+
+  async function postJSON(url, payload){
+    const r = await fetch(url, {
+      method: "POST",
+      headers: {"Content-Type":"application/json", "Accept":"application/json"},
+      body: JSON.stringify(payload || {})
+    });
+    const t = await r.text();
+    let j = {};
+    try { j = JSON.parse(t); } catch(e) {}
+    if(!r.ok){
+      const err = (j && (j.detail || j.error)) ? (j.detail || j.error) : t;
+      throw new Error(err || ("HTTP "+r.status));
+    }
+    return j;
+  }
+
+  btn.addEventListener("click", async function(){
+    try{
+      const name = (document.getElementById("signed_by_name").value || "").trim();
+      const last4 = (document.getElementById("doc_last4").value || "").trim();
+      const chk = document.getElementById("chk").checked;
+
+      if(!name){ alert("Informe seu nome."); return; }
+      if(!chk){ alert("Marque a autorização para continuar."); return; }
+
+      btn.disabled = true;
+      setStatus("Gerando token de conexão...");
+
+      const tk = await postJSON("/api/pluggy/connect_token", { token, signed_by_name: name, doc_last4: last4 });
+      const accessToken = tk.accessToken;
+
+      setStatus("Abrindo Pluggy Connect...");
+
+      const pc = new PluggyConnect({
+        connectToken: accessToken,
+        includeSandbox: !!tk.includeSandbox,
+        onSuccess: async (itemData) => {
+          try{
+            setStatus("Salvando conexão e importando contratos...");
+            await postJSON("/api/pluggy/item_success", { token, itemData });
+            setStatus("Concluído! Você pode fechar esta página.");
+          }catch(e){
+            console.error(e);
+            setStatus("Conectou, mas falhou ao registrar no sistema: " + (e.message || e));
+          }
+        },
+        onError: (error) => {
+          console.error(error);
+          setStatus("Erro no Pluggy Connect: " + (error && (error.message || JSON.stringify(error))) );
+          btn.disabled = false;
+        }
+      });
+
+      pc.init();
+    }catch(e){
+      console.error(e);
+      alert(e.message || String(e));
+      btn.disabled = false;
+      setStatus("");
+    }
+  });
+})();
+</script>
+{% endblock %}
+""")
+
+
+# ----------------------------
+# Routes (Open Finance)
+# ----------------------------
+
+def _mask_doc(doc_digits: str) -> str:
+    d = _digits(doc_digits)
+    if len(d) == 11:
+        return f"{d[0:3]}.{d[3:6]}.{d[6:9]}-{d[9:11]}"
+    if len(d) == 14:
+        return f"{d[0:2]}.{d[2:5]}.{d[5:8]}/{d[8:12]}-{d[12:14]}"
+    return d
+
+
+def _openfinance_require_client(request: Request, session: Session, ctx: TenantContext) -> Optional[Client]:
+    active_client_id = get_active_client_id(request, session, ctx)
+    if not active_client_id and getattr(ctx.membership, "client_id", None):
+        active_client_id = int(ctx.membership.client_id)
+    if not active_client_id:
+        return None
+    return get_client_or_none(session, ctx.company.id, int(active_client_id))
+
 
 
 def ensure_feature_access_tables() -> None:
@@ -4721,6 +5639,16 @@ TEMPLATES.update({
           <div id="c{{ s.id }}" class="accordion-collapse collapse" data-bs-parent="#stagesAcc">
             <div class="accordion-body">
 
+
+              {% if role in ["admin","equipe"] %}
+                <div class="d-flex justify-content-end gap-2 mb-3">
+                  <a class="btn btn-outline-secondary btn-sm" href="/consultoria/stages/{{ s.id }}/editar">Editar etapa</a>
+                  <form method="post" action="/consultoria/stages/{{ s.id }}/excluir" onsubmit="return confirm('Excluir esta etapa e suas sub-etapas?');">
+                    <button class="btn btn-outline-danger btn-sm">Excluir etapa</button>
+                  </form>
+                </div>
+              {% endif %}
+
               {% if s.steps %}
                 <div class="list-group mb-3">
                   {% for st in s.steps %}
@@ -4743,6 +5671,13 @@ TEMPLATES.update({
                           {% if role in ["admin","equipe"] or (role=="cliente" and st.client_action) %}
                             <form method="post" action="/consultoria/steps/{{ st.id }}/toggle">
                               <button class="btn btn-outline-primary btn-sm">{% if st.done %}Desmarcar{% else %}Concluir{% endif %}</button>
+                            </form>
+                          {% endif %}
+
+                          {% if role in ["admin","equipe"] %}
+                            <a class="btn btn-outline-secondary btn-sm" href="/consultoria/steps/{{ st.id }}/editar">Editar</a>
+                            <form method="post" action="/consultoria/steps/{{ st.id }}/excluir" onsubmit="return confirm('Excluir esta sub-etapa?');">
+                              <button class="btn btn-outline-danger btn-sm">Excluir</button>
                             </form>
                           {% endif %}
                         </div>
@@ -7380,6 +8315,7 @@ async def consultoria_edit_stage_action(
         stage_id: int = 0,
         name: str = Form(...),
         due_date: str = Form(""),
+        order: int = Form(1),
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
@@ -7401,8 +8337,18 @@ async def consultoria_edit_stage_action(
 
     stage.name = name.strip()
     stage.due_date = due_date.strip()
-    session.add(stage)
-    session.commit()
+
+    try:
+        desired_order = int(order)
+    except Exception:
+        desired_order = stage.order
+
+    if desired_order != stage.order:
+        stage.order = max(1, desired_order)
+        _move_stage_to_order(session, stage, stage.order)
+    else:
+        session.add(stage)
+        session.commit()
 
     set_flash(request, "Etapa atualizada.")
     return RedirectResponse(f"/consultoria/{project.id}", status_code=303)
@@ -19538,6 +20484,512 @@ async def admin_consultas_toggle(request: Request, session: Session = Depends(ge
     session.add(p)
     session.commit()
     return RedirectResponse("/admin/consultas", status_code=303)
+
+
+
+@app.get("/openfinance", response_class=HTMLResponse)
+@require_login
+async def openfinance_home(request: Request, doc: str = "", email: str = "", session: Session = Depends(get_session)) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+
+    client = _openfinance_require_client(request, session, ctx)
+    if not client:
+        set_flash(request, "Selecione um cliente para usar Open Finance.")
+        return RedirectResponse("/", status_code=303)
+
+    doc_digits = _digits(doc)
+    email_default = (email or "").strip() or (client.finance_email or client.email or "").strip()
+
+    conn = None
+    loans: list[PluggyLoan] = []
+    offers = session.exec(select(PluggyOffer).where(PluggyOffer.company_id == ctx.company.id).order_by(PluggyOffer.created_at.desc())).all()
+    opp_rows = []
+    invite_link = ""
+    self_connect_link = ""
+
+    try:
+        if (request.session.get("of_invite_doc") or "") == doc_digits:
+            exp_ts = int(request.session.get("of_invite_exp") or 0)
+            if not exp_ts or utcnow().timestamp() <= exp_ts:
+                invite_link = str(request.session.get("of_invite_link") or "")
+    except Exception:
+        pass
+
+    if doc_digits:
+        conn = session.exec(
+            select(PluggyConnection).where(
+                PluggyConnection.company_id == ctx.company.id,
+                PluggyConnection.subject_doc == doc_digits,
+            )
+        ).first()
+        loans = session.exec(
+            select(PluggyLoan).where(
+                PluggyLoan.company_id == ctx.company.id,
+                PluggyLoan.subject_doc == doc_digits,
+            ).order_by(PluggyLoan.fetched_at.desc())
+        ).all()
+
+        # oportunidades + label oferta
+        opps = session.exec(
+            select(PluggyOpportunity).where(
+                PluggyOpportunity.company_id == ctx.company.id,
+                PluggyOpportunity.subject_doc == doc_digits,
+            ).order_by(PluggyOpportunity.total_savings_brl.desc())
+        ).all()
+        offer_by_id = {int(o.id or 0): o for o in offers}
+        for o in opps:
+            off = offer_by_id.get(int(o.offer_id or 0))
+            opp_rows.append(
+                {
+                    "pluggy_loan_id": o.pluggy_loan_id,
+                    "offer_label": off.label if off else f"Oferta #{o.offer_id}",
+                    "old_payment_brl": o.old_payment_brl,
+                    "new_payment_brl": o.new_payment_brl,
+                    "monthly_savings_brl": o.monthly_savings_brl,
+                    "total_savings_brl": o.total_savings_brl,
+                }
+            )
+
+        # link auto para cliente (se o próprio cliente estiver logado)
+        payload = {"t": "pluggy_invite", "company_id": ctx.company.id, "doc": doc_digits, "exp": int((utcnow() + timedelta(hours=24)).timestamp())}
+        token = _sign_consent_token(payload)
+        self_connect_link = f"/openfinance/connect/{token}"
+
+    return render(
+        "openfinance.html",
+        request=request,
+        context={
+            "title": "Open Finance",
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "role": ctx.membership.role,
+            "current_client": client,
+            "doc": doc_digits,
+            "email_default": email_default,
+            "conn": conn,
+            "loans": loans,
+            "offers": offers,
+            "opportunities": opp_rows,
+            "invite_link": invite_link,
+            "self_connect_link": self_connect_link,
+        },
+    )
+
+
+@app.post("/openfinance/invite")
+@require_role({"admin", "equipe"})
+async def openfinance_invite(
+    request: Request,
+    doc: str = Form(...),
+    email: str = Form(...),
+    session: Session = Depends(get_session),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+
+    client = _openfinance_require_client(request, session, ctx)
+    if not client:
+        set_flash(request, "Selecione um cliente.")
+        return RedirectResponse("/", status_code=303)
+
+    doc_digits = _digits(doc)
+    if len(doc_digits) not in (11, 14):
+        set_flash(request, "Documento inválido (use CPF ou CNPJ).")
+        return RedirectResponse(f"/openfinance?doc={doc_digits}", status_code=303)
+
+    invited_email = (email or "").strip().lower()
+    if "@" not in invited_email:
+        set_flash(request, "E-mail inválido.")
+        return RedirectResponse(f"/openfinance?doc={doc_digits}", status_code=303)
+
+    expires_at = utcnow() + timedelta(hours=24)
+    inv = PluggyConnectInvite(
+        company_id=ctx.company.id,
+        requested_by_client_id=int(client.id or 0),
+        created_by_user_id=int(ctx.user.id or 0),
+        subject_doc=doc_digits,
+        invited_email=invited_email,
+        status="pendente",
+        expires_at=expires_at,
+        updated_at=utcnow(),
+    )
+    session.add(inv)
+    session.commit()
+    session.refresh(inv)
+
+    payload = {"t": "pluggy_invite", "invite_id": int(inv.id or 0), "company_id": ctx.company.id, "doc": doc_digits, "exp": int(expires_at.timestamp())}
+    token = _sign_consent_token(payload)
+    link = f"{_public_base_url(request)}/openfinance/connect/{token}"
+
+    try:
+        request.session["of_invite_doc"] = doc_digits
+        request.session["of_invite_link"] = link
+        request.session["of_invite_exp"] = int(expires_at.timestamp())
+    except Exception:
+        pass
+
+    html_body = f"""
+      <div style="font-family:Arial,sans-serif; line-height:1.4">
+        <h2>Autorização Open Finance (Pluggy)</h2>
+        <p>Para analisarmos seus contratos e buscar melhores ofertas de crédito, conecte sua instituição via link abaixo:</p>
+        <p><a href="{html.escape(link)}">{html.escape(link)}</a></p>
+        <p style="color:#666; font-size:12px">Este link expira em 24 horas.</p>
+      </div>
+    """
+
+    try:
+        _smtp_send_email(to_email=invited_email, subject="Conexão Open Finance (Pluggy) — autorização", html_body=html_body)
+        set_flash(request, f"E-mail de conexão enviado para {invited_email}.")
+    except Exception as e:
+        set_flash(request, f"Não foi possível enviar e-mail (SMTP). Copie o link manualmente. Erro: {e}")
+
+    return RedirectResponse(f"/openfinance?doc={doc_digits}&email={invited_email}", status_code=303)
+
+
+@app.post("/openfinance/sync")
+@require_login
+async def openfinance_sync(request: Request, doc: str = Form(...), session: Session = Depends(get_session)) -> Response:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+    doc_digits = _digits(doc)
+
+    conn = session.exec(select(PluggyConnection).where(PluggyConnection.company_id == ctx.company.id, PluggyConnection.subject_doc == doc_digits)).first()
+    if not conn or not conn.pluggy_item_id:
+        set_flash(request, "Sem conexão Pluggy para este documento.")
+        return RedirectResponse(f"/openfinance?doc={doc_digits}", status_code=303)
+
+    try:
+        await pluggy_sync_loans(session=session, company_id=ctx.company.id, subject_doc=doc_digits, item_id=conn.pluggy_item_id)
+        set_flash(request, "Sincronização concluída.")
+    except Exception as e:
+        set_flash(request, f"Falha ao sincronizar: {e}")
+
+    return RedirectResponse(f"/openfinance?doc={doc_digits}", status_code=303)
+
+
+@app.post("/openfinance/offers/add")
+@require_role({"admin", "equipe"})
+async def openfinance_add_offer(
+    request: Request,
+    label: str = Form(...),
+    cet_aa_pct: str = Form(...),
+    product_type: str = Form(""),
+    term_min: str = Form("0"),
+    term_max: str = Form("0"),
+    session: Session = Depends(get_session),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+
+    try:
+        cet = float(str(cet_aa_pct).replace(",", "."))
+    except Exception:
+        cet = 0.0
+
+    o = PluggyOffer(
+        company_id=ctx.company.id,
+        label=(label or "").strip(),
+        product_type=(product_type or "").strip(),
+        cet_aa=_to_float_rate(cet),
+        term_min_months=int(term_min or 0) if str(term_min or "").strip().isdigit() else 0,
+        term_max_months=int(term_max or 0) if str(term_max or "").strip().isdigit() else 0,
+        updated_at=utcnow(),
+    )
+    session.add(o)
+    session.commit()
+
+    set_flash(request, "Oferta adicionada.")
+    return RedirectResponse("/openfinance", status_code=303)
+
+
+@app.post("/openfinance/opportunities/generate")
+@require_login
+async def openfinance_generate_opportunities(request: Request, doc: str = Form(...), session: Session = Depends(get_session)) -> Response:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+
+    doc_digits = _digits(doc)
+    try:
+        n = _compute_opportunities_for_doc(session=session, company_id=ctx.company.id, subject_doc=doc_digits)
+        set_flash(request, f"Oportunidades geradas/atualizadas: {n}.")
+    except Exception as e:
+        set_flash(request, f"Falha ao gerar oportunidades: {e}")
+
+    return RedirectResponse(f"/openfinance?doc={doc_digits}", status_code=303)
+
+
+@app.get("/openfinance/connect/{token}", response_class=HTMLResponse)
+async def openfinance_connect_page(token: str, request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
+    try:
+        payload = _verify_consent_token(token)
+        if payload.get("t") != "pluggy_invite":
+            raise ValueError("tipo inválido")
+        company_id = int(payload.get("company_id") or 0)
+        doc_digits = _digits(str(payload.get("doc") or ""))
+        invite_id = int(payload.get("invite_id") or 0)
+    except Exception as e:
+        return render("error.html", request=request, context={"current_user": None, "current_company": None, "role": "", "current_client": None, "message": f"Link inválido: {e}"})
+
+    invited_email = ""
+    inv = None
+    if invite_id:
+        inv = session.get(PluggyConnectInvite, invite_id)
+        if not inv or int(inv.company_id or 0) != company_id:
+            return render("error.html", request=request, context={"current_user": None, "current_company": None, "role": "", "current_client": None, "message": "Convite não encontrado."})
+        if inv.status in ("revogada", "expirada"):
+            return render("error.html", request=request, context={"current_user": None, "current_company": None, "role": "", "current_client": None, "message": f"Convite {inv.status}."})
+        if inv.expires_at and utcnow() > inv.expires_at:
+            inv.status = "expirada"
+            inv.updated_at = utcnow()
+            session.add(inv)
+            session.commit()
+            return render("error.html", request=request, context={"current_user": None, "current_company": None, "role": "", "current_client": None, "message": "Convite expirado."})
+        invited_email = inv.invited_email
+
+    return render(
+        "openfinance_connect.html",
+        request=request,
+        context={
+            "title": "Conectar Open Finance",
+            "current_user": None,
+            "current_company": None,
+            "role": "",
+            "current_client": None,
+            "token": token,
+            "doc_masked": _mask_doc(doc_digits),
+            "invited_email": invited_email or "(não informado)",
+            "pluggy_js_url": PLUGGY_CONNECT_JS_URL,
+            "error": "",
+        },
+    )
+
+
+@app.post("/api/pluggy/connect_token")
+async def pluggy_api_connect_token(request: Request, payload: dict[str, Any], session: Session = Depends(get_session)) -> JSONResponse:
+    token = str(payload.get("token") or "").strip()
+    signed_by_name = str(payload.get("signed_by_name") or "").strip()
+    doc_last4 = str(payload.get("doc_last4") or "").strip()
+
+    try:
+        pl = _verify_consent_token(token)
+        if pl.get("t") != "pluggy_invite":
+            raise ValueError("tipo inválido")
+        company_id = int(pl.get("company_id") or 0)
+        doc_digits = _digits(str(pl.get("doc") or ""))
+        invite_id = int(pl.get("invite_id") or 0)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Token inválido: {e}")
+
+    if not signed_by_name:
+        raise HTTPException(status_code=400, detail="Informe o nome.")
+
+    if doc_last4 and doc_digits and doc_last4 != doc_digits[-4:]:
+        raise HTTPException(status_code=400, detail="Os 4 últimos dígitos não conferem.")
+
+    # valida convite (se existir)
+    if invite_id:
+        inv = session.get(PluggyConnectInvite, invite_id)
+        if not inv or int(inv.company_id or 0) != company_id or inv.subject_doc != doc_digits:
+            raise HTTPException(status_code=400, detail="Convite inválido.")
+        if inv.expires_at and utcnow() > inv.expires_at:
+            inv.status = "expirada"
+            inv.updated_at = utcnow()
+            session.add(inv)
+            session.commit()
+            raise HTTPException(status_code=400, detail="Convite expirado.")
+        inv.signed_by_name = signed_by_name
+        inv.accepted_at = utcnow()
+        inv.status = "conectando"
+        inv.updated_at = utcnow()
+        session.add(inv)
+        session.commit()
+
+    existing = session.exec(
+        select(PluggyConnection).where(PluggyConnection.company_id == company_id, PluggyConnection.subject_doc == doc_digits)
+    ).first()
+    update_item_id = existing.pluggy_item_id if (existing and existing.pluggy_item_id) else None
+
+    try:
+        access_token = await _pluggy_create_connect_token(request=request, company_id=company_id, subject_doc=doc_digits, update_item_id=update_item_id)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Falha ao gerar connect token: {e}")
+
+    return JSONResponse(
+        {
+            "accessToken": access_token,
+            "includeSandbox": PLUGGY_INCLUDE_SANDBOX,
+            "updateItem": update_item_id or None,
+        }
+    )
+
+
+@app.post("/api/pluggy/item_success")
+async def pluggy_api_item_success(request: Request, payload: dict[str, Any], session: Session = Depends(get_session)) -> JSONResponse:
+    token = str(payload.get("token") or "").strip()
+    item_data = payload.get("itemData") or {}
+    try:
+        pl = _verify_consent_token(token)
+        if pl.get("t") != "pluggy_invite":
+            raise ValueError("tipo inválido")
+        company_id = int(pl.get("company_id") or 0)
+        doc_digits = _digits(str(pl.get("doc") or ""))
+        invite_id = int(pl.get("invite_id") or 0)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Token inválido: {e}")
+
+    # extrai itemId
+    item_id = ""
+    connector_id = None
+    try:
+        if isinstance(item_data, dict):
+            item_id = str(item_data.get("id") or item_data.get("itemId") or "").strip()
+            if not item_id and isinstance(item_data.get("item"), dict):
+                item_id = str(item_data["item"].get("id") or "").strip()
+            connector_id = item_data.get("connectorId") or (item_data.get("connector") or {}).get("id") if isinstance(item_data.get("connector"), dict) else None
+    except Exception:
+        item_id = ""
+
+    if not item_id:
+        raise HTTPException(status_code=400, detail="ItemID ausente no retorno do Pluggy Connect.")
+
+    # upsert connection
+    conn = session.exec(select(PluggyConnection).where(PluggyConnection.company_id == company_id, PluggyConnection.subject_doc == doc_digits)).first()
+    if not conn:
+        conn = PluggyConnection(company_id=company_id, subject_doc=doc_digits)
+
+    conn.client_user_id = _pluggy_client_user_id(company_id=company_id, subject_doc=doc_digits)
+    conn.pluggy_item_id = item_id
+    try:
+        conn.connector_id = int(connector_id) if connector_id is not None else conn.connector_id
+    except Exception:
+        pass
+    conn.status = "connected"
+    conn.last_event = "connect_success"
+    conn.last_error = ""
+    conn.updated_at = utcnow()
+    try:
+        conn.raw_item_json = json.dumps(item_data, ensure_ascii=False)
+    except Exception:
+        conn.raw_item_json = ""
+
+    session.add(conn)
+
+    # marca convite como válido (se existir)
+    if invite_id:
+        inv = session.get(PluggyConnectInvite, invite_id)
+        if inv:
+            inv.status = "valida"
+            inv.updated_at = utcnow()
+            session.add(inv)
+
+    session.commit()
+
+    # tenta sincronizar loans já
+    try:
+        await pluggy_sync_loans(session=session, company_id=company_id, subject_doc=doc_digits, item_id=item_id)
+    except Exception as e:
+        # não falha o fluxo do usuário; apenas grava erro para diagnosticar
+        conn.last_error = f"Conectou, mas falhou ao sincronizar loans: {e}"
+        conn.updated_at = utcnow()
+        session.add(conn)
+        session.commit()
+
+    return JSONResponse({"ok": True, "itemId": item_id})
+
+
+@app.post("/webhooks/pluggy")
+async def pluggy_webhook(request: Request, k: str = "", session: Session = Depends(get_session)) -> JSONResponse:
+    if PLUGGY_WEBHOOK_KEY and (k or "") != PLUGGY_WEBHOOK_KEY:
+        raise HTTPException(status_code=401, detail="unauthorized")
+
+    body = await request.json()
+    event = str(body.get("event") or "").strip()
+    item_id = str(body.get("itemId") or "").strip()
+    client_user_id = str(body.get("clientUserId") or "").strip()
+
+    if not item_id:
+        return JSONResponse({"ok": True})
+
+    # tenta derivar company+doc do clientUserId (mc:company:doc)
+    company_id = 0
+    doc_digits = ""
+    if client_user_id.startswith("mc:"):
+        parts = client_user_id.split(":")
+        if len(parts) >= 3:
+            try:
+                company_id = int(parts[1])
+            except Exception:
+                company_id = 0
+            doc_digits = _digits(parts[2])
+
+    if not company_id or not doc_digits:
+        # fallback: procura pelo itemId
+        conn = session.exec(select(PluggyConnection).where(PluggyConnection.pluggy_item_id == item_id)).first()
+        if conn:
+            company_id = int(conn.company_id or 0)
+            doc_digits = conn.subject_doc
+
+    if not company_id or not doc_digits:
+        return JSONResponse({"ok": True})
+
+    conn = session.exec(select(PluggyConnection).where(PluggyConnection.company_id == company_id, PluggyConnection.subject_doc == doc_digits)).first()
+    if conn:
+        conn.last_event = event
+        if event in ("item/updated", "item/created", "item/login_succeeded"):
+            conn.status = "updating"
+        if event == "item/error":
+            conn.status = "error"
+            err = body.get("error") or {}
+            if isinstance(err, dict):
+                conn.last_error = f"{err.get('code')}: {err.get('message')}"
+        conn.updated_at = utcnow()
+        session.add(conn)
+        session.commit()
+
+    if event in ("item/created", "item/updated"):
+        try:
+            await pluggy_sync_loans(session=session, company_id=company_id, subject_doc=doc_digits, item_id=item_id)
+        except Exception as e:
+            if conn:
+                conn.last_error = f"Webhook sync falhou: {e}"
+                conn.updated_at = utcnow()
+                session.add(conn)
+                session.commit()
+
+    return JSONResponse({"ok": True})
+
+
+@app.on_event("startup")
+def _startup() -> None:
+    init_db()
+    ensure_ui_tables()
+    ensure_feature_access_tables()
+    ensure_credit_consent_table()
+    ensure_pluggy_tables()
+    UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+
+
+# ----------------------------
+# Auth routes
+# ----------------------------
+
+
+@app.get("/login", response_class=HTMLResponse)
+async def login_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
+    if get_current_user(request, session):
+        return RedirectResponse("/", status_code=303)
+    return render("login.html", request=request, context={"current_user": None})
 
 # === /CREDIT_WALLET_MODULE_V1 ===
 # ----------------------------
