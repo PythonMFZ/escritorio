@@ -20914,10 +20914,14 @@ async def pluggy_api_item_success(request: Request, payload: dict[str, Any], ses
     return JSONResponse({"ok": True, "itemId": item_id})
 
 
-@app.post("/webhooks/pluggy")
+@app.api_route("/webhooks/pluggy", methods=["POST", "GET", "HEAD"])
+@app.api_route("/api/webhooks/pluggy", methods=["POST", "GET", "HEAD"])
 async def pluggy_webhook(request: Request, k: str = "", session: Session = Depends(get_session)) -> JSONResponse:
     if PLUGGY_WEBHOOK_KEY and (k or "") != PLUGGY_WEBHOOK_KEY:
         raise HTTPException(status_code=401, detail="unauthorized")
+
+    if request.method != "POST":
+        return JSONResponse({"ok": True})
 
     body = await request.json()
     event = str(body.get("event") or "").strip()
