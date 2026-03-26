@@ -2233,6 +2233,15 @@ PLUGGY_CLIENT_SECRET = (os.getenv("PLUGGY_CLIENT_SECRET") or "").strip()
 PLUGGY_INCLUDE_SANDBOX = os.getenv("PLUGGY_INCLUDE_SANDBOX", "0") == "1"
 PLUGGY_CONNECT_JS_URL = (os.getenv("PLUGGY_CONNECT_JS_URL") or "https://cdn.pluggy.ai/pluggy-connect/v2.8.2/pluggy-connect.js").strip()
 PLUGGY_HTTP_TIMEOUT_S = float(os.getenv("PLUGGY_HTTP_TIMEOUT_S", "20") or "20")
+# ----------------------------
+# Open Finance (Klavi) - Link/Consents + Loans report
+# ----------------------------
+
+KLAVI_ENV = (os.getenv("KLAVI_ENV") or "sandbox").strip().lower()
+KLAVI_API_BASE = (os.getenv("KLAVI_API_BASE") or ("https://api-sandbox.klavi.ai" if KLAVI_ENV == "sandbox" else "https://api.klavi.ai")).rstrip("/")
+KLAVI_ACCESS_KEY = (os.getenv("KLAVI_ACCESS_KEY") or "").strip()
+KLAVI_SECRET_KEY = (os.getenv("KLAVI_SECRET_KEY") or "").strip()
+KLAVI_HTTP_TIMEOUT_S = float(os.getenv("KLAVI_HTTP_TIMEOUT_S", "25") or "25")
 PLUGGY_WEBHOOK_KEY = (os.getenv("PLUGGY_WEBHOOK_KEY") or "").strip()
 PLUGGY_WEBHOOK_TRUSTED_IPS = {
     ip.strip() for ip in (os.getenv("PLUGGY_WEBHOOK_TRUSTED_IPS") or "177.71.238.212").split(",") if ip.strip()
@@ -2382,6 +2391,48 @@ class PluggyOpportunity(SQLModel, table=True):
     created_at: datetime = Field(default_factory=utcnow)
 
 
+class KlaviFlow(SQLModel, table=True):
+    """Estado do fluxo Klavi (Link/Consent) por CPF/CNPJ."""
+
+    __table_args__ = (UniqueConstraint("company_id", "subject_doc", name="uq_klavi_flow_company_doc"),)
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    company_id: int = Field(index=True, foreign_key="company.id")
+    subject_doc: str = Field(default="", index=True)
+
+    email: str = ""
+    phone: str = ""
+
+    link_id: str = Field(default="", index=True)
+    link_token: str = ""
+    link_expires_at: datetime = Field(default_factory=utcnow)
+
+    institution_code: str = ""
+    institution_name: str = ""
+
+    consent_id: str = Field(default="", index=True)
+    consent_status: str = ""
+    last_request_id: str = ""
+    last_error: str = ""
+
+    created_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime = Field(default_factory=utcnow)
+
+
+class KlaviReport(SQLModel, table=True):
+    """Armazena relatórios recebidos via webhook (debug + histórico)."""
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    company_id: int = Field(index=True, foreign_key="company.id")
+    subject_doc: str = Field(default="", index=True)
+
+    product: str = Field(default="", index=True)
+    request_id: str = Field(default="", index=True)
+    received_at: datetime = Field(default_factory=utcnow)
+
+    raw_json: str = ""
+
+
 def ensure_pluggy_tables() -> bool:
     """Garante tabelas do módulo Pluggy (ambientes sem Alembic)."""
     ok = True
@@ -2391,6 +2442,8 @@ def ensure_pluggy_tables() -> bool:
         PluggyLoan.__table__,
         PluggyOffer.__table__,
         PluggyOpportunity.__table__,
+        KlaviFlow.__table__,
+        KlaviReport.__table__,
     ):
         try:
             tbl.create(engine, checkfirst=True)
@@ -2401,6 +2454,203 @@ def ensure_pluggy_tables() -> bool:
             except Exception:
                 pass
     return ok
+
+
+@dataclass
+class _KlaviAccessTokenCache:
+    access_token: str = ""
+    exp_ts: float = 0.0
+
+
+_KLAVI_TOKEN_CACHE = _KlaviAccessTokenCache()
+
+
+def _klavi_is_configured() -> bool:
+    return bool(KLAVI_ACCESS_KEY and KLAVI_SECRET_KEY and KLAVI_API_BASE)
+
+
+async def _klavi_get_access_token() -> str:
+    """Retorna accessToken (cache ~30 min) para chamadas server-side."""
+    now = utcnow().timestamp()
+    if _KLAVI_TOKEN_CACHE.access_token and now < (_KLAVI_TOKEN_CACHE.exp_ts - 60):
+        return _KLAVI_TOKEN_CACHE.access_token
+
+    if not _klavi_is_configured():
+        raise RuntimeError("KLAVI_ACCESS_KEY/KLAVI_SECRET_KEY não configurados.")
+
+    url = f"{KLAVI_API_BASE}/data/v1/auth"
+    payload = {"accessKey": KLAVI_ACCESS_KEY, "secretKey": KLAVI_SECRET_KEY}
+
+    async with httpx.AsyncClient(timeout=KLAVI_HTTP_TIMEOUT_S) as client:
+        r = await client.post(url, json=payload, headers={"accept": "application/json"})
+        r.raise_for_status()
+        data = r.json() if r.content else {}
+
+    token = str(data.get("accessToken") or data.get("accesstoken") or "").strip()
+    exp_in = int(data.get("expireIn") or data.get("expirein") or 1800)
+
+    if not token:
+        raise RuntimeError("Resposta inesperada do Klavi /auth (accessToken ausente).")
+
+    _KLAVI_TOKEN_CACHE.access_token = token
+    _KLAVI_TOKEN_CACHE.exp_ts = now + max(60, exp_in)
+    return token
+
+
+def _klavi_auth_header(token: str) -> dict[str, str]:
+    return {"authorization": f"Bearer {token}", "accept": "application/json"}
+
+
+async def _klavi_post_json(*, path: str, bearer: str, payload: dict[str, Any]) -> dict[str, Any]:
+    url = f"{KLAVI_API_BASE}{path}"
+    async with httpx.AsyncClient(timeout=KLAVI_HTTP_TIMEOUT_S) as client:
+        r = await client.post(url, json=payload, headers={**_klavi_auth_header(bearer), "content-type": "application/json"})
+        r.raise_for_status()
+        return r.json() if r.content else {}
+
+
+async def _klavi_get_json(*, path: str, bearer: str) -> Any:
+    url = f"{KLAVI_API_BASE}{path}"
+    async with httpx.AsyncClient(timeout=KLAVI_HTTP_TIMEOUT_S) as client:
+        r = await client.get(url, headers=_klavi_auth_header(bearer))
+        r.raise_for_status()
+        return r.json() if r.content else {}
+
+
+def _deep_iter_dicts(obj: Any) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    stack = [obj]
+    while stack:
+        cur = stack.pop()
+        if isinstance(cur, dict):
+            out.append(cur)
+            for v in cur.values():
+                stack.append(v)
+        elif isinstance(cur, list):
+            for v in cur:
+                stack.append(v)
+    return out
+
+
+def _klavi_pick_float(d: dict[str, Any], *keys: str) -> float:
+    for k in keys:
+        v = d.get(k)
+        if v is None:
+            continue
+        try:
+            if isinstance(v, str):
+                v = v.replace(",", ".")
+            return float(v)
+        except Exception:
+            continue
+    return 0.0
+
+
+def _klavi_pick_int(d: dict[str, Any], *keys: str) -> int:
+    for k in keys:
+        v = d.get(k)
+        if v is None:
+            continue
+        try:
+            return int(float(v))
+        except Exception:
+            continue
+    return 0
+
+
+def _klavi_pick_str(d: dict[str, Any], *keys: str) -> str:
+    for k in keys:
+        v = d.get(k)
+        if v is None:
+            continue
+        s = str(v).strip()
+        if s:
+            return s
+    return ""
+
+
+def _klavi_extract_contract_dicts(payload: Any) -> list[dict[str, Any]]:
+    candidates: list[dict[str, Any]] = []
+    for d in _deep_iter_dicts(payload):
+        has_id = any(k in d for k in ("contractNumber", "contractId", "ipocCode", "loanId", "id"))
+        has_money = any(k in d for k in ("contractAmount", "contractedAmount", "principalAmount", "outstandingBalance", "installmentAmount", "cet", "CET"))
+        if has_id and has_money:
+            candidates.append(d)
+    # dedup by repr hash
+    seen = set()
+    uniq = []
+    for d in candidates:
+        h = hash(json.dumps(d, sort_keys=True, default=str))
+        if h in seen:
+            continue
+        seen.add(h)
+        uniq.append(d)
+    return uniq[:200]
+
+
+def _klavi_contract_to_loan(*, company_id: int, subject_doc: str, link_id: str, contract: dict[str, Any], raw_payload: Any) -> PluggyLoan:
+    contract_number = _klavi_pick_str(contract, "contractNumber", "contractId", "number")
+    ipoc_code = _klavi_pick_str(contract, "ipocCode", "ipoc", "ipoc_code")
+
+    lender = _klavi_pick_str(contract, "brandName", "institutionName", "lenderName", "companyName", "bankName")
+    product_type = _klavi_pick_str(contract, "type", "productType", "product", "subType")
+    amort = _klavi_pick_str(contract, "amortizationType", "amortizationScheduled", "amortization", "amortization_type")
+
+    principal = _klavi_pick_float(contract, "contractAmount", "contractedAmount", "principalAmount", "amount")
+    outstanding = _klavi_pick_float(contract, "outstandingBalance", "contractOutstandingBalance", "balance", "outstanding_brl")
+    installment = _klavi_pick_float(contract, "installmentAmount", "instalmentAmount", "scheduledInstalmentAmount", "installment_brl")
+
+    term_total = _klavi_pick_int(contract, "installmentQuantity", "instalmentQuantity", "termTotalMonths", "term")
+    term_rem = _klavi_pick_int(contract, "remainingInstallments", "remainingInstalments", "termRemainingMonths")
+
+    cet = _klavi_pick_float(contract, "CET", "cet", "cetAnnual", "cet_aa")
+    interest = _klavi_pick_float(contract, "interestRate", "interestRates", "interestAnnual", "interest_aa")
+
+    pluggy_loan_id = f"klavi:{contract_number or ipoc_code or _klavi_pick_str(contract,'id','loanId') or secrets.token_hex(6)}"
+    return PluggyLoan(
+        company_id=company_id,
+        subject_doc=subject_doc,
+        pluggy_item_id=f"klavi:{link_id}",
+        pluggy_loan_id=pluggy_loan_id,
+        contract_number=contract_number,
+        ipoc_code=ipoc_code,
+        lender_name=lender,
+        product_type=product_type or "loans",
+        amortization_type=amort,
+        principal_brl=principal,
+        outstanding_brl=outstanding,
+        installment_brl=installment,
+        term_total_months=term_total,
+        term_remaining_months=term_rem,
+        cet_aa=cet,
+        interest_aa=interest,
+        fetched_at=utcnow(),
+        raw_json=json.dumps(raw_payload, ensure_ascii=False, default=str),
+    )
+
+
+async def klavi_request_loans_report(*, doc_digits: str, flow: KlaviFlow) -> str:
+    """Dispara request de relatório 'pf loans' (ou business) e retorna requestId."""
+    access_token = await _klavi_get_access_token()
+    base_payload = {
+        "taxId": doc_digits,
+        "institutionId": flow.institution_code,
+        "linkId": flow.link_id,
+        "consentId": [flow.consent_id] if flow.consent_id else [],
+        "products": ["loans"],
+        "productsCallbackUrl": {"all": f"{PUBLIC_BASE_URL}/webhooks/klavi/products"} if PUBLIC_BASE_URL else {},
+    }
+
+    if len(doc_digits) == 11:
+        path = "/data/personal/institution-data"
+    else:
+        path = "/data/business/institution-data"
+
+    data = await _klavi_post_json(path=path, bearer=access_token, payload=base_payload)
+    request_id = str(data.get("requestId") or data.get("requestid") or "").strip()
+    if not request_id:
+        request_id = secrets.token_hex(8)
+    return request_id
 
 
 @dataclass
@@ -6906,10 +7156,16 @@ TEMPLATES.setdefault("openfinance.html", r"""{% extends "base.html" %}
 {% block content %}
 <div class="d-flex align-items-center justify-content-between mb-3">
   <div>
-    <div class="h4 mb-0">🌐 Open Finance (Pluggy) — Contratos</div>
+    <div class="h4 mb-0">🌐 Open Finance — Contratos</div>
     <div class="muted">Conecte a conta do titular e importe contratos (Loans) para comparar ofertas.</div>
   </div>
   <a class="btn btn-outline-secondary" href="/">Voltar</a>
+</div>
+
+
+<div class="alert alert-info d-flex justify-content-between align-items-center">
+  <div><strong>Klavi:</strong> se o Pluggy estiver instável, use a conexão via Klavi (Sandbox/Produção).</div>
+  <a class="btn btn-outline-primary btn-sm" href="/openfinance/klavi?doc={{ doc or '' }}&email={{ email_default or '' }}">Abrir Klavi</a>
 </div>
 
 <div class="card p-3 mb-3">
@@ -7110,6 +7366,165 @@ TEMPLATES.setdefault("openfinance.html", r"""{% extends "base.html" %}
 {% endif %}
 {% endblock %}
 """)
+
+TEMPLATES.setdefault("openfinance_klavi.html", r"""{% extends "base.html" %}
+{% block content %}
+<div class="d-flex align-items-center justify-content-between mb-3">
+  <div>
+    <div class="h4 mb-0">🌐 Open Finance (Klavi) — Contratos</div>
+    <div class="muted">Fluxo Link → Consent → Report (pf loans) via Klavi. Use sandbox para testes.</div>
+  </div>
+  <div class="d-flex gap-2">
+    <a class="btn btn-outline-secondary" href="/openfinance?doc={{ doc or '' }}">Voltar</a>
+  </div>
+</div>
+
+<div class="card p-3 mb-3">
+  <form method="post" action="/openfinance/klavi/start" class="row g-2 align-items-end">
+    <input type="hidden" name="doc" value="{{ doc or '' }}"/>
+    <div class="col-md-4">
+      <label class="form-label">CPF/CNPJ</label>
+      <input class="form-control mono" name="doc_input" value="{{ doc or '' }}" required>
+    </div>
+    <div class="col-md-4">
+      <label class="form-label">E-mail do titular</label>
+      <input class="form-control" name="email" value="{{ email_default or '' }}" placeholder="email@exemplo.com" required>
+    </div>
+    <div class="col-md-4">
+      <label class="form-label">Telefone do titular</label>
+      <input class="form-control" name="phone" value="{{ phone_default or '' }}" placeholder="+55DD9XXXXYYYY" required>
+    </div>
+    <div class="col-12 d-flex gap-2 mt-2">
+      <button class="btn btn-primary">Iniciar (criar Link + listar instituições)</button>
+      <a class="btn btn-outline-secondary" href="/openfinance?doc={{ doc or '' }}">Ver contratos/importados</a>
+    </div>
+    <div class="form-text">A Klavi usa Link/Consent do Open Finance. Após autorizar, solicitaremos o relatório <strong>pf loans</strong>.</div>
+  </form>
+</div>
+
+{% if flow %}
+<div class="card p-3 mb-3">
+  <div class="d-flex justify-content-between align-items-center">
+    <div>
+      <div><strong>Status:</strong> {{ flow.consent_status or "—" }}</div>
+      <div class="muted mono">link_id={{ flow.link_id }} | consent_id={{ flow.consent_id }}</div>
+      {% if flow.institution_name %}
+        <div class="muted">Instituição: {{ flow.institution_name }} ({{ flow.institution_code }})</div>
+      {% endif %}
+      {% if flow.last_error %}
+        <div class="text-danger mt-2"><strong>Erro:</strong> {{ flow.last_error }}</div>
+      {% endif %}
+    </div>
+
+    <div class="d-flex gap-2">
+      {% if flow.consent_id %}
+        <form method="post" action="/openfinance/klavi/request">
+          <input type="hidden" name="doc" value="{{ doc or '' }}"/>
+          <button class="btn btn-outline-primary">Solicitar relatório (Loans)</button>
+        </form>
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endif %}
+
+{% if reports %}
+<div class="card p-3">
+  <h6 class="mb-3">Últimos relatórios recebidos</h6>
+  <div class="table-responsive">
+    <table class="table table-sm align-middle">
+      <thead><tr><th>Quando</th><th>Produto</th><th>Request</th></tr></thead>
+      <tbody>
+        {% for r in reports %}
+          <tr>
+            <td class="mono">{{ r.received_at }}</td>
+            <td>{{ r.product }}</td>
+            <td class="mono">{{ r.request_id }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <div class="form-text">Quando o relatório <code>loans</code> chegar, os contratos aparecerão em <a href="/openfinance?doc={{ doc or '' }}">Open Finance</a>.</div>
+</div>
+{% endif %}
+{% endblock %}
+""")
+
+TEMPLATES.setdefault("openfinance_klavi_institutions.html", r"""{% extends "base.html" %}
+{% block content %}
+<div class="d-flex align-items-center justify-content-between mb-3">
+  <div>
+    <div class="h4 mb-0">Escolha a instituição (Klavi)</div>
+    <div class="muted">Documento: <span class="mono">{{ doc }}</span></div>
+  </div>
+  <a class="btn btn-outline-secondary" href="/openfinance/klavi?doc={{ doc }}">Voltar</a>
+</div>
+
+<div class="card p-3">
+  <div class="mb-2 form-text">Selecione a instituição para autorizar no Open Finance. Itens com “outage” podem falhar.</div>
+
+  <div class="list-group">
+    {% for it in institutions %}
+      <div class="list-group-item">
+        <div class="d-flex justify-content-between align-items-center gap-2">
+          <div class="d-flex align-items-center gap-3">
+            {% if it.avatar %}
+              <img src="{{ it.avatar }}" alt="logo" style="width:28px;height:28px;border-radius:6px;object-fit:contain;background:#fff;border:1px solid #eee">
+            {% endif %}
+            <div>
+              <div><strong>{{ it.name }}</strong> <span class="muted mono">({{ it.institutionCode }})</span></div>
+              <div class="muted" style="font-size:12px">
+                {% if it.isOutage %}<span class="text-warning">outage</span>{% else %}ok{% endif %}
+                {% if it.availableResources %} • recursos: {{ it.availableResources|join(", ") }}{% endif %}
+              </div>
+            </div>
+          </div>
+
+          <form method="post" action="/openfinance/klavi/consent">
+            <input type="hidden" name="doc" value="{{ doc }}"/>
+            <input type="hidden" name="institution_code" value="{{ it.institutionCode }}"/>
+            <input type="hidden" name="institution_name" value="{{ it.name }}"/>
+            <button class="btn btn-primary btn-sm">Autorizar</button>
+          </form>
+        </div>
+      </div>
+    {% endfor %}
+  </div>
+</div>
+{% endblock %}
+""")
+
+TEMPLATES.setdefault("openfinance_klavi_return.html", r"""{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <div class="d-flex justify-content-between align-items-start">
+    <div>
+      <h4 class="mb-1">Autorização recebida</h4>
+      <div class="muted mono">{{ doc }}</div>
+      {% if message %}
+        <div class="mt-2">{{ message }}</div>
+      {% endif %}
+      {% if error %}
+        <div class="text-danger mt-2"><strong>Erro:</strong> {{ error }}</div>
+      {% endif %}
+    </div>
+    <a class="btn btn-outline-secondary" href="/openfinance/klavi?doc={{ doc }}">Voltar</a>
+  </div>
+
+  <hr class="my-3"/>
+
+  <form method="post" action="/openfinance/klavi/request" class="d-flex gap-2">
+    <input type="hidden" name="doc" value="{{ doc }}"/>
+    <button class="btn btn-primary">Solicitar relatório (Loans)</button>
+    <a class="btn btn-outline-secondary" href="/openfinance?doc={{ doc }}">Ver contratos/importados</a>
+  </form>
+
+  <div class="form-text mt-2">Após solicitar, aguarde o webhook de produto chegar. A página “Open Finance” mostrará os contratos importados.</div>
+</div>
+{% endblock %}
+""")
+
 
 TEMPLATES.setdefault("openfinance_connect.html", r"""{% extends "base.html" %}
 {% block content %}
@@ -20691,6 +21106,283 @@ async def openfinance_invite(
     return RedirectResponse(f"/openfinance?doc={doc_digits}&email={invited_email}", status_code=303)
 
 
+@app.get("/openfinance/klavi", response_class=HTMLResponse)
+@require_login
+async def openfinance_klavi_home(request: Request, doc: str = "", email: str = "", session: Session = Depends(get_session)) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+
+    client = _openfinance_require_client(request, session, ctx)
+    if not client:
+        set_flash(request, "Selecione um cliente para usar Open Finance.")
+        return RedirectResponse("/", status_code=303)
+
+    if not _klavi_is_configured():
+        set_flash(request, "Klavi não configurado (KLAVI_ACCESS_KEY/KLAVI_SECRET_KEY).")
+        return RedirectResponse("/openfinance", status_code=303)
+
+    doc_digits = _digits(doc)
+    email_default = (email or "").strip() or (client.finance_email or client.email or "").strip()
+    phone_default = (getattr(client, "phone", "") or "").strip()
+
+    flow = None
+    reports: list[KlaviReport] = []
+    if doc_digits:
+        flow = session.exec(
+            select(KlaviFlow).where(KlaviFlow.company_id == ctx.company.id, KlaviFlow.subject_doc == doc_digits)
+        ).first()
+        reports = session.exec(
+            select(KlaviReport)
+            .where(KlaviReport.company_id == ctx.company.id, KlaviReport.subject_doc == doc_digits)
+            .order_by(KlaviReport.received_at.desc())
+            .limit(10)
+        ).all()
+
+    return render(
+        "openfinance_klavi.html",
+        request=request,
+        context={
+            "title": "Open Finance (Klavi)",
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "role": ctx.membership.role,
+            "current_client": client,
+            "doc": doc_digits,
+            "email_default": email_default,
+            "phone_default": phone_default,
+            "flow": flow,
+            "reports": reports,
+        },
+    )
+
+
+@app.post("/openfinance/klavi/start")
+@require_login
+async def openfinance_klavi_start(
+    request: Request,
+    doc_input: str = Form(...),
+    email: str = Form(...),
+    phone: str = Form(...),
+    session: Session = Depends(get_session),
+) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+
+    client = _openfinance_require_client(request, session, ctx)
+    if not client:
+        set_flash(request, "Selecione um cliente para usar Open Finance.")
+        return RedirectResponse("/", status_code=303)
+
+    doc_digits = _digits(doc_input)
+    if len(doc_digits) not in (11, 14):
+        set_flash(request, "Documento inválido (use CPF ou CNPJ).")
+        return RedirectResponse("/openfinance/klavi", status_code=303)
+
+    email_v = (email or "").strip()
+    phone_v = (phone or "").strip()
+    if "@" not in email_v:
+        set_flash(request, "E-mail inválido.")
+        return RedirectResponse(f"/openfinance/klavi?doc={doc_digits}", status_code=303)
+    if not phone_v:
+        set_flash(request, "Telefone obrigatório.")
+        return RedirectResponse(f"/openfinance/klavi?doc={doc_digits}", status_code=303)
+
+    base = _public_base_url(request)
+    access_token = await _klavi_get_access_token()
+
+    # Create Link (requires Authorization bearer access token)
+    link_payload: dict[str, Any] = {
+        "email": email_v,
+        "phone": phone_v,
+        "redirecturl": f"{base}/openfinance/klavi/retorno?doc={doc_digits}",
+        "productscallbackurl": {"all": f"{base}/webhooks/klavi/products"},
+        "externalinfo": {"company_id": int(ctx.company.id or 0), "doc": doc_digits, "client_id": int(client.id or 0)},
+    }
+    if len(doc_digits) == 11:
+        link_payload["personaltaxid"] = doc_digits
+    else:
+        link_payload["businesstaxid"] = doc_digits
+
+    link_data = await _klavi_post_json(path="/data/v1/links", bearer=access_token, payload=link_payload)
+
+    link_id = str(link_data.get("linkid") or link_data.get("linkId") or "").strip()
+    link_token = str(link_data.get("linktoken") or link_data.get("linkToken") or "").strip()
+    exp_in = int(link_data.get("expirein") or link_data.get("expireIn") or 1800)
+
+    if not link_id or not link_token:
+        raise HTTPException(status_code=502, detail="Klavi: linkId/linkToken ausente.")
+
+    expires_at = utcnow() + timedelta(seconds=max(60, exp_in))
+
+    flow = session.exec(select(KlaviFlow).where(KlaviFlow.company_id == ctx.company.id, KlaviFlow.subject_doc == doc_digits)).first()
+    if not flow:
+        flow = KlaviFlow(company_id=ctx.company.id, subject_doc=doc_digits, created_at=utcnow())
+    flow.email = email_v
+    flow.phone = phone_v
+    flow.link_id = link_id
+    flow.link_token = link_token
+    flow.link_expires_at = expires_at
+    flow.consent_status = "link_created"
+    flow.last_error = ""
+    flow.updated_at = utcnow()
+    session.add(flow)
+    session.commit()
+
+    # Institutions list uses linkToken
+    institutions = await _klavi_get_json(path="/data/v1/links/institutions", bearer=link_token)
+    if not isinstance(institutions, list):
+        institutions = []
+
+    return render(
+        "openfinance_klavi_institutions.html",
+        request=request,
+        context={
+            "title": "Open Finance (Klavi) — Instituições",
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "role": ctx.membership.role,
+            "current_client": client,
+            "doc": doc_digits,
+            "institutions": institutions,
+        },
+    )
+
+
+@app.post("/openfinance/klavi/consent")
+@require_login
+async def openfinance_klavi_consent(
+    request: Request,
+    doc: str = Form(...),
+    institution_code: str = Form(...),
+    institution_name: str = Form(""),
+    session: Session = Depends(get_session),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+
+    client = _openfinance_require_client(request, session, ctx)
+    if not client:
+        set_flash(request, "Selecione um cliente para usar Open Finance.")
+        return RedirectResponse("/", status_code=303)
+
+    doc_digits = _digits(doc)
+    flow = session.exec(select(KlaviFlow).where(KlaviFlow.company_id == ctx.company.id, KlaviFlow.subject_doc == doc_digits)).first()
+    if not flow or not flow.link_token:
+        set_flash(request, "Fluxo Klavi não iniciado. Refaça o passo 1.")
+        return RedirectResponse(f"/openfinance/klavi?doc={doc_digits}", status_code=303)
+
+    if utcnow() > (flow.link_expires_at or utcnow()):
+        set_flash(request, "LinkToken expirou. Refaça o passo 1.")
+        return RedirectResponse(f"/openfinance/klavi?doc={doc_digits}", status_code=303)
+
+    base = _public_base_url(request)
+    consent_payload: dict[str, Any] = {
+        "externaltrackid": f"mc:{int(ctx.company.id or 0)}:{doc_digits}:{int(utcnow().timestamp())}",
+        "institutioncode": str(institution_code or "").strip(),
+        "redirecturl": f"{base}/openfinance/klavi/retorno?doc={doc_digits}",
+        "phone": flow.phone,
+        "email": flow.email,
+    }
+    if len(doc_digits) == 11:
+        consent_payload["personaltaxid"] = doc_digits
+    else:
+        consent_payload["businesstaxid"] = doc_digits
+
+    consent_data = await _klavi_post_json(path="/data/v1/consents", bearer=flow.link_token, payload=consent_payload)
+
+    consent_id = str(consent_data.get("consentid") or consent_data.get("consentId") or "").strip()
+    consent_redirect_url = str(consent_data.get("consentredirecturl") or consent_data.get("consentRedirectUrl") or "").strip()
+
+    if not consent_id or not consent_redirect_url:
+        raise HTTPException(status_code=502, detail="Klavi: consentId/consentRedirectUrl ausente.")
+
+    flow.institution_code = str(institution_code or "").strip()
+    flow.institution_name = (institution_name or "").strip()
+    flow.consent_id = consent_id
+    flow.consent_status = "consent_created"
+    flow.updated_at = utcnow()
+    session.add(flow)
+    session.commit()
+
+    return RedirectResponse(consent_redirect_url, status_code=302)
+
+
+@app.get("/openfinance/klavi/retorno", response_class=HTMLResponse)
+async def openfinance_klavi_return(
+    request: Request,
+    doc: str = "",
+    error: str = "",
+    error_description: str = "",
+    session: Session = Depends(get_session),
+) -> HTMLResponse:
+    # Retorno do LGDP/Instituição (não exige login; pode ser usado pelo titular)
+    doc_digits = _digits(doc)
+    message = "Se a autorização foi concluída, solicite o relatório de contratos (Loans)."
+
+    return render(
+        "openfinance_klavi_return.html",
+        request=request,
+        context={
+            "title": "Open Finance (Klavi) — Retorno",
+            "current_user": None,
+            "current_company": None,
+            "role": "",
+            "current_client": None,
+            "doc": doc_digits,
+            "message": message,
+            "error": error_description or error,
+        },
+    )
+
+
+@app.post("/openfinance/klavi/request")
+@require_login
+async def openfinance_klavi_request_report(
+    request: Request,
+    doc: str = Form(...),
+    session: Session = Depends(get_session),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+
+    client = _openfinance_require_client(request, session, ctx)
+    if not client:
+        set_flash(request, "Selecione um cliente para usar Open Finance.")
+        return RedirectResponse("/", status_code=303)
+
+    doc_digits = _digits(doc)
+    flow = session.exec(select(KlaviFlow).where(KlaviFlow.company_id == ctx.company.id, KlaviFlow.subject_doc == doc_digits)).first()
+    if not flow or not flow.consent_id:
+        set_flash(request, "Consentimento não encontrado. Faça a autorização primeiro.")
+        return RedirectResponse(f"/openfinance/klavi?doc={doc_digits}", status_code=303)
+
+    try:
+        req_id = await klavi_request_loans_report(doc_digits=doc_digits, flow=flow)
+        flow.last_request_id = req_id
+        flow.consent_status = "report_requested"
+        flow.updated_at = utcnow()
+        session.add(flow)
+        session.commit()
+        set_flash(request, f"Relatório solicitado (requestId={req_id}). Aguarde o webhook.")
+    except Exception as e:
+        flow.last_error = str(e)
+        flow.updated_at = utcnow()
+        session.add(flow)
+        session.commit()
+        set_flash(request, f"Falha ao solicitar relatório: {e}")
+
+    return RedirectResponse(f"/openfinance/klavi?doc={doc_digits}", status_code=303)
+
+
+
 @app.post("/openfinance/sync")
 @require_login
 async def openfinance_sync(request: Request, doc: str = Form(...), session: Session = Depends(get_session)) -> Response:
@@ -21014,6 +21706,169 @@ async def pluggy_webhook(request: Request, k: str = "", session: Session = Depen
                 session.commit()
 
     return JSONResponse({"ok": True})
+
+
+def _klavi_extract_meta(payload: Any) -> tuple[int, str, str]:
+    """Retorna (company_id, doc_digits, link_id) best-effort."""
+    company_id = 0
+    doc_digits = ""
+    link_id = ""
+
+    if isinstance(payload, dict):
+        ext = payload.get("externalinfo") or payload.get("externalInfo") or {}
+        if isinstance(ext, dict):
+            try:
+                company_id = int(ext.get("company_id") or ext.get("companyId") or 0)
+            except Exception:
+                company_id = 0
+            doc_digits = _digits(str(ext.get("doc") or ""))
+        link_id = str(payload.get("linkid") or payload.get("linkId") or "").strip()
+
+        for k in ("personaltaxid", "personalTaxId", "businesstaxid", "businessTaxId", "taxid", "taxId"):
+            if not doc_digits:
+                doc_digits = _digits(str(payload.get(k) or ""))
+
+    if not doc_digits:
+        for d in _deep_iter_dicts(payload):
+            for k in ("personaltaxid", "personalTaxId", "businesstaxid", "businessTaxId", "taxid", "taxId"):
+                if k in d:
+                    doc_digits = _digits(str(d.get(k) or ""))
+                    if doc_digits:
+                        break
+            if doc_digits:
+                break
+
+    return company_id, doc_digits, link_id
+
+
+def _klavi_process_products_webhook(payload: Any) -> None:
+    try:
+        with Session(engine) as session:
+            company_id, doc_digits, link_id = _klavi_extract_meta(payload)
+
+            flow = None
+            if doc_digits:
+                flow = session.exec(select(KlaviFlow).where(KlaviFlow.subject_doc == doc_digits).order_by(KlaviFlow.updated_at.desc())).first()
+                if flow and not company_id:
+                    company_id = int(flow.company_id or 0)
+                if flow and not link_id:
+                    link_id = flow.link_id
+
+            if not company_id:
+                return
+
+            product = "loans"
+            if isinstance(payload, dict):
+                product = str(payload.get("product") or payload.get("productName") or payload.get("report") or "loans")
+
+            request_id = ""
+            if isinstance(payload, dict):
+                request_id = str(payload.get("requestid") or payload.get("requestId") or "").strip()
+
+            rep = KlaviReport(
+                company_id=company_id,
+                subject_doc=doc_digits,
+                product=product,
+                request_id=request_id,
+                received_at=utcnow(),
+                raw_json=json.dumps(payload, ensure_ascii=False, default=str),
+            )
+            session.add(rep)
+
+            # Importar contratos para PluggyLoan (normalizado)
+            if doc_digits:
+                for contract in _klavi_extract_contract_dicts(payload):
+                    loan = _klavi_contract_to_loan(company_id=company_id, subject_doc=doc_digits, link_id=link_id or "unknown", contract=contract, raw_payload=payload)
+                    existing = session.exec(
+                        select(PluggyLoan).where(PluggyLoan.company_id == company_id, PluggyLoan.pluggy_loan_id == loan.pluggy_loan_id)
+                    ).first()
+                    if existing:
+                        for k in (
+                            "subject_doc",
+                            "pluggy_item_id",
+                            "pluggy_loan_id",
+                            "contract_number",
+                            "ipoc_code",
+                            "lender_name",
+                            "product_type",
+                            "amortization_type",
+                            "principal_brl",
+                            "outstanding_brl",
+                            "installment_brl",
+                            "term_total_months",
+                            "term_remaining_months",
+                            "cet_aa",
+                            "interest_aa",
+                            "fetched_at",
+                            "raw_json",
+                        ):
+                            setattr(existing, k, getattr(loan, k))
+                        session.add(existing)
+                    else:
+                        session.add(loan)
+
+            if flow:
+                flow.consent_status = "report_received"
+                flow.updated_at = utcnow()
+                session.add(flow)
+
+            session.commit()
+    except Exception as e:
+        try:
+            print(f"[klavi] products webhook failed: {e}")
+        except Exception:
+            pass
+
+
+def _klavi_process_events_webhook(payload: Any) -> None:
+    try:
+        with Session(engine) as session:
+            company_id, doc_digits, _ = _klavi_extract_meta(payload)
+            if not doc_digits:
+                return
+            flow = session.exec(select(KlaviFlow).where(KlaviFlow.subject_doc == doc_digits).order_by(KlaviFlow.updated_at.desc())).first()
+            if not flow:
+                return
+            if company_id and int(flow.company_id or 0) != int(company_id):
+                # ignora evento de outro tenant
+                return
+
+            if isinstance(payload, dict):
+                status = str(payload.get("status") or payload.get("event") or payload.get("type") or "").strip().lower()
+                if status:
+                    flow.consent_status = status
+                err = payload.get("error") or payload.get("message") or ""
+                if err and "error" in status:
+                    flow.last_error = str(err)
+            flow.updated_at = utcnow()
+            session.add(flow)
+            session.commit()
+    except Exception as e:
+        try:
+            print(f"[klavi] events webhook failed: {e}")
+        except Exception:
+            pass
+
+
+@app.api_route("/webhooks/klavi/products", methods=["POST", "GET", "HEAD"])
+@app.api_route("/api/webhooks/klavi/products", methods=["POST", "GET", "HEAD"])
+async def klavi_products_webhook(request: Request) -> JSONResponse:
+    if request.method != "POST":
+        return JSONResponse({"ok": True})
+    body = await request.json()
+    _klavi_process_products_webhook(body)
+    return JSONResponse({"ok": True})
+
+
+@app.api_route("/webhooks/klavi/events", methods=["POST", "GET", "HEAD"])
+@app.api_route("/api/webhooks/klavi/events", methods=["POST", "GET", "HEAD"])
+async def klavi_events_webhook(request: Request) -> JSONResponse:
+    if request.method != "POST":
+        return JSONResponse({"ok": True})
+    body = await request.json()
+    _klavi_process_events_webhook(body)
+    return JSONResponse({"ok": True})
+
 
 
 @app.on_event("startup")
