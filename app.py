@@ -2225,7 +2225,7 @@ FEATURE_KEYS.setdefault(
     "openfinance",
     {"title": "Open Finance", "desc": "Contratos/Empréstimos (Pluggy).", "href": "/openfinance"},
 )
-FEATURE_ALLOWED_ROLES.setdefault("openfinance", {"admin", "equipe", "cliente"})
+FEATURE_VISIBLE_ROLES.setdefault("openfinance", {"admin", "equipe", "cliente"})
 for _r in ("admin", "equipe", "cliente"):
     ROLE_DEFAULT_FEATURES.setdefault(_r, set()).add("openfinance")
 
