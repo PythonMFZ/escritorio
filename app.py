@@ -2687,8 +2687,10 @@ async def klavi_request_loans_report(*, doc_digits: str, flow: KlaviFlow) -> str
     }
 
     if callback_url:
-        base_payload["productsCallbackUrl"] = {"global": callback_url}
-        base_payload["productscallbackurl"] = {"global": callback_url}
+        # Klavi doc examples for product callback use key "all" (send all selected reports to this endpoint).
+        # See: /connect/institutional-level-report
+        base_payload["productsCallbackUrl"] = {"all": callback_url}
+        base_payload["productscallbackurl"] = {"all": callback_url}
 
     # Prefer API Reference v1 path; fallback to legacy paths.
     if len(doc_digits) == 11:
@@ -2716,6 +2718,24 @@ async def klavi_request_loans_report(*, doc_digits: str, flow: KlaviFlow) -> str
             if e.response is not None and e.response.status_code == 404:
                 last_404 = e
                 continue
+
+            # Klavi uses HTTP 416 for business processing errors, with `statusCode` in the JSON body.
+            # See: /connect/open-finance-codes-and-errors
+            if e.response is not None and e.response.status_code == 416:
+                try:
+                    err_payload = e.response.json()
+                except Exception:
+                    err_payload = {"message": (e.response.text or "").strip()}
+                status_code = err_payload.get("statusCode") or err_payload.get("statuscode")
+                message = err_payload.get("message") or err_payload.get("error") or str(err_payload)
+
+                # Common fallback: if product list is not accepted, retry requesting all allowed products.
+                if status_code in {4002, 4005} and base_payload.get("products") != ["all"]:
+                    base_payload["products"] = ["all"]
+                    continue
+
+                raise RuntimeError(f"Klavi: erro de negócio (HTTP 416). statusCode={status_code}. {message}") from e
+
             raise
 
     if data is None:
