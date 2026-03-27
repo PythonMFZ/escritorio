@@ -2663,23 +2663,64 @@ def _klavi_contract_to_loan(*, company_id: int, subject_doc: str, link_id: str, 
 
 
 async def klavi_request_loans_report(*, doc_digits: str, flow: KlaviFlow) -> str:
-    """Dispara request de relatório 'pf loans' (ou business) e retorna requestId."""
+    """Dispara request de relatório 'loans' (PF/PJ) e retorna requestId."""
     access_token = await _klavi_get_access_token()
-    base_payload = {
+
+    # Klavi endpoints variam entre camelCase e lowercase em diferentes versões da API.
+    callback_url = f"{PUBLIC_BASE_URL}/webhooks/klavi/products" if PUBLIC_BASE_URL else ""
+
+    base_payload: dict[str, Any] = {
+        # camelCase
         "taxId": doc_digits,
         "institutionId": flow.institution_code,
         "linkId": flow.link_id,
         "consentId": [flow.consent_id] if flow.consent_id else [],
+        # lowercase (compat)
+        "taxid": doc_digits,
+        "institutioncode": flow.institution_code,
+        "linkid": flow.link_id,
+        "consentids": [flow.consent_id] if flow.consent_id else [],
+        # additional aliases seen in docs
+        "institutionCode": flow.institution_code,
+        "consentIds": [flow.consent_id] if flow.consent_id else [],
         "products": ["loans"],
-        "productsCallbackUrl": {"global": f"{PUBLIC_BASE_URL}/webhooks/klavi/products"} if PUBLIC_BASE_URL else {},
     }
 
-    if len(doc_digits) == 11:
-        path = "/data/personal/institution-data"
-    else:
-        path = "/data/business/institution-data"
+    if callback_url:
+        base_payload["productsCallbackUrl"] = {"global": callback_url}
+        base_payload["productscallbackurl"] = {"global": callback_url}
 
-    data = await _klavi_post_json(path=path, bearer=access_token, payload=base_payload)
+    # Prefer API Reference v1 path; fallback to legacy paths.
+    if len(doc_digits) == 11:
+        candidate_paths = (
+            "/data/v1/personal/institution-data",
+            "/data/v1/personal/institution_data",
+            "/data/personal/institution-data",
+            "/data/personal/institution_data",
+        )
+    else:
+        candidate_paths = (
+            "/data/v1/business/institution-data",
+            "/data/v1/business/institution_data",
+            "/data/business/institution-data",
+            "/data/business/institution_data",
+        )
+
+    data: dict[str, Any] | None = None
+    last_404: Exception | None = None
+    for path in candidate_paths:
+        try:
+            data = await _klavi_post_json(path=path, bearer=access_token, payload=base_payload)
+            break
+        except httpx.HTTPStatusError as e:
+            if e.response is not None and e.response.status_code == 404:
+                last_404 = e
+                continue
+            raise
+
+    if data is None:
+        raise last_404 or RuntimeError("Klavi: endpoint de report não encontrado")
+
     request_id = str(data.get("requestId") or data.get("requestid") or "").strip()
     if not request_id:
         request_id = secrets.token_hex(8)
