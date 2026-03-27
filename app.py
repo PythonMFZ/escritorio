@@ -21231,10 +21231,6 @@ async def openfinance_klavi_start(
     if "@" not in email_v:
         set_flash(request, "E-mail inválido.")
         return RedirectResponse(f"/openfinance/klavi?doc={doc_digits}", status_code=303)
-    if not phone_v:
-        set_flash(request, "Telefone obrigatório.")
-        return RedirectResponse(f"/openfinance/klavi?doc={doc_digits}", status_code=303)
-
     base = _public_base_url(request)
     access_token = await _klavi_get_access_token()
 
@@ -21258,6 +21254,17 @@ async def openfinance_klavi_start(
         link_payload["personaltaxid"] = doc_digits
     else:
         link_payload["businesstaxid"] = doc_digits
+
+
+    # Klavi compatibility: some endpoints validate camelCase fields.
+    link_payload.setdefault("redirectUrl", link_payload.get("redirecturl"))
+    link_payload.setdefault("redirectURL", link_payload.get("redirecturl"))
+    link_payload.setdefault("productsCallbackUrl", link_payload.get("productscallbackurl"))
+    link_payload.setdefault("externalInfo", link_payload.get("externalinfo"))
+    if "personaltaxid" in link_payload:
+        link_payload.setdefault("personalTaxId", link_payload["personaltaxid"])
+    if "businesstaxid" in link_payload:
+        link_payload.setdefault("businessTaxId", link_payload["businesstaxid"])
 
     try:
         link_data = await _klavi_post_json(path="/data/v1/links", bearer=access_token, payload=link_payload)
@@ -21363,6 +21370,19 @@ async def openfinance_klavi_consent(
         consent_payload["personaltaxid"] = doc_digits
     else:
         consent_payload["businesstaxid"] = doc_digits
+
+
+    # Klavi compatibility: some endpoints validate camelCase fields.
+    consent_payload.setdefault("externalTrackId", consent_payload.get("externaltrackid"))
+    consent_payload.setdefault("institutionCode", consent_payload.get("institutioncode"))
+    consent_payload.setdefault("validityPeriod", consent_payload.get("validityperiod"))
+    consent_payload.setdefault("redirectUrl", consent_payload.get("redirecturl"))
+    consent_payload.setdefault("redirectURL", consent_payload.get("redirecturl"))
+    if "personaltaxid" in consent_payload:
+        consent_payload.setdefault("personalTaxId", consent_payload["personaltaxid"])
+    if "businesstaxid" in consent_payload:
+        consent_payload.setdefault("businessTaxId", consent_payload["businesstaxid"])
+
 
     try:
         consent_data = await _klavi_post_json(path="/data/v1/consents", bearer=flow.link_token, payload=consent_payload)
