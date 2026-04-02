@@ -3241,7 +3241,7 @@ TEMPLATES: dict[str, str] = {
         {% for section in nav_sections or [] %}
           <div class="side-section">
             <div class="side-title">{{ section.title }}</div>
-            {% for item in section.items %}
+            {% for item in section["items"] %}
               <a class="side-link {% if current_path == item.href %}active{% endif %}" href="{{ item.href }}">
                 <div>
                   <div class="fw-semibold" style="font-size:.95rem;">{{ item.title }}</div>
