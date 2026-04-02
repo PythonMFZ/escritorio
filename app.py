@@ -659,6 +659,63 @@ class ClientSnapshot(SQLModel, table=True):
     created_at: datetime = Field(default_factory=utcnow)
 
 
+
+
+class ClientBusinessProfile(SQLModel, table=True):
+    """
+    Perfil empresarial complementar do cliente.
+
+    Mantido em tabela separada para ampliar a coleta de dados sem quebrar a
+    tabela Client já usada por outros módulos/integradores.
+    """
+    __table_args__ = (UniqueConstraint("company_id", "client_id", name="uq_client_business_profile"),)
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+
+    company_id: int = Field(index=True, foreign_key="company.id")
+    client_id: int = Field(index=True, foreign_key="client.id")
+
+    segment: str = ""
+    subsegment: str = ""
+    cnae: str = ""
+    tax_regime: str = ""
+    company_size: str = ""
+    founded_year: int = 0
+    business_model: str = ""
+    sales_channel: str = ""
+    main_bank: str = ""
+    banking_relationships_count: int = 0
+
+    annual_revenue_brl: float = 0.0
+    monthly_payroll_brl: float = 0.0
+    monthly_fixed_cost_brl: float = 0.0
+    average_ticket_brl: float = 0.0
+    delinquency_brl: float = 0.0
+    inventory_value_brl: float = 0.0
+    receivables_value_brl: float = 0.0
+    collateral_real_estate_brl: float = 0.0
+    collateral_vehicle_brl: float = 0.0
+    collateral_other_brl: float = 0.0
+    desired_credit_amount_brl: float = 0.0
+
+    has_dre: bool = False
+    has_cash_flow: bool = False
+    has_budget: bool = False
+    has_erp: bool = False
+    has_crm: bool = False
+    has_financial_team: bool = False
+    has_accounting_integration: bool = False
+
+    current_goal: str = ""
+    urgency_level: str = ""
+    pain_points: str = ""
+    products_interest_json: str = Field(default="[]")
+    notes: str = ""
+
+    created_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime = Field(default_factory=utcnow)
+
+
 PROFILE_SURVEY_V1 = [
     {"id": "dre_mensal", "section": "Processos", "q": "Você fecha DRE mensalmente?", "type": "bool", "w": 10},
     {"id": "fluxo_90d", "section": "Processos", "q": "Você tem fluxo de caixa projetado (90 dias)?", "type": "bool",
@@ -729,6 +786,216 @@ def score_total(process_score: float, financial_score: float, nps_score: int) ->
     nps01 = max(0, min(10, int(nps_score))) / 10.0  # 0..1
     nps100 = nps01 * 100.0
     return round(_clamp_0_100(0.5 * float(process_score) + 0.4 * float(financial_score) + 0.1 * float(nps100)), 2)
+
+
+
+
+def _load_products_interest(raw: Any) -> list[str]:
+    if raw is None:
+        return []
+    if isinstance(raw, (list, tuple)):
+        vals = [str(x).strip() for x in raw if str(x).strip()]
+        return list(dict.fromkeys(vals))
+    s = str(raw).strip()
+    if not s:
+        return []
+    try:
+        obj = json.loads(s)
+        if isinstance(obj, list):
+            vals = [str(x).strip() for x in obj if str(x).strip()]
+            return list(dict.fromkeys(vals))
+    except Exception:
+        pass
+    vals = [x.strip() for x in s.split(",") if x.strip()]
+    return list(dict.fromkeys(vals))
+
+
+def _safe_float(v: Any) -> float:
+    try:
+        return float(v or 0.0)
+    except Exception:
+        return 0.0
+
+
+def _safe_int(v: Any) -> int:
+    try:
+        return int(v or 0)
+    except Exception:
+        return 0
+
+
+def _bool_score(*values: bool) -> float:
+    if not values:
+        return 0.0
+    return 100.0 * (sum(1 for x in values if bool(x)) / len(values))
+
+
+def score_offer_engine(
+        *,
+        client: Client,
+        profile: Optional[ClientBusinessProfile],
+        latest_snapshot: Optional[ClientSnapshot],
+        pluggy_loans_count: int = 0,
+        pluggy_outstanding_brl: float = 0.0,
+) -> dict[str, Any]:
+    profile = profile or ClientBusinessProfile(company_id=client.company_id, client_id=client.id)
+    snap = latest_snapshot
+
+    revenue_monthly = max(
+        _safe_float(client.revenue_monthly_brl),
+        (_safe_float(profile.annual_revenue_brl) / 12.0) if _safe_float(profile.annual_revenue_brl) > 0 else 0.0,
+        _safe_float(getattr(snap, "revenue_monthly_brl", 0.0)),
+        1.0,
+    )
+    debt_total = max(
+        _safe_float(client.debt_total_brl),
+        _safe_float(getattr(snap, "debt_total_brl", 0.0)),
+        _safe_float(pluggy_outstanding_brl),
+        0.0,
+    )
+    cash_balance = max(
+        _safe_float(client.cash_balance_brl),
+        _safe_float(getattr(snap, "cash_balance_brl", 0.0)),
+        0.0,
+    )
+
+    data_points = [
+        bool(client.name.strip()),
+        bool(_digits_only(client.cnpj)),
+        bool(client.email.strip()),
+        bool(client.phone.strip()),
+        bool(profile.segment.strip()),
+        bool(profile.tax_regime.strip()),
+        bool(profile.current_goal.strip()),
+        revenue_monthly > 1.0,
+        debt_total > 0.0,
+        bool(profile.pain_points.strip()),
+    ]
+    score_data = round(_bool_score(*data_points), 2)
+
+    score_structure = round(_bool_score(
+        profile.has_dre,
+        profile.has_cash_flow,
+        profile.has_budget,
+        profile.has_erp,
+        profile.has_crm,
+        profile.has_financial_team,
+        profile.has_accounting_integration,
+    ), 2)
+
+    leverage_ratio = debt_total / max(revenue_monthly, 1.0)
+    cash_ratio = cash_balance / max(revenue_monthly, 1.0)
+    delinquency_ratio = _safe_float(profile.delinquency_brl) / max(revenue_monthly, 1.0)
+
+    finance = (
+        (100.0 / (1.0 + leverage_ratio)) * 0.55
+        + min(cash_ratio, 1.0) * 100.0 * 0.30
+        + (100.0 / (1.0 + (delinquency_ratio * 2.0))) * 0.15
+    )
+    score_financial = round(_clamp_0_100(finance), 2)
+
+    collateral_total = (
+        _safe_float(profile.collateral_real_estate_brl)
+        + _safe_float(profile.collateral_vehicle_brl)
+        + _safe_float(profile.collateral_other_brl)
+    )
+    score_credit = round(_clamp_0_100(
+        score_financial * 0.40
+        + score_data * 0.10
+        + min(collateral_total / max(revenue_monthly, 1.0), 2.0) * 25.0
+        + min(_safe_float(profile.desired_credit_amount_brl) / max(revenue_monthly, 1.0), 2.0) * 10.0
+        + min(float(pluggy_loans_count), 5.0) * 4.0
+    ), 2)
+
+    score_consulting = round(_clamp_0_100(
+        (100.0 - score_structure) * 0.55
+        + min(leverage_ratio, 3.0) * 15.0
+        + (20.0 if bool(profile.pain_points.strip()) else 0.0)
+        + (10.0 if bool(profile.current_goal.strip()) else 0.0)
+    ), 2)
+
+    score_tools = round(_clamp_0_100(
+        (100.0 - score_structure) * 0.40
+        + (25.0 if not profile.has_cash_flow else 0.0)
+        + (20.0 if not profile.has_dre else 0.0)
+        + (15.0 if not profile.has_erp else 0.0)
+        + (10.0 if not profile.has_crm else 0.0)
+    ), 2)
+
+    credit_recos: list[str] = []
+    consulting_recos: list[str] = []
+    tools_recos: list[str] = []
+
+    interests = set(_load_products_interest(profile.products_interest_json))
+    goal = (profile.current_goal or "").lower()
+
+    if score_credit >= 60:
+        if collateral_total > 0:
+            credit_recos.append("Crédito com garantia / home equity")
+        if leverage_ratio >= 0.8 or pluggy_loans_count > 0:
+            credit_recos.append("Reestruturação ou portabilidade de dívidas")
+        if _safe_float(profile.desired_credit_amount_brl) > 0 or "capital de giro" in goal:
+            credit_recos.append("Capital de giro")
+    if "recebíveis" in goal or "antecip" in goal:
+        credit_recos.append("Antecipação de recebíveis")
+    if "credito" in interests:
+        credit_recos.append("Crédito corporativo estruturado")
+
+    if score_consulting >= 55:
+        if not profile.has_cash_flow or not profile.has_dre:
+            consulting_recos.append("Consultoria financeira e implantação de controles")
+        if leverage_ratio >= 1.0:
+            consulting_recos.append("Consultoria de reestruturação / turnaround")
+        if bool(profile.pain_points.strip()):
+            consulting_recos.append("Diagnóstico estratégico-financeiro")
+
+    if score_tools >= 50:
+        if not profile.has_cash_flow:
+            tools_recos.append("Ferramenta de fluxo de caixa")
+        if not profile.has_dre:
+            tools_recos.append("Ferramenta de DRE gerencial")
+        if not profile.has_erp:
+            tools_recos.append("Implantação de rotina financeira digital")
+
+    if not credit_recos:
+        credit_recos.append("Completar dados de crédito para destravar recomendações")
+    if not consulting_recos:
+        consulting_recos.append("Sem consultoria prioritária no momento")
+    if not tools_recos:
+        tools_recos.append("Sem ferramenta prioritária no momento")
+
+    return {
+        "score_data": score_data,
+        "score_structure": score_structure,
+        "score_financial": score_financial,
+        "score_credit": score_credit,
+        "score_consulting": score_consulting,
+        "score_tools": score_tools,
+        "credit_recommendations": list(dict.fromkeys(credit_recos)),
+        "consulting_recommendations": list(dict.fromkeys(consulting_recos)),
+        "tools_recommendations": list(dict.fromkeys(tools_recos)),
+        "summary": (
+            f"Dados {score_data:.0f}/100 · Estrutura {score_structure:.0f}/100 · "
+            f"Crédito {score_credit:.0f}/100 · Consultoria {score_consulting:.0f}/100."
+        ),
+    }
+
+
+def get_or_create_client_business_profile(session: Session, *, company_id: int, client_id: int) -> ClientBusinessProfile:
+    profile = session.exec(
+        select(ClientBusinessProfile).where(
+            (ClientBusinessProfile.company_id == int(company_id))
+            & (ClientBusinessProfile.client_id == int(client_id))
+        )
+    ).first()
+    if profile:
+        return profile
+
+    profile = ClientBusinessProfile(company_id=int(company_id), client_id=int(client_id))
+    session.add(profile)
+    session.commit()
+    session.refresh(profile)
+    return profile
 
 
 # ----------------------------
@@ -1292,6 +1559,21 @@ def ensure_credit_consent_table() -> bool:
         return False
 
 
+
+
+
+
+def ensure_client_business_profile_table() -> bool:
+    """Garante que a tabela ClientBusinessProfile existe (ambientes sem Alembic)."""
+    try:
+        ClientBusinessProfile.__table__.create(engine, checkfirst=True)
+        return True
+    except Exception as e:
+        try:
+            print(f"[client-business-profile] failed to ensure table: {e}")
+        except Exception:
+            pass
+        return False
 
 
 def ensure_consulta_scr_consent_table() -> bool:
@@ -3478,6 +3760,62 @@ TEMPLATES: dict[str, str] = {
     </div>
   </div>
 
+  {% if current_client and offer_engine %}
+  <div class="col-12">
+    <div class="card p-4">
+      <div class="d-flex flex-wrap justify-content-between align-items-start gap-3 mb-3">
+        <div>
+          <h5 class="mb-1">Motor de ofertas</h5>
+          <div class="muted">Leitura inicial para crédito, consultoria e ferramentas com base nos dados já coletados.</div>
+        </div>
+        <div class="d-flex gap-2 flex-wrap">
+          <span class="badge text-bg-light border">Dados {{ offer_engine.score_data | round(0) }}/100</span>
+          <span class="badge text-bg-light border">Estrutura {{ offer_engine.score_structure | round(0) }}/100</span>
+          <span class="badge text-bg-light border">Financeiro {{ offer_engine.score_financial | round(0) }}/100</span>
+        </div>
+      </div>
+
+      <div class="row g-3">
+        <div class="col-lg-4">
+          <div class="border rounded-4 p-3 h-100">
+            <div class="d-flex justify-content-between mb-2"><span class="fw-semibold">Crédito</span><span>{{ offer_engine.score_credit | round(0) }}/100</span></div>
+            <ul class="mb-0">
+              {% for item in offer_engine.credit_recommendations %}
+                <li>{{ item }}</li>
+              {% endfor %}
+            </ul>
+          </div>
+        </div>
+        <div class="col-lg-4">
+          <div class="border rounded-4 p-3 h-100">
+            <div class="d-flex justify-content-between mb-2"><span class="fw-semibold">Consultoria</span><span>{{ offer_engine.score_consulting | round(0) }}/100</span></div>
+            <ul class="mb-0">
+              {% for item in offer_engine.consulting_recommendations %}
+                <li>{{ item }}</li>
+              {% endfor %}
+            </ul>
+          </div>
+        </div>
+        <div class="col-lg-4">
+          <div class="border rounded-4 p-3 h-100">
+            <div class="d-flex justify-content-between mb-2"><span class="fw-semibold">Ferramentas</span><span>{{ offer_engine.score_tools | round(0) }}/100</span></div>
+            <ul class="mb-0">
+              {% for item in offer_engine.tools_recommendations %}
+                <li>{{ item }}</li>
+              {% endfor %}
+            </ul>
+          </div>
+        </div>
+      </div>
+
+      <div class="mt-3 d-flex gap-2 flex-wrap">
+        <a class="btn btn-primary btn-sm" href="/empresa">Completar cadastro empresarial</a>
+        <a class="btn btn-outline-secondary btn-sm" href="/perfil/avaliacao/nova">Nova avaliação</a>
+      </div>
+    </div>
+  </div>
+  {% endif %}
+
   {% if tabs %}
     {% for t in tabs %}
       <div class="col-12">
@@ -3773,7 +4111,7 @@ TEMPLATES: dict[str, str] = {
   <div class="d-flex justify-content-between align-items-start">
     <div>
       <h4 class="mb-1">Empresa do Cliente</h4>
-      <div class="muted">CNPJ, endereço, e-mails, telefone etc.</div>
+      <div class="muted">Dados cadastrais, operacionais e comerciais para qualificação de ofertas.</div>
     </div>
     <a class="btn btn-outline-secondary" href="/">Voltar</a>
   </div>
@@ -3786,6 +4124,7 @@ TEMPLATES: dict[str, str] = {
     </div>
   {% else %}
     <form method="post" action="/empresa">
+      <h5 class="mb-3">Cadastro base</h5>
       <div class="row g-3">
         <div class="col-md-8">
           <label class="form-label">Razão Social</label>
@@ -3828,8 +4167,170 @@ TEMPLATES: dict[str, str] = {
         </div>
 
         <div class="col-12">
-          <label class="form-label">Observações</label>
+          <label class="form-label">Observações gerais</label>
           <textarea class="form-control" name="notes" rows="3">{{ current_client.notes }}</textarea>
+        </div>
+      </div>
+
+      <hr class="my-4"/>
+
+      <h5 class="mb-3">Perfil empresarial ampliado</h5>
+      <div class="row g-3">
+        <div class="col-md-4">
+          <label class="form-label">Segmento</label>
+          <input class="form-control" name="segment" value="{{ business_profile.segment if business_profile else '' }}" />
+        </div>
+        <div class="col-md-4">
+          <label class="form-label">Subsegmento</label>
+          <input class="form-control" name="subsegment" value="{{ business_profile.subsegment if business_profile else '' }}" />
+        </div>
+        <div class="col-md-4">
+          <label class="form-label">CNAE principal</label>
+          <input class="form-control" name="cnae" value="{{ business_profile.cnae if business_profile else '' }}" />
+        </div>
+
+        <div class="col-md-4">
+          <label class="form-label">Regime tributário</label>
+          <input class="form-control" name="tax_regime" value="{{ business_profile.tax_regime if business_profile else '' }}" />
+        </div>
+        <div class="col-md-4">
+          <label class="form-label">Porte da empresa</label>
+          <input class="form-control" name="company_size" value="{{ business_profile.company_size if business_profile else '' }}" placeholder="ME, EPP, média..." />
+        </div>
+        <div class="col-md-4">
+          <label class="form-label">Ano de fundação</label>
+          <input class="form-control" name="founded_year" type="number" min="1900" max="2100" value="{{ business_profile.founded_year if business_profile else 0 }}" />
+        </div>
+
+        <div class="col-md-4">
+          <label class="form-label">Modelo de negócio</label>
+          <input class="form-control" name="business_model" value="{{ business_profile.business_model if business_profile else '' }}" placeholder="B2B, B2C, recorrente..." />
+        </div>
+        <div class="col-md-4">
+          <label class="form-label">Canal principal de vendas</label>
+          <input class="form-control" name="sales_channel" value="{{ business_profile.sales_channel if business_profile else '' }}" />
+        </div>
+        <div class="col-md-4">
+          <label class="form-label">Banco principal</label>
+          <input class="form-control" name="main_bank" value="{{ business_profile.main_bank if business_profile else '' }}" />
+        </div>
+
+        <div class="col-md-4">
+          <label class="form-label">Qtd. de relacionamentos bancários</label>
+          <input class="form-control" name="banking_relationships_count" type="number" min="0" value="{{ business_profile.banking_relationships_count if business_profile else 0 }}" />
+        </div>
+        <div class="col-md-4">
+          <label class="form-label">Receita anual (R$)</label>
+          <input class="form-control" name="annual_revenue_brl" type="number" step="0.01" min="0" value="{{ business_profile.annual_revenue_brl if business_profile else 0 }}" />
+        </div>
+        <div class="col-md-4">
+          <label class="form-label">Folha mensal (R$)</label>
+          <input class="form-control" name="monthly_payroll_brl" type="number" step="0.01" min="0" value="{{ business_profile.monthly_payroll_brl if business_profile else 0 }}" />
+        </div>
+
+        <div class="col-md-4">
+          <label class="form-label">Custos fixos mensais (R$)</label>
+          <input class="form-control" name="monthly_fixed_cost_brl" type="number" step="0.01" min="0" value="{{ business_profile.monthly_fixed_cost_brl if business_profile else 0 }}" />
+        </div>
+        <div class="col-md-4">
+          <label class="form-label">Ticket médio (R$)</label>
+          <input class="form-control" name="average_ticket_brl" type="number" step="0.01" min="0" value="{{ business_profile.average_ticket_brl if business_profile else 0 }}" />
+        </div>
+        <div class="col-md-4">
+          <label class="form-label">Inadimplência estimada (R$)</label>
+          <input class="form-control" name="delinquency_brl" type="number" step="0.01" min="0" value="{{ business_profile.delinquency_brl if business_profile else 0 }}" />
+        </div>
+
+        <div class="col-md-4">
+          <label class="form-label">Estoque (R$)</label>
+          <input class="form-control" name="inventory_value_brl" type="number" step="0.01" min="0" value="{{ business_profile.inventory_value_brl if business_profile else 0 }}" />
+        </div>
+        <div class="col-md-4">
+          <label class="form-label">Recebíveis (R$)</label>
+          <input class="form-control" name="receivables_value_brl" type="number" step="0.01" min="0" value="{{ business_profile.receivables_value_brl if business_profile else 0 }}" />
+        </div>
+        <div class="col-md-4">
+          <label class="form-label">Crédito desejado (R$)</label>
+          <input class="form-control" name="desired_credit_amount_brl" type="number" step="0.01" min="0" value="{{ business_profile.desired_credit_amount_brl if business_profile else 0 }}" />
+        </div>
+
+        <div class="col-md-4">
+          <label class="form-label">Garantia imobiliária (R$)</label>
+          <input class="form-control" name="collateral_real_estate_brl" type="number" step="0.01" min="0" value="{{ business_profile.collateral_real_estate_brl if business_profile else 0 }}" />
+        </div>
+        <div class="col-md-4">
+          <label class="form-label">Garantia veículos (R$)</label>
+          <input class="form-control" name="collateral_vehicle_brl" type="number" step="0.01" min="0" value="{{ business_profile.collateral_vehicle_brl if business_profile else 0 }}" />
+        </div>
+        <div class="col-md-4">
+          <label class="form-label">Outras garantias (R$)</label>
+          <input class="form-control" name="collateral_other_brl" type="number" step="0.01" min="0" value="{{ business_profile.collateral_other_brl if business_profile else 0 }}" />
+        </div>
+
+        <div class="col-md-6">
+          <label class="form-label">Objetivo atual</label>
+          <input class="form-control" name="current_goal" value="{{ business_profile.current_goal if business_profile else '' }}" placeholder="capital de giro, expansão, reorganização..." />
+        </div>
+        <div class="col-md-6">
+          <label class="form-label">Urgência</label>
+          <select class="form-select" name="urgency_level">
+            {% set urgency = business_profile.urgency_level if business_profile else '' %}
+            <option value="" {% if urgency == '' %}selected{% endif %}>Selecione</option>
+            <option value="baixa" {% if urgency == 'baixa' %}selected{% endif %}>Baixa</option>
+            <option value="media" {% if urgency == 'media' %}selected{% endif %}>Média</option>
+            <option value="alta" {% if urgency == 'alta' %}selected{% endif %}>Alta</option>
+          </select>
+        </div>
+
+        <div class="col-md-12">
+          <label class="form-label">Interesses prioritários</label>
+          {% set interests = business_profile.products_interest_json | default('[]') %}
+          {% set interests_list = interests | from_json if interests else [] %}
+          <div class="row g-2">
+            {% for opt in ["credito","capital_giro","recebiveis","consultoria","fluxo_caixa","dre","open_finance"] %}
+              <div class="col-md-3">
+                <div class="form-check">
+                  <input class="form-check-input" type="checkbox" name="products_interest" value="{{ opt }}" id="pi_{{ opt }}"
+                         {% if opt in interests_list %}checked{% endif %}>
+                  <label class="form-check-label" for="pi_{{ opt }}">{{ opt.replace("_"," ")|title }}</label>
+                </div>
+              </div>
+            {% endfor %}
+          </div>
+        </div>
+
+        <div class="col-md-12">
+          <label class="form-label">Dores / gargalos principais</label>
+          <textarea class="form-control" name="pain_points" rows="3">{{ business_profile.pain_points if business_profile else '' }}</textarea>
+        </div>
+
+        <div class="col-md-12">
+          <label class="form-label">Observações comerciais</label>
+          <textarea class="form-control" name="bp_notes" rows="3">{{ business_profile.notes if business_profile else '' }}</textarea>
+        </div>
+
+        <div class="col-12">
+          <div class="fw-semibold mb-2">Maturidade operacional</div>
+          <div class="row g-2">
+            {% set bp = business_profile %}
+            {% for field, label in [
+              ("has_dre","Fecha DRE"),
+              ("has_cash_flow","Tem fluxo de caixa"),
+              ("has_budget","Trabalha com orçamento"),
+              ("has_erp","Usa ERP"),
+              ("has_crm","Usa CRM"),
+              ("has_financial_team","Tem equipe financeira"),
+              ("has_accounting_integration","Contabilidade integrada")
+            ] %}
+              <div class="col-md-3">
+                <div class="form-check">
+                  <input class="form-check-input" type="checkbox" name="{{ field }}" value="1" id="{{ field }}"
+                         {% if bp and bp[field] %}checked{% endif %}>
+                  <label class="form-check-label" for="{{ field }}">{{ label }}</label>
+                </div>
+              </div>
+            {% endfor %}
+          </div>
         </div>
       </div>
 
@@ -3846,26 +4347,41 @@ TEMPLATES: dict[str, str] = {
 {% extends "base.html" %}
 {% block content %}
 <div class="row g-3">
-  <div class="col-lg-5">
+  <div class="col-lg-4">
     <div class="card p-4">
       <h4 class="mb-1">Meu Perfil</h4>
       <div class="muted mb-3">Dados do usuário</div>
       <div><span class="muted">Nome:</span> <b>{{ current_user.name }}</b></div>
       <div><span class="muted">E-mail:</span> <span class="mono">{{ current_user.email }}</span></div>
       <div><span class="muted">Role:</span> <b>{{ role }}</b></div>
+      {% if current_client %}
+        <hr class="my-3"/>
+        <div><span class="muted">Cliente:</span> <b>{{ current_client.name }}</b></div>
+      {% endif %}
     </div>
+
+    {% if current_client and offer_engine %}
+    <div class="card p-4 mt-3">
+      <h5 class="mb-2">Motor de ofertas</h5>
+      <div class="muted mb-3">{{ offer_engine.summary }}</div>
+      <div class="d-flex justify-content-between"><span>Crédito</span><b>{{ offer_engine.score_credit | round(0) }}/100</b></div>
+      <div class="progress mt-1 mb-2"><div class="progress-bar" style="width:{{ offer_engine.score_credit }}%"></div></div>
+      <div class="d-flex justify-content-between"><span>Consultoria</span><b>{{ offer_engine.score_consulting | round(0) }}/100</b></div>
+      <div class="progress mt-1 mb-2"><div class="progress-bar bg-success" style="width:{{ offer_engine.score_consulting }}%"></div></div>
+      <div class="d-flex justify-content-between"><span>Ferramentas</span><b>{{ offer_engine.score_tools | round(0) }}/100</b></div>
+      <div class="progress mt-1"><div class="progress-bar bg-info" style="width:{{ offer_engine.score_tools }}%"></div></div>
+    </div>
+    {% endif %}
   </div>
 
-  <div class="col-lg-7">
+  <div class="col-lg-8">
     <div class="card p-4">
       <h4 class="mb-1">Indicadores do Cliente</h4>
-      <div class="muted mb-3">Faturamento, endividamento, caixa etc.</div>
+      <div class="muted mb-3">Números base para diagnóstico e motor comercial.</div>
 
       {% if not current_client %}
         <div class="alert alert-warning">Nenhum cliente selecionado/vinculado.</div>
       {% else %}
-        <div class="mb-2"><span class="muted">Cliente:</span> <b>{{ current_client.name }}</b></div>
-
         <form method="post" action="/perfil">
           <div class="row g-3">
             <div class="col-md-6">
@@ -3888,14 +4404,63 @@ TEMPLATES: dict[str, str] = {
               <input class="form-control" name="employees_count" type="number" min="0"
                      value="{{ current_client.employees_count }}" />
             </div>
+            <div class="col-md-6">
+              <label class="form-label">Objetivo atual</label>
+              <input class="form-control" name="current_goal" value="{{ business_profile.current_goal if business_profile else '' }}" />
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">Crédito desejado (R$)</label>
+              <input class="form-control" name="desired_credit_amount_brl" type="number" step="0.01" min="0"
+                     value="{{ business_profile.desired_credit_amount_brl if business_profile else 0 }}" />
+            </div>
+            <div class="col-12">
+              <label class="form-label">Dores principais</label>
+              <textarea class="form-control" name="pain_points" rows="3">{{ business_profile.pain_points if business_profile else '' }}</textarea>
+            </div>
           </div>
-          <div class="mt-4">
+          <div class="mt-4 d-flex gap-2">
             <button class="btn btn-primary">Salvar</button>
-            <a class="btn btn-outline-secondary" href="/empresa">Editar dados da empresa</a>
+            <a class="btn btn-outline-secondary" href="/empresa">Completar cadastro empresarial</a>
+            <a class="btn btn-outline-secondary" href="/perfil/avaliacao/nova">Nova avaliação</a>
           </div>
         </form>
       {% endif %}
     </div>
+
+    {% if snapshots %}
+    <div class="card p-4 mt-3">
+      <div class="d-flex justify-content-between align-items-center">
+        <div>
+          <h5 class="mb-1">Histórico de avaliações</h5>
+          <div class="muted">Evolução do cliente no tempo.</div>
+        </div>
+        {% if latest_score is not none %}
+          <div class="text-end">
+            <div class="fw-semibold">Score atual: {{ latest_score | round(2) }}</div>
+            {% if delta is not none %}
+              <div class="muted small">Variação: {{ delta }}</div>
+            {% endif %}
+          </div>
+        {% endif %}
+      </div>
+      <div class="table-responsive mt-3">
+        <table class="table table-sm align-middle">
+          <thead><tr><th>Data</th><th>Processos</th><th>Financeiro</th><th>Total</th><th></th></tr></thead>
+          <tbody>
+            {% for s in snapshots %}
+              <tr>
+                <td>{{ s.created_at.strftime("%d/%m/%Y %H:%M") if s.created_at else "-" }}</td>
+                <td>{{ s.score_process | round(2) }}</td>
+                <td>{{ s.score_financial | round(2) }}</td>
+                <td><b>{{ s.score_total | round(2) }}</b></td>
+                <td><a class="btn btn-outline-secondary btn-sm" href="/perfil/avaliacao/{{ s.id }}">Ver</a></td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+    {% endif %}
   </div>
 </div>
 {% endblock %}
@@ -6080,7 +6645,7 @@ TEMPLATES.update({
   <div class="d-flex justify-content-between align-items-center">
     <div>
       <h4 class="mb-0">Nova Avaliação do Cliente</h4>
-      <div class="muted">“Foto do momento” + score de evolução</div>
+      <div class="muted">“Foto do momento” + score de evolução + intenção comercial</div>
     </div>
     <a class="btn btn-outline-secondary" href="/perfil">Voltar</a>
   </div>
@@ -6093,7 +6658,7 @@ TEMPLATES.update({
     <div class="mb-2"><span class="muted">Cliente:</span> <b>{{ current_client.name }}</b></div>
 
     <form method="post" action="/perfil/avaliacao/nova">
-      <h5 class="mt-3">Números (do momento)</h5>
+      <h5 class="mt-3">Números do momento</h5>
       <div class="row g-3">
         <div class="col-md-6">
           <label class="form-label">Faturamento mensal (R$)</label>
@@ -6116,16 +6681,59 @@ TEMPLATES.update({
           <input class="form-control" name="nps_score" type="number" min="0" max="10" value="0" />
           <div class="form-text">0 = nada provável recomendar / 10 = muito provável.</div>
         </div>
+        <div class="col-md-6">
+          <label class="form-label">Crédito desejado (R$)</label>
+          <input class="form-control" name="desired_credit_amount_brl" type="number" step="0.01" min="0" value="{{ business_profile.desired_credit_amount_brl if business_profile else 0 }}" />
+        </div>
+        <div class="col-md-6">
+          <label class="form-label">Objetivo atual</label>
+          <input class="form-control" name="current_goal" value="{{ business_profile.current_goal if business_profile else '' }}" placeholder="capital de giro, expansão, reorganização..." />
+        </div>
+        <div class="col-md-6">
+          <label class="form-label">Interesses</label>
+          {% set interests = business_profile.products_interest_json | default('[]') %}
+          {% set interests_list = interests | from_json if interests else [] %}
+          <select class="form-select" multiple name="products_interest">
+            {% for opt in ["credito","capital_giro","recebiveis","consultoria","fluxo_caixa","dre","open_finance"] %}
+              <option value="{{ opt }}" {% if opt in interests_list %}selected{% endif %}>{{ opt.replace("_"," ")|title }}</option>
+            {% endfor %}
+          </select>
+        </div>
         <div class="col-12">
-          <label class="form-label">Observações (opcional)</label>
+          <label class="form-label">Observações</label>
           <textarea class="form-control" name="notes" rows="3" placeholder="Contexto, mudanças recentes, dor principal..."></textarea>
+        </div>
+        <div class="col-12">
+          <label class="form-label">Dores / gargalos principais</label>
+          <textarea class="form-control" name="pain_points" rows="3">{{ business_profile.pain_points if business_profile else '' }}</textarea>
         </div>
       </div>
 
       <hr class="my-4"/>
 
-      <h5>Processos (checklist)</h5>
+      <h5>Processos e estrutura</h5>
       <div class="muted mb-2">Marque o que já está implementado hoje.</div>
+
+      <div class="row g-2 mb-3">
+        {% set bp = business_profile %}
+        {% for field, label in [
+          ("has_dre","Fecha DRE"),
+          ("has_cash_flow","Tem fluxo de caixa"),
+          ("has_budget","Trabalha com orçamento"),
+          ("has_erp","Usa ERP"),
+          ("has_crm","Usa CRM"),
+          ("has_financial_team","Tem equipe financeira"),
+          ("has_accounting_integration","Contabilidade integrada")
+        ] %}
+          <div class="col-md-3">
+            <div class="form-check">
+              <input class="form-check-input" type="checkbox" name="{{ field }}" value="1" id="{{ field }}"
+                     {% if bp and bp[field] %}checked{% endif %}>
+              <label class="form-check-label" for="{{ field }}">{{ label }}</label>
+            </div>
+          </div>
+        {% endfor %}
+      </div>
 
       <div class="row g-2">
         {% for q in survey %}
@@ -7269,6 +7877,7 @@ TEMPLATES.update({
 })
 
 templates_env = Environment(loader=DictLoader(TEMPLATES), autoescape=True)
+templates_env.filters["from_json"] = lambda s: json.loads(s or "[]") if (s or "").strip() else []
 
 
 # ----------------------------
@@ -9426,6 +10035,40 @@ async def dashboard(request: Request, session: Session = Depends(get_session)) -
     active_client_id = get_active_client_id(request, session, ctx)
     current_client = get_client_or_none(session, ctx.company.id, active_client_id)
 
+    business_profile = None
+    offer_engine = None
+    if current_client and ensure_client_business_profile_table():
+        business_profile = get_or_create_client_business_profile(
+            session, company_id=ctx.company.id, client_id=current_client.id
+        )
+        latest_snapshot = session.exec(
+            select(ClientSnapshot)
+            .where(ClientSnapshot.company_id == ctx.company.id, ClientSnapshot.client_id == current_client.id)
+            .order_by(ClientSnapshot.created_at.desc())
+        ).first()
+        subject_doc = _digits_only(current_client.cnpj)
+        pluggy_loans_count = 0
+        pluggy_outstanding_brl = 0.0
+        if subject_doc:
+            try:
+                pluggy_loans = session.exec(
+                    select(PluggyLoan).where(
+                        (PluggyLoan.company_id == ctx.company.id)
+                        & (PluggyLoan.subject_doc == subject_doc)
+                    )
+                ).all()
+                pluggy_loans_count = len(pluggy_loans)
+                pluggy_outstanding_brl = sum(float(x.outstanding_brl or 0.0) for x in pluggy_loans)
+            except Exception:
+                pass
+        offer_engine = score_offer_engine(
+            client=current_client,
+            profile=business_profile,
+            latest_snapshot=latest_snapshot,
+            pluggy_loans_count=pluggy_loans_count,
+            pluggy_outstanding_brl=pluggy_outstanding_brl,
+        )
+
     allowed = effective_allowed_features(session, ctx=ctx, current_client=current_client)
 
     def _is_visible(feature_key: str) -> bool:
@@ -9459,6 +10102,8 @@ async def dashboard(request: Request, session: Session = Depends(get_session)) -
             "current_client": current_client,
             "tabs": tabs,
             "standalone": standalone,
+            "business_profile": business_profile,
+            "offer_engine": offer_engine,
         },
     )
 
@@ -10231,6 +10876,11 @@ async def empresa_page(request: Request, session: Session = Depends(get_session)
         return RedirectResponse("/login", status_code=303)
 
     current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
+    business_profile = None
+    if current_client and ensure_client_business_profile_table():
+        business_profile = get_or_create_client_business_profile(
+            session, company_id=ctx.company.id, client_id=current_client.id
+        )
     return render(
         "empresa.html",
         request=request,
@@ -10239,6 +10889,7 @@ async def empresa_page(request: Request, session: Session = Depends(get_session)
             "current_company": ctx.company,
             "role": ctx.membership.role,
             "current_client": current_client,
+            "business_profile": business_profile,
         },
     )
 
@@ -10258,6 +10909,39 @@ async def empresa_save(
         state: str = Form(""),
         zip_code: str = Form(""),
         notes: str = Form(""),
+        segment: str = Form(""),
+        subsegment: str = Form(""),
+        cnae: str = Form(""),
+        tax_regime: str = Form(""),
+        company_size: str = Form(""),
+        founded_year: int = Form(0),
+        business_model: str = Form(""),
+        sales_channel: str = Form(""),
+        main_bank: str = Form(""),
+        banking_relationships_count: int = Form(0),
+        annual_revenue_brl: float = Form(0.0),
+        monthly_payroll_brl: float = Form(0.0),
+        monthly_fixed_cost_brl: float = Form(0.0),
+        average_ticket_brl: float = Form(0.0),
+        delinquency_brl: float = Form(0.0),
+        inventory_value_brl: float = Form(0.0),
+        receivables_value_brl: float = Form(0.0),
+        collateral_real_estate_brl: float = Form(0.0),
+        collateral_vehicle_brl: float = Form(0.0),
+        collateral_other_brl: float = Form(0.0),
+        desired_credit_amount_brl: float = Form(0.0),
+        current_goal: str = Form(""),
+        urgency_level: str = Form(""),
+        pain_points: str = Form(""),
+        products_interest: list[str] = Form([]),
+        bp_notes: str = Form(""),
+        has_dre: Optional[str] = Form(None),
+        has_cash_flow: Optional[str] = Form(None),
+        has_budget: Optional[str] = Form(None),
+        has_erp: Optional[str] = Form(None),
+        has_crm: Optional[str] = Form(None),
+        has_financial_team: Optional[str] = Form(None),
+        has_accounting_integration: Optional[str] = Form(None),
 ) -> Response:
     ctx = get_tenant_context(request, session)
     if not ctx:
@@ -10288,7 +10972,48 @@ async def empresa_save(
     session.add(current_client)
     session.commit()
 
-    set_flash(request, "Dados da empresa atualizados.")
+    if ensure_client_business_profile_table():
+        bp = get_or_create_client_business_profile(
+            session, company_id=ctx.company.id, client_id=current_client.id
+        )
+        bp.segment = segment.strip()
+        bp.subsegment = subsegment.strip()
+        bp.cnae = cnae.strip()
+        bp.tax_regime = tax_regime.strip()
+        bp.company_size = company_size.strip()
+        bp.founded_year = max(0, int(founded_year or 0))
+        bp.business_model = business_model.strip()
+        bp.sales_channel = sales_channel.strip()
+        bp.main_bank = main_bank.strip()
+        bp.banking_relationships_count = max(0, int(banking_relationships_count or 0))
+        bp.annual_revenue_brl = max(0.0, float(annual_revenue_brl or 0.0))
+        bp.monthly_payroll_brl = max(0.0, float(monthly_payroll_brl or 0.0))
+        bp.monthly_fixed_cost_brl = max(0.0, float(monthly_fixed_cost_brl or 0.0))
+        bp.average_ticket_brl = max(0.0, float(average_ticket_brl or 0.0))
+        bp.delinquency_brl = max(0.0, float(delinquency_brl or 0.0))
+        bp.inventory_value_brl = max(0.0, float(inventory_value_brl or 0.0))
+        bp.receivables_value_brl = max(0.0, float(receivables_value_brl or 0.0))
+        bp.collateral_real_estate_brl = max(0.0, float(collateral_real_estate_brl or 0.0))
+        bp.collateral_vehicle_brl = max(0.0, float(collateral_vehicle_brl or 0.0))
+        bp.collateral_other_brl = max(0.0, float(collateral_other_brl or 0.0))
+        bp.desired_credit_amount_brl = max(0.0, float(desired_credit_amount_brl or 0.0))
+        bp.current_goal = current_goal.strip()
+        bp.urgency_level = urgency_level.strip()
+        bp.pain_points = pain_points.strip()
+        bp.products_interest_json = json.dumps(_load_products_interest(products_interest), ensure_ascii=False)
+        bp.notes = bp_notes.strip()
+        bp.has_dre = _parse_bool(has_dre)
+        bp.has_cash_flow = _parse_bool(has_cash_flow)
+        bp.has_budget = _parse_bool(has_budget)
+        bp.has_erp = _parse_bool(has_erp)
+        bp.has_crm = _parse_bool(has_crm)
+        bp.has_financial_team = _parse_bool(has_financial_team)
+        bp.has_accounting_integration = _parse_bool(has_accounting_integration)
+        bp.updated_at = utcnow()
+        session.add(bp)
+        session.commit()
+
+    set_flash(request, "Dados da empresa e perfil comercial atualizados.")
     return RedirectResponse("/empresa", status_code=303)
 
 
@@ -10302,11 +11027,17 @@ async def perfil_page(request: Request, session: Session = Depends(get_session))
 
     current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
 
+    business_profile = None
+    offer_engine = None
     snapshots: list[ClientSnapshot] = []
     latest_score: Optional[float] = None
     delta: Optional[float] = None
 
     if current_client and ensure_can_access_client(ctx, current_client.id):
+        if ensure_client_business_profile_table():
+            business_profile = get_or_create_client_business_profile(
+                session, company_id=ctx.company.id, client_id=current_client.id
+            )
         snaps = session.exec(
             select(ClientSnapshot)
             .where(ClientSnapshot.company_id == ctx.company.id, ClientSnapshot.client_id == current_client.id)
@@ -10318,6 +11049,12 @@ async def perfil_page(request: Request, session: Session = Depends(get_session))
             latest_score = float(snapshots[0].score_total)
         if len(snapshots) >= 2:
             delta = round(float(snapshots[0].score_total) - float(snapshots[1].score_total), 2)
+        latest_snapshot = snapshots[0] if snapshots else None
+        offer_engine = score_offer_engine(
+            client=current_client,
+            profile=business_profile,
+            latest_snapshot=latest_snapshot,
+        )
 
     return render(
         "perfil.html",
@@ -10330,6 +11067,8 @@ async def perfil_page(request: Request, session: Session = Depends(get_session))
             "snapshots": snapshots,
             "latest_score": latest_score,
             "delta": delta,
+            "business_profile": business_profile,
+            "offer_engine": offer_engine,
         },
     )
 
@@ -10343,6 +11082,9 @@ async def perfil_save(
         debt_total_brl: float = Form(0.0),
         cash_balance_brl: float = Form(0.0),
         employees_count: int = Form(0),
+        desired_credit_amount_brl: float = Form(0.0),
+        current_goal: str = Form(""),
+        pain_points: str = Form(""),
 ) -> Response:
     ctx = get_tenant_context(request, session)
     if not ctx:
@@ -10366,6 +11108,19 @@ async def perfil_save(
 
     session.add(current_client)
     session.commit()
+
+    if ensure_client_business_profile_table():
+        bp = get_or_create_client_business_profile(
+            session, company_id=ctx.company.id, client_id=current_client.id
+        )
+        bp.desired_credit_amount_brl = max(0.0, float(desired_credit_amount_brl or 0.0))
+        if (current_goal or "").strip():
+            bp.current_goal = current_goal.strip()
+        if (pain_points or "").strip():
+            bp.pain_points = pain_points.strip()
+        bp.updated_at = utcnow()
+        session.add(bp)
+        session.commit()
 
     set_flash(request, "Indicadores atualizados.")
     return RedirectResponse("/perfil", status_code=303)
@@ -10401,6 +11156,9 @@ async def perfil_snapshot_new_page(request: Request, session: Session = Depends(
             "role": ctx.membership.role,
             "current_client": current_client,
             "survey": PROFILE_SURVEY_V1,
+            "business_profile": get_or_create_client_business_profile(
+                session, company_id=ctx.company.id, client_id=current_client.id
+            ) if ensure_client_business_profile_table() else None,
         },
     )
 
@@ -10416,6 +11174,17 @@ async def perfil_snapshot_new_action(
         employees_count: int = Form(0),
         nps_score: int = Form(0),
         notes: str = Form(""),
+        desired_credit_amount_brl: float = Form(0.0),
+        current_goal: str = Form(""),
+        pain_points: str = Form(""),
+        products_interest: list[str] = Form([]),
+        has_dre: Optional[str] = Form(None),
+        has_cash_flow: Optional[str] = Form(None),
+        has_budget: Optional[str] = Form(None),
+        has_erp: Optional[str] = Form(None),
+        has_crm: Optional[str] = Form(None),
+        has_financial_team: Optional[str] = Form(None),
+        has_accounting_integration: Optional[str] = Form(None),
 ) -> Response:
     ctx = get_tenant_context(request, session)
     if not ctx:
@@ -10467,6 +11236,30 @@ async def perfil_snapshot_new_action(
     session.add(current_client)
 
     session.commit()
+
+    if ensure_client_business_profile_table():
+        bp = get_or_create_client_business_profile(
+            session, company_id=ctx.company.id, client_id=current_client.id
+        )
+        bp.desired_credit_amount_brl = max(bp.desired_credit_amount_brl, max(0.0, float(desired_credit_amount_brl or 0.0)))
+        if (current_goal or "").strip():
+            bp.current_goal = current_goal.strip()
+        if (pain_points or "").strip():
+            bp.pain_points = pain_points.strip()
+        merged_products = set(_load_products_interest(bp.products_interest_json))
+        merged_products.update(_load_products_interest(products_interest))
+        bp.products_interest_json = json.dumps(sorted(merged_products), ensure_ascii=False)
+        bp.has_dre = bp.has_dre or _parse_bool(has_dre)
+        bp.has_cash_flow = bp.has_cash_flow or _parse_bool(has_cash_flow)
+        bp.has_budget = bp.has_budget or _parse_bool(has_budget)
+        bp.has_erp = bp.has_erp or _parse_bool(has_erp)
+        bp.has_crm = bp.has_crm or _parse_bool(has_crm)
+        bp.has_financial_team = bp.has_financial_team or _parse_bool(has_financial_team)
+        bp.has_accounting_integration = bp.has_accounting_integration or _parse_bool(has_accounting_integration)
+        bp.updated_at = utcnow()
+        session.add(bp)
+        session.commit()
+
     set_flash(request, "Avaliação registrada.")
     return RedirectResponse("/perfil", status_code=303)
 
