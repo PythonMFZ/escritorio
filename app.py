@@ -2201,13 +2201,24 @@ FEATURE_KEYS.setdefault(
 
 
 FEATURE_GROUPS: list[dict[str, Any]] = [
-    {"key": "admin", "title": "Admin", "features": ["ui", "gestao", "credito", "crm"]},
-    {"key": "minha_empresa", "title": "Minha Empresa", "features": ["empresa", "perfil", "financeiro", "documentos", "consultas", "openfinance", "creditos"]},
-    {"key": "meu_projeto", "title": "Meu Projeto", "features": ["consultoria", "reunioes", "tarefas"]},
-    {"key": "minhas_propostas", "title": "Minhas Propostas", "features": ["simulador", "propostas"]},
+    {
+        "key": "cliente",
+        "title": "Cliente",
+        "features": ["empresa", "perfil", "financeiro", "documentos", "propostas", "simulador", "educacao", "openfinance"],
+    },
+    {
+        "key": "escritorio",
+        "title": "Escritório",
+        "features": ["crm", "credito", "consultas", "creditos", "consultoria", "reunioes", "tarefas", "pendencias", "agenda"],
+    },
+    {
+        "key": "admin",
+        "title": "Admin",
+        "features": ["ui", "gestao"],
+    },
 ]
 
-FEATURE_STANDALONE: list[str] = ["pendencias", "agenda", "educacao"]
+FEATURE_STANDALONE: list[str] = []
 
 FEATURE_VISIBLE_ROLES: dict[str, set[str]] = {
     "ui": {"admin"},
@@ -3113,98 +3124,213 @@ TEMPLATES: dict[str, str] = {
     <title>{{ title or "App Escritório" }}</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
     <style>
-      body { background: #f6f7fb; }
-      .card { border: 0; box-shadow: 0 6px 18px rgba(0,0,0,.06); border-radius: 16px; }
-      .brand { font-weight: 700; letter-spacing: .3px; }
-      .muted { color: #6c757d; }
-      a { text-decoration: none; }
-      .btn { border-radius: 12px; }
-      .form-control, .form-select { border-radius: 12px; }
-      .badge { border-radius: 999px; }
+      :root{
+        --bg:#f5f7fb;
+        --bg-soft:#fbfcfe;
+        --card:#ffffff;
+        --line:#e7edf5;
+        --text:#132238;
+        --muted:#728198;
+        --primary:#E07020;
+        --primary-dark:#C85F1B;
+        --primary-soft:#FFF3E8;
+        --teal-soft:#EAF7F6;
+        --shadow:0 10px 30px rgba(16,24,40,.06);
+        --radius:18px;
+      }
+      *{ box-sizing:border-box; }
+      body{ background:linear-gradient(180deg,#fafbfd 0%,#f5f7fb 100%); color:var(--text); }
+      a{ text-decoration:none; color:inherit; }
+      .muted{ color:var(--muted); }
+      .app-shell{ display:grid; grid-template-columns:270px 1fr; min-height:100vh; }
+      .app-sidebar{
+        background:rgba(255,255,255,.92);
+        border-right:1px solid var(--line);
+        padding:20px 16px;
+        position:sticky;
+        top:0;
+        height:100vh;
+        backdrop-filter:blur(10px);
+      }
+      .app-brand{
+        display:flex; align-items:center; gap:12px;
+        padding:8px 10px 18px 10px; margin-bottom:10px;
+        border-bottom:1px solid var(--line);
+      }
+      .app-brand img{ height:38px; width:auto; }
+      .app-brand small{ display:block; color:var(--muted); }
+      .side-section{ margin-top:18px; }
+      .side-title{
+        font-size:.72rem; font-weight:700; letter-spacing:.08em; text-transform:uppercase;
+        color:#8b98ac; margin:0 10px 8px;
+      }
+      .side-link{
+        display:flex; align-items:center; justify-content:space-between;
+        padding:11px 12px; border-radius:14px; margin:4px 0;
+        color:var(--text);
+      }
+      .side-link:hover, .side-link.active{ background:var(--primary-soft); color:#8a4916; }
+      .side-link small{ display:block; color:var(--muted); font-size:.76rem; }
+      .topbar{
+        display:flex; justify-content:space-between; align-items:center; gap:16px;
+        padding:22px 28px 8px 28px;
+      }
+      .page-wrap{ padding:0 28px 28px 28px; }
+      .card{
+        border:1px solid rgba(231,237,245,.95);
+        box-shadow:var(--shadow);
+        border-radius:var(--radius);
+        background:var(--card);
+      }
+      .hero-card{ background:linear-gradient(135deg,#ffffff 0%,#fff8f2 100%); }
+      .btn{ border-radius:12px; }
+      .form-control, .form-select{ border-radius:12px; border-color:#dbe4f0; }
+      .badge{ border-radius:999px; }
       .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;}
       pre { white-space: pre-wrap; margin: 0; }
-      /* PRIMARY = LARANJA (marca) */
-.btn-primary{
-  background-color:#E07020 !important;
-  border-color:#E07020 !important;
-  color:#ffffff !important;
-  font-weight:600;
-}
-.btn-primary:hover{
-  background-color:#C85F1B !important;
-  border-color:#C85F1B !important;
-}
-
-/* OUTLINE PRIMARY = LARANJA */
-.btn-outline-primary{
-  border-color:#E07020 !important;
-  color:#E07020 !important;
-}
-.btn-outline-primary:hover{
-  background-color:#E07020 !important;
-  border-color:#E07020 !important;
-  color:#ffffff !important;
-}
-
-/* Links com teal (opcional) */
-a:hover{ color:#00BFBF; }
+      .btn-primary{
+        background-color:var(--primary) !important;
+        border-color:var(--primary) !important;
+        color:#ffffff !important;
+        font-weight:600;
+      }
+      .btn-primary:hover{
+        background-color:var(--primary-dark) !important;
+        border-color:var(--primary-dark) !important;
+      }
+      .btn-outline-primary{
+        border-color:var(--primary) !important;
+        color:var(--primary) !important;
+      }
+      .btn-outline-primary:hover{
+        background-color:var(--primary) !important;
+        border-color:var(--primary) !important;
+        color:#ffffff !important;
+      }
+      .pill{
+        display:inline-flex; align-items:center; gap:8px;
+        padding:8px 12px; border-radius:999px;
+        border:1px solid var(--line); background:#fff; color:var(--muted);
+      }
+      .soft-panel{
+        border:1px solid var(--line); background:var(--bg-soft); border-radius:16px; padding:14px 16px;
+      }
+      .news-card .list-group-item{ border:0; border-bottom:1px solid #eef2f7; padding-left:0; padding-right:0; }
+      .news-card .list-group-item:last-child{ border-bottom:0; }
+      .grid-main{ display:grid; grid-template-columns:minmax(0,1fr) 320px; gap:20px; }
+      @media (max-width: 1100px){
+        .app-shell{ grid-template-columns:1fr; }
+        .app-sidebar{ display:none; }
+        .topbar, .page-wrap{ padding-left:18px; padding-right:18px; }
+        .grid-main{ grid-template-columns:1fr; }
+      }
     </style>
   </head>
   <body>
-    <nav class="navbar navbar-expand-lg bg-white border-bottom">
-      <div class="container py-2">
-        <a class="navbar-brand d-flex align-items-center gap-2" href="/">
-  <img src="/static/logo.png" alt="Maffezzolli Capital" style="height:44px; width:auto;">
-  <span class="fw-semibold" style="color:#0B1E1E; font-size:0.95rem; letter-spacing:0.2px; opacity:0.9;">Bem-vindo</span>
-</a>
-        <div class="ms-auto d-flex gap-2 align-items-center">
-          {% if current_user %}
-            <span class="badge text-bg-light border">🏢 {{ current_company.name }}</span>
+    {% if current_user %}
+    <div class="app-shell">
+      <aside class="app-sidebar">
+        <div class="app-brand">
+          <img src="/static/logo.png" alt="Maffezzolli Capital">
+          <div>
+            <div class="fw-semibold">Maffezzolli Capital</div>
+            <small>{{ current_company.name if current_company else "Portal" }}</small>
+          </div>
+        </div>
 
+        {% for section in nav_sections or [] %}
+          <div class="side-section">
+            <div class="side-title">{{ section.title }}</div>
+            {% for item in section.items %}
+              <a class="side-link {% if current_path == item.href %}active{% endif %}" href="{{ item.href }}">
+                <div>
+                  <div class="fw-semibold" style="font-size:.95rem;">{{ item.title }}</div>
+                  <small>{{ item.desc }}</small>
+                </div>
+                <span class="muted">›</span>
+              </a>
+            {% endfor %}
+          </div>
+        {% endfor %}
+      </aside>
+
+      <div>
+        <div class="topbar">
+          <div>
+            <div class="fw-semibold" style="font-size:1.1rem;">{{ title or "Portal" }}</div>
+            <div class="muted small">
+              {% if role in ["admin","equipe"] %}
+                Escritório: <b>{{ current_company.name }}</b>{% if current_client %} · Cliente ativo: <b>{{ current_client.name }}</b>{% endif %}
+              {% else %}
+                Área do cliente
+              {% endif %}
+            </div>
+          </div>
+          <div class="d-flex gap-2 flex-wrap align-items-center">
+            {% if current_company %}<span class="pill">🏢 {{ current_company.name }}</span>{% endif %}
             {% if role in ["admin","equipe"] and current_client %}
-              <span class="badge text-bg-light border">🧑‍💼 Cliente: {{ current_client.name }}</span>
+              <span class="pill">🧑‍💼 {{ current_client.name }}</span>
               <a class="btn btn-outline-secondary btn-sm" href="/client/switch">Trocar cliente</a>
             {% endif %}
+            {% if current_user %}
+              <span class="pill">👤 {{ current_user.name }} • {{ role }}</span>
+              <a class="btn btn-outline-secondary btn-sm" href="/logout">Sair</a>
+            {% else %}
+              <a class="btn btn-outline-primary btn-sm" href="/login">Entrar</a>
+            {% endif %}
+          </div>
+        </div>
 
-            <span class="badge text-bg-light border">👤 {{ current_user.name }} • {{ role }}</span>
-            <a class="btn btn-outline-secondary btn-sm" href="/logout">Sair</a>
-          {% else %}
+        <main class="page-wrap">
+          {% if flash %}
+            <div class="alert alert-info">{{ flash }}</div>
+          {% endif %}
+
+          <div id="mc-banner" class="mb-3"></div>
+
+          <div class="grid-main">
+            <div>
+              {% block content %}{% endblock %}
+              <div class="mt-5 muted small">
+                <div>Uploads protegidos por login (download via rota).</div>
+              </div>
+            </div>
+
+            <div>
+              <div class="card p-3 news-card">
+                <div class="d-flex align-items-center justify-content-between">
+                  <div class="fw-semibold">📰 Notícias</div>
+                  {% if role == "admin" %}
+                    <a class="small" href="/admin/ui">Configurar</a>
+                  {% endif %}
+                </div>
+                <div class="muted small mt-1">Economia, mercado e atualização automática.</div>
+                <div id="mc-news" class="mt-2"></div>
+              </div>
+            </div>
+          </div>
+        </main>
+      </div>
+    </div>
+    {% else %}
+      <nav class="navbar navbar-expand-lg bg-white border-bottom">
+        <div class="container py-2">
+          <a class="navbar-brand d-flex align-items-center gap-2" href="/">
+            <img src="/static/logo.png" alt="Maffezzolli Capital" style="height:44px; width:auto;">
+            <span class="fw-semibold" style="color:#0B1E1E; font-size:0.95rem; letter-spacing:0.2px; opacity:0.9;">Bem-vindo</span>
+          </a>
+          <div class="ms-auto d-flex gap-2 align-items-center">
             <a class="btn btn-outline-primary btn-sm" href="/login">Entrar</a>
-          {% endif %}
+          </div>
         </div>
-      </div>
-    </nav>
-
-    <main class="container my-4">
-  {% if flash %}
-    <div class="alert alert-info">{{ flash }}</div>
-  {% endif %}
-
-  <!-- Banner (carrossel) -->
-  <div id="mc-banner" class="mb-3"></div>
-
-  <div class="row g-3">
-    <div class="col-12 col-lg-9">
-      {% block content %}{% endblock %}
-      <div class="mt-5 muted small">
-        <div>Uploads protegidos por login (download via rota).</div>
-      </div>
-    </div>
-
-    <div class="col-12 col-lg-3">
-      <div class="card p-3">
-        <div class="d-flex align-items-center justify-content-between">
-          <div class="fw-semibold">📰 Notícias (economia)</div>
-          {% if role == "admin" %}
-            <a class="small" href="/admin/ui">Configurar</a>
-          {% endif %}
-        </div>
-        <div class="muted small mt-1">Atualiza automaticamente.</div>
-        <div id="mc-news" class="mt-2"></div>
-      </div>
-    </div>
-  </div>
-</main>
+      </nav>
+      <main class="container my-4">
+        {% if flash %}
+          <div class="alert alert-info">{{ flash }}</div>
+        {% endif %}
+        {% block content %}{% endblock %}
+      </main>
+    {% endif %}
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 <script>
 (function(){
@@ -3229,10 +3355,20 @@ a:hover{ color:#00BFBF; }
         const title = esc(s.title || "");
         return `
           <div class="carousel-item ${i===0?'active':''}">
-            <a href="${link}" style="display:block;">
-              <img src="${img}" class="d-block w-100" alt="${title}" style="border-radius:16px; max-height:240px; object-fit:cover;">
+            <a href="${link}">
+              <div class="card hero-card overflow-hidden">
+                <div class="row g-0 align-items-center">
+                  <div class="col-md-7 p-4 p-lg-5">
+                    <div class="text-uppercase muted small mb-2">Destaque</div>
+                    <h4 class="mb-2">${title || "Novidades do portal"}</h4>
+                    <div class="muted">Acompanhe conteúdos e atalhos relevantes do escritório.</div>
+                  </div>
+                  <div class="col-md-5">
+                    <div style="min-height:220px;background:url('${img}') center/cover no-repeat;"></div>
+                  </div>
+                </div>
+              </div>
             </a>
-            ${title ? `<div class="carousel-caption d-none d-md-block"><h6 class="bg-dark bg-opacity-50 d-inline-block px-2 py-1 rounded">${title}</h6></div>` : ``}
           </div>`;
       }).join("");
 
@@ -3249,8 +3385,7 @@ a:hover{ color:#00BFBF; }
             <span class="visually-hidden">Próximo</span>
           </button>
         </div>`;
-    }catch(e){
-    }
+    }catch(e){}
   }
 
   async function loadNews(){
@@ -3284,7 +3419,7 @@ a:hover{ color:#00BFBF; }
   </body>
 </html>
 """,
-    "login.html": r"""
+    "login.html""login.html": r"""
 {% extends "base.html" %}
 {% block content %}
 <div class="row justify-content-center">
@@ -3398,113 +3533,95 @@ a:hover{ color:#00BFBF; }
     "dashboard.html": r"""
 {% extends "base.html" %}
 {% block content %}
-<div class="row g-3">
-  <div class="col-12">
-    <div class="card p-4">
-      <h4 class="mb-1">Painel</h4>
+<div class="card hero-card p-4 mb-3">
+  <div class="d-flex justify-content-between align-items-start flex-wrap gap-3">
+    <div>
+      <div class="text-uppercase muted small mb-2">Visão geral</div>
+      <h4 class="mb-1">Portal organizado por Cliente, Escritório e Admin</h4>
       <div class="muted">
         {% if role in ["admin","equipe"] %}
-          Escritório: <b>{{ current_company.name }}</b>.
-          {% if current_client %} Cliente selecionado: <b>{{ current_client.name }}</b>.{% endif %}
+          Trabalhe com o escritório e, quando necessário, aprofunde no cliente selecionado.
         {% else %}
-          Bem-vindo(a)! Você vê apenas seus dados e arquivos.
+          Complete seus dados, acompanhe suas demandas e use as ferramentas disponíveis.
         {% endif %}
       </div>
-      {% if role in ["admin","equipe"] %}
-        <div class="mt-3 d-flex gap-2">
-          <a class="btn btn-outline-primary btn-sm" href="/admin/members">Gerenciar membros</a>
-          <a class="btn btn-outline-secondary btn-sm" href="/client/switch">Trocar cliente</a>
-        </div>
-      {% endif %}
+    </div>
+    <div class="soft-panel">
+      <div class="fw-semibold mb-1">Contexto ativo</div>
+      <div class="muted small">
+        Empresa: <b>{{ current_company.name }}</b>{% if current_client %}<br/>Cliente: <b>{{ current_client.name }}</b>{% endif %}
+      </div>
     </div>
   </div>
 
-  {% if tabs %}
-  <div class="col-12">
-    <ul class="nav nav-pills gap-2" id="dashTabs" role="tablist">
-      {% for t in tabs %}
-        <li class="nav-item" role="presentation">
-          <button class="nav-link {% if loop.first %}active{% endif %}" id="tab-{{ t.key }}" data-bs-toggle="pill"
-                  data-bs-target="#pane-{{ t.key }}" type="button" role="tab">
-            {{ t.title }}
-          </button>
-        </li>
-      {% endfor %}
-    </ul>
-
-    <div class="tab-content mt-3">
-      {% for t in tabs %}
-        <div class="tab-pane fade {% if loop.first %}show active{% endif %}" id="pane-{{ t.key }}" role="tabpanel">
-          <div class="row g-3">
-            {% for item in t["items"] %}
-              <div class="col-md-6 col-lg-4">
-                <a href="{{ item.href }}">
-                  <div class="card p-4 h-100">
-                    <div class="d-flex justify-content-between align-items-start">
-                      <div>
-                        <div class="fw-semibold">{{ item.title }}</div>
-                        <div class="muted small mt-1">{{ item.desc }}</div>
-                      </div>
-                      <span class="badge text-bg-light border">→</span>
-                    </div>
-                  </div>
-                </a>
-              </div>
-            {% endfor %}
-          </div>
-        </div>
-      {% endfor %}
+  {% if role in ["admin","equipe"] %}
+    <div class="mt-3 d-flex gap-2 flex-wrap">
+      <a class="btn btn-outline-primary btn-sm" href="/admin/members">Gerenciar membros</a>
+      <a class="btn btn-outline-secondary btn-sm" href="/client/switch">Trocar cliente</a>
     </div>
-  </div>
-  {% endif %}
-
-  {% if standalone %}
-  <div class="col-12 mt-2">
-    <div class="d-flex align-items-center justify-content-between">
-      <div class="fw-semibold">Acesso rápido</div>
-      <div class="muted small">Pendências / Agenda / Educação</div>
-    </div>
-  </div>
-
-  {% for item in standalone %}
-    <div class="col-md-6 col-lg-4">
-      <a href="{{ item.href }}">
-        <div class="card p-4 h-100">
-          <div class="d-flex justify-content-between align-items-start">
-            <div>
-              <div class="fw-semibold">{{ item.title }}</div>
-              <div class="muted small mt-1">{{ item.desc }}</div>
-            </div>
-            <span class="badge text-bg-light border">→</span>
-          </div>
-        </div>
-      </a>
-    </div>
-  {% endfor %}
   {% endif %}
 </div>
 
-<script>
-(function(){
-  const tabs = document.getElementById("dashTabs");
-  if (!tabs) return;
+<div class="row g-3 mb-3">
+  {% for section in tabs %}
+  <div class="col-12 col-xl-4">
+    <div class="card p-4 h-100">
+      <div class="d-flex justify-content-between align-items-center mb-3">
+        <div>
+          <div class="fw-semibold">{{ section.title }}</div>
+          <div class="muted small">
+            {% if section.key == "cliente" %}
+              Dados, perfil, documentos e ferramentas do cliente.
+            {% elif section.key == "escritorio" %}
+              Operação do escritório, CRM, crédito e execução.
+            {% elif section.key == "admin" %}
+              Governança, configurações e controle interno.
+            {% else %}
+              Área agrupada.
+            {% endif %}
+          </div>
+        </div>
+        <span class="badge text-bg-light border">{{ section.items|length }}</span>
+      </div>
 
-  const key = "dash_active_tab";
-  const saved = localStorage.getItem(key);
-  if (saved) {
-    const btn = document.getElementById("tab-" + saved);
-    if (btn) btn.click();
-  }
-  tabs.addEventListener("click", (e) => {
-    const btn = e.target.closest("button[id^='tab-']");
-    if (!btn) return;
-    localStorage.setItem(key, btn.id.replace("tab-",""));
-  });
-})();
-</script>
+      <div class="d-grid gap-2">
+        {% for item in section["items"] %}
+          <a href="{{ item.href }}">
+            <div class="soft-panel d-flex justify-content-between align-items-start">
+              <div>
+                <div class="fw-semibold">{{ item.title }}</div>
+                <div class="muted small mt-1">{{ item.desc }}</div>
+              </div>
+              <span class="muted">→</span>
+            </div>
+          </a>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+
+{% if standalone %}
+<div class="card p-4">
+  <div class="fw-semibold mb-2">Acesso rápido</div>
+  <div class="row g-3">
+    {% for item in standalone %}
+    <div class="col-md-6 col-lg-4">
+      <a href="{{ item.href }}">
+        <div class="soft-panel h-100">
+          <div class="fw-semibold">{{ item.title }}</div>
+          <div class="muted small mt-1">{{ item.desc }}</div>
+        </div>
+      </a>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
 {% endblock %}
 """,
-    "client_switch.html": r"""
+    "client_switch.html""client_switch.html": r"""
 {% extends "base.html" %}
 {% block content %}
 <div class="card p-4">
@@ -8506,8 +8623,36 @@ def render(
                 ctx.setdefault("current_user", _t.user)
                 ctx.setdefault("current_company", _t.company)
                 active_client_id = get_active_client_id(request, _db, _t)
-                ctx.setdefault("current_client", get_client_or_none(_db, _t.company.id, active_client_id))
+                _current_client = get_client_or_none(_db, _t.company.id, active_client_id)
+                ctx.setdefault("current_client", _current_client)
                 ctx.setdefault("role", _t.membership.role)
+
+                allowed = effective_allowed_features(_db, ctx=_t, current_client=_current_client)
+
+                def _is_visible(feature_key: str) -> bool:
+                    roles = FEATURE_VISIBLE_ROLES.get(feature_key)
+                    if roles and _t.membership.role not in roles:
+                        return False
+                    return feature_key in allowed
+
+                nav_sections = []
+                for g in FEATURE_GROUPS:
+                    feats = [fk for fk in g["features"] if _is_visible(fk)]
+                    if not feats:
+                        continue
+                    nav_sections.append(
+                        {
+                            "key": g["key"],
+                            "title": g["title"],
+                            "items": [dict(FEATURE_KEYS[fk], key=fk) for fk in feats],
+                        }
+                    )
+
+                standalone = [dict(FEATURE_KEYS[fk], key=fk) for fk in FEATURE_STANDALONE if _is_visible(fk)]
+
+                ctx.setdefault("nav_sections", nav_sections)
+                ctx.setdefault("standalone", standalone)
+                ctx.setdefault("current_path", request.url.path)
     except Exception:
         pass
     return HTMLResponse(templates_env.get_template(template_name).render(**ctx), status_code=status_code)
