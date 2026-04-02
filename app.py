@@ -659,239 +659,6 @@ class ClientSnapshot(SQLModel, table=True):
     created_at: datetime = Field(default_factory=utcnow)
 
 
-class ClientBusinessProfile(SQLModel, table=True):
-    """Perfil empresarial mais completo para cruzamento comercial e de elegibilidade.
-
-    Mantemos separado de Client para não quebrar tabelas legadas em produção.
-    """
-    __table_args__ = (UniqueConstraint("company_id", "client_id", name="uq_client_business_profile"),)
-
-    id: Optional[int] = Field(default=None, primary_key=True)
-    company_id: int = Field(index=True, foreign_key="company.id")
-    client_id: int = Field(index=True, foreign_key="client.id")
-
-    legal_name: str = ""
-    trade_name: str = ""
-    cnae: str = ""
-    tax_regime: str = ""
-    industry: str = ""
-    foundation_year: str = ""
-    monthly_fixed_costs_brl: float = 0.0
-    average_ticket_brl: float = 0.0
-    delinquency_brl: float = 0.0
-    bank_relationships: str = ""
-    active_products: str = ""
-    collateral_assets: str = ""
-    strategic_goal: str = ""
-    main_pain: str = ""
-    service_interest: str = ""
-    has_dre: bool = False
-    has_cash_flow: bool = False
-    has_budget: bool = False
-    has_kpis: bool = False
-    has_erp: bool = False
-    has_financial_team: bool = False
-    updated_at: datetime = Field(default_factory=utcnow)
-
-
-def get_or_create_client_business_profile(session: Session, *, company_id: int, client_id: int) -> "ClientBusinessProfile":
-    row = session.exec(
-        select(ClientBusinessProfile).where(
-            ClientBusinessProfile.company_id == int(company_id),
-            ClientBusinessProfile.client_id == int(client_id),
-        )
-    ).first()
-    if row:
-        return row
-    row = ClientBusinessProfile(company_id=int(company_id), client_id=int(client_id))
-    session.add(row)
-    session.commit()
-    session.refresh(row)
-    return row
-
-
-def _latest_client_snapshot(session: Session, *, company_id: int, client_id: int) -> Optional["ClientSnapshot"]:
-    return session.exec(
-        select(ClientSnapshot)
-        .where(ClientSnapshot.company_id == int(company_id), ClientSnapshot.client_id == int(client_id))
-        .order_by(ClientSnapshot.created_at.desc())
-    ).first()
-
-
-def _latest_credit_report(session: Session, *, company_id: int, client_id: int) -> Optional["CreditReport"]:
-    try:
-        return session.exec(
-            select(CreditReport)
-            .where(CreditReport.company_id == int(company_id), CreditReport.client_id == int(client_id))
-            .order_by(CreditReport.created_at.desc())
-        ).first()
-    except Exception:
-        return None
-
-
-def _count_pluggy_loans_for_client(session: Session, *, current_client: Client) -> int:
-    doc = _digits(current_client.cnpj or "")
-    if not doc:
-        return 0
-    try:
-        rows = session.exec(select(PluggyLoan).where(PluggyLoan.company_id == current_client.company_id, PluggyLoan.subject_doc == doc)).all()
-        return len(rows)
-    except Exception:
-        return 0
-
-
-def compute_offer_potential_summary(
-        *,
-        client: Optional[Client],
-        business_profile: Optional["ClientBusinessProfile"],
-        latest_snapshot: Optional["ClientSnapshot"],
-        latest_credit_report: Optional["CreditReport"] = None,
-        pluggy_loans_count: int = 0,
-) -> dict[str, Any]:
-    if not client:
-        return {
-            "score_credit": 0.0,
-            "score_consulting": 0.0,
-            "score_tools": 0.0,
-            "score_total": 0.0,
-            "credit_offer": "Preencha os dados do cliente.",
-            "consulting_offer": "Preencha os dados do cliente.",
-            "tools_offer": "Preencha os dados do cliente.",
-            "summary": "Sem cliente selecionado.",
-            "highlights": [],
-        }
-
-    revenue = max(0.0, float((latest_snapshot.revenue_monthly_brl if latest_snapshot else client.revenue_monthly_brl) or 0.0))
-    debt = max(0.0, float((latest_snapshot.debt_total_brl if latest_snapshot else client.debt_total_brl) or 0.0))
-    cash = max(0.0, float((latest_snapshot.cash_balance_brl if latest_snapshot else client.cash_balance_brl) or 0.0))
-    employees = max(0, int((latest_snapshot.employees_count if latest_snapshot else client.employees_count) or 0))
-    process_score = float(latest_snapshot.score_process) if latest_snapshot else 0.0
-    financial_score = float(latest_snapshot.score_financial) if latest_snapshot else 0.0
-    total_score = float(latest_snapshot.score_total) if latest_snapshot else 0.0
-
-    bp = business_profile
-    has_controls = sum(
-        1 for flag in [
-            getattr(bp, "has_dre", False),
-            getattr(bp, "has_cash_flow", False),
-            getattr(bp, "has_budget", False),
-            getattr(bp, "has_kpis", False),
-            getattr(bp, "has_erp", False),
-            getattr(bp, "has_financial_team", False),
-        ] if flag
-    )
-
-    debt_ratio = (debt / revenue) if revenue > 0 else 99.0
-    cash_ratio = (cash / revenue) if revenue > 0 else 0.0
-    delinquency_ratio = ((bp.delinquency_brl if bp else 0.0) / revenue) if revenue > 0 else 0.0
-    report_risk = max(0.0, float(getattr(latest_credit_report, "risco_total_brl", 0.0) or 0.0))
-    report_risk_ratio = (report_risk / revenue) if revenue > 0 else 0.0
-
-    score_credit = 45.0
-    if revenue > 50000:
-        score_credit += 12
-    if revenue > 150000:
-        score_credit += 8
-    if debt_ratio < 1.5:
-        score_credit += 15
-    elif debt_ratio > 4:
-        score_credit -= 15
-    if cash_ratio < 0.30:
-        score_credit += 10
-    if report_risk_ratio > 2:
-        score_credit -= 12
-    if pluggy_loans_count > 0:
-        score_credit += 8
-    if bp and getattr(bp, "collateral_assets", "").strip():
-        score_credit += 10
-
-    score_consulting = 40.0
-    if has_controls <= 2:
-        score_consulting += 28
-    elif has_controls <= 4:
-        score_consulting += 15
-    if debt_ratio > 2:
-        score_consulting += 12
-    if cash_ratio < 0.5:
-        score_consulting += 10
-    if employees >= 10:
-        score_consulting += 6
-    if bp and getattr(bp, "main_pain", "").strip():
-        score_consulting += 8
-
-    score_tools = 35.0
-    if has_controls < 6:
-        score_tools += (6 - has_controls) * 7
-    if bp and not getattr(bp, "has_erp", False):
-        score_tools += 8
-    if revenue > 0:
-        score_tools += 5
-
-    score_credit = max(0.0, min(100.0, round(score_credit, 1)))
-    score_consulting = max(0.0, min(100.0, round(score_consulting, 1)))
-    score_tools = max(0.0, min(100.0, round(score_tools, 1)))
-    score_total_offer = round((score_credit * 0.4) + (score_consulting * 0.35) + (score_tools * 0.25), 1)
-
-    credit_offer = "Capital de giro / crédito estruturado"
-    if bp and getattr(bp, "collateral_assets", "").strip():
-        credit_offer = "Home Equity / garantia real / crédito estruturado"
-    elif pluggy_loans_count > 0:
-        credit_offer = "Portabilidade / refinanciamento de contratos"
-    elif debt_ratio > 3:
-        credit_offer = "Reperfilamento de passivos"
-
-    consulting_offer = "Consultoria financeira / diagnóstico gerencial"
-    if debt_ratio > 2.5 or cash_ratio < 0.25:
-        consulting_offer = "Consultoria de reestruturação / turnaround"
-    elif total_score >= 70:
-        consulting_offer = "Consultoria estratégica / preparação para captação"
-
-    tools_offer = "Fluxo de caixa, DRE e indicadores"
-    if bp and getattr(bp, "has_erp", False) and getattr(bp, "has_kpis", False):
-        tools_offer = "BI financeiro / automação de indicadores"
-
-    highlights: list[str] = []
-    if revenue > 0:
-        highlights.append(f"Faturamento mensal base: R$ {revenue:,.0f}".replace(",", "."))
-    if debt > 0:
-        highlights.append(f"Dívida atual: R$ {debt:,.0f}".replace(",", "."))
-    if pluggy_loans_count:
-        highlights.append(f"Contratos Open Finance: {pluggy_loans_count}")
-    if has_controls < 4:
-        highlights.append("Há espaço para organizar processos financeiros básicos")
-    if bp and getattr(bp, "strategic_goal", "").strip():
-        highlights.append(f"Objetivo declarado: {bp.strategic_goal.strip()}")
-
-    summary = "Cliente com "
-    if score_credit >= 70:
-        summary += "boa aderência a ofertas de crédito"
-    elif score_consulting >= 70:
-        summary += "alta aderência a consultoria"
-    else:
-        summary += "potencial inicial mais forte para ferramentas e diagnóstico"
-    if pluggy_loans_count:
-        summary += ", com base adicional de Open Finance disponível"
-    elif latest_credit_report:
-        summary += ", já com leitura de risco integrada"
-    else:
-        summary += ", ainda dependente de mais evidências de dados"
-
-    return {
-        "score_credit": score_credit,
-        "score_consulting": score_consulting,
-        "score_tools": score_tools,
-        "score_total": score_total_offer,
-        "credit_offer": credit_offer,
-        "consulting_offer": consulting_offer,
-        "tools_offer": tools_offer,
-        "summary": summary,
-        "highlights": highlights,
-        "base_total_score": round(total_score, 1),
-        "base_process_score": round(process_score, 1),
-        "base_financial_score": round(financial_score, 1),
-    }
-
-
 PROFILE_SURVEY_V1 = [
     {"id": "dre_mensal", "section": "Processos", "q": "Você fecha DRE mensalmente?", "type": "bool", "w": 10},
     {"id": "fluxo_90d", "section": "Processos", "q": "Você tem fluxo de caixa projetado (90 dias)?", "type": "bool",
@@ -1535,19 +1302,6 @@ def ensure_consulta_scr_consent_table() -> bool:
     except Exception as e:
         try:
             print(f"[consulta-consent] failed to ensure ConsultaScrConsent table: {e}")
-        except Exception:
-            pass
-        return False
-
-
-def ensure_client_business_profile_table() -> bool:
-    """Garante tabela de perfil empresarial (ambientes sem Alembic)."""
-    try:
-        ClientBusinessProfile.__table__.create(engine, checkfirst=True)
-        return True
-    except Exception as e:
-        try:
-            print(f"[client-business-profile] failed to ensure table: {e}")
         except Exception:
             pass
         return False
@@ -2447,62 +2201,24 @@ FEATURE_KEYS.setdefault(
 
 
 FEATURE_GROUPS: list[dict[str, Any]] = [
-    {
-        "key": "cliente",
-        "title": "Cliente",
-        "features": [
-            "empresa",
-            "perfil",
-            "financeiro",
-            "documentos",
-            "openfinance",
-            "propostas",
-            "simulador",
-            "consultoria",
-        ],
-    },
-    {
-        "key": "escritorio",
-        "title": "Escritório",
-        "features": [
-            "crm",
-            "credito",
-            "consultas",
-            "creditos",
-            "reunioes",
-            "tarefas",
-            "pendencias",
-            "agenda",
-        ],
-    },
-    {
-        "key": "admin",
-        "title": "Admin",
-        "features": ["gestao", "ui", "educacao"],
-    },
+    {"key": "admin", "title": "Admin", "features": ["ui", "gestao", "credito", "crm"]},
+    {"key": "minha_empresa", "title": "Minha Empresa", "features": ["empresa", "perfil", "financeiro", "documentos", "consultas", "openfinance", "creditos"]},
+    {"key": "meu_projeto", "title": "Meu Projeto", "features": ["consultoria", "reunioes", "tarefas"]},
+    {"key": "minhas_propostas", "title": "Minhas Propostas", "features": ["simulador", "propostas"]},
 ]
 
-FEATURE_STANDALONE: list[str] = []
+FEATURE_STANDALONE: list[str] = ["pendencias", "agenda", "educacao"]
 
 FEATURE_VISIBLE_ROLES: dict[str, set[str]] = {
     "ui": {"admin"},
     "gestao": {"admin"},
     "crm": {"admin", "equipe"},
-    "credito": {"admin", "equipe"},
-    "consultas": {"admin", "equipe"},
-    "creditos": {"admin", "equipe"},
-    "reunioes": {"admin", "equipe"},
-    "tarefas": {"admin", "equipe"},
-    "pendencias": {"admin", "equipe", "cliente"},
-    "agenda": {"admin", "equipe", "cliente"},
-    "educacao": {"admin", "equipe", "cliente"},
-    "openfinance": {"admin", "equipe", "cliente"},
 }
 
 ROLE_DEFAULT_FEATURES: dict[str, set[str]] = {
     "admin": set(FEATURE_KEYS.keys()),
-    "equipe": set(FEATURE_KEYS.keys()) - {"ui", "gestao"},
-    "cliente": set(FEATURE_KEYS.keys()) - {"ui", "gestao", "crm", "credito", "consultas", "creditos", "reunioes", "tarefas"},
+    "equipe": set(FEATURE_KEYS.keys()),
+    "cliente": set(FEATURE_KEYS.keys()) - {"ui", "gestao", "crm"},
 }
 
 ROLE_DEFAULT_FEATURES["admin"].add("openfinance")
@@ -3397,72 +3113,60 @@ TEMPLATES: dict[str, str] = {
     <title>{{ title or "App Escritório" }}</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
     <style>
-      :root{
-        --bg:#f6f8fc;
-        --bg-alt:#fbfcfe;
-        --card:#ffffff;
-        --line:#e6ebf3;
-        --text:#1e2a3a;
-        --muted:#758397;
-        --primary:#E07020;
-        --primary-dark:#C85F1B;
-        --primary-soft:#FFF3E9;
-        --accent:#E8F5F2;
-        --shadow:0 12px 32px rgba(23,34,56,.08);
-        --radius:18px;
-      }
-      body{background:linear-gradient(180deg,var(--bg-alt) 0%,var(--bg) 100%); color:var(--text);}
-      a{text-decoration:none}
-      .card{border:1px solid var(--line); box-shadow:var(--shadow); border-radius:var(--radius);}
-      .soft-card{background:linear-gradient(180deg,#ffffff 0%,#fcfdff 100%);}
-      .brand{font-weight:700; letter-spacing:.3px}
-      .muted{color:var(--muted)}
-      .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono","Courier New",monospace;}
-      pre{white-space:pre-wrap;margin:0}
-      .btn{border-radius:14px}
-      .form-control,.form-select{border-radius:14px;border-color:#dce4ef}
-      .badge,.pill{border-radius:999px}
-      .btn-primary{background-color:var(--primary)!important;border-color:var(--primary)!important;color:#fff!important;font-weight:600}
-      .btn-primary:hover{background-color:var(--primary-dark)!important;border-color:var(--primary-dark)!important}
-      .btn-outline-primary{border-color:var(--primary)!important;color:var(--primary)!important}
-      .btn-outline-primary:hover{background-color:var(--primary)!important;border-color:var(--primary)!important;color:#fff!important}
-      .btn-soft{background:var(--primary-soft); color:var(--primary-dark); border:1px solid #ffe0ca}
-      .btn-soft:hover{background:#ffe8d7; color:var(--primary-dark)}
-      .metric-card{padding:1.25rem 1.35rem}
-      .metric-label{font-size:.86rem;color:var(--muted)}
-      .metric-value{font-size:1.8rem;font-weight:700;line-height:1.1}
-      .progress-soft{height:10px;background:#eef2f8;border-radius:999px;overflow:hidden}
-      .progress-soft > div{height:100%;background:linear-gradient(90deg,var(--primary),#F3A266)}
-      .nav-soft{display:flex;flex-direction:column;gap:10px}
-      .nav-soft-section{padding:14px;border:1px solid var(--line);border-radius:16px;background:#fff}
-      .nav-soft-title{font-size:.78rem;text-transform:uppercase;letter-spacing:.08em;color:#95a1b3;margin-bottom:10px}
-      .nav-soft a{display:block;padding:10px 12px;border-radius:12px;color:var(--text)}
-      .nav-soft a:hover,.nav-soft a.active{background:var(--primary-soft);color:#6f3c14}
-      .topbar-card{background:linear-gradient(135deg,#fff 0%,#fff7f0 100%)}
-      .section-chip{display:inline-flex;align-items:center;gap:8px;padding:8px 12px;background:#fff;border:1px solid var(--line);border-radius:999px;color:var(--muted);font-size:.9rem}
-      .list-clean .list-group-item{border:0;border-bottom:1px solid #eef2f6;padding-left:0;padding-right:0}
-      .list-clean .list-group-item:last-child{border-bottom:0}
-      .news-card,.side-card{position:sticky;top:92px}
+      body { background: #f6f7fb; }
+      .card { border: 0; box-shadow: 0 6px 18px rgba(0,0,0,.06); border-radius: 16px; }
+      .brand { font-weight: 700; letter-spacing: .3px; }
+      .muted { color: #6c757d; }
+      a { text-decoration: none; }
+      .btn { border-radius: 12px; }
+      .form-control, .form-select { border-radius: 12px; }
+      .badge { border-radius: 999px; }
+      .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;}
+      pre { white-space: pre-wrap; margin: 0; }
+      /* PRIMARY = LARANJA (marca) */
+.btn-primary{
+  background-color:#E07020 !important;
+  border-color:#E07020 !important;
+  color:#ffffff !important;
+  font-weight:600;
+}
+.btn-primary:hover{
+  background-color:#C85F1B !important;
+  border-color:#C85F1B !important;
+}
+
+/* OUTLINE PRIMARY = LARANJA */
+.btn-outline-primary{
+  border-color:#E07020 !important;
+  color:#E07020 !important;
+}
+.btn-outline-primary:hover{
+  background-color:#E07020 !important;
+  border-color:#E07020 !important;
+  color:#ffffff !important;
+}
+
+/* Links com teal (opcional) */
+a:hover{ color:#00BFBF; }
     </style>
   </head>
   <body>
-    <nav class="navbar navbar-expand-lg bg-white border-bottom" style="backdrop-filter: blur(10px); background: rgba(255,255,255,.92)!important;">
+    <nav class="navbar navbar-expand-lg bg-white border-bottom">
       <div class="container py-2">
         <a class="navbar-brand d-flex align-items-center gap-2" href="/">
-          <img src="/static/logo.png" alt="Maffezzolli Capital" style="height:44px; width:auto;">
-          <div>
-            <div class="fw-semibold" style="color:#0B1E1E; font-size:0.95rem; letter-spacing:0.2px; opacity:0.92;">Maffezzolli Capital</div>
-            <div class="muted small">Portal do cliente e do escritório</div>
-          </div>
-        </a>
-        <div class="ms-auto d-flex gap-2 align-items-center flex-wrap">
+  <img src="/static/logo.png" alt="Maffezzolli Capital" style="height:44px; width:auto;">
+  <span class="fw-semibold" style="color:#0B1E1E; font-size:0.95rem; letter-spacing:0.2px; opacity:0.9;">Bem-vindo</span>
+</a>
+        <div class="ms-auto d-flex gap-2 align-items-center">
           {% if current_user %}
-            <span class="section-chip">🏢 {{ current_company.name }}</span>
+            <span class="badge text-bg-light border">🏢 {{ current_company.name }}</span>
+
             {% if role in ["admin","equipe"] and current_client %}
-              <span class="section-chip">🧑‍💼 {{ current_client.name }}</span>
+              <span class="badge text-bg-light border">🧑‍💼 Cliente: {{ current_client.name }}</span>
               <a class="btn btn-outline-secondary btn-sm" href="/client/switch">Trocar cliente</a>
             {% endif %}
-            <span class="section-chip">👤 {{ current_user.name }} • {{ role }}</span>
+
+            <span class="badge text-bg-light border">👤 {{ current_user.name }} • {{ role }}</span>
             <a class="btn btn-outline-secondary btn-sm" href="/logout">Sair</a>
           {% else %}
             <a class="btn btn-outline-primary btn-sm" href="/login">Entrar</a>
@@ -3472,52 +3176,35 @@ TEMPLATES: dict[str, str] = {
     </nav>
 
     <main class="container my-4">
-      {% if flash %}
-        <div class="alert alert-info border-0 card">{{ flash }}</div>
-      {% endif %}
+  {% if flash %}
+    <div class="alert alert-info">{{ flash }}</div>
+  {% endif %}
 
-      <div id="mc-banner" class="mb-3"></div>
+  <!-- Banner (carrossel) -->
+  <div id="mc-banner" class="mb-3"></div>
 
-      <div class="row g-3">
-        <div class="col-12 col-xl-2">
-          {% if current_user and nav_sections %}
-            <div class="card side-card soft-card p-3">
-              <div class="fw-semibold mb-3">Navegação</div>
-              <div class="nav-soft">
-                {% for sec in nav_sections %}
-                  <div class="nav-soft-section">
-                    <div class="nav-soft-title">{{ sec.title }}</div>
-                    {% for item in sec.items %}
-                      <a href="{{ item.href }}" class="{% if request.url.path == item.href %}active{% endif %}">{{ item.title }}</a>
-                    {% endfor %}
-                  </div>
-                {% endfor %}
-              </div>
-            </div>
+  <div class="row g-3">
+    <div class="col-12 col-lg-9">
+      {% block content %}{% endblock %}
+      <div class="mt-5 muted small">
+        <div>Uploads protegidos por login (download via rota).</div>
+      </div>
+    </div>
+
+    <div class="col-12 col-lg-3">
+      <div class="card p-3">
+        <div class="d-flex align-items-center justify-content-between">
+          <div class="fw-semibold">📰 Notícias (economia)</div>
+          {% if role == "admin" %}
+            <a class="small" href="/admin/ui">Configurar</a>
           {% endif %}
         </div>
-
-        <div class="col-12 col-xl-7">
-          {% block content %}{% endblock %}
-          <div class="mt-4 muted small">
-            <div>Uploads protegidos por login e governança por papel/cliente.</div>
-          </div>
-        </div>
-
-        <div class="col-12 col-xl-3">
-          <div class="card news-card soft-card p-3">
-            <div class="d-flex align-items-center justify-content-between">
-              <div class="fw-semibold">📰 Notícias</div>
-              {% if role == "admin" %}
-                <a class="small" href="/admin/ui">Configurar</a>
-              {% endif %}
-            </div>
-            <div class="muted small mt-1">Economia, mercado e contexto comercial.</div>
-            <div id="mc-news" class="mt-2"></div>
-          </div>
-        </div>
+        <div class="muted small mt-1">Atualiza automaticamente.</div>
+        <div id="mc-news" class="mt-2"></div>
       </div>
-    </main>
+    </div>
+  </div>
+</main>
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 <script>
 (function(){
@@ -3543,7 +3230,7 @@ TEMPLATES: dict[str, str] = {
         return `
           <div class="carousel-item ${i===0?'active':''}">
             <a href="${link}" style="display:block;">
-              <img src="${img}" class="d-block w-100" alt="${title}" style="border-radius:18px; max-height:240px; object-fit:cover;">
+              <img src="${img}" class="d-block w-100" alt="${title}" style="border-radius:16px; max-height:240px; object-fit:cover;">
             </a>
             ${title ? `<div class="carousel-caption d-none d-md-block"><h6 class="bg-dark bg-opacity-50 d-inline-block px-2 py-1 rounded">${title}</h6></div>` : ``}
           </div>`;
@@ -3562,7 +3249,8 @@ TEMPLATES: dict[str, str] = {
             <span class="visually-hidden">Próximo</span>
           </button>
         </div>`;
-    }catch(e){}
+    }catch(e){
+    }
   }
 
   async function loadNews(){
@@ -3575,7 +3263,7 @@ TEMPLATES: dict[str, str] = {
       const items = await res.json();
       if (!Array.isArray(items) || items.length === 0) { holder.innerHTML = '<div class="muted small">Sem notícias no momento.</div>'; return; }
       holder.innerHTML = `
-        <div class="list-group list-group-flush list-clean">
+        <div class="list-group list-group-flush">
           ${items.map(it => `
             <a class="list-group-item list-group-item-action small" href="${esc(it.url)}" target="_blank" rel="noopener">
               <div class="fw-semibold">${esc(it.title)}</div>
@@ -3596,7 +3284,7 @@ TEMPLATES: dict[str, str] = {
   </body>
 </html>
 """,
-"login.html": r"""
+    "login.html": r"""
 {% extends "base.html" %}
 {% block content %}
 <div class="row justify-content-center">
@@ -3710,132 +3398,113 @@ TEMPLATES: dict[str, str] = {
     "dashboard.html": r"""
 {% extends "base.html" %}
 {% block content %}
-<div class="card topbar-card p-4 mb-3">
-  <div class="d-flex justify-content-between align-items-start flex-wrap gap-3">
-    <div>
-      <h4 class="mb-1">Portal organizado por Cliente, Escritório e Admin</h4>
+<div class="row g-3">
+  <div class="col-12">
+    <div class="card p-4">
+      <h4 class="mb-1">Painel</h4>
       <div class="muted">
         {% if role in ["admin","equipe"] %}
-          Escritório: <b>{{ current_company.name }}</b>{% if current_client %} • Cliente ativo: <b>{{ current_client.name }}</b>{% endif %}
+          Escritório: <b>{{ current_company.name }}</b>.
+          {% if current_client %} Cliente selecionado: <b>{{ current_client.name }}</b>.{% endif %}
         {% else %}
-          Bem-vindo(a)! Aqui você acompanha seu perfil, autorizações, ferramentas e demandas.
+          Bem-vindo(a)! Você vê apenas seus dados e arquivos.
         {% endif %}
       </div>
-    </div>
-    <div class="d-flex gap-2 flex-wrap">
       {% if role in ["admin","equipe"] %}
-        <a class="btn btn-outline-primary btn-sm" href="/client/switch">Trocar cliente</a>
-        <a class="btn btn-soft btn-sm" href="/negocios">Abrir CRM</a>
-      {% endif %}
-      {% if current_client %}
-        <a class="btn btn-primary btn-sm" href="/perfil/avaliacao/nova">Nova avaliação</a>
-      {% endif %}
-    </div>
-  </div>
-</div>
-
-{% if current_client %}
-<div class="row g-3 mb-3">
-  <div class="col-md-6 col-xl-3">
-    <div class="card metric-card soft-card h-100">
-      <div class="metric-label">Score de oferta</div>
-      <div class="metric-value">{{ "%.1f"|format(offer_summary.score_total) }}</div>
-      <div class="muted small">Leitura comercial consolidada</div>
-    </div>
-  </div>
-  <div class="col-md-6 col-xl-3">
-    <div class="card metric-card soft-card h-100">
-      <div class="metric-label">Crédito</div>
-      <div class="metric-value">{{ "%.1f"|format(offer_summary.score_credit) }}</div>
-      <div class="muted small">{{ offer_summary.credit_offer }}</div>
-    </div>
-  </div>
-  <div class="col-md-6 col-xl-3">
-    <div class="card metric-card soft-card h-100">
-      <div class="metric-label">Consultoria</div>
-      <div class="metric-value">{{ "%.1f"|format(offer_summary.score_consulting) }}</div>
-      <div class="muted small">{{ offer_summary.consulting_offer }}</div>
-    </div>
-  </div>
-  <div class="col-md-6 col-xl-3">
-    <div class="card metric-card soft-card h-100">
-      <div class="metric-label">Ferramentas</div>
-      <div class="metric-value">{{ "%.1f"|format(offer_summary.score_tools) }}</div>
-      <div class="muted small">{{ offer_summary.tools_offer }}</div>
-    </div>
-  </div>
-</div>
-
-<div class="row g-3 mb-3">
-  <div class="col-lg-7">
-    <div class="card p-4 h-100 soft-card">
-      <div class="d-flex justify-content-between align-items-center mb-2">
-        <h5 class="mb-0">Leitura do cliente</h5>
-        {% if latest_snapshot %}<span class="badge text-bg-light border">Score base {{ "%.1f"|format(offer_summary.base_total_score) }}</span>{% endif %}
-      </div>
-      <div class="muted">{{ offer_summary.summary }}</div>
-      {% if offer_summary.highlights %}
-        <ul class="mt-3 mb-0">
-          {% for item in offer_summary.highlights %}
-            <li class="mb-1">{{ item }}</li>
-          {% endfor %}
-        </ul>
-      {% else %}
-        <div class="muted mt-3">Complete o perfil da empresa e faça uma avaliação para gerar recomendações melhores.</div>
+        <div class="mt-3 d-flex gap-2">
+          <a class="btn btn-outline-primary btn-sm" href="/admin/members">Gerenciar membros</a>
+          <a class="btn btn-outline-secondary btn-sm" href="/client/switch">Trocar cliente</a>
+        </div>
       {% endif %}
     </div>
   </div>
-  <div class="col-lg-5">
-    <div class="card p-4 h-100 soft-card">
-      <h5 class="mb-2">Próximos passos sugeridos</h5>
-      <div class="list-group list-group-flush list-clean">
-        <a class="list-group-item" href="/empresa">Completar cadastro da empresa</a>
-        <a class="list-group-item" href="/perfil">Revisar perfil e score</a>
-        <a class="list-group-item" href="/perfil/avaliacao/nova">Registrar nova avaliação</a>
-        <a class="list-group-item" href="/credito">Checar consentimentos e SCR</a>
-      </div>
-    </div>
-  </div>
-</div>
-{% endif %}
 
-{% if tabs %}
-  {% for t in tabs %}
-    <div class="card p-4 mb-3 soft-card">
-      <div class="d-flex justify-content-between align-items-center mb-3">
-        <div>
-          <h5 class="mb-0">{{ t.title }}</h5>
-          <div class="muted small">
-            {% if t.key == "cliente" %}Área do cliente: cadastro, perfil, documentos e ferramentas.
-            {% elif t.key == "escritorio" %}Operação interna: CRM, crédito, tarefas e relacionamento.
-            {% else %}Governança, permissões, conteúdo e gestão do escritório.
-            {% endif %}
+  {% if tabs %}
+  <div class="col-12">
+    <ul class="nav nav-pills gap-2" id="dashTabs" role="tablist">
+      {% for t in tabs %}
+        <li class="nav-item" role="presentation">
+          <button class="nav-link {% if loop.first %}active{% endif %}" id="tab-{{ t.key }}" data-bs-toggle="pill"
+                  data-bs-target="#pane-{{ t.key }}" type="button" role="tab">
+            {{ t.title }}
+          </button>
+        </li>
+      {% endfor %}
+    </ul>
+
+    <div class="tab-content mt-3">
+      {% for t in tabs %}
+        <div class="tab-pane fade {% if loop.first %}show active{% endif %}" id="pane-{{ t.key }}" role="tabpanel">
+          <div class="row g-3">
+            {% for item in t["items"] %}
+              <div class="col-md-6 col-lg-4">
+                <a href="{{ item.href }}">
+                  <div class="card p-4 h-100">
+                    <div class="d-flex justify-content-between align-items-start">
+                      <div>
+                        <div class="fw-semibold">{{ item.title }}</div>
+                        <div class="muted small mt-1">{{ item.desc }}</div>
+                      </div>
+                      <span class="badge text-bg-light border">→</span>
+                    </div>
+                  </div>
+                </a>
+              </div>
+            {% endfor %}
           </div>
         </div>
-      </div>
-      <div class="row g-3">
-        {% for item in t["items"] %}
-          <div class="col-md-6 col-xl-4">
-            <a href="{{ item.href }}">
-              <div class="card p-4 h-100">
-                <div class="d-flex justify-content-between align-items-start">
-                  <div>
-                    <div class="fw-semibold">{{ item.title }}</div>
-                    <div class="muted small mt-1">{{ item.desc }}</div>
-                  </div>
-                  <span class="badge text-bg-light border">→</span>
-                </div>
-              </div>
-            </a>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+
+  {% if standalone %}
+  <div class="col-12 mt-2">
+    <div class="d-flex align-items-center justify-content-between">
+      <div class="fw-semibold">Acesso rápido</div>
+      <div class="muted small">Pendências / Agenda / Educação</div>
+    </div>
+  </div>
+
+  {% for item in standalone %}
+    <div class="col-md-6 col-lg-4">
+      <a href="{{ item.href }}">
+        <div class="card p-4 h-100">
+          <div class="d-flex justify-content-between align-items-start">
+            <div>
+              <div class="fw-semibold">{{ item.title }}</div>
+              <div class="muted small mt-1">{{ item.desc }}</div>
+            </div>
+            <span class="badge text-bg-light border">→</span>
           </div>
-        {% endfor %}
-      </div>
+        </div>
+      </a>
     </div>
   {% endfor %}
-{% endif %}
+  {% endif %}
+</div>
+
+<script>
+(function(){
+  const tabs = document.getElementById("dashTabs");
+  if (!tabs) return;
+
+  const key = "dash_active_tab";
+  const saved = localStorage.getItem(key);
+  if (saved) {
+    const btn = document.getElementById("tab-" + saved);
+    if (btn) btn.click();
+  }
+  tabs.addEventListener("click", (e) => {
+    const btn = e.target.closest("button[id^='tab-']");
+    if (!btn) return;
+    localStorage.setItem(key, btn.id.replace("tab-",""));
+  });
+})();
+</script>
 {% endblock %}
 """,
-"client_switch.html": r"""
+    "client_switch.html": r"""
 {% extends "base.html" %}
 {% block content %}
 <div class="card p-4">
@@ -4071,11 +3740,11 @@ TEMPLATES: dict[str, str] = {
     "empresa.html": r"""
 {% extends "base.html" %}
 {% block content %}
-<div class="card p-4 soft-card">
+<div class="card p-4">
   <div class="d-flex justify-content-between align-items-start">
     <div>
       <h4 class="mb-1">Empresa do Cliente</h4>
-      <div class="muted">Cadastro mestre do cliente, base para score, ofertas e cruzamento de dados.</div>
+      <div class="muted">CNPJ, endereço, e-mails, telefone etc.</div>
     </div>
     <a class="btn btn-outline-secondary" href="/">Voltar</a>
   </div>
@@ -4088,16 +3757,16 @@ TEMPLATES: dict[str, str] = {
     </div>
   {% else %}
     <form method="post" action="/empresa">
-      <h6 class="mb-3">Dados principais</h6>
       <div class="row g-3">
         <div class="col-md-8">
-          <label class="form-label">Razão social</label>
+          <label class="form-label">Razão Social</label>
           <input class="form-control" name="name" value="{{ current_client.name }}" required />
         </div>
         <div class="col-md-4">
           <label class="form-label">CNPJ</label>
           <input class="form-control mono" name="cnpj" value="{{ current_client.cnpj }}" />
         </div>
+
         <div class="col-md-6">
           <label class="form-label">E-mail</label>
           <input class="form-control" name="email" type="email" value="{{ current_client.email }}" />
@@ -4106,14 +3775,16 @@ TEMPLATES: dict[str, str] = {
           <label class="form-label">Telefone</label>
           <input class="form-control" name="phone" value="{{ current_client.phone }}" />
         </div>
+
         <div class="col-md-6">
-          <label class="form-label">E-mail financeiro</label>
+          <label class="form-label">E-mail do financeiro</label>
           <input class="form-control" name="finance_email" type="email" value="{{ current_client.finance_email }}" />
         </div>
         <div class="col-md-6">
           <label class="form-label">Endereço</label>
           <input class="form-control" name="address" value="{{ current_client.address }}" />
         </div>
+
         <div class="col-md-4">
           <label class="form-label">Cidade</label>
           <input class="form-control" name="city" value="{{ current_client.city }}" />
@@ -4126,83 +3797,7 @@ TEMPLATES: dict[str, str] = {
           <label class="form-label">CEP</label>
           <input class="form-control mono" name="zip_code" value="{{ current_client.zip_code }}" />
         </div>
-      </div>
 
-      <hr class="my-4"/>
-      <h6 class="mb-3">Perfil empresarial ampliado</h6>
-      <div class="row g-3">
-        <div class="col-md-6">
-          <label class="form-label">Nome fantasia</label>
-          <input class="form-control" name="trade_name" value="{{ business_profile.trade_name }}" />
-        </div>
-        <div class="col-md-6">
-          <label class="form-label">Nome legal / societário</label>
-          <input class="form-control" name="legal_name" value="{{ business_profile.legal_name }}" />
-        </div>
-        <div class="col-md-4">
-          <label class="form-label">Setor / segmento</label>
-          <input class="form-control" name="industry" value="{{ business_profile.industry }}" />
-        </div>
-        <div class="col-md-4">
-          <label class="form-label">CNAE</label>
-          <input class="form-control" name="cnae" value="{{ business_profile.cnae }}" />
-        </div>
-        <div class="col-md-4">
-          <label class="form-label">Regime tributário</label>
-          <input class="form-control" name="tax_regime" value="{{ business_profile.tax_regime }}" />
-        </div>
-        <div class="col-md-3">
-          <label class="form-label">Ano de fundação</label>
-          <input class="form-control" name="foundation_year" value="{{ business_profile.foundation_year }}" />
-        </div>
-        <div class="col-md-3">
-          <label class="form-label">Custos fixos mensais (R$)</label>
-          <input class="form-control" name="monthly_fixed_costs_brl" type="number" step="0.01" min="0" value="{{ business_profile.monthly_fixed_costs_brl }}" />
-        </div>
-        <div class="col-md-3">
-          <label class="form-label">Ticket médio (R$)</label>
-          <input class="form-control" name="average_ticket_brl" type="number" step="0.01" min="0" value="{{ business_profile.average_ticket_brl }}" />
-        </div>
-        <div class="col-md-3">
-          <label class="form-label">Inadimplência estimada (R$)</label>
-          <input class="form-control" name="delinquency_brl" type="number" step="0.01" min="0" value="{{ business_profile.delinquency_brl }}" />
-        </div>
-        <div class="col-md-6">
-          <label class="form-label">Relacionamento bancário</label>
-          <input class="form-control" name="bank_relationships" value="{{ business_profile.bank_relationships }}" placeholder="Ex.: Itaú, Bradesco, Sicoob" />
-        </div>
-        <div class="col-md-6">
-          <label class="form-label">Produtos ativos</label>
-          <input class="form-control" name="active_products" value="{{ business_profile.active_products }}" placeholder="Ex.: giro, antecipação, conta garantida" />
-        </div>
-        <div class="col-md-6">
-          <label class="form-label">Garantias / ativos</label>
-          <input class="form-control" name="collateral_assets" value="{{ business_profile.collateral_assets }}" placeholder="Ex.: imóvel, veículos, recebíveis" />
-        </div>
-        <div class="col-md-6">
-          <label class="form-label">Objetivo estratégico</label>
-          <input class="form-control" name="strategic_goal" value="{{ business_profile.strategic_goal }}" placeholder="Ex.: reduzir custo, captar, crescer" />
-        </div>
-        <div class="col-md-6">
-          <label class="form-label">Maior dor atual</label>
-          <input class="form-control" name="main_pain" value="{{ business_profile.main_pain }}" />
-        </div>
-        <div class="col-md-6">
-          <label class="form-label">Interesse inicial em serviços</label>
-          <input class="form-control" name="service_interest" value="{{ business_profile.service_interest }}" placeholder="Ex.: crédito, consultoria, DRE, fluxo de caixa" />
-        </div>
-      </div>
-
-      <div class="row g-3 mt-1">
-        <div class="col-md-2"><label class="form-check mt-3"><input class="form-check-input" type="checkbox" name="has_dre" value="1" {% if business_profile.has_dre %}checked{% endif %}> <span class="form-check-label">Fecha DRE</span></label></div>
-        <div class="col-md-2"><label class="form-check mt-3"><input class="form-check-input" type="checkbox" name="has_cash_flow" value="1" {% if business_profile.has_cash_flow %}checked{% endif %}> <span class="form-check-label">Fluxo de caixa</span></label></div>
-        <div class="col-md-2"><label class="form-check mt-3"><input class="form-check-input" type="checkbox" name="has_budget" value="1" {% if business_profile.has_budget %}checked{% endif %}> <span class="form-check-label">Orçamento</span></label></div>
-        <div class="col-md-2"><label class="form-check mt-3"><input class="form-check-input" type="checkbox" name="has_kpis" value="1" {% if business_profile.has_kpis %}checked{% endif %}> <span class="form-check-label">KPIs</span></label></div>
-        <div class="col-md-2"><label class="form-check mt-3"><input class="form-check-input" type="checkbox" name="has_erp" value="1" {% if business_profile.has_erp %}checked{% endif %}> <span class="form-check-label">ERP</span></label></div>
-        <div class="col-md-2"><label class="form-check mt-3"><input class="form-check-input" type="checkbox" name="has_financial_team" value="1" {% if business_profile.has_financial_team %}checked{% endif %}> <span class="form-check-label">Equipe financeira</span></label></div>
-      </div>
-
-      <div class="row g-3 mt-1">
         <div class="col-12">
           <label class="form-label">Observações</label>
           <textarea class="form-control" name="notes" rows="3">{{ current_client.notes }}</textarea>
@@ -4218,78 +3813,31 @@ TEMPLATES: dict[str, str] = {
 </div>
 {% endblock %}
 """,
-"perfil.html": r"""
+    "perfil.html": r"""
 {% extends "base.html" %}
 {% block content %}
 <div class="row g-3">
-  <div class="col-lg-4">
-    <div class="card p-4 soft-card h-100">
+  <div class="col-lg-5">
+    <div class="card p-4">
       <h4 class="mb-1">Meu Perfil</h4>
-      <div class="muted mb-3">Dados do usuário e do cliente ativo.</div>
+      <div class="muted mb-3">Dados do usuário</div>
       <div><span class="muted">Nome:</span> <b>{{ current_user.name }}</b></div>
       <div><span class="muted">E-mail:</span> <span class="mono">{{ current_user.email }}</span></div>
       <div><span class="muted">Role:</span> <b>{{ role }}</b></div>
-      {% if current_client %}
-        <hr class="my-3"/>
-        <div><span class="muted">Cliente:</span> <b>{{ current_client.name }}</b></div>
-        <div><span class="muted">CNPJ:</span> <span class="mono">{{ current_client.cnpj or "—" }}</span></div>
-        <div><span class="muted">E-mail:</span> {{ current_client.email or "—" }}</div>
-        <div><span class="muted">Cidade/UF:</span> {{ current_client.city or "—" }}{% if current_client.state %}/{{ current_client.state }}{% endif %}</div>
-      {% endif %}
     </div>
   </div>
 
-  <div class="col-lg-8">
-    <div class="card p-4 soft-card h-100">
-      <div class="d-flex justify-content-between align-items-start">
-        <div>
-          <h4 class="mb-1">Leitura comercial e operacional</h4>
-          <div class="muted mb-3">Cruza fotografia financeira, processo, SCR e perfil da empresa.</div>
-        </div>
-        <a class="btn btn-primary btn-sm" href="/perfil/avaliacao/nova">Nova avaliação</a>
-      </div>
+  <div class="col-lg-7">
+    <div class="card p-4">
+      <h4 class="mb-1">Indicadores do Cliente</h4>
+      <div class="muted mb-3">Faturamento, endividamento, caixa etc.</div>
 
       {% if not current_client %}
         <div class="alert alert-warning">Nenhum cliente selecionado/vinculado.</div>
       {% else %}
-        <div class="row g-3">
-          <div class="col-md-3">
-            <div class="card p-3">
-              <div class="muted small">Score de oferta</div>
-              <div class="h4 mb-0">{{ "%.1f"|format(offer_summary.score_total) }}</div>
-            </div>
-          </div>
-          <div class="col-md-3">
-            <div class="card p-3">
-              <div class="muted small">Crédito</div>
-              <div class="h4 mb-0">{{ "%.1f"|format(offer_summary.score_credit) }}</div>
-            </div>
-          </div>
-          <div class="col-md-3">
-            <div class="card p-3">
-              <div class="muted small">Consultoria</div>
-              <div class="h4 mb-0">{{ "%.1f"|format(offer_summary.score_consulting) }}</div>
-            </div>
-          </div>
-          <div class="col-md-3">
-            <div class="card p-3">
-              <div class="muted small">Ferramentas</div>
-              <div class="h4 mb-0">{{ "%.1f"|format(offer_summary.score_tools) }}</div>
-            </div>
-          </div>
-        </div>
+        <div class="mb-2"><span class="muted">Cliente:</span> <b>{{ current_client.name }}</b></div>
 
-        <div class="card p-3 mt-3">
-          <div class="fw-semibold">Recomendações atuais</div>
-          <ul class="mt-2 mb-0">
-            <li><b>Crédito:</b> {{ offer_summary.credit_offer }}</li>
-            <li><b>Consultoria:</b> {{ offer_summary.consulting_offer }}</li>
-            <li><b>Ferramentas:</b> {{ offer_summary.tools_offer }}</li>
-          </ul>
-          <div class="muted mt-2">{{ offer_summary.summary }}</div>
-        </div>
-
-        <form method="post" action="/perfil" class="mt-3">
+        <form method="post" action="/perfil">
           <div class="row g-3">
             <div class="col-md-6">
               <label class="form-label">Faturamento mensal (R$)</label>
@@ -4302,37 +3850,2165 @@ TEMPLATES: dict[str, str] = {
                      value="{{ current_client.debt_total_brl }}" />
             </div>
             <div class="col-md-6">
-              <label class="form-label">Caixa disponível (R$)</label>
+              <label class="form-label">Saldo em caixa (R$)</label>
               <input class="form-control" name="cash_balance_brl" type="number" step="0.01" min="0"
                      value="{{ current_client.cash_balance_brl }}" />
             </div>
             <div class="col-md-6">
-              <label class="form-label">Número de colaboradores</label>
+              <label class="form-label">Funcionários</label>
               <input class="form-control" name="employees_count" type="number" min="0"
                      value="{{ current_client.employees_count }}" />
             </div>
           </div>
-          <div class="d-flex gap-2 mt-4">
-            <button class="btn btn-primary">Salvar indicadores</button>
-            <a class="btn btn-outline-secondary" href="/empresa">Completar empresa</a>
+          <div class="mt-4">
+            <button class="btn btn-primary">Salvar</button>
+            <a class="btn btn-outline-secondary" href="/empresa">Editar dados da empresa</a>
+          </div>
+        </form>
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endblock %}
+""",
+    "error.html": r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <h4 class="mb-1">Erro</h4>
+  <div class="muted">{{ message }}</div>
+  <div class="mt-3"><a class="btn btn-outline-secondary" href="/">Voltar</a></div>
+</div>
+{% endblock %}
+""",
+    # ---------------- Pendências ----------------
+    "pending_list.html": r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <div class="d-flex justify-content-between align-items-center">
+    <div>
+      <h4 class="mb-0">Pendências</h4>
+      <div class="muted">Checklist / solicitações de informação.</div>
+    </div>
+    {% if role in ["admin","equipe"] %}
+      <a class="btn btn-primary" href="/pendencias/cliente/novo">Nova</a>
+    {% elif role == "cliente" %}
+      <a class="btn btn-primary" href="/pendencias/cliente/nova">Nova</a>
+    {% endif %}
+  </div>
+  <hr class="my-3"/>
+  {% if items %}
+    <div class="list-group">
+      {% for it in items %}
+        <a class="list-group-item list-group-item-action" href="/pendencias/{{ it.id }}">
+          <div class="d-flex justify-content-between">
+            <div class="fw-semibold">{{ it.title }}</div>
+            <span class="badge text-bg-light border">{{ it.status }}</span>
+          </div>
+          <div class="muted small">
+            {% if role in ["admin","equipe"] %}Cliente: {{ it.client_name }} • {% endif %}
+            {% if it.due_date %}Prazo: {{ it.due_date }} • {% endif %}
+            {{ it.created_at }}
+          </div>
+        </a>
+      {% endfor %}
+    </div>
+  {% else %}
+    <div class="muted">Sem pendências.</div>
+  {% endif %}
+</div>
+{% endblock %}
+""",
+    "pending_new.html": r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <h4>Nova Pendência</h4>
+  <div class="muted">Direcione para um cliente.</div>
+  {% if not clients %}
+    <div class="alert alert-warning mt-3">Nenhum cliente cadastrado. Vá em “Membros”.</div>
+    <a class="btn btn-outline-secondary" href="/pendencias">Voltar</a>
+  {% else %}
+    <form method="post" action="/pendencias/cliente/novo" enctype="multipart/form-data" class="mt-3">
+      <div class="row g-3">
+        <div class="col-12">
+          <label class="form-label">Cliente</label>
+          <select class="form-select" name="client_id" required>
+            {% for c in clients %}
+              <option value="{{ c.id }}" {% if current_client and c.id==current_client.id %}selected{% endif %}>{{ c.name }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="col-md-8">
+          <label class="form-label">Título</label>
+          <input class="form-control" name="title" required />
+        </div>
+        <div class="col-md-4">
+          <label class="form-label">Status</label>
+          <select class="form-select" name="status">
+            <option value="aberto">aberto</option>
+            <option value="aguardando_cliente">aguardando_cliente</option>
+            <option value="concluido">concluido</option>
+          </select>
+        </div>
+        <div class="col-md-4">
+          <label class="form-label">Prazo (AAAA-MM-DD)</label>
+          <input class="form-control mono" name="due_date" placeholder="2026-03-31"/>
+        </div>
+        <div class="col-12">
+          <label class="form-label">Descrição</label>
+          <textarea class="form-control" name="description" rows="5"></textarea>
+        </div>
+        <div class="col-12">
+          <label class="form-label">Anexo (opcional)</label>
+          <input class="form-control" type="file" name="file" />
+        </div>
+      </div>
+      <div class="mt-4 d-flex gap-2">
+        <button class="btn btn-primary">Salvar</button>
+        <a class="btn btn-outline-secondary" href="/pendencias">Cancelar</a>
+      </div>
+    </form>
+  {% endif %}
+</div>
+{% endblock %}
+""",
+    "pending_detail.html": r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <div class="d-flex justify-content-between">
+    <div>
+      <h4 class="mb-1">{{ item.title }}</h4>
+      <div class="muted">
+        Status: <b>{{ item.status }}</b>
+        {% if item.due_date %} • Prazo: <b>{{ item.due_date }}</b>{% endif %}
+        {% if role in ["admin","equipe"] %} • Cliente: <b>{{ client.name }}</b>{% endif %}
+      </div>
+    </div>
+    <div class="d-flex gap-2">
+      <a class="btn btn-outline-secondary" href="/pendencias">Voltar</a>
+      {% if role in ["admin","equipe"] %}
+        <a class="btn btn-outline-primary" href="/pendencias/{{ item.id }}/editar">Editar</a>
+        <form method="post" action="/pendencias/{{ item.id }}/excluir" onsubmit="return confirm('Excluir pendência? Remova anexos antes.');">
+          <button class="btn btn-outline-danger" type="submit">Excluir</button>
+        </form>
+      {% endif %}
+    </div>
+  </div>
+  <hr class="my-3"/>
+  <pre>{{ item.description }}</pre>
+
+  <hr class="my-3"/>
+  <h6>Anexos</h6>
+  {% if attachments %}
+    <ul>
+      {% for a in attachments %}
+        <li class="d-flex justify-content-between align-items-center">
+          <a href="/download/{{ a.id }}">{{ a.original_filename }}</a>
+          {% if role in ["admin","equipe"] %}
+            <form method="post" action="/attachments/{{ a.id }}/delete" class="ms-2">
+              <input type="hidden" name="next" value="/pendencias/{{ item.id }}">
+              <button class="btn btn-outline-danger btn-sm" type="submit">Excluir</button>
+            </form>
+          {% endif %}
+        </li>
+      {% endfor %}
+    </ul>
+  {% else %}
+    <div class="muted">Sem anexos.</div>
+  {% endif %}
+
+  <hr class="my-3"/>
+  <h6>Mensagens</h6>
+  {% if messages %}
+    <div class="list-group mb-3">
+      {% for m in messages %}
+        <div class="list-group-item">
+          <div class="d-flex justify-content-between">
+            <div class="fw-semibold">{{ m.author_name }}</div>
+            <div class="muted small">{{ m.created_at }}</div>
+          </div>
+          <pre class="mt-2">{{ m.message }}</pre>
+        </div>
+      {% endfor %}
+    </div>
+  {% else %}
+    <div class="muted">Sem mensagens.</div>
+  {% endif %}
+
+  {% if role in ["admin","equipe"] %}
+    <hr class="my-3"/>
+    <form method="post" action="/pendencias/{{ item.id }}/status" class="row g-2 align-items-end">
+      <div class="col-md-6">
+        <label class="form-label">Alterar status</label>
+        <select class="form-select" name="status">
+          <option value="aberto" {% if item.status=="aberto" %}selected{% endif %}>aberto</option>
+          <option value="aguardando_cliente" {% if item.status=="aguardando_cliente" %}selected{% endif %}>aguardando_cliente</option>
+          <option value="cliente_enviou" {% if item.status=="cliente_enviou" %}selected{% endif %}>cliente_enviou</option>
+          <option value="concluido" {% if item.status=="concluido" %}selected{% endif %}>concluido</option>
+        </select>
+      </div>
+      <div class="col-md-3">
+        <button class="btn btn-outline-primary w-100">Atualizar</button>
+      </div>
+    </form>
+
+    <form method="post" action="/pendencias/{{ item.id }}/anexar" enctype="multipart/form-data" class="mt-3">
+      <div class="mb-2">
+        <label class="form-label">Mensagem (opcional)</label>
+        <textarea class="form-control" name="message" rows="2"></textarea>
+      </div>
+      <div class="mb-2">
+        <label class="form-label">Anexar arquivo</label>
+        <input class="form-control" type="file" name="file" required />
+      </div>
+      <button class="btn btn-primary">Enviar</button>
+    </form>
+  {% else %}
+    <hr class="my-3"/>
+    {% if item.status == "aguardando_cliente" %}
+      <div class="alert alert-warning">O escritório está aguardando seu envio.</div>
+    {% endif %}
+    <form method="post" action="/pendencias/{{ item.id }}/cliente-upload" enctype="multipart/form-data">
+      <div class="mb-2">
+        <label class="form-label">Mensagem (opcional)</label>
+        <textarea class="form-control" name="message" rows="3"></textarea>
+      </div>
+      <div class="mb-2">
+        <label class="form-label">Anexo (opcional)</label>
+        <input class="form-control" type="file" name="file" />
+      </div>
+      <div class="form-check mb-3">
+        <input class="form-check-input" type="checkbox" name="mark_done" value="1" id="doneCheck">
+        <label class="form-check-label" for="doneCheck">Marcar como concluído</label>
+      </div>
+      <button class="btn btn-primary">Enviar</button>
+    </form>
+  {% endif %}
+</div>
+{% endblock %}
+""",
+    # ---------------- Documentos ----------------
+    "docs_list.html": r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <div class="d-flex justify-content-between align-items-center">
+    <div>
+      <h4 class="mb-0">Documentos</h4>
+      <div class="muted">Contratos, termos e documentos importantes.</div>
+    </div>
+    {% if role in ["admin","equipe"] %}
+      <a class="btn btn-primary" href="/documentos/novo">Novo</a>
+    {% elif role == "cliente" %}
+      <a class="btn btn-primary" href="/documentos/cliente/enviar">Enviar</a>
+    {% endif %}
+  </div>
+  <hr class="my-3"/>
+  {% if items %}
+    <div class="list-group">
+      {% for d in items %}
+        <a class="list-group-item list-group-item-action" href="/documentos/{{ d.id }}">
+          <div class="d-flex justify-content-between">
+            <div class="fw-semibold">{{ d.title }}</div>
+            <span class="badge text-bg-light border">{{ d.status }}</span>
+          </div>
+          <div class="muted small">
+            {% if role in ["admin","equipe"] %}Cliente: {{ d.client_name }} • {% endif %}
+            {{ d.created_at }}
+          </div>
+        </a>
+      {% endfor %}
+    </div>
+  {% else %}
+    <div class="muted">Sem documentos.</div>
+  {% endif %}
+</div>
+{% endblock %}
+""",
+    "docs_new.html": r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <h4>Novo Documento</h4>
+  <div class="muted">Direcione para um cliente e (se quiser) coloque “aguardando_cliente”.</div>
+  {% if not clients %}
+    <div class="alert alert-warning mt-3">Nenhum cliente cadastrado. Vá em “Membros”.</div>
+    <a class="btn btn-outline-secondary" href="/documentos">Voltar</a>
+  {% else %}
+    <form method="post" action="/documentos/novo" enctype="multipart/form-data" class="mt-3">
+      <div class="row g-3">
+        <div class="col-12">
+          <label class="form-label">Cliente</label>
+          <select class="form-select" name="client_id" required>
+            {% for c in clients %}
+              <option value="{{ c.id }}" {% if current_client and c.id==current_client.id %}selected{% endif %}>{{ c.name }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="col-md-8">
+          <label class="form-label">Título</label>
+          <input class="form-control" name="title" required />
+        </div>
+        <div class="col-md-4">
+          <label class="form-label">Status</label>
+          <select class="form-select" name="status">
+            <option value="rascunho">rascunho</option>
+            <option value="aguardando_cliente">aguardando_cliente</option>
+            <option value="concluido">concluido</option>
+          </select>
+        </div>
+        <div class="col-12">
+          <label class="form-label">Conteúdo</label>
+          <textarea class="form-control" name="content" rows="6" required></textarea>
+        </div>
+        <div class="col-12">
+          <label class="form-label">Anexo (opcional)</label>
+          <input class="form-control" type="file" name="file" />
+        </div>
+      </div>
+      <div class="mt-4 d-flex gap-2">
+        <button class="btn btn-primary">Salvar</button>
+        <a class="btn btn-outline-secondary" href="/documentos">Cancelar</a>
+      </div>
+    </form>
+  {% endif %}
+</div>
+{% endblock %}
+""",
+    "docs_detail.html": r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <div class="d-flex justify-content-between">
+    <div>
+      <h4 class="mb-1">{{ doc.title }}</h4>
+      <div class="muted">
+        Status: <b>{{ doc.status }}</b>
+        {% if role in ["admin","equipe"] %} • Cliente: <b>{{ client.name }}</b>{% endif %}
+      </div>
+    </div>
+    <div class="d-flex gap-2">
+      <a class="btn btn-outline-secondary" href="/documentos">Voltar</a>
+      {% if role in ["admin","equipe"] %}
+        <a class="btn btn-outline-primary" href="/documentos/{{ doc.id }}/editar">Editar</a>
+        <form method="post" action="/documentos/{{ doc.id }}/excluir" onsubmit="return confirm('Excluir documento? Remova anexos antes.');">
+          <button class="btn btn-outline-danger" type="submit">Excluir</button>
+        </form>
+      {% endif %}
+    </div>
+  </div>
+
+  <hr class="my-3"/>
+  <pre>{{ doc.content }}</pre>
+
+  <hr class="my-3"/>
+  <h6>Anexos</h6>
+  {% if attachments %}
+    <ul>
+      {% for a in attachments %}
+        <li class="d-flex justify-content-between align-items-center">
+          <a href="/download/{{ a.id }}">{{ a.original_filename }}</a>
+          {% if role in ["admin","equipe"] %}
+            <form method="post" action="/attachments/{{ a.id }}/delete" class="ms-2">
+              <input type="hidden" name="next" value="/documentos/{{ doc.id }}">
+              <button class="btn btn-outline-danger btn-sm" type="submit">Excluir</button>
+            </form>
+          {% endif %}
+        </li>
+      {% endfor %}
+    </ul>
+  {% else %}
+    <div class="muted">Sem anexos.</div>
+  {% endif %}
+
+  <hr class="my-3"/>
+  <h6>Mensagens</h6>
+  {% if messages %}
+    <div class="list-group mb-3">
+      {% for m in messages %}
+        <div class="list-group-item">
+          <div class="d-flex justify-content-between">
+            <div class="fw-semibold">{{ m.author_name }}</div>
+            <div class="muted small">{{ m.created_at }}</div>
+          </div>
+          <pre class="mt-2">{{ m.message }}</pre>
+        </div>
+      {% endfor %}
+    </div>
+  {% else %}
+    <div class="muted">Sem mensagens.</div>
+  {% endif %}
+
+  {% if role in ["admin","equipe"] %}
+    <hr class="my-3"/>
+    <form method="post" action="/documentos/{{ doc.id }}/status" class="row g-2 align-items-end">
+      <div class="col-md-6">
+        <label class="form-label">Alterar status</label>
+        <select class="form-select" name="status">
+          <option value="rascunho" {% if doc.status=="rascunho" %}selected{% endif %}>rascunho</option>
+          <option value="aguardando_cliente" {% if doc.status=="aguardando_cliente" %}selected{% endif %}>aguardando_cliente</option>
+          <option value="cliente_enviou" {% if doc.status=="cliente_enviou" %}selected{% endif %}>cliente_enviou</option>
+          <option value="concluido" {% if doc.status=="concluido" %}selected{% endif %}>concluido</option>
+        </select>
+      </div>
+      <div class="col-md-3">
+        <button class="btn btn-outline-primary w-100">Atualizar</button>
+      </div>
+    </form>
+
+    <form method="post" action="/documentos/{{ doc.id }}/anexar" enctype="multipart/form-data" class="mt-3">
+      <div class="mb-2">
+        <label class="form-label">Mensagem (opcional)</label>
+        <textarea class="form-control" name="message" rows="2"></textarea>
+      </div>
+      <div class="mb-2">
+        <label class="form-label">Anexar arquivo</label>
+        <input class="form-control" type="file" name="file" required />
+      </div>
+      <button class="btn btn-primary">Enviar</button>
+    </form>
+  {% else %}
+    <hr class="my-3"/>
+    {% if doc.status == "aguardando_cliente" %}
+      <div class="alert alert-warning">O escritório está aguardando seu anexo/resposta.</div>
+    {% endif %}
+    <form method="post" action="/documentos/{{ doc.id }}/cliente-upload" enctype="multipart/form-data">
+      <div class="mb-2">
+        <label class="form-label">Mensagem (opcional)</label>
+        <textarea class="form-control" name="message" rows="3"></textarea>
+      </div>
+      <div class="mb-2">
+        <label class="form-label">Anexo</label>
+        <input class="form-control" type="file" name="file" required />
+      </div>
+      <button class="btn btn-primary">Enviar</button>
+    </form>
+  {% endif %}
+</div>
+{% endblock %}
+""",
+    # ---------------- Propostas ----------------
+    "props_list.html": r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <div class="d-flex justify-content-between align-items-center">
+    <div>
+      <h4 class="mb-0">Propostas</h4>
+      <div class="muted">Propostas do escritório e solicitações do cliente.</div>
+    </div>
+
+    {% if role in ["admin","equipe"] %}
+      <a class="btn btn-primary" href="/propostas/nova">Nova Proposta</a>
+    {% else %}
+      <a class="btn btn-primary" href="/propostas/solicitacao">Nova Solicitação</a>
+    {% endif %}
+  </div>
+
+  <hr class="my-3"/>
+  {% if items %}
+    <div class="list-group">
+      {% for p in items %}
+        <a class="list-group-item list-group-item-action" href="/propostas/{{ p.id }}">
+          <div class="d-flex justify-content-between">
+            <div class="fw-semibold">{{ p.title }}</div>
+            <span class="badge text-bg-light border">{{ p.kind }} • {{ p.status }}</span>
+          </div>
+          <div class="muted small">
+            {% if role in ["admin","equipe"] %}Cliente: {{ p.client_name }} • {% endif %}
+            {% if p.kind == "proposta" %}Valor: R$ {{ "%.2f"|format(p.value_brl) }} • {% endif %}
+            {{ p.created_at }}
+          </div>
+        </a>
+      {% endfor %}
+    </div>
+  {% else %}
+    <div class="muted">Sem itens.</div>
+  {% endif %}
+</div>
+{% endblock %}
+""",
+    "props_new_staff.html": r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <h4>Nova Proposta (Escritório)</h4>
+  <div class="muted">Crie uma proposta e direcione para um cliente.</div>
+
+  {% if not clients %}
+    <div class="alert alert-warning mt-3">Nenhum cliente cadastrado. Vá em “Membros”.</div>
+    <a class="btn btn-outline-secondary" href="/propostas">Voltar</a>
+  {% else %}
+    <form method="post" action="/propostas/nova" enctype="multipart/form-data" class="mt-3">
+      <div class="row g-3">
+        <div class="col-12">
+          <label class="form-label">Cliente</label>
+          <select class="form-select" name="client_id" required>
+            {% for c in clients %}
+              <option value="{{ c.id }}" {% if current_client and c.id==current_client.id %}selected{% endif %}>{{ c.name }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="col-md-8">
+          <label class="form-label">Título</label>
+          <input class="form-control" name="title" required />
+        </div>
+        <div class="col-md-4">
+          <label class="form-label">Status</label>
+          <select class="form-select" name="status">
+            <option value="rascunho">rascunho</option>
+            <option value="enviada">enviada</option>
+          </select>
+        </div>
+        <div class="col-12">
+          <label class="form-label">Serviço/Produto</label>
+          <select class="form-select" name="service_name" required>
+            <option value="">Selecione...</option>
+            {% for s in service_catalog %}
+              <option value="{{ s.name }}">{{ s.name }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="col-md-6">
+          <label class="form-label">Valor (R$)</label>
+          <input class="form-control" name="value_brl" type="number" step="0.01" min="0" value="0" required />
+        </div>
+        <div class="col-12">
+          <label class="form-label">Descrição/Notas</label>
+          <textarea class="form-control" name="description" rows="5"></textarea>
+        </div>
+        <div class="col-12">
+          <label class="form-label">Anexo (opcional)</label>
+          <input class="form-control" type="file" name="file" />
+        </div>
+      </div>
+      <div class="mt-4 d-flex gap-2">
+        <button class="btn btn-primary">Salvar</button>
+        <a class="btn btn-outline-secondary" href="/propostas">Cancelar</a>
+      </div>
+    </form>
+  {% endif %}
+</div>
+{% endblock %}
+""",
+    "props_new_client.html": r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <h4>Nova Solicitação (Cliente)</h4>
+  <div class="muted">Peça um serviço/produto ao escritório. Você pode anexar arquivos.</div>
+
+  <form method="post" action="/propostas/solicitacao" enctype="multipart/form-data" class="mt-3">
+    <div class="row g-3">
+      <div class="col-12">
+        <label class="form-label">Título</label>
+        <input class="form-control" name="title" required placeholder="Ex: Preciso de consultoria tributária..." />
+      </div>
+      <div class="col-12">
+        <label class="form-label">Serviço/Produto</label>
+        <select class="form-select" name="service_name" required>
+          <option value="">Selecione...</option>
+          {% for s in service_catalog %}
+            <option value="{{ s.name }}">{{ s.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-12">
+        <label class="form-label">Detalhes</label>
+        <textarea class="form-control" name="description" rows="6" required></textarea>
+      </div>
+      <div class="col-12">
+        <label class="form-label">Anexo (opcional)</label>
+        <input class="form-control" type="file" name="file" />
+      </div>
+    </div>
+    <div class="mt-4 d-flex gap-2">
+      <button class="btn btn-primary">Enviar solicitação</button>
+      <a class="btn btn-outline-secondary" href="/propostas">Cancelar</a>
+    </div>
+  </form>
+</div>
+{% endblock %}
+""",
+    "props_detail.html": r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <div class="d-flex justify-content-between">
+    <div>
+      <h4 class="mb-1">{{ prop.title }}</h4>
+      <div class="muted">
+        Tipo: <b>{{ prop.kind }}</b> • Status: <b>{{ prop.status }}</b>
+        {% if prop.service_name %} • Serviço: <b>{{ prop.service_name }}</b>{% endif %}
+        {% if prop.kind == "proposta" %} • Valor: <b>R$ {{ "%.2f"|format(prop.value_brl) }}</b>{% endif %}
+        {% if role in ["admin","equipe"] %} • Cliente: <b>{{ client.name }}</b>{% endif %}
+      </div>
+    </div>
+    <a class="btn btn-outline-secondary" href="/propostas">Voltar</a>
+  </div>
+
+  <hr class="my-3"/>
+  <pre>{{ prop.description }}</pre>
+
+  <hr class="my-3"/>
+  <h6>Anexos</h6>
+  {% if attachments %}
+    <ul>
+      {% for a in attachments %}
+        <li class="d-flex justify-content-between align-items-center">
+          <a href="/download/{{ a.id }}">{{ a.original_filename }}</a>
+          {% if role in ["admin","equipe"] %}
+            <form method="post" action="/attachments/{{ a.id }}/delete" class="ms-2">
+              <input type="hidden" name="next" value="/financeiro/{{ inv.id }}">
+              <button class="btn btn-outline-danger btn-sm" type="submit">Excluir</button>
+            </form>
+          {% endif %}
+        </li>
+      {% endfor %}
+    </ul>
+  {% else %}
+    <div class="muted">Sem anexos.</div>
+  {% endif %}
+
+  <hr class="my-3"/>
+  <h6>Mensagens</h6>
+  {% if messages %}
+    <div class="list-group mb-3">
+      {% for m in messages %}
+        <div class="list-group-item">
+          <div class="d-flex justify-content-between">
+            <div class="fw-semibold">{{ m.author_name }}</div>
+            <div class="muted small">{{ m.created_at }}</div>
+          </div>
+          <pre class="mt-2">{{ m.message }}</pre>
+        </div>
+      {% endfor %}
+    </div>
+  {% else %}
+    <div class="muted">Sem mensagens.</div>
+  {% endif %}
+
+  {% if role in ["admin","equipe"] %}
+    <hr class="my-3"/>
+    <h6>Ações do escritório</h6>
+
+    <form method="post" action="/propostas/{{ prop.id }}/atualizar" class="row g-2 align-items-end">
+      <div class="col-md-4">
+        <label class="form-label">Tipo</label>
+        <select class="form-select" name="kind">
+          <option value="proposta" {% if prop.kind=="proposta" %}selected{% endif %}>proposta</option>
+          <option value="solicitacao" {% if prop.kind=="solicitacao" %}selected{% endif %}>solicitacao</option>
+        </select>
+      </div>
+      <div class="col-md-4">
+        <label class="form-label">Status</label>
+        <select class="form-select" name="status">
+          {% for s in allowed_statuses %}
+            <option value="{{ s }}" {% if prop.status==s %}selected{% endif %}>{{ s }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-12">
+        <label class="form-label">Serviço/Produto</label>
+        <select class="form-select" name="service_name" required>
+          <option value="">Selecione...</option>
+          {% for s in service_catalog %}
+            <option value="{{ s.name }}" {% if prop.service_name==s.name %}selected{% endif %}>{{ s.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-md-4">
+        <label class="form-label">Valor (R$)</label>
+        <input class="form-control" name="value_brl" type="number" step="0.01" min="0" value="{{ prop.value_brl }}" />
+      </div>
+      <div class="col-12">
+        <label class="form-label">Mensagem (opcional)</label>
+        <textarea class="form-control" name="message" rows="2"></textarea>
+      </div>
+      <div class="col-md-3">
+        <button class="btn btn-outline-primary w-100">Salvar</button>
+      </div>
+    </form>
+
+    <form method="post" action="/propostas/{{ prop.id }}/anexar" enctype="multipart/form-data" class="mt-3">
+      <div class="mb-2">
+        <label class="form-label">Anexar arquivo</label>
+        <input class="form-control" type="file" name="file" required />
+      </div>
+      <button class="btn btn-primary">Enviar anexo</button>
+    </form>
+
+  {% else %}
+    <hr class="my-3"/>
+    <h6>Enviar mais informações</h6>
+    <form method="post" action="/propostas/{{ prop.id }}/cliente-upload" enctype="multipart/form-data">
+      <div class="mb-2">
+        <label class="form-label">Mensagem (opcional)</label>
+        <textarea class="form-control" name="message" rows="3"></textarea>
+      </div>
+      <div class="mb-2">
+        <label class="form-label">Anexo (opcional)</label>
+        <input class="form-control" type="file" name="file" />
+      </div>
+      <button class="btn btn-primary">Enviar</button>
+    </form>
+  {% endif %}
+</div>
+{% endblock %}
+""",
+    # ---------------- Financeiro ----------------
+    "fin_list.html": r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <div class="d-flex justify-content-between align-items-center">
+    <div>
+      <h4 class="mb-0">Financeiro</h4>
+      <div class="muted">Notas/Boletos de honorários (manual) + sincronizado do Conta Azul.</div>
+    </div>
+    {% if role in ["admin","equipe"] %}
+      <a class="btn btn-primary" href="/financeiro/novo">Nova cobrança</a>
+    {% endif %}
+  </div>
+
+  <hr class="my-3"/>
+
+  {% if items %}
+    <div class="list-group">
+      {% for it in items %}
+        <a class="list-group-item list-group-item-action" href="/financeiro/{{ it.id }}">
+          <div class="d-flex justify-content-between">
+            <div class="fw-semibold">{{ it.title }}</div>
+            <span class="badge text-bg-light border">{{ it.status }}</span>
+          </div>
+          <div class="muted small">
+            {% if role in ["admin","equipe"] %}Cliente: {{ it.client_name }} • {% endif %}
+            Valor: R$ {{ "%.2f"|format(it.amount_brl) }} •
+            {% if it.due_date %}Venc: {{ it.due_date }} • {% endif %}
+            {{ it.created_at }}
+          </div>
+        </a>
+      {% endfor %}
+    </div>
+  {% else %}
+    <div class="muted">Sem cobranças manuais.</div>
+  {% endif %}
+</div>
+
+<div class="card p-4 mt-3">
+  <div class="d-flex justify-content-between align-items-center">
+    <div>
+      <h5 class="mb-0">Conta Azul</h5>
+      <div class="muted small">Sincroniza notas fiscais e contas a receber do ERP (filtrado pelo cliente selecionado).</div>
+    </div>
+    {% if role in ["admin","equipe"] %}
+      <a class="btn btn-outline-secondary" href="/integrations/contaazul">Configurar</a>
+    {% endif %}
+  </div>
+
+  <hr class="my-3"/>
+
+  {% if not ca_configured %}
+    <div class="alert alert-warning">
+      Configure <code>CONTA_AZUL_CLIENT_ID</code> e <code>CONTA_AZUL_CLIENT_SECRET</code> no Render.
+    </div>
+  {% elif not ca_connected %}
+    <div class="alert alert-info">
+      Conta Azul não conectada. <a href="/integrations/contaazul">Clique aqui para conectar</a>.
+    </div>
+  {% else %}
+    <div class="d-flex flex-wrap align-items-center gap-2">
+      <span class="badge text-bg-light border">Conectado</span>
+      {% if ca_last_sync %}<span class="muted small">Última sync: {{ ca_last_sync }}</span>{% endif %}
+      {% if role in ["admin","equipe"] %}
+        <form method="post" action="/financeiro/contaazul/sync">
+          <button class="btn btn-sm btn-outline-primary">Sincronizar agora</button>
+        </form>
+      {% endif %}
+    </div>
+
+    {% if role in ["admin","equipe"] and current_client %}
+      <div class="border rounded p-3 mt-3">
+        <div class="fw-semibold mb-1">Vínculo do cliente (Conta Azul)</div>
+        <div class="muted small">
+          Cliente: <b>{{ current_client.name }}</b> • Doc: {{ ca_client_doc or "—" }} • E-mail: {{ ca_client_email or "—" }}
+        </div>
+        <div class="mono small mt-1">person_id: {{ ca_person_id or "—" }}</div>
+
+        <div class="d-flex flex-wrap gap-2 mt-2">
+          <form method="post" action="/financeiro/contaazul/auto_vincular">
+            <button class="btn btn-sm btn-outline-secondary">Auto-vincular</button>
+          </form>
+
+          <form method="post" action="/financeiro/contaazul/vincular" class="d-flex gap-2">
+            <input name="person_id" class="form-control form-control-sm" placeholder="UUID do cliente no Conta Azul (Pessoa)" style="min-width: 280px;" />
+            <button class="btn btn-sm btn-outline-primary">Salvar vínculo</button>
+          </form>
+        </div>
+
+        <div class="muted small mt-2">
+          Se não aparecer nada após sincronizar, geralmente o documento/e-mail do cliente no Conta Azul está diferente. Nesse caso, cole o UUID da pessoa (Cliente) do Conta Azul aqui.
+        </div>
+      </div>
+    {% endif %}
+
+    <div class="mt-4">
+      <h6 class="mb-2">Contas a receber / Boletos</h6>
+      {% if ca_receivables %}
+        <div class="table-responsive">
+          <table class="table table-sm align-middle">
+            <thead>
+              <tr>
+                <th>Venc.</th>
+                <th>Descrição</th>
+                <th>Status</th>
+                <th>Download</th>
+                <th>Aberto</th>
+                <th>Pago</th>
+                <th>Fatura</th>
+                <th>Link</th>
+                <th>Download</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for r in ca_receivables %}
+                <tr>
+                  <td class="mono small">{{ r.due_date }}</td>
+                  <td>{{ r.description }}</td>
+                  <td><span class="badge text-bg-light border">{{ r.status }}</span></td>
+                  <td>R$ {{ "%.2f"|format(r.amount_open) }}</td>
+                  <td>R$ {{ "%.2f"|format(r.amount_paid) }}</td>
+                  <td class="mono small">{% if r.invoice_number %}{{ r.invoice_type }} #{{ r.invoice_number }}{% else %}—{% endif %}</td>
+                  <td>
+                    {% if r.payment_url %}
+                      <a class="btn btn-sm btn-outline-primary" href="{{ r.payment_url }}" target="_blank" rel="noopener">Abrir</a>
+                    {% else %}
+                      —
+                    {% endif %}
+                  </td>
+                  <td>
+                    <a class="btn btn-sm btn-outline-secondary" href="/financeiro/contaazul/receivable/{{ r.id }}/fatura.pdf" target="_blank" rel="noopener">PDF</a>
+                  </td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      {% else %}
+        <div class="muted small">Nenhuma parcela encontrada. Clique em “Sincronizar agora”.</div>
+      {% endif %}
+    </div>
+
+    <div class="mt-4">
+      <h6 class="mb-2">Notas fiscais</h6>
+      {% if ca_invoices %}
+        <div class="table-responsive">
+          <table class="table table-sm align-middle">
+            <thead>
+              <tr>
+                <th>Data</th>
+                <th>Número</th>
+                <th>Tipo</th>
+                <th>Status</th>
+                <th>Download</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for n in ca_invoices %}
+                <tr>
+                  <td class="mono small">{{ n.issue_date }}</td>
+                  <td class="mono small">{{ n.number or "—" }}</td>
+                  <td class="mono small">{{ n.invoice_type }}</td>
+                  <td><span class="badge text-bg-light border">{{ n.status }}</span></td>
+                  <td>
+                    {% if n.invoice_type.upper() == "NFSE" %}
+                      <a class="btn btn-sm btn-outline-secondary" href="/financeiro/contaazul/invoice/{{ n.id }}/pdf" target="_blank" rel="noopener">PDF</a>
+                    {% elif n.invoice_type.upper() == "NFE" %}
+                      <a class="btn btn-sm btn-outline-secondary" href="/financeiro/contaazul/invoice/{{ n.id }}/xml" target="_blank" rel="noopener">XML</a>
+                    {% else %}
+                      —
+                    {% endif %}
+                  </td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      {% else %}
+        <div class="muted small">Nenhuma nota encontrada. Clique em “Sincronizar agora”.</div>
+      {% endif %}
+    </div>
+  {% endif %}
+</div>
+{% endblock %}
+""",
+    "fin_new.html": r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <h4>Nova cobrança (nota/boleto)</h4>
+  <div class="muted">Só admin/equipe cria e anexa PDF/arquivo para o cliente baixar.</div>
+
+  {% if not clients %}
+    <div class="alert alert-warning mt-3">Nenhum cliente cadastrado. Vá em “Membros”.</div>
+    <div class="d-flex gap-2">
+      <a class="btn btn-outline-secondary" href="/financeiro">Voltar</a>
+      {% if role in ["admin","equipe"] %}
+        <a class="btn btn-outline-primary" href="/financeiro/{{ inv.id }}/editar">Editar</a>
+      {% endif %}
+    </div>
+  {% else %}
+    <form method="post" action="/financeiro/novo" enctype="multipart/form-data" class="mt-3">
+      <div class="row g-3">
+        <div class="col-12">
+          <label class="form-label">Cliente</label>
+          <select class="form-select" name="client_id" required>
+            {% for c in clients %}
+              <option value="{{ c.id }}" {% if current_client and c.id==current_client.id %}selected{% endif %}>{{ c.name }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="col-md-8">
+          <label class="form-label">Título</label>
+          <input class="form-control" name="title" required placeholder="Honorários - Março/2026" />
+        </div>
+        <div class="col-md-4">
+          <label class="form-label">Status</label>
+          <select class="form-select" name="status">
+            <option value="emitido">emitido</option>
+            <option value="pago">pago</option>
+            <option value="atrasado">atrasado</option>
+            <option value="cancelado">cancelado</option>
+          </select>
+        </div>
+        <div class="col-md-6">
+          <label class="form-label">Valor (R$)</label>
+          <input class="form-control" name="amount_brl" type="number" step="0.01" min="0" value="0" required />
+        </div>
+        <div class="col-md-6">
+          <label class="form-label">Vencimento (AAAA-MM-DD)</label>
+          <input class="form-control mono" name="due_date" placeholder="2026-03-20" />
+        </div>
+        <div class="col-12">
+          <label class="form-label">Observações</label>
+          <textarea class="form-control" name="notes" rows="3"></textarea>
+        </div>
+        <div class="col-12">
+          <label class="form-label">Anexo (PDF/arquivo)</label>
+          <input class="form-control" type="file" name="file" required />
+        </div>
+      </div>
+      <div class="mt-4 d-flex gap-2">
+        <button class="btn btn-primary">Salvar</button>
+        <a class="btn btn-outline-secondary" href="/financeiro">Cancelar</a>
+      </div>
+    </form>
+  {% endif %}
+</div>
+{% endblock %}
+""",
+    "fin_detail.html": r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <div class="d-flex justify-content-between">
+    <div>
+      <h4 class="mb-1">{{ inv.title }}</h4>
+      <div class="muted">
+        Status: <b>{{ inv.status }}</b> • Valor: <b>R$ {{ "%.2f"|format(inv.amount_brl) }}</b>
+        {% if inv.due_date %} • Venc: <b>{{ inv.due_date }}</b>{% endif %}
+        {% if role in ["admin","equipe"] %} • Cliente: <b>{{ client.name }}</b>{% endif %}
+      </div>
+    </div>
+    <div class="d-flex gap-2">
+      <a class="btn btn-outline-secondary" href="/financeiro">Voltar</a>
+      {% if role in ["admin","equipe"] %}
+        <a class="btn btn-outline-primary" href="/financeiro/{{ inv.id }}/editar">Editar</a>
+        <form method="post" action="/financeiro/{{ inv.id }}/excluir" onsubmit="return confirm('Excluir lançamento? Remova anexos antes.');">
+          <button class="btn btn-outline-danger" type="submit">Excluir</button>
+        </form>
+      {% endif %}
+    </div>
+  </div>
+
+  <hr class="my-3"/>
+  <pre>{{ inv.notes }}</pre>
+
+  <hr class="my-3"/>
+  <h6>Anexos (download)</h6>
+  {% if attachments %}
+    <ul>
+      {% for a in attachments %}
+        <li class="d-flex justify-content-between align-items-center">
+          <a href="/download/{{ a.id }}">{{ a.original_filename }}</a>
+          {% if role in ["admin","equipe"] %}
+            <form method="post" action="/attachments/{{ a.id }}/delete" class="ms-2">
+              <input type="hidden" name="next" value="/financeiro/{{ inv.id }}">
+              <button class="btn btn-outline-danger btn-sm" type="submit">Excluir</button>
+            </form>
+          {% endif %}
+        </li>
+      {% endfor %}
+    </ul>
+  {% else %}
+    <div class="muted">Sem anexos.</div>
+  {% endif %}
+
+  {% if role in ["admin","equipe"] %}
+    <hr class="my-3"/>
+    <form method="post" action="/financeiro/{{ inv.id }}/anexar" enctype="multipart/form-data">
+      <div class="mb-2">
+        <label class="form-label">Anexar novo arquivo</label>
+        <input class="form-control" type="file" name="file" required />
+      </div>
+      <button class="btn btn-primary">Enviar</button>
+    </form>
+  {% endif %}
+</div>
+{% endblock %}
+""",
+}
+
+TEMPLATES.update({
+    "contaazul_settings.html": r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <div class="d-flex justify-content-between align-items-start">
+    <div>
+      <h4 class="mb-1">Integração: Conta Azul</h4>
+      <div class="muted">Sincroniza notas e cobranças (boletos) para aparecerem no Financeiro.</div>
+    </div>
+    <a class="btn btn-outline-secondary" href="/financeiro">Voltar</a>
+  </div>
+
+  <hr class="my-3"/>
+
+  {% if not configured %}
+    <div class="alert alert-warning">
+      Configure as variáveis no Render: <code>CONTA_AZUL_CLIENT_ID</code> e <code>CONTA_AZUL_CLIENT_SECRET</code>.
+    </div>
+  {% endif %}
+
+  <div class="mb-2">
+    <div class="muted small">Redirect URI (cadastre no Portal do Desenvolvedor Conta Azul):</div>
+    <div class="mono">{{ redirect_uri }}</div>
+  </div>
+
+  {% if connected %}
+    <div class="alert alert-success">Conectado{% if last_sync %} • Última sync: {{ last_sync }}{% endif %}</div>
+    <form method="post" action="/integrations/contaazul/disconnect" onsubmit="return confirm('Desconectar Conta Azul?');">
+      <button class="btn btn-outline-danger">Desconectar</button>
+    </form>
+  {% else %}
+    <div class="alert alert-info">Ainda não conectado.</div>
+    <a class="btn btn-primary" href="/integrations/contaazul/connect">Conectar Conta Azul</a>
+  {% endif %}
+</div>
+{% endblock %}
+""",
+    "fin_list.html": r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <div class="d-flex justify-content-between align-items-center">
+    <div>
+      <h4 class="mb-0">Financeiro</h4>
+      <div class="muted">Notas/Boletos de honorários (manual) + sincronizado do Conta Azul.</div>
+    </div>
+    <div class="d-flex gap-2">
+      {% if role in ["admin","equipe"] %}
+        <a class="btn btn-outline-secondary" href="/integrations/contaazul">Conta Azul</a>
+        {% if ca_connected %}
+          <form method="post" action="/financeiro/contaazul/sync">
+            <button class="btn btn-outline-primary" type="submit">Sincronizar</button>
+          </form>
+        {% endif %}
+        <a class="btn btn-primary" href="/financeiro/novo">Nova cobrança</a>
+      {% endif %}
+    </div>
+  </div>
+
+  {% if ca_configured and role in ["admin","equipe"] and not ca_connected %}
+    <div class="alert alert-warning mt-3">
+      Conta Azul não conectado. Vá em <a href="/integrations/contaazul">Integrações → Conta Azul</a>.
+    </div>
+  {% endif %}
+
+  {% if ca_last_sync %}
+    <div class="muted small mt-2">Conta Azul: última sync em {{ ca_last_sync }}</div>
+  {% endif %}
+
+  <hr class="my-3"/>
+  <h6 class="mb-2">Cobranças (manual)</h6>
+  {% if items %}
+    <div class="list-group">
+      {% for it in items %}
+        <a class="list-group-item list-group-item-action" href="/financeiro/{{ it.id }}">
+          <div class="d-flex justify-content-between">
+            <div class="fw-semibold">{{ it.title }}</div>
+            <span class="badge text-bg-light border">{{ it.status }}</span>
+          </div>
+          <div class="muted small">
+            {% if role in ["admin","equipe"] %}Cliente: {{ it.client_name }} • {% endif %}
+            Valor: R$ {{ "%.2f"|format(it.amount_brl) }} •
+            {% if it.due_date %}Venc: {{ it.due_date }} • {% endif %}
+            {{ it.created_at }}
+          </div>
+        </a>
+      {% endfor %}
+    </div>
+  {% else %}
+    <div class="muted">Sem cobranças manuais.</div>
+  {% endif %}
+
+  <hr class="my-4"/>
+  <h6 class="mb-2">Conta Azul: Boletos / Contas a receber</h6>
+  {% if ca_receivables %}
+    <div class="list-group">
+      {% for r in ca_receivables %}
+        <div class="list-group-item">
+          <div class="d-flex justify-content-between">
+            <div class="fw-semibold">{{ r.description }}</div>
+            <span class="badge text-bg-light border">{{ r.status }}</span>
+          </div>
+          <div class="muted small mt-1">
+            Valor: R$ {{ "%.2f"|format(r.amount_total) }} • Aberto: R$ {{ "%.2f"|format(r.amount_open) }}
+            {% if r.due_date %} • Venc: {{ r.due_date }}{% endif %}
+            {% if r.invoice_type or r.invoice_number %} • {{ r.invoice_type }} {{ r.invoice_number }}{% endif %}
+            {% if r.boleto_status %} • Boleto: {{ r.boleto_status }}{% endif %}
+          </div>
+          {% if r.payment_url %}
+            <div class="mt-2">
+              <a class="btn btn-sm btn-outline-primary" href="{{ r.payment_url }}" target="_blank" rel="noopener">Abrir link de pagamento</a>
+            </div>
+          {% endif %}
+        </div>
+      {% endfor %}
+    </div>
+  {% else %}
+    <div class="muted">Sem itens sincronizados.</div>
+  {% endif %}
+
+  <hr class="my-4"/>
+  <h6 class="mb-2">Conta Azul: Notas fiscais</h6>
+  {% if ca_invoices %}
+    <div class="list-group">
+      {% for n in ca_invoices %}
+        <div class="list-group-item">
+          <div class="d-flex justify-content-between">
+            <div class="fw-semibold">{{ n.invoice_type }} {{ n.number }}</div>
+            <span class="badge text-bg-light border">{{ n.status }}</span>
+          </div>
+          <div class="muted small mt-1">
+            {% if n.issue_date %}Emissão/Competência: {{ n.issue_date }} • {% endif %}
+            {% if n.amount %}Valor: R$ {{ "%.2f"|format(n.amount) }} • {% endif %}
+            ID: {{ n.external_id }}
+          </div>
+        </div>
+      {% endfor %}
+    </div>
+  {% else %}
+    <div class="muted">Sem notas sincronizadas.</div>
+  {% endif %}
+</div>
+{% endblock %}
+""",
+})
+
+TEMPLATES.update({
+    "consult_list.html": r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <div class="d-flex justify-content-between align-items-center">
+    <div>
+      <h4 class="mb-0">Consultoria</h4>
+      <div class="muted">Projetos → Etapas → Sub-etapas → % concluído</div>
+    </div>
+    {% if role in ["admin","equipe"] %}
+      <a class="btn btn-primary" href="/consultoria/novo">Novo projeto</a>
+    {% endif %}
+  </div>
+
+  <hr class="my-3"/>
+
+  {% if projects %}
+    <div class="list-group">
+      {% for p in projects %}
+        <a class="list-group-item list-group-item-action" href="/consultoria/{{ p.id }}">
+          <div class="d-flex justify-content-between">
+            <div class="fw-semibold">{{ p.name }}</div>
+            <span class="badge text-bg-light border">{{ p.status }}</span>
+          </div>
+
+          <div class="muted small mt-1">
+            {% if role in ["admin","equipe"] %}Cliente: {{ p.client_name }} • {% endif %}
+            {% if p.due_date %}Prazo: {{ p.due_date }} • {% endif %}
+            Progresso: {{ p.progress_pct }}%
+          </div>
+
+          <div class="progress mt-2" style="height: 8px;">
+            <div class="progress-bar" role="progressbar" style="width: {{ p.progress_pct }}%;"></div>
+          </div>
+        </a>
+      {% endfor %}
+    </div>
+  {% else %}
+    <div class="muted">Sem projetos ainda.</div>
+  {% endif %}
+</div>
+{% endblock %}
+""",
+
+    "consult_new.html": r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <h4>Novo Projeto de Consultoria</h4>
+  <div class="muted">Direcione para um cliente e defina prazos.</div>
+
+  {% if not clients %}
+    <div class="alert alert-warning mt-3">Nenhum cliente cadastrado. Vá em “Membros” e crie um cliente.</div>
+    <a class="btn btn-outline-secondary" href="/consultoria">Voltar</a>
+  {% else %}
+    <form method="post" action="/consultoria/novo" class="mt-3">
+      <div class="row g-3">
+        <div class="col-12">
+          <label class="form-label">Cliente</label>
+          <select class="form-select" name="client_id" required>
+            {% for c in clients %}
+              <option value="{{ c.id }}" {% if current_client and c.id==current_client.id %}selected{% endif %}>{{ c.name }}</option>
+            {% endfor %}
+          </select>
+        </div>
+
+        <div class="col-md-8">
+          <label class="form-label">Nome do projeto</label>
+          <input class="form-control" name="name" required placeholder="Ex: Reestruturação Financeira 2026" />
+        </div>
+
+        <div class="col-md-4">
+          <label class="form-label">Status</label>
+          <select class="form-select" name="status">
+            <option value="ativo">ativo</option>
+            <option value="pausado">pausado</option>
+            <option value="concluido">concluido</option>
+          </select>
+        </div>
+
+        <div class="col-md-6">
+          <label class="form-label">Início (AAAA-MM-DD)</label>
+          <input class="form-control mono" name="start_date" placeholder="2026-03-10" />
+        </div>
+
+        <div class="col-md-6">
+          <label class="form-label">Prazo final (AAAA-MM-DD)</label>
+          <input class="form-control mono" name="due_date" placeholder="2026-06-30" />
+        </div>
+
+        <div class="col-12">
+          <label class="form-label">Descrição</label>
+          <textarea class="form-control" name="description" rows="4"></textarea>
+        </div>
+      </div>
+
+      <div class="mt-4 d-flex gap-2">
+        <button class="btn btn-primary">Criar</button>
+        <a class="btn btn-outline-secondary" href="/consultoria">Cancelar</a>
+      </div>
+    </form>
+  {% endif %}
+</div>
+{% endblock %}
+""",
+
+    "consult_detail.html": r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <div class="d-flex justify-content-between align-items-start">
+    <div>
+      <h4 class="mb-1">{{ project.name }}</h4>
+      <div class="muted">
+        Status: <b>{{ project.status }}</b>
+        {% if project.due_date %} • Prazo final: <b>{{ project.due_date }}</b>{% endif %}
+        {% if role in ["admin","equipe"] %} • Cliente: <b>{{ client.name }}</b>{% endif %}
+      </div>
+
+      <div class="mt-2">
+        <div class="muted small">Progresso: <b>{{ progress_pct }}%</b></div>
+        <div class="progress" style="height: 10px;">
+          <div class="progress-bar" role="progressbar" style="width: {{ progress_pct }}%;"></div>
+        </div>
+      </div>
+    </div>
+
+    <a class="btn btn-outline-secondary" href="/consultoria">Voltar</a>
+  </div>
+
+  {% if project.description %}
+    <hr class="my-3"/>
+    <pre>{{ project.description }}</pre>
+  {% endif %}
+
+  <hr class="my-3"/>
+  <h5 class="mb-3">Etapas</h5>
+
+  {% if stages %}
+    <div class="accordion" id="stagesAcc">
+      {% for s in stages %}
+        <div class="accordion-item">
+          <h2 class="accordion-header" id="h{{ s.id }}">
+            <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#c{{ s.id }}">
+              {{ s.order }}. {{ s.name }}
+              {% if s.due_date %}<span class="ms-2 muted small">• prazo: {{ s.due_date }}</span>{% endif %}
+            </button>
+          </h2>
+          <div id="c{{ s.id }}" class="accordion-collapse collapse" data-bs-parent="#stagesAcc">
+            <div class="accordion-body">
+
+
+              {% if role in ["admin","equipe"] %}
+                <div class="d-flex justify-content-end gap-2 mb-3">
+                  <a class="btn btn-outline-secondary btn-sm" href="/consultoria/stages/{{ s.id }}/editar">Editar etapa</a>
+                  <form method="post" action="/consultoria/stages/{{ s.id }}/excluir" onsubmit="return confirm('Excluir esta etapa e suas sub-etapas?');">
+                    <button class="btn btn-outline-danger btn-sm">Excluir etapa</button>
+                  </form>
+                </div>
+              {% endif %}
+
+              {% if s.steps %}
+                <div class="list-group mb-3">
+                  {% for st in s.steps %}
+                    <div class="list-group-item">
+                      <div class="d-flex justify-content-between align-items-start">
+                        <div>
+                          <div class="fw-semibold">
+                            {% if st.done %}✅{% else %}⬜{% endif %}
+                            {{ st.title }}
+                            {% if st.client_action %}<span class="badge text-bg-light border ms-2">cliente</span>{% endif %}
+                          </div>
+                          {% if st.description %}<div class="muted small mt-1">{{ st.description }}</div>{% endif %}
+                          <div class="muted small">
+                            {% if st.due_date %}Prazo: {{ st.due_date }} • {% endif %}
+                            Peso: {{ st.weight }}
+                          </div>
+                        </div>
+
+                        <div class="d-flex gap-2">
+                          {% if role in ["admin","equipe"] or (role=="cliente" and st.client_action) %}
+                            <form method="post" action="/consultoria/steps/{{ st.id }}/toggle">
+                              <button class="btn btn-outline-primary btn-sm">{% if st.done %}Desmarcar{% else %}Concluir{% endif %}</button>
+                            </form>
+                          {% endif %}
+
+                          {% if role in ["admin","equipe"] %}
+                            <a class="btn btn-outline-secondary btn-sm" href="/consultoria/steps/{{ st.id }}/editar">Editar</a>
+                            <form method="post" action="/consultoria/steps/{{ st.id }}/excluir" onsubmit="return confirm('Excluir esta sub-etapa?');">
+                              <button class="btn btn-outline-danger btn-sm">Excluir</button>
+                            </form>
+                          {% endif %}
+                        </div>
+                      </div>
+                    </div>
+                  {% endfor %}
+                </div>
+              {% else %}
+                <div class="muted mb-3">Sem sub-etapas.</div>
+              {% endif %}
+
+              {% if role in ["admin","equipe"] %}
+                <form method="post" action="/consultoria/stages/{{ s.id }}/steps" class="card p-3">
+                  <div class="fw-semibold mb-2">Adicionar sub-etapa</div>
+                  <div class="row g-2">
+                    <div class="col-md-6">
+                      <input class="form-control" name="title" required placeholder="Título" />
+                    </div>
+                    <div class="col-md-6">
+                      <input class="form-control mono" name="due_date" placeholder="Prazo AAAA-MM-DD" />
+                    </div>
+                    <div class="col-12">
+                      <input class="form-control" name="description" placeholder="Descrição (opcional)" />
+                    </div>
+                    <div class="col-md-4">
+                      <input class="form-control" name="weight" type="number" step="0.1" min="0.1" value="1.0" />
+                      <div class="form-text">Peso para cálculo do %.</div>
+                    </div>
+                    <div class="col-md-4">
+                      <div class="form-check mt-2">
+                        <input class="form-check-input" type="checkbox" name="client_action" value="1" id="ca{{ s.id }}">
+                        <label class="form-check-label" for="ca{{ s.id }}">Ação do cliente</label>
+                      </div>
+                    </div>
+                    <div class="col-md-4">
+                      <button class="btn btn-primary w-100">Adicionar</button>
+                    </div>
+                  </div>
+                </form>
+              {% endif %}
+
+            </div>
+          </div>
+        </div>
+      {% endfor %}
+    </div>
+  {% else %}
+    <div class="muted">Sem etapas ainda.</div>
+  {% endif %}
+
+  {% if role in ["admin","equipe"] %}
+    <hr class="my-3"/>
+    <form method="post" action="/consultoria/{{ project.id }}/stages" class="card p-3">
+      <div class="fw-semibold mb-2">Adicionar etapa</div>
+      <div class="row g-2">
+        <div class="col-md-8">
+          <input class="form-control" name="name" required placeholder="Nome da etapa" />
+        </div>
+        <div class="col-md-4">
+          <input class="form-control mono" name="due_date" placeholder="Prazo AAAA-MM-DD" />
+        </div>
+        <div class="col-12">
+          <button class="btn btn-primary">Adicionar etapa</button>
+        </div>
+      </div>
+    </form>
+  {% endif %}
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+{% endblock %}
+""",
+})
+
+TEMPLATES.update({
+    "agenda.html": r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <div class="d-flex justify-content-between align-items-center">
+    <div>
+      <h4 class="mb-0">Agenda</h4>
+      <div class="muted">Agendamentos (Outlook Bookings)</div>
+    </div>
+    <a class="btn btn-outline-primary" href="{{ bookings_url }}" target="_blank" rel="noopener">Abrir em nova aba</a>
+  </div>
+  <hr class="my-3"/>
+  <div class="ratio ratio-16x9">
+    <iframe src="{{ bookings_url }}" title="Agenda" loading="lazy" referrerpolicy="no-referrer"></iframe>
+  </div>
+  <div class="muted small mt-3">Se o iframe não carregar, clique em “Abrir em nova aba”.</div>
+</div>
+{% endblock %}
+""",
+
+    "pending_new_client.html": r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <h4>Nova Pendência (Cliente)</h4>
+  <div class="muted">Crie um pedido/pendência e envie anexos ao escritório.</div>
+  <form method="post" action="/pendencias/cliente/nova" enctype="multipart/form-data" class="mt-3">
+    <div class="row g-3">
+      <div class="col-12">
+        <label class="form-label">Título</label>
+        <input class="form-control" name="title" required />
+      </div>
+      <div class="col-12">
+        <label class="form-label">Descrição</label>
+        <textarea class="form-control" name="description" rows="4"></textarea>
+      </div>
+      <div class="col-md-6">
+        <label class="form-label">Prazo (opcional)</label>
+        <input class="form-control mono" name="due_date" placeholder="2026-03-31" />
+      </div>
+      <div class="col-12">
+        <label class="form-label">Anexar arquivo (opcional)</label>
+        <input class="form-control" type="file" name="file" />
+      </div>
+    </div>
+    <div class="mt-4 d-flex gap-2">
+      <button class="btn btn-primary" type="submit">Criar</button>
+      <a class="btn btn-outline-secondary" href="/pendencias">Cancelar</a>
+    </div>
+  </form>
+</div>
+{% endblock %}
+""",
+
+    "docs_send_client.html": r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <h4>Enviar Documento (Cliente)</h4>
+  <div class="muted">Envie um documento ao escritório e acompanhe o status.</div>
+  <form method="post" action="/documentos/cliente/enviar" enctype="multipart/form-data" class="mt-3">
+    <div class="row g-3">
+      <div class="col-12">
+        <label class="form-label">Título</label>
+        <input class="form-control" name="title" required />
+      </div>
+      <div class="col-12">
+        <label class="form-label">Mensagem (opcional)</label>
+        <textarea class="form-control" name="message" rows="3"></textarea>
+      </div>
+      <div class="col-12">
+        <label class="form-label">Arquivo</label>
+        <input class="form-control" type="file" name="file" required />
+      </div>
+    </div>
+    <div class="mt-4 d-flex gap-2">
+      <button class="btn btn-primary" type="submit">Enviar</button>
+      <a class="btn btn-outline-secondary" href="/documentos">Cancelar</a>
+    </div>
+  </form>
+</div>
+{% endblock %}
+""",
+
+    "docs_edit.html": r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <div class="d-flex justify-content-between align-items-center">
+    <div>
+      <h4 class="mb-0">Editar Documento</h4>
+      <div class="muted">{{ doc.title }}</div>
+    </div>
+    <a class="btn btn-outline-secondary" href="/documentos/{{ doc.id }}">Voltar</a>
+  </div>
+  <hr class="my-3"/>
+  <form method="post" action="/documentos/{{ doc.id }}/editar">
+    <div class="row g-3">
+      <div class="col-md-8">
+        <label class="form-label">Título</label>
+        <input class="form-control" name="title" value="{{ doc.title }}" required />
+      </div>
+      <div class="col-md-4">
+        <label class="form-label">Status</label>
+        <select class="form-select" name="status">
+          <option value="rascunho" {% if doc.status=="rascunho" %}selected{% endif %}>rascunho</option>
+          <option value="aguardando_cliente" {% if doc.status=="aguardando_cliente" %}selected{% endif %}>aguardando_cliente</option>
+          <option value="cliente_enviou" {% if doc.status=="cliente_enviou" %}selected{% endif %}>cliente_enviou</option>
+          <option value="concluido" {% if doc.status=="concluido" %}selected{% endif %}>concluido</option>
+        </select>
+      </div>
+      <div class="col-12">
+        <label class="form-label">Conteúdo</label>
+        <textarea class="form-control" name="content" rows="6" required>{{ doc.content }}</textarea>
+      </div>
+    </div>
+    <div class="mt-4 d-flex gap-2">
+      <button class="btn btn-primary" type="submit">Salvar</button>
+      <a class="btn btn-outline-secondary" href="/documentos/{{ doc.id }}">Cancelar</a>
+    </div>
+  </form>
+  <hr class="my-4"/>
+  <form method="post" action="/documentos/{{ doc.id }}/excluir" onsubmit="return confirm('Excluir documento? Remova anexos antes.');">
+    <button class="btn btn-outline-danger" type="submit">Excluir documento</button>
+  </form>
+</div>
+{% endblock %}
+""",
+
+    "pending_edit.html": r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <div class="d-flex justify-content-between align-items-center">
+    <div>
+      <h4 class="mb-0">Editar Pendência</h4>
+      <div class="muted">{{ item.title }}</div>
+    </div>
+    <a class="btn btn-outline-secondary" href="/pendencias/{{ item.id }}">Voltar</a>
+  </div>
+  <hr class="my-3"/>
+  <form method="post" action="/pendencias/{{ item.id }}/editar">
+    <div class="row g-3">
+      <div class="col-md-8">
+        <label class="form-label">Título</label>
+        <input class="form-control" name="title" value="{{ item.title }}" required />
+      </div>
+      <div class="col-md-4">
+        <label class="form-label">Status</label>
+        <select class="form-select" name="status">
+          <option value="aberto" {% if item.status=="aberto" %}selected{% endif %}>aberto</option>
+          <option value="aguardando_cliente" {% if item.status=="aguardando_cliente" %}selected{% endif %}>aguardando_cliente</option>
+          <option value="cliente_enviou" {% if item.status=="cliente_enviou" %}selected{% endif %}>cliente_enviou</option>
+          <option value="concluido" {% if item.status=="concluido" %}selected{% endif %}>concluido</option>
+        </select>
+      </div>
+      <div class="col-md-6">
+        <label class="form-label">Prazo (AAAA-MM-DD)</label>
+        <input class="form-control mono" name="due_date" value="{{ item.due_date }}" />
+      </div>
+      <div class="col-12">
+        <label class="form-label">Descrição</label>
+        <textarea class="form-control" name="description" rows="5">{{ item.description }}</textarea>
+      </div>
+    </div>
+    <div class="mt-4 d-flex gap-2">
+      <button class="btn btn-primary" type="submit">Salvar</button>
+      <a class="btn btn-outline-secondary" href="/pendencias/{{ item.id }}">Cancelar</a>
+    </div>
+  </form>
+  <hr class="my-4"/>
+  <form method="post" action="/pendencias/{{ item.id }}/excluir" onsubmit="return confirm('Excluir pendência? Remova anexos antes.');">
+    <button class="btn btn-outline-danger" type="submit">Excluir pendência</button>
+  </form>
+</div>
+{% endblock %}
+""",
+
+    "fin_edit.html": r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <div class="d-flex justify-content-between align-items-center">
+    <div>
+      <h4 class="mb-0">Editar Financeiro</h4>
+      <div class="muted">{{ inv.title }}</div>
+    </div>
+    <a class="btn btn-outline-secondary" href="/financeiro/{{ inv.id }}">Voltar</a>
+  </div>
+  <hr class="my-3"/>
+  <form method="post" action="/financeiro/{{ inv.id }}/editar">
+    <div class="row g-3">
+      <div class="col-md-8">
+        <label class="form-label">Título</label>
+        <input class="form-control" name="title" value="{{ inv.title }}" required />
+      </div>
+      <div class="col-md-4">
+        <label class="form-label">Status</label>
+        <select class="form-select" name="status">
+          <option value="emitido" {% if inv.status=="emitido" %}selected{% endif %}>emitido</option>
+          <option value="pago" {% if inv.status=="pago" %}selected{% endif %}>pago</option>
+          <option value="atrasado" {% if inv.status=="atrasado" %}selected{% endif %}>atrasado</option>
+          <option value="cancelado" {% if inv.status=="cancelado" %}selected{% endif %}>cancelado</option>
+        </select>
+      </div>
+      <div class="col-md-4">
+        <label class="form-label">Valor (R$)</label>
+        <input class="form-control" name="amount_brl" type="number" step="0.01" min="0" value="{{ inv.amount_brl }}" />
+      </div>
+      <div class="col-md-4">
+        <label class="form-label">Vencimento (AAAA-MM-DD)</label>
+        <input class="form-control mono" name="due_date" value="{{ inv.due_date }}" />
+      </div>
+      <div class="col-12">
+        <label class="form-label">Notas</label>
+        <textarea class="form-control" name="notes" rows="4">{{ inv.notes }}</textarea>
+      </div>
+    </div>
+    <div class="mt-4 d-flex gap-2">
+      <button class="btn btn-primary" type="submit">Salvar</button>
+      <a class="btn btn-outline-secondary" href="/financeiro/{{ inv.id }}">Cancelar</a>
+    </div>
+  </form>
+  <hr class="my-4"/>
+  <form method="post" action="/financeiro/{{ inv.id }}/excluir" onsubmit="return confirm('Excluir lançamento? Remova anexos antes.');">
+    <button class="btn btn-outline-danger" type="submit">Excluir lançamento</button>
+  </form>
+</div>
+{% endblock %}
+""",
+})
+
+TEMPLATES.update({
+    "tasks_list.html": r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <div class="d-flex justify-content-between align-items-center">
+    <div>
+      <h4 class="mb-0">Tarefas</h4>
+      <div class="muted">Kanban por status • filtros • prazos • prioridade</div>
+    </div>
+    {% if role in ["admin","equipe"] %}
+      <a class="btn btn-primary" href="/tarefas/nova{% if filter_client_id %}?client_id={{ filter_client_id }}{% endif %}">Nova tarefa</a>
+    {% endif %}
+  </div>
+
+  <hr class="my-3"/>
+
+  {% if role in ["admin","equipe"] %}
+    <form method="get" action="/tarefas" class="row g-2 align-items-end mb-3">
+      <div class="col-md-3">
+        <label class="form-label">Cliente</label>
+        <select class="form-select" name="client_id">
+          <option value="0" {% if filter_client_id==0 %}selected{% endif %}>Todos</option>
+          {% for c in clients %}
+            <option value="{{ c.id }}" {% if filter_client_id==c.id %}selected{% endif %}>{{ c.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <div class="col-md-3">
+        <label class="form-label">Responsável</label>
+        <select class="form-select" name="assignee_user_id">
+          <option value="0" {% if filter_assignee_user_id==0 %}selected{% endif %}>Todos</option>
+          <option value="-1" {% if filter_assignee_user_id==-1 %}selected{% endif %}>Sem responsável</option>
+          {% for u in assignees %}
+            <option value="{{ u.id }}" {% if filter_assignee_user_id==u.id %}selected{% endif %}>{{ u.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <div class="col-md-2">
+        <label class="form-label">Status</label>
+        <select class="form-select" name="status">
+          <option value="" {% if not filter_status %}selected{% endif %}>Todos</option>
+          <option value="nao_iniciada" {% if filter_status=="nao_iniciada" %}selected{% endif %}>nao_iniciada</option>
+          <option value="em_andamento" {% if filter_status=="em_andamento" %}selected{% endif %}>em_andamento</option>
+          <option value="concluida" {% if filter_status=="concluida" %}selected{% endif %}>concluida</option>
+        </select>
+      </div>
+
+      <div class="col-md-2">
+        <label class="form-label">Prioridade</label>
+        <select class="form-select" name="priority">
+          <option value="" {% if not filter_priority %}selected{% endif %}>Todas</option>
+          <option value="baixa" {% if filter_priority=="baixa" %}selected{% endif %}>baixa</option>
+          <option value="media" {% if filter_priority=="media" %}selected{% endif %}>media</option>
+          <option value="alta" {% if filter_priority=="alta" %}selected{% endif %}>alta</option>
+        </select>
+      </div>
+
+      <div class="col-md-2">
+        <label class="form-label">Prazo</label>
+        <select class="form-select" name="due">
+          <option value="" {% if not filter_due %}selected{% endif %}>Todos</option>
+          <option value="atrasadas" {% if filter_due=="atrasadas" %}selected{% endif %}>atrasadas</option>
+          <option value="hoje" {% if filter_due=="hoje" %}selected{% endif %}>hoje</option>
+          <option value="7dias" {% if filter_due=="7dias" %}selected{% endif %}>7 dias</option>
+          <option value="sem_prazo" {% if filter_due=="sem_prazo" %}selected{% endif %}>sem prazo</option>
+        </select>
+      </div>
+
+      <div class="col-12 d-flex gap-2 align-items-center mt-1">
+        <div class="form-check">
+          <input class="form-check-input" type="checkbox" name="mine" value="1" id="mine" {% if filter_mine==1 %}checked{% endif %}>
+          <label class="form-check-label" for="mine">Minhas</label>
+        </div>
+        <button class="btn btn-outline-primary" type="submit">Aplicar</button>
+        <a class="btn btn-outline-secondary" href="/tarefas">Limpar</a>
+      </div>
+    </form>
+  {% endif %}
+
+  <div class="row g-3">
+    {% for col in columns %}
+      <div class="col-12 col-lg-4">
+        <div class="card p-3 h-100">
+          <div class="fw-semibold mb-2">{{ col.label }} <span class="muted">({{ col.count }})</span></div>
+          {% if col.tasks %}
+            <div class="vstack gap-2">
+              {% for t in col.tasks %}
+                <a class="card p-3" href="/tarefas/{{ t.id }}">
+                  <div class="d-flex justify-content-between align-items-start">
+                    <div class="fw-semibold">{{ t.title }}</div>
+                    <span class="badge text-bg-light border">{{ t.priority }}</span>
+                  </div>
+                  <div class="muted small mt-1">
+                    {% if role in ["admin","equipe"] and filter_client_id==0 and t.client_name %}
+                      Cliente: {{ t.client_name }} •
+                    {% endif %}
+                    {% if t.due_date %}Prazo: {{ t.due_date }} • {% endif %}
+                    {% if t.assignee_name %}Resp: {{ t.assignee_name }}{% endif %}
+                  </div>
+                  {% if t.visible_to_client %}
+                    <div class="mt-2"><span class="badge text-bg-light border">visível ao cliente</span></div>
+                  {% endif %}
+                </a>
+              {% endfor %}
+            </div>
+          {% else %}
+            <div class="muted small">Sem tarefas.</div>
+          {% endif %}
+        </div>
+      </div>
+    {% endfor %}
+  </div>
+</div>
+{% endblock %}
+""",
+
+    "tasks_new.html": r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <h4>Nova tarefa</h4>
+  <div class="muted">Crie uma tarefa para um cliente, defina prazo, prioridade e visibilidade.</div>
+
+  {% if not clients %}
+    <div class="alert alert-warning mt-3">Nenhum cliente cadastrado.</div>
+    <a class="btn btn-outline-secondary" href="/tarefas">Voltar</a>
+  {% else %}
+    <form method="post" action="/tarefas/nova" class="mt-3">
+      <div class="row g-3">
+        <div class="col-md-6">
+          <label class="form-label">Cliente</label>
+          <select class="form-select" name="client_id" required>
+            {% for c in clients %}
+              <option value="{{ c.id }}" {% if prefill_client and c.id==prefill_client.id %}selected{% endif %}>{{ c.name }}</option>
+            {% endfor %}
+          </select>
+        </div>
+
+        <div class="col-md-6">
+          <label class="form-label">Responsável (opcional)</label>
+          <select class="form-select" name="assignee_user_id">
+            <option value="">—</option>
+            {% for u in assignees %}
+              <option value="{{ u.id }}">{{ u.name }} ({{ u.role }})</option>
+            {% endfor %}
+          </select>
+        </div>
+
+        <div class="col-12">
+          <label class="form-label">Título</label>
+          <input class="form-control" name="title" required />
+        </div>
+
+        <div class="col-12">
+          <label class="form-label">Descrição</label>
+          <textarea class="form-control" name="description" rows="4"></textarea>
+        </div>
+
+        <div class="col-md-4">
+          <label class="form-label">Status</label>
+          <select class="form-select" name="status">
+            <option value="nao_iniciada">nao_iniciada</option>
+            <option value="em_andamento">em_andamento</option>
+            <option value="concluida">concluida</option>
+          </select>
+        </div>
+
+        <div class="col-md-4">
+          <label class="form-label">Prioridade</label>
+          <select class="form-select" name="priority">
+            <option value="baixa">baixa</option>
+            <option value="media" selected>media</option>
+            <option value="alta">alta</option>
+          </select>
+        </div>
+
+        <div class="col-md-4">
+          <label class="form-label">Prazo (AAAA-MM-DD)</label>
+          <input class="form-control mono" name="due_date" />
+        </div>
+
+        <div class="col-md-6">
+          <div class="form-check mt-4">
+            <input class="form-check-input" type="checkbox" name="visible_to_client" value="1" id="vis">
+            <label class="form-check-label" for="vis">Visível ao cliente</label>
+          </div>
+        </div>
+
+        <div class="col-md-6">
+          <div class="form-check mt-4">
+            <input class="form-check-input" type="checkbox" name="client_action" value="1" id="ca">
+            <label class="form-check-label" for="ca">Cliente pode concluir</label>
+          </div>
+        </div>
+      </div>
+
+      <div class="mt-4 d-flex gap-2">
+        <button class="btn btn-primary" type="submit">Criar</button>
+        <a class="btn btn-outline-secondary" href="/tarefas">Cancelar</a>
+      </div>
+    </form>
+  {% endif %}
+</div>
+{% endblock %}
+""",
+
+    "tasks_detail.html": r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <div class="d-flex justify-content-between align-items-start">
+    <div>
+      <h4 class="mb-1">{{ task.title }}</h4>
+      <div class="muted">
+        Status: <b>{{ task.status }}</b> • Prioridade: <b>{{ task.priority }}</b>
+        {% if task.due_date %} • Prazo: <b>{{ task.due_date }}</b>{% endif %}
+        {% if assignee_name %} • Resp: <b>{{ assignee_name }}</b>{% endif %}
+      </div>
+      {% if task.visible_to_client %}<div class="mt-2"><span class="badge text-bg-light border">visível ao cliente</span></div>{% endif %}
+    </div>
+    <div class="d-flex gap-2">
+      <a class="btn btn-outline-secondary" href="/tarefas">Voltar</a>
+      {% if role in ["admin","equipe"] %}
+        <a class="btn btn-outline-primary" href="/tarefas/{{ task.id }}/editar">Editar</a>
+      {% endif %}
+    </div>
+  </div>
+
+  {% if task.description %}
+    <hr class="my-3"/>
+    <pre>{{ task.description }}</pre>
+  {% endif %}
+
+  <hr class="my-3"/>
+  <div class="d-flex gap-2 flex-wrap">
+    {% if role in ["admin","equipe"] %}
+      <form method="post" action="/tarefas/{{ task.id }}/status">
+        <input type="hidden" name="status" value="nao_iniciada"/>
+        <button class="btn btn-outline-secondary btn-sm" type="submit">Não iniciada</button>
+      </form>
+      <form method="post" action="/tarefas/{{ task.id }}/status">
+        <input type="hidden" name="status" value="em_andamento"/>
+        <button class="btn btn-outline-secondary btn-sm" type="submit">Em andamento</button>
+      </form>
+      <form method="post" action="/tarefas/{{ task.id }}/status">
+        <input type="hidden" name="status" value="concluida"/>
+        <button class="btn btn-outline-secondary btn-sm" type="submit">Concluída</button>
+      </form>
+    {% endif %}
+
+    {% if role=="cliente" and task.client_action %}
+      <form method="post" action="/tarefas/{{ task.id }}/toggle">
+        <button class="btn btn-outline-primary btn-sm" type="submit">
+          {% if task.status=="concluida" %}Desmarcar conclusão{% else %}Marcar como concluída{% endif %}
+        </button>
+      </form>
+    {% endif %}
+  </div>
+
+  {% if role in ["admin","equipe"] %}
+    <hr class="my-3"/>
+    <form method="post" action="/tarefas/{{ task.id }}/excluir" class="card p-3">
+      <div class="fw-semibold">Excluir (seguro)</div>
+      <div class="muted small">Para excluir, digite <b>EXCLUIR</b> e confirme.</div>
+      <div class="row g-2 align-items-end mt-2">
+        <div class="col-md-6">
+          <input class="form-control" name="confirm" placeholder="EXCLUIR" required />
+        </div>
+        <div class="col-md-3">
+          <button class="btn btn-outline-danger w-100" type="submit">Excluir</button>
+        </div>
+      </div>
+    </form>
+  {% endif %}
+
+  <hr class="my-3"/>
+  <h5>Comentários</h5>
+
+  {% if comments %}
+    <div class="list-group mb-3">
+      {% for c in comments %}
+        <div class="list-group-item">
+          <div class="d-flex justify-content-between">
+            <div class="fw-semibold">{{ c.author_name }}</div>
+            <div class="muted small">{{ c.created_at }}</div>
+          </div>
+          <div class="mt-1">{{ c.message }}</div>
+        </div>
+      {% endfor %}
+    </div>
+  {% else %}
+    <div class="muted mb-3">Sem comentários.</div>
+  {% endif %}
+
+  <form method="post" action="/tarefas/{{ task.id }}/comentario" class="card p-3">
+    <label class="form-label fw-semibold">Adicionar comentário</label>
+    <textarea class="form-control" name="message" rows="3" required></textarea>
+    <div class="mt-2">
+      <button class="btn btn-primary" type="submit">Enviar</button>
+    </div>
+  </form>
+</div>
+{% endblock %}
+""",
+
+    "tasks_edit.html": r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <div class="d-flex justify-content-between align-items-start">
+    <div>
+      <h4 class="mb-1">Editar tarefa</h4>
+      <div class="muted">{{ task.title }}</div>
+    </div>
+    <a class="btn btn-outline-secondary" href="/tarefas/{{ task.id }}">Voltar</a>
+  </div>
+
+  <hr class="my-3"/>
+
+  <form method="post" action="/tarefas/{{ task.id }}/editar">
+    <div class="row g-3">
+      <div class="col-md-6">
+        <label class="form-label">Cliente</label>
+        <select class="form-select" name="client_id" required>
+          {% for c in clients %}
+            <option value="{{ c.id }}" {% if c.id==task.client_id %}selected{% endif %}>{{ c.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <div class="col-md-6">
+        <label class="form-label">Responsável (opcional)</label>
+        <select class="form-select" name="assignee_user_id">
+          <option value="">—</option>
+          {% for u in assignees %}
+            <option value="{{ u.id }}" {% if task.assignee_user_id==u.id %}selected{% endif %}>{{ u.name }} ({{ u.role }})</option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <div class="col-12">
+        <label class="form-label">Título</label>
+        <input class="form-control" name="title" value="{{ task.title }}" required />
+      </div>
+
+      <div class="col-12">
+        <label class="form-label">Descrição</label>
+        <textarea class="form-control" name="description" rows="4">{{ task.description }}</textarea>
+      </div>
+
+      <div class="col-md-4">
+        <label class="form-label">Status</label>
+        <select class="form-select" name="status">
+          <option value="nao_iniciada" {% if task.status=="nao_iniciada" %}selected{% endif %}>nao_iniciada</option>
+          <option value="em_andamento" {% if task.status=="em_andamento" %}selected{% endif %}>em_andamento</option>
+          <option value="concluida" {% if task.status=="concluida" %}selected{% endif %}>concluida</option>
+        </select>
+      </div>
+
+      <div class="col-md-4">
+        <label class="form-label">Prioridade</label>
+        <select class="form-select" name="priority">
+          <option value="baixa" {% if task.priority=="baixa" %}selected{% endif %}>baixa</option>
+          <option value="media" {% if task.priority=="media" %}selected{% endif %}>media</option>
+          <option value="alta" {% if task.priority=="alta" %}selected{% endif %}>alta</option>
+        </select>
+      </div>
+
+      <div class="col-md-4">
+        <label class="form-label">Prazo (AAAA-MM-DD)</label>
+        <input class="form-control mono" name="due_date" value="{{ task.due_date }}" />
+      </div>
+
+      <div class="col-md-6">
+        <div class="form-check mt-4">
+          <input class="form-check-input" type="checkbox" name="visible_to_client" value="1" id="vis" {% if task.visible_to_client %}checked{% endif %}>
+          <label class="form-check-label" for="vis">Visível ao cliente</label>
+        </div>
+      </div>
+
+      <div class="col-md-6">
+        <div class="form-check mt-4">
+          <input class="form-check-input" type="checkbox" name="client_action" value="1" id="ca" {% if task.client_action %}checked{% endif %}>
+          <label class="form-check-label" for="ca">Cliente pode concluir</label>
+        </div>
+      </div>
+    </div>
+
+    <div class="mt-4 d-flex gap-2">
+      <button class="btn btn-primary" type="submit">Salvar</button>
+      <a class="btn btn-outline-secondary" href="/tarefas/{{ task.id }}">Cancelar</a>
+    </div>
+  </form>
+</div>
+{% endblock %}
+""",
+})
+
+# ----------------------------
+# Perfil: templates (override + novos)
+# ----------------------------
+TEMPLATES.update({
+    "perfil.html": r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="row g-3">
+  <div class="col-lg-5">
+    <div class="card p-4">
+      <h4 class="mb-1">Meu Perfil</h4>
+      <div class="muted mb-3">Dados do usuário</div>
+      <div><span class="muted">Nome:</span> <b>{{ current_user.name }}</b></div>
+      <div><span class="muted">E-mail:</span> <span class="mono">{{ current_user.email }}</span></div>
+      <div><span class="muted">Role:</span> <b>{{ role }}</b></div>
+    </div>
+
+    {% if current_client %}
+      <div class="card p-4 mt-3">
+        <div class="d-flex justify-content-between align-items-start">
+          <div>
+            <h5 class="mb-1">Evolução</h5>
+            <div class="muted">Score 0–100 (processos + financeiro + NPS)</div>
+          </div>
+          <a class="btn btn-primary btn-sm" href="/perfil/avaliacao/nova">Nova avaliação</a>
+        </div>
+
+        {% if latest_score is not none %}
+          <div class="mt-3">
+            <div class="d-flex justify-content-between">
+              <div class="fw-semibold">Score atual</div>
+              <div class="fw-semibold">{{ "%.1f"|format(latest_score) }}</div>
+            </div>
+            {% if delta is not none %}
+              <div class="muted small">Variação vs. anterior: <b>{{ delta }}</b></div>
+            {% else %}
+              <div class="muted small">Ainda sem comparação (precisa de 2 avaliações).</div>
+            {% endif %}
+          </div>
+        {% else %}
+          <div class="alert alert-info mt-3">Nenhuma avaliação registrada ainda.</div>
+        {% endif %}
+      </div>
+    {% endif %}
+  </div>
+
+  <div class="col-lg-7">
+    <div class="card p-4">
+      <h4 class="mb-1">Indicadores do Cliente</h4>
+      <div class="muted mb-3">Faturamento, endividamento, caixa etc.</div>
+
+      {% if not current_client %}
+        <div class="alert alert-warning">Nenhum cliente selecionado/vinculado.</div>
+      {% else %}
+        <div class="mb-2"><span class="muted">Cliente:</span> <b>{{ current_client.name }}</b></div>
+
+        <form method="post" action="/perfil">
+          <div class="row g-3">
+            <div class="col-md-6">
+              <label class="form-label">Faturamento mensal (R$)</label>
+              <input class="form-control" name="revenue_monthly_brl" type="number" step="0.01" min="0"
+                     value="{{ current_client.revenue_monthly_brl }}" />
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">Endividamento total (R$)</label>
+              <input class="form-control" name="debt_total_brl" type="number" step="0.01" min="0"
+                     value="{{ current_client.debt_total_brl }}" />
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">Saldo em caixa (R$)</label>
+              <input class="form-control" name="cash_balance_brl" type="number" step="0.01" min="0"
+                     value="{{ current_client.cash_balance_brl }}" />
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">Funcionários</label>
+              <input class="form-control" name="employees_count" type="number" min="0"
+                     value="{{ current_client.employees_count }}" />
+            </div>
+          </div>
+          <div class="mt-4">
+            <button class="btn btn-primary">Salvar</button>
+            <a class="btn btn-outline-secondary" href="/empresa">Editar dados da empresa</a>
+            <a class="btn btn-outline-primary" href="/perfil/avaliacao/nova">Nova avaliação</a>
           </div>
         </form>
 
         <hr class="my-4"/>
-        <div class="d-flex justify-content-between align-items-center">
-          <h6 class="mb-0">Histórico de avaliações</h6>
-          {% if latest_score is not none %}
-            <div class="muted small">
-              Último score: <b>{{ "%.1f"|format(latest_score) }}</b>
-              {% if delta is not none %}
-                • variação: <b>{% if delta > 0 %}+{% endif %}{{ "%.1f"|format(delta) }}</b>
-              {% endif %}
-            </div>
-          {% endif %}
-        </div>
+        <h6 class="mb-2">Histórico de avaliações</h6>
 
         {% if snapshots %}
-          <div class="table-responsive mt-3">
+          <div class="table-responsive">
             <table class="table table-sm align-middle">
               <thead>
                 <tr>
@@ -4359,7 +6035,7 @@ TEMPLATES: dict[str, str] = {
             </table>
           </div>
         {% else %}
-          <div class="muted mt-3">Sem avaliações ainda.</div>
+          <div class="muted">Sem avaliações ainda.</div>
         {% endif %}
       {% endif %}
     </div>
@@ -4367,14 +6043,15 @@ TEMPLATES: dict[str, str] = {
 </div>
 {% endblock %}
 """,
-"perfil_snapshot_new.html": r"""
+
+    "perfil_snapshot_new.html": r"""
 {% extends "base.html" %}
 {% block content %}
-<div class="card p-4 soft-card">
+<div class="card p-4">
   <div class="d-flex justify-content-between align-items-center">
     <div>
       <h4 class="mb-0">Nova Avaliação do Cliente</h4>
-      <div class="muted">Foto do momento + score de evolução + base para score de ofertas.</div>
+      <div class="muted">“Foto do momento” + score de evolução</div>
     </div>
     <a class="btn btn-outline-secondary" href="/perfil">Voltar</a>
   </div>
@@ -4389,55 +6066,52 @@ TEMPLATES: dict[str, str] = {
     <form method="post" action="/perfil/avaliacao/nova">
       <h5 class="mt-3">Números (do momento)</h5>
       <div class="row g-3">
-        <div class="col-md-3">
+        <div class="col-md-6">
           <label class="form-label">Faturamento mensal (R$)</label>
           <input class="form-control" name="revenue_monthly_brl" type="number" step="0.01" min="0" value="{{ current_client.revenue_monthly_brl }}" />
         </div>
-        <div class="col-md-3">
+        <div class="col-md-6">
           <label class="form-label">Dívida total (R$)</label>
           <input class="form-control" name="debt_total_brl" type="number" step="0.01" min="0" value="{{ current_client.debt_total_brl }}" />
         </div>
-        <div class="col-md-3">
+        <div class="col-md-6">
           <label class="form-label">Caixa (R$)</label>
           <input class="form-control" name="cash_balance_brl" type="number" step="0.01" min="0" value="{{ current_client.cash_balance_brl }}" />
         </div>
-        <div class="col-md-3">
-          <label class="form-label">Colaboradores</label>
+        <div class="col-md-6">
+          <label class="form-label">Funcionários</label>
           <input class="form-control" name="employees_count" type="number" min="0" value="{{ current_client.employees_count }}" />
+        </div>
+        <div class="col-md-6">
+          <label class="form-label">NPS (0 a 10)</label>
+          <input class="form-control" name="nps_score" type="number" min="0" max="10" value="0" />
+          <div class="form-text">0 = nada provável recomendar / 10 = muito provável.</div>
+        </div>
+        <div class="col-12">
+          <label class="form-label">Observações (opcional)</label>
+          <textarea class="form-control" name="notes" rows="3" placeholder="Contexto, mudanças recentes, dor principal..."></textarea>
         </div>
       </div>
 
       <hr class="my-4"/>
-      <h5 class="mb-3">Maturidade da empresa</h5>
-      <div class="row g-3">
+
+      <h5>Processos (checklist)</h5>
+      <div class="muted mb-2">Marque o que já está implementado hoje.</div>
+
+      <div class="row g-2">
         {% for q in survey %}
-          <div class="col-md-6">
-            <label class="form-check card p-3 h-100">
-              <input class="form-check-input" type="checkbox" name="{{ q.id }}" value="1">
-              <span class="form-check-label ms-2">
-                <b>{{ q.q }}</b>
-                <div class="muted small mt-1">{{ q.section }} • peso {{ q.w }}</div>
-              </span>
-            </label>
+          <div class="col-12">
+            <div class="form-check">
+              <input class="form-check-input" type="checkbox" name="{{ q.id }}" value="1" id="{{ q.id }}">
+              <label class="form-check-label" for="{{ q.id }}">{{ q.q }}</label>
+            </div>
           </div>
         {% endfor %}
       </div>
 
-      <hr class="my-4"/>
-      <div class="row g-3">
-        <div class="col-md-4">
-          <label class="form-label">NPS / percepção interna</label>
-          <input class="form-control" name="nps_score" type="number" min="0" max="10" value="0" />
-        </div>
-        <div class="col-md-8">
-          <label class="form-label">Observações da avaliação</label>
-          <input class="form-control" name="notes" value="" />
-        </div>
-      </div>
-
-      <div class="d-flex gap-2 mt-4">
-        <button class="btn btn-primary">Salvar avaliação</button>
-        <a class="btn btn-outline-secondary" href="/empresa">Editar empresa</a>
+      <div class="mt-4 d-flex gap-2">
+        <button class="btn btn-primary" type="submit">Salvar avaliação</button>
+        <a class="btn btn-outline-secondary" href="/perfil">Cancelar</a>
       </div>
     </form>
   {% endif %}
@@ -4445,10 +6119,10 @@ TEMPLATES: dict[str, str] = {
 {% endblock %}
 """,
 
-"perfil_snapshot_detail.html": r"""
+    "perfil_snapshot_detail.html": r"""
 {% extends "base.html" %}
 {% block content %}
-<div class="card p-4 soft-card">
+<div class="card p-4">
   <div class="d-flex justify-content-between align-items-start">
     <div>
       <h4 class="mb-1">Avaliação</h4>
@@ -4510,7 +6184,7 @@ TEMPLATES: dict[str, str] = {
 </div>
 {% endblock %}
 """,
-}
+})
 
 TEMPLATES.update({
     "crm_list.html": r"""
@@ -6832,30 +8506,8 @@ def render(
                 ctx.setdefault("current_user", _t.user)
                 ctx.setdefault("current_company", _t.company)
                 active_client_id = get_active_client_id(request, _db, _t)
-                _current_client = get_client_or_none(_db, _t.company.id, active_client_id)
-                ctx.setdefault("current_client", _current_client)
+                ctx.setdefault("current_client", get_client_or_none(_db, _t.company.id, active_client_id))
                 ctx.setdefault("role", _t.membership.role)
-
-                try:
-                    allowed = effective_allowed_features(_db, ctx=_t, current_client=_current_client)
-                except Exception:
-                    allowed = set(ROLE_DEFAULT_FEATURES.get(_t.membership.role, set()))
-
-                nav_sections: list[dict[str, Any]] = []
-                for group in FEATURE_GROUPS:
-                    items = []
-                    for feature_key in group.get("features", []):
-                        if feature_key not in FEATURE_KEYS:
-                            continue
-                        roles = FEATURE_VISIBLE_ROLES.get(feature_key)
-                        if roles and _t.membership.role not in roles:
-                            continue
-                        if feature_key not in allowed:
-                            continue
-                        items.append(dict(FEATURE_KEYS[feature_key], key=feature_key))
-                    if items:
-                        nav_sections.append({"key": group.get("key"), "title": group.get("title"), "items": items})
-                ctx.setdefault("nav_sections", nav_sections)
     except Exception:
         pass
     return HTMLResponse(templates_env.get_template(template_name).render(**ctx), status_code=status_code)
@@ -6972,7 +8624,6 @@ def _startup() -> None:
     ensure_ui_tables()
     ensure_feature_access_tables()
     ensure_credit_consent_table()
-    ensure_client_business_profile_table()
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 
@@ -7769,23 +9420,6 @@ async def dashboard(request: Request, session: Session = Depends(get_session)) -
 
     standalone = [dict(FEATURE_KEYS[fk], key=fk) for fk in FEATURE_STANDALONE if _is_visible(fk)]
 
-    latest_snapshot = None
-    latest_credit_report = None
-    business_profile = None
-    offer_summary = compute_offer_potential_summary(client=current_client, business_profile=None, latest_snapshot=None)
-
-    if current_client and ensure_can_access_client(ctx, current_client.id):
-        business_profile = get_or_create_client_business_profile(session, company_id=ctx.company.id, client_id=current_client.id)
-        latest_snapshot = _latest_client_snapshot(session, company_id=ctx.company.id, client_id=current_client.id)
-        latest_credit_report = _latest_credit_report(session, company_id=ctx.company.id, client_id=current_client.id)
-        offer_summary = compute_offer_potential_summary(
-            client=current_client,
-            business_profile=business_profile,
-            latest_snapshot=latest_snapshot,
-            latest_credit_report=latest_credit_report,
-            pluggy_loans_count=_count_pluggy_loans_for_client(session, current_client=current_client),
-        )
-
     return render(
         "dashboard.html",
         request=request,
@@ -7796,10 +9430,6 @@ async def dashboard(request: Request, session: Session = Depends(get_session)) -
             "current_client": current_client,
             "tabs": tabs,
             "standalone": standalone,
-            "latest_snapshot": latest_snapshot,
-            "latest_credit_report": latest_credit_report,
-            "business_profile": business_profile,
-            "offer_summary": offer_summary,
         },
     )
 
@@ -8572,9 +10202,6 @@ async def empresa_page(request: Request, session: Session = Depends(get_session)
         return RedirectResponse("/login", status_code=303)
 
     current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
-    business_profile = None
-    if current_client and ensure_can_access_client(ctx, current_client.id):
-        business_profile = get_or_create_client_business_profile(session, company_id=ctx.company.id, client_id=current_client.id)
     return render(
         "empresa.html",
         request=request,
@@ -8583,7 +10210,6 @@ async def empresa_page(request: Request, session: Session = Depends(get_session)
             "current_company": ctx.company,
             "role": ctx.membership.role,
             "current_client": current_client,
-            "business_profile": business_profile,
         },
     )
 
@@ -8603,27 +10229,6 @@ async def empresa_save(
         state: str = Form(""),
         zip_code: str = Form(""),
         notes: str = Form(""),
-        trade_name: str = Form(""),
-        legal_name: str = Form(""),
-        industry: str = Form(""),
-        cnae: str = Form(""),
-        tax_regime: str = Form(""),
-        foundation_year: str = Form(""),
-        monthly_fixed_costs_brl: float = Form(0.0),
-        average_ticket_brl: float = Form(0.0),
-        delinquency_brl: float = Form(0.0),
-        bank_relationships: str = Form(""),
-        active_products: str = Form(""),
-        collateral_assets: str = Form(""),
-        strategic_goal: str = Form(""),
-        main_pain: str = Form(""),
-        service_interest: str = Form(""),
-        has_dre: str = Form(""),
-        has_cash_flow: str = Form(""),
-        has_budget: str = Form(""),
-        has_kpis: str = Form(""),
-        has_erp: str = Form(""),
-        has_financial_team: str = Form(""),
 ) -> Response:
     ctx = get_tenant_context(request, session)
     if not ctx:
@@ -8654,32 +10259,6 @@ async def empresa_save(
     session.add(current_client)
     session.commit()
 
-    profile = get_or_create_client_business_profile(session, company_id=ctx.company.id, client_id=current_client.id)
-    profile.trade_name = trade_name.strip()
-    profile.legal_name = legal_name.strip()
-    profile.industry = industry.strip()
-    profile.cnae = cnae.strip()
-    profile.tax_regime = tax_regime.strip()
-    profile.foundation_year = foundation_year.strip()
-    profile.monthly_fixed_costs_brl = max(0.0, float(monthly_fixed_costs_brl or 0.0))
-    profile.average_ticket_brl = max(0.0, float(average_ticket_brl or 0.0))
-    profile.delinquency_brl = max(0.0, float(delinquency_brl or 0.0))
-    profile.bank_relationships = bank_relationships.strip()
-    profile.active_products = active_products.strip()
-    profile.collateral_assets = collateral_assets.strip()
-    profile.strategic_goal = strategic_goal.strip()
-    profile.main_pain = main_pain.strip()
-    profile.service_interest = service_interest.strip()
-    profile.has_dre = (has_dre == "1")
-    profile.has_cash_flow = (has_cash_flow == "1")
-    profile.has_budget = (has_budget == "1")
-    profile.has_kpis = (has_kpis == "1")
-    profile.has_erp = (has_erp == "1")
-    profile.has_financial_team = (has_financial_team == "1")
-    profile.updated_at = utcnow()
-    session.add(profile)
-    session.commit()
-
     set_flash(request, "Dados da empresa atualizados.")
     return RedirectResponse("/empresa", status_code=303)
 
@@ -8697,12 +10276,8 @@ async def perfil_page(request: Request, session: Session = Depends(get_session))
     snapshots: list[ClientSnapshot] = []
     latest_score: Optional[float] = None
     delta: Optional[float] = None
-    business_profile: Optional[ClientBusinessProfile] = None
-    latest_credit_report: Optional[CreditReport] = None
-    offer_summary = compute_offer_potential_summary(client=current_client, business_profile=None, latest_snapshot=None)
 
     if current_client and ensure_can_access_client(ctx, current_client.id):
-        business_profile = get_or_create_client_business_profile(session, company_id=ctx.company.id, client_id=current_client.id)
         snaps = session.exec(
             select(ClientSnapshot)
             .where(ClientSnapshot.company_id == ctx.company.id, ClientSnapshot.client_id == current_client.id)
@@ -8714,14 +10289,6 @@ async def perfil_page(request: Request, session: Session = Depends(get_session))
             latest_score = float(snapshots[0].score_total)
         if len(snapshots) >= 2:
             delta = round(float(snapshots[0].score_total) - float(snapshots[1].score_total), 2)
-        latest_credit_report = _latest_credit_report(session, company_id=ctx.company.id, client_id=current_client.id)
-        offer_summary = compute_offer_potential_summary(
-            client=current_client,
-            business_profile=business_profile,
-            latest_snapshot=snapshots[0] if snapshots else None,
-            latest_credit_report=latest_credit_report,
-            pluggy_loans_count=_count_pluggy_loans_for_client(session, current_client=current_client),
-        )
 
     return render(
         "perfil.html",
@@ -8734,9 +10301,6 @@ async def perfil_page(request: Request, session: Session = Depends(get_session))
             "snapshots": snapshots,
             "latest_score": latest_score,
             "delta": delta,
-            "business_profile": business_profile,
-            "latest_credit_report": latest_credit_report,
-            "offer_summary": offer_summary,
         },
     )
 
