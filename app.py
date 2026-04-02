@@ -659,63 +659,6 @@ class ClientSnapshot(SQLModel, table=True):
     created_at: datetime = Field(default_factory=utcnow)
 
 
-
-
-class ClientBusinessProfile(SQLModel, table=True):
-    """
-    Perfil empresarial complementar do cliente.
-
-    Mantido em tabela separada para ampliar a coleta de dados sem quebrar a
-    tabela Client já usada por outros módulos/integradores.
-    """
-    __table_args__ = (UniqueConstraint("company_id", "client_id", name="uq_client_business_profile"),)
-
-    id: Optional[int] = Field(default=None, primary_key=True)
-
-    company_id: int = Field(index=True, foreign_key="company.id")
-    client_id: int = Field(index=True, foreign_key="client.id")
-
-    segment: str = ""
-    subsegment: str = ""
-    cnae: str = ""
-    tax_regime: str = ""
-    company_size: str = ""
-    founded_year: int = 0
-    business_model: str = ""
-    sales_channel: str = ""
-    main_bank: str = ""
-    banking_relationships_count: int = 0
-
-    annual_revenue_brl: float = 0.0
-    monthly_payroll_brl: float = 0.0
-    monthly_fixed_cost_brl: float = 0.0
-    average_ticket_brl: float = 0.0
-    delinquency_brl: float = 0.0
-    inventory_value_brl: float = 0.0
-    receivables_value_brl: float = 0.0
-    collateral_real_estate_brl: float = 0.0
-    collateral_vehicle_brl: float = 0.0
-    collateral_other_brl: float = 0.0
-    desired_credit_amount_brl: float = 0.0
-
-    has_dre: bool = False
-    has_cash_flow: bool = False
-    has_budget: bool = False
-    has_erp: bool = False
-    has_crm: bool = False
-    has_financial_team: bool = False
-    has_accounting_integration: bool = False
-
-    current_goal: str = ""
-    urgency_level: str = ""
-    pain_points: str = ""
-    products_interest_json: str = Field(default="[]")
-    notes: str = ""
-
-    created_at: datetime = Field(default_factory=utcnow)
-    updated_at: datetime = Field(default_factory=utcnow)
-
-
 PROFILE_SURVEY_V1 = [
     {"id": "dre_mensal", "section": "Processos", "q": "Você fecha DRE mensalmente?", "type": "bool", "w": 10},
     {"id": "fluxo_90d", "section": "Processos", "q": "Você tem fluxo de caixa projetado (90 dias)?", "type": "bool",
@@ -786,216 +729,6 @@ def score_total(process_score: float, financial_score: float, nps_score: int) ->
     nps01 = max(0, min(10, int(nps_score))) / 10.0  # 0..1
     nps100 = nps01 * 100.0
     return round(_clamp_0_100(0.5 * float(process_score) + 0.4 * float(financial_score) + 0.1 * float(nps100)), 2)
-
-
-
-
-def _load_products_interest(raw: Any) -> list[str]:
-    if raw is None:
-        return []
-    if isinstance(raw, (list, tuple)):
-        vals = [str(x).strip() for x in raw if str(x).strip()]
-        return list(dict.fromkeys(vals))
-    s = str(raw).strip()
-    if not s:
-        return []
-    try:
-        obj = json.loads(s)
-        if isinstance(obj, list):
-            vals = [str(x).strip() for x in obj if str(x).strip()]
-            return list(dict.fromkeys(vals))
-    except Exception:
-        pass
-    vals = [x.strip() for x in s.split(",") if x.strip()]
-    return list(dict.fromkeys(vals))
-
-
-def _safe_float(v: Any) -> float:
-    try:
-        return float(v or 0.0)
-    except Exception:
-        return 0.0
-
-
-def _safe_int(v: Any) -> int:
-    try:
-        return int(v or 0)
-    except Exception:
-        return 0
-
-
-def _bool_score(*values: bool) -> float:
-    if not values:
-        return 0.0
-    return 100.0 * (sum(1 for x in values if bool(x)) / len(values))
-
-
-def score_offer_engine(
-        *,
-        client: Client,
-        profile: Optional[ClientBusinessProfile],
-        latest_snapshot: Optional[ClientSnapshot],
-        pluggy_loans_count: int = 0,
-        pluggy_outstanding_brl: float = 0.0,
-) -> dict[str, Any]:
-    profile = profile or ClientBusinessProfile(company_id=client.company_id, client_id=client.id)
-    snap = latest_snapshot
-
-    revenue_monthly = max(
-        _safe_float(client.revenue_monthly_brl),
-        (_safe_float(profile.annual_revenue_brl) / 12.0) if _safe_float(profile.annual_revenue_brl) > 0 else 0.0,
-        _safe_float(getattr(snap, "revenue_monthly_brl", 0.0)),
-        1.0,
-    )
-    debt_total = max(
-        _safe_float(client.debt_total_brl),
-        _safe_float(getattr(snap, "debt_total_brl", 0.0)),
-        _safe_float(pluggy_outstanding_brl),
-        0.0,
-    )
-    cash_balance = max(
-        _safe_float(client.cash_balance_brl),
-        _safe_float(getattr(snap, "cash_balance_brl", 0.0)),
-        0.0,
-    )
-
-    data_points = [
-        bool(client.name.strip()),
-        bool(_digits_only(client.cnpj)),
-        bool(client.email.strip()),
-        bool(client.phone.strip()),
-        bool(profile.segment.strip()),
-        bool(profile.tax_regime.strip()),
-        bool(profile.current_goal.strip()),
-        revenue_monthly > 1.0,
-        debt_total > 0.0,
-        bool(profile.pain_points.strip()),
-    ]
-    score_data = round(_bool_score(*data_points), 2)
-
-    score_structure = round(_bool_score(
-        profile.has_dre,
-        profile.has_cash_flow,
-        profile.has_budget,
-        profile.has_erp,
-        profile.has_crm,
-        profile.has_financial_team,
-        profile.has_accounting_integration,
-    ), 2)
-
-    leverage_ratio = debt_total / max(revenue_monthly, 1.0)
-    cash_ratio = cash_balance / max(revenue_monthly, 1.0)
-    delinquency_ratio = _safe_float(profile.delinquency_brl) / max(revenue_monthly, 1.0)
-
-    finance = (
-        (100.0 / (1.0 + leverage_ratio)) * 0.55
-        + min(cash_ratio, 1.0) * 100.0 * 0.30
-        + (100.0 / (1.0 + (delinquency_ratio * 2.0))) * 0.15
-    )
-    score_financial = round(_clamp_0_100(finance), 2)
-
-    collateral_total = (
-        _safe_float(profile.collateral_real_estate_brl)
-        + _safe_float(profile.collateral_vehicle_brl)
-        + _safe_float(profile.collateral_other_brl)
-    )
-    score_credit = round(_clamp_0_100(
-        score_financial * 0.40
-        + score_data * 0.10
-        + min(collateral_total / max(revenue_monthly, 1.0), 2.0) * 25.0
-        + min(_safe_float(profile.desired_credit_amount_brl) / max(revenue_monthly, 1.0), 2.0) * 10.0
-        + min(float(pluggy_loans_count), 5.0) * 4.0
-    ), 2)
-
-    score_consulting = round(_clamp_0_100(
-        (100.0 - score_structure) * 0.55
-        + min(leverage_ratio, 3.0) * 15.0
-        + (20.0 if bool(profile.pain_points.strip()) else 0.0)
-        + (10.0 if bool(profile.current_goal.strip()) else 0.0)
-    ), 2)
-
-    score_tools = round(_clamp_0_100(
-        (100.0 - score_structure) * 0.40
-        + (25.0 if not profile.has_cash_flow else 0.0)
-        + (20.0 if not profile.has_dre else 0.0)
-        + (15.0 if not profile.has_erp else 0.0)
-        + (10.0 if not profile.has_crm else 0.0)
-    ), 2)
-
-    credit_recos: list[str] = []
-    consulting_recos: list[str] = []
-    tools_recos: list[str] = []
-
-    interests = set(_load_products_interest(profile.products_interest_json))
-    goal = (profile.current_goal or "").lower()
-
-    if score_credit >= 60:
-        if collateral_total > 0:
-            credit_recos.append("Crédito com garantia / home equity")
-        if leverage_ratio >= 0.8 or pluggy_loans_count > 0:
-            credit_recos.append("Reestruturação ou portabilidade de dívidas")
-        if _safe_float(profile.desired_credit_amount_brl) > 0 or "capital de giro" in goal:
-            credit_recos.append("Capital de giro")
-    if "recebíveis" in goal or "antecip" in goal:
-        credit_recos.append("Antecipação de recebíveis")
-    if "credito" in interests:
-        credit_recos.append("Crédito corporativo estruturado")
-
-    if score_consulting >= 55:
-        if not profile.has_cash_flow or not profile.has_dre:
-            consulting_recos.append("Consultoria financeira e implantação de controles")
-        if leverage_ratio >= 1.0:
-            consulting_recos.append("Consultoria de reestruturação / turnaround")
-        if bool(profile.pain_points.strip()):
-            consulting_recos.append("Diagnóstico estratégico-financeiro")
-
-    if score_tools >= 50:
-        if not profile.has_cash_flow:
-            tools_recos.append("Ferramenta de fluxo de caixa")
-        if not profile.has_dre:
-            tools_recos.append("Ferramenta de DRE gerencial")
-        if not profile.has_erp:
-            tools_recos.append("Implantação de rotina financeira digital")
-
-    if not credit_recos:
-        credit_recos.append("Completar dados de crédito para destravar recomendações")
-    if not consulting_recos:
-        consulting_recos.append("Sem consultoria prioritária no momento")
-    if not tools_recos:
-        tools_recos.append("Sem ferramenta prioritária no momento")
-
-    return {
-        "score_data": score_data,
-        "score_structure": score_structure,
-        "score_financial": score_financial,
-        "score_credit": score_credit,
-        "score_consulting": score_consulting,
-        "score_tools": score_tools,
-        "credit_recommendations": list(dict.fromkeys(credit_recos)),
-        "consulting_recommendations": list(dict.fromkeys(consulting_recos)),
-        "tools_recommendations": list(dict.fromkeys(tools_recos)),
-        "summary": (
-            f"Dados {score_data:.0f}/100 · Estrutura {score_structure:.0f}/100 · "
-            f"Crédito {score_credit:.0f}/100 · Consultoria {score_consulting:.0f}/100."
-        ),
-    }
-
-
-def get_or_create_client_business_profile(session: Session, *, company_id: int, client_id: int) -> ClientBusinessProfile:
-    profile = session.exec(
-        select(ClientBusinessProfile).where(
-            (ClientBusinessProfile.company_id == int(company_id))
-            & (ClientBusinessProfile.client_id == int(client_id))
-        )
-    ).first()
-    if profile:
-        return profile
-
-    profile = ClientBusinessProfile(company_id=int(company_id), client_id=int(client_id))
-    session.add(profile)
-    session.commit()
-    session.refresh(profile)
-    return profile
 
 
 # ----------------------------
@@ -1559,21 +1292,6 @@ def ensure_credit_consent_table() -> bool:
         return False
 
 
-
-
-
-
-def ensure_client_business_profile_table() -> bool:
-    """Garante que a tabela ClientBusinessProfile existe (ambientes sem Alembic)."""
-    try:
-        ClientBusinessProfile.__table__.create(engine, checkfirst=True)
-        return True
-    except Exception as e:
-        try:
-            print(f"[client-business-profile] failed to ensure table: {e}")
-        except Exception:
-            pass
-        return False
 
 
 def ensure_consulta_scr_consent_table() -> bool:
@@ -2483,40 +2201,10 @@ FEATURE_KEYS.setdefault(
 
 
 FEATURE_GROUPS: list[dict[str, Any]] = [
-    {
-        "key": "cliente",
-        "title": "Cliente",
-        "features": [
-            "empresa",
-            "perfil",
-            "financeiro",
-            "documentos",
-            "consultas",
-            "openfinance",
-            "creditos",
-            "propostas",
-            "simulador",
-        ],
-    },
-    {
-        "key": "escritorio",
-        "title": "Escritório",
-        "features": [
-            "crm",
-            "credito",
-            "consultoria",
-            "reunioes",
-            "tarefas",
-        ],
-    },
-    {
-        "key": "admin",
-        "title": "Admin",
-        "features": [
-            "ui",
-            "gestao",
-        ],
-    },
+    {"key": "admin", "title": "Admin", "features": ["ui", "gestao", "parceiros", "credito", "crm"]},
+    {"key": "minha_empresa", "title": "Minha Empresa", "features": ["empresa", "perfil", "financeiro", "documentos", "consultas", "openfinance", "creditos"]},
+    {"key": "meu_projeto", "title": "Meu Projeto", "features": ["consultoria", "reunioes", "tarefas"]},
+    {"key": "minhas_propostas", "title": "Minhas Propostas", "features": ["simulador", "propostas"]},
 ]
 
 FEATURE_STANDALONE: list[str] = ["pendencias", "agenda", "educacao"]
@@ -2535,6 +2223,17 @@ ROLE_DEFAULT_FEATURES: dict[str, set[str]] = {
 
 ROLE_DEFAULT_FEATURES["admin"].add("openfinance")
 ROLE_DEFAULT_FEATURES["equipe"].add("openfinance")
+
+FEATURE_KEYS.setdefault(
+    "parceiros",
+    {
+        "title": "Parceiros / Produtos",
+        "desc": "Cadastro de parceiros, produtos, regras e defaults do simulador.",
+        "href": "/admin/parceiros",
+    },
+)
+FEATURE_VISIBLE_ROLES.setdefault("parceiros", {"admin"})
+ROLE_DEFAULT_FEATURES["admin"].add("parceiros")
 
 # Open Finance (Pluggy) - Loans module
 # ----------------------------
@@ -2734,6 +2433,68 @@ class PluggyOpportunity(SQLModel, table=True):
 
     method: str = ""  # PRICE|SAC_AVG|...
     created_at: datetime = Field(default_factory=utcnow)
+
+
+
+class Partner(SQLModel, table=True):
+    """Parceiro comercial/financeiro."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    company_id: int = Field(index=True, foreign_key="company.id")
+
+    name: str
+    kind: str = Field(default="banco", index=True)  # banco|fidc|fintech|securitizadora|consultoria|outro
+    contact_name: str = ""
+    contact_email: str = ""
+    contact_phone: str = ""
+    is_active: bool = Field(default=True, index=True)
+    priority: int = Field(default=100, index=True)
+    notes: str = ""
+
+    created_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime = Field(default_factory=utcnow)
+
+
+class PartnerProduct(SQLModel, table=True):
+    """Produto cadastrado por parceiro, com regras e defaults do simulador."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    company_id: int = Field(index=True, foreign_key="company.id")
+    partner_id: int = Field(index=True, foreign_key="partner.id")
+
+    name: str
+    category: str = Field(default="credito", index=True)  # credito|consultoria|ferramenta|outro
+    product_type: str = Field(default="", index=True)
+    is_active: bool = Field(default=True, index=True)
+    visible_in_simulator: bool = Field(default=True, index=True)
+    priority: int = Field(default=100, index=True)
+
+    # Elegibilidade
+    min_revenue_monthly_brl: float = 0.0
+    max_debt_ratio: float = 0.0  # 0 => não valida; senão dívida/faturamento mensal
+    min_score_total: float = 0.0
+    min_score_financial: float = 0.0
+    requires_collateral: bool = False
+    min_ticket_brl: float = 0.0
+    max_ticket_brl: float = 0.0
+    allowed_states_json: str = ""
+    notes: str = ""
+
+    # Defaults do simulador
+    default_loan_type: str = ""
+    default_amortization: str = Field(default="price")
+    default_rate_pct: float = 0.0
+    default_rate_base: str = Field(default="am")  # am|aa
+    default_term_months: int = 0
+    term_min_months: int = 0
+    term_max_months: int = 0
+    default_grace_months: int = 0
+    default_io_months: int = 0
+    default_fee_amount_brl: float = 0.0
+    default_monthly_insurance_brl: float = 0.0
+    default_monthly_admin_fee_brl: float = 0.0
+    default_ltv_pct: float = 0.0
+
+    created_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime = Field(default_factory=utcnow)
 
 
 class KlaviFlow(SQLModel, table=True):
@@ -3066,6 +2827,51 @@ class _PluggyApiKeyCache:
 
 
 _PLUGGY_KEY_CACHE = _PluggyApiKeyCache()
+
+
+
+def ensure_partner_tables() -> bool:
+    """Garante tabelas do módulo Parceiros/Produtos (ambientes sem Alembic)."""
+    ok = True
+    for tbl in (
+        Partner.__table__,
+        PartnerProduct.__table__,
+    ):
+        try:
+            tbl.create(engine, checkfirst=True)
+        except Exception as e:
+            ok = False
+            try:
+                print(f"[partners] failed to ensure table {tbl.name}: {e}")
+            except Exception:
+                pass
+    return ok
+
+
+def _partner_kind_options() -> list[str]:
+    return ["banco", "fidc", "fintech", "securitizadora", "consultoria", "outro"]
+
+
+def _partner_product_category_options() -> list[str]:
+    return ["credito", "consultoria", "ferramenta", "outro"]
+
+
+def _partner_product_type_options() -> list[str]:
+    return [
+        "",
+        "capital_giro",
+        "recebiveis",
+        "home_equity",
+        "auto_equity",
+        "consignado",
+        "portabilidade",
+        "reperfilamento",
+        "credito_estruturado",
+        "consultoria_financeira",
+        "turnaround",
+        "bpo_financeiro",
+        "bi_financeiro",
+    ]
 
 
 def _digits(value: str) -> str:
@@ -3425,90 +3231,51 @@ TEMPLATES: dict[str, str] = {
     <title>{{ title or "App Escritório" }}</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
     <style>
-      :root{
-        --mc-bg:#f5f7fb;
-        --mc-bg-2:#fbfcfe;
-        --mc-card:#ffffff;
-        --mc-line:#e9eef5;
-        --mc-text:#172435;
-        --mc-muted:#728096;
-        --mc-primary:#E07020;
-        --mc-primary-hover:#C85F1B;
-        --mc-accent:#00BFBF;
-        --mc-shadow:0 12px 30px rgba(15, 23, 42, .08);
-        --mc-radius:18px;
-      }
-      body{
-        background: linear-gradient(180deg, var(--mc-bg-2) 0%, var(--mc-bg) 100%);
-        color: var(--mc-text);
-      }
-      .card{
-        border:1px solid var(--mc-line);
-        box-shadow: var(--mc-shadow);
-        border-radius: var(--mc-radius);
-        background: var(--mc-card);
-      }
-      .brand{ font-weight:700; letter-spacing:.3px; }
-      .muted{ color:var(--mc-muted); }
-      a{ text-decoration:none; }
-      .btn{ border-radius:12px; }
-      .form-control, .form-select{ border-radius:12px; }
-      .badge{ border-radius:999px; }
-      .mono{ font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;}
-      pre{ white-space: pre-wrap; margin: 0; }
-      .navbar{
-        background: rgba(255,255,255,.92) !important;
-        backdrop-filter: blur(8px);
-      }
-      .shell-main{
-        max-width: 1440px;
-      }
-      .dash-section-title{
-        font-size: .8rem;
-        text-transform: uppercase;
-        letter-spacing: .08em;
-        color: #8a96ab;
-      }
-      .dash-card-link{ color:inherit; display:block; }
-      .dash-card-link:hover .card{
-        transform: translateY(-1px);
-        transition: .18s ease;
-        box-shadow: 0 16px 34px rgba(15,23,42,.10);
-      }
-      .sidebar-card .list-group-item{
-        border-left:0;border-right:0;
-      }
+      body { background: #f6f7fb; }
+      .card { border: 0; box-shadow: 0 6px 18px rgba(0,0,0,.06); border-radius: 16px; }
+      .brand { font-weight: 700; letter-spacing: .3px; }
+      .muted { color: #6c757d; }
+      a { text-decoration: none; }
+      .btn { border-radius: 12px; }
+      .form-control, .form-select { border-radius: 12px; }
+      .badge { border-radius: 999px; }
+      .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;}
+      pre { white-space: pre-wrap; margin: 0; }
+      /* PRIMARY = LARANJA (marca) */
+.btn-primary{
+  background-color:#E07020 !important;
+  border-color:#E07020 !important;
+  color:#ffffff !important;
+  font-weight:600;
+}
+.btn-primary:hover{
+  background-color:#C85F1B !important;
+  border-color:#C85F1B !important;
+}
 
-      .btn-primary{
-        background-color:var(--mc-primary) !important;
-        border-color:var(--mc-primary) !important;
-        color:#ffffff !important;
-        font-weight:600;
-      }
-      .btn-primary:hover{
-        background-color:var(--mc-primary-hover) !important;
-        border-color:var(--mc-primary-hover) !important;
-      }
-      .btn-outline-primary{
-        border-color:var(--mc-primary) !important;
-        color:var(--mc-primary) !important;
-      }
-      .btn-outline-primary:hover{
-        background-color:var(--mc-primary) !important;
-        border-color:var(--mc-primary) !important;
-        color:#ffffff !important;
-      }
-      a:hover{ color:var(--mc-accent); }
+/* OUTLINE PRIMARY = LARANJA */
+.btn-outline-primary{
+  border-color:#E07020 !important;
+  color:#E07020 !important;
+}
+.btn-outline-primary:hover{
+  background-color:#E07020 !important;
+  border-color:#E07020 !important;
+  color:#ffffff !important;
+}
+
+/* Links com teal (opcional) */
+a:hover{ color:#00BFBF; }
     </style>
   </head>
   <body>
-    <nav class="navbar navbar-expand-lg border-bottom">
-      <div class="container shell-main py-2">
+    <nav class="navbar navbar-expand-lg bg-white border-bottom">
+      <div class="container py-2">
         <a class="navbar-brand d-flex align-items-center gap-2" href="/">
-          <img src="/static/logo.png" alt="Maffezzolli Capital" style="height:44px; width:auto;">
-          <span class="fw-semibold" style="color:#0B1E1E; font-size:0.95rem; letter-spacing:0.2px; opacity:0.9;">Bem-vindo</span>
-        </a>
-        <div class="ms-auto d-flex gap-2 align-items-center flex-wrap justify-content-end">
+  <img src="/static/logo.png" alt="Maffezzolli Capital" style="height:44px; width:auto;">
+  <span class="fw-semibold" style="color:#0B1E1E; font-size:0.95rem; letter-spacing:0.2px; opacity:0.9;">Bem-vindo</span>
+</a>
+        <div class="ms-auto d-flex gap-2 align-items-center">
           {% if current_user %}
             <span class="badge text-bg-light border">🏢 {{ current_company.name }}</span>
 
@@ -3526,72 +3293,87 @@ TEMPLATES: dict[str, str] = {
       </div>
     </nav>
 
-    <main class="container shell-main my-4">
-      {% if flash %}
-        <div class="alert alert-info">{{ flash }}</div>
-      {% endif %}
+    <main class="container my-4">
+  {% if flash %}
+    <div class="alert alert-info">{{ flash }}</div>
+  {% endif %}
 
-      <div id="mc-banner" class="mb-3"></div>
+  <!-- Banner (carrossel) -->
+  <div id="mc-banner" class="mb-3"></div>
 
-      <div class="row g-3">
-        <div class="col-12 col-lg-9">
-          {% block content %}{% endblock %}
-        </div>
-
-        <div class="col-12 col-lg-3">
-          <div class="card p-3 sidebar-card">
-            <div class="fw-semibold mb-2">Notícias</div>
-            <div id="mc-news" class="muted small">Carregando…</div>
-          </div>
-        </div>
+  <div class="row g-3">
+    <div class="col-12 col-lg-9">
+      {% block content %}{% endblock %}
+      <div class="mt-5 muted small">
+        <div>Uploads protegidos por login (download via rota).</div>
       </div>
-    </main>
+    </div>
 
-<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+    <div class="col-12 col-lg-3">
+      <div class="card p-3">
+        <div class="d-flex align-items-center justify-content-between">
+          <div class="fw-semibold">📰 Notícias (economia)</div>
+          {% if role == "admin" %}
+            <a class="small" href="/admin/ui">Configurar</a>
+          {% endif %}
+        </div>
+        <div class="muted small mt-1">Atualiza automaticamente.</div>
+        <div id="mc-news" class="mt-2"></div>
+      </div>
+    </div>
+  </div>
+</main>
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 <script>
 (function(){
-  function esc(s){
-    return String(s == null ? "" : s)
-      .replaceAll("&","&amp;")
-      .replaceAll("<","&lt;")
-      .replaceAll(">","&gt;")
-      .replaceAll('"',"&quot;");
-  }
+  const esc = (s) => String(s || "").replace(/[&<>"']/g, (c) => ({
+    "&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"
+  }[c]));
 
   async function loadBanner(){
     const holder = document.getElementById("mc-banner");
-    if(!holder) return;
+    if (!holder) return;
     try{
       const res = await fetch("/api/ui/banner", { headers: { "Accept": "application/json" }, credentials: "same-origin" });
-      if(!res.ok){ holder.innerHTML = ""; return; }
-      const items = await res.json();
-      if(!Array.isArray(items) || items.length === 0){ holder.innerHTML = ""; return; }
+      if (!res.ok) return;
+      const slides = await res.json();
+      if (!Array.isArray(slides) || slides.length === 0) { holder.innerHTML = ""; return; }
+
+      const cid = "mcCarousel";
+      const indicators = slides.map((_,i)=>`<button type="button" data-bs-target="#${cid}" data-bs-slide-to="${i}" ${i===0?'class="active" aria-current="true"':''} aria-label="Slide ${i+1}"></button>`).join("");
+      const items = slides.map((s,i)=>{
+        const img = esc(s.image_url);
+        const link = esc(s.link_path || "/");
+        const title = esc(s.title || "");
+        return `
+          <div class="carousel-item ${i===0?'active':''}">
+            <a href="${link}" style="display:block;">
+              <img src="${img}" class="d-block w-100" alt="${title}" style="border-radius:16px; max-height:240px; object-fit:cover;">
+            </a>
+            ${title ? `<div class="carousel-caption d-none d-md-block"><h6 class="bg-dark bg-opacity-50 d-inline-block px-2 py-1 rounded">${title}</h6></div>` : ``}
+          </div>`;
+      }).join("");
+
       holder.innerHTML = `
-        <div id="bannerCarousel" class="carousel slide">
-          <div class="carousel-inner">
-            ${items.map((it,idx)=>`
-              <div class="carousel-item ${idx===0 ? "active" : ""}">
-                <a href="${esc(it.link_path || "/")}">
-                  <img src="${esc(it.image_url)}" class="d-block w-100 rounded-4 border" style="max-height:260px; object-fit:cover;" alt="${esc(it.title || "")}">
-                </a>
-              </div>`).join("")}
-          </div>
-          ${items.length > 1 ? `
-          <button class="carousel-control-prev" type="button" data-bs-target="#bannerCarousel" data-bs-slide="prev">
-            <span class="carousel-control-prev-icon"></span>
+        <div id="${cid}" class="carousel slide" data-bs-ride="carousel">
+          <div class="carousel-indicators">${indicators}</div>
+          <div class="carousel-inner">${items}</div>
+          <button class="carousel-control-prev" type="button" data-bs-target="#${cid}" data-bs-slide="prev">
+            <span class="carousel-control-prev-icon" aria-hidden="true"></span>
+            <span class="visually-hidden">Anterior</span>
           </button>
-          <button class="carousel-control-next" type="button" data-bs-target="#bannerCarousel" data-bs-slide="next">
-            <span class="carousel-control-next-icon"></span>
-          </button>` : ""}
+          <button class="carousel-control-next" type="button" data-bs-target="#${cid}" data-bs-slide="next">
+            <span class="carousel-control-next-icon" aria-hidden="true"></span>
+            <span class="visually-hidden">Próximo</span>
+          </button>
         </div>`;
     }catch(e){
-      holder.innerHTML = "";
     }
   }
 
   async function loadNews(){
     const holder = document.getElementById("mc-news");
-    if(!holder) return;
+    if (!holder) return;
     holder.innerHTML = '<div class="muted small">Carregando…</div>';
     try{
       const res = await fetch("/api/ui/news?limit=10", { headers: { "Accept": "application/json" }, credentials: "same-origin" });
@@ -3737,138 +3519,107 @@ TEMPLATES: dict[str, str] = {
 <div class="row g-3">
   <div class="col-12">
     <div class="card p-4">
-      <div class="d-flex flex-wrap justify-content-between align-items-start gap-3">
-        <div>
-          <h4 class="mb-1">Painel</h4>
-          <div class="muted">
-            {% if role in ["admin","equipe"] %}
-              Escritório: <b>{{ current_company.name }}</b>.
-              {% if current_client %} Cliente selecionado: <b>{{ current_client.name }}</b>.{% endif %}
-            {% else %}
-              Bem-vindo(a)! Você vê apenas seus dados e arquivos.
-            {% endif %}
-          </div>
-        </div>
-
+      <h4 class="mb-1">Painel</h4>
+      <div class="muted">
         {% if role in ["admin","equipe"] %}
-          <div class="d-flex gap-2">
-            <a class="btn btn-outline-primary btn-sm" href="/admin/members">Gerenciar membros</a>
-            <a class="btn btn-outline-secondary btn-sm" href="/client/switch">Trocar cliente</a>
-          </div>
+          Escritório: <b>{{ current_company.name }}</b>.
+          {% if current_client %} Cliente selecionado: <b>{{ current_client.name }}</b>.{% endif %}
+        {% else %}
+          Bem-vindo(a)! Você vê apenas seus dados e arquivos.
         {% endif %}
       </div>
+      {% if role in ["admin","equipe"] %}
+        <div class="mt-3 d-flex gap-2">
+          <a class="btn btn-outline-primary btn-sm" href="/admin/members">Gerenciar membros</a>
+          <a class="btn btn-outline-secondary btn-sm" href="/client/switch">Trocar cliente</a>
+        </div>
+      {% endif %}
     </div>
   </div>
-
-  {% if current_client and offer_engine %}
-  <div class="col-12">
-    <div class="card p-4">
-      <div class="d-flex flex-wrap justify-content-between align-items-start gap-3 mb-3">
-        <div>
-          <h5 class="mb-1">Motor de ofertas</h5>
-          <div class="muted">Leitura inicial para crédito, consultoria e ferramentas com base nos dados já coletados.</div>
-        </div>
-        <div class="d-flex gap-2 flex-wrap">
-          <span class="badge text-bg-light border">Dados {{ offer_engine.score_data | round(0) }}/100</span>
-          <span class="badge text-bg-light border">Estrutura {{ offer_engine.score_structure | round(0) }}/100</span>
-          <span class="badge text-bg-light border">Financeiro {{ offer_engine.score_financial | round(0) }}/100</span>
-        </div>
-      </div>
-
-      <div class="row g-3">
-        <div class="col-lg-4">
-          <div class="border rounded-4 p-3 h-100">
-            <div class="d-flex justify-content-between mb-2"><span class="fw-semibold">Crédito</span><span>{{ offer_engine.score_credit | round(0) }}/100</span></div>
-            <ul class="mb-0">
-              {% for item in offer_engine.credit_recommendations %}
-                <li>{{ item }}</li>
-              {% endfor %}
-            </ul>
-          </div>
-        </div>
-        <div class="col-lg-4">
-          <div class="border rounded-4 p-3 h-100">
-            <div class="d-flex justify-content-between mb-2"><span class="fw-semibold">Consultoria</span><span>{{ offer_engine.score_consulting | round(0) }}/100</span></div>
-            <ul class="mb-0">
-              {% for item in offer_engine.consulting_recommendations %}
-                <li>{{ item }}</li>
-              {% endfor %}
-            </ul>
-          </div>
-        </div>
-        <div class="col-lg-4">
-          <div class="border rounded-4 p-3 h-100">
-            <div class="d-flex justify-content-between mb-2"><span class="fw-semibold">Ferramentas</span><span>{{ offer_engine.score_tools | round(0) }}/100</span></div>
-            <ul class="mb-0">
-              {% for item in offer_engine.tools_recommendations %}
-                <li>{{ item }}</li>
-              {% endfor %}
-            </ul>
-          </div>
-        </div>
-      </div>
-
-      <div class="mt-3 d-flex gap-2 flex-wrap">
-        <a class="btn btn-primary btn-sm" href="/empresa">Completar cadastro empresarial</a>
-        <a class="btn btn-outline-secondary btn-sm" href="/perfil/avaliacao/nova">Nova avaliação</a>
-      </div>
-    </div>
-  </div>
-  {% endif %}
 
   {% if tabs %}
-    {% for t in tabs %}
-      <div class="col-12">
-        <div class="d-flex align-items-center justify-content-between mb-2">
-          <div class="dash-section-title">{{ t.title }}</div>
-          <div class="muted small">{{ t["items"]|length }} módulos</div>
-        </div>
-        <div class="row g-3">
-          {% for item in t["items"] %}
-            <div class="col-md-6 col-xl-4">
-              <a class="dash-card-link" href="{{ item.href }}">
-                <div class="card p-4 h-100">
-                  <div class="d-flex justify-content-between align-items-start">
-                    <div>
-                      <div class="fw-semibold">{{ item.title }}</div>
-                      <div class="muted small mt-1">{{ item.desc }}</div>
+  <div class="col-12">
+    <ul class="nav nav-pills gap-2" id="dashTabs" role="tablist">
+      {% for t in tabs %}
+        <li class="nav-item" role="presentation">
+          <button class="nav-link {% if loop.first %}active{% endif %}" id="tab-{{ t.key }}" data-bs-toggle="pill"
+                  data-bs-target="#pane-{{ t.key }}" type="button" role="tab">
+            {{ t.title }}
+          </button>
+        </li>
+      {% endfor %}
+    </ul>
+
+    <div class="tab-content mt-3">
+      {% for t in tabs %}
+        <div class="tab-pane fade {% if loop.first %}show active{% endif %}" id="pane-{{ t.key }}" role="tabpanel">
+          <div class="row g-3">
+            {% for item in t["items"] %}
+              <div class="col-md-6 col-lg-4">
+                <a href="{{ item.href }}">
+                  <div class="card p-4 h-100">
+                    <div class="d-flex justify-content-between align-items-start">
+                      <div>
+                        <div class="fw-semibold">{{ item.title }}</div>
+                        <div class="muted small mt-1">{{ item.desc }}</div>
+                      </div>
+                      <span class="badge text-bg-light border">→</span>
                     </div>
-                    <span class="badge text-bg-light border">→</span>
                   </div>
-                </div>
-              </a>
-            </div>
-          {% endfor %}
+                </a>
+              </div>
+            {% endfor %}
+          </div>
         </div>
-      </div>
-    {% endfor %}
+      {% endfor %}
+    </div>
+  </div>
   {% endif %}
 
   {% if standalone %}
-    <div class="col-12 mt-2">
-      <div class="d-flex align-items-center justify-content-between">
-        <div class="dash-section-title">Acesso rápido</div>
-        <div class="muted small">Pendências, Agenda e Educação</div>
-      </div>
+  <div class="col-12 mt-2">
+    <div class="d-flex align-items-center justify-content-between">
+      <div class="fw-semibold">Acesso rápido</div>
+      <div class="muted small">Pendências / Agenda / Educação</div>
     </div>
+  </div>
 
-    {% for item in standalone %}
-      <div class="col-md-6 col-xl-4">
-        <a class="dash-card-link" href="{{ item.href }}">
-          <div class="card p-4 h-100">
-            <div class="d-flex justify-content-between align-items-start">
-              <div>
-                <div class="fw-semibold">{{ item.title }}</div>
-                <div class="muted small mt-1">{{ item.desc }}</div>
-              </div>
-              <span class="badge text-bg-light border">→</span>
+  {% for item in standalone %}
+    <div class="col-md-6 col-lg-4">
+      <a href="{{ item.href }}">
+        <div class="card p-4 h-100">
+          <div class="d-flex justify-content-between align-items-start">
+            <div>
+              <div class="fw-semibold">{{ item.title }}</div>
+              <div class="muted small mt-1">{{ item.desc }}</div>
             </div>
+            <span class="badge text-bg-light border">→</span>
           </div>
-        </a>
-      </div>
-    {% endfor %}
+        </div>
+      </a>
+    </div>
+  {% endfor %}
   {% endif %}
 </div>
+
+<script>
+(function(){
+  const tabs = document.getElementById("dashTabs");
+  if (!tabs) return;
+
+  const key = "dash_active_tab";
+  const saved = localStorage.getItem(key);
+  if (saved) {
+    const btn = document.getElementById("tab-" + saved);
+    if (btn) btn.click();
+  }
+  tabs.addEventListener("click", (e) => {
+    const btn = e.target.closest("button[id^='tab-']");
+    if (!btn) return;
+    localStorage.setItem(key, btn.id.replace("tab-",""));
+  });
+})();
+</script>
 {% endblock %}
 """,
     "client_switch.html": r"""
@@ -4111,7 +3862,7 @@ TEMPLATES: dict[str, str] = {
   <div class="d-flex justify-content-between align-items-start">
     <div>
       <h4 class="mb-1">Empresa do Cliente</h4>
-      <div class="muted">Dados cadastrais, operacionais e comerciais para qualificação de ofertas.</div>
+      <div class="muted">CNPJ, endereço, e-mails, telefone etc.</div>
     </div>
     <a class="btn btn-outline-secondary" href="/">Voltar</a>
   </div>
@@ -4124,7 +3875,6 @@ TEMPLATES: dict[str, str] = {
     </div>
   {% else %}
     <form method="post" action="/empresa">
-      <h5 class="mb-3">Cadastro base</h5>
       <div class="row g-3">
         <div class="col-md-8">
           <label class="form-label">Razão Social</label>
@@ -4167,170 +3917,8 @@ TEMPLATES: dict[str, str] = {
         </div>
 
         <div class="col-12">
-          <label class="form-label">Observações gerais</label>
+          <label class="form-label">Observações</label>
           <textarea class="form-control" name="notes" rows="3">{{ current_client.notes }}</textarea>
-        </div>
-      </div>
-
-      <hr class="my-4"/>
-
-      <h5 class="mb-3">Perfil empresarial ampliado</h5>
-      <div class="row g-3">
-        <div class="col-md-4">
-          <label class="form-label">Segmento</label>
-          <input class="form-control" name="segment" value="{{ business_profile.segment if business_profile else '' }}" />
-        </div>
-        <div class="col-md-4">
-          <label class="form-label">Subsegmento</label>
-          <input class="form-control" name="subsegment" value="{{ business_profile.subsegment if business_profile else '' }}" />
-        </div>
-        <div class="col-md-4">
-          <label class="form-label">CNAE principal</label>
-          <input class="form-control" name="cnae" value="{{ business_profile.cnae if business_profile else '' }}" />
-        </div>
-
-        <div class="col-md-4">
-          <label class="form-label">Regime tributário</label>
-          <input class="form-control" name="tax_regime" value="{{ business_profile.tax_regime if business_profile else '' }}" />
-        </div>
-        <div class="col-md-4">
-          <label class="form-label">Porte da empresa</label>
-          <input class="form-control" name="company_size" value="{{ business_profile.company_size if business_profile else '' }}" placeholder="ME, EPP, média..." />
-        </div>
-        <div class="col-md-4">
-          <label class="form-label">Ano de fundação</label>
-          <input class="form-control" name="founded_year" type="number" min="1900" max="2100" value="{{ business_profile.founded_year if business_profile else 0 }}" />
-        </div>
-
-        <div class="col-md-4">
-          <label class="form-label">Modelo de negócio</label>
-          <input class="form-control" name="business_model" value="{{ business_profile.business_model if business_profile else '' }}" placeholder="B2B, B2C, recorrente..." />
-        </div>
-        <div class="col-md-4">
-          <label class="form-label">Canal principal de vendas</label>
-          <input class="form-control" name="sales_channel" value="{{ business_profile.sales_channel if business_profile else '' }}" />
-        </div>
-        <div class="col-md-4">
-          <label class="form-label">Banco principal</label>
-          <input class="form-control" name="main_bank" value="{{ business_profile.main_bank if business_profile else '' }}" />
-        </div>
-
-        <div class="col-md-4">
-          <label class="form-label">Qtd. de relacionamentos bancários</label>
-          <input class="form-control" name="banking_relationships_count" type="number" min="0" value="{{ business_profile.banking_relationships_count if business_profile else 0 }}" />
-        </div>
-        <div class="col-md-4">
-          <label class="form-label">Receita anual (R$)</label>
-          <input class="form-control" name="annual_revenue_brl" type="number" step="0.01" min="0" value="{{ business_profile.annual_revenue_brl if business_profile else 0 }}" />
-        </div>
-        <div class="col-md-4">
-          <label class="form-label">Folha mensal (R$)</label>
-          <input class="form-control" name="monthly_payroll_brl" type="number" step="0.01" min="0" value="{{ business_profile.monthly_payroll_brl if business_profile else 0 }}" />
-        </div>
-
-        <div class="col-md-4">
-          <label class="form-label">Custos fixos mensais (R$)</label>
-          <input class="form-control" name="monthly_fixed_cost_brl" type="number" step="0.01" min="0" value="{{ business_profile.monthly_fixed_cost_brl if business_profile else 0 }}" />
-        </div>
-        <div class="col-md-4">
-          <label class="form-label">Ticket médio (R$)</label>
-          <input class="form-control" name="average_ticket_brl" type="number" step="0.01" min="0" value="{{ business_profile.average_ticket_brl if business_profile else 0 }}" />
-        </div>
-        <div class="col-md-4">
-          <label class="form-label">Inadimplência estimada (R$)</label>
-          <input class="form-control" name="delinquency_brl" type="number" step="0.01" min="0" value="{{ business_profile.delinquency_brl if business_profile else 0 }}" />
-        </div>
-
-        <div class="col-md-4">
-          <label class="form-label">Estoque (R$)</label>
-          <input class="form-control" name="inventory_value_brl" type="number" step="0.01" min="0" value="{{ business_profile.inventory_value_brl if business_profile else 0 }}" />
-        </div>
-        <div class="col-md-4">
-          <label class="form-label">Recebíveis (R$)</label>
-          <input class="form-control" name="receivables_value_brl" type="number" step="0.01" min="0" value="{{ business_profile.receivables_value_brl if business_profile else 0 }}" />
-        </div>
-        <div class="col-md-4">
-          <label class="form-label">Crédito desejado (R$)</label>
-          <input class="form-control" name="desired_credit_amount_brl" type="number" step="0.01" min="0" value="{{ business_profile.desired_credit_amount_brl if business_profile else 0 }}" />
-        </div>
-
-        <div class="col-md-4">
-          <label class="form-label">Garantia imobiliária (R$)</label>
-          <input class="form-control" name="collateral_real_estate_brl" type="number" step="0.01" min="0" value="{{ business_profile.collateral_real_estate_brl if business_profile else 0 }}" />
-        </div>
-        <div class="col-md-4">
-          <label class="form-label">Garantia veículos (R$)</label>
-          <input class="form-control" name="collateral_vehicle_brl" type="number" step="0.01" min="0" value="{{ business_profile.collateral_vehicle_brl if business_profile else 0 }}" />
-        </div>
-        <div class="col-md-4">
-          <label class="form-label">Outras garantias (R$)</label>
-          <input class="form-control" name="collateral_other_brl" type="number" step="0.01" min="0" value="{{ business_profile.collateral_other_brl if business_profile else 0 }}" />
-        </div>
-
-        <div class="col-md-6">
-          <label class="form-label">Objetivo atual</label>
-          <input class="form-control" name="current_goal" value="{{ business_profile.current_goal if business_profile else '' }}" placeholder="capital de giro, expansão, reorganização..." />
-        </div>
-        <div class="col-md-6">
-          <label class="form-label">Urgência</label>
-          <select class="form-select" name="urgency_level">
-            {% set urgency = business_profile.urgency_level if business_profile else '' %}
-            <option value="" {% if urgency == '' %}selected{% endif %}>Selecione</option>
-            <option value="baixa" {% if urgency == 'baixa' %}selected{% endif %}>Baixa</option>
-            <option value="media" {% if urgency == 'media' %}selected{% endif %}>Média</option>
-            <option value="alta" {% if urgency == 'alta' %}selected{% endif %}>Alta</option>
-          </select>
-        </div>
-
-        <div class="col-md-12">
-          <label class="form-label">Interesses prioritários</label>
-          {% set interests = business_profile.products_interest_json | default('[]') %}
-          {% set interests_list = interests | from_json if interests else [] %}
-          <div class="row g-2">
-            {% for opt in ["credito","capital_giro","recebiveis","consultoria","fluxo_caixa","dre","open_finance"] %}
-              <div class="col-md-3">
-                <div class="form-check">
-                  <input class="form-check-input" type="checkbox" name="products_interest" value="{{ opt }}" id="pi_{{ opt }}"
-                         {% if opt in interests_list %}checked{% endif %}>
-                  <label class="form-check-label" for="pi_{{ opt }}">{{ opt.replace("_"," ")|title }}</label>
-                </div>
-              </div>
-            {% endfor %}
-          </div>
-        </div>
-
-        <div class="col-md-12">
-          <label class="form-label">Dores / gargalos principais</label>
-          <textarea class="form-control" name="pain_points" rows="3">{{ business_profile.pain_points if business_profile else '' }}</textarea>
-        </div>
-
-        <div class="col-md-12">
-          <label class="form-label">Observações comerciais</label>
-          <textarea class="form-control" name="bp_notes" rows="3">{{ business_profile.notes if business_profile else '' }}</textarea>
-        </div>
-
-        <div class="col-12">
-          <div class="fw-semibold mb-2">Maturidade operacional</div>
-          <div class="row g-2">
-            {% set bp = business_profile %}
-            {% for field, label in [
-              ("has_dre","Fecha DRE"),
-              ("has_cash_flow","Tem fluxo de caixa"),
-              ("has_budget","Trabalha com orçamento"),
-              ("has_erp","Usa ERP"),
-              ("has_crm","Usa CRM"),
-              ("has_financial_team","Tem equipe financeira"),
-              ("has_accounting_integration","Contabilidade integrada")
-            ] %}
-              <div class="col-md-3">
-                <div class="form-check">
-                  <input class="form-check-input" type="checkbox" name="{{ field }}" value="1" id="{{ field }}"
-                         {% if bp and bp[field] %}checked{% endif %}>
-                  <label class="form-check-label" for="{{ field }}">{{ label }}</label>
-                </div>
-              </div>
-            {% endfor %}
-          </div>
         </div>
       </div>
 
@@ -4347,41 +3935,26 @@ TEMPLATES: dict[str, str] = {
 {% extends "base.html" %}
 {% block content %}
 <div class="row g-3">
-  <div class="col-lg-4">
+  <div class="col-lg-5">
     <div class="card p-4">
       <h4 class="mb-1">Meu Perfil</h4>
       <div class="muted mb-3">Dados do usuário</div>
       <div><span class="muted">Nome:</span> <b>{{ current_user.name }}</b></div>
       <div><span class="muted">E-mail:</span> <span class="mono">{{ current_user.email }}</span></div>
       <div><span class="muted">Role:</span> <b>{{ role }}</b></div>
-      {% if current_client %}
-        <hr class="my-3"/>
-        <div><span class="muted">Cliente:</span> <b>{{ current_client.name }}</b></div>
-      {% endif %}
     </div>
-
-    {% if current_client and offer_engine %}
-    <div class="card p-4 mt-3">
-      <h5 class="mb-2">Motor de ofertas</h5>
-      <div class="muted mb-3">{{ offer_engine.summary }}</div>
-      <div class="d-flex justify-content-between"><span>Crédito</span><b>{{ offer_engine.score_credit | round(0) }}/100</b></div>
-      <div class="progress mt-1 mb-2"><div class="progress-bar" style="width:{{ offer_engine.score_credit }}%"></div></div>
-      <div class="d-flex justify-content-between"><span>Consultoria</span><b>{{ offer_engine.score_consulting | round(0) }}/100</b></div>
-      <div class="progress mt-1 mb-2"><div class="progress-bar bg-success" style="width:{{ offer_engine.score_consulting }}%"></div></div>
-      <div class="d-flex justify-content-between"><span>Ferramentas</span><b>{{ offer_engine.score_tools | round(0) }}/100</b></div>
-      <div class="progress mt-1"><div class="progress-bar bg-info" style="width:{{ offer_engine.score_tools }}%"></div></div>
-    </div>
-    {% endif %}
   </div>
 
-  <div class="col-lg-8">
+  <div class="col-lg-7">
     <div class="card p-4">
       <h4 class="mb-1">Indicadores do Cliente</h4>
-      <div class="muted mb-3">Números base para diagnóstico e motor comercial.</div>
+      <div class="muted mb-3">Faturamento, endividamento, caixa etc.</div>
 
       {% if not current_client %}
         <div class="alert alert-warning">Nenhum cliente selecionado/vinculado.</div>
       {% else %}
+        <div class="mb-2"><span class="muted">Cliente:</span> <b>{{ current_client.name }}</b></div>
+
         <form method="post" action="/perfil">
           <div class="row g-3">
             <div class="col-md-6">
@@ -4404,63 +3977,14 @@ TEMPLATES: dict[str, str] = {
               <input class="form-control" name="employees_count" type="number" min="0"
                      value="{{ current_client.employees_count }}" />
             </div>
-            <div class="col-md-6">
-              <label class="form-label">Objetivo atual</label>
-              <input class="form-control" name="current_goal" value="{{ business_profile.current_goal if business_profile else '' }}" />
-            </div>
-            <div class="col-md-6">
-              <label class="form-label">Crédito desejado (R$)</label>
-              <input class="form-control" name="desired_credit_amount_brl" type="number" step="0.01" min="0"
-                     value="{{ business_profile.desired_credit_amount_brl if business_profile else 0 }}" />
-            </div>
-            <div class="col-12">
-              <label class="form-label">Dores principais</label>
-              <textarea class="form-control" name="pain_points" rows="3">{{ business_profile.pain_points if business_profile else '' }}</textarea>
-            </div>
           </div>
-          <div class="mt-4 d-flex gap-2">
+          <div class="mt-4">
             <button class="btn btn-primary">Salvar</button>
-            <a class="btn btn-outline-secondary" href="/empresa">Completar cadastro empresarial</a>
-            <a class="btn btn-outline-secondary" href="/perfil/avaliacao/nova">Nova avaliação</a>
+            <a class="btn btn-outline-secondary" href="/empresa">Editar dados da empresa</a>
           </div>
         </form>
       {% endif %}
     </div>
-
-    {% if snapshots %}
-    <div class="card p-4 mt-3">
-      <div class="d-flex justify-content-between align-items-center">
-        <div>
-          <h5 class="mb-1">Histórico de avaliações</h5>
-          <div class="muted">Evolução do cliente no tempo.</div>
-        </div>
-        {% if latest_score is not none %}
-          <div class="text-end">
-            <div class="fw-semibold">Score atual: {{ latest_score | round(2) }}</div>
-            {% if delta is not none %}
-              <div class="muted small">Variação: {{ delta }}</div>
-            {% endif %}
-          </div>
-        {% endif %}
-      </div>
-      <div class="table-responsive mt-3">
-        <table class="table table-sm align-middle">
-          <thead><tr><th>Data</th><th>Processos</th><th>Financeiro</th><th>Total</th><th></th></tr></thead>
-          <tbody>
-            {% for s in snapshots %}
-              <tr>
-                <td>{{ s.created_at.strftime("%d/%m/%Y %H:%M") if s.created_at else "-" }}</td>
-                <td>{{ s.score_process | round(2) }}</td>
-                <td>{{ s.score_financial | round(2) }}</td>
-                <td><b>{{ s.score_total | round(2) }}</b></td>
-                <td><a class="btn btn-outline-secondary btn-sm" href="/perfil/avaliacao/{{ s.id }}">Ver</a></td>
-              </tr>
-            {% endfor %}
-          </tbody>
-        </table>
-      </div>
-    </div>
-    {% endif %}
   </div>
 </div>
 {% endblock %}
@@ -6645,7 +6169,7 @@ TEMPLATES.update({
   <div class="d-flex justify-content-between align-items-center">
     <div>
       <h4 class="mb-0">Nova Avaliação do Cliente</h4>
-      <div class="muted">“Foto do momento” + score de evolução + intenção comercial</div>
+      <div class="muted">“Foto do momento” + score de evolução</div>
     </div>
     <a class="btn btn-outline-secondary" href="/perfil">Voltar</a>
   </div>
@@ -6658,7 +6182,7 @@ TEMPLATES.update({
     <div class="mb-2"><span class="muted">Cliente:</span> <b>{{ current_client.name }}</b></div>
 
     <form method="post" action="/perfil/avaliacao/nova">
-      <h5 class="mt-3">Números do momento</h5>
+      <h5 class="mt-3">Números (do momento)</h5>
       <div class="row g-3">
         <div class="col-md-6">
           <label class="form-label">Faturamento mensal (R$)</label>
@@ -6681,59 +6205,16 @@ TEMPLATES.update({
           <input class="form-control" name="nps_score" type="number" min="0" max="10" value="0" />
           <div class="form-text">0 = nada provável recomendar / 10 = muito provável.</div>
         </div>
-        <div class="col-md-6">
-          <label class="form-label">Crédito desejado (R$)</label>
-          <input class="form-control" name="desired_credit_amount_brl" type="number" step="0.01" min="0" value="{{ business_profile.desired_credit_amount_brl if business_profile else 0 }}" />
-        </div>
-        <div class="col-md-6">
-          <label class="form-label">Objetivo atual</label>
-          <input class="form-control" name="current_goal" value="{{ business_profile.current_goal if business_profile else '' }}" placeholder="capital de giro, expansão, reorganização..." />
-        </div>
-        <div class="col-md-6">
-          <label class="form-label">Interesses</label>
-          {% set interests = business_profile.products_interest_json | default('[]') %}
-          {% set interests_list = interests | from_json if interests else [] %}
-          <select class="form-select" multiple name="products_interest">
-            {% for opt in ["credito","capital_giro","recebiveis","consultoria","fluxo_caixa","dre","open_finance"] %}
-              <option value="{{ opt }}" {% if opt in interests_list %}selected{% endif %}>{{ opt.replace("_"," ")|title }}</option>
-            {% endfor %}
-          </select>
-        </div>
         <div class="col-12">
-          <label class="form-label">Observações</label>
+          <label class="form-label">Observações (opcional)</label>
           <textarea class="form-control" name="notes" rows="3" placeholder="Contexto, mudanças recentes, dor principal..."></textarea>
-        </div>
-        <div class="col-12">
-          <label class="form-label">Dores / gargalos principais</label>
-          <textarea class="form-control" name="pain_points" rows="3">{{ business_profile.pain_points if business_profile else '' }}</textarea>
         </div>
       </div>
 
       <hr class="my-4"/>
 
-      <h5>Processos e estrutura</h5>
+      <h5>Processos (checklist)</h5>
       <div class="muted mb-2">Marque o que já está implementado hoje.</div>
-
-      <div class="row g-2 mb-3">
-        {% set bp = business_profile %}
-        {% for field, label in [
-          ("has_dre","Fecha DRE"),
-          ("has_cash_flow","Tem fluxo de caixa"),
-          ("has_budget","Trabalha com orçamento"),
-          ("has_erp","Usa ERP"),
-          ("has_crm","Usa CRM"),
-          ("has_financial_team","Tem equipe financeira"),
-          ("has_accounting_integration","Contabilidade integrada")
-        ] %}
-          <div class="col-md-3">
-            <div class="form-check">
-              <input class="form-check-input" type="checkbox" name="{{ field }}" value="1" id="{{ field }}"
-                     {% if bp and bp[field] %}checked{% endif %}>
-              <label class="form-check-label" for="{{ field }}">{{ label }}</label>
-            </div>
-          </div>
-        {% endfor %}
-      </div>
 
       <div class="row g-2">
         {% for q in survey %}
@@ -7877,7 +7358,6 @@ TEMPLATES.update({
 })
 
 templates_env = Environment(loader=DictLoader(TEMPLATES), autoescape=True)
-templates_env.filters["from_json"] = lambda s: json.loads(s or "[]") if (s or "").strip() else []
 
 
 # ----------------------------
@@ -8509,6 +7989,7 @@ def resolve_feature_key(path: str) -> Optional[str]:
     mapping = [
         ("/admin/ui", "ui"),
         ("/admin/gestao", "gestao"),
+        ("/admin/parceiros", "parceiros"),
         ("/admin/members", "gestao"),
         ("/admin/clients", "gestao"),
         ("/negocios", "crm"),
@@ -9262,6 +8743,7 @@ def _startup() -> None:
     ensure_ui_tables()
     ensure_feature_access_tables()
     ensure_credit_consent_table()
+    ensure_partner_tables()
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 
@@ -10035,40 +9517,6 @@ async def dashboard(request: Request, session: Session = Depends(get_session)) -
     active_client_id = get_active_client_id(request, session, ctx)
     current_client = get_client_or_none(session, ctx.company.id, active_client_id)
 
-    business_profile = None
-    offer_engine = None
-    if current_client and ensure_client_business_profile_table():
-        business_profile = get_or_create_client_business_profile(
-            session, company_id=ctx.company.id, client_id=current_client.id
-        )
-        latest_snapshot = session.exec(
-            select(ClientSnapshot)
-            .where(ClientSnapshot.company_id == ctx.company.id, ClientSnapshot.client_id == current_client.id)
-            .order_by(ClientSnapshot.created_at.desc())
-        ).first()
-        subject_doc = _digits_only(current_client.cnpj)
-        pluggy_loans_count = 0
-        pluggy_outstanding_brl = 0.0
-        if subject_doc:
-            try:
-                pluggy_loans = session.exec(
-                    select(PluggyLoan).where(
-                        (PluggyLoan.company_id == ctx.company.id)
-                        & (PluggyLoan.subject_doc == subject_doc)
-                    )
-                ).all()
-                pluggy_loans_count = len(pluggy_loans)
-                pluggy_outstanding_brl = sum(float(x.outstanding_brl or 0.0) for x in pluggy_loans)
-            except Exception:
-                pass
-        offer_engine = score_offer_engine(
-            client=current_client,
-            profile=business_profile,
-            latest_snapshot=latest_snapshot,
-            pluggy_loans_count=pluggy_loans_count,
-            pluggy_outstanding_brl=pluggy_outstanding_brl,
-        )
-
     allowed = effective_allowed_features(session, ctx=ctx, current_client=current_client)
 
     def _is_visible(feature_key: str) -> bool:
@@ -10102,8 +9550,6 @@ async def dashboard(request: Request, session: Session = Depends(get_session)) -
             "current_client": current_client,
             "tabs": tabs,
             "standalone": standalone,
-            "business_profile": business_profile,
-            "offer_engine": offer_engine,
         },
     )
 
@@ -10876,11 +10322,6 @@ async def empresa_page(request: Request, session: Session = Depends(get_session)
         return RedirectResponse("/login", status_code=303)
 
     current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
-    business_profile = None
-    if current_client and ensure_client_business_profile_table():
-        business_profile = get_or_create_client_business_profile(
-            session, company_id=ctx.company.id, client_id=current_client.id
-        )
     return render(
         "empresa.html",
         request=request,
@@ -10889,7 +10330,6 @@ async def empresa_page(request: Request, session: Session = Depends(get_session)
             "current_company": ctx.company,
             "role": ctx.membership.role,
             "current_client": current_client,
-            "business_profile": business_profile,
         },
     )
 
@@ -10909,39 +10349,6 @@ async def empresa_save(
         state: str = Form(""),
         zip_code: str = Form(""),
         notes: str = Form(""),
-        segment: str = Form(""),
-        subsegment: str = Form(""),
-        cnae: str = Form(""),
-        tax_regime: str = Form(""),
-        company_size: str = Form(""),
-        founded_year: int = Form(0),
-        business_model: str = Form(""),
-        sales_channel: str = Form(""),
-        main_bank: str = Form(""),
-        banking_relationships_count: int = Form(0),
-        annual_revenue_brl: float = Form(0.0),
-        monthly_payroll_brl: float = Form(0.0),
-        monthly_fixed_cost_brl: float = Form(0.0),
-        average_ticket_brl: float = Form(0.0),
-        delinquency_brl: float = Form(0.0),
-        inventory_value_brl: float = Form(0.0),
-        receivables_value_brl: float = Form(0.0),
-        collateral_real_estate_brl: float = Form(0.0),
-        collateral_vehicle_brl: float = Form(0.0),
-        collateral_other_brl: float = Form(0.0),
-        desired_credit_amount_brl: float = Form(0.0),
-        current_goal: str = Form(""),
-        urgency_level: str = Form(""),
-        pain_points: str = Form(""),
-        products_interest: list[str] = Form([]),
-        bp_notes: str = Form(""),
-        has_dre: Optional[str] = Form(None),
-        has_cash_flow: Optional[str] = Form(None),
-        has_budget: Optional[str] = Form(None),
-        has_erp: Optional[str] = Form(None),
-        has_crm: Optional[str] = Form(None),
-        has_financial_team: Optional[str] = Form(None),
-        has_accounting_integration: Optional[str] = Form(None),
 ) -> Response:
     ctx = get_tenant_context(request, session)
     if not ctx:
@@ -10972,48 +10379,7 @@ async def empresa_save(
     session.add(current_client)
     session.commit()
 
-    if ensure_client_business_profile_table():
-        bp = get_or_create_client_business_profile(
-            session, company_id=ctx.company.id, client_id=current_client.id
-        )
-        bp.segment = segment.strip()
-        bp.subsegment = subsegment.strip()
-        bp.cnae = cnae.strip()
-        bp.tax_regime = tax_regime.strip()
-        bp.company_size = company_size.strip()
-        bp.founded_year = max(0, int(founded_year or 0))
-        bp.business_model = business_model.strip()
-        bp.sales_channel = sales_channel.strip()
-        bp.main_bank = main_bank.strip()
-        bp.banking_relationships_count = max(0, int(banking_relationships_count or 0))
-        bp.annual_revenue_brl = max(0.0, float(annual_revenue_brl or 0.0))
-        bp.monthly_payroll_brl = max(0.0, float(monthly_payroll_brl or 0.0))
-        bp.monthly_fixed_cost_brl = max(0.0, float(monthly_fixed_cost_brl or 0.0))
-        bp.average_ticket_brl = max(0.0, float(average_ticket_brl or 0.0))
-        bp.delinquency_brl = max(0.0, float(delinquency_brl or 0.0))
-        bp.inventory_value_brl = max(0.0, float(inventory_value_brl or 0.0))
-        bp.receivables_value_brl = max(0.0, float(receivables_value_brl or 0.0))
-        bp.collateral_real_estate_brl = max(0.0, float(collateral_real_estate_brl or 0.0))
-        bp.collateral_vehicle_brl = max(0.0, float(collateral_vehicle_brl or 0.0))
-        bp.collateral_other_brl = max(0.0, float(collateral_other_brl or 0.0))
-        bp.desired_credit_amount_brl = max(0.0, float(desired_credit_amount_brl or 0.0))
-        bp.current_goal = current_goal.strip()
-        bp.urgency_level = urgency_level.strip()
-        bp.pain_points = pain_points.strip()
-        bp.products_interest_json = json.dumps(_load_products_interest(products_interest), ensure_ascii=False)
-        bp.notes = bp_notes.strip()
-        bp.has_dre = _parse_bool(has_dre)
-        bp.has_cash_flow = _parse_bool(has_cash_flow)
-        bp.has_budget = _parse_bool(has_budget)
-        bp.has_erp = _parse_bool(has_erp)
-        bp.has_crm = _parse_bool(has_crm)
-        bp.has_financial_team = _parse_bool(has_financial_team)
-        bp.has_accounting_integration = _parse_bool(has_accounting_integration)
-        bp.updated_at = utcnow()
-        session.add(bp)
-        session.commit()
-
-    set_flash(request, "Dados da empresa e perfil comercial atualizados.")
+    set_flash(request, "Dados da empresa atualizados.")
     return RedirectResponse("/empresa", status_code=303)
 
 
@@ -11027,17 +10393,11 @@ async def perfil_page(request: Request, session: Session = Depends(get_session))
 
     current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
 
-    business_profile = None
-    offer_engine = None
     snapshots: list[ClientSnapshot] = []
     latest_score: Optional[float] = None
     delta: Optional[float] = None
 
     if current_client and ensure_can_access_client(ctx, current_client.id):
-        if ensure_client_business_profile_table():
-            business_profile = get_or_create_client_business_profile(
-                session, company_id=ctx.company.id, client_id=current_client.id
-            )
         snaps = session.exec(
             select(ClientSnapshot)
             .where(ClientSnapshot.company_id == ctx.company.id, ClientSnapshot.client_id == current_client.id)
@@ -11049,12 +10409,6 @@ async def perfil_page(request: Request, session: Session = Depends(get_session))
             latest_score = float(snapshots[0].score_total)
         if len(snapshots) >= 2:
             delta = round(float(snapshots[0].score_total) - float(snapshots[1].score_total), 2)
-        latest_snapshot = snapshots[0] if snapshots else None
-        offer_engine = score_offer_engine(
-            client=current_client,
-            profile=business_profile,
-            latest_snapshot=latest_snapshot,
-        )
 
     return render(
         "perfil.html",
@@ -11067,8 +10421,6 @@ async def perfil_page(request: Request, session: Session = Depends(get_session))
             "snapshots": snapshots,
             "latest_score": latest_score,
             "delta": delta,
-            "business_profile": business_profile,
-            "offer_engine": offer_engine,
         },
     )
 
@@ -11082,9 +10434,6 @@ async def perfil_save(
         debt_total_brl: float = Form(0.0),
         cash_balance_brl: float = Form(0.0),
         employees_count: int = Form(0),
-        desired_credit_amount_brl: float = Form(0.0),
-        current_goal: str = Form(""),
-        pain_points: str = Form(""),
 ) -> Response:
     ctx = get_tenant_context(request, session)
     if not ctx:
@@ -11108,19 +10457,6 @@ async def perfil_save(
 
     session.add(current_client)
     session.commit()
-
-    if ensure_client_business_profile_table():
-        bp = get_or_create_client_business_profile(
-            session, company_id=ctx.company.id, client_id=current_client.id
-        )
-        bp.desired_credit_amount_brl = max(0.0, float(desired_credit_amount_brl or 0.0))
-        if (current_goal or "").strip():
-            bp.current_goal = current_goal.strip()
-        if (pain_points or "").strip():
-            bp.pain_points = pain_points.strip()
-        bp.updated_at = utcnow()
-        session.add(bp)
-        session.commit()
 
     set_flash(request, "Indicadores atualizados.")
     return RedirectResponse("/perfil", status_code=303)
@@ -11156,9 +10492,6 @@ async def perfil_snapshot_new_page(request: Request, session: Session = Depends(
             "role": ctx.membership.role,
             "current_client": current_client,
             "survey": PROFILE_SURVEY_V1,
-            "business_profile": get_or_create_client_business_profile(
-                session, company_id=ctx.company.id, client_id=current_client.id
-            ) if ensure_client_business_profile_table() else None,
         },
     )
 
@@ -11174,17 +10507,6 @@ async def perfil_snapshot_new_action(
         employees_count: int = Form(0),
         nps_score: int = Form(0),
         notes: str = Form(""),
-        desired_credit_amount_brl: float = Form(0.0),
-        current_goal: str = Form(""),
-        pain_points: str = Form(""),
-        products_interest: list[str] = Form([]),
-        has_dre: Optional[str] = Form(None),
-        has_cash_flow: Optional[str] = Form(None),
-        has_budget: Optional[str] = Form(None),
-        has_erp: Optional[str] = Form(None),
-        has_crm: Optional[str] = Form(None),
-        has_financial_team: Optional[str] = Form(None),
-        has_accounting_integration: Optional[str] = Form(None),
 ) -> Response:
     ctx = get_tenant_context(request, session)
     if not ctx:
@@ -11236,30 +10558,6 @@ async def perfil_snapshot_new_action(
     session.add(current_client)
 
     session.commit()
-
-    if ensure_client_business_profile_table():
-        bp = get_or_create_client_business_profile(
-            session, company_id=ctx.company.id, client_id=current_client.id
-        )
-        bp.desired_credit_amount_brl = max(bp.desired_credit_amount_brl, max(0.0, float(desired_credit_amount_brl or 0.0)))
-        if (current_goal or "").strip():
-            bp.current_goal = current_goal.strip()
-        if (pain_points or "").strip():
-            bp.pain_points = pain_points.strip()
-        merged_products = set(_load_products_interest(bp.products_interest_json))
-        merged_products.update(_load_products_interest(products_interest))
-        bp.products_interest_json = json.dumps(sorted(merged_products), ensure_ascii=False)
-        bp.has_dre = bp.has_dre or _parse_bool(has_dre)
-        bp.has_cash_flow = bp.has_cash_flow or _parse_bool(has_cash_flow)
-        bp.has_budget = bp.has_budget or _parse_bool(has_budget)
-        bp.has_erp = bp.has_erp or _parse_bool(has_erp)
-        bp.has_crm = bp.has_crm or _parse_bool(has_crm)
-        bp.has_financial_team = bp.has_financial_team or _parse_bool(has_financial_team)
-        bp.has_accounting_integration = bp.has_accounting_integration or _parse_bool(has_accounting_integration)
-        bp.updated_at = utcnow()
-        session.add(bp)
-        session.commit()
-
     set_flash(request, "Avaliação registrada.")
     return RedirectResponse("/perfil", status_code=303)
 
@@ -18068,6 +17366,456 @@ async def credit_report_generate_tasks(request: Request, session: Session = Depe
     return RedirectResponse("/tarefas", status_code=303)
 
 
+TEMPLATES.setdefault("admin_partners.html", r"""{% extends "base.html" %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-start flex-wrap gap-2 mb-3">
+  <div>
+    <div class="h4 mb-0">Parceiros / Produtos</div>
+    <div class="muted">Cadastre parceiros, produtos, regras de elegibilidade e defaults do simulador.</div>
+  </div>
+  <div class="d-flex gap-2">
+    <a class="btn btn-outline-secondary" href="/simulador">Abrir simulador</a>
+  </div>
+</div>
+
+<div class="row g-3">
+  <div class="col-lg-4">
+    <div class="card p-3">
+      <div class="fw-semibold mb-2">Novo parceiro</div>
+      <form method="post" action="/admin/parceiros/add" class="row g-2">
+        <div class="col-12">
+          <label class="form-label">Nome</label>
+          <input class="form-control" name="name" required>
+        </div>
+        <div class="col-md-6">
+          <label class="form-label">Tipo</label>
+          <select class="form-select" name="kind">
+            {% for k in partner_kind_options %}
+              <option value="{{ k }}">{{ k }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="col-md-6">
+          <label class="form-label">Prioridade</label>
+          <input class="form-control" name="priority" value="100">
+        </div>
+        <div class="col-md-6">
+          <label class="form-label">Contato</label>
+          <input class="form-control" name="contact_name">
+        </div>
+        <div class="col-md-6">
+          <label class="form-label">E-mail</label>
+          <input class="form-control" name="contact_email">
+        </div>
+        <div class="col-12">
+          <label class="form-label">Observações</label>
+          <textarea class="form-control" name="notes" rows="3"></textarea>
+        </div>
+        <div class="col-12">
+          <button class="btn btn-primary w-100">Salvar parceiro</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div class="col-lg-8">
+    <div class="card p-3">
+      <div class="fw-semibold mb-2">Novo produto por parceiro</div>
+      <form method="post" action="/admin/parceiros/products/add" class="row g-2">
+        <div class="col-md-4">
+          <label class="form-label">Parceiro</label>
+          <select class="form-select" name="partner_id" required>
+            <option value="">-- selecione --</option>
+            {% for p in partners %}
+              <option value="{{ p.id }}">{{ p.name }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="col-md-4">
+          <label class="form-label">Nome do produto</label>
+          <input class="form-control" name="name" required>
+        </div>
+        <div class="col-md-4">
+          <label class="form-label">Categoria</label>
+          <select class="form-select" name="category">
+            {% for c in category_options %}
+              <option value="{{ c }}">{{ c }}</option>
+            {% endfor %}
+          </select>
+        </div>
+
+        <div class="col-md-4">
+          <label class="form-label">Tipo</label>
+          <select class="form-select" name="product_type">
+            {% for c in product_type_options %}
+              <option value="{{ c }}">{{ c or "(vazio)" }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="col-md-2">
+          <label class="form-label">Prioridade</label>
+          <input class="form-control" name="priority" value="100">
+        </div>
+        <div class="col-md-3">
+          <label class="form-label">Visível simulador</label>
+          <select class="form-select" name="visible_in_simulator">
+            <option value="1">sim</option>
+            <option value="0">não</option>
+          </select>
+        </div>
+        <div class="col-md-3">
+          <label class="form-label">Exige garantia</label>
+          <select class="form-select" name="requires_collateral">
+            <option value="0">não</option>
+            <option value="1">sim</option>
+          </select>
+        </div>
+
+        <div class="col-md-3">
+          <label class="form-label">Fat. mín mensal</label>
+          <input class="form-control" name="min_revenue_monthly_brl" placeholder="0">
+        </div>
+        <div class="col-md-3">
+          <label class="form-label">Score total mín</label>
+          <input class="form-control" name="min_score_total" placeholder="0">
+        </div>
+        <div class="col-md-3">
+          <label class="form-label">Score financeiro mín</label>
+          <input class="form-control" name="min_score_financial" placeholder="0">
+        </div>
+        <div class="col-md-3">
+          <label class="form-label">Alavancagem máx (x)</label>
+          <input class="form-control" name="max_debt_ratio" placeholder="0">
+        </div>
+
+        <div class="col-md-3">
+          <label class="form-label">Ticket mín</label>
+          <input class="form-control" name="min_ticket_brl" placeholder="0">
+        </div>
+        <div class="col-md-3">
+          <label class="form-label">Ticket máx</label>
+          <input class="form-control" name="max_ticket_brl" placeholder="0">
+        </div>
+        <div class="col-md-3">
+          <label class="form-label">UFs permitidas (JSON)</label>
+          <input class="form-control" name="allowed_states_json" placeholder='["SP","PR"]'>
+        </div>
+        <div class="col-md-3">
+          <label class="form-label">LTV padrão (%)</label>
+          <input class="form-control" name="default_ltv_pct" placeholder="0">
+        </div>
+
+        <div class="col-md-3">
+          <label class="form-label">Tipo empréstimo</label>
+          <input class="form-control" name="default_loan_type" placeholder="Capital de giro">
+        </div>
+        <div class="col-md-3">
+          <label class="form-label">Amortização</label>
+          <select class="form-select" name="default_amortization">
+            <option value="price">price</option>
+            <option value="sac">sac</option>
+            <option value="americano">americano</option>
+          </select>
+        </div>
+        <div class="col-md-2">
+          <label class="form-label">Taxa %</label>
+          <input class="form-control" name="default_rate_pct" placeholder="1,79">
+        </div>
+        <div class="col-md-2">
+          <label class="form-label">Base</label>
+          <select class="form-select" name="default_rate_base">
+            <option value="am">am</option>
+            <option value="aa">aa</option>
+          </select>
+        </div>
+        <div class="col-md-2">
+          <label class="form-label">Prazo padr.</label>
+          <input class="form-control" name="default_term_months" placeholder="24">
+        </div>
+
+        <div class="col-md-2">
+          <label class="form-label">Prazo mín</label>
+          <input class="form-control" name="term_min_months" placeholder="0">
+        </div>
+        <div class="col-md-2">
+          <label class="form-label">Prazo máx</label>
+          <input class="form-control" name="term_max_months" placeholder="0">
+        </div>
+        <div class="col-md-2">
+          <label class="form-label">Carência</label>
+          <input class="form-control" name="default_grace_months" placeholder="0">
+        </div>
+        <div class="col-md-2">
+          <label class="form-label">IO extra</label>
+          <input class="form-control" name="default_io_months" placeholder="0">
+        </div>
+        <div class="col-md-2">
+          <label class="form-label">Tarifa</label>
+          <input class="form-control" name="default_fee_amount_brl" placeholder="0">
+        </div>
+        <div class="col-md-2">
+          <label class="form-label">Seguro</label>
+          <input class="form-control" name="default_monthly_insurance_brl" placeholder="0">
+        </div>
+        <div class="col-md-2">
+          <label class="form-label">Taxa admin</label>
+          <input class="form-control" name="default_monthly_admin_fee_brl" placeholder="0">
+        </div>
+
+        <div class="col-12">
+          <label class="form-label">Diretrizes / observações</label>
+          <textarea class="form-control" name="notes" rows="3" placeholder="Ex.: aceita operação com garantia, foco em portabilidade, exige faturamento recorrente..."></textarea>
+        </div>
+
+        <div class="col-12">
+          <button class="btn btn-primary w-100">Salvar produto</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div class="col-12">
+    <div class="card p-3">
+      <div class="fw-semibold mb-2">Catálogo atual</div>
+      {% if partner_rows %}
+        <div class="accordion" id="partnersAcc">
+          {% for row in partner_rows %}
+            <div class="accordion-item">
+              <h2 class="accordion-header">
+                <button class="accordion-button {% if not loop.first %}collapsed{% endif %}" type="button" data-bs-toggle="collapse" data-bs-target="#p{{ row.partner.id }}">
+                  {{ row.partner.name }} · {{ row.partner.kind }} · {{ row.products|length }} produto(s)
+                </button>
+              </h2>
+              <div id="p{{ row.partner.id }}" class="accordion-collapse collapse {% if loop.first %}show{% endif %}" data-bs-parent="#partnersAcc">
+                <div class="accordion-body">
+                  <div class="muted small mb-3">{{ row.partner.notes or "Sem observações." }}</div>
+                  {% if row.products %}
+                    <div class="table-responsive">
+                      <table class="table table-sm align-middle">
+                        <thead>
+                          <tr>
+                            <th>Produto</th>
+                            <th>Categoria</th>
+                            <th>Taxa padrão</th>
+                            <th>Prazo</th>
+                            <th>Regras</th>
+                            <th></th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {% for p in row.products %}
+                            <tr>
+                              <td>
+                                <div class="fw-semibold">{{ p.name }}</div>
+                                <div class="muted small">{{ p.product_type or "-" }}</div>
+                              </td>
+                              <td>{{ p.category }}</td>
+                              <td>{{ p.default_rate_pct }}% {{ p.default_rate_base }}</td>
+                              <td>{{ p.default_term_months or "-" }}m</td>
+                              <td class="small">
+                                fat mín {{ p.min_revenue_monthly_brl or 0 }} ·
+                                score mín {{ p.min_score_total or 0 }} ·
+                                ticket {{ p.min_ticket_brl or 0 }}-{{ p.max_ticket_brl or 0 }}
+                              </td>
+                              <td class="text-end">
+                                <form method="post" action="/admin/parceiros/products/{{ p.id }}/toggle">
+                                  <button class="btn btn-outline-secondary btn-sm">{% if p.is_active %}Inativar{% else %}Ativar{% endif %}</button>
+                                </form>
+                              </td>
+                            </tr>
+                          {% endfor %}
+                        </tbody>
+                      </table>
+                    </div>
+                  {% else %}
+                    <div class="muted small">Nenhum produto cadastrado.</div>
+                  {% endif %}
+                </div>
+              </div>
+            </div>
+          {% endfor %}
+        </div>
+      {% else %}
+        <div class="muted">Nenhum parceiro cadastrado ainda.</div>
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endblock %}
+""")
+
+
+@app.get("/admin/parceiros", response_class=HTMLResponse)
+@require_role({"admin"})
+async def admin_partners_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+    ensure_partner_tables()
+
+    partners = session.exec(
+        select(Partner).where(Partner.company_id == ctx.company.id).order_by(Partner.priority.asc(), Partner.name.asc())
+    ).all()
+    products = session.exec(
+        select(PartnerProduct).where(PartnerProduct.company_id == ctx.company.id).order_by(PartnerProduct.priority.asc(), PartnerProduct.created_at.desc())
+    ).all()
+    grouped: list[dict[str, Any]] = []
+    for partner in partners:
+        grouped.append(
+            {
+                "partner": partner,
+                "products": [p for p in products if int(p.partner_id or 0) == int(partner.id or 0)],
+            }
+        )
+    return render(
+        "admin_partners.html",
+        request=request,
+        context={
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "role": ctx.membership.role,
+            "current_client": get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx)),
+            "partners": partners,
+            "partner_rows": grouped,
+            "partner_kind_options": _partner_kind_options(),
+            "category_options": _partner_product_category_options(),
+            "product_type_options": _partner_product_type_options(),
+        },
+    )
+
+
+@app.post("/admin/parceiros/add")
+@require_role({"admin"})
+async def admin_partners_add(
+    request: Request,
+    name: str = Form(...),
+    kind: str = Form("banco"),
+    contact_name: str = Form(""),
+    contact_email: str = Form(""),
+    contact_phone: str = Form(""),
+    priority: str = Form("100"),
+    notes: str = Form(""),
+    session: Session = Depends(get_session),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+    ensure_partner_tables()
+
+    partner = Partner(
+        company_id=ctx.company.id,
+        name=(name or "").strip(),
+        kind=(kind or "").strip() or "banco",
+        contact_name=(contact_name or "").strip(),
+        contact_email=(contact_email or "").strip(),
+        contact_phone=(contact_phone or "").strip(),
+        priority=int(priority or 100) if str(priority or "").strip().isdigit() else 100,
+        notes=(notes or "").strip(),
+        updated_at=utcnow(),
+    )
+    session.add(partner)
+    session.commit()
+    set_flash(request, "Parceiro salvo.")
+    return RedirectResponse("/admin/parceiros", status_code=303)
+
+
+@app.post("/admin/parceiros/products/add")
+@require_role({"admin"})
+async def admin_partner_products_add(
+    request: Request,
+    partner_id: int = Form(...),
+    name: str = Form(...),
+    category: str = Form("credito"),
+    product_type: str = Form(""),
+    priority: str = Form("100"),
+    visible_in_simulator: str = Form("1"),
+    requires_collateral: str = Form("0"),
+    min_revenue_monthly_brl: str = Form("0"),
+    max_debt_ratio: str = Form("0"),
+    min_score_total: str = Form("0"),
+    min_score_financial: str = Form("0"),
+    min_ticket_brl: str = Form("0"),
+    max_ticket_brl: str = Form("0"),
+    allowed_states_json: str = Form(""),
+    default_ltv_pct: str = Form("0"),
+    default_loan_type: str = Form(""),
+    default_amortization: str = Form("price"),
+    default_rate_pct: str = Form("0"),
+    default_rate_base: str = Form("am"),
+    default_term_months: str = Form("0"),
+    term_min_months: str = Form("0"),
+    term_max_months: str = Form("0"),
+    default_grace_months: str = Form("0"),
+    default_io_months: str = Form("0"),
+    default_fee_amount_brl: str = Form("0"),
+    default_monthly_insurance_brl: str = Form("0"),
+    default_monthly_admin_fee_brl: str = Form("0"),
+    notes: str = Form(""),
+    session: Session = Depends(get_session),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+    ensure_partner_tables()
+
+    partner = session.get(Partner, partner_id)
+    if not partner or int(partner.company_id or 0) != int(ctx.company.id or 0):
+        set_flash(request, "Parceiro inválido.")
+        return RedirectResponse("/admin/parceiros", status_code=303)
+
+    row = PartnerProduct(
+        company_id=ctx.company.id,
+        partner_id=int(partner_id),
+        name=(name or "").strip(),
+        category=(category or "").strip() or "credito",
+        product_type=(product_type or "").strip(),
+        priority=int(priority or 100) if str(priority or "").strip().isdigit() else 100,
+        visible_in_simulator=str(visible_in_simulator) == "1",
+        requires_collateral=str(requires_collateral) == "1",
+        min_revenue_monthly_brl=float(str(min_revenue_monthly_brl or "0").replace(",", ".")),
+        max_debt_ratio=float(str(max_debt_ratio or "0").replace(",", ".")),
+        min_score_total=float(str(min_score_total or "0").replace(",", ".")),
+        min_score_financial=float(str(min_score_financial or "0").replace(",", ".")),
+        min_ticket_brl=float(str(min_ticket_brl or "0").replace(",", ".")),
+        max_ticket_brl=float(str(max_ticket_brl or "0").replace(",", ".")),
+        allowed_states_json=(allowed_states_json or "").strip(),
+        default_ltv_pct=float(str(default_ltv_pct or "0").replace(",", ".")),
+        default_loan_type=(default_loan_type or "").strip(),
+        default_amortization=(default_amortization or "price").strip(),
+        default_rate_pct=float(str(default_rate_pct or "0").replace(",", ".")),
+        default_rate_base=(default_rate_base or "am").strip(),
+        default_term_months=int(default_term_months or 0) if str(default_term_months or "").strip().isdigit() else 0,
+        term_min_months=int(term_min_months or 0) if str(term_min_months or "").strip().isdigit() else 0,
+        term_max_months=int(term_max_months or 0) if str(term_max_months or "").strip().isdigit() else 0,
+        default_grace_months=int(default_grace_months or 0) if str(default_grace_months or "").strip().isdigit() else 0,
+        default_io_months=int(default_io_months or 0) if str(default_io_months or "").strip().isdigit() else 0,
+        default_fee_amount_brl=float(str(default_fee_amount_brl or "0").replace(",", ".")),
+        default_monthly_insurance_brl=float(str(default_monthly_insurance_brl or "0").replace(",", ".")),
+        default_monthly_admin_fee_brl=float(str(default_monthly_admin_fee_brl or "0").replace(",", ".")),
+        notes=(notes or "").strip(),
+        updated_at=utcnow(),
+    )
+    session.add(row)
+    session.commit()
+    set_flash(request, "Produto salvo.")
+    return RedirectResponse("/admin/parceiros", status_code=303)
+
+
+@app.post("/admin/parceiros/products/{product_id}/toggle")
+@require_role({"admin"})
+async def admin_partner_products_toggle(request: Request, product_id: int, session: Session = Depends(get_session)) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+    row = session.get(PartnerProduct, product_id)
+    if not row or int(row.company_id or 0) != int(ctx.company.id or 0):
+        set_flash(request, "Produto não encontrado.")
+        return RedirectResponse("/admin/parceiros", status_code=303)
+
+    row.is_active = not bool(row.is_active)
+    row.updated_at = utcnow()
+    session.add(row)
+    session.commit()
+    set_flash(request, "Status do produto atualizado.")
+    return RedirectResponse("/admin/parceiros", status_code=303)
+
+
 
 # ==============================
 # SIMULADOR DE EMPRÉSTIMOS + PDF
@@ -18543,164 +18291,490 @@ def render_loan_pdf(res: LoanSimResult) -> bytes:
     return buf.getvalue()
 
 
+
+def _json_list_load(value: str) -> list[str]:
+    try:
+        raw = json.loads((value or "").strip() or "[]")
+        return [str(x).strip() for x in raw if str(x).strip()]
+    except Exception:
+        return []
+
+
+def _latest_client_snapshot(session: Session, *, company_id: int, client_id: int) -> Optional[ClientSnapshot]:
+    return session.exec(
+        select(ClientSnapshot)
+        .where(ClientSnapshot.company_id == company_id, ClientSnapshot.client_id == client_id)
+        .order_by(ClientSnapshot.created_at.desc())
+    ).first()
+
+
+def _estimate_partner_product_ticket(client: Client, snapshot: Optional[ClientSnapshot], product: PartnerProduct) -> float:
+    revenue = float((snapshot.revenue_monthly_brl if snapshot else 0.0) or client.revenue_monthly_brl or 0.0)
+    debt = float((snapshot.debt_total_brl if snapshot else 0.0) or client.debt_total_brl or 0.0)
+
+    base = 0.0
+    if revenue > 0:
+        base = revenue * 0.35
+    if debt > 0:
+        base = max(base, debt * 0.70)
+
+    if product.min_ticket_brl > 0:
+        base = max(base, float(product.min_ticket_brl))
+    if product.max_ticket_brl > 0:
+        base = min(base or float(product.max_ticket_brl), float(product.max_ticket_brl))
+
+    return round(max(base, 0.0), 2)
+
+
+def _match_partner_product_for_client(
+    *,
+    client: Client,
+    snapshot: Optional[ClientSnapshot],
+    product: PartnerProduct,
+    partner: Partner,
+) -> dict[str, Any]:
+    revenue = float((snapshot.revenue_monthly_brl if snapshot else 0.0) or client.revenue_monthly_brl or 0.0)
+    debt = float((snapshot.debt_total_brl if snapshot else 0.0) or client.debt_total_brl or 0.0)
+    cash = float((snapshot.cash_balance_brl if snapshot else 0.0) or client.cash_balance_brl or 0.0)
+    score_total_val = float(snapshot.score_total if snapshot else 0.0)
+    score_fin_val = float(snapshot.score_financial if snapshot else score_financial_simple(revenue, debt, cash))
+    debt_ratio = (debt / revenue) if revenue > 0 else 0.0
+
+    score = 50.0
+    reasons: list[str] = []
+    blockers: list[str] = []
+
+    if product.min_revenue_monthly_brl > 0:
+        if revenue >= float(product.min_revenue_monthly_brl):
+            score += 12
+            reasons.append(f"faturamento atende mínimo de R$ {product.min_revenue_monthly_brl:,.0f}")
+        else:
+            blockers.append(f"faturamento abaixo do mínimo de R$ {product.min_revenue_monthly_brl:,.0f}")
+
+    if product.min_score_total > 0:
+        if score_total_val >= float(product.min_score_total):
+            score += 10
+            reasons.append(f"score total {score_total_val:.1f} atende mínimo")
+        else:
+            blockers.append(f"score total abaixo do mínimo ({product.min_score_total:.1f})")
+
+    if product.min_score_financial > 0:
+        if score_fin_val >= float(product.min_score_financial):
+            score += 10
+            reasons.append(f"score financeiro {score_fin_val:.1f} atende mínimo")
+        else:
+            blockers.append(f"score financeiro abaixo do mínimo ({product.min_score_financial:.1f})")
+
+    if product.max_debt_ratio > 0:
+        if debt_ratio <= float(product.max_debt_ratio):
+            score += 8
+            reasons.append(f"alavancagem dentro do limite ({debt_ratio:.2f}x)")
+        else:
+            blockers.append(f"alavancagem acima do limite ({product.max_debt_ratio:.2f}x)")
+
+    allowed_states = {s.upper() for s in _json_list_load(product.allowed_states_json)}
+    state = (client.state or "").strip().upper()
+    if allowed_states:
+        if state and state in allowed_states:
+            score += 5
+            reasons.append(f"UF {state} coberta pelo produto")
+        else:
+            blockers.append("UF do cliente fora da cobertura do produto")
+
+    if product.requires_collateral:
+        score -= 4
+        reasons.append("produto normalmente exige garantia real ou recebíveis")
+
+    if product.category == "consultoria":
+        if score_total_val < 65 or score_fin_val < 60:
+            score += 12
+            reasons.append("perfil sugere espaço para consultoria financeira")
+    elif product.category == "ferramenta":
+        if score_total_val < 75:
+            score += 8
+            reasons.append("ferramenta pode apoiar maturidade operacional")
+    else:
+        if revenue > 0 and debt > 0:
+            score += 6
+            reasons.append("há base para comparação de crédito/reestruturação")
+
+    eligible = len(blockers) == 0
+    ticket = _estimate_partner_product_ticket(client, snapshot, product)
+
+    return {
+        "eligible": eligible,
+        "score": round(max(0.0, min(score, 100.0)), 2),
+        "reasons": reasons,
+        "blockers": blockers,
+        "ticket_brl": ticket,
+        "partner": partner,
+        "product": product,
+    }
+
+
+def _collect_partner_product_matches(
+    *,
+    session: Session,
+    company_id: int,
+    client: Optional[Client],
+) -> list[dict[str, Any]]:
+    if not client:
+        return []
+    snapshot = _latest_client_snapshot(session, company_id=company_id, client_id=int(client.id or 0))
+    products = session.exec(
+        select(PartnerProduct).where(
+            PartnerProduct.company_id == company_id,
+            PartnerProduct.is_active == True,
+        ).order_by(PartnerProduct.priority.asc(), PartnerProduct.created_at.desc())
+    ).all()
+    partners = session.exec(
+        select(Partner).where(
+            Partner.company_id == company_id,
+            Partner.is_active == True,
+        )
+    ).all()
+    partner_by_id = {int(p.id or 0): p for p in partners}
+    rows: list[dict[str, Any]] = []
+    for product in products:
+        partner = partner_by_id.get(int(product.partner_id or 0))
+        if not partner:
+            continue
+        rows.append(_match_partner_product_for_client(client=client, snapshot=snapshot, product=product, partner=partner))
+    rows.sort(key=lambda x: (0 if x["eligible"] else 1, -float(x["score"]), int(x["product"].priority or 100), x["partner"].name.lower()))
+    return rows
+
 SIMULADOR_TEMPLATE = r"""
 {% extends "base.html" %}
 {% block content %}
-<div class="container" style="max-width: 980px;">
-  <h3 class="mt-3">Simulador de Empréstimo</h3>
+<div class="container" style="max-width: 1160px;">
+  <div class="d-flex justify-content-between align-items-start flex-wrap gap-2 mt-3">
+    <div>
+      <h3 class="mb-1">Simulador de Empréstimo</h3>
+      <div class="muted">Pré-simulação usando os parâmetros padrão dos produtos cadastrados por parceiro.</div>
+    </div>
+    {% if current_client %}
+      <span class="badge text-bg-light border">Cliente ativo: {{ current_client.name }}</span>
+    {% endif %}
+  </div>
+
+  {% if recommended_products %}
+    <div class="card p-3 mt-3">
+      <div class="d-flex justify-content-between align-items-center mb-2">
+        <div class="fw-semibold">Motor de ofertas — produtos sugeridos</div>
+        <div class="muted small">Ordenado por aderência e regras do produto.</div>
+      </div>
+      <div class="table-responsive">
+        <table class="table table-sm align-middle">
+          <thead>
+            <tr>
+              <th>Parceiro</th>
+              <th>Produto</th>
+              <th>Categoria</th>
+              <th>Status</th>
+              <th>Score</th>
+              <th>Ticket sug.</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for row in recommended_products[:12] %}
+              <tr>
+                <td>{{ row.partner.name }}</td>
+                <td>
+                  <div class="fw-semibold">{{ row.product.name }}</div>
+                  <div class="muted small">{{ row.product.product_type or row.product.category }}</div>
+                </td>
+                <td>{{ row.product.category }}</td>
+                <td>
+                  {% if row.eligible %}
+                    <span class="badge text-bg-success">Elegível</span>
+                  {% else %}
+                    <span class="badge text-bg-warning">Revisar</span>
+                  {% endif %}
+                </td>
+                <td>{{ row.score }}</td>
+                <td>R$ {{ row.ticket_brl | round(2) }}</td>
+                <td class="text-end">
+                  <a class="btn btn-outline-primary btn-sm" href="/simulador?partner_product_id={{ row.product.id }}">Simular</a>
+                </td>
+              </tr>
+              {% if row.reasons or row.blockers %}
+              <tr>
+                <td colspan="7" class="pt-0">
+                  <div class="small muted">
+                    {% if row.reasons %}<b>Motivos:</b> {{ row.reasons | join("; ") }}.{% endif %}
+                    {% if row.blockers %} <b>Pontos de atenção:</b> {{ row.blockers | join("; ") }}.{% endif %}
+                  </div>
+                </td>
+              </tr>
+              {% endif %}
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  {% endif %}
+
   <form method="post" action="/simulador/pdf" class="card p-3 mt-3">
     <div class="row g-2">
-      <div class="col-md-6">
-        <label class="form-label">Cliente (nome)</label>
-        <input class="form-control" name="borrower_name" placeholder="Nome do cliente">
+      <div class="col-md-4">
+        <label class="form-label">Produto / parceiro</label>
+        <select class="form-select" name="partner_product_id" id="sim_partner_product_id">
+          <option value="">-- Escolher manualmente --</option>
+          {% for p in partner_products %}
+            <option value="{{ p.id }}" {% if selected_product and selected_product.id == p.id %}selected{% endif %}>
+              {{ p.partner_name }} — {{ p.name }}
+            </option>
+          {% endfor %}
+        </select>
+        <div class="form-text">Ao selecionar, o formulário é pré-preenchido com taxa, prazo, amortização e tarifas do produto.</div>
       </div>
 
-      <div class="col-md-6">
+      <div class="col-md-4">
+        <label class="form-label">Cliente (nome)</label>
+        <input class="form-control" name="borrower_name" id="sim_borrower_name" placeholder="Nome do cliente" value="{{ current_client.name if current_client else '' }}">
+      </div>
+
+      <div class="col-md-4">
         <label class="form-label">Cliente (opcional)</label>
         <select class="form-select" name="client_id" id="sim_client_id">
           <option value="">-- (sem cliente) --</option>
           {% for c in clients %}
-            <option value="{{ c.id }}">{{ c.name }}</option>
+            <option value="{{ c.id }}" {% if current_client and current_client.id == c.id %}selected{% endif %}>{{ c.name }}</option>
           {% endfor %}
         </select>
-        <div class="form-text">Selecione para habilitar “Gerar Proposta” (gera também um card no CRM).</div>
+        <div class="form-text">Selecione para habilitar “Gerar Proposta” e puxar o cliente ativo para o motor.</div>
       </div>
+
       <div class="col-md-6">
         <label class="form-label">Tipo de empréstimo</label>
-        <input class="form-control" name="loan_type" placeholder="Ex.: Crédito com garantia, Consignado, Capital de giro">
+        <input class="form-control" name="loan_type" id="sim_loan_type" placeholder="Ex.: Crédito com garantia, Capital de giro" value="{{ selected_defaults.loan_type }}">
       </div>
 
-      <div class="col-md-4">
+      <div class="col-md-3">
         <label class="form-label">Amortização</label>
-        <select class="form-select" name="amortization">
-          <option value="price">PRICE (parcela fixa)</option>
-          <option value="sac">SAC (amortização constante)</option>
-          <option value="americano">Americano (juros + quitação final)</option>
+        <select class="form-select" name="amortization" id="sim_amortization">
+          <option value="price" {% if selected_defaults.amortization == "price" %}selected{% endif %}>PRICE (parcela fixa)</option>
+          <option value="sac" {% if selected_defaults.amortization == "sac" %}selected{% endif %}>SAC (amortização constante)</option>
+          <option value="americano" {% if selected_defaults.amortization == "americano" %}selected{% endif %}>Americano (juros + quitação final)</option>
         </select>
       </div>
 
-      <div class="col-md-4">
+      <div class="col-md-3">
         <label class="form-label">Taxa (%)</label>
-        <input class="form-control" name="rate_pct" placeholder="Ex.: 1,79" value="1,79">
-        <div class="form-text">Informe em percentual. Ex: "1,79" = 1,79%</div>
+        <input class="form-control" name="rate_pct" id="sim_rate_pct" placeholder="Ex.: 1,79" value="{{ selected_defaults.rate_pct }}">
       </div>
 
-      <div class="col-md-4">
+      <div class="col-md-3">
         <label class="form-label">Base</label>
-        <select class="form-select" name="rate_base">
-          <option value="am">ao mês</option>
-          <option value="aa">ao ano</option>
+        <select class="form-select" name="rate_base" id="sim_rate_base">
+          <option value="am" {% if selected_defaults.rate_base == "am" %}selected{% endif %}>ao mês</option>
+          <option value="aa" {% if selected_defaults.rate_base == "aa" %}selected{% endif %}>ao ano</option>
         </select>
       </div>
 
-      <div class="col-md-4">
+      <div class="col-md-3">
         <label class="form-label">Prazo (meses)</label>
-        <input class="form-control" name="term_months" value="24">
+        <input class="form-control" name="term_months" id="sim_term_months" value="{{ selected_defaults.term_months }}">
       </div>
 
-      <div class="col-md-4">
+      <div class="col-md-3">
         <label class="form-label">Carência (meses – juros only)</label>
-        <input class="form-control" name="grace_months" value="0">
+        <input class="form-control" name="grace_months" id="sim_grace_months" value="{{ selected_defaults.grace_months }}">
       </div>
 
-      <div class="col-md-4">
+      <div class="col-md-3">
         <label class="form-label">Juros-only extra (meses)</label>
-        <input class="form-control" name="io_months" value="0">
+        <input class="form-control" name="io_months" id="sim_io_months" value="{{ selected_defaults.io_months }}">
       </div>
 
       <div class="col-md-4">
         <label class="form-label">Valor do empréstimo (R$)</label>
-        <input class="form-control" name="principal" placeholder="Ex.: 100000">
+        <input class="form-control" name="principal" id="sim_principal" placeholder="Ex.: 100000" value="{{ selected_defaults.principal }}">
         <div class="form-text">Se preencher valor do bem + LTV, pode deixar em branco.</div>
       </div>
 
       <div class="col-md-4">
         <label class="form-label">Valor do bem (garantia) (R$)</label>
-        <input class="form-control" name="collateral_value" placeholder="Ex.: 200000">
+        <input class="form-control" name="collateral_value" id="sim_collateral_value" placeholder="Ex.: 200000" value="{{ selected_defaults.collateral_value }}">
       </div>
 
       <div class="col-md-4">
         <label class="form-label">LTV (%)</label>
-        <input class="form-control" name="ltv_pct" placeholder="Ex.: 50">
+        <input class="form-control" name="ltv_pct" id="sim_ltv_pct" placeholder="Ex.: 50" value="{{ selected_defaults.ltv_pct }}">
       </div>
 
       <div class="col-md-4">
         <label class="form-label">Tarifa de abertura (R$)</label>
-        <input class="form-control" name="fee_amount" value="0">
+        <input class="form-control" name="fee_amount" id="sim_fee_amount" value="{{ selected_defaults.fee_amount }}">
       </div>
 
       <div class="col-md-4">
         <label class="form-label">Seguro mensal (R$)</label>
-        <input class="form-control" name="monthly_insurance" value="0">
+        <input class="form-control" name="monthly_insurance" id="sim_monthly_insurance" value="{{ selected_defaults.monthly_insurance }}">
       </div>
 
       <div class="col-md-4">
         <label class="form-label">Taxa admin mensal (R$)</label>
-        <input class="form-control" name="monthly_admin_fee" value="0">
+        <input class="form-control" name="monthly_admin_fee" id="sim_monthly_admin_fee" value="{{ selected_defaults.monthly_admin_fee }}">
       </div>
 
       <div class="col-12">
         <label class="form-label">Observações</label>
-        <textarea class="form-control" name="notes" rows="3" placeholder="Condições, garantias, CET, etc."></textarea>
+        <textarea class="form-control" name="notes" id="sim_notes" rows="3" placeholder="Condições, garantias, CET, etc.">{{ selected_defaults.notes }}</textarea>
       </div>
 
       <div class="col-12 d-flex gap-2 mt-2">
         <button class="btn btn-primary" type="submit">Gerar PDF</button>
-
-        <button class="btn btn-success"
-                type="submit"
-                formaction="/simulador/proposta"
-                formtarget="_blank"
-                rel="noopener"
-                id="btn_proposta"
-                disabled>
-          Gerar Proposta
-        </button>
-        <button class="btn btn-outline-secondary" type="submit" formaction="/simulador/json">Gerar JSON</button>
+        <button class="btn btn-outline-secondary" formaction="/simulador/json" formmethod="post" type="submit">Ver JSON</button>
       </div>
     </div>
   </form>
-
-  <p class="text-muted mt-3" style="font-size: 0.9rem;">
-    * Esta é apenas uma simulação e não constitui proposta de crédito. Sujeito à análise e aprovação.
-  </p>
 </div>
+
 <script>
 (function(){
-  const sel = document.getElementById("sim_client_id");
-  const btn = document.getElementById("btn_proposta");
-  if (!sel || !btn) return;
+  const catalog = {{ product_defaults_json | safe }};
+  const sel = document.getElementById("sim_partner_product_id");
+  if (!sel) return;
 
-  const toggle = () => {
-    btn.disabled = !sel.value;
+  const apply = () => {
+    const item = catalog[String(sel.value || "")];
+    if (!item) return;
+
+    const setValue = (id, value) => {
+      const el = document.getElementById(id);
+      if (!el || value === null || value === undefined) return;
+      el.value = value;
+    };
+
+    setValue("sim_loan_type", item.loan_type || "");
+    setValue("sim_rate_pct", item.rate_pct || "");
+    setValue("sim_rate_base", item.rate_base || "am");
+    setValue("sim_term_months", item.term_months || "");
+    setValue("sim_grace_months", item.grace_months || 0);
+    setValue("sim_io_months", item.io_months || 0);
+    setValue("sim_principal", item.principal || "");
+    setValue("sim_ltv_pct", item.ltv_pct || "");
+    setValue("sim_fee_amount", item.fee_amount || 0);
+    setValue("sim_monthly_insurance", item.monthly_insurance || 0);
+    setValue("sim_monthly_admin_fee", item.monthly_admin_fee || 0);
+
+    const amort = document.getElementById("sim_amortization");
+    if (amort && item.amortization) amort.value = item.amortization;
+
+    const notes = document.getElementById("sim_notes");
+    if (notes && item.notes !== undefined) notes.value = item.notes;
   };
 
-  sel.addEventListener("change", toggle);
-  toggle();
+  sel.addEventListener("change", apply);
+  apply();
 })();
 </script>
 {% endblock %}
 """
 
 
+
 @app.get("/simulador", response_class=HTMLResponse)
 @require_login
-async def simulador_page(request: Request) -> HTMLResponse:
+async def simulador_page(request: Request, partner_product_id: int = 0, session: Session = Depends(get_session)) -> HTMLResponse:
     if "simulador.html" not in TEMPLATES:
         TEMPLATES["simulador.html"] = SIMULADOR_TEMPLATE
-    ctx = get_tenant_context(request, Session(engine)) if False else None
-    # (ctx already validated by require_login)
-    clients = []
-    try:
-        # session available via dependency in other routes; here we use a short-lived session
-        db = Session(engine)
-        tctx = get_tenant_context(request, db)
-        if tctx:
-            clients = db.exec(select(Client).where(Client.company_id == tctx.company.id).order_by(Client.name)).all()
-        db.close()
-    except Exception:
-        clients = []
-    return render("simulador.html", request=request, context={"title": "Simulador", "clients": clients})
+
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+
+    clients = session.exec(select(Client).where(Client.company_id == ctx.company.id).order_by(Client.name)).all()
+    current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
+
+    partner_products_rows = []
+    product_defaults: dict[str, Any] = {}
+    selected_product = None
+    recommended = _collect_partner_product_matches(session=session, company_id=ctx.company.id, client=current_client)
+
+    partner_products = session.exec(
+        select(PartnerProduct, Partner)
+        .join(Partner, Partner.id == PartnerProduct.partner_id)
+        .where(
+            PartnerProduct.company_id == ctx.company.id,
+            PartnerProduct.is_active == True,
+            Partner.is_active == True,
+            PartnerProduct.visible_in_simulator == True,
+        )
+        .order_by(Partner.priority.asc(), PartnerProduct.priority.asc(), Partner.name.asc(), PartnerProduct.name.asc())
+    ).all()
+
+    selected_match = None
+    if partner_product_id:
+        selected_match = next((row for row in recommended if int(row["product"].id or 0) == int(partner_product_id)), None)
+
+    for product, partner in partner_products:
+        partner_products_rows.append(
+            {
+                "id": product.id,
+                "name": product.name,
+                "partner_name": partner.name,
+                "category": product.category,
+            }
+        )
+        est_principal = 0.0
+        row_match = next((row for row in recommended if int(row["product"].id or 0) == int(product.id or 0)), None)
+        if row_match:
+            est_principal = float(row_match.get("ticket_brl") or 0.0)
+        product_defaults[str(product.id)] = {
+            "loan_type": (product.default_loan_type or product.name or "").strip(),
+            "amortization": (product.default_amortization or "price").strip(),
+            "rate_pct": (str(round(float(product.default_rate_pct or 0.0), 4)).replace(".", ",")) if product.default_rate_pct else "",
+            "rate_base": (product.default_rate_base or "am").strip(),
+            "term_months": int(product.default_term_months or product.term_max_months or product.term_min_months or 24),
+            "grace_months": int(product.default_grace_months or 0),
+            "io_months": int(product.default_io_months or 0),
+            "principal": est_principal or "",
+            "ltv_pct": float(product.default_ltv_pct or 0.0) or "",
+            "fee_amount": float(product.default_fee_amount_brl or 0.0),
+            "monthly_insurance": float(product.default_monthly_insurance_brl or 0.0),
+            "monthly_admin_fee": float(product.default_monthly_admin_fee_brl or 0.0),
+            "notes": f"Parceiro: {partner.name}\nProduto: {product.name}\n{(product.notes or '').strip()}".strip(),
+        }
+        if partner_product_id and int(product.id or 0) == int(partner_product_id):
+            selected_product = product
+
+    selected_defaults = {
+        "loan_type": "",
+        "amortization": "price",
+        "rate_pct": "1,79",
+        "rate_base": "am",
+        "term_months": 24,
+        "grace_months": 0,
+        "io_months": 0,
+        "principal": "",
+        "collateral_value": "",
+        "ltv_pct": "",
+        "fee_amount": "0",
+        "monthly_insurance": "0",
+        "monthly_admin_fee": "0",
+        "notes": "",
+    }
+    if selected_product:
+        selected_defaults.update(product_defaults.get(str(selected_product.id), {}))
+    return render(
+        "simulador.html",
+        request=request,
+        context={
+            "title": "Simulador",
+            "clients": clients,
+            "current_client": current_client,
+            "partner_products": partner_products_rows,
+            "recommended_products": recommended,
+            "selected_product": selected_product,
+            "selected_defaults": selected_defaults,
+            "product_defaults_json": json.dumps(product_defaults, ensure_ascii=False),
+        },
+    )
+
 
 
 @app.post("/simulador/json", response_class=JSONResponse)
@@ -18722,6 +18796,7 @@ async def simulador_json(
     monthly_admin_fee: str = Form("0"),
     borrower_name: str = Form(""),
     notes: str = Form(""),
+    partner_product_id: str = Form(""),
     session: Session = Depends(get_session),
 ) -> JSONResponse:
     _ = get_tenant_context(request, session)
@@ -18741,7 +18816,7 @@ async def simulador_json(
         monthly_insurance=monthly_insurance,
         monthly_admin_fee=monthly_admin_fee,
         borrower_name=borrower_name,
-        notes=notes,
+        notes=(f"[Produto #{partner_product_id}] " + notes.strip()) if str(partner_product_id or "").strip() else notes,
     )
     res = simulate_loan(inp)
     return JSONResponse({
@@ -18806,6 +18881,7 @@ async def simulador_pdf(
     monthly_admin_fee: str = Form("0"),
     borrower_name: str = Form(""),
     notes: str = Form(""),
+    partner_product_id: str = Form(""),
     session: Session = Depends(get_session),
 ):
     _ = get_tenant_context(request, session)
@@ -18826,7 +18902,7 @@ async def simulador_pdf(
         monthly_insurance=monthly_insurance,
         monthly_admin_fee=monthly_admin_fee,
         borrower_name=borrower_name,
-        notes=notes,
+        notes=(f"[Produto #{partner_product_id}] " + notes.strip()) if str(partner_product_id or "").strip() else notes,
     )
     res = simulate_loan(inp)
     pdf_bytes = render_loan_pdf(res)
