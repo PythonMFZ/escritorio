@@ -3290,7 +3290,7 @@ TEMPLATES: dict[str, str] = {
 
           <div class="grid-main">
             <div>
-              {% block content %}{% endblock %}
+              {% block public_content %}{% endblock %}
               <div class="mt-5 muted small">
                 <div>Uploads protegidos por login (download via rota).</div>
               </div>
