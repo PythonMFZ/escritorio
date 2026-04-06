@@ -1024,11 +1024,15 @@ def ensure_offer_engine_columns() -> None:
                     except Exception:
                         pass
                 for stmt in [
+                    "ALTER TABLE IF EXISTS internalservice ALTER COLUMN family_slug SET DEFAULT ''",
+                    "ALTER TABLE IF EXISTS internalservice ALTER COLUMN family_code SET DEFAULT ''",
+                    "ALTER TABLE IF EXISTS clientbusinessprofile ALTER COLUMN banking_relationships_count SET DEFAULT 0",
+                    "ALTER TABLE IF EXISTS clientbusinessprofile ALTER COLUMN banks_count SET DEFAULT 0",
                     "UPDATE internalservice SET family_slug = COALESCE(NULLIF(family_slug, ''), family_code, '')",
                     "UPDATE internalservice SET family_code = COALESCE(NULLIF(family_code, ''), family_slug, '')",
                     "UPDATE partnerproduct SET family_slug = COALESCE(NULLIF(family_slug, ''), family_code, '')",
                     "UPDATE partnerproduct SET family_code = COALESCE(NULLIF(family_code, ''), family_slug, '')",
-                    "UPDATE clientbusinessprofile SET banking_relationships_count = COALESCE(banking_relationships_count, 0)",
+                    "UPDATE clientbusinessprofile SET banking_relationships_count = COALESCE(banking_relationships_count, banks_count, 0)",
                     "UPDATE clientbusinessprofile SET banks_count = COALESCE(banks_count, banking_relationships_count, 0)",
                 ]:
                     try:
@@ -1069,20 +1073,73 @@ def seed_product_families(session: Session) -> None:
 
 
 def seed_internal_services(session: Session, company_id: int) -> None:
+    backend = engine.url.get_backend_name()
+    now = utcnow()
     for item in INTERNAL_SERVICE_SEED:
-        row = session.exec(select(InternalService).where(InternalService.company_id == company_id, InternalService.name == item["name"])).first()
-        if not row:
-            row = InternalService(company_id=company_id, name=item["name"])
-        row.area = item["area"]
-        row.family_code = item["family_code"]
-        row.family_slug = item["family_code"]
-        row.description = item["description"]
-        row.priority_weight = item["priority_weight"]
-        row.is_active = True
-        row.updated_at = utcnow()
-        session.add(row)
-    session.commit()
+        family = str(item["family_code"]).strip()
+        name = str(item["name"]).strip()
+        area = str(item["area"]).strip()
+        description = str(item["description"]).strip()
+        priority = int(item["priority_weight"])
+        existing = session.exec(
+            select(InternalService).where(
+                InternalService.company_id == company_id,
+                InternalService.name == name,
+            )
+        ).first()
+        if existing:
+            existing.area = area
+            existing.family_code = family
+            existing.family_slug = family
+            existing.description = description
+            existing.priority_weight = priority
+            existing.is_active = True
+            existing.updated_at = now
+            session.add(existing)
+            continue
 
+        if backend.startswith("postgres"):
+            session.exec(text("""
+                INSERT INTO internalservice
+                    (company_id, area, family_code, family_slug, name, description, priority_weight, is_active, notes, created_at, updated_at)
+                VALUES
+                    (:company_id, :area, :family_code, :family_slug, :name, :description, :priority_weight, TRUE, '', :created_at, :updated_at)
+                ON CONFLICT (company_id, name)
+                DO UPDATE SET
+                    area = EXCLUDED.area,
+                    family_code = EXCLUDED.family_code,
+                    family_slug = EXCLUDED.family_slug,
+                    description = EXCLUDED.description,
+                    priority_weight = EXCLUDED.priority_weight,
+                    is_active = TRUE,
+                    updated_at = EXCLUDED.updated_at
+            """), {
+                "company_id": company_id,
+                "area": area,
+                "family_code": family,
+                "family_slug": family,
+                "name": name,
+                "description": description,
+                "priority_weight": priority,
+                "created_at": now,
+                "updated_at": now,
+            })
+        else:
+            row = InternalService(
+                company_id=company_id,
+                area=area,
+                family_code=family,
+                family_slug=family,
+                name=name,
+                description=description,
+                priority_weight=priority,
+                is_active=True,
+                notes="",
+                created_at=now,
+                updated_at=now,
+            )
+            session.add(row)
+    session.commit()
 
 def _json_dump_list(items: list[str]) -> str:
     return json.dumps([str(x).strip() for x in items if str(x).strip()], ensure_ascii=False)
@@ -1097,19 +1154,68 @@ def _json_list(s: str) -> list[str]:
 
 
 def get_or_create_business_profile(session: Session, *, company_id: int, client_id: int) -> ClientBusinessProfile:
-    row = session.exec(select(ClientBusinessProfile).where(ClientBusinessProfile.company_id == company_id, ClientBusinessProfile.client_id == client_id)).first()
+    row = session.exec(
+        select(ClientBusinessProfile).where(
+            ClientBusinessProfile.company_id == company_id,
+            ClientBusinessProfile.client_id == client_id,
+        )
+    ).first()
     if row:
         if getattr(row, "banks_count", None) in (None, ""):
             row.banks_count = int(getattr(row, "banking_relationships_count", 0) or 0)
         if getattr(row, "banking_relationships_count", None) in (None, ""):
             row.banking_relationships_count = int(getattr(row, "banks_count", 0) or 0)
         return row
-    row = ClientBusinessProfile(company_id=company_id, client_id=client_id, banks_count=0, banking_relationships_count=0)
+
+    now = utcnow()
+    backend = engine.url.get_backend_name()
+    if backend.startswith("postgres"):
+        session.exec(text("""
+            INSERT INTO clientbusinessprofile (
+                company_id, client_id,
+                segment, subsegment, cnae, tax_regime, company_size, founded_year,
+                business_model, sales_channel, main_bank,
+                banks_count, banking_relationships_count,
+                annual_revenue_brl, monthly_fixed_cost_brl, payroll_monthly_brl, average_ticket_brl,
+                inventory_brl, receivables_brl, collateral_brl, delinquency_brl, desired_credit_brl,
+                urgency_level, strategic_goal, pain_points, interests_json,
+                has_erp, has_budget, has_board, has_audited_fs, updated_at
+            ) VALUES (
+                :company_id, :client_id,
+                '', '', '', '', '', 0,
+                '', '', '',
+                0, 0,
+                0, 0, 0, 0,
+                0, 0, 0, 0, 0,
+                '', '', '', '[]',
+                FALSE, FALSE, FALSE, FALSE, :updated_at
+            )
+            ON CONFLICT (company_id, client_id) DO NOTHING
+        """), {
+            "company_id": company_id,
+            "client_id": client_id,
+            "updated_at": now,
+        })
+        session.commit()
+        row = session.exec(
+            select(ClientBusinessProfile).where(
+                ClientBusinessProfile.company_id == company_id,
+                ClientBusinessProfile.client_id == client_id,
+            )
+        ).first()
+        if row:
+            return row
+
+    row = ClientBusinessProfile(
+        company_id=company_id,
+        client_id=client_id,
+        banks_count=0,
+        banking_relationships_count=0,
+    )
     session.add(row)
     session.commit()
     session.refresh(row)
     return row
-
 
 def list_product_families(session: Session, area: str = "") -> list[ProductFamily]:
     q = select(ProductFamily).where(ProductFamily.is_active == True)
