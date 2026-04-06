@@ -698,7 +698,7 @@ def score_process_from_answers(answers: dict[str, Any]) -> float:
     if total_w <= 0:
         return 0.0
     got = 0.0
-    for q in PROFILE_SURVEY_V1:
+    for q in PROFILE_SURVEY_V2:
         if bool(answers.get(q["id"])):
             got += q["w"]
     return round((got / total_w) * 100.0, 2)
@@ -730,6 +730,434 @@ def score_total(process_score: float, financial_score: float, nps_score: int) ->
     nps100 = nps01 * 100.0
     return round(_clamp_0_100(0.5 * float(process_score) + 0.4 * float(financial_score) + 0.1 * float(nps100)), 2)
 
+
+
+
+# ----------------------------
+# Catálogo de Ofertas (famílias canônicas) + Perfil Empresarial
+# ----------------------------
+
+class ProductFamily(SQLModel, table=True):
+    __table_args__ = (UniqueConstraint("code", name="uq_productfamily_code"),)
+    id: Optional[int] = Field(default=None, primary_key=True)
+    code: str = Field(index=True)
+    area: str = Field(index=True)
+    label: str
+    description: str = ""
+    is_active: bool = Field(default=True, index=True)
+    sort_order: int = Field(default=0, index=True)
+    created_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime = Field(default_factory=utcnow)
+
+
+class ClientBusinessProfile(SQLModel, table=True):
+    __table_args__ = (UniqueConstraint("company_id", "client_id", name="uq_clientbusinessprofile_company_client"),)
+    id: Optional[int] = Field(default=None, primary_key=True)
+    company_id: int = Field(index=True, foreign_key="company.id")
+    client_id: int = Field(index=True, foreign_key="client.id")
+    segment: str = ""
+    subsegment: str = ""
+    cnae: str = ""
+    tax_regime: str = ""
+    company_size: str = ""
+    founded_year: int = 0
+    business_model: str = ""
+    sales_channel: str = ""
+    main_bank: str = ""
+    banks_count: int = 0
+    annual_revenue_brl: float = 0.0
+    monthly_fixed_cost_brl: float = 0.0
+    payroll_monthly_brl: float = 0.0
+    average_ticket_brl: float = 0.0
+    inventory_brl: float = 0.0
+    receivables_brl: float = 0.0
+    collateral_brl: float = 0.0
+    delinquency_brl: float = 0.0
+    desired_credit_brl: float = 0.0
+    urgency_level: str = ""
+    strategic_goal: str = ""
+    pain_points: str = ""
+    interests_json: str = "[]"
+    has_erp: bool = False
+    has_budget: bool = False
+    has_board: bool = False
+    has_audited_fs: bool = False
+    updated_at: datetime = Field(default_factory=utcnow)
+
+
+class InternalService(SQLModel, table=True):
+    __table_args__ = (UniqueConstraint("company_id", "name", name="uq_internalservice_company_name"),)
+    id: Optional[int] = Field(default=None, primary_key=True)
+    company_id: int = Field(index=True, foreign_key="company.id")
+    area: str = Field(index=True)
+    family_code: str = Field(default="", index=True)
+    name: str
+    description: str = ""
+    priority_weight: int = 50
+    is_active: bool = Field(default=True, index=True)
+    notes: str = ""
+    created_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime = Field(default_factory=utcnow)
+
+
+class Partner(SQLModel, table=True):
+    __table_args__ = (UniqueConstraint("company_id", "name", name="uq_partner_company_name"),)
+    id: Optional[int] = Field(default=None, primary_key=True)
+    company_id: int = Field(index=True, foreign_key="company.id")
+    name: str
+    partner_type: str = "financeiro"
+    contact_name: str = ""
+    contact_email: str = ""
+    notes: str = ""
+    is_active: bool = Field(default=True, index=True)
+    created_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime = Field(default_factory=utcnow)
+
+
+class PartnerProduct(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    company_id: int = Field(index=True, foreign_key="company.id")
+    partner_id: int = Field(index=True, foreign_key="partner.id")
+    area: str = Field(default="", index=True)
+    family_code: str = Field(default="", index=True)
+    name: str
+    pf_pj: str = "PJ"
+    ticket_min_brl: float = 0.0
+    ticket_max_brl: float = 0.0
+    revenue_min_brl: float = 0.0
+    revenue_max_brl: float = 0.0
+    score_total_min: float = 0.0
+    score_financial_min: float = 0.0
+    max_debt_ratio: float = 0.0
+    requires_collateral: bool = False
+    allowed_states_json: str = "[]"
+    allowed_segments_json: str = "[]"
+    rate_default_pct: float = 0.0
+    cet_default_pct: float = 0.0
+    term_min_months: int = 0
+    term_max_months: int = 0
+    grace_max_months: int = 0
+    amortization_default: str = "PRICE"
+    tariff_default_brl: float = 0.0
+    insurance_default_brl: float = 0.0
+    admin_fee_default_brl: float = 0.0
+    ltv_max_pct: float = 0.0
+    commission_text: str = ""
+    payout_term: str = ""
+    is_active: bool = Field(default=True, index=True)
+    notes: str = ""
+    created_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime = Field(default_factory=utcnow)
+
+
+class PartnerCampaign(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    company_id: int = Field(index=True, foreign_key="company.id")
+    partner_product_id: int = Field(index=True, foreign_key="partnerproduct.id")
+    title: str
+    starts_at: datetime = Field(default_factory=utcnow)
+    ends_at: datetime = Field(default_factory=utcnow)
+    bonus_pct: float = 0.0
+    rule_summary: str = ""
+    is_active: bool = Field(default=True, index=True)
+    created_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime = Field(default_factory=utcnow)
+
+
+class OfferMatch(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    company_id: int = Field(index=True, foreign_key="company.id")
+    client_id: int = Field(index=True, foreign_key="client.id")
+    family_code: str = Field(default="", index=True)
+    source_kind: str = Field(default="internal", index=True)
+    internal_service_id: Optional[int] = Field(default=None, foreign_key="internalservice.id")
+    partner_product_id: Optional[int] = Field(default=None, foreign_key="partnerproduct.id")
+    area: str = Field(default="", index=True)
+    product_name: str = ""
+    partner_name: str = ""
+    priority_level: str = Field(default="media", index=True)
+    score_fit: float = 0.0
+    reason_summary: str = ""
+    partner_options_count: int = 0
+    created_at: datetime = Field(default_factory=utcnow)
+
+
+PRODUCT_FAMILY_SEED: list[dict[str, Any]] = [
+    {"code": "turnaround", "area": "advisory", "label": "Turnaround", "description": "Reestruturacao financeira e operacional."},
+    {"code": "valuation", "area": "advisory", "label": "Valuation", "description": "Avaliacao de empresas."},
+    {"code": "estrategia_financeira", "area": "advisory", "label": "Consultoria Estrategica Financeira", "description": "Planejamento e governanca financeira."},
+    {"code": "plano_rj", "area": "advisory", "label": "Plano de Recuperacao Judicial", "description": "Preparacao do plano e estrategia."},
+    {"code": "rodada_seed", "area": "ib", "label": "Rodada Anjo/Seed/Serie A", "description": "Captacao com investidores."},
+    {"code": "equity_roadshow", "area": "ib", "label": "Roadshow de Equity", "description": "Roadshow com fundos."},
+    {"code": "debenture", "area": "ib", "label": "Debenture", "description": "Emissao de divida no mercado."},
+    {"code": "cri_cra", "area": "ib", "label": "CRI/CRA", "description": "Estruturacoes com recebiveis."},
+    {"code": "ma_sell_side", "area": "ib", "label": "M&A Sell-side", "description": "Mandato de venda."},
+    {"code": "ma_buy_side", "area": "ib", "label": "M&A Buy-side", "description": "Mandato de compra."},
+    {"code": "distressed_ma", "area": "special_sits", "label": "Distressed M&A", "description": "Ativos estressados e situacoes especiais."},
+    {"code": "credito_rj", "area": "special_sits", "label": "Creditos de RJ", "description": "Intermediacao de creditos de recuperacao judicial."},
+    {"code": "credito_tributario", "area": "special_sits", "label": "Creditos Tributarios", "description": "Monetizacao de ativos tributarios."},
+    {"code": "dip_financing", "area": "special_sits", "label": "DIP Financing", "description": "Financiamento DIP."},
+    {"code": "capital_giro", "area": "baas", "label": "Capital de Giro", "description": "Capital de giro."},
+    {"code": "conta_garantida", "area": "baas", "label": "Conta Garantida", "description": "Credito rotativo em conta."},
+    {"code": "antecipacao_recebiveis", "area": "baas", "label": "Antecipacao de Recebiveis", "description": "Desconto de duplicatas e titulos."},
+    {"code": "antecipacao_cartoes", "area": "baas", "label": "Antecipacao de Cartoes", "description": "Antecipacao de vendas no cartao."},
+    {"code": "cambio", "area": "baas", "label": "Cambio", "description": "Operacoes de cambio."},
+    {"code": "trade_finance", "area": "baas", "label": "Trade Finance", "description": "ACC/ACE e funding de comercio exterior."},
+    {"code": "financiamento_veiculos", "area": "baas", "label": "Financiamento de Veiculos", "description": "Aquisicao/renovacao de frota."},
+    {"code": "consorcio", "area": "baas", "label": "Consorcio", "description": "Consorcios."},
+    {"code": "cessao_credito", "area": "baas", "label": "Cessao de Credito", "description": "Cessao de credito e recebiveis."},
+    {"code": "auto_equity", "area": "baas", "label": "Auto Equity", "description": "Credito com garantia de veiculo."},
+    {"code": "credito_corporativo_estruturado", "area": "baas", "label": "Credito Corporativo Estruturado", "description": "Credito sob medida."},
+    {"code": "home_equity", "area": "baas", "label": "Home Equity", "description": "Emprestimo com garantia de imovel."},
+    {"code": "credito_habitacional", "area": "baas", "label": "Credito Habitacional", "description": "Financiamento habitacional."},
+    {"code": "plano_empresario", "area": "baas", "label": "Financiamento a Producao", "description": "Plano empresario."},
+    {"code": "analise_credito", "area": "baas", "label": "Analise de Credito", "description": "Relatorio de risco."},
+]
+
+INTERNAL_SERVICE_SEED: list[dict[str, Any]] = [
+    {"area": "advisory", "family_code": "turnaround", "name": "Advisory - Consultoria Turnaround", "description": "Consultoria em reestruturacao de empresas", "priority_weight": 95},
+    {"area": "advisory", "family_code": "valuation", "name": "Advisory - Consultoria Valuation", "description": "Avaliacao de empresas", "priority_weight": 72},
+    {"area": "advisory", "family_code": "estrategia_financeira", "name": "Advisory - Consultoria Estrategica Financeira", "description": "Consultoria em financas empresariais", "priority_weight": 86},
+    {"area": "advisory", "family_code": "plano_rj", "name": "Advisory - Plano de Recuperacao Judicial", "description": "Preparacao do plano de RJ", "priority_weight": 89},
+    {"area": "ib", "family_code": "rodada_seed", "name": "IB - Assessoria em Rodada Anjo/Seed/Serie A (ECM)", "description": "Captacao com investidores", "priority_weight": 70},
+    {"area": "ib", "family_code": "equity_roadshow", "name": "IB - Roadshow para Captacao de Equity (ECM)", "description": "Roadshow com fundos", "priority_weight": 68},
+    {"area": "ib", "family_code": "debenture", "name": "IB - Estruturacao de Debenture (DCM)", "description": "Emissao de divida", "priority_weight": 76},
+    {"area": "ib", "family_code": "cri_cra", "name": "IB - Estruturacao de CRI/CRA (DCM)", "description": "Estruturacao CRI/CRA", "priority_weight": 74},
+    {"area": "ib", "family_code": "ma_sell_side", "name": "IB - Mandato de Venda (M&A Sell-side)", "description": "Mandato de venda", "priority_weight": 80},
+    {"area": "ib", "family_code": "ma_buy_side", "name": "IB - Mandato de Compra (M&A Buy-side)", "description": "Mandato de compra", "priority_weight": 66},
+    {"area": "special_sits", "family_code": "distressed_ma", "name": "Special Sits - Assessoria em M&A de Ativos Estressados", "description": "Ativos estressados", "priority_weight": 88},
+    {"area": "special_sits", "family_code": "credito_rj", "name": "Special Sits - Intermediacao de Creditos de RJ", "description": "Creditos de RJ", "priority_weight": 84},
+    {"area": "special_sits", "family_code": "credito_tributario", "name": "Special Sits - Venda de Creditos Tributarios", "description": "Creditos tributarios", "priority_weight": 82},
+    {"area": "special_sits", "family_code": "dip_financing", "name": "Special Sits - Captacao de Financiamento DIP", "description": "DIP Financing", "priority_weight": 90},
+    {"area": "baas", "family_code": "capital_giro", "name": "BaaS - Capital de Giro", "description": "Capital de giro", "priority_weight": 85},
+    {"area": "baas", "family_code": "conta_garantida", "name": "BaaS - Conta Garantida", "description": "Conta garantida", "priority_weight": 72},
+    {"area": "baas", "family_code": "antecipacao_recebiveis", "name": "BaaS - Desconto de Duplicatas / Antecipacao de Titulos", "description": "Antecipacao de recebiveis", "priority_weight": 83},
+    {"area": "baas", "family_code": "antecipacao_cartoes", "name": "BaaS - Antecipacao de Cartoes", "description": "Antecipacao de cartoes", "priority_weight": 79},
+    {"area": "baas", "family_code": "cambio", "name": "BaaS - Cambio Pronto (PF e PJ)", "description": "Cambio", "priority_weight": 58},
+    {"area": "baas", "family_code": "trade_finance", "name": "BaaS - Trade Finance", "description": "Trade Finance", "priority_weight": 65},
+    {"area": "baas", "family_code": "financiamento_veiculos", "name": "BaaS - Financiamento de Veiculos", "description": "Financiamento de veiculos", "priority_weight": 60},
+    {"area": "baas", "family_code": "consorcio", "name": "BaaS - Consorcio", "description": "Consorcio", "priority_weight": 61},
+    {"area": "baas", "family_code": "cessao_credito", "name": "BaaS - Cessao de Credito", "description": "Cessao de credito", "priority_weight": 63},
+    {"area": "baas", "family_code": "auto_equity", "name": "BaaS - Auto Equity", "description": "Auto equity", "priority_weight": 70},
+    {"area": "baas", "family_code": "credito_corporativo_estruturado", "name": "BaaS - Credito Corporativo Estruturado", "description": "Credito estruturado", "priority_weight": 84},
+    {"area": "baas", "family_code": "home_equity", "name": "BaaS - Home Equity (Emprestimo com Garantia de Imovel)", "description": "Home Equity", "priority_weight": 92},
+    {"area": "baas", "family_code": "credito_habitacional", "name": "BaaS - Credito Habitacional", "description": "Credito Habitacional", "priority_weight": 59},
+    {"area": "baas", "family_code": "plano_empresario", "name": "BaaS - Financiamento a Producao (Plano Empresario)", "description": "Plano Empresario", "priority_weight": 68},
+    {"area": "baas", "family_code": "analise_credito", "name": "BaaS - Analise de Credito", "description": "Analise de Credito", "priority_weight": 55},
+]
+
+PROFILE_SURVEY_V2 = PROFILE_SURVEY_V1 + [
+    {"id": "governanca", "section": "Governanca", "q": "A empresa possui governanca e ritos de decisao definidos?", "type": "bool", "w": 8},
+    {"id": "erp", "section": "Tecnologia", "q": "A empresa utiliza ERP ou sistema financeiro centralizado?", "type": "bool", "w": 8},
+    {"id": "demonstracoes_auditadas", "section": "Governanca", "q": "A empresa possui demonstracoes auditadas ou revisadas?", "type": "bool", "w": 6},
+]
+
+
+def ensure_offer_engine_tables() -> bool:
+    ok = True
+    for tbl in (ProductFamily.__table__, ClientBusinessProfile.__table__, InternalService.__table__, Partner.__table__, PartnerProduct.__table__, PartnerCampaign.__table__, OfferMatch.__table__):
+        try:
+            tbl.create(engine, checkfirst=True)
+        except Exception:
+            ok = False
+    return ok
+
+
+def ensure_offer_engine_columns() -> None:
+    try:
+        if engine.url.get_backend_name().startswith("postgres"):
+            with engine.begin() as conn:
+                for stmt in [
+                    "ALTER TABLE IF EXISTS internalservice ADD COLUMN IF NOT EXISTS family_code VARCHAR NOT NULL DEFAULT ''",
+                    "ALTER TABLE IF EXISTS partnerproduct ADD COLUMN IF NOT EXISTS family_code VARCHAR NOT NULL DEFAULT ''",
+                    "ALTER TABLE IF EXISTS offermatch ADD COLUMN IF NOT EXISTS family_code VARCHAR NOT NULL DEFAULT ''",
+                    "ALTER TABLE IF EXISTS offermatch ADD COLUMN IF NOT EXISTS partner_options_count INTEGER NOT NULL DEFAULT 0",
+                ]:
+                    try:
+                        conn.exec_driver_sql(stmt)
+                    except Exception:
+                        pass
+    except Exception:
+        pass
+
+
+def seed_product_families(session: Session) -> None:
+    for idx, item in enumerate(PRODUCT_FAMILY_SEED, start=1):
+        row = session.exec(select(ProductFamily).where(ProductFamily.code == item["code"])).first()
+        if not row:
+            row = ProductFamily(code=item["code"])
+        row.area = item["area"]
+        row.label = item["label"]
+        row.description = item["description"]
+        row.sort_order = idx
+        row.is_active = True
+        row.updated_at = utcnow()
+        session.add(row)
+    session.commit()
+
+
+def seed_internal_services(session: Session, company_id: int) -> None:
+    for item in INTERNAL_SERVICE_SEED:
+        row = session.exec(select(InternalService).where(InternalService.company_id == company_id, InternalService.name == item["name"])).first()
+        if not row:
+            row = InternalService(company_id=company_id, name=item["name"])
+        row.area = item["area"]
+        row.family_code = item["family_code"]
+        row.description = item["description"]
+        row.priority_weight = item["priority_weight"]
+        row.is_active = True
+        row.updated_at = utcnow()
+        session.add(row)
+    session.commit()
+
+
+def _json_dump_list(items: list[str]) -> str:
+    return json.dumps([str(x).strip() for x in items if str(x).strip()], ensure_ascii=False)
+
+
+def _json_list(s: str) -> list[str]:
+    try:
+        data = json.loads(s or "[]")
+        return [str(x).strip() for x in data if str(x).strip()]
+    except Exception:
+        return []
+
+
+def get_or_create_business_profile(session: Session, *, company_id: int, client_id: int) -> ClientBusinessProfile:
+    row = session.exec(select(ClientBusinessProfile).where(ClientBusinessProfile.company_id == company_id, ClientBusinessProfile.client_id == client_id)).first()
+    if row:
+        return row
+    row = ClientBusinessProfile(company_id=company_id, client_id=client_id)
+    session.add(row)
+    session.commit()
+    session.refresh(row)
+    return row
+
+
+def list_product_families(session: Session, area: str = "") -> list[ProductFamily]:
+    q = select(ProductFamily).where(ProductFamily.is_active == True)
+    if area:
+        q = q.where(ProductFamily.area == area)
+    return session.exec(q.order_by(ProductFamily.sort_order.asc(), ProductFamily.label.asc())).all()
+
+
+def compute_offer_engine(*, session: Session, company_id: int, client: Client, profile: ClientBusinessProfile, latest_snapshot: Optional[ClientSnapshot]) -> list[dict[str, Any]]:
+    score_total_snap = float(latest_snapshot.score_total) if latest_snapshot else 0.0
+    score_fin_snap = float(latest_snapshot.score_financial) if latest_snapshot else 0.0
+    score_proc_snap = float(latest_snapshot.score_process) if latest_snapshot else 0.0
+    revenue_monthly = max(float(client.revenue_monthly_brl or 0.0), float(profile.annual_revenue_brl or 0.0) / 12.0)
+    debt_total = max(float(client.debt_total_brl or 0.0), 0.0)
+    cash_balance = max(float(client.cash_balance_brl or 0.0), 0.0)
+    debt_ratio = debt_total / max(revenue_monthly, 1.0)
+    txt = " ".join([profile.strategic_goal or "", profile.pain_points or "", " ".join(_json_list(profile.interests_json)), latest_snapshot.notes if latest_snapshot else ""]).lower()
+
+    scores = {item["code"]: 0.0 for item in PRODUCT_FAMILY_SEED}
+    if revenue_monthly > 0:
+        scores["capital_giro"] += 28
+        if cash_balance < revenue_monthly * 0.5:
+            scores["capital_giro"] += 12
+        if profile.receivables_brl > 0:
+            scores["antecipacao_recebiveis"] += 22
+        if profile.collateral_brl > 0:
+            scores["home_equity"] += 24
+            scores["auto_equity"] += 10
+        if "cart" in txt:
+            scores["antecipacao_cartoes"] += 18
+        if "consorcio" in txt:
+            scores["consorcio"] += 16
+        if "cambio" in txt:
+            scores["cambio"] += 18
+        if "import" in txt or "export" in txt or "comercio exterior" in txt:
+            scores["trade_finance"] += 22
+        if "veicul" in txt or "frota" in txt:
+            scores["financiamento_veiculos"] += 16
+        scores["analise_credito"] += 12
+
+    if score_total_snap < 65 or score_proc_snap < 60:
+        scores["turnaround"] += 30
+        scores["estrategia_financeira"] += 22
+    if "valuation" in txt or "valor da empresa" in txt:
+        scores["valuation"] += 30
+    if "equity" in txt or "investidor" in txt or "captacao" in txt:
+        scores["rodada_seed"] += 26
+        scores["equity_roadshow"] += 22
+    if revenue_monthly >= 300000:
+        scores["debenture"] += 16
+        scores["cri_cra"] += 14
+    if "vender empresa" in txt:
+        scores["ma_sell_side"] += 24
+    if "comprar empresa" in txt or "aquisicao" in txt:
+        scores["ma_buy_side"] += 18
+    if "rj" in txt or "recuperacao judicial" in txt:
+        scores["plano_rj"] += 35
+        scores["credito_rj"] += 34
+        scores["dip_financing"] += 24
+    if "tributario" in txt or "precatorio" in txt:
+        scores["credito_tributario"] += 30
+    if "distress" in txt or "estressad" in txt:
+        scores["distressed_ma"] += 24
+
+    for interest in _json_list(profile.interests_json):
+        if interest in scores:
+            scores[interest] += 24
+
+    services = session.exec(select(InternalService).where(InternalService.company_id == company_id, InternalService.is_active == True).order_by(InternalService.priority_weight.desc())).all()
+    partner_products = session.exec(select(PartnerProduct).where(PartnerProduct.company_id == company_id, PartnerProduct.is_active == True).order_by(PartnerProduct.name.asc())).all()
+    families = {f.code: f for f in list_product_families(session)}
+    partners = {pp.id: session.get(Partner, pp.partner_id) for pp in partner_products}
+
+    def eligible(pp: PartnerProduct) -> bool:
+        desired = float(profile.desired_credit_brl or 0.0)
+        if pp.revenue_min_brl and revenue_monthly < pp.revenue_min_brl:
+            return False
+        if pp.revenue_max_brl and revenue_monthly > pp.revenue_max_brl > 0:
+            return False
+        if desired and pp.ticket_min_brl and desired < pp.ticket_min_brl:
+            return False
+        if desired and pp.ticket_max_brl and desired > pp.ticket_max_brl > 0:
+            return False
+        if pp.score_total_min and score_total_snap < pp.score_total_min:
+            return False
+        if pp.score_financial_min and score_fin_snap < pp.score_financial_min:
+            return False
+        if pp.max_debt_ratio and debt_ratio > pp.max_debt_ratio:
+            return False
+        if pp.requires_collateral and float(profile.collateral_brl or 0.0) <= 0:
+            return False
+        states = _json_list(pp.allowed_states_json)
+        if states and (client.state or "").upper() not in {s.upper() for s in states}:
+            return False
+        segs = _json_list(pp.allowed_segments_json)
+        if segs and (profile.segment or "").lower() not in {s.lower() for s in segs}:
+            return False
+        return True
+
+    out = []
+    for svc in services:
+        base = scores.get(svc.family_code, 0.0)
+        if base <= 0:
+            continue
+        elig = [pp for pp in partner_products if pp.family_code == svc.family_code and eligible(pp)]
+        score_fit = round(min(100.0, base + max(0, svc.priority_weight - 50) * 0.4 + min(len(elig) * 2, 8)), 2)
+        priority = "alta" if score_fit >= 75 else "media" if score_fit >= 55 else "baixa"
+        fam = families.get(svc.family_code)
+        out.append({"source_kind":"internal","family_code":svc.family_code,"area":svc.area,"product_name":svc.name,"partner_name":"","priority_level":priority,"score_fit":score_fit,"reason_summary":f"Solucao interna recomendada. Parceiros elegiveis nesta familia: {len(elig)}.","partner_options_count":len(elig),"internal_service_id":svc.id,"partner_product_id":None,"family_label":fam.label if fam else svc.family_code})
+        for pp in elig:
+            partner = partners.get(pp.id)
+            out.append({"source_kind":"partner","family_code":svc.family_code,"area":svc.area,"product_name":pp.name,"partner_name":partner.name if partner else "Parceiro","priority_level":priority,"score_fit":min(100.0, score_fit + 4),"reason_summary":f"Parceiro elegivel para a familia {fam.label if fam else svc.family_code}.","partner_options_count":len(elig),"internal_service_id":svc.id,"partner_product_id":pp.id,"family_label":fam.label if fam else svc.family_code})
+
+    out.sort(key=lambda x: (0 if x["priority_level"] == "alta" else 1 if x["priority_level"] == "media" else 2, -float(x["score_fit"])))
+    return out
+
+
+def persist_offer_matches(session: Session, *, company_id: int, client_id: int, matches: list[dict[str, Any]]) -> None:
+    old = session.exec(select(OfferMatch).where(OfferMatch.company_id == company_id, OfferMatch.client_id == client_id)).all()
+    for row in old:
+        session.delete(row)
+    session.commit()
+    for item in matches:
+        session.add(OfferMatch(company_id=company_id, client_id=client_id, family_code=item.get("family_code") or "", source_kind=item.get("source_kind") or "internal", internal_service_id=item.get("internal_service_id"), partner_product_id=item.get("partner_product_id"), area=item.get("area") or "", product_name=item.get("product_name") or "", partner_name=item.get("partner_name") or "", priority_level=item.get("priority_level") or "media", score_fit=float(item.get("score_fit") or 0.0), reason_summary=item.get("reason_summary") or "", partner_options_count=int(item.get("partner_options_count") or 0)))
+    session.commit()
 
 # ----------------------------
 # Documentos (contratos, termos etc.)
@@ -2201,44 +2629,10 @@ FEATURE_KEYS.setdefault(
 
 
 FEATURE_GROUPS: list[dict[str, Any]] = [
-    {
-        "key": "cliente",
-        "title": "Cliente",
-        "features": [
-            "empresa",
-            "perfil",
-            "ofertas",
-            "financeiro",
-            "documentos",
-            "consultas",
-            "openfinance",
-            "creditos",
-            "simulador",
-            "propostas",
-        ],
-    },
-    {
-        "key": "operacao",
-        "title": "Escritório",
-        "features": [
-            "crm",
-            "credito",
-            "motor_ofertas",
-            "consultoria",
-            "reunioes",
-            "tarefas",
-        ],
-    },
-    {
-        "key": "admin",
-        "title": "Admin",
-        "features": [
-            "ui",
-            "gestao",
-            "servicos_internos",
-            "parceiros",
-        ],
-    },
+    {"key": "admin", "title": "Admin", "features": ["ui", "gestao", "credito", "crm"]},
+    {"key": "minha_empresa", "title": "Minha Empresa", "features": ["empresa", "perfil", "financeiro", "documentos", "consultas", "openfinance", "creditos"]},
+    {"key": "meu_projeto", "title": "Meu Projeto", "features": ["consultoria", "reunioes", "tarefas"]},
+    {"key": "minhas_propostas", "title": "Minhas Propostas", "features": ["simulador", "propostas"]},
 ]
 
 FEATURE_STANDALONE: list[str] = ["pendencias", "agenda", "educacao"]
@@ -2247,6 +2641,11 @@ FEATURE_VISIBLE_ROLES: dict[str, set[str]] = {
     "ui": {"admin"},
     "gestao": {"admin"},
     "crm": {"admin", "equipe"},
+    "familias": {"admin"},
+    "servicos_internos": {"admin"},
+    "parceiros": {"admin"},
+    "motor_ofertas": {"admin", "equipe"},
+    "ofertas": {"admin", "equipe", "cliente"},
 }
 
 ROLE_DEFAULT_FEATURES: dict[str, set[str]] = {
@@ -2257,48 +2656,22 @@ ROLE_DEFAULT_FEATURES: dict[str, set[str]] = {
 
 ROLE_DEFAULT_FEATURES["admin"].add("openfinance")
 ROLE_DEFAULT_FEATURES["equipe"].add("openfinance")
-
-FEATURE_KEYS.setdefault(
-    "parceiros",
-    {
-        "title": "Parceiros / Produtos",
-        "desc": "Cadastro de parceiros, produtos, regras e defaults do simulador.",
-        "href": "/admin/parceiros",
-    },
-)
-FEATURE_VISIBLE_ROLES.setdefault("parceiros", {"admin"})
-ROLE_DEFAULT_FEATURES["admin"].add("parceiros")
-
-FEATURE_KEYS.setdefault(
-    "servicos_internos",
-    {
-        "title": "Produtos Internos",
-        "desc": "Catálogo de Advisory, IB, BaaS e Special Sits.",
-        "href": "/admin/servicos-internos",
-    },
-)
-FEATURE_KEYS.setdefault(
-    "motor_ofertas",
-    {
-        "title": "Motor de Ofertas",
-        "desc": "Ranking de produtos e parceiros por cliente.",
-        "href": "/motor-ofertas",
-    },
-)
-FEATURE_KEYS.setdefault(
-    "ofertas",
-    {
-        "title": "Ofertas",
-        "desc": "Ofertas recomendadas para o cliente.",
-        "href": "/ofertas",
-    },
-)
-FEATURE_VISIBLE_ROLES.setdefault("servicos_internos", {"admin"})
-FEATURE_VISIBLE_ROLES.setdefault("motor_ofertas", {"admin", "equipe"})
-FEATURE_VISIBLE_ROLES.setdefault("ofertas", {"admin", "equipe", "cliente"})
-ROLE_DEFAULT_FEATURES["admin"].update({"servicos_internos", "motor_ofertas", "ofertas"})
-ROLE_DEFAULT_FEATURES["equipe"].update({"motor_ofertas", "ofertas"})
+ROLE_DEFAULT_FEATURES["admin"].update({"familias","servicos_internos","parceiros","motor_ofertas","ofertas"})
+ROLE_DEFAULT_FEATURES["equipe"].update({"motor_ofertas","ofertas"})
 ROLE_DEFAULT_FEATURES["cliente"].add("ofertas")
+
+FEATURE_KEYS.update({
+    "ofertas": {"title": "Ofertas", "desc": "Produtos e servicos aderentes ao seu perfil.", "href": "/ofertas"},
+    "familias": {"title": "Familias", "desc": "Familias canonicas de produto.", "href": "/admin/familias"},
+    "servicos_internos": {"title": "Produtos Internos", "desc": "Catalogo interno por area e familia.", "href": "/admin/servicos-internos"},
+    "parceiros": {"title": "Parceiros", "desc": "Parceiros, produtos e campanhas.", "href": "/admin/parceiros"},
+    "motor_ofertas": {"title": "Motor de Ofertas", "desc": "Ranking de ofertas internas e de parceiros.", "href": "/motor-ofertas"},
+})
+FEATURE_GROUPS = [
+    {"key": "cliente", "title": "Cliente", "features": ["empresa", "perfil", "ofertas", "financeiro", "documentos", "consultas", "openfinance", "creditos", "propostas"]},
+    {"key": "escritorio", "title": "Escritorio", "features": ["crm", "credito", "motor_ofertas", "consultoria", "reunioes", "tarefas", "simulador"]},
+    {"key": "admin", "title": "Admin", "features": ["ui", "gestao", "familias", "servicos_internos", "parceiros"]},
+]
 
 # Open Finance (Pluggy) - Loans module
 # ----------------------------
@@ -2499,120 +2872,6 @@ class PluggyOpportunity(SQLModel, table=True):
     method: str = ""  # PRICE|SAC_AVG|...
     created_at: datetime = Field(default_factory=utcnow)
 
-
-
-class Partner(SQLModel, table=True):
-    """Parceiro comercial/financeiro."""
-    id: Optional[int] = Field(default=None, primary_key=True)
-    company_id: int = Field(index=True, foreign_key="company.id")
-
-    name: str
-    kind: str = Field(default="banco", index=True)  # banco|fidc|fintech|securitizadora|consultoria|outro
-    contact_name: str = ""
-    contact_email: str = ""
-    contact_phone: str = ""
-    is_active: bool = Field(default=True, index=True)
-    priority: int = Field(default=100, index=True)
-    notes: str = ""
-
-    created_at: datetime = Field(default_factory=utcnow)
-    updated_at: datetime = Field(default_factory=utcnow)
-
-
-class PartnerProduct(SQLModel, table=True):
-    """Produto cadastrado por parceiro, com regras e defaults do simulador."""
-    id: Optional[int] = Field(default=None, primary_key=True)
-    company_id: int = Field(index=True, foreign_key="company.id")
-    partner_id: int = Field(index=True, foreign_key="partner.id")
-
-    name: str
-    category: str = Field(default="credito", index=True)  # credito|consultoria|ferramenta|outro
-    product_type: str = Field(default="", index=True)
-    family_slug: str = Field(default="", index=True)
-    is_active: bool = Field(default=True, index=True)
-    visible_in_simulator: bool = Field(default=True, index=True)
-    priority: int = Field(default=100, index=True)
-
-    # Elegibilidade
-    min_revenue_monthly_brl: float = 0.0
-    max_debt_ratio: float = 0.0  # 0 => não valida; senão dívida/faturamento mensal
-    min_score_total: float = 0.0
-    min_score_financial: float = 0.0
-    requires_collateral: bool = False
-    min_ticket_brl: float = 0.0
-    max_ticket_brl: float = 0.0
-    allowed_states_json: str = ""
-    notes: str = ""
-
-    # Defaults do simulador
-    default_loan_type: str = ""
-    default_amortization: str = Field(default="price")
-    default_rate_pct: float = 0.0
-    default_rate_base: str = Field(default="am")  # am|aa
-    default_term_months: int = 0
-    term_min_months: int = 0
-    term_max_months: int = 0
-    default_grace_months: int = 0
-    default_io_months: int = 0
-    default_fee_amount_brl: float = 0.0
-    default_monthly_insurance_brl: float = 0.0
-    default_monthly_admin_fee_brl: float = 0.0
-    default_ltv_pct: float = 0.0
-
-    created_at: datetime = Field(default_factory=utcnow)
-    updated_at: datetime = Field(default_factory=utcnow)
-
-
-
-class InternalService(SQLModel, table=True):
-    """Catálogo interno Maffezzolli: Advisory, IB, BaaS e Special Sits."""
-    id: Optional[int] = Field(default=None, primary_key=True)
-    company_id: int = Field(index=True, foreign_key="company.id")
-    area: str = Field(default="baas", index=True)  # advisory|ib|baas|special_sits
-    family_slug: str = Field(default="", index=True)
-    name: str
-    description: str = ""
-    priority_weight: int = Field(default=100, index=True)
-    is_active: bool = Field(default=True, index=True)
-    notes: str = ""
-    created_at: datetime = Field(default_factory=utcnow)
-    updated_at: datetime = Field(default_factory=utcnow)
-
-
-class PartnerCampaign(SQLModel, table=True):
-    """Campanhas temporárias por parceiro/produto."""
-    id: Optional[int] = Field(default=None, primary_key=True)
-    company_id: int = Field(index=True, foreign_key="company.id")
-    partner_product_id: int = Field(index=True, foreign_key="partnerproduct.id")
-    title: str
-    starts_at: Optional[datetime] = None
-    ends_at: Optional[datetime] = None
-    bonus_pct: float = 0.0
-    rule_summary: str = ""
-    is_active: bool = Field(default=True, index=True)
-    created_at: datetime = Field(default_factory=utcnow)
-    updated_at: datetime = Field(default_factory=utcnow)
-
-
-class OfferMatch(SQLModel, table=True):
-    """Resultado persistido do motor de ofertas por cliente."""
-    id: Optional[int] = Field(default=None, primary_key=True)
-    company_id: int = Field(index=True, foreign_key="company.id")
-    client_id: int = Field(index=True, foreign_key="client.id")
-    subject_doc: str = Field(default="", index=True)
-    source_kind: str = Field(default="partner", index=True)  # internal|partner
-    internal_service_id: Optional[int] = Field(default=None, index=True, foreign_key="internalservice.id")
-    partner_product_id: Optional[int] = Field(default=None, index=True, foreign_key="partnerproduct.id")
-    area: str = Field(default="", index=True)
-    family_slug: str = Field(default="", index=True)
-    product_name: str = ""
-    partner_name: str = ""
-    partner_options_count: int = 0
-    score_fit: float = 0.0
-    priority_level: str = Field(default="media", index=True)
-    reason_summary: str = ""
-    estimated_commission_text: str = ""
-    created_at: datetime = Field(default_factory=utcnow)
 
 class KlaviFlow(SQLModel, table=True):
     """Estado do fluxo Klavi (Link/Consent) por CPF/CNPJ."""
@@ -2945,544 +3204,6 @@ class _PluggyApiKeyCache:
 
 _PLUGGY_KEY_CACHE = _PluggyApiKeyCache()
 
-
-
-def ensure_partner_tables() -> bool:
-    """Garante tabelas do módulo Parceiros/Produtos (ambientes sem Alembic)."""
-    ok = True
-    for tbl in (
-        Partner.__table__,
-        PartnerProduct.__table__,
-        InternalService.__table__,
-        PartnerCampaign.__table__,
-        OfferMatch.__table__,
-    ):
-        try:
-            tbl.create(engine, checkfirst=True)
-        except Exception as e:
-            ok = False
-            try:
-                print(f"[partners] failed to ensure table {tbl.name}: {e}")
-            except Exception:
-                pass
-    return ok
-
-
-def _ensure_table_column(table_name: str, column_name: str, ddl_postgres: str, ddl_sqlite: str) -> bool:
-    """Garante coluna nova em ambientes sem Alembic.
-
-    create_all/checkfirst cria tabela, mas não altera schema existente.
-    """
-    try:
-        with engine.begin() as conn:
-            backend = (engine.url.get_backend_name() or "").lower()
-
-            if backend.startswith("postgres"):
-                conn.exec_driver_sql(ddl_postgres)
-                return True
-
-            if backend.startswith("sqlite"):
-                try:
-                    rows = conn.exec_driver_sql(f"PRAGMA table_info('{table_name}')").fetchall()
-                    cols = {str(r[1]) for r in rows}
-                except Exception:
-                    cols = set()
-                if column_name not in cols:
-                    conn.exec_driver_sql(ddl_sqlite)
-                return True
-
-            return True
-    except Exception as e:
-        try:
-            print(f"[partners] failed to ensure column {table_name}.{column_name}: {e}")
-        except Exception:
-            pass
-        return False
-
-
-def ensure_partner_schema_columns() -> bool:
-    ok = True
-    ok = _ensure_table_column(
-        "partnerproduct",
-        "family_slug",
-        """
-        ALTER TABLE partnerproduct
-        ADD COLUMN IF NOT EXISTS family_slug VARCHAR NOT NULL DEFAULT '';
-        """,
-        "ALTER TABLE partnerproduct ADD COLUMN family_slug VARCHAR NOT NULL DEFAULT ''",
-    ) and ok
-
-    ok = _ensure_table_column(
-        "internalservice",
-        "family_slug",
-        """
-        ALTER TABLE internalservice
-        ADD COLUMN IF NOT EXISTS family_slug VARCHAR NOT NULL DEFAULT '';
-        """,
-        "ALTER TABLE internalservice ADD COLUMN family_slug VARCHAR NOT NULL DEFAULT ''",
-    ) and ok
-
-    ok = _ensure_table_column(
-        "offermatch",
-        "family_slug",
-        """
-        ALTER TABLE offermatch
-        ADD COLUMN IF NOT EXISTS family_slug VARCHAR NOT NULL DEFAULT '';
-        """,
-        "ALTER TABLE offermatch ADD COLUMN family_slug VARCHAR NOT NULL DEFAULT ''",
-    ) and ok
-
-    ok = _ensure_table_column(
-        "offermatch",
-        "partner_options_count",
-        """
-        ALTER TABLE offermatch
-        ADD COLUMN IF NOT EXISTS partner_options_count INTEGER NOT NULL DEFAULT 0;
-        """,
-        "ALTER TABLE offermatch ADD COLUMN partner_options_count INTEGER NOT NULL DEFAULT 0",
-    ) and ok
-
-    return ok
-
-
-
-def _partner_kind_options() -> list[str]:
-    return ["banco", "fidc", "fintech", "securitizadora", "consultoria", "outro"]
-
-
-def _partner_product_category_options() -> list[str]:
-    return ["credito", "consultoria", "ferramenta", "outro"]
-
-
-def _partner_product_type_options() -> list[str]:
-    return [
-        "",
-        "capital_giro",
-        "recebiveis",
-        "home_equity",
-        "auto_equity",
-        "consignado",
-        "portabilidade",
-        "reperfilamento",
-        "credito_estruturado",
-        "consultoria_financeira",
-        "turnaround",
-        "bpo_financeiro",
-        "bi_financeiro",
-    ]
-
-
-
-def _offer_area_options() -> list[tuple[str, str]]:
-    return [
-        ("advisory", "Advisory"),
-        ("ib", "Investment Banking"),
-        ("baas", "BaaS"),
-        ("special_sits", "Special Sits"),
-    ]
-
-
-def _internal_service_defaults() -> list[tuple[str, str, str, str]]:
-    return [
-        ("advisory", "turnaround", "Advisory - Consultoria Turnaround", "Consultoria em reestruturação de empresas."),
-        ("advisory", "valuation", "Advisory - Consultoria Valuation", "Avaliação de empresas."),
-        ("advisory", "estrategia_financeira", "Advisory - Consultoria Estratégica Financeira", "Consultoria em finanças empresariais."),
-        ("advisory", "plano_rj", "Advisory - Plano de Recuperação Judicial", "Plano, documentos e estratégia para recuperação judicial."),
-        ("ib", "rodada_seed", "IB - Assessoria em Rodada Anjo/Seed/Série A (ECM)", "Conectar startups e empresas em crescimento com investidores."),
-        ("ib", "roadshow_equity", "IB - Roadshow para Captação de Equity (ECM)", "Apresentar a empresa a múltiplos fundos para captação."),
-        ("ib", "debenture", "IB - Estruturação de Debênture (DCM)", "Estruturar emissão de títulos de dívida."),
-        ("ib", "cri_cra", "IB - Estruturação de CRI/CRA (DCM)", "Estruturação de títulos lastreados em recebíveis."),
-        ("ib", "ma_sell_side", "IB - Mandato de Venda (M&A Sell-side)", "Venda total ou parcial da empresa."),
-        ("ib", "ma_buy_side", "IB - Mandato de Compra (M&A Buy-side)", "Assessoria em aquisições."),
-        ("special_sits", "distressed_ma", "Special Sits - Assessoria em M&A de Ativos Estressados (Distressed M&A)", "Fusões e aquisições em situações de crise."),
-        ("special_sits", "creditos_rj", "Special Sits - Intermediação de Créditos de RJ (Recuperação Judicial)", "Liquidez para créditos de empresas em RJ."),
-        ("special_sits", "creditos_tributarios", "Special Sits - Venda de Créditos Tributários (Precatórios,etc.)", "Monetização de créditos tributários."),
-        ("special_sits", "dip_financing", "Special Sits - Captação de Financiamento DIP (Debtor-in-Possession)", "Financiamento emergencial em RJ."),
-        ("baas", "capital_giro", "BaaS - Capital de Giro", "Linhas de capital de giro para financiar operações."),
-        ("baas", "conta_garantida", "BaaS - Conta Garantida", "Crédito rotativo para flexibilidade de caixa."),
-        ("baas", "desconto_duplicatas", "BaaS - Desconto de Duplicatas / Antecipação de Títulos", "Transforme vendas a prazo em caixa imediato."),
-        ("baas", "antecipacao_cartoes", "BaaS - Antecipação de Cartões", "Adiantamento de vendas em cartão."),
-        ("baas", "cambio", "BaaS - Câmbio Pronto (PF e PJ)", "Compra e venda de moeda estrangeira."),
-        ("baas", "trade_finance", "BaaS - Trade Finance", "Operações de ACC/ACE e comércio exterior."),
-        ("baas", "financiamento_veiculos", "BaaS - Financiamento de Veículos", "Linhas para aquisição de veículos."),
-        ("baas", "consorcio", "BaaS - Consórcio", "Consórcio para imóveis e veículos."),
-        ("baas", "cessao_credito", "BaaS - Cessão de Crédito", "Venda de carteiras de crédito e recebíveis."),
-        ("baas", "auto_equity", "BaaS - Auto Equity", "Crédito com veículo em garantia."),
-        ("baas", "credito_estruturado", "BaaS - Crédito Corporativo Estruturado", "Operações sob medida para necessidades específicas."),
-        ("baas", "home_equity", "BaaS - Home Equity (Empréstimo com Garantia de Imóvel)", "Crédito com imóvel em garantia."),
-        ("baas", "credito_habitacional", "BaaS - Crédito Habitacional", "Financiamento imobiliário."),
-        ("baas", "plano_empresario", "BaaS - Financiamento à Produção (Plano Empresário)", "Financiamento à produção imobiliária."),
-        ("baas", "analise_credito", "BaaS - Analise de Crédito", "Relatório completo sobre perfil de risco."),
-    ]
-
-
-def _seed_internal_services(session: Session, company_id: int) -> None:
-    try:
-        existing = session.exec(
-            select(InternalService).where(InternalService.company_id == int(company_id))
-        ).first()
-        if existing:
-            return
-        rows = []
-        for area, family_slug, name, desc in _internal_service_defaults():
-            rows.append(
-                InternalService(
-                    company_id=int(company_id),
-                    area=area,
-                    family_slug=family_slug,
-                    name=name,
-                    description=desc,
-                    priority_weight=100,
-                    is_active=True,
-                )
-            )
-        session.add_all(rows)
-        session.commit()
-    except Exception:
-        session.rollback()
-
-
-def _latest_client_snapshot(session: Session, company_id: int, client_id: int) -> Optional[ClientSnapshot]:
-    return session.exec(
-        select(ClientSnapshot)
-        .where(ClientSnapshot.company_id == int(company_id), ClientSnapshot.client_id == int(client_id))
-        .order_by(ClientSnapshot.created_at.desc())
-    ).first()
-
-
-def _parse_states_csv(raw: str) -> set[str]:
-    return {p.strip().upper() for p in (raw or "").split(",") if p.strip()}
-
-
-def _norm_family_slug(raw: str) -> str:
-    s = (raw or "").strip().lower()
-    s = re.sub(r"[^a-z0-9_]+", "_", s)
-    s = re.sub(r"_+", "_", s).strip("_")
-    return s
-
-
-def _eligible_partner_options_for_family(
-    *,
-    session: Session,
-    company_id: int,
-    client: Client,
-    snapshot: Optional[ClientSnapshot],
-    family_slug: str,
-) -> list[dict[str, Any]]:
-    fam = _norm_family_slug(family_slug)
-    if not fam:
-        return []
-    products = session.exec(
-        select(PartnerProduct)
-        .where(
-            PartnerProduct.company_id == int(company_id),
-            PartnerProduct.is_active == True,
-            PartnerProduct.family_slug == fam,
-        )
-        .order_by(PartnerProduct.priority.asc(), PartnerProduct.created_at.desc())
-    ).all()
-    if not products:
-        return []
-    partners = session.exec(
-        select(Partner).where(
-            Partner.company_id == int(company_id),
-            Partner.is_active == True,
-        )
-    ).all()
-    partner_by_id = {int(p.id or 0): p for p in partners}
-    rows: list[dict[str, Any]] = []
-    for product in products:
-        partner = partner_by_id.get(int(product.partner_id or 0))
-        if not partner:
-            continue
-        row = _match_partner_product_for_client(client=client, snapshot=snapshot, product=product, partner=partner)
-        if row.get("eligible"):
-            rows.append(row)
-    rows.sort(key=lambda x: (-float(x["score"]), int(x["product"].priority or 100), x["partner"].name.lower()))
-    return rows
-
-
-def _current_campaigns_for_product(session: Session, company_id: int, partner_product_id: int) -> list[PartnerCampaign]:
-    now = utcnow()
-    rows = session.exec(
-        select(PartnerCampaign)
-        .where(
-            PartnerCampaign.company_id == int(company_id),
-            PartnerCampaign.partner_product_id == int(partner_product_id),
-            PartnerCampaign.is_active == True,
-        )
-        .order_by(PartnerCampaign.created_at.desc())
-    ).all()
-    out = []
-    for row in rows:
-        if row.starts_at and row.starts_at > now:
-            continue
-        if row.ends_at and row.ends_at < now:
-            continue
-        out.append(row)
-    return out
-
-
-def _estimate_partner_commission_text(product: PartnerProduct, campaigns: list[PartnerCampaign]) -> str:
-    base = ""
-    if float(product.default_rate_pct or 0) > 0:
-        base = f"Taxa base sug.: {round(float(product.default_rate_pct or 0), 2)}% {str(product.default_rate_base or 'am')}"
-    if campaigns:
-        extra = " | ".join(
-            [f"{c.title} (+{round(float(c.bonus_pct or 0), 2)}%)" if float(c.bonus_pct or 0) > 0 else c.title for c in campaigns]
-        )
-        return (base + " • " if base else "") + extra
-    return base
-
-
-def _priority_label(score_fit: float) -> str:
-    if score_fit >= 85:
-        return "alta"
-    if score_fit >= 65:
-        return "media"
-    return "baixa"
-
-
-def _score_internal_service(service: InternalService, client: Client, snap: Optional[ClientSnapshot]) -> tuple[float, list[str]]:
-    reasons: list[str] = []
-    score = 40.0
-    debt = float(getattr(client, "debt_total_brl", 0.0) or 0.0)
-    revenue = float(getattr(client, "revenue_monthly_brl", 0.0) or 0.0)
-    cash = float(getattr(client, "cash_balance_brl", 0.0) or 0.0)
-    total_score = float(getattr(snap, "score_total", 0.0) or 0.0) if snap else 0.0
-    process_score = float(getattr(snap, "score_process", 0.0) or 0.0) if snap else 0.0
-
-    if service.area == "advisory":
-        if process_score < 60:
-            score += 22
-            reasons.append("baixa maturidade operacional")
-        if debt > revenue * 4:
-            score += 18
-            reasons.append("alavancagem elevada")
-    elif service.area == "ib":
-        if revenue >= 300000:
-            score += 18
-            reasons.append("escala de receita compatível")
-        if total_score >= 65:
-            score += 16
-            reasons.append("empresa com maturidade para agenda estratégica")
-    elif service.area == "special_sits":
-        if debt > revenue * 6:
-            score += 26
-            reasons.append("estrutura de passivo relevante")
-        if cash < revenue * 0.3:
-            score += 10
-            reasons.append("caixa pressionado")
-    elif service.area == "baas":
-        if revenue > 0:
-            score += 10
-            reasons.append("empresa com demanda financeira potencial")
-        if debt > 0:
-            score += 10
-            reasons.append("passivo passível de estruturação")
-        if cash < revenue * 0.5:
-            score += 10
-            reasons.append("necessidade de caixa / liquidez")
-
-    score += max(min(total_score / 10.0, 10.0), 0.0)
-    return round(min(score, 99.0), 2), reasons
-
-
-def _score_partner_product(session: Session, company_id: int, product: PartnerProduct, partner: Partner, client: Client, snap: Optional[ClientSnapshot]) -> dict[str, Any]:
-    reasons: list[str] = []
-    blockers: list[str] = []
-    score = 45.0 + max(0.0, 20.0 - float(product.priority or 100) / 10.0)
-
-    revenue = float(getattr(client, "revenue_monthly_brl", 0.0) or 0.0)
-    debt = float(getattr(client, "debt_total_brl", 0.0) or 0.0)
-    total_score = float(getattr(snap, "score_total", 0.0) or 0.0) if snap else 0.0
-    fin_score = float(getattr(snap, "score_financial", 0.0) or 0.0) if snap else 0.0
-    ticket_brl = min(max(revenue * 3, float(product.min_ticket_brl or 0.0) or 0.0), float(product.max_ticket_brl or 0.0) or max(revenue * 3, 0.0))
-
-    eligible = True
-    if float(product.min_revenue_monthly_brl or 0.0) > 0 and revenue < float(product.min_revenue_monthly_brl or 0.0):
-        eligible = False
-        blockers.append("faturamento abaixo do mínimo")
-    else:
-        if revenue > 0 and float(product.min_revenue_monthly_brl or 0.0) > 0:
-            reasons.append("faturamento compatível")
-
-    if float(product.min_score_total or 0.0) > 0 and total_score < float(product.min_score_total or 0.0):
-        eligible = False
-        blockers.append("score total abaixo do mínimo")
-    elif float(product.min_score_total or 0.0) > 0:
-        reasons.append("score total compatível")
-        score += 8
-
-    if float(product.min_score_financial or 0.0) > 0 and fin_score < float(product.min_score_financial or 0.0):
-        eligible = False
-        blockers.append("score financeiro abaixo do mínimo")
-    elif float(product.min_score_financial or 0.0) > 0:
-        reasons.append("score financeiro compatível")
-        score += 8
-
-    max_debt_ratio = float(product.max_debt_ratio or 0.0)
-    if max_debt_ratio > 0 and revenue > 0:
-        actual_ratio = debt / max(revenue, 1.0)
-        if actual_ratio > max_debt_ratio:
-            eligible = False
-            blockers.append("alavancagem acima da regra")
-        else:
-            reasons.append("alavancagem dentro da regra")
-            score += 6
-
-    states = _parse_states_csv(product.allowed_states_json)
-    client_state = (getattr(client, "state", "") or "").strip().upper()
-    if states:
-        if client_state and client_state in states:
-            reasons.append("UF atendida")
-            score += 4
-        else:
-            blockers.append("UF fora da cobertura")
-            eligible = False
-
-    if bool(product.requires_collateral):
-        if "home" in str(product.product_type or "") or "equity" in str(product.product_type or ""):
-            reasons.append("produto orientado a garantia")
-        score += 4
-
-    if float(product.min_ticket_brl or 0.0) > 0 and ticket_brl < float(product.min_ticket_brl or 0.0):
-        eligible = False
-        blockers.append("ticket sugerido abaixo do mínimo")
-    if float(product.max_ticket_brl or 0.0) > 0 and ticket_brl > float(product.max_ticket_brl or 0.0):
-        ticket_brl = float(product.max_ticket_brl or 0.0)
-
-    campaigns = _current_campaigns_for_product(session, company_id, int(product.id or 0))
-    if campaigns:
-        score += 5
-        reasons.append("campanha vigente")
-
-    return {
-        "partner": partner,
-        "product": product,
-        "score": round(min(score, 99.0), 2),
-        "eligible": eligible,
-        "reasons": reasons,
-        "blockers": blockers,
-        "ticket_brl": round(ticket_brl or 0.0, 2),
-        "campaigns": campaigns,
-        "commission_text": _estimate_partner_commission_text(product, campaigns),
-    }
-
-
-def _generate_offer_matches(session: Session, company_id: int, client: Client) -> list[OfferMatch]:
-    _seed_internal_services(session, company_id)
-    snap = _latest_client_snapshot(session, company_id, int(client.id or 0))
-
-    old_rows = session.exec(
-        select(OfferMatch).where(OfferMatch.company_id == int(company_id), OfferMatch.client_id == int(client.id or 0))
-    ).all()
-    for row in old_rows:
-        session.delete(row)
-    session.commit()
-
-    created: list[OfferMatch] = []
-
-    services = session.exec(
-        select(InternalService)
-        .where(InternalService.company_id == int(company_id), InternalService.is_active == True)
-        .order_by(InternalService.priority_weight.asc(), InternalService.name.asc())
-    ).all()
-    for service in services:
-        score_fit, reasons = _score_internal_service(service, client, snap)
-        partner_matches = _eligible_partner_options_for_family(
-            session=session,
-            company_id=company_id,
-            client=client,
-            snapshot=snap,
-            family_slug=service.family_slug,
-        )
-        partner_names = [m["partner"].name for m in partner_matches[:5]]
-        reason_parts = list(reasons) if reasons else []
-        if service.family_slug:
-            reason_parts.append(f"família: {service.family_slug}")
-        if partner_matches:
-            reason_parts.append(f"{len(partner_matches)} parceiro(s) elegível(eis): " + ", ".join(partner_names))
-        elif service.area == "baas" and service.family_slug:
-            reason_parts.append("sem parceiro elegível cadastrado para esta família no momento")
-
-        row = OfferMatch(
-            company_id=int(company_id),
-            client_id=int(client.id or 0),
-            subject_doc=_digits(str(getattr(client, "cnpj", "") or getattr(client, "email", ""))),
-            source_kind="internal",
-            internal_service_id=int(service.id or 0),
-            area=service.area,
-            family_slug=_norm_family_slug(service.family_slug),
-            product_name=service.name,
-            partner_name=(" / ".join(partner_names[:3])) if partner_names else "Maffezzolli Capital",
-            partner_options_count=len(partner_matches),
-            score_fit=score_fit,
-            priority_level=_priority_label(score_fit),
-            reason_summary="; ".join(reason_parts) or "aderência calculada pelo perfil do cliente",
-        )
-        session.add(row)
-        created.append(row)
-
-    partners = session.exec(
-        select(Partner).where(Partner.company_id == int(company_id), Partner.is_active == True).order_by(Partner.priority.asc(), Partner.name.asc())
-    ).all()
-    products = session.exec(
-        select(PartnerProduct)
-        .where(PartnerProduct.company_id == int(company_id), PartnerProduct.is_active == True)
-        .order_by(PartnerProduct.priority.asc(), PartnerProduct.created_at.desc())
-    ).all()
-    partner_by_id = {int(p.id or 0): p for p in partners}
-    internal_by_family = {}
-    for service in services:
-        fam = _norm_family_slug(service.family_slug)
-        if fam and fam not in internal_by_family:
-            internal_by_family[fam] = service
-
-    for product in products:
-        partner = partner_by_id.get(int(product.partner_id or 0))
-        if not partner:
-            continue
-        result = _score_partner_product(session, company_id, product, partner, client, snap)
-        fam = _norm_family_slug(getattr(product, "family_slug", "") or getattr(product, "product_type", ""))
-        linked_internal = internal_by_family.get(fam)
-        area = linked_internal.area if linked_internal else ("baas" if product.category == "credito" else product.category)
-        product_name = f"{linked_internal.name} — {product.name}" if linked_internal else product.name
-        reasons = list(result["reasons"])
-        if fam:
-            reasons.append(f"família vinculada: {fam}")
-        if linked_internal:
-            reasons.append(f"catálogo interno: {linked_internal.name}")
-        reason_summary = "Motivos: " + "; ".join(reasons) if reasons else "Motivos: aderência calculada"
-        if result["blockers"]:
-            reason_summary += " | Atenção: " + "; ".join(result["blockers"])
-
-        row = OfferMatch(
-            company_id=int(company_id),
-            client_id=int(client.id or 0),
-            subject_doc=_digits(str(getattr(client, "cnpj", "") or getattr(client, "email", ""))),
-            source_kind="partner",
-            internal_service_id=int(linked_internal.id or 0) if linked_internal else None,
-            partner_product_id=int(product.id or 0),
-            area=area,
-            family_slug=fam,
-            product_name=product_name,
-            partner_name=partner.name,
-            partner_options_count=1,
-            score_fit=float(result["score"]),
-            priority_level=_priority_label(float(result["score"])),
-            reason_summary=reason_summary,
-            estimated_commission_text=result["commission_text"],
-        )
-        session.add(row)
-        created.append(row)
-
-    session.commit()
-    return session.exec(
-        select(OfferMatch)
-        .where(OfferMatch.company_id == int(company_id), OfferMatch.client_id == int(client.id or 0))
-        .order_by(OfferMatch.score_fit.desc(), OfferMatch.created_at.desc())
-    ).all()
 
 def _digits(value: str) -> str:
     return re.sub(r"\\D+", "", (value or "")).strip()
@@ -4129,65 +3850,21 @@ a:hover{ color:#00BFBF; }
 <div class="row g-3">
   <div class="col-12">
     <div class="card p-4">
-      <div class="d-flex justify-content-between align-items-start gap-3 flex-wrap">
-        <div>
-          <h4 class="mb-1">Painel</h4>
-          <div class="muted">
-            {% if role in ["admin","equipe"] %}
-              Escritório: <b>{{ current_company.name }}</b>.
-              {% if current_client %} Cliente selecionado: <b>{{ current_client.name }}</b>.{% endif %}
-            {% else %}
-              Bem-vindo(a)! Você vê seus dados, ferramentas e ofertas personalizadas.
-            {% endif %}
-          </div>
-        </div>
-        <div class="d-flex gap-2 flex-wrap">
-          {% if role in ["admin","equipe"] %}
-            <a class="btn btn-outline-primary btn-sm" href="/client/switch">Trocar cliente</a>
-            <a class="btn btn-outline-secondary btn-sm" href="/motor-ofertas">Motor de ofertas</a>
-          {% endif %}
-          <a class="btn btn-outline-secondary btn-sm" href="/ofertas">Ver ofertas</a>
-        </div>
+      <h4 class="mb-1">Painel</h4>
+      <div class="muted">
+        {% if role in ["admin","equipe"] %}
+          Escritório: <b>{{ current_company.name }}</b>.
+          {% if current_client %} Cliente selecionado: <b>{{ current_client.name }}</b>.{% endif %}
+        {% else %}
+          Bem-vindo(a)! Você vê apenas seus dados e arquivos.
+        {% endif %}
       </div>
-    </div>
-  </div>
-
-  <div class="col-12">
-    <div class="row g-3">
-      <div class="col-md-4">
-        <div class="card p-3 h-100">
-          <div class="small muted">Diagnóstico</div>
-          <div class="fw-semibold mt-1">Perfil e dados da empresa</div>
-          <div class="small mt-2">Atualize seu cadastro, indicadores e informações estratégicas.</div>
-          <div class="mt-3"><a class="btn btn-outline-primary btn-sm" href="/empresa">Abrir empresa</a></div>
+      {% if role in ["admin","equipe"] %}
+        <div class="mt-3 d-flex gap-2">
+          <a class="btn btn-outline-primary btn-sm" href="/admin/members">Gerenciar membros</a>
+          <a class="btn btn-outline-secondary btn-sm" href="/client/switch">Trocar cliente</a>
         </div>
-      </div>
-      <div class="col-md-4">
-        <div class="card p-3 h-100">
-          <div class="small muted">Ofertas</div>
-          <div class="fw-semibold mt-1">Motor de oportunidades</div>
-          <div class="small mt-2">Veja produtos internos e parceiros aderentes ao perfil do cliente.</div>
-          <div class="mt-3 d-flex gap-2 flex-wrap">
-            <a class="btn btn-outline-primary btn-sm" href="/ofertas">Minhas ofertas</a>
-            {% if role in ["admin","equipe"] %}<a class="btn btn-outline-secondary btn-sm" href="/motor-ofertas">Painel do motor</a>{% endif %}
-          </div>
-        </div>
-      </div>
-      <div class="col-md-4">
-        <div class="card p-3 h-100">
-          <div class="small muted">Cadastro</div>
-          <div class="fw-semibold mt-1">Produtos e parceiros</div>
-          <div class="small mt-2">Administra catálogo interno, parceiros, regras, campanhas e defaults do simulador.</div>
-          <div class="mt-3 d-flex gap-2 flex-wrap">
-            {% if role == "admin" %}
-              <a class="btn btn-outline-primary btn-sm" href="/admin/servicos-internos">Produtos internos</a>
-              <a class="btn btn-outline-secondary btn-sm" href="/admin/parceiros">Parceiros</a>
-            {% else %}
-              <a class="btn btn-outline-secondary btn-sm" href="/simulador">Simulador</a>
-            {% endif %}
-          </div>
-        </div>
-      </div>
+      {% endif %}
     </div>
   </div>
 
@@ -4237,6 +3914,7 @@ a:hover{ color:#00BFBF; }
       <div class="muted small">Pendências / Agenda / Educação</div>
     </div>
   </div>
+
   {% for item in standalone %}
     <div class="col-md-6 col-lg-4">
       <a href="{{ item.href }}">
@@ -4254,6 +3932,25 @@ a:hover{ color:#00BFBF; }
   {% endfor %}
   {% endif %}
 </div>
+
+<script>
+(function(){
+  const tabs = document.getElementById("dashTabs");
+  if (!tabs) return;
+
+  const key = "dash_active_tab";
+  const saved = localStorage.getItem(key);
+  if (saved) {
+    const btn = document.getElementById("tab-" + saved);
+    if (btn) btn.click();
+  }
+  tabs.addEventListener("click", (e) => {
+    const btn = e.target.closest("button[id^='tab-']");
+    if (!btn) return;
+    localStorage.setItem(key, btn.id.replace("tab-",""));
+  });
+})();
+</script>
 {% endblock %}
 """,
     "client_switch.html": r"""
@@ -7989,201 +7686,64 @@ TEMPLATES.update({
 </div>
 {% endblock %}
 """,
-
-    "admin_internal_services.html": r"""
-{% extends "base.html" %}
-{% block content %}
-<div class="row g-3">
-  <div class="col-lg-5">
-    <div class="card p-4">
-      <h4 class="mb-1">Produtos internos</h4>
-      <div class="muted mb-3">Catálogo próprio da Maffezzolli Capital: Advisory, IB, BaaS e Special Sits.</div>
-      <form method="post" action="/admin/servicos-internos/add" class="row g-2">
-        <div class="col-md-6">
-          <label class="form-label">Área</label>
-          <select class="form-select" name="area">
-            {% for value,label in area_options %}
-              <option value="{{ value }}">{{ label }}</option>
-            {% endfor %}
-          </select>
-        </div>
-        <div class="col-md-6">
-          <label class="form-label">Família</label>
-          <input class="form-control" name="family_slug" placeholder="home_equity, turnaround...">
-        </div>
-        <div class="col-12">
-          <label class="form-label">Nome do produto</label>
-          <input class="form-control" name="name" required>
-        </div>
-        <div class="col-12">
-          <label class="form-label">Descrição</label>
-          <textarea class="form-control" name="description" rows="3"></textarea>
-        </div>
-        <div class="col-md-4">
-          <label class="form-label">Prioridade</label>
-          <input class="form-control" name="priority_weight" value="100">
-        </div>
-        <div class="col-12">
-          <label class="form-label">Observações</label>
-          <textarea class="form-control" name="notes" rows="2"></textarea>
-        </div>
-        <div class="col-12 d-flex gap-2">
-          <button class="btn btn-primary">Salvar produto</button>
-          <a class="btn btn-outline-secondary" href="/admin/parceiros">Ir para parceiros</a>
-        </div>
-      </form>
-    </div>
-  </div>
-  <div class="col-lg-7">
-    <div class="card p-4">
-      <div class="d-flex justify-content-between align-items-center mb-3">
-        <div>
-          <h5 class="mb-1">Catálogo interno</h5>
-          <div class="muted">Produtos próprios usados pelo motor de ofertas.</div>
-        </div>
-        <form method="post" action="/admin/servicos-internos/seed">
-          <button class="btn btn-outline-primary btn-sm">Semear catálogo padrão</button>
-        </form>
-      </div>
-      {% if rows %}
-        <div class="table-responsive">
-          <table class="table align-middle">
-            <thead><tr><th>Área</th><th>Produto</th><th>Família</th><th>Prioridade</th></tr></thead>
-            <tbody>
-              {% for row in rows %}
-                <tr>
-                  <td><span class="badge text-bg-light border">{{ row.area }}</span></td>
-                  <td>
-                    <div class="fw-semibold">{{ row.name }}</div>
-                    <div class="muted small">{{ row.description }}</div>
-                  </td>
-                  <td>{{ row.family_slug or "-" }}</td>
-                  <td>{{ row.priority_weight }}</td>
-                </tr>
-              {% endfor %}
-            </tbody>
-          </table>
-        </div>
-      {% else %}
-        <div class="muted">Nenhum produto interno cadastrado.</div>
-      {% endif %}
-    </div>
-  </div>
-</div>
-{% endblock %}
-""",
-    "motor_ofertas.html": r"""
-{% extends "base.html" %}
-{% block content %}
-<div class="card p-4 mb-3">
-  <div class="d-flex justify-content-between align-items-start gap-2 flex-wrap">
-    <div>
-      <h4 class="mb-1">Motor de Ofertas</h4>
-      <div class="muted">Área, produto e parceiro recomendados com base no perfil do cliente.</div>
-    </div>
-    <div class="d-flex gap-2 flex-wrap">
-      <a class="btn btn-outline-secondary" href="/admin/servicos-internos">Produtos internos</a>
-      <a class="btn btn-outline-secondary" href="/admin/parceiros">Parceiros</a>
-      <form method="post" action="/motor-ofertas/gerar">
-        <button class="btn btn-primary">Gerar / atualizar ofertas</button>
-      </form>
-    </div>
-  </div>
-  {% if current_client %}
-    <div class="mt-3 small">
-      Cliente atual: <b>{{ current_client.name }}</b>
-      {% if current_client.cnpj %} · {{ current_client.cnpj }}{% endif %}
-    </div>
-  {% endif %}
-</div>
-
-<div class="row g-3 mb-3">
-  <div class="col-md-2"><div class="card p-3 h-100"><div class="small muted">Total</div><div class="h4 mb-0">{{ summary.total }}</div></div></div>
-  <div class="col-md-2"><div class="card p-3 h-100"><div class="small muted">Alta</div><div class="h4 mb-0">{{ summary.alta }}</div></div></div>
-  <div class="col-md-2"><div class="card p-3 h-100"><div class="small muted">Média</div><div class="h4 mb-0">{{ summary.media }}</div></div></div>
-  <div class="col-md-2"><div class="card p-3 h-100"><div class="small muted">Baixa</div><div class="h4 mb-0">{{ summary.baixa }}</div></div></div>
-  <div class="col-md-2"><div class="card p-3 h-100"><div class="small muted">Internos</div><div class="h4 mb-0">{{ summary.internos }}</div></div></div>
-  <div class="col-md-2"><div class="card p-3 h-100"><div class="small muted">Parceiros</div><div class="h4 mb-0">{{ summary.parceiros }}</div></div></div>
-</div>
-
-{% if not current_client %}
-  <div class="alert alert-warning">Selecione um cliente para gerar as ofertas.</div>
-{% endif %}
-
-{% if matches %}
-  <div class="row g-3">
-    {% for row in matches %}
-      <div class="col-lg-6">
-        <div class="card p-3 h-100">
-          <div class="d-flex justify-content-between gap-2">
-            <div>
-              <div class="small muted">{{ row.area or "-" }} · {{ row.source_kind }}{% if row.family_slug %} · {{ row.family_slug }}{% endif %}</div>
-              <div class="fw-semibold">{{ row.product_name }}</div>
-              <div class="muted">{{ row.partner_name or "Maffezzolli Capital" }}</div>
-            </div>
-            <div class="text-end">
-              <div class="badge text-bg-light border">{{ row.priority_level|upper }}</div>
-              <div class="mt-2 fw-semibold">{{ "%.1f"|format(row.score_fit) }}</div>
-            </div>
-          </div>
-          <div class="small mt-3">{{ row.reason_summary }}</div>
-          {% if row.partner_options_count and row.source_kind == "internal" %}
-            <div class="small mt-2"><b>Opções elegíveis:</b> {{ row.partner_options_count }} parceiro(s)</div>
-          {% endif %}
-          {% if row.estimated_commission_text %}
-            <div class="small mt-2"><b>Comissão / campanha:</b> {{ row.estimated_commission_text }}</div>
-          {% endif %}
-          <div class="mt-3 d-flex gap-2">
-            {% if row.partner_product_id %}
-              <a class="btn btn-outline-primary btn-sm" href="/simulador?partner_product_id={{ row.partner_product_id }}">Simular</a>
-            {% endif %}
-            <a class="btn btn-outline-secondary btn-sm" href="/propostas">Criar proposta</a>
-          </div>
-        </div>
-      </div>
-    {% endfor %}
-  </div>
-{% else %}
-  <div class="card p-4"><div class="muted">Nenhuma oferta gerada ainda.</div></div>
-{% endif %}
-{% endblock %}
-""",
-    "client_offers.html": r"""
-{% extends "base.html" %}
-{% block content %}
-<div class="card p-4 mb-3">
-  <h4 class="mb-1">Ofertas para sua empresa</h4>
-  <div class="muted">Recomendações personalizadas a partir do seu perfil e dos dados compartilhados.</div>
-</div>
-{% if rows %}
-  <div class="row g-3">
-    {% for row in rows %}
-      <div class="col-lg-6">
-        <div class="card p-3 h-100">
-          <div class="small muted">{{ row.area or "-" }}{% if row.family_slug %} · {{ row.family_slug }}{% endif %}</div>
-          <div class="fw-semibold">{{ row.product_name }}</div>
-          <div class="muted">{{ row.partner_name }}</div>
-          <div class="small mt-2">{{ row.reason_summary }}</div>
-          <div class="mt-3 d-flex gap-2">
-            {% if row.partner_product_id %}
-              <a class="btn btn-outline-primary btn-sm" href="/simulador?partner_product_id={{ row.partner_product_id }}">Ver simulação</a>
-            {% endif %}
-            <a class="btn btn-outline-secondary btn-sm" href="/propostas">Solicitar proposta</a>
-          </div>
-        </div>
-      </div>
-    {% endfor %}
-  </div>
-{% else %}
-  <div class="card p-4"><div class="muted">Ainda não há ofertas personalizadas. Complete seu perfil e peça uma análise.</div></div>
-{% endif %}
-{% endblock %}
-""",
-
 })
 
 templates_env = Environment(loader=DictLoader(TEMPLATES), autoescape=True)
 
+
+# ----------------------------
+# Templates (Oferta Engine / Perfil ampliado)
+# ----------------------------
+
+TEMPLATES["admin_familias.html"] = r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <h4 class="mb-1">Familias de Produto</h4>
+  <div class="muted mb-3">Familias canonicas pre-estabelecidas para evitar erro de escrita e garantir relacionamento consistente.</div>
+  <div class="table-responsive"><table class="table"><thead><tr><th>Area</th><th>Codigo</th><th>Rotulo</th><th>Descricao</th></tr></thead><tbody>{% for fam in families %}<tr><td>{{ fam.area }}</td><td><span class="mono">{{ fam.code }}</span></td><td><b>{{ fam.label }}</b></td><td>{{ fam.description }}</td></tr>{% endfor %}</tbody></table></div>
+</div>
+{% endblock %}
+"""
+
+TEMPLATES["motor_ofertas.html"] = r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4 mb-3">
+  <div class="d-flex justify-content-between align-items-center">
+    <div><h4 class="mb-1">Motor de Ofertas</h4><div class="muted">Ranking calibrado por familia, perfil empresarial, snapshot e elegibilidade dos parceiros.</div></div>
+    <form method="post" action="/motor-ofertas/gerar"><button class="btn btn-primary">Gerar motor</button></form>
+  </div>
+</div>
+{% if not current_client %}
+  <div class="alert alert-warning">Nenhum cliente selecionado.</div>
+{% else %}
+<div class="card p-4">
+  <div class="mb-3"><span class="muted">Cliente:</span> <b>{{ current_client.name }}</b></div>
+  {% if matches %}
+  <div class="table-responsive"><table class="table"><thead><tr><th>Tipo</th><th>Area</th><th>Familia</th><th>Produto</th><th>Parceiro</th><th>Prioridade</th><th>Score</th><th>Opcoes</th></tr></thead><tbody>{% for m in matches %}<tr><td>{{ m.source_kind }}</td><td>{{ m.area }}</td><td><span class="mono">{{ m.family_code }}</span></td><td><b>{{ m.product_name }}</b><br><small class="muted">{{ m.reason_summary }}</small></td><td>{{ m.partner_name or "Interno" }}</td><td>{{ m.priority_level }}</td><td>{{ "%.1f"|format(m.score_fit) }}</td><td>{{ m.partner_options_count }}</td></tr>{% endfor %}</tbody></table></div>
+  {% else %}<div class="muted">Nenhuma sugestao gerada ainda.</div>{% endif %}
+</div>
+{% endif %}
+{% endblock %}
+"""
+
+TEMPLATES["ofertas.html"] = r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <h4 class="mb-1">Minhas Ofertas</h4>
+  <div class="muted mb-3">Ofertas aderentes ao perfil da sua empresa.</div>
+  {% if not current_client %}
+    <div class="alert alert-warning">Nenhum cliente selecionado.</div>
+  {% else %}
+    {% if matches %}
+      <div class="row g-3">{% for m in matches %}<div class="col-lg-6"><div class="border rounded p-3 h-100"><div class="d-flex justify-content-between"><b>{{ m.product_name }}</b><span class="badge text-bg-light">{{ m.priority_level }}</span></div><div class="muted small">{{ m.partner_name or "Maffezzolli Capital" }}</div><div class="small mt-2"><span class="mono">{{ m.family_code }}</span> | Score {{ "%.1f"|format(m.score_fit) }}</div><div class="mt-2">{{ m.reason_summary }}</div>{% if m.partner_options_count %}<div class="mt-2 small muted">{{ m.partner_options_count }} parceiro(s) elegivel(eis) nessa familia.</div>{% endif %}<div class="mt-3 d-flex gap-2"><a class="btn btn-sm btn-outline-primary" href="/simulador">Simular</a><a class="btn btn-sm btn-outline-secondary" href="/propostas">Solicitar proposta</a></div></div></div>{% endfor %}</div>
+    {% else %}<div class="muted">Ainda nao ha ofertas geradas para sua empresa.</div>{% endif %}
+  {% endif %}
+</div>
+{% endblock %}
+"""
 
 # ----------------------------
 # Templates (Open Finance)
@@ -8814,10 +8374,6 @@ def resolve_feature_key(path: str) -> Optional[str]:
     mapping = [
         ("/admin/ui", "ui"),
         ("/admin/gestao", "gestao"),
-        ("/admin/parceiros", "parceiros"),
-        ("/admin/servicos-internos", "servicos_internos"),
-        ("/motor-ofertas", "motor_ofertas"),
-        ("/ofertas", "ofertas"),
         ("/admin/members", "gestao"),
         ("/admin/clients", "gestao"),
         ("/negocios", "crm"),
@@ -9564,210 +9120,6 @@ async def feature_access_middleware(request: Request, call_next: Callable[..., A
 # Install SessionMiddleware last so request.session is available inside BaseHTTPMiddleware.
 app.add_middleware(SessionMiddleware, secret_key=APP_SECRET_KEY, https_only=https_only, same_site="lax")
 
-@app.get("/admin/servicos-internos", response_class=HTMLResponse)
-@require_role({"admin"})
-async def admin_internal_services_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
-    ctx = get_tenant_context(request, session)
-    assert ctx is not None
-    ensure_partner_tables()
-    ensure_partner_schema_columns()
-    _seed_internal_services(session, ctx.company.id)
-    rows = session.exec(
-        select(InternalService)
-        .where(InternalService.company_id == int(ctx.company.id))
-        .order_by(InternalService.priority_weight.asc(), InternalService.name.asc())
-    ).all()
-    return render(
-        "admin_internal_services.html",
-        request=request,
-        context={
-            "current_user": ctx.user,
-            "current_company": ctx.company,
-            "role": ctx.membership.role,
-            "current_client": get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx)),
-            "rows": rows,
-            "area_options": _offer_area_options(),
-        },
-    )
-
-
-@app.post("/admin/servicos-internos/add")
-@require_role({"admin"})
-async def admin_internal_services_add(
-    request: Request,
-    area: str = Form("baas"),
-    family_slug: str = Form(""),
-    name: str = Form(...),
-    description: str = Form(""),
-    priority_weight: str = Form("100"),
-    notes: str = Form(""),
-    session: Session = Depends(get_session),
-) -> Response:
-    ctx = get_tenant_context(request, session)
-    assert ctx is not None
-    ensure_partner_tables()
-    ensure_partner_schema_columns()
-    row = InternalService(
-        company_id=int(ctx.company.id),
-        area=(area or "baas").strip(),
-        family_slug=(family_slug or "").strip(),
-        name=(name or "").strip(),
-        description=(description or "").strip(),
-        priority_weight=int(priority_weight or 100) if str(priority_weight or "").strip().isdigit() else 100,
-        notes=(notes or "").strip(),
-        is_active=True,
-        updated_at=utcnow(),
-    )
-    session.add(row)
-    session.commit()
-    set_flash(request, "Produto interno salvo.")
-    return RedirectResponse("/admin/servicos-internos", status_code=303)
-
-
-@app.post("/admin/servicos-internos/seed")
-@require_role({"admin"})
-async def admin_internal_services_seed(request: Request, session: Session = Depends(get_session)) -> Response:
-    ctx = get_tenant_context(request, session)
-    assert ctx is not None
-    ensure_partner_tables()
-    ensure_partner_schema_columns()
-    _seed_internal_services(session, ctx.company.id)
-    set_flash(request, "Catálogo padrão verificado.")
-    return RedirectResponse("/admin/servicos-internos", status_code=303)
-
-
-@app.post("/admin/parceiros/products/{product_id}/campaigns/add")
-@require_role({"admin"})
-async def admin_partner_campaigns_add(
-    request: Request,
-    product_id: int,
-    title: str = Form(...),
-    bonus_pct: str = Form("0"),
-    starts_at: str = Form(""),
-    ends_at: str = Form(""),
-    rule_summary: str = Form(""),
-    session: Session = Depends(get_session),
-) -> Response:
-    ctx = get_tenant_context(request, session)
-    assert ctx is not None
-    ensure_partner_tables()
-    ensure_partner_schema_columns()
-    product = session.get(PartnerProduct, product_id)
-    if not product or int(product.company_id or 0) != int(ctx.company.id or 0):
-        set_flash(request, "Produto inválido.")
-        return RedirectResponse("/admin/parceiros", status_code=303)
-
-    def _parse_date_ymd(raw: str) -> Optional[datetime]:
-        s = (raw or "").strip()
-        if not s:
-            return None
-        try:
-            return datetime.fromisoformat(s).replace(tzinfo=timezone.utc)
-        except Exception:
-            return None
-
-    row = PartnerCampaign(
-        company_id=int(ctx.company.id),
-        partner_product_id=int(product_id),
-        title=(title or "").strip(),
-        bonus_pct=float(str(bonus_pct or "0").replace(",", ".")),
-        starts_at=_parse_date_ymd(starts_at),
-        ends_at=_parse_date_ymd(ends_at),
-        rule_summary=(rule_summary or "").strip(),
-        is_active=True,
-        updated_at=utcnow(),
-    )
-    session.add(row)
-    session.commit()
-    set_flash(request, "Campanha salva.")
-    return RedirectResponse("/admin/parceiros", status_code=303)
-
-
-@app.get("/motor-ofertas", response_class=HTMLResponse)
-@require_role({"admin", "equipe"})
-async def motor_ofertas_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
-    ctx = get_tenant_context(request, session)
-    assert ctx is not None
-    ensure_partner_tables()
-    ensure_partner_schema_columns()
-    active_client_id = get_active_client_id(request, session, ctx)
-    current_client = get_client_or_none(session, ctx.company.id, active_client_id)
-    matches = []
-    summary = {"total": 0, "alta": 0, "media": 0, "baixa": 0, "internos": 0, "parceiros": 0}
-    if current_client:
-        matches = session.exec(
-            select(OfferMatch)
-            .where(OfferMatch.company_id == int(ctx.company.id), OfferMatch.client_id == int(current_client.id or 0))
-            .order_by(OfferMatch.score_fit.desc(), OfferMatch.created_at.desc())
-        ).all()
-        summary["total"] = len(matches)
-        for row in matches:
-            summary[row.priority_level if row.priority_level in {"alta","media","baixa"} else "baixa"] += 1
-            if row.source_kind == "internal":
-                summary["internos"] += 1
-            else:
-                summary["parceiros"] += 1
-    return render(
-        "motor_ofertas.html",
-        request=request,
-        context={
-            "current_user": ctx.user,
-            "current_company": ctx.company,
-            "role": ctx.membership.role,
-            "current_client": current_client,
-            "matches": matches,
-            "summary": summary,
-        },
-    )
-
-
-@app.post("/motor-ofertas/gerar")
-@require_role({"admin", "equipe"})
-async def motor_ofertas_generate(request: Request, session: Session = Depends(get_session)) -> Response:
-    ctx = get_tenant_context(request, session)
-    assert ctx is not None
-    ensure_partner_tables()
-    ensure_partner_schema_columns()
-    active_client_id = get_active_client_id(request, session, ctx)
-    current_client = get_client_or_none(session, ctx.company.id, active_client_id)
-    if not current_client:
-        set_flash(request, "Selecione um cliente antes de gerar ofertas.")
-        return RedirectResponse("/client/switch", status_code=303)
-    _generate_offer_matches(session, ctx.company.id, current_client)
-    set_flash(request, "Motor de ofertas atualizado.")
-    return RedirectResponse("/motor-ofertas", status_code=303)
-
-
-@app.get("/ofertas", response_class=HTMLResponse)
-@require_login
-async def ofertas_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
-    ctx = get_tenant_context(request, session)
-    assert ctx is not None
-    ensure_partner_tables()
-    ensure_partner_schema_columns()
-    active_client_id = get_active_client_id(request, session, ctx)
-    current_client = get_client_or_none(session, ctx.company.id, active_client_id)
-    rows = []
-    if current_client:
-        rows = session.exec(
-            select(OfferMatch)
-            .where(OfferMatch.company_id == int(ctx.company.id), OfferMatch.client_id == int(current_client.id or 0))
-            .order_by(OfferMatch.score_fit.desc(), OfferMatch.created_at.desc())
-        ).all()
-    return render(
-        "client_offers.html",
-        request=request,
-        context={
-            "current_user": ctx.user,
-            "current_company": ctx.company,
-            "role": ctx.membership.role,
-            "current_client": current_client,
-            "rows": rows,
-        },
-    )
-
-
-
 
 @app.on_event("startup")
 def _startup() -> None:
@@ -9775,8 +9127,16 @@ def _startup() -> None:
     ensure_ui_tables()
     ensure_feature_access_tables()
     ensure_credit_consent_table()
-    ensure_partner_tables()
-    ensure_partner_schema_columns()
+    ensure_offer_engine_tables()
+    ensure_offer_engine_columns()
+    with Session(engine) as _s:
+        try:
+            seed_product_families(_s)
+            ids = [x[0] for x in _s.exec(select(Company.id)).all()]
+            for _cid in ids:
+                seed_internal_services(_s, int(_cid))
+        except Exception:
+            pass
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 
@@ -10587,6 +9947,157 @@ async def dashboard(request: Request, session: Session = Depends(get_session)) -
     )
 
 
+
+
+# ----------------------------
+# Catálogo / Motor de Ofertas
+# ----------------------------
+
+@app.get("/admin/familias", response_class=HTMLResponse)
+@require_role({"admin"})
+async def admin_familias_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+    ensure_offer_engine_tables()
+    ensure_offer_engine_columns()
+    seed_product_families(session)
+    families = list_product_families(session)
+    return render("admin_familias.html", request=request, context={"current_user": ctx.user, "current_company": ctx.company, "role": ctx.membership.role, "families": families})
+
+
+@app.get("/admin/servicos-internos", response_class=HTMLResponse)
+@require_role({"admin"})
+async def admin_servicos_internos_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+    ensure_offer_engine_tables()
+    ensure_offer_engine_columns()
+    seed_product_families(session)
+    seed_internal_services(session, ctx.company.id)
+    services = session.exec(select(InternalService).where(InternalService.company_id == ctx.company.id).order_by(InternalService.area.asc(), InternalService.priority_weight.desc(), InternalService.name.asc())).all()
+    families = list_product_families(session)
+    return render("admin_servicos_internos.html", request=request, context={"current_user": ctx.user, "current_company": ctx.company, "role": ctx.membership.role, "services": services, "families": families})
+
+
+@app.post("/admin/servicos-internos/add")
+@require_role({"admin"})
+async def admin_servicos_internos_add(request: Request, session: Session = Depends(get_session), area: str = Form(...), family_code: str = Form(...), name: str = Form(...), description: str = Form(""), priority_weight: int = Form(50), notes: str = Form("")) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+    row = InternalService(company_id=ctx.company.id, area=(area or "").strip(), family_code=(family_code or "").strip(), name=(name or "").strip(), description=(description or "").strip(), priority_weight=max(0, int(priority_weight or 50)), notes=(notes or "").strip(), is_active=True)
+    session.add(row)
+    session.commit()
+    set_flash(request, "Produto interno salvo.")
+    return RedirectResponse("/admin/servicos-internos", status_code=303)
+
+
+@app.get("/admin/parceiros", response_class=HTMLResponse)
+@require_role({"admin"})
+async def admin_parceiros_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+    ensure_offer_engine_tables()
+    ensure_offer_engine_columns()
+    seed_product_families(session)
+    partners = session.exec(select(Partner).where(Partner.company_id == ctx.company.id).order_by(Partner.name.asc())).all()
+    products = session.exec(select(PartnerProduct).where(PartnerProduct.company_id == ctx.company.id).order_by(PartnerProduct.partner_id.asc(), PartnerProduct.name.asc())).all()
+    campaigns = session.exec(select(PartnerCampaign).where(PartnerCampaign.company_id == ctx.company.id).order_by(PartnerCampaign.starts_at.desc())).all()
+    partner_map = {p.id: p for p in partners}
+    families = list_product_families(session)
+    return render("admin_parceiros.html", request=request, context={"current_user": ctx.user, "current_company": ctx.company, "role": ctx.membership.role, "partners": partners, "products": products, "campaigns": campaigns, "partner_map": partner_map, "families": families})
+
+
+@app.post("/admin/parceiros/add")
+@require_role({"admin"})
+async def admin_parceiros_add(request: Request, session: Session = Depends(get_session), name: str = Form(...), partner_type: str = Form("financeiro"), contact_name: str = Form(""), contact_email: str = Form(""), notes: str = Form("")) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+    row = Partner(company_id=ctx.company.id, name=(name or "").strip(), partner_type=(partner_type or "").strip(), contact_name=(contact_name or "").strip(), contact_email=(contact_email or "").strip(), notes=(notes or "").strip(), is_active=True)
+    session.add(row)
+    session.commit()
+    set_flash(request, "Parceiro salvo.")
+    return RedirectResponse("/admin/parceiros", status_code=303)
+
+
+@app.post("/admin/parceiros/products/add")
+@require_role({"admin"})
+async def admin_partner_product_add(request: Request, session: Session = Depends(get_session), partner_id: int = Form(...), area: str = Form(...), family_code: str = Form(...), name: str = Form(...), pf_pj: str = Form("PJ"), ticket_min_brl: float = Form(0.0), ticket_max_brl: float = Form(0.0), revenue_min_brl: float = Form(0.0), revenue_max_brl: float = Form(0.0), score_total_min: float = Form(0.0), score_financial_min: float = Form(0.0), max_debt_ratio: float = Form(0.0), requires_collateral: Optional[str] = Form(None), allowed_states_csv: str = Form(""), allowed_segments_csv: str = Form(""), rate_default_pct: float = Form(0.0), cet_default_pct: float = Form(0.0), term_min_months: int = Form(0), term_max_months: int = Form(0), grace_max_months: int = Form(0), amortization_default: str = Form("PRICE"), tariff_default_brl: float = Form(0.0), insurance_default_brl: float = Form(0.0), admin_fee_default_brl: float = Form(0.0), ltv_max_pct: float = Form(0.0), commission_text: str = Form(""), payout_term: str = Form(""), notes: str = Form("")) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+    row = PartnerProduct(company_id=ctx.company.id, partner_id=int(partner_id), area=(area or "").strip(), family_code=(family_code or "").strip(), name=(name or "").strip(), pf_pj=(pf_pj or "PJ").strip(), ticket_min_brl=max(0.0, float(ticket_min_brl or 0.0)), ticket_max_brl=max(0.0, float(ticket_max_brl or 0.0)), revenue_min_brl=max(0.0, float(revenue_min_brl or 0.0)), revenue_max_brl=max(0.0, float(revenue_max_brl or 0.0)), score_total_min=max(0.0, float(score_total_min or 0.0)), score_financial_min=max(0.0, float(score_financial_min or 0.0)), max_debt_ratio=max(0.0, float(max_debt_ratio or 0.0)), requires_collateral=_parse_bool(requires_collateral), allowed_states_json=_json_dump_list([x.strip().upper() for x in (allowed_states_csv or "").split(",") if x.strip()]), allowed_segments_json=_json_dump_list([x.strip() for x in (allowed_segments_csv or "").split(",") if x.strip()]), rate_default_pct=max(0.0, float(rate_default_pct or 0.0)), cet_default_pct=max(0.0, float(cet_default_pct or 0.0)), term_min_months=max(0, int(term_min_months or 0)), term_max_months=max(0, int(term_max_months or 0)), grace_max_months=max(0, int(grace_max_months or 0)), amortization_default=(amortization_default or "PRICE").strip(), tariff_default_brl=max(0.0, float(tariff_default_brl or 0.0)), insurance_default_brl=max(0.0, float(insurance_default_brl or 0.0)), admin_fee_default_brl=max(0.0, float(admin_fee_default_brl or 0.0)), ltv_max_pct=max(0.0, float(ltv_max_pct or 0.0)), commission_text=(commission_text or "").strip(), payout_term=(payout_term or "").strip(), notes=(notes or "").strip(), is_active=True)
+    session.add(row)
+    session.commit()
+    set_flash(request, "Produto do parceiro salvo.")
+    return RedirectResponse("/admin/parceiros", status_code=303)
+
+
+@app.post("/admin/parceiros/campaigns/add")
+@require_role({"admin"})
+async def admin_partner_campaign_add(request: Request, session: Session = Depends(get_session), partner_product_id: int = Form(...), title: str = Form(...), starts_at: str = Form(""), ends_at: str = Form(""), bonus_pct: float = Form(0.0), rule_summary: str = Form("")) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+    def _parse_dt(v: str, fallback_days: int) -> datetime:
+        raw = (v or "").strip()
+        if not raw:
+            return utcnow() + timedelta(days=fallback_days)
+        try:
+            return datetime.fromisoformat(raw).replace(tzinfo=timezone.utc)
+        except Exception:
+            try:
+                return datetime.fromisoformat(raw + "T00:00:00").replace(tzinfo=timezone.utc)
+            except Exception:
+                return utcnow() + timedelta(days=fallback_days)
+    row = PartnerCampaign(company_id=ctx.company.id, partner_product_id=int(partner_product_id), title=(title or "").strip(), starts_at=_parse_dt(starts_at, -1), ends_at=_parse_dt(ends_at, 30), bonus_pct=max(0.0, float(bonus_pct or 0.0)), rule_summary=(rule_summary or "").strip(), is_active=True)
+    session.add(row)
+    session.commit()
+    set_flash(request, "Campanha salva.")
+    return RedirectResponse("/admin/parceiros", status_code=303)
+
+
+@app.get("/motor-ofertas", response_class=HTMLResponse)
+@require_role({"admin", "equipe"})
+async def motor_ofertas_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+    current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
+    matches: list[OfferMatch] = []
+    if current_client and ensure_can_access_client(ctx, current_client.id):
+        matches = session.exec(select(OfferMatch).where(OfferMatch.company_id == ctx.company.id, OfferMatch.client_id == current_client.id).order_by(OfferMatch.score_fit.desc(), OfferMatch.created_at.desc())).all()
+    return render("motor_ofertas.html", request=request, context={"current_user": ctx.user, "current_company": ctx.company, "role": ctx.membership.role, "current_client": current_client, "matches": matches})
+
+
+@app.post("/motor-ofertas/gerar")
+@require_role({"admin", "equipe"})
+async def motor_ofertas_generate(request: Request, session: Session = Depends(get_session)) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+    current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
+    if not current_client:
+        set_flash(request, "Selecione um cliente para gerar o motor.")
+        return RedirectResponse("/motor-ofertas", status_code=303)
+    profile = get_or_create_business_profile(session, company_id=ctx.company.id, client_id=current_client.id)
+    latest_snapshot = session.exec(select(ClientSnapshot).where(ClientSnapshot.company_id == ctx.company.id, ClientSnapshot.client_id == current_client.id).order_by(ClientSnapshot.created_at.desc()).limit(1)).first()
+    seed_product_families(session)
+    seed_internal_services(session, ctx.company.id)
+    matches = compute_offer_engine(session=session, company_id=ctx.company.id, client=current_client, profile=profile, latest_snapshot=latest_snapshot)
+    persist_offer_matches(session, company_id=ctx.company.id, client_id=current_client.id, matches=matches)
+    set_flash(request, f"Motor de ofertas gerado: {len(matches)} sugestao(oes).")
+    return RedirectResponse("/motor-ofertas", status_code=303)
+
+
+@app.get("/ofertas", response_class=HTMLResponse)
+@require_login
+async def ofertas_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+    current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
+    matches: list[OfferMatch] = []
+    if current_client and ensure_can_access_client(ctx, current_client.id):
+        matches = session.exec(select(OfferMatch).where(OfferMatch.company_id == ctx.company.id, OfferMatch.client_id == current_client.id).order_by(OfferMatch.score_fit.desc(), OfferMatch.created_at.desc())).all()
+    return render("ofertas.html", request=request, context={"current_user": ctx.user, "current_company": ctx.company, "role": ctx.membership.role, "current_client": current_client, "matches": matches})
+
 # ----------------------------
 # Staff: trocar cliente
 # ----------------------------
@@ -11355,6 +10866,10 @@ async def empresa_page(request: Request, session: Session = Depends(get_session)
         return RedirectResponse("/login", status_code=303)
 
     current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
+    business_profile = None
+    if current_client and ensure_can_access_client(ctx, current_client.id):
+        business_profile = get_or_create_business_profile(session, company_id=ctx.company.id, client_id=current_client.id)
+
     return render(
         "empresa.html",
         request=request,
@@ -11363,6 +10878,8 @@ async def empresa_page(request: Request, session: Session = Depends(get_session)
             "current_company": ctx.company,
             "role": ctx.membership.role,
             "current_client": current_client,
+            "business_profile": business_profile,
+            "product_families": list_product_families(session),
         },
     )
 
@@ -11382,6 +10899,33 @@ async def empresa_save(
         state: str = Form(""),
         zip_code: str = Form(""),
         notes: str = Form(""),
+        segment: str = Form(""),
+        subsegment: str = Form(""),
+        cnae: str = Form(""),
+        tax_regime: str = Form(""),
+        company_size: str = Form(""),
+        founded_year: int = Form(0),
+        business_model: str = Form(""),
+        sales_channel: str = Form(""),
+        main_bank: str = Form(""),
+        banks_count: int = Form(0),
+        annual_revenue_brl: float = Form(0.0),
+        monthly_fixed_cost_brl: float = Form(0.0),
+        payroll_monthly_brl: float = Form(0.0),
+        average_ticket_brl: float = Form(0.0),
+        inventory_brl: float = Form(0.0),
+        receivables_brl: float = Form(0.0),
+        collateral_brl: float = Form(0.0),
+        delinquency_brl: float = Form(0.0),
+        desired_credit_brl: float = Form(0.0),
+        urgency_level: str = Form(""),
+        strategic_goal: str = Form(""),
+        pain_points: str = Form(""),
+        interests: Optional[list[str]] = Form(None),
+        has_erp: Optional[str] = Form(None),
+        has_budget: Optional[str] = Form(None),
+        has_board: Optional[str] = Form(None),
+        has_audited_fs: Optional[str] = Form(None),
 ) -> Response:
     ctx = get_tenant_context(request, session)
     if not ctx:
@@ -11410,6 +10954,36 @@ async def empresa_save(
     current_client.updated_at = utcnow()
 
     session.add(current_client)
+    profile = get_or_create_business_profile(session, company_id=ctx.company.id, client_id=current_client.id)
+    profile.segment = (segment or "").strip()
+    profile.subsegment = (subsegment or "").strip()
+    profile.cnae = (cnae or "").strip()
+    profile.tax_regime = (tax_regime or "").strip()
+    profile.company_size = (company_size or "").strip()
+    profile.founded_year = max(0, int(founded_year or 0))
+    profile.business_model = (business_model or "").strip()
+    profile.sales_channel = (sales_channel or "").strip()
+    profile.main_bank = (main_bank or "").strip()
+    profile.banks_count = max(0, int(banks_count or 0))
+    profile.annual_revenue_brl = max(0.0, float(annual_revenue_brl or 0.0))
+    profile.monthly_fixed_cost_brl = max(0.0, float(monthly_fixed_cost_brl or 0.0))
+    profile.payroll_monthly_brl = max(0.0, float(payroll_monthly_brl or 0.0))
+    profile.average_ticket_brl = max(0.0, float(average_ticket_brl or 0.0))
+    profile.inventory_brl = max(0.0, float(inventory_brl or 0.0))
+    profile.receivables_brl = max(0.0, float(receivables_brl or 0.0))
+    profile.collateral_brl = max(0.0, float(collateral_brl or 0.0))
+    profile.delinquency_brl = max(0.0, float(delinquency_brl or 0.0))
+    profile.desired_credit_brl = max(0.0, float(desired_credit_brl or 0.0))
+    profile.urgency_level = (urgency_level or "").strip()
+    profile.strategic_goal = (strategic_goal or "").strip()
+    profile.pain_points = (pain_points or "").strip()
+    profile.interests_json = _json_dump_list(list(interests or []))
+    profile.has_erp = _parse_bool(has_erp)
+    profile.has_budget = _parse_bool(has_budget)
+    profile.has_board = _parse_bool(has_board)
+    profile.has_audited_fs = _parse_bool(has_audited_fs)
+    profile.updated_at = utcnow()
+    session.add(profile)
     session.commit()
 
     set_flash(request, "Dados da empresa atualizados.")
@@ -11443,6 +11017,12 @@ async def perfil_page(request: Request, session: Session = Depends(get_session))
         if len(snapshots) >= 2:
             delta = round(float(snapshots[0].score_total) - float(snapshots[1].score_total), 2)
 
+    business_profile = None
+    offer_matches: list[OfferMatch] = []
+    if current_client and ensure_can_access_client(ctx, current_client.id):
+        business_profile = get_or_create_business_profile(session, company_id=ctx.company.id, client_id=current_client.id)
+        offer_matches = session.exec(select(OfferMatch).where(OfferMatch.company_id == ctx.company.id, OfferMatch.client_id == current_client.id).order_by(OfferMatch.score_fit.desc(), OfferMatch.created_at.desc()).limit(8)).all()
+
     return render(
         "perfil.html",
         request=request,
@@ -11454,6 +11034,8 @@ async def perfil_page(request: Request, session: Session = Depends(get_session))
             "snapshots": snapshots,
             "latest_score": latest_score,
             "delta": delta,
+            "business_profile": business_profile,
+            "offer_matches": offer_matches,
         },
     )
 
@@ -11490,6 +11072,10 @@ async def perfil_save(
 
     session.add(current_client)
     session.commit()
+    profile = get_or_create_business_profile(session, company_id=ctx.company.id, client_id=current_client.id)
+    latest_snapshot = session.exec(select(ClientSnapshot).where(ClientSnapshot.company_id == ctx.company.id, ClientSnapshot.client_id == current_client.id).order_by(ClientSnapshot.created_at.desc()).limit(1)).first()
+    matches = compute_offer_engine(session=session, company_id=ctx.company.id, client=current_client, profile=profile, latest_snapshot=latest_snapshot)
+    persist_offer_matches(session, company_id=ctx.company.id, client_id=current_client.id, matches=matches)
 
     set_flash(request, "Indicadores atualizados.")
     return RedirectResponse("/perfil", status_code=303)
@@ -11524,7 +11110,9 @@ async def perfil_snapshot_new_page(request: Request, session: Session = Depends(
             "current_company": ctx.company,
             "role": ctx.membership.role,
             "current_client": current_client,
-            "survey": PROFILE_SURVEY_V1,
+            "business_profile": get_or_create_business_profile(session, company_id=ctx.company.id, client_id=current_client.id),
+            "survey": PROFILE_SURVEY_V2,
+            "product_families": list_product_families(session),
         },
     )
 
@@ -11590,7 +11178,47 @@ async def perfil_snapshot_new_action(
     current_client.updated_at = utcnow()
     session.add(current_client)
 
+    profile = get_or_create_business_profile(session, company_id=ctx.company.id, client_id=current_client.id)
+    form2 = await request.form()
+    interests = form2.getlist("interests") if hasattr(form2, "getlist") else []
+    profile.segment = (form2.get("segment") or profile.segment or "").strip()
+    profile.subsegment = (form2.get("subsegment") or profile.subsegment or "").strip()
+    profile.cnae = (form2.get("cnae") or profile.cnae or "").strip()
+    profile.tax_regime = (form2.get("tax_regime") or profile.tax_regime or "").strip()
+    profile.company_size = (form2.get("company_size") or profile.company_size or "").strip()
+    try:
+        profile.founded_year = max(0, int(form2.get("founded_year") or profile.founded_year or 0))
+    except Exception:
+        pass
+    profile.business_model = (form2.get("business_model") or profile.business_model or "").strip()
+    profile.sales_channel = (form2.get("sales_channel") or profile.sales_channel or "").strip()
+    profile.main_bank = (form2.get("main_bank") or profile.main_bank or "").strip()
+    try:
+        profile.banks_count = max(0, int(form2.get("banks_count") or profile.banks_count or 0))
+    except Exception:
+        pass
+    profile.annual_revenue_brl = max(float(form2.get("annual_revenue_brl") or profile.annual_revenue_brl or 0.0), 0.0)
+    profile.monthly_fixed_cost_brl = max(float(form2.get("monthly_fixed_cost_brl") or profile.monthly_fixed_cost_brl or 0.0), 0.0)
+    profile.payroll_monthly_brl = max(float(form2.get("payroll_monthly_brl") or profile.payroll_monthly_brl or 0.0), 0.0)
+    profile.average_ticket_brl = max(float(form2.get("average_ticket_brl") or profile.average_ticket_brl or 0.0), 0.0)
+    profile.inventory_brl = max(float(form2.get("inventory_brl") or profile.inventory_brl or 0.0), 0.0)
+    profile.receivables_brl = max(float(form2.get("receivables_brl") or profile.receivables_brl or 0.0), 0.0)
+    profile.collateral_brl = max(float(form2.get("collateral_brl") or profile.collateral_brl or 0.0), 0.0)
+    profile.delinquency_brl = max(float(form2.get("delinquency_brl") or profile.delinquency_brl or 0.0), 0.0)
+    profile.desired_credit_brl = max(float(form2.get("desired_credit_brl") or profile.desired_credit_brl or 0.0), 0.0)
+    profile.urgency_level = (form2.get("urgency_level") or profile.urgency_level or "").strip()
+    profile.strategic_goal = (form2.get("strategic_goal") or profile.strategic_goal or "").strip()
+    profile.pain_points = (form2.get("pain_points") or profile.pain_points or "").strip()
+    profile.interests_json = _json_dump_list(list(interests or []))
+    profile.has_erp = _parse_bool(form2.get("has_erp"))
+    profile.has_budget = _parse_bool(form2.get("has_budget"))
+    profile.has_board = _parse_bool(form2.get("has_board"))
+    profile.has_audited_fs = _parse_bool(form2.get("has_audited_fs"))
+    profile.updated_at = utcnow()
+    session.add(profile)
     session.commit()
+    matches = compute_offer_engine(session=session, company_id=ctx.company.id, client=current_client, profile=profile, latest_snapshot=snap)
+    persist_offer_matches(session, company_id=ctx.company.id, client_id=current_client.id, matches=matches)
     set_flash(request, "Avaliação registrada.")
     return RedirectResponse("/perfil", status_code=303)
 
@@ -18399,328 +18027,6 @@ async def credit_report_generate_tasks(request: Request, session: Session = Depe
     return RedirectResponse("/tarefas", status_code=303)
 
 
-TEMPLATES.setdefault("admin_partners.html", r"""{% extends "base.html" %}
-{% block content %}
-<div class="d-flex justify-content-between align-items-start flex-wrap gap-2 mb-3">
-  <div>
-    <div class="h4 mb-0">Parceiros / Produtos</div>
-    <div class="muted">Cadastre parceiros, produtos, regras, defaults do simulador e campanhas comerciais.</div>
-  </div>
-  <div class="d-flex gap-2">
-    <a class="btn btn-outline-secondary" href="/admin/servicos-internos">Produtos internos</a>
-    <a class="btn btn-outline-secondary" href="/simulador">Abrir simulador</a>
-  </div>
-</div>
-
-<div class="row g-3">
-  <div class="col-lg-4">
-    <div class="card p-3">
-      <div class="fw-semibold mb-2">Novo parceiro</div>
-      <form method="post" action="/admin/parceiros/add" class="row g-2">
-        <div class="col-12"><label class="form-label">Nome</label><input class="form-control" name="name" required></div>
-        <div class="col-md-6"><label class="form-label">Tipo</label><select class="form-select" name="kind">{% for k in partner_kind_options %}<option value="{{ k }}">{{ k }}</option>{% endfor %}</select></div>
-        <div class="col-md-6"><label class="form-label">Prioridade</label><input class="form-control" name="priority" value="100"></div>
-        <div class="col-md-6"><label class="form-label">Contato</label><input class="form-control" name="contact_name"></div>
-        <div class="col-md-6"><label class="form-label">E-mail</label><input class="form-control" name="contact_email"></div>
-        <div class="col-md-6"><label class="form-label">Telefone</label><input class="form-control" name="contact_phone"></div>
-        <div class="col-12"><label class="form-label">Observações</label><textarea class="form-control" name="notes" rows="3"></textarea></div>
-        <div class="col-12"><button class="btn btn-primary w-100">Salvar parceiro</button></div>
-      </form>
-    </div>
-  </div>
-
-  <div class="col-lg-8">
-    <div class="card p-3">
-      <div class="fw-semibold mb-2">Novo produto por parceiro</div>
-      <form method="post" action="/admin/parceiros/products/add" class="row g-2">
-        <div class="col-md-4"><label class="form-label">Parceiro</label><select class="form-select" name="partner_id" required><option value="">-- selecione --</option>{% for p in partners %}<option value="{{ p.id }}">{{ p.name }}</option>{% endfor %}</select></div>
-        <div class="col-md-4"><label class="form-label">Nome do produto</label><input class="form-control" name="name" required></div>
-        <div class="col-md-4"><label class="form-label">Categoria</label><select class="form-select" name="category">{% for c in category_options %}<option value="{{ c }}">{{ c }}</option>{% endfor %}</select></div>
-        <div class="col-md-4"><label class="form-label">Tipo</label><select class="form-select" name="product_type">{% for c in product_type_options %}<option value="{{ c }}">{{ c or "(vazio)" }}</option>{% endfor %}</select></div>
-        <div class="col-md-4"><label class="form-label">Família</label><input class="form-control" name="family_slug" placeholder="home_equity, capital_giro..."></div>
-        <div class="col-md-2"><label class="form-label">Prioridade</label><input class="form-control" name="priority" value="100"></div>
-        <div class="col-md-3"><label class="form-label">Visível simulador</label><select class="form-select" name="visible_in_simulator"><option value="1">sim</option><option value="0">não</option></select></div>
-        <div class="col-md-3"><label class="form-label">Exige garantia</label><select class="form-select" name="requires_collateral"><option value="0">não</option><option value="1">sim</option></select></div>
-        <div class="col-md-3"><label class="form-label">Fat. mín mensal</label><input class="form-control" name="min_revenue_monthly_brl" placeholder="0"></div>
-        <div class="col-md-3"><label class="form-label">Score total mín</label><input class="form-control" name="min_score_total" placeholder="0"></div>
-        <div class="col-md-3"><label class="form-label">Score financeiro mín</label><input class="form-control" name="min_score_financial" placeholder="0"></div>
-        <div class="col-md-3"><label class="form-label">Alavancagem máx (x)</label><input class="form-control" name="max_debt_ratio" placeholder="0"></div>
-        <div class="col-md-3"><label class="form-label">Ticket mín</label><input class="form-control" name="min_ticket_brl" placeholder="0"></div>
-        <div class="col-md-3"><label class="form-label">Ticket máx</label><input class="form-control" name="max_ticket_brl" placeholder="0"></div>
-        <div class="col-md-3"><label class="form-label">UFs permitidas (JSON)</label><input class="form-control" name="allowed_states_json" placeholder='["SP","PR"]'></div>
-        <div class="col-md-3"><label class="form-label">LTV padrão (%)</label><input class="form-control" name="default_ltv_pct" placeholder="0"></div>
-        <div class="col-md-3"><label class="form-label">Tipo empréstimo</label><input class="form-control" name="default_loan_type" placeholder="Capital de giro"></div>
-        <div class="col-md-3"><label class="form-label">Amortização</label><select class="form-select" name="default_amortization"><option value="price">price</option><option value="sac">sac</option><option value="americano">americano</option></select></div>
-        <div class="col-md-2"><label class="form-label">Taxa %</label><input class="form-control" name="default_rate_pct" placeholder="1,79"></div>
-        <div class="col-md-2"><label class="form-label">Base</label><select class="form-select" name="default_rate_base"><option value="am">am</option><option value="aa">aa</option></select></div>
-        <div class="col-md-2"><label class="form-label">Prazo padr.</label><input class="form-control" name="default_term_months" placeholder="24"></div>
-        <div class="col-md-2"><label class="form-label">Prazo mín</label><input class="form-control" name="term_min_months" placeholder="0"></div>
-        <div class="col-md-2"><label class="form-label">Prazo máx</label><input class="form-control" name="term_max_months" placeholder="0"></div>
-        <div class="col-md-2"><label class="form-label">Carência</label><input class="form-control" name="default_grace_months" placeholder="0"></div>
-        <div class="col-md-2"><label class="form-label">IO extra</label><input class="form-control" name="default_io_months" placeholder="0"></div>
-        <div class="col-md-2"><label class="form-label">Tarifa</label><input class="form-control" name="default_fee_amount_brl" placeholder="0"></div>
-        <div class="col-md-2"><label class="form-label">Seguro</label><input class="form-control" name="default_monthly_insurance_brl" placeholder="0"></div>
-        <div class="col-md-2"><label class="form-label">Taxa admin</label><input class="form-control" name="default_monthly_admin_fee_brl" placeholder="0"></div>
-        <div class="col-12"><label class="form-label">Diretrizes / observações</label><textarea class="form-control" name="notes" rows="3" placeholder="Ex.: aceita operação com garantia, foco em portabilidade, exige faturamento recorrente..."></textarea></div>
-        <div class="col-12"><button class="btn btn-primary w-100">Salvar produto</button></div>
-      </form>
-    </div>
-  </div>
-
-  <div class="col-12">
-    <div class="card p-3">
-      <div class="fw-semibold mb-2">Catálogo atual</div>
-      {% if partner_rows %}
-        <div class="accordion" id="partnersAcc">
-          {% for row in partner_rows %}
-            <div class="accordion-item">
-              <h2 class="accordion-header">
-                <button class="accordion-button {% if not loop.first %}collapsed{% endif %}" type="button" data-bs-toggle="collapse" data-bs-target="#p{{ row.partner.id }}">
-                  {{ row.partner.name }} · {{ row.partner.kind }} · {{ row.products|length }} produto(s)
-                </button>
-              </h2>
-              <div id="p{{ row.partner.id }}" class="accordion-collapse collapse {% if loop.first %}show{% endif %}" data-bs-parent="#partnersAcc">
-                <div class="accordion-body">
-                  <div class="muted small mb-3">{{ row.partner.notes or "Sem observações." }}</div>
-                  {% if row.products %}
-                    <div class="table-responsive mb-3">
-                      <table class="table table-sm align-middle">
-                        <thead><tr><th>Produto</th><th>Categoria</th><th>Taxa padrão</th><th>Prazo</th><th>Regras</th><th>Campanhas</th><th></th></tr></thead>
-                        <tbody>
-                          {% for p in row.products %}
-                            <tr>
-                              <td><div class="fw-semibold">{{ p.name }}</div><div class="muted small">{{ p.product_type or "-" }}</div></td>
-                              <td>{{ p.category }}</td>
-                              <td>{{ p.default_rate_pct }}% {{ p.default_rate_base }}</td>
-                              <td>{{ p.default_term_months or "-" }}m</td>
-                              <td class="small">fat mín {{ p.min_revenue_monthly_brl or 0 }} · score mín {{ p.min_score_total or 0 }} · ticket {{ p.min_ticket_brl or 0 }}-{{ p.max_ticket_brl or 0 }}</td>
-                              <td class="small">{% set campaigns = campaigns_by_product.get(p.id, []) %}{% if campaigns %}{% for c in campaigns %}<div>{{ c.title }}{% if c.bonus_pct %} (+{{ c.bonus_pct }}%){% endif %}</div>{% endfor %}{% else %}<span class="muted">sem campanha</span>{% endif %}</td>
-                              <td class="text-end">
-                                <form method="post" action="/admin/parceiros/products/{{ p.id }}/toggle"><button class="btn btn-outline-secondary btn-sm">{% if p.is_active %}Inativar{% else %}Ativar{% endif %}</button></form>
-                              </td>
-                            </tr>
-                            <tr>
-                              <td colspan="7">
-                                <form method="post" action="/admin/parceiros/products/{{ p.id }}/campaigns/add" class="row g-2 align-items-end">
-                                  <div class="col-md-3"><label class="form-label small">Campanha</label><input class="form-control form-control-sm" name="title" placeholder="Campanha Sofisa Giro PMT" required></div>
-                                  <div class="col-md-2"><label class="form-label small">Bônus %</label><input class="form-control form-control-sm" name="bonus_pct" placeholder="0"></div>
-                                  <div class="col-md-2"><label class="form-label small">Início</label><input class="form-control form-control-sm" name="starts_at" type="date"></div>
-                                  <div class="col-md-2"><label class="form-label small">Fim</label><input class="form-control form-control-sm" name="ends_at" type="date"></div>
-                                  <div class="col-md-2"><label class="form-label small">Resumo</label><input class="form-control form-control-sm" name="rule_summary" placeholder="critério principal"></div>
-                                  <div class="col-md-1"><button class="btn btn-outline-primary btn-sm w-100">Salvar</button></div>
-                                </form>
-                              </td>
-                            </tr>
-                          {% endfor %}
-                        </tbody>
-                      </table>
-                    </div>
-                  {% else %}
-                    <div class="muted small">Nenhum produto cadastrado.</div>
-                  {% endif %}
-                </div>
-              </div>
-            </div>
-          {% endfor %}
-        </div>
-      {% else %}
-        <div class="muted">Nenhum parceiro cadastrado ainda.</div>
-      {% endif %}
-    </div>
-  </div>
-</div>
-{% endblock %}
-""")
-
-
-@app.get("/admin/parceiros", response_class=HTMLResponse)
-@require_role({"admin"})
-async def admin_partners_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
-    ctx = get_tenant_context(request, session)
-    assert ctx is not None
-    ensure_partner_tables()
-    ensure_partner_schema_columns()
-
-    partners = session.exec(
-        select(Partner).where(Partner.company_id == ctx.company.id).order_by(Partner.priority.asc(), Partner.name.asc())
-    ).all()
-    products = session.exec(
-        select(PartnerProduct).where(PartnerProduct.company_id == ctx.company.id).order_by(PartnerProduct.priority.asc(), PartnerProduct.created_at.desc())
-    ).all()
-    grouped: list[dict[str, Any]] = []
-    for partner in partners:
-        grouped.append(
-            {
-                "partner": partner,
-                "products": [p for p in products if int(p.partner_id or 0) == int(partner.id or 0)],
-            }
-        )
-    return render(
-        "admin_partners.html",
-        request=request,
-        context={
-            "current_user": ctx.user,
-            "current_company": ctx.company,
-            "role": ctx.membership.role,
-            "current_client": get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx)),
-            "partners": partners,
-            "partner_rows": grouped,
-            "campaigns_by_product": {
-                int(pid): session.exec(
-                    select(PartnerCampaign)
-                    .where(
-                        PartnerCampaign.company_id == int(ctx.company.id),
-                        PartnerCampaign.partner_product_id == int(pid),
-                        PartnerCampaign.is_active == True,
-                    )
-                    .order_by(PartnerCampaign.created_at.desc())
-                ).all()
-                for pid in [int(p.id or 0) for p in products]
-            },
-            "partner_kind_options": _partner_kind_options(),
-            "category_options": _partner_product_category_options(),
-            "product_type_options": _partner_product_type_options(),
-        },
-    )
-
-
-@app.post("/admin/parceiros/add")
-@require_role({"admin"})
-async def admin_partners_add(
-    request: Request,
-    name: str = Form(...),
-    kind: str = Form("banco"),
-    contact_name: str = Form(""),
-    contact_email: str = Form(""),
-    contact_phone: str = Form(""),
-    priority: str = Form("100"),
-    notes: str = Form(""),
-    session: Session = Depends(get_session),
-) -> Response:
-    ctx = get_tenant_context(request, session)
-    assert ctx is not None
-    ensure_partner_tables()
-    ensure_partner_schema_columns()
-
-    partner = Partner(
-        company_id=ctx.company.id,
-        name=(name or "").strip(),
-        kind=(kind or "").strip() or "banco",
-        contact_name=(contact_name or "").strip(),
-        contact_email=(contact_email or "").strip(),
-        contact_phone=(contact_phone or "").strip(),
-        priority=int(priority or 100) if str(priority or "").strip().isdigit() else 100,
-        notes=(notes or "").strip(),
-        updated_at=utcnow(),
-    )
-    session.add(partner)
-    session.commit()
-    set_flash(request, "Parceiro salvo.")
-    return RedirectResponse("/admin/parceiros", status_code=303)
-
-
-@app.post("/admin/parceiros/products/add")
-@require_role({"admin"})
-async def admin_partner_products_add(
-    request: Request,
-    partner_id: int = Form(...),
-    name: str = Form(...),
-    category: str = Form("credito"),
-    product_type: str = Form(""),
-    family_slug: str = Form(""),
-    priority: str = Form("100"),
-    visible_in_simulator: str = Form("1"),
-    requires_collateral: str = Form("0"),
-    min_revenue_monthly_brl: str = Form("0"),
-    max_debt_ratio: str = Form("0"),
-    min_score_total: str = Form("0"),
-    min_score_financial: str = Form("0"),
-    min_ticket_brl: str = Form("0"),
-    max_ticket_brl: str = Form("0"),
-    allowed_states_json: str = Form(""),
-    default_ltv_pct: str = Form("0"),
-    default_loan_type: str = Form(""),
-    default_amortization: str = Form("price"),
-    default_rate_pct: str = Form("0"),
-    default_rate_base: str = Form("am"),
-    default_term_months: str = Form("0"),
-    term_min_months: str = Form("0"),
-    term_max_months: str = Form("0"),
-    default_grace_months: str = Form("0"),
-    default_io_months: str = Form("0"),
-    default_fee_amount_brl: str = Form("0"),
-    default_monthly_insurance_brl: str = Form("0"),
-    default_monthly_admin_fee_brl: str = Form("0"),
-    notes: str = Form(""),
-    session: Session = Depends(get_session),
-) -> Response:
-    ctx = get_tenant_context(request, session)
-    assert ctx is not None
-    ensure_partner_tables()
-    ensure_partner_schema_columns()
-
-    partner = session.get(Partner, partner_id)
-    if not partner or int(partner.company_id or 0) != int(ctx.company.id or 0):
-        set_flash(request, "Parceiro inválido.")
-        return RedirectResponse("/admin/parceiros", status_code=303)
-
-    row = PartnerProduct(
-        company_id=ctx.company.id,
-        partner_id=int(partner_id),
-        name=(name or "").strip(),
-        category=(category or "").strip() or "credito",
-        product_type=(product_type or "").strip(),
-        family_slug=_norm_family_slug(family_slug or product_type or name),
-        priority=int(priority or 100) if str(priority or "").strip().isdigit() else 100,
-        visible_in_simulator=str(visible_in_simulator) == "1",
-        requires_collateral=str(requires_collateral) == "1",
-        min_revenue_monthly_brl=float(str(min_revenue_monthly_brl or "0").replace(",", ".")),
-        max_debt_ratio=float(str(max_debt_ratio or "0").replace(",", ".")),
-        min_score_total=float(str(min_score_total or "0").replace(",", ".")),
-        min_score_financial=float(str(min_score_financial or "0").replace(",", ".")),
-        min_ticket_brl=float(str(min_ticket_brl or "0").replace(",", ".")),
-        max_ticket_brl=float(str(max_ticket_brl or "0").replace(",", ".")),
-        allowed_states_json=(allowed_states_json or "").strip(),
-        default_ltv_pct=float(str(default_ltv_pct or "0").replace(",", ".")),
-        default_loan_type=(default_loan_type or "").strip(),
-        default_amortization=(default_amortization or "price").strip(),
-        default_rate_pct=float(str(default_rate_pct or "0").replace(",", ".")),
-        default_rate_base=(default_rate_base or "am").strip(),
-        default_term_months=int(default_term_months or 0) if str(default_term_months or "").strip().isdigit() else 0,
-        term_min_months=int(term_min_months or 0) if str(term_min_months or "").strip().isdigit() else 0,
-        term_max_months=int(term_max_months or 0) if str(term_max_months or "").strip().isdigit() else 0,
-        default_grace_months=int(default_grace_months or 0) if str(default_grace_months or "").strip().isdigit() else 0,
-        default_io_months=int(default_io_months or 0) if str(default_io_months or "").strip().isdigit() else 0,
-        default_fee_amount_brl=float(str(default_fee_amount_brl or "0").replace(",", ".")),
-        default_monthly_insurance_brl=float(str(default_monthly_insurance_brl or "0").replace(",", ".")),
-        default_monthly_admin_fee_brl=float(str(default_monthly_admin_fee_brl or "0").replace(",", ".")),
-        notes=(notes or "").strip(),
-        updated_at=utcnow(),
-    )
-    session.add(row)
-    session.commit()
-    set_flash(request, "Produto salvo.")
-    return RedirectResponse("/admin/parceiros", status_code=303)
-
-
-@app.post("/admin/parceiros/products/{product_id}/toggle")
-@require_role({"admin"})
-async def admin_partner_products_toggle(request: Request, product_id: int, session: Session = Depends(get_session)) -> Response:
-    ctx = get_tenant_context(request, session)
-    assert ctx is not None
-    row = session.get(PartnerProduct, product_id)
-    if not row or int(row.company_id or 0) != int(ctx.company.id or 0):
-        set_flash(request, "Produto não encontrado.")
-        return RedirectResponse("/admin/parceiros", status_code=303)
-
-    row.is_active = not bool(row.is_active)
-    row.updated_at = utcnow()
-    session.add(row)
-    session.commit()
-    set_flash(request, "Status do produto atualizado.")
-    return RedirectResponse("/admin/parceiros", status_code=303)
-
-
 
 # ==============================
 # SIMULADOR DE EMPRÉSTIMOS + PDF
@@ -19196,491 +18502,164 @@ def render_loan_pdf(res: LoanSimResult) -> bytes:
     return buf.getvalue()
 
 
-
-def _json_list_load(value: str) -> list[str]:
-    try:
-        raw = json.loads((value or "").strip() or "[]")
-        return [str(x).strip() for x in raw if str(x).strip()]
-    except Exception:
-        return []
-
-
-def _latest_client_snapshot(session: Session, *, company_id: int, client_id: int) -> Optional[ClientSnapshot]:
-    return session.exec(
-        select(ClientSnapshot)
-        .where(ClientSnapshot.company_id == company_id, ClientSnapshot.client_id == client_id)
-        .order_by(ClientSnapshot.created_at.desc())
-    ).first()
-
-
-def _estimate_partner_product_ticket(client: Client, snapshot: Optional[ClientSnapshot], product: PartnerProduct) -> float:
-    revenue = float((snapshot.revenue_monthly_brl if snapshot else 0.0) or client.revenue_monthly_brl or 0.0)
-    debt = float((snapshot.debt_total_brl if snapshot else 0.0) or client.debt_total_brl or 0.0)
-
-    base = 0.0
-    if revenue > 0:
-        base = revenue * 0.35
-    if debt > 0:
-        base = max(base, debt * 0.70)
-
-    if product.min_ticket_brl > 0:
-        base = max(base, float(product.min_ticket_brl))
-    if product.max_ticket_brl > 0:
-        base = min(base or float(product.max_ticket_brl), float(product.max_ticket_brl))
-
-    return round(max(base, 0.0), 2)
-
-
-def _match_partner_product_for_client(
-    *,
-    client: Client,
-    snapshot: Optional[ClientSnapshot],
-    product: PartnerProduct,
-    partner: Partner,
-) -> dict[str, Any]:
-    revenue = float((snapshot.revenue_monthly_brl if snapshot else 0.0) or client.revenue_monthly_brl or 0.0)
-    debt = float((snapshot.debt_total_brl if snapshot else 0.0) or client.debt_total_brl or 0.0)
-    cash = float((snapshot.cash_balance_brl if snapshot else 0.0) or client.cash_balance_brl or 0.0)
-    score_total_val = float(snapshot.score_total if snapshot else 0.0)
-    score_fin_val = float(snapshot.score_financial if snapshot else score_financial_simple(revenue, debt, cash))
-    debt_ratio = (debt / revenue) if revenue > 0 else 0.0
-
-    score = 50.0
-    reasons: list[str] = []
-    blockers: list[str] = []
-
-    if product.min_revenue_monthly_brl > 0:
-        if revenue >= float(product.min_revenue_monthly_brl):
-            score += 12
-            reasons.append(f"faturamento atende mínimo de R$ {product.min_revenue_monthly_brl:,.0f}")
-        else:
-            blockers.append(f"faturamento abaixo do mínimo de R$ {product.min_revenue_monthly_brl:,.0f}")
-
-    if product.min_score_total > 0:
-        if score_total_val >= float(product.min_score_total):
-            score += 10
-            reasons.append(f"score total {score_total_val:.1f} atende mínimo")
-        else:
-            blockers.append(f"score total abaixo do mínimo ({product.min_score_total:.1f})")
-
-    if product.min_score_financial > 0:
-        if score_fin_val >= float(product.min_score_financial):
-            score += 10
-            reasons.append(f"score financeiro {score_fin_val:.1f} atende mínimo")
-        else:
-            blockers.append(f"score financeiro abaixo do mínimo ({product.min_score_financial:.1f})")
-
-    if product.max_debt_ratio > 0:
-        if debt_ratio <= float(product.max_debt_ratio):
-            score += 8
-            reasons.append(f"alavancagem dentro do limite ({debt_ratio:.2f}x)")
-        else:
-            blockers.append(f"alavancagem acima do limite ({product.max_debt_ratio:.2f}x)")
-
-    allowed_states = {s.upper() for s in _json_list_load(product.allowed_states_json)}
-    state = (client.state or "").strip().upper()
-    if allowed_states:
-        if state and state in allowed_states:
-            score += 5
-            reasons.append(f"UF {state} coberta pelo produto")
-        else:
-            blockers.append("UF do cliente fora da cobertura do produto")
-
-    if product.requires_collateral:
-        score -= 4
-        reasons.append("produto normalmente exige garantia real ou recebíveis")
-
-    if product.category == "consultoria":
-        if score_total_val < 65 or score_fin_val < 60:
-            score += 12
-            reasons.append("perfil sugere espaço para consultoria financeira")
-    elif product.category == "ferramenta":
-        if score_total_val < 75:
-            score += 8
-            reasons.append("ferramenta pode apoiar maturidade operacional")
-    else:
-        if revenue > 0 and debt > 0:
-            score += 6
-            reasons.append("há base para comparação de crédito/reestruturação")
-
-    eligible = len(blockers) == 0
-    ticket = _estimate_partner_product_ticket(client, snapshot, product)
-
-    return {
-        "eligible": eligible,
-        "score": round(max(0.0, min(score, 100.0)), 2),
-        "reasons": reasons,
-        "blockers": blockers,
-        "ticket_brl": ticket,
-        "partner": partner,
-        "product": product,
-    }
-
-
-def _collect_partner_product_matches(
-    *,
-    session: Session,
-    company_id: int,
-    client: Optional[Client],
-) -> list[dict[str, Any]]:
-    if not client:
-        return []
-    snapshot = _latest_client_snapshot(session, company_id=company_id, client_id=int(client.id or 0))
-    products = session.exec(
-        select(PartnerProduct).where(
-            PartnerProduct.company_id == company_id,
-            PartnerProduct.is_active == True,
-        ).order_by(PartnerProduct.priority.asc(), PartnerProduct.created_at.desc())
-    ).all()
-    partners = session.exec(
-        select(Partner).where(
-            Partner.company_id == company_id,
-            Partner.is_active == True,
-        )
-    ).all()
-    partner_by_id = {int(p.id or 0): p for p in partners}
-    rows: list[dict[str, Any]] = []
-    for product in products:
-        partner = partner_by_id.get(int(product.partner_id or 0))
-        if not partner:
-            continue
-        rows.append(_match_partner_product_for_client(client=client, snapshot=snapshot, product=product, partner=partner))
-    rows.sort(key=lambda x: (0 if x["eligible"] else 1, -float(x["score"]), int(x["product"].priority or 100), x["partner"].name.lower()))
-    return rows
-
 SIMULADOR_TEMPLATE = r"""
 {% extends "base.html" %}
 {% block content %}
-<div class="container" style="max-width: 1160px;">
-  <div class="d-flex justify-content-between align-items-start flex-wrap gap-2 mt-3">
-    <div>
-      <h3 class="mb-1">Simulador de Empréstimo</h3>
-      <div class="muted">Pré-simulação usando os parâmetros padrão dos produtos cadastrados por parceiro.</div>
-    </div>
-    {% if current_client %}
-      <span class="badge text-bg-light border">Cliente ativo: {{ current_client.name }}</span>
-    {% endif %}
-  </div>
-
-  {% if recommended_products %}
-    <div class="card p-3 mt-3">
-      <div class="d-flex justify-content-between align-items-center mb-2">
-        <div class="fw-semibold">Motor de ofertas — produtos sugeridos</div>
-        <div class="muted small">Ordenado por aderência e regras do produto.</div>
-      </div>
-      <div class="table-responsive">
-        <table class="table table-sm align-middle">
-          <thead>
-            <tr>
-              <th>Parceiro</th>
-              <th>Produto</th>
-              <th>Categoria</th>
-              <th>Status</th>
-              <th>Score</th>
-              <th>Ticket sug.</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {% for row in recommended_products[:12] %}
-              <tr>
-                <td>{{ row.partner.name }}</td>
-                <td>
-                  <div class="fw-semibold">{{ row.product.name }}</div>
-                  <div class="muted small">{{ row.product.product_type or row.product.category }}{% if row.product.family_slug %} · {{ row.product.family_slug }}{% endif %}</div>
-                </td>
-                <td>{{ row.product.category }}</td>
-                <td>
-                  {% if row.eligible %}
-                    <span class="badge text-bg-success">Elegível</span>
-                  {% else %}
-                    <span class="badge text-bg-warning">Revisar</span>
-                  {% endif %}
-                </td>
-                <td>{{ row.score }}</td>
-                <td>R$ {{ row.ticket_brl | round(2) }}</td>
-                <td class="text-end">
-                  <a class="btn btn-outline-primary btn-sm" href="/simulador?partner_product_id={{ row.product.id }}">Simular</a>
-                </td>
-              </tr>
-              {% if row.reasons or row.blockers %}
-              <tr>
-                <td colspan="7" class="pt-0">
-                  <div class="small muted">
-                    {% if row.reasons %}<b>Motivos:</b> {{ row.reasons | join("; ") }}.{% endif %}
-                    {% if row.blockers %} <b>Pontos de atenção:</b> {{ row.blockers | join("; ") }}.{% endif %}
-                  </div>
-                </td>
-              </tr>
-              {% endif %}
-            {% endfor %}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  {% endif %}
-
+<div class="container" style="max-width: 980px;">
+  <h3 class="mt-3">Simulador de Empréstimo</h3>
   <form method="post" action="/simulador/pdf" class="card p-3 mt-3">
     <div class="row g-2">
-      <div class="col-md-4">
-        <label class="form-label">Produto / parceiro</label>
-        <select class="form-select" name="partner_product_id" id="sim_partner_product_id">
-          <option value="">-- Escolher manualmente --</option>
-          {% for p in partner_products %}
-            <option value="{{ p.id }}" {% if selected_product and selected_product.id == p.id %}selected{% endif %}>
-              {{ p.partner_name }} — {{ p.name }}{% if p.family_slug %} ({{ p.family_slug }}){% endif %}
-            </option>
-          {% endfor %}
-        </select>
-        <div class="form-text">Ao selecionar, o formulário é pré-preenchido com taxa, prazo, amortização e tarifas do produto.</div>
-      </div>
-
-      <div class="col-md-4">
+      <div class="col-md-6">
         <label class="form-label">Cliente (nome)</label>
-        <input class="form-control" name="borrower_name" id="sim_borrower_name" placeholder="Nome do cliente" value="{{ current_client.name if current_client else '' }}">
+        <input class="form-control" name="borrower_name" placeholder="Nome do cliente">
       </div>
 
-      <div class="col-md-4">
+      <div class="col-md-6">
         <label class="form-label">Cliente (opcional)</label>
         <select class="form-select" name="client_id" id="sim_client_id">
           <option value="">-- (sem cliente) --</option>
           {% for c in clients %}
-            <option value="{{ c.id }}" {% if current_client and current_client.id == c.id %}selected{% endif %}>{{ c.name }}</option>
+            <option value="{{ c.id }}">{{ c.name }}</option>
           {% endfor %}
         </select>
-        <div class="form-text">Selecione para habilitar “Gerar Proposta” e puxar o cliente ativo para o motor.</div>
+        <div class="form-text">Selecione para habilitar “Gerar Proposta” (gera também um card no CRM).</div>
       </div>
-
       <div class="col-md-6">
         <label class="form-label">Tipo de empréstimo</label>
-        <input class="form-control" name="loan_type" id="sim_loan_type" placeholder="Ex.: Crédito com garantia, Capital de giro" value="{{ selected_defaults.loan_type }}">
+        <input class="form-control" name="loan_type" placeholder="Ex.: Crédito com garantia, Consignado, Capital de giro">
       </div>
 
-      <div class="col-md-3">
+      <div class="col-md-4">
         <label class="form-label">Amortização</label>
-        <select class="form-select" name="amortization" id="sim_amortization">
-          <option value="price" {% if selected_defaults.amortization == "price" %}selected{% endif %}>PRICE (parcela fixa)</option>
-          <option value="sac" {% if selected_defaults.amortization == "sac" %}selected{% endif %}>SAC (amortização constante)</option>
-          <option value="americano" {% if selected_defaults.amortization == "americano" %}selected{% endif %}>Americano (juros + quitação final)</option>
+        <select class="form-select" name="amortization">
+          <option value="price">PRICE (parcela fixa)</option>
+          <option value="sac">SAC (amortização constante)</option>
+          <option value="americano">Americano (juros + quitação final)</option>
         </select>
       </div>
 
-      <div class="col-md-3">
+      <div class="col-md-4">
         <label class="form-label">Taxa (%)</label>
-        <input class="form-control" name="rate_pct" id="sim_rate_pct" placeholder="Ex.: 1,79" value="{{ selected_defaults.rate_pct }}">
+        <input class="form-control" name="rate_pct" placeholder="Ex.: 1,79" value="1,79">
+        <div class="form-text">Informe em percentual. Ex: "1,79" = 1,79%</div>
       </div>
 
-      <div class="col-md-3">
+      <div class="col-md-4">
         <label class="form-label">Base</label>
-        <select class="form-select" name="rate_base" id="sim_rate_base">
-          <option value="am" {% if selected_defaults.rate_base == "am" %}selected{% endif %}>ao mês</option>
-          <option value="aa" {% if selected_defaults.rate_base == "aa" %}selected{% endif %}>ao ano</option>
+        <select class="form-select" name="rate_base">
+          <option value="am">ao mês</option>
+          <option value="aa">ao ano</option>
         </select>
       </div>
 
-      <div class="col-md-3">
+      <div class="col-md-4">
         <label class="form-label">Prazo (meses)</label>
-        <input class="form-control" name="term_months" id="sim_term_months" value="{{ selected_defaults.term_months }}">
+        <input class="form-control" name="term_months" value="24">
       </div>
 
-      <div class="col-md-3">
+      <div class="col-md-4">
         <label class="form-label">Carência (meses – juros only)</label>
-        <input class="form-control" name="grace_months" id="sim_grace_months" value="{{ selected_defaults.grace_months }}">
+        <input class="form-control" name="grace_months" value="0">
       </div>
 
-      <div class="col-md-3">
+      <div class="col-md-4">
         <label class="form-label">Juros-only extra (meses)</label>
-        <input class="form-control" name="io_months" id="sim_io_months" value="{{ selected_defaults.io_months }}">
+        <input class="form-control" name="io_months" value="0">
       </div>
 
       <div class="col-md-4">
         <label class="form-label">Valor do empréstimo (R$)</label>
-        <input class="form-control" name="principal" id="sim_principal" placeholder="Ex.: 100000" value="{{ selected_defaults.principal }}">
+        <input class="form-control" name="principal" placeholder="Ex.: 100000">
         <div class="form-text">Se preencher valor do bem + LTV, pode deixar em branco.</div>
       </div>
 
       <div class="col-md-4">
         <label class="form-label">Valor do bem (garantia) (R$)</label>
-        <input class="form-control" name="collateral_value" id="sim_collateral_value" placeholder="Ex.: 200000" value="{{ selected_defaults.collateral_value }}">
+        <input class="form-control" name="collateral_value" placeholder="Ex.: 200000">
       </div>
 
       <div class="col-md-4">
         <label class="form-label">LTV (%)</label>
-        <input class="form-control" name="ltv_pct" id="sim_ltv_pct" placeholder="Ex.: 50" value="{{ selected_defaults.ltv_pct }}">
+        <input class="form-control" name="ltv_pct" placeholder="Ex.: 50">
       </div>
 
       <div class="col-md-4">
         <label class="form-label">Tarifa de abertura (R$)</label>
-        <input class="form-control" name="fee_amount" id="sim_fee_amount" value="{{ selected_defaults.fee_amount }}">
+        <input class="form-control" name="fee_amount" value="0">
       </div>
 
       <div class="col-md-4">
         <label class="form-label">Seguro mensal (R$)</label>
-        <input class="form-control" name="monthly_insurance" id="sim_monthly_insurance" value="{{ selected_defaults.monthly_insurance }}">
+        <input class="form-control" name="monthly_insurance" value="0">
       </div>
 
       <div class="col-md-4">
         <label class="form-label">Taxa admin mensal (R$)</label>
-        <input class="form-control" name="monthly_admin_fee" id="sim_monthly_admin_fee" value="{{ selected_defaults.monthly_admin_fee }}">
+        <input class="form-control" name="monthly_admin_fee" value="0">
       </div>
 
       <div class="col-12">
         <label class="form-label">Observações</label>
-        <textarea class="form-control" name="notes" id="sim_notes" rows="3" placeholder="Condições, garantias, CET, etc.">{{ selected_defaults.notes }}</textarea>
+        <textarea class="form-control" name="notes" rows="3" placeholder="Condições, garantias, CET, etc."></textarea>
       </div>
 
       <div class="col-12 d-flex gap-2 mt-2">
         <button class="btn btn-primary" type="submit">Gerar PDF</button>
-        <button class="btn btn-outline-secondary" formaction="/simulador/json" formmethod="post" type="submit">Ver JSON</button>
+
+        <button class="btn btn-success"
+                type="submit"
+                formaction="/simulador/proposta"
+                formtarget="_blank"
+                rel="noopener"
+                id="btn_proposta"
+                disabled>
+          Gerar Proposta
+        </button>
+        <button class="btn btn-outline-secondary" type="submit" formaction="/simulador/json">Gerar JSON</button>
       </div>
     </div>
   </form>
-</div>
 
+  <p class="text-muted mt-3" style="font-size: 0.9rem;">
+    * Esta é apenas uma simulação e não constitui proposta de crédito. Sujeito à análise e aprovação.
+  </p>
+</div>
 <script>
 (function(){
-  const catalog = {{ product_defaults_json | safe }};
-  const sel = document.getElementById("sim_partner_product_id");
-  if (!sel) return;
+  const sel = document.getElementById("sim_client_id");
+  const btn = document.getElementById("btn_proposta");
+  if (!sel || !btn) return;
 
-  const apply = () => {
-    const item = catalog[String(sel.value || "")];
-    if (!item) return;
-
-    const setValue = (id, value) => {
-      const el = document.getElementById(id);
-      if (!el || value === null || value === undefined) return;
-      el.value = value;
-    };
-
-    setValue("sim_loan_type", item.loan_type || "");
-    setValue("sim_rate_pct", item.rate_pct || "");
-    setValue("sim_rate_base", item.rate_base || "am");
-    setValue("sim_term_months", item.term_months || "");
-    setValue("sim_grace_months", item.grace_months || 0);
-    setValue("sim_io_months", item.io_months || 0);
-    setValue("sim_principal", item.principal || "");
-    setValue("sim_ltv_pct", item.ltv_pct || "");
-    setValue("sim_fee_amount", item.fee_amount || 0);
-    setValue("sim_monthly_insurance", item.monthly_insurance || 0);
-    setValue("sim_monthly_admin_fee", item.monthly_admin_fee || 0);
-
-    const amort = document.getElementById("sim_amortization");
-    if (amort && item.amortization) amort.value = item.amortization;
-
-    const notes = document.getElementById("sim_notes");
-    if (notes && item.notes !== undefined) notes.value = item.notes;
+  const toggle = () => {
+    btn.disabled = !sel.value;
   };
 
-  sel.addEventListener("change", apply);
-  apply();
+  sel.addEventListener("change", toggle);
+  toggle();
 })();
 </script>
 {% endblock %}
 """
 
 
-
 @app.get("/simulador", response_class=HTMLResponse)
 @require_login
-async def simulador_page(request: Request, partner_product_id: int = 0, session: Session = Depends(get_session)) -> HTMLResponse:
+async def simulador_page(request: Request) -> HTMLResponse:
     if "simulador.html" not in TEMPLATES:
         TEMPLATES["simulador.html"] = SIMULADOR_TEMPLATE
-
-    ctx = get_tenant_context(request, session)
-    if not ctx:
-        request.session.clear()
-        return RedirectResponse("/login", status_code=303)
-
-    clients = session.exec(select(Client).where(Client.company_id == ctx.company.id).order_by(Client.name)).all()
-    current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
-
-    partner_products_rows = []
-    product_defaults: dict[str, Any] = {}
-    selected_product = None
-    recommended = _collect_partner_product_matches(session=session, company_id=ctx.company.id, client=current_client)
-
-    partner_products = session.exec(
-        select(PartnerProduct, Partner)
-        .join(Partner, Partner.id == PartnerProduct.partner_id)
-        .where(
-            PartnerProduct.company_id == ctx.company.id,
-            PartnerProduct.is_active == True,
-            Partner.is_active == True,
-            PartnerProduct.visible_in_simulator == True,
-        )
-        .order_by(Partner.priority.asc(), PartnerProduct.priority.asc(), Partner.name.asc(), PartnerProduct.name.asc())
-    ).all()
-
-    selected_match = None
-    if partner_product_id:
-        selected_match = next((row for row in recommended if int(row["product"].id or 0) == int(partner_product_id)), None)
-
-    for product, partner in partner_products:
-        partner_products_rows.append(
-            {
-                "id": product.id,
-                "name": product.name,
-                "partner_name": partner.name,
-                "category": product.category,
-                "family_slug": product.family_slug,
-            }
-        )
-        est_principal = 0.0
-        row_match = next((row for row in recommended if int(row["product"].id or 0) == int(product.id or 0)), None)
-        if row_match:
-            est_principal = float(row_match.get("ticket_brl") or 0.0)
-        product_defaults[str(product.id)] = {
-            "loan_type": (product.default_loan_type or product.name or "").strip(),
-            "amortization": (product.default_amortization or "price").strip(),
-            "rate_pct": (str(round(float(product.default_rate_pct or 0.0), 4)).replace(".", ",")) if product.default_rate_pct else "",
-            "rate_base": (product.default_rate_base or "am").strip(),
-            "term_months": int(product.default_term_months or product.term_max_months or product.term_min_months or 24),
-            "grace_months": int(product.default_grace_months or 0),
-            "io_months": int(product.default_io_months or 0),
-            "principal": est_principal or "",
-            "ltv_pct": float(product.default_ltv_pct or 0.0) or "",
-            "fee_amount": float(product.default_fee_amount_brl or 0.0),
-            "monthly_insurance": float(product.default_monthly_insurance_brl or 0.0),
-            "monthly_admin_fee": float(product.default_monthly_admin_fee_brl or 0.0),
-            "notes": f"Parceiro: {partner.name}\nProduto: {product.name}\n{(product.notes or '').strip()}".strip(),
-        }
-        if partner_product_id and int(product.id or 0) == int(partner_product_id):
-            selected_product = product
-
-    selected_defaults = {
-        "loan_type": "",
-        "amortization": "price",
-        "rate_pct": "1,79",
-        "rate_base": "am",
-        "term_months": 24,
-        "grace_months": 0,
-        "io_months": 0,
-        "principal": "",
-        "collateral_value": "",
-        "ltv_pct": "",
-        "fee_amount": "0",
-        "monthly_insurance": "0",
-        "monthly_admin_fee": "0",
-        "notes": "",
-    }
-    if selected_product:
-        selected_defaults.update(product_defaults.get(str(selected_product.id), {}))
-    return render(
-        "simulador.html",
-        request=request,
-        context={
-            "title": "Simulador",
-            "clients": clients,
-            "current_client": current_client,
-            "partner_products": partner_products_rows,
-            "recommended_products": recommended,
-            "selected_product": selected_product,
-            "selected_defaults": selected_defaults,
-            "product_defaults_json": json.dumps(product_defaults, ensure_ascii=False),
-        },
-    )
-
+    ctx = get_tenant_context(request, Session(engine)) if False else None
+    # (ctx already validated by require_login)
+    clients = []
+    try:
+        # session available via dependency in other routes; here we use a short-lived session
+        db = Session(engine)
+        tctx = get_tenant_context(request, db)
+        if tctx:
+            clients = db.exec(select(Client).where(Client.company_id == tctx.company.id).order_by(Client.name)).all()
+        db.close()
+    except Exception:
+        clients = []
+    return render("simulador.html", request=request, context={"title": "Simulador", "clients": clients})
 
 
 @app.post("/simulador/json", response_class=JSONResponse)
@@ -19702,7 +18681,6 @@ async def simulador_json(
     monthly_admin_fee: str = Form("0"),
     borrower_name: str = Form(""),
     notes: str = Form(""),
-    partner_product_id: str = Form(""),
     session: Session = Depends(get_session),
 ) -> JSONResponse:
     _ = get_tenant_context(request, session)
@@ -19722,7 +18700,7 @@ async def simulador_json(
         monthly_insurance=monthly_insurance,
         monthly_admin_fee=monthly_admin_fee,
         borrower_name=borrower_name,
-        notes=(f"[Produto #{partner_product_id}] " + notes.strip()) if str(partner_product_id or "").strip() else notes,
+        notes=notes,
     )
     res = simulate_loan(inp)
     return JSONResponse({
@@ -19787,7 +18765,6 @@ async def simulador_pdf(
     monthly_admin_fee: str = Form("0"),
     borrower_name: str = Form(""),
     notes: str = Form(""),
-    partner_product_id: str = Form(""),
     session: Session = Depends(get_session),
 ):
     _ = get_tenant_context(request, session)
@@ -19808,7 +18785,7 @@ async def simulador_pdf(
         monthly_insurance=monthly_insurance,
         monthly_admin_fee=monthly_admin_fee,
         borrower_name=borrower_name,
-        notes=(f"[Produto #{partner_product_id}] " + notes.strip()) if str(partner_product_id or "").strip() else notes,
+        notes=notes,
     )
     res = simulate_loan(inp)
     pdf_bytes = render_loan_pdf(res)
@@ -23841,210 +22818,6 @@ async def klavi_events_webhook(request: Request) -> JSONResponse:
     body = await request.json()
     _klavi_process_events_webhook(body)
     return JSONResponse({"ok": True})
-
-
-@app.get("/admin/servicos-internos", response_class=HTMLResponse)
-@require_role({"admin"})
-async def admin_internal_services_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
-    ctx = get_tenant_context(request, session)
-    assert ctx is not None
-    ensure_partner_tables()
-    ensure_partner_schema_columns()
-    _seed_internal_services(session, ctx.company.id)
-    rows = session.exec(
-        select(InternalService)
-        .where(InternalService.company_id == int(ctx.company.id))
-        .order_by(InternalService.priority_weight.asc(), InternalService.name.asc())
-    ).all()
-    return render(
-        "admin_internal_services.html",
-        request=request,
-        context={
-            "current_user": ctx.user,
-            "current_company": ctx.company,
-            "role": ctx.membership.role,
-            "current_client": get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx)),
-            "rows": rows,
-            "area_options": _offer_area_options(),
-        },
-    )
-
-
-@app.post("/admin/servicos-internos/add")
-@require_role({"admin"})
-async def admin_internal_services_add(
-    request: Request,
-    area: str = Form("baas"),
-    family_slug: str = Form(""),
-    name: str = Form(...),
-    description: str = Form(""),
-    priority_weight: str = Form("100"),
-    notes: str = Form(""),
-    session: Session = Depends(get_session),
-) -> Response:
-    ctx = get_tenant_context(request, session)
-    assert ctx is not None
-    ensure_partner_tables()
-    ensure_partner_schema_columns()
-    row = InternalService(
-        company_id=int(ctx.company.id),
-        area=(area or "baas").strip(),
-        family_slug=(family_slug or "").strip(),
-        name=(name or "").strip(),
-        description=(description or "").strip(),
-        priority_weight=int(priority_weight or 100) if str(priority_weight or "").strip().isdigit() else 100,
-        notes=(notes or "").strip(),
-        is_active=True,
-        updated_at=utcnow(),
-    )
-    session.add(row)
-    session.commit()
-    set_flash(request, "Produto interno salvo.")
-    return RedirectResponse("/admin/servicos-internos", status_code=303)
-
-
-@app.post("/admin/servicos-internos/seed")
-@require_role({"admin"})
-async def admin_internal_services_seed(request: Request, session: Session = Depends(get_session)) -> Response:
-    ctx = get_tenant_context(request, session)
-    assert ctx is not None
-    ensure_partner_tables()
-    ensure_partner_schema_columns()
-    _seed_internal_services(session, ctx.company.id)
-    set_flash(request, "Catálogo padrão verificado.")
-    return RedirectResponse("/admin/servicos-internos", status_code=303)
-
-
-@app.post("/admin/parceiros/products/{product_id}/campaigns/add")
-@require_role({"admin"})
-async def admin_partner_campaigns_add(
-    request: Request,
-    product_id: int,
-    title: str = Form(...),
-    bonus_pct: str = Form("0"),
-    starts_at: str = Form(""),
-    ends_at: str = Form(""),
-    rule_summary: str = Form(""),
-    session: Session = Depends(get_session),
-) -> Response:
-    ctx = get_tenant_context(request, session)
-    assert ctx is not None
-    ensure_partner_tables()
-    ensure_partner_schema_columns()
-    product = session.get(PartnerProduct, product_id)
-    if not product or int(product.company_id or 0) != int(ctx.company.id or 0):
-        set_flash(request, "Produto inválido.")
-        return RedirectResponse("/admin/parceiros", status_code=303)
-
-    def _parse_date_ymd(raw: str) -> Optional[datetime]:
-        s = (raw or "").strip()
-        if not s:
-            return None
-        try:
-            return datetime.fromisoformat(s).replace(tzinfo=timezone.utc)
-        except Exception:
-            return None
-
-    row = PartnerCampaign(
-        company_id=int(ctx.company.id),
-        partner_product_id=int(product_id),
-        title=(title or "").strip(),
-        bonus_pct=float(str(bonus_pct or "0").replace(",", ".")),
-        starts_at=_parse_date_ymd(starts_at),
-        ends_at=_parse_date_ymd(ends_at),
-        rule_summary=(rule_summary or "").strip(),
-        is_active=True,
-        updated_at=utcnow(),
-    )
-    session.add(row)
-    session.commit()
-    set_flash(request, "Campanha salva.")
-    return RedirectResponse("/admin/parceiros", status_code=303)
-
-
-@app.get("/motor-ofertas", response_class=HTMLResponse)
-@require_role({"admin", "equipe"})
-async def motor_ofertas_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
-    ctx = get_tenant_context(request, session)
-    assert ctx is not None
-    ensure_partner_tables()
-    ensure_partner_schema_columns()
-    active_client_id = get_active_client_id(request, session, ctx)
-    current_client = get_client_or_none(session, ctx.company.id, active_client_id)
-    matches = []
-    summary = {"total": 0, "alta": 0, "media": 0, "baixa": 0, "internos": 0, "parceiros": 0}
-    if current_client:
-        matches = session.exec(
-            select(OfferMatch)
-            .where(OfferMatch.company_id == int(ctx.company.id), OfferMatch.client_id == int(current_client.id or 0))
-            .order_by(OfferMatch.score_fit.desc(), OfferMatch.created_at.desc())
-        ).all()
-        summary["total"] = len(matches)
-        for row in matches:
-            summary[row.priority_level if row.priority_level in {"alta","media","baixa"} else "baixa"] += 1
-            if row.source_kind == "internal":
-                summary["internos"] += 1
-            else:
-                summary["parceiros"] += 1
-    return render(
-        "motor_ofertas.html",
-        request=request,
-        context={
-            "current_user": ctx.user,
-            "current_company": ctx.company,
-            "role": ctx.membership.role,
-            "current_client": current_client,
-            "matches": matches,
-            "summary": summary,
-        },
-    )
-
-
-@app.post("/motor-ofertas/gerar")
-@require_role({"admin", "equipe"})
-async def motor_ofertas_generate(request: Request, session: Session = Depends(get_session)) -> Response:
-    ctx = get_tenant_context(request, session)
-    assert ctx is not None
-    ensure_partner_tables()
-    ensure_partner_schema_columns()
-    active_client_id = get_active_client_id(request, session, ctx)
-    current_client = get_client_or_none(session, ctx.company.id, active_client_id)
-    if not current_client:
-        set_flash(request, "Selecione um cliente antes de gerar ofertas.")
-        return RedirectResponse("/client/switch", status_code=303)
-    _generate_offer_matches(session, ctx.company.id, current_client)
-    set_flash(request, "Motor de ofertas atualizado.")
-    return RedirectResponse("/motor-ofertas", status_code=303)
-
-
-@app.get("/ofertas", response_class=HTMLResponse)
-@require_login
-async def ofertas_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
-    ctx = get_tenant_context(request, session)
-    assert ctx is not None
-    ensure_partner_tables()
-    ensure_partner_schema_columns()
-    active_client_id = get_active_client_id(request, session, ctx)
-    current_client = get_client_or_none(session, ctx.company.id, active_client_id)
-    rows = []
-    if current_client:
-        rows = session.exec(
-            select(OfferMatch)
-            .where(OfferMatch.company_id == int(ctx.company.id), OfferMatch.client_id == int(current_client.id or 0))
-            .order_by(OfferMatch.score_fit.desc(), OfferMatch.created_at.desc())
-        ).all()
-    return render(
-        "client_offers.html",
-        request=request,
-        context={
-            "current_user": ctx.user,
-            "current_company": ctx.company,
-            "role": ctx.membership.role,
-            "current_client": current_client,
-            "rows": rows,
-        },
-    )
-
 
 
 
