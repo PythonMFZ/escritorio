@@ -1,5 +1,5 @@
 from __future__ import annotations
-from sqlalchemy import UniqueConstraint, func, text, delete
+from sqlalchemy import func, delete, text
 from sqlalchemy.exc import OperationalError
 
 import base64
@@ -29,7 +29,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 from jinja2 import Environment
 from jinja2.loaders import DictLoader
 from passlib.context import CryptContext
-from sqlalchemy import UniqueConstraint, func
+from sqlalchemy import UniqueConstraint, func, text
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Field, Session, SQLModel, create_engine, select
 from starlette.middleware.sessions import SessionMiddleware
@@ -1099,7 +1099,7 @@ def seed_internal_services(session: Session, company_id: int) -> None:
             continue
 
         if backend.startswith("postgres"):
-            session.exec(text("""
+            session.execute(text("""
                 INSERT INTO internalservice
                     (company_id, area, family_code, family_slug, name, description, priority_weight, is_active, notes, created_at, updated_at)
                 VALUES
@@ -1170,7 +1170,7 @@ def get_or_create_business_profile(session: Session, *, company_id: int, client_
     now = utcnow()
     backend = engine.url.get_backend_name()
     if backend.startswith("postgres"):
-        session.exec(text("""
+        session.execute(text("""
             INSERT INTO clientbusinessprofile (
                 company_id, client_id,
                 segment, subsegment, cnae, tax_regime, company_size, founded_year,
