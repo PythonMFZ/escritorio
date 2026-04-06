@@ -765,6 +765,7 @@ class ClientBusinessProfile(SQLModel, table=True):
     sales_channel: str = ""
     main_bank: str = ""
     banks_count: int = 0
+    banking_relationships_count: int = 0
     annual_revenue_brl: float = 0.0
     monthly_fixed_cost_brl: float = 0.0
     payroll_monthly_brl: float = 0.0
@@ -791,6 +792,7 @@ class InternalService(SQLModel, table=True):
     company_id: int = Field(index=True, foreign_key="company.id")
     area: str = Field(index=True)
     family_code: str = Field(default="", index=True)
+    family_slug: str = Field(default="", index=True)
     name: str
     description: str = ""
     priority_weight: int = 50
@@ -820,6 +822,7 @@ class PartnerProduct(SQLModel, table=True):
     partner_id: int = Field(index=True, foreign_key="partner.id")
     area: str = Field(default="", index=True)
     family_code: str = Field(default="", index=True)
+    family_slug: str = Field(default="", index=True)
     name: str
     pf_pj: str = "PJ"
     ticket_min_brl: float = 0.0
@@ -966,7 +969,9 @@ def ensure_offer_engine_tables() -> bool:
 def ensure_offer_engine_columns() -> None:
     internal_statements_pg = [
         "ALTER TABLE IF EXISTS internalservice ADD COLUMN IF NOT EXISTS family_code VARCHAR NOT NULL DEFAULT ''",
+        "ALTER TABLE IF EXISTS internalservice ADD COLUMN IF NOT EXISTS family_slug VARCHAR NOT NULL DEFAULT ''",
         "ALTER TABLE IF EXISTS partnerproduct ADD COLUMN IF NOT EXISTS family_code VARCHAR NOT NULL DEFAULT ''",
+        "ALTER TABLE IF EXISTS partnerproduct ADD COLUMN IF NOT EXISTS family_slug VARCHAR NOT NULL DEFAULT ''",
         "ALTER TABLE IF EXISTS offermatch ADD COLUMN IF NOT EXISTS family_code VARCHAR NOT NULL DEFAULT ''",
         "ALTER TABLE IF EXISTS offermatch ADD COLUMN IF NOT EXISTS partner_options_count INTEGER NOT NULL DEFAULT 0",
     ]
@@ -981,6 +986,7 @@ def ensure_offer_engine_columns() -> None:
         ("sales_channel", "VARCHAR NOT NULL DEFAULT ''", "TEXT NOT NULL DEFAULT ''"),
         ("main_bank", "VARCHAR NOT NULL DEFAULT ''", "TEXT NOT NULL DEFAULT ''"),
         ("banks_count", "INTEGER NOT NULL DEFAULT 0", "INTEGER NOT NULL DEFAULT 0"),
+        ("banking_relationships_count", "INTEGER NOT NULL DEFAULT 0", "INTEGER NOT NULL DEFAULT 0"),
         ("annual_revenue_brl", "DOUBLE PRECISION NOT NULL DEFAULT 0", "REAL NOT NULL DEFAULT 0"),
         ("monthly_fixed_cost_brl", "DOUBLE PRECISION NOT NULL DEFAULT 0", "REAL NOT NULL DEFAULT 0"),
         ("payroll_monthly_brl", "DOUBLE PRECISION NOT NULL DEFAULT 0", "REAL NOT NULL DEFAULT 0"),
@@ -1015,6 +1021,18 @@ def ensure_offer_engine_columns() -> None:
                             f"ALTER TABLE IF EXISTS clientbusinessprofile "
                             f"ADD COLUMN IF NOT EXISTS {col} {ddl_pg}"
                         )
+                    except Exception:
+                        pass
+                for stmt in [
+                    "UPDATE internalservice SET family_slug = COALESCE(NULLIF(family_slug, ''), family_code, '')",
+                    "UPDATE internalservice SET family_code = COALESCE(NULLIF(family_code, ''), family_slug, '')",
+                    "UPDATE partnerproduct SET family_slug = COALESCE(NULLIF(family_slug, ''), family_code, '')",
+                    "UPDATE partnerproduct SET family_code = COALESCE(NULLIF(family_code, ''), family_slug, '')",
+                    "UPDATE clientbusinessprofile SET banking_relationships_count = COALESCE(banking_relationships_count, 0)",
+                    "UPDATE clientbusinessprofile SET banks_count = COALESCE(banks_count, banking_relationships_count, 0)",
+                ]:
+                    try:
+                        conn.exec_driver_sql(stmt)
                     except Exception:
                         pass
             elif backend.startswith("sqlite"):
@@ -1057,6 +1075,7 @@ def seed_internal_services(session: Session, company_id: int) -> None:
             row = InternalService(company_id=company_id, name=item["name"])
         row.area = item["area"]
         row.family_code = item["family_code"]
+        row.family_slug = item["family_code"]
         row.description = item["description"]
         row.priority_weight = item["priority_weight"]
         row.is_active = True
@@ -1080,8 +1099,12 @@ def _json_list(s: str) -> list[str]:
 def get_or_create_business_profile(session: Session, *, company_id: int, client_id: int) -> ClientBusinessProfile:
     row = session.exec(select(ClientBusinessProfile).where(ClientBusinessProfile.company_id == company_id, ClientBusinessProfile.client_id == client_id)).first()
     if row:
+        if getattr(row, "banks_count", None) in (None, ""):
+            row.banks_count = int(getattr(row, "banking_relationships_count", 0) or 0)
+        if getattr(row, "banking_relationships_count", None) in (None, ""):
+            row.banking_relationships_count = int(getattr(row, "banks_count", 0) or 0)
         return row
-    row = ClientBusinessProfile(company_id=company_id, client_id=client_id)
+    row = ClientBusinessProfile(company_id=company_id, client_id=client_id, banks_count=0, banking_relationships_count=0)
     session.add(row)
     session.commit()
     session.refresh(row)
@@ -1191,14 +1214,15 @@ def compute_offer_engine(*, session: Session, company_id: int, client: Client, p
         base = scores.get(svc.family_code, 0.0)
         if base <= 0:
             continue
-        elig = [pp for pp in partner_products if pp.family_code == svc.family_code and eligible(pp)]
+        svc_family = (svc.family_code or getattr(svc, 'family_slug', '') or '').strip()
+        elig = [pp for pp in partner_products if ((pp.family_code or getattr(pp, 'family_slug', '') or '').strip() == svc_family) and eligible(pp)]
         score_fit = round(min(100.0, base + max(0, svc.priority_weight - 50) * 0.4 + min(len(elig) * 2, 8)), 2)
         priority = "alta" if score_fit >= 75 else "media" if score_fit >= 55 else "baixa"
-        fam = families.get(svc.family_code)
-        out.append({"source_kind":"internal","family_code":svc.family_code,"area":svc.area,"product_name":svc.name,"partner_name":"","priority_level":priority,"score_fit":score_fit,"reason_summary":f"Solucao interna recomendada. Parceiros elegiveis nesta familia: {len(elig)}.","partner_options_count":len(elig),"internal_service_id":svc.id,"partner_product_id":None,"family_label":fam.label if fam else svc.family_code})
+        fam = families.get(svc_family or svc.family_code)
+        out.append({"source_kind":"internal","family_code":svc_family or svc.family_code,"area":svc.area,"product_name":svc.name,"partner_name":"","priority_level":priority,"score_fit":score_fit,"reason_summary":f"Solucao interna recomendada. Parceiros elegiveis nesta familia: {len(elig)}.","partner_options_count":len(elig),"internal_service_id":svc.id,"partner_product_id":None,"family_label":fam.label if fam else (svc_family or svc.family_code)})
         for pp in elig:
             partner = partners.get(pp.id)
-            out.append({"source_kind":"partner","family_code":svc.family_code,"area":svc.area,"product_name":pp.name,"partner_name":partner.name if partner else "Parceiro","priority_level":priority,"score_fit":min(100.0, score_fit + 4),"reason_summary":f"Parceiro elegivel para a familia {fam.label if fam else svc.family_code}.","partner_options_count":len(elig),"internal_service_id":svc.id,"partner_product_id":pp.id,"family_label":fam.label if fam else svc.family_code})
+            out.append({"source_kind":"partner","family_code":svc_family or svc.family_code,"area":svc.area,"product_name":pp.name,"partner_name":partner.name if partner else "Parceiro","priority_level":priority,"score_fit":min(100.0, score_fit + 4),"reason_summary":f"Parceiro elegivel para a familia {fam.label if fam else (svc_family or svc.family_code)}.","partner_options_count":len(elig),"internal_service_id":svc.id,"partner_product_id":pp.id,"family_label":fam.label if fam else (svc_family or svc.family_code)})
 
     out.sort(key=lambda x: (0 if x["priority_level"] == "alta" else 1 if x["priority_level"] == "media" else 2, -float(x["score_fit"])))
     return out
@@ -10038,7 +10062,8 @@ async def admin_servicos_internos_page(request: Request, session: Session = Depe
 async def admin_servicos_internos_add(request: Request, session: Session = Depends(get_session), area: str = Form(...), family_code: str = Form(...), name: str = Form(...), description: str = Form(""), priority_weight: int = Form(50), notes: str = Form("")) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
-    row = InternalService(company_id=ctx.company.id, area=(area or "").strip(), family_code=(family_code or "").strip(), name=(name or "").strip(), description=(description or "").strip(), priority_weight=max(0, int(priority_weight or 50)), notes=(notes or "").strip(), is_active=True)
+    fc = (family_code or "").strip()
+    row = InternalService(company_id=ctx.company.id, area=(area or "").strip(), family_code=fc, family_slug=fc, name=(name or "").strip(), description=(description or "").strip(), priority_weight=max(0, int(priority_weight or 50)), notes=(notes or "").strip(), is_active=True)
     session.add(row)
     session.commit()
     set_flash(request, "Produto interno salvo.")
@@ -11019,6 +11044,7 @@ async def empresa_save(
     profile.sales_channel = (sales_channel or "").strip()
     profile.main_bank = (main_bank or "").strip()
     profile.banks_count = max(0, int(banks_count or 0))
+    profile.banking_relationships_count = profile.banks_count
     profile.annual_revenue_brl = max(0.0, float(annual_revenue_brl or 0.0))
     profile.monthly_fixed_cost_brl = max(0.0, float(monthly_fixed_cost_brl or 0.0))
     profile.payroll_monthly_brl = max(0.0, float(payroll_monthly_brl or 0.0))
@@ -18129,9 +18155,14 @@ def _dec(x: Any) -> Decimal:
     s = str(x).strip()
     if not s:
         return Decimal("0")
-    # "1.234,56" -> "1234.56"
+    s = s.replace("%", "").replace("R$", "").replace(" ", "")
     s = s.replace(".", "").replace(",", ".")
-    return Decimal(s)
+    if not s or s in {"-", "."}:
+        return Decimal("0")
+    try:
+        return Decimal(s)
+    except Exception:
+        return Decimal("0")
 
 
 def _d2(x: Decimal) -> Decimal:
