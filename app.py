@@ -23550,9 +23550,8 @@ async def login_page(request: Request, session: Session = Depends(get_session)) 
 # ----------------------------
 if __name__ == "__main__":
     import uvicorn
-
     uvicorn.run(
-        "app:app",
+        app,
         host="0.0.0.0",
         port=int(os.getenv("PORT", "8000")),
         log_level=os.getenv("LOG_LEVEL", "info").lower(),
