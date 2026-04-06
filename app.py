@@ -990,12 +990,16 @@ def ensure_offer_engine_columns() -> None:
         ("annual_revenue_brl", "DOUBLE PRECISION NOT NULL DEFAULT 0", "REAL NOT NULL DEFAULT 0"),
         ("monthly_fixed_cost_brl", "DOUBLE PRECISION NOT NULL DEFAULT 0", "REAL NOT NULL DEFAULT 0"),
         ("payroll_monthly_brl", "DOUBLE PRECISION NOT NULL DEFAULT 0", "REAL NOT NULL DEFAULT 0"),
+        ("monthly_payroll_brl", "DOUBLE PRECISION NOT NULL DEFAULT 0", "REAL NOT NULL DEFAULT 0"),
         ("average_ticket_brl", "DOUBLE PRECISION NOT NULL DEFAULT 0", "REAL NOT NULL DEFAULT 0"),
         ("inventory_brl", "DOUBLE PRECISION NOT NULL DEFAULT 0", "REAL NOT NULL DEFAULT 0"),
         ("receivables_brl", "DOUBLE PRECISION NOT NULL DEFAULT 0", "REAL NOT NULL DEFAULT 0"),
+        ("monthly_receivables_brl", "DOUBLE PRECISION NOT NULL DEFAULT 0", "REAL NOT NULL DEFAULT 0"),
         ("collateral_brl", "DOUBLE PRECISION NOT NULL DEFAULT 0", "REAL NOT NULL DEFAULT 0"),
+        ("collateral_available_brl", "DOUBLE PRECISION NOT NULL DEFAULT 0", "REAL NOT NULL DEFAULT 0"),
         ("delinquency_brl", "DOUBLE PRECISION NOT NULL DEFAULT 0", "REAL NOT NULL DEFAULT 0"),
         ("desired_credit_brl", "DOUBLE PRECISION NOT NULL DEFAULT 0", "REAL NOT NULL DEFAULT 0"),
+        ("desired_credit_amount_brl", "DOUBLE PRECISION NOT NULL DEFAULT 0", "REAL NOT NULL DEFAULT 0"),
         ("urgency_level", "VARCHAR NOT NULL DEFAULT ''", "TEXT NOT NULL DEFAULT ''"),
         ("strategic_goal", "TEXT NOT NULL DEFAULT ''", "TEXT NOT NULL DEFAULT ''"),
         ("pain_points", "TEXT NOT NULL DEFAULT ''", "TEXT NOT NULL DEFAULT ''"),
@@ -1073,72 +1077,18 @@ def seed_product_families(session: Session) -> None:
 
 
 def seed_internal_services(session: Session, company_id: int) -> None:
-    backend = engine.url.get_backend_name()
-    now = utcnow()
     for item in INTERNAL_SERVICE_SEED:
-        family = str(item["family_code"]).strip()
-        name = str(item["name"]).strip()
-        area = str(item["area"]).strip()
-        description = str(item["description"]).strip()
-        priority = int(item["priority_weight"])
-        existing = session.exec(
-            select(InternalService).where(
-                InternalService.company_id == company_id,
-                InternalService.name == name,
-            )
-        ).first()
-        if existing:
-            existing.area = area
-            existing.family_code = family
-            existing.family_slug = family
-            existing.description = description
-            existing.priority_weight = priority
-            existing.is_active = True
-            existing.updated_at = now
-            session.add(existing)
-            continue
-
-        if backend.startswith("postgres"):
-            session.execute(text("""
-                INSERT INTO internalservice
-                    (company_id, area, family_code, family_slug, name, description, priority_weight, is_active, notes, created_at, updated_at)
-                VALUES
-                    (:company_id, :area, :family_code, :family_slug, :name, :description, :priority_weight, TRUE, '', :created_at, :updated_at)
-                ON CONFLICT (company_id, name)
-                DO UPDATE SET
-                    area = EXCLUDED.area,
-                    family_code = EXCLUDED.family_code,
-                    family_slug = EXCLUDED.family_slug,
-                    description = EXCLUDED.description,
-                    priority_weight = EXCLUDED.priority_weight,
-                    is_active = TRUE,
-                    updated_at = EXCLUDED.updated_at
-            """), {
-                "company_id": company_id,
-                "area": area,
-                "family_code": family,
-                "family_slug": family,
-                "name": name,
-                "description": description,
-                "priority_weight": priority,
-                "created_at": now,
-                "updated_at": now,
-            })
-        else:
-            row = InternalService(
-                company_id=company_id,
-                area=area,
-                family_code=family,
-                family_slug=family,
-                name=name,
-                description=description,
-                priority_weight=priority,
-                is_active=True,
-                notes="",
-                created_at=now,
-                updated_at=now,
-            )
-            session.add(row)
+        _upsert_internal_service_compat(
+            session,
+            company_id=company_id,
+            area=str(item["area"]).strip(),
+            family=str(item["family_code"]).strip(),
+            name=str(item["name"]).strip(),
+            description=str(item["description"]).strip(),
+            priority_weight=int(item["priority_weight"]),
+            notes="",
+            is_active=True,
+        )
     session.commit()
 
 def _json_dump_list(items: list[str]) -> str:
@@ -1152,6 +1102,220 @@ def _json_list(s: str) -> list[str]:
     except Exception:
         return []
 
+
+
+
+def _table_columns_meta(session: Session, table_name: str) -> list[dict[str, Any]]:
+    backend = engine.url.get_backend_name()
+    if backend.startswith("postgres"):
+        rows = session.execute(text("""
+            SELECT column_name, data_type, is_nullable
+            FROM information_schema.columns
+            WHERE table_schema = current_schema()
+              AND table_name = :table_name
+            ORDER BY ordinal_position
+        """), {"table_name": table_name}).fetchall()
+        return [
+            {"name": str(r[0]), "type": str(r[1] or "").lower(), "nullable": str(r[2] or "").upper() == "YES"}
+            for r in rows
+        ]
+    rows = session.execute(text(f"PRAGMA table_info('{table_name}')")).fetchall()
+    return [{"name": str(r[1]), "type": str(r[2] or "").lower(), "nullable": not bool(r[3])} for r in rows]
+
+
+def _generic_sql_default_for_column(name: str, data_type: str) -> Any:
+    n = (name or "").lower()
+    dt = (data_type or "").lower()
+    explicit: dict[str, Any] = {
+        "company_id": 0,
+        "client_id": 0,
+        "banks_count": 0,
+        "banking_relationships_count": 0,
+        "annual_revenue_brl": 0.0,
+        "monthly_fixed_cost_brl": 0.0,
+        "payroll_monthly_brl": 0.0,
+        "monthly_payroll_brl": 0.0,
+        "average_ticket_brl": 0.0,
+        "inventory_brl": 0.0,
+        "receivables_brl": 0.0,
+        "monthly_receivables_brl": 0.0,
+        "collateral_brl": 0.0,
+        "collateral_available_brl": 0.0,
+        "delinquency_brl": 0.0,
+        "desired_credit_brl": 0.0,
+        "desired_credit_amount_brl": 0.0,
+        "priority_weight": 50,
+        "is_active": True,
+        "interests_json": "[]",
+        "updated_at": utcnow(),
+        "created_at": utcnow(),
+        "family_slug": "",
+        "family_code": "",
+        "name": "",
+        "description": "",
+        "notes": "",
+        "area": "",
+    }
+    if n in explicit:
+        return explicit[n]
+    if "bool" in dt:
+        return False
+    if any(x in dt for x in ["int", "numeric", "double", "real", "decimal"]):
+        return 0
+    if "timestamp" in dt or dt == "date":
+        return utcnow()
+    if "json" in dt:
+        return "[]"
+    if any(x in dt for x in ["char", "text", "uuid"]):
+        return ""
+    return ""
+
+
+def _insert_or_ignore_business_profile_compat(session: Session, *, company_id: int, client_id: int) -> None:
+    cols_meta = _table_columns_meta(session, "clientbusinessprofile")
+    if not cols_meta:
+        return
+
+    provided: dict[str, Any] = {
+        "company_id": company_id,
+        "client_id": client_id,
+        "segment": "",
+        "subsegment": "",
+        "cnae": "",
+        "tax_regime": "",
+        "company_size": "",
+        "founded_year": 0,
+        "business_model": "",
+        "sales_channel": "",
+        "main_bank": "",
+        "banks_count": 0,
+        "banking_relationships_count": 0,
+        "annual_revenue_brl": 0.0,
+        "monthly_fixed_cost_brl": 0.0,
+        "payroll_monthly_brl": 0.0,
+        "monthly_payroll_brl": 0.0,
+        "average_ticket_brl": 0.0,
+        "inventory_brl": 0.0,
+        "receivables_brl": 0.0,
+        "monthly_receivables_brl": 0.0,
+        "collateral_brl": 0.0,
+        "collateral_available_brl": 0.0,
+        "delinquency_brl": 0.0,
+        "desired_credit_brl": 0.0,
+        "desired_credit_amount_brl": 0.0,
+        "urgency_level": "",
+        "strategic_goal": "",
+        "pain_points": "",
+        "interests_json": "[]",
+        "has_erp": False,
+        "has_budget": False,
+        "has_board": False,
+        "has_audited_fs": False,
+        "updated_at": utcnow(),
+        "created_at": utcnow(),
+    }
+
+    names: list[str] = []
+    params: dict[str, Any] = {}
+    for meta in cols_meta:
+        col = meta["name"]
+        if col == "id":
+            continue
+        if col in provided:
+            val = provided[col]
+        elif not meta["nullable"]:
+            val = _generic_sql_default_for_column(col, meta["type"])
+        else:
+            continue
+        names.append(col)
+        params[col] = val
+
+    if not names:
+        return
+
+    cols_sql = ", ".join(names)
+    placeholders = ", ".join(f":{c}" for c in names)
+    backend = engine.url.get_backend_name()
+    if backend.startswith("postgres") and {"company_id", "client_id"}.issubset(set(names)):
+        sql = f"INSERT INTO clientbusinessprofile ({cols_sql}) VALUES ({placeholders}) ON CONFLICT (company_id, client_id) DO NOTHING"
+    else:
+        sql = f"INSERT OR IGNORE INTO clientbusinessprofile ({cols_sql}) VALUES ({placeholders})"
+    session.execute(text(sql), params)
+    session.commit()
+
+
+def _upsert_internal_service_compat(
+    session: Session,
+    *,
+    company_id: int,
+    area: str,
+    family: str,
+    name: str,
+    description: str,
+    priority_weight: int,
+    notes: str = "",
+    is_active: bool = True,
+) -> None:
+    cols_meta = _table_columns_meta(session, "internalservice")
+    if not cols_meta:
+        row = InternalService(
+            company_id=company_id,
+            area=area,
+            family_code=family,
+            family_slug=family,
+            name=name,
+            description=description,
+            priority_weight=priority_weight,
+            notes=notes,
+            is_active=is_active,
+        )
+        session.add(row)
+        session.commit()
+        return
+
+    provided: dict[str, Any] = {
+        "company_id": company_id,
+        "area": area,
+        "family_code": family,
+        "family_slug": family,
+        "name": name,
+        "description": description,
+        "priority_weight": int(priority_weight or 0),
+        "is_active": bool(is_active),
+        "notes": notes or "",
+        "created_at": utcnow(),
+        "updated_at": utcnow(),
+    }
+
+    names: list[str] = []
+    params: dict[str, Any] = {}
+    for meta in cols_meta:
+        col = meta["name"]
+        if col == "id":
+            continue
+        if col in provided:
+            val = provided[col]
+        elif not meta["nullable"]:
+            val = _generic_sql_default_for_column(col, meta["type"])
+        else:
+            continue
+        names.append(col)
+        params[col] = val
+
+    if not names:
+        return
+
+    cols_sql = ", ".join(names)
+    placeholders = ", ".join(f":{c}" for c in names)
+    backend = engine.url.get_backend_name()
+    if backend.startswith("postgres"):
+        update_cols = [c for c in names if c not in {"company_id", "name", "created_at"}]
+        update_sql = ", ".join(f"{c}=EXCLUDED.{c}" for c in update_cols)
+        sql = f"INSERT INTO internalservice ({cols_sql}) VALUES ({placeholders}) ON CONFLICT (company_id, name) DO UPDATE SET {update_sql}"
+    else:
+        sql = f"INSERT OR REPLACE INTO internalservice ({cols_sql}) VALUES ({placeholders})"
+    session.execute(text(sql), params)
+    session.commit()
 
 def get_or_create_business_profile(session: Session, *, company_id: int, client_id: int) -> ClientBusinessProfile:
     row = session.exec(
@@ -1167,51 +1331,22 @@ def get_or_create_business_profile(session: Session, *, company_id: int, client_
             row.banking_relationships_count = int(getattr(row, "banks_count", 0) or 0)
         return row
 
-    now = utcnow()
-    backend = engine.url.get_backend_name()
-    if backend.startswith("postgres"):
-        session.execute(text("""
-            INSERT INTO clientbusinessprofile (
-                company_id, client_id,
-                segment, subsegment, cnae, tax_regime, company_size, founded_year,
-                business_model, sales_channel, main_bank,
-                banks_count, banking_relationships_count,
-                annual_revenue_brl, monthly_fixed_cost_brl, payroll_monthly_brl, average_ticket_brl,
-                inventory_brl, receivables_brl, collateral_brl, delinquency_brl, desired_credit_brl,
-                urgency_level, strategic_goal, pain_points, interests_json,
-                has_erp, has_budget, has_board, has_audited_fs, updated_at
-            ) VALUES (
-                :company_id, :client_id,
-                '', '', '', '', '', 0,
-                '', '', '',
-                0, 0,
-                0, 0, 0, 0,
-                0, 0, 0, 0, 0,
-                '', '', '', '[]',
-                FALSE, FALSE, FALSE, FALSE, :updated_at
-            )
-            ON CONFLICT (company_id, client_id) DO NOTHING
-        """), {
-            "company_id": company_id,
-            "client_id": client_id,
-            "updated_at": now,
-        })
-        session.commit()
-        row = session.exec(
-            select(ClientBusinessProfile).where(
-                ClientBusinessProfile.company_id == company_id,
-                ClientBusinessProfile.client_id == client_id,
-            )
-        ).first()
-        if row:
-            return row
+    _insert_or_ignore_business_profile_compat(session, company_id=company_id, client_id=client_id)
 
-    row = ClientBusinessProfile(
-        company_id=company_id,
-        client_id=client_id,
-        banks_count=0,
-        banking_relationships_count=0,
-    )
+    row = session.exec(
+        select(ClientBusinessProfile).where(
+            ClientBusinessProfile.company_id == company_id,
+            ClientBusinessProfile.client_id == client_id,
+        )
+    ).first()
+    if row:
+        if getattr(row, "banks_count", None) in (None, ""):
+            row.banks_count = int(getattr(row, "banking_relationships_count", 0) or 0)
+        if getattr(row, "banking_relationships_count", None) in (None, ""):
+            row.banking_relationships_count = int(getattr(row, "banks_count", 0) or 0)
+        return row
+
+    row = ClientBusinessProfile(company_id=company_id, client_id=client_id, banks_count=0, banking_relationships_count=0)
     session.add(row)
     session.commit()
     session.refresh(row)
@@ -10169,12 +10304,19 @@ async def admin_servicos_internos_add(request: Request, session: Session = Depen
     ctx = get_tenant_context(request, session)
     assert ctx is not None
     fc = (family_code or "").strip()
-    row = InternalService(company_id=ctx.company.id, area=(area or "").strip(), family_code=fc, family_slug=fc, name=(name or "").strip(), description=(description or "").strip(), priority_weight=max(0, int(priority_weight or 50)), notes=(notes or "").strip(), is_active=True)
-    session.add(row)
-    session.commit()
+    _upsert_internal_service_compat(
+        session,
+        company_id=ctx.company.id,
+        area=(area or "").strip(),
+        family=fc,
+        name=(name or "").strip(),
+        description=(description or "").strip(),
+        priority_weight=max(0, int(priority_weight or 50)),
+        notes=(notes or "").strip(),
+        is_active=True,
+    )
     set_flash(request, "Produto interno salvo.")
     return RedirectResponse("/admin/servicos-internos", status_code=303)
-
 
 @app.get("/admin/parceiros", response_class=HTMLResponse)
 @require_role({"admin"})
