@@ -1257,6 +1257,17 @@ def _generic_sql_default_for_column(name: str, data_type: str) -> Any:
         "score_total_min": 0.0,
         "score_financial_min": 0.0,
         "max_debt_ratio": 0.0,
+        "subject_doc": "",
+        "source_kind": "internal",
+        "internal_service_id": None,
+        "partner_product_id": None,
+        "product_name": "",
+        "partner_name": "",
+        "priority_level": "media",
+        "score_fit": 0.0,
+        "reason_summary": "",
+        "estimated_commission_text": "",
+        "partner_options_count": 0,
     }
     if n in explicit:
         return explicit[n]
@@ -1826,14 +1837,98 @@ def compute_offer_engine(*, session: Session, company_id: int, client: Client, p
     return out
 
 
+
+def _insert_offer_match_compat(
+    session: Session,
+    *,
+    company_id: int,
+    client_id: int,
+    subject_doc: str,
+    item: dict[str, Any],
+) -> None:
+    cols_meta = _table_columns_meta(session, "offermatch")
+    if not cols_meta:
+        session.add(OfferMatch(
+            company_id=company_id,
+            client_id=client_id,
+            family_code=item.get("family_code") or "",
+            source_kind=item.get("source_kind") or "internal",
+            internal_service_id=item.get("internal_service_id"),
+            partner_product_id=item.get("partner_product_id"),
+            area=item.get("area") or "",
+            product_name=item.get("product_name") or "",
+            partner_name=item.get("partner_name") or "",
+            priority_level=item.get("priority_level") or "media",
+            score_fit=float(item.get("score_fit") or 0.0),
+            reason_summary=item.get("reason_summary") or "",
+            partner_options_count=int(item.get("partner_options_count") or 0),
+        ))
+        return
+
+    provided: dict[str, Any] = {
+        "company_id": company_id,
+        "client_id": client_id,
+        "subject_doc": subject_doc or "",
+        "family_code": item.get("family_code") or "",
+        "source_kind": item.get("source_kind") or "internal",
+        "internal_service_id": item.get("internal_service_id"),
+        "partner_product_id": item.get("partner_product_id"),
+        "area": item.get("area") or "",
+        "product_name": item.get("product_name") or "",
+        "partner_name": item.get("partner_name") or "",
+        "priority_level": item.get("priority_level") or "media",
+        "score_fit": float(item.get("score_fit") or 0.0),
+        "reason_summary": item.get("reason_summary") or "",
+        "estimated_commission_text": item.get("estimated_commission_text") or "",
+        "partner_options_count": int(item.get("partner_options_count") or 0),
+        "created_at": item.get("created_at") or utcnow(),
+    }
+
+    names: list[str] = []
+    params: dict[str, Any] = {}
+    for meta in cols_meta:
+        col = meta["name"]
+        if col == "id":
+            continue
+        if col in provided:
+            val = provided[col]
+        elif not meta["nullable"]:
+            val = _generic_sql_default_for_column(col, meta["type"])
+        else:
+            continue
+        names.append(col)
+        params[col] = val
+
+    if not names:
+        return
+
+    cols_sql = ", ".join(names)
+    placeholders = ", ".join(f":{c}" for c in names)
+    sql = f"INSERT INTO offermatch ({cols_sql}) VALUES ({placeholders})"
+    session.execute(text(sql), params)
+
+
 def persist_offer_matches(session: Session, *, company_id: int, client_id: int, matches: list[dict[str, Any]]) -> None:
     old = session.exec(select(OfferMatch).where(OfferMatch.company_id == company_id, OfferMatch.client_id == client_id)).all()
     for row in old:
         session.delete(row)
     session.commit()
+
+    client = session.get(Client, client_id)
+    subject_doc = _digits(getattr(client, "cnpj", "") or "") if client else ""
+    if not subject_doc and client:
+        subject_doc = _digits(getattr(client, "email", "") or "") or ""
+
     for item in matches:
-        session.add(OfferMatch(company_id=company_id, client_id=client_id, family_code=item.get("family_code") or "", source_kind=item.get("source_kind") or "internal", internal_service_id=item.get("internal_service_id"), partner_product_id=item.get("partner_product_id"), area=item.get("area") or "", product_name=item.get("product_name") or "", partner_name=item.get("partner_name") or "", priority_level=item.get("priority_level") or "media", score_fit=float(item.get("score_fit") or 0.0), reason_summary=item.get("reason_summary") or "", partner_options_count=int(item.get("partner_options_count") or 0)))
+        _insert_offer_match_compat(
+            session,
+            company_id=company_id,
+            client_id=client_id,
+            subject_doc=subject_doc,
+            item=item,
+        )
     session.commit()
+
 
 # ----------------------------
 # Documentos (contratos, termos etc.)
