@@ -12211,7 +12211,6 @@ async def empresa_save(
         urgency_level: str = Form(""),
         strategic_goal: str = Form(""),
         pain_points: str = Form(""),
-        interests: Optional[list[str]] = Form(None),
         has_erp: Optional[str] = Form(None),
         has_budget: Optional[str] = Form(None),
         has_board: Optional[str] = Form(None),
@@ -12230,6 +12229,12 @@ async def empresa_save(
     if not ensure_can_access_client(ctx, current_client.id):
         set_flash(request, "Sem permissão.")
         return RedirectResponse("/empresa", status_code=303)
+
+    form = await request.form()
+    interests = form.getlist("interests") if hasattr(form, "getlist") else []
+    if not interests:
+        one = form.get("interests")
+        interests = [str(one).strip()] if one else []
 
     current_client.name = name.strip()
     current_client.cnpj = cnpj.strip()
@@ -12259,12 +12264,20 @@ async def empresa_save(
     profile.annual_revenue_brl = max(0.0, float(annual_revenue_brl or 0.0))
     profile.monthly_fixed_cost_brl = max(0.0, float(monthly_fixed_cost_brl or 0.0))
     profile.payroll_monthly_brl = max(0.0, float(payroll_monthly_brl or 0.0))
+    if hasattr(profile, "monthly_payroll_brl"):
+        profile.monthly_payroll_brl = profile.payroll_monthly_brl
     profile.average_ticket_brl = max(0.0, float(average_ticket_brl or 0.0))
     profile.inventory_brl = max(0.0, float(inventory_brl or 0.0))
     profile.receivables_brl = max(0.0, float(receivables_brl or 0.0))
+    if hasattr(profile, "monthly_receivables_brl"):
+        profile.monthly_receivables_brl = profile.receivables_brl
     profile.collateral_brl = max(0.0, float(collateral_brl or 0.0))
+    if hasattr(profile, "collateral_available_brl"):
+        profile.collateral_available_brl = profile.collateral_brl
     profile.delinquency_brl = max(0.0, float(delinquency_brl or 0.0))
     profile.desired_credit_brl = max(0.0, float(desired_credit_brl or 0.0))
+    if hasattr(profile, "desired_credit_amount_brl"):
+        profile.desired_credit_amount_brl = profile.desired_credit_brl
     profile.urgency_level = (urgency_level or "").strip()
     profile.strategic_goal = (strategic_goal or "").strip()
     profile.pain_points = (pain_points or "").strip()
