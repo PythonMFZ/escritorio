@@ -1407,16 +1407,27 @@ def _upsert_internal_service_compat(
     if not names:
         return
 
+    existing_id = session.execute(
+        text("SELECT id FROM internalservice WHERE company_id = :company_id AND name = :name ORDER BY id LIMIT 1"),
+        {"company_id": company_id, "name": name},
+    ).scalar()
+
+    if existing_id:
+        update_cols = [c for c in names if c not in {"company_id", "name", "created_at"}]
+        if update_cols:
+            set_sql = ", ".join(f"{c} = :{c}" for c in update_cols)
+            upd_params = {c: params[c] for c in update_cols}
+            upd_params["id"] = int(existing_id)
+            session.execute(
+                text(f"UPDATE internalservice SET {set_sql} WHERE id = :id"),
+                upd_params,
+            )
+            session.commit()
+        return
+
     cols_sql = ", ".join(names)
     placeholders = ", ".join(f":{c}" for c in names)
-    backend = engine.url.get_backend_name()
-    if backend.startswith("postgres"):
-        update_cols = [c for c in names if c not in {"company_id", "name", "created_at"}]
-        update_sql = ", ".join(f"{c}=EXCLUDED.{c}" for c in update_cols)
-        sql = f"INSERT INTO internalservice ({cols_sql}) VALUES ({placeholders}) ON CONFLICT (company_id, name) DO UPDATE SET {update_sql}"
-    else:
-        sql = f"INSERT OR REPLACE INTO internalservice ({cols_sql}) VALUES ({placeholders})"
-    session.execute(text(sql), params)
+    session.execute(text(f"INSERT INTO internalservice ({cols_sql}) VALUES ({placeholders})"), params)
     session.commit()
 
 
@@ -1477,16 +1488,28 @@ def _upsert_partner_compat(
     if not names:
         return
 
+    existing_id = session.execute(
+        text("SELECT id FROM partner WHERE company_id = :company_id AND name = :name ORDER BY id LIMIT 1"),
+        {"company_id": company_id, "name": name},
+    ).scalar()
+
+    if existing_id:
+        update_cols = [c for c in names if c not in {"company_id", "name", "created_at"}]
+        if update_cols:
+            set_sql = ", ".join(f"{c} = :{c}" for c in update_cols)
+            upd_params = {c: params[c] for c in update_cols}
+            upd_params["id"] = int(existing_id)
+            session.execute(
+                text(f"UPDATE partner SET {set_sql} WHERE id = :id"),
+                upd_params,
+            )
+            session.commit()
+        return
+
     cols_sql = ", ".join(names)
     placeholders = ", ".join(f":{c}" for c in names)
-    backend = engine.url.get_backend_name()
-    if backend.startswith("postgres"):
-        update_cols = [c for c in names if c not in {"company_id", "name", "created_at"}]
-        update_sql = ", ".join(f"{c}=EXCLUDED.{c}" for c in update_cols)
-        sql = f"INSERT INTO partner ({cols_sql}) VALUES ({placeholders}) ON CONFLICT (company_id, name) DO UPDATE SET {update_sql}"
-    else:
-        sql = f"INSERT OR REPLACE INTO partner ({cols_sql}) VALUES ({placeholders})"
-    session.execute(text(sql), params)
+    session.execute(text(f"INSERT INTO partner ({cols_sql}) VALUES ({placeholders})"), params)
+    session.commit()
 
 def _upsert_partner_product_compat(
     session: Session,
@@ -1596,12 +1619,26 @@ def _upsert_partner_product_compat(
 
     cols_sql = ", ".join(names)
     placeholders = ", ".join(f":{c}" for c in names)
-    backend = engine.url.get_backend_name()
-    if backend.startswith("postgres"):
-        sql = f"INSERT INTO partnerproduct ({cols_sql}) VALUES ({placeholders})"
-    else:
-        sql = f"INSERT INTO partnerproduct ({cols_sql}) VALUES ({placeholders})"
-    session.execute(text(sql), params)
+
+    existing_id = session.execute(
+        text("SELECT id FROM partnerproduct WHERE company_id = :company_id AND partner_id = :partner_id AND name = :name ORDER BY id LIMIT 1"),
+        {"company_id": company_id, "partner_id": partner_id, "name": name},
+    ).scalar()
+
+    if existing_id:
+        update_cols = [c for c in names if c not in {"company_id", "partner_id", "name", "created_at"}]
+        if update_cols:
+            set_sql = ", ".join(f"{c} = :{c}" for c in update_cols)
+            upd_params = {c: params[c] for c in update_cols}
+            upd_params["id"] = int(existing_id)
+            session.execute(
+                text(f"UPDATE partnerproduct SET {set_sql} WHERE id = :id"),
+                upd_params,
+            )
+            session.commit()
+        return
+
+    session.execute(text(f"INSERT INTO partnerproduct ({cols_sql}) VALUES ({placeholders})"), params)
     session.commit()
 
 def get_or_create_business_profile(session: Session, *, company_id: int, client_id: int) -> ClientBusinessProfile:
