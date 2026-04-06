@@ -964,19 +964,73 @@ def ensure_offer_engine_tables() -> bool:
 
 
 def ensure_offer_engine_columns() -> None:
+    internal_statements_pg = [
+        "ALTER TABLE IF EXISTS internalservice ADD COLUMN IF NOT EXISTS family_code VARCHAR NOT NULL DEFAULT ''",
+        "ALTER TABLE IF EXISTS partnerproduct ADD COLUMN IF NOT EXISTS family_code VARCHAR NOT NULL DEFAULT ''",
+        "ALTER TABLE IF EXISTS offermatch ADD COLUMN IF NOT EXISTS family_code VARCHAR NOT NULL DEFAULT ''",
+        "ALTER TABLE IF EXISTS offermatch ADD COLUMN IF NOT EXISTS partner_options_count INTEGER NOT NULL DEFAULT 0",
+    ]
+    business_profile_columns = [
+        ("segment", "VARCHAR NOT NULL DEFAULT ''", "TEXT NOT NULL DEFAULT ''"),
+        ("subsegment", "VARCHAR NOT NULL DEFAULT ''", "TEXT NOT NULL DEFAULT ''"),
+        ("cnae", "VARCHAR NOT NULL DEFAULT ''", "TEXT NOT NULL DEFAULT ''"),
+        ("tax_regime", "VARCHAR NOT NULL DEFAULT ''", "TEXT NOT NULL DEFAULT ''"),
+        ("company_size", "VARCHAR NOT NULL DEFAULT ''", "TEXT NOT NULL DEFAULT ''"),
+        ("founded_year", "INTEGER NOT NULL DEFAULT 0", "INTEGER NOT NULL DEFAULT 0"),
+        ("business_model", "VARCHAR NOT NULL DEFAULT ''", "TEXT NOT NULL DEFAULT ''"),
+        ("sales_channel", "VARCHAR NOT NULL DEFAULT ''", "TEXT NOT NULL DEFAULT ''"),
+        ("main_bank", "VARCHAR NOT NULL DEFAULT ''", "TEXT NOT NULL DEFAULT ''"),
+        ("banks_count", "INTEGER NOT NULL DEFAULT 0", "INTEGER NOT NULL DEFAULT 0"),
+        ("annual_revenue_brl", "DOUBLE PRECISION NOT NULL DEFAULT 0", "REAL NOT NULL DEFAULT 0"),
+        ("monthly_fixed_cost_brl", "DOUBLE PRECISION NOT NULL DEFAULT 0", "REAL NOT NULL DEFAULT 0"),
+        ("payroll_monthly_brl", "DOUBLE PRECISION NOT NULL DEFAULT 0", "REAL NOT NULL DEFAULT 0"),
+        ("average_ticket_brl", "DOUBLE PRECISION NOT NULL DEFAULT 0", "REAL NOT NULL DEFAULT 0"),
+        ("inventory_brl", "DOUBLE PRECISION NOT NULL DEFAULT 0", "REAL NOT NULL DEFAULT 0"),
+        ("receivables_brl", "DOUBLE PRECISION NOT NULL DEFAULT 0", "REAL NOT NULL DEFAULT 0"),
+        ("collateral_brl", "DOUBLE PRECISION NOT NULL DEFAULT 0", "REAL NOT NULL DEFAULT 0"),
+        ("delinquency_brl", "DOUBLE PRECISION NOT NULL DEFAULT 0", "REAL NOT NULL DEFAULT 0"),
+        ("desired_credit_brl", "DOUBLE PRECISION NOT NULL DEFAULT 0", "REAL NOT NULL DEFAULT 0"),
+        ("urgency_level", "VARCHAR NOT NULL DEFAULT ''", "TEXT NOT NULL DEFAULT ''"),
+        ("strategic_goal", "TEXT NOT NULL DEFAULT ''", "TEXT NOT NULL DEFAULT ''"),
+        ("pain_points", "TEXT NOT NULL DEFAULT ''", "TEXT NOT NULL DEFAULT ''"),
+        ("interests_json", "TEXT NOT NULL DEFAULT '[]'", "TEXT NOT NULL DEFAULT '[]'"),
+        ("has_erp", "BOOLEAN NOT NULL DEFAULT FALSE", "INTEGER NOT NULL DEFAULT 0"),
+        ("has_budget", "BOOLEAN NOT NULL DEFAULT FALSE", "INTEGER NOT NULL DEFAULT 0"),
+        ("has_board", "BOOLEAN NOT NULL DEFAULT FALSE", "INTEGER NOT NULL DEFAULT 0"),
+        ("has_audited_fs", "BOOLEAN NOT NULL DEFAULT FALSE", "INTEGER NOT NULL DEFAULT 0"),
+    ]
+
     try:
-        if engine.url.get_backend_name().startswith("postgres"):
-            with engine.begin() as conn:
-                for stmt in [
-                    "ALTER TABLE IF EXISTS internalservice ADD COLUMN IF NOT EXISTS family_code VARCHAR NOT NULL DEFAULT ''",
-                    "ALTER TABLE IF EXISTS partnerproduct ADD COLUMN IF NOT EXISTS family_code VARCHAR NOT NULL DEFAULT ''",
-                    "ALTER TABLE IF EXISTS offermatch ADD COLUMN IF NOT EXISTS family_code VARCHAR NOT NULL DEFAULT ''",
-                    "ALTER TABLE IF EXISTS offermatch ADD COLUMN IF NOT EXISTS partner_options_count INTEGER NOT NULL DEFAULT 0",
-                ]:
+        backend = engine.url.get_backend_name()
+        with engine.begin() as conn:
+            if backend.startswith("postgres"):
+                for stmt in internal_statements_pg:
                     try:
                         conn.exec_driver_sql(stmt)
                     except Exception:
                         pass
+                for col, ddl_pg, _ddl_sqlite in business_profile_columns:
+                    try:
+                        conn.exec_driver_sql(
+                            f"ALTER TABLE IF EXISTS clientbusinessprofile "
+                            f"ADD COLUMN IF NOT EXISTS {col} {ddl_pg}"
+                        )
+                    except Exception:
+                        pass
+            elif backend.startswith("sqlite"):
+                try:
+                    rows = conn.exec_driver_sql("PRAGMA table_info('clientbusinessprofile')").fetchall()
+                    existing = {str(r[1]) for r in rows}
+                except Exception:
+                    existing = set()
+                for col, _ddl_pg, ddl_sqlite in business_profile_columns:
+                    if col not in existing:
+                        try:
+                            conn.exec_driver_sql(
+                                f"ALTER TABLE clientbusinessprofile ADD COLUMN {col} {ddl_sqlite}"
+                            )
+                        except Exception:
+                            pass
     except Exception:
         pass
 
