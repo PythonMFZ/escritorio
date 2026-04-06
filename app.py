@@ -1,5 +1,5 @@
 from __future__ import annotations
-from sqlalchemy import func, delete
+from sqlalchemy import UniqueConstraint, func, text, delete
 from sqlalchemy.exc import OperationalError
 
 import base64
