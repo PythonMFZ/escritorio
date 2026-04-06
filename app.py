@@ -1317,6 +1317,123 @@ def _upsert_internal_service_compat(
     session.execute(text(sql), params)
     session.commit()
 
+
+def _upsert_partner_product_compat(
+    session: Session,
+    *,
+    company_id: int,
+    partner_id: int,
+    area: str,
+    family: str,
+    name: str,
+    pf_pj: str,
+    ticket_min_brl: float,
+    ticket_max_brl: float,
+    revenue_min_brl: float,
+    revenue_max_brl: float,
+    score_total_min: float,
+    score_financial_min: float,
+    max_debt_ratio: float,
+    requires_collateral: bool,
+    allowed_states_json: str,
+    allowed_segments_json: str,
+    rate_default_pct: float,
+    cet_default_pct: float,
+    term_min_months: int,
+    term_max_months: int,
+    grace_max_months: int,
+    amortization_default: str,
+    tariff_default_brl: float,
+    insurance_default_brl: float,
+    admin_fee_default_brl: float,
+    ltv_max_pct: float,
+    commission_text: str,
+    payout_term: str,
+    notes: str,
+    is_active: bool = True,
+) -> None:
+    cols_meta = _table_columns_meta(session, "partnerproduct")
+    if not cols_meta:
+        row = PartnerProduct(
+            company_id=company_id, partner_id=partner_id, area=area,
+            family_code=family, family_slug=family, name=name, pf_pj=pf_pj,
+            ticket_min_brl=ticket_min_brl, ticket_max_brl=ticket_max_brl,
+            revenue_min_brl=revenue_min_brl, revenue_max_brl=revenue_max_brl,
+            score_total_min=score_total_min, score_financial_min=score_financial_min,
+            max_debt_ratio=max_debt_ratio, requires_collateral=requires_collateral,
+            allowed_states_json=allowed_states_json, allowed_segments_json=allowed_segments_json,
+            rate_default_pct=rate_default_pct, cet_default_pct=cet_default_pct,
+            term_min_months=term_min_months, term_max_months=term_max_months,
+            grace_max_months=grace_max_months, amortization_default=amortization_default,
+            tariff_default_brl=tariff_default_brl, insurance_default_brl=insurance_default_brl,
+            admin_fee_default_brl=admin_fee_default_brl, ltv_max_pct=ltv_max_pct,
+            commission_text=commission_text, payout_term=payout_term, notes=notes, is_active=is_active,
+        )
+        session.add(row)
+        session.commit()
+        return
+
+    provided: dict[str, Any] = {
+        "company_id": company_id,
+        "partner_id": partner_id,
+        "area": area,
+        "family_code": family,
+        "family_slug": family,
+        "name": name,
+        "pf_pj": pf_pj,
+        "ticket_min_brl": ticket_min_brl,
+        "ticket_max_brl": ticket_max_brl,
+        "revenue_min_brl": revenue_min_brl,
+        "revenue_max_brl": revenue_max_brl,
+        "score_total_min": score_total_min,
+        "score_financial_min": score_financial_min,
+        "max_debt_ratio": max_debt_ratio,
+        "requires_collateral": requires_collateral,
+        "allowed_states_json": allowed_states_json,
+        "allowed_segments_json": allowed_segments_json,
+        "rate_default_pct": rate_default_pct,
+        "cet_default_pct": cet_default_pct,
+        "term_min_months": term_min_months,
+        "term_max_months": term_max_months,
+        "grace_max_months": grace_max_months,
+        "amortization_default": amortization_default,
+        "tariff_default_brl": tariff_default_brl,
+        "insurance_default_brl": insurance_default_brl,
+        "admin_fee_default_brl": admin_fee_default_brl,
+        "ltv_max_pct": ltv_max_pct,
+        "commission_text": commission_text,
+        "payout_term": payout_term,
+        "notes": notes,
+        "is_active": is_active,
+        "created_at": utcnow(),
+        "updated_at": utcnow(),
+    }
+
+    names: list[str] = []
+    params: dict[str, Any] = {}
+    for meta in cols_meta:
+        col = meta["name"]
+        if col == "id":
+            continue
+        if col in provided:
+            val = provided[col]
+        elif not meta["nullable"]:
+            val = _generic_sql_default_for_column(col, meta["type"])
+        else:
+            continue
+        names.append(col)
+        params[col] = val
+
+    cols_sql = ", ".join(names)
+    placeholders = ", ".join(f":{c}" for c in names)
+    backend = engine.url.get_backend_name()
+    if backend.startswith("postgres"):
+        sql = f"INSERT INTO partnerproduct ({cols_sql}) VALUES ({placeholders})"
+    else:
+        sql = f"INSERT INTO partnerproduct ({cols_sql}) VALUES ({placeholders})"
+    session.execute(text(sql), params)
+    session.commit()
+
 def get_or_create_business_profile(session: Session, *, company_id: int, client_id: int) -> ClientBusinessProfile:
     row = session.exec(
         select(ClientBusinessProfile).where(
@@ -1351,6 +1468,39 @@ def get_or_create_business_profile(session: Session, *, company_id: int, client_
     session.commit()
     session.refresh(row)
     return row
+
+
+
+def _sync_business_profile_legacy_columns(session: Session, profile: ClientBusinessProfile) -> None:
+    try:
+        cols = {c["name"] for c in _table_columns_meta(session, "clientbusinessprofile")}
+        if not cols or not profile.id:
+            return
+        sets = []
+        params: dict[str, Any] = {"id": int(profile.id)}
+        if "banking_relationships_count" in cols:
+            sets.append("banking_relationships_count = :banking_relationships_count")
+            params["banking_relationships_count"] = int(profile.banks_count or 0)
+        if "monthly_payroll_brl" in cols:
+            sets.append("monthly_payroll_brl = :monthly_payroll_brl")
+            params["monthly_payroll_brl"] = float(profile.payroll_monthly_brl or 0.0)
+        if "monthly_receivables_brl" in cols:
+            sets.append("monthly_receivables_brl = :monthly_receivables_brl")
+            params["monthly_receivables_brl"] = float(profile.receivables_brl or 0.0)
+        if "collateral_available_brl" in cols:
+            sets.append("collateral_available_brl = :collateral_available_brl")
+            params["collateral_available_brl"] = float(profile.collateral_brl or 0.0)
+        if "desired_credit_amount_brl" in cols:
+            sets.append("desired_credit_amount_brl = :desired_credit_amount_brl")
+            params["desired_credit_amount_brl"] = float(profile.desired_credit_brl or 0.0)
+        if sets:
+            session.execute(text(f"UPDATE clientbusinessprofile SET {', '.join(sets)} WHERE id = :id"), params)
+            session.commit()
+    except Exception:
+        try:
+            session.rollback()
+        except Exception:
+            pass
 
 def list_product_families(session: Session, area: str = "") -> list[ProductFamily]:
     q = select(ProductFamily).where(ProductFamily.is_active == True)
@@ -4509,42 +4659,44 @@ a:hover{ color:#00BFBF; }
 {% extends "base.html" %}
 {% block content %}
 <div class="card p-4">
-  <div class="d-flex justify-content-between align-items-start">
+  <div class="d-flex flex-wrap justify-content-between align-items-start gap-3">
     <div>
-      <h4 class="mb-1">Empresa do Cliente</h4>
-      <div class="muted">CNPJ, endereço, e-mails, telefone etc.</div>
+      <h4 class="mb-1">Minha Empresa</h4>
+      <div class="muted">Cadastre os dados completos da empresa para alimentar o motor de ofertas, o simulador e o CRM.</div>
     </div>
-    <a class="btn btn-outline-secondary" href="/">Voltar</a>
+    <div class="d-flex gap-2">
+      <a class="btn btn-outline-secondary" href="/perfil">Ver perfil</a>
+      <a class="btn btn-outline-secondary" href="/">Voltar</a>
+    </div>
   </div>
   <hr class="my-3"/>
 
   {% if not current_client %}
     <div class="alert alert-warning">
       Nenhum cliente selecionado/vinculado.
-      {% if role in ["admin","equipe"] %}Use “Trocar cliente” ou crie um cliente em “Membros”.{% else %}Peça ao escritório para vincular seu acesso.{% endif %}
+      {% if role in ["admin","equipe"] %}Use “Trocar cliente”.{% else %}Peça ao escritório para vincular seu acesso.{% endif %}
     </div>
   {% else %}
     <form method="post" action="/empresa">
       <div class="row g-3">
+        <div class="col-12"><div class="fw-semibold">1. Cadastro básico</div></div>
         <div class="col-md-8">
-          <label class="form-label">Razão Social</label>
+          <label class="form-label">Razão social</label>
           <input class="form-control" name="name" value="{{ current_client.name }}" required />
         </div>
         <div class="col-md-4">
           <label class="form-label">CNPJ</label>
           <input class="form-control mono" name="cnpj" value="{{ current_client.cnpj }}" />
         </div>
-
-        <div class="col-md-6">
+        <div class="col-md-4">
           <label class="form-label">E-mail</label>
           <input class="form-control" name="email" type="email" value="{{ current_client.email }}" />
         </div>
-        <div class="col-md-6">
+        <div class="col-md-4">
           <label class="form-label">Telefone</label>
           <input class="form-control" name="phone" value="{{ current_client.phone }}" />
         </div>
-
-        <div class="col-md-6">
+        <div class="col-md-4">
           <label class="form-label">E-mail do financeiro</label>
           <input class="form-control" name="finance_email" type="email" value="{{ current_client.finance_email }}" />
         </div>
@@ -4552,29 +4704,151 @@ a:hover{ color:#00BFBF; }
           <label class="form-label">Endereço</label>
           <input class="form-control" name="address" value="{{ current_client.address }}" />
         </div>
-
-        <div class="col-md-4">
+        <div class="col-md-3">
           <label class="form-label">Cidade</label>
           <input class="form-control" name="city" value="{{ current_client.city }}" />
         </div>
-        <div class="col-md-4">
-          <label class="form-label">Estado</label>
+        <div class="col-md-1">
+          <label class="form-label">UF</label>
           <input class="form-control" name="state" value="{{ current_client.state }}" />
         </div>
-        <div class="col-md-4">
+        <div class="col-md-2">
           <label class="form-label">CEP</label>
           <input class="form-control mono" name="zip_code" value="{{ current_client.zip_code }}" />
         </div>
 
+        <div class="col-12 mt-2"><div class="fw-semibold">2. Perfil da empresa</div></div>
+        <div class="col-md-3">
+          <label class="form-label">Segmento</label>
+          <input class="form-control" name="segment" value="{{ business_profile.segment if business_profile else '' }}" />
+        </div>
+        <div class="col-md-3">
+          <label class="form-label">Subsegmento</label>
+          <input class="form-control" name="subsegment" value="{{ business_profile.subsegment if business_profile else '' }}" />
+        </div>
+        <div class="col-md-3">
+          <label class="form-label">CNAE</label>
+          <input class="form-control" name="cnae" value="{{ business_profile.cnae if business_profile else '' }}" />
+        </div>
+        <div class="col-md-3">
+          <label class="form-label">Regime tributário</label>
+          <input class="form-control" name="tax_regime" value="{{ business_profile.tax_regime if business_profile else '' }}" />
+        </div>
+        <div class="col-md-3">
+          <label class="form-label">Porte</label>
+          <input class="form-control" name="company_size" value="{{ business_profile.company_size if business_profile else '' }}" />
+        </div>
+        <div class="col-md-3">
+          <label class="form-label">Ano de fundação</label>
+          <input class="form-control" type="number" min="0" name="founded_year" value="{{ business_profile.founded_year if business_profile else 0 }}" />
+        </div>
+        <div class="col-md-3">
+          <label class="form-label">Modelo de negócio</label>
+          <input class="form-control" name="business_model" value="{{ business_profile.business_model if business_profile else '' }}" />
+        </div>
+        <div class="col-md-3">
+          <label class="form-label">Canal de vendas</label>
+          <input class="form-control" name="sales_channel" value="{{ business_profile.sales_channel if business_profile else '' }}" />
+        </div>
+
+        <div class="col-12 mt-2"><div class="fw-semibold">3. Estrutura financeira</div></div>
+        <div class="col-md-3">
+          <label class="form-label">Banco principal</label>
+          <input class="form-control" name="main_bank" value="{{ business_profile.main_bank if business_profile else '' }}" />
+        </div>
+        <div class="col-md-3">
+          <label class="form-label">Relacionamentos bancários</label>
+          <input class="form-control" type="number" min="0" name="banks_count" value="{{ business_profile.banks_count if business_profile else 0 }}" />
+        </div>
+        <div class="col-md-3">
+          <label class="form-label">Faturamento anual (R$)</label>
+          <input class="form-control" type="number" step="0.01" min="0" name="annual_revenue_brl" value="{{ business_profile.annual_revenue_brl if business_profile else 0 }}" />
+        </div>
+        <div class="col-md-3">
+          <label class="form-label">Custos fixos mensais (R$)</label>
+          <input class="form-control" type="number" step="0.01" min="0" name="monthly_fixed_cost_brl" value="{{ business_profile.monthly_fixed_cost_brl if business_profile else 0 }}" />
+        </div>
+        <div class="col-md-3">
+          <label class="form-label">Folha mensal (R$)</label>
+          <input class="form-control" type="number" step="0.01" min="0" name="payroll_monthly_brl" value="{{ business_profile.payroll_monthly_brl if business_profile else 0 }}" />
+        </div>
+        <div class="col-md-3">
+          <label class="form-label">Ticket médio (R$)</label>
+          <input class="form-control" type="number" step="0.01" min="0" name="average_ticket_brl" value="{{ business_profile.average_ticket_brl if business_profile else 0 }}" />
+        </div>
+        <div class="col-md-3">
+          <label class="form-label">Estoque (R$)</label>
+          <input class="form-control" type="number" step="0.01" min="0" name="inventory_brl" value="{{ business_profile.inventory_brl if business_profile else 0 }}" />
+        </div>
+        <div class="col-md-3">
+          <label class="form-label">Recebíveis (R$)</label>
+          <input class="form-control" type="number" step="0.01" min="0" name="receivables_brl" value="{{ business_profile.receivables_brl if business_profile else 0 }}" />
+        </div>
+        <div class="col-md-4">
+          <label class="form-label">Garantias disponíveis (R$)</label>
+          <input class="form-control" type="number" step="0.01" min="0" name="collateral_brl" value="{{ business_profile.collateral_brl if business_profile else 0 }}" />
+        </div>
+        <div class="col-md-4">
+          <label class="form-label">Inadimplência (R$)</label>
+          <input class="form-control" type="number" step="0.01" min="0" name="delinquency_brl" value="{{ business_profile.delinquency_brl if business_profile else 0 }}" />
+        </div>
+        <div class="col-md-4">
+          <label class="form-label">Crédito desejado (R$)</label>
+          <input class="form-control" type="number" step="0.01" min="0" name="desired_credit_brl" value="{{ business_profile.desired_credit_brl if business_profile else 0 }}" />
+        </div>
+
+        <div class="col-12 mt-2"><div class="fw-semibold">4. Objetivos e maturidade</div></div>
+        <div class="col-md-4">
+          <label class="form-label">Urgência</label>
+          <select class="form-select" name="urgency_level">
+            {% set urg = business_profile.urgency_level if business_profile else '' %}
+            <option value="" {% if urg == '' %}selected{% endif %}>Selecione</option>
+            <option value="baixa" {% if urg == 'baixa' %}selected{% endif %}>Baixa</option>
+            <option value="media" {% if urg == 'media' %}selected{% endif %}>Média</option>
+            <option value="alta" {% if urg == 'alta' %}selected{% endif %}>Alta</option>
+            <option value="imediata" {% if urg == 'imediata' %}selected{% endif %}>Imediata</option>
+          </select>
+        </div>
+        <div class="col-md-8">
+          <label class="form-label">Objetivo estratégico</label>
+          <input class="form-control" name="strategic_goal" value="{{ business_profile.strategic_goal if business_profile else '' }}" placeholder="Ex.: reestruturar passivos, expandir, captar equity..." />
+        </div>
         <div class="col-12">
-          <label class="form-label">Observações</label>
+          <label class="form-label">Dores principais</label>
+          <textarea class="form-control" name="pain_points" rows="3">{{ business_profile.pain_points if business_profile else '' }}</textarea>
+        </div>
+        <div class="col-12">
+          <label class="form-label">Interesses / famílias de produto</label>
+          <div class="row g-2">
+            {% set selected_interests = selected_interest_codes or [] %}
+            {% for fam in product_families %}
+              {% set checked = fam.code in selected_interests %}
+              <div class="col-md-4">
+                <label class="form-check border rounded p-2 w-100">
+                  <input class="form-check-input me-2" type="checkbox" name="interests" value="{{ fam.code }}" {% if checked %}checked{% endif %}/>
+                  <span class="form-check-label">
+                    <b>{{ fam.label }}</b><br>
+                    <small class="muted">{{ fam.area }}</small>
+                  </span>
+                </label>
+              </div>
+            {% endfor %}
+          </div>
+        </div>
+        <div class="col-md-3"><label class="form-check mt-4"><input class="form-check-input me-2" type="checkbox" name="has_erp" {% if business_profile and business_profile.has_erp %}checked{% endif %}/>Usa ERP</label></div>
+        <div class="col-md-3"><label class="form-check mt-4"><input class="form-check-input me-2" type="checkbox" name="has_budget" {% if business_profile and business_profile.has_budget %}checked{% endif %}/>Tem orçamento</label></div>
+        <div class="col-md-3"><label class="form-check mt-4"><input class="form-check-input me-2" type="checkbox" name="has_board" {% if business_profile and business_profile.has_board %}checked{% endif %}/>Tem governança / board</label></div>
+        <div class="col-md-3"><label class="form-check mt-4"><input class="form-check-input me-2" type="checkbox" name="has_audited_fs" {% if business_profile and business_profile.has_audited_fs %}checked{% endif %}/>DFs auditadas</label></div>
+
+        <div class="col-12">
+          <label class="form-label">Observações gerais</label>
           <textarea class="form-control" name="notes" rows="3">{{ current_client.notes }}</textarea>
         </div>
       </div>
 
       <div class="d-flex gap-2 mt-4">
-        <button class="btn btn-primary">Salvar</button>
-        <a class="btn btn-outline-secondary" href="/perfil">Ver Perfil</a>
+        <button class="btn btn-primary">Salvar perfil empresarial</button>
+        <a class="btn btn-outline-secondary" href="/perfil">Ver painel do perfil</a>
       </div>
     </form>
   {% endif %}
@@ -4585,54 +4859,148 @@ a:hover{ color:#00BFBF; }
 {% extends "base.html" %}
 {% block content %}
 <div class="row g-3">
-  <div class="col-lg-5">
-    <div class="card p-4">
+  <div class="col-xl-3">
+    <div class="card p-4 h-100">
       <h4 class="mb-1">Meu Perfil</h4>
-      <div class="muted mb-3">Dados do usuário</div>
+      <div class="muted mb-3">Dados do usuário e do atendimento.</div>
       <div><span class="muted">Nome:</span> <b>{{ current_user.name }}</b></div>
       <div><span class="muted">E-mail:</span> <span class="mono">{{ current_user.email }}</span></div>
       <div><span class="muted">Role:</span> <b>{{ role }}</b></div>
+      {% if current_client %}
+        <hr>
+        <div><span class="muted">Cliente:</span> <b>{{ current_client.name }}</b></div>
+        <div><span class="muted">CNPJ:</span> <span class="mono">{{ current_client.cnpj or "-" }}</span></div>
+        <div><span class="muted">Cidade/UF:</span> {{ current_client.city or "-" }}{% if current_client.state %}/{{ current_client.state }}{% endif %}</div>
+      {% endif %}
+      <div class="mt-3 d-grid gap-2">
+        <a class="btn btn-outline-secondary" href="/empresa">Completar perfil empresarial</a>
+        <a class="btn btn-primary" href="/perfil/avaliacao/nova">Nova avaliação</a>
+      </div>
     </div>
   </div>
 
-  <div class="col-lg-7">
-    <div class="card p-4">
-      <h4 class="mb-1">Indicadores do Cliente</h4>
-      <div class="muted mb-3">Faturamento, endividamento, caixa etc.</div>
-
+  <div class="col-xl-6">
+    <div class="card p-4 mb-3">
+      <div class="d-flex justify-content-between align-items-start">
+        <div>
+          <h4 class="mb-1">Indicadores do Cliente</h4>
+          <div class="muted">Faturamento, endividamento, caixa, equipe e saúde financeira.</div>
+        </div>
+        <div class="text-end">
+          <div class="muted small">Score atual</div>
+          <div class="fs-3 fw-bold">{{ "%.1f"|format(latest_score or 0) }}</div>
+          {% if delta is not none %}
+            <div class="small {% if delta >= 0 %}text-success{% else %}text-danger{% endif %}">
+              {% if delta >= 0 %}+{% endif %}{{ "%.1f"|format(delta) }} vs. avaliação anterior
+            </div>
+          {% endif %}
+        </div>
+      </div>
       {% if not current_client %}
-        <div class="alert alert-warning">Nenhum cliente selecionado/vinculado.</div>
+        <div class="alert alert-warning mt-3">Nenhum cliente selecionado/vinculado.</div>
       {% else %}
-        <div class="mb-2"><span class="muted">Cliente:</span> <b>{{ current_client.name }}</b></div>
-
-        <form method="post" action="/perfil">
+        <form method="post" action="/perfil" class="mt-3">
           <div class="row g-3">
             <div class="col-md-6">
               <label class="form-label">Faturamento mensal (R$)</label>
-              <input class="form-control" name="revenue_monthly_brl" type="number" step="0.01" min="0"
-                     value="{{ current_client.revenue_monthly_brl }}" />
+              <input class="form-control" name="revenue_monthly_brl" type="number" step="0.01" min="0" value="{{ current_client.revenue_monthly_brl }}" />
             </div>
             <div class="col-md-6">
               <label class="form-label">Endividamento total (R$)</label>
-              <input class="form-control" name="debt_total_brl" type="number" step="0.01" min="0"
-                     value="{{ current_client.debt_total_brl }}" />
+              <input class="form-control" name="debt_total_brl" type="number" step="0.01" min="0" value="{{ current_client.debt_total_brl }}" />
             </div>
             <div class="col-md-6">
               <label class="form-label">Saldo em caixa (R$)</label>
-              <input class="form-control" name="cash_balance_brl" type="number" step="0.01" min="0"
-                     value="{{ current_client.cash_balance_brl }}" />
+              <input class="form-control" name="cash_balance_brl" type="number" step="0.01" min="0" value="{{ current_client.cash_balance_brl }}" />
             </div>
             <div class="col-md-6">
               <label class="form-label">Funcionários</label>
-              <input class="form-control" name="employees_count" type="number" min="0"
-                     value="{{ current_client.employees_count }}" />
+              <input class="form-control" name="employees_count" type="number" min="0" value="{{ current_client.employees_count }}" />
             </div>
           </div>
-          <div class="mt-4">
-            <button class="btn btn-primary">Salvar</button>
+          <div class="mt-4 d-flex gap-2">
+            <button class="btn btn-primary">Salvar indicadores</button>
             <a class="btn btn-outline-secondary" href="/empresa">Editar dados da empresa</a>
+            <a class="btn btn-outline-secondary" href="/motor-ofertas">Ver motor</a>
           </div>
         </form>
+      {% endif %}
+    </div>
+
+    {% if current_client and business_profile %}
+    <div class="card p-4">
+      <div class="d-flex justify-content-between align-items-start">
+        <div>
+          <h4 class="mb-1">Perfil Empresarial</h4>
+          <div class="muted">Resumo do diagnóstico empresarial usado no motor de ofertas.</div>
+        </div>
+        <a class="btn btn-sm btn-outline-secondary" href="/empresa">Editar</a>
+      </div>
+      <div class="row g-3 mt-1">
+        <div class="col-md-4"><div class="border rounded p-3 h-100"><div class="muted small">Segmento</div><div class="fw-semibold">{{ business_profile.segment or "-" }}</div><div class="small muted">{{ business_profile.subsegment or "" }}</div></div></div>
+        <div class="col-md-4"><div class="border rounded p-3 h-100"><div class="muted small">Regime / Porte</div><div class="fw-semibold">{{ business_profile.tax_regime or "-" }}</div><div class="small muted">{{ business_profile.company_size or "-" }}</div></div></div>
+        <div class="col-md-4"><div class="border rounded p-3 h-100"><div class="muted small">Banco principal</div><div class="fw-semibold">{{ business_profile.main_bank or "-" }}</div><div class="small muted">{{ business_profile.banks_count or 0 }} relacionamento(s)</div></div></div>
+        <div class="col-md-4"><div class="border rounded p-3 h-100"><div class="muted small">Receita anual</div><div class="fw-semibold">R$ {{ "%.2f"|format(business_profile.annual_revenue_brl or 0) }}</div><div class="small muted">Folha R$ {{ "%.2f"|format(business_profile.payroll_monthly_brl or 0) }}</div></div></div>
+        <div class="col-md-4"><div class="border rounded p-3 h-100"><div class="muted small">Recebíveis / Garantias</div><div class="fw-semibold">R$ {{ "%.2f"|format(business_profile.receivables_brl or 0) }}</div><div class="small muted">Garantias R$ {{ "%.2f"|format(business_profile.collateral_brl or 0) }}</div></div></div>
+        <div class="col-md-4"><div class="border rounded p-3 h-100"><div class="muted small">Crédito desejado</div><div class="fw-semibold">R$ {{ "%.2f"|format(business_profile.desired_credit_brl or 0) }}</div><div class="small muted">Urgência: {{ business_profile.urgency_level or "-" }}</div></div></div>
+      </div>
+      <div class="mt-3">
+        <div class="fw-semibold">Objetivo estratégico</div>
+        <div>{{ business_profile.strategic_goal or "-" }}</div>
+      </div>
+      <div class="mt-2">
+        <div class="fw-semibold">Dores principais</div>
+        <div>{{ business_profile.pain_points or "-" }}</div>
+      </div>
+      <div class="mt-2">
+        <div class="fw-semibold">Interesses</div>
+        {% set interests = business_profile_interests or [] %}
+        {% if interests %}
+          <div class="d-flex flex-wrap gap-2 mt-1">
+            {% for item in interests %}
+              <span class="badge text-bg-light border">{{ item }}</span>
+            {% endfor %}
+          </div>
+        {% else %}
+          <div class="muted">Nenhum interesse informado ainda.</div>
+        {% endif %}
+      </div>
+    </div>
+    {% endif %}
+  </div>
+
+  <div class="col-xl-3">
+    <div class="card p-4 mb-3">
+      <h4 class="mb-1">Evolução</h4>
+      <div class="muted mb-2">Score 0–100 (processos + financeiro + NPS)</div>
+      <div class="fs-3 fw-bold">{{ "%.1f"|format(latest_score or 0) }}</div>
+      {% if snapshots %}
+        <div class="small muted">{{ snapshots|length }} avaliação(ões) no histórico.</div>
+      {% else %}
+        <div class="small muted">Ainda sem histórico suficiente.</div>
+      {% endif %}
+    </div>
+
+    <div class="card p-4">
+      <div class="d-flex justify-content-between align-items-start">
+        <div>
+          <h4 class="mb-1">Motor de Ofertas</h4>
+          <div class="muted">Principais recomendações para o cliente.</div>
+        </div>
+        <a class="btn btn-sm btn-outline-secondary" href="/motor-ofertas">Abrir</a>
+      </div>
+      {% if offer_matches %}
+        <div class="mt-3 d-grid gap-2">
+          {% for m in offer_matches[:4] %}
+          <div class="border rounded p-3">
+            <div class="d-flex justify-content-between"><b>{{ m.product_name }}</b><span class="badge text-bg-light border">{{ m.priority_level }}</span></div>
+            <div class="small muted">{{ m.partner_name or "Maffezzolli Capital" }}</div>
+            <div class="small mt-1"><span class="mono">{{ m.family_code }}</span> • score {{ "%.1f"|format(m.score_fit) }}</div>
+          </div>
+          {% endfor %}
+        </div>
+      {% else %}
+        <div class="muted mt-3">Ainda não há recomendações geradas. Complete o perfil empresarial e gere o motor.</div>
       {% endif %}
     </div>
   </div>
@@ -8064,6 +8432,388 @@ TEMPLATES["ofertas.html"] = r"""
 {% endblock %}
 """
 
+
+
+# ----------------------------
+# Templates (Perfil, Motor e Catálogo)
+# ----------------------------
+
+TEMPLATES["motor_ofertas.html"] = r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4 mb-3">
+  <div class="d-flex flex-wrap justify-content-between align-items-start gap-3">
+    <div>
+      <h4 class="mb-1">Motor de Ofertas</h4>
+      <div class="muted">O motor cruza perfil empresarial, histórico de avaliações, score e elegibilidade por família de produto e parceiro.</div>
+    </div>
+    <form method="post" action="/motor-ofertas/gerar">
+      <button class="btn btn-primary">Gerar motor</button>
+    </form>
+  </div>
+</div>
+
+{% if not current_client %}
+  <div class="alert alert-warning">Nenhum cliente selecionado.</div>
+{% else %}
+  <div class="row g-3 mb-3">
+    <div class="col-md-3"><div class="card p-3 h-100"><div class="muted small">Cliente</div><div class="fw-semibold">{{ current_client.name }}</div></div></div>
+    <div class="col-md-3"><div class="card p-3 h-100"><div class="muted small">Sugestões</div><div class="fw-semibold">{{ matches|length }}</div></div></div>
+    <div class="col-md-3"><div class="card p-3 h-100"><div class="muted small">Prioridade alta</div><div class="fw-semibold">{{ matches|selectattr("priority_level", "equalto", "alta")|list|length }}</div></div></div>
+    <div class="col-md-3"><div class="card p-3 h-100"><div class="muted small">Parceiros elegíveis</div><div class="fw-semibold">{{ matches|selectattr("source_kind", "equalto", "partner")|list|length }}</div></div></div>
+  </div>
+
+  {% if matches %}
+    <div class="row g-3">
+      {% for m in matches %}
+      <div class="col-lg-6">
+        <div class="card p-4 h-100">
+          <div class="d-flex justify-content-between align-items-start">
+            <div>
+              <div class="fw-semibold">{{ m.product_name }}</div>
+              <div class="small muted">{{ m.partner_name or "Maffezzolli Capital" }}</div>
+            </div>
+            <span class="badge text-bg-light border">{{ m.priority_level }}</span>
+          </div>
+          <div class="small mt-2"><span class="mono">{{ m.family_code }}</span> • score {{ "%.1f"|format(m.score_fit) }}</div>
+          <div class="mt-2">{{ m.reason_summary }}</div>
+          {% if m.partner_options_count %}
+            <div class="mt-2 small muted">{{ m.partner_options_count }} parceiro(s) elegível(eis) nessa família.</div>
+          {% endif %}
+          <div class="mt-3 d-flex gap-2">
+            <a class="btn btn-sm btn-outline-primary" href="/simulador">Simular</a>
+            <a class="btn btn-sm btn-outline-secondary" href="/propostas">Gerar proposta</a>
+          </div>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+  {% else %}
+    <div class="card p-4">
+      <div class="fw-semibold mb-2">Ainda não há recomendações</div>
+      <div class="muted">Complete o perfil empresarial, faça uma avaliação em <b>/perfil/avaliacao/nova</b>, cadastre parceiros/produtos e gere o motor novamente.</div>
+      <div class="mt-3 d-flex gap-2">
+        <a class="btn btn-outline-secondary" href="/empresa">Completar perfil</a>
+        <a class="btn btn-outline-secondary" href="/admin/parceiros">Cadastrar parceiros</a>
+      </div>
+    </div>
+  {% endif %}
+{% endif %}
+{% endblock %}
+"""
+
+TEMPLATES["ofertas.html"] = r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <div class="d-flex justify-content-between align-items-start">
+    <div>
+      <h4 class="mb-1">Minhas Ofertas</h4>
+      <div class="muted">Ofertas aderentes ao perfil da sua empresa, organizadas por família e parceiro.</div>
+    </div>
+    <a class="btn btn-outline-secondary" href="/motor-ofertas">Ver motor</a>
+  </div>
+  <hr class="my-3"/>
+  {% if not current_client %}
+    <div class="alert alert-warning">Nenhum cliente selecionado.</div>
+  {% elif matches %}
+    <div class="row g-3">
+      {% for m in matches %}
+      <div class="col-lg-6">
+        <div class="border rounded p-3 h-100">
+          <div class="d-flex justify-content-between align-items-start gap-2">
+            <div>
+              <div class="fw-semibold">{{ m.product_name }}</div>
+              <div class="small muted">{{ m.partner_name or "Maffezzolli Capital" }}</div>
+            </div>
+            <span class="badge text-bg-light border">{{ m.priority_level }}</span>
+          </div>
+          <div class="small mt-2"><span class="mono">{{ m.family_code }}</span> • score {{ "%.1f"|format(m.score_fit) }}</div>
+          <div class="mt-2">{{ m.reason_summary }}</div>
+          {% if m.partner_options_count %}
+            <div class="small muted mt-2">{{ m.partner_options_count }} parceiro(s) elegível(eis) nessa família.</div>
+          {% endif %}
+          <div class="mt-3 d-flex gap-2">
+            <a class="btn btn-sm btn-outline-primary" href="/simulador">Simular</a>
+            <a class="btn btn-sm btn-outline-secondary" href="/propostas">Solicitar proposta</a>
+          </div>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+  {% else %}
+    <div class="muted">Ainda não há ofertas geradas para sua empresa.</div>
+  {% endif %}
+</div>
+{% endblock %}
+"""
+
+TEMPLATES["admin_servicos_internos.html"] = r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4 mb-3">
+  <div class="d-flex flex-wrap justify-content-between align-items-start gap-3">
+    <div>
+      <h4 class="mb-1">Produtos internos</h4>
+      <div class="muted">Catálogo próprio da Maffezzolli Capital, vinculado às famílias canônicas do motor.</div>
+    </div>
+    <div class="d-flex gap-2">
+      <a class="btn btn-outline-secondary" href="/admin/familias">Ver famílias</a>
+      <a class="btn btn-outline-secondary" href="/motor-ofertas">Abrir motor</a>
+    </div>
+  </div>
+</div>
+
+<div class="row g-3">
+  <div class="col-lg-5">
+    <div class="card p-4">
+      <h5 class="mb-3">Cadastrar produto interno</h5>
+      <form method="post" action="/admin/servicos-internos/add">
+        <div class="mb-3">
+          <label class="form-label">Área</label>
+          <select class="form-select" name="area">
+            <option value="advisory">Advisory</option>
+            <option value="ib">IB</option>
+            <option value="baas">BaaS</option>
+            <option value="special_sits">Special Sits</option>
+          </select>
+        </div>
+        <div class="mb-3">
+          <label class="form-label">Família</label>
+          <select class="form-select" name="family_code" required>
+            {% for fam in families %}
+              <option value="{{ fam.code }}">{{ fam.label }} ({{ fam.area }})</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="mb-3">
+          <label class="form-label">Nome do produto</label>
+          <input class="form-control" name="name" required />
+        </div>
+        <div class="mb-3">
+          <label class="form-label">Descrição</label>
+          <textarea class="form-control" name="description" rows="3"></textarea>
+        </div>
+        <div class="mb-3">
+          <label class="form-label">Peso/prioridade</label>
+          <input class="form-control" type="number" min="0" name="priority_weight" value="50" />
+        </div>
+        <div class="mb-3">
+          <label class="form-label">Notas</label>
+          <textarea class="form-control" name="notes" rows="2"></textarea>
+        </div>
+        <button class="btn btn-primary">Salvar produto interno</button>
+      </form>
+    </div>
+  </div>
+
+  <div class="col-lg-7">
+    <div class="card p-4">
+      <h5 class="mb-3">Catálogo atual</h5>
+      {% if services %}
+        <div class="table-responsive">
+          <table class="table align-middle">
+            <thead><tr><th>Área</th><th>Família</th><th>Produto</th><th>Peso</th></tr></thead>
+            <tbody>
+            {% for s in services %}
+              <tr>
+                <td>{{ s.area }}</td>
+                <td><span class="mono">{{ s.family_code or s.family_slug }}</span></td>
+                <td><b>{{ s.name }}</b><br><small class="muted">{{ s.description }}</small></td>
+                <td>{{ s.priority_weight }}</td>
+              </tr>
+            {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      {% else %}
+        <div class="muted">Nenhum produto interno cadastrado.</div>
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endblock %}
+"""
+
+TEMPLATES["admin_parceiros.html"] = r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4 mb-3">
+  <div class="d-flex flex-wrap justify-content-between align-items-start gap-3">
+    <div>
+      <h4 class="mb-1">Parceiros e produtos</h4>
+      <div class="muted">Cadastre parceiros, vincule seus produtos às famílias canônicas e use isso no motor de ofertas e no simulador.</div>
+    </div>
+    <a class="btn btn-outline-secondary" href="/admin/familias">Ver famílias</a>
+  </div>
+</div>
+
+<div class="row g-3">
+  <div class="col-lg-4">
+    <div class="card p-4 mb-3">
+      <h5 class="mb-3">Novo parceiro</h5>
+      <form method="post" action="/admin/parceiros/add">
+        <div class="mb-3"><label class="form-label">Nome</label><input class="form-control" name="name" required /></div>
+        <div class="mb-3"><label class="form-label">Tipo</label><input class="form-control" name="partner_type" value="financeiro" /></div>
+        <div class="mb-3"><label class="form-label">Contato</label><input class="form-control" name="contact_name" /></div>
+        <div class="mb-3"><label class="form-label">E-mail</label><input class="form-control" type="email" name="contact_email" /></div>
+        <div class="mb-3"><label class="form-label">Notas</label><textarea class="form-control" name="notes" rows="2"></textarea></div>
+        <button class="btn btn-primary">Salvar parceiro</button>
+      </form>
+    </div>
+
+    <div class="card p-4">
+      <h5 class="mb-3">Nova campanha</h5>
+      <form method="post" action="/admin/parceiros/campaigns/add">
+        <div class="mb-3">
+          <label class="form-label">Produto do parceiro</label>
+          <select class="form-select" name="partner_product_id">
+            {% for p in products %}
+              <option value="{{ p.id }}">{{ partner_map[p.partner_id].name if p.partner_id in partner_map else 'Parceiro' }} — {{ p.name }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="mb-3"><label class="form-label">Título</label><input class="form-control" name="title" required /></div>
+        <div class="row g-2">
+          <div class="col-md-6"><label class="form-label">Início</label><input class="form-control" type="date" name="starts_at" /></div>
+          <div class="col-md-6"><label class="form-label">Fim</label><input class="form-control" type="date" name="ends_at" /></div>
+        </div>
+        <div class="mb-3 mt-3"><label class="form-label">Bônus (%)</label><input class="form-control" type="number" step="0.01" name="bonus_pct" value="0" /></div>
+        <div class="mb-3"><label class="form-label">Resumo da regra</label><textarea class="form-control" name="rule_summary" rows="2"></textarea></div>
+        <button class="btn btn-outline-primary">Salvar campanha</button>
+      </form>
+    </div>
+  </div>
+
+  <div class="col-lg-8">
+    <div class="card p-4 mb-3">
+      <h5 class="mb-3">Novo produto de parceiro</h5>
+      <form method="post" action="/admin/parceiros/products/add">
+        <div class="row g-3">
+          <div class="col-md-6">
+            <label class="form-label">Parceiro</label>
+            <select class="form-select" name="partner_id" required>
+              {% for p in partners %}
+                <option value="{{ p.id }}">{{ p.name }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="col-md-3">
+            <label class="form-label">Área</label>
+            <select class="form-select" name="area">
+              <option value="advisory">Advisory</option>
+              <option value="ib">IB</option>
+              <option value="baas">BaaS</option>
+              <option value="special_sits">Special Sits</option>
+            </select>
+          </div>
+          <div class="col-md-3">
+            <label class="form-label">Público</label>
+            <select class="form-select" name="pf_pj">
+              <option value="PJ">PJ</option>
+              <option value="PF">PF</option>
+              <option value="PF/PJ">PF/PJ</option>
+            </select>
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">Família</label>
+            <select class="form-select" name="family_code" required>
+              {% for fam in families %}
+                <option value="{{ fam.code }}">{{ fam.label }} ({{ fam.area }})</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">Nome do produto</label>
+            <input class="form-control" name="name" required />
+          </div>
+          <div class="col-md-3"><label class="form-label">Ticket min. (R$)</label><input class="form-control" type="number" step="0.01" name="ticket_min_brl" value="0" /></div>
+          <div class="col-md-3"><label class="form-label">Ticket max. (R$)</label><input class="form-control" type="number" step="0.01" name="ticket_max_brl" value="0" /></div>
+          <div class="col-md-3"><label class="form-label">Receita min. mensal (R$)</label><input class="form-control" type="number" step="0.01" name="revenue_min_brl" value="0" /></div>
+          <div class="col-md-3"><label class="form-label">Receita max. mensal (R$)</label><input class="form-control" type="number" step="0.01" name="revenue_max_brl" value="0" /></div>
+          <div class="col-md-3"><label class="form-label">Score total min.</label><input class="form-control" type="number" step="0.01" name="score_total_min" value="0" /></div>
+          <div class="col-md-3"><label class="form-label">Score financeiro min.</label><input class="form-control" type="number" step="0.01" name="score_financial_min" value="0" /></div>
+          <div class="col-md-3"><label class="form-label">Debt ratio max.</label><input class="form-control" type="number" step="0.01" name="max_debt_ratio" value="0" /></div>
+          <div class="col-md-3"><label class="form-label">Exige garantia?</label><div class="form-check mt-2"><input class="form-check-input" type="checkbox" name="requires_collateral"></div></div>
+          <div class="col-md-3"><label class="form-label">Taxa padrão (%)</label><input class="form-control" type="number" step="0.01" name="rate_default_pct" value="0" /></div>
+          <div class="col-md-3"><label class="form-label">CET padrão (%)</label><input class="form-control" type="number" step="0.01" name="cet_default_pct" value="0" /></div>
+          <div class="col-md-2"><label class="form-label">Prazo min.</label><input class="form-control" type="number" name="term_min_months" value="0" /></div>
+          <div class="col-md-2"><label class="form-label">Prazo max.</label><input class="form-control" type="number" name="term_max_months" value="0" /></div>
+          <div class="col-md-2"><label class="form-label">Carência max.</label><input class="form-control" type="number" name="grace_max_months" value="0" /></div>
+          <div class="col-md-3"><label class="form-label">Amortização</label><input class="form-control" name="amortization_default" value="PRICE" /></div>
+          <div class="col-md-3"><label class="form-label">LTV max. (%)</label><input class="form-control" type="number" step="0.01" name="ltv_max_pct" value="0" /></div>
+          <div class="col-md-4"><label class="form-label">UFs permitidas (CSV)</label><input class="form-control" name="allowed_states_csv" /></div>
+          <div class="col-md-4"><label class="form-label">Segmentos permitidos (CSV)</label><input class="form-control" name="allowed_segments_csv" /></div>
+          <div class="col-md-4"><label class="form-label">Comissão</label><input class="form-control" name="commission_text" /></div>
+          <div class="col-md-4"><label class="form-label">Payout</label><input class="form-control" name="payout_term" /></div>
+          <div class="col-md-8"><label class="form-label">Notas</label><input class="form-control" name="notes" /></div>
+        </div>
+        <button class="btn btn-primary mt-3">Salvar produto do parceiro</button>
+      </form>
+    </div>
+
+    <div class="card p-4 mb-3">
+      <h5 class="mb-3">Parceiros cadastrados</h5>
+      {% if partners %}
+      <div class="table-responsive">
+        <table class="table align-middle">
+          <thead><tr><th>Nome</th><th>Tipo</th><th>Contato</th><th>E-mail</th></tr></thead>
+          <tbody>
+            {% for p in partners %}
+            <tr><td><b>{{ p.name }}</b></td><td>{{ p.partner_type }}</td><td>{{ p.contact_name or "-" }}</td><td>{{ p.contact_email or "-" }}</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% else %}<div class="muted">Nenhum parceiro cadastrado.</div>{% endif %}
+    </div>
+
+    <div class="card p-4 mb-3">
+      <h5 class="mb-3">Produtos dos parceiros</h5>
+      {% if products %}
+      <div class="table-responsive">
+        <table class="table align-middle">
+          <thead><tr><th>Parceiro</th><th>Produto</th><th>Família</th><th>Regras</th></tr></thead>
+          <tbody>
+            {% for p in products %}
+            <tr>
+              <td>{{ partner_map[p.partner_id].name if p.partner_id in partner_map else p.partner_id }}</td>
+              <td><b>{{ p.name }}</b><br><small class="muted">{{ p.pf_pj }}</small></td>
+              <td><span class="mono">{{ p.family_code or p.family_slug }}</span></td>
+              <td class="small muted">Receita min. {{ "%.0f"|format(p.revenue_min_brl or 0) }} • Ticket {{ "%.0f"|format(p.ticket_min_brl or 0) }}–{{ "%.0f"|format(p.ticket_max_brl or 0) }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% else %}<div class="muted">Nenhum produto de parceiro cadastrado.</div>{% endif %}
+    </div>
+
+    <div class="card p-4">
+      <h5 class="mb-3">Campanhas</h5>
+      {% if campaigns %}
+      <div class="table-responsive">
+        <table class="table align-middle">
+          <thead><tr><th>Título</th><th>Produto</th><th>Bônus</th><th>Vigência</th></tr></thead>
+          <tbody>
+          {% for c in campaigns %}
+            <tr>
+              <td><b>{{ c.title }}</b><br><small class="muted">{{ c.rule_summary }}</small></td>
+              <td>{% for p in products %}{% if p.id == c.partner_product_id %}{{ p.name }}{% endif %}{% endfor %}</td>
+              <td>{{ "%.2f"|format(c.bonus_pct or 0) }}%</td>
+              <td>{{ c.starts_at }}<br>{{ c.ends_at }}</td>
+            </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% else %}<div class="muted">Nenhuma campanha cadastrada.</div>{% endif %}
+    </div>
+  </div>
+</div>
+{% endblock %}
+"""
+
 # ----------------------------
 # Templates (Open Finance)
 # ----------------------------
@@ -10340,9 +11090,13 @@ async def admin_parceiros_add(request: Request, session: Session = Depends(get_s
     ctx = get_tenant_context(request, session)
     assert ctx is not None
     row = Partner(company_id=ctx.company.id, name=(name or "").strip(), partner_type=(partner_type or "").strip(), contact_name=(contact_name or "").strip(), contact_email=(contact_email or "").strip(), notes=(notes or "").strip(), is_active=True)
-    session.add(row)
-    session.commit()
-    set_flash(request, "Parceiro salvo.")
+    try:
+        session.add(row)
+        session.commit()
+        set_flash(request, "Parceiro salvo.")
+    except IntegrityError:
+        session.rollback()
+        set_flash(request, "Já existe parceiro com esse nome.")
     return RedirectResponse("/admin/parceiros", status_code=303)
 
 
@@ -10351,9 +11105,39 @@ async def admin_parceiros_add(request: Request, session: Session = Depends(get_s
 async def admin_partner_product_add(request: Request, session: Session = Depends(get_session), partner_id: int = Form(...), area: str = Form(...), family_code: str = Form(...), name: str = Form(...), pf_pj: str = Form("PJ"), ticket_min_brl: float = Form(0.0), ticket_max_brl: float = Form(0.0), revenue_min_brl: float = Form(0.0), revenue_max_brl: float = Form(0.0), score_total_min: float = Form(0.0), score_financial_min: float = Form(0.0), max_debt_ratio: float = Form(0.0), requires_collateral: Optional[str] = Form(None), allowed_states_csv: str = Form(""), allowed_segments_csv: str = Form(""), rate_default_pct: float = Form(0.0), cet_default_pct: float = Form(0.0), term_min_months: int = Form(0), term_max_months: int = Form(0), grace_max_months: int = Form(0), amortization_default: str = Form("PRICE"), tariff_default_brl: float = Form(0.0), insurance_default_brl: float = Form(0.0), admin_fee_default_brl: float = Form(0.0), ltv_max_pct: float = Form(0.0), commission_text: str = Form(""), payout_term: str = Form(""), notes: str = Form("")) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
-    row = PartnerProduct(company_id=ctx.company.id, partner_id=int(partner_id), area=(area or "").strip(), family_code=(family_code or "").strip(), name=(name or "").strip(), pf_pj=(pf_pj or "PJ").strip(), ticket_min_brl=max(0.0, float(ticket_min_brl or 0.0)), ticket_max_brl=max(0.0, float(ticket_max_brl or 0.0)), revenue_min_brl=max(0.0, float(revenue_min_brl or 0.0)), revenue_max_brl=max(0.0, float(revenue_max_brl or 0.0)), score_total_min=max(0.0, float(score_total_min or 0.0)), score_financial_min=max(0.0, float(score_financial_min or 0.0)), max_debt_ratio=max(0.0, float(max_debt_ratio or 0.0)), requires_collateral=_parse_bool(requires_collateral), allowed_states_json=_json_dump_list([x.strip().upper() for x in (allowed_states_csv or "").split(",") if x.strip()]), allowed_segments_json=_json_dump_list([x.strip() for x in (allowed_segments_csv or "").split(",") if x.strip()]), rate_default_pct=max(0.0, float(rate_default_pct or 0.0)), cet_default_pct=max(0.0, float(cet_default_pct or 0.0)), term_min_months=max(0, int(term_min_months or 0)), term_max_months=max(0, int(term_max_months or 0)), grace_max_months=max(0, int(grace_max_months or 0)), amortization_default=(amortization_default or "PRICE").strip(), tariff_default_brl=max(0.0, float(tariff_default_brl or 0.0)), insurance_default_brl=max(0.0, float(insurance_default_brl or 0.0)), admin_fee_default_brl=max(0.0, float(admin_fee_default_brl or 0.0)), ltv_max_pct=max(0.0, float(ltv_max_pct or 0.0)), commission_text=(commission_text or "").strip(), payout_term=(payout_term or "").strip(), notes=(notes or "").strip(), is_active=True)
-    session.add(row)
-    session.commit()
+    _upsert_partner_product_compat(
+        session,
+        company_id=ctx.company.id,
+        partner_id=int(partner_id),
+        area=(area or "").strip(),
+        family=(family_code or "").strip(),
+        name=(name or "").strip(),
+        pf_pj=(pf_pj or "PJ").strip(),
+        ticket_min_brl=max(0.0, float(ticket_min_brl or 0.0)),
+        ticket_max_brl=max(0.0, float(ticket_max_brl or 0.0)),
+        revenue_min_brl=max(0.0, float(revenue_min_brl or 0.0)),
+        revenue_max_brl=max(0.0, float(revenue_max_brl or 0.0)),
+        score_total_min=max(0.0, float(score_total_min or 0.0)),
+        score_financial_min=max(0.0, float(score_financial_min or 0.0)),
+        max_debt_ratio=max(0.0, float(max_debt_ratio or 0.0)),
+        requires_collateral=_parse_bool(requires_collateral),
+        allowed_states_json=_json_dump_list([x.strip().upper() for x in (allowed_states_csv or "").split(",") if x.strip()]),
+        allowed_segments_json=_json_dump_list([x.strip() for x in (allowed_segments_csv or "").split(",") if x.strip()]),
+        rate_default_pct=max(0.0, float(rate_default_pct or 0.0)),
+        cet_default_pct=max(0.0, float(cet_default_pct or 0.0)),
+        term_min_months=max(0, int(term_min_months or 0)),
+        term_max_months=max(0, int(term_max_months or 0)),
+        grace_max_months=max(0, int(grace_max_months or 0)),
+        amortization_default=(amortization_default or "PRICE").strip(),
+        tariff_default_brl=max(0.0, float(tariff_default_brl or 0.0)),
+        insurance_default_brl=max(0.0, float(insurance_default_brl or 0.0)),
+        admin_fee_default_brl=max(0.0, float(admin_fee_default_brl or 0.0)),
+        ltv_max_pct=max(0.0, float(ltv_max_pct or 0.0)),
+        commission_text=(commission_text or "").strip(),
+        payout_term=(payout_term or "").strip(),
+        notes=(notes or "").strip(),
+        is_active=True,
+    )
     set_flash(request, "Produto do parceiro salvo.")
     return RedirectResponse("/admin/parceiros", status_code=303)
 
@@ -11207,6 +11991,7 @@ async def empresa_page(request: Request, session: Session = Depends(get_session)
             "current_client": current_client,
             "business_profile": business_profile,
             "product_families": list_product_families(session),
+            "selected_interest_codes": _json_list(business_profile.interests_json) if business_profile else [],
         },
     )
 
@@ -11313,6 +12098,7 @@ async def empresa_save(
     profile.updated_at = utcnow()
     session.add(profile)
     session.commit()
+    _sync_business_profile_legacy_columns(session, profile)
 
     set_flash(request, "Dados da empresa atualizados.")
     return RedirectResponse("/empresa", status_code=303)
@@ -11364,6 +12150,7 @@ async def perfil_page(request: Request, session: Session = Depends(get_session))
             "delta": delta,
             "business_profile": business_profile,
             "offer_matches": offer_matches,
+            "business_profile_interests": _json_list(business_profile.interests_json) if business_profile else [],
         },
     )
 
@@ -11441,6 +12228,7 @@ async def perfil_snapshot_new_page(request: Request, session: Session = Depends(
             "business_profile": get_or_create_business_profile(session, company_id=ctx.company.id, client_id=current_client.id),
             "survey": PROFILE_SURVEY_V2,
             "product_families": list_product_families(session),
+            "selected_interest_codes": _json_list(business_profile.interests_json) if business_profile else [],
         },
     )
 
