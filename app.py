@@ -2968,6 +2968,84 @@ def ensure_partner_tables() -> bool:
     return ok
 
 
+def _ensure_table_column(table_name: str, column_name: str, ddl_postgres: str, ddl_sqlite: str) -> bool:
+    """Garante coluna nova em ambientes sem Alembic.
+
+    create_all/checkfirst cria tabela, mas não altera schema existente.
+    """
+    try:
+        with engine.begin() as conn:
+            backend = (engine.url.get_backend_name() or "").lower()
+
+            if backend.startswith("postgres"):
+                conn.exec_driver_sql(ddl_postgres)
+                return True
+
+            if backend.startswith("sqlite"):
+                try:
+                    rows = conn.exec_driver_sql(f"PRAGMA table_info('{table_name}')").fetchall()
+                    cols = {str(r[1]) for r in rows}
+                except Exception:
+                    cols = set()
+                if column_name not in cols:
+                    conn.exec_driver_sql(ddl_sqlite)
+                return True
+
+            return True
+    except Exception as e:
+        try:
+            print(f"[partners] failed to ensure column {table_name}.{column_name}: {e}")
+        except Exception:
+            pass
+        return False
+
+
+def ensure_partner_schema_columns() -> bool:
+    ok = True
+    ok = _ensure_table_column(
+        "partnerproduct",
+        "family_slug",
+        """
+        ALTER TABLE partnerproduct
+        ADD COLUMN IF NOT EXISTS family_slug VARCHAR NOT NULL DEFAULT '';
+        """,
+        "ALTER TABLE partnerproduct ADD COLUMN family_slug VARCHAR NOT NULL DEFAULT ''",
+    ) and ok
+
+    ok = _ensure_table_column(
+        "internalservice",
+        "family_slug",
+        """
+        ALTER TABLE internalservice
+        ADD COLUMN IF NOT EXISTS family_slug VARCHAR NOT NULL DEFAULT '';
+        """,
+        "ALTER TABLE internalservice ADD COLUMN family_slug VARCHAR NOT NULL DEFAULT ''",
+    ) and ok
+
+    ok = _ensure_table_column(
+        "offermatch",
+        "family_slug",
+        """
+        ALTER TABLE offermatch
+        ADD COLUMN IF NOT EXISTS family_slug VARCHAR NOT NULL DEFAULT '';
+        """,
+        "ALTER TABLE offermatch ADD COLUMN family_slug VARCHAR NOT NULL DEFAULT ''",
+    ) and ok
+
+    ok = _ensure_table_column(
+        "offermatch",
+        "partner_options_count",
+        """
+        ALTER TABLE offermatch
+        ADD COLUMN IF NOT EXISTS partner_options_count INTEGER NOT NULL DEFAULT 0;
+        """,
+        "ALTER TABLE offermatch ADD COLUMN partner_options_count INTEGER NOT NULL DEFAULT 0",
+    ) and ok
+
+    return ok
+
+
+
 def _partner_kind_options() -> list[str]:
     return ["banco", "fidc", "fintech", "securitizadora", "consultoria", "outro"]
 
@@ -9492,6 +9570,7 @@ async def admin_internal_services_page(request: Request, session: Session = Depe
     ctx = get_tenant_context(request, session)
     assert ctx is not None
     ensure_partner_tables()
+    ensure_partner_schema_columns()
     _seed_internal_services(session, ctx.company.id)
     rows = session.exec(
         select(InternalService)
@@ -9527,6 +9606,7 @@ async def admin_internal_services_add(
     ctx = get_tenant_context(request, session)
     assert ctx is not None
     ensure_partner_tables()
+    ensure_partner_schema_columns()
     row = InternalService(
         company_id=int(ctx.company.id),
         area=(area or "baas").strip(),
@@ -9550,6 +9630,7 @@ async def admin_internal_services_seed(request: Request, session: Session = Depe
     ctx = get_tenant_context(request, session)
     assert ctx is not None
     ensure_partner_tables()
+    ensure_partner_schema_columns()
     _seed_internal_services(session, ctx.company.id)
     set_flash(request, "Catálogo padrão verificado.")
     return RedirectResponse("/admin/servicos-internos", status_code=303)
@@ -9570,6 +9651,7 @@ async def admin_partner_campaigns_add(
     ctx = get_tenant_context(request, session)
     assert ctx is not None
     ensure_partner_tables()
+    ensure_partner_schema_columns()
     product = session.get(PartnerProduct, product_id)
     if not product or int(product.company_id or 0) != int(ctx.company.id or 0):
         set_flash(request, "Produto inválido.")
@@ -9607,6 +9689,7 @@ async def motor_ofertas_page(request: Request, session: Session = Depends(get_se
     ctx = get_tenant_context(request, session)
     assert ctx is not None
     ensure_partner_tables()
+    ensure_partner_schema_columns()
     active_client_id = get_active_client_id(request, session, ctx)
     current_client = get_client_or_none(session, ctx.company.id, active_client_id)
     matches = []
@@ -9644,6 +9727,7 @@ async def motor_ofertas_generate(request: Request, session: Session = Depends(ge
     ctx = get_tenant_context(request, session)
     assert ctx is not None
     ensure_partner_tables()
+    ensure_partner_schema_columns()
     active_client_id = get_active_client_id(request, session, ctx)
     current_client = get_client_or_none(session, ctx.company.id, active_client_id)
     if not current_client:
@@ -9660,6 +9744,7 @@ async def ofertas_page(request: Request, session: Session = Depends(get_session)
     ctx = get_tenant_context(request, session)
     assert ctx is not None
     ensure_partner_tables()
+    ensure_partner_schema_columns()
     active_client_id = get_active_client_id(request, session, ctx)
     current_client = get_client_or_none(session, ctx.company.id, active_client_id)
     rows = []
@@ -9691,6 +9776,7 @@ def _startup() -> None:
     ensure_feature_access_tables()
     ensure_credit_consent_table()
     ensure_partner_tables()
+    ensure_partner_schema_columns()
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 
@@ -18453,6 +18539,7 @@ async def admin_partners_page(request: Request, session: Session = Depends(get_s
     ctx = get_tenant_context(request, session)
     assert ctx is not None
     ensure_partner_tables()
+    ensure_partner_schema_columns()
 
     partners = session.exec(
         select(Partner).where(Partner.company_id == ctx.company.id).order_by(Partner.priority.asc(), Partner.name.asc())
@@ -18513,6 +18600,7 @@ async def admin_partners_add(
     ctx = get_tenant_context(request, session)
     assert ctx is not None
     ensure_partner_tables()
+    ensure_partner_schema_columns()
 
     partner = Partner(
         company_id=ctx.company.id,
@@ -18569,6 +18657,7 @@ async def admin_partner_products_add(
     ctx = get_tenant_context(request, session)
     assert ctx is not None
     ensure_partner_tables()
+    ensure_partner_schema_columns()
 
     partner = session.get(Partner, partner_id)
     if not partner or int(partner.company_id or 0) != int(ctx.company.id or 0):
@@ -23760,6 +23849,7 @@ async def admin_internal_services_page(request: Request, session: Session = Depe
     ctx = get_tenant_context(request, session)
     assert ctx is not None
     ensure_partner_tables()
+    ensure_partner_schema_columns()
     _seed_internal_services(session, ctx.company.id)
     rows = session.exec(
         select(InternalService)
@@ -23795,6 +23885,7 @@ async def admin_internal_services_add(
     ctx = get_tenant_context(request, session)
     assert ctx is not None
     ensure_partner_tables()
+    ensure_partner_schema_columns()
     row = InternalService(
         company_id=int(ctx.company.id),
         area=(area or "baas").strip(),
@@ -23818,6 +23909,7 @@ async def admin_internal_services_seed(request: Request, session: Session = Depe
     ctx = get_tenant_context(request, session)
     assert ctx is not None
     ensure_partner_tables()
+    ensure_partner_schema_columns()
     _seed_internal_services(session, ctx.company.id)
     set_flash(request, "Catálogo padrão verificado.")
     return RedirectResponse("/admin/servicos-internos", status_code=303)
@@ -23838,6 +23930,7 @@ async def admin_partner_campaigns_add(
     ctx = get_tenant_context(request, session)
     assert ctx is not None
     ensure_partner_tables()
+    ensure_partner_schema_columns()
     product = session.get(PartnerProduct, product_id)
     if not product or int(product.company_id or 0) != int(ctx.company.id or 0):
         set_flash(request, "Produto inválido.")
@@ -23875,6 +23968,7 @@ async def motor_ofertas_page(request: Request, session: Session = Depends(get_se
     ctx = get_tenant_context(request, session)
     assert ctx is not None
     ensure_partner_tables()
+    ensure_partner_schema_columns()
     active_client_id = get_active_client_id(request, session, ctx)
     current_client = get_client_or_none(session, ctx.company.id, active_client_id)
     matches = []
@@ -23912,6 +24006,7 @@ async def motor_ofertas_generate(request: Request, session: Session = Depends(ge
     ctx = get_tenant_context(request, session)
     assert ctx is not None
     ensure_partner_tables()
+    ensure_partner_schema_columns()
     active_client_id = get_active_client_id(request, session, ctx)
     current_client = get_client_or_none(session, ctx.company.id, active_client_id)
     if not current_client:
@@ -23928,6 +24023,7 @@ async def ofertas_page(request: Request, session: Session = Depends(get_session)
     ctx = get_tenant_context(request, session)
     assert ctx is not None
     ensure_partner_tables()
+    ensure_partner_schema_columns()
     active_client_id = get_active_client_id(request, session, ctx)
     current_client = get_client_or_none(session, ctx.company.id, active_client_id)
     rows = []
