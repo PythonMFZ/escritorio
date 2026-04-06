@@ -2528,6 +2528,7 @@ class PartnerProduct(SQLModel, table=True):
     name: str
     category: str = Field(default="credito", index=True)  # credito|consultoria|ferramenta|outro
     product_type: str = Field(default="", index=True)
+    family_slug: str = Field(default="", index=True)
     is_active: bool = Field(default=True, index=True)
     visible_in_simulator: bool = Field(default=True, index=True)
     priority: int = Field(default=100, index=True)
@@ -2603,8 +2604,10 @@ class OfferMatch(SQLModel, table=True):
     internal_service_id: Optional[int] = Field(default=None, index=True, foreign_key="internalservice.id")
     partner_product_id: Optional[int] = Field(default=None, index=True, foreign_key="partnerproduct.id")
     area: str = Field(default="", index=True)
+    family_slug: str = Field(default="", index=True)
     product_name: str = ""
     partner_name: str = ""
+    partner_options_count: int = 0
     score_fit: float = 0.0
     priority_level: str = Field(default="media", index=True)
     reason_summary: str = ""
@@ -3073,6 +3076,54 @@ def _parse_states_csv(raw: str) -> set[str]:
     return {p.strip().upper() for p in (raw or "").split(",") if p.strip()}
 
 
+def _norm_family_slug(raw: str) -> str:
+    s = (raw or "").strip().lower()
+    s = re.sub(r"[^a-z0-9_]+", "_", s)
+    s = re.sub(r"_+", "_", s).strip("_")
+    return s
+
+
+def _eligible_partner_options_for_family(
+    *,
+    session: Session,
+    company_id: int,
+    client: Client,
+    snapshot: Optional[ClientSnapshot],
+    family_slug: str,
+) -> list[dict[str, Any]]:
+    fam = _norm_family_slug(family_slug)
+    if not fam:
+        return []
+    products = session.exec(
+        select(PartnerProduct)
+        .where(
+            PartnerProduct.company_id == int(company_id),
+            PartnerProduct.is_active == True,
+            PartnerProduct.family_slug == fam,
+        )
+        .order_by(PartnerProduct.priority.asc(), PartnerProduct.created_at.desc())
+    ).all()
+    if not products:
+        return []
+    partners = session.exec(
+        select(Partner).where(
+            Partner.company_id == int(company_id),
+            Partner.is_active == True,
+        )
+    ).all()
+    partner_by_id = {int(p.id or 0): p for p in partners}
+    rows: list[dict[str, Any]] = []
+    for product in products:
+        partner = partner_by_id.get(int(product.partner_id or 0))
+        if not partner:
+            continue
+        row = _match_partner_product_for_client(client=client, snapshot=snapshot, product=product, partner=partner)
+        if row.get("eligible"):
+            rows.append(row)
+    rows.sort(key=lambda x: (-float(x["score"]), int(x["product"].priority or 100), x["partner"].name.lower()))
+    return rows
+
+
 def _current_campaigns_for_product(session: Session, company_id: int, partner_product_id: int) -> list[PartnerCampaign]:
     now = utcnow()
     rows = session.exec(
@@ -3261,6 +3312,22 @@ def _generate_offer_matches(session: Session, company_id: int, client: Client) -
     ).all()
     for service in services:
         score_fit, reasons = _score_internal_service(service, client, snap)
+        partner_matches = _eligible_partner_options_for_family(
+            session=session,
+            company_id=company_id,
+            client=client,
+            snapshot=snap,
+            family_slug=service.family_slug,
+        )
+        partner_names = [m["partner"].name for m in partner_matches[:5]]
+        reason_parts = list(reasons) if reasons else []
+        if service.family_slug:
+            reason_parts.append(f"família: {service.family_slug}")
+        if partner_matches:
+            reason_parts.append(f"{len(partner_matches)} parceiro(s) elegível(eis): " + ", ".join(partner_names))
+        elif service.area == "baas" and service.family_slug:
+            reason_parts.append("sem parceiro elegível cadastrado para esta família no momento")
+
         row = OfferMatch(
             company_id=int(company_id),
             client_id=int(client.id or 0),
@@ -3268,11 +3335,13 @@ def _generate_offer_matches(session: Session, company_id: int, client: Client) -
             source_kind="internal",
             internal_service_id=int(service.id or 0),
             area=service.area,
+            family_slug=_norm_family_slug(service.family_slug),
             product_name=service.name,
-            partner_name="Maffezzolli Capital",
+            partner_name=(" / ".join(partner_names[:3])) if partner_names else "Maffezzolli Capital",
+            partner_options_count=len(partner_matches),
             score_fit=score_fit,
             priority_level=_priority_label(score_fit),
-            reason_summary="; ".join(reasons) or "aderência calculada pelo perfil do cliente",
+            reason_summary="; ".join(reason_parts) or "aderência calculada pelo perfil do cliente",
         )
         session.add(row)
         created.append(row)
@@ -3286,23 +3355,45 @@ def _generate_offer_matches(session: Session, company_id: int, client: Client) -
         .order_by(PartnerProduct.priority.asc(), PartnerProduct.created_at.desc())
     ).all()
     partner_by_id = {int(p.id or 0): p for p in partners}
+    internal_by_family = {}
+    for service in services:
+        fam = _norm_family_slug(service.family_slug)
+        if fam and fam not in internal_by_family:
+            internal_by_family[fam] = service
+
     for product in products:
         partner = partner_by_id.get(int(product.partner_id or 0))
         if not partner:
             continue
         result = _score_partner_product(session, company_id, product, partner, client, snap)
+        fam = _norm_family_slug(getattr(product, "family_slug", "") or getattr(product, "product_type", ""))
+        linked_internal = internal_by_family.get(fam)
+        area = linked_internal.area if linked_internal else ("baas" if product.category == "credito" else product.category)
+        product_name = f"{linked_internal.name} — {product.name}" if linked_internal else product.name
+        reasons = list(result["reasons"])
+        if fam:
+            reasons.append(f"família vinculada: {fam}")
+        if linked_internal:
+            reasons.append(f"catálogo interno: {linked_internal.name}")
+        reason_summary = "Motivos: " + "; ".join(reasons) if reasons else "Motivos: aderência calculada"
+        if result["blockers"]:
+            reason_summary += " | Atenção: " + "; ".join(result["blockers"])
+
         row = OfferMatch(
             company_id=int(company_id),
             client_id=int(client.id or 0),
             subject_doc=_digits(str(getattr(client, "cnpj", "") or getattr(client, "email", ""))),
             source_kind="partner",
+            internal_service_id=int(linked_internal.id or 0) if linked_internal else None,
             partner_product_id=int(product.id or 0),
-            area="baas" if product.category == "credito" else product.category,
-            product_name=product.name,
+            area=area,
+            family_slug=fam,
+            product_name=product_name,
             partner_name=partner.name,
+            partner_options_count=1,
             score_fit=float(result["score"]),
             priority_level=_priority_label(float(result["score"])),
-            reason_summary="Motivos: " + "; ".join(result["reasons"]) + ((" | Atenção: " + "; ".join(result["blockers"])) if result["blockers"] else ""),
+            reason_summary=reason_summary,
             estimated_commission_text=result["commission_text"],
         )
         session.add(row)
@@ -7948,7 +8039,7 @@ TEMPLATES.update({
         <div class="card p-3 h-100">
           <div class="d-flex justify-content-between gap-2">
             <div>
-              <div class="small muted">{{ row.area or "-" }} · {{ row.source_kind }}</div>
+              <div class="small muted">{{ row.area or "-" }} · {{ row.source_kind }}{% if row.family_slug %} · {{ row.family_slug }}{% endif %}</div>
               <div class="fw-semibold">{{ row.product_name }}</div>
               <div class="muted">{{ row.partner_name or "Maffezzolli Capital" }}</div>
             </div>
@@ -7958,6 +8049,9 @@ TEMPLATES.update({
             </div>
           </div>
           <div class="small mt-3">{{ row.reason_summary }}</div>
+          {% if row.partner_options_count and row.source_kind == "internal" %}
+            <div class="small mt-2"><b>Opções elegíveis:</b> {{ row.partner_options_count }} parceiro(s)</div>
+          {% endif %}
           {% if row.estimated_commission_text %}
             <div class="small mt-2"><b>Comissão / campanha:</b> {{ row.estimated_commission_text }}</div>
           {% endif %}
@@ -7988,7 +8082,7 @@ TEMPLATES.update({
     {% for row in rows %}
       <div class="col-lg-6">
         <div class="card p-3 h-100">
-          <div class="small muted">{{ row.area or "-" }}</div>
+          <div class="small muted">{{ row.area or "-" }}{% if row.family_slug %} · {{ row.family_slug }}{% endif %}</div>
           <div class="fw-semibold">{{ row.product_name }}</div>
           <div class="muted">{{ row.partner_name }}</div>
           <div class="small mt-2">{{ row.reason_summary }}</div>
@@ -18257,6 +18351,7 @@ TEMPLATES.setdefault("admin_partners.html", r"""{% extends "base.html" %}
         <div class="col-md-4"><label class="form-label">Nome do produto</label><input class="form-control" name="name" required></div>
         <div class="col-md-4"><label class="form-label">Categoria</label><select class="form-select" name="category">{% for c in category_options %}<option value="{{ c }}">{{ c }}</option>{% endfor %}</select></div>
         <div class="col-md-4"><label class="form-label">Tipo</label><select class="form-select" name="product_type">{% for c in product_type_options %}<option value="{{ c }}">{{ c or "(vazio)" }}</option>{% endfor %}</select></div>
+        <div class="col-md-4"><label class="form-label">Família</label><input class="form-control" name="family_slug" placeholder="home_equity, capital_giro..."></div>
         <div class="col-md-2"><label class="form-label">Prioridade</label><input class="form-control" name="priority" value="100"></div>
         <div class="col-md-3"><label class="form-label">Visível simulador</label><select class="form-select" name="visible_in_simulator"><option value="1">sim</option><option value="0">não</option></select></div>
         <div class="col-md-3"><label class="form-label">Exige garantia</label><select class="form-select" name="requires_collateral"><option value="0">não</option><option value="1">sim</option></select></div>
@@ -18444,6 +18539,7 @@ async def admin_partner_products_add(
     name: str = Form(...),
     category: str = Form("credito"),
     product_type: str = Form(""),
+    family_slug: str = Form(""),
     priority: str = Form("100"),
     visible_in_simulator: str = Form("1"),
     requires_collateral: str = Form("0"),
@@ -18485,6 +18581,7 @@ async def admin_partner_products_add(
         name=(name or "").strip(),
         category=(category or "").strip() or "credito",
         product_type=(product_type or "").strip(),
+        family_slug=_norm_family_slug(family_slug or product_type or name),
         priority=int(priority or 100) if str(priority or "").strip().isdigit() else 100,
         visible_in_simulator=str(visible_in_simulator) == "1",
         requires_collateral=str(requires_collateral) == "1",
@@ -19201,7 +19298,7 @@ SIMULADOR_TEMPLATE = r"""
                 <td>{{ row.partner.name }}</td>
                 <td>
                   <div class="fw-semibold">{{ row.product.name }}</div>
-                  <div class="muted small">{{ row.product.product_type or row.product.category }}</div>
+                  <div class="muted small">{{ row.product.product_type or row.product.category }}{% if row.product.family_slug %} · {{ row.product.family_slug }}{% endif %}</div>
                 </td>
                 <td>{{ row.product.category }}</td>
                 <td>
@@ -19242,7 +19339,7 @@ SIMULADOR_TEMPLATE = r"""
           <option value="">-- Escolher manualmente --</option>
           {% for p in partner_products %}
             <option value="{{ p.id }}" {% if selected_product and selected_product.id == p.id %}selected{% endif %}>
-              {{ p.partner_name }} — {{ p.name }}
+              {{ p.partner_name }} — {{ p.name }}{% if p.family_slug %} ({{ p.family_slug }}){% endif %}
             </option>
           {% endfor %}
         </select>
@@ -19437,6 +19534,7 @@ async def simulador_page(request: Request, partner_product_id: int = 0, session:
                 "name": product.name,
                 "partner_name": partner.name,
                 "category": product.category,
+                "family_slug": product.family_slug,
             }
         )
         est_principal = 0.0
