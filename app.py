@@ -2201,10 +2201,44 @@ FEATURE_KEYS.setdefault(
 
 
 FEATURE_GROUPS: list[dict[str, Any]] = [
-    {"key": "admin", "title": "Admin", "features": ["ui", "gestao", "parceiros", "credito", "crm"]},
-    {"key": "minha_empresa", "title": "Minha Empresa", "features": ["empresa", "perfil", "financeiro", "documentos", "consultas", "openfinance", "creditos"]},
-    {"key": "meu_projeto", "title": "Meu Projeto", "features": ["consultoria", "reunioes", "tarefas"]},
-    {"key": "minhas_propostas", "title": "Minhas Propostas", "features": ["simulador", "propostas"]},
+    {
+        "key": "cliente",
+        "title": "Cliente",
+        "features": [
+            "empresa",
+            "perfil",
+            "ofertas",
+            "financeiro",
+            "documentos",
+            "consultas",
+            "openfinance",
+            "creditos",
+            "simulador",
+            "propostas",
+        ],
+    },
+    {
+        "key": "operacao",
+        "title": "Escritório",
+        "features": [
+            "crm",
+            "credito",
+            "motor_ofertas",
+            "consultoria",
+            "reunioes",
+            "tarefas",
+        ],
+    },
+    {
+        "key": "admin",
+        "title": "Admin",
+        "features": [
+            "ui",
+            "gestao",
+            "servicos_internos",
+            "parceiros",
+        ],
+    },
 ]
 
 FEATURE_STANDALONE: list[str] = ["pendencias", "agenda", "educacao"]
@@ -3926,21 +3960,65 @@ a:hover{ color:#00BFBF; }
 <div class="row g-3">
   <div class="col-12">
     <div class="card p-4">
-      <h4 class="mb-1">Painel</h4>
-      <div class="muted">
-        {% if role in ["admin","equipe"] %}
-          Escritório: <b>{{ current_company.name }}</b>.
-          {% if current_client %} Cliente selecionado: <b>{{ current_client.name }}</b>.{% endif %}
-        {% else %}
-          Bem-vindo(a)! Você vê apenas seus dados e arquivos.
-        {% endif %}
-      </div>
-      {% if role in ["admin","equipe"] %}
-        <div class="mt-3 d-flex gap-2">
-          <a class="btn btn-outline-primary btn-sm" href="/admin/members">Gerenciar membros</a>
-          <a class="btn btn-outline-secondary btn-sm" href="/client/switch">Trocar cliente</a>
+      <div class="d-flex justify-content-between align-items-start gap-3 flex-wrap">
+        <div>
+          <h4 class="mb-1">Painel</h4>
+          <div class="muted">
+            {% if role in ["admin","equipe"] %}
+              Escritório: <b>{{ current_company.name }}</b>.
+              {% if current_client %} Cliente selecionado: <b>{{ current_client.name }}</b>.{% endif %}
+            {% else %}
+              Bem-vindo(a)! Você vê seus dados, ferramentas e ofertas personalizadas.
+            {% endif %}
+          </div>
         </div>
-      {% endif %}
+        <div class="d-flex gap-2 flex-wrap">
+          {% if role in ["admin","equipe"] %}
+            <a class="btn btn-outline-primary btn-sm" href="/client/switch">Trocar cliente</a>
+            <a class="btn btn-outline-secondary btn-sm" href="/motor-ofertas">Motor de ofertas</a>
+          {% endif %}
+          <a class="btn btn-outline-secondary btn-sm" href="/ofertas">Ver ofertas</a>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-12">
+    <div class="row g-3">
+      <div class="col-md-4">
+        <div class="card p-3 h-100">
+          <div class="small muted">Diagnóstico</div>
+          <div class="fw-semibold mt-1">Perfil e dados da empresa</div>
+          <div class="small mt-2">Atualize seu cadastro, indicadores e informações estratégicas.</div>
+          <div class="mt-3"><a class="btn btn-outline-primary btn-sm" href="/empresa">Abrir empresa</a></div>
+        </div>
+      </div>
+      <div class="col-md-4">
+        <div class="card p-3 h-100">
+          <div class="small muted">Ofertas</div>
+          <div class="fw-semibold mt-1">Motor de oportunidades</div>
+          <div class="small mt-2">Veja produtos internos e parceiros aderentes ao perfil do cliente.</div>
+          <div class="mt-3 d-flex gap-2 flex-wrap">
+            <a class="btn btn-outline-primary btn-sm" href="/ofertas">Minhas ofertas</a>
+            {% if role in ["admin","equipe"] %}<a class="btn btn-outline-secondary btn-sm" href="/motor-ofertas">Painel do motor</a>{% endif %}
+          </div>
+        </div>
+      </div>
+      <div class="col-md-4">
+        <div class="card p-3 h-100">
+          <div class="small muted">Cadastro</div>
+          <div class="fw-semibold mt-1">Produtos e parceiros</div>
+          <div class="small mt-2">Administra catálogo interno, parceiros, regras, campanhas e defaults do simulador.</div>
+          <div class="mt-3 d-flex gap-2 flex-wrap">
+            {% if role == "admin" %}
+              <a class="btn btn-outline-primary btn-sm" href="/admin/servicos-internos">Produtos internos</a>
+              <a class="btn btn-outline-secondary btn-sm" href="/admin/parceiros">Parceiros</a>
+            {% else %}
+              <a class="btn btn-outline-secondary btn-sm" href="/simulador">Simulador</a>
+            {% endif %}
+          </div>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -3990,7 +4068,6 @@ a:hover{ color:#00BFBF; }
       <div class="muted small">Pendências / Agenda / Educação</div>
     </div>
   </div>
-
   {% for item in standalone %}
     <div class="col-md-6 col-lg-4">
       <a href="{{ item.href }}">
@@ -4008,25 +4085,6 @@ a:hover{ color:#00BFBF; }
   {% endfor %}
   {% endif %}
 </div>
-
-<script>
-(function(){
-  const tabs = document.getElementById("dashTabs");
-  if (!tabs) return;
-
-  const key = "dash_active_tab";
-  const saved = localStorage.getItem(key);
-  if (saved) {
-    const btn = document.getElementById("tab-" + saved);
-    if (btn) btn.click();
-  }
-  tabs.addEventListener("click", (e) => {
-    const btn = e.target.closest("button[id^='tab-']");
-    if (!btn) return;
-    localStorage.setItem(key, btn.id.replace("tab-",""));
-  });
-})();
-</script>
 {% endblock %}
 """,
     "client_switch.html": r"""
@@ -7849,14 +7907,18 @@ TEMPLATES.update({
 {% extends "base.html" %}
 {% block content %}
 <div class="card p-4 mb-3">
-  <div class="d-flex justify-content-between align-items-start gap-2">
+  <div class="d-flex justify-content-between align-items-start gap-2 flex-wrap">
     <div>
       <h4 class="mb-1">Motor de Ofertas</h4>
       <div class="muted">Área, produto e parceiro recomendados com base no perfil do cliente.</div>
     </div>
-    <form method="post" action="/motor-ofertas/gerar">
-      <button class="btn btn-primary">Gerar / atualizar ofertas</button>
-    </form>
+    <div class="d-flex gap-2 flex-wrap">
+      <a class="btn btn-outline-secondary" href="/admin/servicos-internos">Produtos internos</a>
+      <a class="btn btn-outline-secondary" href="/admin/parceiros">Parceiros</a>
+      <form method="post" action="/motor-ofertas/gerar">
+        <button class="btn btn-primary">Gerar / atualizar ofertas</button>
+      </form>
+    </div>
   </div>
   {% if current_client %}
     <div class="mt-3 small">
@@ -7864,6 +7926,15 @@ TEMPLATES.update({
       {% if current_client.cnpj %} · {{ current_client.cnpj }}{% endif %}
     </div>
   {% endif %}
+</div>
+
+<div class="row g-3 mb-3">
+  <div class="col-md-2"><div class="card p-3 h-100"><div class="small muted">Total</div><div class="h4 mb-0">{{ summary.total }}</div></div></div>
+  <div class="col-md-2"><div class="card p-3 h-100"><div class="small muted">Alta</div><div class="h4 mb-0">{{ summary.alta }}</div></div></div>
+  <div class="col-md-2"><div class="card p-3 h-100"><div class="small muted">Média</div><div class="h4 mb-0">{{ summary.media }}</div></div></div>
+  <div class="col-md-2"><div class="card p-3 h-100"><div class="small muted">Baixa</div><div class="h4 mb-0">{{ summary.baixa }}</div></div></div>
+  <div class="col-md-2"><div class="card p-3 h-100"><div class="small muted">Internos</div><div class="h4 mb-0">{{ summary.internos }}</div></div></div>
+  <div class="col-md-2"><div class="card p-3 h-100"><div class="small muted">Parceiros</div><div class="h4 mb-0">{{ summary.parceiros }}</div></div></div>
 </div>
 
 {% if not current_client %}
@@ -9320,6 +9391,203 @@ async def feature_access_middleware(request: Request, call_next: Callable[..., A
 
 # Install SessionMiddleware last so request.session is available inside BaseHTTPMiddleware.
 app.add_middleware(SessionMiddleware, secret_key=APP_SECRET_KEY, https_only=https_only, same_site="lax")
+
+@app.get("/admin/servicos-internos", response_class=HTMLResponse)
+@require_role({"admin"})
+async def admin_internal_services_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+    ensure_partner_tables()
+    _seed_internal_services(session, ctx.company.id)
+    rows = session.exec(
+        select(InternalService)
+        .where(InternalService.company_id == int(ctx.company.id))
+        .order_by(InternalService.priority_weight.asc(), InternalService.name.asc())
+    ).all()
+    return render(
+        "admin_internal_services.html",
+        request=request,
+        context={
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "role": ctx.membership.role,
+            "current_client": get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx)),
+            "rows": rows,
+            "area_options": _offer_area_options(),
+        },
+    )
+
+
+@app.post("/admin/servicos-internos/add")
+@require_role({"admin"})
+async def admin_internal_services_add(
+    request: Request,
+    area: str = Form("baas"),
+    family_slug: str = Form(""),
+    name: str = Form(...),
+    description: str = Form(""),
+    priority_weight: str = Form("100"),
+    notes: str = Form(""),
+    session: Session = Depends(get_session),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+    ensure_partner_tables()
+    row = InternalService(
+        company_id=int(ctx.company.id),
+        area=(area or "baas").strip(),
+        family_slug=(family_slug or "").strip(),
+        name=(name or "").strip(),
+        description=(description or "").strip(),
+        priority_weight=int(priority_weight or 100) if str(priority_weight or "").strip().isdigit() else 100,
+        notes=(notes or "").strip(),
+        is_active=True,
+        updated_at=utcnow(),
+    )
+    session.add(row)
+    session.commit()
+    set_flash(request, "Produto interno salvo.")
+    return RedirectResponse("/admin/servicos-internos", status_code=303)
+
+
+@app.post("/admin/servicos-internos/seed")
+@require_role({"admin"})
+async def admin_internal_services_seed(request: Request, session: Session = Depends(get_session)) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+    ensure_partner_tables()
+    _seed_internal_services(session, ctx.company.id)
+    set_flash(request, "Catálogo padrão verificado.")
+    return RedirectResponse("/admin/servicos-internos", status_code=303)
+
+
+@app.post("/admin/parceiros/products/{product_id}/campaigns/add")
+@require_role({"admin"})
+async def admin_partner_campaigns_add(
+    request: Request,
+    product_id: int,
+    title: str = Form(...),
+    bonus_pct: str = Form("0"),
+    starts_at: str = Form(""),
+    ends_at: str = Form(""),
+    rule_summary: str = Form(""),
+    session: Session = Depends(get_session),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+    ensure_partner_tables()
+    product = session.get(PartnerProduct, product_id)
+    if not product or int(product.company_id or 0) != int(ctx.company.id or 0):
+        set_flash(request, "Produto inválido.")
+        return RedirectResponse("/admin/parceiros", status_code=303)
+
+    def _parse_date_ymd(raw: str) -> Optional[datetime]:
+        s = (raw or "").strip()
+        if not s:
+            return None
+        try:
+            return datetime.fromisoformat(s).replace(tzinfo=timezone.utc)
+        except Exception:
+            return None
+
+    row = PartnerCampaign(
+        company_id=int(ctx.company.id),
+        partner_product_id=int(product_id),
+        title=(title or "").strip(),
+        bonus_pct=float(str(bonus_pct or "0").replace(",", ".")),
+        starts_at=_parse_date_ymd(starts_at),
+        ends_at=_parse_date_ymd(ends_at),
+        rule_summary=(rule_summary or "").strip(),
+        is_active=True,
+        updated_at=utcnow(),
+    )
+    session.add(row)
+    session.commit()
+    set_flash(request, "Campanha salva.")
+    return RedirectResponse("/admin/parceiros", status_code=303)
+
+
+@app.get("/motor-ofertas", response_class=HTMLResponse)
+@require_role({"admin", "equipe"})
+async def motor_ofertas_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+    ensure_partner_tables()
+    active_client_id = get_active_client_id(request, session, ctx)
+    current_client = get_client_or_none(session, ctx.company.id, active_client_id)
+    matches = []
+    summary = {"total": 0, "alta": 0, "media": 0, "baixa": 0, "internos": 0, "parceiros": 0}
+    if current_client:
+        matches = session.exec(
+            select(OfferMatch)
+            .where(OfferMatch.company_id == int(ctx.company.id), OfferMatch.client_id == int(current_client.id or 0))
+            .order_by(OfferMatch.score_fit.desc(), OfferMatch.created_at.desc())
+        ).all()
+        summary["total"] = len(matches)
+        for row in matches:
+            summary[row.priority_level if row.priority_level in {"alta","media","baixa"} else "baixa"] += 1
+            if row.source_kind == "internal":
+                summary["internos"] += 1
+            else:
+                summary["parceiros"] += 1
+    return render(
+        "motor_ofertas.html",
+        request=request,
+        context={
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "role": ctx.membership.role,
+            "current_client": current_client,
+            "matches": matches,
+            "summary": summary,
+        },
+    )
+
+
+@app.post("/motor-ofertas/gerar")
+@require_role({"admin", "equipe"})
+async def motor_ofertas_generate(request: Request, session: Session = Depends(get_session)) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+    ensure_partner_tables()
+    active_client_id = get_active_client_id(request, session, ctx)
+    current_client = get_client_or_none(session, ctx.company.id, active_client_id)
+    if not current_client:
+        set_flash(request, "Selecione um cliente antes de gerar ofertas.")
+        return RedirectResponse("/client/switch", status_code=303)
+    _generate_offer_matches(session, ctx.company.id, current_client)
+    set_flash(request, "Motor de ofertas atualizado.")
+    return RedirectResponse("/motor-ofertas", status_code=303)
+
+
+@app.get("/ofertas", response_class=HTMLResponse)
+@require_login
+async def ofertas_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+    ensure_partner_tables()
+    active_client_id = get_active_client_id(request, session, ctx)
+    current_client = get_client_or_none(session, ctx.company.id, active_client_id)
+    rows = []
+    if current_client:
+        rows = session.exec(
+            select(OfferMatch)
+            .where(OfferMatch.company_id == int(ctx.company.id), OfferMatch.client_id == int(current_client.id or 0))
+            .order_by(OfferMatch.score_fit.desc(), OfferMatch.created_at.desc())
+        ).all()
+    return render(
+        "client_offers.html",
+        request=request,
+        context={
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "role": ctx.membership.role,
+            "current_client": current_client,
+            "rows": rows,
+        },
+    )
+
+
 
 
 @app.on_event("startup")
@@ -17956,9 +18224,10 @@ TEMPLATES.setdefault("admin_partners.html", r"""{% extends "base.html" %}
 <div class="d-flex justify-content-between align-items-start flex-wrap gap-2 mb-3">
   <div>
     <div class="h4 mb-0">Parceiros / Produtos</div>
-    <div class="muted">Cadastre parceiros, produtos, regras de elegibilidade e defaults do simulador.</div>
+    <div class="muted">Cadastre parceiros, produtos, regras, defaults do simulador e campanhas comerciais.</div>
   </div>
   <div class="d-flex gap-2">
+    <a class="btn btn-outline-secondary" href="/admin/servicos-internos">Produtos internos</a>
     <a class="btn btn-outline-secondary" href="/simulador">Abrir simulador</a>
   </div>
 </div>
@@ -17968,37 +18237,14 @@ TEMPLATES.setdefault("admin_partners.html", r"""{% extends "base.html" %}
     <div class="card p-3">
       <div class="fw-semibold mb-2">Novo parceiro</div>
       <form method="post" action="/admin/parceiros/add" class="row g-2">
-        <div class="col-12">
-          <label class="form-label">Nome</label>
-          <input class="form-control" name="name" required>
-        </div>
-        <div class="col-md-6">
-          <label class="form-label">Tipo</label>
-          <select class="form-select" name="kind">
-            {% for k in partner_kind_options %}
-              <option value="{{ k }}">{{ k }}</option>
-            {% endfor %}
-          </select>
-        </div>
-        <div class="col-md-6">
-          <label class="form-label">Prioridade</label>
-          <input class="form-control" name="priority" value="100">
-        </div>
-        <div class="col-md-6">
-          <label class="form-label">Contato</label>
-          <input class="form-control" name="contact_name">
-        </div>
-        <div class="col-md-6">
-          <label class="form-label">E-mail</label>
-          <input class="form-control" name="contact_email">
-        </div>
-        <div class="col-12">
-          <label class="form-label">Observações</label>
-          <textarea class="form-control" name="notes" rows="3"></textarea>
-        </div>
-        <div class="col-12">
-          <button class="btn btn-primary w-100">Salvar parceiro</button>
-        </div>
+        <div class="col-12"><label class="form-label">Nome</label><input class="form-control" name="name" required></div>
+        <div class="col-md-6"><label class="form-label">Tipo</label><select class="form-select" name="kind">{% for k in partner_kind_options %}<option value="{{ k }}">{{ k }}</option>{% endfor %}</select></div>
+        <div class="col-md-6"><label class="form-label">Prioridade</label><input class="form-control" name="priority" value="100"></div>
+        <div class="col-md-6"><label class="form-label">Contato</label><input class="form-control" name="contact_name"></div>
+        <div class="col-md-6"><label class="form-label">E-mail</label><input class="form-control" name="contact_email"></div>
+        <div class="col-md-6"><label class="form-label">Telefone</label><input class="form-control" name="contact_phone"></div>
+        <div class="col-12"><label class="form-label">Observações</label><textarea class="form-control" name="notes" rows="3"></textarea></div>
+        <div class="col-12"><button class="btn btn-primary w-100">Salvar parceiro</button></div>
       </form>
     </div>
   </div>
@@ -18007,154 +18253,35 @@ TEMPLATES.setdefault("admin_partners.html", r"""{% extends "base.html" %}
     <div class="card p-3">
       <div class="fw-semibold mb-2">Novo produto por parceiro</div>
       <form method="post" action="/admin/parceiros/products/add" class="row g-2">
-        <div class="col-md-4">
-          <label class="form-label">Parceiro</label>
-          <select class="form-select" name="partner_id" required>
-            <option value="">-- selecione --</option>
-            {% for p in partners %}
-              <option value="{{ p.id }}">{{ p.name }}</option>
-            {% endfor %}
-          </select>
-        </div>
-        <div class="col-md-4">
-          <label class="form-label">Nome do produto</label>
-          <input class="form-control" name="name" required>
-        </div>
-        <div class="col-md-4">
-          <label class="form-label">Categoria</label>
-          <select class="form-select" name="category">
-            {% for c in category_options %}
-              <option value="{{ c }}">{{ c }}</option>
-            {% endfor %}
-          </select>
-        </div>
-
-        <div class="col-md-4">
-          <label class="form-label">Tipo</label>
-          <select class="form-select" name="product_type">
-            {% for c in product_type_options %}
-              <option value="{{ c }}">{{ c or "(vazio)" }}</option>
-            {% endfor %}
-          </select>
-        </div>
-        <div class="col-md-2">
-          <label class="form-label">Prioridade</label>
-          <input class="form-control" name="priority" value="100">
-        </div>
-        <div class="col-md-3">
-          <label class="form-label">Visível simulador</label>
-          <select class="form-select" name="visible_in_simulator">
-            <option value="1">sim</option>
-            <option value="0">não</option>
-          </select>
-        </div>
-        <div class="col-md-3">
-          <label class="form-label">Exige garantia</label>
-          <select class="form-select" name="requires_collateral">
-            <option value="0">não</option>
-            <option value="1">sim</option>
-          </select>
-        </div>
-
-        <div class="col-md-3">
-          <label class="form-label">Fat. mín mensal</label>
-          <input class="form-control" name="min_revenue_monthly_brl" placeholder="0">
-        </div>
-        <div class="col-md-3">
-          <label class="form-label">Score total mín</label>
-          <input class="form-control" name="min_score_total" placeholder="0">
-        </div>
-        <div class="col-md-3">
-          <label class="form-label">Score financeiro mín</label>
-          <input class="form-control" name="min_score_financial" placeholder="0">
-        </div>
-        <div class="col-md-3">
-          <label class="form-label">Alavancagem máx (x)</label>
-          <input class="form-control" name="max_debt_ratio" placeholder="0">
-        </div>
-
-        <div class="col-md-3">
-          <label class="form-label">Ticket mín</label>
-          <input class="form-control" name="min_ticket_brl" placeholder="0">
-        </div>
-        <div class="col-md-3">
-          <label class="form-label">Ticket máx</label>
-          <input class="form-control" name="max_ticket_brl" placeholder="0">
-        </div>
-        <div class="col-md-3">
-          <label class="form-label">UFs permitidas (JSON)</label>
-          <input class="form-control" name="allowed_states_json" placeholder='["SP","PR"]'>
-        </div>
-        <div class="col-md-3">
-          <label class="form-label">LTV padrão (%)</label>
-          <input class="form-control" name="default_ltv_pct" placeholder="0">
-        </div>
-
-        <div class="col-md-3">
-          <label class="form-label">Tipo empréstimo</label>
-          <input class="form-control" name="default_loan_type" placeholder="Capital de giro">
-        </div>
-        <div class="col-md-3">
-          <label class="form-label">Amortização</label>
-          <select class="form-select" name="default_amortization">
-            <option value="price">price</option>
-            <option value="sac">sac</option>
-            <option value="americano">americano</option>
-          </select>
-        </div>
-        <div class="col-md-2">
-          <label class="form-label">Taxa %</label>
-          <input class="form-control" name="default_rate_pct" placeholder="1,79">
-        </div>
-        <div class="col-md-2">
-          <label class="form-label">Base</label>
-          <select class="form-select" name="default_rate_base">
-            <option value="am">am</option>
-            <option value="aa">aa</option>
-          </select>
-        </div>
-        <div class="col-md-2">
-          <label class="form-label">Prazo padr.</label>
-          <input class="form-control" name="default_term_months" placeholder="24">
-        </div>
-
-        <div class="col-md-2">
-          <label class="form-label">Prazo mín</label>
-          <input class="form-control" name="term_min_months" placeholder="0">
-        </div>
-        <div class="col-md-2">
-          <label class="form-label">Prazo máx</label>
-          <input class="form-control" name="term_max_months" placeholder="0">
-        </div>
-        <div class="col-md-2">
-          <label class="form-label">Carência</label>
-          <input class="form-control" name="default_grace_months" placeholder="0">
-        </div>
-        <div class="col-md-2">
-          <label class="form-label">IO extra</label>
-          <input class="form-control" name="default_io_months" placeholder="0">
-        </div>
-        <div class="col-md-2">
-          <label class="form-label">Tarifa</label>
-          <input class="form-control" name="default_fee_amount_brl" placeholder="0">
-        </div>
-        <div class="col-md-2">
-          <label class="form-label">Seguro</label>
-          <input class="form-control" name="default_monthly_insurance_brl" placeholder="0">
-        </div>
-        <div class="col-md-2">
-          <label class="form-label">Taxa admin</label>
-          <input class="form-control" name="default_monthly_admin_fee_brl" placeholder="0">
-        </div>
-
-        <div class="col-12">
-          <label class="form-label">Diretrizes / observações</label>
-          <textarea class="form-control" name="notes" rows="3" placeholder="Ex.: aceita operação com garantia, foco em portabilidade, exige faturamento recorrente..."></textarea>
-        </div>
-
-        <div class="col-12">
-          <button class="btn btn-primary w-100">Salvar produto</button>
-        </div>
+        <div class="col-md-4"><label class="form-label">Parceiro</label><select class="form-select" name="partner_id" required><option value="">-- selecione --</option>{% for p in partners %}<option value="{{ p.id }}">{{ p.name }}</option>{% endfor %}</select></div>
+        <div class="col-md-4"><label class="form-label">Nome do produto</label><input class="form-control" name="name" required></div>
+        <div class="col-md-4"><label class="form-label">Categoria</label><select class="form-select" name="category">{% for c in category_options %}<option value="{{ c }}">{{ c }}</option>{% endfor %}</select></div>
+        <div class="col-md-4"><label class="form-label">Tipo</label><select class="form-select" name="product_type">{% for c in product_type_options %}<option value="{{ c }}">{{ c or "(vazio)" }}</option>{% endfor %}</select></div>
+        <div class="col-md-2"><label class="form-label">Prioridade</label><input class="form-control" name="priority" value="100"></div>
+        <div class="col-md-3"><label class="form-label">Visível simulador</label><select class="form-select" name="visible_in_simulator"><option value="1">sim</option><option value="0">não</option></select></div>
+        <div class="col-md-3"><label class="form-label">Exige garantia</label><select class="form-select" name="requires_collateral"><option value="0">não</option><option value="1">sim</option></select></div>
+        <div class="col-md-3"><label class="form-label">Fat. mín mensal</label><input class="form-control" name="min_revenue_monthly_brl" placeholder="0"></div>
+        <div class="col-md-3"><label class="form-label">Score total mín</label><input class="form-control" name="min_score_total" placeholder="0"></div>
+        <div class="col-md-3"><label class="form-label">Score financeiro mín</label><input class="form-control" name="min_score_financial" placeholder="0"></div>
+        <div class="col-md-3"><label class="form-label">Alavancagem máx (x)</label><input class="form-control" name="max_debt_ratio" placeholder="0"></div>
+        <div class="col-md-3"><label class="form-label">Ticket mín</label><input class="form-control" name="min_ticket_brl" placeholder="0"></div>
+        <div class="col-md-3"><label class="form-label">Ticket máx</label><input class="form-control" name="max_ticket_brl" placeholder="0"></div>
+        <div class="col-md-3"><label class="form-label">UFs permitidas (JSON)</label><input class="form-control" name="allowed_states_json" placeholder='["SP","PR"]'></div>
+        <div class="col-md-3"><label class="form-label">LTV padrão (%)</label><input class="form-control" name="default_ltv_pct" placeholder="0"></div>
+        <div class="col-md-3"><label class="form-label">Tipo empréstimo</label><input class="form-control" name="default_loan_type" placeholder="Capital de giro"></div>
+        <div class="col-md-3"><label class="form-label">Amortização</label><select class="form-select" name="default_amortization"><option value="price">price</option><option value="sac">sac</option><option value="americano">americano</option></select></div>
+        <div class="col-md-2"><label class="form-label">Taxa %</label><input class="form-control" name="default_rate_pct" placeholder="1,79"></div>
+        <div class="col-md-2"><label class="form-label">Base</label><select class="form-select" name="default_rate_base"><option value="am">am</option><option value="aa">aa</option></select></div>
+        <div class="col-md-2"><label class="form-label">Prazo padr.</label><input class="form-control" name="default_term_months" placeholder="24"></div>
+        <div class="col-md-2"><label class="form-label">Prazo mín</label><input class="form-control" name="term_min_months" placeholder="0"></div>
+        <div class="col-md-2"><label class="form-label">Prazo máx</label><input class="form-control" name="term_max_months" placeholder="0"></div>
+        <div class="col-md-2"><label class="form-label">Carência</label><input class="form-control" name="default_grace_months" placeholder="0"></div>
+        <div class="col-md-2"><label class="form-label">IO extra</label><input class="form-control" name="default_io_months" placeholder="0"></div>
+        <div class="col-md-2"><label class="form-label">Tarifa</label><input class="form-control" name="default_fee_amount_brl" placeholder="0"></div>
+        <div class="col-md-2"><label class="form-label">Seguro</label><input class="form-control" name="default_monthly_insurance_brl" placeholder="0"></div>
+        <div class="col-md-2"><label class="form-label">Taxa admin</label><input class="form-control" name="default_monthly_admin_fee_brl" placeholder="0"></div>
+        <div class="col-12"><label class="form-label">Diretrizes / observações</label><textarea class="form-control" name="notes" rows="3" placeholder="Ex.: aceita operação com garantia, foco em portabilidade, exige faturamento recorrente..."></textarea></div>
+        <div class="col-12"><button class="btn btn-primary w-100">Salvar produto</button></div>
       </form>
     </div>
   </div>
@@ -18175,36 +18302,31 @@ TEMPLATES.setdefault("admin_partners.html", r"""{% extends "base.html" %}
                 <div class="accordion-body">
                   <div class="muted small mb-3">{{ row.partner.notes or "Sem observações." }}</div>
                   {% if row.products %}
-                    <div class="table-responsive">
+                    <div class="table-responsive mb-3">
                       <table class="table table-sm align-middle">
-                        <thead>
-                          <tr>
-                            <th>Produto</th>
-                            <th>Categoria</th>
-                            <th>Taxa padrão</th>
-                            <th>Prazo</th>
-                            <th>Regras</th>
-                            <th></th>
-                          </tr>
-                        </thead>
+                        <thead><tr><th>Produto</th><th>Categoria</th><th>Taxa padrão</th><th>Prazo</th><th>Regras</th><th>Campanhas</th><th></th></tr></thead>
                         <tbody>
                           {% for p in row.products %}
                             <tr>
-                              <td>
-                                <div class="fw-semibold">{{ p.name }}</div>
-                                <div class="muted small">{{ p.product_type or "-" }}</div>
-                              </td>
+                              <td><div class="fw-semibold">{{ p.name }}</div><div class="muted small">{{ p.product_type or "-" }}</div></td>
                               <td>{{ p.category }}</td>
                               <td>{{ p.default_rate_pct }}% {{ p.default_rate_base }}</td>
                               <td>{{ p.default_term_months or "-" }}m</td>
-                              <td class="small">
-                                fat mín {{ p.min_revenue_monthly_brl or 0 }} ·
-                                score mín {{ p.min_score_total or 0 }} ·
-                                ticket {{ p.min_ticket_brl or 0 }}-{{ p.max_ticket_brl or 0 }}
-                              </td>
+                              <td class="small">fat mín {{ p.min_revenue_monthly_brl or 0 }} · score mín {{ p.min_score_total or 0 }} · ticket {{ p.min_ticket_brl or 0 }}-{{ p.max_ticket_brl or 0 }}</td>
+                              <td class="small">{% set campaigns = campaigns_by_product.get(p.id, []) %}{% if campaigns %}{% for c in campaigns %}<div>{{ c.title }}{% if c.bonus_pct %} (+{{ c.bonus_pct }}%){% endif %}</div>{% endfor %}{% else %}<span class="muted">sem campanha</span>{% endif %}</td>
                               <td class="text-end">
-                                <form method="post" action="/admin/parceiros/products/{{ p.id }}/toggle">
-                                  <button class="btn btn-outline-secondary btn-sm">{% if p.is_active %}Inativar{% else %}Ativar{% endif %}</button>
+                                <form method="post" action="/admin/parceiros/products/{{ p.id }}/toggle"><button class="btn btn-outline-secondary btn-sm">{% if p.is_active %}Inativar{% else %}Ativar{% endif %}</button></form>
+                              </td>
+                            </tr>
+                            <tr>
+                              <td colspan="7">
+                                <form method="post" action="/admin/parceiros/products/{{ p.id }}/campaigns/add" class="row g-2 align-items-end">
+                                  <div class="col-md-3"><label class="form-label small">Campanha</label><input class="form-control form-control-sm" name="title" placeholder="Campanha Sofisa Giro PMT" required></div>
+                                  <div class="col-md-2"><label class="form-label small">Bônus %</label><input class="form-control form-control-sm" name="bonus_pct" placeholder="0"></div>
+                                  <div class="col-md-2"><label class="form-label small">Início</label><input class="form-control form-control-sm" name="starts_at" type="date"></div>
+                                  <div class="col-md-2"><label class="form-label small">Fim</label><input class="form-control form-control-sm" name="ends_at" type="date"></div>
+                                  <div class="col-md-2"><label class="form-label small">Resumo</label><input class="form-control form-control-sm" name="rule_summary" placeholder="critério principal"></div>
+                                  <div class="col-md-1"><button class="btn btn-outline-primary btn-sm w-100">Salvar</button></div>
                                 </form>
                               </td>
                             </tr>
@@ -18261,6 +18383,18 @@ async def admin_partners_page(request: Request, session: Session = Depends(get_s
             "current_client": get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx)),
             "partners": partners,
             "partner_rows": grouped,
+            "campaigns_by_product": {
+                int(pid): session.exec(
+                    select(PartnerCampaign)
+                    .where(
+                        PartnerCampaign.company_id == int(ctx.company.id),
+                        PartnerCampaign.partner_product_id == int(pid),
+                        PartnerCampaign.is_active == True,
+                    )
+                    .order_by(PartnerCampaign.created_at.desc())
+                ).all()
+                for pid in [int(p.id or 0) for p in products]
+            },
             "partner_kind_options": _partner_kind_options(),
             "category_options": _partner_product_category_options(),
             "product_type_options": _partner_product_type_options(),
@@ -23522,6 +23656,203 @@ async def klavi_events_webhook(request: Request) -> JSONResponse:
     return JSONResponse({"ok": True})
 
 
+@app.get("/admin/servicos-internos", response_class=HTMLResponse)
+@require_role({"admin"})
+async def admin_internal_services_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+    ensure_partner_tables()
+    _seed_internal_services(session, ctx.company.id)
+    rows = session.exec(
+        select(InternalService)
+        .where(InternalService.company_id == int(ctx.company.id))
+        .order_by(InternalService.priority_weight.asc(), InternalService.name.asc())
+    ).all()
+    return render(
+        "admin_internal_services.html",
+        request=request,
+        context={
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "role": ctx.membership.role,
+            "current_client": get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx)),
+            "rows": rows,
+            "area_options": _offer_area_options(),
+        },
+    )
+
+
+@app.post("/admin/servicos-internos/add")
+@require_role({"admin"})
+async def admin_internal_services_add(
+    request: Request,
+    area: str = Form("baas"),
+    family_slug: str = Form(""),
+    name: str = Form(...),
+    description: str = Form(""),
+    priority_weight: str = Form("100"),
+    notes: str = Form(""),
+    session: Session = Depends(get_session),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+    ensure_partner_tables()
+    row = InternalService(
+        company_id=int(ctx.company.id),
+        area=(area or "baas").strip(),
+        family_slug=(family_slug or "").strip(),
+        name=(name or "").strip(),
+        description=(description or "").strip(),
+        priority_weight=int(priority_weight or 100) if str(priority_weight or "").strip().isdigit() else 100,
+        notes=(notes or "").strip(),
+        is_active=True,
+        updated_at=utcnow(),
+    )
+    session.add(row)
+    session.commit()
+    set_flash(request, "Produto interno salvo.")
+    return RedirectResponse("/admin/servicos-internos", status_code=303)
+
+
+@app.post("/admin/servicos-internos/seed")
+@require_role({"admin"})
+async def admin_internal_services_seed(request: Request, session: Session = Depends(get_session)) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+    ensure_partner_tables()
+    _seed_internal_services(session, ctx.company.id)
+    set_flash(request, "Catálogo padrão verificado.")
+    return RedirectResponse("/admin/servicos-internos", status_code=303)
+
+
+@app.post("/admin/parceiros/products/{product_id}/campaigns/add")
+@require_role({"admin"})
+async def admin_partner_campaigns_add(
+    request: Request,
+    product_id: int,
+    title: str = Form(...),
+    bonus_pct: str = Form("0"),
+    starts_at: str = Form(""),
+    ends_at: str = Form(""),
+    rule_summary: str = Form(""),
+    session: Session = Depends(get_session),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+    ensure_partner_tables()
+    product = session.get(PartnerProduct, product_id)
+    if not product or int(product.company_id or 0) != int(ctx.company.id or 0):
+        set_flash(request, "Produto inválido.")
+        return RedirectResponse("/admin/parceiros", status_code=303)
+
+    def _parse_date_ymd(raw: str) -> Optional[datetime]:
+        s = (raw or "").strip()
+        if not s:
+            return None
+        try:
+            return datetime.fromisoformat(s).replace(tzinfo=timezone.utc)
+        except Exception:
+            return None
+
+    row = PartnerCampaign(
+        company_id=int(ctx.company.id),
+        partner_product_id=int(product_id),
+        title=(title or "").strip(),
+        bonus_pct=float(str(bonus_pct or "0").replace(",", ".")),
+        starts_at=_parse_date_ymd(starts_at),
+        ends_at=_parse_date_ymd(ends_at),
+        rule_summary=(rule_summary or "").strip(),
+        is_active=True,
+        updated_at=utcnow(),
+    )
+    session.add(row)
+    session.commit()
+    set_flash(request, "Campanha salva.")
+    return RedirectResponse("/admin/parceiros", status_code=303)
+
+
+@app.get("/motor-ofertas", response_class=HTMLResponse)
+@require_role({"admin", "equipe"})
+async def motor_ofertas_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+    ensure_partner_tables()
+    active_client_id = get_active_client_id(request, session, ctx)
+    current_client = get_client_or_none(session, ctx.company.id, active_client_id)
+    matches = []
+    summary = {"total": 0, "alta": 0, "media": 0, "baixa": 0, "internos": 0, "parceiros": 0}
+    if current_client:
+        matches = session.exec(
+            select(OfferMatch)
+            .where(OfferMatch.company_id == int(ctx.company.id), OfferMatch.client_id == int(current_client.id or 0))
+            .order_by(OfferMatch.score_fit.desc(), OfferMatch.created_at.desc())
+        ).all()
+        summary["total"] = len(matches)
+        for row in matches:
+            summary[row.priority_level if row.priority_level in {"alta","media","baixa"} else "baixa"] += 1
+            if row.source_kind == "internal":
+                summary["internos"] += 1
+            else:
+                summary["parceiros"] += 1
+    return render(
+        "motor_ofertas.html",
+        request=request,
+        context={
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "role": ctx.membership.role,
+            "current_client": current_client,
+            "matches": matches,
+            "summary": summary,
+        },
+    )
+
+
+@app.post("/motor-ofertas/gerar")
+@require_role({"admin", "equipe"})
+async def motor_ofertas_generate(request: Request, session: Session = Depends(get_session)) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+    ensure_partner_tables()
+    active_client_id = get_active_client_id(request, session, ctx)
+    current_client = get_client_or_none(session, ctx.company.id, active_client_id)
+    if not current_client:
+        set_flash(request, "Selecione um cliente antes de gerar ofertas.")
+        return RedirectResponse("/client/switch", status_code=303)
+    _generate_offer_matches(session, ctx.company.id, current_client)
+    set_flash(request, "Motor de ofertas atualizado.")
+    return RedirectResponse("/motor-ofertas", status_code=303)
+
+
+@app.get("/ofertas", response_class=HTMLResponse)
+@require_login
+async def ofertas_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+    ensure_partner_tables()
+    active_client_id = get_active_client_id(request, session, ctx)
+    current_client = get_client_or_none(session, ctx.company.id, active_client_id)
+    rows = []
+    if current_client:
+        rows = session.exec(
+            select(OfferMatch)
+            .where(OfferMatch.company_id == int(ctx.company.id), OfferMatch.client_id == int(current_client.id or 0))
+            .order_by(OfferMatch.score_fit.desc(), OfferMatch.created_at.desc())
+        ).all()
+    return render(
+        "client_offers.html",
+        request=request,
+        context={
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "role": ctx.membership.role,
+            "current_client": current_client,
+            "rows": rows,
+        },
+    )
+
+
+
 
 @app.on_event("startup")
 def _startup() -> None:
@@ -23550,6 +23881,7 @@ async def login_page(request: Request, session: Session = Depends(get_session)) 
 # ----------------------------
 if __name__ == "__main__":
     import uvicorn
+
     uvicorn.run(
         app,
         host="0.0.0.0",
