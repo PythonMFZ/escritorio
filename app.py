@@ -967,14 +967,6 @@ def ensure_offer_engine_tables() -> bool:
 
 
 def ensure_offer_engine_columns() -> None:
-    internal_statements_pg = [
-        "ALTER TABLE IF EXISTS internalservice ADD COLUMN IF NOT EXISTS family_code VARCHAR NOT NULL DEFAULT ''",
-        "ALTER TABLE IF EXISTS internalservice ADD COLUMN IF NOT EXISTS family_slug VARCHAR NOT NULL DEFAULT ''",
-        "ALTER TABLE IF EXISTS partnerproduct ADD COLUMN IF NOT EXISTS family_code VARCHAR NOT NULL DEFAULT ''",
-        "ALTER TABLE IF EXISTS partnerproduct ADD COLUMN IF NOT EXISTS family_slug VARCHAR NOT NULL DEFAULT ''",
-        "ALTER TABLE IF EXISTS offermatch ADD COLUMN IF NOT EXISTS family_code VARCHAR NOT NULL DEFAULT ''",
-        "ALTER TABLE IF EXISTS offermatch ADD COLUMN IF NOT EXISTS partner_options_count INTEGER NOT NULL DEFAULT 0",
-    ]
     business_profile_columns = [
         ("segment", "VARCHAR NOT NULL DEFAULT ''", "TEXT NOT NULL DEFAULT ''"),
         ("subsegment", "VARCHAR NOT NULL DEFAULT ''", "TEXT NOT NULL DEFAULT ''"),
@@ -1009,27 +1001,106 @@ def ensure_offer_engine_columns() -> None:
         ("has_board", "BOOLEAN NOT NULL DEFAULT FALSE", "INTEGER NOT NULL DEFAULT 0"),
         ("has_audited_fs", "BOOLEAN NOT NULL DEFAULT FALSE", "INTEGER NOT NULL DEFAULT 0"),
     ]
+    internal_service_columns = [
+        ("area", "VARCHAR NOT NULL DEFAULT ''", "TEXT NOT NULL DEFAULT ''"),
+        ("family_code", "VARCHAR NOT NULL DEFAULT ''", "TEXT NOT NULL DEFAULT ''"),
+        ("family_slug", "VARCHAR NOT NULL DEFAULT ''", "TEXT NOT NULL DEFAULT ''"),
+        ("name", "VARCHAR NOT NULL DEFAULT ''", "TEXT NOT NULL DEFAULT ''"),
+        ("description", "TEXT NOT NULL DEFAULT ''", "TEXT NOT NULL DEFAULT ''"),
+        ("priority_weight", "INTEGER NOT NULL DEFAULT 50", "INTEGER NOT NULL DEFAULT 50"),
+        ("is_active", "BOOLEAN NOT NULL DEFAULT TRUE", "INTEGER NOT NULL DEFAULT 1"),
+        ("notes", "TEXT NOT NULL DEFAULT ''", "TEXT NOT NULL DEFAULT ''"),
+        ("created_at", "TIMESTAMP WITHOUT TIME ZONE DEFAULT NOW()", "TEXT"),
+        ("updated_at", "TIMESTAMP WITHOUT TIME ZONE DEFAULT NOW()", "TEXT"),
+    ]
+    partner_columns = [
+        ("name", "VARCHAR NOT NULL DEFAULT ''", "TEXT NOT NULL DEFAULT ''"),
+        ("partner_type", "VARCHAR NOT NULL DEFAULT 'financeiro'", "TEXT NOT NULL DEFAULT 'financeiro'"),
+        ("contact_name", "VARCHAR NOT NULL DEFAULT ''", "TEXT NOT NULL DEFAULT ''"),
+        ("contact_email", "VARCHAR NOT NULL DEFAULT ''", "TEXT NOT NULL DEFAULT ''"),
+        ("notes", "TEXT NOT NULL DEFAULT ''", "TEXT NOT NULL DEFAULT ''"),
+        ("is_active", "BOOLEAN NOT NULL DEFAULT TRUE", "INTEGER NOT NULL DEFAULT 1"),
+        ("created_at", "TIMESTAMP WITHOUT TIME ZONE DEFAULT NOW()", "TEXT"),
+        ("updated_at", "TIMESTAMP WITHOUT TIME ZONE DEFAULT NOW()", "TEXT"),
+    ]
+    partner_product_columns = [
+        ("area", "VARCHAR NOT NULL DEFAULT ''", "TEXT NOT NULL DEFAULT ''"),
+        ("family_code", "VARCHAR NOT NULL DEFAULT ''", "TEXT NOT NULL DEFAULT ''"),
+        ("family_slug", "VARCHAR NOT NULL DEFAULT ''", "TEXT NOT NULL DEFAULT ''"),
+        ("name", "VARCHAR NOT NULL DEFAULT ''", "TEXT NOT NULL DEFAULT ''"),
+        ("pf_pj", "VARCHAR NOT NULL DEFAULT 'PJ'", "TEXT NOT NULL DEFAULT 'PJ'"),
+        ("ticket_min_brl", "DOUBLE PRECISION NOT NULL DEFAULT 0", "REAL NOT NULL DEFAULT 0"),
+        ("ticket_max_brl", "DOUBLE PRECISION NOT NULL DEFAULT 0", "REAL NOT NULL DEFAULT 0"),
+        ("revenue_min_brl", "DOUBLE PRECISION NOT NULL DEFAULT 0", "REAL NOT NULL DEFAULT 0"),
+        ("revenue_max_brl", "DOUBLE PRECISION NOT NULL DEFAULT 0", "REAL NOT NULL DEFAULT 0"),
+        ("score_total_min", "DOUBLE PRECISION NOT NULL DEFAULT 0", "REAL NOT NULL DEFAULT 0"),
+        ("score_financial_min", "DOUBLE PRECISION NOT NULL DEFAULT 0", "REAL NOT NULL DEFAULT 0"),
+        ("max_debt_ratio", "DOUBLE PRECISION NOT NULL DEFAULT 0", "REAL NOT NULL DEFAULT 0"),
+        ("requires_collateral", "BOOLEAN NOT NULL DEFAULT FALSE", "INTEGER NOT NULL DEFAULT 0"),
+        ("allowed_states_json", "TEXT NOT NULL DEFAULT '[]'", "TEXT NOT NULL DEFAULT '[]'"),
+        ("allowed_segments_json", "TEXT NOT NULL DEFAULT '[]'", "TEXT NOT NULL DEFAULT '[]'"),
+        ("rate_default_pct", "DOUBLE PRECISION NOT NULL DEFAULT 0", "REAL NOT NULL DEFAULT 0"),
+        ("cet_default_pct", "DOUBLE PRECISION NOT NULL DEFAULT 0", "REAL NOT NULL DEFAULT 0"),
+        ("term_min_months", "INTEGER NOT NULL DEFAULT 0", "INTEGER NOT NULL DEFAULT 0"),
+        ("term_max_months", "INTEGER NOT NULL DEFAULT 0", "INTEGER NOT NULL DEFAULT 0"),
+        ("grace_max_months", "INTEGER NOT NULL DEFAULT 0", "INTEGER NOT NULL DEFAULT 0"),
+        ("amortization_default", "VARCHAR NOT NULL DEFAULT 'PRICE'", "TEXT NOT NULL DEFAULT 'PRICE'"),
+        ("tariff_default_brl", "DOUBLE PRECISION NOT NULL DEFAULT 0", "REAL NOT NULL DEFAULT 0"),
+        ("insurance_default_brl", "DOUBLE PRECISION NOT NULL DEFAULT 0", "REAL NOT NULL DEFAULT 0"),
+        ("admin_fee_default_brl", "DOUBLE PRECISION NOT NULL DEFAULT 0", "REAL NOT NULL DEFAULT 0"),
+        ("ltv_max_pct", "DOUBLE PRECISION NOT NULL DEFAULT 0", "REAL NOT NULL DEFAULT 0"),
+        ("commission_text", "TEXT NOT NULL DEFAULT ''", "TEXT NOT NULL DEFAULT ''"),
+        ("payout_term", "TEXT NOT NULL DEFAULT ''", "TEXT NOT NULL DEFAULT ''"),
+        ("is_active", "BOOLEAN NOT NULL DEFAULT TRUE", "INTEGER NOT NULL DEFAULT 1"),
+        ("notes", "TEXT NOT NULL DEFAULT ''", "TEXT NOT NULL DEFAULT ''"),
+        ("created_at", "TIMESTAMP WITHOUT TIME ZONE DEFAULT NOW()", "TEXT"),
+        ("updated_at", "TIMESTAMP WITHOUT TIME ZONE DEFAULT NOW()", "TEXT"),
+    ]
+    campaign_columns = [
+        ("title", "TEXT NOT NULL DEFAULT ''", "TEXT NOT NULL DEFAULT ''"),
+        ("starts_at", "TIMESTAMP WITHOUT TIME ZONE DEFAULT NOW()", "TEXT"),
+        ("ends_at", "TIMESTAMP WITHOUT TIME ZONE DEFAULT NOW()", "TEXT"),
+        ("bonus_pct", "DOUBLE PRECISION NOT NULL DEFAULT 0", "REAL NOT NULL DEFAULT 0"),
+        ("rule_summary", "TEXT NOT NULL DEFAULT ''", "TEXT NOT NULL DEFAULT ''"),
+        ("is_active", "BOOLEAN NOT NULL DEFAULT TRUE", "INTEGER NOT NULL DEFAULT 1"),
+        ("created_at", "TIMESTAMP WITHOUT TIME ZONE DEFAULT NOW()", "TEXT"),
+        ("updated_at", "TIMESTAMP WITHOUT TIME ZONE DEFAULT NOW()", "TEXT"),
+    ]
+    offermatch_columns = [
+        ("family_code", "VARCHAR NOT NULL DEFAULT ''", "TEXT NOT NULL DEFAULT ''"),
+        ("partner_options_count", "INTEGER NOT NULL DEFAULT 0", "INTEGER NOT NULL DEFAULT 0"),
+    ]
+
+    all_by_table = {
+        "clientbusinessprofile": business_profile_columns,
+        "internalservice": internal_service_columns,
+        "partner": partner_columns,
+        "partnerproduct": partner_product_columns,
+        "partnercampaign": campaign_columns,
+        "offermatch": offermatch_columns,
+    }
 
     try:
         backend = engine.url.get_backend_name()
         with engine.begin() as conn:
             if backend.startswith("postgres"):
-                for stmt in internal_statements_pg:
-                    try:
-                        conn.exec_driver_sql(stmt)
-                    except Exception:
-                        pass
-                for col, ddl_pg, _ddl_sqlite in business_profile_columns:
-                    try:
-                        conn.exec_driver_sql(
-                            f"ALTER TABLE IF EXISTS clientbusinessprofile "
-                            f"ADD COLUMN IF NOT EXISTS {col} {ddl_pg}"
-                        )
-                    except Exception:
-                        pass
+                for table_name, cols in all_by_table.items():
+                    for col, ddl_pg, _ddl_sqlite in cols:
+                        try:
+                            conn.exec_driver_sql(
+                                f"ALTER TABLE IF EXISTS {table_name} "
+                                f"ADD COLUMN IF NOT EXISTS {col} {ddl_pg}"
+                            )
+                        except Exception:
+                            pass
                 for stmt in [
                     "ALTER TABLE IF EXISTS internalservice ALTER COLUMN family_slug SET DEFAULT ''",
                     "ALTER TABLE IF EXISTS internalservice ALTER COLUMN family_code SET DEFAULT ''",
+                    "ALTER TABLE IF EXISTS partner ALTER COLUMN partner_type SET DEFAULT 'financeiro'",
+                    "ALTER TABLE IF EXISTS partner ALTER COLUMN contact_name SET DEFAULT ''",
+                    "ALTER TABLE IF EXISTS partner ALTER COLUMN contact_email SET DEFAULT ''",
+                    "ALTER TABLE IF EXISTS partner ALTER COLUMN notes SET DEFAULT ''",
+                    "ALTER TABLE IF EXISTS partner ALTER COLUMN is_active SET DEFAULT TRUE",
                     "ALTER TABLE IF EXISTS clientbusinessprofile ALTER COLUMN banking_relationships_count SET DEFAULT 0",
                     "ALTER TABLE IF EXISTS clientbusinessprofile ALTER COLUMN banks_count SET DEFAULT 0",
                     "UPDATE internalservice SET family_slug = COALESCE(NULLIF(family_slug, ''), family_code, '')",
@@ -1044,19 +1115,18 @@ def ensure_offer_engine_columns() -> None:
                     except Exception:
                         pass
             elif backend.startswith("sqlite"):
-                try:
-                    rows = conn.exec_driver_sql("PRAGMA table_info('clientbusinessprofile')").fetchall()
-                    existing = {str(r[1]) for r in rows}
-                except Exception:
-                    existing = set()
-                for col, _ddl_pg, ddl_sqlite in business_profile_columns:
-                    if col not in existing:
-                        try:
-                            conn.exec_driver_sql(
-                                f"ALTER TABLE clientbusinessprofile ADD COLUMN {col} {ddl_sqlite}"
-                            )
-                        except Exception:
-                            pass
+                for table_name, cols in all_by_table.items():
+                    try:
+                        rows = conn.exec_driver_sql(f"PRAGMA table_info('{table_name}')").fetchall()
+                        existing = {str(r[1]) for r in rows}
+                    except Exception:
+                        existing = set()
+                    for col, _ddl_pg, ddl_sqlite in cols:
+                        if col not in existing:
+                            try:
+                                conn.exec_driver_sql(f"ALTER TABLE {table_name} ADD COLUMN {col} {ddl_sqlite}")
+                            except Exception:
+                                pass
     except Exception:
         pass
 
@@ -1155,6 +1225,38 @@ def _generic_sql_default_for_column(name: str, data_type: str) -> Any:
         "description": "",
         "notes": "",
         "area": "",
+        "partner_type": "financeiro",
+        "contact_name": "",
+        "contact_email": "",
+        "pf_pj": "PJ",
+        "commission_text": "",
+        "payout_term": "",
+        "rule_summary": "",
+        "title": "",
+        "amortization_default": "PRICE",
+        "starts_at": utcnow(),
+        "ends_at": utcnow(),
+        "is_active": True,
+        "requires_collateral": False,
+        "allowed_states_json": "[]",
+        "allowed_segments_json": "[]",
+        "bonus_pct": 0.0,
+        "rate_default_pct": 0.0,
+        "cet_default_pct": 0.0,
+        "term_min_months": 0,
+        "term_max_months": 0,
+        "grace_max_months": 0,
+        "tariff_default_brl": 0.0,
+        "insurance_default_brl": 0.0,
+        "admin_fee_default_brl": 0.0,
+        "ltv_max_pct": 0.0,
+        "ticket_min_brl": 0.0,
+        "ticket_max_brl": 0.0,
+        "revenue_min_brl": 0.0,
+        "revenue_max_brl": 0.0,
+        "score_total_min": 0.0,
+        "score_financial_min": 0.0,
+        "max_debt_ratio": 0.0,
     }
     if n in explicit:
         return explicit[n]
@@ -1317,6 +1419,74 @@ def _upsert_internal_service_compat(
     session.execute(text(sql), params)
     session.commit()
 
+
+
+def _upsert_partner_compat(
+    session: Session,
+    *,
+    company_id: int,
+    name: str,
+    partner_type: str,
+    contact_name: str,
+    contact_email: str,
+    notes: str,
+    is_active: bool = True,
+) -> None:
+    cols_meta = _table_columns_meta(session, "partner")
+    if not cols_meta:
+        row = Partner(
+            company_id=company_id,
+            name=name,
+            partner_type=partner_type or "financeiro",
+            contact_name=contact_name or "",
+            contact_email=contact_email or "",
+            notes=notes or "",
+            is_active=is_active,
+        )
+        session.add(row)
+        session.commit()
+        return
+
+    provided: dict[str, Any] = {
+        "company_id": company_id,
+        "name": name,
+        "partner_type": partner_type or "financeiro",
+        "contact_name": contact_name or "",
+        "contact_email": contact_email or "",
+        "notes": notes or "",
+        "is_active": bool(is_active),
+        "created_at": utcnow(),
+        "updated_at": utcnow(),
+    }
+
+    names: list[str] = []
+    params: dict[str, Any] = {}
+    for meta in cols_meta:
+        col = meta["name"]
+        if col == "id":
+            continue
+        if col in provided:
+            val = provided[col]
+        elif not meta["nullable"]:
+            val = _generic_sql_default_for_column(col, meta["type"])
+        else:
+            continue
+        names.append(col)
+        params[col] = val
+
+    if not names:
+        return
+
+    cols_sql = ", ".join(names)
+    placeholders = ", ".join(f":{c}" for c in names)
+    backend = engine.url.get_backend_name()
+    if backend.startswith("postgres"):
+        update_cols = [c for c in names if c not in {"company_id", "name", "created_at"}]
+        update_sql = ", ".join(f"{c}=EXCLUDED.{c}" for c in update_cols)
+        sql = f"INSERT INTO partner ({cols_sql}) VALUES ({placeholders}) ON CONFLICT (company_id, name) DO UPDATE SET {update_sql}"
+    else:
+        sql = f"INSERT OR REPLACE INTO partner ({cols_sql}) VALUES ({placeholders})"
+    session.execute(text(sql), params)
 
 def _upsert_partner_product_compat(
     session: Session,
@@ -11089,9 +11259,17 @@ async def admin_parceiros_page(request: Request, session: Session = Depends(get_
 async def admin_parceiros_add(request: Request, session: Session = Depends(get_session), name: str = Form(...), partner_type: str = Form("financeiro"), contact_name: str = Form(""), contact_email: str = Form(""), notes: str = Form("")) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
-    row = Partner(company_id=ctx.company.id, name=(name or "").strip(), partner_type=(partner_type or "").strip(), contact_name=(contact_name or "").strip(), contact_email=(contact_email or "").strip(), notes=(notes or "").strip(), is_active=True)
     try:
-        session.add(row)
+        _upsert_partner_compat(
+            session,
+            company_id=ctx.company.id,
+            name=(name or "").strip(),
+            partner_type=(partner_type or "financeiro").strip(),
+            contact_name=(contact_name or "").strip(),
+            contact_email=(contact_email or "").strip(),
+            notes=(notes or "").strip(),
+            is_active=True,
+        )
         session.commit()
         set_flash(request, "Parceiro salvo.")
     except IntegrityError:
