@@ -772,6 +772,17 @@ class ClientBusinessProfile(SQLModel, table=True):
     average_ticket_brl: float = 0.0
     inventory_brl: float = 0.0
     receivables_brl: float = 0.0
+    other_current_assets_brl: float = 0.0
+    cash_and_investments_brl: float = 0.0
+    immobilized_brl: float = 0.0
+    other_non_current_assets_brl: float = 0.0
+    payables_360_brl: float = 0.0
+    short_term_debt_brl: float = 0.0
+    tax_liabilities_brl: float = 0.0
+    labor_liabilities_brl: float = 0.0
+    other_current_liabilities_brl: float = 0.0
+    long_term_debt_brl: float = 0.0
+    other_non_current_liabilities_brl: float = 0.0
     collateral_brl: float = 0.0
     delinquency_brl: float = 0.0
     desired_credit_brl: float = 0.0
@@ -1017,6 +1028,17 @@ def ensure_offer_engine_columns() -> None:
         ("inventory_brl", "DOUBLE PRECISION NOT NULL DEFAULT 0", "REAL NOT NULL DEFAULT 0"),
         ("receivables_brl", "DOUBLE PRECISION NOT NULL DEFAULT 0", "REAL NOT NULL DEFAULT 0"),
         ("monthly_receivables_brl", "DOUBLE PRECISION NOT NULL DEFAULT 0", "REAL NOT NULL DEFAULT 0"),
+        ("other_current_assets_brl", "DOUBLE PRECISION NOT NULL DEFAULT 0", "REAL NOT NULL DEFAULT 0"),
+        ("cash_and_investments_brl", "DOUBLE PRECISION NOT NULL DEFAULT 0", "REAL NOT NULL DEFAULT 0"),
+        ("immobilized_brl", "DOUBLE PRECISION NOT NULL DEFAULT 0", "REAL NOT NULL DEFAULT 0"),
+        ("other_non_current_assets_brl", "DOUBLE PRECISION NOT NULL DEFAULT 0", "REAL NOT NULL DEFAULT 0"),
+        ("payables_360_brl", "DOUBLE PRECISION NOT NULL DEFAULT 0", "REAL NOT NULL DEFAULT 0"),
+        ("short_term_debt_brl", "DOUBLE PRECISION NOT NULL DEFAULT 0", "REAL NOT NULL DEFAULT 0"),
+        ("tax_liabilities_brl", "DOUBLE PRECISION NOT NULL DEFAULT 0", "REAL NOT NULL DEFAULT 0"),
+        ("labor_liabilities_brl", "DOUBLE PRECISION NOT NULL DEFAULT 0", "REAL NOT NULL DEFAULT 0"),
+        ("other_current_liabilities_brl", "DOUBLE PRECISION NOT NULL DEFAULT 0", "REAL NOT NULL DEFAULT 0"),
+        ("long_term_debt_brl", "DOUBLE PRECISION NOT NULL DEFAULT 0", "REAL NOT NULL DEFAULT 0"),
+        ("other_non_current_liabilities_brl", "DOUBLE PRECISION NOT NULL DEFAULT 0", "REAL NOT NULL DEFAULT 0"),
         ("collateral_brl", "DOUBLE PRECISION NOT NULL DEFAULT 0", "REAL NOT NULL DEFAULT 0"),
         ("collateral_available_brl", "DOUBLE PRECISION NOT NULL DEFAULT 0", "REAL NOT NULL DEFAULT 0"),
         ("delinquency_brl", "DOUBLE PRECISION NOT NULL DEFAULT 0", "REAL NOT NULL DEFAULT 0"),
@@ -1155,6 +1177,17 @@ def ensure_offer_engine_columns() -> None:
                     "UPDATE partnerproduct SET family_code = COALESCE(NULLIF(family_code, ''), family_slug, '')",
                     "UPDATE clientbusinessprofile SET banking_relationships_count = COALESCE(banking_relationships_count, banks_count, 0)",
                     "UPDATE clientbusinessprofile SET banks_count = COALESCE(banks_count, banking_relationships_count, 0)",
+                    "UPDATE clientbusinessprofile SET other_current_assets_brl = COALESCE(other_current_assets_brl, 0)",
+                    "UPDATE clientbusinessprofile SET cash_and_investments_brl = COALESCE(cash_and_investments_brl, 0)",
+                    "UPDATE clientbusinessprofile SET immobilized_brl = COALESCE(immobilized_brl, 0)",
+                    "UPDATE clientbusinessprofile SET other_non_current_assets_brl = COALESCE(other_non_current_assets_brl, 0)",
+                    "UPDATE clientbusinessprofile SET payables_360_brl = COALESCE(payables_360_brl, 0)",
+                    "UPDATE clientbusinessprofile SET short_term_debt_brl = COALESCE(short_term_debt_brl, 0)",
+                    "UPDATE clientbusinessprofile SET tax_liabilities_brl = COALESCE(tax_liabilities_brl, 0)",
+                    "UPDATE clientbusinessprofile SET labor_liabilities_brl = COALESCE(labor_liabilities_brl, 0)",
+                    "UPDATE clientbusinessprofile SET other_current_liabilities_brl = COALESCE(other_current_liabilities_brl, 0)",
+                    "UPDATE clientbusinessprofile SET long_term_debt_brl = COALESCE(long_term_debt_brl, 0)",
+                    "UPDATE clientbusinessprofile SET other_non_current_liabilities_brl = COALESCE(other_non_current_liabilities_brl, 0)",
                     "UPDATE clientbusinessprofile SET current_assets_brl = COALESCE(current_assets_brl, 0)",
                     "UPDATE clientbusinessprofile SET non_current_assets_brl = COALESCE(non_current_assets_brl, 0)",
                     "UPDATE clientbusinessprofile SET current_liabilities_brl = COALESCE(current_liabilities_brl, 0)",
@@ -1261,6 +1294,17 @@ def _generic_sql_default_for_column(name: str, data_type: str) -> Any:
         "inventory_brl": 0.0,
         "receivables_brl": 0.0,
         "monthly_receivables_brl": 0.0,
+        "other_current_assets_brl": 0.0,
+        "cash_and_investments_brl": 0.0,
+        "immobilized_brl": 0.0,
+        "other_non_current_assets_brl": 0.0,
+        "payables_360_brl": 0.0,
+        "short_term_debt_brl": 0.0,
+        "tax_liabilities_brl": 0.0,
+        "labor_liabilities_brl": 0.0,
+        "other_current_liabilities_brl": 0.0,
+        "long_term_debt_brl": 0.0,
+        "other_non_current_liabilities_brl": 0.0,
         "collateral_brl": 0.0,
         "collateral_available_brl": 0.0,
         "delinquency_brl": 0.0,
@@ -1785,7 +1829,7 @@ def compute_offer_engine(*, session: Session, company_id: int, client: Client, p
     score_proc_snap = float(latest_snapshot.score_process) if latest_snapshot else 0.0
     revenue_monthly = max(float(client.revenue_monthly_brl or 0.0), float(profile.annual_revenue_brl or 0.0) / 12.0)
     debt_total = max(float(client.debt_total_brl or 0.0), 0.0)
-    cash_balance = max(float(client.cash_balance_brl or 0.0), 0.0)
+    cash_balance = float(client.cash_balance_brl or 0.0)
     debt_ratio = debt_total / max(revenue_monthly, 1.0)
     txt = " ".join([profile.strategic_goal or "", profile.pain_points or "", " ".join(_json_list(profile.interests_json)), latest_snapshot.notes if latest_snapshot else ""]).lower()
 
@@ -12431,6 +12475,15 @@ async def empresa_page(request: Request, session: Session = Depends(get_session)
             "business_profile": business_profile,
             "product_families": list_product_families(session),
             "selected_interest_codes": _json_list(business_profile.interests_json) if business_profile else [],
+            "company_size_options": COMPANY_SIZE_OPTIONS,
+            "segment_options": COMPANY_SEGMENT_OPTIONS,
+            "subsegment_options": SEGMENT_SUBSEGMENT_OPTIONS.get((business_profile.segment if business_profile else "") or "", []),
+            "segment_subsegments_json": json.dumps(SEGMENT_SUBSEGMENT_OPTIONS, ensure_ascii=False),
+            "tax_regime_options": TAX_REGIME_OPTIONS,
+            "business_model_options": BUSINESS_MODEL_OPTIONS,
+            "sales_channel_options": SALES_CHANNEL_OPTIONS,
+            "urgency_level_options": URGENCY_LEVEL_OPTIONS,
+            "uf_options": UF_OPTIONS,
         },
     )
 
@@ -12529,8 +12582,10 @@ async def empresa_save(
     if hasattr(profile, "monthly_payroll_brl"):
         profile.monthly_payroll_brl = profile.payroll_monthly_brl
     profile.average_ticket_brl = _safe_money(average_ticket_brl)
-    profile.inventory_brl = _safe_money(inventory_brl)
-    profile.receivables_brl = _safe_money(receivables_brl)
+    if "inventory_brl" in form:
+        profile.inventory_brl = _safe_money(form.get("inventory_brl"))
+    if "receivables_brl" in form:
+        profile.receivables_brl = _safe_money(form.get("receivables_brl"))
     if hasattr(profile, "monthly_receivables_brl"):
         profile.monthly_receivables_brl = profile.receivables_brl
     profile.collateral_brl = _safe_money(collateral_brl)
@@ -12698,6 +12753,18 @@ async def perfil_save(
         debt_total_brl: float = Form(0.0),
         cash_balance_brl: float = Form(0.0),
         employees_count: int = Form(0),
+        receivables_brl: float = Form(0.0),
+        inventory_brl: float = Form(0.0),
+        other_current_assets_brl: float = Form(0.0),
+        immobilized_brl: float = Form(0.0),
+        other_non_current_assets_brl: float = Form(0.0),
+        payables_360_brl: float = Form(0.0),
+        short_term_debt_brl: float = Form(0.0),
+        tax_liabilities_brl: float = Form(0.0),
+        labor_liabilities_brl: float = Form(0.0),
+        other_current_liabilities_brl: float = Form(0.0),
+        long_term_debt_brl: float = Form(0.0),
+        other_non_current_liabilities_brl: float = Form(0.0),
         current_assets_brl: float = Form(0.0),
         non_current_assets_brl: float = Form(0.0),
         current_liabilities_brl: float = Form(0.0),
@@ -12719,24 +12786,67 @@ async def perfil_save(
         return RedirectResponse("/perfil", status_code=303)
 
     current_client.revenue_monthly_brl = _safe_money(revenue_monthly_brl)
-    current_client.debt_total_brl = _safe_money(debt_total_brl)
-    current_client.cash_balance_brl = _safe_money(cash_balance_brl)
     current_client.employees_count = _safe_int(employees_count)
     current_client.updated_at = utcnow()
 
-    session.add(current_client)
-    session.commit()
-
     profile = get_or_create_business_profile(session, company_id=ctx.company.id, client_id=current_client.id)
-    profile.current_assets_brl = _safe_money(current_assets_brl)
-    profile.non_current_assets_brl = _safe_money(non_current_assets_brl)
-    profile.current_liabilities_brl = _safe_money(current_liabilities_brl)
-    profile.non_current_liabilities_brl = _safe_money(non_current_liabilities_brl)
-    assets_total = profile.current_assets_brl + profile.non_current_assets_brl
-    liabilities_total = profile.current_liabilities_brl + profile.non_current_liabilities_brl
-    informed_equity = _safe_money(equity_brl)
-    profile.equity_brl = informed_equity if informed_equity > 0 else max(0.0, assets_total - liabilities_total)
+
+    detail_values = {
+        "cash_balance_brl": _safe_signed_money(cash_balance_brl),
+        "receivables_brl": _safe_money(receivables_brl),
+        "inventory_brl": _safe_money(inventory_brl),
+        "other_current_assets_brl": _safe_money(other_current_assets_brl),
+        "immobilized_brl": _safe_money(immobilized_brl),
+        "other_non_current_assets_brl": _safe_money(other_non_current_assets_brl),
+        "payables_360_brl": _safe_money(payables_360_brl),
+        "short_term_debt_brl": _safe_money(short_term_debt_brl),
+        "tax_liabilities_brl": _safe_money(tax_liabilities_brl),
+        "labor_liabilities_brl": _safe_money(labor_liabilities_brl),
+        "other_current_liabilities_brl": _safe_money(other_current_liabilities_brl),
+        "long_term_debt_brl": _safe_money(long_term_debt_brl),
+        "other_non_current_liabilities_brl": _safe_money(other_non_current_liabilities_brl),
+    }
+    detail_provided = any(abs(v) > 0 for v in detail_values.values())
+    aggregate_provided = any(_safe_money(v) > 0 for v in [current_assets_brl, non_current_assets_brl, current_liabilities_brl, non_current_liabilities_brl])
+
+    if detail_provided:
+        profile.cash_and_investments_brl = detail_values["cash_balance_brl"]
+        profile.receivables_brl = detail_values["receivables_brl"]
+        profile.inventory_brl = detail_values["inventory_brl"]
+        profile.other_current_assets_brl = detail_values["other_current_assets_brl"]
+        profile.immobilized_brl = detail_values["immobilized_brl"]
+        profile.other_non_current_assets_brl = detail_values["other_non_current_assets_brl"]
+        profile.payables_360_brl = detail_values["payables_360_brl"]
+        profile.short_term_debt_brl = detail_values["short_term_debt_brl"]
+        profile.tax_liabilities_brl = detail_values["tax_liabilities_brl"]
+        profile.labor_liabilities_brl = detail_values["labor_liabilities_brl"]
+        profile.other_current_liabilities_brl = detail_values["other_current_liabilities_brl"]
+        profile.long_term_debt_brl = detail_values["long_term_debt_brl"]
+        profile.other_non_current_liabilities_brl = detail_values["other_non_current_liabilities_brl"]
+
+        breakdown = _financial_breakdown(profile, current_client)
+        profile.current_assets_brl = breakdown["current_assets"]
+        profile.non_current_assets_brl = breakdown["non_current_assets"]
+        profile.current_liabilities_brl = breakdown["current_liabilities"]
+        profile.non_current_liabilities_brl = breakdown["non_current_liabilities"]
+        profile.equity_brl = breakdown["equity"]
+
+        current_client.cash_balance_brl = breakdown["cash_signed"]
+        current_client.debt_total_brl = breakdown["debt_total"]
+    else:
+        current_client.cash_balance_brl = _safe_signed_money(cash_balance_brl)
+        current_client.debt_total_brl = _safe_money(debt_total_brl)
+        profile.current_assets_brl = _safe_money(current_assets_brl)
+        profile.non_current_assets_brl = _safe_money(non_current_assets_brl)
+        profile.current_liabilities_brl = _safe_money(current_liabilities_brl)
+        profile.non_current_liabilities_brl = _safe_money(non_current_liabilities_brl)
+        assets_total = profile.current_assets_brl + profile.non_current_assets_brl
+        liabilities_total = profile.current_liabilities_brl + profile.non_current_liabilities_brl
+        profile.equity_brl = round(assets_total - liabilities_total, 2)
+
     profile.updated_at = utcnow()
+
+    session.add(current_client)
     session.add(profile)
     session.commit()
     _sync_business_profile_legacy_columns(session, profile)
@@ -12751,26 +12861,6 @@ async def perfil_save(
     persist_offer_matches(session, company_id=ctx.company.id, client_id=current_client.id, matches=matches)
 
     set_flash(request, "Diagnóstico financeiro atualizado.")
-    return RedirectResponse("/perfil", status_code=303)
-
-    if not ensure_can_access_client(ctx, current_client.id):
-        set_flash(request, "Sem permissão.")
-        return RedirectResponse("/perfil", status_code=303)
-
-    current_client.revenue_monthly_brl = max(0.0, float(revenue_monthly_brl))
-    current_client.debt_total_brl = max(0.0, float(debt_total_brl))
-    current_client.cash_balance_brl = max(0.0, float(cash_balance_brl))
-    current_client.employees_count = max(0, int(employees_count))
-    current_client.updated_at = utcnow()
-
-    session.add(current_client)
-    session.commit()
-    profile = get_or_create_business_profile(session, company_id=ctx.company.id, client_id=current_client.id)
-    latest_snapshot = session.exec(select(ClientSnapshot).where(ClientSnapshot.company_id == ctx.company.id, ClientSnapshot.client_id == current_client.id).order_by(ClientSnapshot.created_at.desc()).limit(1)).first()
-    matches = compute_offer_engine(session=session, company_id=ctx.company.id, client=current_client, profile=profile, latest_snapshot=latest_snapshot)
-    persist_offer_matches(session, company_id=ctx.company.id, client_id=current_client.id, matches=matches)
-
-    set_flash(request, "Indicadores atualizados.")
     return RedirectResponse("/perfil", status_code=303)
 
 
@@ -24689,6 +24779,90 @@ def _safe_money(value: Any) -> float:
         return 1_000_000_000_000.0
     return round(out, 2)
 
+def _safe_signed_money(value: Any) -> float:
+    try:
+        out = float(value or 0.0)
+    except Exception:
+        out = 0.0
+    if out > 1_000_000_000_000:
+        out = 1_000_000_000_000.0
+    if out < -1_000_000_000_000:
+        out = -1_000_000_000_000.0
+    return round(out, 2)
+
+def _financial_breakdown(profile: Optional[ClientBusinessProfile], client: Optional[Client] = None) -> dict[str, float]:
+    profile = profile or ClientBusinessProfile(company_id=0, client_id=0)
+    cash_signed = _safe_signed_money(getattr(profile, "cash_and_investments_brl", None))
+    if cash_signed == 0.0 and client is not None:
+        cash_signed = _safe_signed_money(getattr(client, "cash_balance_brl", 0.0))
+
+    receivables = _safe_money(getattr(profile, "receivables_brl", 0.0))
+    inventory = _safe_money(getattr(profile, "inventory_brl", 0.0))
+    other_current_assets = _safe_money(getattr(profile, "other_current_assets_brl", 0.0))
+    immobilized = _safe_money(getattr(profile, "immobilized_brl", 0.0))
+    other_non_current_assets = _safe_money(getattr(profile, "other_non_current_assets_brl", 0.0))
+
+    payables_360 = _safe_money(getattr(profile, "payables_360_brl", 0.0))
+    short_term_debt = _safe_money(getattr(profile, "short_term_debt_brl", 0.0))
+    tax_liabilities = _safe_money(getattr(profile, "tax_liabilities_brl", 0.0))
+    labor_liabilities = _safe_money(getattr(profile, "labor_liabilities_brl", 0.0))
+    other_current_liabilities = _safe_money(getattr(profile, "other_current_liabilities_brl", 0.0))
+    long_term_debt = _safe_money(getattr(profile, "long_term_debt_brl", 0.0))
+    other_non_current_liabilities = _safe_money(getattr(profile, "other_non_current_liabilities_brl", 0.0))
+
+    overdraft = round(abs(min(0.0, cash_signed)), 2)
+    cash_asset = round(max(0.0, cash_signed), 2)
+
+    current_assets = round(cash_asset + receivables + inventory + other_current_assets, 2)
+    non_current_assets = round(immobilized + other_non_current_assets, 2)
+    current_liabilities = round(payables_360 + short_term_debt + tax_liabilities + labor_liabilities + other_current_liabilities + overdraft, 2)
+    non_current_liabilities = round(long_term_debt + other_non_current_liabilities, 2)
+
+    total_assets = round(current_assets + non_current_assets, 2)
+    total_liabilities = round(current_liabilities + non_current_liabilities, 2)
+    equity = round(total_assets - total_liabilities, 2)
+
+    operating_current_assets = round(receivables + inventory + other_current_assets, 2)
+    operating_current_liabilities = round(payables_360 + tax_liabilities + labor_liabilities + other_current_liabilities, 2)
+    working_capital = round(current_assets - current_liabilities, 2)
+    working_capital_need = round(operating_current_assets - operating_current_liabilities, 2)
+    treasury_balance = round(working_capital - working_capital_need, 2)
+    debt_total = round(short_term_debt + long_term_debt + overdraft, 2)
+    net_debt = round(debt_total - cash_asset, 2)
+
+    return {
+        "cash_signed": cash_signed,
+        "cash_asset": cash_asset,
+        "overdraft": overdraft,
+        "receivables": receivables,
+        "inventory": inventory,
+        "other_current_assets": other_current_assets,
+        "immobilized": immobilized,
+        "other_non_current_assets": other_non_current_assets,
+        "payables_360": payables_360,
+        "short_term_debt": short_term_debt,
+        "tax_liabilities": tax_liabilities,
+        "labor_liabilities": labor_liabilities,
+        "other_current_liabilities": other_current_liabilities,
+        "long_term_debt": long_term_debt,
+        "other_non_current_liabilities": other_non_current_liabilities,
+        "current_assets": current_assets,
+        "non_current_assets": non_current_assets,
+        "current_liabilities": current_liabilities,
+        "non_current_liabilities": non_current_liabilities,
+        "total_assets": total_assets,
+        "total_liabilities": total_liabilities,
+        "equity": equity,
+        "operating_current_assets": operating_current_assets,
+        "operating_current_liabilities": operating_current_liabilities,
+        "working_capital": working_capital,
+        "working_capital_need": working_capital_need,
+        "treasury_balance": treasury_balance,
+        "debt_total": debt_total,
+        "net_debt": net_debt,
+    }
+
+
 def _safe_int(value: Any) -> int:
     try:
         out = int(float(value or 0))
@@ -24743,29 +24917,26 @@ def _safe_ratio(num: float, den: float) -> Optional[float]:
 
 
 def build_client_dashboard_analysis(*, client: Client, profile: ClientBusinessProfile, latest_snapshot: Optional[ClientSnapshot]) -> dict[str, Any]:
+    breakdown = _financial_breakdown(profile, client)
     revenue_monthly = max(_safe_money(getattr(client, "revenue_monthly_brl", 0.0)), _safe_money(getattr(profile, "annual_revenue_brl", 0.0)) / 12.0)
-    debt_total = _safe_money(getattr(client, "debt_total_brl", 0.0))
-    cash_balance = _safe_money(getattr(client, "cash_balance_brl", 0.0))
-    receivables = _safe_money(getattr(profile, "receivables_brl", 0.0))
-    inventory = _safe_money(getattr(profile, "inventory_brl", 0.0))
-    current_assets = _safe_money(getattr(profile, "current_assets_brl", 0.0)) or _safe_money(cash_balance + receivables + inventory)
-    non_current_assets = _safe_money(getattr(profile, "non_current_assets_brl", 0.0))
-    current_liabilities = _safe_money(getattr(profile, "current_liabilities_brl", 0.0))
-    non_current_liabilities = _safe_money(getattr(profile, "non_current_liabilities_brl", 0.0))
-    equity = _safe_money(getattr(profile, "equity_brl", 0.0))
-    if (current_assets or non_current_assets or current_liabilities or non_current_liabilities):
-        equity = round((current_assets + non_current_assets) - (current_liabilities + non_current_liabilities), 2)
-
+    debt_total = breakdown["debt_total"] or _safe_money(getattr(client, "debt_total_brl", 0.0))
+    cash_balance = breakdown["cash_signed"] if breakdown["cash_signed"] or getattr(profile, "cash_and_investments_brl", 0.0) else _safe_signed_money(getattr(client, "cash_balance_brl", 0.0))
+    current_assets = breakdown["current_assets"] or _safe_money(getattr(profile, "current_assets_brl", 0.0))
+    non_current_assets = breakdown["non_current_assets"] or _safe_money(getattr(profile, "non_current_assets_brl", 0.0))
+    current_liabilities = breakdown["current_liabilities"] or _safe_money(getattr(profile, "current_liabilities_brl", 0.0))
+    non_current_liabilities = breakdown["non_current_liabilities"] or _safe_money(getattr(profile, "non_current_liabilities_brl", 0.0))
     total_assets = round(current_assets + non_current_assets, 2)
     total_liabilities = round(current_liabilities + non_current_liabilities, 2)
+    equity = round(total_assets - total_liabilities, 2)
+
     working_capital = round(current_assets - current_liabilities, 2)
     current_ratio = _safe_ratio(current_assets, current_liabilities)
-    debt_to_equity = _safe_ratio(total_liabilities, equity) if equity > 0 else None
+    debt_to_equity = _safe_ratio(total_liabilities, equity) if equity != 0 else None
     debt_ratio = debt_total / max(revenue_monthly, 1.0) if revenue_monthly > 0 else 0.0
 
     score_financial = float(getattr(latest_snapshot, "score_financial", 0.0) or 0.0)
     if score_financial <= 0:
-        score_financial = score_financial_simple(revenue_monthly, debt_total, cash_balance)
+        score_financial = score_financial_simple(revenue_monthly, max(debt_total, 0.0), max(cash_balance, 0.0))
 
     score_process = float(getattr(latest_snapshot, "score_process", 0.0) or 0.0)
     if score_process <= 0:
@@ -24780,30 +24951,45 @@ def build_client_dashboard_analysis(*, client: Client, profile: ClientBusinessPr
             score_process += 10.0
         score_process = min(100.0, score_process)
 
-    score_total_calc = float(getattr(latest_snapshot, "score_total", 0.0) or 0.0)
-    if score_total_calc <= 0:
-        score_total_calc = score_total(score_process, score_financial, 8)
-
-    score_banking = 40.0
-    if revenue_monthly > 0:
-        score_banking += 12.0
+    liquidity_bonus = 0.0
     if current_ratio:
         if current_ratio >= 1.4:
-            score_banking += 16.0
+            liquidity_bonus = 12.0
         elif current_ratio >= 1.0:
-            score_banking += 10.0
+            liquidity_bonus = 6.0
+        elif current_ratio < 0.8:
+            liquidity_bonus = -8.0
+
+    treasury_bonus = 8.0 if breakdown["treasury_balance"] >= 0 else -6.0
+    ccl_bonus = 8.0 if working_capital >= 0 else -8.0
+
+    patrimonial_score = max(0.0, min(100.0, round(50.0 + liquidity_bonus + treasury_bonus + ccl_bonus + min(max(equity, 0.0) / max(revenue_monthly, 1.0), 1.0) * 12.0, 1)))
+    score_total_calc = float(getattr(latest_snapshot, "score_total", 0.0) or 0.0)
+    if score_total_calc <= 0:
+        score_total_calc = round(_clamp_0_100((score_process * 0.35) + (score_financial * 0.35) + (patrimonial_score * 0.30)), 1)
+
+    score_banking = 42.0
+    if revenue_monthly > 0:
+        score_banking += 10.0
+    if current_ratio:
+        if current_ratio >= 1.4:
+            score_banking += 14.0
+        elif current_ratio >= 1.0:
+            score_banking += 8.0
         elif current_ratio < 0.8:
             score_banking -= 10.0
     if debt_ratio <= 1.0:
-        score_banking += 14.0
+        score_banking += 12.0
     elif debt_ratio <= 2.0:
-        score_banking += 6.0
+        score_banking += 5.0
     else:
         score_banking -= 8.0
     if getattr(profile, "collateral_brl", 0.0) > 0:
         score_banking += 10.0
     if getattr(profile, "delinquency_brl", 0.0) > 0:
         score_banking -= 8.0
+    if breakdown["working_capital_need"] > 0 and breakdown["treasury_balance"] < 0:
+        score_banking -= 6.0
     score_banking += min(score_financial * 0.18, 18.0)
     score_banking = max(0.0, min(100.0, round(score_banking, 1)))
 
@@ -24877,18 +25063,35 @@ def build_client_dashboard_analysis(*, client: Client, profile: ClientBusinessPr
         "revenue_monthly": revenue_monthly,
         "debt_total": debt_total,
         "cash_balance": cash_balance,
-        "receivables": receivables,
-        "inventory": inventory,
+        "receivables": breakdown["receivables"],
+        "inventory": breakdown["inventory"],
+        "other_current_assets": breakdown["other_current_assets"],
+        "immobilized": breakdown["immobilized"],
+        "other_non_current_assets": breakdown["other_non_current_assets"],
+        "payables_360": breakdown["payables_360"],
+        "short_term_debt": breakdown["short_term_debt"],
+        "tax_liabilities": breakdown["tax_liabilities"],
+        "labor_liabilities": breakdown["labor_liabilities"],
+        "other_current_liabilities": breakdown["other_current_liabilities"],
+        "long_term_debt": breakdown["long_term_debt"],
+        "other_non_current_liabilities": breakdown["other_non_current_liabilities"],
         "current_assets": current_assets,
         "non_current_assets": non_current_assets,
         "current_liabilities": current_liabilities,
         "non_current_liabilities": non_current_liabilities,
-        "equity": equity,
         "total_assets": total_assets,
         "total_liabilities": total_liabilities,
+        "equity": equity,
         "working_capital": working_capital,
+        "working_capital_need": breakdown["working_capital_need"],
+        "treasury_balance": breakdown["treasury_balance"],
+        "operating_current_assets": breakdown["operating_current_assets"],
+        "operating_current_liabilities": breakdown["operating_current_liabilities"],
+        "overdraft": breakdown["overdraft"],
+        "net_debt": breakdown["net_debt"],
         "current_ratio": current_ratio,
         "debt_to_equity": debt_to_equity,
+        "patrimonial_score": patrimonial_score,
         "score_card": score_card,
         "bars": bars,
         "compliance_score": compliance_score,
@@ -25255,7 +25458,7 @@ TEMPLATES["empresa.html"] = r"""
           <label class="form-label">UF</label>
           <select class="form-select" name="state">
             <option value="">Selecione</option>
-            {% for uf in ["AC","AL","AM","AP","BA","CE","DF","ES","GO","MA","MG","MS","MT","PA","PB","PE","PI","PR","RJ","RN","RO","RR","RS","SC","SE","SP","TO"] %}
+            {% for uf in uf_options %}
               <option value="{{ uf }}" {% if current_client.state == uf %}selected{% endif %}>{{ uf }}</option>
             {% endfor %}
           </select>
@@ -25270,29 +25473,38 @@ TEMPLATES["empresa.html"] = r"""
           <label class="form-label">Porte</label>
           <select class="form-select" name="company_size">
             <option value="">Selecione</option>
-            {% for item in ["MEI","ME","EPP","Médio porte","Grande porte"] %}
+            {% for item in company_size_options %}
               <option value="{{ item }}" {% if business_profile and business_profile.company_size == item %}selected{% endif %}>{{ item }}</option>
             {% endfor %}
           </select>
         </div>
         <div class="col-md-3">
           <label class="form-label">Segmento</label>
-          <select class="form-select" name="segment">
+          <select class="form-select" name="segment" id="segment-select">
             <option value="">Selecione</option>
-            {% for item in ["Comércio","Indústria","Serviços","Agronegócio","Construção","Tecnologia","Saúde","Logística/Transporte","Imobiliário","Financeiro","Educação","Outro"] %}
+            {% for item in segment_options %}
               <option value="{{ item }}" {% if business_profile and business_profile.segment == item %}selected{% endif %}>{{ item }}</option>
             {% endfor %}
           </select>
         </div>
         <div class="col-md-3">
           <label class="form-label">Subsegmento</label>
-          <input class="form-control" name="subsegment" value="{{ business_profile.subsegment if business_profile else '' }}" placeholder="Ex.: Varejo, SaaS, Clínica" />
+          {% set current_sub = business_profile.subsegment if business_profile else '' %}
+          <select class="form-select" name="subsegment" id="subsegment-select" data-current="{{ current_sub }}">
+            <option value="">Selecione</option>
+            {% for item in subsegment_options %}
+              <option value="{{ item }}" {% if current_sub == item %}selected{% endif %}>{{ item }}</option>
+            {% endfor %}
+            {% if current_sub and current_sub not in subsegment_options %}
+              <option value="{{ current_sub }}" selected>{{ current_sub }}</option>
+            {% endif %}
+          </select>
         </div>
         <div class="col-md-3">
           <label class="form-label">Regime tributário</label>
           <select class="form-select" name="tax_regime">
             <option value="">Selecione</option>
-            {% for item in ["Simples Nacional","Lucro Presumido","Lucro Real","MEI","Outro"] %}
+            {% for item in tax_regime_options %}
               <option value="{{ item }}" {% if business_profile and business_profile.tax_regime == item %}selected{% endif %}>{{ item }}</option>
             {% endfor %}
           </select>
@@ -25310,7 +25522,7 @@ TEMPLATES["empresa.html"] = r"""
           <label class="form-label">Modelo de negócio</label>
           <select class="form-select" name="business_model">
             <option value="">Selecione</option>
-            {% for item in ["B2B","B2C","B2B2C","Assinatura","Projeto/serviço","Marketplace","Indústria própria","Distribuição","Outro"] %}
+            {% for item in business_model_options %}
               <option value="{{ item }}" {% if business_profile and business_profile.business_model == item %}selected{% endif %}>{{ item }}</option>
             {% endfor %}
           </select>
@@ -25319,7 +25531,7 @@ TEMPLATES["empresa.html"] = r"""
           <label class="form-label">Canal de vendas</label>
           <select class="form-select" name="sales_channel">
             <option value="">Selecione</option>
-            {% for item in ["Presencial","Online","Híbrido","Comercial externo","Marketplace","Franquia","Outro"] %}
+            {% for item in sales_channel_options %}
               <option value="{{ item }}" {% if business_profile and business_profile.sales_channel == item %}selected{% endif %}>{{ item }}</option>
             {% endfor %}
           </select>
@@ -25351,14 +25563,6 @@ TEMPLATES["empresa.html"] = r"""
           <input class="form-control" name="average_ticket_brl" type="number" step="0.01" min="0" value="{{ business_profile.average_ticket_brl if business_profile else 0 }}" />
         </div>
         <div class="col-md-3">
-          <label class="form-label">Estoques (R$)</label>
-          <input class="form-control" name="inventory_brl" type="number" step="0.01" min="0" value="{{ business_profile.inventory_brl if business_profile else 0 }}" />
-        </div>
-        <div class="col-md-3">
-          <label class="form-label">Recebíveis (R$)</label>
-          <input class="form-control" name="receivables_brl" type="number" step="0.01" min="0" value="{{ business_profile.receivables_brl if business_profile else 0 }}" />
-        </div>
-        <div class="col-md-3">
           <label class="form-label">Garantias disponíveis (R$)</label>
           <input class="form-control" name="collateral_brl" type="number" step="0.01" min="0" value="{{ business_profile.collateral_brl if business_profile else 0 }}" />
         </div>
@@ -25374,10 +25578,16 @@ TEMPLATES["empresa.html"] = r"""
           <label class="form-label">Urgência</label>
           <select class="form-select" name="urgency_level">
             <option value="">Selecione</option>
-            {% for item in ["Baixa","Média","Alta","Imediata"] %}
+            {% for item in urgency_level_options %}
               <option value="{{ item }}" {% if business_profile and business_profile.urgency_level == item %}selected{% endif %}>{{ item }}</option>
             {% endfor %}
           </select>
+        </div>
+
+        <div class="col-12">
+          <div class="alert alert-light border mb-0">
+            O detalhamento do <b>diagnóstico financeiro e patrimonial</b> agora fica na aba <a href="/perfil"><b>Diagnóstico Financeiro</b></a>.
+          </div>
         </div>
 
         <div class="col-12 mt-2"><div class="fw-semibold">4. Governança e interesses</div></div>
@@ -25419,21 +25629,56 @@ TEMPLATES["empresa.html"] = r"""
         <a class="btn btn-outline-secondary" href="/perfil">Ir para diagnóstico financeiro</a>
       </div>
     </form>
+    <script>
+      (function() {
+        const segmentSelect = document.getElementById("segment-select");
+        const subsegmentSelect = document.getElementById("subsegment-select");
+        const segmentMap = {{ segment_subsegments_json|safe }};
+        const currentValue = subsegmentSelect ? (subsegmentSelect.dataset.current || "") : "";
+        function rebuild() {
+          if (!segmentSelect || !subsegmentSelect) return;
+          const segment = segmentSelect.value || "";
+          const items = segmentMap[segment] || [];
+          const keep = subsegmentSelect.value || currentValue || "";
+          subsegmentSelect.innerHTML = '<option value="">Selecione</option>';
+          items.forEach(function(item) {
+            const opt = document.createElement("option");
+            opt.value = item;
+            opt.textContent = item;
+            if (keep === item) opt.selected = true;
+            subsegmentSelect.appendChild(opt);
+          });
+          if (keep && items.indexOf(keep) === -1) {
+            const opt = document.createElement("option");
+            opt.value = keep;
+            opt.textContent = keep;
+            opt.selected = true;
+            subsegmentSelect.appendChild(opt);
+          }
+        }
+        if (segmentSelect && subsegmentSelect) {
+          segmentSelect.addEventListener("change", rebuild);
+          rebuild();
+        }
+      })();
+    </script>
   {% endif %}
 </div>
 {% endblock %}
 """
 
+
 TEMPLATES["perfil.html"] = r"""
 {% extends "base.html" %}
 {% block content %}
 <div class="row g-3">
-  <div class="col-xl-4">
+  <div class="col-xl-3">
     <div class="card p-4 h-100">
-      <h4 class="mb-1">Diagnóstico Financeiro</h4>
-      <div class="muted mb-3">Leitura financeira, patrimonial e evolução do cliente.</div>
-      <div><span class="muted">Usuário:</span> <b>{{ current_user.name }}</b></div>
+      <h4 class="mb-1">Meu Perfil</h4>
+      <div class="muted mb-3">Dados do usuário, do cliente e da evolução do diagnóstico.</div>
+      <div><span class="muted">Nome:</span> <b>{{ current_user.name }}</b></div>
       <div><span class="muted">E-mail:</span> <span class="mono">{{ current_user.email }}</span></div>
+      <div><span class="muted">Role:</span> <b>{{ role }}</b></div>
       {% if current_client %}
         <hr>
         <div><span class="muted">Cliente:</span> <b>{{ current_client.name }}</b></div>
@@ -25441,91 +25686,123 @@ TEMPLATES["perfil.html"] = r"""
         <div><span class="muted">Cidade/UF:</span> {{ current_client.city or "-" }}{% if current_client.state %}/{{ current_client.state }}{% endif %}</div>
       {% endif %}
       <div class="mt-3 d-grid gap-2">
-        <a class="btn btn-outline-secondary" href="/empresa">Editar dados da empresa</a>
-        <a class="btn btn-primary" href="/perfil/avaliacao/nova">Nova avaliação</a>
+        <a class="btn btn-outline-secondary" href="/empresa">Completar perfil empresarial</a>
+        <a class="btn btn-primary" href="/perfil/avaliacao/nova">Registrar nova avaliação</a>
       </div>
-      {% if financial_analysis %}
-      <hr>
-      <div class="row g-2">
-        {% for card in financial_analysis.score_card %}
-          <div class="col-6">
-            <div class="border rounded p-2 h-100">
-              <div class="muted small">{{ card.label }}</div>
-              <div class="fs-4 fw-bold">{{ "%.0f"|format(card.value) }}</div>
-              <div class="small muted">{{ card.hint }}</div>
-            </div>
-          </div>
-        {% endfor %}
-      </div>
+      {% if snapshots %}
+        <hr>
+        <div class="small muted">Histórico de avaliações</div>
+        <div class="fs-4 fw-bold">{{ snapshots|length }}</div>
+        <div class="small muted">Último score geral: {{ "%.1f"|format(latest_score or 0) }}</div>
       {% endif %}
     </div>
   </div>
 
-  <div class="col-xl-8">
+  <div class="col-xl-6">
     <div class="card p-4 mb-3">
-      <div class="d-flex justify-content-between align-items-start">
+      <div class="d-flex justify-content-between align-items-start gap-3">
         <div>
-          <h4 class="mb-1">Indicadores e balanço</h4>
-          <div class="muted">Faturamento, endividamento, caixa e estrutura patrimonial.</div>
+          <h4 class="mb-1">Diagnóstico Financeiro</h4>
+          <div class="muted">Detalhe a estrutura patrimonial e os principais componentes do capital de giro.</div>
         </div>
-        <div class="text-end">
-          <div class="muted small">Score atual</div>
-          <div class="fs-3 fw-bold">{{ "%.1f"|format(latest_score or 0) }}</div>
-          {% if delta is not none %}
-            <div class="small {% if delta >= 0 %}text-success{% else %}text-danger{% endif %}">
-              {% if delta >= 0 %}+{% endif %}{{ "%.1f"|format(delta) }} vs. avaliação anterior
-            </div>
-          {% endif %}
-        </div>
+        {% if financial_analysis %}
+          <div class="text-end">
+            <div class="muted small">Patrimônio líquido calculado</div>
+            <div class="fs-4 fw-bold">{{ financial_analysis.equity|brl }}</div>
+          </div>
+        {% endif %}
       </div>
-
       {% if not current_client %}
         <div class="alert alert-warning mt-3">Nenhum cliente selecionado/vinculado.</div>
       {% else %}
         <form method="post" action="/perfil" class="mt-3">
           <div class="row g-3">
-            <div class="col-md-6">
+            <div class="col-12"><div class="fw-semibold">1. Indicadores rápidos</div></div>
+            <div class="col-md-4">
               <label class="form-label">Faturamento mensal (R$)</label>
               <input class="form-control" name="revenue_monthly_brl" type="number" step="0.01" min="0" value="{{ current_client.revenue_monthly_brl }}" />
             </div>
-            <div class="col-md-6">
-              <label class="form-label">Endividamento total (R$)</label>
-              <input class="form-control" name="debt_total_brl" type="number" step="0.01" min="0" value="{{ current_client.debt_total_brl }}" />
+            <div class="col-md-4">
+              <label class="form-label">Caixa / disponibilidades líquidas (R$)</label>
+              <input class="form-control" name="cash_balance_brl" type="number" step="0.01" value="{{ financial_analysis.cash_balance if financial_analysis else current_client.cash_balance_brl }}" />
+              <div class="form-text">Aceita valor negativo quando houver pressão de caixa ou conta garantida estourada.</div>
             </div>
-            <div class="col-md-6">
-              <label class="form-label">Saldo em caixa (R$)</label>
-              <input class="form-control" name="cash_balance_brl" type="number" step="0.01" min="0" value="{{ current_client.cash_balance_brl }}" />
-            </div>
-            <div class="col-md-6">
+            <div class="col-md-4">
               <label class="form-label">Funcionários</label>
               <input class="form-control" name="employees_count" type="number" min="0" value="{{ current_client.employees_count }}" />
             </div>
 
-            <div class="col-12 mt-2"><div class="fw-semibold">Balanço patrimonial resumido</div></div>
+            <div class="col-12 mt-2"><div class="fw-semibold">2. Ativo circulante</div></div>
+            <div class="col-md-4">
+              <label class="form-label">Contas a receber até 360 dias (R$)</label>
+              <input class="form-control" name="receivables_brl" type="number" step="0.01" min="0" value="{{ financial_analysis.receivables if financial_analysis else (business_profile.receivables_brl if business_profile else 0) }}" />
+            </div>
+            <div class="col-md-4">
+              <label class="form-label">Estoques (R$)</label>
+              <input class="form-control" name="inventory_brl" type="number" step="0.01" min="0" value="{{ financial_analysis.inventory if financial_analysis else (business_profile.inventory_brl if business_profile else 0) }}" />
+            </div>
+            <div class="col-md-4">
+              <label class="form-label">Outros ativos circulantes (R$)</label>
+              <input class="form-control" name="other_current_assets_brl" type="number" step="0.01" min="0" value="{{ financial_analysis.other_current_assets if financial_analysis else (business_profile.other_current_assets_brl if business_profile else 0) }}" />
+            </div>
+
+            <div class="col-12 mt-2"><div class="fw-semibold">3. Ativo não circulante</div></div>
             <div class="col-md-6">
-              <label class="form-label">Ativo circulante (R$)</label>
-              <input class="form-control" name="current_assets_brl" type="number" step="0.01" min="0" value="{{ business_profile.current_assets_brl if business_profile else 0 }}" />
+              <label class="form-label">Imobilizado (R$)</label>
+              <input class="form-control" name="immobilized_brl" type="number" step="0.01" min="0" value="{{ financial_analysis.immobilized if financial_analysis else (business_profile.immobilized_brl if business_profile else 0) }}" />
             </div>
             <div class="col-md-6">
-              <label class="form-label">Ativo não circulante (R$)</label>
-              <input class="form-control" name="non_current_assets_brl" type="number" step="0.01" min="0" value="{{ business_profile.non_current_assets_brl if business_profile else 0 }}" />
+              <label class="form-label">Outros ativos não circulantes (R$)</label>
+              <input class="form-control" name="other_non_current_assets_brl" type="number" step="0.01" min="0" value="{{ financial_analysis.other_non_current_assets if financial_analysis else (business_profile.other_non_current_assets_brl if business_profile else 0) }}" />
+            </div>
+
+            <div class="col-12 mt-2"><div class="fw-semibold">4. Passivo circulante</div></div>
+            <div class="col-md-4">
+              <label class="form-label">Contas a pagar até 360 dias (R$)</label>
+              <input class="form-control" name="payables_360_brl" type="number" step="0.01" min="0" value="{{ financial_analysis.payables_360 if financial_analysis else (business_profile.payables_360_brl if business_profile else 0) }}" />
+            </div>
+            <div class="col-md-4">
+              <label class="form-label">Dívida financeira CP (R$)</label>
+              <input class="form-control" name="short_term_debt_brl" type="number" step="0.01" min="0" value="{{ financial_analysis.short_term_debt if financial_analysis else (business_profile.short_term_debt_brl if business_profile else 0) }}" />
+            </div>
+            <div class="col-md-4">
+              <label class="form-label">Passivos fiscais CP (R$)</label>
+              <input class="form-control" name="tax_liabilities_brl" type="number" step="0.01" min="0" value="{{ financial_analysis.tax_liabilities if financial_analysis else (business_profile.tax_liabilities_brl if business_profile else 0) }}" />
             </div>
             <div class="col-md-6">
-              <label class="form-label">Passivo circulante (R$)</label>
-              <input class="form-control" name="current_liabilities_brl" type="number" step="0.01" min="0" value="{{ business_profile.current_liabilities_brl if business_profile else 0 }}" />
+              <label class="form-label">Passivos trabalhistas CP (R$)</label>
+              <input class="form-control" name="labor_liabilities_brl" type="number" step="0.01" min="0" value="{{ financial_analysis.labor_liabilities if financial_analysis else (business_profile.labor_liabilities_brl if business_profile else 0) }}" />
             </div>
             <div class="col-md-6">
-              <label class="form-label">Passivo não circulante (R$)</label>
-              <input class="form-control" name="non_current_liabilities_brl" type="number" step="0.01" min="0" value="{{ business_profile.non_current_liabilities_brl if business_profile else 0 }}" />
+              <label class="form-label">Outros passivos circulantes (R$)</label>
+              <input class="form-control" name="other_current_liabilities_brl" type="number" step="0.01" min="0" value="{{ financial_analysis.other_current_liabilities if financial_analysis else (business_profile.other_current_liabilities_brl if business_profile else 0) }}" />
+            </div>
+
+            <div class="col-12 mt-2"><div class="fw-semibold">5. Passivo não circulante</div></div>
+            <div class="col-md-6">
+              <label class="form-label">Dívida financeira LP (R$)</label>
+              <input class="form-control" name="long_term_debt_brl" type="number" step="0.01" min="0" value="{{ financial_analysis.long_term_debt if financial_analysis else (business_profile.long_term_debt_brl if business_profile else 0) }}" />
             </div>
             <div class="col-md-6">
-              <label class="form-label">Patrimônio líquido (R$)</label>
-              <input class="form-control" name="equity_brl" type="number" step="0.01" min="0" value="{{ business_profile.equity_brl if business_profile else 0 }}" />
+              <label class="form-label">Outros passivos não circulantes (R$)</label>
+              <input class="form-control" name="other_non_current_liabilities_brl" type="number" step="0.01" min="0" value="{{ financial_analysis.other_non_current_liabilities if financial_analysis else (business_profile.other_non_current_liabilities_brl if business_profile else 0) }}" />
             </div>
+
+            {% if financial_analysis %}
+            <div class="col-12 mt-2"><div class="fw-semibold">6. Totais calculados</div></div>
+            <div class="col-md-4"><div class="border rounded p-3 h-100"><div class="muted small">Ativo circulante</div><div class="fw-semibold">{{ financial_analysis.current_assets|brl }}</div></div></div>
+            <div class="col-md-4"><div class="border rounded p-3 h-100"><div class="muted small">Ativo não circulante</div><div class="fw-semibold">{{ financial_analysis.non_current_assets|brl }}</div></div></div>
+            <div class="col-md-4"><div class="border rounded p-3 h-100"><div class="muted small">Ativo total</div><div class="fw-semibold">{{ financial_analysis.total_assets|brl }}</div></div></div>
+            <div class="col-md-4"><div class="border rounded p-3 h-100"><div class="muted small">Passivo circulante</div><div class="fw-semibold">{{ financial_analysis.current_liabilities|brl }}</div></div></div>
+            <div class="col-md-4"><div class="border rounded p-3 h-100"><div class="muted small">Passivo não circulante</div><div class="fw-semibold">{{ financial_analysis.non_current_liabilities|brl }}</div></div></div>
+            <div class="col-md-4"><div class="border rounded p-3 h-100"><div class="muted small">Patrimônio líquido</div><div class="fw-semibold">{{ financial_analysis.equity|brl }}</div><div class="small muted">Ativo total - passivo total</div></div></div>
+            {% endif %}
           </div>
+
           <div class="mt-4 d-flex gap-2">
             <button class="btn btn-primary">Salvar diagnóstico</button>
             <a class="btn btn-outline-secondary" href="/empresa">Editar dados da empresa</a>
+            <a class="btn btn-outline-secondary" href="/motor-ofertas">Ver motor</a>
           </div>
         </form>
       {% endif %}
@@ -25544,19 +25821,58 @@ TEMPLATES["perfil.html"] = r"""
           {% for bar in financial_analysis.bars %}
             <div class="mb-3">
               <div class="d-flex justify-content-between small">
-                <span>{{ bar.label }}</span>
+                <span>{{ bar.label }} <span class="mc-help" title="{{ bar.tooltip }}">i</span></span>
                 <span>{{ "%.0f"|format(bar.value) }}</span>
               </div>
               <div class="progress" style="height: 12px;">
                 <div class="progress-bar {{ bar.class }}" role="progressbar" style="width: {{ bar.value }}%;" aria-valuenow="{{ bar.value }}" aria-valuemin="0" aria-valuemax="100"></div>
               </div>
+              <div class="small muted mt-1">{{ bar.band_label }}</div>
             </div>
           {% endfor %}
         </div>
         <div class="row g-3 mt-1">
-          <div class="col-md-4"><div class="border rounded p-3 h-100"><div class="muted small">Capital de giro líquido</div><div class="fw-semibold">R$ {{ "{:,.2f}".format(financial_analysis.working_capital).replace(",", "X").replace(".", ",").replace("X", ".") }}</div></div></div>
+          <div class="col-md-4"><div class="border rounded p-3 h-100"><div class="muted small">Capital Circulante Líquido</div><div class="fw-semibold">{{ financial_analysis.working_capital|brl }}</div></div></div>
+          <div class="col-md-4"><div class="border rounded p-3 h-100"><div class="muted small">Necessidade de Capital de Giro</div><div class="fw-semibold">{{ financial_analysis.working_capital_need|brl }}</div></div></div>
+          <div class="col-md-4"><div class="border rounded p-3 h-100"><div class="muted small">Saldo de Tesouraria</div><div class="fw-semibold">{{ financial_analysis.treasury_balance|brl }}</div></div></div>
           <div class="col-md-4"><div class="border rounded p-3 h-100"><div class="muted small">Liquidez corrente</div><div class="fw-semibold">{{ "%.2f"|format(financial_analysis.current_ratio or 0) }}</div></div></div>
           <div class="col-md-4"><div class="border rounded p-3 h-100"><div class="muted small">Dívida / patrimônio</div><div class="fw-semibold">{{ "%.2f"|format(financial_analysis.debt_to_equity or 0) }}</div></div></div>
+          <div class="col-md-4"><div class="border rounded p-3 h-100"><div class="muted small">Dívida líquida</div><div class="fw-semibold">{{ financial_analysis.net_debt|brl }}</div></div></div>
+        </div>
+      </div>
+
+      <div class="card p-4 mb-3">
+        <div class="d-flex justify-content-between align-items-start">
+          <div>
+            <h5 class="mb-1">Composição patrimonial</h5>
+            <div class="muted">Leitura detalhada do que compõe ativos e passivos.</div>
+          </div>
+          <span class="badge text-bg-light border">Atualizado</span>
+        </div>
+        <div class="row g-3 mt-1">
+          <div class="col-md-6">
+            <div class="border rounded p-3 h-100">
+              <div class="fw-semibold mb-2">Ativo</div>
+              <div class="d-flex justify-content-between small mb-1"><span>Caixa / disponibilidades</span><span>{{ financial_analysis.cash_balance|brl }}</span></div>
+              <div class="d-flex justify-content-between small mb-1"><span>Contas a receber até 360 dias</span><span>{{ financial_analysis.receivables|brl }}</span></div>
+              <div class="d-flex justify-content-between small mb-1"><span>Estoques</span><span>{{ financial_analysis.inventory|brl }}</span></div>
+              <div class="d-flex justify-content-between small mb-1"><span>Outros ativos circulantes</span><span>{{ financial_analysis.other_current_assets|brl }}</span></div>
+              <div class="d-flex justify-content-between small mb-1"><span>Imobilizado</span><span>{{ financial_analysis.immobilized|brl }}</span></div>
+              <div class="d-flex justify-content-between small"><span>Outros ativos não circulantes</span><span>{{ financial_analysis.other_non_current_assets|brl }}</span></div>
+            </div>
+          </div>
+          <div class="col-md-6">
+            <div class="border rounded p-3 h-100">
+              <div class="fw-semibold mb-2">Passivo</div>
+              <div class="d-flex justify-content-between small mb-1"><span>Contas a pagar até 360 dias</span><span>{{ financial_analysis.payables_360|brl }}</span></div>
+              <div class="d-flex justify-content-between small mb-1"><span>Dívida financeira CP</span><span>{{ financial_analysis.short_term_debt|brl }}</span></div>
+              <div class="d-flex justify-content-between small mb-1"><span>Passivos fiscais CP</span><span>{{ financial_analysis.tax_liabilities|brl }}</span></div>
+              <div class="d-flex justify-content-between small mb-1"><span>Passivos trabalhistas CP</span><span>{{ financial_analysis.labor_liabilities|brl }}</span></div>
+              <div class="d-flex justify-content-between small mb-1"><span>Outros passivos circulantes</span><span>{{ financial_analysis.other_current_liabilities|brl }}</span></div>
+              <div class="d-flex justify-content-between small mb-1"><span>Dívida financeira LP</span><span>{{ financial_analysis.long_term_debt|brl }}</span></div>
+              <div class="d-flex justify-content-between small"><span>Outros passivos não circulantes</span><span>{{ financial_analysis.other_non_current_liabilities|brl }}</span></div>
+            </div>
+          </div>
         </div>
       </div>
     {% endif %}
@@ -25592,9 +25908,68 @@ TEMPLATES["perfil.html"] = r"""
       {% endif %}
     </div>
   </div>
+
+  <div class="col-xl-3">
+    <div class="card p-4 mb-3">
+      <h4 class="mb-1">Evolução</h4>
+      <div class="muted mb-2">Score 0–100 (estrutura + financeiro + visão comercial)</div>
+      <div class="fs-3 fw-bold">{{ "%.1f"|format(latest_score or 0) }}</div>
+      {% if delta is not none %}
+        <div class="small {% if delta >= 0 %}text-success{% else %}text-danger{% endif %}">
+          {% if delta >= 0 %}+{% endif %}{{ "%.1f"|format(delta) }} vs. avaliação anterior
+        </div>
+      {% endif %}
+      {% if snapshots %}
+        <div class="small muted mt-2">{{ snapshots|length }} avaliação(ões) no histórico.</div>
+      {% else %}
+        <div class="small muted mt-2">Ainda sem histórico suficiente.</div>
+      {% endif %}
+    </div>
+
+    {% if current_client and business_profile %}
+    <div class="card p-4 mb-3">
+      <div class="d-flex justify-content-between align-items-start">
+        <div>
+          <h4 class="mb-1">Perfil Empresarial</h4>
+          <div class="muted">Resumo do diagnóstico empresarial usado no motor de ofertas.</div>
+        </div>
+        <a class="btn btn-sm btn-outline-secondary" href="/empresa">Editar</a>
+      </div>
+      <div class="row g-3 mt-1">
+        <div class="col-12"><div class="border rounded p-3 h-100"><div class="muted small">Segmento</div><div class="fw-semibold">{{ business_profile.segment or "-" }}</div><div class="small muted">{{ business_profile.subsegment or "" }}</div></div></div>
+        <div class="col-12"><div class="border rounded p-3 h-100"><div class="muted small">Regime / Porte</div><div class="fw-semibold">{{ business_profile.tax_regime or "-" }}</div><div class="small muted">{{ business_profile.company_size or "-" }}</div></div></div>
+        <div class="col-12"><div class="border rounded p-3 h-100"><div class="muted small">Banco principal</div><div class="fw-semibold">{{ business_profile.main_bank or "-" }}</div><div class="small muted">{{ business_profile.banks_count or 0 }} relacionamento(s)</div></div></div>
+      </div>
+    </div>
+    {% endif %}
+
+    <div class="card p-4">
+      <div class="d-flex justify-content-between align-items-start">
+        <div>
+          <h4 class="mb-1">Motor de Ofertas</h4>
+          <div class="muted">Principais recomendações para o cliente.</div>
+        </div>
+        <a class="btn btn-sm btn-outline-secondary" href="/motor-ofertas">Abrir</a>
+      </div>
+      {% if offer_matches %}
+        <div class="mt-3 d-grid gap-2">
+          {% for m in offer_matches[:4] %}
+          <div class="border rounded p-3">
+            <div class="d-flex justify-content-between"><b>{{ m.product_name }}</b><span class="badge text-bg-light border">{{ m.priority_level }}</span></div>
+            <div class="small muted">{{ m.partner_name or "Maffezzolli Capital" }}</div>
+            <div class="small mt-1"><span class="mono">{{ m.family_code }}</span> • score {{ "%.1f"|format(m.score_fit) }}</div>
+          </div>
+          {% endfor %}
+        </div>
+      {% else %}
+        <div class="muted mt-3">Ainda não há recomendações geradas. Complete o perfil empresarial e gere o motor.</div>
+      {% endif %}
+    </div>
+  </div>
 </div>
 {% endblock %}
 """
+
 
 TEMPLATES["dashboard.html"] = r"""
 {% extends "base.html" %}
