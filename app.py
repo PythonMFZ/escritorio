@@ -7647,7 +7647,7 @@ TEMPLATES.update({
   <div class="d-flex justify-content-between align-items-center">
     <div>
       <h4 class="mb-0">Nova Avaliação do Cliente</h4>
-      <div class="muted">“Foto do momento” + score de evolução</div>
+      <div class="muted">Registro detalhado do momento atual + score de evolução</div>
     </div>
     <a class="btn btn-outline-secondary" href="/perfil">Voltar</a>
   </div>
@@ -7660,37 +7660,116 @@ TEMPLATES.update({
     <div class="mb-2"><span class="muted">Cliente:</span> <b>{{ current_client.name }}</b></div>
 
     <form method="post" action="/perfil/avaliacao/nova">
-      <h5 class="mt-3">Números (do momento)</h5>
+      <h5 class="mt-3">Indicadores do momento</h5>
       <div class="row g-3">
-        <div class="col-md-6">
+        <div class="col-md-4">
           <label class="form-label">Faturamento mensal (R$)</label>
           <input class="form-control" name="revenue_monthly_brl" type="number" step="0.01" min="0" value="{{ current_client.revenue_monthly_brl }}" />
         </div>
-        <div class="col-md-6">
-          <label class="form-label">Dívida total (R$)</label>
+        <div class="col-md-4">
+          <label class="form-label">Endividamento total (R$)</label>
           <input class="form-control" name="debt_total_brl" type="number" step="0.01" min="0" value="{{ current_client.debt_total_brl }}" />
         </div>
-        <div class="col-md-6">
-          <label class="form-label">Caixa (R$)</label>
-          <input class="form-control" name="cash_balance_brl" type="number" step="0.01" min="0" value="{{ current_client.cash_balance_brl }}" />
+        <div class="col-md-4">
+          <label class="form-label">Disponibilidades líquidas (R$)</label>
+          <input class="form-control" name="cash_balance_brl" type="number" step="0.01" value="{{ current_client.cash_balance_brl }}" />
+          <div class="form-text">Pode ficar negativo quando houver pressão imediata de caixa.</div>
         </div>
-        <div class="col-md-6">
+        <div class="col-md-4">
           <label class="form-label">Funcionários</label>
           <input class="form-control" name="employees_count" type="number" min="0" value="{{ current_client.employees_count }}" />
         </div>
-        <div class="col-md-6">
+        <div class="col-md-4">
           <label class="form-label">NPS (0 a 10)</label>
           <input class="form-control" name="nps_score" type="number" min="0" max="10" value="0" />
           <div class="form-text">0 = nada provável recomendar / 10 = muito provável.</div>
         </div>
-        <div class="col-12">
-          <label class="form-label">Observações (opcional)</label>
-          <textarea class="form-control" name="notes" rows="3" placeholder="Contexto, mudanças recentes, dor principal..."></textarea>
+        <div class="col-md-4">
+          <label class="form-label">Contas bancárias / relacionamentos</label>
+          <input class="form-control" name="banks_count" type="number" min="0" value="{{ business_profile.banks_count if business_profile else 0 }}" />
         </div>
       </div>
 
       <hr class="my-4"/>
+      <h5>Composição patrimonial detalhada</h5>
+      <div class="muted mb-3">Preencha os componentes. O sistema calcula automaticamente ativo total, passivo total e patrimônio líquido.</div>
 
+      <div class="row g-3">
+        <div class="col-12 mt-2"><div class="fw-semibold">Ativo circulante</div></div>
+        <div class="col-md-3">
+          <label class="form-label">Caixa e aplicações</label>
+          <input class="form-control" name="cash_and_investments_brl" type="number" step="0.01" value="{{ business_profile.cash_and_investments_brl if business_profile else current_client.cash_balance_brl }}" />
+        </div>
+        <div class="col-md-3">
+          <label class="form-label">Contas a receber até 360 dias</label>
+          <input class="form-control" name="receivables_brl" type="number" step="0.01" min="0" value="{{ business_profile.receivables_brl if business_profile else 0 }}" />
+        </div>
+        <div class="col-md-3">
+          <label class="form-label">Estoques</label>
+          <input class="form-control" name="inventory_brl" type="number" step="0.01" min="0" value="{{ business_profile.inventory_brl if business_profile else 0 }}" />
+        </div>
+        <div class="col-md-3">
+          <label class="form-label">Outros ativos circulantes</label>
+          <input class="form-control" name="other_current_assets_brl" type="number" step="0.01" min="0" value="{{ business_profile.other_current_assets_brl if business_profile else 0 }}" />
+        </div>
+
+        <div class="col-12 mt-2"><div class="fw-semibold">Ativo não circulante</div></div>
+        <div class="col-md-6">
+          <label class="form-label">Imobilizado</label>
+          <input class="form-control" name="immobilized_brl" type="number" step="0.01" min="0" value="{{ business_profile.immobilized_brl if business_profile else 0 }}" />
+        </div>
+        <div class="col-md-6">
+          <label class="form-label">Outros ativos não circulantes</label>
+          <input class="form-control" name="other_non_current_assets_brl" type="number" step="0.01" min="0" value="{{ business_profile.other_non_current_assets_brl if business_profile else 0 }}" />
+        </div>
+
+        <div class="col-12 mt-2"><div class="fw-semibold">Passivo circulante</div></div>
+        <div class="col-md-3">
+          <label class="form-label">Contas a pagar até 360 dias</label>
+          <input class="form-control" name="payables_360_brl" type="number" step="0.01" min="0" value="{{ business_profile.payables_360_brl if business_profile else 0 }}" />
+        </div>
+        <div class="col-md-3">
+          <label class="form-label">Dívida financeira CP</label>
+          <input class="form-control" name="short_term_debt_brl" type="number" step="0.01" min="0" value="{{ business_profile.short_term_debt_brl if business_profile else 0 }}" />
+        </div>
+        <div class="col-md-3">
+          <label class="form-label">Passivos fiscais CP</label>
+          <input class="form-control" name="tax_liabilities_brl" type="number" step="0.01" min="0" value="{{ business_profile.tax_liabilities_brl if business_profile else 0 }}" />
+        </div>
+        <div class="col-md-3">
+          <label class="form-label">Passivos trabalhistas CP</label>
+          <input class="form-control" name="labor_liabilities_brl" type="number" step="0.01" min="0" value="{{ business_profile.labor_liabilities_brl if business_profile else 0 }}" />
+        </div>
+        <div class="col-md-6">
+          <label class="form-label">Outros passivos circulantes</label>
+          <input class="form-control" name="other_current_liabilities_brl" type="number" step="0.01" min="0" value="{{ business_profile.other_current_liabilities_brl if business_profile else 0 }}" />
+        </div>
+
+        <div class="col-12 mt-2"><div class="fw-semibold">Passivo não circulante</div></div>
+        <div class="col-md-6">
+          <label class="form-label">Dívida financeira LP</label>
+          <input class="form-control" name="long_term_debt_brl" type="number" step="0.01" min="0" value="{{ business_profile.long_term_debt_brl if business_profile else 0 }}" />
+        </div>
+        <div class="col-md-6">
+          <label class="form-label">Outros passivos não circulantes</label>
+          <input class="form-control" name="other_non_current_liabilities_brl" type="number" step="0.01" min="0" value="{{ business_profile.other_non_current_liabilities_brl if business_profile else 0 }}" />
+        </div>
+
+        <div class="col-md-4">
+          <label class="form-label">Garantias disponíveis (R$)</label>
+          <input class="form-control" name="collateral_brl" type="number" step="0.01" min="0" value="{{ business_profile.collateral_brl if business_profile else 0 }}" />
+        </div>
+        <div class="col-md-4">
+          <label class="form-label">Inadimplência (R$)</label>
+          <input class="form-control" name="delinquency_brl" type="number" step="0.01" min="0" value="{{ business_profile.delinquency_brl if business_profile else 0 }}" />
+        </div>
+        <div class="col-md-4">
+          <label class="form-label">Crédito desejado (R$)</label>
+          <input class="form-control" name="desired_credit_brl" type="number" step="0.01" min="0" value="{{ business_profile.desired_credit_brl if business_profile else 0 }}" />
+        </div>
+      </div>
+
+      <hr class="my-4"/>
       <h5>Processos (checklist)</h5>
       <div class="muted mb-2">Marque o que já está implementado hoje.</div>
 
@@ -7705,6 +7784,11 @@ TEMPLATES.update({
         {% endfor %}
       </div>
 
+      <div class="col-12 mt-4">
+        <label class="form-label">Observações (opcional)</label>
+        <textarea class="form-control" name="notes" rows="3" placeholder="Contexto, mudanças recentes, dor principal..."></textarea>
+      </div>
+
       <div class="mt-4 d-flex gap-2">
         <button class="btn btn-primary" type="submit">Salvar avaliação</button>
         <a class="btn btn-outline-secondary" href="/perfil">Cancelar</a>
@@ -7715,7 +7799,7 @@ TEMPLATES.update({
 {% endblock %}
 """,
 
-    "perfil_snapshot_detail.html": r"""
+    "perfil_snapshot_detail.html""perfil_snapshot_detail.html": r"""
 {% extends "base.html" %}
 {% block content %}
 <div class="card p-4">
@@ -13051,6 +13135,22 @@ async def perfil_snapshot_new_action(
     profile.average_ticket_brl = max(float(form2.get("average_ticket_brl") or profile.average_ticket_brl or 0.0), 0.0)
     profile.inventory_brl = max(float(form2.get("inventory_brl") or profile.inventory_brl or 0.0), 0.0)
     profile.receivables_brl = max(float(form2.get("receivables_brl") or profile.receivables_brl or 0.0), 0.0)
+    profile.cash_and_investments_brl = float(form2.get("cash_and_investments_brl") or profile.cash_and_investments_brl or cash_balance_brl or 0.0)
+    profile.other_current_assets_brl = max(float(form2.get("other_current_assets_brl") or profile.other_current_assets_brl or 0.0), 0.0)
+    profile.immobilized_brl = max(float(form2.get("immobilized_brl") or profile.immobilized_brl or 0.0), 0.0)
+    profile.other_non_current_assets_brl = max(float(form2.get("other_non_current_assets_brl") or profile.other_non_current_assets_brl or 0.0), 0.0)
+    profile.payables_360_brl = max(float(form2.get("payables_360_brl") or profile.payables_360_brl or 0.0), 0.0)
+    profile.short_term_debt_brl = max(float(form2.get("short_term_debt_brl") or profile.short_term_debt_brl or 0.0), 0.0)
+    profile.tax_liabilities_brl = max(float(form2.get("tax_liabilities_brl") or profile.tax_liabilities_brl or 0.0), 0.0)
+    profile.labor_liabilities_brl = max(float(form2.get("labor_liabilities_brl") or profile.labor_liabilities_brl or 0.0), 0.0)
+    profile.other_current_liabilities_brl = max(float(form2.get("other_current_liabilities_brl") or profile.other_current_liabilities_brl or 0.0), 0.0)
+    profile.long_term_debt_brl = max(float(form2.get("long_term_debt_brl") or profile.long_term_debt_brl or 0.0), 0.0)
+    profile.other_non_current_liabilities_brl = max(float(form2.get("other_non_current_liabilities_brl") or profile.other_non_current_liabilities_brl or 0.0), 0.0)
+    profile.current_assets_brl = max(profile.cash_and_investments_brl, 0.0) + profile.receivables_brl + profile.inventory_brl + profile.other_current_assets_brl
+    profile.non_current_assets_brl = profile.immobilized_brl + profile.other_non_current_assets_brl
+    profile.current_liabilities_brl = profile.payables_360_brl + profile.short_term_debt_brl + profile.tax_liabilities_brl + profile.labor_liabilities_brl + profile.other_current_liabilities_brl
+    profile.non_current_liabilities_brl = profile.long_term_debt_brl + profile.other_non_current_liabilities_brl
+    profile.equity_brl = (profile.current_assets_brl + profile.non_current_assets_brl) - (profile.current_liabilities_brl + profile.non_current_liabilities_brl)
     profile.collateral_brl = max(float(form2.get("collateral_brl") or profile.collateral_brl or 0.0), 0.0)
     profile.delinquency_brl = max(float(form2.get("delinquency_brl") or profile.delinquency_brl or 0.0), 0.0)
     profile.desired_credit_brl = max(float(form2.get("desired_credit_brl") or profile.desired_credit_brl or 0.0), 0.0)
