@@ -694,7 +694,7 @@ def _parse_bool(val: Any) -> bool:
 
 
 def score_process_from_answers(answers: dict[str, Any]) -> float:
-    total_w = sum(q["w"] for q in PROFILE_SURVEY_V1)
+    total_w = sum(q["w"] for q in PROFILE_SURVEY_V2)
     if total_w <= 0:
         return 0.0
     got = 0.0
@@ -5259,11 +5259,10 @@ a:hover{ color:#00BFBF; }
 <div class="row g-3">
   <div class="col-xl-3">
     <div class="card p-4 h-100">
-      <h4 class="mb-1">Meu Perfil</h4>
-      <div class="muted mb-3">Dados do usuário e do atendimento.</div>
-      <div><span class="muted">Nome:</span> <b>{{ current_user.name }}</b></div>
+      <h4 class="mb-1">Diagnóstico Financeiro</h4>
+      <div class="muted mb-3">Visão patrimonial, evolução e scores do cliente.</div>
+      <div><span class="muted">Usuário:</span> <b>{{ current_user.name }}</b></div>
       <div><span class="muted">E-mail:</span> <span class="mono">{{ current_user.email }}</span></div>
-      <div><span class="muted">Role:</span> <b>{{ role }}</b></div>
       {% if current_client %}
         <hr>
         <div><span class="muted">Cliente:</span> <b>{{ current_client.name }}</b></div>
@@ -5271,18 +5270,37 @@ a:hover{ color:#00BFBF; }
         <div><span class="muted">Cidade/UF:</span> {{ current_client.city or "-" }}{% if current_client.state %}/{{ current_client.state }}{% endif %}</div>
       {% endif %}
       <div class="mt-3 d-grid gap-2">
-        <a class="btn btn-outline-secondary" href="/empresa">Completar perfil empresarial</a>
+        <a class="btn btn-outline-secondary" href="/empresa">Editar dados da empresa</a>
         <a class="btn btn-primary" href="/perfil/avaliacao/nova">Nova avaliação</a>
       </div>
+
+      {% if financial_analysis %}
+      <hr>
+      <div class="row g-2">
+        {% for card in financial_analysis.score_card %}
+          <div class="col-6">
+            <div class="border rounded p-2 h-100">
+              <div class="d-flex align-items-center gap-1">
+                <div class="muted small">{{ card.label }}</div>
+                <span class="mc-help" data-bs-toggle="tooltip" data-bs-placement="top" title="{{ card.tooltip }}">i</span>
+              </div>
+              <div class="fs-4 fw-bold">{{ "%.0f"|format(card.value) }}</div>
+              <div class="small muted">{{ card.hint }}</div>
+              <div class="small mt-1"><span class="badge text-bg-light border">{{ card.band_label }}</span></div>
+            </div>
+          </div>
+        {% endfor %}
+      </div>
+      {% endif %}
     </div>
   </div>
 
-  <div class="col-xl-6">
+  <div class="col-xl-9">
     <div class="card p-4 mb-3">
       <div class="d-flex justify-content-between align-items-start">
         <div>
-          <h4 class="mb-1">Indicadores do Cliente</h4>
-          <div class="muted">Faturamento, endividamento, caixa, equipe e saúde financeira.</div>
+          <h4 class="mb-1">Indicadores e composição patrimonial</h4>
+          <div class="muted">Preencha os componentes do balanço para o sistema calcular automaticamente patrimônio líquido, capital circulante e pressão de caixa.</div>
         </div>
         <div class="text-end">
           <div class="muted small">Score atual</div>
@@ -5294,30 +5312,100 @@ a:hover{ color:#00BFBF; }
           {% endif %}
         </div>
       </div>
+
       {% if not current_client %}
         <div class="alert alert-warning mt-3">Nenhum cliente selecionado/vinculado.</div>
       {% else %}
         <form method="post" action="/perfil" class="mt-3">
           <div class="row g-3">
-            <div class="col-md-6">
+            <div class="col-md-4">
               <label class="form-label">Faturamento mensal (R$)</label>
               <input class="form-control" name="revenue_monthly_brl" type="number" step="0.01" min="0" value="{{ current_client.revenue_monthly_brl }}" />
             </div>
-            <div class="col-md-6">
-              <label class="form-label">Endividamento total (R$)</label>
-              <input class="form-control" name="debt_total_brl" type="number" step="0.01" min="0" value="{{ current_client.debt_total_brl }}" />
+            <div class="col-md-4">
+              <label class="form-label">Disponibilidades líquidas (R$)</label>
+              <input class="form-control" name="cash_balance_brl" type="number" step="0.01" value="{{ financial_analysis.cash_balance if financial_analysis else current_client.cash_balance_brl }}" />
+              <div class="small muted">Aceita negativo quando houver pressão imediata de caixa.</div>
             </div>
-            <div class="col-md-6">
-              <label class="form-label">Saldo em caixa (R$)</label>
-              <input class="form-control" name="cash_balance_brl" type="number" step="0.01" min="0" value="{{ current_client.cash_balance_brl }}" />
-            </div>
-            <div class="col-md-6">
+            <div class="col-md-4">
               <label class="form-label">Funcionários</label>
               <input class="form-control" name="employees_count" type="number" min="0" value="{{ current_client.employees_count }}" />
             </div>
+
+            <div class="col-12 mt-2"><div class="fw-semibold">Ativo circulante</div></div>
+            <div class="col-md-3">
+              <label class="form-label">Caixa e aplicações</label>
+              <input class="form-control" name="cash_balance_brl" type="number" step="0.01" value="{{ business_profile.cash_and_investments_brl if business_profile else (financial_analysis.cash_balance if financial_analysis else current_client.cash_balance_brl) }}" />
+            </div>
+            <div class="col-md-3">
+              <label class="form-label">Contas a receber até 360 dias</label>
+              <input class="form-control" name="receivables_brl" type="number" step="0.01" min="0" value="{{ business_profile.receivables_brl if business_profile else 0 }}" />
+            </div>
+            <div class="col-md-3">
+              <label class="form-label">Estoques</label>
+              <input class="form-control" name="inventory_brl" type="number" step="0.01" min="0" value="{{ business_profile.inventory_brl if business_profile else 0 }}" />
+            </div>
+            <div class="col-md-3">
+              <label class="form-label">Outros ativos circulantes</label>
+              <input class="form-control" name="other_current_assets_brl" type="number" step="0.01" min="0" value="{{ business_profile.other_current_assets_brl if business_profile else 0 }}" />
+            </div>
+
+            <div class="col-12 mt-2"><div class="fw-semibold">Ativo não circulante</div></div>
+            <div class="col-md-6">
+              <label class="form-label">Imobilizado</label>
+              <input class="form-control" name="immobilized_brl" type="number" step="0.01" min="0" value="{{ business_profile.immobilized_brl if business_profile else 0 }}" />
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">Outros ativos não circulantes</label>
+              <input class="form-control" name="other_non_current_assets_brl" type="number" step="0.01" min="0" value="{{ business_profile.other_non_current_assets_brl if business_profile else 0 }}" />
+            </div>
+
+            <div class="col-12 mt-2"><div class="fw-semibold">Passivo circulante</div></div>
+            <div class="col-md-3">
+              <label class="form-label">Contas a pagar até 360 dias</label>
+              <input class="form-control" name="payables_360_brl" type="number" step="0.01" min="0" value="{{ business_profile.payables_360_brl if business_profile else 0 }}" />
+            </div>
+            <div class="col-md-3">
+              <label class="form-label">Dívida financeira CP</label>
+              <input class="form-control" name="short_term_debt_brl" type="number" step="0.01" min="0" value="{{ business_profile.short_term_debt_brl if business_profile else 0 }}" />
+            </div>
+            <div class="col-md-3">
+              <label class="form-label">Passivos fiscais CP</label>
+              <input class="form-control" name="tax_liabilities_brl" type="number" step="0.01" min="0" value="{{ business_profile.tax_liabilities_brl if business_profile else 0 }}" />
+            </div>
+            <div class="col-md-3">
+              <label class="form-label">Passivos trabalhistas CP</label>
+              <input class="form-control" name="labor_liabilities_brl" type="number" step="0.01" min="0" value="{{ business_profile.labor_liabilities_brl if business_profile else 0 }}" />
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">Outros passivos circulantes</label>
+              <input class="form-control" name="other_current_liabilities_brl" type="number" step="0.01" min="0" value="{{ business_profile.other_current_liabilities_brl if business_profile else 0 }}" />
+            </div>
+
+            <div class="col-12 mt-2"><div class="fw-semibold">Passivo não circulante</div></div>
+            <div class="col-md-6">
+              <label class="form-label">Dívida financeira LP</label>
+              <input class="form-control" name="long_term_debt_brl" type="number" step="0.01" min="0" value="{{ business_profile.long_term_debt_brl if business_profile else 0 }}" />
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">Outros passivos não circulantes</label>
+              <input class="form-control" name="other_non_current_liabilities_brl" type="number" step="0.01" min="0" value="{{ business_profile.other_non_current_liabilities_brl if business_profile else 0 }}" />
+            </div>
+
+            <div class="col-12 mt-3"><div class="fw-semibold">Balanço consolidado calculado</div></div>
+            <div class="col-md-3"><div class="border rounded p-3 h-100"><div class="muted small">Ativo circulante</div><div class="fw-semibold">{{ (financial_analysis.current_assets if financial_analysis else (business_profile.current_assets_brl if business_profile else 0))|brl }}</div></div></div>
+            <div class="col-md-3"><div class="border rounded p-3 h-100"><div class="muted small">Ativo não circulante</div><div class="fw-semibold">{{ (financial_analysis.non_current_assets if financial_analysis else (business_profile.non_current_assets_brl if business_profile else 0))|brl }}</div></div></div>
+            <div class="col-md-3"><div class="border rounded p-3 h-100"><div class="muted small">Passivo circulante</div><div class="fw-semibold">{{ (financial_analysis.current_liabilities if financial_analysis else (business_profile.current_liabilities_brl if business_profile else 0))|brl }}</div></div></div>
+            <div class="col-md-3"><div class="border rounded p-3 h-100"><div class="muted small">Passivo não circulante</div><div class="fw-semibold">{{ (financial_analysis.non_current_liabilities if financial_analysis else (business_profile.non_current_liabilities_brl if business_profile else 0))|brl }}</div></div></div>
+
+            <div class="col-md-4"><div class="border rounded p-3 h-100"><div class="muted small">Patrimônio líquido</div><div class="fw-semibold">{{ (financial_analysis.equity if financial_analysis else (business_profile.equity_brl if business_profile else 0))|brl }}</div><div class="small muted">Ativo total - Passivo total</div></div></div>
+            <div class="col-md-4"><div class="border rounded p-3 h-100"><div class="muted small">Capital Circulante Líquido</div><div class="fw-semibold">{{ (financial_analysis.working_capital if financial_analysis else 0)|brl }}</div><div class="small muted">Ativo circulante - Passivo circulante</div></div></div>
+            <div class="col-md-4"><div class="border rounded p-3 h-100"><div class="muted small">Necessidade de Capital de Giro</div><div class="fw-semibold">{{ (financial_analysis.working_capital_need if financial_analysis else 0)|brl }}</div><div class="small muted">Ativos operacionais CP - passivos operacionais CP</div></div></div>
+            <div class="col-md-6"><div class="border rounded p-3 h-100"><div class="muted small">Saldo de tesouraria</div><div class="fw-semibold">{{ (financial_analysis.treasury_balance if financial_analysis else 0)|brl }}</div><div class="small muted">CCL - NCG</div></div></div>
+            <div class="col-md-6"><div class="border rounded p-3 h-100"><div class="muted small">Dívida líquida</div><div class="fw-semibold">{{ (financial_analysis.net_debt if financial_analysis else 0)|brl }}</div><div class="small muted">Dívida financeira total - caixa/aplicações</div></div></div>
           </div>
-          <div class="mt-4 d-flex gap-2">
-            <button class="btn btn-primary">Salvar indicadores</button>
+          <div class="mt-4 d-flex gap-2 flex-wrap">
+            <button class="btn btn-primary">Salvar diagnóstico</button>
             <a class="btn btn-outline-secondary" href="/empresa">Editar dados da empresa</a>
             <a class="btn btn-outline-secondary" href="/motor-ofertas">Ver motor</a>
           </div>
@@ -5325,82 +5413,56 @@ a:hover{ color:#00BFBF; }
       {% endif %}
     </div>
 
-    {% if current_client and business_profile %}
-    <div class="card p-4">
+    {% if financial_analysis %}
+    <div class="card p-4 mb-3">
       <div class="d-flex justify-content-between align-items-start">
         <div>
-          <h4 class="mb-1">Perfil Empresarial</h4>
-          <div class="muted">Resumo do diagnóstico empresarial usado no motor de ofertas.</div>
+          <h4 class="mb-1">Composição dos scores</h4>
+          <div class="muted">Leitura visual para facilitar a interpretação do diagnóstico.</div>
         </div>
-        <a class="btn btn-sm btn-outline-secondary" href="/empresa">Editar</a>
-      </div>
-      <div class="row g-3 mt-1">
-        <div class="col-md-4"><div class="border rounded p-3 h-100"><div class="muted small">Segmento</div><div class="fw-semibold">{{ business_profile.segment or "-" }}</div><div class="small muted">{{ business_profile.subsegment or "" }}</div></div></div>
-        <div class="col-md-4"><div class="border rounded p-3 h-100"><div class="muted small">Regime / Porte</div><div class="fw-semibold">{{ business_profile.tax_regime or "-" }}</div><div class="small muted">{{ business_profile.company_size or "-" }}</div></div></div>
-        <div class="col-md-4"><div class="border rounded p-3 h-100"><div class="muted small">Banco principal</div><div class="fw-semibold">{{ business_profile.main_bank or "-" }}</div><div class="small muted">{{ business_profile.banks_count or 0 }} relacionamento(s)</div></div></div>
-        <div class="col-md-4"><div class="border rounded p-3 h-100"><div class="muted small">Receita anual</div><div class="fw-semibold">R$ {{ "%.2f"|format(business_profile.annual_revenue_brl or 0) }}</div><div class="small muted">Folha R$ {{ "%.2f"|format(business_profile.payroll_monthly_brl or 0) }}</div></div></div>
-        <div class="col-md-4"><div class="border rounded p-3 h-100"><div class="muted small">Recebíveis / Garantias</div><div class="fw-semibold">R$ {{ "%.2f"|format(business_profile.receivables_brl or 0) }}</div><div class="small muted">Garantias R$ {{ "%.2f"|format(business_profile.collateral_brl or 0) }}</div></div></div>
-        <div class="col-md-4"><div class="border rounded p-3 h-100"><div class="muted small">Crédito desejado</div><div class="fw-semibold">R$ {{ "%.2f"|format(business_profile.desired_credit_brl or 0) }}</div><div class="small muted">Urgência: {{ business_profile.urgency_level or "-" }}</div></div></div>
+        <div class="small muted">Passe o mouse no <b>i</b> para entender cada score</div>
       </div>
       <div class="mt-3">
-        <div class="fw-semibold">Objetivo estratégico</div>
-        <div>{{ business_profile.strategic_goal or "-" }}</div>
-      </div>
-      <div class="mt-2">
-        <div class="fw-semibold">Dores principais</div>
-        <div>{{ business_profile.pain_points or "-" }}</div>
-      </div>
-      <div class="mt-2">
-        <div class="fw-semibold">Interesses</div>
-        {% set interests = business_profile_interests or [] %}
-        {% if interests %}
-          <div class="d-flex flex-wrap gap-2 mt-1">
-            {% for item in interests %}
-              <span class="badge text-bg-light border">{{ item }}</span>
-            {% endfor %}
+        {% for bar in financial_analysis.bars %}
+          <div class="mb-3">
+            <div class="d-flex justify-content-between align-items-center mb-1">
+              <div class="d-flex align-items-center gap-1">
+                <div class="fw-semibold">{{ bar.label }}</div>
+                <span class="mc-help" data-bs-toggle="tooltip" data-bs-placement="top" title="{{ bar.tooltip }}">i</span>
+              </div>
+              <div><span class="badge text-bg-light border">{{ bar.band_label }}</span> <b>{{ "%.0f"|format(bar.value) }}</b></div>
+            </div>
+            <div class="mc-bar-track">
+              <div class="mc-bar-fill {{ bar.class }}" style="width: {{ bar.value }}%;"></div>
+            </div>
           </div>
-        {% else %}
-          <div class="muted">Nenhum interesse informado ainda.</div>
-        {% endif %}
+        {% endfor %}
       </div>
     </div>
     {% endif %}
-  </div>
 
-  <div class="col-xl-3">
-    <div class="card p-4 mb-3">
-      <h4 class="mb-1">Evolução</h4>
-      <div class="muted mb-2">Score 0–100 (processos + financeiro + NPS)</div>
-      <div class="fs-3 fw-bold">{{ "%.1f"|format(latest_score or 0) }}</div>
-      {% if snapshots %}
-        <div class="small muted">{{ snapshots|length }} avaliação(ões) no histórico.</div>
-      {% else %}
-        <div class="small muted">Ainda sem histórico suficiente.</div>
-      {% endif %}
-    </div>
-
+    {% if snapshots %}
     <div class="card p-4">
-      <div class="d-flex justify-content-between align-items-start">
-        <div>
-          <h4 class="mb-1">Motor de Ofertas</h4>
-          <div class="muted">Principais recomendações para o cliente.</div>
-        </div>
-        <a class="btn btn-sm btn-outline-secondary" href="/motor-ofertas">Abrir</a>
+      <h4 class="mb-1">Evolução das avaliações</h4>
+      <div class="muted mb-3">Histórico dos snapshots registrados.</div>
+      <div class="table-responsive">
+        <table class="table align-middle">
+          <thead><tr><th>Data</th><th>Score Total</th><th>Processo</th><th>Financeiro</th><th>NPS</th></tr></thead>
+          <tbody>
+            {% for s in snapshots %}
+              <tr>
+                <td>{{ s.created_at.strftime("%d/%m/%Y %H:%M") if s.created_at else "-" }}</td>
+                <td><b>{{ "%.1f"|format(s.score_total) }}</b></td>
+                <td>{{ "%.1f"|format(s.score_process) }}</td>
+                <td>{{ "%.1f"|format(s.score_financial) }}</td>
+                <td>{{ s.nps_score }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
       </div>
-      {% if offer_matches %}
-        <div class="mt-3 d-grid gap-2">
-          {% for m in offer_matches[:4] %}
-          <div class="border rounded p-3">
-            <div class="d-flex justify-content-between"><b>{{ m.product_name }}</b><span class="badge text-bg-light border">{{ m.priority_level }}</span></div>
-            <div class="small muted">{{ m.partner_name or "Maffezzolli Capital" }}</div>
-            <div class="small mt-1"><span class="mono">{{ m.family_code }}</span> • score {{ "%.1f"|format(m.score_fit) }}</div>
-          </div>
-          {% endfor %}
-        </div>
-      {% else %}
-        <div class="muted mt-3">Ainda não há recomendações geradas. Complete o perfil empresarial e gere o motor.</div>
-      {% endif %}
     </div>
+    {% endif %}
   </div>
 </div>
 {% endblock %}
@@ -12885,6 +12947,8 @@ async def perfil_snapshot_new_page(request: Request, session: Session = Depends(
         set_flash(request, "Sem permissão.")
         return RedirectResponse("/perfil", status_code=303)
 
+    business_profile = get_or_create_business_profile(session, company_id=ctx.company.id, client_id=current_client.id)
+
     return render(
         "perfil_snapshot_new.html",
         request=request,
@@ -12893,7 +12957,7 @@ async def perfil_snapshot_new_page(request: Request, session: Session = Depends(
             "current_company": ctx.company,
             "role": ctx.membership.role,
             "current_client": current_client,
-            "business_profile": get_or_create_business_profile(session, company_id=ctx.company.id, client_id=current_client.id),
+            "business_profile": business_profile,
             "survey": PROFILE_SURVEY_V2,
             "product_families": list_product_families(session),
             "selected_interest_codes": _json_list(business_profile.interests_json) if business_profile else [],
@@ -12929,7 +12993,7 @@ async def perfil_snapshot_new_action(
 
     form = await request.form()
     answers: dict[str, Any] = {}
-    for q in PROFILE_SURVEY_V1:
+    for q in PROFILE_SURVEY_V2:
         key = q["id"]
         answers[key] = _parse_bool(form.get(key))
 
