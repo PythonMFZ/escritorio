@@ -28209,3 +28209,989 @@ async def admin_analytics_page(request: Request, session: Session = Depends(get_
             "rows": rows,
         },
     )
+
+
+# ============================
+# Entrega 4 — Mensageria interna
+# ============================
+
+class Conversation(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    company_id: int = Field(index=True, foreign_key="company.id")
+    client_id: Optional[int] = Field(default=None, index=True, foreign_key="client.id")
+    title: str = ""
+    scope_kind: str = Field(default="geral", index=True)  # geral | cliente | proposta | tarefa | documento | oferta
+    context_id: Optional[int] = Field(default=None, index=True)
+    is_active: bool = Field(default=True, index=True)
+    created_by_user_id: int = Field(index=True, foreign_key="user.id")
+    created_at: datetime = Field(default_factory=utcnow, index=True)
+    updated_at: datetime = Field(default_factory=utcnow, index=True)
+
+
+class ConversationParticipant(SQLModel, table=True):
+    __table_args__ = (UniqueConstraint("conversation_id", "user_id", name="uq_conversation_participant"),)
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    conversation_id: int = Field(index=True, foreign_key="conversation.id")
+    user_id: int = Field(index=True, foreign_key="user.id")
+    is_active: bool = Field(default=True, index=True)
+    joined_at: datetime = Field(default_factory=utcnow)
+    last_read_at: Optional[datetime] = Field(default=None, index=True)
+
+
+class ConversationMessage(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    company_id: int = Field(index=True, foreign_key="company.id")
+    conversation_id: int = Field(index=True, foreign_key="conversation.id")
+    sender_user_id: int = Field(index=True, foreign_key="user.id")
+    body: str = ""
+    created_at: datetime = Field(default_factory=utcnow, index=True)
+
+
+def ensure_delivery4_tables() -> bool:
+    ok = True
+    for tbl in (
+        Conversation.__table__,
+        ConversationParticipant.__table__,
+        ConversationMessage.__table__,
+    ):
+        try:
+            tbl.create(engine, checkfirst=True)
+        except Exception:
+            ok = False
+    return ok
+
+
+def ensure_delivery4_columns() -> None:
+    conversation_columns = [
+        ("client_id", "INTEGER", "INTEGER"),
+        ("title", "TEXT NOT NULL DEFAULT ''", "TEXT NOT NULL DEFAULT ''"),
+        ("scope_kind", "VARCHAR NOT NULL DEFAULT 'geral'", "TEXT NOT NULL DEFAULT 'geral'"),
+        ("context_id", "INTEGER", "INTEGER"),
+        ("is_active", "BOOLEAN NOT NULL DEFAULT TRUE", "INTEGER NOT NULL DEFAULT 1"),
+        ("created_by_user_id", "INTEGER NOT NULL DEFAULT 0", "INTEGER NOT NULL DEFAULT 0"),
+        ("created_at", "TIMESTAMP WITHOUT TIME ZONE DEFAULT NOW()", "TEXT"),
+        ("updated_at", "TIMESTAMP WITHOUT TIME ZONE DEFAULT NOW()", "TEXT"),
+    ]
+    participant_columns = [
+        ("is_active", "BOOLEAN NOT NULL DEFAULT TRUE", "INTEGER NOT NULL DEFAULT 1"),
+        ("joined_at", "TIMESTAMP WITHOUT TIME ZONE DEFAULT NOW()", "TEXT"),
+        ("last_read_at", "TIMESTAMP WITHOUT TIME ZONE", "TEXT"),
+    ]
+    message_columns = [
+        ("company_id", "INTEGER NOT NULL DEFAULT 0", "INTEGER NOT NULL DEFAULT 0"),
+        ("sender_user_id", "INTEGER NOT NULL DEFAULT 0", "INTEGER NOT NULL DEFAULT 0"),
+        ("body", "TEXT NOT NULL DEFAULT ''", "TEXT NOT NULL DEFAULT ''"),
+        ("created_at", "TIMESTAMP WITHOUT TIME ZONE DEFAULT NOW()", "TEXT"),
+    ]
+    all_by_table = {
+        "conversation": conversation_columns,
+        "conversationparticipant": participant_columns,
+        "conversationmessage": message_columns,
+    }
+
+    try:
+        backend = engine.url.get_backend_name()
+        with engine.begin() as conn:
+            if backend.startswith("postgres"):
+                for table_name, cols in all_by_table.items():
+                    for col, ddl_pg, _ddl_sqlite in cols:
+                        try:
+                            conn.exec_driver_sql(
+                                f"ALTER TABLE IF EXISTS {table_name} "
+                                f"ADD COLUMN IF NOT EXISTS {col} {ddl_pg}"
+                            )
+                        except Exception:
+                            pass
+                for stmt in [
+                    "ALTER TABLE IF EXISTS conversation ALTER COLUMN scope_kind SET DEFAULT 'geral'",
+                    "ALTER TABLE IF EXISTS conversation ALTER COLUMN title SET DEFAULT ''",
+                    "ALTER TABLE IF EXISTS conversation ALTER COLUMN is_active SET DEFAULT TRUE",
+                    "ALTER TABLE IF EXISTS conversationparticipant ALTER COLUMN is_active SET DEFAULT TRUE",
+                    "ALTER TABLE IF EXISTS conversationmessage ALTER COLUMN body SET DEFAULT ''",
+                    "UPDATE conversation SET scope_kind = COALESCE(NULLIF(scope_kind, ''), 'geral')",
+                    "UPDATE conversation SET title = COALESCE(title, '')",
+                    "UPDATE conversation SET is_active = COALESCE(is_active, TRUE)",
+                    "UPDATE conversationparticipant SET is_active = COALESCE(is_active, TRUE)",
+                    "UPDATE conversationmessage SET body = COALESCE(body, '')",
+                ]:
+                    try:
+                        conn.exec_driver_sql(stmt)
+                    except Exception:
+                        pass
+            elif backend.startswith("sqlite"):
+                for table_name, cols in all_by_table.items():
+                    try:
+                        rows = conn.exec_driver_sql(f"PRAGMA table_info('{table_name}')").fetchall()
+                        existing = {str(r[1]) for r in rows}
+                    except Exception:
+                        existing = set()
+                    for col, _ddl_pg, ddl_sqlite in cols:
+                        if col not in existing:
+                            try:
+                                conn.exec_driver_sql(f"ALTER TABLE {table_name} ADD COLUMN {col} {ddl_sqlite}")
+                            except Exception:
+                                pass
+    except Exception:
+        pass
+
+
+@app.on_event("startup")
+def _startup_delivery4() -> None:
+    ensure_delivery4_tables()
+    ensure_delivery4_columns()
+
+
+def unread_messages_count_for_user(session: Session, *, company_id: int, user_id: int) -> int:
+    try:
+        participants = session.exec(
+            select(ConversationParticipant, Conversation)
+            .join(Conversation, Conversation.id == ConversationParticipant.conversation_id)
+            .where(
+                Conversation.company_id == company_id,
+                Conversation.is_active == True,
+                ConversationParticipant.user_id == user_id,
+                ConversationParticipant.is_active == True,
+            )
+        ).all()
+        total = 0
+        for participant, conversation in participants:
+            conds = [
+                ConversationMessage.company_id == company_id,
+                ConversationMessage.conversation_id == conversation.id,
+                ConversationMessage.sender_user_id != user_id,
+            ]
+            last_read_at = participant.last_read_at
+            if last_read_at:
+                conds.append(ConversationMessage.created_at > last_read_at)
+            total += int(
+                session.exec(
+                    select(func.count())
+                    .select_from(ConversationMessage)
+                    .where(*conds)
+                ).one() or 0
+            )
+        return total
+    except Exception:
+        return 0
+
+
+def _conversation_accessible(session: Session, *, ctx: Any, conversation: Conversation) -> bool:
+    if not conversation or conversation.company_id != ctx.company.id or not conversation.is_active:
+        return False
+    if _is_staff(ctx.membership.role):
+        return True
+    if conversation.client_id and ctx.membership.client_id != conversation.client_id:
+        return False
+    return bool(
+        session.exec(
+            select(ConversationParticipant.id).where(
+                ConversationParticipant.conversation_id == conversation.id,
+                ConversationParticipant.user_id == ctx.user.id,
+                ConversationParticipant.is_active == True,
+            )
+        ).first()
+    )
+
+
+def _ensure_participant(session: Session, *, conversation_id: int, user_id: int) -> ConversationParticipant:
+    row = session.exec(
+        select(ConversationParticipant).where(
+            ConversationParticipant.conversation_id == conversation_id,
+            ConversationParticipant.user_id == user_id,
+        )
+    ).first()
+    if not row:
+        row = ConversationParticipant(
+            conversation_id=conversation_id,
+            user_id=user_id,
+            is_active=True,
+            joined_at=utcnow(),
+        )
+    row.is_active = True
+    session.add(row)
+    return row
+
+
+def _eligible_chat_memberships(session: Session, *, company_id: int, client_id: Optional[int], creator_role: str) -> list[Membership]:
+    rows = session.exec(
+        select(Membership).where(Membership.company_id == company_id).order_by(Membership.created_at.asc())
+    ).all()
+    allowed: list[Membership] = []
+    for m in rows:
+        if creator_role == "cliente":
+            if m.role in {"admin", "equipe"}:
+                allowed.append(m)
+            elif client_id and m.role == "cliente" and m.client_id == client_id:
+                allowed.append(m)
+        else:
+            if client_id:
+                if m.role in {"admin", "equipe"} or (m.role == "cliente" and m.client_id == client_id):
+                    allowed.append(m)
+            else:
+                allowed.append(m)
+    seen: set[int] = set()
+    dedup: list[Membership] = []
+    for m in allowed:
+        if int(m.user_id) not in seen:
+            dedup.append(m)
+            seen.add(int(m.user_id))
+    return dedup
+
+
+def _participants_for_conversation(session: Session, conversation_id: int) -> list[dict[str, Any]]:
+    rows = session.exec(
+        select(ConversationParticipant)
+        .where(
+            ConversationParticipant.conversation_id == conversation_id,
+            ConversationParticipant.is_active == True,
+        )
+        .order_by(ConversationParticipant.joined_at.asc())
+    ).all()
+    items: list[dict[str, Any]] = []
+    for row in rows:
+        user = session.get(User, row.user_id)
+        membership = None
+        if user:
+            membership = session.exec(
+                select(Membership).where(Membership.user_id == user.id).order_by(Membership.created_at.asc())
+            ).first()
+        items.append({
+            "participant_id": row.id,
+            "user_id": row.user_id,
+            "name": user.name if user else f"Usuário {row.user_id}",
+            "email": user.email if user else "—",
+            "role": membership.role if membership else "—",
+            "last_read_at": row.last_read_at.strftime("%d/%m/%Y %H:%M") if row.last_read_at else "—",
+        })
+    return items
+
+
+def _notify_conversation_participants(
+    session: Session,
+    *,
+    conversation: Conversation,
+    sender_user_id: int,
+    title: str,
+    message: str,
+) -> None:
+    participants = session.exec(
+        select(ConversationParticipant).where(
+            ConversationParticipant.conversation_id == conversation.id,
+            ConversationParticipant.is_active == True,
+        )
+    ).all()
+    for p in participants:
+        if int(p.user_id) == int(sender_user_id):
+            continue
+        session.add(
+            Notification(
+                company_id=conversation.company_id,
+                client_id=conversation.client_id,
+                user_id=p.user_id,
+                kind="mensagem",
+                title=_clean_text(title, 120),
+                message=_clean_text(message, 400),
+                href=f"/mensagens/{conversation.id}",
+                is_read=False,
+                created_by_user_id=sender_user_id,
+                created_at=utcnow(),
+            )
+        )
+
+
+_original_render_delivery4 = render
+
+def render(
+    template_name: str,
+    *,
+    request: Request,
+    context: Optional[dict[str, Any]] = None,
+    status_code: int = 200,
+) -> HTMLResponse:
+    ctx = dict(context or {})
+    ctx.setdefault("unread_messages_count", 0)
+    try:
+        with Session(engine) as _db:
+            tenant = get_tenant_context(request, _db)
+            if tenant:
+                ctx.setdefault(
+                    "unread_messages_count",
+                    unread_messages_count_for_user(
+                        _db,
+                        company_id=tenant.company.id,
+                        user_id=tenant.user.id,
+                    ),
+                )
+    except Exception:
+        pass
+    return _original_render_delivery4(template_name, request=request, context=ctx, status_code=status_code)
+
+
+_original_resolve_feature_key_delivery4 = resolve_feature_key
+
+def resolve_feature_key(path: str) -> Optional[str]:
+    extra_mapping = [
+        ("/mensagens", "mensagens"),
+    ]
+    for prefix, key in extra_mapping:
+        if path == prefix or path.startswith(prefix + "/"):
+            return key
+    return _original_resolve_feature_key_delivery4(path)
+
+
+FEATURE_KEYS.update({
+    "mensagens": {
+        "title": "Mensagens",
+        "desc": "Conversas internas e por cliente.",
+        "href": "/mensagens",
+    },
+})
+FEATURE_VISIBLE_ROLES.update({
+    "mensagens": {"admin", "equipe", "cliente"},
+})
+ROLE_DEFAULT_FEATURES.setdefault("admin", set()).add("mensagens")
+ROLE_DEFAULT_FEATURES.setdefault("equipe", set()).add("mensagens")
+ROLE_DEFAULT_FEATURES.setdefault("cliente", set()).add("mensagens")
+
+_group_map_delivery4 = {g.get("key"): g for g in FEATURE_GROUPS}
+for group_key, insert_pos in (("cliente", 3), ("escritorio", 3), ("meu_projeto", 1), ("minhas_propostas", 1)):
+    if group_key in _group_map_delivery4 and "mensagens" not in _group_map_delivery4[group_key]["features"]:
+        feats = _group_map_delivery4[group_key]["features"]
+        pos = min(max(insert_pos, 0), len(feats))
+        feats.insert(pos, "mensagens")
+
+_base_tpl_delivery4 = TEMPLATES.get("base.html", "")
+if _base_tpl_delivery4 and 'href="/mensagens"' not in _base_tpl_delivery4:
+    if 'href="/notificacoes"' in _base_tpl_delivery4:
+        _base_tpl_delivery4 = _base_tpl_delivery4.replace(
+            '<a class="btn btn-outline-secondary btn-sm position-relative" href="/notificacoes"',
+            '<a class="btn btn-outline-secondary btn-sm position-relative" href="/mensagens" aria-label="Mensagens">💬{% if unread_messages_count %}<span class="position-absolute top-0 start-100 translate-middle badge rounded-pill text-bg-danger">{{ unread_messages_count }}</span>{% endif %}</a>\n            <a class="btn btn-outline-secondary btn-sm position-relative" href="/notificacoes"'
+        )
+    else:
+        _base_tpl_delivery4 = _base_tpl_delivery4.replace(
+            '<a class="btn btn-outline-secondary btn-sm" href="/logout">Sair</a>',
+            '<a class="btn btn-outline-secondary btn-sm position-relative" href="/mensagens" aria-label="Mensagens">💬{% if unread_messages_count %}<span class="position-absolute top-0 start-100 translate-middle badge rounded-pill text-bg-danger">{{ unread_messages_count }}</span>{% endif %}</a>\n            <a class="btn btn-outline-secondary btn-sm" href="/logout">Sair</a>'
+        )
+    TEMPLATES["base.html"] = _base_tpl_delivery4
+
+TEMPLATES["messages_list.html"] = r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <div class="d-flex flex-wrap justify-content-between align-items-start gap-3">
+    <div>
+      <h4 class="mb-1">Mensagens</h4>
+      <div class="muted">Converse com equipe, membros da empresa e acompanhe assuntos por cliente.</div>
+    </div>
+    <div class="d-flex gap-2">
+      <a class="btn btn-primary" href="/mensagens/nova">Nova conversa</a>
+      <a class="btn btn-outline-secondary" href="/">Voltar</a>
+    </div>
+  </div>
+  <hr class="my-3"/>
+  {% if conversations %}
+    <div class="list-group list-group-flush">
+      {% for item in conversations %}
+      <a class="list-group-item list-group-item-action py-3" href="/mensagens/{{ item.id }}">
+        <div class="d-flex flex-wrap justify-content-between gap-2">
+          <div>
+            <div class="fw-semibold">{{ item.title }}</div>
+            <div class="small muted">
+              {% if item.client_name %}Cliente: {{ item.client_name }} • {% endif %}
+              {{ item.scope_label }} • Atualizada em {{ item.updated_at }}
+            </div>
+            {% if item.participants_preview %}
+              <div class="small muted mt-1">Participantes: {{ item.participants_preview }}</div>
+            {% endif %}
+          </div>
+          <div class="text-end">
+            {% if item.unread_count %}
+              <span class="badge text-bg-danger">{{ item.unread_count }} nova(s)</span>
+            {% endif %}
+            <div class="small muted mt-1">{{ item.message_count }} mensagem(ns)</div>
+          </div>
+        </div>
+      </a>
+      {% endfor %}
+    </div>
+  {% else %}
+    <div class="muted">Nenhuma conversa ainda.</div>
+  {% endif %}
+</div>
+{% endblock %}
+"""
+
+TEMPLATES["message_new.html"] = r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <div class="d-flex flex-wrap justify-content-between align-items-start gap-3">
+    <div>
+      <h4 class="mb-1">Nova conversa</h4>
+      <div class="muted">Crie uma conversa por cliente ou assunto interno.</div>
+    </div>
+    <div><a class="btn btn-outline-secondary" href="/mensagens">Voltar</a></div>
+  </div>
+  <hr class="my-3"/>
+  <form method="post" action="/mensagens/nova" class="row g-3">
+    <div class="col-12 col-lg-6">
+      <label class="form-label">Título</label>
+      <input class="form-control" type="text" name="title" maxlength="120" required placeholder="Ex.: Documentos pendentes, alinhamento comercial">
+    </div>
+    <div class="col-12 col-lg-3">
+      <label class="form-label">Escopo</label>
+      <select class="form-select" name="scope_kind">
+        <option value="geral">Geral</option>
+        <option value="cliente">Cliente</option>
+        <option value="tarefa">Tarefa</option>
+        <option value="documento">Documento</option>
+        <option value="oferta">Oferta</option>
+        <option value="proposta">Proposta</option>
+      </select>
+    </div>
+    {% if role in ["admin","equipe"] %}
+    <div class="col-12 col-lg-3">
+      <label class="form-label">Cliente</label>
+      <select class="form-select" name="client_id">
+        <option value="">Sem cliente específico</option>
+        {% for option in client_options %}
+          <option value="{{ option.id }}" {% if option.id == current_client_id %}selected{% endif %}>{{ option.name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    {% else %}
+      <input type="hidden" name="client_id" value="{{ current_client.id if current_client else '' }}">
+    {% endif %}
+    <div class="col-12">
+      <label class="form-label">Mensagem inicial</label>
+      <textarea class="form-control" name="body" rows="5" maxlength="4000" required></textarea>
+    </div>
+    <div class="col-12">
+      <label class="form-label">Participantes</label>
+      <select class="form-select" name="participant_user_ids" multiple size="8">
+        {% for option in participant_options %}
+          <option value="{{ option.user_id }}" {% if option.selected %}selected{% endif %}>
+            {{ option.name }} — {{ option.role }}{% if option.client_name %} — {{ option.client_name }}{% endif %}
+          </option>
+        {% endfor %}
+      </select>
+      <div class="form-text">
+        {% if role == "cliente" %}
+          A equipe e os membros vinculados à sua empresa já entram por padrão.
+        {% else %}
+          Você pode selecionar equipe e membros do cliente. Se não selecionar ninguém, a equipe e o cliente atual entram automaticamente.
+        {% endif %}
+      </div>
+    </div>
+    <div class="col-12">
+      <button class="btn btn-primary">Criar conversa</button>
+    </div>
+  </form>
+</div>
+{% endblock %}
+"""
+
+TEMPLATES["message_detail.html"] = r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="row g-3">
+  <div class="col-12 col-xl-8">
+    <div class="card p-4">
+      <div class="d-flex flex-wrap justify-content-between align-items-start gap-3">
+        <div>
+          <h4 class="mb-1">{{ conversation.title }}</h4>
+          <div class="muted">
+            {% if conversation.client_name %}Cliente: {{ conversation.client_name }} • {% endif %}
+            {{ conversation.scope_label }} • Criada em {{ conversation.created_at }}
+          </div>
+        </div>
+        <div class="d-flex gap-2">
+          <a class="btn btn-outline-secondary" href="/mensagens">Voltar</a>
+        </div>
+      </div>
+      <hr class="my-3"/>
+      <div class="d-flex flex-column gap-3">
+        {% for msg in messages %}
+          <div class="border rounded p-3 {% if msg.is_mine %}bg-light{% endif %}">
+            <div class="d-flex justify-content-between gap-2">
+              <div class="fw-semibold">{{ msg.sender_name }}</div>
+              <div class="small muted">{{ msg.created_at }}</div>
+            </div>
+            <div class="mt-2" style="white-space:pre-wrap;">{{ msg.body }}</div>
+          </div>
+        {% else %}
+          <div class="muted">Nenhuma mensagem ainda.</div>
+        {% endfor %}
+      </div>
+      <hr class="my-3"/>
+      <form method="post" action="/mensagens/{{ conversation.id }}/enviar" class="row g-3">
+        <div class="col-12">
+          <label class="form-label">Nova mensagem</label>
+          <textarea class="form-control" name="body" rows="4" maxlength="4000" required></textarea>
+        </div>
+        <div class="col-12">
+          <button class="btn btn-primary">Enviar</button>
+        </div>
+      </form>
+    </div>
+  </div>
+  <div class="col-12 col-xl-4">
+    <div class="card p-4">
+      <div class="fw-semibold mb-2">Participantes</div>
+      <div class="d-flex flex-column gap-2">
+        {% for p in participants %}
+          <div class="border rounded p-2">
+            <div class="fw-semibold">{{ p.name }}</div>
+            <div class="small muted">{{ p.email }}</div>
+            <div class="small muted">{{ p.role }} • Última leitura: {{ p.last_read_at }}</div>
+          </div>
+        {% endfor %}
+      </div>
+      {% if role in ["admin","equipe"] %}
+      <hr class="my-3"/>
+      <form method="post" action="/mensagens/{{ conversation.id }}/participantes" class="row g-2">
+        <div class="col-12">
+          <label class="form-label">Adicionar participantes</label>
+          <select class="form-select" name="participant_user_ids" multiple size="7">
+            {% for option in participant_options %}
+              <option value="{{ option.user_id }}">
+                {{ option.name }} — {{ option.role }}{% if option.client_name %} — {{ option.client_name }}{% endif %}
+              </option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="col-12">
+          <button class="btn btn-outline-primary">Adicionar</button>
+        </div>
+      </form>
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endblock %}
+"""
+
+if hasattr(templates_env.loader, "mapping"):
+    templates_env.loader.mapping = TEMPLATES
+
+
+def _message_scope_label(scope_kind: str) -> str:
+    mapping = {
+        "geral": "Conversa geral",
+        "cliente": "Conversa de cliente",
+        "tarefa": "Conversa de tarefa",
+        "documento": "Conversa de documento",
+        "oferta": "Conversa de oferta",
+        "proposta": "Conversa de proposta",
+    }
+    return mapping.get((scope_kind or "").strip().lower(), "Conversa")
+
+
+@app.get("/mensagens", response_class=HTMLResponse)
+@require_login
+async def messages_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+
+    if _is_staff(ctx.membership.role):
+        conversations = session.exec(
+            select(Conversation)
+            .where(Conversation.company_id == ctx.company.id, Conversation.is_active == True)
+            .order_by(Conversation.updated_at.desc())
+        ).all()
+    else:
+        conv_ids = session.exec(
+            select(ConversationParticipant.conversation_id).where(
+                ConversationParticipant.user_id == ctx.user.id,
+                ConversationParticipant.is_active == True,
+            )
+        ).all()
+        conversations = []
+        if conv_ids:
+            conversations = session.exec(
+                select(Conversation)
+                .where(
+                    Conversation.company_id == ctx.company.id,
+                    Conversation.is_active == True,
+                    Conversation.id.in_(list(conv_ids)),
+                )
+                .order_by(Conversation.updated_at.desc())
+            ).all()
+
+    items = []
+    for conv in conversations:
+        if not _conversation_accessible(session, ctx=ctx, conversation=conv):
+            continue
+        client = session.get(Client, conv.client_id) if conv.client_id else None
+        participant_names = [p["name"] for p in _participants_for_conversation(session, conv.id)[:3]]
+        participant = session.exec(
+            select(ConversationParticipant).where(
+                ConversationParticipant.conversation_id == conv.id,
+                ConversationParticipant.user_id == ctx.user.id,
+            )
+        ).first()
+        unread_count = 0
+        conds = [
+            ConversationMessage.company_id == ctx.company.id,
+            ConversationMessage.conversation_id == conv.id,
+            ConversationMessage.sender_user_id != ctx.user.id,
+        ]
+        if participant and participant.last_read_at:
+            conds.append(ConversationMessage.created_at > participant.last_read_at)
+        unread_count = int(
+            session.exec(select(func.count()).select_from(ConversationMessage).where(*conds)).one() or 0
+        )
+        message_count = int(
+            session.exec(
+                select(func.count()).select_from(ConversationMessage).where(ConversationMessage.conversation_id == conv.id)
+            ).one() or 0
+        )
+        items.append({
+            "id": conv.id,
+            "title": conv.title or f"Conversa #{conv.id}",
+            "client_name": client.name if client else "",
+            "scope_label": _message_scope_label(conv.scope_kind),
+            "updated_at": conv.updated_at.strftime("%d/%m/%Y %H:%M") if conv.updated_at else "—",
+            "participants_preview": ", ".join(participant_names),
+            "unread_count": unread_count,
+            "message_count": message_count,
+        })
+
+    active_client_id = get_active_client_id(request, session, ctx)
+    current_client = get_client_or_none(session, ctx.company.id, active_client_id)
+
+    return render(
+        "messages_list.html",
+        request=request,
+        context={
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "role": ctx.membership.role,
+            "current_client": current_client,
+            "conversations": items,
+        },
+    )
+
+
+@app.get("/mensagens/nova", response_class=HTMLResponse)
+@require_login
+async def message_new_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+
+    active_client_id = get_active_client_id(request, session, ctx)
+    current_client = get_client_or_none(session, ctx.company.id, active_client_id)
+    memberships = _eligible_chat_memberships(
+        session,
+        company_id=ctx.company.id,
+        client_id=current_client.id if current_client else ctx.membership.client_id,
+        creator_role=ctx.membership.role,
+    )
+    participant_options = []
+    for membership in memberships:
+        user = session.get(User, membership.user_id)
+        client = session.get(Client, membership.client_id) if membership.client_id else None
+        participant_options.append({
+            "user_id": membership.user_id,
+            "name": user.name if user else f"Usuário {membership.user_id}",
+            "role": membership.role,
+            "client_name": client.name if client else "",
+            "selected": membership.user_id == ctx.user.id or membership.role in {"admin", "equipe"} or (ctx.membership.role == "cliente" and membership.client_id == ctx.membership.client_id),
+        })
+
+    client_rows = session.exec(select(Client).where(Client.company_id == ctx.company.id).order_by(Client.name.asc())).all()
+    client_options = [{"id": row.id, "name": row.name} for row in client_rows if row.id]
+
+    return render(
+        "message_new.html",
+        request=request,
+        context={
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "role": ctx.membership.role,
+            "current_client": current_client,
+            "current_client_id": current_client.id if current_client else None,
+            "participant_options": participant_options,
+            "client_options": client_options,
+        },
+    )
+
+
+@app.post("/mensagens/nova")
+@require_login
+async def message_new_submit(
+    request: Request,
+    title: str = Form(""),
+    scope_kind: str = Form("geral"),
+    client_id: Optional[str] = Form(None),
+    body: str = Form(""),
+    participant_user_ids: list[str] = Form(default=[]),
+    session: Session = Depends(get_session),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    clean_title = _clean_text(title, 120)
+    clean_body = _clean_text(body, 4000)
+    if not clean_title or not clean_body:
+        set_flash(request, "Informe título e mensagem inicial.")
+        return RedirectResponse("/mensagens/nova", status_code=303)
+
+    target_client_id = None
+    if ctx.membership.role == "cliente":
+        target_client_id = ctx.membership.client_id
+    else:
+        target_client_id = _safe_int(client_id)
+        if target_client_id:
+            c = session.get(Client, target_client_id)
+            if not c or c.company_id != ctx.company.id:
+                target_client_id = None
+
+    selected_ids = {int(x) for x in participant_user_ids if _safe_int(x)}
+    selected_ids.add(int(ctx.user.id))
+
+    if ctx.membership.role == "cliente" or not selected_ids:
+        auto_memberships = _eligible_chat_memberships(
+            session,
+            company_id=ctx.company.id,
+            client_id=target_client_id,
+            creator_role=ctx.membership.role,
+        )
+        selected_ids.update(int(m.user_id) for m in auto_memberships)
+
+    conv = Conversation(
+        company_id=ctx.company.id,
+        client_id=target_client_id,
+        title=clean_title,
+        scope_kind=_clean_text(scope_kind, 30) or "geral",
+        context_id=None,
+        is_active=True,
+        created_by_user_id=ctx.user.id,
+        created_at=utcnow(),
+        updated_at=utcnow(),
+    )
+    session.add(conv)
+    session.commit()
+    session.refresh(conv)
+
+    for uid in sorted(selected_ids):
+        _ensure_participant(session, conversation_id=conv.id, user_id=uid)
+    session.add(
+        ConversationMessage(
+            company_id=ctx.company.id,
+            conversation_id=conv.id,
+            sender_user_id=ctx.user.id,
+            body=clean_body,
+            created_at=utcnow(),
+        )
+    )
+    for uid in sorted(selected_ids):
+        participant = session.exec(
+            select(ConversationParticipant).where(
+                ConversationParticipant.conversation_id == conv.id,
+                ConversationParticipant.user_id == uid,
+            )
+        ).first()
+        if participant and uid == ctx.user.id:
+            participant.last_read_at = utcnow()
+            session.add(participant)
+
+    _notify_conversation_participants(
+        session,
+        conversation=conv,
+        sender_user_id=ctx.user.id,
+        title=f"Nova conversa: {clean_title}",
+        message=clean_body[:220],
+    )
+    session.commit()
+    set_flash(request, "Conversa criada com sucesso.")
+    return RedirectResponse(f"/mensagens/{conv.id}", status_code=303)
+
+
+@app.get("/mensagens/{conversation_id}", response_class=HTMLResponse)
+@require_login
+async def message_detail_page(request: Request, conversation_id: int, session: Session = Depends(get_session)) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+
+    conv = session.get(Conversation, int(conversation_id))
+    if not conv or not _conversation_accessible(session, ctx=ctx, conversation=conv):
+        return render(
+            "error.html",
+            request=request,
+            context={"message": "Conversa não encontrada ou sem permissão."},
+            status_code=404,
+        )
+
+    participant_row = _ensure_participant(session, conversation_id=conv.id, user_id=ctx.user.id)
+    participant_row.last_read_at = utcnow()
+    session.add(participant_row)
+    session.commit()
+
+    msgs = session.exec(
+        select(ConversationMessage)
+        .where(ConversationMessage.conversation_id == conv.id)
+        .order_by(ConversationMessage.created_at.asc())
+    ).all()
+    messages = []
+    for msg in msgs:
+        sender = session.get(User, msg.sender_user_id)
+        messages.append({
+            "id": msg.id,
+            "sender_name": sender.name if sender else f"Usuário {msg.sender_user_id}",
+            "body": msg.body,
+            "created_at": msg.created_at.strftime("%d/%m/%Y %H:%M") if msg.created_at else "—",
+            "is_mine": int(msg.sender_user_id) == int(ctx.user.id),
+        })
+
+    current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
+    conv_client = session.get(Client, conv.client_id) if conv.client_id else None
+    participants = _participants_for_conversation(session, conv.id)
+
+    memberships = _eligible_chat_memberships(
+        session,
+        company_id=ctx.company.id,
+        client_id=conv.client_id,
+        creator_role=ctx.membership.role,
+    )
+    existing_user_ids = {int(p["user_id"]) for p in participants}
+    participant_options = []
+    for membership in memberships:
+        if int(membership.user_id) in existing_user_ids:
+            continue
+        user = session.get(User, membership.user_id)
+        client = session.get(Client, membership.client_id) if membership.client_id else None
+        participant_options.append({
+            "user_id": membership.user_id,
+            "name": user.name if user else f"Usuário {membership.user_id}",
+            "role": membership.role,
+            "client_name": client.name if client else "",
+        })
+
+    return render(
+        "message_detail.html",
+        request=request,
+        context={
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "role": ctx.membership.role,
+            "current_client": current_client,
+            "conversation": {
+                "id": conv.id,
+                "title": conv.title,
+                "client_name": conv_client.name if conv_client else "",
+                "scope_label": _message_scope_label(conv.scope_kind),
+                "created_at": conv.created_at.strftime("%d/%m/%Y %H:%M") if conv.created_at else "—",
+            },
+            "messages": messages,
+            "participants": participants,
+            "participant_options": participant_options,
+        },
+    )
+
+
+@app.post("/mensagens/{conversation_id}/enviar")
+@require_login
+async def message_send_submit(
+    request: Request,
+    conversation_id: int,
+    body: str = Form(""),
+    session: Session = Depends(get_session),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+    conv = session.get(Conversation, int(conversation_id))
+    if not conv or not _conversation_accessible(session, ctx=ctx, conversation=conv):
+        return render(
+            "error.html",
+            request=request,
+            context={"message": "Conversa não encontrada ou sem permissão."},
+            status_code=404,
+        )
+
+    clean_body = _clean_text(body, 4000)
+    if not clean_body:
+        set_flash(request, "Digite uma mensagem.")
+        return RedirectResponse(f"/mensagens/{conversation_id}", status_code=303)
+
+    _ensure_participant(session, conversation_id=conv.id, user_id=ctx.user.id)
+    session.add(
+        ConversationMessage(
+            company_id=ctx.company.id,
+            conversation_id=conv.id,
+            sender_user_id=ctx.user.id,
+            body=clean_body,
+            created_at=utcnow(),
+        )
+    )
+    conv.updated_at = utcnow()
+    session.add(conv)
+
+    participant_row = session.exec(
+        select(ConversationParticipant).where(
+            ConversationParticipant.conversation_id == conv.id,
+            ConversationParticipant.user_id == ctx.user.id,
+        )
+    ).first()
+    if participant_row:
+        participant_row.last_read_at = utcnow()
+        session.add(participant_row)
+
+    _notify_conversation_participants(
+        session,
+        conversation=conv,
+        sender_user_id=ctx.user.id,
+        title=f"Nova mensagem em: {conv.title}",
+        message=clean_body[:220],
+    )
+    session.commit()
+    return RedirectResponse(f"/mensagens/{conv.id}", status_code=303)
+
+
+@app.post("/mensagens/{conversation_id}/participantes")
+@require_role({"admin", "equipe"})
+async def message_add_participants(
+    request: Request,
+    conversation_id: int,
+    participant_user_ids: list[str] = Form(default=[]),
+    session: Session = Depends(get_session),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+    conv = session.get(Conversation, int(conversation_id))
+    if not conv or conv.company_id != ctx.company.id or not conv.is_active:
+        return render(
+            "error.html",
+            request=request,
+            context={"message": "Conversa não encontrada."},
+            status_code=404,
+        )
+
+    added = 0
+    allowed_memberships = _eligible_chat_memberships(
+        session,
+        company_id=ctx.company.id,
+        client_id=conv.client_id,
+        creator_role=ctx.membership.role,
+    )
+    allowed_user_ids = {int(m.user_id) for m in allowed_memberships}
+    for raw in participant_user_ids:
+        uid = _safe_int(raw)
+        if not uid or uid not in allowed_user_ids:
+            continue
+        row = _ensure_participant(session, conversation_id=conv.id, user_id=uid)
+        row.is_active = True
+        session.add(row)
+        added += 1
+    conv.updated_at = utcnow()
+    session.add(conv)
+    session.commit()
+    set_flash(request, f"{added} participante(s) adicionados.")
+    return RedirectResponse(f"/mensagens/{conv.id}", status_code=303)
