@@ -13695,6 +13695,21 @@ async def docs_new_action(
         )
         session.commit()
 
+    try:
+        if doc.status != "rascunho":
+            notify_client_members(
+                session,
+                company_id=ctx.company.id,
+                client_id=client.id,
+                kind="documento",
+                title="Novo documento disponível",
+                message=doc.title,
+                href=f"/documentos/{doc.id}",
+                created_by_user_id=ctx.user.id,
+            )
+    except Exception:
+        pass
+
     set_flash(request, "Documento criado.")
     return RedirectResponse("/documentos", status_code=303)
 
@@ -15823,6 +15838,21 @@ async def tasks_new_action(
     session.add(task)
     session.commit()
     session.refresh(task)
+
+    try:
+        if task.visible_to_client or task.client_action:
+            notify_client_members(
+                session,
+                company_id=ctx.company.id,
+                client_id=client.id,
+                kind="tarefa",
+                title="Nova tarefa disponível",
+                message=task.title,
+                href=f"/tarefas/{task.id}",
+                created_by_user_id=ctx.user.id,
+            )
+    except Exception:
+        pass
 
     set_flash(request, "Tarefa criada.")
     return RedirectResponse(f"/tarefas/{task.id}", status_code=303)
@@ -25557,6 +25587,20 @@ async def motor_ofertas_review_save(
     review.updated_at = utcnow()
     session.add(review)
     session.commit()
+    try:
+        if review.status == "aprovada_cliente" and review.is_visible_to_client:
+            notify_client_members(
+                session,
+                company_id=match.company_id,
+                client_id=match.client_id,
+                kind="oferta",
+                title="Nova oportunidade liberada",
+                message=(review.client_summary or match.product_name or "Há uma nova oportunidade disponível.")[:240],
+                href="/ofertas",
+                created_by_user_id=ctx.user.id,
+            )
+    except Exception:
+        pass
     set_flash(request, "Revisão da oferta atualizada.")
     return RedirectResponse("/motor-ofertas", status_code=303)
 
@@ -27239,3 +27283,838 @@ TEMPLATES["perfil.html"] = r"""
 </div>
 {% endblock %}
 """
+
+
+# ----------------------------
+# Entrega 3 (rebuild estável): grupo econômico, notificações e analytics
+# ----------------------------
+
+class ClientGroupCompany(SQLModel, table=True):
+    __table_args__ = (UniqueConstraint("company_id", "client_id", "cnpj", name="uq_clientgroup_company"),)
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    company_id: int = Field(index=True, foreign_key="company.id")
+    client_id: int = Field(index=True, foreign_key="client.id")
+    cnpj: str = Field(index=True, default="")
+    legal_name: str = ""
+    relationship_type: str = Field(default="filial", index=True)  # filial | grupo
+    is_active: bool = Field(default=True, index=True)
+    notes: str = ""
+    created_by_user_id: Optional[int] = Field(default=None, foreign_key="user.id")
+    created_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime = Field(default_factory=utcnow)
+
+
+class Notification(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    company_id: int = Field(index=True, foreign_key="company.id")
+    client_id: Optional[int] = Field(default=None, index=True, foreign_key="client.id")
+    user_id: int = Field(index=True, foreign_key="user.id")
+    kind: str = Field(default="sistema", index=True)
+    title: str = ""
+    message: str = ""
+    href: str = ""
+    is_read: bool = Field(default=False, index=True)
+    created_by_user_id: Optional[int] = Field(default=None, foreign_key="user.id")
+    created_at: datetime = Field(default_factory=utcnow, index=True)
+    read_at: Optional[datetime] = Field(default=None, index=True)
+
+
+class UserActivity(SQLModel, table=True):
+    __table_args__ = (UniqueConstraint("company_id", "user_id", name="uq_user_activity_company_user"),)
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    company_id: int = Field(index=True, foreign_key="company.id")
+    user_id: int = Field(index=True, foreign_key="user.id")
+    role: str = Field(default="", index=True)
+    last_client_id: Optional[int] = Field(default=None, index=True, foreign_key="client.id")
+    last_path: str = ""
+    last_method: str = ""
+    request_count: int = 0
+    last_seen_at: datetime = Field(default_factory=utcnow, index=True)
+    created_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime = Field(default_factory=utcnow)
+
+
+def ensure_delivery3_tables() -> bool:
+    ok = True
+    for tbl in (
+        ClientGroupCompany.__table__,
+        Notification.__table__,
+        UserActivity.__table__,
+    ):
+        try:
+            tbl.create(engine, checkfirst=True)
+        except Exception:
+            ok = False
+    return ok
+
+
+@app.on_event("startup")
+def _startup_delivery3_rebuild() -> None:
+    ensure_delivery3_tables()
+
+
+def _only_digits(value: str) -> str:
+    return re.sub(r"\D+", "", str(value or ""))
+
+
+def _normalize_group_relationship(value: str) -> str:
+    val = (value or "").strip().lower()
+    return val if val in {"filial", "grupo"} else "filial"
+
+
+def create_user_notification(
+    session: Session,
+    *,
+    company_id: int,
+    user_id: int,
+    kind: str,
+    title: str,
+    message: str = "",
+    href: str = "",
+    client_id: Optional[int] = None,
+    created_by_user_id: Optional[int] = None,
+) -> Notification:
+    row = Notification(
+        company_id=company_id,
+        client_id=client_id,
+        user_id=user_id,
+        kind=_clean_text(kind, 50) or "sistema",
+        title=_clean_text(title, 200),
+        message=_clean_text(message, 1000),
+        href=_clean_text(href, 250),
+        created_by_user_id=created_by_user_id,
+        created_at=utcnow(),
+    )
+    session.add(row)
+    session.commit()
+    session.refresh(row)
+    return row
+
+
+def notify_client_members(
+    session: Session,
+    *,
+    company_id: int,
+    client_id: int,
+    kind: str,
+    title: str,
+    message: str = "",
+    href: str = "",
+    created_by_user_id: Optional[int] = None,
+) -> int:
+    memberships = session.exec(
+        select(Membership).where(
+            Membership.company_id == company_id,
+            Membership.client_id == client_id,
+            Membership.role == "cliente",
+        )
+    ).all()
+    count = 0
+    seen_user_ids: set[int] = set()
+    for membership in memberships:
+        uid = int(membership.user_id or 0)
+        if not uid or uid in seen_user_ids:
+            continue
+        seen_user_ids.add(uid)
+        create_user_notification(
+            session,
+            company_id=company_id,
+            client_id=client_id,
+            user_id=uid,
+            kind=kind,
+            title=title,
+            message=message,
+            href=href,
+            created_by_user_id=created_by_user_id,
+        )
+        count += 1
+    return count
+
+
+def unread_notifications_count_for_user(session: Session, *, company_id: int, user_id: int) -> int:
+    try:
+        return int(
+            session.exec(
+                select(func.count())
+                .select_from(Notification)
+                .where(
+                    Notification.company_id == company_id,
+                    Notification.user_id == user_id,
+                    Notification.is_read == False,
+                )
+            ).one()
+        )
+    except Exception:
+        return 0
+
+
+def group_company_count(session: Session, *, company_id: int, client_id: int) -> int:
+    try:
+        return int(
+            session.exec(
+                select(func.count())
+                .select_from(ClientGroupCompany)
+                .where(
+                    ClientGroupCompany.company_id == company_id,
+                    ClientGroupCompany.client_id == client_id,
+                    ClientGroupCompany.is_active == True,
+                )
+            ).one()
+        )
+    except Exception:
+        return 0
+
+
+def current_online_users_count(session: Session, *, company_id: int, within_minutes: int = 5) -> int:
+    cutoff = utcnow() - timedelta(minutes=max(1, int(within_minutes)))
+    try:
+        return int(
+            session.exec(
+                select(func.count())
+                .select_from(UserActivity)
+                .where(
+                    UserActivity.company_id == company_id,
+                    UserActivity.last_seen_at >= cutoff,
+                )
+            ).one()
+        )
+    except Exception:
+        return 0
+
+
+@app.middleware("http")
+async def activity_tracking_middleware(request: Request, call_next: Callable[..., Any]) -> Response:
+    response = await call_next(request)
+    try:
+        path = request.url.path
+        if (
+            path.startswith("/static")
+            or path.startswith("/api/ui/")
+            or path.startswith("/health")
+            or path.startswith("/__")
+            or path.startswith("/favicon")
+        ):
+            return response
+        if session_user_id(request) is None:
+            return response
+        with Session(engine) as _db:
+            ctx = get_tenant_context(request, _db)
+            if not ctx:
+                return response
+            row = _db.exec(
+                select(UserActivity).where(
+                    UserActivity.company_id == ctx.company.id,
+                    UserActivity.user_id == ctx.user.id,
+                )
+            ).first()
+            if not row:
+                row = UserActivity(
+                    company_id=ctx.company.id,
+                    user_id=ctx.user.id,
+                    role=ctx.membership.role,
+                    request_count=0,
+                    created_at=utcnow(),
+                    updated_at=utcnow(),
+                )
+            row.role = ctx.membership.role
+            row.last_client_id = get_active_client_id(request, _db, ctx)
+            row.last_path = _clean_text(path, 250)
+            row.last_method = _clean_text(request.method, 20)
+            row.request_count = int(row.request_count or 0) + 1
+            row.last_seen_at = utcnow()
+            row.updated_at = utcnow()
+            _db.add(row)
+            _db.commit()
+    except Exception:
+        pass
+    return response
+
+
+_original_render_delivery3 = render
+
+def render(
+    template_name: str,
+    *,
+    request: Request,
+    context: Optional[dict[str, Any]] = None,
+    status_code: int = 200,
+) -> HTMLResponse:
+    ctx = dict(context or {})
+    ctx.setdefault("unread_notifications_count", 0)
+    ctx.setdefault("group_company_count", 0)
+    try:
+        with Session(engine) as _db:
+            tenant = get_tenant_context(request, _db)
+            if tenant:
+                ctx.setdefault(
+                    "unread_notifications_count",
+                    unread_notifications_count_for_user(
+                        _db,
+                        company_id=tenant.company.id,
+                        user_id=tenant.user.id,
+                    ),
+                )
+                active_client_id = get_active_client_id(request, _db, tenant)
+                if active_client_id:
+                    ctx.setdefault(
+                        "group_company_count",
+                        group_company_count(
+                            _db,
+                            company_id=tenant.company.id,
+                            client_id=active_client_id,
+                        ),
+                    )
+    except Exception:
+        pass
+    return _original_render_delivery3(template_name, request=request, context=ctx, status_code=status_code)
+
+
+_original_resolve_feature_key_delivery3 = resolve_feature_key
+
+def resolve_feature_key(path: str) -> Optional[str]:
+    extra_mapping = [
+        ("/empresa/grupo", "grupo_empresa"),
+        ("/notificacoes", "notificacoes"),
+        ("/admin/gestao/analytics", "analytics"),
+    ]
+    for prefix, key in extra_mapping:
+        if path == prefix or path.startswith(prefix + "/"):
+            return key
+    return _original_resolve_feature_key_delivery3(path)
+
+
+FEATURE_KEYS.update({
+    "grupo_empresa": {
+        "title": "Grupo Econômico",
+        "desc": "Filiais e empresas vinculadas ao grupo do cliente.",
+        "href": "/empresa/grupo",
+    },
+    "analytics": {
+        "title": "Analytics e Rastreamento",
+        "desc": "Acessos, uso e usuários online da plataforma.",
+        "href": "/admin/gestao/analytics",
+    },
+})
+
+FEATURE_VISIBLE_ROLES.update({
+    "grupo_empresa": {"admin", "equipe", "cliente"},
+    "analytics": {"admin"},
+})
+
+ROLE_DEFAULT_FEATURES.setdefault("admin", set()).add("analytics")
+ROLE_DEFAULT_FEATURES.setdefault("admin", set()).add("grupo_empresa")
+ROLE_DEFAULT_FEATURES.setdefault("equipe", set()).add("grupo_empresa")
+ROLE_DEFAULT_FEATURES.setdefault("cliente", set()).add("grupo_empresa")
+
+_group_map = {g.get("key"): g for g in FEATURE_GROUPS}
+if "minha_empresa" in _group_map and "grupo_empresa" not in _group_map["minha_empresa"]["features"]:
+    _group_map["minha_empresa"]["features"].insert(1, "grupo_empresa")
+if "admin" in _group_map and "analytics" not in _group_map["admin"]["features"]:
+    _group_map["admin"]["features"].append("analytics")
+
+# Atualiza base.html de forma mínima e segura.
+_base_tpl = TEMPLATES.get("base.html", "")
+if _base_tpl and 'href="/notificacoes"' not in _base_tpl:
+    _base_tpl = _base_tpl.replace(
+        '<a class="btn btn-outline-secondary btn-sm" href="/logout">Sair</a>',
+        '<a class="btn btn-outline-secondary btn-sm position-relative" href="/notificacoes" aria-label="Notificações">🔔{% if unread_notifications_count %}<span class="position-absolute top-0 start-100 translate-middle badge rounded-pill text-bg-danger">{{ unread_notifications_count }}</span>{% endif %}</a>\n            <a class="btn btn-outline-secondary btn-sm" href="/logout">Sair</a>'
+    )
+    TEMPLATES["base.html"] = _base_tpl
+
+_empresa_tpl = TEMPLATES.get("empresa.html", "")
+if _empresa_tpl and 'href="/empresa/grupo"' not in _empresa_tpl:
+    _empresa_tpl = _empresa_tpl.replace(
+        '<a class="btn btn-outline-secondary" href="/perfil">Ir para diagnóstico</a>',
+        '<a class="btn btn-outline-secondary" href="/perfil">Ir para diagnóstico</a>\n      <a class="btn btn-outline-primary" href="/empresa/grupo">Grupo econômico{% if group_company_count %} ({{ group_company_count }}){% endif %}</a>'
+    )
+    TEMPLATES["empresa.html"] = _empresa_tpl
+
+if hasattr(templates_env.loader, "mapping"):
+    templates_env.loader.mapping = TEMPLATES
+
+TEMPLATES["empresa_grupo.html"] = r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <div class="d-flex flex-wrap justify-content-between align-items-start gap-3">
+    <div>
+      <h4 class="mb-1">Grupo Econômico</h4>
+      <div class="muted">Cadastre filiais e empresas do mesmo grupo para enriquecer a análise consolidada.</div>
+    </div>
+    <div class="d-flex gap-2">
+      <a class="btn btn-outline-secondary" href="/empresa">Voltar para empresa</a>
+      <a class="btn btn-outline-secondary" href="/">Painel</a>
+    </div>
+  </div>
+  <hr class="my-3"/>
+  {% if not current_client %}
+    <div class="alert alert-warning">Nenhum cliente selecionado.</div>
+  {% else %}
+    <div class="row g-3">
+      <div class="col-lg-5">
+        <div class="border rounded p-3 h-100">
+          <div class="fw-semibold mb-2">Adicionar CNPJ relacionado</div>
+          <form method="post" action="/empresa/grupo">
+            <div class="mb-3">
+              <label class="form-label">CNPJ</label>
+              <input class="form-control mono" name="cnpj" placeholder="00.000.000/0000-00" required>
+            </div>
+            <div class="mb-3">
+              <label class="form-label">Razão social</label>
+              <input class="form-control" name="legal_name" placeholder="Opcional">
+            </div>
+            <div class="mb-3">
+              <label class="form-label">Tipo</label>
+              <select class="form-select" name="relationship_type">
+                <option value="filial">Filial</option>
+                <option value="grupo">Empresa do grupo</option>
+              </select>
+            </div>
+            <div class="mb-3">
+              <label class="form-label">Observações</label>
+              <textarea class="form-control" name="notes" rows="3" placeholder="Opcional"></textarea>
+            </div>
+            <button class="btn btn-primary">Salvar CNPJ relacionado</button>
+          </form>
+        </div>
+      </div>
+      <div class="col-lg-7">
+        <div class="border rounded p-3 h-100">
+          <div class="fw-semibold mb-2">Estrutura vinculada</div>
+          <div class="small muted mb-3">
+            Principal: <span class="mono">{{ current_client.cnpj or "—" }}</span> — {{ current_client.name }}
+          </div>
+          {% if companies %}
+            <div class="table-responsive">
+              <table class="table align-middle">
+                <thead>
+                  <tr>
+                    <th>CNPJ</th>
+                    <th>Razão social</th>
+                    <th>Tipo</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {% for row in companies %}
+                  <tr>
+                    <td class="mono">{{ row.cnpj }}</td>
+                    <td>{{ row.legal_name or "—" }}</td>
+                    <td><span class="badge text-bg-light border">{{ "Filial" if row.relationship_type == "filial" else "Grupo" }}</span></td>
+                    <td class="text-end">
+                      <form method="post" action="/empresa/grupo/{{ row.id }}/remover" onsubmit="return confirm('Remover este CNPJ relacionado?');">
+                        <button class="btn btn-outline-danger btn-sm">Remover</button>
+                      </form>
+                    </td>
+                  </tr>
+                  {% if row.notes %}
+                  <tr>
+                    <td></td>
+                    <td colspan="3" class="small muted">{{ row.notes }}</td>
+                  </tr>
+                  {% endif %}
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+          {% else %}
+            <div class="muted">Nenhum CNPJ relacionado cadastrado ainda.</div>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+  {% endif %}
+</div>
+{% endblock %}
+"""
+
+TEMPLATES["notifications.html"] = r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <div class="d-flex flex-wrap justify-content-between align-items-start gap-3">
+    <div>
+      <h4 class="mb-1">Notificações</h4>
+      <div class="muted">Alertas sobre tarefas, documentos e oportunidades liberadas.</div>
+    </div>
+    <div class="d-flex gap-2">
+      <form method="post" action="/notificacoes/marcar-todas">
+        <button class="btn btn-outline-secondary">Marcar todas como lidas</button>
+      </form>
+      <a class="btn btn-outline-secondary" href="/">Voltar</a>
+    </div>
+  </div>
+  <hr class="my-3"/>
+  {% if items %}
+    <div class="list-group list-group-flush">
+      {% for item in items %}
+      <div class="list-group-item py-3">
+        <div class="d-flex flex-wrap justify-content-between gap-2">
+          <div>
+            <div class="fw-semibold">{{ item.title }}</div>
+            <div class="small muted">{{ item.created_at }}</div>
+          </div>
+          <div class="d-flex gap-2">
+            {% if item.href %}
+              <a class="btn btn-outline-primary btn-sm" href="{{ item.href }}">Abrir</a>
+            {% endif %}
+            {% if not item.is_read %}
+            <form method="post" action="/notificacoes/{{ item.id }}/ler">
+              <button class="btn btn-outline-secondary btn-sm">Marcar como lida</button>
+            </form>
+            {% endif %}
+          </div>
+        </div>
+        {% if item.message %}
+          <div class="mt-2">{{ item.message }}</div>
+        {% endif %}
+        <div class="mt-2">
+          <span class="badge text-bg-light border">{{ item.kind }}</span>
+          {% if not item.is_read %}
+            <span class="badge text-bg-warning">Nova</span>
+          {% endif %}
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+  {% else %}
+    <div class="muted">Nenhuma notificação no momento.</div>
+  {% endif %}
+</div>
+{% endblock %}
+"""
+
+TEMPLATES["admin_analytics.html"] = r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <div class="d-flex flex-wrap justify-content-between align-items-start gap-3">
+    <div>
+      <h4 class="mb-1">Analytics e Rastreamento</h4>
+      <div class="muted">Uso da plataforma, acessos de clientes e usuários online agora.</div>
+    </div>
+    <div class="d-flex gap-2">
+      <a class="btn btn-outline-secondary" href="/">Voltar</a>
+    </div>
+  </div>
+  <hr class="my-3"/>
+
+  <div class="row g-3 mb-3">
+    <div class="col-md-3"><div class="mc-stat-card"><div class="muted small">Usuários com acesso</div><div class="fs-3 fw-semibold">{{ totals.total_users }}</div></div></div>
+    <div class="col-md-3"><div class="mc-stat-card"><div class="muted small">Clientes que já acessaram</div><div class="fs-3 fw-semibold">{{ totals.clients_accessed }}</div></div></div>
+    <div class="col-md-3"><div class="mc-stat-card"><div class="muted small">Online agora</div><div class="fs-3 fw-semibold">{{ totals.online_now }}</div></div></div>
+    <div class="col-md-3"><div class="mc-stat-card"><div class="muted small">Requisições rastreadas</div><div class="fs-3 fw-semibold">{{ totals.total_requests }}</div></div></div>
+  </div>
+
+  <div class="row g-3">
+    <div class="col-12">
+      <div class="border rounded p-3">
+        <div class="fw-semibold mb-2">Acessos por usuário</div>
+        {% if rows %}
+        <div class="table-responsive">
+          <table class="table align-middle">
+            <thead>
+              <tr>
+                <th>Usuário</th>
+                <th>Papel</th>
+                <th>Cliente vinculado</th>
+                <th>Última rota</th>
+                <th>Requisições</th>
+                <th>Último acesso</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for row in rows %}
+              <tr>
+                <td>
+                  <div class="fw-semibold">{{ row.user_name }}</div>
+                  <div class="small muted">{{ row.email }}</div>
+                </td>
+                <td>{{ row.role }}</td>
+                <td>{{ row.client_name }}</td>
+                <td class="mono small">{{ row.last_path }}</td>
+                <td>{{ row.request_count }}</td>
+                <td>{{ row.last_seen_at }}</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        {% else %}
+          <div class="muted">Nenhuma atividade rastreada ainda.</div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+"""
+
+if hasattr(templates_env.loader, "mapping"):
+    templates_env.loader.mapping = TEMPLATES
+
+
+@app.get("/empresa/grupo", response_class=HTMLResponse)
+@require_login
+async def empresa_grupo_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+
+    active_client_id = get_active_client_id(request, session, ctx)
+    current_client = get_client_or_none(session, ctx.company.id, active_client_id)
+    if not current_client or not ensure_can_access_client(ctx, current_client.id):
+        return render(
+            "error.html",
+            request=request,
+            context={"message": "Cliente não encontrado ou sem permissão."},
+            status_code=404,
+        )
+
+    companies = session.exec(
+        select(ClientGroupCompany)
+        .where(
+            ClientGroupCompany.company_id == ctx.company.id,
+            ClientGroupCompany.client_id == current_client.id,
+            ClientGroupCompany.is_active == True,
+        )
+        .order_by(ClientGroupCompany.created_at.desc())
+    ).all()
+
+    return render(
+        "empresa_grupo.html",
+        request=request,
+        context={
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "role": ctx.membership.role,
+            "current_client": current_client,
+            "companies": companies,
+        },
+    )
+
+
+@app.post("/empresa/grupo")
+@require_login
+async def empresa_grupo_save(
+    request: Request,
+    session: Session = Depends(get_session),
+    cnpj: str = Form(...),
+    legal_name: str = Form(""),
+    relationship_type: str = Form("filial"),
+    notes: str = Form(""),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    active_client_id = get_active_client_id(request, session, ctx)
+    current_client = get_client_or_none(session, ctx.company.id, active_client_id)
+    if not current_client or not ensure_can_access_client(ctx, current_client.id):
+        set_flash(request, "Cliente inválido.")
+        return RedirectResponse("/empresa/grupo", status_code=303)
+
+    cnpj_digits = _only_digits(cnpj)
+    if len(cnpj_digits) != 14:
+        set_flash(request, "Informe um CNPJ válido com 14 dígitos.")
+        return RedirectResponse("/empresa/grupo", status_code=303)
+
+    existing = session.exec(
+        select(ClientGroupCompany).where(
+            ClientGroupCompany.company_id == ctx.company.id,
+            ClientGroupCompany.client_id == current_client.id,
+            ClientGroupCompany.cnpj == cnpj_digits,
+        )
+    ).first()
+    if existing:
+        existing.legal_name = _clean_text(legal_name, 200)
+        existing.relationship_type = _normalize_group_relationship(relationship_type)
+        existing.notes = _clean_text(notes, 2000)
+        existing.is_active = True
+        existing.updated_at = utcnow()
+        session.add(existing)
+        session.commit()
+        set_flash(request, "CNPJ relacionado atualizado.")
+        return RedirectResponse("/empresa/grupo", status_code=303)
+
+    row = ClientGroupCompany(
+        company_id=ctx.company.id,
+        client_id=current_client.id,
+        cnpj=cnpj_digits,
+        legal_name=_clean_text(legal_name, 200),
+        relationship_type=_normalize_group_relationship(relationship_type),
+        notes=_clean_text(notes, 2000),
+        is_active=True,
+        created_by_user_id=ctx.user.id,
+        created_at=utcnow(),
+        updated_at=utcnow(),
+    )
+    session.add(row)
+    session.commit()
+    set_flash(request, "CNPJ relacionado salvo.")
+    return RedirectResponse("/empresa/grupo", status_code=303)
+
+
+@app.post("/empresa/grupo/{row_id}/remover")
+@require_login
+async def empresa_grupo_remove(request: Request, row_id: int, session: Session = Depends(get_session)) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+    row = session.get(ClientGroupCompany, int(row_id))
+    if not row or row.company_id != ctx.company.id:
+        set_flash(request, "Registro não encontrado.")
+        return RedirectResponse("/empresa/grupo", status_code=303)
+    if not ensure_can_access_client(ctx, row.client_id):
+        set_flash(request, "Sem permissão.")
+        return RedirectResponse("/empresa/grupo", status_code=303)
+
+    row.is_active = False
+    row.updated_at = utcnow()
+    session.add(row)
+    session.commit()
+    set_flash(request, "CNPJ relacionado removido.")
+    return RedirectResponse("/empresa/grupo", status_code=303)
+
+
+@app.get("/notificacoes", response_class=HTMLResponse)
+@require_login
+async def notifications_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+
+    rows = session.exec(
+        select(Notification)
+        .where(
+            Notification.company_id == ctx.company.id,
+            Notification.user_id == ctx.user.id,
+        )
+        .order_by(Notification.created_at.desc())
+        .limit(100)
+    ).all()
+
+    items = [
+        {
+            "id": row.id,
+            "kind": row.kind,
+            "title": row.title,
+            "message": row.message,
+            "href": row.href,
+            "is_read": bool(row.is_read),
+            "created_at": row.created_at.strftime("%d/%m/%Y %H:%M") if row.created_at else "—",
+        }
+        for row in rows
+    ]
+
+    active_client_id = get_active_client_id(request, session, ctx)
+    current_client = get_client_or_none(session, ctx.company.id, active_client_id)
+
+    return render(
+        "notifications.html",
+        request=request,
+        context={
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "role": ctx.membership.role,
+            "current_client": current_client,
+            "items": items,
+        },
+    )
+
+
+@app.post("/notificacoes/marcar-todas")
+@require_login
+async def notifications_mark_all(request: Request, session: Session = Depends(get_session)) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+    rows = session.exec(
+        select(Notification).where(
+            Notification.company_id == ctx.company.id,
+            Notification.user_id == ctx.user.id,
+            Notification.is_read == False,
+        )
+    ).all()
+    now = utcnow()
+    for row in rows:
+        row.is_read = True
+        row.read_at = now
+        session.add(row)
+    session.commit()
+    set_flash(request, "Notificações marcadas como lidas.")
+    return RedirectResponse("/notificacoes", status_code=303)
+
+
+@app.post("/notificacoes/{notification_id}/ler")
+@require_login
+async def notifications_mark_one(request: Request, notification_id: int, session: Session = Depends(get_session)) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+    row = session.get(Notification, int(notification_id))
+    if row and row.company_id == ctx.company.id and row.user_id == ctx.user.id:
+        row.is_read = True
+        row.read_at = utcnow()
+        session.add(row)
+        session.commit()
+    return RedirectResponse("/notificacoes", status_code=303)
+
+
+@app.get("/admin/gestao/analytics", response_class=HTMLResponse)
+@require_role({"admin"})
+async def admin_analytics_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    activities = session.exec(
+        select(UserActivity)
+        .where(UserActivity.company_id == ctx.company.id)
+        .order_by(UserActivity.last_seen_at.desc())
+    ).all()
+
+    memberships = session.exec(select(Membership).where(Membership.company_id == ctx.company.id)).all()
+    total_users = len({int(m.user_id) for m in memberships})
+    client_user_ids = {int(m.user_id) for m in memberships if m.role == "cliente" and m.client_id}
+    clients_accessed = len({
+        int(a.last_client_id)
+        for a in activities
+        if a.user_id in client_user_ids and a.last_client_id
+    })
+    total_requests = sum(int(a.request_count or 0) for a in activities)
+    online_now = current_online_users_count(session, company_id=ctx.company.id)
+
+    rows = []
+    for activity in activities:
+        user = session.get(User, activity.user_id)
+        client = session.get(Client, activity.last_client_id) if activity.last_client_id else None
+        rows.append({
+            "user_name": user.name if user else f"Usuário {activity.user_id}",
+            "email": user.email if user else "—",
+            "role": activity.role or "—",
+            "client_name": client.name if client else "—",
+            "last_path": activity.last_path or "—",
+            "request_count": int(activity.request_count or 0),
+            "last_seen_at": activity.last_seen_at.strftime("%d/%m/%Y %H:%M") if activity.last_seen_at else "—",
+        })
+
+    active_client_id = get_active_client_id(request, session, ctx)
+    current_client = get_client_or_none(session, ctx.company.id, active_client_id)
+
+    return render(
+        "admin_analytics.html",
+        request=request,
+        context={
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "role": ctx.membership.role,
+            "current_client": current_client,
+            "totals": {
+                "total_users": total_users,
+                "clients_accessed": clients_accessed,
+                "online_now": online_now,
+                "total_requests": total_requests,
+            },
+            "rows": rows,
+        },
+    )
