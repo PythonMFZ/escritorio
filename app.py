@@ -917,6 +917,53 @@ class OfferVisibilityReview(SQLModel, table=True):
     updated_at: datetime = Field(default_factory=utcnow)
 
 
+class ClientGroupCompany(SQLModel, table=True):
+    __table_args__ = (UniqueConstraint("company_id", "client_id", "cnpj", name="uq_clientgroupcompany_company_client_cnpj"),)
+    id: Optional[int] = Field(default=None, primary_key=True)
+    company_id: int = Field(index=True, foreign_key="company.id")
+    client_id: int = Field(index=True, foreign_key="client.id")
+    legal_name: str = ""
+    cnpj: str = Field(default="", index=True)
+    relation_type: str = Field(default="filial", index=True)  # matriz | filial | empresa_grupo | outro
+    notes: str = ""
+    is_active: bool = Field(default=True, index=True)
+    created_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime = Field(default_factory=utcnow)
+
+
+class UserActivity(SQLModel, table=True):
+    __table_args__ = (UniqueConstraint("company_id", "user_id", name="uq_useractivity_company_user"),)
+    id: Optional[int] = Field(default=None, primary_key=True)
+    company_id: int = Field(index=True, foreign_key="company.id")
+    user_id: int = Field(index=True, foreign_key="user.id")
+    membership_role: str = Field(default="", index=True)
+    client_id: Optional[int] = Field(default=None, index=True, foreign_key="client.id")
+    total_requests: int = 0
+    total_page_views: int = 0
+    total_logins: int = 0
+    last_path: str = ""
+    last_ip: str = ""
+    last_user_agent: str = ""
+    last_seen_at: Optional[datetime] = Field(default=None, index=True)
+    last_login_at: Optional[datetime] = Field(default=None, index=True)
+    created_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime = Field(default_factory=utcnow)
+
+
+class AppNotification(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    company_id: int = Field(index=True, foreign_key="company.id")
+    user_id: int = Field(index=True, foreign_key="user.id")
+    client_id: Optional[int] = Field(default=None, index=True, foreign_key="client.id")
+    kind: str = Field(default="geral", index=True)
+    title: str
+    message: str = ""
+    href: str = ""
+    is_read: bool = Field(default=False, index=True)
+    created_at: datetime = Field(default_factory=utcnow, index=True)
+    read_at: Optional[datetime] = Field(default=None, index=True)
+
+
 PRODUCT_FAMILY_SEED: list[dict[str, Any]] = [
     {"code": "turnaround", "area": "advisory", "label": "Turnaround", "description": "Reestruturacao financeira e operacional."},
     {"code": "valuation", "area": "advisory", "label": "Valuation", "description": "Avaliacao de empresas."},
@@ -13695,6 +13742,19 @@ async def docs_new_action(
         )
         session.commit()
 
+    try:
+        _notify_client_members(
+            session,
+            company_id=ctx.company.id,
+            client_id=client.id,
+            kind="documento",
+            title="Novo documento disponivel",
+            message=f'Foi disponibilizado o documento "{doc.title}".',
+            href=f"/documentos/{doc.id}",
+        )
+    except Exception:
+        pass
+
     set_flash(request, "Documento criado.")
     return RedirectResponse("/documentos", status_code=303)
 
@@ -15823,6 +15883,31 @@ async def tasks_new_action(
     session.add(task)
     session.commit()
     session.refresh(task)
+
+    try:
+        if assignee and assignee != ctx.user.id:
+            _create_notifications_for_user_ids(
+                session,
+                company_id=ctx.company.id,
+                user_ids=[assignee],
+                client_id=client.id,
+                kind="tarefa",
+                title="Nova tarefa atribuida",
+                message=f"Tarefa \"{task.title}\" atribuida para {client.name}.",
+                href=f"/tarefas/{task.id}",
+            )
+        if task.visible_to_client or task.client_action:
+            _notify_client_members(
+                session,
+                company_id=ctx.company.id,
+                client_id=client.id,
+                kind="tarefa",
+                title="Nova tarefa no portal",
+                message=f'Foi criada a tarefa "{task.title}" para acompanhamento.',
+                href=f"/tarefas/{task.id}",
+            )
+    except Exception:
+        pass
 
     set_flash(request, "Tarefa criada.")
     return RedirectResponse(f"/tarefas/{task.id}", status_code=303)
@@ -25557,6 +25642,22 @@ async def motor_ofertas_review_save(
     review.updated_at = utcnow()
     session.add(review)
     session.commit()
+    try:
+        if review.is_visible_to_client:
+            summary = review.client_summary or match.product_name or "Nova oportunidade aprovada"
+            _notify_client_members(
+                session,
+                company_id=ctx.company.id,
+                client_id=match.client_id,
+                kind="oferta",
+                title="Nova oportunidade liberada",
+                message=summary,
+                href="/ofertas",
+            )
+        else:
+            _mark_offer_notifications_hidden(session, company_id=ctx.company.id, client_id=match.client_id, offer_match_id=match.id)
+    except Exception:
+        pass
     set_flash(request, "Revisão da oferta atualizada.")
     return RedirectResponse("/motor-ofertas", status_code=303)
 
@@ -27239,3 +27340,867 @@ TEMPLATES["perfil.html"] = r"""
 </div>
 {% endblock %}
 """
+
+
+# ----------------------------
+# Entrega 3: grupo econômico, notificações e analytics de acesso
+# ----------------------------
+
+GROUP_RELATION_OPTIONS = ["matriz", "filial", "empresa_grupo", "outro"]
+
+
+def ensure_delivery3_tables() -> bool:
+    ok = True
+    for tbl in (
+        ClientGroupCompany.__table__,
+        UserActivity.__table__,
+        AppNotification.__table__,
+    ):
+        try:
+            tbl.create(engine, checkfirst=True)
+        except Exception:
+            ok = False
+    return ok
+
+
+@app.on_event("startup")
+def _startup_delivery3() -> None:
+    ensure_delivery3_tables()
+    try:
+        templates_env.globals["unread_notifications_count"] = _unread_notifications_count
+        templates_env.globals["online_now_count"] = _online_now_count
+        templates_env.globals["client_group_companies_count"] = _client_group_companies_count
+    except Exception:
+        pass
+
+
+def _activity_should_track(path: str) -> bool:
+    if not path:
+        return False
+    prefixes = ("/static/", "/health", "/__")
+    if path.startswith(prefixes):
+        return False
+    if path.startswith("/api/ui/"):
+        return False
+    return True
+
+
+def _get_or_create_user_activity(session: Session, *, company_id: int, user_id: int) -> UserActivity:
+    row = session.exec(
+        select(UserActivity).where(UserActivity.company_id == company_id, UserActivity.user_id == user_id)
+    ).first()
+    if not row:
+        row = UserActivity(company_id=company_id, user_id=user_id, created_at=utcnow(), updated_at=utcnow())
+    return row
+
+
+def _track_user_activity_row(
+    session: Session,
+    *,
+    request: Request,
+    company_id: int,
+    user_id: int,
+    membership_role: str,
+    client_id: Optional[int],
+    mark_login: bool = False,
+) -> None:
+    row = _get_or_create_user_activity(session, company_id=company_id, user_id=user_id)
+    row.membership_role = membership_role or row.membership_role
+    row.client_id = client_id
+    row.total_requests = int(row.total_requests or 0) + 1
+    if request.method.upper() == "GET":
+        row.total_page_views = int(row.total_page_views or 0) + 1
+    row.last_seen_at = utcnow()
+    row.updated_at = utcnow()
+    row.last_path = str(request.url.path or "")[:240]
+    row.last_ip = _request_ip(request)[:80]
+    row.last_user_agent = (request.headers.get("user-agent") or "")[:500]
+    if mark_login:
+        row.total_logins = int(row.total_logins or 0) + 1
+        row.last_login_at = utcnow()
+    session.add(row)
+    session.commit()
+
+
+@app.middleware("http")
+async def delivery3_activity_middleware(request: Request, call_next: Callable[..., Any]) -> Response:
+    response = await call_next(request)
+    try:
+        if not _activity_should_track(request.url.path):
+            return response
+        with Session(engine) as _db:
+            _ctx = get_tenant_context(request, _db)
+            if not _ctx:
+                return response
+            _track_user_activity_row(
+                _db,
+                request=request,
+                company_id=_ctx.company.id,
+                user_id=_ctx.user.id,
+                membership_role=_ctx.membership.role,
+                client_id=get_active_client_id(request, _db, _ctx),
+                mark_login=(request.url.path == "/login" and request.method.upper() == "POST"),
+            )
+    except Exception:
+        pass
+    return response
+
+
+def _distinct_user_ids(values: list[int]) -> list[int]:
+    seen: set[int] = set()
+    out: list[int] = []
+    for v in values:
+        iv = int(v or 0)
+        if iv <= 0 or iv in seen:
+            continue
+        seen.add(iv)
+        out.append(iv)
+    return out
+
+
+def _client_member_user_ids(session: Session, *, company_id: int, client_id: int) -> list[int]:
+    rows = session.exec(
+        select(Membership.user_id).where(
+            Membership.company_id == company_id,
+            Membership.role == "cliente",
+            Membership.client_id == client_id,
+        )
+    ).all()
+    return _distinct_user_ids([int(r) for r in rows if r])
+
+
+def _staff_user_ids(session: Session, *, company_id: int) -> list[int]:
+    rows = session.exec(
+        select(Membership.user_id).where(
+            Membership.company_id == company_id,
+            Membership.role.in_(["admin", "equipe"]),
+        )
+    ).all()
+    return _distinct_user_ids([int(r) for r in rows if r])
+
+
+def _create_notifications_for_user_ids(
+    session: Session,
+    *,
+    company_id: int,
+    user_ids: list[int],
+    kind: str,
+    title: str,
+    message: str = "",
+    href: str = "",
+    client_id: Optional[int] = None,
+) -> None:
+    now = utcnow()
+    for uid in _distinct_user_ids(user_ids):
+        session.add(
+            AppNotification(
+                company_id=company_id,
+                user_id=uid,
+                client_id=client_id,
+                kind=_clean_text(kind, 40),
+                title=_clean_text(title, 180) or "Atualização",
+                message=_clean_text(message, 1500),
+                href=_clean_text(href, 240),
+                is_read=False,
+                created_at=now,
+            )
+        )
+    session.commit()
+
+
+def _notify_client_members(
+    session: Session,
+    *,
+    company_id: int,
+    client_id: int,
+    kind: str,
+    title: str,
+    message: str = "",
+    href: str = "",
+) -> None:
+    user_ids = _client_member_user_ids(session, company_id=company_id, client_id=client_id)
+    if not user_ids:
+        return
+    _create_notifications_for_user_ids(
+        session,
+        company_id=company_id,
+        user_ids=user_ids,
+        client_id=client_id,
+        kind=kind,
+        title=title,
+        message=message,
+        href=href,
+    )
+
+
+def _mark_offer_notifications_hidden(session: Session, *, company_id: int, client_id: int, offer_match_id: int) -> None:
+    rows = session.exec(
+        select(AppNotification).where(
+            AppNotification.company_id == company_id,
+            AppNotification.client_id == client_id,
+            AppNotification.kind == "oferta",
+            AppNotification.href == "/ofertas",
+            AppNotification.is_read == False,
+        )
+    ).all()
+    for row in rows:
+        row.is_read = True
+        row.read_at = utcnow()
+        session.add(row)
+    session.commit()
+
+
+def _unread_notifications_count(company_id: int, user_id: int) -> int:
+    if not company_id or not user_id:
+        return 0
+    try:
+        with Session(engine) as s:
+            return int(
+                s.exec(
+                    select(func.count(AppNotification.id)).where(
+                        AppNotification.company_id == int(company_id),
+                        AppNotification.user_id == int(user_id),
+                        AppNotification.is_read == False,
+                    )
+                ).one()
+            )
+    except Exception:
+        return 0
+
+
+def _online_now_count(company_id: int) -> int:
+    if not company_id:
+        return 0
+    try:
+        limit_at = utcnow() - timedelta(minutes=5)
+        with Session(engine) as s:
+            return int(
+                s.exec(
+                    select(func.count(UserActivity.id)).where(
+                        UserActivity.company_id == int(company_id),
+                        UserActivity.last_seen_at.is_not(None),
+                        UserActivity.last_seen_at >= limit_at,
+                    )
+                ).one()
+            )
+    except Exception:
+        return 0
+
+
+def _client_group_companies_count(company_id: int, client_id: int) -> int:
+    if not company_id or not client_id:
+        return 0
+    try:
+        with Session(engine) as s:
+            return int(
+                s.exec(
+                    select(func.count(ClientGroupCompany.id)).where(
+                        ClientGroupCompany.company_id == int(company_id),
+                        ClientGroupCompany.client_id == int(client_id),
+                        ClientGroupCompany.is_active == True,
+                    )
+                ).one()
+            )
+    except Exception:
+        return 0
+
+
+@app.get("/empresa/grupo", response_class=HTMLResponse)
+@require_login
+async def empresa_grupo_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+
+    current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
+    if not current_client:
+        set_flash(request, "Nenhum cliente selecionado/vinculado.")
+        return RedirectResponse("/empresa", status_code=303)
+    if not ensure_can_access_client(ctx, current_client.id):
+        set_flash(request, "Sem permissão.")
+        return RedirectResponse("/empresa", status_code=303)
+
+    companies = session.exec(
+        select(ClientGroupCompany)
+        .where(
+            ClientGroupCompany.company_id == ctx.company.id,
+            ClientGroupCompany.client_id == current_client.id,
+            ClientGroupCompany.is_active == True,
+        )
+        .order_by(ClientGroupCompany.created_at.asc())
+    ).all()
+
+    return render(
+        "empresa_grupo.html",
+        request=request,
+        context={
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "role": ctx.membership.role,
+            "current_client": current_client,
+            "companies": companies,
+            "group_relation_options": GROUP_RELATION_OPTIONS,
+        },
+    )
+
+
+@app.post("/empresa/grupo")
+@require_login
+async def empresa_grupo_add(
+    request: Request,
+    session: Session = Depends(get_session),
+    legal_name: str = Form(""),
+    cnpj: str = Form(""),
+    relation_type: str = Form("filial"),
+    notes: str = Form(""),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+
+    current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
+    if not current_client:
+        set_flash(request, "Nenhum cliente selecionado/vinculado.")
+        return RedirectResponse("/empresa", status_code=303)
+    if not ensure_can_access_client(ctx, current_client.id):
+        set_flash(request, "Sem permissão.")
+        return RedirectResponse("/empresa", status_code=303)
+
+    normalized_cnpj = _normalize_document(cnpj)
+    if len(_digits(normalized_cnpj)) != 14:
+        set_flash(request, "Informe um CNPJ válido com 14 dígitos.")
+        return RedirectResponse("/empresa/grupo", status_code=303)
+
+    relation_type = _coerce_choice(relation_type, GROUP_RELATION_OPTIONS) or "filial"
+    existing = session.exec(
+        select(ClientGroupCompany).where(
+            ClientGroupCompany.company_id == ctx.company.id,
+            ClientGroupCompany.client_id == current_client.id,
+            ClientGroupCompany.cnpj == normalized_cnpj,
+        )
+    ).first()
+    if existing:
+        existing.legal_name = _clean_text(legal_name, 160) or existing.legal_name
+        existing.relation_type = relation_type
+        existing.notes = _clean_text(notes, 500)
+        existing.is_active = True
+        existing.updated_at = utcnow()
+        session.add(existing)
+    else:
+        session.add(
+            ClientGroupCompany(
+                company_id=ctx.company.id,
+                client_id=current_client.id,
+                legal_name=_clean_text(legal_name, 160),
+                cnpj=normalized_cnpj,
+                relation_type=relation_type,
+                notes=_clean_text(notes, 500),
+                is_active=True,
+                created_at=utcnow(),
+                updated_at=utcnow(),
+            )
+        )
+    session.commit()
+    set_flash(request, "CNPJ relacionado salvo.")
+    return RedirectResponse("/empresa/grupo", status_code=303)
+
+
+@app.post("/empresa/grupo/{group_company_id}/remover")
+@require_login
+async def empresa_grupo_remove(
+    request: Request,
+    group_company_id: int,
+    session: Session = Depends(get_session),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+    row = session.get(ClientGroupCompany, int(group_company_id))
+    if not row or row.company_id != ctx.company.id:
+        set_flash(request, "Registro não encontrado.")
+        return RedirectResponse("/empresa/grupo", status_code=303)
+    if not ensure_can_access_client(ctx, row.client_id):
+        set_flash(request, "Sem permissão.")
+        return RedirectResponse("/empresa/grupo", status_code=303)
+    row.is_active = False
+    row.updated_at = utcnow()
+    session.add(row)
+    session.commit()
+    set_flash(request, "CNPJ removido da composição do grupo.")
+    return RedirectResponse("/empresa/grupo", status_code=303)
+
+
+@app.get("/notificacoes", response_class=HTMLResponse)
+@require_login
+async def notifications_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+
+    rows = session.exec(
+        select(AppNotification)
+        .where(
+            AppNotification.company_id == ctx.company.id,
+            AppNotification.user_id == ctx.user.id,
+        )
+        .order_by(AppNotification.created_at.desc())
+    ).all()
+
+    return render(
+        "notifications.html",
+        request=request,
+        context={
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "role": ctx.membership.role,
+            "current_client": get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx)),
+            "notifications": rows,
+        },
+    )
+
+
+@app.post("/notificacoes/marcar-todas")
+@require_login
+async def notifications_mark_all(request: Request, session: Session = Depends(get_session)) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+    rows = session.exec(
+        select(AppNotification).where(
+            AppNotification.company_id == ctx.company.id,
+            AppNotification.user_id == ctx.user.id,
+            AppNotification.is_read == False,
+        )
+    ).all()
+    now = utcnow()
+    for row in rows:
+        row.is_read = True
+        row.read_at = now
+        session.add(row)
+    session.commit()
+    set_flash(request, "Notificações marcadas como lidas.")
+    return RedirectResponse("/notificacoes", status_code=303)
+
+
+@app.post("/notificacoes/{notification_id}/ler")
+@require_login
+async def notifications_mark_one(request: Request, notification_id: int, session: Session = Depends(get_session)) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+    row = session.get(AppNotification, int(notification_id))
+    if row and row.company_id == ctx.company.id and row.user_id == ctx.user.id:
+        row.is_read = True
+        row.read_at = utcnow()
+        session.add(row)
+        session.commit()
+        if row.href:
+            return RedirectResponse(row.href, status_code=303)
+    return RedirectResponse("/notificacoes", status_code=303)
+
+
+@app.get("/admin/gestao/analytics", response_class=HTMLResponse)
+@require_role({"admin", "equipe"})
+async def admin_usage_analytics(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    activities = session.exec(
+        select(UserActivity)
+        .where(UserActivity.company_id == ctx.company.id)
+        .order_by(UserActivity.last_seen_at.desc())
+    ).all()
+
+    users_map = {u.id: u for u in session.exec(select(User)).all() if u.id}
+    clients_map = {c.id: c for c in session.exec(select(Client).where(Client.company_id == ctx.company.id)).all() if c.id}
+
+    online_limit = utcnow() - timedelta(minutes=5)
+    active_client_users = [a for a in activities if a.membership_role == "cliente" and a.last_login_at]
+    online_users = [a for a in activities if a.last_seen_at and a.last_seen_at >= online_limit]
+    page_views = sum(int(a.total_page_views or 0) for a in activities)
+    total_requests = sum(int(a.total_requests or 0) for a in activities)
+
+    rows: list[dict[str, Any]] = []
+    for a in activities:
+        user = users_map.get(a.user_id)
+        client = clients_map.get(a.client_id or 0)
+        rows.append(
+            {
+                "user_name": user.name if user else f"Usuário {a.user_id}",
+                "email": user.email if user else "",
+                "role": a.membership_role or "-",
+                "client_name": client.name if client else "",
+                "last_seen_at": a.last_seen_at,
+                "last_login_at": a.last_login_at,
+                "total_requests": int(a.total_requests or 0),
+                "total_page_views": int(a.total_page_views or 0),
+                "online_now": bool(a.last_seen_at and a.last_seen_at >= online_limit),
+                "last_path": a.last_path or "",
+            }
+        )
+
+    return render(
+        "admin_usage_analytics.html",
+        request=request,
+        context={
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "role": ctx.membership.role,
+            "current_client": get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx)),
+            "total_accessed_client_users": len(active_client_users),
+            "online_now_count": len(online_users),
+            "total_page_views": page_views,
+            "total_requests": total_requests,
+            "rows": rows,
+        },
+    )
+
+
+# --- Template overrides entrega 3 ---
+
+TEMPLATES["base.html"] = r"""
+<!doctype html>
+<html lang="pt-br">
+  <head>
+    <meta charset="utf-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1"/>
+    <title>{{ title or "App Escritório" }}</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+      body { background: #f6f7fb; }
+      .card { border: 0; box-shadow: 0 6px 18px rgba(0,0,0,.06); border-radius: 16px; }
+      .brand { font-weight: 700; letter-spacing: .3px; }
+      .muted { color: #6c757d; }
+      a { text-decoration: none; }
+      .btn { border-radius: 12px; }
+      .form-control, .form-select { border-radius: 12px; }
+      .badge { border-radius: 999px; }
+      .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;}
+      pre { white-space: pre-wrap; margin: 0; }
+      .btn-primary{ background-color:#E07020 !important; border-color:#E07020 !important; color:#ffffff !important; font-weight:600; }
+      .btn-primary:hover{ background-color:#C85F1B !important; border-color:#C85F1B !important; }
+      .btn-outline-primary{ border-color:#E07020 !important; color:#E07020 !important; }
+      .btn-outline-primary:hover{ background-color:#E07020 !important; border-color:#E07020 !important; color:#ffffff !important; }
+      a:hover{ color:#00BFBF; }
+      .top-icon-btn{ position:relative; min-width:40px; }
+      .notif-badge{ position:absolute; top:-6px; right:-6px; }
+    </style>
+  </head>
+  <body>
+    <nav class="navbar navbar-expand-lg bg-white border-bottom">
+      <div class="container py-2">
+        <a class="navbar-brand d-flex align-items-center gap-2" href="/">
+          <img src="/static/logo.png" alt="Maffezzolli Capital" style="height:44px; width:auto;">
+          <span class="fw-semibold" style="color:#0B1E1E; font-size:0.95rem; letter-spacing:0.2px; opacity:0.9;">Bem-vindo</span>
+        </a>
+        <div class="ms-auto d-flex gap-2 align-items-center">
+          {% if current_user %}
+            <span class="badge text-bg-light border">🏢 {{ current_company.name }}</span>
+
+            {% if role in ["admin","equipe"] and current_client %}
+              <span class="badge text-bg-light border">🧑‍💼 Cliente: {{ current_client.name }}</span>
+              <a class="btn btn-outline-secondary btn-sm" href="/client/switch">Trocar cliente</a>
+            {% endif %}
+
+            {% set _notif_count = unread_notifications_count(current_company.id if current_company else 0, current_user.id if current_user else 0) %}
+            <a class="btn btn-outline-secondary btn-sm top-icon-btn" href="/notificacoes" title="Notificações">
+              🔔
+              {% if _notif_count > 0 %}
+                <span class="badge text-bg-danger notif-badge">{{ _notif_count }}</span>
+              {% endif %}
+            </a>
+
+            {% if role in ["admin","equipe"] %}
+              <a class="btn btn-outline-secondary btn-sm" href="/admin/gestao/analytics" title="Uso e acessos">Uso</a>
+            {% endif %}
+
+            <span class="badge text-bg-light border">👤 {{ current_user.name }} • {{ role }}</span>
+            <a class="btn btn-outline-secondary btn-sm" href="/logout">Sair</a>
+          {% else %}
+            <a class="btn btn-outline-primary btn-sm" href="/login">Entrar</a>
+          {% endif %}
+        </div>
+      </div>
+    </nav>
+
+    <main class="container my-4">
+      {% if flash %}
+        <div class="alert alert-info">{{ flash }}</div>
+      {% endif %}
+
+      <div id="mc-banner" class="mb-3"></div>
+
+      <div class="row g-3">
+        <div class="col-12 col-lg-9">
+          {% block content %}{% endblock %}
+          <div class="mt-3" id="mc-news"></div>
+        </div>
+        <div class="col-12 col-lg-3">
+          <div class="card p-3">
+            <div class="d-flex justify-content-between align-items-center mb-2">
+              <div class="fw-semibold">Notícias (economia)</div>
+              {% if current_user and role == "admin" %}
+                <a class="small" href="/admin/ui">Configurar</a>
+              {% endif %}
+            </div>
+            <div class="muted small mb-2">Atualiza automaticamente.</div>
+            <div id="mc-news-inline"></div>
+          </div>
+        </div>
+      </div>
+    </main>
+
+    <script>
+      async function mcLoadBanner(){
+        try{
+          const r = await fetch('/api/ui/banner');
+          if(!r.ok) return;
+          const data = await r.json();
+          const root = document.getElementById('mc-banner');
+          if(!root || !data || !data.slides || !data.slides.length) return;
+          const slides = data.slides;
+          let html = '<div id="mcBannerCarousel" class="carousel slide" data-bs-ride="carousel"><div class="carousel-inner">';
+          slides.forEach((s, i) => {
+            html += `<div class="carousel-item ${i===0?'active':''}">
+              <a href="${s.link_path || '/'}"><img src="${s.image_url}" class="d-block w-100 rounded-4" alt="${(s.title||'').replace(/"/g,'&quot;')}" style="max-height:260px; object-fit:cover;"></a>
+              ${s.title ? `<div class="carousel-caption d-none d-md-block"><h5>${s.title}</h5></div>` : ''}
+            </div>`;
+          });
+          html += '</div>';
+          if(slides.length > 1){
+            html += `<button class="carousel-control-prev" type="button" data-bs-target="#mcBannerCarousel" data-bs-slide="prev">
+                       <span class="carousel-control-prev-icon" aria-hidden="true"></span><span class="visually-hidden">Previous</span></button>
+                     <button class="carousel-control-next" type="button" data-bs-target="#mcBannerCarousel" data-bs-slide="next">
+                       <span class="carousel-control-next-icon" aria-hidden="true"></span><span class="visually-hidden">Next</span></button>`;
+          }
+          html += '</div>';
+          root.innerHTML = html;
+        }catch(e){}
+      }
+
+      async function mcLoadNews(){
+        try{
+          const r = await fetch('/api/ui/news?limit=10');
+          if(!r.ok) return;
+          const data = await r.json();
+          const root = document.getElementById('mc-news-inline');
+          if(!root || !data || !data.items || !data.items.length) return;
+          root.innerHTML = data.items.map(n =>
+            `<div class="border-top py-2">
+               <a href="${n.url}" target="_blank" rel="noopener" class="fw-semibold d-block">${n.name}</a>
+             </div>`
+          ).join('');
+        }catch(e){}
+      }
+      mcLoadBanner();
+      mcLoadNews();
+    </script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+  </body>
+</html>
+"""
+
+TEMPLATES["empresa.html"] = TEMPLATES["empresa.html"].replace(
+    '<a class="btn btn-outline-secondary" href="/perfil">Ir para diagnóstico</a>',
+    '<a class="btn btn-outline-secondary" href="/perfil">Ir para diagnóstico</a>\n      <a class="btn btn-outline-secondary" href="/empresa/grupo">CNPJs do grupo</a>',
+)
+
+TEMPLATES["notifications.html"] = r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <div class="d-flex flex-wrap justify-content-between align-items-start gap-3">
+    <div>
+      <h4 class="mb-1">Notificações</h4>
+      <div class="muted">Alertas sobre tarefas, documentos e oportunidades liberadas.</div>
+    </div>
+    <form method="post" action="/notificacoes/marcar-todas">
+      <button class="btn btn-outline-secondary">Marcar todas como lidas</button>
+    </form>
+  </div>
+  <hr class="my-3"/>
+  {% if notifications %}
+    <div class="d-grid gap-3">
+      {% for n in notifications %}
+        <div class="border rounded p-3 {% if not n.is_read %}bg-light{% endif %}">
+          <div class="d-flex justify-content-between align-items-start gap-3">
+            <div>
+              <div class="fw-semibold">{{ n.title }}</div>
+              <div class="small muted mt-1">{{ n.created_at.strftime("%d/%m/%Y %H:%M") if n.created_at else "" }} • {{ n.kind }}</div>
+              {% if n.message %}<div class="mt-2">{{ n.message }}</div>{% endif %}
+            </div>
+            <div class="d-flex gap-2">
+              {% if not n.is_read %}
+                <form method="post" action="/notificacoes/{{ n.id }}/ler">
+                  <button class="btn btn-sm btn-primary">Abrir</button>
+                </form>
+              {% elif n.href %}
+                <a class="btn btn-sm btn-outline-secondary" href="{{ n.href }}">Abrir</a>
+              {% endif %}
+            </div>
+          </div>
+        </div>
+      {% endfor %}
+    </div>
+  {% else %}
+    <div class="muted">Você ainda não possui notificações.</div>
+  {% endif %}
+</div>
+{% endblock %}
+"""
+
+TEMPLATES["empresa_grupo.html"] = r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <div class="d-flex flex-wrap justify-content-between align-items-start gap-3">
+    <div>
+      <h4 class="mb-1">CNPJs do grupo econômico</h4>
+      <div class="muted">Cadastre filiais e outras empresas que compõem o grupo do cliente selecionado.</div>
+    </div>
+    <div class="d-flex gap-2">
+      <a class="btn btn-outline-secondary" href="/empresa">Voltar para empresa</a>
+      <a class="btn btn-outline-secondary" href="/perfil">Ver diagnóstico</a>
+    </div>
+  </div>
+  <hr class="my-3"/>
+  {% if current_client %}
+    <div class="mb-3"><span class="muted">Cliente:</span> <b>{{ current_client.name }}</b> • <span class="mono">{{ current_client.cnpj or "-" }}</span></div>
+  {% endif %}
+  <div class="row g-4">
+    <div class="col-lg-5">
+      <div class="border rounded p-3 h-100">
+        <div class="fw-semibold mb-2">Novo CNPJ relacionado</div>
+        <form method="post" action="/empresa/grupo" class="row g-3">
+          <div class="col-12">
+            <label class="form-label">Razão social</label>
+            <input class="form-control" name="legal_name" maxlength="160" placeholder="Ex.: MZ Capital Filial Blumenau"/>
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">CNPJ</label>
+            <input class="form-control" name="cnpj" placeholder="00.000.000/0000-00" required/>
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">Relação</label>
+            <select class="form-select" name="relation_type">
+              {% for opt in group_relation_options %}
+                <option value="{{ opt }}">{{ opt.replace("_", " ").title() }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="col-12">
+            <label class="form-label">Observações</label>
+            <textarea class="form-control" name="notes" rows="3" maxlength="500"></textarea>
+          </div>
+          <div class="col-12">
+            <button class="btn btn-primary">Salvar CNPJ relacionado</button>
+          </div>
+        </form>
+      </div>
+    </div>
+    <div class="col-lg-7">
+      <div class="border rounded p-3 h-100">
+        <div class="fw-semibold mb-2">Empresas cadastradas</div>
+        {% if companies %}
+          <div class="d-grid gap-3">
+            {% for item in companies %}
+              <div class="border rounded p-3">
+                <div class="d-flex justify-content-between align-items-start gap-3">
+                  <div>
+                    <div class="fw-semibold">{{ item.legal_name or "Empresa relacionada" }}</div>
+                    <div class="mono small">{{ item.cnpj }}</div>
+                    <div class="small muted mt-1">{{ item.relation_type.replace("_", " ").title() }}</div>
+                    {% if item.notes %}<div class="small mt-2">{{ item.notes }}</div>{% endif %}
+                  </div>
+                  <form method="post" action="/empresa/grupo/{{ item.id }}/remover" onsubmit="return confirm('Remover este CNPJ do grupo?');">
+                    <button class="btn btn-sm btn-outline-danger">Remover</button>
+                  </form>
+                </div>
+              </div>
+            {% endfor %}
+          </div>
+        {% else %}
+          <div class="muted">Ainda não há filiais ou empresas relacionadas cadastradas.</div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+"""
+
+TEMPLATES["admin_usage_analytics.html"] = r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="d-grid gap-3">
+  <div class="card p-4">
+    <div class="d-flex flex-wrap justify-content-between align-items-start gap-3">
+      <div>
+        <h4 class="mb-1">Uso e acessos do portal</h4>
+        <div class="muted">Visão rápida de acessos, uso e usuários online.</div>
+      </div>
+      <div class="badge text-bg-light border">Online agora: {{ online_now_count }}</div>
+    </div>
+  </div>
+
+  <div class="row g-3">
+    <div class="col-md-3"><div class="card p-4 h-100"><div class="muted small">Clientes que já acessaram</div><div class="display-6 fw-semibold">{{ total_accessed_client_users }}</div></div></div>
+    <div class="col-md-3"><div class="card p-4 h-100"><div class="muted small">Usuários online agora</div><div class="display-6 fw-semibold">{{ online_now_count }}</div></div></div>
+    <div class="col-md-3"><div class="card p-4 h-100"><div class="muted small">Page views</div><div class="display-6 fw-semibold">{{ total_page_views }}</div></div></div>
+    <div class="col-md-3"><div class="card p-4 h-100"><div class="muted small">Requisições totais</div><div class="display-6 fw-semibold">{{ total_requests }}</div></div></div>
+  </div>
+
+  <div class="card p-4">
+    <div class="fw-semibold mb-2">Usuários e atividade</div>
+    {% if rows %}
+      <div class="table-responsive">
+        <table class="table align-middle">
+          <thead>
+            <tr>
+              <th>Usuário</th>
+              <th>Papel</th>
+              <th>Cliente</th>
+              <th>Online</th>
+              <th>Último acesso</th>
+              <th>Último login</th>
+              <th>Uso</th>
+              <th>Última página</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for row in rows %}
+              <tr>
+                <td>
+                  <div class="fw-semibold">{{ row.user_name }}</div>
+                  <div class="small muted">{{ row.email }}</div>
+                </td>
+                <td>{{ row.role }}</td>
+                <td>{{ row.client_name or "-" }}</td>
+                <td>{% if row.online_now %}<span class="badge text-bg-success">online</span>{% else %}<span class="badge text-bg-light border">offline</span>{% endif %}</td>
+                <td>{{ row.last_seen_at.strftime("%d/%m/%Y %H:%M") if row.last_seen_at else "-" }}</td>
+                <td>{{ row.last_login_at.strftime("%d/%m/%Y %H:%M") if row.last_login_at else "-" }}</td>
+                <td>{{ row.total_page_views }} views • {{ row.total_requests }} req</td>
+                <td class="small mono">{{ row.last_path or "-" }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <div class="muted">Ainda não há dados de atividade suficientes.</div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}
+"""
+
+try:
+    templates_env.loader.mapping = TEMPLATES
+    templates_env.cache.clear()
+    templates_env.globals["unread_notifications_count"] = _unread_notifications_count
+    templates_env.globals["online_now_count"] = _online_now_count
+    templates_env.globals["client_group_companies_count"] = _client_group_companies_count
+except Exception:
+    pass
