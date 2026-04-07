@@ -2574,10 +2574,6 @@ def init_db() -> None:
     # Em produção (Postgres), quem cria/alterar tabelas é o Alembic.
     # Porém, para features novas sem migration (ex.: UI banner/notícias), garantimos as tabelas.
     ensure_ui_tables()
-    try:
-        ensure_entrega3_tables()
-    except Exception:
-        pass
     # Em dev local (SQLite), criamos automaticamente tudo.
     if engine.url.get_backend_name().startswith("sqlite"):
         SQLModel.metadata.create_all(engine)
@@ -10685,9 +10681,6 @@ def render(
     ctx.setdefault("allow_company_signup", ALLOW_COMPANY_SIGNUP)
     ctx.setdefault("service_catalog", SERVICE_CATALOG)
     ctx.setdefault("bookings_url", BOOKINGS_URL)
-    ctx.setdefault("unread_notifications_count", _unread_notifications_count if "_unread_notifications_count" in globals() else (lambda *_a, **_k: 0))
-    ctx.setdefault("online_now_count", 0)
-    ctx.setdefault("client_group_companies_count", _client_group_companies_count if "_client_group_companies_count" in globals() else (lambda *_a, **_k: 0))
 
     # Inject tenant context defaults for templates that expect them.
     try:
@@ -26566,6 +26559,1316 @@ TEMPLATES["base.html"] = r"""
     <title>{{ title or "App Escritório" }}</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
     <style>
+      :root{
+        --mc-primary:#E07020;
+        --mc-primary-dark:#C85F1B;
+        --mc-ink:#0B1E1E;
+        --mc-bg:#f7f7fb;
+        --mc-border:#ececf3;
+        --mc-low:#f4a261;
+        --mc-mid:#e9c46a;
+        --mc-high:#e07020;
+      }
+      body { background: var(--mc-bg); color: #1f2937; }
+      .card { border: 0; box-shadow: 0 8px 24px rgba(15,23,42,.06); border-radius: 18px; }
+      .brand { font-weight: 700; letter-spacing: .3px; }
+      .muted { color: #6b7280; }
+      a { text-decoration: none; }
+      .btn { border-radius: 12px; }
+      .form-control, .form-select, textarea { border-radius: 12px; }
+      .badge { border-radius: 999px; }
+      .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;}
+      pre { white-space: pre-wrap; margin: 0; }
+      .btn-primary{ background-color:var(--mc-primary)!important; border-color:var(--mc-primary)!important; color:#fff!important; font-weight:600; }
+      .btn-primary:hover{ background-color:var(--mc-primary-dark)!important; border-color:var(--mc-primary-dark)!important; }
+      .btn-outline-primary{ border-color:var(--mc-primary)!important; color:var(--mc-primary)!important; }
+      .btn-outline-primary:hover{ background-color:var(--mc-primary)!important; border-color:var(--mc-primary)!important; color:#fff!important; }
+      .nav-pills .nav-link{ color: var(--mc-primary); border:1px solid rgba(224,112,32,.18); background:#fff; }
+      .nav-pills .nav-link.active{ background: var(--mc-primary); border-color: var(--mc-primary); color:#fff; }
+      .mc-help{ display:inline-flex; align-items:center; justify-content:center; width:18px; height:18px; border-radius:999px; font-size:.72rem; font-weight:700; background:rgba(224,112,32,.12); color:var(--mc-primary-dark); cursor:help; margin-left:.35rem; }
+      .mc-score-band{ font-size:.78rem; }
+      .mc-bar-low{ background-color: var(--mc-low)!important; }
+      .mc-bar-mid{ background-color: var(--mc-mid)!important; }
+      .mc-bar-high{ background-color: var(--mc-high)!important; }
+      .mc-task-warning{ border:1px solid rgba(233,196,106,.75)!important; box-shadow:0 0 0 1px rgba(233,196,106,.15); }
+      .mc-task-danger{ border:1px solid rgba(220,53,69,.55)!important; box-shadow:0 0 0 1px rgba(220,53,69,.10); }
+      .mc-stat-card{ border:1px solid var(--mc-border); border-radius:16px; padding:1rem; height:100%; background:#fff; }
+      a:hover{ color:#00BFBF; }
+    </style>
+  </head>
+  <body>
+    <nav class="navbar navbar-expand-lg bg-white border-bottom">
+      <div class="container py-2">
+        <a class="navbar-brand d-flex align-items-center gap-2" href="/">
+          <img src="/static/logo.png" alt="Maffezzolli Capital" style="height:44px; width:auto;">
+          <span class="fw-semibold" style="color:#0B1E1E; font-size:0.95rem; letter-spacing:0.2px; opacity:0.9;">Bem-vindo</span>
+        </a>
+        <div class="ms-auto d-flex gap-2 align-items-center">
+          {% if current_user %}
+            <span class="badge text-bg-light border">🏢 {{ current_company.name }}</span>
+            {% if role in ["admin","equipe"] and current_client %}
+              <span class="badge text-bg-light border">🧑‍💼 Cliente: {{ current_client.name }}</span>
+              <a class="btn btn-outline-secondary btn-sm" href="/client/switch">Trocar cliente</a>
+            {% endif %}
+            <span class="badge text-bg-light border">👤 {{ current_user.name }} • {{ role }}</span>
+            <a class="btn btn-outline-secondary btn-sm" href="/logout">Sair</a>
+          {% else %}
+            <a class="btn btn-outline-primary btn-sm" href="/login">Entrar</a>
+          {% endif %}
+        </div>
+      </div>
+    </nav>
+
+    <main class="container my-4">
+      {% if flash %}
+        <div class="alert alert-info">{{ flash }}</div>
+      {% endif %}
+
+      <div id="mc-banner" class="mb-3"></div>
+
+      <div class="row g-3">
+        <div class="col-12 col-lg-9">
+          {% block content %}{% endblock %}
+          <div class="mt-5 muted small">
+            <div>Uploads protegidos por login (download via rota).</div>
+          </div>
+        </div>
+
+        <div class="col-12 col-lg-3">
+          <div class="card p-3">
+            <div class="d-flex align-items-center justify-content-between">
+              <div class="fw-semibold">📰 Notícias (economia)</div>
+              {% if role == "admin" %}
+                <a class="small" href="/admin/ui">Configurar</a>
+              {% endif %}
+            </div>
+            <div class="muted small mt-1">Atualiza automaticamente.</div>
+            <div id="mc-news" class="mt-2"></div>
+          </div>
+        </div>
+      </div>
+    </main>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+    (function(){
+      const esc = (s) => String(s || "").replace(/[&<>"']/g, (c) => ({
+        "&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"
+      }[c]));
+
+      async function loadBanner(){
+        const holder = document.getElementById("mc-banner");
+        if (!holder) return;
+        try{
+          const res = await fetch("/api/ui/banner", { headers: { "Accept": "application/json" }, credentials: "same-origin" });
+          if (!res.ok) return;
+          const slides = await res.json();
+          if (!Array.isArray(slides) || slides.length === 0) { holder.innerHTML = ""; return; }
+
+          const cid = "mcCarousel";
+          const indicators = slides.map((_,i)=>`<button type="button" data-bs-target="#${cid}" data-bs-slide-to="${i}" ${i===0?'class="active" aria-current="true"':''} aria-label="Slide ${i+1}"></button>`).join("");
+          const items = slides.map((s,i)=>{
+            const img = esc(s.image_url);
+            const link = esc(s.link_path || "/");
+            const title = esc(s.title || "");
+            return `
+              <div class="carousel-item ${i===0?'active':''}">
+                <a href="${link}" style="display:block;">
+                  <img src="${img}" class="d-block w-100" alt="${title}" style="border-radius:16px; max-height:240px; object-fit:cover;">
+                </a>
+                ${title ? `<div class="carousel-caption d-none d-md-block"><h6 class="bg-dark bg-opacity-50 d-inline-block px-2 py-1 rounded">${title}</h6></div>` : ``}
+              </div>`;
+          }).join("");
+
+          holder.innerHTML = `
+            <div id="${cid}" class="carousel slide" data-bs-ride="carousel">
+              <div class="carousel-indicators">${indicators}</div>
+              <div class="carousel-inner">${items}</div>
+              <button class="carousel-control-prev" type="button" data-bs-target="#${cid}" data-bs-slide="prev">
+                <span class="carousel-control-prev-icon" aria-hidden="true"></span>
+                <span class="visually-hidden">Anterior</span>
+              </button>
+              <button class="carousel-control-next" type="button" data-bs-target="#${cid}" data-bs-slide="next">
+                <span class="carousel-control-next-icon" aria-hidden="true"></span>
+                <span class="visually-hidden">Próximo</span>
+              </button>
+            </div>`;
+        }catch(e){}
+      }
+
+      async function loadNews(){
+        const holder = document.getElementById("mc-news");
+        if (!holder) return;
+        holder.innerHTML = '<div class="muted small">Carregando…</div>';
+        try{
+          const res = await fetch("/api/ui/news?limit=10", { headers: { "Accept": "application/json" }, credentials: "same-origin" });
+          if (!res.ok) { holder.innerHTML = '<div class="muted small">Sem notícias no momento.</div>'; return; }
+          const items = await res.json();
+          if (!Array.isArray(items) || items.length === 0) { holder.innerHTML = '<div class="muted small">Sem notícias no momento.</div>'; return; }
+          holder.innerHTML = `
+            <div class="list-group list-group-flush">
+              ${items.map(it => `
+                <a class="list-group-item list-group-item-action small" href="${esc(it.url)}" target="_blank" rel="noopener">
+                  <div class="fw-semibold">${esc(it.title)}</div>
+                  <div class="muted" style="font-size:.8rem;">${esc(it.source || "")}${it.published ? " • " + esc(it.published) : ""}</div>
+                </a>`).join("")}
+            </div>`;
+        }catch(e){
+          holder.innerHTML = '<div class="muted small">Sem notícias no momento.</div>';
+        }
+      }
+
+      window.addEventListener("DOMContentLoaded", function(){
+        loadBanner();
+        loadNews();
+        document.querySelectorAll('[data-bs-toggle="tooltip"]').forEach((el) => new bootstrap.Tooltip(el));
+      });
+    })();
+    </script>
+  </body>
+</html>
+"""
+
+SIMULADOR_TEMPLATE = r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="container" style="max-width: 980px;">
+  <h3 class="mt-3">Simulador de Empréstimo</h3>
+  <form method="post" action="/simulador/pdf" class="card p-3 mt-3">
+    <div class="row g-2">
+      <div class="col-md-6">
+        <label class="form-label">Cliente (nome)</label>
+        <input class="form-control" name="borrower_name" placeholder="Nome do cliente" value="{{ borrower_name or '' }}">
+      </div>
+
+      <div class="col-md-6">
+        <label class="form-label">Cliente {% if client_locked %}(vinculado ao seu acesso){% else %}(opcional){% endif %}</label>
+        {% if client_locked and current_client %}
+          <input type="hidden" name="client_id" value="{{ current_client.id }}">
+          <input class="form-control" value="{{ current_client.name }}" readonly>
+          <div class="form-text">Como seu acesso é de cliente, a proposta será vinculada somente à sua empresa.</div>
+        {% else %}
+          <select class="form-select" name="client_id" id="sim_client_id">
+            <option value="">-- (sem cliente) --</option>
+            {% for c in clients %}
+              <option value="{{ c.id }}" {% if selected_client_id and c.id == selected_client_id %}selected{% endif %}>{{ c.name }}</option>
+            {% endfor %}
+          </select>
+          <div class="form-text">Selecione para habilitar “Gerar Proposta” (gera também um card no CRM).</div>
+        {% endif %}
+      </div>
+
+      <div class="col-md-6">
+        <label class="form-label">Tipo de empréstimo</label>
+        <input class="form-control" name="loan_type" placeholder="Ex.: Crédito com garantia, Consignado, Capital de giro">
+      </div>
+
+      <div class="col-md-4">
+        <label class="form-label">Amortização</label>
+        <select class="form-select" name="amortization">
+          <option value="price">PRICE (parcela fixa)</option>
+          <option value="sac">SAC (amortização constante)</option>
+          <option value="americano">Americano (juros + quitação final)</option>
+        </select>
+      </div>
+
+      <div class="col-md-4">
+        <label class="form-label">Taxa (%)</label>
+        <input class="form-control" name="rate_pct" placeholder="Ex.: 1,79" value="1,79">
+        <div class="form-text">Informe em percentual. Ex: "1,79" = 1,79%</div>
+      </div>
+
+      <div class="col-md-4">
+        <label class="form-label">Base</label>
+        <select class="form-select" name="rate_base">
+          <option value="am">ao mês</option>
+          <option value="aa">ao ano</option>
+        </select>
+      </div>
+
+      <div class="col-md-4">
+        <label class="form-label">Prazo (meses)</label>
+        <input class="form-control" name="term_months" value="24">
+      </div>
+
+      <div class="col-md-4">
+        <label class="form-label">Carência (meses – juros only)</label>
+        <input class="form-control" name="grace_months" value="0">
+      </div>
+
+      <div class="col-md-4">
+        <label class="form-label">Juros-only extra (meses)</label>
+        <input class="form-control" name="io_months" value="0">
+      </div>
+
+      <div class="col-md-4">
+        <label class="form-label">Valor do empréstimo (R$)</label>
+        <input class="form-control" name="principal" placeholder="Ex.: 100000">
+        <div class="form-text">Se preencher valor do bem + LTV, pode deixar em branco.</div>
+      </div>
+
+      <div class="col-md-4">
+        <label class="form-label">Valor do bem (garantia) (R$)</label>
+        <input class="form-control" name="collateral_value" placeholder="Ex.: 200000">
+      </div>
+
+      <div class="col-md-4">
+        <label class="form-label">LTV (%)</label>
+        <input class="form-control" name="ltv_pct" placeholder="Ex.: 50">
+      </div>
+
+      <div class="col-md-4">
+        <label class="form-label">Tarifa de abertura (R$)</label>
+        <input class="form-control" name="fee_amount" value="0">
+      </div>
+
+      <div class="col-md-4">
+        <label class="form-label">Seguro mensal (R$)</label>
+        <input class="form-control" name="monthly_insurance" value="0">
+      </div>
+
+      <div class="col-md-4">
+        <label class="form-label">Taxa admin mensal (R$)</label>
+        <input class="form-control" name="monthly_admin_fee" value="0">
+      </div>
+
+      <div class="col-12">
+        <label class="form-label">Observações</label>
+        <textarea class="form-control" name="notes" rows="3" placeholder="Condições, garantias, CET, etc."></textarea>
+      </div>
+
+      <div class="col-12 d-flex gap-2 mt-2">
+        <button class="btn btn-primary" type="submit">Gerar PDF</button>
+        <button class="btn btn-success" type="submit" formaction="/simulador/proposta" formtarget="_blank" rel="noopener" id="btn_proposta" {% if client_locked and current_client %}{% else %}disabled{% endif %}>
+          Gerar Proposta
+        </button>
+        <button class="btn btn-outline-secondary" type="submit" formaction="/simulador/json">Gerar JSON</button>
+      </div>
+    </div>
+  </form>
+
+  <p class="text-muted mt-3" style="font-size: 0.9rem;">
+    * Esta é apenas uma simulação e não constitui proposta de crédito. Sujeito à análise e aprovação.
+  </p>
+</div>
+<script>
+(function(){
+  const sel = document.getElementById("sim_client_id");
+  const btn = document.getElementById("btn_proposta");
+  if (!btn) return;
+  if (!sel) {
+    btn.disabled = false;
+    return;
+  }
+  const toggle = () => { btn.disabled = !sel.value; };
+  sel.addEventListener("change", toggle);
+  toggle();
+})();
+</script>
+{% endblock %}
+"""
+
+TEMPLATES["tasks_list.html"] = r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <div class="d-flex justify-content-between align-items-center">
+    <div>
+      <h4 class="mb-0">Tarefas</h4>
+      <div class="muted">Kanban por status • filtros • prazos • prioridade</div>
+    </div>
+    {% if role in ["admin","equipe"] %}
+      <a class="btn btn-primary" href="/tarefas/nova{% if filter_client_id %}?client_id={{ filter_client_id }}{% endif %}">Nova tarefa</a>
+    {% endif %}
+  </div>
+
+  <hr class="my-3"/>
+
+  {% if role in ["admin","equipe"] %}
+    <form method="get" action="/tarefas" class="row g-2 align-items-end mb-3">
+      <div class="col-md-3">
+        <label class="form-label">Cliente</label>
+        <select class="form-select" name="client_id">
+          <option value="0" {% if filter_client_id==0 %}selected{% endif %}>Todos</option>
+          {% for c in clients %}
+            <option value="{{ c.id }}" {% if filter_client_id==c.id %}selected{% endif %}>{{ c.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <div class="col-md-3">
+        <label class="form-label">Responsável</label>
+        <select class="form-select" name="assignee_user_id">
+          <option value="0" {% if filter_assignee_user_id==0 %}selected{% endif %}>Todos</option>
+          <option value="-1" {% if filter_assignee_user_id==-1 %}selected{% endif %}>Sem responsável</option>
+          {% for u in assignees %}
+            <option value="{{ u.id }}" {% if filter_assignee_user_id==u.id %}selected{% endif %}>{{ u.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <div class="col-md-2">
+        <label class="form-label">Status</label>
+        <select class="form-select" name="status">
+          <option value="" {% if not filter_status %}selected{% endif %}>Todos</option>
+          <option value="nao_iniciada" {% if filter_status=="nao_iniciada" %}selected{% endif %}>nao_iniciada</option>
+          <option value="em_andamento" {% if filter_status=="em_andamento" %}selected{% endif %}>em_andamento</option>
+          <option value="concluida" {% if filter_status=="concluida" %}selected{% endif %}>concluida</option>
+        </select>
+      </div>
+
+      <div class="col-md-2">
+        <label class="form-label">Prioridade</label>
+        <select class="form-select" name="priority">
+          <option value="" {% if not filter_priority %}selected{% endif %}>Todas</option>
+          <option value="baixa" {% if filter_priority=="baixa" %}selected{% endif %}>baixa</option>
+          <option value="media" {% if filter_priority=="media" %}selected{% endif %}>media</option>
+          <option value="alta" {% if filter_priority=="alta" %}selected{% endif %}>alta</option>
+        </select>
+      </div>
+
+      <div class="col-md-2">
+        <label class="form-label">Prazo</label>
+        <select class="form-select" name="due">
+          <option value="" {% if not filter_due %}selected{% endif %}>Todos</option>
+          <option value="atrasadas" {% if filter_due=="atrasadas" %}selected{% endif %}>atrasadas</option>
+          <option value="hoje" {% if filter_due=="hoje" %}selected{% endif %}>hoje</option>
+          <option value="7dias" {% if filter_due=="7dias" %}selected{% endif %}>7 dias</option>
+          <option value="sem_prazo" {% if filter_due=="sem_prazo" %}selected{% endif %}>sem prazo</option>
+        </select>
+      </div>
+
+      <div class="col-12 d-flex gap-2 align-items-center mt-1">
+        <div class="form-check">
+          <input class="form-check-input" type="checkbox" name="mine" value="1" id="mine" {% if filter_mine==1 %}checked{% endif %}>
+          <label class="form-check-label" for="mine">Minhas</label>
+        </div>
+        <button class="btn btn-outline-primary" type="submit">Aplicar</button>
+        <a class="btn btn-outline-secondary" href="/tarefas">Limpar</a>
+      </div>
+    </form>
+  {% endif %}
+
+  <div class="row g-3">
+    {% for col in columns %}
+      <div class="col-12 col-lg-4">
+        <div class="card p-3 h-100">
+          <div class="fw-semibold mb-2">{{ col.label }} <span class="muted">({{ col.count }})</span></div>
+          {% if col.tasks %}
+            <div class="vstack gap-2">
+              {% for t in col.tasks %}
+                <a class="card p-3 {% if t.due_state == 'danger' %}mc-task-danger{% elif t.due_state == 'warning' %}mc-task-warning{% endif %}" href="/tarefas/{{ t.id }}">
+                  <div class="d-flex justify-content-between align-items-start">
+                    <div class="fw-semibold">{{ t.title }}</div>
+                    <span class="badge text-bg-light border">{{ t.priority }}</span>
+                  </div>
+                  <div class="muted small mt-1">
+                    {% if role in ["admin","equipe"] and filter_client_id==0 and t.client_name %}
+                      Cliente: {{ t.client_name }} •
+                    {% endif %}
+                    {% if t.due_date %}Prazo: {{ t.due_date }} • {% endif %}
+                    {% if t.assignee_name %}Resp: {{ t.assignee_name }}{% endif %}
+                  </div>
+                  <div class="mt-2 d-flex gap-2 flex-wrap">
+                    {% if t.visible_to_client %}
+                      <span class="badge text-bg-light border">visível ao cliente</span>
+                    {% endif %}
+                    {% if t.due_label %}
+                      <span class="badge {% if t.due_state == 'danger' %}text-bg-danger{% else %}text-bg-warning{% endif %}">{{ t.due_label }}</span>
+                    {% endif %}
+                  </div>
+                </a>
+              {% endfor %}
+            </div>
+          {% else %}
+            <div class="muted small">Sem tarefas.</div>
+          {% endif %}
+        </div>
+      </div>
+    {% endfor %}
+  </div>
+</div>
+{% endblock %}
+"""
+
+TEMPLATES["dashboard.html"] = r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="row g-3">
+  <div class="col-12">
+    <div class="card p-4">
+      <div class="d-flex flex-wrap justify-content-between align-items-start gap-3">
+        <div>
+          <h4 class="mb-1">Painel</h4>
+          <div class="muted">
+            {% if role in ["admin","equipe"] %}
+              Escritório: <b>{{ current_company.name }}</b>.{% if current_client %} Cliente selecionado: <b>{{ current_client.name }}</b>.{% endif %}
+            {% else %}
+              Bem-vindo(a)! Você vê apenas os dados, indicadores e oportunidades liberadas para sua empresa.
+            {% endif %}
+          </div>
+        </div>
+        {% if role in ["admin","equipe"] %}
+          <div class="d-flex gap-2">
+            <a class="btn btn-outline-primary btn-sm" href="/admin/members">Gerenciar membros</a>
+            <a class="btn btn-outline-secondary btn-sm" href="/client/switch">Trocar cliente</a>
+          </div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+  {% if dashboard_scores and current_client %}
+    <div class="col-12">
+      <div class="card p-4">
+        <div class="d-flex flex-wrap justify-content-between align-items-center gap-2">
+          <div>
+            <h5 class="mb-1">Resumo analítico da empresa</h5>
+            <div class="muted">Cards e barras visuais para dar mais clareza ao diagnóstico financeiro.</div>
+          </div>
+          <div class="d-flex gap-2 flex-wrap">
+            <span class="badge text-bg-light border">{{ approved_offers_count }} oportunidade(s) liberada(s)</span>
+            <span class="badge text-bg-light border">{{ pending_items_count }} pendência(s)</span>
+          </div>
+        </div>
+        <div class="row g-3 mt-1">
+          {% for card in dashboard_scores.score_card %}
+          <div class="col-md-6 col-xl-3">
+            <div class="mc-stat-card">
+              <div class="d-flex align-items-center">
+                <div class="muted small">{{ card.label }}</div>
+                <span class="mc-help" data-bs-toggle="tooltip" data-bs-placement="top" title="{{ card.tooltip }}">i</span>
+              </div>
+              <div class="fs-3 fw-bold">{{ "%.0f"|format(card.value) }}</div>
+              <div class="small muted">{{ card.hint }}</div>
+              <div class="small mc-score-band mt-1"><span class="badge text-bg-light border">{{ card.band_label }}</span></div>
+            </div>
+          </div>
+          {% endfor %}
+        </div>
+        <div class="row g-3 mt-1">
+          <div class="col-lg-7">
+            <div class="border rounded p-3 h-100">
+              <div class="fw-semibold mb-3">Leitura visual dos scores</div>
+              {% for bar in dashboard_scores.bars %}
+                <div class="mb-3">
+                  <div class="d-flex justify-content-between small">
+                    <span>{{ bar.label }} <span class="mc-help" data-bs-toggle="tooltip" data-bs-placement="top" title="{{ bar.tooltip }}">i</span></span>
+                    <span>{{ "%.0f"|format(bar.value) }}</span>
+                  </div>
+                  <div class="progress" style="height: 12px;">
+                    <div class="progress-bar {{ bar.class }}" role="progressbar" style="width: {{ bar.value }}%;" aria-valuenow="{{ bar.value }}" aria-valuemin="0" aria-valuemax="100"></div>
+                  </div>
+                  <div class="small muted mt-1">{{ bar.band_label }}</div>
+                </div>
+              {% endfor %}
+            </div>
+          </div>
+          <div class="col-lg-5">
+            <div class="border rounded p-3 h-100">
+              <div class="fw-semibold mb-3">Indicadores-chave</div>
+              <div class="small d-flex justify-content-between mb-2"><span>Capital de giro líquido</span><b>{{ dashboard_scores.working_capital|brl }}</b></div>
+              <div class="small d-flex justify-content-between mb-2"><span>Liquidez corrente</span><b>{{ dashboard_scores.current_ratio|brnum }}</b></div>
+              <div class="small d-flex justify-content-between mb-2"><span>Patrimônio líquido</span><b>{{ dashboard_scores.equity|brl }}</b></div>
+              <div class="small d-flex justify-content-between mb-2"><span>Endividamento / patrimônio</span><b>{{ dashboard_scores.debt_to_equity|brnum }}</b></div>
+              <div class="small d-flex justify-content-between"><span>Status do motor</span><span class="badge text-bg-light border">{{ dashboard_scores.status_label }}</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  {% endif %}
+
+  {% if tabs %}
+  <div class="col-12">
+    <ul class="nav nav-pills gap-2" id="dashTabs" role="tablist">
+      {% for t in tabs %}
+        <li class="nav-item" role="presentation">
+          <button class="nav-link {% if loop.first %}active{% endif %}" id="tab-{{ t.key }}" data-bs-toggle="pill"
+                  data-bs-target="#pane-{{ t.key }}" type="button" role="tab">
+            {{ t.title }}
+          </button>
+        </li>
+      {% endfor %}
+    </ul>
+
+    <div class="tab-content mt-3">
+      {% for t in tabs %}
+        <div class="tab-pane fade {% if loop.first %}show active{% endif %}" id="pane-{{ t.key }}" role="tabpanel">
+          <div class="row g-3">
+            {% for item in t["items"] %}
+              <div class="col-md-6 col-lg-4">
+                <a href="{{ item.href }}">
+                  <div class="card p-4 h-100">
+                    <div class="d-flex justify-content-between align-items-start">
+                      <div>
+                        <div class="fw-semibold">{{ item.title }}</div>
+                        <div class="muted small mt-1">{{ item.desc }}</div>
+                      </div>
+                      <span class="badge text-bg-light border">→</span>
+                    </div>
+                  </div>
+                </a>
+              </div>
+            {% endfor %}
+          </div>
+        </div>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+
+  {% if standalone %}
+  <div class="col-12 mt-2">
+    <div class="d-flex align-items-center justify-content-between">
+      <div class="fw-semibold">{{ standalone_title or "Atendimento e Conteúdo" }}</div>
+      <div class="muted small">{{ standalone_desc or "Pendências, Agenda e Educação" }}</div>
+    </div>
+  </div>
+
+  {% for item in standalone %}
+    <div class="col-md-6 col-lg-4">
+      <a href="{{ item.href }}">
+        <div class="card p-4 h-100">
+          <div class="d-flex justify-content-between align-items-start">
+            <div>
+              <div class="fw-semibold">{{ item.title }}</div>
+              <div class="muted small mt-1">{{ item.desc }}</div>
+            </div>
+            <span class="badge text-bg-light border">→</span>
+          </div>
+        </div>
+      </a>
+    </div>
+  {% endfor %}
+  {% endif %}
+</div>
+
+<script>
+(function(){
+  const tabs = document.getElementById("dashTabs");
+  if (!tabs) return;
+  const key = "dash_active_tab";
+  const saved = localStorage.getItem(key);
+  if (saved) {
+    const btn = document.getElementById("tab-" + saved);
+    if (btn) btn.click();
+  }
+  tabs.addEventListener("click", (e) => {
+    const btn = e.target.closest("button[id^='tab-']");
+    if (!btn) return;
+    localStorage.setItem(key, btn.id.replace("tab-",""));
+  });
+})();
+</script>
+{% endblock %}
+"""
+
+TEMPLATES["perfil.html"] = r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="row g-3">
+  <div class="col-xl-4">
+    <div class="card p-4 h-100">
+      <h4 class="mb-1">Diagnóstico Financeiro</h4>
+      <div class="muted mb-3">Leitura financeira, patrimonial e evolução do cliente.</div>
+      <div><span class="muted">Usuário:</span> <b>{{ current_user.name }}</b></div>
+      <div><span class="muted">E-mail:</span> <span class="mono">{{ current_user.email }}</span></div>
+      {% if current_client %}
+        <hr>
+        <div><span class="muted">Cliente:</span> <b>{{ current_client.name }}</b></div>
+        <div><span class="muted">CNPJ:</span> <span class="mono">{{ current_client.cnpj or "-" }}</span></div>
+        <div><span class="muted">Cidade/UF:</span> {{ current_client.city or "-" }}{% if current_client.state %}/{{ current_client.state }}{% endif %}</div>
+      {% endif %}
+      <div class="mt-3 d-grid gap-2">
+        <a class="btn btn-outline-secondary" href="/empresa">Editar dados da empresa</a>
+        <a class="btn btn-primary" href="/perfil/avaliacao/nova">Nova avaliação</a>
+      </div>
+      {% if financial_analysis %}
+      <hr>
+      <div class="row g-2">
+        {% for card in financial_analysis.score_card %}
+          <div class="col-6">
+            <div class="border rounded p-2 h-100">
+              <div class="d-flex align-items-center">
+                <div class="muted small">{{ card.label }}</div>
+                <span class="mc-help" data-bs-toggle="tooltip" data-bs-placement="top" title="{{ card.tooltip }}">i</span>
+              </div>
+              <div class="fs-4 fw-bold">{{ "%.0f"|format(card.value) }}</div>
+              <div class="small muted">{{ card.hint }}</div>
+              <div class="small mt-1"><span class="badge text-bg-light border">{{ card.band_label }}</span></div>
+            </div>
+          </div>
+        {% endfor %}
+      </div>
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="col-xl-8">
+    <div class="card p-4 mb-3">
+      <div class="d-flex justify-content-between align-items-start">
+        <div>
+          <h4 class="mb-1">Indicadores e balanço</h4>
+          <div class="muted">Faturamento, endividamento, caixa e estrutura patrimonial.</div>
+        </div>
+        <div class="text-end">
+          <div class="muted small">Score atual</div>
+          <div class="fs-3 fw-bold">{{ "%.1f"|format(latest_score or 0) }}</div>
+          {% if delta is not none %}
+            <div class="small {% if delta >= 0 %}text-success{% else %}text-danger{% endif %}">
+              {% if delta >= 0 %}+{% endif %}{{ "%.1f"|format(delta) }} vs. avaliação anterior
+            </div>
+          {% endif %}
+        </div>
+      </div>
+
+      {% if not current_client %}
+        <div class="alert alert-warning mt-3">Nenhum cliente selecionado/vinculado.</div>
+      {% else %}
+        <form method="post" action="/perfil" class="mt-3">
+          <div class="row g-3">
+            <div class="col-md-6">
+              <label class="form-label">Faturamento mensal (R$)</label>
+              <input class="form-control" name="revenue_monthly_brl" type="number" step="0.01" min="0" value="{{ current_client.revenue_monthly_brl }}" />
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">Endividamento total (R$)</label>
+              <input class="form-control" name="debt_total_brl" type="number" step="0.01" min="0" value="{{ current_client.debt_total_brl }}" />
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">Saldo em caixa (R$)</label>
+              <input class="form-control" name="cash_balance_brl" type="number" step="0.01" min="0" value="{{ current_client.cash_balance_brl }}" />
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">Funcionários</label>
+              <input class="form-control" name="employees_count" type="number" min="0" value="{{ current_client.employees_count }}" />
+            </div>
+
+            <div class="col-12 mt-2"><div class="fw-semibold">Balanço patrimonial resumido</div></div>
+            <div class="col-md-6">
+              <label class="form-label">Ativo circulante (R$)</label>
+              <input class="form-control" name="current_assets_brl" type="number" step="0.01" min="0" value="{{ business_profile.current_assets_brl if business_profile else 0 }}" />
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">Ativo não circulante (R$)</label>
+              <input class="form-control" name="non_current_assets_brl" type="number" step="0.01" min="0" value="{{ business_profile.non_current_assets_brl if business_profile else 0 }}" />
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">Passivo circulante (R$)</label>
+              <input class="form-control" name="current_liabilities_brl" type="number" step="0.01" min="0" value="{{ business_profile.current_liabilities_brl if business_profile else 0 }}" />
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">Passivo não circulante (R$)</label>
+              <input class="form-control" name="non_current_liabilities_brl" type="number" step="0.01" min="0" value="{{ business_profile.non_current_liabilities_brl if business_profile else 0 }}" />
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">Patrimônio líquido (R$)</label>
+              <input class="form-control" name="equity_brl" type="number" step="0.01" min="0" value="{{ business_profile.equity_brl if business_profile else 0 }}" />
+              <div class="form-text">Se deixar zerado, o sistema calcula automaticamente com base em ativo total - passivo total.</div>
+            </div>
+          </div>
+          <div class="mt-4 d-flex gap-2">
+            <button class="btn btn-primary">Salvar diagnóstico</button>
+            <a class="btn btn-outline-secondary" href="/empresa">Editar dados da empresa</a>
+          </div>
+        </form>
+      {% endif %}
+    </div>
+
+    {% if financial_analysis %}
+      <div class="card p-4 mb-3">
+        <div class="d-flex justify-content-between align-items-center">
+          <div>
+            <h5 class="mb-1">Painel visual do motor</h5>
+            <div class="muted">Indicadores resumidos para leitura rápida do cliente.</div>
+          </div>
+          <span class="badge text-bg-light border">Elegibilidade {{ financial_analysis.status_label }}</span>
+        </div>
+        <div class="mt-3">
+          {% for bar in financial_analysis.bars %}
+            <div class="mb-3">
+              <div class="d-flex justify-content-between small">
+                <span>{{ bar.label }} <span class="mc-help" data-bs-toggle="tooltip" data-bs-placement="top" title="{{ bar.tooltip }}">i</span></span>
+                <span>{{ "%.0f"|format(bar.value) }}</span>
+              </div>
+              <div class="progress" style="height: 12px;">
+                <div class="progress-bar {{ bar.class }}" role="progressbar" style="width: {{ bar.value }}%;" aria-valuenow="{{ bar.value }}" aria-valuemin="0" aria-valuemax="100"></div>
+              </div>
+              <div class="small muted mt-1">{{ bar.band_label }}</div>
+            </div>
+          {% endfor %}
+        </div>
+        <div class="row g-3 mt-1">
+          <div class="col-md-4"><div class="border rounded p-3 h-100"><div class="muted small">Capital de giro líquido</div><div class="fw-semibold">{{ financial_analysis.working_capital|brl }}</div></div></div>
+          <div class="col-md-4"><div class="border rounded p-3 h-100"><div class="muted small">Liquidez corrente</div><div class="fw-semibold">{{ financial_analysis.current_ratio|brnum }}</div></div></div>
+          <div class="col-md-4"><div class="border rounded p-3 h-100"><div class="muted small">Dívida / patrimônio</div><div class="fw-semibold">{{ financial_analysis.debt_to_equity|brnum }}</div></div></div>
+        </div>
+      </div>
+    {% endif %}
+
+    <div class="card p-4">
+      <div class="d-flex justify-content-between align-items-start gap-2">
+        <div>
+          <h5 class="mb-1">Oportunidades relacionadas</h5>
+          <div class="muted">Ofertas já tratadas pelo motor e visíveis para o seu papel.</div>
+        </div>
+        <a class="btn btn-outline-secondary btn-sm" href="/ofertas">Abrir oportunidades</a>
+      </div>
+      {% if offer_matches %}
+        <div class="row g-3 mt-1">
+          {% for m in offer_matches %}
+            <div class="col-lg-6">
+              <div class="border rounded p-3 h-100">
+                <div class="d-flex justify-content-between align-items-start">
+                  <div>
+                    <div class="fw-semibold">{{ m.product_name }}</div>
+                    <div class="small muted">{{ m.partner_name or "Maffezzolli Capital" }}</div>
+                  </div>
+                  <span class="badge text-bg-light border">{{ m.priority_level }}</span>
+                </div>
+                <div class="small mt-2"><span class="mono">{{ m.family_code }}</span> • score {{ "%.1f"|format(m.score_fit) }}</div>
+                <div class="mt-2">{{ m.client_summary or m.reason_summary }}</div>
+              </div>
+            </div>
+          {% endfor %}
+        </div>
+      {% else %}
+        <div class="muted mt-3">Ainda não há oportunidades liberadas.</div>
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endblock %}
+"""
+
+
+# ----------------------------
+# Entrega 3: grupo econômico, notificações e analytics de acesso
+# ----------------------------
+
+GROUP_RELATION_OPTIONS = ["matriz", "filial", "empresa_grupo", "outro"]
+
+
+def ensure_delivery3_tables() -> bool:
+    ok = True
+    for tbl in (
+        ClientGroupCompany.__table__,
+        UserActivity.__table__,
+        AppNotification.__table__,
+    ):
+        try:
+            tbl.create(engine, checkfirst=True)
+        except Exception:
+            ok = False
+    return ok
+
+
+@app.on_event("startup")
+def _startup_delivery3() -> None:
+    ensure_delivery3_tables()
+    try:
+        templates_env.globals["unread_notifications_count"] = _unread_notifications_count
+        templates_env.globals["online_now_count"] = _online_now_count
+        templates_env.globals["client_group_companies_count"] = _client_group_companies_count
+    except Exception:
+        pass
+
+
+def _activity_should_track(path: str) -> bool:
+    if not path:
+        return False
+    prefixes = ("/static/", "/health", "/__")
+    if path.startswith(prefixes):
+        return False
+    if path.startswith("/api/ui/"):
+        return False
+    return True
+
+
+def _get_or_create_user_activity(session: Session, *, company_id: int, user_id: int) -> UserActivity:
+    row = session.exec(
+        select(UserActivity).where(UserActivity.company_id == company_id, UserActivity.user_id == user_id)
+    ).first()
+    if not row:
+        row = UserActivity(company_id=company_id, user_id=user_id, created_at=utcnow(), updated_at=utcnow())
+    return row
+
+
+def _track_user_activity_row(
+    session: Session,
+    *,
+    request: Request,
+    company_id: int,
+    user_id: int,
+    membership_role: str,
+    client_id: Optional[int],
+    mark_login: bool = False,
+) -> None:
+    row = _get_or_create_user_activity(session, company_id=company_id, user_id=user_id)
+    row.membership_role = membership_role or row.membership_role
+    row.client_id = client_id
+    row.total_requests = int(row.total_requests or 0) + 1
+    if request.method.upper() == "GET":
+        row.total_page_views = int(row.total_page_views or 0) + 1
+    row.last_seen_at = utcnow()
+    row.updated_at = utcnow()
+    row.last_path = str(request.url.path or "")[:240]
+    row.last_ip = _request_ip(request)[:80]
+    row.last_user_agent = (request.headers.get("user-agent") or "")[:500]
+    if mark_login:
+        row.total_logins = int(row.total_logins or 0) + 1
+        row.last_login_at = utcnow()
+    session.add(row)
+    session.commit()
+
+
+@app.middleware("http")
+async def delivery3_activity_middleware(request: Request, call_next: Callable[..., Any]) -> Response:
+    response = await call_next(request)
+    try:
+        if not _activity_should_track(request.url.path):
+            return response
+        with Session(engine) as _db:
+            _ctx = get_tenant_context(request, _db)
+            if not _ctx:
+                return response
+            _track_user_activity_row(
+                _db,
+                request=request,
+                company_id=_ctx.company.id,
+                user_id=_ctx.user.id,
+                membership_role=_ctx.membership.role,
+                client_id=get_active_client_id(request, _db, _ctx),
+                mark_login=(request.url.path == "/login" and request.method.upper() == "POST"),
+            )
+    except Exception:
+        pass
+    return response
+
+
+def _distinct_user_ids(values: list[int]) -> list[int]:
+    seen: set[int] = set()
+    out: list[int] = []
+    for v in values:
+        iv = int(v or 0)
+        if iv <= 0 or iv in seen:
+            continue
+        seen.add(iv)
+        out.append(iv)
+    return out
+
+
+def _client_member_user_ids(session: Session, *, company_id: int, client_id: int) -> list[int]:
+    rows = session.exec(
+        select(Membership.user_id).where(
+            Membership.company_id == company_id,
+            Membership.role == "cliente",
+            Membership.client_id == client_id,
+        )
+    ).all()
+    return _distinct_user_ids([int(r) for r in rows if r])
+
+
+def _staff_user_ids(session: Session, *, company_id: int) -> list[int]:
+    rows = session.exec(
+        select(Membership.user_id).where(
+            Membership.company_id == company_id,
+            Membership.role.in_(["admin", "equipe"]),
+        )
+    ).all()
+    return _distinct_user_ids([int(r) for r in rows if r])
+
+
+def _create_notifications_for_user_ids(
+    session: Session,
+    *,
+    company_id: int,
+    user_ids: list[int],
+    kind: str,
+    title: str,
+    message: str = "",
+    href: str = "",
+    client_id: Optional[int] = None,
+) -> None:
+    now = utcnow()
+    for uid in _distinct_user_ids(user_ids):
+        session.add(
+            AppNotification(
+                company_id=company_id,
+                user_id=uid,
+                client_id=client_id,
+                kind=_clean_text(kind, 40),
+                title=_clean_text(title, 180) or "Atualização",
+                message=_clean_text(message, 1500),
+                href=_clean_text(href, 240),
+                is_read=False,
+                created_at=now,
+            )
+        )
+    session.commit()
+
+
+def _notify_client_members(
+    session: Session,
+    *,
+    company_id: int,
+    client_id: int,
+    kind: str,
+    title: str,
+    message: str = "",
+    href: str = "",
+) -> None:
+    user_ids = _client_member_user_ids(session, company_id=company_id, client_id=client_id)
+    if not user_ids:
+        return
+    _create_notifications_for_user_ids(
+        session,
+        company_id=company_id,
+        user_ids=user_ids,
+        client_id=client_id,
+        kind=kind,
+        title=title,
+        message=message,
+        href=href,
+    )
+
+
+def _mark_offer_notifications_hidden(session: Session, *, company_id: int, client_id: int, offer_match_id: int) -> None:
+    rows = session.exec(
+        select(AppNotification).where(
+            AppNotification.company_id == company_id,
+            AppNotification.client_id == client_id,
+            AppNotification.kind == "oferta",
+            AppNotification.href == "/ofertas",
+            AppNotification.is_read == False,
+        )
+    ).all()
+    for row in rows:
+        row.is_read = True
+        row.read_at = utcnow()
+        session.add(row)
+    session.commit()
+
+
+def _unread_notifications_count(company_id: int, user_id: int) -> int:
+    if not company_id or not user_id:
+        return 0
+    try:
+        with Session(engine) as s:
+            return int(
+                s.exec(
+                    select(func.count(AppNotification.id)).where(
+                        AppNotification.company_id == int(company_id),
+                        AppNotification.user_id == int(user_id),
+                        AppNotification.is_read == False,
+                    )
+                ).one()
+            )
+    except Exception:
+        return 0
+
+
+def _online_now_count(company_id: int) -> int:
+    if not company_id:
+        return 0
+    try:
+        limit_at = utcnow() - timedelta(minutes=5)
+        with Session(engine) as s:
+            return int(
+                s.exec(
+                    select(func.count(UserActivity.id)).where(
+                        UserActivity.company_id == int(company_id),
+                        UserActivity.last_seen_at.is_not(None),
+                        UserActivity.last_seen_at >= limit_at,
+                    )
+                ).one()
+            )
+    except Exception:
+        return 0
+
+
+def _client_group_companies_count(company_id: int, client_id: int) -> int:
+    if not company_id or not client_id:
+        return 0
+    try:
+        with Session(engine) as s:
+            return int(
+                s.exec(
+                    select(func.count(ClientGroupCompany.id)).where(
+                        ClientGroupCompany.company_id == int(company_id),
+                        ClientGroupCompany.client_id == int(client_id),
+                        ClientGroupCompany.is_active == True,
+                    )
+                ).one()
+            )
+    except Exception:
+        return 0
+
+
+@app.get("/empresa/grupo", response_class=HTMLResponse)
+@require_login
+async def empresa_grupo_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+
+    current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
+    if not current_client:
+        set_flash(request, "Nenhum cliente selecionado/vinculado.")
+        return RedirectResponse("/empresa", status_code=303)
+    if not ensure_can_access_client(ctx, current_client.id):
+        set_flash(request, "Sem permissão.")
+        return RedirectResponse("/empresa", status_code=303)
+
+    companies = session.exec(
+        select(ClientGroupCompany)
+        .where(
+            ClientGroupCompany.company_id == ctx.company.id,
+            ClientGroupCompany.client_id == current_client.id,
+            ClientGroupCompany.is_active == True,
+        )
+        .order_by(ClientGroupCompany.created_at.asc())
+    ).all()
+
+    return render(
+        "empresa_grupo.html",
+        request=request,
+        context={
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "role": ctx.membership.role,
+            "current_client": current_client,
+            "companies": companies,
+            "group_relation_options": GROUP_RELATION_OPTIONS,
+        },
+    )
+
+
+@app.post("/empresa/grupo")
+@require_login
+async def empresa_grupo_add(
+    request: Request,
+    session: Session = Depends(get_session),
+    legal_name: str = Form(""),
+    cnpj: str = Form(""),
+    relation_type: str = Form("filial"),
+    notes: str = Form(""),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+
+    current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
+    if not current_client:
+        set_flash(request, "Nenhum cliente selecionado/vinculado.")
+        return RedirectResponse("/empresa", status_code=303)
+    if not ensure_can_access_client(ctx, current_client.id):
+        set_flash(request, "Sem permissão.")
+        return RedirectResponse("/empresa", status_code=303)
+
+    normalized_cnpj = _normalize_document(cnpj)
+    if len(_digits(normalized_cnpj)) != 14:
+        set_flash(request, "Informe um CNPJ válido com 14 dígitos.")
+        return RedirectResponse("/empresa/grupo", status_code=303)
+
+    relation_type = _coerce_choice(relation_type, GROUP_RELATION_OPTIONS) or "filial"
+    existing = session.exec(
+        select(ClientGroupCompany).where(
+            ClientGroupCompany.company_id == ctx.company.id,
+            ClientGroupCompany.client_id == current_client.id,
+            ClientGroupCompany.cnpj == normalized_cnpj,
+        )
+    ).first()
+    if existing:
+        existing.legal_name = _clean_text(legal_name, 160) or existing.legal_name
+        existing.relation_type = relation_type
+        existing.notes = _clean_text(notes, 500)
+        existing.is_active = True
+        existing.updated_at = utcnow()
+        session.add(existing)
+    else:
+        session.add(
+            ClientGroupCompany(
+                company_id=ctx.company.id,
+                client_id=current_client.id,
+                legal_name=_clean_text(legal_name, 160),
+                cnpj=normalized_cnpj,
+                relation_type=relation_type,
+                notes=_clean_text(notes, 500),
+                is_active=True,
+                created_at=utcnow(),
+                updated_at=utcnow(),
+            )
+        )
+    session.commit()
+    set_flash(request, "CNPJ relacionado salvo.")
+    return RedirectResponse("/empresa/grupo", status_code=303)
+
+
+@app.post("/empresa/grupo/{group_company_id}/remover")
+@require_login
+async def empresa_grupo_remove(
+    request: Request,
+    group_company_id: int,
+    session: Session = Depends(get_session),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+    row = session.get(ClientGroupCompany, int(group_company_id))
+    if not row or row.company_id != ctx.company.id:
+        set_flash(request, "Registro não encontrado.")
+        return RedirectResponse("/empresa/grupo", status_code=303)
+    if not ensure_can_access_client(ctx, row.client_id):
+        set_flash(request, "Sem permissão.")
+        return RedirectResponse("/empresa/grupo", status_code=303)
+    row.is_active = False
+    row.updated_at = utcnow()
+    session.add(row)
+    session.commit()
+    set_flash(request, "CNPJ removido da composição do grupo.")
+    return RedirectResponse("/empresa/grupo", status_code=303)
+
+
+@app.get("/notificacoes", response_class=HTMLResponse)
+@require_login
+async def notifications_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+
+    rows = session.exec(
+        select(AppNotification)
+        .where(
+            AppNotification.company_id == ctx.company.id,
+            AppNotification.user_id == ctx.user.id,
+        )
+        .order_by(AppNotification.created_at.desc())
+    ).all()
+
+    return render(
+        "notifications.html",
+        request=request,
+        context={
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "role": ctx.membership.role,
+            "current_client": get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx)),
+            "notifications": rows,
+        },
+    )
+
+
+@app.post("/notificacoes/marcar-todas")
+@require_login
+async def notifications_mark_all(request: Request, session: Session = Depends(get_session)) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+    rows = session.exec(
+        select(AppNotification).where(
+            AppNotification.company_id == ctx.company.id,
+            AppNotification.user_id == ctx.user.id,
+            AppNotification.is_read == False,
+        )
+    ).all()
+    now = utcnow()
+    for row in rows:
+        row.is_read = True
+        row.read_at = now
+        session.add(row)
+    session.commit()
+    set_flash(request, "Notificações marcadas como lidas.")
+    return RedirectResponse("/notificacoes", status_code=303)
+
+
+@app.post("/notificacoes/{notification_id}/ler")
+@require_login
+async def notifications_mark_one(request: Request, notification_id: int, session: Session = Depends(get_session)) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+    row = session.get(AppNotification, int(notification_id))
+    if row and row.company_id == ctx.company.id and row.user_id == ctx.user.id:
+        row.is_read = True
+        row.read_at = utcnow()
+        session.add(row)
+        session.commit()
+        if row.href:
+            return RedirectResponse(row.href, status_code=303)
+    return RedirectResponse("/notificacoes", status_code=303)
+
+
+@app.get("/admin/gestao/analytics", response_class=HTMLResponse)
+@require_role({"admin", "equipe"})
+async def admin_usage_analytics(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    activities = session.exec(
+        select(UserActivity)
+        .where(UserActivity.company_id == ctx.company.id)
+        .order_by(UserActivity.last_seen_at.desc())
+    ).all()
+
+    users_map = {u.id: u for u in session.exec(select(User)).all() if u.id}
+    clients_map = {c.id: c for c in session.exec(select(Client).where(Client.company_id == ctx.company.id)).all() if c.id}
+
+    online_limit = utcnow() - timedelta(minutes=5)
+    active_client_users = [a for a in activities if a.membership_role == "cliente" and a.last_login_at]
+    online_users = [a for a in activities if a.last_seen_at and a.last_seen_at >= online_limit]
+    page_views = sum(int(a.total_page_views or 0) for a in activities)
+    total_requests = sum(int(a.total_requests or 0) for a in activities)
+
+    rows: list[dict[str, Any]] = []
+    for a in activities:
+        user = users_map.get(a.user_id)
+        client = clients_map.get(a.client_id or 0)
+        rows.append(
+            {
+                "user_name": user.name if user else f"Usuário {a.user_id}",
+                "email": user.email if user else "",
+                "role": a.membership_role or "-",
+                "client_name": client.name if client else "",
+                "last_seen_at": a.last_seen_at,
+                "last_login_at": a.last_login_at,
+                "total_requests": int(a.total_requests or 0),
+                "total_page_views": int(a.total_page_views or 0),
+                "online_now": bool(a.last_seen_at and a.last_seen_at >= online_limit),
+                "last_path": a.last_path or "",
+            }
+        )
+
+    return render(
+        "admin_usage_analytics.html",
+        request=request,
+        context={
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "role": ctx.membership.role,
+            "current_client": get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx)),
+            "total_accessed_client_users": len(active_client_users),
+            "online_now_count": len(online_users),
+            "total_page_views": page_views,
+            "total_requests": total_requests,
+            "rows": rows,
+        },
+    )
+
+
+# --- Template overrides entrega 3 ---
+
+TEMPLATES["base.html"] = r"""
+<!doctype html>
+<html lang="pt-br">
+  <head>
+    <meta charset="utf-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1"/>
+    <title>{{ title or "App Escritório" }}</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
       body { background: #f6f7fb; }
       .card { border: 0; box-shadow: 0 6px 18px rgba(0,0,0,.06); border-radius: 16px; }
       .brand { font-weight: 700; letter-spacing: .3px; }
@@ -26576,77 +27879,13 @@ TEMPLATES["base.html"] = r"""
       .badge { border-radius: 999px; }
       .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;}
       pre { white-space: pre-wrap; margin: 0; }
-
-      .btn-primary{
-        background-color:#E07020 !important;
-        border-color:#E07020 !important;
-        color:#ffffff !important;
-        font-weight:600;
-      }
-      .btn-primary:hover{
-        background-color:#C85F1B !important;
-        border-color:#C85F1B !important;
-      }
-      .btn-outline-primary{
-        border-color:#E07020 !important;
-        color:#E07020 !important;
-      }
-      .btn-outline-primary:hover{
-        background-color:#E07020 !important;
-        border-color:#E07020 !important;
-        color:#ffffff !important;
-      }
-      .nav-pills .nav-link{
-        color:#E07020;
-        border-radius:999px;
-        border:1px solid rgba(224,112,32,.22);
-        background:#fff;
-        font-weight:600;
-      }
-      .nav-pills .nav-link:hover{
-        background:rgba(224,112,32,.08);
-        color:#C85F1B;
-      }
-      .nav-pills .nav-link.active,
-      .nav-pills .show > .nav-link{
-        background:#E07020 !important;
-        border-color:#E07020 !important;
-        color:#fff !important;
-      }
-
+      .btn-primary{ background-color:#E07020 !important; border-color:#E07020 !important; color:#ffffff !important; font-weight:600; }
+      .btn-primary:hover{ background-color:#C85F1B !important; border-color:#C85F1B !important; }
+      .btn-outline-primary{ border-color:#E07020 !important; color:#E07020 !important; }
+      .btn-outline-primary:hover{ background-color:#E07020 !important; border-color:#E07020 !important; color:#ffffff !important; }
+      a:hover{ color:#00BFBF; }
       .top-icon-btn{ position:relative; min-width:40px; }
       .notif-badge{ position:absolute; top:-6px; right:-6px; }
-
-      .mc-help{
-        display:inline-flex;
-        align-items:center;
-        justify-content:center;
-        width:18px;
-        height:18px;
-        border-radius:999px;
-        background:rgba(224,112,32,.12);
-        color:#E07020;
-        font-size:.72rem;
-        font-weight:700;
-        cursor:help;
-        line-height:1;
-      }
-      .mc-bar-track{
-        width:100%;
-        height:12px;
-        border-radius:999px;
-        background:#e8ebf0;
-        overflow:hidden;
-      }
-      .mc-bar-fill{
-        height:100%;
-        border-radius:999px;
-      }
-      .mc-bar-low{ background:linear-gradient(90deg, #c84b31 0%, #dc5f3a 100%); }
-      .mc-bar-mid{ background:linear-gradient(90deg, #E07020 0%, #f09a3e 100%); }
-      .mc-bar-high{ background:linear-gradient(90deg, #E07020 0%, #f6b34d 100%); }
-
-      a:hover{ color:#00BFBF; }
     </style>
   </head>
   <body>
@@ -26755,25 +27994,13 @@ TEMPLATES["base.html"] = r"""
           ).join('');
         }catch(e){}
       }
-
-      function mcInitTooltips(){
-        if (!window.bootstrap || !bootstrap.Tooltip) return;
-        document.querySelectorAll('[data-bs-toggle="tooltip"]').forEach((el) => {
-          try { new bootstrap.Tooltip(el); } catch(e){}
-        });
-      }
-
-      window.addEventListener("DOMContentLoaded", function(){
-        mcLoadBanner();
-        mcLoadNews();
-        mcInitTooltips();
-      });
+      mcLoadBanner();
+      mcLoadNews();
     </script>
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
   </body>
 </html>
 """
-
 
 TEMPLATES["empresa.html"] = TEMPLATES["empresa.html"].replace(
     '<a class="btn btn-outline-secondary" href="/perfil">Ir para diagnóstico</a>',
@@ -26968,428 +28195,6 @@ TEMPLATES["admin_usage_analytics.html"] = r"""
 </div>
 {% endblock %}
 """
-
-
-
-# --- Entrega 3 fix: analytics no menu Admin + estilos/tooltips preservados ---
-FEATURE_KEYS.update({
-    "analytics": {
-        "title": "Analytics e Rastreamento",
-        "desc": "Uso, acessos e atividade dos usuários.",
-        "href": "/admin/gestao/analytics",
-    },
-})
-FEATURE_VISIBLE_ROLES.setdefault("analytics", {"admin", "equipe"})
-ROLE_DEFAULT_FEATURES.setdefault("admin", set()).add("analytics")
-ROLE_DEFAULT_FEATURES.setdefault("equipe", set()).add("analytics")
-for _group in FEATURE_GROUPS:
-    if _group.get("key") == "admin":
-        feats = list(_group.get("features") or [])
-        if "analytics" not in feats:
-            feats.append("analytics")
-        _group["features"] = feats
-
-
-try:
-    templates_env.loader.mapping = TEMPLATES
-    templates_env.cache.clear()
-    templates_env.globals["unread_notifications_count"] = _unread_notifications_count
-    templates_env.globals["online_now_count"] = _online_now_count
-    templates_env.globals["client_group_companies_count"] = _client_group_companies_count
-except Exception:
-    pass
-
-
-# --- Entrega 3 hotfix: helpers, rotas e tracking ---
-def ensure_entrega3_tables() -> None:
-    try:
-        SQLModel.metadata.create_all(
-            engine,
-            tables=[ClientGroupCompany.__table__, UserActivity.__table__, AppNotification.__table__],
-            checkfirst=True,
-        )
-    except Exception:
-        pass
-
-
-def _unread_notifications_count(company_id: int, user_id: int) -> int:
-    if not company_id or not user_id:
-        return 0
-    try:
-        with Session(engine) as session:
-            stmt = select(func.count()).select_from(AppNotification).where(
-                AppNotification.company_id == int(company_id),
-                AppNotification.user_id == int(user_id),
-                AppNotification.is_read == False,  # noqa: E712
-            )
-            return int(session.exec(stmt).one() or 0)
-    except Exception:
-        return 0
-
-
-def _online_now_count(company_id: int) -> int:
-    if not company_id:
-        return 0
-    try:
-        cutoff = utcnow() - timedelta(minutes=5)
-        with Session(engine) as session:
-            stmt = select(func.count()).select_from(UserActivity).where(
-                UserActivity.company_id == int(company_id),
-                UserActivity.last_seen_at != None,  # noqa: E711
-                UserActivity.last_seen_at >= cutoff,
-            )
-            return int(session.exec(stmt).one() or 0)
-    except Exception:
-        return 0
-
-
-def _client_group_companies_count(company_id: int, client_id: int) -> int:
-    if not company_id or not client_id:
-        return 0
-    try:
-        with Session(engine) as session:
-            stmt = select(func.count()).select_from(ClientGroupCompany).where(
-                ClientGroupCompany.company_id == int(company_id),
-                ClientGroupCompany.client_id == int(client_id),
-                ClientGroupCompany.is_active == True,  # noqa: E712
-            )
-            return int(session.exec(stmt).one() or 0)
-    except Exception:
-        return 0
-
-
-@app.on_event("startup")
-async def _entrega3_startup_hotfix() -> None:
-    ensure_entrega3_tables()
-    try:
-        templates_env.globals["unread_notifications_count"] = _unread_notifications_count
-        templates_env.globals["online_now_count"] = _online_now_count
-        templates_env.globals["client_group_companies_count"] = _client_group_companies_count
-    except Exception:
-        pass
-
-
-@app.middleware("http")
-async def entrega3_activity_tracking_middleware(request: Request, call_next: Callable[..., Any]) -> Response:
-    response = await call_next(request)
-    path = request.url.path or "/"
-    if (
-        path.startswith("/static")
-        or path.startswith("/api/ui/")
-        or path.startswith("/health")
-        or path.startswith("/healthz")
-        or path.startswith("/favicon")
-    ):
-        return response
-    uid = session_user_id(request)
-    if not uid:
-        return response
-    try:
-        with Session(engine) as session:
-            ctx = get_tenant_context(request, session)
-            if not ctx:
-                return response
-            ensure_entrega3_tables()
-            row = session.exec(
-                select(UserActivity).where(
-                    UserActivity.company_id == ctx.company.id,
-                    UserActivity.user_id == ctx.user.id,
-                )
-            ).first()
-            if not row:
-                row = UserActivity(
-                    company_id=ctx.company.id,
-                    user_id=ctx.user.id,
-                    membership_role=ctx.membership.role,
-                    client_id=getattr(ctx.membership, "client_id", None),
-                )
-            row.membership_role = ctx.membership.role
-            row.client_id = getattr(ctx.membership, "client_id", None)
-            row.last_path = path[:300]
-            row.last_ip = (_request_ip(request) or "")[:64]
-            row.last_user_agent = (request.headers.get("user-agent") or "")[:255]
-            row.last_seen_at = utcnow()
-            row.updated_at = utcnow()
-            row.total_requests = int(row.total_requests or 0) + 1
-            if request.method.upper() == "GET" and "text/html" in (response.headers.get("content-type") or ""):
-                row.total_page_views = int(row.total_page_views or 0) + 1
-            session.add(row)
-            session.commit()
-    except Exception:
-        pass
-    return response
-
-
-def _entrega3_create_notification(
-    *,
-    company_id: int,
-    user_id: int,
-    client_id: Optional[int],
-    kind: str,
-    title: str,
-    message: str = "",
-    href: str = "",
-) -> None:
-    try:
-        with Session(engine) as session:
-            ensure_entrega3_tables()
-            session.add(
-                AppNotification(
-                    company_id=company_id,
-                    user_id=user_id,
-                    client_id=client_id,
-                    kind=kind[:40],
-                    title=(title or "")[:160],
-                    message=(message or "")[:1000],
-                    href=(href or "")[:500],
-                )
-            )
-            session.commit()
-    except Exception:
-        pass
-
-
-@app.get("/notificacoes", response_class=HTMLResponse)
-@require_login
-async def notifications_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
-    ensure_entrega3_tables()
-    ctx = get_tenant_context(request, session)
-    if not ctx:
-        request.session.clear()
-        return RedirectResponse("/login", status_code=303)
-    rows = session.exec(
-        select(AppNotification)
-        .where(
-            AppNotification.company_id == ctx.company.id,
-            AppNotification.user_id == ctx.user.id,
-        )
-        .order_by(AppNotification.is_read.asc(), AppNotification.created_at.desc())
-    ).all()
-    return render(
-        "notifications.html",
-        request=request,
-        context={
-            "current_user": ctx.user,
-            "current_company": ctx.company,
-            "role": ctx.membership.role,
-            "current_client": get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx)),
-            "notifications": rows,
-            "unread_notifications_count": _unread_notifications_count,
-        },
-    )
-
-
-@app.post("/notificacoes/marcar-todas")
-@require_login
-async def notifications_mark_all(request: Request, session: Session = Depends(get_session)) -> Response:
-    ensure_entrega3_tables()
-    ctx = get_tenant_context(request, session)
-    if not ctx:
-        request.session.clear()
-        return RedirectResponse("/login", status_code=303)
-    rows = session.exec(
-        select(AppNotification).where(
-            AppNotification.company_id == ctx.company.id,
-            AppNotification.user_id == ctx.user.id,
-            AppNotification.is_read == False,  # noqa: E712
-        )
-    ).all()
-    now = utcnow()
-    for row in rows:
-        row.is_read = True
-        row.read_at = now
-        session.add(row)
-    session.commit()
-    request.session["flash"] = "Notificações marcadas como lidas."
-    return RedirectResponse("/notificacoes", status_code=303)
-
-
-@app.post("/notificacoes/{notification_id}/ler")
-@require_login
-async def notifications_mark_one(notification_id: int, request: Request, session: Session = Depends(get_session)) -> Response:
-    ensure_entrega3_tables()
-    ctx = get_tenant_context(request, session)
-    if not ctx:
-        request.session.clear()
-        return RedirectResponse("/login", status_code=303)
-    row = session.get(AppNotification, notification_id)
-    if not row or row.company_id != ctx.company.id or row.user_id != ctx.user.id:
-        raise HTTPException(status_code=404, detail="Notificação não encontrada.")
-    if not row.is_read:
-        row.is_read = True
-        row.read_at = utcnow()
-        session.add(row)
-        session.commit()
-    return RedirectResponse(row.href or "/notificacoes", status_code=303)
-
-
-GROUP_RELATION_OPTIONS = ["matriz", "filial", "empresa_grupo", "outro"]
-
-
-@app.get("/empresa/grupo", response_class=HTMLResponse)
-@require_login
-async def empresa_grupo_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
-    ensure_entrega3_tables()
-    ctx = get_tenant_context(request, session)
-    if not ctx:
-        request.session.clear()
-        return RedirectResponse("/login", status_code=303)
-    current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
-    if not current_client:
-        request.session["flash"] = "Selecione um cliente para gerenciar os CNPJs do grupo."
-        return RedirectResponse("/client/switch", status_code=303)
-    rows = session.exec(
-        select(ClientGroupCompany).where(
-            ClientGroupCompany.company_id == ctx.company.id,
-            ClientGroupCompany.client_id == current_client.id,
-            ClientGroupCompany.is_active == True,  # noqa: E712
-        ).order_by(ClientGroupCompany.created_at.desc())
-    ).all()
-    return render(
-        "empresa_grupo.html",
-        request=request,
-        context={
-            "current_user": ctx.user,
-            "current_company": ctx.company,
-            "role": ctx.membership.role,
-            "current_client": current_client,
-            "companies": rows,
-            "group_relation_options": GROUP_RELATION_OPTIONS,
-            "unread_notifications_count": _unread_notifications_count,
-        },
-    )
-
-
-@app.post("/empresa/grupo")
-@require_login
-async def empresa_grupo_create(
-    request: Request,
-    legal_name: str = Form(""),
-    cnpj: str = Form(""),
-    relation_type: str = Form("filial"),
-    notes: str = Form(""),
-    session: Session = Depends(get_session),
-) -> Response:
-    ensure_entrega3_tables()
-    ctx = get_tenant_context(request, session)
-    if not ctx:
-        request.session.clear()
-        return RedirectResponse("/login", status_code=303)
-    current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
-    if not current_client:
-        request.session["flash"] = "Selecione um cliente para gerenciar os CNPJs do grupo."
-        return RedirectResponse("/client/switch", status_code=303)
-    raw_cnpj = re.sub(r"\D+", "", cnpj or "")
-    if len(raw_cnpj) != 14:
-        request.session["flash"] = "Informe um CNPJ válido com 14 dígitos."
-        return RedirectResponse("/empresa/grupo", status_code=303)
-    if relation_type not in GROUP_RELATION_OPTIONS:
-        relation_type = "outro"
-    row = session.exec(
-        select(ClientGroupCompany).where(
-            ClientGroupCompany.company_id == ctx.company.id,
-            ClientGroupCompany.client_id == current_client.id,
-            ClientGroupCompany.cnpj == raw_cnpj,
-        )
-    ).first()
-    if not row:
-        row = ClientGroupCompany(company_id=ctx.company.id, client_id=current_client.id, cnpj=raw_cnpj)
-    row.legal_name = (legal_name or "").strip()[:160]
-    row.relation_type = relation_type
-    row.notes = (notes or "").strip()[:500]
-    row.is_active = True
-    row.updated_at = utcnow()
-    session.add(row)
-    session.commit()
-    request.session["flash"] = "CNPJ do grupo salvo."
-    return RedirectResponse("/empresa/grupo", status_code=303)
-
-
-@app.post("/empresa/grupo/{item_id}/remover")
-@require_login
-async def empresa_grupo_remove(item_id: int, request: Request, session: Session = Depends(get_session)) -> Response:
-    ensure_entrega3_tables()
-    ctx = get_tenant_context(request, session)
-    if not ctx:
-        request.session.clear()
-        return RedirectResponse("/login", status_code=303)
-    row = session.get(ClientGroupCompany, item_id)
-    if not row or row.company_id != ctx.company.id:
-        raise HTTPException(status_code=404, detail="Registro não encontrado.")
-    row.is_active = False
-    row.updated_at = utcnow()
-    session.add(row)
-    session.commit()
-    request.session["flash"] = "CNPJ relacionado removido."
-    return RedirectResponse("/empresa/grupo", status_code=303)
-
-
-@app.get("/admin/gestao/analytics", response_class=HTMLResponse)
-@require_login
-@require_role({"admin", "equipe"})
-async def admin_usage_analytics_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
-    ensure_entrega3_tables()
-    ctx = get_tenant_context(request, session)
-    if not ctx:
-        request.session.clear()
-        return RedirectResponse("/login", status_code=303)
-
-    activities = session.exec(
-        select(UserActivity, User, Membership, Client)
-        .join(User, User.id == UserActivity.user_id)
-        .join(Membership, (Membership.user_id == UserActivity.user_id) & (Membership.company_id == UserActivity.company_id))
-        .outerjoin(Client, Client.id == UserActivity.client_id)
-        .where(UserActivity.company_id == ctx.company.id)
-        .order_by(UserActivity.last_seen_at.desc())
-    ).all()
-
-    cutoff = utcnow() - timedelta(minutes=5)
-    online_now_count = 0
-    total_requests = 0
-    total_page_views = 0
-    total_accessed_client_users = 0
-    rows = []
-
-    seen_client_users = set()
-    for activity, user, membership, client in activities:
-        total_requests += int(activity.total_requests or 0)
-        total_page_views += int(activity.total_page_views or 0)
-        online_now = bool(activity.last_seen_at and activity.last_seen_at >= cutoff)
-        if online_now:
-            online_now_count += 1
-        if membership.role == "cliente":
-            seen_client_users.add(user.id)
-        rows.append({
-            "user_name": user.name,
-            "email": user.email,
-            "role": membership.role,
-            "client_name": client.name if client else "",
-            "online_now": online_now,
-            "last_seen_at": activity.last_seen_at,
-            "last_login_at": activity.last_login_at,
-            "total_page_views": int(activity.total_page_views or 0),
-            "total_requests": int(activity.total_requests or 0),
-            "last_path": activity.last_path or "",
-        })
-    total_accessed_client_users = len(seen_client_users)
-
-    return render(
-        "admin_usage_analytics.html",
-        request=request,
-        context={
-            "current_user": ctx.user,
-            "current_company": ctx.company,
-            "role": ctx.membership.role,
-            "current_client": get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx)),
-            "rows": rows,
-            "online_now_count": online_now_count,
-            "total_requests": total_requests,
-            "total_page_views": total_page_views,
-            "total_accessed_client_users": total_accessed_client_users,
-            "unread_notifications_count": _unread_notifications_count,
-        },
-    )
-
 
 try:
     templates_env.loader.mapping = TEMPLATES
