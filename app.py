@@ -2574,6 +2574,10 @@ def init_db() -> None:
     # Em produção (Postgres), quem cria/alterar tabelas é o Alembic.
     # Porém, para features novas sem migration (ex.: UI banner/notícias), garantimos as tabelas.
     ensure_ui_tables()
+    try:
+        ensure_entrega3_tables()
+    except Exception:
+        pass
     # Em dev local (SQLite), criamos automaticamente tudo.
     if engine.url.get_backend_name().startswith("sqlite"):
         SQLModel.metadata.create_all(engine)
@@ -10681,6 +10685,9 @@ def render(
     ctx.setdefault("allow_company_signup", ALLOW_COMPANY_SIGNUP)
     ctx.setdefault("service_catalog", SERVICE_CATALOG)
     ctx.setdefault("bookings_url", BOOKINGS_URL)
+    ctx.setdefault("unread_notifications_count", _unread_notifications_count if "_unread_notifications_count" in globals() else (lambda *_a, **_k: 0))
+    ctx.setdefault("online_now_count", 0)
+    ctx.setdefault("client_group_companies_count", _client_group_companies_count if "_client_group_companies_count" in globals() else (lambda *_a, **_k: 0))
 
     # Inject tenant context defaults for templates that expect them.
     try:
@@ -26981,6 +26988,407 @@ for _group in FEATURE_GROUPS:
         if "analytics" not in feats:
             feats.append("analytics")
         _group["features"] = feats
+
+
+try:
+    templates_env.loader.mapping = TEMPLATES
+    templates_env.cache.clear()
+    templates_env.globals["unread_notifications_count"] = _unread_notifications_count
+    templates_env.globals["online_now_count"] = _online_now_count
+    templates_env.globals["client_group_companies_count"] = _client_group_companies_count
+except Exception:
+    pass
+
+
+# --- Entrega 3 hotfix: helpers, rotas e tracking ---
+def ensure_entrega3_tables() -> None:
+    try:
+        SQLModel.metadata.create_all(
+            engine,
+            tables=[ClientGroupCompany.__table__, UserActivity.__table__, AppNotification.__table__],
+            checkfirst=True,
+        )
+    except Exception:
+        pass
+
+
+def _unread_notifications_count(company_id: int, user_id: int) -> int:
+    if not company_id or not user_id:
+        return 0
+    try:
+        with Session(engine) as session:
+            stmt = select(func.count()).select_from(AppNotification).where(
+                AppNotification.company_id == int(company_id),
+                AppNotification.user_id == int(user_id),
+                AppNotification.is_read == False,  # noqa: E712
+            )
+            return int(session.exec(stmt).one() or 0)
+    except Exception:
+        return 0
+
+
+def _online_now_count(company_id: int) -> int:
+    if not company_id:
+        return 0
+    try:
+        cutoff = utcnow() - timedelta(minutes=5)
+        with Session(engine) as session:
+            stmt = select(func.count()).select_from(UserActivity).where(
+                UserActivity.company_id == int(company_id),
+                UserActivity.last_seen_at != None,  # noqa: E711
+                UserActivity.last_seen_at >= cutoff,
+            )
+            return int(session.exec(stmt).one() or 0)
+    except Exception:
+        return 0
+
+
+def _client_group_companies_count(company_id: int, client_id: int) -> int:
+    if not company_id or not client_id:
+        return 0
+    try:
+        with Session(engine) as session:
+            stmt = select(func.count()).select_from(ClientGroupCompany).where(
+                ClientGroupCompany.company_id == int(company_id),
+                ClientGroupCompany.client_id == int(client_id),
+                ClientGroupCompany.is_active == True,  # noqa: E712
+            )
+            return int(session.exec(stmt).one() or 0)
+    except Exception:
+        return 0
+
+
+@app.on_event("startup")
+async def _entrega3_startup_hotfix() -> None:
+    ensure_entrega3_tables()
+    try:
+        templates_env.globals["unread_notifications_count"] = _unread_notifications_count
+        templates_env.globals["online_now_count"] = _online_now_count
+        templates_env.globals["client_group_companies_count"] = _client_group_companies_count
+    except Exception:
+        pass
+
+
+@app.middleware("http")
+async def entrega3_activity_tracking_middleware(request: Request, call_next: Callable[..., Any]) -> Response:
+    response = await call_next(request)
+    path = request.url.path or "/"
+    if (
+        path.startswith("/static")
+        or path.startswith("/api/ui/")
+        or path.startswith("/health")
+        or path.startswith("/healthz")
+        or path.startswith("/favicon")
+    ):
+        return response
+    uid = session_user_id(request)
+    if not uid:
+        return response
+    try:
+        with Session(engine) as session:
+            ctx = get_tenant_context(request, session)
+            if not ctx:
+                return response
+            ensure_entrega3_tables()
+            row = session.exec(
+                select(UserActivity).where(
+                    UserActivity.company_id == ctx.company.id,
+                    UserActivity.user_id == ctx.user.id,
+                )
+            ).first()
+            if not row:
+                row = UserActivity(
+                    company_id=ctx.company.id,
+                    user_id=ctx.user.id,
+                    membership_role=ctx.membership.role,
+                    client_id=getattr(ctx.membership, "client_id", None),
+                )
+            row.membership_role = ctx.membership.role
+            row.client_id = getattr(ctx.membership, "client_id", None)
+            row.last_path = path[:300]
+            row.last_ip = (_request_ip(request) or "")[:64]
+            row.last_user_agent = (request.headers.get("user-agent") or "")[:255]
+            row.last_seen_at = utcnow()
+            row.updated_at = utcnow()
+            row.total_requests = int(row.total_requests or 0) + 1
+            if request.method.upper() == "GET" and "text/html" in (response.headers.get("content-type") or ""):
+                row.total_page_views = int(row.total_page_views or 0) + 1
+            session.add(row)
+            session.commit()
+    except Exception:
+        pass
+    return response
+
+
+def _entrega3_create_notification(
+    *,
+    company_id: int,
+    user_id: int,
+    client_id: Optional[int],
+    kind: str,
+    title: str,
+    message: str = "",
+    href: str = "",
+) -> None:
+    try:
+        with Session(engine) as session:
+            ensure_entrega3_tables()
+            session.add(
+                AppNotification(
+                    company_id=company_id,
+                    user_id=user_id,
+                    client_id=client_id,
+                    kind=kind[:40],
+                    title=(title or "")[:160],
+                    message=(message or "")[:1000],
+                    href=(href or "")[:500],
+                )
+            )
+            session.commit()
+    except Exception:
+        pass
+
+
+@app.get("/notificacoes", response_class=HTMLResponse)
+@require_login
+async def notifications_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
+    ensure_entrega3_tables()
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+    rows = session.exec(
+        select(AppNotification)
+        .where(
+            AppNotification.company_id == ctx.company.id,
+            AppNotification.user_id == ctx.user.id,
+        )
+        .order_by(AppNotification.is_read.asc(), AppNotification.created_at.desc())
+    ).all()
+    return render(
+        "notifications.html",
+        request=request,
+        context={
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "role": ctx.membership.role,
+            "current_client": get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx)),
+            "notifications": rows,
+            "unread_notifications_count": _unread_notifications_count,
+        },
+    )
+
+
+@app.post("/notificacoes/marcar-todas")
+@require_login
+async def notifications_mark_all(request: Request, session: Session = Depends(get_session)) -> Response:
+    ensure_entrega3_tables()
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+    rows = session.exec(
+        select(AppNotification).where(
+            AppNotification.company_id == ctx.company.id,
+            AppNotification.user_id == ctx.user.id,
+            AppNotification.is_read == False,  # noqa: E712
+        )
+    ).all()
+    now = utcnow()
+    for row in rows:
+        row.is_read = True
+        row.read_at = now
+        session.add(row)
+    session.commit()
+    request.session["flash"] = "Notificações marcadas como lidas."
+    return RedirectResponse("/notificacoes", status_code=303)
+
+
+@app.post("/notificacoes/{notification_id}/ler")
+@require_login
+async def notifications_mark_one(notification_id: int, request: Request, session: Session = Depends(get_session)) -> Response:
+    ensure_entrega3_tables()
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+    row = session.get(AppNotification, notification_id)
+    if not row or row.company_id != ctx.company.id or row.user_id != ctx.user.id:
+        raise HTTPException(status_code=404, detail="Notificação não encontrada.")
+    if not row.is_read:
+        row.is_read = True
+        row.read_at = utcnow()
+        session.add(row)
+        session.commit()
+    return RedirectResponse(row.href or "/notificacoes", status_code=303)
+
+
+GROUP_RELATION_OPTIONS = ["matriz", "filial", "empresa_grupo", "outro"]
+
+
+@app.get("/empresa/grupo", response_class=HTMLResponse)
+@require_login
+async def empresa_grupo_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
+    ensure_entrega3_tables()
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+    current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
+    if not current_client:
+        request.session["flash"] = "Selecione um cliente para gerenciar os CNPJs do grupo."
+        return RedirectResponse("/client/switch", status_code=303)
+    rows = session.exec(
+        select(ClientGroupCompany).where(
+            ClientGroupCompany.company_id == ctx.company.id,
+            ClientGroupCompany.client_id == current_client.id,
+            ClientGroupCompany.is_active == True,  # noqa: E712
+        ).order_by(ClientGroupCompany.created_at.desc())
+    ).all()
+    return render(
+        "empresa_grupo.html",
+        request=request,
+        context={
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "role": ctx.membership.role,
+            "current_client": current_client,
+            "companies": rows,
+            "group_relation_options": GROUP_RELATION_OPTIONS,
+            "unread_notifications_count": _unread_notifications_count,
+        },
+    )
+
+
+@app.post("/empresa/grupo")
+@require_login
+async def empresa_grupo_create(
+    request: Request,
+    legal_name: str = Form(""),
+    cnpj: str = Form(""),
+    relation_type: str = Form("filial"),
+    notes: str = Form(""),
+    session: Session = Depends(get_session),
+) -> Response:
+    ensure_entrega3_tables()
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+    current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
+    if not current_client:
+        request.session["flash"] = "Selecione um cliente para gerenciar os CNPJs do grupo."
+        return RedirectResponse("/client/switch", status_code=303)
+    raw_cnpj = re.sub(r"\D+", "", cnpj or "")
+    if len(raw_cnpj) != 14:
+        request.session["flash"] = "Informe um CNPJ válido com 14 dígitos."
+        return RedirectResponse("/empresa/grupo", status_code=303)
+    if relation_type not in GROUP_RELATION_OPTIONS:
+        relation_type = "outro"
+    row = session.exec(
+        select(ClientGroupCompany).where(
+            ClientGroupCompany.company_id == ctx.company.id,
+            ClientGroupCompany.client_id == current_client.id,
+            ClientGroupCompany.cnpj == raw_cnpj,
+        )
+    ).first()
+    if not row:
+        row = ClientGroupCompany(company_id=ctx.company.id, client_id=current_client.id, cnpj=raw_cnpj)
+    row.legal_name = (legal_name or "").strip()[:160]
+    row.relation_type = relation_type
+    row.notes = (notes or "").strip()[:500]
+    row.is_active = True
+    row.updated_at = utcnow()
+    session.add(row)
+    session.commit()
+    request.session["flash"] = "CNPJ do grupo salvo."
+    return RedirectResponse("/empresa/grupo", status_code=303)
+
+
+@app.post("/empresa/grupo/{item_id}/remover")
+@require_login
+async def empresa_grupo_remove(item_id: int, request: Request, session: Session = Depends(get_session)) -> Response:
+    ensure_entrega3_tables()
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+    row = session.get(ClientGroupCompany, item_id)
+    if not row or row.company_id != ctx.company.id:
+        raise HTTPException(status_code=404, detail="Registro não encontrado.")
+    row.is_active = False
+    row.updated_at = utcnow()
+    session.add(row)
+    session.commit()
+    request.session["flash"] = "CNPJ relacionado removido."
+    return RedirectResponse("/empresa/grupo", status_code=303)
+
+
+@app.get("/admin/gestao/analytics", response_class=HTMLResponse)
+@require_login
+@require_role({"admin", "equipe"})
+async def admin_usage_analytics_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
+    ensure_entrega3_tables()
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+
+    activities = session.exec(
+        select(UserActivity, User, Membership, Client)
+        .join(User, User.id == UserActivity.user_id)
+        .join(Membership, (Membership.user_id == UserActivity.user_id) & (Membership.company_id == UserActivity.company_id))
+        .outerjoin(Client, Client.id == UserActivity.client_id)
+        .where(UserActivity.company_id == ctx.company.id)
+        .order_by(UserActivity.last_seen_at.desc())
+    ).all()
+
+    cutoff = utcnow() - timedelta(minutes=5)
+    online_now_count = 0
+    total_requests = 0
+    total_page_views = 0
+    total_accessed_client_users = 0
+    rows = []
+
+    seen_client_users = set()
+    for activity, user, membership, client in activities:
+        total_requests += int(activity.total_requests or 0)
+        total_page_views += int(activity.total_page_views or 0)
+        online_now = bool(activity.last_seen_at and activity.last_seen_at >= cutoff)
+        if online_now:
+            online_now_count += 1
+        if membership.role == "cliente":
+            seen_client_users.add(user.id)
+        rows.append({
+            "user_name": user.name,
+            "email": user.email,
+            "role": membership.role,
+            "client_name": client.name if client else "",
+            "online_now": online_now,
+            "last_seen_at": activity.last_seen_at,
+            "last_login_at": activity.last_login_at,
+            "total_page_views": int(activity.total_page_views or 0),
+            "total_requests": int(activity.total_requests or 0),
+            "last_path": activity.last_path or "",
+        })
+    total_accessed_client_users = len(seen_client_users)
+
+    return render(
+        "admin_usage_analytics.html",
+        request=request,
+        context={
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "role": ctx.membership.role,
+            "current_client": get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx)),
+            "rows": rows,
+            "online_now_count": online_now_count,
+            "total_requests": total_requests,
+            "total_page_views": total_page_views,
+            "total_accessed_client_users": total_accessed_client_users,
+            "unread_notifications_count": _unread_notifications_count,
+        },
+    )
 
 
 try:
