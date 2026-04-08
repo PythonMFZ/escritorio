@@ -33265,6 +33265,7 @@ TEMPLATES["ferramentas.html"] = r"""
 {% endblock %}
 """
 
+
 TEMPLATES["ferramentas_financeiro.html"] = r"""
 {% extends "base.html" %}
 {% block content %}
@@ -33272,7 +33273,7 @@ TEMPLATES["ferramentas_financeiro.html"] = r"""
   <div class="d-flex justify-content-between align-items-start flex-wrap gap-3">
     <div>
       <h4 class="mb-1">Financeiro Gerencial</h4>
-      <div class="muted">Entrega 1: ativação comercial, trial e cobrança em créditos já ligados ao cliente.</div>
+      <div class="muted">Contas a pagar e receber da empresa do cliente, com isolamento por cliente e cobrança via créditos.</div>
     </div>
     <span class="badge {% if finance_tool.access_ok %}text-bg-success{% elif finance_tool.trial_active %}text-bg-warning{% else %}text-bg-secondary{% endif %}">
       {{ finance_tool.status_label }}
@@ -33283,69 +33284,121 @@ TEMPLATES["ferramentas_financeiro.html"] = r"""
 {% if not current_client %}
   <div class="alert alert-warning">Selecione um cliente para acessar a ferramenta.</div>
 {% else %}
-  <div class="row g-3">
-    <div class="col-lg-8">
-      <div class="card p-4">
-        <div class="row g-3">
-          <div class="col-md-4">
-            <div class="border rounded p-3 h-100">
-              <div class="muted small">Saldo atual</div>
-              <div class="fw-semibold">{{ finance_tool.wallet_balance_credits|brnum(2) }} créditos</div>
-            </div>
-          </div>
-          <div class="col-md-4">
-            <div class="border rounded p-3 h-100">
-              <div class="muted small">Mensalidade</div>
-              <div class="fw-semibold">{{ finance_tool.monthly_price_credits }} créditos</div>
-            </div>
-          </div>
-          <div class="col-md-4">
-            <div class="border rounded p-3 h-100">
-              <div class="muted small">Próxima cobrança</div>
-              <div class="fw-semibold">
-                {% if finance_tool.next_billing_at %}
-                  {{ finance_tool.next_billing_at.strftime("%d/%m/%Y") }}
-                {% else %}
-                  —
-                {% endif %}
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <div class="alert {% if finance_tool.access_ok %}alert-success{% else %}alert-warning{% endif %} mt-3">
-          {{ finance_tool.message }}
-        </div>
-
-        {% if finance_tool.access_ok %}
-          <div class="card bg-light border-0 p-3">
-            <div class="fw-semibold mb-2">Próximas entregas desta ferramenta</div>
-            <ul class="mb-0 small">
-              <li>cadastros próprios do cliente</li>
-              <li>contas a pagar e receber</li>
-              <li>DRE gerencial</li>
-              <li>fluxo de caixa</li>
-            </ul>
-          </div>
-        {% else %}
-          <div class="d-flex gap-2 flex-wrap">
-            <a class="btn btn-primary" href="/creditos">Recarregar créditos</a>
-            <a class="btn btn-outline-primary" href="/ferramentas">Voltar para Ferramentas</a>
-          </div>
-        {% endif %}
+  <div class="row g-3 mb-3">
+    <div class="col-md-3">
+      <div class="card p-3 h-100">
+        <div class="muted small">Saldo de créditos</div>
+        <div class="fw-semibold">{{ finance_tool.wallet_balance_credits|brnum(2) }} créditos</div>
       </div>
     </div>
-
-    <div class="col-lg-4">
-      <div class="card p-4 h-100">
-        <h6 class="mb-3">Cliente</h6>
-        <div class="fw-semibold">{{ current_client.name }}</div>
-        {% if current_client.email %}<div class="small muted">{{ current_client.email }}</div>{% endif %}
-        <hr>
-        <div class="small muted">Ferramenta vinculada ao cliente ativo e isolada por empresa/cliente.</div>
+    <div class="col-md-3">
+      <div class="card p-3 h-100">
+        <div class="muted small">Mensalidade</div>
+        <div class="fw-semibold">{{ finance_tool.monthly_price_credits }} créditos/mês</div>
+      </div>
+    </div>
+    <div class="col-md-3">
+      <div class="card p-3 h-100">
+        <div class="muted small">Receber em aberto</div>
+        <div class="fw-semibold">{{ finance_summary.open_receivable|brl }}</div>
+      </div>
+    </div>
+    <div class="col-md-3">
+      <div class="card p-3 h-100">
+        <div class="muted small">Pagar em aberto</div>
+        <div class="fw-semibold">{{ finance_summary.open_payable|brl }}</div>
       </div>
     </div>
   </div>
+
+  <div class="alert {% if finance_tool.access_ok %}alert-success{% else %}alert-warning{% endif %} mb-3">
+    {{ finance_tool.message }}
+  </div>
+
+  {% if finance_tool.access_ok %}
+    <div class="d-flex gap-2 flex-wrap mb-3">
+      <a class="btn btn-primary" href="/ferramentas/financeiro/novo">Novo lançamento</a>
+      <a class="btn btn-outline-primary" href="/ferramentas/financeiro/lancamentos">Ver lançamentos</a>
+      <a class="btn btn-outline-secondary" href="/ferramentas/financeiro/cadastros">Cadastros</a>
+      <a class="btn btn-outline-secondary" href="/creditos">Créditos</a>
+    </div>
+
+    <div class="row g-3 mb-3">
+      <div class="col-md-4">
+        <div class="card p-3 h-100">
+          <div class="muted small">Saldo projetado 30 dias</div>
+          <div class="fw-semibold">{{ finance_summary.projected_30d|brl }}</div>
+        </div>
+      </div>
+      <div class="col-md-4">
+        <div class="card p-3 h-100">
+          <div class="muted small">Lançamentos em atraso</div>
+          <div class="fw-semibold">{{ finance_summary.overdue_count }}</div>
+        </div>
+      </div>
+      <div class="col-md-4">
+        <div class="card p-3 h-100">
+          <div class="muted small">Último movimento</div>
+          <div class="fw-semibold">
+            {% if recent_entries %}
+              {{ recent_entries[0].due_date or "—" }}
+            {% else %}
+              —
+            {% endif %}
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card p-4">
+      <div class="d-flex justify-content-between align-items-start gap-2 flex-wrap">
+        <div>
+          <h5 class="mb-1">Últimos lançamentos</h5>
+          <div class="muted">Acompanhe rapidamente o movimento financeiro mais recente.</div>
+        </div>
+        <a class="btn btn-sm btn-outline-primary" href="/ferramentas/financeiro/lancamentos">Abrir lista completa</a>
+      </div>
+
+      {% if recent_entries %}
+        <div class="table-responsive mt-3">
+          <table class="table table-sm align-middle">
+            <thead>
+              <tr>
+                <th>Tipo</th>
+                <th>Descrição</th>
+                <th>Vencimento</th>
+                <th>Status</th>
+                <th class="text-end">Valor</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for row in recent_entries %}
+                <tr>
+                  <td><span class="badge {% if row.entry_kind == 'receber' %}text-bg-success{% else %}text-bg-danger{% endif %}">{{ row.entry_kind }}</span></td>
+                  <td>
+                    <div class="fw-semibold">{{ row.description }}</div>
+                    <div class="small muted">{{ row.category_name or row.supplier_name or "Sem classificação" }}</div>
+                  </td>
+                  <td>{{ row.due_date or "—" }}</td>
+                  <td>{{ row.status }}</td>
+                  <td class="text-end">{{ row.amount_expected_brl|brl }}</td>
+                  <td class="text-end"><a class="btn btn-sm btn-outline-secondary" href="/ferramentas/financeiro/{{ row.id }}/editar">Editar</a></td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      {% else %}
+        <div class="muted mt-3">Ainda não há lançamentos cadastrados.</div>
+      {% endif %}
+    </div>
+  {% else %}
+    <div class="d-flex gap-2 flex-wrap">
+      <a class="btn btn-primary" href="/creditos">Recarregar créditos</a>
+      <a class="btn btn-outline-primary" href="/ferramentas">Voltar para Ferramentas</a>
+    </div>
+  {% endif %}
 {% endif %}
 {% endblock %}
 """
@@ -33403,6 +33456,20 @@ async def ferramentas_financeiro_page(request: Request, session: Session = Depen
         tool_code=CLIENT_TOOL_FINANCE_CODE,
     )
 
+    finance_summary = {
+        "open_receivable": 0.0,
+        "open_payable": 0.0,
+        "projected_30d": 0.0,
+        "overdue_count": 0,
+    }
+    recent_entries: list[dict[str, Any]] = []
+
+    if finance_tool.get("access_ok"):
+        ensure_client_finance_tables()
+        seed_client_finance_defaults(session, company_id=ctx.company.id, client_id=current_client.id)
+        finance_summary = _client_finance_summary(session, company_id=ctx.company.id, client_id=current_client.id)
+        recent_entries = _client_finance_recent_entries(session, company_id=ctx.company.id, client_id=current_client.id, limit=8)
+
     return render(
         "ferramentas_financeiro.html",
         request=request,
@@ -33413,5 +33480,1228 @@ async def ferramentas_financeiro_page(request: Request, session: Session = Depen
             "role": ctx.membership.role,
             "current_client": current_client,
             "finance_tool": finance_tool,
+            "finance_summary": finance_summary,
+            "recent_entries": recent_entries,
         },
     )
+
+
+
+# ----------------------------
+# Ferramentas para Cliente - Entrega 2
+# ----------------------------
+
+CLIENT_FINANCE_ENTRY_KINDS = {"pagar", "receber"}
+CLIENT_FINANCE_ENTRY_STATUSES = ["previsto", "aberto", "parcial", "pago", "recebido", "cancelado"]
+CLIENT_FINANCE_CATEGORY_KINDS = {"receita", "despesa"}
+
+CLIENT_FINANCE_DEFAULT_COST_CENTERS = [
+    ("ADM", "Administrativo"),
+    ("COM", "Comercial"),
+    ("OPE", "Operacional"),
+    ("FIN", "Financeiro"),
+]
+
+CLIENT_FINANCE_DEFAULT_CATEGORIES = [
+    {"name": "Vendas de Produtos", "category_kind": "receita", "dre_group": "Receita Bruta"},
+    {"name": "Prestação de Serviços", "category_kind": "receita", "dre_group": "Receita Bruta"},
+    {"name": "Receitas Recorrentes", "category_kind": "receita", "dre_group": "Receita Bruta"},
+    {"name": "Outras Receitas", "category_kind": "receita", "dre_group": "Outras Receitas"},
+    {"name": "Fornecedores", "category_kind": "despesa", "dre_group": "Custos e Despesas"},
+    {"name": "Folha", "category_kind": "despesa", "dre_group": "Custos e Despesas"},
+    {"name": "Marketing", "category_kind": "despesa", "dre_group": "Custos e Despesas"},
+    {"name": "Impostos", "category_kind": "despesa", "dre_group": "Custos e Despesas"},
+    {"name": "Tecnologia", "category_kind": "despesa", "dre_group": "Custos e Despesas"},
+]
+
+CLIENT_FINANCE_DEFAULT_REVENUE_TYPES = [
+    ("Venda de produto", "Receita operacional com venda de produto."),
+    ("Prestação de serviço", "Receita operacional com serviço."),
+    ("Receita recorrente", "Receita mensal recorrente."),
+    ("Outras receitas", "Outras entradas."),
+]
+
+
+class ClientFinanceSupplier(SQLModel, table=True):
+    __table_args__ = (UniqueConstraint("company_id", "client_id", "name", name="uq_clientfin_supplier_company_client_name"),)
+    id: Optional[int] = Field(default=None, primary_key=True)
+    company_id: int = Field(index=True, foreign_key="company.id")
+    client_id: int = Field(index=True, foreign_key="client.id")
+    name: str
+    document: str = ""
+    email: str = ""
+    phone: str = ""
+    notes: str = ""
+    is_active: bool = Field(default=True, index=True)
+    created_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime = Field(default_factory=utcnow)
+
+
+class ClientFinanceCostCenter(SQLModel, table=True):
+    __table_args__ = (UniqueConstraint("company_id", "client_id", "code", name="uq_clientfin_cc_company_client_code"),)
+    id: Optional[int] = Field(default=None, primary_key=True)
+    company_id: int = Field(index=True, foreign_key="company.id")
+    client_id: int = Field(index=True, foreign_key="client.id")
+    code: str = Field(index=True)
+    name: str
+    notes: str = ""
+    is_active: bool = Field(default=True, index=True)
+    created_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime = Field(default_factory=utcnow)
+
+
+class ClientFinanceCategory(SQLModel, table=True):
+    __table_args__ = (UniqueConstraint("company_id", "client_id", "name", "category_kind", name="uq_clientfin_cat_company_client_name_kind"),)
+    id: Optional[int] = Field(default=None, primary_key=True)
+    company_id: int = Field(index=True, foreign_key="company.id")
+    client_id: int = Field(index=True, foreign_key="client.id")
+    name: str
+    category_kind: str = Field(default="despesa", index=True)
+    dre_group: str = ""
+    notes: str = ""
+    is_active: bool = Field(default=True, index=True)
+    created_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime = Field(default_factory=utcnow)
+
+
+class ClientFinanceRevenueType(SQLModel, table=True):
+    __table_args__ = (UniqueConstraint("company_id", "client_id", "name", name="uq_clientfin_revtype_company_client_name"),)
+    id: Optional[int] = Field(default=None, primary_key=True)
+    company_id: int = Field(index=True, foreign_key="company.id")
+    client_id: int = Field(index=True, foreign_key="client.id")
+    name: str
+    description: str = ""
+    is_active: bool = Field(default=True, index=True)
+    created_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime = Field(default_factory=utcnow)
+
+
+class ClientFinanceBankAccount(SQLModel, table=True):
+    __table_args__ = (UniqueConstraint("company_id", "client_id", "name", name="uq_clientfin_bank_company_client_name"),)
+    id: Optional[int] = Field(default=None, primary_key=True)
+    company_id: int = Field(index=True, foreign_key="company.id")
+    client_id: int = Field(index=True, foreign_key="client.id")
+    name: str
+    bank_name: str = ""
+    branch_number: str = ""
+    account_number: str = ""
+    initial_balance_brl: float = 0.0
+    notes: str = ""
+    is_active: bool = Field(default=True, index=True)
+    created_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime = Field(default_factory=utcnow)
+
+
+class ClientFinancialEntry(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    company_id: int = Field(index=True, foreign_key="company.id")
+    client_id: int = Field(index=True, foreign_key="client.id")
+    created_by_user_id: int = Field(index=True, foreign_key="user.id")
+    updated_by_user_id: Optional[int] = Field(default=None, index=True, foreign_key="user.id")
+
+    entry_kind: str = Field(default="receber", index=True)
+    status: str = Field(default="aberto", index=True)
+
+    supplier_id: Optional[int] = Field(default=None, index=True, foreign_key="clientfinancesupplier.id")
+    cost_center_id: Optional[int] = Field(default=None, index=True, foreign_key="clientfinancecostcenter.id")
+    category_id: Optional[int] = Field(default=None, index=True, foreign_key="clientfinancecategory.id")
+    revenue_type_id: Optional[int] = Field(default=None, index=True, foreign_key="clientfinancerevenuetype.id")
+    bank_account_id: Optional[int] = Field(default=None, index=True, foreign_key="clientfinancebankaccount.id")
+
+    description: str
+    document_number: str = ""
+    competence_date: str = ""
+    due_date: str = ""
+    settlement_date: str = ""
+
+    amount_expected_brl: float = 0.0
+    amount_realized_brl: float = 0.0
+    notes: str = ""
+
+    created_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime = Field(default_factory=utcnow)
+
+
+def ensure_client_finance_tables() -> bool:
+    try:
+        SQLModel.metadata.create_all(
+            engine,
+            tables=[
+                ClientFinanceSupplier.__table__,
+                ClientFinanceCostCenter.__table__,
+                ClientFinanceCategory.__table__,
+                ClientFinanceRevenueType.__table__,
+                ClientFinanceBankAccount.__table__,
+                ClientFinancialEntry.__table__,
+            ],
+            checkfirst=True,
+        )
+        return True
+    except Exception as e:
+        try:
+            print(f"[client_finance] failed to ensure tables: {e}")
+        except Exception:
+            pass
+        return False
+
+
+@app.on_event("startup")
+def _startup_client_finance() -> None:
+    ensure_client_finance_tables()
+
+
+def seed_client_finance_defaults(session: Session, *, company_id: int, client_id: int) -> None:
+    changed = False
+
+    existing_cc = {str(x.code).strip().upper() for x in session.exec(
+        select(ClientFinanceCostCenter).where(
+            ClientFinanceCostCenter.company_id == company_id,
+            ClientFinanceCostCenter.client_id == client_id,
+        )
+    ).all()}
+    for code, name in CLIENT_FINANCE_DEFAULT_COST_CENTERS:
+        if code.upper() in existing_cc:
+            continue
+        session.add(ClientFinanceCostCenter(company_id=company_id, client_id=client_id, code=code.upper(), name=name, is_active=True))
+        changed = True
+
+    existing_cat = {
+        (str(x.name).strip().lower(), str(x.category_kind).strip().lower())
+        for x in session.exec(
+            select(ClientFinanceCategory).where(
+                ClientFinanceCategory.company_id == company_id,
+                ClientFinanceCategory.client_id == client_id,
+            )
+        ).all()
+    }
+    for item in CLIENT_FINANCE_DEFAULT_CATEGORIES:
+        key = (item["name"].strip().lower(), item["category_kind"].strip().lower())
+        if key in existing_cat:
+            continue
+        session.add(
+            ClientFinanceCategory(
+                company_id=company_id,
+                client_id=client_id,
+                name=item["name"],
+                category_kind=item["category_kind"],
+                dre_group=item["dre_group"],
+                is_active=True,
+            )
+        )
+        changed = True
+
+    existing_rt = {str(x.name).strip().lower() for x in session.exec(
+        select(ClientFinanceRevenueType).where(
+            ClientFinanceRevenueType.company_id == company_id,
+            ClientFinanceRevenueType.client_id == client_id,
+        )
+    ).all()}
+    for name, description in CLIENT_FINANCE_DEFAULT_REVENUE_TYPES:
+        if name.strip().lower() in existing_rt:
+            continue
+        session.add(
+            ClientFinanceRevenueType(
+                company_id=company_id,
+                client_id=client_id,
+                name=name,
+                description=description,
+                is_active=True,
+            )
+        )
+        changed = True
+
+    if changed:
+        session.commit()
+
+
+def _client_finance_require_access(
+    request: Request,
+    session: Session,
+) -> tuple[TenantContext, Client, dict[str, Any]] | Response:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+
+    current_client = _client_current_client(request, session, ctx)
+    if not current_client:
+        set_flash(request, "Selecione um cliente para acessar a ferramenta.")
+        return RedirectResponse("/ferramentas", status_code=303)
+
+    finance_tool = _tool_subscription_status_payload(
+        session,
+        company_id=ctx.company.id,
+        client_id=current_client.id,
+        tool_code=CLIENT_TOOL_FINANCE_CODE,
+    )
+    if not finance_tool.get("access_ok"):
+        set_flash(request, finance_tool.get("message") or "Ferramenta indisponível.")
+        return RedirectResponse("/ferramentas", status_code=303)
+
+    ensure_client_finance_tables()
+    seed_client_finance_defaults(session, company_id=ctx.company.id, client_id=current_client.id)
+    return ctx, current_client, finance_tool
+
+
+def _client_finance_summary(session: Session, *, company_id: int, client_id: int) -> dict[str, Any]:
+    rows = session.exec(
+        select(ClientFinancialEntry).where(
+            ClientFinancialEntry.company_id == company_id,
+            ClientFinancialEntry.client_id == client_id,
+        )
+    ).all()
+    today = datetime.now().date()
+    open_receivable = 0.0
+    open_payable = 0.0
+    projected_30d = 0.0
+    overdue_count = 0
+    horizon = today + timedelta(days=30)
+
+    for row in rows:
+        due = None
+        try:
+            due = datetime.strptime(str(row.due_date or ""), "%Y-%m-%d").date()
+        except Exception:
+            due = None
+
+        is_open = str(row.status or "") in {"previsto", "aberto", "parcial"}
+        amount = float(row.amount_expected_brl or 0.0)
+
+        if row.entry_kind == "receber" and is_open:
+            open_receivable += amount
+        if row.entry_kind == "pagar" and is_open:
+            open_payable += amount
+        if is_open and due and due < today:
+            overdue_count += 1
+        if is_open and due and today <= due <= horizon:
+            projected_30d += amount if row.entry_kind == "receber" else -amount
+
+    return {
+        "open_receivable": round(open_receivable, 2),
+        "open_payable": round(open_payable, 2),
+        "projected_30d": round(projected_30d, 2),
+        "overdue_count": int(overdue_count),
+    }
+
+
+def _client_finance_name_maps(session: Session, *, company_id: int, client_id: int) -> dict[str, dict[int, str]]:
+    categories = {int(x.id): x.name for x in session.exec(
+        select(ClientFinanceCategory).where(
+            ClientFinanceCategory.company_id == company_id,
+            ClientFinanceCategory.client_id == client_id,
+        )
+    ).all() if x.id}
+    suppliers = {int(x.id): x.name for x in session.exec(
+        select(ClientFinanceSupplier).where(
+            ClientFinanceSupplier.company_id == company_id,
+            ClientFinanceSupplier.client_id == client_id,
+        )
+    ).all() if x.id}
+    cost_centers = {int(x.id): f"{x.code} • {x.name}" for x in session.exec(
+        select(ClientFinanceCostCenter).where(
+            ClientFinanceCostCenter.company_id == company_id,
+            ClientFinanceCostCenter.client_id == client_id,
+        )
+    ).all() if x.id}
+    bank_accounts = {int(x.id): x.name for x in session.exec(
+        select(ClientFinanceBankAccount).where(
+            ClientFinanceBankAccount.company_id == company_id,
+            ClientFinanceBankAccount.client_id == client_id,
+        )
+    ).all() if x.id}
+    revenue_types = {int(x.id): x.name for x in session.exec(
+        select(ClientFinanceRevenueType).where(
+            ClientFinanceRevenueType.company_id == company_id,
+            ClientFinanceRevenueType.client_id == client_id,
+        )
+    ).all() if x.id}
+    return {
+        "categories": categories,
+        "suppliers": suppliers,
+        "cost_centers": cost_centers,
+        "bank_accounts": bank_accounts,
+        "revenue_types": revenue_types,
+    }
+
+
+def _client_finance_row_view(row: ClientFinancialEntry, name_maps: dict[str, dict[int, str]]) -> dict[str, Any]:
+    return {
+        "id": int(row.id or 0),
+        "entry_kind": row.entry_kind,
+        "status": row.status,
+        "description": row.description,
+        "document_number": row.document_number,
+        "competence_date": row.competence_date,
+        "due_date": row.due_date,
+        "settlement_date": row.settlement_date,
+        "amount_expected_brl": float(row.amount_expected_brl or 0.0),
+        "amount_realized_brl": float(row.amount_realized_brl or 0.0),
+        "notes": row.notes,
+        "category_name": name_maps["categories"].get(int(row.category_id or 0), ""),
+        "supplier_name": name_maps["suppliers"].get(int(row.supplier_id or 0), ""),
+        "cost_center_name": name_maps["cost_centers"].get(int(row.cost_center_id or 0), ""),
+        "bank_account_name": name_maps["bank_accounts"].get(int(row.bank_account_id or 0), ""),
+        "revenue_type_name": name_maps["revenue_types"].get(int(row.revenue_type_id or 0), ""),
+    }
+
+
+def _client_finance_recent_entries(session: Session, *, company_id: int, client_id: int, limit: int = 8) -> list[dict[str, Any]]:
+    name_maps = _client_finance_name_maps(session, company_id=company_id, client_id=client_id)
+    rows = session.exec(
+        select(ClientFinancialEntry)
+        .where(
+            ClientFinancialEntry.company_id == company_id,
+            ClientFinancialEntry.client_id == client_id,
+        )
+        .order_by(ClientFinancialEntry.id.desc())
+        .limit(int(limit))
+    ).all()
+    return [_client_finance_row_view(row, name_maps) for row in rows]
+
+
+def _client_finance_select_options(session: Session, *, company_id: int, client_id: int) -> dict[str, list[Any]]:
+    return {
+        "suppliers": session.exec(
+            select(ClientFinanceSupplier)
+            .where(ClientFinanceSupplier.company_id == company_id, ClientFinanceSupplier.client_id == client_id)
+            .order_by(ClientFinanceSupplier.name.asc())
+        ).all(),
+        "cost_centers": session.exec(
+            select(ClientFinanceCostCenter)
+            .where(ClientFinanceCostCenter.company_id == company_id, ClientFinanceCostCenter.client_id == client_id)
+            .order_by(ClientFinanceCostCenter.code.asc(), ClientFinanceCostCenter.name.asc())
+        ).all(),
+        "categories_receita": session.exec(
+            select(ClientFinanceCategory)
+            .where(
+                ClientFinanceCategory.company_id == company_id,
+                ClientFinanceCategory.client_id == client_id,
+                ClientFinanceCategory.category_kind == "receita",
+            )
+            .order_by(ClientFinanceCategory.name.asc())
+        ).all(),
+        "categories_despesa": session.exec(
+            select(ClientFinanceCategory)
+            .where(
+                ClientFinanceCategory.company_id == company_id,
+                ClientFinanceCategory.client_id == client_id,
+                ClientFinanceCategory.category_kind == "despesa",
+            )
+            .order_by(ClientFinanceCategory.name.asc())
+        ).all(),
+        "revenue_types": session.exec(
+            select(ClientFinanceRevenueType)
+            .where(ClientFinanceRevenueType.company_id == company_id, ClientFinanceRevenueType.client_id == client_id)
+            .order_by(ClientFinanceRevenueType.name.asc())
+        ).all(),
+        "bank_accounts": session.exec(
+            select(ClientFinanceBankAccount)
+            .where(ClientFinanceBankAccount.company_id == company_id, ClientFinanceBankAccount.client_id == client_id)
+            .order_by(ClientFinanceBankAccount.name.asc())
+        ).all(),
+    }
+
+
+TEMPLATES["ferramentas_financeiro_cadastros.html"] = r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4 mb-3">
+  <div class="d-flex justify-content-between align-items-start gap-3 flex-wrap">
+    <div>
+      <h4 class="mb-1">Cadastros do Financeiro Gerencial</h4>
+      <div class="muted">Cadastros próprios do cliente ativo para usar em contas a pagar e receber.</div>
+    </div>
+    <a class="btn btn-outline-primary" href="/ferramentas/financeiro">Voltar</a>
+  </div>
+</div>
+
+<div class="row g-3">
+  <div class="col-lg-6">
+    <div class="card p-4 h-100">
+      <h5 class="mb-3">Fornecedores</h5>
+      <form method="post" action="/ferramentas/financeiro/cadastros/fornecedores" class="row g-2 mb-3">
+        <div class="col-md-6"><input class="form-control" name="name" placeholder="Nome" required></div>
+        <div class="col-md-6"><input class="form-control" name="document" placeholder="CNPJ/CPF"></div>
+        <div class="col-md-6"><input class="form-control" name="email" placeholder="E-mail"></div>
+        <div class="col-md-6"><input class="form-control" name="phone" placeholder="Telefone"></div>
+        <div class="col-12"><button class="btn btn-primary">Adicionar fornecedor</button></div>
+      </form>
+      <div class="table-responsive">
+        <table class="table table-sm">
+          <tbody>
+            {% for row in suppliers %}
+              <tr><td>{{ row.name }}</td><td class="small muted">{{ row.document }}</td></tr>
+            {% else %}
+              <tr><td class="muted">Nenhum fornecedor cadastrado.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-lg-6">
+    <div class="card p-4 h-100">
+      <h5 class="mb-3">Centros de custo</h5>
+      <form method="post" action="/ferramentas/financeiro/cadastros/centros-custo" class="row g-2 mb-3">
+        <div class="col-md-4"><input class="form-control" name="code" placeholder="Código" required></div>
+        <div class="col-md-8"><input class="form-control" name="name" placeholder="Nome" required></div>
+        <div class="col-12"><button class="btn btn-primary">Adicionar centro de custo</button></div>
+      </form>
+      <div class="table-responsive">
+        <table class="table table-sm">
+          <tbody>
+            {% for row in cost_centers %}
+              <tr><td>{{ row.code }}</td><td>{{ row.name }}</td></tr>
+            {% else %}
+              <tr><td class="muted">Nenhum centro de custo cadastrado.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-lg-6">
+    <div class="card p-4 h-100">
+      <h5 class="mb-3">Categorias</h5>
+      <form method="post" action="/ferramentas/financeiro/cadastros/categorias" class="row g-2 mb-3">
+        <div class="col-md-5"><input class="form-control" name="name" placeholder="Nome" required></div>
+        <div class="col-md-4">
+          <select class="form-select" name="category_kind">
+            <option value="receita">Receita</option>
+            <option value="despesa">Despesa</option>
+          </select>
+        </div>
+        <div class="col-md-3"><input class="form-control" name="dre_group" placeholder="Grupo DRE"></div>
+        <div class="col-12"><button class="btn btn-primary">Adicionar categoria</button></div>
+      </form>
+      <div class="table-responsive">
+        <table class="table table-sm">
+          <tbody>
+            {% for row in categories %}
+              <tr><td>{{ row.name }}</td><td>{{ row.category_kind }}</td><td class="small muted">{{ row.dre_group }}</td></tr>
+            {% else %}
+              <tr><td class="muted">Nenhuma categoria cadastrada.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-lg-6">
+    <div class="card p-4 h-100">
+      <h5 class="mb-3">Tipos de receita e contas</h5>
+      <form method="post" action="/ferramentas/financeiro/cadastros/tipos-receita" class="row g-2 mb-3">
+        <div class="col-md-5"><input class="form-control" name="name" placeholder="Tipo de receita" required></div>
+        <div class="col-md-7"><input class="form-control" name="description" placeholder="Descrição"></div>
+        <div class="col-12"><button class="btn btn-primary">Adicionar tipo de receita</button></div>
+      </form>
+
+      <form method="post" action="/ferramentas/financeiro/cadastros/contas" class="row g-2 mb-3 mt-1">
+        <div class="col-md-4"><input class="form-control" name="name" placeholder="Nome da conta" required></div>
+        <div class="col-md-4"><input class="form-control" name="bank_name" placeholder="Banco"></div>
+        <div class="col-md-4"><input class="form-control" name="initial_balance_brl" type="number" step="0.01" value="0"></div>
+        <div class="col-12"><button class="btn btn-outline-primary">Adicionar conta</button></div>
+      </form>
+
+      <div class="row">
+        <div class="col-md-6">
+          <div class="small fw-semibold mb-2">Tipos de receita</div>
+          <ul class="small mb-0 ps-3">
+            {% for row in revenue_types %}
+              <li>{{ row.name }}</li>
+            {% else %}
+              <li class="muted">Nenhum tipo cadastrado.</li>
+            {% endfor %}
+          </ul>
+        </div>
+        <div class="col-md-6">
+          <div class="small fw-semibold mb-2">Contas bancárias</div>
+          <ul class="small mb-0 ps-3">
+            {% for row in bank_accounts %}
+              <li>{{ row.name }}{% if row.bank_name %} • {{ row.bank_name }}{% endif %}</li>
+            {% else %}
+              <li class="muted">Nenhuma conta cadastrada.</li>
+            {% endfor %}
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+"""
+
+TEMPLATES["ferramentas_financeiro_form.html"] = r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <div class="d-flex justify-content-between align-items-start gap-3 flex-wrap mb-3">
+    <div>
+      <h4 class="mb-1">{{ page_title }}</h4>
+      <div class="muted">Preencha o lançamento financeiro do cliente ativo.</div>
+    </div>
+    <a class="btn btn-outline-primary" href="/ferramentas/financeiro/lancamentos">Voltar</a>
+  </div>
+
+  <form method="post" action="{{ form_action }}" class="row g-3">
+    <div class="col-md-3">
+      <label class="form-label">Tipo</label>
+      <select class="form-select" name="entry_kind">
+        <option value="receber" {% if form.entry_kind == "receber" %}selected{% endif %}>Receber</option>
+        <option value="pagar" {% if form.entry_kind == "pagar" %}selected{% endif %}>Pagar</option>
+      </select>
+    </div>
+    <div class="col-md-3">
+      <label class="form-label">Status</label>
+      <select class="form-select" name="status">
+        {% for status in statuses %}
+          <option value="{{ status }}" {% if form.status == status %}selected{% endif %}>{{ status }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-md-6">
+      <label class="form-label">Descrição</label>
+      <input class="form-control" name="description" value="{{ form.description }}" required>
+    </div>
+
+    <div class="col-md-3">
+      <label class="form-label">Documento</label>
+      <input class="form-control" name="document_number" value="{{ form.document_number }}">
+    </div>
+    <div class="col-md-3">
+      <label class="form-label">Competência</label>
+      <input class="form-control" type="date" name="competence_date" value="{{ form.competence_date }}">
+    </div>
+    <div class="col-md-3">
+      <label class="form-label">Vencimento</label>
+      <input class="form-control" type="date" name="due_date" value="{{ form.due_date }}">
+    </div>
+    <div class="col-md-3">
+      <label class="form-label">Liquidação</label>
+      <input class="form-control" type="date" name="settlement_date" value="{{ form.settlement_date }}">
+    </div>
+
+    <div class="col-md-3">
+      <label class="form-label">Valor previsto</label>
+      <input class="form-control" type="number" step="0.01" name="amount_expected_brl" value="{{ form.amount_expected_brl }}">
+    </div>
+    <div class="col-md-3">
+      <label class="form-label">Valor realizado</label>
+      <input class="form-control" type="number" step="0.01" name="amount_realized_brl" value="{{ form.amount_realized_brl }}">
+    </div>
+    <div class="col-md-3">
+      <label class="form-label">Conta bancária</label>
+      <select class="form-select" name="bank_account_id">
+        <option value="">Selecione</option>
+        {% for row in options.bank_accounts %}
+          <option value="{{ row.id }}" {% if form.bank_account_id == (row.id|string) %}selected{% endif %}>{{ row.name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-md-3">
+      <label class="form-label">Centro de custo</label>
+      <select class="form-select" name="cost_center_id">
+        <option value="">Selecione</option>
+        {% for row in options.cost_centers %}
+          <option value="{{ row.id }}" {% if form.cost_center_id == (row.id|string) %}selected{% endif %}>{{ row.code }} • {{ row.name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+
+    <div class="col-md-4">
+      <label class="form-label">Fornecedor</label>
+      <select class="form-select" name="supplier_id">
+        <option value="">Selecione</option>
+        {% for row in options.suppliers %}
+          <option value="{{ row.id }}" {% if form.supplier_id == (row.id|string) %}selected{% endif %}>{{ row.name }}</option>
+        {% endfor %}
+      </select>
+      <div class="small muted">Use principalmente em contas a pagar.</div>
+    </div>
+    <div class="col-md-4">
+      <label class="form-label">Categoria</label>
+      <select class="form-select" name="category_id">
+        <option value="">Selecione</option>
+        {% for row in options.categories_receita %}
+          <option value="{{ row.id }}" {% if form.category_id == (row.id|string) %}selected{% endif %}>Receita • {{ row.name }}</option>
+        {% endfor %}
+        {% for row in options.categories_despesa %}
+          <option value="{{ row.id }}" {% if form.category_id == (row.id|string) %}selected{% endif %}>Despesa • {{ row.name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-md-4">
+      <label class="form-label">Tipo de receita</label>
+      <select class="form-select" name="revenue_type_id">
+        <option value="">Selecione</option>
+        {% for row in options.revenue_types %}
+          <option value="{{ row.id }}" {% if form.revenue_type_id == (row.id|string) %}selected{% endif %}>{{ row.name }}</option>
+        {% endfor %}
+      </select>
+      <div class="small muted">Use principalmente em contas a receber.</div>
+    </div>
+
+    <div class="col-12">
+      <label class="form-label">Observações</label>
+      <textarea class="form-control" name="notes" rows="3">{{ form.notes }}</textarea>
+    </div>
+
+    <div class="col-12">
+      <button class="btn btn-primary">{{ submit_label }}</button>
+    </div>
+  </form>
+</div>
+{% endblock %}
+"""
+
+TEMPLATES["ferramentas_financeiro_lancamentos.html"] = r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4 mb-3">
+  <div class="d-flex justify-content-between align-items-start gap-3 flex-wrap">
+    <div>
+      <h4 class="mb-1">Lançamentos Financeiros</h4>
+      <div class="muted">Contas a pagar e receber do cliente ativo.</div>
+    </div>
+    <div class="d-flex gap-2 flex-wrap">
+      <a class="btn btn-primary" href="/ferramentas/financeiro/novo">Novo lançamento</a>
+      <a class="btn btn-outline-secondary" href="/ferramentas/financeiro/cadastros">Cadastros</a>
+    </div>
+  </div>
+</div>
+
+<div class="card p-4 mb-3">
+  <form method="get" class="row g-2">
+    <div class="col-md-3">
+      <input class="form-control" name="q" placeholder="Buscar descrição" value="{{ filters.q }}">
+    </div>
+    <div class="col-md-2">
+      <select class="form-select" name="entry_kind">
+        <option value="">Todos os tipos</option>
+        <option value="receber" {% if filters.entry_kind == "receber" %}selected{% endif %}>Receber</option>
+        <option value="pagar" {% if filters.entry_kind == "pagar" %}selected{% endif %}>Pagar</option>
+      </select>
+    </div>
+    <div class="col-md-2">
+      <select class="form-select" name="status">
+        <option value="">Todos os status</option>
+        {% for status in statuses %}
+          <option value="{{ status }}" {% if filters.status == status %}selected{% endif %}>{{ status }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-md-2">
+      <input class="form-control" type="month" name="month" value="{{ filters.month }}">
+    </div>
+    <div class="col-md-3">
+      <button class="btn btn-outline-primary">Filtrar</button>
+      <a class="btn btn-outline-secondary" href="/ferramentas/financeiro/lancamentos">Limpar</a>
+    </div>
+  </form>
+</div>
+
+<div class="card p-4">
+  <div class="table-responsive">
+    <table class="table align-middle">
+      <thead>
+        <tr>
+          <th>Tipo</th>
+          <th>Descrição</th>
+          <th>Categoria</th>
+          <th>Vencimento</th>
+          <th>Status</th>
+          <th class="text-end">Previsto</th>
+          <th class="text-end">Realizado</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in entries %}
+          <tr>
+            <td><span class="badge {% if row.entry_kind == 'receber' %}text-bg-success{% else %}text-bg-danger{% endif %}">{{ row.entry_kind }}</span></td>
+            <td>
+              <div class="fw-semibold">{{ row.description }}</div>
+              <div class="small muted">
+                {% if row.supplier_name %}{{ row.supplier_name }}{% endif %}
+                {% if row.revenue_type_name %}{{ row.revenue_type_name }}{% endif %}
+              </div>
+            </td>
+            <td>{{ row.category_name or "—" }}</td>
+            <td>{{ row.due_date or "—" }}</td>
+            <td>{{ row.status }}</td>
+            <td class="text-end">{{ row.amount_expected_brl|brl }}</td>
+            <td class="text-end">{{ row.amount_realized_brl|brl }}</td>
+            <td class="text-end"><a class="btn btn-sm btn-outline-secondary" href="/ferramentas/financeiro/{{ row.id }}/editar">Editar</a></td>
+          </tr>
+        {% else %}
+          <tr><td colspan="8" class="muted">Nenhum lançamento encontrado.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}
+"""
+
+
+@app.get("/ferramentas/financeiro/cadastros", response_class=HTMLResponse)
+@require_login
+async def ferramentas_financeiro_cadastros_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
+    access = _client_finance_require_access(request, session)
+    if isinstance(access, Response):
+        return access
+    ctx, current_client, finance_tool = access
+
+    return render(
+        "ferramentas_financeiro_cadastros.html",
+        request=request,
+        context={
+            "title": "Cadastros do Financeiro",
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "role": ctx.membership.role,
+            "current_client": current_client,
+            "finance_tool": finance_tool,
+            "suppliers": session.exec(select(ClientFinanceSupplier).where(ClientFinanceSupplier.company_id == ctx.company.id, ClientFinanceSupplier.client_id == current_client.id).order_by(ClientFinanceSupplier.name.asc())).all(),
+            "cost_centers": session.exec(select(ClientFinanceCostCenter).where(ClientFinanceCostCenter.company_id == ctx.company.id, ClientFinanceCostCenter.client_id == current_client.id).order_by(ClientFinanceCostCenter.code.asc())).all(),
+            "categories": session.exec(select(ClientFinanceCategory).where(ClientFinanceCategory.company_id == ctx.company.id, ClientFinanceCategory.client_id == current_client.id).order_by(ClientFinanceCategory.category_kind.asc(), ClientFinanceCategory.name.asc())).all(),
+            "revenue_types": session.exec(select(ClientFinanceRevenueType).where(ClientFinanceRevenueType.company_id == ctx.company.id, ClientFinanceRevenueType.client_id == current_client.id).order_by(ClientFinanceRevenueType.name.asc())).all(),
+            "bank_accounts": session.exec(select(ClientFinanceBankAccount).where(ClientFinanceBankAccount.company_id == ctx.company.id, ClientFinanceBankAccount.client_id == current_client.id).order_by(ClientFinanceBankAccount.name.asc())).all(),
+        },
+    )
+
+
+@app.post("/ferramentas/financeiro/cadastros/fornecedores")
+@require_login
+async def ferramentas_financeiro_supplier_create(
+    request: Request,
+    session: Session = Depends(get_session),
+    name: str = Form(""),
+    document: str = Form(""),
+    email: str = Form(""),
+    phone: str = Form(""),
+) -> Response:
+    access = _client_finance_require_access(request, session)
+    if isinstance(access, Response):
+        return access
+    ctx, current_client, _finance_tool = access
+    nm = (name or "").strip()
+    if not nm:
+        set_flash(request, "Informe o nome do fornecedor.")
+        return RedirectResponse("/ferramentas/financeiro/cadastros", status_code=303)
+    row = ClientFinanceSupplier(
+        company_id=ctx.company.id,
+        client_id=current_client.id,
+        name=nm,
+        document=(document or "").strip(),
+        email=(email or "").strip(),
+        phone=(phone or "").strip(),
+        is_active=True,
+    )
+    session.add(row)
+    try:
+        session.commit()
+        set_flash(request, "Fornecedor cadastrado.")
+    except IntegrityError:
+        session.rollback()
+        set_flash(request, "Fornecedor já cadastrado.")
+    return RedirectResponse("/ferramentas/financeiro/cadastros", status_code=303)
+
+
+@app.post("/ferramentas/financeiro/cadastros/centros-custo")
+@require_login
+async def ferramentas_financeiro_cost_center_create(
+    request: Request,
+    session: Session = Depends(get_session),
+    code: str = Form(""),
+    name: str = Form(""),
+) -> Response:
+    access = _client_finance_require_access(request, session)
+    if isinstance(access, Response):
+        return access
+    ctx, current_client, _finance_tool = access
+    c = (code or "").strip().upper()
+    nm = (name or "").strip()
+    if not c or not nm:
+        set_flash(request, "Informe código e nome do centro de custo.")
+        return RedirectResponse("/ferramentas/financeiro/cadastros", status_code=303)
+    row = ClientFinanceCostCenter(company_id=ctx.company.id, client_id=current_client.id, code=c, name=nm, is_active=True)
+    session.add(row)
+    try:
+        session.commit()
+        set_flash(request, "Centro de custo cadastrado.")
+    except IntegrityError:
+        session.rollback()
+        set_flash(request, "Centro de custo já cadastrado.")
+    return RedirectResponse("/ferramentas/financeiro/cadastros", status_code=303)
+
+
+@app.post("/ferramentas/financeiro/cadastros/categorias")
+@require_login
+async def ferramentas_financeiro_category_create(
+    request: Request,
+    session: Session = Depends(get_session),
+    name: str = Form(""),
+    category_kind: str = Form("despesa"),
+    dre_group: str = Form(""),
+) -> Response:
+    access = _client_finance_require_access(request, session)
+    if isinstance(access, Response):
+        return access
+    ctx, current_client, _finance_tool = access
+    nm = (name or "").strip()
+    kind = (category_kind or "despesa").strip().lower()
+    if kind not in CLIENT_FINANCE_CATEGORY_KINDS or not nm:
+        set_flash(request, "Informe uma categoria válida.")
+        return RedirectResponse("/ferramentas/financeiro/cadastros", status_code=303)
+    row = ClientFinanceCategory(
+        company_id=ctx.company.id,
+        client_id=current_client.id,
+        name=nm,
+        category_kind=kind,
+        dre_group=(dre_group or "").strip(),
+        is_active=True,
+    )
+    session.add(row)
+    try:
+        session.commit()
+        set_flash(request, "Categoria cadastrada.")
+    except IntegrityError:
+        session.rollback()
+        set_flash(request, "Categoria já cadastrada.")
+    return RedirectResponse("/ferramentas/financeiro/cadastros", status_code=303)
+
+
+@app.post("/ferramentas/financeiro/cadastros/tipos-receita")
+@require_login
+async def ferramentas_financeiro_revenue_type_create(
+    request: Request,
+    session: Session = Depends(get_session),
+    name: str = Form(""),
+    description: str = Form(""),
+) -> Response:
+    access = _client_finance_require_access(request, session)
+    if isinstance(access, Response):
+        return access
+    ctx, current_client, _finance_tool = access
+    nm = (name or "").strip()
+    if not nm:
+        set_flash(request, "Informe o tipo de receita.")
+        return RedirectResponse("/ferramentas/financeiro/cadastros", status_code=303)
+    row = ClientFinanceRevenueType(
+        company_id=ctx.company.id,
+        client_id=current_client.id,
+        name=nm,
+        description=(description or "").strip(),
+        is_active=True,
+    )
+    session.add(row)
+    try:
+        session.commit()
+        set_flash(request, "Tipo de receita cadastrado.")
+    except IntegrityError:
+        session.rollback()
+        set_flash(request, "Tipo de receita já cadastrado.")
+    return RedirectResponse("/ferramentas/financeiro/cadastros", status_code=303)
+
+
+@app.post("/ferramentas/financeiro/cadastros/contas")
+@require_login
+async def ferramentas_financeiro_bank_account_create(
+    request: Request,
+    session: Session = Depends(get_session),
+    name: str = Form(""),
+    bank_name: str = Form(""),
+    initial_balance_brl: float = Form(0.0),
+) -> Response:
+    access = _client_finance_require_access(request, session)
+    if isinstance(access, Response):
+        return access
+    ctx, current_client, _finance_tool = access
+    nm = (name or "").strip()
+    if not nm:
+        set_flash(request, "Informe o nome da conta.")
+        return RedirectResponse("/ferramentas/financeiro/cadastros", status_code=303)
+    row = ClientFinanceBankAccount(
+        company_id=ctx.company.id,
+        client_id=current_client.id,
+        name=nm,
+        bank_name=(bank_name or "").strip(),
+        initial_balance_brl=float(initial_balance_brl or 0.0),
+        is_active=True,
+    )
+    session.add(row)
+    try:
+        session.commit()
+        set_flash(request, "Conta cadastrada.")
+    except IntegrityError:
+        session.rollback()
+        set_flash(request, "Conta já cadastrada.")
+    return RedirectResponse("/ferramentas/financeiro/cadastros", status_code=303)
+
+
+def _client_finance_form_defaults(entry: Optional[ClientFinancialEntry] = None) -> dict[str, Any]:
+    return {
+        "entry_kind": getattr(entry, "entry_kind", "receber") or "receber",
+        "status": getattr(entry, "status", "aberto") or "aberto",
+        "description": getattr(entry, "description", "") or "",
+        "document_number": getattr(entry, "document_number", "") or "",
+        "competence_date": getattr(entry, "competence_date", "") or "",
+        "due_date": getattr(entry, "due_date", "") or "",
+        "settlement_date": getattr(entry, "settlement_date", "") or "",
+        "amount_expected_brl": float(getattr(entry, "amount_expected_brl", 0.0) or 0.0),
+        "amount_realized_brl": float(getattr(entry, "amount_realized_brl", 0.0) or 0.0),
+        "supplier_id": str(getattr(entry, "supplier_id", "") or ""),
+        "cost_center_id": str(getattr(entry, "cost_center_id", "") or ""),
+        "category_id": str(getattr(entry, "category_id", "") or ""),
+        "revenue_type_id": str(getattr(entry, "revenue_type_id", "") or ""),
+        "bank_account_id": str(getattr(entry, "bank_account_id", "") or ""),
+        "notes": getattr(entry, "notes", "") or "",
+    }
+
+
+@app.get("/ferramentas/financeiro/lancamentos", response_class=HTMLResponse)
+@require_login
+async def ferramentas_financeiro_lancamentos_page(
+    request: Request,
+    q: str = "",
+    entry_kind: str = "",
+    status: str = "",
+    month: str = "",
+    session: Session = Depends(get_session),
+) -> HTMLResponse:
+    access = _client_finance_require_access(request, session)
+    if isinstance(access, Response):
+        return access
+    ctx, current_client, finance_tool = access
+
+    stmt = select(ClientFinancialEntry).where(
+        ClientFinancialEntry.company_id == ctx.company.id,
+        ClientFinancialEntry.client_id == current_client.id,
+    )
+    if (q or "").strip():
+        stmt = stmt.where(ClientFinancialEntry.description.ilike(f"%{(q or '').strip()}%"))
+    if (entry_kind or "").strip() in CLIENT_FINANCE_ENTRY_KINDS:
+        stmt = stmt.where(ClientFinancialEntry.entry_kind == (entry_kind or "").strip())
+    if (status or "").strip() in CLIENT_FINANCE_ENTRY_STATUSES:
+        stmt = stmt.where(ClientFinancialEntry.status == (status or "").strip())
+    if re.match(r"^\d{4}-\d{2}$", (month or "").strip()):
+        stmt = stmt.where(ClientFinancialEntry.competence_date.startswith((month or "").strip()))
+
+    rows = session.exec(stmt.order_by(ClientFinancialEntry.id.desc())).all()
+    name_maps = _client_finance_name_maps(session, company_id=ctx.company.id, client_id=current_client.id)
+    entries = [_client_finance_row_view(row, name_maps) for row in rows]
+
+    return render(
+        "ferramentas_financeiro_lancamentos.html",
+        request=request,
+        context={
+            "title": "Lançamentos Financeiros",
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "role": ctx.membership.role,
+            "current_client": current_client,
+            "finance_tool": finance_tool,
+            "entries": entries,
+            "filters": {"q": q or "", "entry_kind": entry_kind or "", "status": status or "", "month": month or ""},
+            "statuses": CLIENT_FINANCE_ENTRY_STATUSES,
+        },
+    )
+
+
+@app.get("/ferramentas/financeiro/novo", response_class=HTMLResponse)
+@require_login
+async def ferramentas_financeiro_new_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
+    access = _client_finance_require_access(request, session)
+    if isinstance(access, Response):
+        return access
+    ctx, current_client, finance_tool = access
+
+    return render(
+        "ferramentas_financeiro_form.html",
+        request=request,
+        context={
+            "title": "Novo Lançamento Financeiro",
+            "page_title": "Novo Lançamento",
+            "submit_label": "Salvar lançamento",
+            "form_action": "/ferramentas/financeiro/novo",
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "role": ctx.membership.role,
+            "current_client": current_client,
+            "finance_tool": finance_tool,
+            "options": _client_finance_select_options(session, company_id=ctx.company.id, client_id=current_client.id),
+            "statuses": CLIENT_FINANCE_ENTRY_STATUSES,
+            "form": _client_finance_form_defaults(),
+        },
+    )
+
+
+@app.post("/ferramentas/financeiro/novo")
+@require_login
+async def ferramentas_financeiro_create(
+    request: Request,
+    session: Session = Depends(get_session),
+    entry_kind: str = Form("receber"),
+    status: str = Form("aberto"),
+    description: str = Form(""),
+    document_number: str = Form(""),
+    competence_date: str = Form(""),
+    due_date: str = Form(""),
+    settlement_date: str = Form(""),
+    amount_expected_brl: float = Form(0.0),
+    amount_realized_brl: float = Form(0.0),
+    supplier_id: str = Form(""),
+    cost_center_id: str = Form(""),
+    category_id: str = Form(""),
+    revenue_type_id: str = Form(""),
+    bank_account_id: str = Form(""),
+    notes: str = Form(""),
+) -> Response:
+    access = _client_finance_require_access(request, session)
+    if isinstance(access, Response):
+        return access
+    ctx, current_client, _finance_tool = access
+
+    kind = (entry_kind or "receber").strip()
+    st = (status or "aberto").strip()
+    desc = (description or "").strip()
+    if kind not in CLIENT_FINANCE_ENTRY_KINDS or st not in CLIENT_FINANCE_ENTRY_STATUSES or not desc:
+        set_flash(request, "Preencha tipo, status e descrição do lançamento.")
+        return RedirectResponse("/ferramentas/financeiro/novo", status_code=303)
+
+    row = ClientFinancialEntry(
+        company_id=ctx.company.id,
+        client_id=current_client.id,
+        created_by_user_id=ctx.user.id,
+        updated_by_user_id=ctx.user.id,
+        entry_kind=kind,
+        status=st,
+        description=desc,
+        document_number=(document_number or "").strip(),
+        competence_date=(competence_date or "").strip(),
+        due_date=(due_date or "").strip(),
+        settlement_date=(settlement_date or "").strip(),
+        amount_expected_brl=float(amount_expected_brl or 0.0),
+        amount_realized_brl=float(amount_realized_brl or 0.0),
+        supplier_id=int(supplier_id) if str(supplier_id or "").strip().isdigit() else None,
+        cost_center_id=int(cost_center_id) if str(cost_center_id or "").strip().isdigit() else None,
+        category_id=int(category_id) if str(category_id or "").strip().isdigit() else None,
+        revenue_type_id=int(revenue_type_id) if str(revenue_type_id or "").strip().isdigit() else None,
+        bank_account_id=int(bank_account_id) if str(bank_account_id or "").strip().isdigit() else None,
+        notes=(notes or "").strip(),
+    )
+    session.add(row)
+    session.commit()
+    set_flash(request, "Lançamento financeiro cadastrado.")
+    return RedirectResponse("/ferramentas/financeiro/lancamentos", status_code=303)
+
+
+@app.get("/ferramentas/financeiro/{entry_id}/editar", response_class=HTMLResponse)
+@require_login
+async def ferramentas_financeiro_edit_page(entry_id: int, request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
+    access = _client_finance_require_access(request, session)
+    if isinstance(access, Response):
+        return access
+    ctx, current_client, finance_tool = access
+
+    entry = session.exec(
+        select(ClientFinancialEntry).where(
+            ClientFinancialEntry.id == int(entry_id),
+            ClientFinancialEntry.company_id == ctx.company.id,
+            ClientFinancialEntry.client_id == current_client.id,
+        )
+    ).first()
+    if not entry:
+        set_flash(request, "Lançamento não encontrado.")
+        return RedirectResponse("/ferramentas/financeiro/lancamentos", status_code=303)
+
+    return render(
+        "ferramentas_financeiro_form.html",
+        request=request,
+        context={
+            "title": "Editar Lançamento Financeiro",
+            "page_title": "Editar Lançamento",
+            "submit_label": "Salvar alterações",
+            "form_action": f"/ferramentas/financeiro/{int(entry.id)}/editar",
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "role": ctx.membership.role,
+            "current_client": current_client,
+            "finance_tool": finance_tool,
+            "options": _client_finance_select_options(session, company_id=ctx.company.id, client_id=current_client.id),
+            "statuses": CLIENT_FINANCE_ENTRY_STATUSES,
+            "form": _client_finance_form_defaults(entry),
+        },
+    )
+
+
+@app.post("/ferramentas/financeiro/{entry_id}/editar")
+@require_login
+async def ferramentas_financeiro_edit(
+    entry_id: int,
+    request: Request,
+    session: Session = Depends(get_session),
+    entry_kind: str = Form("receber"),
+    status: str = Form("aberto"),
+    description: str = Form(""),
+    document_number: str = Form(""),
+    competence_date: str = Form(""),
+    due_date: str = Form(""),
+    settlement_date: str = Form(""),
+    amount_expected_brl: float = Form(0.0),
+    amount_realized_brl: float = Form(0.0),
+    supplier_id: str = Form(""),
+    cost_center_id: str = Form(""),
+    category_id: str = Form(""),
+    revenue_type_id: str = Form(""),
+    bank_account_id: str = Form(""),
+    notes: str = Form(""),
+) -> Response:
+    access = _client_finance_require_access(request, session)
+    if isinstance(access, Response):
+        return access
+    ctx, current_client, _finance_tool = access
+
+    entry = session.exec(
+        select(ClientFinancialEntry).where(
+            ClientFinancialEntry.id == int(entry_id),
+            ClientFinancialEntry.company_id == ctx.company.id,
+            ClientFinancialEntry.client_id == current_client.id,
+        )
+    ).first()
+    if not entry:
+        set_flash(request, "Lançamento não encontrado.")
+        return RedirectResponse("/ferramentas/financeiro/lancamentos", status_code=303)
+
+    kind = (entry_kind or "receber").strip()
+    st = (status or "aberto").strip()
+    desc = (description or "").strip()
+    if kind not in CLIENT_FINANCE_ENTRY_KINDS or st not in CLIENT_FINANCE_ENTRY_STATUSES or not desc:
+        set_flash(request, "Preencha tipo, status e descrição do lançamento.")
+        return RedirectResponse(f"/ferramentas/financeiro/{int(entry.id)}/editar", status_code=303)
+
+    entry.entry_kind = kind
+    entry.status = st
+    entry.description = desc
+    entry.document_number = (document_number or "").strip()
+    entry.competence_date = (competence_date or "").strip()
+    entry.due_date = (due_date or "").strip()
+    entry.settlement_date = (settlement_date or "").strip()
+    entry.amount_expected_brl = float(amount_expected_brl or 0.0)
+    entry.amount_realized_brl = float(amount_realized_brl or 0.0)
+    entry.supplier_id = int(supplier_id) if str(supplier_id or "").strip().isdigit() else None
+    entry.cost_center_id = int(cost_center_id) if str(cost_center_id or "").strip().isdigit() else None
+    entry.category_id = int(category_id) if str(category_id or "").strip().isdigit() else None
+    entry.revenue_type_id = int(revenue_type_id) if str(revenue_type_id or "").strip().isdigit() else None
+    entry.bank_account_id = int(bank_account_id) if str(bank_account_id or "").strip().isdigit() else None
+    entry.notes = (notes or "").strip()
+    entry.updated_by_user_id = ctx.user.id
+    entry.updated_at = utcnow()
+    session.add(entry)
+    session.commit()
+    set_flash(request, "Lançamento atualizado.")
+    return RedirectResponse("/ferramentas/financeiro/lancamentos", status_code=303)
