@@ -9145,6 +9145,8 @@ TEMPLATES.update({
     </div>
     <div class="d-flex gap-2 flex-wrap">
       <a class="btn btn-outline-secondary" href="/admin/financeiro/cadastros">Cadastros</a>
+      <a class="btn btn-outline-primary" href="/admin/financeiro/dre">DRE</a>
+      <a class="btn btn-outline-primary" href="/admin/financeiro/fluxo-caixa">Fluxo de caixa</a>
       <a class="btn btn-primary" href="/admin/financeiro/novo">Novo lançamento</a>
     </div>
   </div>
@@ -9192,8 +9194,8 @@ TEMPLATES.update({
   </div>
 
   <div class="alert alert-light border mt-3 mb-0">
-    <div class="fw-semibold mb-1">Entrega A</div>
-    <div class="small muted">Base operacional implantada. Nesta etapa já é possível cadastrar fornecedores, centros de custo, categorias, tipos de receita, contas bancárias e lançar contas a pagar/receber. DRE gerencial e fluxo de caixa analítico entram na próxima camada.</div>
+    <div class="fw-semibold mb-1">Financeiro interno</div>
+    <div class="small muted">Base operacional implantada com DRE gerencial e fluxo de caixa previsto/realizado. Use os filtros e os botões acima para navegar entre lançamentos, DRE e fluxo.</div>
   </div>
 </div>
 
@@ -9555,6 +9557,238 @@ TEMPLATES.update({
 """,
 })
 
+
+
+TEMPLATES.update({
+    "office_finance_dre.html": r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <div class="d-flex justify-content-between align-items-start flex-wrap gap-2">
+    <div>
+      <h4 class="mb-0">DRE Gerencial</h4>
+      <div class="muted">Visão gerencial por competência com base nos lançamentos do Financeiro Interno.</div>
+    </div>
+    <div class="d-flex gap-2 flex-wrap">
+      <a class="btn btn-outline-secondary" href="/admin/financeiro">Voltar</a>
+      <a class="btn btn-outline-primary" href="/admin/financeiro/fluxo-caixa?month={{ filters.month }}{% if filters.client_id %}&client_id={{ filters.client_id }}{% endif %}{% if filters.cost_center_id %}&cost_center_id={{ filters.cost_center_id }}{% endif %}{% if filters.internal_service_id %}&internal_service_id={{ filters.internal_service_id }}{% endif %}{% if filters.family_code %}&family_code={{ filters.family_code }}{% endif %}">Ir para fluxo</a>
+    </div>
+  </div>
+
+  <form class="row g-2 mt-2" method="get" action="/admin/financeiro/dre">
+    <div class="col-md-2">
+      <label class="form-label">Mês</label>
+      <input class="form-control" type="month" name="month" value="{{ filters.month }}" />
+    </div>
+    <div class="col-md-3">
+      <label class="form-label">Cliente</label>
+      <select class="form-select" name="client_id">
+        <option value="">Todos</option>
+        {% for c in clients %}
+          <option value="{{ c.id }}" {% if filters.client_id == (c.id|string) %}selected{% endif %}>{{ c.name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-md-2">
+      <label class="form-label">Centro de custo</label>
+      <select class="form-select" name="cost_center_id">
+        <option value="">Todos</option>
+        {% for cc in cost_centers %}
+          <option value="{{ cc.id }}" {% if filters.cost_center_id == (cc.id|string) %}selected{% endif %}>{{ cc.code }} - {{ cc.name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-md-3">
+      <label class="form-label">Produto / serviço</label>
+      <select class="form-select" name="internal_service_id">
+        <option value="">Todos</option>
+        {% for svc in services %}
+          <option value="{{ svc.id }}" {% if filters.internal_service_id == (svc.id|string) %}selected{% endif %}>{{ svc.name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-md-2">
+      <label class="form-label">Família</label>
+      <select class="form-select" name="family_code">
+        <option value="">Todas</option>
+        {% for family in families %}
+          <option value="{{ family.code }}" {% if filters.family_code == family.code %}selected{% endif %}>{{ family.label }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-12 d-flex gap-2">
+      <button class="btn btn-outline-primary">Filtrar</button>
+      <a class="btn btn-outline-secondary" href="/admin/financeiro/dre">Limpar</a>
+    </div>
+  </form>
+
+  <div class="row g-3 mt-2">
+    <div class="col-md-3"><div class="border rounded p-3 h-100"><div class="muted small">Receita líquida</div><div class="fw-semibold">{{ summary.net_revenue_realized|brl }}</div><div class="small muted">Realizado</div></div></div>
+    <div class="col-md-3"><div class="border rounded p-3 h-100"><div class="muted small">EBITDA</div><div class="fw-semibold">{{ summary.ebitda_realized|brl }}</div><div class="small muted">Realizado</div></div></div>
+    <div class="col-md-3"><div class="border rounded p-3 h-100"><div class="muted small">Resultado do período</div><div class="fw-semibold">{{ summary.net_result_realized|brl }}</div><div class="small muted">Realizado</div></div></div>
+    <div class="col-md-3"><div class="border rounded p-3 h-100"><div class="muted small">Lançamentos considerados</div><div class="fw-semibold">{{ summary.entry_count }}</div><div class="small muted">No filtro atual</div></div></div>
+  </div>
+</div>
+
+<div class="card p-4 mt-3">
+  <div class="d-flex justify-content-between align-items-center">
+    <h5 class="mb-0">Demonstração do resultado</h5>
+    <div class="muted small">Competência {{ filters.month or "todos os períodos" }}</div>
+  </div>
+  <div class="table-responsive mt-3">
+    <table class="table align-middle">
+      <thead>
+        <tr>
+          <th>Grupo</th>
+          <th class="text-end">Previsto</th>
+          <th class="text-end">Realizado</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in rows %}
+          <tr class="{% if row.kind == 'result' %}table-light{% endif %}">
+            <td>
+              <div class="{% if row.kind == 'result' %}fw-semibold{% endif %}">{{ row.label }}</div>
+            </td>
+            <td class="text-end {% if row.kind == 'result' %}fw-semibold{% endif %}">{{ row.expected|brl }}</td>
+            <td class="text-end {% if row.kind == 'result' %}fw-semibold{% endif %}">{{ row.realized|brl }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}
+""",
+    "office_finance_cashflow.html": r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <div class="d-flex justify-content-between align-items-start flex-wrap gap-2">
+    <div>
+      <h4 class="mb-0">Fluxo de Caixa</h4>
+      <div class="muted">Previsto e realizado por data, calculado a partir dos lançamentos do Financeiro Interno.</div>
+    </div>
+    <div class="d-flex gap-2 flex-wrap">
+      <a class="btn btn-outline-secondary" href="/admin/financeiro">Voltar</a>
+      <a class="btn btn-outline-primary" href="/admin/financeiro/dre?month={{ filters.month }}{% if filters.client_id %}&client_id={{ filters.client_id }}{% endif %}{% if filters.cost_center_id %}&cost_center_id={{ filters.cost_center_id }}{% endif %}{% if filters.internal_service_id %}&internal_service_id={{ filters.internal_service_id }}{% endif %}{% if filters.family_code %}&family_code={{ filters.family_code }}{% endif %}">Ir para DRE</a>
+    </div>
+  </div>
+
+  <form class="row g-2 mt-2" method="get" action="/admin/financeiro/fluxo-caixa">
+    <div class="col-md-2">
+      <label class="form-label">Mês</label>
+      <input class="form-control" type="month" name="month" value="{{ filters.month }}" />
+    </div>
+    <div class="col-md-2">
+      <label class="form-label">Cliente</label>
+      <select class="form-select" name="client_id">
+        <option value="">Todos</option>
+        {% for c in clients %}
+          <option value="{{ c.id }}" {% if filters.client_id == (c.id|string) %}selected{% endif %}>{{ c.name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-md-2">
+      <label class="form-label">Centro de custo</label>
+      <select class="form-select" name="cost_center_id">
+        <option value="">Todos</option>
+        {% for cc in cost_centers %}
+          <option value="{{ cc.id }}" {% if filters.cost_center_id == (cc.id|string) %}selected{% endif %}>{{ cc.code }} - {{ cc.name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-md-2">
+      <label class="form-label">Produto / serviço</label>
+      <select class="form-select" name="internal_service_id">
+        <option value="">Todos</option>
+        {% for svc in services %}
+          <option value="{{ svc.id }}" {% if filters.internal_service_id == (svc.id|string) %}selected{% endif %}>{{ svc.name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-md-2">
+      <label class="form-label">Família</label>
+      <select class="form-select" name="family_code">
+        <option value="">Todas</option>
+        {% for family in families %}
+          <option value="{{ family.code }}" {% if filters.family_code == family.code %}selected{% endif %}>{{ family.label }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-md-2">
+      <label class="form-label">Conta bancária</label>
+      <select class="form-select" name="bank_account_id">
+        <option value="">Todas</option>
+        {% for acc in bank_accounts %}
+          <option value="{{ acc.id }}" {% if filters.bank_account_id == (acc.id|string) %}selected{% endif %}>{{ acc.name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-12 d-flex gap-2">
+      <button class="btn btn-outline-primary">Filtrar</button>
+      <a class="btn btn-outline-secondary" href="/admin/financeiro/fluxo-caixa">Limpar</a>
+    </div>
+  </form>
+
+  <div class="row g-3 mt-2">
+    <div class="col-md-3"><div class="border rounded p-3 h-100"><div class="muted small">Saldo inicial</div><div class="fw-semibold">{{ summary.initial_balance|brl }}</div></div></div>
+    <div class="col-md-3"><div class="border rounded p-3 h-100"><div class="muted small">Entradas previstas</div><div class="fw-semibold">{{ summary.projected_inflows|brl }}</div></div></div>
+    <div class="col-md-3"><div class="border rounded p-3 h-100"><div class="muted small">Saídas previstas</div><div class="fw-semibold">{{ summary.projected_outflows|brl }}</div></div></div>
+    <div class="col-md-3"><div class="border rounded p-3 h-100"><div class="muted small">Fechamento projetado</div><div class="fw-semibold">{{ summary.projected_ending_balance|brl }}</div></div></div>
+    <div class="col-md-3"><div class="border rounded p-3 h-100"><div class="muted small">Entradas realizadas</div><div class="fw-semibold">{{ summary.realized_inflows|brl }}</div></div></div>
+    <div class="col-md-3"><div class="border rounded p-3 h-100"><div class="muted small">Saídas realizadas</div><div class="fw-semibold">{{ summary.realized_outflows|brl }}</div></div></div>
+    <div class="col-md-3"><div class="border rounded p-3 h-100"><div class="muted small">Fechamento realizado</div><div class="fw-semibold">{{ summary.realized_ending_balance|brl }}</div></div></div>
+    <div class="col-md-3"><div class="border rounded p-3 h-100"><div class="muted small">Em atraso em aberto</div><div class="fw-semibold">{{ summary.overdue_open|brl }}</div></div></div>
+  </div>
+</div>
+
+<div class="card p-4 mt-3">
+  <div class="d-flex justify-content-between align-items-center">
+    <h5 class="mb-0">Movimentação do período</h5>
+    <div class="muted small">{{ rows|length }} dia(s) com movimento</div>
+  </div>
+  {% if rows %}
+    <div class="table-responsive mt-3">
+      <table class="table align-middle">
+        <thead>
+          <tr>
+            <th>Data</th>
+            <th class="text-end">Entradas previstas</th>
+            <th class="text-end">Saídas previstas</th>
+            <th class="text-end">Saldo projetado</th>
+            <th class="text-end">Entradas realizadas</th>
+            <th class="text-end">Saídas realizadas</th>
+            <th class="text-end">Saldo realizado</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in rows %}
+            <tr>
+              <td>
+                <div class="fw-semibold">{{ row.date_label }}</div>
+                {% if row.details %}
+                  <div class="small muted">{{ row.details|join(" • ") }}</div>
+                {% endif %}
+              </td>
+              <td class="text-end">{{ row.projected_in|brl }}</td>
+              <td class="text-end">{{ row.projected_out|brl }}</td>
+              <td class="text-end fw-semibold">{{ row.running_projected|brl }}</td>
+              <td class="text-end">{{ row.realized_in|brl }}</td>
+              <td class="text-end">{{ row.realized_out|brl }}</td>
+              <td class="text-end fw-semibold">{{ row.running_realized|brl }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <div class="muted mt-3">Nenhum movimento encontrado para os filtros informados.</div>
+  {% endif %}
+</div>
+{% endblock %}
+""",
+})
 templates_env = Environment(loader=DictLoader(TEMPLATES), autoescape=True)
 
 def _format_brl(value: Any) -> str:
@@ -15826,6 +16060,316 @@ def _office_finance_rows(session: Session, company_id: int, *, q: str = "", entr
     return rows, summary, clients
 
 
+
+
+def _office_selected_month(month: str) -> str:
+    s = (month or "").strip()
+    if re.fullmatch(r"\d{4}-\d{2}", s):
+        return s
+    return datetime.now().strftime("%Y-%m")
+
+
+def _office_entry_competence_month(entry: OfficeFinancialEntry) -> str:
+    for value in (entry.competence_date, entry.due_date, entry.settlement_date):
+        s = str(value or "").strip()
+        if re.fullmatch(r"\d{4}-\d{2}-\d{2}", s):
+            return s[:7]
+    return ""
+
+
+def _office_date_in_month(value: str, month: str) -> bool:
+    s = str(value or "").strip()
+    return bool(month and re.fullmatch(r"\d{4}-\d{2}-\d{2}", s) and s.startswith(month))
+
+
+def _office_entry_realized_amount(entry: OfficeFinancialEntry) -> float:
+    status = str(entry.status or "").strip().lower()
+    realized = float(entry.amount_realized_brl or 0.0)
+    expected = float(entry.amount_expected_brl or 0.0)
+    if realized:
+        return realized
+    if entry.entry_kind == "receber" and status == "recebido":
+        return expected
+    if entry.entry_kind == "pagar" and status == "pago":
+        return expected
+    return 0.0
+
+
+def _office_filter_entries(
+    session: Session,
+    company_id: int,
+    *,
+    month: str = "",
+    client_id: str = "",
+    cost_center_id: str = "",
+    internal_service_id: str = "",
+    family_code: str = "",
+    bank_account_id: str = "",
+) -> tuple[list[OfficeFinancialEntry], dict[str, Any]]:
+    entries = session.exec(
+        select(OfficeFinancialEntry)
+        .where(OfficeFinancialEntry.company_id == company_id)
+        .order_by(OfficeFinancialEntry.due_date, OfficeFinancialEntry.created_at)
+    ).all()
+    catalog = _office_catalog(session, company_id)
+    selected_month = _office_selected_month(month)
+
+    filtered: list[OfficeFinancialEntry] = []
+    for entry in entries:
+        if selected_month and _office_entry_competence_month(entry) != selected_month:
+            continue
+        if client_id and str(entry.client_id or "") != str(client_id):
+            continue
+        if cost_center_id and str(entry.cost_center_id or "") != str(cost_center_id):
+            continue
+        if internal_service_id and str(entry.internal_service_id or "") != str(internal_service_id):
+            continue
+        if family_code and str(entry.product_family_code or "").strip() != str(family_code).strip():
+            continue
+        if bank_account_id and str(entry.bank_account_id or "") != str(bank_account_id):
+            continue
+        filtered.append(entry)
+
+    family_codes = sorted({str(x.product_family_code or "").strip() for x in entries if str(x.product_family_code or "").strip()})
+    families = session.exec(
+        select(ProductFamily)
+        .where(ProductFamily.code.in_(family_codes))
+        .order_by(ProductFamily.area, ProductFamily.sort_order, ProductFamily.label)
+    ).all() if family_codes else []
+
+    lookups = {
+        "clients": catalog["clients"],
+        "cost_centers": catalog["cost_centers"],
+        "services": catalog["services"],
+        "bank_accounts": catalog["bank_accounts"],
+        "families": families,
+        "categories_by_id": {int(x.id): x for x in session.exec(select(OfficeCategory).where(OfficeCategory.company_id == company_id)).all() if x.id},
+        "clients_by_id": {int(x.id): x for x in catalog["clients"] if x.id},
+        "services_by_id": {int(x.id): x for x in catalog["services"] if x.id},
+        "bank_accounts_by_id": {int(x.id): x for x in catalog["bank_accounts"] if x.id},
+    }
+    return filtered, lookups
+
+
+def _office_dre_report(
+    session: Session,
+    company_id: int,
+    *,
+    month: str = "",
+    client_id: str = "",
+    cost_center_id: str = "",
+    internal_service_id: str = "",
+    family_code: str = "",
+) -> tuple[list[dict[str, Any]], dict[str, Any], dict[str, Any]]:
+    entries, lookups = _office_filter_entries(
+        session,
+        company_id,
+        month=month,
+        client_id=client_id,
+        cost_center_id=cost_center_id,
+        internal_service_id=internal_service_id,
+        family_code=family_code,
+    )
+    categories_by_id = lookups["categories_by_id"]
+
+    base_groups = [
+        "Receita Bruta",
+        "Deduções/Impostos",
+        "Outras Receitas",
+        "Custos Diretos",
+        "Despesas Operacionais",
+        "Resultado Financeiro",
+        "Outras Despesas",
+    ]
+    group_totals: dict[str, dict[str, float]] = {g: {"expected": 0.0, "realized": 0.0} for g in base_groups}
+
+    def _group_for(entry: OfficeFinancialEntry) -> str:
+        cat = categories_by_id.get(int(entry.category_id or 0))
+        group = str(getattr(cat, "dre_group", "") or "").strip()
+        if group:
+            return group
+        return "Receita Bruta" if entry.entry_kind == "receber" else "Despesas Operacionais"
+
+    for entry in entries:
+        if str(entry.status or "").strip().lower() == "cancelado":
+            continue
+        group = _group_for(entry)
+        if group not in group_totals:
+            group_totals[group] = {"expected": 0.0, "realized": 0.0}
+        expected = float(entry.amount_expected_brl or 0.0)
+        realized = _office_entry_realized_amount(entry)
+        signal = 1.0 if entry.entry_kind == "receber" else -1.0
+        group_totals[group]["expected"] += signal * expected
+        group_totals[group]["realized"] += signal * realized
+
+    receita_bruta_e = group_totals.get("Receita Bruta", {}).get("expected", 0.0)
+    receita_bruta_r = group_totals.get("Receita Bruta", {}).get("realized", 0.0)
+    deducoes_e = group_totals.get("Deduções/Impostos", {}).get("expected", 0.0)
+    deducoes_r = group_totals.get("Deduções/Impostos", {}).get("realized", 0.0)
+    outras_receitas_e = group_totals.get("Outras Receitas", {}).get("expected", 0.0)
+    outras_receitas_r = group_totals.get("Outras Receitas", {}).get("realized", 0.0)
+    custos_e = group_totals.get("Custos Diretos", {}).get("expected", 0.0)
+    custos_r = group_totals.get("Custos Diretos", {}).get("realized", 0.0)
+    despesas_op_e = group_totals.get("Despesas Operacionais", {}).get("expected", 0.0)
+    despesas_op_r = group_totals.get("Despesas Operacionais", {}).get("realized", 0.0)
+    resultado_fin_e = group_totals.get("Resultado Financeiro", {}).get("expected", 0.0)
+    resultado_fin_r = group_totals.get("Resultado Financeiro", {}).get("realized", 0.0)
+    outras_despesas_e = group_totals.get("Outras Despesas", {}).get("expected", 0.0)
+    outras_despesas_r = group_totals.get("Outras Despesas", {}).get("realized", 0.0)
+
+    receita_liquida_e = receita_bruta_e + deducoes_e
+    receita_liquida_r = receita_bruta_r + deducoes_r
+    margem_bruta_e = receita_liquida_e + custos_e
+    margem_bruta_r = receita_liquida_r + custos_r
+    ebitda_e = margem_bruta_e + despesas_op_e
+    ebitda_r = margem_bruta_r + despesas_op_r
+    resultado_periodo_e = ebitda_e + resultado_fin_e + outras_receitas_e + outras_despesas_e
+    resultado_periodo_r = ebitda_r + resultado_fin_r + outras_receitas_r + outras_despesas_r
+
+    ordered_groups = [g for g in base_groups if g in group_totals] + [g for g in group_totals.keys() if g not in base_groups]
+    rows: list[dict[str, Any]] = []
+    for group in ordered_groups:
+        rows.append({
+            "label": group,
+            "expected": round(group_totals[group]["expected"], 2),
+            "realized": round(group_totals[group]["realized"], 2),
+            "kind": "group",
+        })
+        if group == "Deduções/Impostos":
+            rows.append({"label": "Receita líquida", "expected": round(receita_liquida_e, 2), "realized": round(receita_liquida_r, 2), "kind": "result"})
+        if group == "Custos Diretos":
+            rows.append({"label": "Margem bruta", "expected": round(margem_bruta_e, 2), "realized": round(margem_bruta_r, 2), "kind": "result"})
+        if group == "Despesas Operacionais":
+            rows.append({"label": "EBITDA", "expected": round(ebitda_e, 2), "realized": round(ebitda_r, 2), "kind": "result"})
+    rows.append({"label": "Resultado do período", "expected": round(resultado_periodo_e, 2), "realized": round(resultado_periodo_r, 2), "kind": "result"})
+
+    summary = {
+        "entry_count": len(entries),
+        "net_revenue_expected": round(receita_liquida_e, 2),
+        "net_revenue_realized": round(receita_liquida_r, 2),
+        "ebitda_expected": round(ebitda_e, 2),
+        "ebitda_realized": round(ebitda_r, 2),
+        "net_result_expected": round(resultado_periodo_e, 2),
+        "net_result_realized": round(resultado_periodo_r, 2),
+    }
+    return rows, summary, lookups
+
+
+def _office_cashflow_report(
+    session: Session,
+    company_id: int,
+    *,
+    month: str = "",
+    client_id: str = "",
+    cost_center_id: str = "",
+    internal_service_id: str = "",
+    family_code: str = "",
+    bank_account_id: str = "",
+) -> tuple[list[dict[str, Any]], dict[str, Any], dict[str, Any]]:
+    entries, lookups = _office_filter_entries(
+        session,
+        company_id,
+        month=month,
+        client_id=client_id,
+        cost_center_id=cost_center_id,
+        internal_service_id=internal_service_id,
+        family_code=family_code,
+        bank_account_id=bank_account_id,
+    )
+    selected_month = _office_selected_month(month)
+    today_key = _office_date_key(datetime.now().strftime("%Y-%m-%d"))
+
+    bank_accounts = lookups["bank_accounts"]
+    if bank_account_id:
+        initial_balance = sum(float(x.initial_balance_brl or 0.0) for x in bank_accounts if str(x.id or "") == str(bank_account_id))
+    else:
+        initial_balance = sum(float(x.initial_balance_brl or 0.0) for x in bank_accounts)
+
+    buckets: dict[str, dict[str, Any]] = {}
+    projected_inflows = projected_outflows = 0.0
+    realized_inflows = realized_outflows = 0.0
+    overdue_open = 0.0
+
+    services_by_id = lookups["services_by_id"]
+
+    def _bucket(date_str: str) -> dict[str, Any]:
+        label = date_str if re.fullmatch(r"\d{4}-\d{2}-\d{2}", str(date_str or "").strip()) else "Sem data"
+        if label not in buckets:
+            buckets[label] = {
+                "date": label,
+                "date_label": label if label != "Sem data" else "Sem data",
+                "projected_in": 0.0,
+                "projected_out": 0.0,
+                "realized_in": 0.0,
+                "realized_out": 0.0,
+                "details": [],
+            }
+        return buckets[label]
+
+    for entry in entries:
+        status = str(entry.status or "").strip().lower()
+        expected = float(entry.amount_expected_brl or 0.0)
+        realized = _office_entry_realized_amount(entry)
+        due = str(entry.due_date or "").strip()
+        settlement = str(entry.settlement_date or "").strip()
+
+        if _office_is_open(entry) and due and _office_date_key(due) < today_key:
+            signal = 1.0 if entry.entry_kind == "receber" else -1.0
+            overdue_open += signal * expected
+
+        if due and _office_date_in_month(due, selected_month) and status != "cancelado":
+            row = _bucket(due)
+            if entry.entry_kind == "receber":
+                row["projected_in"] += expected
+                projected_inflows += expected
+            else:
+                row["projected_out"] += expected
+                projected_outflows += expected
+            detail = str(entry.description or "").strip()
+            svc = services_by_id.get(int(entry.internal_service_id or 0))
+            if svc:
+                detail = f"{detail} ({svc.name})"
+            if detail:
+                row["details"].append(detail)
+
+        if settlement and _office_date_in_month(settlement, selected_month) and realized:
+            row = _bucket(settlement)
+            if entry.entry_kind == "receber":
+                row["realized_in"] += realized
+                realized_inflows += realized
+            else:
+                row["realized_out"] += realized
+                realized_outflows += realized
+
+    ordered_keys = sorted(buckets.keys(), key=lambda s: (s == "Sem data", _office_date_key(s)))
+    running_projected = float(initial_balance)
+    running_realized = float(initial_balance)
+    rows: list[dict[str, Any]] = []
+    for key in ordered_keys:
+        row = buckets[key]
+        running_projected += float(row["projected_in"]) - float(row["projected_out"])
+        running_realized += float(row["realized_in"]) - float(row["realized_out"])
+        row["running_projected"] = round(running_projected, 2)
+        row["running_realized"] = round(running_realized, 2)
+        row["projected_in"] = round(float(row["projected_in"]), 2)
+        row["projected_out"] = round(float(row["projected_out"]), 2)
+        row["realized_in"] = round(float(row["realized_in"]), 2)
+        row["realized_out"] = round(float(row["realized_out"]), 2)
+        row["details"] = row["details"][:3]
+        rows.append(row)
+
+    summary = {
+        "initial_balance": round(initial_balance, 2),
+        "projected_inflows": round(projected_inflows, 2),
+        "projected_outflows": round(projected_outflows, 2),
+        "projected_ending_balance": round(initial_balance + projected_inflows - projected_outflows, 2),
+        "realized_inflows": round(realized_inflows, 2),
+        "realized_outflows": round(realized_outflows, 2),
+        "realized_ending_balance": round(initial_balance + realized_inflows - realized_outflows, 2),
+        "overdue_open": round(overdue_open, 2),
+    }
+    return rows, summary, lookups
+
 def _office_entry_form_data(entry: Optional[OfficeFinancialEntry] = None) -> dict[str, str]:
     if not entry:
         return {
@@ -16292,6 +16836,83 @@ async def office_finance_edit_action(request: Request, session: Session = Depend
     return RedirectResponse("/admin/financeiro", status_code=303)
 
 
+
+
+
+@app.get("/admin/financeiro/dre", response_class=HTMLResponse)
+@require_role({"admin", "equipe"})
+async def office_finance_dre_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+    if not ensure_office_finance_tables():
+        return render("error.html", request=request, context={"message": "Não foi possível inicializar o Financeiro Interno."}, status_code=500)
+
+    filters = {
+        "month": _office_selected_month((request.query_params.get("month") or "").strip()),
+        "client_id": (request.query_params.get("client_id") or "").strip(),
+        "cost_center_id": (request.query_params.get("cost_center_id") or "").strip(),
+        "internal_service_id": (request.query_params.get("internal_service_id") or "").strip(),
+        "family_code": (request.query_params.get("family_code") or "").strip(),
+    }
+    rows, summary, lookups = _office_dre_report(session, ctx.company.id, **filters)
+    current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
+    return render(
+        "office_finance_dre.html",
+        request=request,
+        context={
+            "title": "DRE Gerencial",
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "current_client": current_client,
+            "role": ctx.membership.role,
+            "filters": filters,
+            "rows": rows,
+            "summary": summary,
+            "clients": lookups["clients"],
+            "cost_centers": lookups["cost_centers"],
+            "services": lookups["services"],
+            "families": lookups["families"],
+        },
+    )
+
+
+@app.get("/admin/financeiro/fluxo-caixa", response_class=HTMLResponse)
+@require_role({"admin", "equipe"})
+async def office_finance_cashflow_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+    if not ensure_office_finance_tables():
+        return render("error.html", request=request, context={"message": "Não foi possível inicializar o Financeiro Interno."}, status_code=500)
+
+    filters = {
+        "month": _office_selected_month((request.query_params.get("month") or "").strip()),
+        "client_id": (request.query_params.get("client_id") or "").strip(),
+        "cost_center_id": (request.query_params.get("cost_center_id") or "").strip(),
+        "internal_service_id": (request.query_params.get("internal_service_id") or "").strip(),
+        "family_code": (request.query_params.get("family_code") or "").strip(),
+        "bank_account_id": (request.query_params.get("bank_account_id") or "").strip(),
+    }
+    rows, summary, lookups = _office_cashflow_report(session, ctx.company.id, **filters)
+    current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
+    return render(
+        "office_finance_cashflow.html",
+        request=request,
+        context={
+            "title": "Fluxo de Caixa",
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "current_client": current_client,
+            "role": ctx.membership.role,
+            "filters": filters,
+            "rows": rows,
+            "summary": summary,
+            "clients": lookups["clients"],
+            "cost_centers": lookups["cost_centers"],
+            "services": lookups["services"],
+            "families": lookups["families"],
+            "bank_accounts": lookups["bank_accounts"],
+        },
+    )
 
 @app.get("/financeiro", response_class=HTMLResponse)
 @require_login
