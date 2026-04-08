@@ -26269,6 +26269,7 @@ FEATURE_GROUPS = [
     {"key": "meu_projeto", "title": "Meu Projeto", "features": ["consultoria", "reunioes", "tarefas"]},
     {"key": "escritorio_comercial", "title": "Escritório • Comercial", "features": ["crm", "motor_ofertas"]},
     {"key": "escritorio_credito", "title": "Escritório • Crédito e Estruturação", "features": ["credito"]},
+    {"key": "escritorio_financeiro", "title": "Escritório • Financeiro", "features": ["financeiro_escritorio"]},
     {"key": "admin", "title": "Admin", "features": ["ui", "gestao", "familias", "servicos_internos", "parceiros"]},
 ]
 FEATURE_STANDALONE = ["pendencias", "agenda", "educacao"]
@@ -26276,6 +26277,7 @@ FEATURE_VISIBLE_ROLES.update({
     "credito": {"admin", "equipe"},
     "crm": {"admin", "equipe"},
     "motor_ofertas": {"admin", "equipe"},
+    "financeiro_escritorio": {"admin", "equipe"},
     "familias": {"admin"},
     "servicos_internos": {"admin"},
     "parceiros": {"admin"},
@@ -26300,6 +26302,8 @@ ROLE_DEFAULT_FEATURES["cliente"] = {
     "agenda",
     "educacao",
 }
+ROLE_DEFAULT_FEATURES["admin"].add("financeiro_escritorio")
+ROLE_DEFAULT_FEATURES["equipe"].add("financeiro_escritorio")
 
 def _clean_text(value: Any, max_len: int = 255) -> str:
     raw = html.escape(str(value or "").strip())
@@ -29116,6 +29120,10 @@ if "minha_empresa" in _group_map and "grupo_empresa" not in _group_map["minha_em
     _group_map["minha_empresa"]["features"].insert(1, "grupo_empresa")
 if "admin" in _group_map and "analytics" not in _group_map["admin"]["features"]:
     _group_map["admin"]["features"].append("analytics")
+if "escritorio_financeiro" not in _group_map:
+    FEATURE_GROUPS.insert(max(len(FEATURE_GROUPS) - 1, 0), {"key": "escritorio_financeiro", "title": "Escritório • Financeiro", "features": ["financeiro_escritorio"]})
+elif "financeiro_escritorio" not in _group_map["escritorio_financeiro"]["features"]:
+    _group_map["escritorio_financeiro"]["features"].append("financeiro_escritorio")
 
 # Atualiza base.html de forma mínima e segura.
 _base_tpl = TEMPLATES.get("base.html", "")
