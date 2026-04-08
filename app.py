@@ -29384,3 +29384,59 @@ async def message_add_participants(
     session.commit()
     set_flash(request, f"{added} participante(s) adicionados.")
     return RedirectResponse(f"/mensagens/{conv.id}", status_code=303)
+
+
+# ----------------------------
+# Hotfix: restaura Mensageria no topo e nos grupos após ajustes do sininho
+# ----------------------------
+
+FEATURE_KEYS.update({
+    "mensagens": {
+        "title": "Mensagens",
+        "desc": "Conversas internas e por cliente.",
+        "href": "/mensagens",
+    },
+})
+FEATURE_VISIBLE_ROLES.update({
+    "mensagens": {"admin", "equipe", "cliente"},
+})
+ROLE_DEFAULT_FEATURES.setdefault("admin", set()).add("mensagens")
+ROLE_DEFAULT_FEATURES.setdefault("equipe", set()).add("mensagens")
+ROLE_DEFAULT_FEATURES.setdefault("cliente", set()).add("mensagens")
+
+def _ensure_feature_in_group(feature_key: str, group_key: str, insert_pos: int = 0) -> None:
+    for g in FEATURE_GROUPS:
+        if str(g.get("key") or "") == group_key:
+            feats = g.setdefault("features", [])
+            if feature_key not in feats:
+                pos = min(max(insert_pos, 0), len(feats))
+                feats.insert(pos, feature_key)
+            return
+
+_ensure_feature_in_group("mensagens", "cliente", 3)
+_ensure_feature_in_group("mensagens", "escritorio", 3)
+_ensure_feature_in_group("mensagens", "admin", 1)
+
+_base_tpl_fix_mensagens = TEMPLATES.get("base.html", "")
+if _base_tpl_fix_mensagens and 'href="/mensagens"' not in _base_tpl_fix_mensagens:
+    _msg_btn = (
+        '<a class="btn btn-outline-secondary btn-sm d-inline-flex align-items-center gap-1 position-relative" '
+        'href="/mensagens" aria-label="Mensagens"><span>💬</span>'
+        '{% if unread_messages_count %}<span class="badge rounded-pill text-bg-danger">{{ unread_messages_count }}</span>{% endif %}'
+        '</a>'
+    )
+    if 'href="/notificacoes"' in _base_tpl_fix_mensagens:
+        _base_tpl_fix_mensagens = re.sub(
+            r'(<a[^>]+href="/notificacoes"[^>]*>)',
+            _msg_btn + r'\1',
+            _base_tpl_fix_mensagens,
+            count=1,
+        )
+    elif 'href="/logout"' in _base_tpl_fix_mensagens:
+        _base_tpl_fix_mensagens = _base_tpl_fix_mensagens.replace(
+            '<a class="btn btn-outline-secondary btn-sm" href="/logout">Sair</a>',
+            _msg_btn + '\n            <a class="btn btn-outline-secondary btn-sm" href="/logout">Sair</a>',
+        )
+    TEMPLATES["base.html"] = _base_tpl_fix_mensagens
+    if hasattr(templates_env.loader, "mapping"):
+        templates_env.loader.mapping = TEMPLATES
