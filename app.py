@@ -12754,6 +12754,19 @@ async def empresa_save(
     session.commit()
     _sync_business_profile_legacy_columns(session, profile)
 
+    try:
+        _notify_staff_about_client_activity(
+            session,
+            ctx=ctx,
+            client_id=current_client.id,
+            kind="atividade_cliente",
+            title="Cliente atualizou dados da empresa",
+            message=(current_client.name or "Cliente")[:160],
+            href="/empresa",
+        )
+    except Exception:
+        pass
+
     set_flash(request, "Dados da empresa atualizados.")
     return RedirectResponse("/empresa", status_code=303)
 
@@ -13006,6 +13019,19 @@ async def perfil_save(
     matches = compute_offer_engine(session=session, company_id=ctx.company.id, client=current_client, profile=profile, latest_snapshot=latest_snapshot)
     persist_offer_matches(session, company_id=ctx.company.id, client_id=current_client.id, matches=matches)
 
+    try:
+        _notify_staff_about_client_activity(
+            session,
+            ctx=ctx,
+            client_id=current_client.id,
+            kind="atividade_cliente",
+            title="Cliente atualizou o diagnóstico financeiro",
+            message=(current_client.name or "Cliente")[:160],
+            href="/perfil",
+        )
+    except Exception:
+        pass
+
     set_flash(request, "Diagnóstico financeiro atualizado.")
     return RedirectResponse("/perfil", status_code=303)
 
@@ -13167,6 +13193,20 @@ async def perfil_snapshot_new_action(
     session.commit()
     matches = compute_offer_engine(session=session, company_id=ctx.company.id, client=current_client, profile=profile, latest_snapshot=snap)
     persist_offer_matches(session, company_id=ctx.company.id, client_id=current_client.id, matches=matches)
+
+    try:
+        _notify_staff_about_client_activity(
+            session,
+            ctx=ctx,
+            client_id=current_client.id,
+            kind="atividade_cliente",
+            title="Cliente registrou uma nova avaliação",
+            message=(current_client.name or "Cliente")[:160],
+            href="/perfil",
+        )
+    except Exception:
+        pass
+
     set_flash(request, "Avaliação registrada.")
     return RedirectResponse("/perfil", status_code=303)
 
@@ -20706,7 +20746,10 @@ async def simulador_json(
     notes: str = Form(""),
     session: Session = Depends(get_session),
 ) -> JSONResponse:
-    _ = get_tenant_context(request, session)
+    ctx = get_tenant_context(request, session)
+    current_client = None
+    if ctx:
+        current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
     inp = build_loan_input(
         loan_type=loan_type,
         amortization=amortization,
@@ -20726,6 +20769,19 @@ async def simulador_json(
         notes=notes,
     )
     res = simulate_loan(inp)
+    try:
+        if ctx and current_client:
+            _notify_staff_about_client_activity(
+                session,
+                ctx=ctx,
+                client_id=current_client.id,
+                kind="simulacao",
+                title="Cliente executou uma simulação",
+                message=f"{inp.loan_type} • {format_brl(float(inp.principal))}",
+                href="/simulador",
+            )
+    except Exception:
+        pass
     return JSONResponse({
         "inputs": {
             "loan_type": inp.loan_type,
@@ -20790,7 +20846,10 @@ async def simulador_pdf(
     notes: str = Form(""),
     session: Session = Depends(get_session),
 ):
-    _ = get_tenant_context(request, session)
+    ctx = get_tenant_context(request, session)
+    current_client = None
+    if ctx:
+        current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
 
     inp = build_loan_input(
         loan_type=loan_type,
@@ -20811,6 +20870,19 @@ async def simulador_pdf(
         notes=notes,
     )
     res = simulate_loan(inp)
+    try:
+        if ctx and current_client:
+            _notify_staff_about_client_activity(
+                session,
+                ctx=ctx,
+                client_id=current_client.id,
+                kind="simulacao",
+                title="Cliente gerou PDF de simulação",
+                message=f"{inp.loan_type} • {format_brl(float(inp.principal))}",
+                href="/simulador",
+            )
+    except Exception:
+        pass
     pdf_bytes = render_loan_pdf(res)
     headers = {"Content-Disposition": 'inline; filename="simulacao_emprestimo_maffezzolli.pdf"'}
     return StreamingResponse(io.BytesIO(pdf_bytes), media_type="application/pdf", headers=headers)
@@ -27560,6 +27632,34 @@ def notify_staff_members(
     return count
 
 
+def _notify_staff_about_client_activity(
+    session: Session,
+    *,
+    ctx: TenantContext,
+    client_id: Optional[int],
+    title: str,
+    message: str = "",
+    href: str = "",
+    kind: str = "atividade_cliente",
+) -> int:
+    if ctx.membership.role != "cliente":
+        return 0
+    target_client_id = int(client_id or ctx.membership.client_id or 0)
+    if not target_client_id:
+        return 0
+    return notify_staff_members(
+        session,
+        company_id=ctx.company.id,
+        client_id=target_client_id,
+        kind=kind,
+        title=title,
+        message=message,
+        href=href,
+        created_by_user_id=ctx.user.id,
+        exclude_user_ids={ctx.user.id},
+    )
+
+
 def unread_notifications_count_for_user(session: Session, *, company_id: int, user_id: int) -> int:
     try:
         return int(
@@ -27751,7 +27851,7 @@ _base_tpl = TEMPLATES.get("base.html", "")
 if _base_tpl and 'href="/notificacoes"' not in _base_tpl:
     _base_tpl = _base_tpl.replace(
         '<a class="btn btn-outline-secondary btn-sm" href="/logout">Sair</a>',
-        '<a class="btn btn-outline-secondary btn-sm position-relative" href="/notificacoes" aria-label="Notificações">🔔{% if unread_notifications_count %}<span class="position-absolute top-0 start-100 translate-middle badge rounded-pill text-bg-danger">{{ unread_notifications_count }}</span>{% endif %}</a>\n            <a class="btn btn-outline-secondary btn-sm" href="/logout">Sair</a>'
+        '<a class="btn btn-outline-secondary btn-sm d-inline-flex align-items-center gap-1 position-relative" href="/notificacoes" aria-label="Notificações"><span>🔔</span>{% if unread_notifications_count %}<span class="badge rounded-pill text-bg-danger">{{ unread_notifications_count }}</span>{% endif %}</a>\n            <a class="btn btn-outline-secondary btn-sm" href="/logout">Sair</a>'
     )
     TEMPLATES["base.html"] = _base_tpl
 
@@ -28128,18 +28228,21 @@ async def notifications_page(request: Request, session: Session = Depends(get_se
         .limit(100)
     ).all()
 
-    items = [
-        {
+    items = []
+    for row in rows:
+        client = session.get(Client, row.client_id) if row.client_id else None
+        author = session.get(User, row.created_by_user_id) if row.created_by_user_id else None
+        items.append({
             "id": row.id,
             "kind": row.kind,
             "title": row.title,
             "message": row.message,
             "href": row.href,
             "is_read": bool(row.is_read),
+            "client_name": client.name if client else "",
+            "author_name": author.name if author else "",
             "created_at": row.created_at.strftime("%d/%m/%Y %H:%M") if row.created_at else "—",
-        }
-        for row in rows
-    ]
+        })
 
     active_client_id = get_active_client_id(request, session, ctx)
     current_client = get_client_or_none(session, ctx.company.id, active_client_id)
