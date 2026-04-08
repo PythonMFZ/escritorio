@@ -2444,6 +2444,109 @@ class FinanceInvoice(SQLModel, table=True):
     updated_at: datetime = Field(default_factory=utcnow)
 
 
+OFFICE_ENTRY_KINDS = {"pagar", "receber"}
+OFFICE_ENTRY_STATUSES = ["previsto", "aberto", "parcial", "pago", "recebido", "cancelado"]
+OFFICE_CATEGORY_KINDS = {"receita", "despesa"}
+
+
+class OfficeSupplier(SQLModel, table=True):
+    __table_args__ = (UniqueConstraint("company_id", "name", name="uq_officesupplier_company_name"),)
+    id: Optional[int] = Field(default=None, primary_key=True)
+    company_id: int = Field(index=True, foreign_key="company.id")
+    name: str
+    document: str = ""
+    email: str = ""
+    phone: str = ""
+    notes: str = ""
+    is_active: bool = Field(default=True, index=True)
+    created_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime = Field(default_factory=utcnow)
+
+
+class OfficeCostCenter(SQLModel, table=True):
+    __table_args__ = (UniqueConstraint("company_id", "code", name="uq_officecostcenter_company_code"),)
+    id: Optional[int] = Field(default=None, primary_key=True)
+    company_id: int = Field(index=True, foreign_key="company.id")
+    code: str = Field(index=True)
+    name: str
+    notes: str = ""
+    is_active: bool = Field(default=True, index=True)
+    created_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime = Field(default_factory=utcnow)
+
+
+class OfficeCategory(SQLModel, table=True):
+    __table_args__ = (UniqueConstraint("company_id", "name", "category_kind", name="uq_officecategory_company_name_kind"),)
+    id: Optional[int] = Field(default=None, primary_key=True)
+    company_id: int = Field(index=True, foreign_key="company.id")
+    name: str
+    category_kind: str = Field(default="despesa", index=True)  # receita | despesa
+    dre_group: str = ""
+    notes: str = ""
+    is_active: bool = Field(default=True, index=True)
+    created_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime = Field(default_factory=utcnow)
+
+
+class OfficeRevenueType(SQLModel, table=True):
+    __table_args__ = (UniqueConstraint("company_id", "name", name="uq_officerevenuetype_company_name"),)
+    id: Optional[int] = Field(default=None, primary_key=True)
+    company_id: int = Field(index=True, foreign_key="company.id")
+    name: str
+    description: str = ""
+    is_active: bool = Field(default=True, index=True)
+    created_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime = Field(default_factory=utcnow)
+
+
+class OfficeBankAccount(SQLModel, table=True):
+    __table_args__ = (UniqueConstraint("company_id", "name", name="uq_officebankaccount_company_name"),)
+    id: Optional[int] = Field(default=None, primary_key=True)
+    company_id: int = Field(index=True, foreign_key="company.id")
+    name: str
+    bank_name: str = ""
+    branch_number: str = ""
+    account_number: str = ""
+    initial_balance_brl: float = 0.0
+    notes: str = ""
+    is_active: bool = Field(default=True, index=True)
+    created_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime = Field(default_factory=utcnow)
+
+
+class OfficeFinancialEntry(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    company_id: int = Field(index=True, foreign_key="company.id")
+    created_by_user_id: int = Field(index=True, foreign_key="user.id")
+    updated_by_user_id: Optional[int] = Field(default=None, index=True, foreign_key="user.id")
+
+    entry_kind: str = Field(default="receber", index=True)  # pagar | receber
+    status: str = Field(default="aberto", index=True)
+
+    client_id: Optional[int] = Field(default=None, index=True, foreign_key="client.id")
+    supplier_id: Optional[int] = Field(default=None, index=True, foreign_key="officesupplier.id")
+    cost_center_id: Optional[int] = Field(default=None, index=True, foreign_key="officecostcenter.id")
+    category_id: Optional[int] = Field(default=None, index=True, foreign_key="officecategory.id")
+    revenue_type_id: Optional[int] = Field(default=None, index=True, foreign_key="officerevenuetype.id")
+    bank_account_id: Optional[int] = Field(default=None, index=True, foreign_key="officebankaccount.id")
+    internal_service_id: Optional[int] = Field(default=None, index=True, foreign_key="internalservice.id")
+
+    description: str
+    document_number: str = ""
+    competence_date: str = ""
+    due_date: str = ""
+    settlement_date: str = ""
+
+    amount_expected_brl: float = 0.0
+    amount_realized_brl: float = 0.0
+
+    product_family_code: str = Field(default="", index=True)
+    notes: str = ""
+
+    created_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime = Field(default_factory=utcnow)
+
+
 # ----------------------------
 # Pendências (Checklist)
 # ----------------------------
@@ -2587,6 +2690,114 @@ def ensure_credit_consent_table() -> bool:
         return False
 
 
+
+
+OFFICE_FINANCE_DEFAULT_COST_CENTERS: list[tuple[str, str]] = [
+    ("ADM", "Administrativo"),
+    ("COM", "Comercial"),
+    ("FIN", "Financeiro"),
+    ("MKT", "Marketing"),
+    ("OPS", "Operações"),
+    ("TEC", "Tecnologia"),
+]
+
+OFFICE_FINANCE_DEFAULT_CATEGORIES: list[dict[str, str]] = [
+    {"name": "Honorários Advisory", "category_kind": "receita", "dre_group": "Receita Bruta"},
+    {"name": "Honorários Investment Banking", "category_kind": "receita", "dre_group": "Receita Bruta"},
+    {"name": "Success Fee", "category_kind": "receita", "dre_group": "Receita Bruta"},
+    {"name": "Comissão de Parceiros", "category_kind": "receita", "dre_group": "Outras Receitas"},
+    {"name": "Receita Financeira", "category_kind": "receita", "dre_group": "Resultado Financeiro"},
+    {"name": "Folha", "category_kind": "despesa", "dre_group": "Despesas Operacionais"},
+    {"name": "Marketing", "category_kind": "despesa", "dre_group": "Despesas Operacionais"},
+    {"name": "Tecnologia", "category_kind": "despesa", "dre_group": "Despesas Operacionais"},
+    {"name": "Jurídico e Compliance", "category_kind": "despesa", "dre_group": "Despesas Operacionais"},
+    {"name": "Impostos", "category_kind": "despesa", "dre_group": "Deduções/Impostos"},
+    {"name": "Serviços de Terceiros", "category_kind": "despesa", "dre_group": "Despesas Operacionais"},
+]
+
+OFFICE_FINANCE_DEFAULT_REVENUE_TYPES: list[tuple[str, str]] = [
+    ("Honorários Advisory", "Receita recorrente ou por projeto de advisory."),
+    ("Honorários IB", "Receita ligada a ECM/DCM/M&A."),
+    ("Success Fee", "Receita variável por fechamento."),
+    ("Comissão de Parceiros", "Comissões recebidas de parceiros."),
+    ("Mensalidade", "Receita recorrente de acompanhamento."),
+    ("Reembolso", "Reembolso de despesas."),
+    ("Receita Financeira", "Juros e rendimentos."),
+    ("Outros", "Outras receitas."),
+]
+
+
+def ensure_office_finance_tables() -> bool:
+    try:
+        SQLModel.metadata.create_all(
+            engine,
+            tables=[
+                OfficeSupplier.__table__,
+                OfficeCostCenter.__table__,
+                OfficeCategory.__table__,
+                OfficeRevenueType.__table__,
+                OfficeBankAccount.__table__,
+                OfficeFinancialEntry.__table__,
+            ],
+            checkfirst=True,
+        )
+        return True
+    except Exception as e:
+        try:
+            print(f"[office_finance] failed to ensure tables: {e}")
+        except Exception:
+            pass
+        return False
+
+
+def seed_office_finance_defaults(session: Session, company_id: int) -> None:
+    changed = False
+
+    existing_cc = {str(x.code).strip().upper() for x in session.exec(
+        select(OfficeCostCenter).where(OfficeCostCenter.company_id == company_id)
+    ).all()}
+    for code, name in OFFICE_FINANCE_DEFAULT_COST_CENTERS:
+        if code.upper() in existing_cc:
+            continue
+        session.add(OfficeCostCenter(company_id=company_id, code=code.upper(), name=name, is_active=True))
+        changed = True
+
+    existing_cat = {(str(x.name).strip().lower(), str(x.category_kind).strip().lower()) for x in session.exec(
+        select(OfficeCategory).where(OfficeCategory.company_id == company_id)
+    ).all()}
+    for item in OFFICE_FINANCE_DEFAULT_CATEGORIES:
+        key = (item["name"].strip().lower(), item["category_kind"].strip().lower())
+        if key in existing_cat:
+            continue
+        session.add(
+            OfficeCategory(
+                company_id=company_id,
+                name=item["name"],
+                category_kind=item["category_kind"],
+                dre_group=item["dre_group"],
+                is_active=True,
+            )
+        )
+        changed = True
+
+    existing_rt = {str(x.name).strip().lower() for x in session.exec(
+        select(OfficeRevenueType).where(OfficeRevenueType.company_id == company_id)
+    ).all()}
+    for name, description in OFFICE_FINANCE_DEFAULT_REVENUE_TYPES:
+        if name.strip().lower() in existing_rt:
+            continue
+        session.add(
+            OfficeRevenueType(
+                company_id=company_id,
+                name=name,
+                description=description,
+                is_active=True,
+            )
+        )
+        changed = True
+
+    if changed:
+        session.commit()
 
 
 def ensure_consulta_scr_consent_table() -> bool:
@@ -3473,6 +3684,7 @@ FEATURE_KEYS: dict[str, dict[str, str]] = {
     "empresa": {"title": "Empresa", "desc": "Dados completos do cliente.", "href": "/empresa"},
     "perfil": {"title": "Perfil", "desc": "Indicadores do cliente.", "href": "/perfil"},
     "financeiro": {"title": "Financeiro", "desc": "Notas/boletos de honorários.", "href": "/financeiro"},
+    "financeiro_escritorio": {"title": "Financeiro Interno", "desc": "Contas a pagar/receber e cadastros internos.", "href": "/admin/financeiro"},
     "documentos": {"title": "Documentos", "desc": "Contratos e docs importantes.", "href": "/documentos"},
     "consultoria": {"title": "Consultoria", "desc": "Projetos, etapas e progresso.", "href": "/consultoria"},
     "reunioes": {"title": "Reuniões", "desc": "Atas e notas (Notion).", "href": "/reunioes"},
@@ -3513,6 +3725,7 @@ FEATURE_VISIBLE_ROLES: dict[str, set[str]] = {
     "parceiros": {"admin"},
     "motor_ofertas": {"admin", "equipe"},
     "ofertas": {"admin", "equipe", "cliente"},
+    "financeiro_escritorio": {"admin", "equipe"},
 }
 
 ROLE_DEFAULT_FEATURES: dict[str, set[str]] = {
@@ -3523,8 +3736,8 @@ ROLE_DEFAULT_FEATURES: dict[str, set[str]] = {
 
 ROLE_DEFAULT_FEATURES["admin"].add("openfinance")
 ROLE_DEFAULT_FEATURES["equipe"].add("openfinance")
-ROLE_DEFAULT_FEATURES["admin"].update({"familias","servicos_internos","parceiros","motor_ofertas","ofertas"})
-ROLE_DEFAULT_FEATURES["equipe"].update({"motor_ofertas","ofertas"})
+ROLE_DEFAULT_FEATURES["admin"].update({"familias","servicos_internos","parceiros","motor_ofertas","ofertas","financeiro_escritorio"})
+ROLE_DEFAULT_FEATURES["equipe"].update({"motor_ofertas","ofertas","financeiro_escritorio"})
 ROLE_DEFAULT_FEATURES["cliente"].add("ofertas")
 
 FEATURE_KEYS.update({
@@ -3536,7 +3749,7 @@ FEATURE_KEYS.update({
 })
 FEATURE_GROUPS = [
     {"key": "cliente", "title": "Cliente", "features": ["empresa", "perfil", "ofertas", "financeiro", "documentos", "consultas", "openfinance", "creditos", "propostas"]},
-    {"key": "escritorio", "title": "Escritorio", "features": ["crm", "credito", "motor_ofertas", "consultoria", "reunioes", "tarefas", "simulador"]},
+    {"key": "escritorio", "title": "Escritorio", "features": ["crm", "credito", "motor_ofertas", "financeiro_escritorio", "consultoria", "reunioes", "tarefas", "simulador"]},
     {"key": "admin", "title": "Admin", "features": ["ui", "gestao", "familias", "servicos_internos", "parceiros"]},
 ]
 
@@ -8919,6 +9132,429 @@ TEMPLATES.update({
 """,
 })
 
+
+TEMPLATES.update({
+    "office_finance_dashboard.html": r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <div class="d-flex justify-content-between align-items-start flex-wrap gap-2">
+    <div>
+      <h4 class="mb-0">Financeiro Interno do Escritório</h4>
+      <div class="muted">Contas a pagar, contas a receber e cadastros internos do escritório.</div>
+    </div>
+    <div class="d-flex gap-2 flex-wrap">
+      <a class="btn btn-outline-secondary" href="/admin/financeiro/cadastros">Cadastros</a>
+      <a class="btn btn-primary" href="/admin/financeiro/novo">Novo lançamento</a>
+    </div>
+  </div>
+
+  <form class="row g-2 mt-2" method="get" action="/admin/financeiro">
+    <div class="col-md-3">
+      <input class="form-control" name="q" value="{{ filters.q }}" placeholder="Buscar descrição, documento, cliente..." />
+    </div>
+    <div class="col-md-2">
+      <select class="form-select" name="entry_kind">
+        <option value="">Tipo</option>
+        <option value="receber" {% if filters.entry_kind == "receber" %}selected{% endif %}>Receber</option>
+        <option value="pagar" {% if filters.entry_kind == "pagar" %}selected{% endif %}>Pagar</option>
+      </select>
+    </div>
+    <div class="col-md-2">
+      <select class="form-select" name="status">
+        <option value="">Status</option>
+        {% for st in statuses %}
+          <option value="{{ st }}" {% if filters.status == st %}selected{% endif %}>{{ st|capitalize }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-md-2">
+      <input class="form-control" type="month" name="month" value="{{ filters.month }}" />
+    </div>
+    <div class="col-md-2">
+      <select class="form-select" name="client_id">
+        <option value="">Todos os clientes</option>
+        {% for c in clients %}
+          <option value="{{ c.id }}" {% if filters.client_id == (c.id|string) %}selected{% endif %}>{{ c.name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-md-1 d-grid">
+      <button class="btn btn-outline-primary">Filtrar</button>
+    </div>
+  </form>
+
+  <div class="row g-3 mt-2">
+    <div class="col-md-3"><div class="border rounded p-3 h-100"><div class="muted small">Receber em aberto</div><div class="fw-semibold">{{ summary.open_receivables|brl }}</div></div></div>
+    <div class="col-md-3"><div class="border rounded p-3 h-100"><div class="muted small">Pagar em aberto</div><div class="fw-semibold">{{ summary.open_payables|brl }}</div></div></div>
+    <div class="col-md-3"><div class="border rounded p-3 h-100"><div class="muted small">Saldo projetado 30 dias</div><div class="fw-semibold">{{ summary.projected_30d|brl }}</div></div></div>
+    <div class="col-md-3"><div class="border rounded p-3 h-100"><div class="muted small">Lançamentos filtrados</div><div class="fw-semibold">{{ summary.filtered_count }}</div></div></div>
+  </div>
+
+  <div class="alert alert-light border mt-3 mb-0">
+    <div class="fw-semibold mb-1">Entrega A</div>
+    <div class="small muted">Base operacional implantada. Nesta etapa já é possível cadastrar fornecedores, centros de custo, categorias, tipos de receita, contas bancárias e lançar contas a pagar/receber. DRE gerencial e fluxo de caixa analítico entram na próxima camada.</div>
+  </div>
+</div>
+
+<div class="card p-4 mt-3">
+  <div class="d-flex justify-content-between align-items-center">
+    <h5 class="mb-0">Lançamentos</h5>
+    <div class="muted small">{{ rows|length }} item(ns)</div>
+  </div>
+  {% if rows %}
+    <div class="table-responsive mt-3">
+      <table class="table align-middle">
+        <thead>
+          <tr>
+            <th>Tipo</th>
+            <th>Descrição</th>
+            <th>Cliente / Fornecedor</th>
+            <th>Categoria</th>
+            <th>Centro de custo</th>
+            <th>Vencimento</th>
+            <th>Status</th>
+            <th class="text-end">Previsto</th>
+            <th class="text-end">Realizado</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in rows %}
+            <tr>
+              <td><span class="badge {% if row.entry_kind == 'receber' %}text-bg-success{% else %}text-bg-secondary{% endif %}">{{ row.entry_kind }}</span></td>
+              <td>
+                <div class="fw-semibold">{{ row.description }}</div>
+                <div class="muted small">
+                  {% if row.document_number %}Doc: {{ row.document_number }} • {% endif %}
+                  Competência: {{ row.competence_date or "—" }}
+                </div>
+              </td>
+              <td>{{ row.counterparty_name or "—" }}</td>
+              <td>{{ row.category_name or "—" }}</td>
+              <td>{{ row.cost_center_name or "—" }}</td>
+              <td>{{ row.due_date or "—" }}</td>
+              <td><span class="badge text-bg-light border">{{ row.status }}</span></td>
+              <td class="text-end">{{ row.amount_expected_brl|brl }}</td>
+              <td class="text-end">{{ row.amount_realized_brl|brl }}</td>
+              <td class="text-end"><a class="btn btn-sm btn-outline-primary" href="/admin/financeiro/{{ row.id }}/editar">Editar</a></td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <div class="muted mt-3">Nenhum lançamento encontrado para os filtros informados.</div>
+  {% endif %}
+</div>
+{% endblock %}
+""",
+    "office_finance_form.html": r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
+    <div>
+      <h4 class="mb-0">{{ "Editar lançamento" if entry else "Novo lançamento" }}</h4>
+      <div class="muted">Use receber para receitas do escritório e pagar para despesas operacionais.</div>
+    </div>
+    <a class="btn btn-outline-secondary" href="/admin/financeiro">Voltar</a>
+  </div>
+
+  <form method="post" class="row g-3 mt-2">
+    <div class="col-md-3">
+      <label class="form-label">Tipo</label>
+      <select class="form-select" name="entry_kind" id="entry_kind" required>
+        <option value="receber" {% if form.entry_kind == "receber" %}selected{% endif %}>Receber</option>
+        <option value="pagar" {% if form.entry_kind == "pagar" %}selected{% endif %}>Pagar</option>
+      </select>
+    </div>
+    <div class="col-md-3">
+      <label class="form-label">Status</label>
+      <select class="form-select" name="status" required>
+        {% for st in statuses %}
+          <option value="{{ st }}" {% if form.status == st %}selected{% endif %}>{{ st|capitalize }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-md-3">
+      <label class="form-label">Valor previsto (R$)</label>
+      <input class="form-control" type="text" name="amount_expected_brl" value="{{ form.amount_expected_brl }}" required />
+    </div>
+    <div class="col-md-3">
+      <label class="form-label">Valor realizado (R$)</label>
+      <input class="form-control" type="text" name="amount_realized_brl" value="{{ form.amount_realized_brl }}" />
+    </div>
+
+    <div class="col-md-8">
+      <label class="form-label">Descrição</label>
+      <input class="form-control" name="description" value="{{ form.description }}" required />
+    </div>
+    <div class="col-md-4">
+      <label class="form-label">Documento</label>
+      <input class="form-control" name="document_number" value="{{ form.document_number }}" />
+    </div>
+
+    <div class="col-md-4 receivable-only">
+      <label class="form-label">Cliente</label>
+      <select class="form-select" name="client_id">
+        <option value="">Selecione</option>
+        {% for c in clients %}
+          <option value="{{ c.id }}" {% if form.client_id == (c.id|string) %}selected{% endif %}>{{ c.name }}</option>
+        {% endfor %}
+      </select>
+      <div class="small muted mt-1">Receita do escritório vinculada ao cliente.</div>
+    </div>
+    <div class="col-md-4 payable-only">
+      <label class="form-label">Fornecedor</label>
+      <select class="form-select" name="supplier_id">
+        <option value="">Selecione</option>
+        {% for s in suppliers %}
+          <option value="{{ s.id }}" {% if form.supplier_id == (s.id|string) %}selected{% endif %}>{{ s.name }}</option>
+        {% endfor %}
+      </select>
+      <div class="small muted mt-1">Use para contas a pagar.</div>
+    </div>
+    <div class="col-md-4">
+      <label class="form-label">Centro de custo</label>
+      <select class="form-select" name="cost_center_id">
+        <option value="">Selecione</option>
+        {% for item in cost_centers %}
+          <option value="{{ item.id }}" {% if form.cost_center_id == (item.id|string) %}selected{% endif %}>{{ item.code }} • {{ item.name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+
+    <div class="col-md-4">
+      <label class="form-label">Categoria</label>
+      <select class="form-select" name="category_id">
+        <option value="">Selecione</option>
+        {% for item in categories %}
+          <option value="{{ item.id }}" data-kind="{{ item.category_kind }}" {% if form.category_id == (item.id|string) %}selected{% endif %}>{{ item.name }} ({{ item.category_kind }})</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-md-4 receivable-only">
+      <label class="form-label">Tipo de receita</label>
+      <select class="form-select" name="revenue_type_id">
+        <option value="">Selecione</option>
+        {% for item in revenue_types %}
+          <option value="{{ item.id }}" {% if form.revenue_type_id == (item.id|string) %}selected{% endif %}>{{ item.name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-md-4 receivable-only">
+      <label class="form-label">Produto / serviço</label>
+      <select class="form-select" name="internal_service_id">
+        <option value="">Selecione</option>
+        {% for item in services %}
+          <option value="{{ item.id }}" data-family="{{ item.family_code }}" {% if form.internal_service_id == (item.id|string) %}selected{% endif %}>{{ item.name }}</option>
+        {% endfor %}
+      </select>
+      <div class="small muted mt-1">Ajuda a consolidar a receita por produto/família.</div>
+    </div>
+
+    <div class="col-md-3">
+      <label class="form-label">Competência</label>
+      <input class="form-control" type="date" name="competence_date" value="{{ form.competence_date }}" />
+    </div>
+    <div class="col-md-3">
+      <label class="form-label">Vencimento</label>
+      <input class="form-control" type="date" name="due_date" value="{{ form.due_date }}" />
+    </div>
+    <div class="col-md-3">
+      <label class="form-label">Pagamento / recebimento</label>
+      <input class="form-control" type="date" name="settlement_date" value="{{ form.settlement_date }}" />
+    </div>
+    <div class="col-md-3">
+      <label class="form-label">Conta bancária</label>
+      <select class="form-select" name="bank_account_id">
+        <option value="">Selecione</option>
+        {% for item in bank_accounts %}
+          <option value="{{ item.id }}" {% if form.bank_account_id == (item.id|string) %}selected{% endif %}>{{ item.name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+
+    <div class="col-12">
+      <label class="form-label">Observações</label>
+      <textarea class="form-control" name="notes" rows="4">{{ form.notes }}</textarea>
+    </div>
+
+    <div class="col-12 d-flex gap-2">
+      <button class="btn btn-primary">Salvar</button>
+      <a class="btn btn-outline-secondary" href="/admin/financeiro">Cancelar</a>
+    </div>
+  </form>
+</div>
+
+<script>
+(function() {
+  const kind = document.getElementById("entry_kind");
+  function refreshKind() {
+    const isReceivable = (kind && kind.value === "receber");
+    document.querySelectorAll(".receivable-only").forEach(el => {
+      el.style.display = isReceivable ? "" : "none";
+    });
+    document.querySelectorAll(".payable-only").forEach(el => {
+      el.style.display = isReceivable ? "none" : "";
+    });
+  }
+  if (kind) {
+    kind.addEventListener("change", refreshKind);
+    refreshKind();
+  }
+})();
+</script>
+{% endblock %}
+""",
+    "office_finance_registry.html": r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
+    <div>
+      <h4 class="mb-0">Cadastros do Financeiro Interno</h4>
+      <div class="muted">Base para contas a pagar, contas a receber e relatórios gerenciais.</div>
+    </div>
+    <a class="btn btn-outline-secondary" href="/admin/financeiro">Voltar ao financeiro</a>
+  </div>
+</div>
+
+<div class="row g-3 mt-1">
+  <div class="col-lg-6">
+    <div class="card p-4 h-100">
+      <h5>Fornecedores</h5>
+      <form method="post" action="/admin/financeiro/cadastros/fornecedores" class="row g-2 mt-1">
+        <div class="col-md-6"><input class="form-control" name="name" placeholder="Nome" required /></div>
+        <div class="col-md-6"><input class="form-control" name="document" placeholder="CNPJ/CPF" /></div>
+        <div class="col-md-6"><input class="form-control" name="email" placeholder="E-mail" /></div>
+        <div class="col-md-6"><input class="form-control" name="phone" placeholder="Telefone" /></div>
+        <div class="col-12"><textarea class="form-control" name="notes" rows="2" placeholder="Observações"></textarea></div>
+        <div class="col-12"><button class="btn btn-primary">Salvar fornecedor</button></div>
+      </form>
+      <hr />
+      <div class="small muted mb-2">{{ suppliers|length }} cadastrado(s)</div>
+      <div class="list-group">
+        {% for item in suppliers %}
+          <div class="list-group-item">
+            <div class="fw-semibold">{{ item.name }}</div>
+            <div class="muted small">{{ item.document or "Sem documento" }}{% if item.email %} • {{ item.email }}{% endif %}</div>
+          </div>
+        {% else %}
+          <div class="muted">Nenhum fornecedor cadastrado.</div>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+
+  <div class="col-lg-6">
+    <div class="card p-4 h-100">
+      <h5>Centros de custo</h5>
+      <form method="post" action="/admin/financeiro/cadastros/centros-custo" class="row g-2 mt-1">
+        <div class="col-md-4"><input class="form-control" name="code" placeholder="Código" required /></div>
+        <div class="col-md-8"><input class="form-control" name="name" placeholder="Nome" required /></div>
+        <div class="col-12"><textarea class="form-control" name="notes" rows="2" placeholder="Observações"></textarea></div>
+        <div class="col-12"><button class="btn btn-primary">Salvar centro</button></div>
+      </form>
+      <hr />
+      <div class="small muted mb-2">{{ cost_centers|length }} cadastrado(s)</div>
+      <div class="list-group">
+        {% for item in cost_centers %}
+          <div class="list-group-item">
+            <div class="fw-semibold">{{ item.code }} • {{ item.name }}</div>
+            <div class="muted small">{{ item.notes or "Sem observações" }}</div>
+          </div>
+        {% else %}
+          <div class="muted">Nenhum centro de custo cadastrado.</div>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+
+  <div class="col-lg-6">
+    <div class="card p-4 h-100">
+      <h5>Categorias</h5>
+      <form method="post" action="/admin/financeiro/cadastros/categorias" class="row g-2 mt-1">
+        <div class="col-md-6"><input class="form-control" name="name" placeholder="Nome" required /></div>
+        <div class="col-md-3">
+          <select class="form-select" name="category_kind">
+            <option value="receita">Receita</option>
+            <option value="despesa">Despesa</option>
+          </select>
+        </div>
+        <div class="col-md-3"><input class="form-control" name="dre_group" placeholder="Grupo DRE" /></div>
+        <div class="col-12"><textarea class="form-control" name="notes" rows="2" placeholder="Observações"></textarea></div>
+        <div class="col-12"><button class="btn btn-primary">Salvar categoria</button></div>
+      </form>
+      <hr />
+      <div class="small muted mb-2">{{ categories|length }} cadastrada(s)</div>
+      <div class="list-group">
+        {% for item in categories %}
+          <div class="list-group-item">
+            <div class="fw-semibold">{{ item.name }}</div>
+            <div class="muted small">{{ item.category_kind }} • {{ item.dre_group or "Sem grupo DRE" }}</div>
+          </div>
+        {% else %}
+          <div class="muted">Nenhuma categoria cadastrada.</div>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+
+  <div class="col-lg-6">
+    <div class="card p-4 h-100">
+      <h5>Tipos de receita</h5>
+      <form method="post" action="/admin/financeiro/cadastros/tipos-receita" class="row g-2 mt-1">
+        <div class="col-md-6"><input class="form-control" name="name" placeholder="Nome" required /></div>
+        <div class="col-md-6"><input class="form-control" name="description" placeholder="Descrição" /></div>
+        <div class="col-12"><button class="btn btn-primary">Salvar tipo de receita</button></div>
+      </form>
+      <hr />
+      <div class="small muted mb-2">{{ revenue_types|length }} cadastrado(s)</div>
+      <div class="list-group">
+        {% for item in revenue_types %}
+          <div class="list-group-item">
+            <div class="fw-semibold">{{ item.name }}</div>
+            <div class="muted small">{{ item.description or "Sem descrição" }}</div>
+          </div>
+        {% else %}
+          <div class="muted">Nenhum tipo de receita cadastrado.</div>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+
+  <div class="col-12">
+    <div class="card p-4">
+      <h5>Contas bancárias / caixa</h5>
+      <form method="post" action="/admin/financeiro/cadastros/contas" class="row g-2 mt-1">
+        <div class="col-md-3"><input class="form-control" name="name" placeholder="Nome da conta" required /></div>
+        <div class="col-md-3"><input class="form-control" name="bank_name" placeholder="Banco" /></div>
+        <div class="col-md-2"><input class="form-control" name="branch_number" placeholder="Agência" /></div>
+        <div class="col-md-2"><input class="form-control" name="account_number" placeholder="Conta" /></div>
+        <div class="col-md-2"><input class="form-control" name="initial_balance_brl" placeholder="Saldo inicial" /></div>
+        <div class="col-12"><textarea class="form-control" name="notes" rows="2" placeholder="Observações"></textarea></div>
+        <div class="col-12"><button class="btn btn-primary">Salvar conta</button></div>
+      </form>
+      <hr />
+      <div class="list-group">
+        {% for item in bank_accounts %}
+          <div class="list-group-item">
+            <div class="fw-semibold">{{ item.name }}</div>
+            <div class="muted small">{{ item.bank_name or "Banco não informado" }}{% if item.account_number %} • Conta {{ item.account_number }}{% endif %} • Saldo inicial {{ item.initial_balance_brl|brl }}</div>
+          </div>
+        {% else %}
+          <div class="muted">Nenhuma conta bancária cadastrada.</div>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+""",
+})
+
 templates_env = Environment(loader=DictLoader(TEMPLATES), autoescape=True)
 
 def _format_brl(value: Any) -> str:
@@ -10007,6 +10643,7 @@ def resolve_feature_key(path: str) -> Optional[str]:
 
     mapping = [
         ("/admin/ui", "ui"),
+        ("/admin/financeiro", "financeiro_escritorio"),
         ("/admin/gestao", "gestao"),
         ("/admin/members", "gestao"),
         ("/admin/clients", "gestao"),
@@ -10761,6 +11398,7 @@ def _startup() -> None:
     ensure_ui_tables()
     ensure_feature_access_tables()
     ensure_credit_consent_table()
+    ensure_office_finance_tables()
     ensure_offer_engine_tables()
     ensure_offer_engine_columns()
     with Session(engine) as _s:
@@ -10769,6 +11407,7 @@ def _startup() -> None:
             ids = [x[0] for x in _s.exec(select(Company.id)).all()]
             for _cid in ids:
                 seed_internal_services(_s, int(_cid))
+                seed_office_finance_defaults(_s, int(_cid))
         except Exception:
             pass
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
@@ -15072,6 +15711,586 @@ async def contaazul_receivable_fatura_pdf(
         media_type="application/pdf",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
+
+def _office_date_key(value: str) -> tuple[int, int, int]:
+    s = (value or "").strip()
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", s):
+        return (9999, 12, 31)
+    try:
+        y, m, d = s.split("-")
+        return (int(y), int(m), int(d))
+    except Exception:
+        return (9999, 12, 31)
+
+
+def _office_is_open(entry: OfficeFinancialEntry) -> bool:
+    status = str(entry.status or "").strip().lower()
+    if entry.entry_kind == "receber":
+        return status not in {"recebido", "cancelado"}
+    return status not in {"pago", "cancelado"}
+
+
+def _office_catalog(session: Session, company_id: int) -> dict[str, list[Any]]:
+    seed_office_finance_defaults(session, company_id)
+    return {
+        "clients": session.exec(select(Client).where(Client.company_id == company_id).order_by(Client.name)).all(),
+        "suppliers": session.exec(select(OfficeSupplier).where(OfficeSupplier.company_id == company_id, OfficeSupplier.is_active == True).order_by(OfficeSupplier.name)).all(),
+        "cost_centers": session.exec(select(OfficeCostCenter).where(OfficeCostCenter.company_id == company_id, OfficeCostCenter.is_active == True).order_by(OfficeCostCenter.code, OfficeCostCenter.name)).all(),
+        "categories": session.exec(select(OfficeCategory).where(OfficeCategory.company_id == company_id, OfficeCategory.is_active == True).order_by(OfficeCategory.category_kind, OfficeCategory.name)).all(),
+        "revenue_types": session.exec(select(OfficeRevenueType).where(OfficeRevenueType.company_id == company_id, OfficeRevenueType.is_active == True).order_by(OfficeRevenueType.name)).all(),
+        "bank_accounts": session.exec(select(OfficeBankAccount).where(OfficeBankAccount.company_id == company_id, OfficeBankAccount.is_active == True).order_by(OfficeBankAccount.name)).all(),
+        "services": session.exec(select(InternalService).where(InternalService.company_id == company_id, InternalService.is_active == True).order_by(InternalService.area, InternalService.name)).all(),
+    }
+
+
+def _office_finance_rows(session: Session, company_id: int, *, q: str = "", entry_kind: str = "", status: str = "", month: str = "", client_id: str = "") -> tuple[list[dict[str, Any]], dict[str, Any], list[Client]]:
+    clients = session.exec(select(Client).where(Client.company_id == company_id).order_by(Client.name)).all()
+    entries = session.exec(
+        select(OfficeFinancialEntry)
+        .where(OfficeFinancialEntry.company_id == company_id)
+        .order_by(OfficeFinancialEntry.created_at.desc())
+    ).all()
+
+    client_by_id = {int(x.id): x for x in clients if x.id}
+    supplier_by_id = {int(x.id): x for x in session.exec(select(OfficeSupplier).where(OfficeSupplier.company_id == company_id)).all() if x.id}
+    cost_center_by_id = {int(x.id): x for x in session.exec(select(OfficeCostCenter).where(OfficeCostCenter.company_id == company_id)).all() if x.id}
+    category_by_id = {int(x.id): x for x in session.exec(select(OfficeCategory).where(OfficeCategory.company_id == company_id)).all() if x.id}
+
+    q_norm = (q or "").strip().lower()
+    rows: list[dict[str, Any]] = []
+    today_key = _office_date_key(datetime.now().strftime("%Y-%m-%d"))
+    horizon_key = _office_date_key((datetime.now() + timedelta(days=30)).strftime("%Y-%m-%d"))
+
+    open_receivables = 0.0
+    open_payables = 0.0
+    projected_30d = 0.0
+
+    for entry in entries:
+        if entry.entry_kind == "receber" and _office_is_open(entry):
+            open_receivables += float(entry.amount_expected_brl or 0.0)
+        if entry.entry_kind == "pagar" and _office_is_open(entry):
+            open_payables += float(entry.amount_expected_brl or 0.0)
+
+        due_key = _office_date_key(entry.due_date)
+        if today_key <= due_key <= horizon_key and _office_is_open(entry):
+            signal = 1.0 if entry.entry_kind == "receber" else -1.0
+            projected_30d += signal * float(entry.amount_expected_brl or 0.0)
+
+        counterparty = ""
+        if entry.entry_kind == "receber" and entry.client_id:
+            counterparty = getattr(client_by_id.get(int(entry.client_id)), "name", "") or ""
+        elif entry.entry_kind == "pagar" and entry.supplier_id:
+            counterparty = getattr(supplier_by_id.get(int(entry.supplier_id)), "name", "") or ""
+
+        hay = " ".join([
+            str(entry.description or ""),
+            str(entry.document_number or ""),
+            counterparty,
+            getattr(category_by_id.get(int(entry.category_id or 0)), "name", "") or "",
+        ]).lower()
+
+        if q_norm and q_norm not in hay:
+            continue
+        if entry_kind and entry.entry_kind != entry_kind:
+            continue
+        if status and entry.status != status:
+            continue
+        if month and not str(entry.due_date or "").startswith(month):
+            continue
+        if client_id and str(entry.client_id or "") != str(client_id):
+            continue
+
+        rows.append({
+            "id": entry.id,
+            "entry_kind": entry.entry_kind,
+            "status": entry.status,
+            "description": entry.description,
+            "document_number": entry.document_number,
+            "competence_date": entry.competence_date,
+            "due_date": entry.due_date,
+            "amount_expected_brl": float(entry.amount_expected_brl or 0.0),
+            "amount_realized_brl": float(entry.amount_realized_brl or 0.0),
+            "counterparty_name": counterparty,
+            "category_name": getattr(category_by_id.get(int(entry.category_id or 0)), "name", "") or "",
+            "cost_center_name": getattr(cost_center_by_id.get(int(entry.cost_center_id or 0)), "name", "") or "",
+        })
+
+    rows.sort(key=lambda item: (_office_date_key(item["due_date"]), item["description"].lower()))
+    summary = {
+        "open_receivables": round(open_receivables, 2),
+        "open_payables": round(open_payables, 2),
+        "projected_30d": round(projected_30d, 2),
+        "filtered_count": len(rows),
+    }
+    return rows, summary, clients
+
+
+def _office_entry_form_data(entry: Optional[OfficeFinancialEntry] = None) -> dict[str, str]:
+    if not entry:
+        return {
+            "entry_kind": "receber",
+            "status": "aberto",
+            "amount_expected_brl": "",
+            "amount_realized_brl": "",
+            "description": "",
+            "document_number": "",
+            "client_id": "",
+            "supplier_id": "",
+            "cost_center_id": "",
+            "category_id": "",
+            "revenue_type_id": "",
+            "internal_service_id": "",
+            "competence_date": "",
+            "due_date": "",
+            "settlement_date": "",
+            "bank_account_id": "",
+            "notes": "",
+        }
+    return {
+        "entry_kind": str(entry.entry_kind or "receber"),
+        "status": str(entry.status or "aberto"),
+        "amount_expected_brl": _format_number_br(entry.amount_expected_brl or 0.0, 2),
+        "amount_realized_brl": _format_number_br(entry.amount_realized_brl or 0.0, 2) if float(entry.amount_realized_brl or 0.0) else "",
+        "description": str(entry.description or ""),
+        "document_number": str(entry.document_number or ""),
+        "client_id": str(entry.client_id or ""),
+        "supplier_id": str(entry.supplier_id or ""),
+        "cost_center_id": str(entry.cost_center_id or ""),
+        "category_id": str(entry.category_id or ""),
+        "revenue_type_id": str(entry.revenue_type_id or ""),
+        "internal_service_id": str(entry.internal_service_id or ""),
+        "competence_date": str(entry.competence_date or ""),
+        "due_date": str(entry.due_date or ""),
+        "settlement_date": str(entry.settlement_date or ""),
+        "bank_account_id": str(entry.bank_account_id or ""),
+        "notes": str(entry.notes or ""),
+    }
+
+
+def _office_entry_apply_form(*, entry: OfficeFinancialEntry, company_id: int, current_user_id: int, form: dict[str, Any], session: Session) -> tuple[bool, str]:
+    entry_kind = str(form.get("entry_kind") or "receber").strip().lower()
+    if entry_kind not in OFFICE_ENTRY_KINDS:
+        return False, "Tipo de lançamento inválido."
+
+    status = str(form.get("status") or "aberto").strip().lower()
+    if status not in OFFICE_ENTRY_STATUSES:
+        return False, "Status inválido."
+
+    description = str(form.get("description") or "").strip()
+    if not description:
+        return False, "Informe a descrição."
+
+    amount_expected = _parse_brl_amount(form.get("amount_expected_brl"))
+    amount_realized = _parse_brl_amount(form.get("amount_realized_brl")) if str(form.get("amount_realized_brl") or "").strip() else 0.0
+
+    client_id = _safe_int(form.get("client_id"))
+    supplier_id = _safe_int(form.get("supplier_id"))
+    cost_center_id = _safe_int(form.get("cost_center_id"))
+    category_id = _safe_int(form.get("category_id"))
+    revenue_type_id = _safe_int(form.get("revenue_type_id"))
+    internal_service_id = _safe_int(form.get("internal_service_id"))
+    bank_account_id = _safe_int(form.get("bank_account_id"))
+
+    if entry_kind == "receber":
+        if not client_id:
+            return False, "Selecione o cliente da receita."
+        if supplier_id:
+            supplier_id = None
+    else:
+        client_id = None
+        if not supplier_id:
+            return False, "Selecione o fornecedor da despesa."
+        revenue_type_id = None
+        internal_service_id = None
+
+    if client_id:
+        client = session.get(Client, int(client_id))
+        if not client or client.company_id != company_id:
+            return False, "Cliente inválido."
+
+    if supplier_id:
+        supplier = session.get(OfficeSupplier, int(supplier_id))
+        if not supplier or supplier.company_id != company_id:
+            return False, "Fornecedor inválido."
+
+    if cost_center_id:
+        cc = session.get(OfficeCostCenter, int(cost_center_id))
+        if not cc or cc.company_id != company_id:
+            return False, "Centro de custo inválido."
+
+    category: Optional[OfficeCategory] = None
+    if category_id:
+        category = session.get(OfficeCategory, int(category_id))
+        if not category or category.company_id != company_id:
+            return False, "Categoria inválida."
+        if category.category_kind != ("receita" if entry_kind == "receber" else "despesa"):
+            return False, "A categoria escolhida não combina com o tipo de lançamento."
+
+    if revenue_type_id:
+        rt = session.get(OfficeRevenueType, int(revenue_type_id))
+        if not rt or rt.company_id != company_id:
+            return False, "Tipo de receita inválido."
+
+    family_code = ""
+    if internal_service_id:
+        svc = session.get(InternalService, int(internal_service_id))
+        if not svc or svc.company_id != company_id:
+            return False, "Produto/serviço inválido."
+        family_code = str(svc.family_code or svc.family_slug or "").strip()
+
+    if bank_account_id:
+        ba = session.get(OfficeBankAccount, int(bank_account_id))
+        if not ba or ba.company_id != company_id:
+            return False, "Conta bancária inválida."
+
+    entry.company_id = company_id
+    entry.updated_by_user_id = current_user_id
+    if not entry.id:
+        entry.created_by_user_id = current_user_id
+    entry.entry_kind = entry_kind
+    entry.status = status
+    entry.description = description
+    entry.document_number = str(form.get("document_number") or "").strip()
+    entry.client_id = client_id
+    entry.supplier_id = supplier_id
+    entry.cost_center_id = cost_center_id
+    entry.category_id = category_id
+    entry.revenue_type_id = revenue_type_id
+    entry.internal_service_id = internal_service_id
+    entry.bank_account_id = bank_account_id
+    entry.competence_date = str(form.get("competence_date") or "").strip()
+    entry.due_date = str(form.get("due_date") or "").strip()
+    entry.settlement_date = str(form.get("settlement_date") or "").strip()
+    entry.amount_expected_brl = float(amount_expected or 0.0)
+    entry.amount_realized_brl = float(amount_realized or 0.0)
+    entry.product_family_code = family_code
+    entry.notes = str(form.get("notes") or "").strip()
+    entry.updated_at = utcnow()
+    return True, ""
+
+
+@app.get("/admin/financeiro", response_class=HTMLResponse)
+@require_role({"admin", "equipe"})
+async def office_finance_dashboard(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    if not ensure_office_finance_tables():
+        return render("error.html", request=request, context={"message": "Não foi possível inicializar o Financeiro Interno."}, status_code=500)
+
+    seed_office_finance_defaults(session, ctx.company.id)
+
+    filters = {
+        "q": (request.query_params.get("q") or "").strip(),
+        "entry_kind": (request.query_params.get("entry_kind") or "").strip().lower(),
+        "status": (request.query_params.get("status") or "").strip().lower(),
+        "month": (request.query_params.get("month") or "").strip(),
+        "client_id": (request.query_params.get("client_id") or "").strip(),
+    }
+    rows, summary, clients = _office_finance_rows(session, ctx.company.id, **filters)
+
+    current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
+    return render(
+        "office_finance_dashboard.html",
+        request=request,
+        context={
+            "title": "Financeiro Interno",
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "current_client": current_client,
+            "role": ctx.membership.role,
+            "rows": rows,
+            "summary": summary,
+            "statuses": OFFICE_ENTRY_STATUSES,
+            "filters": filters,
+            "clients": clients,
+        },
+    )
+
+
+@app.get("/admin/financeiro/cadastros", response_class=HTMLResponse)
+@require_role({"admin", "equipe"})
+async def office_finance_registry_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    if not ensure_office_finance_tables():
+        return render("error.html", request=request, context={"message": "Não foi possível inicializar o Financeiro Interno."}, status_code=500)
+
+    catalog = _office_catalog(session, ctx.company.id)
+    current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
+    return render(
+        "office_finance_registry.html",
+        request=request,
+        context={
+            "title": "Cadastros do Financeiro",
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "current_client": current_client,
+            "role": ctx.membership.role,
+            **catalog,
+        },
+    )
+
+
+@app.post("/admin/financeiro/cadastros/fornecedores")
+@require_role({"admin", "equipe"})
+async def office_finance_supplier_create(
+    request: Request,
+    session: Session = Depends(get_session),
+    name: str = Form(""),
+    document: str = Form(""),
+    email: str = Form(""),
+    phone: str = Form(""),
+    notes: str = Form(""),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+    if not ensure_office_finance_tables():
+        set_flash(request, "Financeiro Interno não está configurado.")
+        return RedirectResponse("/admin/financeiro/cadastros", status_code=303)
+
+    if not name.strip():
+        set_flash(request, "Informe o nome do fornecedor.")
+        return RedirectResponse("/admin/financeiro/cadastros", status_code=303)
+
+    exists = session.exec(select(OfficeSupplier).where(OfficeSupplier.company_id == ctx.company.id, OfficeSupplier.name == name.strip())).first()
+    if exists:
+        set_flash(request, "Fornecedor já cadastrado.")
+        return RedirectResponse("/admin/financeiro/cadastros", status_code=303)
+
+    session.add(OfficeSupplier(company_id=ctx.company.id, name=name.strip(), document=document.strip(), email=email.strip(), phone=phone.strip(), notes=notes.strip()))
+    session.commit()
+    set_flash(request, "Fornecedor cadastrado.")
+    return RedirectResponse("/admin/financeiro/cadastros", status_code=303)
+
+
+@app.post("/admin/financeiro/cadastros/centros-custo")
+@require_role({"admin", "equipe"})
+async def office_finance_cost_center_create(
+    request: Request,
+    session: Session = Depends(get_session),
+    code: str = Form(""),
+    name: str = Form(""),
+    notes: str = Form(""),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+    if not code.strip() or not name.strip():
+        set_flash(request, "Informe código e nome do centro de custo.")
+        return RedirectResponse("/admin/financeiro/cadastros", status_code=303)
+
+    code_norm = code.strip().upper()
+    exists = session.exec(select(OfficeCostCenter).where(OfficeCostCenter.company_id == ctx.company.id, OfficeCostCenter.code == code_norm)).first()
+    if exists:
+        set_flash(request, "Centro de custo já cadastrado.")
+        return RedirectResponse("/admin/financeiro/cadastros", status_code=303)
+
+    session.add(OfficeCostCenter(company_id=ctx.company.id, code=code_norm, name=name.strip(), notes=notes.strip()))
+    session.commit()
+    set_flash(request, "Centro de custo cadastrado.")
+    return RedirectResponse("/admin/financeiro/cadastros", status_code=303)
+
+
+@app.post("/admin/financeiro/cadastros/categorias")
+@require_role({"admin", "equipe"})
+async def office_finance_category_create(
+    request: Request,
+    session: Session = Depends(get_session),
+    name: str = Form(""),
+    category_kind: str = Form("despesa"),
+    dre_group: str = Form(""),
+    notes: str = Form(""),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    kind = category_kind.strip().lower()
+    if not name.strip() or kind not in OFFICE_CATEGORY_KINDS:
+        set_flash(request, "Informe uma categoria válida.")
+        return RedirectResponse("/admin/financeiro/cadastros", status_code=303)
+
+    exists = session.exec(
+        select(OfficeCategory).where(
+            OfficeCategory.company_id == ctx.company.id,
+            OfficeCategory.name == name.strip(),
+            OfficeCategory.category_kind == kind,
+        )
+    ).first()
+    if exists:
+        set_flash(request, "Categoria já cadastrada.")
+        return RedirectResponse("/admin/financeiro/cadastros", status_code=303)
+
+    session.add(OfficeCategory(company_id=ctx.company.id, name=name.strip(), category_kind=kind, dre_group=dre_group.strip(), notes=notes.strip()))
+    session.commit()
+    set_flash(request, "Categoria cadastrada.")
+    return RedirectResponse("/admin/financeiro/cadastros", status_code=303)
+
+
+@app.post("/admin/financeiro/cadastros/tipos-receita")
+@require_role({"admin", "equipe"})
+async def office_finance_revenue_type_create(
+    request: Request,
+    session: Session = Depends(get_session),
+    name: str = Form(""),
+    description: str = Form(""),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    if not name.strip():
+        set_flash(request, "Informe o tipo de receita.")
+        return RedirectResponse("/admin/financeiro/cadastros", status_code=303)
+
+    exists = session.exec(select(OfficeRevenueType).where(OfficeRevenueType.company_id == ctx.company.id, OfficeRevenueType.name == name.strip())).first()
+    if exists:
+        set_flash(request, "Tipo de receita já cadastrado.")
+        return RedirectResponse("/admin/financeiro/cadastros", status_code=303)
+
+    session.add(OfficeRevenueType(company_id=ctx.company.id, name=name.strip(), description=description.strip()))
+    session.commit()
+    set_flash(request, "Tipo de receita cadastrado.")
+    return RedirectResponse("/admin/financeiro/cadastros", status_code=303)
+
+
+@app.post("/admin/financeiro/cadastros/contas")
+@require_role({"admin", "equipe"})
+async def office_finance_bank_account_create(
+    request: Request,
+    session: Session = Depends(get_session),
+    name: str = Form(""),
+    bank_name: str = Form(""),
+    branch_number: str = Form(""),
+    account_number: str = Form(""),
+    initial_balance_brl: str = Form(""),
+    notes: str = Form(""),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    if not name.strip():
+        set_flash(request, "Informe o nome da conta.")
+        return RedirectResponse("/admin/financeiro/cadastros", status_code=303)
+
+    exists = session.exec(select(OfficeBankAccount).where(OfficeBankAccount.company_id == ctx.company.id, OfficeBankAccount.name == name.strip())).first()
+    if exists:
+        set_flash(request, "Conta já cadastrada.")
+        return RedirectResponse("/admin/financeiro/cadastros", status_code=303)
+
+    session.add(
+        OfficeBankAccount(
+            company_id=ctx.company.id,
+            name=name.strip(),
+            bank_name=bank_name.strip(),
+            branch_number=branch_number.strip(),
+            account_number=account_number.strip(),
+            initial_balance_brl=_parse_brl_amount(initial_balance_brl),
+            notes=notes.strip(),
+        )
+    )
+    session.commit()
+    set_flash(request, "Conta bancária cadastrada.")
+    return RedirectResponse("/admin/financeiro/cadastros", status_code=303)
+
+
+@app.get("/admin/financeiro/novo", response_class=HTMLResponse)
+@require_role({"admin", "equipe"})
+async def office_finance_new_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+    if not ensure_office_finance_tables():
+        return render("error.html", request=request, context={"message": "Não foi possível inicializar o Financeiro Interno."}, status_code=500)
+
+    catalog = _office_catalog(session, ctx.company.id)
+    current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
+    return render(
+        "office_finance_form.html",
+        request=request,
+        context={
+            "title": "Novo lançamento",
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "current_client": current_client,
+            "role": ctx.membership.role,
+            "entry": None,
+            "form": _office_entry_form_data(),
+            "statuses": OFFICE_ENTRY_STATUSES,
+            **catalog,
+        },
+    )
+
+
+@app.post("/admin/financeiro/novo")
+@require_role({"admin", "equipe"})
+async def office_finance_new_action(request: Request, session: Session = Depends(get_session)) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    form = await request.form()
+    entry = OfficeFinancialEntry(company_id=ctx.company.id, created_by_user_id=ctx.user.id, description="")
+    ok, msg = _office_entry_apply_form(entry=entry, company_id=ctx.company.id, current_user_id=ctx.user.id, form=dict(form), session=session)
+    if not ok:
+        set_flash(request, msg)
+        return RedirectResponse("/admin/financeiro/novo", status_code=303)
+
+    session.add(entry)
+    session.commit()
+    set_flash(request, "Lançamento criado.")
+    return RedirectResponse("/admin/financeiro", status_code=303)
+
+
+@app.get("/admin/financeiro/{entry_id}/editar", response_class=HTMLResponse)
+@require_role({"admin", "equipe"})
+async def office_finance_edit_page(request: Request, session: Session = Depends(get_session), entry_id: int = 0) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    entry = session.get(OfficeFinancialEntry, int(entry_id))
+    if not entry or entry.company_id != ctx.company.id:
+        return render("error.html", request=request, context={"message": "Lançamento não encontrado."}, status_code=404)
+
+    catalog = _office_catalog(session, ctx.company.id)
+    current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
+    return render(
+        "office_finance_form.html",
+        request=request,
+        context={
+            "title": "Editar lançamento",
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "current_client": current_client,
+            "role": ctx.membership.role,
+            "entry": entry,
+            "form": _office_entry_form_data(entry),
+            "statuses": OFFICE_ENTRY_STATUSES,
+            **catalog,
+        },
+    )
+
+
+@app.post("/admin/financeiro/{entry_id}/editar")
+@require_role({"admin", "equipe"})
+async def office_finance_edit_action(request: Request, session: Session = Depends(get_session), entry_id: int = 0) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    entry = session.get(OfficeFinancialEntry, int(entry_id))
+    if not entry or entry.company_id != ctx.company.id:
+        set_flash(request, "Lançamento não encontrado.")
+        return RedirectResponse("/admin/financeiro", status_code=303)
+
+    form = await request.form()
+    ok, msg = _office_entry_apply_form(entry=entry, company_id=ctx.company.id, current_user_id=ctx.user.id, form=dict(form), session=session)
+    if not ok:
+        set_flash(request, msg)
+        return RedirectResponse(f"/admin/financeiro/{entry.id}/editar", status_code=303)
+
+    session.add(entry)
+    session.commit()
+    set_flash(request, "Lançamento atualizado.")
+    return RedirectResponse("/admin/financeiro", status_code=303)
+
 
 
 @app.get("/financeiro", response_class=HTMLResponse)
