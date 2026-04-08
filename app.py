@@ -32870,3 +32870,548 @@ TEMPLATES.update({
 {% endblock %}
 """,
 })
+
+
+# ----------------------------
+# Ferramentas para Cliente - Entrega 1
+# ----------------------------
+
+CLIENT_TOOL_FINANCE_CODE = "financeiro_gerencial"
+CLIENT_TOOL_FINANCE_MONTHLY_CREDITS = 70
+
+
+class ClientToolSubscription(SQLModel, table=True):
+    __table_args__ = (UniqueConstraint("company_id", "client_id", "tool_code", name="uq_clienttoolsubscription_company_client_tool"),)
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    company_id: int = Field(index=True, foreign_key="company.id")
+    client_id: int = Field(index=True, foreign_key="client.id")
+    tool_code: str = Field(index=True)
+    status: str = Field(default="trial", index=True)  # trial | active | blocked | cancelled
+    trial_started_at: Optional[datetime] = Field(default=None, index=True)
+    trial_ends_at: Optional[datetime] = Field(default=None, index=True)
+    monthly_price_credits: int = Field(default=CLIENT_TOOL_FINANCE_MONTHLY_CREDITS)
+    last_billed_period: str = Field(default="", index=True)  # YYYY-MM
+    next_billing_at: Optional[datetime] = Field(default=None, index=True)
+    is_active: bool = Field(default=True, index=True)
+    created_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime = Field(default_factory=utcnow)
+
+
+def ensure_client_tool_tables() -> None:
+    try:
+        SQLModel.metadata.create_all(engine, tables=[ClientToolSubscription.__table__], checkfirst=True)
+    except Exception:
+        pass
+
+
+@app.on_event("startup")
+def _startup_client_tools() -> None:
+    ensure_client_tool_tables()
+
+
+def _tool_period_label(dt: Optional[datetime]) -> str:
+    ref = dt or utcnow()
+    return f"{ref.year:04d}-{ref.month:02d}"
+
+
+def _client_current_client(request: Request, session: Session, ctx: TenantContext) -> Optional[Client]:
+    active_client_id = get_active_client_id(request, session, ctx)
+    if not active_client_id and getattr(ctx.membership, "client_id", None):
+        active_client_id = int(ctx.membership.client_id)
+    if not active_client_id:
+        return None
+    client = get_client_or_none(session, ctx.company.id, int(active_client_id))
+    if not client:
+        return None
+    if not ensure_can_access_client(ctx, client.id):
+        return None
+    return client
+
+
+def _get_or_create_client_tool_subscription(
+    session: Session,
+    *,
+    company_id: int,
+    client_id: int,
+    tool_code: str = CLIENT_TOOL_FINANCE_CODE,
+) -> ClientToolSubscription:
+    row = session.exec(
+        select(ClientToolSubscription).where(
+            ClientToolSubscription.company_id == company_id,
+            ClientToolSubscription.client_id == client_id,
+            ClientToolSubscription.tool_code == tool_code,
+        )
+    ).first()
+    if row:
+        return row
+
+    now = utcnow()
+    row = ClientToolSubscription(
+        company_id=company_id,
+        client_id=client_id,
+        tool_code=tool_code,
+        status="trial",
+        trial_started_at=now,
+        trial_ends_at=now + timedelta(days=30),
+        monthly_price_credits=CLIENT_TOOL_FINANCE_MONTHLY_CREDITS,
+        next_billing_at=now + timedelta(days=30),
+        is_active=True,
+        created_at=now,
+        updated_at=now,
+    )
+    session.add(row)
+    session.commit()
+    session.refresh(row)
+    return row
+
+
+def _wallet_debit_tool_fee(
+    session: Session,
+    *,
+    company_id: int,
+    client_id: int,
+    subscription_id: int,
+    amount_credits: int,
+    tool_code: str = CLIENT_TOOL_FINANCE_CODE,
+) -> bool:
+    amount_cents = int(max(0, int(amount_credits)) * 100)
+    if amount_cents <= 0:
+        return True
+
+    wallet = _get_or_create_wallet(session, company_id=company_id, client_id=client_id)
+    if int(wallet.balance_cents or 0) < amount_cents:
+        return False
+
+    wallet.balance_cents -= amount_cents
+    wallet.updated_at = utcnow()
+    session.add(wallet)
+    session.commit()
+    _wallet_add_ledger(
+        session,
+        company_id=company_id,
+        client_id=client_id,
+        kind="TOOL_MONTHLY_FEE",
+        amount_cents=-amount_cents,
+        ref_type="client_tool_subscription",
+        ref_id=str(subscription_id),
+        note=f"Mensalidade da ferramenta {tool_code} (-{amount_credits} créditos)",
+    )
+    return True
+
+
+def _tool_subscription_status_payload(
+    session: Session,
+    *,
+    company_id: int,
+    client_id: int,
+    tool_code: str = CLIENT_TOOL_FINANCE_CODE,
+) -> dict[str, Any]:
+    sub = _get_or_create_client_tool_subscription(
+        session,
+        company_id=company_id,
+        client_id=client_id,
+        tool_code=tool_code,
+    )
+    wallet = _get_or_create_wallet(session, company_id=company_id, client_id=client_id)
+
+    now = utcnow()
+    now_naive = now.replace(tzinfo=None) if getattr(now, "tzinfo", None) else now
+    trial_ends = sub.trial_ends_at
+    trial_ends_naive = trial_ends.replace(tzinfo=None) if trial_ends and getattr(trial_ends, "tzinfo", None) else trial_ends
+
+    message = ""
+    access_ok = False
+    status_label = "Bloqueado"
+    billed_this_month = sub.last_billed_period == _tool_period_label(now)
+
+    if not sub.is_active or sub.status == "cancelled":
+        sub.status = "cancelled"
+        message = "Ferramenta inativa."
+        access_ok = False
+        status_label = "Inativa"
+    elif trial_ends_naive and now_naive < trial_ends_naive:
+        sub.status = "trial"
+        access_ok = True
+        status_label = "Período grátis"
+        days_left = max(0, (trial_ends_naive.date() - now_naive.date()).days)
+        message = f"Período grátis ativo. Restam {days_left} dia(s)."
+    else:
+        if billed_this_month and sub.status == "active":
+            access_ok = True
+            status_label = "Ativa"
+            message = f"Mensalidade do período {_tool_period_label(now)} já debitada."
+        else:
+            debit_ok = _wallet_debit_tool_fee(
+                session,
+                company_id=company_id,
+                client_id=client_id,
+                subscription_id=int(sub.id or 0),
+                amount_credits=int(sub.monthly_price_credits or CLIENT_TOOL_FINANCE_MONTHLY_CREDITS),
+                tool_code=tool_code,
+            )
+            if debit_ok:
+                sub.status = "active"
+                sub.last_billed_period = _tool_period_label(now)
+                next_ref = (now_naive + timedelta(days=32)).replace(day=1)
+                sub.next_billing_at = next_ref
+                sub.updated_at = utcnow()
+                session.add(sub)
+                session.commit()
+                access_ok = True
+                status_label = "Ativa"
+                message = f"Mensalidade de {int(sub.monthly_price_credits or 0)} créditos debitada para o período {sub.last_billed_period}."
+                wallet = _get_or_create_wallet(session, company_id=company_id, client_id=client_id)
+            else:
+                sub.status = "blocked"
+                sub.updated_at = utcnow()
+                session.add(sub)
+                session.commit()
+                access_ok = False
+                status_label = "Bloqueada"
+                message = f"Saldo insuficiente. Esta ferramenta consome {int(sub.monthly_price_credits or 0)} créditos por mês após o período grátis."
+
+    return {
+        "subscription": sub,
+        "wallet": wallet,
+        "access_ok": access_ok,
+        "status_label": status_label,
+        "message": message,
+        "trial_active": bool(sub.status == "trial" and trial_ends_naive and now_naive < trial_ends_naive),
+        "trial_days_left": max(0, (trial_ends_naive.date() - now_naive.date()).days) if trial_ends_naive and now_naive < trial_ends_naive else 0,
+        "monthly_price_credits": int(sub.monthly_price_credits or CLIENT_TOOL_FINANCE_MONTHLY_CREDITS),
+        "wallet_balance_credits": round((wallet.balance_cents or 0) / 100.0, 2),
+        "trial_ends_at": trial_ends_naive,
+        "next_billing_at": sub.next_billing_at.replace(tzinfo=None) if sub.next_billing_at and getattr(sub.next_billing_at, "tzinfo", None) else sub.next_billing_at,
+    }
+
+
+FEATURE_KEYS["ferramentas"] = {
+    "title": "Ferramentas",
+    "desc": "Ferramentas operacionais para a gestão da sua empresa.",
+    "href": "/ferramentas",
+}
+
+FEATURE_GROUPS = [
+    {"key": "minha_empresa", "title": "Minha Empresa", "features": ["empresa", "financeiro", "documentos"]},
+    {"key": "diagnostico", "title": "Diagnóstico Financeiro", "features": ["perfil"]},
+    {"key": "compliance_risco", "title": "Compliance e Análise de Risco", "features": ["consultas", "creditos", "openfinance"]},
+    {"key": "solucoes", "title": "Soluções Financeiras", "features": ["ofertas", "simulador", "propostas"]},
+    {"key": "meu_projeto", "title": "Meu Projeto", "features": ["consultoria", "reunioes", "tarefas"]},
+    {"key": "ferramentas_conteudo", "title": "Ferramentas e Conteúdo", "features": ["ferramentas", "educacao"]},
+    {"key": "escritorio_comercial", "title": "Escritório • Comercial", "features": ["crm", "motor_ofertas"]},
+    {"key": "escritorio_credito", "title": "Escritório • Crédito e Estruturação", "features": ["credito"]},
+    {"key": "escritorio_financeiro", "title": "Escritório • Financeiro", "features": ["financeiro_escritorio"]},
+    {"key": "admin", "title": "Admin", "features": ["ui", "gestao", "familias", "servicos_internos", "parceiros"]},
+]
+FEATURE_STANDALONE = ["pendencias", "agenda"]
+FEATURE_VISIBLE_ROLES.update({
+    "ferramentas": {"cliente", "admin", "equipe"},
+    "educacao": {"cliente", "admin", "equipe"},
+    "financeiro_escritorio": {"admin", "equipe"},
+    "credito": {"admin", "equipe"},
+    "crm": {"admin", "equipe"},
+    "motor_ofertas": {"admin", "equipe"},
+    "familias": {"admin"},
+    "servicos_internos": {"admin"},
+    "parceiros": {"admin"},
+})
+ROLE_DEFAULT_FEATURES["admin"] = set(FEATURE_KEYS.keys())
+ROLE_DEFAULT_FEATURES["equipe"] = set(FEATURE_KEYS.keys()) - {"ui", "gestao", "familias", "servicos_internos", "parceiros"}
+ROLE_DEFAULT_FEATURES["cliente"] = {
+    "empresa",
+    "perfil",
+    "financeiro",
+    "documentos",
+    "consultas",
+    "creditos",
+    "openfinance",
+    "ofertas",
+    "simulador",
+    "propostas",
+    "consultoria",
+    "reunioes",
+    "tarefas",
+    "pendencias",
+    "agenda",
+    "educacao",
+}
+ROLE_DEFAULT_FEATURES["admin"].add("financeiro_escritorio")
+ROLE_DEFAULT_FEATURES["equipe"].add("financeiro_escritorio")
+ROLE_DEFAULT_FEATURES["admin"].add("ferramentas")
+ROLE_DEFAULT_FEATURES["equipe"].add("ferramentas")
+
+
+def resolve_feature_key(path: str) -> Optional[str]:
+    if path.startswith("/static/") or path.startswith("/login") or path.startswith("/logout"):
+        return None
+    if path.startswith("/api/"):
+        return None
+    if path in {"/", "/health"}:
+        return None
+
+    mapping = [
+        ("/admin/ui", "ui"),
+        ("/admin/financeiro", "financeiro_escritorio"),
+        ("/admin/gestao", "gestao"),
+        ("/admin/members", "gestao"),
+        ("/admin/clients", "gestao"),
+        ("/negocios", "crm"),
+        ("/credito", "credito"),
+        ("/empresa", "empresa"),
+        ("/perfil", "perfil"),
+        ("/financeiro", "financeiro"),
+        ("/documentos", "documentos"),
+        ("/consultoria", "consultoria"),
+        ("/reunioes", "reunioes"),
+        ("/tarefas", "tarefas"),
+        ("/simulador", "simulador"),
+        ("/propostas", "propostas"),
+        ("/pendencias", "pendencias"),
+        ("/agenda", "agenda"),
+        ("/educacao", "educacao"),
+        ("/ferramentas", "ferramentas"),
+    ]
+    for prefix, key in mapping:
+        if path == prefix or path.startswith(prefix + "/"):
+            return key
+    return None
+
+
+TEMPLATES["ferramentas.html"] = r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4 mb-3">
+  <div class="d-flex justify-content-between align-items-start flex-wrap gap-3">
+    <div>
+      <h4 class="mb-1">Ferramentas</h4>
+      <div class="muted">Recursos práticos para organizar a gestão financeira da sua empresa.</div>
+    </div>
+    {% if current_client %}
+      <div class="text-end">
+        <div class="muted small">Cliente ativo</div>
+        <div class="fw-semibold">{{ current_client.name }}</div>
+      </div>
+    {% endif %}
+  </div>
+</div>
+
+{% if not current_client %}
+  <div class="alert alert-warning">Selecione um cliente para acessar as ferramentas.</div>
+{% else %}
+  <div class="row g-3">
+    <div class="col-lg-8">
+      <div class="card p-4 h-100">
+        <div class="d-flex justify-content-between align-items-start gap-3 flex-wrap">
+          <div>
+            <h5 class="mb-1">Financeiro Gerencial</h5>
+            <div class="muted">Contas a pagar, contas a receber, DRE e fluxo de caixa para uso do cliente.</div>
+          </div>
+          <span class="badge {% if finance_tool.access_ok %}text-bg-success{% elif finance_tool.trial_active %}text-bg-warning{% else %}text-bg-secondary{% endif %}">
+            {{ finance_tool.status_label }}
+          </span>
+        </div>
+
+        <div class="row g-3 mt-1">
+          <div class="col-md-4">
+            <div class="border rounded p-3 h-100">
+              <div class="muted small">Período grátis</div>
+              <div class="fw-semibold">
+                {% if finance_tool.trial_active and finance_tool.trial_ends_at %}
+                  até {{ finance_tool.trial_ends_at.strftime("%d/%m/%Y") }}
+                {% else %}
+                  encerrado
+                {% endif %}
+              </div>
+            </div>
+          </div>
+          <div class="col-md-4">
+            <div class="border rounded p-3 h-100">
+              <div class="muted small">Mensalidade</div>
+              <div class="fw-semibold">{{ finance_tool.monthly_price_credits }} créditos/mês</div>
+            </div>
+          </div>
+          <div class="col-md-4">
+            <div class="border rounded p-3 h-100">
+              <div class="muted small">Saldo atual</div>
+              <div class="fw-semibold">{{ finance_tool.wallet_balance_credits|brnum(2) }} créditos</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="alert {% if finance_tool.access_ok %}alert-success{% else %}alert-warning{% endif %} mt-3 mb-3">
+          {{ finance_tool.message }}
+        </div>
+
+        <div class="d-flex gap-2 flex-wrap">
+          <a class="btn btn-primary" href="/ferramentas/financeiro">Abrir Financeiro Gerencial</a>
+          <a class="btn btn-outline-primary" href="/creditos">Gerenciar créditos</a>
+        </div>
+      </div>
+    </div>
+
+    <div class="col-lg-4">
+      <div class="card p-4 h-100">
+        <h6 class="mb-3">Como funciona</h6>
+        <ol class="small mb-0 ps-3">
+          <li>Ao liberar a ferramenta para o cliente, o primeiro acesso ativa 1 mês grátis.</li>
+          <li>Após o período grátis, a ferramenta consome {{ finance_tool.monthly_price_credits }} créditos por mês.</li>
+          <li>Sem saldo suficiente, o acesso fica bloqueado até nova recarga.</li>
+        </ol>
+      </div>
+    </div>
+  </div>
+{% endif %}
+{% endblock %}
+"""
+
+TEMPLATES["ferramentas_financeiro.html"] = r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4 mb-3">
+  <div class="d-flex justify-content-between align-items-start flex-wrap gap-3">
+    <div>
+      <h4 class="mb-1">Financeiro Gerencial</h4>
+      <div class="muted">Entrega 1: ativação comercial, trial e cobrança em créditos já ligados ao cliente.</div>
+    </div>
+    <span class="badge {% if finance_tool.access_ok %}text-bg-success{% elif finance_tool.trial_active %}text-bg-warning{% else %}text-bg-secondary{% endif %}">
+      {{ finance_tool.status_label }}
+    </span>
+  </div>
+</div>
+
+{% if not current_client %}
+  <div class="alert alert-warning">Selecione um cliente para acessar a ferramenta.</div>
+{% else %}
+  <div class="row g-3">
+    <div class="col-lg-8">
+      <div class="card p-4">
+        <div class="row g-3">
+          <div class="col-md-4">
+            <div class="border rounded p-3 h-100">
+              <div class="muted small">Saldo atual</div>
+              <div class="fw-semibold">{{ finance_tool.wallet_balance_credits|brnum(2) }} créditos</div>
+            </div>
+          </div>
+          <div class="col-md-4">
+            <div class="border rounded p-3 h-100">
+              <div class="muted small">Mensalidade</div>
+              <div class="fw-semibold">{{ finance_tool.monthly_price_credits }} créditos</div>
+            </div>
+          </div>
+          <div class="col-md-4">
+            <div class="border rounded p-3 h-100">
+              <div class="muted small">Próxima cobrança</div>
+              <div class="fw-semibold">
+                {% if finance_tool.next_billing_at %}
+                  {{ finance_tool.next_billing_at.strftime("%d/%m/%Y") }}
+                {% else %}
+                  —
+                {% endif %}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="alert {% if finance_tool.access_ok %}alert-success{% else %}alert-warning{% endif %} mt-3">
+          {{ finance_tool.message }}
+        </div>
+
+        {% if finance_tool.access_ok %}
+          <div class="card bg-light border-0 p-3">
+            <div class="fw-semibold mb-2">Próximas entregas desta ferramenta</div>
+            <ul class="mb-0 small">
+              <li>cadastros próprios do cliente</li>
+              <li>contas a pagar e receber</li>
+              <li>DRE gerencial</li>
+              <li>fluxo de caixa</li>
+            </ul>
+          </div>
+        {% else %}
+          <div class="d-flex gap-2 flex-wrap">
+            <a class="btn btn-primary" href="/creditos">Recarregar créditos</a>
+            <a class="btn btn-outline-primary" href="/ferramentas">Voltar para Ferramentas</a>
+          </div>
+        {% endif %}
+      </div>
+    </div>
+
+    <div class="col-lg-4">
+      <div class="card p-4 h-100">
+        <h6 class="mb-3">Cliente</h6>
+        <div class="fw-semibold">{{ current_client.name }}</div>
+        {% if current_client.email %}<div class="small muted">{{ current_client.email }}</div>{% endif %}
+        <hr>
+        <div class="small muted">Ferramenta vinculada ao cliente ativo e isolada por empresa/cliente.</div>
+      </div>
+    </div>
+  </div>
+{% endif %}
+{% endblock %}
+"""
+
+
+@app.get("/ferramentas", response_class=HTMLResponse)
+@require_login
+async def ferramentas_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+
+    current_client = _client_current_client(request, session, ctx)
+    finance_tool = None
+    if current_client:
+        finance_tool = _tool_subscription_status_payload(
+            session,
+            company_id=ctx.company.id,
+            client_id=current_client.id,
+            tool_code=CLIENT_TOOL_FINANCE_CODE,
+        )
+
+    return render(
+        "ferramentas.html",
+        request=request,
+        context={
+            "title": "Ferramentas",
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "role": ctx.membership.role,
+            "current_client": current_client,
+            "finance_tool": finance_tool,
+        },
+    )
+
+
+@app.get("/ferramentas/financeiro", response_class=HTMLResponse)
+@require_login
+async def ferramentas_financeiro_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+
+    current_client = _client_current_client(request, session, ctx)
+    if not current_client:
+        set_flash(request, "Selecione um cliente para acessar a ferramenta.")
+        return RedirectResponse("/ferramentas", status_code=303)
+
+    finance_tool = _tool_subscription_status_payload(
+        session,
+        company_id=ctx.company.id,
+        client_id=current_client.id,
+        tool_code=CLIENT_TOOL_FINANCE_CODE,
+    )
+
+    return render(
+        "ferramentas_financeiro.html",
+        request=request,
+        context={
+            "title": "Financeiro Gerencial",
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "role": ctx.membership.role,
+            "current_client": current_client,
+            "finance_tool": finance_tool,
+        },
+    )
