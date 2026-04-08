@@ -13599,6 +13599,19 @@ async def pending_attach_client(
     session.add(item)
     session.commit()
 
+    try:
+        _notify_staff_about_client_activity(
+            session,
+            ctx=ctx,
+            client_id=item.client_id,
+            kind="pendencia",
+            title="Cliente atualizou uma pendência",
+            message=(item.title or "Pendência")[:160],
+            href=f"/pendencias/{item.id}",
+        )
+    except Exception:
+        pass
+
     set_flash(request, "Enviado.")
     return RedirectResponse(f"/pendencias/{item.id}", status_code=303)
 
@@ -13936,6 +13949,19 @@ async def docs_attach_client(
     doc.updated_at = utcnow()
     session.add(doc)
     session.commit()
+
+    try:
+        _notify_staff_about_client_activity(
+            session,
+            ctx=ctx,
+            client_id=doc.client_id,
+            kind="documento",
+            title="Cliente atualizou um documento",
+            message=(doc.title or "Documento")[:160],
+            href=f"/documentos/{doc.id}",
+        )
+    except Exception:
+        pass
 
     set_flash(request, "Enviado.")
     return RedirectResponse(f"/documentos/{doc.id}", status_code=303)
@@ -16366,6 +16392,19 @@ async def pending_new_client_action(
         )
         session.commit()
 
+    try:
+        _notify_staff_about_client_activity(
+            session,
+            ctx=ctx,
+            client_id=item.client_id,
+            kind="pendencia",
+            title="Cliente criou uma nova pendência",
+            message=(item.title or "Pendência")[:160],
+            href=f"/pendencias/{item.id}",
+        )
+    except Exception:
+        pass
+
     set_flash(request, "Pendência criada.")
     return RedirectResponse(f"/pendencias/{item.id}", status_code=303)
 
@@ -16457,6 +16496,19 @@ async def docs_send_client_action(
         )
     )
     session.commit()
+
+    try:
+        _notify_staff_about_client_activity(
+            session,
+            ctx=ctx,
+            client_id=doc.client_id,
+            kind="documento",
+            title="Cliente enviou um novo documento",
+            message=(doc.title or "Documento")[:160],
+            href=f"/documentos/{doc.id}",
+        )
+    except Exception:
+        pass
 
     set_flash(request, "Documento enviado.")
     return RedirectResponse(f"/documentos/{doc.id}", status_code=303)
