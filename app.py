@@ -11980,7 +11980,7 @@ async def consultoria_delete_stage(request: Request, session: Session = Depends(
     return RedirectResponse(f"/consultoria/{project.id}", status_code=303)
 
 
-@app.get("/consultoria/steps/{step_id}/editar", response_class=HTMLResponse)@app.get("/consultoria/steps/{step_id}/editar", response_class=HTMLResponse)
+@app.get("/consultoria/steps/{step_id}/editar", response_class=HTMLResponse)
 @require_role({"admin", "equipe"})
 async def consultoria_edit_step_page(request: Request, session: Session = Depends(get_session),
                                      step_id: int = 0) -> HTMLResponse:
@@ -12062,7 +12062,7 @@ async def consultoria_edit_step_action(
     return RedirectResponse(f"/consultoria/{project.id}", status_code=303)
 
 
-@app.post("/consultoria/steps/{step_id}/excluir")@app.post("/consultoria/steps/{step_id}/excluir")
+@app.post("/consultoria/steps/{step_id}/excluir")
 @require_role({"admin", "equipe"})
 
 async def consultoria_delete_step(request: Request, session: Session = Depends(get_session),
@@ -12095,7 +12095,7 @@ async def consultoria_delete_step(request: Request, session: Session = Depends(g
     return RedirectResponse(f"/consultoria/{project.id}", status_code=303)
 
 
-@app.post("/consultoria/novo")@app.post("/consultoria/novo")
+@app.post("/consultoria/novo")
 @require_role({"admin", "equipe"})
 async def consultoria_new_action(
         request: Request,
