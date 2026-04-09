@@ -2005,10 +2005,44 @@ def _insert_offer_match_compat(
 
 
 def persist_offer_matches(session: Session, *, company_id: int, client_id: int, matches: list[dict[str, Any]]) -> None:
-    old = session.exec(select(OfferMatch).where(OfferMatch.company_id == company_id, OfferMatch.client_id == client_id)).all()
+    old = session.exec(
+        select(OfferMatch).where(
+            OfferMatch.company_id == company_id,
+            OfferMatch.client_id == client_id,
+        )
+    ).all()
+    old_ids = [int(row.id) for row in old if row.id]
+
+    if old_ids:
+        reviews = session.exec(
+            select(OfferVisibilityReview).where(
+                OfferVisibilityReview.offer_match_id.in_(old_ids)
+            )
+        ).all()
+        for review in reviews:
+            session.delete(review)
+
     for row in old:
         session.delete(row)
+
     session.commit()
+
+    client = session.get(Client, client_id)
+    subject_doc = _digits(getattr(client, "cnpj", "") or "") if client else ""
+    if not subject_doc and client:
+        subject_doc = _digits(getattr(client, "email", "") or "") or ""
+
+    for item in matches:
+        _insert_offer_match_compat(
+            session,
+            company_id=company_id,
+            client_id=client_id,
+            subject_doc=subject_doc,
+            item=item,
+        )
+
+    session.commit()
+    sync_offer_reviews(session, company_id=company_id, client_id=client_id)
 
     client = session.get(Client, client_id)
     subject_doc = _digits(getattr(client, "cnpj", "") or "") if client else ""
@@ -2396,6 +2430,7 @@ class BusinessDeal(SQLModel, table=True):
     title: str
     demand: str = ""  # demanda inicial
     notes: str = ""
+    lost_reason: str = ""
 
     stage: str = Field(default="qualificacao", index=True)
 
@@ -4696,6 +4731,8 @@ a:hover{ color:#00BFBF; }
             {% endif %}
 
             <span class="badge text-bg-light border">👤 {{ current_user.name }} • {{ role }}</span>
+            <a class="btn btn-outline-secondary btn-sm position-relative" href="/notificacoes">🔔{% if unread_notifications_count %}<span class="badge rounded-pill text-bg-danger ms-1">{{ unread_notifications_count }}</span>{% endif %}</a>
+            <a class="btn btn-outline-secondary btn-sm position-relative" href="/mensagens">💬{% if unread_messages_count %}<span class="badge rounded-pill text-bg-danger ms-1">{{ unread_messages_count }}</span>{% endif %} Mensagens</a>
             <a class="btn btn-outline-secondary btn-sm" href="/logout">Sair</a>
           {% else %}
             <a class="btn btn-outline-primary btn-sm" href="/login">Entrar</a>
@@ -4707,6 +4744,12 @@ a:hover{ color:#00BFBF; }
     <main class="container my-4">
   {% if flash %}
     <div class="alert alert-info">{{ flash }}</div>
+  {% endif %}
+  {% if approved_offers_count and approved_offers_count > 0 and role == "cliente" %}
+    <div class="alert alert-warning d-flex justify-content-between align-items-center flex-wrap gap-2">
+      <div><b>Temos ofertas alinhadas ao seu perfil.</b> Confira aqui!</div>
+      <a class="btn btn-primary btn-sm" href="/ofertas">Ver ofertas</a>
+    </div>
   {% endif %}
 
   <!-- Banner (carrossel) -->
@@ -4835,7 +4878,7 @@ a:hover{ color:#00BFBF; }
       <hr class="my-4"/>
 
 {% if allow_company_signup %}
-  <div class="d-flex justify-content-between align-items-center">
+  <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
     <div class="muted">Primeiro acesso?</div>
     <a class="btn btn-outline-primary" href="/signup">Criar escritório</a>
   </div>
@@ -5717,7 +5760,7 @@ a:hover{ color:#00BFBF; }
           </div>
           <div class="muted small">
             {% if role in ["admin","equipe"] %}Cliente: {{ it.client_name }} • {% endif %}
-            {% if it.due_date %}Prazo: {{ it.due_date }} • {% endif %}
+            {% if it.due_date %}Prazo: {{ it.due_date|brdate }} • {% endif %}
             {{ it.created_at }}
           </div>
         </a>
@@ -5815,7 +5858,7 @@ a:hover{ color:#00BFBF; }
     <ul>
       {% for a in attachments %}
         <li class="d-flex justify-content-between align-items-center">
-          <a href="/download/{{ a.id }}">{{ a.original_filename }}</a>
+          <a class="btn btn-sm btn-outline-secondary" href="/download/{{ a.id }}">Baixar {{ "NF" if "nf" in (a.original_filename|lower) else ("Boleto" if "boleto" in (a.original_filename|lower) else a.original_filename) }}</a>
           {% if role in ["admin","equipe"] %}
             <form method="post" action="/attachments/{{ a.id }}/delete" class="ms-2">
               <input type="hidden" name="next" value="/pendencias/{{ item.id }}">
@@ -6019,7 +6062,7 @@ a:hover{ color:#00BFBF; }
     <ul>
       {% for a in attachments %}
         <li class="d-flex justify-content-between align-items-center">
-          <a href="/download/{{ a.id }}">{{ a.original_filename }}</a>
+          <a class="btn btn-sm btn-outline-secondary" href="/download/{{ a.id }}">Baixar {{ "NF" if "nf" in (a.original_filename|lower) else ("Boleto" if "boleto" in (a.original_filename|lower) else a.original_filename) }}</a>
           {% if role in ["admin","equipe"] %}
             <form method="post" action="/attachments/{{ a.id }}/delete" class="ms-2">
               <input type="hidden" name="next" value="/documentos/{{ doc.id }}">
@@ -6268,7 +6311,7 @@ a:hover{ color:#00BFBF; }
     <ul>
       {% for a in attachments %}
         <li class="d-flex justify-content-between align-items-center">
-          <a href="/download/{{ a.id }}">{{ a.original_filename }}</a>
+          <a class="btn btn-sm btn-outline-secondary" href="/download/{{ a.id }}">Baixar {{ "NF" if "nf" in (a.original_filename|lower) else ("Boleto" if "boleto" in (a.original_filename|lower) else a.original_filename) }}</a>
           {% if role in ["admin","equipe"] %}
             <form method="post" action="/attachments/{{ a.id }}/delete" class="ms-2">
               <input type="hidden" name="next" value="/financeiro/{{ inv.id }}">
@@ -6396,7 +6439,7 @@ a:hover{ color:#00BFBF; }
           <div class="muted small">
             {% if role in ["admin","equipe"] %}Cliente: {{ it.client_name }} • {% endif %}
             Valor: R$ {{ "%.2f"|format(it.amount_brl) }} •
-            {% if it.due_date %}Venc: {{ it.due_date }} • {% endif %}
+            {% if it.due_date %}Venc: {{ it.due_date|brdate }} • {% endif %}
             {{ it.created_at }}
           </div>
         </a>
@@ -6485,7 +6528,7 @@ a:hover{ color:#00BFBF; }
             <tbody>
               {% for r in ca_receivables %}
                 <tr>
-                  <td class="mono small">{{ r.due_date }}</td>
+                  <td class="mono small">{{ r.due_date|brdate }}</td>
                   <td>{{ r.description }}</td>
                   <td><span class="badge text-bg-light border">{{ r.status }}</span></td>
                   <td>R$ {{ "%.2f"|format(r.amount_open) }}</td>
@@ -6528,7 +6571,7 @@ a:hover{ color:#00BFBF; }
             <tbody>
               {% for n in ca_invoices %}
                 <tr>
-                  <td class="mono small">{{ n.issue_date }}</td>
+                  <td class="mono small">{{ n.issue_date|brdate }}</td>
                   <td class="mono small">{{ n.number or "—" }}</td>
                   <td class="mono small">{{ n.invoice_type }}</td>
                   <td><span class="badge text-bg-light border">{{ n.status }}</span></td>
@@ -6598,7 +6641,7 @@ a:hover{ color:#00BFBF; }
           <input class="form-control" name="amount_brl" type="number" step="0.01" min="0" value="0" required />
         </div>
         <div class="col-md-6">
-          <label class="form-label">Vencimento (AAAA-MM-DD)</label>
+          <label class="form-label">Vencimento (DD/MM/AAAA)</label>
           <input class="form-control mono" name="due_date" placeholder="2026-03-20" />
         </div>
         <div class="col-12">
@@ -6628,7 +6671,7 @@ a:hover{ color:#00BFBF; }
       <h4 class="mb-1">{{ inv.title }}</h4>
       <div class="muted">
         Status: <b>{{ inv.status }}</b> • Valor: <b>R$ {{ "%.2f"|format(inv.amount_brl) }}</b>
-        {% if inv.due_date %} • Venc: <b>{{ inv.due_date }}</b>{% endif %}
+        {% if inv.due_date %} • Venc: <b>{{ inv.due_date|brdate }}</b>{% endif %}
         {% if role in ["admin","equipe"] %} • Cliente: <b>{{ client.name }}</b>{% endif %}
       </div>
     </div>
@@ -6652,7 +6695,7 @@ a:hover{ color:#00BFBF; }
     <ul>
       {% for a in attachments %}
         <li class="d-flex justify-content-between align-items-center">
-          <a href="/download/{{ a.id }}">{{ a.original_filename }}</a>
+          <a class="btn btn-sm btn-outline-secondary" href="/download/{{ a.id }}">Baixar {{ "NF" if "nf" in (a.original_filename|lower) else ("Boleto" if "boleto" in (a.original_filename|lower) else a.original_filename) }}</a>
           {% if role in ["admin","equipe"] %}
             <form method="post" action="/attachments/{{ a.id }}/delete" class="ms-2">
               <input type="hidden" name="next" value="/financeiro/{{ inv.id }}">
@@ -6764,7 +6807,7 @@ TEMPLATES.update({
           <div class="muted small">
             {% if role in ["admin","equipe"] %}Cliente: {{ it.client_name }} • {% endif %}
             Valor: R$ {{ "%.2f"|format(it.amount_brl) }} •
-            {% if it.due_date %}Venc: {{ it.due_date }} • {% endif %}
+            {% if it.due_date %}Venc: {{ it.due_date|brdate }} • {% endif %}
             {{ it.created_at }}
           </div>
         </a>
@@ -6786,7 +6829,7 @@ TEMPLATES.update({
           </div>
           <div class="muted small mt-1">
             Valor: R$ {{ "%.2f"|format(r.amount_total) }} • Aberto: R$ {{ "%.2f"|format(r.amount_open) }}
-            {% if r.due_date %} • Venc: {{ r.due_date }}{% endif %}
+            {% if r.due_date %} • Venc: {{ r.due_date|brdate }}{% endif %}
             {% if r.invoice_type or r.invoice_number %} • {{ r.invoice_type }} {{ r.invoice_number }}{% endif %}
             {% if r.boleto_status %} • Boleto: {{ r.boleto_status }}{% endif %}
           </div>
@@ -6813,7 +6856,7 @@ TEMPLATES.update({
             <span class="badge text-bg-light border">{{ n.status }}</span>
           </div>
           <div class="muted small mt-1">
-            {% if n.issue_date %}Emissão/Competência: {{ n.issue_date }} • {% endif %}
+            {% if n.issue_date %}Emissão/Competência: {{ n.issue_date|brdate }} • {% endif %}
             {% if n.amount %}Valor: R$ {{ "%.2f"|format(n.amount) }} • {% endif %}
             ID: {{ n.external_id }}
           </div>
@@ -7003,7 +7046,7 @@ TEMPLATES.update({
                           </div>
                           {% if st.description %}<div class="muted small mt-1">{{ st.description }}</div>{% endif %}
                           <div class="muted small">
-                            {% if st.due_date %}Prazo: {{ st.due_date }} • {% endif %}
+                            {% if st.due_date %}Prazo: {{ st.due_date|brdate }} • {% endif %}
                             Peso: {{ st.weight }}
                           </div>
                         </div>
@@ -7304,8 +7347,8 @@ TEMPLATES.update({
         <input class="form-control" name="amount_brl" type="number" step="0.01" min="0" value="{{ inv.amount_brl }}" />
       </div>
       <div class="col-md-4">
-        <label class="form-label">Vencimento (AAAA-MM-DD)</label>
-        <input class="form-control mono" name="due_date" value="{{ inv.due_date }}" />
+        <label class="form-label">Vencimento (DD/MM/AAAA)</label>
+        <input class="form-control mono" name="due_date" value="{{ inv.due_date|brdate }}" />
       </div>
       <div class="col-12">
         <label class="form-label">Notas</label>
@@ -8025,6 +8068,9 @@ TEMPLATES.update({
   </div>
 
   <hr class="my-3"/>
+      {% if deal.lost_reason %}
+        <div class="alert alert-warning mt-3 mb-0"><b>Motivo de perda:</b> {{ deal.lost_reason }}</div>
+      {% endif %}
 
   <div class="row g-3">
     <div class="col-md-4">
@@ -8270,12 +8316,16 @@ TEMPLATES.update({
       </div>
       <div class="col-md-4">
         <label class="form-label">Data do próximo passo</label>
-        <input class="form-control mono" name="next_step_date" placeholder="AAAA-MM-DD" />
+        <input class="form-control mono" name="next_step_date" placeholder="DD/MM/AAAA" />
       </div>
 
       <div class="col-12">
         <label class="form-label">Notas internas</label>
         <textarea class="form-control" name="notes" rows="3"></textarea>
+      </div>
+      <div class="col-12">
+        <label class="form-label">Motivo de perda (quando perdido)</label>
+        <input class="form-control" name="lost_reason" placeholder="Ex.: preço, timing, sem aderência, sem retorno..." />
       </div>
     </div>
 
@@ -8364,7 +8414,7 @@ TEMPLATES.update({
         <form method="post" action="/negocios/{{ deal.id }}/next" class="mb-3">
           <label class="form-label">Próximo passo</label>
           <input class="form-control mb-2" name="next_step" value="{{ deal.next_step }}" />
-          <input class="form-control mono" name="next_step_date" value="{{ deal.next_step_date }}" placeholder="AAAA-MM-DD" />
+          <input class="form-control mono" name="next_step_date" value="{{ deal.next_step_date }}" placeholder="DD/MM/AAAA" />
           <button class="btn btn-outline-primary w-100 mt-2">Salvar</button>
         </form>
 
@@ -8480,12 +8530,16 @@ TEMPLATES.update({
       </div>
       <div class="col-md-4">
         <label class="form-label">Data do próximo passo</label>
-        <input class="form-control mono" name="next_step_date" value="{{ deal.next_step_date }}" placeholder="AAAA-MM-DD" />
+        <input class="form-control mono" name="next_step_date" value="{{ deal.next_step_date }}" placeholder="DD/MM/AAAA" />
       </div>
 
       <div class="col-12">
         <label class="form-label">Notas internas</label>
         <textarea class="form-control" name="notes" rows="3">{{ deal.notes }}</textarea>
+      </div>
+      <div class="col-12">
+        <label class="form-label">Motivo de perda (quando perdido)</label>
+        <input class="form-control" name="lost_reason" value="{{ deal.lost_reason }}" placeholder="Ex.: preço, timing, sem aderência, sem retorno..." />
       </div>
     </div>
 
@@ -8591,8 +8645,8 @@ TEMPLATES.update({
       </div>
 
       <div class="col-md-6">
-        <label class="form-label">Data (AAAA-MM-DD)</label>
-        <input class="form-control mono" name="meeting_date" placeholder="2026-03-12" />
+        <label class="form-label">Data (DD/MM/AAAA)</label>
+        <input class="form-control mono" name="meeting_date" placeholder="09/04/2026" />
       </div>
 
       <div class="col-12">
@@ -8630,26 +8684,65 @@ TEMPLATES.update({
       <h4 class="mb-1">{{ meeting.title or "Reunião" }}</h4>
       <div class="muted">
         {% if role in ["admin","equipe"] %}Cliente: <b>{{ client.name }}</b> • {% endif %}
-        {% if meeting.meeting_date %}Data: <b>{{ meeting.meeting_date }}</b> • {% endif %}
+        {% if meeting.meeting_date %}Data: <b>{{ meeting.meeting_date|brdate }}</b> • {% endif %}
         Status Notion: <b>{{ meeting.notion_status or "—" }}</b>
       </div>
       {% if meeting.notion_url %}
         <div class="small mt-1"><a href="{{ meeting.notion_url }}" target="_blank" rel="noopener">Abrir no Notion</a></div>
       {% endif %}
       {% if meeting.last_synced_at %}
-        <div class="muted small mt-1">Última sincronização: {{ meeting.last_synced_at }}</div>
+        <div class="muted small mt-1">Última sincronização: {{ meeting.last_synced_at|brdatetime }}</div>
+      {% endif %}
+      {% if meeting.total_meeting_minutes %}
+        <div class="muted small mt-1">Horas em reunião: {{ (meeting.total_meeting_minutes / 60)|round(2) }}h</div>
       {% endif %}
     </div>
 
-    <div class="d-flex gap-2">
+    <div class="d-flex gap-2 flex-wrap">
       <a class="btn btn-outline-secondary" href="/reunioes">Voltar</a>
       {% if role in ["admin","equipe"] %}
         <form method="post" action="/reunioes/{{ meeting.id }}/sync">
           <button class="btn btn-outline-primary" type="submit">Sincronizar</button>
         </form>
+        <form method="post" action="/reunioes/{{ meeting.id }}/checkin">
+          <button class="btn btn-outline-success" type="submit">Check-in</button>
+        </form>
+        <form method="post" action="/reunioes/{{ meeting.id }}/checkout">
+          <button class="btn btn-outline-warning" type="submit">Check-out</button>
+        </form>
+      {% endif %}
+      {% if role == "cliente" and meeting.admin_notes_visible_to_client and meeting.admin_notes %}
+        <a class="btn btn-outline-primary" href="#cliente-notes">Anotações</a>
       {% endif %}
     </div>
   </div>
+
+  {% if role in ["admin","equipe"] %}
+    <hr class="my-3"/>
+    <form method="post" action="/reunioes/{{ meeting.id }}/anotacoes" class="card p-3">
+      <div class="fw-semibold mb-2">Anotações da reunião</div>
+      <div class="row g-2">
+        <div class="col-12">
+          <textarea class="form-control" name="admin_notes" rows="4" placeholder="Anotações do escritório">{{ meeting.admin_notes }}</textarea>
+        </div>
+        <div class="col-12">
+          <label class="form-check">
+            <input class="form-check-input" type="checkbox" name="admin_notes_visible_to_client" value="1" {% if meeting.admin_notes_visible_to_client %}checked{% endif %}>
+            <span class="form-check-label">Visível ao cliente</span>
+          </label>
+        </div>
+        <div class="col-12">
+          <button class="btn btn-primary" type="submit">Salvar anotações</button>
+        </div>
+      </div>
+    </form>
+  {% elif meeting.admin_notes_visible_to_client and meeting.admin_notes %}
+    <hr class="my-3"/>
+    <div class="card p-3" id="cliente-notes">
+      <div class="fw-semibold mb-2">Anotações</div>
+      <pre>{{ meeting.admin_notes }}</pre>
+    </div>
+  {% endif %}
 
   {% if role in ["admin","equipe"] and meeting.action_items_text %}
     <hr class="my-3"/>
@@ -8799,7 +8892,7 @@ TEMPLATES.update({
             </div>
             <div class="col-md-6">
               <label class="form-label">Data da assinatura</label>
-              <input class="form-control mono" name="signed_at" placeholder="AAAA-MM-DD" />
+              <input class="form-control mono" name="signed_at" placeholder="DD/MM/AAAA" />
             </div>
             <div class="col-md-6">
               <label class="form-label">Arquivo (PDF/Imagem)</label>
@@ -9811,6 +9904,62 @@ def _format_number_br(value: Any, decimals: int = 2) -> str:
 
 templates_env.filters["brl"] = _format_brl
 templates_env.filters["brnum"] = _format_number_br
+
+
+def _normalize_date_input(value: Any) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    raw = raw.replace(".", "/").replace("-", "/")
+    for fmt in ("%d/%m/%Y", "%Y/%m/%d", "%Y-%m-%d", "%d-%m-%Y"):
+        try:
+            return datetime.strptime(str(value or "").strip(), fmt).date().isoformat()
+        except Exception:
+            pass
+    for fmt in ("%d/%m/%Y", "%Y/%m/%d", "%Y-%m-%d", "%d-%m-%Y"):
+        try:
+            return datetime.strptime(raw, fmt).date().isoformat()
+        except Exception:
+            pass
+    return str(value or "").strip()
+
+def _format_date_br(value: Any) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y", "%Y/%m/%d"):
+        try:
+            return datetime.strptime(raw, fmt).strftime("%d/%m/%Y")
+        except Exception:
+            pass
+    if "T" in raw:
+        try:
+            return datetime.fromisoformat(raw.replace("Z", "+00:00")).strftime("%d/%m/%Y")
+        except Exception:
+            pass
+    return raw
+
+def _format_datetime_br(value: Any) -> str:
+    if not value:
+        return ""
+    if isinstance(value, datetime):
+        return value.strftime("%d/%m/%Y %H:%M")
+    raw = str(value).strip()
+    if not raw:
+        return ""
+    try:
+        return datetime.fromisoformat(raw.replace("Z", "+00:00")).strftime("%d/%m/%Y %H:%M")
+    except Exception:
+        pass
+    for fmt in ("%Y-%m-%d %H:%M", "%Y-%m-%d", "%d/%m/%Y %H:%M", "%d/%m/%Y"):
+        try:
+            return datetime.strptime(raw, fmt).strftime("%d/%m/%Y %H:%M" if "%H:%M" in fmt else "%d/%m/%Y")
+        except Exception:
+            pass
+    return raw
+
+templates_env.filters["brdate"] = _format_date_br
+templates_env.filters["brdatetime"] = _format_datetime_br
 
 
 # ----------------------------
@@ -11019,12 +11168,60 @@ class Meeting(SQLModel, table=True):
     notes_text: str = ""
     transcript_text: str = ""
     action_items_text: str = ""
+    admin_notes: str = ""
+    admin_notes_visible_to_client: bool = False
+    checkin_at: Optional[datetime] = None
+    checkout_at: Optional[datetime] = None
+    total_meeting_minutes: int = 0
 
     raw_json: str = Field(default="{}")
     last_synced_at: Optional[datetime] = None
 
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)
+
+
+
+def ensure_meeting_extra_columns() -> None:
+    try:
+        backend = engine.url.get_backend_name()
+        with engine.begin() as conn:
+            if backend.startswith("postgres"):
+                for stmt in [
+                    "ALTER TABLE IF EXISTS meeting ADD COLUMN IF NOT EXISTS admin_notes TEXT NOT NULL DEFAULT ''",
+                    "ALTER TABLE IF EXISTS meeting ADD COLUMN IF NOT EXISTS admin_notes_visible_to_client BOOLEAN NOT NULL DEFAULT FALSE",
+                    "ALTER TABLE IF EXISTS meeting ADD COLUMN IF NOT EXISTS checkin_at TIMESTAMP WITHOUT TIME ZONE",
+                    "ALTER TABLE IF EXISTS meeting ADD COLUMN IF NOT EXISTS checkout_at TIMESTAMP WITHOUT TIME ZONE",
+                    "ALTER TABLE IF EXISTS meeting ADD COLUMN IF NOT EXISTS total_meeting_minutes INTEGER NOT NULL DEFAULT 0",
+                ]:
+                    try:
+                        conn.exec_driver_sql(stmt)
+                    except Exception:
+                        pass
+            elif backend.startswith("sqlite"):
+                try:
+                    rows = conn.exec_driver_sql("PRAGMA table_info('meeting')").fetchall()
+                    existing = {str(r[1]) for r in rows}
+                except Exception:
+                    existing = set()
+                stmts = []
+                if "admin_notes" not in existing:
+                    stmts.append("ALTER TABLE meeting ADD COLUMN admin_notes TEXT NOT NULL DEFAULT ''")
+                if "admin_notes_visible_to_client" not in existing:
+                    stmts.append("ALTER TABLE meeting ADD COLUMN admin_notes_visible_to_client INTEGER NOT NULL DEFAULT 0")
+                if "checkin_at" not in existing:
+                    stmts.append("ALTER TABLE meeting ADD COLUMN checkin_at TEXT")
+                if "checkout_at" not in existing:
+                    stmts.append("ALTER TABLE meeting ADD COLUMN checkout_at TEXT")
+                if "total_meeting_minutes" not in existing:
+                    stmts.append("ALTER TABLE meeting ADD COLUMN total_meeting_minutes INTEGER NOT NULL DEFAULT 0")
+                for stmt in stmts:
+                    try:
+                        conn.exec_driver_sql(stmt)
+                    except Exception:
+                        pass
+    except Exception:
+        pass
 
 
 class MeetingMessage(SQLModel, table=True):
@@ -11852,10 +12049,6 @@ async def consultoria_edit_stage_page(request: Request, session: Session = Depen
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
-    # Garante tabela em ambientes sem Alembic
-    if not ensure_credit_consent_table():
-        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
-        return RedirectResponse("/credito", status_code=303)
 
     stage = session.get(ConsultingStage, int(stage_id))
     if not stage:
@@ -11889,10 +12082,6 @@ async def consultoria_edit_stage_action(
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
-    # Garante tabela em ambientes sem Alembic
-    if not ensure_credit_consent_table():
-        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
-        return RedirectResponse("/credito", status_code=303)
 
     stage = session.get(ConsultingStage, int(stage_id))
     if not stage:
@@ -11905,7 +12094,7 @@ async def consultoria_edit_stage_action(
         return RedirectResponse("/consultoria", status_code=303)
 
     stage.name = name.strip()
-    stage.due_date = due_date.strip()
+    stage.due_date = _normalize_date_input(due_date)
 
     try:
         desired_order = int(order)
@@ -11917,7 +12106,12 @@ async def consultoria_edit_stage_action(
         _move_stage_to_order(session, stage, stage.order)
     else:
         session.add(stage)
-        session.commit()
+        try:
+            session.commit()
+        except Exception:
+            session.rollback()
+            set_flash(request, "Falha ao atualizar etapa.")
+            return RedirectResponse(f"/consultoria/{project.id}", status_code=303)
 
     set_flash(request, "Etapa atualizada.")
     return RedirectResponse(f"/consultoria/{project.id}", status_code=303)
@@ -11930,10 +12124,6 @@ async def consultoria_delete_stage(request: Request, session: Session = Depends(
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
-    # Garante tabela em ambientes sem Alembic
-    if not ensure_credit_consent_table():
-        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
-        return RedirectResponse("/credito", status_code=303)
 
     stage = session.get(ConsultingStage, int(stage_id))
     if not stage:
@@ -11949,7 +12139,12 @@ async def consultoria_delete_stage(request: Request, session: Session = Depends(
     for st in steps:
         session.delete(st)
     session.delete(stage)
-    session.commit()
+    try:
+        session.commit()
+    except Exception:
+        session.rollback()
+        set_flash(request, "Falha ao excluir etapa.")
+        return RedirectResponse(f"/consultoria/{project.id}", status_code=303)
 
     set_flash(request, "Etapa excluída.")
     return RedirectResponse(f"/consultoria/{project.id}", status_code=303)
@@ -11962,10 +12157,6 @@ async def consultoria_edit_step_page(request: Request, session: Session = Depend
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
-    # Garante tabela em ambientes sem Alembic
-    if not ensure_credit_consent_table():
-        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
-        return RedirectResponse("/credito", status_code=303)
 
     step = session.get(ConsultingStep, int(step_id))
     if not step:
@@ -12002,10 +12193,6 @@ async def consultoria_edit_step_action(
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
-    # Garante tabela em ambientes sem Alembic
-    if not ensure_credit_consent_table():
-        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
-        return RedirectResponse("/credito", status_code=303)
 
     step = session.get(ConsultingStep, int(step_id))
     if not step:
@@ -12020,13 +12207,18 @@ async def consultoria_edit_step_action(
 
     step.title = title.strip()
     step.description = description.strip()
-    step.due_date = due_date.strip()
+    step.due_date = _normalize_date_input(due_date)
     step.weight = max(0.1, float(weight))
     step.client_action = (client_action == "1")
     step.updated_at = utcnow()
 
     session.add(step)
-    session.commit()
+    try:
+        session.commit()
+    except Exception:
+        session.rollback()
+        set_flash(request, "Falha ao atualizar sub-etapa.")
+        return RedirectResponse(f"/consultoria/{project.id}", status_code=303)
 
     set_flash(request, "Sub-etapa atualizada.")
     return RedirectResponse(f"/consultoria/{project.id}", status_code=303)
@@ -12039,10 +12231,6 @@ async def consultoria_delete_step(request: Request, session: Session = Depends(g
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
-    # Garante tabela em ambientes sem Alembic
-    if not ensure_credit_consent_table():
-        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
-        return RedirectResponse("/credito", status_code=303)
 
     step = session.get(ConsultingStep, int(step_id))
     if not step:
@@ -12056,7 +12244,12 @@ async def consultoria_delete_step(request: Request, session: Session = Depends(g
         return RedirectResponse("/consultoria", status_code=303)
 
     session.delete(step)
-    session.commit()
+    try:
+        session.commit()
+    except Exception:
+        session.rollback()
+        set_flash(request, "Falha ao excluir sub-etapa.")
+        return RedirectResponse(f"/consultoria/{project.id}", status_code=303)
 
     set_flash(request, "Sub-etapa excluída.")
     return RedirectResponse(f"/consultoria/{project.id}", status_code=303)
@@ -12099,7 +12292,7 @@ async def consultoria_new_action(
         description=description.strip(),
         status=status,
         start_date=start_date.strip(),
-        due_date=due_date.strip(),
+        due_date=_normalize_date_input(due_date),
         updated_at=utcnow(),
     )
     session.add(proj)
@@ -12180,10 +12373,6 @@ async def consultoria_add_stage(
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
-    # Garante tabela em ambientes sem Alembic
-    if not ensure_credit_consent_table():
-        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
-        return RedirectResponse("/credito", status_code=303)
 
     project = session.get(ConsultingProject, int(project_id))
     if not project or project.company_id != ctx.company.id:
@@ -12194,10 +12383,15 @@ async def consultoria_add_stage(
         project_id=project.id,
         name=name.strip(),
         order=_next_stage_order(session, project.id),
-        due_date=due_date.strip(),
+        due_date=_normalize_date_input(due_date),
     )
     session.add(stage)
-    session.commit()
+    try:
+        session.commit()
+    except Exception:
+        session.rollback()
+        set_flash(request, "Falha ao adicionar etapa.")
+        return RedirectResponse(f"/consultoria/{project.id}", status_code=303)
 
     set_flash(request, "Etapa adicionada.")
     return RedirectResponse(f"/consultoria/{project.id}", status_code=303)
@@ -12218,10 +12412,6 @@ async def consultoria_add_step(
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
-    # Garante tabela em ambientes sem Alembic
-    if not ensure_credit_consent_table():
-        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
-        return RedirectResponse("/credito", status_code=303)
 
     stage = session.get(ConsultingStage, int(stage_id))
     if not stage:
@@ -12237,13 +12427,18 @@ async def consultoria_add_step(
         stage_id=stage.id,
         title=title.strip(),
         description=description.strip(),
-        due_date=due_date.strip(),
+        due_date=_normalize_date_input(due_date),
         weight=max(0.1, float(weight)),
         client_action=(client_action == "1"),
         updated_at=utcnow(),
     )
     session.add(step)
-    session.commit()
+    try:
+        session.commit()
+    except Exception:
+        session.rollback()
+        set_flash(request, "Falha ao adicionar sub-etapa.")
+        return RedirectResponse(f"/consultoria/{project.id}", status_code=303)
 
     set_flash(request, "Sub-etapa adicionada.")
     return RedirectResponse(f"/consultoria/{project.id}", status_code=303)
@@ -13403,6 +13598,19 @@ async def client_access_page(
     ).first()
     allowed = set(_parse_json_list(row.features_json)) if row else ROLE_DEFAULT_FEATURES["cliente"]
 
+    tool_subscription = _find_client_tool_subscription(
+        session,
+        company_id=ctx.company.id,
+        client_id=client_id,
+        tool_code=CLIENT_TOOL_FINANCE_CODE,
+    )
+    tool_payload = _tool_subscription_status_payload(
+        session,
+        company_id=ctx.company.id,
+        client_id=client_id,
+        tool_code=CLIENT_TOOL_FINANCE_CODE,
+    )
+
     mems = session.exec(
         select(Membership).where(Membership.company_id == ctx.company.id, Membership.client_id == client_id)
     ).all()
@@ -13426,6 +13634,8 @@ async def client_access_page(
             "feature_standalone": FEATURE_STANDALONE,
             "feature_keys": FEATURE_KEYS,
             "linked_users": users,
+            "tool_subscription": tool_subscription,
+            "tool_payload": tool_payload,
         },
     )
 
@@ -13462,7 +13672,69 @@ async def client_access_save(
     session.add(row)
     session.commit()
 
-    set_flash(request, "Permissões do cliente atualizadas.")
+    tool_enabled = str(form.get("tool_finance_enabled") or "") == "1"
+    billing_mode = str(form.get("tool_finance_billing_mode") or "freemium").strip().lower()
+    if billing_mode not in {"freemium", "paid"}:
+        billing_mode = "freemium"
+    try:
+        monthly_price_credits = max(0, int(form.get("tool_finance_price_credits") or CLIENT_TOOL_FINANCE_MONTHLY_CREDITS))
+    except Exception:
+        monthly_price_credits = CLIENT_TOOL_FINANCE_MONTHLY_CREDITS
+    try:
+        trial_days = max(0, int(form.get("tool_finance_trial_days") or 30))
+    except Exception:
+        trial_days = 30
+    start_trial_now = str(form.get("tool_finance_start_trial_now") or "") == "1"
+
+    sub = _find_client_tool_subscription(
+        session,
+        company_id=ctx.company.id,
+        client_id=client_id,
+        tool_code=CLIENT_TOOL_FINANCE_CODE,
+    )
+    if not sub:
+        sub = ClientToolSubscription(
+            company_id=ctx.company.id,
+            client_id=client_id,
+            tool_code=CLIENT_TOOL_FINANCE_CODE,
+            status="blocked",
+            is_active=False,
+            monthly_price_credits=monthly_price_credits,
+            billing_mode=billing_mode,
+            trial_days=trial_days,
+            created_at=utcnow(),
+            updated_at=utcnow(),
+        )
+
+    sub.is_active = bool(tool_enabled)
+    sub.monthly_price_credits = monthly_price_credits
+    sub.billing_mode = billing_mode
+    sub.trial_days = trial_days
+    sub.updated_at = utcnow()
+
+    if not tool_enabled:
+        sub.status = "cancelled"
+        sub.trial_started_at = None
+        sub.trial_ends_at = None
+        sub.next_billing_at = None
+        sub.last_billed_period = ""
+    elif billing_mode == "paid":
+        sub.status = "active" if sub.last_billed_period else "blocked"
+        sub.trial_started_at = None
+        sub.trial_ends_at = None
+    else:
+        if start_trial_now:
+            now = utcnow()
+            sub.status = "trial"
+            sub.trial_started_at = now
+            sub.trial_ends_at = now + timedelta(days=trial_days)
+            sub.next_billing_at = sub.trial_ends_at
+            sub.last_billed_period = ""
+
+    session.add(sub)
+    session.commit()
+
+    set_flash(request, "Permissões e ferramenta do cliente atualizadas.")
     return RedirectResponse(f"/admin/clients/{client_id}/access", status_code=303)
 
 # ----------------------------
@@ -14249,7 +14521,7 @@ async def pending_new_action(
         title=title.strip(),
         description=description.strip(),
         status=status,
-        due_date=due_date.strip(),
+        due_date=_normalize_date_input(due_date),
         updated_at=utcnow(),
     )
     session.add(item)
@@ -17268,7 +17540,7 @@ async def fin_new_action(
         created_by_user_id=ctx.user.id,
         title=title.strip(),
         amount_brl=max(0.0, float(amount_brl)),
-        due_date=due_date.strip(),
+        due_date=_normalize_date_input(due_date),
         status=status,
         notes=notes.strip(),
         updated_at=utcnow(),
@@ -17735,7 +18007,7 @@ async def tasks_new_action(
         description=description.strip(),
         status=status,
         priority=priority,
-        due_date=due_date.strip(),
+        due_date=_normalize_date_input(due_date),
         visible_to_client=(visible_to_client == "1"),
         client_action=(client_action == "1"),
         created_at=utcnow(),
@@ -18199,7 +18471,7 @@ async def pending_new_client_action(
         title=title.strip(),
         description=description.strip(),
         status="cliente_enviou",
-        due_date=due_date.strip(),
+        due_date=_normalize_date_input(due_date),
         created_at=utcnow(),
         updated_at=utcnow(),
     )
@@ -18611,7 +18883,7 @@ async def fin_edit_action(
     inv.title = title.strip()
     inv.status = status.strip().lower()
     inv.amount_brl = max(0.0, float(amount_brl))
-    inv.due_date = due_date.strip()
+    inv.due_date = _normalize_date_input(due_date)
     inv.notes = notes.strip()
     inv.updated_at = utcnow()
     session.add(inv)
@@ -18834,6 +19106,7 @@ async def crm_new_action(
         source: str = Form(""),
         next_step: str = Form(""),
         next_step_date: str = Form(""),
+        lost_reason: str = Form(""),
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
@@ -18903,8 +19176,9 @@ async def crm_new_action(
         value_estimate_brl=max(0.0, float(value_estimate_brl)),
         probability_pct=prob,
         next_step=next_step.strip(),
-        next_step_date=next_step_date.strip(),
+        next_step_date=_normalize_date_input(next_step_date),
         source=source.strip(),
+        lost_reason=(lost_reason or "").strip(),
         updated_at=utcnow(),
     )
     session.add(deal)
@@ -19022,6 +19296,7 @@ async def crm_edit_action(
         source: str = Form(""),
         next_step: str = Form(""),
         next_step_date: str = Form(""),
+        lost_reason: str = Form(""),
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
@@ -19068,7 +19343,8 @@ async def crm_edit_action(
     deal.probability_pct = max(0, min(100, int(probability_pct or 0)))
     deal.source = source.strip()
     deal.next_step = next_step.strip()
-    deal.next_step_date = next_step_date.strip()
+    deal.next_step_date = _normalize_date_input(next_step_date)
+    deal.lost_reason = (lost_reason or "").strip() if stage == "perdido" else ""
     deal.updated_at = utcnow()
     session.add(deal)
     session.commit()
@@ -19087,6 +19363,7 @@ async def crm_update_stage(
         session: Session = Depends(get_session),
         deal_id: int = 0,
         stage: str = Form(""),
+        lost_reason: str = Form(""),
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
@@ -19102,6 +19379,7 @@ async def crm_update_stage(
         return RedirectResponse("/negocios", status_code=303)
 
     deal.stage = _crm_stage_key_or_default(stage)
+    deal.lost_reason = (lost_reason or "").strip() if deal.stage == "perdido" else deal.lost_reason
     deal.updated_at = utcnow()
     session.add(deal)
     session.commit()
@@ -19136,7 +19414,7 @@ async def crm_update_next(
         return RedirectResponse("/negocios", status_code=303)
 
     deal.next_step = (next_step or "").strip()
-    deal.next_step_date = (next_step_date or "").strip()
+    deal.next_step_date = _normalize_date_input(next_step_date)
     deal.updated_at = utcnow()
     session.add(deal)
     session.commit()
@@ -19391,10 +19669,6 @@ async def meetings_new_page(request: Request, session: Session = Depends(get_ses
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
-    # Garante tabela em ambientes sem Alembic
-    if not ensure_credit_consent_table():
-        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
-        return RedirectResponse("/credito", status_code=303)
 
     clients = session.exec(select(Client).where(Client.company_id == ctx.company.id).order_by(Client.created_at)).all()
     active_client_id = get_active_client_id(request, session, ctx)
@@ -19428,10 +19702,6 @@ async def meetings_new_action(
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
-    # Garante tabela em ambientes sem Alembic
-    if not ensure_credit_consent_table():
-        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
-        return RedirectResponse("/credito", status_code=303)
 
     client = get_client_or_none(session, ctx.company.id, int(client_id))
     if not client:
@@ -19448,7 +19718,7 @@ async def meetings_new_action(
         client_id=client.id,
         created_by_user_id=ctx.user.id,
         title=title.strip(),
-        meeting_date=meeting_date.strip(),
+        meeting_date=_normalize_date_input(meeting_date),
         notion_page_id=page_id,
         notion_url=notion_page.strip(),
         updated_at=utcnow(),
@@ -19524,16 +19794,78 @@ async def meetings_detail(request: Request, session: Session = Depends(get_sessi
     )
 
 
+
+@app.post("/reunioes/{meeting_id}/anotacoes")
+@require_role({"admin", "equipe"})
+async def meetings_save_notes(
+    request: Request,
+    session: Session = Depends(get_session),
+    meeting_id: int = 0,
+    admin_notes: str = Form(""),
+    admin_notes_visible_to_client: str = Form(""),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+    mt = session.get(Meeting, int(meeting_id))
+    if not mt or mt.company_id != ctx.company.id:
+        set_flash(request, "Reunião não encontrada.")
+        return RedirectResponse("/reunioes", status_code=303)
+    mt.admin_notes = (admin_notes or "").strip()
+    mt.admin_notes_visible_to_client = (admin_notes_visible_to_client == "1")
+    mt.updated_at = utcnow()
+    session.add(mt)
+    session.commit()
+    set_flash(request, "Anotações salvas.")
+    return RedirectResponse(f"/reunioes/{mt.id}", status_code=303)
+
+@app.post("/reunioes/{meeting_id}/checkin")
+@require_role({"admin", "equipe"})
+async def meetings_checkin(request: Request, session: Session = Depends(get_session), meeting_id: int = 0) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+    mt = session.get(Meeting, int(meeting_id))
+    if not mt or mt.company_id != ctx.company.id:
+        set_flash(request, "Reunião não encontrada.")
+        return RedirectResponse("/reunioes", status_code=303)
+    mt.checkin_at = utcnow()
+    mt.updated_at = utcnow()
+    session.add(mt)
+    session.commit()
+    set_flash(request, "Check-in registrado.")
+    return RedirectResponse(f"/reunioes/{mt.id}", status_code=303)
+
+@app.post("/reunioes/{meeting_id}/checkout")
+@require_role({"admin", "equipe"})
+async def meetings_checkout(request: Request, session: Session = Depends(get_session), meeting_id: int = 0) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+    mt = session.get(Meeting, int(meeting_id))
+    if not mt or mt.company_id != ctx.company.id:
+        set_flash(request, "Reunião não encontrada.")
+        return RedirectResponse("/reunioes", status_code=303)
+    now = utcnow()
+    mt.checkout_at = now
+    if mt.checkin_at:
+        start = mt.checkin_at
+        if getattr(start, "tzinfo", None) and not getattr(now, "tzinfo", None):
+            start = start.replace(tzinfo=None)
+        elif getattr(now, "tzinfo", None) and not getattr(start, "tzinfo", None):
+            now = now.replace(tzinfo=None)
+        minutes = max(0, int((now - start).total_seconds() // 60))
+        mt.total_meeting_minutes = max(0, int(mt.total_meeting_minutes or 0)) + minutes
+        mt.checkin_at = None
+    mt.updated_at = utcnow()
+    session.add(mt)
+    session.commit()
+    set_flash(request, "Check-out registrado.")
+    return RedirectResponse(f"/reunioes/{mt.id}", status_code=303)
+
 @app.post("/reunioes/{meeting_id}/sync")
 @require_role({"admin", "equipe"})
 async def meetings_sync(request: Request, session: Session = Depends(get_session), meeting_id: int = 0) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
-    # Garante tabela em ambientes sem Alembic
-    if not ensure_credit_consent_table():
-        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
-        return RedirectResponse("/credito", status_code=303)
 
     mt = session.get(Meeting, int(meeting_id))
     if not mt or mt.company_id != ctx.company.id:
@@ -19573,10 +19905,6 @@ async def meetings_generate_tasks(
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
-    # Garante tabela em ambientes sem Alembic
-    if not ensure_credit_consent_table():
-        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
-        return RedirectResponse("/credito", status_code=303)
 
     mt = session.get(Meeting, int(meeting_id))
     if not mt or mt.company_id != ctx.company.id:
@@ -20150,7 +20478,7 @@ TEMPLATES.update({
     <ul class="mb-2">
       {% for a in attachments %}
         <li class="d-flex justify-content-between align-items-center">
-          <a href="/download/{{ a.id }}">{{ a.original_filename }}</a>
+          <a class="btn btn-sm btn-outline-secondary" href="/download/{{ a.id }}">Baixar {{ "NF" if "nf" in (a.original_filename|lower) else ("Boleto" if "boleto" in (a.original_filename|lower) else a.original_filename) }}</a>
           {% if role in ["admin","equipe"] %}
             <form method="post" action="/attachments/{{ a.id }}/delete" class="ms-2">
               <input type="hidden" name="next" value="/educacao/aulas/{{ lesson.id }}">
@@ -22444,22 +22772,36 @@ SIMULADOR_TEMPLATE = r"""
     <div class="row g-2">
       <div class="col-md-6">
         <label class="form-label">Cliente (nome)</label>
-        <input class="form-control" name="borrower_name" placeholder="Nome do cliente">
+        <input class="form-control" name="borrower_name" value="{{ borrower_name }}" {% if client_locked %}readonly{% endif %} placeholder="Nome do cliente">
       </div>
 
       <div class="col-md-6">
         <label class="form-label">Cliente (opcional)</label>
-        <select class="form-select" name="client_id" id="sim_client_id">
+        <select class="form-select" name="client_id" id="sim_client_id" {% if client_locked %}disabled{% endif %}>
           <option value="">-- (sem cliente) --</option>
           {% for c in clients %}
-            <option value="{{ c.id }}">{{ c.name }}</option>
+            <option value="{{ c.id }}" {% if c.id == selected_client_id %}selected{% endif %}>{{ c.name }}</option>
           {% endfor %}
         </select>
+        {% if client_locked and selected_client_id %}<input type="hidden" name="client_id" value="{{ selected_client_id }}">{% endif %}
         <div class="form-text">Selecione para habilitar “Gerar Proposta” (gera também um card no CRM).</div>
       </div>
       <div class="col-md-6">
         <label class="form-label">Tipo de empréstimo</label>
-        <input class="form-control" name="loan_type" placeholder="Ex.: Crédito com garantia, Consignado, Capital de giro">
+        <input class="form-control" list="loan_type_list" name="loan_type" placeholder="Ex.: Home Equity, Capital de giro, Consórcio">
+        <datalist id="loan_type_list">
+          <option value="Capital de Giro"></option>
+          <option value="Conta Garantida"></option>
+          <option value="Antecipação de Recebíveis"></option>
+          <option value="Antecipação de Cartões"></option>
+          <option value="Trade Finance"></option>
+          <option value="Consórcio"></option>
+          <option value="Auto Equity"></option>
+          <option value="Crédito Corporativo Estruturado"></option>
+          <option value="Home Equity"></option>
+          <option value="Crédito Habitacional"></option>
+          <option value="Financiamento à Produção"></option>
+        </datalist>
       </div>
 
       <div class="col-md-4">
@@ -23005,7 +23347,7 @@ async def simulador_criar_proposta(
     # simulation params (same as simulador/pdf)
     loan_type: str = Form("Empréstimo"),
     amortization: str = Form("price"),
-    rate: str = Form("1,79"),
+    rate_pct: str = Form("1,79"),
     rate_base: str = Form("am"),
     term_months: int = Form(24),
     principal: str = Form(""),
@@ -23047,7 +23389,7 @@ async def simulador_criar_proposta(
     inp = LoanSimInputs.from_form(
         loan_type=loan_type,
         amortization=amortization,
-        rate=rate,
+        rate=rate_pct,
         rate_base=rate_base,
         term_months=term_months,
         principal=principal,
@@ -28670,7 +29012,20 @@ SIMULADOR_TEMPLATE = r"""
 
       <div class="col-md-6">
         <label class="form-label">Tipo de empréstimo</label>
-        <input class="form-control" name="loan_type" placeholder="Ex.: Crédito com garantia, Consignado, Capital de giro">
+        <input class="form-control" list="loan_type_list" name="loan_type" placeholder="Ex.: Home Equity, Capital de giro, Consórcio">
+        <datalist id="loan_type_list">
+          <option value="Capital de Giro"></option>
+          <option value="Conta Garantida"></option>
+          <option value="Antecipação de Recebíveis"></option>
+          <option value="Antecipação de Cartões"></option>
+          <option value="Trade Finance"></option>
+          <option value="Consórcio"></option>
+          <option value="Auto Equity"></option>
+          <option value="Crédito Corporativo Estruturado"></option>
+          <option value="Home Equity"></option>
+          <option value="Crédito Habitacional"></option>
+          <option value="Financiamento à Produção"></option>
+        </datalist>
       </div>
 
       <div class="col-md-4">
@@ -30567,6 +30922,25 @@ def render(
                         user_id=tenant.user.id,
                     ),
                 )
+                ctx.setdefault(
+                    "unread_notifications_count",
+                    unread_notifications_count_for_user(
+                        _db,
+                        company_id=tenant.company.id,
+                        user_id=tenant.user.id,
+                    ),
+                )
+                active_client_id = get_active_client_id(request, _db, tenant)
+                if active_client_id and ensure_can_access_client(tenant, active_client_id):
+                    approved_count = int(_db.exec(
+                        select(func.count()).select_from(OfferVisibilityReview).where(
+                            OfferVisibilityReview.company_id == tenant.company.id,
+                            OfferVisibilityReview.client_id == int(active_client_id),
+                            OfferVisibilityReview.is_visible_to_client == True,
+                            OfferVisibilityReview.status == "aprovada_cliente",
+                        )
+                    ).one() or 0)
+                    ctx.setdefault("approved_offers_count", approved_count)
     except Exception:
         pass
     return _original_render_delivery4(template_name, request=request, context=ctx, status_code=status_code)
@@ -32891,6 +33265,8 @@ class ClientToolSubscription(SQLModel, table=True):
     trial_started_at: Optional[datetime] = Field(default=None, index=True)
     trial_ends_at: Optional[datetime] = Field(default=None, index=True)
     monthly_price_credits: int = Field(default=CLIENT_TOOL_FINANCE_MONTHLY_CREDITS)
+    billing_mode: str = Field(default="freemium", index=True)  # freemium | paid
+    trial_days: int = Field(default=30)
     last_billed_period: str = Field(default="", index=True)  # YYYY-MM
     next_billing_at: Optional[datetime] = Field(default=None, index=True)
     is_active: bool = Field(default=True, index=True)
@@ -32901,6 +33277,36 @@ class ClientToolSubscription(SQLModel, table=True):
 def ensure_client_tool_tables() -> None:
     try:
         SQLModel.metadata.create_all(engine, tables=[ClientToolSubscription.__table__], checkfirst=True)
+    except Exception:
+        pass
+    try:
+        backend = engine.url.get_backend_name()
+        with engine.begin() as conn:
+            if backend.startswith("postgres"):
+                for stmt in [
+                    "ALTER TABLE IF EXISTS clienttoolsubscription ADD COLUMN IF NOT EXISTS billing_mode VARCHAR NOT NULL DEFAULT 'freemium'",
+                    "ALTER TABLE IF EXISTS clienttoolsubscription ADD COLUMN IF NOT EXISTS trial_days INTEGER NOT NULL DEFAULT 30",
+                ]:
+                    try:
+                        conn.exec_driver_sql(stmt)
+                    except Exception:
+                        pass
+            elif backend.startswith("sqlite"):
+                try:
+                    rows = conn.exec_driver_sql("PRAGMA table_info('clienttoolsubscription')").fetchall()
+                    existing = {str(r[1]) for r in rows}
+                except Exception:
+                    existing = set()
+                if "billing_mode" not in existing:
+                    try:
+                        conn.exec_driver_sql("ALTER TABLE clienttoolsubscription ADD COLUMN billing_mode TEXT NOT NULL DEFAULT 'freemium'")
+                    except Exception:
+                        pass
+                if "trial_days" not in existing:
+                    try:
+                        conn.exec_driver_sql("ALTER TABLE clienttoolsubscription ADD COLUMN trial_days INTEGER NOT NULL DEFAULT 30")
+                    except Exception:
+                        pass
     except Exception:
         pass
 
@@ -32929,6 +33335,21 @@ def _client_current_client(request: Request, session: Session, ctx: TenantContex
     return client
 
 
+def _find_client_tool_subscription(
+    session: Session,
+    *,
+    company_id: int,
+    client_id: int,
+    tool_code: str = CLIENT_TOOL_FINANCE_CODE,
+) -> Optional[ClientToolSubscription]:
+    return session.exec(
+        select(ClientToolSubscription).where(
+            ClientToolSubscription.company_id == company_id,
+            ClientToolSubscription.client_id == client_id,
+            ClientToolSubscription.tool_code == tool_code,
+        )
+    ).first()
+
 def _get_or_create_client_tool_subscription(
     session: Session,
     *,
@@ -32936,13 +33357,12 @@ def _get_or_create_client_tool_subscription(
     client_id: int,
     tool_code: str = CLIENT_TOOL_FINANCE_CODE,
 ) -> ClientToolSubscription:
-    row = session.exec(
-        select(ClientToolSubscription).where(
-            ClientToolSubscription.company_id == company_id,
-            ClientToolSubscription.client_id == client_id,
-            ClientToolSubscription.tool_code == tool_code,
-        )
-    ).first()
+    row = _find_client_tool_subscription(
+        session,
+        company_id=company_id,
+        client_id=client_id,
+        tool_code=tool_code,
+    )
     if row:
         return row
 
@@ -32951,12 +33371,14 @@ def _get_or_create_client_tool_subscription(
         company_id=company_id,
         client_id=client_id,
         tool_code=tool_code,
-        status="trial",
-        trial_started_at=now,
-        trial_ends_at=now + timedelta(days=30),
+        status="blocked",
+        trial_started_at=None,
+        trial_ends_at=None,
         monthly_price_credits=CLIENT_TOOL_FINANCE_MONTHLY_CREDITS,
-        next_billing_at=now + timedelta(days=30),
-        is_active=True,
+        billing_mode="freemium",
+        trial_days=30,
+        next_billing_at=None,
+        is_active=False,
         created_at=now,
         updated_at=now,
     )
@@ -33007,13 +33429,30 @@ def _tool_subscription_status_payload(
     client_id: int,
     tool_code: str = CLIENT_TOOL_FINANCE_CODE,
 ) -> dict[str, Any]:
-    sub = _get_or_create_client_tool_subscription(
+    sub = _find_client_tool_subscription(
         session,
         company_id=company_id,
         client_id=client_id,
         tool_code=tool_code,
     )
     wallet = _get_or_create_wallet(session, company_id=company_id, client_id=client_id)
+
+    if not sub:
+        return {
+            "subscription": None,
+            "wallet": wallet,
+            "access_ok": False,
+            "status_label": "Aguardando liberação",
+            "message": "Esta ferramenta ainda não foi liberada pela equipe.",
+            "trial_active": False,
+            "trial_days_left": 0,
+            "monthly_price_credits": CLIENT_TOOL_FINANCE_MONTHLY_CREDITS,
+            "wallet_balance_credits": round((wallet.balance_cents or 0) / 100.0, 2),
+            "trial_ends_at": None,
+            "next_billing_at": None,
+            "billing_mode": "freemium",
+            "trial_days": 30,
+        }
 
     now = utcnow()
     now_naive = now.replace(tzinfo=None) if getattr(now, "tzinfo", None) else now
@@ -33024,12 +33463,18 @@ def _tool_subscription_status_payload(
     access_ok = False
     status_label = "Bloqueado"
     billed_this_month = sub.last_billed_period == _tool_period_label(now)
+    billing_mode = (sub.billing_mode or "freemium").strip().lower()
+    if billing_mode not in {"freemium", "paid"}:
+        billing_mode = "freemium"
 
     if not sub.is_active or sub.status == "cancelled":
-        sub.status = "cancelled"
-        message = "Ferramenta inativa."
+        message = "Ferramenta inativa. Peça liberação para a equipe."
         access_ok = False
         status_label = "Inativa"
+    elif billing_mode == "freemium" and not trial_ends_naive and sub.status in {"blocked", "trial"}:
+        access_ok = False
+        status_label = "Aguardando trial"
+        message = "O período grátis ainda não foi iniciado pela equipe."
     elif trial_ends_naive and now_naive < trial_ends_naive:
         sub.status = "trial"
         access_ok = True
@@ -33069,7 +33514,7 @@ def _tool_subscription_status_payload(
                 session.commit()
                 access_ok = False
                 status_label = "Bloqueada"
-                message = f"Saldo insuficiente. Esta ferramenta consome {int(sub.monthly_price_credits or 0)} créditos por mês após o período grátis."
+                message = f"Saldo insuficiente. Esta ferramenta consome {int(sub.monthly_price_credits or 0)} créditos por mês."
 
     return {
         "subscription": sub,
@@ -33077,12 +33522,14 @@ def _tool_subscription_status_payload(
         "access_ok": access_ok,
         "status_label": status_label,
         "message": message,
-        "trial_active": bool(sub.status == "trial" and trial_ends_naive and now_naive < trial_ends_naive),
-        "trial_days_left": max(0, (trial_ends_naive.date() - now_naive.date()).days) if trial_ends_naive and now_naive < trial_ends_naive else 0,
-        "monthly_price_credits": int(sub.monthly_price_credits or CLIENT_TOOL_FINANCE_MONTHLY_CREDITS),
+        "trial_active": bool(sub and sub.status == "trial" and trial_ends_naive and now_naive < trial_ends_naive),
+        "trial_days_left": max(0, (trial_ends_naive.date() - now_naive.date()).days) if sub and trial_ends_naive and now_naive < trial_ends_naive else 0,
+        "monthly_price_credits": int((sub.monthly_price_credits if sub else CLIENT_TOOL_FINANCE_MONTHLY_CREDITS) or CLIENT_TOOL_FINANCE_MONTHLY_CREDITS),
         "wallet_balance_credits": round((wallet.balance_cents or 0) / 100.0, 2),
         "trial_ends_at": trial_ends_naive,
-        "next_billing_at": sub.next_billing_at.replace(tzinfo=None) if sub.next_billing_at and getattr(sub.next_billing_at, "tzinfo", None) else sub.next_billing_at,
+        "next_billing_at": sub.next_billing_at.replace(tzinfo=None) if sub and sub.next_billing_at and getattr(sub.next_billing_at, "tzinfo", None) else (sub.next_billing_at if sub else None),
+        "billing_mode": billing_mode,
+        "trial_days": int(getattr(sub, "trial_days", 30) or 30) if sub else 30,
     }
 
 
@@ -33228,7 +33675,7 @@ TEMPLATES["ferramentas.html"] = r"""
           <div class="col-md-4">
             <div class="border rounded p-3 h-100">
               <div class="muted small">Mensalidade</div>
-              <div class="fw-semibold">{{ finance_tool.monthly_price_credits }} créditos/mês</div>
+              <div class="fw-semibold">{{ finance_tool.monthly_price_credits }} créditos/mês</div><div class="muted small">{{ "Freemium" if finance_tool.billing_mode == "freemium" else "Pago" }}</div>
             </div>
           </div>
           <div class="col-md-4">
@@ -33254,8 +33701,8 @@ TEMPLATES["ferramentas.html"] = r"""
       <div class="card p-4 h-100">
         <h6 class="mb-3">Como funciona</h6>
         <ol class="small mb-0 ps-3">
-          <li>Ao liberar a ferramenta para o cliente, o primeiro acesso ativa 1 mês grátis.</li>
-          <li>Após o período grátis, a ferramenta consome {{ finance_tool.monthly_price_credits }} créditos por mês.</li>
+          <li>A equipe define se a ferramenta será freemium ou paga e quando o período grátis começa.</li>
+          <li>{% if finance_tool.billing_mode == "freemium" %}Após o período grátis, a ferramenta consome {{ finance_tool.monthly_price_credits }} créditos por mês.{% else %}Ferramenta paga: {{ finance_tool.monthly_price_credits }} créditos por mês.{% endif %}</li>
           <li>Sem saldo suficiente, o acesso fica bloqueado até nova recarga.</li>
         </ol>
       </div>
@@ -33294,7 +33741,7 @@ TEMPLATES["ferramentas_financeiro.html"] = r"""
     <div class="col-md-3">
       <div class="card p-3 h-100">
         <div class="muted small">Mensalidade</div>
-        <div class="fw-semibold">{{ finance_tool.monthly_price_credits }} créditos/mês</div>
+        <div class="fw-semibold">{{ finance_tool.monthly_price_credits }} créditos/mês</div><div class="muted small">{{ "Freemium" if finance_tool.billing_mode == "freemium" else "Pago" }}</div>
       </div>
     </div>
     <div class="col-md-3">
@@ -33317,6 +33764,7 @@ TEMPLATES["ferramentas_financeiro.html"] = r"""
 
   {% if finance_tool.access_ok %}
     <div class="d-flex gap-2 flex-wrap mb-3">
+      <a class="btn btn-outline-secondary" href="/mensagens">Mensagens</a>
       <a class="btn btn-primary" href="/ferramentas/financeiro/novo">Novo lançamento</a>
       <a class="btn btn-outline-primary" href="/ferramentas/financeiro/lancamentos">Ver lançamentos</a>
       <a class="btn btn-outline-secondary" href="/ferramentas/financeiro/cadastros">Cadastros</a>
@@ -35059,7 +35507,7 @@ TEMPLATES["ferramentas_financeiro.html"] = r"""
     <div class="col-md-3">
       <div class="card p-3 h-100">
         <div class="muted small">Mensalidade</div>
-        <div class="fw-semibold">{{ finance_tool.monthly_price_credits }} créditos/mês</div>
+        <div class="fw-semibold">{{ finance_tool.monthly_price_credits }} créditos/mês</div><div class="muted small">{{ "Freemium" if finance_tool.billing_mode == "freemium" else "Pago" }}</div>
       </div>
     </div>
     <div class="col-md-3">
@@ -35082,6 +35530,7 @@ TEMPLATES["ferramentas_financeiro.html"] = r"""
 
   {% if finance_tool.access_ok %}
     <div class="d-flex gap-2 flex-wrap mb-3">
+      <a class="btn btn-outline-secondary" href="/mensagens">Mensagens</a>
       <a class="btn btn-primary" href="/ferramentas/financeiro/novo">Novo lançamento</a>
       <a class="btn btn-outline-primary" href="/ferramentas/financeiro/lancamentos">Ver lançamentos</a>
       <a class="btn btn-outline-primary" href="/ferramentas/financeiro/dre">DRE</a>
@@ -35441,3 +35890,1883 @@ async def ferramentas_financeiro_fluxo_caixa_page(
         },
     )
 
+
+
+# ----------------------------
+# Entrega 11: Atendimento WhatsApp (Fase 1)
+# ----------------------------
+
+WHATSAPP_VERIFY_TOKEN = (os.getenv("WHATSAPP_VERIFY_TOKEN") or "").strip()
+WHATSAPP_GRAPH_VERSION = (os.getenv("WHATSAPP_GRAPH_VERSION") or "v23.0").strip()
+WHATSAPP_ACCESS_TOKEN = (os.getenv("WHATSAPP_ACCESS_TOKEN") or "").strip()
+
+
+class WhatsAppChannelConfig(SQLModel, table=True):
+    __table_args__ = (UniqueConstraint("company_id", name="uq_whatsappchannel_company"),)
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    company_id: int = Field(index=True, foreign_key="company.id")
+    is_enabled: bool = Field(default=False, index=True)
+    display_name: str = Field(default="Maffezzolli Capital")
+    business_phone: str = Field(default="")
+    meta_phone_number_id: str = Field(default="", index=True)
+    welcome_message: str = Field(default="")
+    after_hours_message: str = Field(default="")
+    created_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime = Field(default_factory=utcnow, index=True)
+
+
+class WhatsAppQueue(SQLModel, table=True):
+    __table_args__ = (UniqueConstraint("company_id", "code", name="uq_whatsappqueue_company_code"),)
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    company_id: int = Field(index=True, foreign_key="company.id")
+    code: str = Field(index=True)
+    label: str = ""
+    sort_order: int = Field(default=0, index=True)
+    default_assignee_user_id: Optional[int] = Field(default=None, index=True, foreign_key="user.id")
+    is_active: bool = Field(default=True, index=True)
+    created_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime = Field(default_factory=utcnow, index=True)
+
+
+class WhatsAppThread(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    company_id: int = Field(index=True, foreign_key="company.id")
+    client_id: Optional[int] = Field(default=None, index=True, foreign_key="client.id")
+    contact_name: str = Field(default="")
+    contact_phone: str = Field(default="", index=True)
+    is_group: bool = Field(default=False, index=True)
+    group_name: str = Field(default="")
+    topic_code: str = Field(default="geral", index=True)
+    status: str = Field(default="aberto", index=True)  # aberto | aguardando_cliente | resolvido
+    assigned_user_id: Optional[int] = Field(default=None, index=True, foreign_key="user.id")
+    source_kind: str = Field(default="manual", index=True)  # manual | webhook
+    external_thread_id: str = Field(default="", index=True)
+    last_message_at: datetime = Field(default_factory=utcnow, index=True)
+    last_inbound_at: Optional[datetime] = Field(default=None, index=True)
+    last_outbound_at: Optional[datetime] = Field(default=None, index=True)
+    created_by_user_id: Optional[int] = Field(default=None, index=True, foreign_key="user.id")
+    created_at: datetime = Field(default_factory=utcnow, index=True)
+    updated_at: datetime = Field(default_factory=utcnow, index=True)
+
+
+class WhatsAppThreadMessage(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    company_id: int = Field(index=True, foreign_key="company.id")
+    thread_id: int = Field(index=True, foreign_key="whatsappthread.id")
+    direction: str = Field(default="outbound", index=True)  # inbound | outbound | internal_note
+    body: str = Field(default="")
+    sender_name: str = Field(default="")
+    created_by_user_id: Optional[int] = Field(default=None, index=True, foreign_key="user.id")
+    delivery_status: str = Field(default="local", index=True)  # local | sent | delivered | read | failed | received
+    external_message_id: str = Field(default="", index=True)
+    created_at: datetime = Field(default_factory=utcnow, index=True)
+
+
+def ensure_whatsapp_tables() -> bool:
+    ok = True
+    for tbl in (
+        WhatsAppChannelConfig.__table__,
+        WhatsAppQueue.__table__,
+        WhatsAppThread.__table__,
+        WhatsAppThreadMessage.__table__,
+    ):
+        try:
+            tbl.create(engine, checkfirst=True)
+        except Exception:
+            ok = False
+    return ok
+
+
+def ensure_whatsapp_columns() -> None:
+    all_by_table = {
+        "whatsappchannelconfig": [
+            ("company_id", "INTEGER", "INTEGER"),
+            ("is_enabled", "BOOLEAN NOT NULL DEFAULT FALSE", "INTEGER NOT NULL DEFAULT 0"),
+            ("display_name", "TEXT NOT NULL DEFAULT ''", "TEXT NOT NULL DEFAULT ''"),
+            ("business_phone", "TEXT NOT NULL DEFAULT ''", "TEXT NOT NULL DEFAULT ''"),
+            ("meta_phone_number_id", "TEXT NOT NULL DEFAULT ''", "TEXT NOT NULL DEFAULT ''"),
+            ("welcome_message", "TEXT NOT NULL DEFAULT ''", "TEXT NOT NULL DEFAULT ''"),
+            ("after_hours_message", "TEXT NOT NULL DEFAULT ''", "TEXT NOT NULL DEFAULT ''"),
+            ("created_at", "TIMESTAMP WITHOUT TIME ZONE", "TEXT"),
+            ("updated_at", "TIMESTAMP WITHOUT TIME ZONE", "TEXT"),
+        ],
+        "whatsappqueue": [
+            ("company_id", "INTEGER", "INTEGER"),
+            ("code", "TEXT NOT NULL DEFAULT ''", "TEXT NOT NULL DEFAULT ''"),
+            ("label", "TEXT NOT NULL DEFAULT ''", "TEXT NOT NULL DEFAULT ''"),
+            ("sort_order", "INTEGER NOT NULL DEFAULT 0", "INTEGER NOT NULL DEFAULT 0"),
+            ("default_assignee_user_id", "INTEGER", "INTEGER"),
+            ("is_active", "BOOLEAN NOT NULL DEFAULT TRUE", "INTEGER NOT NULL DEFAULT 1"),
+            ("created_at", "TIMESTAMP WITHOUT TIME ZONE", "TEXT"),
+            ("updated_at", "TIMESTAMP WITHOUT TIME ZONE", "TEXT"),
+        ],
+        "whatsappthread": [
+            ("company_id", "INTEGER", "INTEGER"),
+            ("client_id", "INTEGER", "INTEGER"),
+            ("contact_name", "TEXT NOT NULL DEFAULT ''", "TEXT NOT NULL DEFAULT ''"),
+            ("contact_phone", "TEXT NOT NULL DEFAULT ''", "TEXT NOT NULL DEFAULT ''"),
+            ("is_group", "BOOLEAN NOT NULL DEFAULT FALSE", "INTEGER NOT NULL DEFAULT 0"),
+            ("group_name", "TEXT NOT NULL DEFAULT ''", "TEXT NOT NULL DEFAULT ''"),
+            ("topic_code", "TEXT NOT NULL DEFAULT 'geral'", "TEXT NOT NULL DEFAULT 'geral'"),
+            ("status", "TEXT NOT NULL DEFAULT 'aberto'", "TEXT NOT NULL DEFAULT 'aberto'"),
+            ("assigned_user_id", "INTEGER", "INTEGER"),
+            ("source_kind", "TEXT NOT NULL DEFAULT 'manual'", "TEXT NOT NULL DEFAULT 'manual'"),
+            ("external_thread_id", "TEXT NOT NULL DEFAULT ''", "TEXT NOT NULL DEFAULT ''"),
+            ("last_message_at", "TIMESTAMP WITHOUT TIME ZONE", "TEXT"),
+            ("last_inbound_at", "TIMESTAMP WITHOUT TIME ZONE", "TEXT"),
+            ("last_outbound_at", "TIMESTAMP WITHOUT TIME ZONE", "TEXT"),
+            ("created_by_user_id", "INTEGER", "INTEGER"),
+            ("created_at", "TIMESTAMP WITHOUT TIME ZONE", "TEXT"),
+            ("updated_at", "TIMESTAMP WITHOUT TIME ZONE", "TEXT"),
+        ],
+        "whatsappthreadmessage": [
+            ("company_id", "INTEGER", "INTEGER"),
+            ("thread_id", "INTEGER", "INTEGER"),
+            ("direction", "TEXT NOT NULL DEFAULT 'outbound'", "TEXT NOT NULL DEFAULT 'outbound'"),
+            ("body", "TEXT NOT NULL DEFAULT ''", "TEXT NOT NULL DEFAULT ''"),
+            ("sender_name", "TEXT NOT NULL DEFAULT ''", "TEXT NOT NULL DEFAULT ''"),
+            ("created_by_user_id", "INTEGER", "INTEGER"),
+            ("delivery_status", "TEXT NOT NULL DEFAULT 'local'", "TEXT NOT NULL DEFAULT 'local'"),
+            ("external_message_id", "TEXT NOT NULL DEFAULT ''", "TEXT NOT NULL DEFAULT ''"),
+            ("created_at", "TIMESTAMP WITHOUT TIME ZONE", "TEXT"),
+        ],
+    }
+    try:
+        backend = engine.url.get_backend_name()
+        with engine.begin() as conn:
+            if backend.startswith("postgres"):
+                for table_name, cols in all_by_table.items():
+                    for col, ddl_pg, _ddl_sqlite in cols:
+                        try:
+                            conn.exec_driver_sql(
+                                f"ALTER TABLE IF EXISTS {table_name} ADD COLUMN IF NOT EXISTS {col} {ddl_pg}"
+                            )
+                        except Exception:
+                            pass
+            elif backend.startswith("sqlite"):
+                for table_name, cols in all_by_table.items():
+                    try:
+                        rows = conn.exec_driver_sql(f"PRAGMA table_info('{table_name}')").fetchall()
+                        existing = {str(r[1]) for r in rows}
+                    except Exception:
+                        existing = set()
+                    for col, _ddl_pg, ddl_sqlite in cols:
+                        if col not in existing:
+                            try:
+                                conn.exec_driver_sql(f"ALTER TABLE {table_name} ADD COLUMN {col} {ddl_sqlite}")
+                            except Exception:
+                                pass
+    except Exception:
+        pass
+
+
+def _default_whatsapp_welcome() -> str:
+    return (
+        "Olá! Seja bem-vindo à Maffezzolli Capital.\n\n"
+        "Escolha o assunto desejado:\n"
+        "1. Financeiro\n"
+        "2. Crédito\n"
+        "3. Consultoria\n"
+        "4. Falar com a equipe"
+    )
+
+
+def _get_or_create_whatsapp_config(session: Session, *, company_id: int) -> WhatsAppChannelConfig:
+    row = session.exec(
+        select(WhatsAppChannelConfig).where(WhatsAppChannelConfig.company_id == company_id)
+    ).first()
+    if row:
+        return row
+    row = WhatsAppChannelConfig(
+        company_id=company_id,
+        is_enabled=False,
+        display_name="Maffezzolli Capital",
+        welcome_message=_default_whatsapp_welcome(),
+        after_hours_message="Recebemos sua mensagem. Nosso time retornará assim que possível.",
+    )
+    session.add(row)
+    session.commit()
+    session.refresh(row)
+    return row
+
+
+def seed_whatsapp_defaults(session: Session, company_id: int) -> None:
+    _get_or_create_whatsapp_config(session, company_id=company_id)
+    defaults = [
+        ("financeiro", "Financeiro", 10),
+        ("credito", "Crédito", 20),
+        ("consultoria", "Consultoria", 30),
+        ("geral", "Falar com a equipe", 40),
+    ]
+    for code, label, order in defaults:
+        row = session.exec(
+            select(WhatsAppQueue).where(
+                WhatsAppQueue.company_id == company_id,
+                WhatsAppQueue.code == code,
+            )
+        ).first()
+        if not row:
+            row = WhatsAppQueue(company_id=company_id, code=code)
+        row.label = label
+        row.sort_order = order
+        row.is_active = True
+        row.updated_at = utcnow()
+        session.add(row)
+    session.commit()
+
+
+def _normalize_whatsapp_topic(value: str) -> str:
+    val = (value or "").strip().lower()
+    return val if val in {"financeiro", "credito", "consultoria", "geral"} else "geral"
+
+
+def _normalize_whatsapp_status(value: str) -> str:
+    val = (value or "").strip().lower()
+    return val if val in {"aberto", "aguardando_cliente", "resolvido"} else "aberto"
+
+
+def _whatsapp_staff_memberships(session: Session, *, company_id: int) -> list[Membership]:
+    return session.exec(
+        select(Membership)
+        .where(Membership.company_id == company_id, Membership.role.in_(["admin", "equipe"]))
+        .order_by(Membership.role, Membership.id)
+    ).all()
+
+
+def _whatsapp_queue_label_map(session: Session, *, company_id: int) -> dict[str, str]:
+    rows = session.exec(
+        select(WhatsAppQueue)
+        .where(WhatsAppQueue.company_id == company_id, WhatsAppQueue.is_active == True)
+        .order_by(WhatsAppQueue.sort_order, WhatsAppQueue.label)
+    ).all()
+    return {str(r.code): str(r.label) for r in rows}
+
+
+def _whatsapp_pick_default_assignee(session: Session, *, company_id: int, topic_code: str) -> Optional[int]:
+    queue = session.exec(
+        select(WhatsAppQueue).where(
+            WhatsAppQueue.company_id == company_id,
+            WhatsAppQueue.code == topic_code,
+            WhatsAppQueue.is_active == True,
+        )
+    ).first()
+    if queue and queue.default_assignee_user_id:
+        return int(queue.default_assignee_user_id)
+    memberships = _whatsapp_staff_memberships(session, company_id=company_id)
+    return int(memberships[0].user_id) if memberships else None
+
+
+def _match_client_by_phone(session: Session, *, company_id: int, phone_digits: str) -> Optional[Client]:
+    digits = _only_digits(phone_digits)
+    if not digits:
+        return None
+    clients = session.exec(select(Client).where(Client.company_id == company_id)).all()
+    for c in clients:
+        cdigits = _only_digits(getattr(c, "phone", "") or "")
+        if cdigits and (cdigits == digits or digits.endswith(cdigits[-8:]) or cdigits.endswith(digits[-8:])):
+            return c
+    return None
+
+
+def _whatsapp_thread_display_name(thread: WhatsAppThread) -> str:
+    if thread.is_group and thread.group_name:
+        return thread.group_name
+    if thread.contact_name:
+        return thread.contact_name
+    if thread.contact_phone:
+        return thread.contact_phone
+    return f"Conversa #{thread.id}"
+
+
+def _whatsapp_create_thread(
+    session: Session,
+    *,
+    company_id: int,
+    client_id: Optional[int],
+    contact_name: str,
+    contact_phone: str,
+    is_group: bool,
+    group_name: str,
+    topic_code: str,
+    assigned_user_id: Optional[int],
+    status: str,
+    source_kind: str,
+    created_by_user_id: Optional[int],
+) -> WhatsAppThread:
+    row = WhatsAppThread(
+        company_id=company_id,
+        client_id=client_id,
+        contact_name=_clean_text(contact_name, 120),
+        contact_phone=_only_digits(contact_phone)[:20],
+        is_group=bool(is_group),
+        group_name=_clean_text(group_name, 120),
+        topic_code=_normalize_whatsapp_topic(topic_code),
+        status=_normalize_whatsapp_status(status),
+        assigned_user_id=assigned_user_id,
+        source_kind=_clean_text(source_kind, 30) or "manual",
+        created_by_user_id=created_by_user_id,
+        last_message_at=utcnow(),
+        created_at=utcnow(),
+        updated_at=utcnow(),
+    )
+    session.add(row)
+    session.commit()
+    session.refresh(row)
+    return row
+
+
+def _whatsapp_add_message(
+    session: Session,
+    *,
+    thread: WhatsAppThread,
+    direction: str,
+    body: str,
+    sender_name: str,
+    created_by_user_id: Optional[int],
+    delivery_status: str = "",
+    external_message_id: str = "",
+) -> WhatsAppThreadMessage:
+    clean_body = _clean_text(body, 5000)
+    row = WhatsAppThreadMessage(
+        company_id=thread.company_id,
+        thread_id=thread.id,
+        direction=direction if direction in {"inbound", "outbound", "internal_note"} else "outbound",
+        body=clean_body,
+        sender_name=_clean_text(sender_name, 120),
+        created_by_user_id=created_by_user_id,
+        delivery_status=_clean_text(delivery_status or ("received" if direction == "inbound" else "local"), 40),
+        external_message_id=_clean_text(external_message_id, 120),
+        created_at=utcnow(),
+    )
+    session.add(row)
+    now = utcnow()
+    thread.last_message_at = now
+    thread.updated_at = now
+    if row.direction == "inbound":
+        thread.last_inbound_at = now
+        if thread.status == "resolvido":
+            thread.status = "aberto"
+    elif row.direction == "outbound":
+        thread.last_outbound_at = now
+        if thread.status == "aberto":
+            thread.status = "aguardando_cliente"
+    session.add(thread)
+    session.commit()
+    session.refresh(row)
+    return row
+
+
+def _whatsapp_menu_choice_to_topic(text_value: str) -> Optional[str]:
+    val = (text_value or "").strip().lower()
+    if val in {"1", "financeiro"}:
+        return "financeiro"
+    if val in {"2", "credito", "crédito"}:
+        return "credito"
+    if val in {"3", "consultoria"}:
+        return "consultoria"
+    if val in {"4", "geral", "equipe"}:
+        return "geral"
+    return None
+
+
+async def _try_send_whatsapp_text(
+    *,
+    config: WhatsAppChannelConfig,
+    to_phone: str,
+    body: str,
+) -> tuple[bool, str, str]:
+    digits = _only_digits(to_phone)
+    if not digits:
+        return False, "Telefone inválido.", ""
+    if not config.is_enabled or not config.meta_phone_number_id:
+        return False, "Canal não configurado para envio via API.", ""
+    if not WHATSAPP_ACCESS_TOKEN:
+        return False, "WHATSAPP_ACCESS_TOKEN não configurado no ambiente.", ""
+    url = f"https://graph.facebook.com/{WHATSAPP_GRAPH_VERSION}/{config.meta_phone_number_id}/messages"
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": digits,
+        "type": "text",
+        "text": {"preview_url": False, "body": str(body or "")[:4096]},
+    }
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            resp = await client.post(
+                url,
+                headers={
+                    "Authorization": f"Bearer {WHATSAPP_ACCESS_TOKEN}",
+                    "Content-Type": "application/json",
+                },
+                json=payload,
+            )
+        if 200 <= resp.status_code < 300:
+            data = resp.json() if resp.headers.get("content-type", "").startswith("application/json") else {}
+            ext_id = ""
+            msgs = data.get("messages") if isinstance(data, dict) else None
+            if isinstance(msgs, list) and msgs and isinstance(msgs[0], dict):
+                ext_id = str(msgs[0].get("id") or "")
+            return True, "", ext_id
+        return False, f"Falha Meta API ({resp.status_code})", ""
+    except Exception as exc:
+        return False, f"Falha de envio: {exc}", ""
+
+
+def _whatsapp_find_open_thread_by_phone(session: Session, *, company_id: int, phone_digits: str) -> Optional[WhatsAppThread]:
+    digits = _only_digits(phone_digits)
+    if not digits:
+        return None
+    rows = session.exec(
+        select(WhatsAppThread)
+        .where(
+            WhatsAppThread.company_id == company_id,
+            WhatsAppThread.contact_phone == digits,
+            WhatsAppThread.status != "resolvido",
+        )
+        .order_by(WhatsAppThread.last_message_at.desc())
+    ).all()
+    return rows[0] if rows else None
+
+
+def _whatsapp_notify_new_inbound(session: Session, *, thread: WhatsAppThread, preview: str, created_by_user_id: Optional[int] = None) -> None:
+    title = f"WhatsApp • {_whatsapp_thread_display_name(thread)}"
+    href = f"/admin/whatsapp/conversas/{thread.id}"
+    if thread.assigned_user_id:
+        try:
+            create_user_notification(
+                session,
+                company_id=thread.company_id,
+                client_id=thread.client_id,
+                user_id=int(thread.assigned_user_id),
+                kind="whatsapp",
+                title=title,
+                message=preview[:220],
+                href=href,
+                created_by_user_id=created_by_user_id,
+            )
+        except Exception:
+            pass
+        notify_staff_members(
+            session,
+            company_id=thread.company_id,
+            client_id=thread.client_id,
+            kind="whatsapp",
+            title=title,
+            message=preview[:220],
+            href=href,
+            created_by_user_id=created_by_user_id,
+            exclude_user_ids={int(thread.assigned_user_id)},
+        )
+    else:
+        notify_staff_members(
+            session,
+            company_id=thread.company_id,
+            client_id=thread.client_id,
+            kind="whatsapp",
+            title=title,
+            message=preview[:220],
+            href=href,
+            created_by_user_id=created_by_user_id,
+        )
+
+
+def _whatsapp_stats(session: Session, *, company_id: int) -> dict[str, int]:
+    try:
+        total_aberto = int(session.exec(
+            select(func.count()).select_from(WhatsAppThread).where(
+                WhatsAppThread.company_id == company_id,
+                WhatsAppThread.status == "aberto",
+            )
+        ).one())
+    except Exception:
+        total_aberto = 0
+    try:
+        total_aguardando = int(session.exec(
+            select(func.count()).select_from(WhatsAppThread).where(
+                WhatsAppThread.company_id == company_id,
+                WhatsAppThread.status == "aguardando_cliente",
+            )
+        ).one())
+    except Exception:
+        total_aguardando = 0
+    try:
+        total_resolvido = int(session.exec(
+            select(func.count()).select_from(WhatsAppThread).where(
+                WhatsAppThread.company_id == company_id,
+                WhatsAppThread.status == "resolvido",
+            )
+        ).one())
+    except Exception:
+        total_resolvido = 0
+    return {
+        "aberto": total_aberto,
+        "aguardando_cliente": total_aguardando,
+        "resolvido": total_resolvido,
+    }
+
+
+@app.on_event("startup")
+def _startup_delivery11_whatsapp() -> None:
+    ensure_whatsapp_tables()
+    ensure_whatsapp_columns()
+    with Session(engine) as _s:
+        try:
+            ids = [x[0] for x in _s.exec(select(Company.id)).all()]
+            for _cid in ids:
+                seed_whatsapp_defaults(_s, int(_cid))
+        except Exception:
+            pass
+
+
+_original_resolve_feature_key_delivery11 = resolve_feature_key
+
+def resolve_feature_key(path: str) -> Optional[str]:
+    extra_mapping = [
+        ("/admin/whatsapp", "whatsapp_central"),
+    ]
+    for prefix, key in extra_mapping:
+        if path == prefix or path.startswith(prefix + "/"):
+            return key
+    return _original_resolve_feature_key_delivery11(path)
+
+
+FEATURE_KEYS["whatsapp_central"] = {
+    "title": "WhatsApp",
+    "desc": "Caixa central, filas e triagem do WhatsApp do escritório.",
+    "href": "/admin/whatsapp",
+}
+FEATURE_VISIBLE_ROLES["whatsapp_central"] = {"admin", "equipe"}
+ROLE_DEFAULT_FEATURES.setdefault("admin", set()).add("whatsapp_central")
+ROLE_DEFAULT_FEATURES.setdefault("equipe", set()).add("whatsapp_central")
+
+_group_map_delivery11 = {g.get("key"): g for g in FEATURE_GROUPS}
+if "escritorio" in _group_map_delivery11:
+    feats = _group_map_delivery11["escritorio"]["features"]
+    if "whatsapp_central" not in feats:
+        insert_at = 1 if len(feats) >= 1 else 0
+        feats.insert(insert_at, "whatsapp_central")
+elif "escritorio_comercial" in _group_map_delivery11:
+    feats = _group_map_delivery11["escritorio_comercial"]["features"]
+    if "whatsapp_central" not in feats:
+        feats.insert(0, "whatsapp_central")
+else:
+    FEATURE_GROUPS.append({
+        "key": "escritorio_atendimento",
+        "title": "Escritório • Atendimento",
+        "features": ["whatsapp_central"],
+    })
+
+
+TEMPLATES["whatsapp_hub.html"] = r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="d-flex flex-wrap justify-content-between align-items-start gap-3 mb-3">
+  <div>
+    <h4 class="mb-1">WhatsApp do Escritório</h4>
+    <div class="muted">Central operacional para triagem, filas e atendimento da equipe.</div>
+  </div>
+  <div class="d-flex gap-2 flex-wrap">
+    <a class="btn btn-outline-secondary" href="/admin/whatsapp/config">Configuração</a>
+    <a class="btn btn-outline-secondary" href="/admin/whatsapp/filas">Filas</a>
+    <a class="btn btn-primary" href="/admin/whatsapp/caixa">Abrir caixa</a>
+  </div>
+</div>
+
+<div class="row g-3">
+  <div class="col-md-4">
+    <div class="card p-3 h-100">
+      <div class="small text-uppercase muted">Canal</div>
+      <div class="fs-5 fw-semibold mt-1">{{ "Ativo" if config.is_enabled else "Em preparação" }}</div>
+      <div class="muted mt-2">{{ config.display_name or "Maffezzolli Capital" }}</div>
+      <div class="mono mt-1">{{ config.business_phone or "Telefone não configurado" }}</div>
+      <div class="mt-3 small">
+        {% if config.meta_phone_number_id %}
+          <div><strong>Phone Number ID:</strong> <span class="mono">{{ config.meta_phone_number_id }}</span></div>
+        {% else %}
+          <div class="text-warning">Informe o Phone Number ID da Meta para ativar envio/webhook.</div>
+        {% endif %}
+      </div>
+      <div class="mt-3">
+        <a class="btn btn-sm btn-outline-secondary" href="/admin/whatsapp/config">Editar canal</a>
+      </div>
+    </div>
+  </div>
+  <div class="col-md-4">
+    <div class="card p-3 h-100">
+      <div class="small text-uppercase muted">Filas padrão do chatbot</div>
+      <div class="mt-2">
+        {% for q in queues %}
+          <div class="d-flex justify-content-between align-items-center border rounded-3 p-2 mb-2">
+            <div>
+              <div class="fw-semibold">{{ q.label }}</div>
+              <div class="small muted mono">{{ q.code }}</div>
+            </div>
+            <div class="small text-end">
+              {% if q.default_assignee_name %}
+                {{ q.default_assignee_name }}
+              {% else %}
+                <span class="muted">Sem responsável padrão</span>
+              {% endif %}
+            </div>
+          </div>
+        {% endfor %}
+      </div>
+      <a class="btn btn-sm btn-outline-secondary mt-2" href="/admin/whatsapp/filas">Gerenciar filas</a>
+    </div>
+  </div>
+  <div class="col-md-4">
+    <div class="card p-3 h-100">
+      <div class="small text-uppercase muted">Caixa</div>
+      <div class="row g-2 mt-1">
+        <div class="col-4">
+          <div class="border rounded-3 p-2 text-center">
+            <div class="small muted">Abertos</div>
+            <div class="fs-4 fw-semibold">{{ stats.aberto }}</div>
+          </div>
+        </div>
+        <div class="col-4">
+          <div class="border rounded-3 p-2 text-center">
+            <div class="small muted">Aguardando</div>
+            <div class="fs-4 fw-semibold">{{ stats.aguardando_cliente }}</div>
+          </div>
+        </div>
+        <div class="col-4">
+          <div class="border rounded-3 p-2 text-center">
+            <div class="small muted">Resolvidos</div>
+            <div class="fs-4 fw-semibold">{{ stats.resolvido }}</div>
+          </div>
+        </div>
+      </div>
+      <div class="mt-3 small muted">
+        Nesta primeira entrega, você já organiza canal, filas e caixa central. O envio/recebimento real depende da configuração do número e credenciais da Meta.
+      </div>
+      <div class="mt-3 d-grid">
+        <a class="btn btn-primary" href="/admin/whatsapp/caixa">Ir para a caixa central</a>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+"""
+
+TEMPLATES["whatsapp_config.html"] = r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="d-flex flex-wrap justify-content-between align-items-start gap-3 mb-3">
+  <div>
+    <h4 class="mb-1">Configuração do canal WhatsApp</h4>
+    <div class="muted">Cadastre o número do escritório e a mensagem inicial do chatbot.</div>
+  </div>
+  <a class="btn btn-outline-secondary" href="/admin/whatsapp">Voltar</a>
+</div>
+
+<div class="row g-3">
+  <div class="col-lg-7">
+    <div class="card p-4">
+      <form method="post" action="/admin/whatsapp/config" class="row g-3">
+        <div class="col-md-6">
+          <label class="form-label">Nome exibido</label>
+          <input class="form-control" name="display_name" value="{{ config.display_name }}" placeholder="Maffezzolli Capital"/>
+        </div>
+        <div class="col-md-6">
+          <label class="form-label">Telefone do escritório</label>
+          <input class="form-control" name="business_phone" value="{{ config.business_phone }}" placeholder="5511999999999"/>
+        </div>
+        <div class="col-md-8">
+          <label class="form-label">Meta Phone Number ID</label>
+          <input class="form-control" name="meta_phone_number_id" value="{{ config.meta_phone_number_id }}" placeholder="ID do número no WhatsApp Cloud API"/>
+          <div class="form-text">Esse ID é usado no webhook e no envio oficial pela API.</div>
+        </div>
+        <div class="col-md-4 d-flex align-items-end">
+          <div class="form-check form-switch">
+            <input class="form-check-input" type="checkbox" id="is_enabled" name="is_enabled" {% if config.is_enabled %}checked{% endif %}/>
+            <label class="form-check-label" for="is_enabled">Canal ativo</label>
+          </div>
+        </div>
+        <div class="col-12">
+          <label class="form-label">Mensagem inicial do chatbot</label>
+          <textarea class="form-control" rows="7" name="welcome_message">{{ config.welcome_message }}</textarea>
+        </div>
+        <div class="col-12">
+          <label class="form-label">Mensagem fora de horário</label>
+          <textarea class="form-control" rows="3" name="after_hours_message">{{ config.after_hours_message }}</textarea>
+        </div>
+        <div class="col-12 d-flex gap-2">
+          <button class="btn btn-primary">Salvar canal</button>
+          <a class="btn btn-outline-secondary" href="/admin/whatsapp/caixa">Ir para caixa</a>
+        </div>
+      </form>
+    </div>
+  </div>
+  <div class="col-lg-5">
+    <div class="card p-4">
+      <div class="small text-uppercase muted">Checklist da entrega 1</div>
+      <ol class="mt-3 small">
+        <li>Definir o número do escritório que será ligado ao canal.</li>
+        <li>Informar o <strong>Meta Phone Number ID</strong>.</li>
+        <li>Configurar <code>WHATSAPP_VERIFY_TOKEN</code> no ambiente.</li>
+        <li>Configurar <code>WHATSAPP_ACCESS_TOKEN</code> quando quiser envio real.</li>
+        <li>Testar a caixa central e a triagem por assunto.</li>
+      </ol>
+      <div class="alert alert-warning mt-3 mb-0">
+        O canal pode ficar ativo no app agora, mas o envio e o recebimento reais só funcionam quando a configuração oficial da Meta estiver pronta.
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+"""
+
+TEMPLATES["whatsapp_queues.html"] = r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="d-flex flex-wrap justify-content-between align-items-start gap-3 mb-3">
+  <div>
+    <h4 class="mb-1">Filas do WhatsApp</h4>
+    <div class="muted">Defina as opções do chatbot e o responsável padrão por assunto.</div>
+  </div>
+  <div class="d-flex gap-2">
+    <a class="btn btn-outline-secondary" href="/admin/whatsapp">Voltar</a>
+    <a class="btn btn-outline-secondary" href="/admin/whatsapp/caixa">Caixa</a>
+  </div>
+</div>
+
+<div class="row g-3">
+  <div class="col-lg-5">
+    <div class="card p-4">
+      <div class="fw-semibold mb-3">{{ "Editar fila" if editing_queue else "Nova fila" }}</div>
+      <form method="post" action="/admin/whatsapp/filas/salvar" class="row g-3">
+        <input type="hidden" name="queue_id" value="{{ editing_queue.id if editing_queue else '' }}"/>
+        <div class="col-md-5">
+          <label class="form-label">Código</label>
+          <input class="form-control" name="code" value="{{ editing_queue.code if editing_queue else '' }}" placeholder="financeiro"/>
+        </div>
+        <div class="col-md-7">
+          <label class="form-label">Rótulo</label>
+          <input class="form-control" name="label" value="{{ editing_queue.label if editing_queue else '' }}" placeholder="Financeiro"/>
+        </div>
+        <div class="col-md-4">
+          <label class="form-label">Ordem</label>
+          <input class="form-control" type="number" name="sort_order" value="{{ editing_queue.sort_order if editing_queue else 50 }}"/>
+        </div>
+        <div class="col-md-8">
+          <label class="form-label">Responsável padrão</label>
+          <select class="form-select" name="default_assignee_user_id">
+            <option value="">Sem responsável padrão</option>
+            {% for row in staff_options %}
+              <option value="{{ row.user_id }}" {% if editing_queue and editing_queue.default_assignee_user_id == row.user_id %}selected{% endif %}>{{ row.label }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="col-12">
+          <div class="form-check form-switch">
+            <input class="form-check-input" id="queue_active" type="checkbox" name="is_active" {% if not editing_queue or editing_queue.is_active %}checked{% endif %}/>
+            <label class="form-check-label" for="queue_active">Fila ativa</label>
+          </div>
+        </div>
+        <div class="col-12 d-flex gap-2">
+          <button class="btn btn-primary">Salvar fila</button>
+          <a class="btn btn-outline-secondary" href="/admin/whatsapp/filas">Limpar</a>
+        </div>
+      </form>
+    </div>
+  </div>
+  <div class="col-lg-7">
+    <div class="card p-4">
+      <div class="fw-semibold mb-3">Filas cadastradas</div>
+      <div class="vstack gap-2">
+        {% for q in queues %}
+          <div class="border rounded-3 p-3">
+            <div class="d-flex flex-wrap justify-content-between align-items-start gap-2">
+              <div>
+                <div class="fw-semibold">{{ q.label }}</div>
+                <div class="small muted mono">{{ q.code }}</div>
+              </div>
+              <div class="small text-end">
+                {% if q.default_assignee_name %}
+                  {{ q.default_assignee_name }}
+                {% else %}
+                  <span class="muted">Sem responsável padrão</span>
+                {% endif %}
+                <div class="mt-1">
+                  <span class="badge text-bg-light border">{{ "Ativa" if q.is_active else "Inativa" }}</span>
+                </div>
+              </div>
+            </div>
+            <div class="mt-2 d-flex gap-2">
+              <a class="btn btn-sm btn-outline-secondary" href="/admin/whatsapp/filas?queue_id={{ q.id }}">Editar</a>
+            </div>
+          </div>
+        {% else %}
+          <div class="muted">Nenhuma fila cadastrada.</div>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+"""
+
+TEMPLATES["whatsapp_inbox.html"] = r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="d-flex flex-wrap justify-content-between align-items-start gap-3 mb-3">
+  <div>
+    <h4 class="mb-1">Caixa central do WhatsApp</h4>
+    <div class="muted">Triagem, acompanhamento e distribuição das conversas do escritório.</div>
+  </div>
+  <div class="d-flex gap-2">
+    <a class="btn btn-outline-secondary" href="/admin/whatsapp">Voltar</a>
+    <a class="btn btn-primary" href="/admin/whatsapp/conversas/nova">Nova conversa</a>
+  </div>
+</div>
+
+<div class="card p-3 mb-3">
+  <form method="get" action="/admin/whatsapp/caixa" class="row g-2">
+    <div class="col-md-4">
+      <input class="form-control" name="q" value="{{ filters.q }}" placeholder="Buscar por nome, telefone ou grupo"/>
+    </div>
+    <div class="col-md-3">
+      <select class="form-select" name="status">
+        <option value="">Todos os status</option>
+        {% for status_value, status_label in status_options %}
+          <option value="{{ status_value }}" {% if filters.status == status_value %}selected{% endif %}>{{ status_label }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-md-3">
+      <select class="form-select" name="topic_code">
+        <option value="">Todos os assuntos</option>
+        {% for code, label in topic_options %}
+          <option value="{{ code }}" {% if filters.topic_code == code %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-md-2 d-grid">
+      <button class="btn btn-outline-secondary">Filtrar</button>
+    </div>
+  </form>
+</div>
+
+<div class="row g-3 mb-3">
+  <div class="col-md-4">
+    <div class="card p-3 text-center">
+      <div class="small muted">Abertos</div>
+      <div class="fs-4 fw-semibold">{{ stats.aberto }}</div>
+    </div>
+  </div>
+  <div class="col-md-4">
+    <div class="card p-3 text-center">
+      <div class="small muted">Aguardando cliente</div>
+      <div class="fs-4 fw-semibold">{{ stats.aguardando_cliente }}</div>
+    </div>
+  </div>
+  <div class="col-md-4">
+    <div class="card p-3 text-center">
+      <div class="small muted">Resolvidos</div>
+      <div class="fs-4 fw-semibold">{{ stats.resolvido }}</div>
+    </div>
+  </div>
+</div>
+
+<div class="card p-3">
+  <div class="vstack gap-2">
+    {% for row in threads %}
+      <a class="border rounded-3 p-3 d-block text-reset" href="/admin/whatsapp/conversas/{{ row.id }}">
+        <div class="d-flex flex-wrap justify-content-between align-items-start gap-2">
+          <div>
+            <div class="fw-semibold">{{ row.display_name }}</div>
+            <div class="small muted">
+              {% if row.client_name %}Cliente: {{ row.client_name }} • {% endif %}
+              {{ row.contact_phone or "Sem telefone" }}
+              {% if row.is_group and row.group_name %} • Grupo{% endif %}
+            </div>
+          </div>
+          <div class="text-end small">
+            <span class="badge text-bg-light border">{{ row.status_label }}</span>
+            <div class="muted mt-1">{{ row.topic_label }}</div>
+          </div>
+        </div>
+        {% if row.last_message %}
+          <div class="mt-2">{{ row.last_message }}</div>
+        {% endif %}
+        <div class="small muted mt-2">
+          {% if row.assigned_name %}Responsável: {{ row.assigned_name }} • {% endif %}
+          Última movimentação: {{ row.last_message_at.strftime("%d/%m/%Y %H:%M") if row.last_message_at else "-" }}
+        </div>
+      </a>
+    {% else %}
+      <div class="muted">Nenhuma conversa encontrada.</div>
+    {% endfor %}
+  </div>
+</div>
+{% endblock %}
+"""
+
+TEMPLATES["whatsapp_thread_new.html"] = r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="d-flex flex-wrap justify-content-between align-items-start gap-3 mb-3">
+  <div>
+    <h4 class="mb-1">Nova conversa de WhatsApp</h4>
+    <div class="muted">Abra uma conversa manual, já classificada e atribuída para a fila certa.</div>
+  </div>
+  <a class="btn btn-outline-secondary" href="/admin/whatsapp/caixa">Voltar</a>
+</div>
+
+<div class="card p-4">
+  <form method="post" action="/admin/whatsapp/conversas/nova" class="row g-3">
+    <div class="col-md-6">
+      <label class="form-label">Cliente vinculado</label>
+      <select class="form-select" name="client_id">
+        <option value="">Sem vínculo agora</option>
+        {% for c in clients %}
+          <option value="{{ c.id }}">{{ c.name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-md-6">
+      <label class="form-label">Assunto</label>
+      <select class="form-select" name="topic_code">
+        {% for code, label in topic_options %}
+          <option value="{{ code }}">{{ label }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-md-6">
+      <label class="form-label">Nome do contato</label>
+      <input class="form-control" name="contact_name" placeholder="Nome do cliente"/>
+    </div>
+    <div class="col-md-6">
+      <label class="form-label">Telefone</label>
+      <input class="form-control" name="contact_phone" placeholder="5511999999999"/>
+    </div>
+    <div class="col-md-6">
+      <label class="form-label">Responsável</label>
+      <select class="form-select" name="assigned_user_id">
+        <option value="">Atribuir automaticamente</option>
+        {% for row in staff_options %}
+          <option value="{{ row.user_id }}">{{ row.label }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-md-6 d-flex align-items-end">
+      <div class="form-check form-switch">
+        <input class="form-check-input" id="is_group" type="checkbox" name="is_group"/>
+        <label class="form-check-label" for="is_group">Conversa de grupo</label>
+      </div>
+    </div>
+    <div class="col-12">
+      <label class="form-label">Nome do grupo (se aplicável)</label>
+      <input class="form-control" name="group_name" placeholder="Grupo dos sócios"/>
+    </div>
+    <div class="col-12">
+      <label class="form-label">Primeira mensagem</label>
+      <textarea class="form-control" rows="4" name="first_message" placeholder="Escreva a primeira resposta ou registre a entrada inicial..."></textarea>
+      <div class="form-text">Se o canal Meta ainda não estiver ligado, a mensagem fica registrada localmente na central.</div>
+    </div>
+    <div class="col-12">
+      <button class="btn btn-primary">Criar conversa</button>
+    </div>
+  </form>
+</div>
+{% endblock %}
+"""
+
+TEMPLATES["whatsapp_thread_detail.html"] = r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="d-flex flex-wrap justify-content-between align-items-start gap-3 mb-3">
+  <div>
+    <h4 class="mb-1">WhatsApp • {{ display_name }}</h4>
+    <div class="muted">
+      {% if client %}Cliente vinculado: {{ client.name }} • {% endif %}
+      {{ thread.contact_phone or "Sem telefone" }}
+      {% if thread.is_group and thread.group_name %} • Grupo{% endif %}
+    </div>
+  </div>
+  <div class="d-flex gap-2 flex-wrap">
+    <a class="btn btn-outline-secondary" href="/admin/whatsapp/caixa">Voltar</a>
+    <a class="btn btn-outline-secondary" href="/admin/whatsapp/config">Canal</a>
+  </div>
+</div>
+
+<div class="row g-3">
+  <div class="col-lg-8">
+    <div class="card p-3">
+      <div class="vstack gap-2">
+        {% for msg in messages %}
+          <div class="border rounded-3 p-3 {% if msg.direction == 'inbound' %}bg-light{% endif %}">
+            <div class="d-flex justify-content-between align-items-start gap-2">
+              <div class="fw-semibold">
+                {% if msg.direction == "inbound" %}Cliente{% elif msg.direction == "outbound" %}Equipe{% else %}Nota interna{% endif %}
+                {% if msg.sender_name %} • {{ msg.sender_name }}{% endif %}
+              </div>
+              <div class="small muted">{{ msg.created_at.strftime("%d/%m/%Y %H:%M") if msg.created_at else "-" }}</div>
+            </div>
+            <div class="mt-2">{{ msg.body }}</div>
+            <div class="small muted mt-2">
+              {{ msg.delivery_status }}
+              {% if msg.external_message_id %} • <span class="mono">{{ msg.external_message_id }}</span>{% endif %}
+            </div>
+          </div>
+        {% else %}
+          <div class="muted">Ainda não há mensagens nesta conversa.</div>
+        {% endfor %}
+      </div>
+    </div>
+
+    <div class="card p-4 mt-3">
+      <div class="fw-semibold mb-3">Nova mensagem</div>
+      <form method="post" action="/admin/whatsapp/conversas/{{ thread.id }}/mensagens" class="row g-3">
+        <div class="col-md-4">
+          <label class="form-label">Tipo</label>
+          <select class="form-select" name="direction">
+            <option value="outbound">Resposta da equipe</option>
+            <option value="internal_note">Nota interna</option>
+            <option value="inbound">Registrar mensagem recebida</option>
+          </select>
+        </div>
+        <div class="col-md-8 d-flex align-items-end">
+          <div class="form-check form-switch">
+            <input class="form-check-input" id="send_live" type="checkbox" name="send_live" {% if config.is_enabled and config.meta_phone_number_id %}checked{% endif %}/>
+            <label class="form-check-label" for="send_live">Tentar enviar via WhatsApp oficial</label>
+          </div>
+        </div>
+        <div class="col-12">
+          <textarea class="form-control" rows="5" name="body" placeholder="Digite a mensagem..." required></textarea>
+        </div>
+        <div class="col-12">
+          <button class="btn btn-primary">Registrar mensagem</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div class="col-lg-4">
+    <div class="card p-4">
+      <div class="fw-semibold mb-3">Classificação</div>
+      <form method="post" action="/admin/whatsapp/conversas/{{ thread.id }}/salvar" class="row g-3">
+        <div class="col-12">
+          <label class="form-label">Status</label>
+          <select class="form-select" name="status">
+            {% for status_value, status_label in status_options %}
+              <option value="{{ status_value }}" {% if thread.status == status_value %}selected{% endif %}>{{ status_label }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="col-12">
+          <label class="form-label">Assunto</label>
+          <select class="form-select" name="topic_code">
+            {% for code, label in topic_options %}
+              <option value="{{ code }}" {% if thread.topic_code == code %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="col-12">
+          <label class="form-label">Responsável</label>
+          <select class="form-select" name="assigned_user_id">
+            <option value="">Sem responsável</option>
+            {% for row in staff_options %}
+              <option value="{{ row.user_id }}" {% if thread.assigned_user_id == row.user_id %}selected{% endif %}>{{ row.label }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="col-12">
+          <label class="form-label">Cliente vinculado</label>
+          <select class="form-select" name="client_id">
+            <option value="">Sem vínculo</option>
+            {% for c in clients %}
+              <option value="{{ c.id }}" {% if thread.client_id == c.id %}selected{% endif %}>{{ c.name }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="col-12">
+          <button class="btn btn-outline-secondary">Salvar classificação</button>
+        </div>
+      </form>
+    </div>
+
+    <div class="card p-4 mt-3">
+      <div class="fw-semibold mb-3">Triage bot</div>
+      <div class="small muted mb-2">Preview da mensagem inicial do chatbot:</div>
+      <pre class="small border rounded-3 p-3 mb-0" style="white-space:pre-wrap;">{{ config.welcome_message }}</pre>
+    </div>
+  </div>
+</div>
+{% endblock %}
+"""
+
+
+@app.get("/admin/whatsapp")
+@require_role({"admin", "equipe"})
+async def whatsapp_hub_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+    config = _get_or_create_whatsapp_config(session, company_id=ctx.company.id)
+    queues = session.exec(
+        select(WhatsAppQueue)
+        .where(WhatsAppQueue.company_id == ctx.company.id)
+        .order_by(WhatsAppQueue.sort_order, WhatsAppQueue.label)
+    ).all()
+    users = {int(u.id): u for u in session.exec(select(User)).all()}
+    queue_rows = []
+    for q in queues:
+        queue_rows.append({
+            "id": q.id,
+            "code": q.code,
+            "label": q.label,
+            "default_assignee_name": users.get(int(q.default_assignee_user_id or 0)).name if q.default_assignee_user_id and users.get(int(q.default_assignee_user_id or 0)) else "",
+            "is_active": q.is_active,
+        })
+    return render(
+        "whatsapp_hub.html",
+        request=request,
+        context={
+            "title": "WhatsApp",
+            "config": config,
+            "queues": queue_rows,
+            "stats": _whatsapp_stats(session, company_id=ctx.company.id),
+        },
+    )
+
+
+@app.get("/admin/whatsapp/config")
+@require_role({"admin", "equipe"})
+async def whatsapp_config_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+    config = _get_or_create_whatsapp_config(session, company_id=ctx.company.id)
+    return render(
+        "whatsapp_config.html",
+        request=request,
+        context={
+            "title": "Configuração WhatsApp",
+            "config": config,
+        },
+    )
+
+
+@app.post("/admin/whatsapp/config")
+@require_role({"admin", "equipe"})
+async def whatsapp_config_save(
+    request: Request,
+    display_name: str = Form(default=""),
+    business_phone: str = Form(default=""),
+    meta_phone_number_id: str = Form(default=""),
+    welcome_message: str = Form(default=""),
+    after_hours_message: str = Form(default=""),
+    is_enabled: Optional[str] = Form(default=None),
+    session: Session = Depends(get_session),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+    config = _get_or_create_whatsapp_config(session, company_id=ctx.company.id)
+    config.display_name = _clean_text(display_name, 120) or "Maffezzolli Capital"
+    config.business_phone = _only_digits(business_phone)[:20]
+    config.meta_phone_number_id = _clean_text(meta_phone_number_id, 120)
+    config.welcome_message = _clean_text(welcome_message, 4000) or _default_whatsapp_welcome()
+    config.after_hours_message = _clean_text(after_hours_message, 2000)
+    config.is_enabled = bool(is_enabled)
+    config.updated_at = utcnow()
+    session.add(config)
+    session.commit()
+    set_flash(request, "Configuração do WhatsApp salva.")
+    return RedirectResponse("/admin/whatsapp/config", status_code=303)
+
+
+@app.get("/admin/whatsapp/filas")
+@require_role({"admin", "equipe"})
+async def whatsapp_queues_page(
+    request: Request,
+    queue_id: Optional[int] = None,
+    session: Session = Depends(get_session),
+) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+    seed_whatsapp_defaults(session, ctx.company.id)
+    queues = session.exec(
+        select(WhatsAppQueue)
+        .where(WhatsAppQueue.company_id == ctx.company.id)
+        .order_by(WhatsAppQueue.sort_order, WhatsAppQueue.label)
+    ).all()
+    staff_memberships = _whatsapp_staff_memberships(session, company_id=ctx.company.id)
+    users = {int(u.id): u for u in session.exec(select(User)).all()}
+    staff_options = []
+    for m in staff_memberships:
+        u = users.get(int(m.user_id or 0))
+        if not u:
+            continue
+        staff_options.append({"user_id": int(u.id), "label": f"{u.name} • {m.role}"})
+    editing = None
+    if queue_id:
+        editing = session.get(WhatsAppQueue, int(queue_id))
+        if editing and editing.company_id != ctx.company.id:
+            editing = None
+    queue_rows = []
+    for q in queues:
+        u = users.get(int(q.default_assignee_user_id or 0)) if q.default_assignee_user_id else None
+        queue_rows.append({
+            "id": q.id,
+            "code": q.code,
+            "label": q.label,
+            "sort_order": q.sort_order,
+            "default_assignee_name": u.name if u else "",
+            "default_assignee_user_id": int(q.default_assignee_user_id or 0) or None,
+            "is_active": q.is_active,
+        })
+    return render(
+        "whatsapp_queues.html",
+        request=request,
+        context={
+            "title": "Filas WhatsApp",
+            "queues": queue_rows,
+            "editing_queue": editing,
+            "staff_options": staff_options,
+        },
+    )
+
+
+@app.post("/admin/whatsapp/filas/salvar")
+@require_role({"admin", "equipe"})
+async def whatsapp_queues_save(
+    request: Request,
+    queue_id: Optional[str] = Form(default=""),
+    code: str = Form(default=""),
+    label: str = Form(default=""),
+    sort_order: int = Form(default=50),
+    default_assignee_user_id: Optional[str] = Form(default=""),
+    is_active: Optional[str] = Form(default=None),
+    session: Session = Depends(get_session),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+    clean_code = _normalize_whatsapp_topic(code)
+    clean_label = _clean_text(label, 80) or clean_code.title()
+    row = None
+    if queue_id and str(queue_id).strip():
+        row = session.get(WhatsAppQueue, int(queue_id))
+        if row and row.company_id != ctx.company.id:
+            row = None
+    if not row:
+        row = session.exec(
+            select(WhatsAppQueue).where(
+                WhatsAppQueue.company_id == ctx.company.id,
+                WhatsAppQueue.code == clean_code,
+            )
+        ).first()
+    if not row:
+        row = WhatsAppQueue(company_id=ctx.company.id, code=clean_code, created_at=utcnow())
+    uid = _safe_int(default_assignee_user_id)
+    if uid:
+        allowed_user_ids = {int(m.user_id) for m in _whatsapp_staff_memberships(session, company_id=ctx.company.id)}
+        row.default_assignee_user_id = uid if uid in allowed_user_ids else None
+    else:
+        row.default_assignee_user_id = None
+    row.label = clean_label
+    row.sort_order = int(sort_order or 50)
+    row.is_active = bool(is_active)
+    row.updated_at = utcnow()
+    session.add(row)
+    session.commit()
+    set_flash(request, "Fila salva.")
+    return RedirectResponse("/admin/whatsapp/filas", status_code=303)
+
+
+@app.get("/admin/whatsapp/caixa")
+@require_role({"admin", "equipe"})
+async def whatsapp_inbox_page(
+    request: Request,
+    q: str = "",
+    status: str = "",
+    topic_code: str = "",
+    session: Session = Depends(get_session),
+) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+    query = select(WhatsAppThread).where(WhatsAppThread.company_id == ctx.company.id)
+    if q.strip():
+        term = f"%{q.strip()}%"
+        query = query.where(
+            WhatsAppThread.contact_name.ilike(term)
+            | WhatsAppThread.group_name.ilike(term)
+            | WhatsAppThread.contact_phone.ilike(term)
+        )
+    if status.strip():
+        query = query.where(WhatsAppThread.status == _normalize_whatsapp_status(status))
+    if topic_code.strip():
+        query = query.where(WhatsAppThread.topic_code == _normalize_whatsapp_topic(topic_code))
+    threads = session.exec(query.order_by(WhatsAppThread.last_message_at.desc()).limit(200)).all()
+    users = {int(u.id): u for u in session.exec(select(User)).all()}
+    clients = {int(c.id): c for c in session.exec(select(Client).where(Client.company_id == ctx.company.id)).all()}
+    topic_map = _whatsapp_queue_label_map(session, company_id=ctx.company.id)
+    last_messages = {}
+    try:
+        msg_rows = session.exec(
+            select(WhatsAppThreadMessage)
+            .where(WhatsAppThreadMessage.company_id == ctx.company.id)
+            .order_by(WhatsAppThreadMessage.id.desc())
+            .limit(1000)
+        ).all()
+        for m in msg_rows:
+            last_messages.setdefault(int(m.thread_id), m)
+    except Exception:
+        pass
+
+    def _status_label(val: str) -> str:
+        return {
+            "aberto": "Aberto",
+            "aguardando_cliente": "Aguardando cliente",
+            "resolvido": "Resolvido",
+        }.get(val, val)
+
+    rows = []
+    for t in threads:
+        rows.append({
+            "id": t.id,
+            "display_name": _whatsapp_thread_display_name(t),
+            "client_name": clients.get(int(t.client_id or 0)).name if t.client_id and clients.get(int(t.client_id or 0)) else "",
+            "contact_phone": t.contact_phone,
+            "is_group": t.is_group,
+            "group_name": t.group_name,
+            "topic_label": topic_map.get(t.topic_code, t.topic_code.title()),
+            "status_label": _status_label(t.status),
+            "assigned_name": users.get(int(t.assigned_user_id or 0)).name if t.assigned_user_id and users.get(int(t.assigned_user_id or 0)) else "",
+            "last_message": getattr(last_messages.get(int(t.id)), "body", ""),
+            "last_message_at": t.last_message_at,
+        })
+    topic_options = list(topic_map.items())
+    status_options = [("aberto", "Aberto"), ("aguardando_cliente", "Aguardando cliente"), ("resolvido", "Resolvido")]
+    return render(
+        "whatsapp_inbox.html",
+        request=request,
+        context={
+            "title": "Caixa WhatsApp",
+            "threads": rows,
+            "stats": _whatsapp_stats(session, company_id=ctx.company.id),
+            "topic_options": topic_options,
+            "status_options": status_options,
+            "filters": {"q": q, "status": status, "topic_code": topic_code},
+        },
+    )
+
+
+@app.get("/admin/whatsapp/conversas/nova")
+@require_role({"admin", "equipe"})
+async def whatsapp_thread_new_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+    clients = session.exec(select(Client).where(Client.company_id == ctx.company.id).order_by(Client.name)).all()
+    staff_memberships = _whatsapp_staff_memberships(session, company_id=ctx.company.id)
+    users = {int(u.id): u for u in session.exec(select(User)).all()}
+    staff_options = []
+    for m in staff_memberships:
+        u = users.get(int(m.user_id or 0))
+        if u:
+            staff_options.append({"user_id": int(u.id), "label": f"{u.name} • {m.role}"})
+    topic_options = list(_whatsapp_queue_label_map(session, company_id=ctx.company.id).items())
+    return render(
+        "whatsapp_thread_new.html",
+        request=request,
+        context={
+            "title": "Nova conversa WhatsApp",
+            "clients": clients,
+            "staff_options": staff_options,
+            "topic_options": topic_options,
+        },
+    )
+
+
+@app.post("/admin/whatsapp/conversas/nova")
+@require_role({"admin", "equipe"})
+async def whatsapp_thread_new_submit(
+    request: Request,
+    client_id: Optional[str] = Form(default=""),
+    topic_code: str = Form(default="geral"),
+    contact_name: str = Form(default=""),
+    contact_phone: str = Form(default=""),
+    assigned_user_id: Optional[str] = Form(default=""),
+    is_group: Optional[str] = Form(default=None),
+    group_name: str = Form(default=""),
+    first_message: str = Form(default=""),
+    session: Session = Depends(get_session),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+    selected_client_id = _safe_int(client_id)
+    client = get_client_or_none(session, ctx.company.id, selected_client_id)
+    phone = _only_digits(contact_phone) or _only_digits(getattr(client, "phone", "") if client else "")
+    name = _clean_text(contact_name, 120) or (getattr(client, "name", "") if client else "")
+    if not phone:
+        set_flash(request, "Informe o telefone da conversa.")
+        return RedirectResponse("/admin/whatsapp/conversas/nova", status_code=303)
+    assignee_id = _safe_int(assigned_user_id) or _whatsapp_pick_default_assignee(
+        session, company_id=ctx.company.id, topic_code=_normalize_whatsapp_topic(topic_code)
+    )
+    thread = _whatsapp_create_thread(
+        session,
+        company_id=ctx.company.id,
+        client_id=client.id if client else None,
+        contact_name=name,
+        contact_phone=phone,
+        is_group=bool(is_group),
+        group_name=group_name,
+        topic_code=topic_code,
+        assigned_user_id=assignee_id,
+        status="aberto",
+        source_kind="manual",
+        created_by_user_id=ctx.user.id,
+    )
+    if first_message.strip():
+        _whatsapp_add_message(
+            session,
+            thread=thread,
+            direction="outbound",
+            body=first_message,
+            sender_name=ctx.user.name,
+            created_by_user_id=ctx.user.id,
+            delivery_status="local",
+        )
+    if assignee_id and assignee_id != ctx.user.id:
+        try:
+            create_user_notification(
+                session,
+                company_id=ctx.company.id,
+                client_id=thread.client_id,
+                user_id=int(assignee_id),
+                kind="whatsapp",
+                title=f"Nova conversa WhatsApp • {_whatsapp_thread_display_name(thread)}",
+                message="A conversa foi atribuída para você.",
+                href=f"/admin/whatsapp/conversas/{thread.id}",
+                created_by_user_id=ctx.user.id,
+            )
+        except Exception:
+            pass
+    set_flash(request, "Conversa criada.")
+    return RedirectResponse(f"/admin/whatsapp/conversas/{thread.id}", status_code=303)
+
+
+@app.get("/admin/whatsapp/conversas/{thread_id}")
+@require_role({"admin", "equipe"})
+async def whatsapp_thread_detail_page(
+    request: Request,
+    thread_id: int,
+    session: Session = Depends(get_session),
+) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+    thread = session.get(WhatsAppThread, int(thread_id))
+    if not thread or thread.company_id != ctx.company.id:
+        return render("error.html", request=request, context={"message": "Conversa não encontrada."}, status_code=404)
+    messages = session.exec(
+        select(WhatsAppThreadMessage)
+        .where(WhatsAppThreadMessage.thread_id == thread.id, WhatsAppThreadMessage.company_id == ctx.company.id)
+        .order_by(WhatsAppThreadMessage.created_at.asc(), WhatsAppThreadMessage.id.asc())
+    ).all()
+    config = _get_or_create_whatsapp_config(session, company_id=ctx.company.id)
+    topic_options = list(_whatsapp_queue_label_map(session, company_id=ctx.company.id).items())
+    status_options = [("aberto", "Aberto"), ("aguardando_cliente", "Aguardando cliente"), ("resolvido", "Resolvido")]
+    clients = session.exec(select(Client).where(Client.company_id == ctx.company.id).order_by(Client.name)).all()
+    client = get_client_or_none(session, ctx.company.id, thread.client_id)
+    staff_memberships = _whatsapp_staff_memberships(session, company_id=ctx.company.id)
+    users = {int(u.id): u for u in session.exec(select(User)).all()}
+    staff_options = []
+    for m in staff_memberships:
+        u = users.get(int(m.user_id or 0))
+        if u:
+            staff_options.append({"user_id": int(u.id), "label": f"{u.name} • {m.role}"})
+    return render(
+        "whatsapp_thread_detail.html",
+        request=request,
+        context={
+            "title": "Conversa WhatsApp",
+            "thread": thread,
+            "messages": messages,
+            "config": config,
+            "display_name": _whatsapp_thread_display_name(thread),
+            "topic_options": topic_options,
+            "status_options": status_options,
+            "clients": clients,
+            "client": client,
+            "staff_options": staff_options,
+        },
+    )
+
+
+@app.post("/admin/whatsapp/conversas/{thread_id}/salvar")
+@require_role({"admin", "equipe"})
+async def whatsapp_thread_save(
+    request: Request,
+    thread_id: int,
+    status: str = Form(default="aberto"),
+    topic_code: str = Form(default="geral"),
+    assigned_user_id: Optional[str] = Form(default=""),
+    client_id: Optional[str] = Form(default=""),
+    session: Session = Depends(get_session),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+    thread = session.get(WhatsAppThread, int(thread_id))
+    if not thread or thread.company_id != ctx.company.id:
+        set_flash(request, "Conversa não encontrada.")
+        return RedirectResponse("/admin/whatsapp/caixa", status_code=303)
+    thread.status = _normalize_whatsapp_status(status)
+    thread.topic_code = _normalize_whatsapp_topic(topic_code)
+    assignee_id = _safe_int(assigned_user_id)
+    allowed_user_ids = {int(m.user_id) for m in _whatsapp_staff_memberships(session, company_id=ctx.company.id)}
+    thread.assigned_user_id = assignee_id if assignee_id in allowed_user_ids else None
+    chosen_client_id = _safe_int(client_id)
+    chosen_client = get_client_or_none(session, ctx.company.id, chosen_client_id)
+    thread.client_id = chosen_client.id if chosen_client else None
+    thread.updated_at = utcnow()
+    session.add(thread)
+    session.commit()
+    set_flash(request, "Classificação da conversa atualizada.")
+    return RedirectResponse(f"/admin/whatsapp/conversas/{thread.id}", status_code=303)
+
+
+@app.post("/admin/whatsapp/conversas/{thread_id}/mensagens")
+@require_role({"admin", "equipe"})
+async def whatsapp_thread_add_message(
+    request: Request,
+    thread_id: int,
+    direction: str = Form(default="outbound"),
+    body: str = Form(default=""),
+    send_live: Optional[str] = Form(default=None),
+    session: Session = Depends(get_session),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+    thread = session.get(WhatsAppThread, int(thread_id))
+    if not thread or thread.company_id != ctx.company.id:
+        set_flash(request, "Conversa não encontrada.")
+        return RedirectResponse("/admin/whatsapp/caixa", status_code=303)
+    clean_body = _clean_text(body, 5000)
+    if not clean_body:
+        set_flash(request, "Escreva uma mensagem.")
+        return RedirectResponse(f"/admin/whatsapp/conversas/{thread.id}", status_code=303)
+
+    delivery_status = "local"
+    external_id = ""
+    if direction == "outbound" and send_live:
+        config = _get_or_create_whatsapp_config(session, company_id=ctx.company.id)
+        ok, err, ext_id = await _try_send_whatsapp_text(config=config, to_phone=thread.contact_phone, body=clean_body)
+        if ok:
+            delivery_status = "sent"
+            external_id = ext_id
+        else:
+            delivery_status = "failed"
+            if err:
+                set_flash(request, f"Mensagem registrada no app, mas não enviada via WhatsApp: {err}")
+
+    msg = _whatsapp_add_message(
+        session,
+        thread=thread,
+        direction=direction if direction in {"inbound", "outbound", "internal_note"} else "outbound",
+        body=clean_body,
+        sender_name=ctx.user.name,
+        created_by_user_id=ctx.user.id,
+        delivery_status=delivery_status,
+        external_message_id=external_id,
+    )
+    chosen_topic = _whatsapp_menu_choice_to_topic(clean_body) if direction == "inbound" else None
+    if chosen_topic:
+        thread.topic_code = chosen_topic
+        thread.assigned_user_id = thread.assigned_user_id or _whatsapp_pick_default_assignee(
+            session, company_id=ctx.company.id, topic_code=chosen_topic
+        )
+        session.add(thread)
+        session.commit()
+
+    if direction == "inbound":
+        _whatsapp_notify_new_inbound(session, thread=thread, preview=clean_body, created_by_user_id=ctx.user.id)
+
+    return RedirectResponse(f"/admin/whatsapp/conversas/{thread.id}", status_code=303)
+
+
+@app.get("/api/whatsapp/webhook")
+async def whatsapp_webhook_verify(request: Request) -> Response:
+    mode = request.query_params.get("hub.mode", "")
+    token = request.query_params.get("hub.verify_token", "")
+    challenge = request.query_params.get("hub.challenge", "")
+    if mode == "subscribe" and WHATSAPP_VERIFY_TOKEN and token == WHATSAPP_VERIFY_TOKEN:
+        return Response(content=challenge, media_type="text/plain")
+    return Response(content="forbidden", status_code=403, media_type="text/plain")
+
+
+def _extract_meta_whatsapp_messages(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    for entry in payload.get("entry") or []:
+        if not isinstance(entry, dict):
+            continue
+        for change in entry.get("changes") or []:
+            if not isinstance(change, dict):
+                continue
+            value = change.get("value") or {}
+            if not isinstance(value, dict):
+                continue
+            metadata = value.get("metadata") or {}
+            phone_number_id = str(metadata.get("phone_number_id") or "")
+            contacts = value.get("contacts") or []
+            contact_map: dict[str, str] = {}
+            for c in contacts:
+                if not isinstance(c, dict):
+                    continue
+                waid = str(c.get("wa_id") or "")
+                profile = c.get("profile") or {}
+                contact_map[waid] = str(profile.get("name") or "")
+            for msg in value.get("messages") or []:
+                if not isinstance(msg, dict):
+                    continue
+                wa_from = str(msg.get("from") or "")
+                msg_type = str(msg.get("type") or "")
+                body = ""
+                if msg_type == "text":
+                    body = str((msg.get("text") or {}).get("body") or "")
+                elif msg_type == "button":
+                    body = str((msg.get("button") or {}).get("text") or "")
+                elif msg_type == "interactive":
+                    interactive = msg.get("interactive") or {}
+                    if "button_reply" in interactive:
+                        body = str((interactive.get("button_reply") or {}).get("title") or "")
+                    elif "list_reply" in interactive:
+                        body = str((interactive.get("list_reply") or {}).get("title") or "")
+                if not body:
+                    body = f"[mensagem {msg_type or 'sem texto'}]"
+                items.append({
+                    "phone_number_id": phone_number_id,
+                    "from": wa_from,
+                    "profile_name": contact_map.get(wa_from, ""),
+                    "body": body,
+                    "message_id": str(msg.get("id") or ""),
+                })
+    return items
+
+
+@app.post("/api/whatsapp/webhook")
+async def whatsapp_webhook_receive(request: Request, session: Session = Depends(get_session)) -> JSONResponse:
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+    events = _extract_meta_whatsapp_messages(payload if isinstance(payload, dict) else {})
+    processed = 0
+    for event in events:
+        phone_number_id = str(event.get("phone_number_id") or "")
+        if not phone_number_id:
+            continue
+        config = session.exec(
+            select(WhatsAppChannelConfig).where(
+                WhatsAppChannelConfig.meta_phone_number_id == phone_number_id
+            )
+        ).first()
+        if not config:
+            continue
+        company_id = int(config.company_id)
+        incoming_phone = _only_digits(str(event.get("from") or ""))
+        if not incoming_phone:
+            continue
+        thread = _whatsapp_find_open_thread_by_phone(session, company_id=company_id, phone_digits=incoming_phone)
+        if not thread:
+            matched_client = _match_client_by_phone(session, company_id=company_id, phone_digits=incoming_phone)
+            thread = _whatsapp_create_thread(
+                session,
+                company_id=company_id,
+                client_id=matched_client.id if matched_client else None,
+                contact_name=str(event.get("profile_name") or "") or (matched_client.name if matched_client else ""),
+                contact_phone=incoming_phone,
+                is_group=False,
+                group_name="",
+                topic_code="geral",
+                assigned_user_id=_whatsapp_pick_default_assignee(session, company_id=company_id, topic_code="geral"),
+                status="aberto",
+                source_kind="webhook",
+                created_by_user_id=None,
+            )
+        body = str(event.get("body") or "")
+        choice_topic = _whatsapp_menu_choice_to_topic(body)
+        if choice_topic:
+            thread.topic_code = choice_topic
+            thread.assigned_user_id = thread.assigned_user_id or _whatsapp_pick_default_assignee(
+                session, company_id=company_id, topic_code=choice_topic
+            )
+            session.add(thread)
+            session.commit()
+        _whatsapp_add_message(
+            session,
+            thread=thread,
+            direction="inbound",
+            body=body,
+            sender_name=str(event.get("profile_name") or "") or "Cliente",
+            created_by_user_id=None,
+            delivery_status="received",
+            external_message_id=str(event.get("message_id") or ""),
+        )
+        _whatsapp_notify_new_inbound(session, thread=thread, preview=body)
+        processed += 1
+    return JSONResponse({"ok": True, "processed": processed})
+
+
+
+
+TEMPLATES["client_access.html"] = r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <div class="d-flex justify-content-between align-items-start gap-2 flex-wrap">
+    <div>
+      <h4 class="mb-1">Permissões do cliente</h4>
+      <div class="muted">{{ client.name }}</div>
+    </div>
+    <a class="btn btn-outline-secondary" href="/admin/gestao">Voltar</a>
+  </div>
+  <form method="post" action="/admin/clients/{{ client.id }}/access" class="mt-3">
+    <div class="row g-3">
+      <div class="col-12 col-lg-7">
+        <div class="card p-3 h-100">
+          <h6 class="mb-2">Features liberadas</h6>
+          {% for group in feature_groups %}
+            <div class="mb-3">
+              <div class="fw-semibold mb-2">{{ group.title }}</div>
+              <div class="row g-2">
+                {% for fk in group.features %}
+                  {% set meta = feature_keys.get(fk) %}
+                  {% if meta %}
+                    <div class="col-md-6">
+                      <label class="form-check">
+                        <input class="form-check-input" type="checkbox" name="features" value="{{ fk }}" {% if fk in allowed %}checked{% endif %}>
+                        <span class="form-check-label"><b>{{ meta.title }}</b><br><span class="muted small">{{ meta.desc }}</span></span>
+                      </label>
+                    </div>
+                  {% endif %}
+                {% endfor %}
+              </div>
+            </div>
+          {% endfor %}
+          {% if feature_standalone %}
+          <div class="mb-2">
+            <div class="fw-semibold mb-2">Outros</div>
+            <div class="row g-2">
+              {% for fk in feature_standalone %}
+                {% set meta = feature_keys.get(fk) %}
+                {% if meta %}
+                  <div class="col-md-6">
+                    <label class="form-check">
+                      <input class="form-check-input" type="checkbox" name="features" value="{{ fk }}" {% if fk in allowed %}checked{% endif %}>
+                      <span class="form-check-label"><b>{{ meta.title }}</b><br><span class="muted small">{{ meta.desc }}</span></span>
+                    </label>
+                  </div>
+                {% endif %}
+              {% endfor %}
+            </div>
+          </div>
+          {% endif %}
+        </div>
+      </div>
+
+      <div class="col-12 col-lg-5">
+        <div class="card p-3 mb-3">
+          <h6 class="mb-2">Ferramenta: Financeiro Gerencial</h6>
+          <div class="row g-2">
+            <div class="col-12">
+              <label class="form-check">
+                <input class="form-check-input" type="checkbox" name="tool_finance_enabled" value="1" {% if tool_subscription and tool_subscription.is_active %}checked{% endif %}>
+                <span class="form-check-label">Ferramenta liberada</span>
+              </label>
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">Modelo</label>
+              <select class="form-select" name="tool_finance_billing_mode">
+                {% set current_mode = (tool_subscription.billing_mode if tool_subscription else tool_payload.billing_mode) %}
+                <option value="freemium" {% if current_mode == "freemium" %}selected{% endif %}>Freemium</option>
+                <option value="paid" {% if current_mode == "paid" %}selected{% endif %}>Pago</option>
+              </select>
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">Preço mensal (créditos)</label>
+              <input class="form-control" type="number" min="0" name="tool_finance_price_credits" value="{{ tool_payload.monthly_price_credits }}">
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">Período grátis (dias)</label>
+              <input class="form-control" type="number" min="0" name="tool_finance_trial_days" value="{{ tool_payload.trial_days }}">
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">Status atual</label>
+              <div class="form-control bg-light">{{ tool_payload.status_label }}</div>
+            </div>
+            <div class="col-12">
+              <label class="form-check">
+                <input class="form-check-input" type="checkbox" name="tool_finance_start_trial_now" value="1">
+                <span class="form-check-label">Iniciar período grátis agora</span>
+              </label>
+              <div class="form-text">O trial não começa automaticamente. Só inicia quando você marcar esta opção ao salvar.</div>
+            </div>
+            <div class="col-12">
+              <div class="small muted">{{ tool_payload.message }}</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card p-3">
+          <h6 class="mb-2">Usuários vinculados</h6>
+          {% if linked_users %}
+            <ul class="mb-0">
+              {% for item in linked_users %}
+                <li>{{ item.user.name }} — {{ item.user.email }} <span class="muted">({{ item.membership.role }})</span></li>
+              {% endfor %}
+            </ul>
+          {% else %}
+            <div class="muted">Nenhum usuário vinculado.</div>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+
+    <div class="mt-4 d-flex gap-2">
+      <button class="btn btn-primary" type="submit">Salvar</button>
+      <a class="btn btn-outline-secondary" href="/admin/gestao">Cancelar</a>
+    </div>
+  </form>
+</div>
+{% endblock %}
+"""
+
+
+@app.on_event("startup")
+def _startup_meeting_columns() -> None:
+    try:
+        ensure_meeting_extra_columns()
+    except Exception:
+        pass
+
+
+def ensure_businessdeal_extra_columns() -> None:
+    try:
+        backend = engine.url.get_backend_name()
+        with engine.begin() as conn:
+            if backend.startswith("postgres"):
+                try:
+                    conn.exec_driver_sql("ALTER TABLE IF EXISTS businessdeal ADD COLUMN IF NOT EXISTS lost_reason TEXT NOT NULL DEFAULT ''")
+                except Exception:
+                    pass
+            elif backend.startswith("sqlite"):
+                try:
+                    rows = conn.exec_driver_sql("PRAGMA table_info('businessdeal')").fetchall()
+                    existing = {str(r[1]) for r in rows}
+                except Exception:
+                    existing = set()
+                if "lost_reason" not in existing:
+                    try:
+                        conn.exec_driver_sql("ALTER TABLE businessdeal ADD COLUMN lost_reason TEXT NOT NULL DEFAULT ''")
+                    except Exception:
+                        pass
+    except Exception:
+        pass
+
+@app.on_event("startup")
+def _startup_businessdeal_columns() -> None:
+    try:
+        ensure_businessdeal_extra_columns()
+    except Exception:
+        pass
