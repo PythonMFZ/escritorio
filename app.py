@@ -2004,6 +2004,7 @@ def _insert_offer_match_compat(
     session.execute(text(sql), params)
 
 
+
 def persist_offer_matches(session: Session, *, company_id: int, client_id: int, matches: list[dict[str, Any]]) -> None:
     old = session.exec(
         select(OfferMatch).where(
@@ -2011,6 +2012,7 @@ def persist_offer_matches(session: Session, *, company_id: int, client_id: int, 
             OfferMatch.client_id == client_id,
         )
     ).all()
+
     old_ids = [int(row.id) for row in old if row.id]
 
     if old_ids:
@@ -2042,25 +2044,14 @@ def persist_offer_matches(session: Session, *, company_id: int, client_id: int, 
         )
 
     session.commit()
-    sync_offer_reviews(session, company_id=company_id, client_id=client_id)
 
-    client = session.get(Client, client_id)
-    subject_doc = _digits(getattr(client, "cnpj", "") or "") if client else ""
-    if not subject_doc and client:
-        subject_doc = _digits(getattr(client, "email", "") or "") or ""
-
-    for item in matches:
-        _insert_offer_match_compat(
-            session,
-            company_id=company_id,
-            client_id=client_id,
-            subject_doc=subject_doc,
-            item=item,
-        )
-    session.commit()
-
+    try:
+        sync_offer_reviews(session, company_id=company_id, client_id=client_id)
+    except Exception:
+        session.rollback()
 
 # ----------------------------
+# Documentos# ----------------------------
 # Documentos (contratos, termos etc.)
 # ----------------------------
 
@@ -2243,8 +2234,8 @@ class ConsultingProject(SQLModel, table=True):
     description: str = ""
     status: str = Field(default="ativo", index=True)  # ativo|pausado|concluido
 
-    start_date: str = ""  # AAAA-MM-DD (MVP simples)
-    due_date: str = ""  # AAAA-MM-DD (MVP simples)
+    start_date: str = ""  # DD/MM/AAAA (MVP simples)
+    due_date: str = ""  # DD/MM/AAAA (MVP simples)
 
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)
@@ -2260,7 +2251,7 @@ class ConsultingStage(SQLModel, table=True):
 
     name: str
     order: int = Field(default=1, index=True)
-    due_date: str = ""  # AAAA-MM-DD
+    due_date: str = ""  # DD/MM/AAAA
 
     created_at: datetime = Field(default_factory=utcnow)
 
@@ -2276,7 +2267,7 @@ class ConsultingStep(SQLModel, table=True):
 
     title: str
     description: str = ""
-    due_date: str = ""  # AAAA-MM-DD
+    due_date: str = ""  # DD/MM/AAAA
     weight: float = Field(default=1.0)  # peso para cálculo do %
     done: bool = Field(default=False, index=True)
 
@@ -2307,7 +2298,7 @@ class Task(SQLModel, table=True):
 
     status: str = Field(default="nao_iniciada", index=True)  # nao_iniciada | em_andamento | concluida
     priority: str = Field(default="media", index=True)  # baixa | media | alta
-    due_date: str = ""  # AAAA-MM-DD
+    due_date: str = ""  # DD/MM/AAAA
 
     visible_to_client: bool = Field(default=False, index=True)
     client_action: bool = Field(default=False, index=True)  # cliente pode marcar como concluído?
@@ -2430,7 +2421,6 @@ class BusinessDeal(SQLModel, table=True):
     title: str
     demand: str = ""  # demanda inicial
     notes: str = ""
-    lost_reason: str = ""
 
     stage: str = Field(default="qualificacao", index=True)
 
@@ -2440,7 +2430,7 @@ class BusinessDeal(SQLModel, table=True):
     probability_pct: int = 0  # 0..100
 
     next_step: str = ""
-    next_step_date: str = ""  # AAAA-MM-DD
+    next_step_date: str = ""  # DD/MM/AAAA
 
     source: str = ""  # origem
 
@@ -2471,7 +2461,7 @@ class FinanceInvoice(SQLModel, table=True):
 
     title: str  # ex: "Honorários - Março/2026"
     amount_brl: float = 0.0
-    due_date: str = ""  # AAAA-MM-DD (MVP simples)
+    due_date: str = ""  # DD/MM/AAAA (MVP simples)
     status: str = Field(default="emitido", index=True)
     notes: str = ""
 
@@ -2598,7 +2588,7 @@ class PendingItem(SQLModel, table=True):
     title: str
     description: str = ""
     status: str = Field(default="aberto", index=True)
-    due_date: str = ""  # AAAA-MM-DD
+    due_date: str = ""  # DD/MM/AAAA
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)
 
@@ -4731,8 +4721,6 @@ a:hover{ color:#00BFBF; }
             {% endif %}
 
             <span class="badge text-bg-light border">👤 {{ current_user.name }} • {{ role }}</span>
-            <a class="btn btn-outline-secondary btn-sm position-relative" href="/notificacoes">🔔{% if unread_notifications_count %}<span class="badge rounded-pill text-bg-danger ms-1">{{ unread_notifications_count }}</span>{% endif %}</a>
-            <a class="btn btn-outline-secondary btn-sm position-relative" href="/mensagens">💬{% if unread_messages_count %}<span class="badge rounded-pill text-bg-danger ms-1">{{ unread_messages_count }}</span>{% endif %} Mensagens</a>
             <a class="btn btn-outline-secondary btn-sm" href="/logout">Sair</a>
           {% else %}
             <a class="btn btn-outline-primary btn-sm" href="/login">Entrar</a>
@@ -4744,12 +4732,6 @@ a:hover{ color:#00BFBF; }
     <main class="container my-4">
   {% if flash %}
     <div class="alert alert-info">{{ flash }}</div>
-  {% endif %}
-  {% if approved_offers_count and approved_offers_count > 0 and role == "cliente" %}
-    <div class="alert alert-warning d-flex justify-content-between align-items-center flex-wrap gap-2">
-      <div><b>Temos ofertas alinhadas ao seu perfil.</b> Confira aqui!</div>
-      <a class="btn btn-primary btn-sm" href="/ofertas">Ver ofertas</a>
-    </div>
   {% endif %}
 
   <!-- Banner (carrossel) -->
@@ -4878,7 +4860,7 @@ a:hover{ color:#00BFBF; }
       <hr class="my-4"/>
 
 {% if allow_company_signup %}
-  <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
+  <div class="d-flex justify-content-between align-items-center">
     <div class="muted">Primeiro acesso?</div>
     <a class="btn btn-outline-primary" href="/signup">Criar escritório</a>
   </div>
@@ -5760,7 +5742,7 @@ a:hover{ color:#00BFBF; }
           </div>
           <div class="muted small">
             {% if role in ["admin","equipe"] %}Cliente: {{ it.client_name }} • {% endif %}
-            {% if it.due_date %}Prazo: {{ it.due_date|brdate }} • {% endif %}
+            {% if it.due_date %}Prazo: {{ it.due_date }} • {% endif %}
             {{ it.created_at }}
           </div>
         </a>
@@ -5805,7 +5787,7 @@ a:hover{ color:#00BFBF; }
           </select>
         </div>
         <div class="col-md-4">
-          <label class="form-label">Prazo (AAAA-MM-DD)</label>
+          <label class="form-label">Prazo (DD/MM/AAAA)</label>
           <input class="form-control mono" name="due_date" placeholder="2026-03-31"/>
         </div>
         <div class="col-12">
@@ -5858,7 +5840,7 @@ a:hover{ color:#00BFBF; }
     <ul>
       {% for a in attachments %}
         <li class="d-flex justify-content-between align-items-center">
-          <a class="btn btn-sm btn-outline-secondary" href="/download/{{ a.id }}">Baixar {{ "NF" if "nf" in (a.original_filename|lower) else ("Boleto" if "boleto" in (a.original_filename|lower) else a.original_filename) }}</a>
+          <a href="/download/{{ a.id }}">{{ a.original_filename }}</a>
           {% if role in ["admin","equipe"] %}
             <form method="post" action="/attachments/{{ a.id }}/delete" class="ms-2">
               <input type="hidden" name="next" value="/pendencias/{{ item.id }}">
@@ -6062,7 +6044,7 @@ a:hover{ color:#00BFBF; }
     <ul>
       {% for a in attachments %}
         <li class="d-flex justify-content-between align-items-center">
-          <a class="btn btn-sm btn-outline-secondary" href="/download/{{ a.id }}">Baixar {{ "NF" if "nf" in (a.original_filename|lower) else ("Boleto" if "boleto" in (a.original_filename|lower) else a.original_filename) }}</a>
+          <a href="/download/{{ a.id }}">{{ a.original_filename }}</a>
           {% if role in ["admin","equipe"] %}
             <form method="post" action="/attachments/{{ a.id }}/delete" class="ms-2">
               <input type="hidden" name="next" value="/documentos/{{ doc.id }}">
@@ -6311,7 +6293,7 @@ a:hover{ color:#00BFBF; }
     <ul>
       {% for a in attachments %}
         <li class="d-flex justify-content-between align-items-center">
-          <a class="btn btn-sm btn-outline-secondary" href="/download/{{ a.id }}">Baixar {{ "NF" if "nf" in (a.original_filename|lower) else ("Boleto" if "boleto" in (a.original_filename|lower) else a.original_filename) }}</a>
+          <a href="/download/{{ a.id }}">{{ a.original_filename }}</a>
           {% if role in ["admin","equipe"] %}
             <form method="post" action="/attachments/{{ a.id }}/delete" class="ms-2">
               <input type="hidden" name="next" value="/financeiro/{{ inv.id }}">
@@ -6439,7 +6421,7 @@ a:hover{ color:#00BFBF; }
           <div class="muted small">
             {% if role in ["admin","equipe"] %}Cliente: {{ it.client_name }} • {% endif %}
             Valor: R$ {{ "%.2f"|format(it.amount_brl) }} •
-            {% if it.due_date %}Venc: {{ it.due_date|brdate }} • {% endif %}
+            {% if it.due_date %}Venc: {{ it.due_date }} • {% endif %}
             {{ it.created_at }}
           </div>
         </a>
@@ -6528,7 +6510,7 @@ a:hover{ color:#00BFBF; }
             <tbody>
               {% for r in ca_receivables %}
                 <tr>
-                  <td class="mono small">{{ r.due_date|brdate }}</td>
+                  <td class="mono small">{{ r.due_date }}</td>
                   <td>{{ r.description }}</td>
                   <td><span class="badge text-bg-light border">{{ r.status }}</span></td>
                   <td>R$ {{ "%.2f"|format(r.amount_open) }}</td>
@@ -6571,7 +6553,7 @@ a:hover{ color:#00BFBF; }
             <tbody>
               {% for n in ca_invoices %}
                 <tr>
-                  <td class="mono small">{{ n.issue_date|brdate }}</td>
+                  <td class="mono small">{{ n.issue_date }}</td>
                   <td class="mono small">{{ n.number or "—" }}</td>
                   <td class="mono small">{{ n.invoice_type }}</td>
                   <td><span class="badge text-bg-light border">{{ n.status }}</span></td>
@@ -6671,7 +6653,7 @@ a:hover{ color:#00BFBF; }
       <h4 class="mb-1">{{ inv.title }}</h4>
       <div class="muted">
         Status: <b>{{ inv.status }}</b> • Valor: <b>R$ {{ "%.2f"|format(inv.amount_brl) }}</b>
-        {% if inv.due_date %} • Venc: <b>{{ inv.due_date|brdate }}</b>{% endif %}
+        {% if inv.due_date %} • Venc: <b>{{ inv.due_date }}</b>{% endif %}
         {% if role in ["admin","equipe"] %} • Cliente: <b>{{ client.name }}</b>{% endif %}
       </div>
     </div>
@@ -6695,7 +6677,7 @@ a:hover{ color:#00BFBF; }
     <ul>
       {% for a in attachments %}
         <li class="d-flex justify-content-between align-items-center">
-          <a class="btn btn-sm btn-outline-secondary" href="/download/{{ a.id }}">Baixar {{ "NF" if "nf" in (a.original_filename|lower) else ("Boleto" if "boleto" in (a.original_filename|lower) else a.original_filename) }}</a>
+          <a href="/download/{{ a.id }}">{{ a.original_filename }}</a>
           {% if role in ["admin","equipe"] %}
             <form method="post" action="/attachments/{{ a.id }}/delete" class="ms-2">
               <input type="hidden" name="next" value="/financeiro/{{ inv.id }}">
@@ -6807,7 +6789,7 @@ TEMPLATES.update({
           <div class="muted small">
             {% if role in ["admin","equipe"] %}Cliente: {{ it.client_name }} • {% endif %}
             Valor: R$ {{ "%.2f"|format(it.amount_brl) }} •
-            {% if it.due_date %}Venc: {{ it.due_date|brdate }} • {% endif %}
+            {% if it.due_date %}Venc: {{ it.due_date }} • {% endif %}
             {{ it.created_at }}
           </div>
         </a>
@@ -6829,7 +6811,7 @@ TEMPLATES.update({
           </div>
           <div class="muted small mt-1">
             Valor: R$ {{ "%.2f"|format(r.amount_total) }} • Aberto: R$ {{ "%.2f"|format(r.amount_open) }}
-            {% if r.due_date %} • Venc: {{ r.due_date|brdate }}{% endif %}
+            {% if r.due_date %} • Venc: {{ r.due_date }}{% endif %}
             {% if r.invoice_type or r.invoice_number %} • {{ r.invoice_type }} {{ r.invoice_number }}{% endif %}
             {% if r.boleto_status %} • Boleto: {{ r.boleto_status }}{% endif %}
           </div>
@@ -6856,7 +6838,7 @@ TEMPLATES.update({
             <span class="badge text-bg-light border">{{ n.status }}</span>
           </div>
           <div class="muted small mt-1">
-            {% if n.issue_date %}Emissão/Competência: {{ n.issue_date|brdate }} • {% endif %}
+            {% if n.issue_date %}Emissão/Competência: {{ n.issue_date }} • {% endif %}
             {% if n.amount %}Valor: R$ {{ "%.2f"|format(n.amount) }} • {% endif %}
             ID: {{ n.external_id }}
           </div>
@@ -6953,12 +6935,12 @@ TEMPLATES.update({
         </div>
 
         <div class="col-md-6">
-          <label class="form-label">Início (AAAA-MM-DD)</label>
+          <label class="form-label">Início (DD/MM/AAAA)</label>
           <input class="form-control mono" name="start_date" placeholder="2026-03-10" />
         </div>
 
         <div class="col-md-6">
-          <label class="form-label">Prazo final (AAAA-MM-DD)</label>
+          <label class="form-label">Prazo final (DD/MM/AAAA)</label>
           <input class="form-control mono" name="due_date" placeholder="2026-06-30" />
         </div>
 
@@ -7046,7 +7028,7 @@ TEMPLATES.update({
                           </div>
                           {% if st.description %}<div class="muted small mt-1">{{ st.description }}</div>{% endif %}
                           <div class="muted small">
-                            {% if st.due_date %}Prazo: {{ st.due_date|brdate }} • {% endif %}
+                            {% if st.due_date %}Prazo: {{ st.due_date }} • {% endif %}
                             Peso: {{ st.weight }}
                           </div>
                         </div>
@@ -7081,7 +7063,7 @@ TEMPLATES.update({
                       <input class="form-control" name="title" required placeholder="Título" />
                     </div>
                     <div class="col-md-6">
-                      <input class="form-control mono" name="due_date" placeholder="Prazo AAAA-MM-DD" />
+                      <input class="form-control mono" name="due_date" placeholder="Prazo DD/MM/AAAA" />
                     </div>
                     <div class="col-12">
                       <input class="form-control" name="description" placeholder="Descrição (opcional)" />
@@ -7121,7 +7103,7 @@ TEMPLATES.update({
           <input class="form-control" name="name" required placeholder="Nome da etapa" />
         </div>
         <div class="col-md-4">
-          <input class="form-control mono" name="due_date" placeholder="Prazo AAAA-MM-DD" />
+          <input class="form-control mono" name="due_date" placeholder="Prazo DD/MM/AAAA" />
         </div>
         <div class="col-12">
           <button class="btn btn-primary">Adicionar etapa</button>
@@ -7294,7 +7276,7 @@ TEMPLATES.update({
         </select>
       </div>
       <div class="col-md-6">
-        <label class="form-label">Prazo (AAAA-MM-DD)</label>
+        <label class="form-label">Prazo (DD/MM/AAAA)</label>
         <input class="form-control mono" name="due_date" value="{{ item.due_date }}" />
       </div>
       <div class="col-12">
@@ -7348,7 +7330,7 @@ TEMPLATES.update({
       </div>
       <div class="col-md-4">
         <label class="form-label">Vencimento (DD/MM/AAAA)</label>
-        <input class="form-control mono" name="due_date" value="{{ inv.due_date|brdate }}" />
+        <input class="form-control mono" name="due_date" value="{{ inv.due_date }}" />
       </div>
       <div class="col-12">
         <label class="form-label">Notas</label>
@@ -7549,7 +7531,7 @@ TEMPLATES.update({
         </div>
 
         <div class="col-md-4">
-          <label class="form-label">Prazo (AAAA-MM-DD)</label>
+          <label class="form-label">Prazo (DD/MM/AAAA)</label>
           <input class="form-control mono" name="due_date" />
         </div>
 
@@ -7741,7 +7723,7 @@ TEMPLATES.update({
       </div>
 
       <div class="col-md-4">
-        <label class="form-label">Prazo (AAAA-MM-DD)</label>
+        <label class="form-label">Prazo (DD/MM/AAAA)</label>
         <input class="form-control mono" name="due_date" value="{{ task.due_date }}" />
       </div>
 
@@ -8068,9 +8050,6 @@ TEMPLATES.update({
   </div>
 
   <hr class="my-3"/>
-      {% if deal.lost_reason %}
-        <div class="alert alert-warning mt-3 mb-0"><b>Motivo de perda:</b> {{ deal.lost_reason }}</div>
-      {% endif %}
 
   <div class="row g-3">
     <div class="col-md-4">
@@ -8323,10 +8302,6 @@ TEMPLATES.update({
         <label class="form-label">Notas internas</label>
         <textarea class="form-control" name="notes" rows="3"></textarea>
       </div>
-      <div class="col-12">
-        <label class="form-label">Motivo de perda (quando perdido)</label>
-        <input class="form-control" name="lost_reason" placeholder="Ex.: preço, timing, sem aderência, sem retorno..." />
-      </div>
     </div>
 
     <div class="mt-4 d-flex gap-2">
@@ -8537,10 +8512,6 @@ TEMPLATES.update({
         <label class="form-label">Notas internas</label>
         <textarea class="form-control" name="notes" rows="3">{{ deal.notes }}</textarea>
       </div>
-      <div class="col-12">
-        <label class="form-label">Motivo de perda (quando perdido)</label>
-        <input class="form-control" name="lost_reason" value="{{ deal.lost_reason }}" placeholder="Ex.: preço, timing, sem aderência, sem retorno..." />
-      </div>
     </div>
 
     <div class="mt-4 d-flex gap-2">
@@ -8646,7 +8617,7 @@ TEMPLATES.update({
 
       <div class="col-md-6">
         <label class="form-label">Data (DD/MM/AAAA)</label>
-        <input class="form-control mono" name="meeting_date" placeholder="09/04/2026" />
+        <input class="form-control mono" name="meeting_date" placeholder="2026-03-12" />
       </div>
 
       <div class="col-12">
@@ -8684,65 +8655,26 @@ TEMPLATES.update({
       <h4 class="mb-1">{{ meeting.title or "Reunião" }}</h4>
       <div class="muted">
         {% if role in ["admin","equipe"] %}Cliente: <b>{{ client.name }}</b> • {% endif %}
-        {% if meeting.meeting_date %}Data: <b>{{ meeting.meeting_date|brdate }}</b> • {% endif %}
+        {% if meeting.meeting_date %}Data: <b>{{ meeting.meeting_date }}</b> • {% endif %}
         Status Notion: <b>{{ meeting.notion_status or "—" }}</b>
       </div>
       {% if meeting.notion_url %}
         <div class="small mt-1"><a href="{{ meeting.notion_url }}" target="_blank" rel="noopener">Abrir no Notion</a></div>
       {% endif %}
       {% if meeting.last_synced_at %}
-        <div class="muted small mt-1">Última sincronização: {{ meeting.last_synced_at|brdatetime }}</div>
-      {% endif %}
-      {% if meeting.total_meeting_minutes %}
-        <div class="muted small mt-1">Horas em reunião: {{ (meeting.total_meeting_minutes / 60)|round(2) }}h</div>
+        <div class="muted small mt-1">Última sincronização: {{ meeting.last_synced_at }}</div>
       {% endif %}
     </div>
 
-    <div class="d-flex gap-2 flex-wrap">
+    <div class="d-flex gap-2">
       <a class="btn btn-outline-secondary" href="/reunioes">Voltar</a>
       {% if role in ["admin","equipe"] %}
         <form method="post" action="/reunioes/{{ meeting.id }}/sync">
           <button class="btn btn-outline-primary" type="submit">Sincronizar</button>
         </form>
-        <form method="post" action="/reunioes/{{ meeting.id }}/checkin">
-          <button class="btn btn-outline-success" type="submit">Check-in</button>
-        </form>
-        <form method="post" action="/reunioes/{{ meeting.id }}/checkout">
-          <button class="btn btn-outline-warning" type="submit">Check-out</button>
-        </form>
-      {% endif %}
-      {% if role == "cliente" and meeting.admin_notes_visible_to_client and meeting.admin_notes %}
-        <a class="btn btn-outline-primary" href="#cliente-notes">Anotações</a>
       {% endif %}
     </div>
   </div>
-
-  {% if role in ["admin","equipe"] %}
-    <hr class="my-3"/>
-    <form method="post" action="/reunioes/{{ meeting.id }}/anotacoes" class="card p-3">
-      <div class="fw-semibold mb-2">Anotações da reunião</div>
-      <div class="row g-2">
-        <div class="col-12">
-          <textarea class="form-control" name="admin_notes" rows="4" placeholder="Anotações do escritório">{{ meeting.admin_notes }}</textarea>
-        </div>
-        <div class="col-12">
-          <label class="form-check">
-            <input class="form-check-input" type="checkbox" name="admin_notes_visible_to_client" value="1" {% if meeting.admin_notes_visible_to_client %}checked{% endif %}>
-            <span class="form-check-label">Visível ao cliente</span>
-          </label>
-        </div>
-        <div class="col-12">
-          <button class="btn btn-primary" type="submit">Salvar anotações</button>
-        </div>
-      </div>
-    </form>
-  {% elif meeting.admin_notes_visible_to_client and meeting.admin_notes %}
-    <hr class="my-3"/>
-    <div class="card p-3" id="cliente-notes">
-      <div class="fw-semibold mb-2">Anotações</div>
-      <pre>{{ meeting.admin_notes }}</pre>
-    </div>
-  {% endif %}
 
   {% if role in ["admin","equipe"] and meeting.action_items_text %}
     <hr class="my-3"/>
@@ -9904,62 +9836,6 @@ def _format_number_br(value: Any, decimals: int = 2) -> str:
 
 templates_env.filters["brl"] = _format_brl
 templates_env.filters["brnum"] = _format_number_br
-
-
-def _normalize_date_input(value: Any) -> str:
-    raw = str(value or "").strip()
-    if not raw:
-        return ""
-    raw = raw.replace(".", "/").replace("-", "/")
-    for fmt in ("%d/%m/%Y", "%Y/%m/%d", "%Y-%m-%d", "%d-%m-%Y"):
-        try:
-            return datetime.strptime(str(value or "").strip(), fmt).date().isoformat()
-        except Exception:
-            pass
-    for fmt in ("%d/%m/%Y", "%Y/%m/%d", "%Y-%m-%d", "%d-%m-%Y"):
-        try:
-            return datetime.strptime(raw, fmt).date().isoformat()
-        except Exception:
-            pass
-    return str(value or "").strip()
-
-def _format_date_br(value: Any) -> str:
-    raw = str(value or "").strip()
-    if not raw:
-        return ""
-    for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y", "%Y/%m/%d"):
-        try:
-            return datetime.strptime(raw, fmt).strftime("%d/%m/%Y")
-        except Exception:
-            pass
-    if "T" in raw:
-        try:
-            return datetime.fromisoformat(raw.replace("Z", "+00:00")).strftime("%d/%m/%Y")
-        except Exception:
-            pass
-    return raw
-
-def _format_datetime_br(value: Any) -> str:
-    if not value:
-        return ""
-    if isinstance(value, datetime):
-        return value.strftime("%d/%m/%Y %H:%M")
-    raw = str(value).strip()
-    if not raw:
-        return ""
-    try:
-        return datetime.fromisoformat(raw.replace("Z", "+00:00")).strftime("%d/%m/%Y %H:%M")
-    except Exception:
-        pass
-    for fmt in ("%Y-%m-%d %H:%M", "%Y-%m-%d", "%d/%m/%Y %H:%M", "%d/%m/%Y"):
-        try:
-            return datetime.strptime(raw, fmt).strftime("%d/%m/%Y %H:%M" if "%H:%M" in fmt else "%d/%m/%Y")
-        except Exception:
-            pass
-    return raw
-
-templates_env.filters["brdate"] = _format_date_br
-templates_env.filters["brdatetime"] = _format_datetime_br
 
 
 # ----------------------------
@@ -11156,7 +11032,7 @@ class Meeting(SQLModel, table=True):
     created_by_user_id: int = Field(index=True, foreign_key="user.id")
 
     title: str = ""
-    meeting_date: str = ""  # AAAA-MM-DD (simple)
+    meeting_date: str = ""  # DD/MM/AAAA (simple)
     source: str = Field(default="notion", index=True)
 
     notion_page_id: str = Field(default="", index=True)  # normalized UUID (with hyphens)
@@ -11168,60 +11044,12 @@ class Meeting(SQLModel, table=True):
     notes_text: str = ""
     transcript_text: str = ""
     action_items_text: str = ""
-    admin_notes: str = ""
-    admin_notes_visible_to_client: bool = False
-    checkin_at: Optional[datetime] = None
-    checkout_at: Optional[datetime] = None
-    total_meeting_minutes: int = 0
 
     raw_json: str = Field(default="{}")
     last_synced_at: Optional[datetime] = None
 
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)
-
-
-
-def ensure_meeting_extra_columns() -> None:
-    try:
-        backend = engine.url.get_backend_name()
-        with engine.begin() as conn:
-            if backend.startswith("postgres"):
-                for stmt in [
-                    "ALTER TABLE IF EXISTS meeting ADD COLUMN IF NOT EXISTS admin_notes TEXT NOT NULL DEFAULT ''",
-                    "ALTER TABLE IF EXISTS meeting ADD COLUMN IF NOT EXISTS admin_notes_visible_to_client BOOLEAN NOT NULL DEFAULT FALSE",
-                    "ALTER TABLE IF EXISTS meeting ADD COLUMN IF NOT EXISTS checkin_at TIMESTAMP WITHOUT TIME ZONE",
-                    "ALTER TABLE IF EXISTS meeting ADD COLUMN IF NOT EXISTS checkout_at TIMESTAMP WITHOUT TIME ZONE",
-                    "ALTER TABLE IF EXISTS meeting ADD COLUMN IF NOT EXISTS total_meeting_minutes INTEGER NOT NULL DEFAULT 0",
-                ]:
-                    try:
-                        conn.exec_driver_sql(stmt)
-                    except Exception:
-                        pass
-            elif backend.startswith("sqlite"):
-                try:
-                    rows = conn.exec_driver_sql("PRAGMA table_info('meeting')").fetchall()
-                    existing = {str(r[1]) for r in rows}
-                except Exception:
-                    existing = set()
-                stmts = []
-                if "admin_notes" not in existing:
-                    stmts.append("ALTER TABLE meeting ADD COLUMN admin_notes TEXT NOT NULL DEFAULT ''")
-                if "admin_notes_visible_to_client" not in existing:
-                    stmts.append("ALTER TABLE meeting ADD COLUMN admin_notes_visible_to_client INTEGER NOT NULL DEFAULT 0")
-                if "checkin_at" not in existing:
-                    stmts.append("ALTER TABLE meeting ADD COLUMN checkin_at TEXT")
-                if "checkout_at" not in existing:
-                    stmts.append("ALTER TABLE meeting ADD COLUMN checkout_at TEXT")
-                if "total_meeting_minutes" not in existing:
-                    stmts.append("ALTER TABLE meeting ADD COLUMN total_meeting_minutes INTEGER NOT NULL DEFAULT 0")
-                for stmt in stmts:
-                    try:
-                        conn.exec_driver_sql(stmt)
-                    except Exception:
-                        pass
-    except Exception:
-        pass
 
 
 class MeetingMessage(SQLModel, table=True):
@@ -11997,8 +11825,8 @@ async def consultoria_edit_project_action(
 
     project.name = name.strip()
     project.status = status
-    project.start_date = start_date.strip()
-    project.due_date = due_date.strip()
+    project.start_date = _normalize_date_input(start_date)
+    project.due_date = _normalize_date_input(due_date)
     project.description = description.strip()
     project.updated_at = utcnow()
 
@@ -12049,6 +11877,10 @@ async def consultoria_edit_stage_page(request: Request, session: Session = Depen
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
 
     stage = session.get(ConsultingStage, int(stage_id))
     if not stage:
@@ -12071,6 +11903,7 @@ async def consultoria_edit_stage_page(request: Request, session: Session = Depen
 
 @app.post("/consultoria/stages/{stage_id}/editar")
 @require_role({"admin", "equipe"})
+
 async def consultoria_edit_stage_action(
         request: Request,
         session: Session = Depends(get_session),
@@ -12082,6 +11915,9 @@ async def consultoria_edit_stage_action(
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
 
     stage = session.get(ConsultingStage, int(stage_id))
     if not stage:
@@ -12093,37 +11929,33 @@ async def consultoria_edit_stage_action(
         set_flash(request, "Projeto inválido.")
         return RedirectResponse("/consultoria", status_code=303)
 
-    stage.name = name.strip()
-    stage.due_date = _normalize_date_input(due_date)
-
     try:
-        desired_order = int(order)
-    except Exception:
-        desired_order = stage.order
-
-    if desired_order != stage.order:
-        stage.order = max(1, desired_order)
-        _move_stage_to_order(session, stage, stage.order)
-    else:
-        session.add(stage)
+        stage.name = (name or "").strip()
+        stage.due_date = _normalize_date_input(due_date)
         try:
-            session.commit()
+            stage.order = max(1, int(order))
         except Exception:
-            session.rollback()
-            set_flash(request, "Falha ao atualizar etapa.")
-            return RedirectResponse(f"/consultoria/{project.id}", status_code=303)
-
-    set_flash(request, "Etapa atualizada.")
+            stage.order = max(1, int(stage.order or 1))
+        session.add(stage)
+        session.commit()
+        set_flash(request, "Etapa atualizada.")
+    except Exception as e:
+        session.rollback()
+        set_flash(request, f"Não foi possível atualizar a etapa: {e}")
     return RedirectResponse(f"/consultoria/{project.id}", status_code=303)
 
 
-@app.post("/consultoria/stages/{stage_id}/excluir")
+@app.post("/consultoria/stages/{stage_id}/excluir")@app.post("/consultoria/stages/{stage_id}/excluir")
 @require_role({"admin", "equipe"})
+
 async def consultoria_delete_stage(request: Request, session: Session = Depends(get_session),
                                    stage_id: int = 0) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
 
     stage = session.get(ConsultingStage, int(stage_id))
     if not stage:
@@ -12135,28 +11967,30 @@ async def consultoria_delete_stage(request: Request, session: Session = Depends(
         set_flash(request, "Projeto inválido.")
         return RedirectResponse("/consultoria", status_code=303)
 
-    steps = session.exec(select(ConsultingStep).where(ConsultingStep.stage_id == stage.id)).all()
-    for st in steps:
-        session.delete(st)
-    session.delete(stage)
     try:
+        steps = session.exec(select(ConsultingStep).where(ConsultingStep.stage_id == stage.id)).all()
+        for st in steps:
+            session.delete(st)
+        session.delete(stage)
         session.commit()
-    except Exception:
+        set_flash(request, "Etapa excluída.")
+    except Exception as e:
         session.rollback()
-        set_flash(request, "Falha ao excluir etapa.")
-        return RedirectResponse(f"/consultoria/{project.id}", status_code=303)
-
-    set_flash(request, "Etapa excluída.")
+        set_flash(request, f"Não foi possível excluir a etapa: {e}")
     return RedirectResponse(f"/consultoria/{project.id}", status_code=303)
 
 
-@app.get("/consultoria/steps/{step_id}/editar", response_class=HTMLResponse)
+@app.get("/consultoria/steps/{step_id}/editar", response_class=HTMLResponse)@app.get("/consultoria/steps/{step_id}/editar", response_class=HTMLResponse)
 @require_role({"admin", "equipe"})
 async def consultoria_edit_step_page(request: Request, session: Session = Depends(get_session),
                                      step_id: int = 0) -> HTMLResponse:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
 
     step = session.get(ConsultingStep, int(step_id))
     if not step:
@@ -12180,6 +12014,7 @@ async def consultoria_edit_step_page(request: Request, session: Session = Depend
 
 @app.post("/consultoria/steps/{step_id}/editar")
 @require_role({"admin", "equipe"})
+
 async def consultoria_edit_step_action(
         request: Request,
         session: Session = Depends(get_session),
@@ -12193,6 +12028,9 @@ async def consultoria_edit_step_action(
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
 
     step = session.get(ConsultingStep, int(step_id))
     if not step:
@@ -12205,32 +12043,36 @@ async def consultoria_edit_step_action(
         set_flash(request, "Projeto inválido.")
         return RedirectResponse("/consultoria", status_code=303)
 
-    step.title = title.strip()
-    step.description = description.strip()
-    step.due_date = _normalize_date_input(due_date)
-    step.weight = max(0.1, float(weight))
-    step.client_action = (client_action == "1")
-    step.updated_at = utcnow()
-
-    session.add(step)
     try:
+        step.title = (title or "").strip()
+        step.description = (description or "").strip()
+        step.due_date = _normalize_date_input(due_date)
+        try:
+            step.weight = max(0.1, float(weight))
+        except Exception:
+            step.weight = max(0.1, float(step.weight or 1.0))
+        step.client_action = (client_action == "1")
+        step.updated_at = utcnow()
+        session.add(step)
         session.commit()
-    except Exception:
+        set_flash(request, "Sub-etapa atualizada.")
+    except Exception as e:
         session.rollback()
-        set_flash(request, "Falha ao atualizar sub-etapa.")
-        return RedirectResponse(f"/consultoria/{project.id}", status_code=303)
-
-    set_flash(request, "Sub-etapa atualizada.")
+        set_flash(request, f"Não foi possível atualizar a sub-etapa: {e}")
     return RedirectResponse(f"/consultoria/{project.id}", status_code=303)
 
 
-@app.post("/consultoria/steps/{step_id}/excluir")
+@app.post("/consultoria/steps/{step_id}/excluir")@app.post("/consultoria/steps/{step_id}/excluir")
 @require_role({"admin", "equipe"})
+
 async def consultoria_delete_step(request: Request, session: Session = Depends(get_session),
                                   step_id: int = 0) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
 
     step = session.get(ConsultingStep, int(step_id))
     if not step:
@@ -12243,19 +12085,17 @@ async def consultoria_delete_step(request: Request, session: Session = Depends(g
         set_flash(request, "Projeto inválido.")
         return RedirectResponse("/consultoria", status_code=303)
 
-    session.delete(step)
     try:
+        session.delete(step)
         session.commit()
-    except Exception:
+        set_flash(request, "Sub-etapa excluída.")
+    except Exception as e:
         session.rollback()
-        set_flash(request, "Falha ao excluir sub-etapa.")
-        return RedirectResponse(f"/consultoria/{project.id}", status_code=303)
-
-    set_flash(request, "Sub-etapa excluída.")
+        set_flash(request, f"Não foi possível excluir a sub-etapa: {e}")
     return RedirectResponse(f"/consultoria/{project.id}", status_code=303)
 
 
-@app.post("/consultoria/novo")
+@app.post("/consultoria/novo")@app.post("/consultoria/novo")
 @require_role({"admin", "equipe"})
 async def consultoria_new_action(
         request: Request,
@@ -12291,7 +12131,7 @@ async def consultoria_new_action(
         name=name.strip(),
         description=description.strip(),
         status=status,
-        start_date=start_date.strip(),
+        start_date=_normalize_date_input(start_date),
         due_date=_normalize_date_input(due_date),
         updated_at=utcnow(),
     )
@@ -12373,6 +12213,10 @@ async def consultoria_add_stage(
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
 
     project = session.get(ConsultingProject, int(project_id))
     if not project or project.company_id != ctx.company.id:
@@ -12386,12 +12230,7 @@ async def consultoria_add_stage(
         due_date=_normalize_date_input(due_date),
     )
     session.add(stage)
-    try:
-        session.commit()
-    except Exception:
-        session.rollback()
-        set_flash(request, "Falha ao adicionar etapa.")
-        return RedirectResponse(f"/consultoria/{project.id}", status_code=303)
+    session.commit()
 
     set_flash(request, "Etapa adicionada.")
     return RedirectResponse(f"/consultoria/{project.id}", status_code=303)
@@ -12412,6 +12251,10 @@ async def consultoria_add_step(
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
 
     stage = session.get(ConsultingStage, int(stage_id))
     if not stage:
@@ -12433,12 +12276,7 @@ async def consultoria_add_step(
         updated_at=utcnow(),
     )
     session.add(step)
-    try:
-        session.commit()
-    except Exception:
-        session.rollback()
-        set_flash(request, "Falha ao adicionar sub-etapa.")
-        return RedirectResponse(f"/consultoria/{project.id}", status_code=303)
+    session.commit()
 
     set_flash(request, "Sub-etapa adicionada.")
     return RedirectResponse(f"/consultoria/{project.id}", status_code=303)
@@ -13567,6 +13405,7 @@ async def member_link_client(
 
 @app.get("/admin/clients/{client_id}/access", response_class=HTMLResponse)
 @require_role({"admin", "equipe"})
+
 async def client_access_page(
     request: Request,
     client_id: int,
@@ -13596,20 +13435,7 @@ async def client_access_page(
             ClientFeatureAccess.client_id == client_id,
         )
     ).first()
-    allowed = set(_parse_json_list(row.features_json)) if row else ROLE_DEFAULT_FEATURES["cliente"]
-
-    tool_subscription = _find_client_tool_subscription(
-        session,
-        company_id=ctx.company.id,
-        client_id=client_id,
-        tool_code=CLIENT_TOOL_FINANCE_CODE,
-    )
-    tool_payload = _tool_subscription_status_payload(
-        session,
-        company_id=ctx.company.id,
-        client_id=client_id,
-        tool_code=CLIENT_TOOL_FINANCE_CODE,
-    )
+    allowed = set(_parse_json_list(row.features_json)) if row else set(ROLE_DEFAULT_FEATURES["cliente"])
 
     mems = session.exec(
         select(Membership).where(Membership.company_id == ctx.company.id, Membership.client_id == client_id)
@@ -13619,6 +13445,13 @@ async def client_access_page(
         u = session.get(User, m.user_id)
         if u:
             users.append({"user": u, "membership": m})
+
+    finance_tool_admin = _tool_admin_payload(
+        session,
+        company_id=ctx.company.id,
+        client_id=client_id,
+        tool_code=CLIENT_TOOL_FINANCE_CODE,
+    )
 
     return render(
         "client_access.html",
@@ -13634,8 +13467,7 @@ async def client_access_page(
             "feature_standalone": FEATURE_STANDALONE,
             "feature_keys": FEATURE_KEYS,
             "linked_users": users,
-            "tool_subscription": tool_subscription,
-            "tool_payload": tool_payload,
+            "finance_tool_admin": finance_tool_admin,
         },
     )
 
@@ -13672,72 +13504,59 @@ async def client_access_save(
     session.add(row)
     session.commit()
 
-    tool_enabled = str(form.get("tool_finance_enabled") or "") == "1"
-    billing_mode = str(form.get("tool_finance_billing_mode") or "freemium").strip().lower()
-    if billing_mode not in {"freemium", "paid"}:
-        billing_mode = "freemium"
-    try:
-        monthly_price_credits = max(0, int(form.get("tool_finance_price_credits") or CLIENT_TOOL_FINANCE_MONTHLY_CREDITS))
-    except Exception:
-        monthly_price_credits = CLIENT_TOOL_FINANCE_MONTHLY_CREDITS
-    try:
-        trial_days = max(0, int(form.get("tool_finance_trial_days") or 30))
-    except Exception:
-        trial_days = 30
-    start_trial_now = str(form.get("tool_finance_start_trial_now") or "") == "1"
-
-    sub = _find_client_tool_subscription(
-        session,
-        company_id=ctx.company.id,
-        client_id=client_id,
-        tool_code=CLIENT_TOOL_FINANCE_CODE,
-    )
-    if not sub:
-        sub = ClientToolSubscription(
+    # Configuração manual da ferramenta Financeiro Gerencial
+    if CLIENT_TOOL_FINANCE_CODE in features:
+        sub = _get_or_create_client_tool_subscription(
+            session,
             company_id=ctx.company.id,
             client_id=client_id,
             tool_code=CLIENT_TOOL_FINANCE_CODE,
-            status="blocked",
-            is_active=False,
-            monthly_price_credits=monthly_price_credits,
-            billing_mode=billing_mode,
-            trial_days=trial_days,
-            created_at=utcnow(),
-            updated_at=utcnow(),
         )
+        pricing_mode = (str(form.get("tool_finance_pricing_mode") or "trial").strip().lower() or "trial")
+        trial_days = max(0, int(str(form.get("tool_finance_trial_days") or "30") or 30))
+        monthly_credits = max(0, int(str(form.get("tool_finance_monthly_credits") or str(CLIENT_TOOL_FINANCE_MONTHLY_CREDITS)) or CLIENT_TOOL_FINANCE_MONTHLY_CREDITS))
+        release_enabled = str(form.get("tool_finance_release_enabled") or "") == "1"
+        start_trial_now = str(form.get("tool_finance_start_trial_now") or "") == "1"
 
-    sub.is_active = bool(tool_enabled)
-    sub.monthly_price_credits = monthly_price_credits
-    sub.billing_mode = billing_mode
-    sub.trial_days = trial_days
-    sub.updated_at = utcnow()
+        sub.is_active = bool(release_enabled)
+        sub.monthly_price_credits = monthly_credits
+        sub.updated_at = utcnow()
 
-    if not tool_enabled:
-        sub.status = "cancelled"
-        sub.trial_started_at = None
-        sub.trial_ends_at = None
-        sub.next_billing_at = None
-        sub.last_billed_period = ""
-    elif billing_mode == "paid":
-        sub.status = "active" if sub.last_billed_period else "blocked"
-        sub.trial_started_at = None
-        sub.trial_ends_at = None
-    else:
-        if start_trial_now:
-            now = utcnow()
+        now = utcnow()
+        if not release_enabled:
+            sub.status = "blocked"
+            sub.trial_started_at = None
+            sub.trial_ends_at = None
+            sub.next_billing_at = None
+        elif pricing_mode == "free":
+            sub.status = "active"
+            sub.trial_started_at = None
+            sub.trial_ends_at = None
+            sub.next_billing_at = None
+            sub.monthly_price_credits = 0
+        elif start_trial_now and trial_days > 0:
             sub.status = "trial"
             sub.trial_started_at = now
             sub.trial_ends_at = now + timedelta(days=trial_days)
             sub.next_billing_at = sub.trial_ends_at
-            sub.last_billed_period = ""
+        else:
+            if sub.status == "trial" and sub.trial_started_at and sub.trial_ends_at:
+                pass
+            else:
+                sub.status = "blocked" if pricing_mode == "trial" else "active"
+                if pricing_mode == "trial":
+                    sub.trial_started_at = None
+                    sub.trial_ends_at = None
+                    sub.next_billing_at = None
 
-    session.add(sub)
-    session.commit()
+        session.add(sub)
+        session.commit()
 
-    set_flash(request, "Permissões e ferramenta do cliente atualizadas.")
+    set_flash(request, "Permissões do cliente atualizadas.")
     return RedirectResponse(f"/admin/clients/{client_id}/access", status_code=303)
 
 # ----------------------------
+# Empresa / Perfil# ----------------------------
 # Empresa / Perfil
 # ----------------------------
 
@@ -18883,7 +18702,7 @@ async def fin_edit_action(
     inv.title = title.strip()
     inv.status = status.strip().lower()
     inv.amount_brl = max(0.0, float(amount_brl))
-    inv.due_date = _normalize_date_input(due_date)
+    inv.due_date = due_date.strip()
     inv.notes = notes.strip()
     inv.updated_at = utcnow()
     session.add(inv)
@@ -19106,7 +18925,6 @@ async def crm_new_action(
         source: str = Form(""),
         next_step: str = Form(""),
         next_step_date: str = Form(""),
-        lost_reason: str = Form(""),
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
@@ -19178,7 +18996,6 @@ async def crm_new_action(
         next_step=next_step.strip(),
         next_step_date=_normalize_date_input(next_step_date),
         source=source.strip(),
-        lost_reason=(lost_reason or "").strip(),
         updated_at=utcnow(),
     )
     session.add(deal)
@@ -19296,7 +19113,6 @@ async def crm_edit_action(
         source: str = Form(""),
         next_step: str = Form(""),
         next_step_date: str = Form(""),
-        lost_reason: str = Form(""),
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
@@ -19344,7 +19160,6 @@ async def crm_edit_action(
     deal.source = source.strip()
     deal.next_step = next_step.strip()
     deal.next_step_date = _normalize_date_input(next_step_date)
-    deal.lost_reason = (lost_reason or "").strip() if stage == "perdido" else ""
     deal.updated_at = utcnow()
     session.add(deal)
     session.commit()
@@ -19363,7 +19178,6 @@ async def crm_update_stage(
         session: Session = Depends(get_session),
         deal_id: int = 0,
         stage: str = Form(""),
-        lost_reason: str = Form(""),
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
@@ -19379,7 +19193,6 @@ async def crm_update_stage(
         return RedirectResponse("/negocios", status_code=303)
 
     deal.stage = _crm_stage_key_or_default(stage)
-    deal.lost_reason = (lost_reason or "").strip() if deal.stage == "perdido" else deal.lost_reason
     deal.updated_at = utcnow()
     session.add(deal)
     session.commit()
@@ -19414,7 +19227,7 @@ async def crm_update_next(
         return RedirectResponse("/negocios", status_code=303)
 
     deal.next_step = (next_step or "").strip()
-    deal.next_step_date = _normalize_date_input(next_step_date)
+    deal.next_step_date = (next_step_date or "").strip()
     deal.updated_at = utcnow()
     session.add(deal)
     session.commit()
@@ -19669,6 +19482,10 @@ async def meetings_new_page(request: Request, session: Session = Depends(get_ses
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
 
     clients = session.exec(select(Client).where(Client.company_id == ctx.company.id).order_by(Client.created_at)).all()
     active_client_id = get_active_client_id(request, session, ctx)
@@ -19702,6 +19519,10 @@ async def meetings_new_action(
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
 
     client = get_client_or_none(session, ctx.company.id, int(client_id))
     if not client:
@@ -19794,78 +19615,16 @@ async def meetings_detail(request: Request, session: Session = Depends(get_sessi
     )
 
 
-
-@app.post("/reunioes/{meeting_id}/anotacoes")
-@require_role({"admin", "equipe"})
-async def meetings_save_notes(
-    request: Request,
-    session: Session = Depends(get_session),
-    meeting_id: int = 0,
-    admin_notes: str = Form(""),
-    admin_notes_visible_to_client: str = Form(""),
-) -> Response:
-    ctx = get_tenant_context(request, session)
-    assert ctx is not None
-    mt = session.get(Meeting, int(meeting_id))
-    if not mt or mt.company_id != ctx.company.id:
-        set_flash(request, "Reunião não encontrada.")
-        return RedirectResponse("/reunioes", status_code=303)
-    mt.admin_notes = (admin_notes or "").strip()
-    mt.admin_notes_visible_to_client = (admin_notes_visible_to_client == "1")
-    mt.updated_at = utcnow()
-    session.add(mt)
-    session.commit()
-    set_flash(request, "Anotações salvas.")
-    return RedirectResponse(f"/reunioes/{mt.id}", status_code=303)
-
-@app.post("/reunioes/{meeting_id}/checkin")
-@require_role({"admin", "equipe"})
-async def meetings_checkin(request: Request, session: Session = Depends(get_session), meeting_id: int = 0) -> Response:
-    ctx = get_tenant_context(request, session)
-    assert ctx is not None
-    mt = session.get(Meeting, int(meeting_id))
-    if not mt or mt.company_id != ctx.company.id:
-        set_flash(request, "Reunião não encontrada.")
-        return RedirectResponse("/reunioes", status_code=303)
-    mt.checkin_at = utcnow()
-    mt.updated_at = utcnow()
-    session.add(mt)
-    session.commit()
-    set_flash(request, "Check-in registrado.")
-    return RedirectResponse(f"/reunioes/{mt.id}", status_code=303)
-
-@app.post("/reunioes/{meeting_id}/checkout")
-@require_role({"admin", "equipe"})
-async def meetings_checkout(request: Request, session: Session = Depends(get_session), meeting_id: int = 0) -> Response:
-    ctx = get_tenant_context(request, session)
-    assert ctx is not None
-    mt = session.get(Meeting, int(meeting_id))
-    if not mt or mt.company_id != ctx.company.id:
-        set_flash(request, "Reunião não encontrada.")
-        return RedirectResponse("/reunioes", status_code=303)
-    now = utcnow()
-    mt.checkout_at = now
-    if mt.checkin_at:
-        start = mt.checkin_at
-        if getattr(start, "tzinfo", None) and not getattr(now, "tzinfo", None):
-            start = start.replace(tzinfo=None)
-        elif getattr(now, "tzinfo", None) and not getattr(start, "tzinfo", None):
-            now = now.replace(tzinfo=None)
-        minutes = max(0, int((now - start).total_seconds() // 60))
-        mt.total_meeting_minutes = max(0, int(mt.total_meeting_minutes or 0)) + minutes
-        mt.checkin_at = None
-    mt.updated_at = utcnow()
-    session.add(mt)
-    session.commit()
-    set_flash(request, "Check-out registrado.")
-    return RedirectResponse(f"/reunioes/{mt.id}", status_code=303)
-
 @app.post("/reunioes/{meeting_id}/sync")
 @require_role({"admin", "equipe"})
 async def meetings_sync(request: Request, session: Session = Depends(get_session), meeting_id: int = 0) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
 
     mt = session.get(Meeting, int(meeting_id))
     if not mt or mt.company_id != ctx.company.id:
@@ -19905,6 +19664,10 @@ async def meetings_generate_tasks(
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
 
     mt = session.get(Meeting, int(meeting_id))
     if not mt or mt.company_id != ctx.company.id:
@@ -20478,7 +20241,7 @@ TEMPLATES.update({
     <ul class="mb-2">
       {% for a in attachments %}
         <li class="d-flex justify-content-between align-items-center">
-          <a class="btn btn-sm btn-outline-secondary" href="/download/{{ a.id }}">Baixar {{ "NF" if "nf" in (a.original_filename|lower) else ("Boleto" if "boleto" in (a.original_filename|lower) else a.original_filename) }}</a>
+          <a href="/download/{{ a.id }}">{{ a.original_filename }}</a>
           {% if role in ["admin","equipe"] %}
             <form method="post" action="/attachments/{{ a.id }}/delete" class="ms-2">
               <input type="hidden" name="next" value="/educacao/aulas/{{ lesson.id }}">
@@ -22772,36 +22535,22 @@ SIMULADOR_TEMPLATE = r"""
     <div class="row g-2">
       <div class="col-md-6">
         <label class="form-label">Cliente (nome)</label>
-        <input class="form-control" name="borrower_name" value="{{ borrower_name }}" {% if client_locked %}readonly{% endif %} placeholder="Nome do cliente">
+        <input class="form-control" name="borrower_name" placeholder="Nome do cliente">
       </div>
 
       <div class="col-md-6">
         <label class="form-label">Cliente (opcional)</label>
-        <select class="form-select" name="client_id" id="sim_client_id" {% if client_locked %}disabled{% endif %}>
+        <select class="form-select" name="client_id" id="sim_client_id">
           <option value="">-- (sem cliente) --</option>
           {% for c in clients %}
-            <option value="{{ c.id }}" {% if c.id == selected_client_id %}selected{% endif %}>{{ c.name }}</option>
+            <option value="{{ c.id }}">{{ c.name }}</option>
           {% endfor %}
         </select>
-        {% if client_locked and selected_client_id %}<input type="hidden" name="client_id" value="{{ selected_client_id }}">{% endif %}
         <div class="form-text">Selecione para habilitar “Gerar Proposta” (gera também um card no CRM).</div>
       </div>
       <div class="col-md-6">
         <label class="form-label">Tipo de empréstimo</label>
-        <input class="form-control" list="loan_type_list" name="loan_type" placeholder="Ex.: Home Equity, Capital de giro, Consórcio">
-        <datalist id="loan_type_list">
-          <option value="Capital de Giro"></option>
-          <option value="Conta Garantida"></option>
-          <option value="Antecipação de Recebíveis"></option>
-          <option value="Antecipação de Cartões"></option>
-          <option value="Trade Finance"></option>
-          <option value="Consórcio"></option>
-          <option value="Auto Equity"></option>
-          <option value="Crédito Corporativo Estruturado"></option>
-          <option value="Home Equity"></option>
-          <option value="Crédito Habitacional"></option>
-          <option value="Financiamento à Produção"></option>
-        </datalist>
+        <input class="form-control" name="loan_type" placeholder="Ex.: Crédito com garantia, Consignado, Capital de giro">
       </div>
 
       <div class="col-md-4">
@@ -23347,7 +23096,7 @@ async def simulador_criar_proposta(
     # simulation params (same as simulador/pdf)
     loan_type: str = Form("Empréstimo"),
     amortization: str = Form("price"),
-    rate_pct: str = Form("1,79"),
+    rate: str = Form("1,79"),
     rate_base: str = Form("am"),
     term_months: int = Form(24),
     principal: str = Form(""),
@@ -23386,10 +23135,18 @@ async def simulador_criar_proposta(
         raise HTTPException(status_code=403, detail="Sem permissão para este cliente.")
 
     # Constrói inputs + simula (para preencher descrição/valor)
+    raw_form = await request.form()
+    chosen_rate = (
+        str(raw_form.get("rate_pct") or "").strip()
+        or str(raw_form.get("rate") or "").strip()
+        or str(rate or "").strip()
+        or "1,79"
+    )
     inp = LoanSimInputs.from_form(
         loan_type=loan_type,
         amortization=amortization,
-        rate=rate_pct,
+        rate=chosen_rate,
+        rate_pct=chosen_rate,
         rate_base=rate_base,
         term_months=term_months,
         principal=principal,
@@ -29012,20 +28769,7 @@ SIMULADOR_TEMPLATE = r"""
 
       <div class="col-md-6">
         <label class="form-label">Tipo de empréstimo</label>
-        <input class="form-control" list="loan_type_list" name="loan_type" placeholder="Ex.: Home Equity, Capital de giro, Consórcio">
-        <datalist id="loan_type_list">
-          <option value="Capital de Giro"></option>
-          <option value="Conta Garantida"></option>
-          <option value="Antecipação de Recebíveis"></option>
-          <option value="Antecipação de Cartões"></option>
-          <option value="Trade Finance"></option>
-          <option value="Consórcio"></option>
-          <option value="Auto Equity"></option>
-          <option value="Crédito Corporativo Estruturado"></option>
-          <option value="Home Equity"></option>
-          <option value="Crédito Habitacional"></option>
-          <option value="Financiamento à Produção"></option>
-        </datalist>
+        <input class="form-control" name="loan_type" placeholder="Ex.: Crédito com garantia, Consignado, Capital de giro">
       </div>
 
       <div class="col-md-4">
@@ -30922,25 +30666,6 @@ def render(
                         user_id=tenant.user.id,
                     ),
                 )
-                ctx.setdefault(
-                    "unread_notifications_count",
-                    unread_notifications_count_for_user(
-                        _db,
-                        company_id=tenant.company.id,
-                        user_id=tenant.user.id,
-                    ),
-                )
-                active_client_id = get_active_client_id(request, _db, tenant)
-                if active_client_id and ensure_can_access_client(tenant, active_client_id):
-                    approved_count = int(_db.exec(
-                        select(func.count()).select_from(OfferVisibilityReview).where(
-                            OfferVisibilityReview.company_id == tenant.company.id,
-                            OfferVisibilityReview.client_id == int(active_client_id),
-                            OfferVisibilityReview.is_visible_to_client == True,
-                            OfferVisibilityReview.status == "aprovada_cliente",
-                        )
-                    ).one() or 0)
-                    ctx.setdefault("approved_offers_count", approved_count)
     except Exception:
         pass
     return _original_render_delivery4(template_name, request=request, context=ctx, status_code=status_code)
@@ -33265,8 +32990,6 @@ class ClientToolSubscription(SQLModel, table=True):
     trial_started_at: Optional[datetime] = Field(default=None, index=True)
     trial_ends_at: Optional[datetime] = Field(default=None, index=True)
     monthly_price_credits: int = Field(default=CLIENT_TOOL_FINANCE_MONTHLY_CREDITS)
-    billing_mode: str = Field(default="freemium", index=True)  # freemium | paid
-    trial_days: int = Field(default=30)
     last_billed_period: str = Field(default="", index=True)  # YYYY-MM
     next_billing_at: Optional[datetime] = Field(default=None, index=True)
     is_active: bool = Field(default=True, index=True)
@@ -33277,36 +33000,6 @@ class ClientToolSubscription(SQLModel, table=True):
 def ensure_client_tool_tables() -> None:
     try:
         SQLModel.metadata.create_all(engine, tables=[ClientToolSubscription.__table__], checkfirst=True)
-    except Exception:
-        pass
-    try:
-        backend = engine.url.get_backend_name()
-        with engine.begin() as conn:
-            if backend.startswith("postgres"):
-                for stmt in [
-                    "ALTER TABLE IF EXISTS clienttoolsubscription ADD COLUMN IF NOT EXISTS billing_mode VARCHAR NOT NULL DEFAULT 'freemium'",
-                    "ALTER TABLE IF EXISTS clienttoolsubscription ADD COLUMN IF NOT EXISTS trial_days INTEGER NOT NULL DEFAULT 30",
-                ]:
-                    try:
-                        conn.exec_driver_sql(stmt)
-                    except Exception:
-                        pass
-            elif backend.startswith("sqlite"):
-                try:
-                    rows = conn.exec_driver_sql("PRAGMA table_info('clienttoolsubscription')").fetchall()
-                    existing = {str(r[1]) for r in rows}
-                except Exception:
-                    existing = set()
-                if "billing_mode" not in existing:
-                    try:
-                        conn.exec_driver_sql("ALTER TABLE clienttoolsubscription ADD COLUMN billing_mode TEXT NOT NULL DEFAULT 'freemium'")
-                    except Exception:
-                        pass
-                if "trial_days" not in existing:
-                    try:
-                        conn.exec_driver_sql("ALTER TABLE clienttoolsubscription ADD COLUMN trial_days INTEGER NOT NULL DEFAULT 30")
-                    except Exception:
-                        pass
     except Exception:
         pass
 
@@ -33335,21 +33028,6 @@ def _client_current_client(request: Request, session: Session, ctx: TenantContex
     return client
 
 
-def _find_client_tool_subscription(
-    session: Session,
-    *,
-    company_id: int,
-    client_id: int,
-    tool_code: str = CLIENT_TOOL_FINANCE_CODE,
-) -> Optional[ClientToolSubscription]:
-    return session.exec(
-        select(ClientToolSubscription).where(
-            ClientToolSubscription.company_id == company_id,
-            ClientToolSubscription.client_id == client_id,
-            ClientToolSubscription.tool_code == tool_code,
-        )
-    ).first()
-
 def _get_or_create_client_tool_subscription(
     session: Session,
     *,
@@ -33357,12 +33035,13 @@ def _get_or_create_client_tool_subscription(
     client_id: int,
     tool_code: str = CLIENT_TOOL_FINANCE_CODE,
 ) -> ClientToolSubscription:
-    row = _find_client_tool_subscription(
-        session,
-        company_id=company_id,
-        client_id=client_id,
-        tool_code=tool_code,
-    )
+    row = session.exec(
+        select(ClientToolSubscription).where(
+            ClientToolSubscription.company_id == company_id,
+            ClientToolSubscription.client_id == client_id,
+            ClientToolSubscription.tool_code == tool_code,
+        )
+    ).first()
     if row:
         return row
 
@@ -33371,14 +33050,12 @@ def _get_or_create_client_tool_subscription(
         company_id=company_id,
         client_id=client_id,
         tool_code=tool_code,
-        status="blocked",
-        trial_started_at=None,
-        trial_ends_at=None,
+        status="trial",
+        trial_started_at=now,
+        trial_ends_at=now + timedelta(days=30),
         monthly_price_credits=CLIENT_TOOL_FINANCE_MONTHLY_CREDITS,
-        billing_mode="freemium",
-        trial_days=30,
-        next_billing_at=None,
-        is_active=False,
+        next_billing_at=now + timedelta(days=30),
+        is_active=True,
         created_at=now,
         updated_at=now,
     )
@@ -33429,30 +33106,13 @@ def _tool_subscription_status_payload(
     client_id: int,
     tool_code: str = CLIENT_TOOL_FINANCE_CODE,
 ) -> dict[str, Any]:
-    sub = _find_client_tool_subscription(
+    sub = _get_or_create_client_tool_subscription(
         session,
         company_id=company_id,
         client_id=client_id,
         tool_code=tool_code,
     )
     wallet = _get_or_create_wallet(session, company_id=company_id, client_id=client_id)
-
-    if not sub:
-        return {
-            "subscription": None,
-            "wallet": wallet,
-            "access_ok": False,
-            "status_label": "Aguardando liberação",
-            "message": "Esta ferramenta ainda não foi liberada pela equipe.",
-            "trial_active": False,
-            "trial_days_left": 0,
-            "monthly_price_credits": CLIENT_TOOL_FINANCE_MONTHLY_CREDITS,
-            "wallet_balance_credits": round((wallet.balance_cents or 0) / 100.0, 2),
-            "trial_ends_at": None,
-            "next_billing_at": None,
-            "billing_mode": "freemium",
-            "trial_days": 30,
-        }
 
     now = utcnow()
     now_naive = now.replace(tzinfo=None) if getattr(now, "tzinfo", None) else now
@@ -33463,18 +33123,12 @@ def _tool_subscription_status_payload(
     access_ok = False
     status_label = "Bloqueado"
     billed_this_month = sub.last_billed_period == _tool_period_label(now)
-    billing_mode = (sub.billing_mode or "freemium").strip().lower()
-    if billing_mode not in {"freemium", "paid"}:
-        billing_mode = "freemium"
 
     if not sub.is_active or sub.status == "cancelled":
-        message = "Ferramenta inativa. Peça liberação para a equipe."
+        sub.status = "cancelled"
+        message = "Ferramenta inativa."
         access_ok = False
         status_label = "Inativa"
-    elif billing_mode == "freemium" and not trial_ends_naive and sub.status in {"blocked", "trial"}:
-        access_ok = False
-        status_label = "Aguardando trial"
-        message = "O período grátis ainda não foi iniciado pela equipe."
     elif trial_ends_naive and now_naive < trial_ends_naive:
         sub.status = "trial"
         access_ok = True
@@ -33514,7 +33168,7 @@ def _tool_subscription_status_payload(
                 session.commit()
                 access_ok = False
                 status_label = "Bloqueada"
-                message = f"Saldo insuficiente. Esta ferramenta consome {int(sub.monthly_price_credits or 0)} créditos por mês."
+                message = f"Saldo insuficiente. Esta ferramenta consome {int(sub.monthly_price_credits or 0)} créditos por mês após o período grátis."
 
     return {
         "subscription": sub,
@@ -33522,14 +33176,12 @@ def _tool_subscription_status_payload(
         "access_ok": access_ok,
         "status_label": status_label,
         "message": message,
-        "trial_active": bool(sub and sub.status == "trial" and trial_ends_naive and now_naive < trial_ends_naive),
-        "trial_days_left": max(0, (trial_ends_naive.date() - now_naive.date()).days) if sub and trial_ends_naive and now_naive < trial_ends_naive else 0,
-        "monthly_price_credits": int((sub.monthly_price_credits if sub else CLIENT_TOOL_FINANCE_MONTHLY_CREDITS) or CLIENT_TOOL_FINANCE_MONTHLY_CREDITS),
+        "trial_active": bool(sub.status == "trial" and trial_ends_naive and now_naive < trial_ends_naive),
+        "trial_days_left": max(0, (trial_ends_naive.date() - now_naive.date()).days) if trial_ends_naive and now_naive < trial_ends_naive else 0,
+        "monthly_price_credits": int(sub.monthly_price_credits or CLIENT_TOOL_FINANCE_MONTHLY_CREDITS),
         "wallet_balance_credits": round((wallet.balance_cents or 0) / 100.0, 2),
         "trial_ends_at": trial_ends_naive,
-        "next_billing_at": sub.next_billing_at.replace(tzinfo=None) if sub and sub.next_billing_at and getattr(sub.next_billing_at, "tzinfo", None) else (sub.next_billing_at if sub else None),
-        "billing_mode": billing_mode,
-        "trial_days": int(getattr(sub, "trial_days", 30) or 30) if sub else 30,
+        "next_billing_at": sub.next_billing_at.replace(tzinfo=None) if sub.next_billing_at and getattr(sub.next_billing_at, "tzinfo", None) else sub.next_billing_at,
     }
 
 
@@ -33675,7 +33327,7 @@ TEMPLATES["ferramentas.html"] = r"""
           <div class="col-md-4">
             <div class="border rounded p-3 h-100">
               <div class="muted small">Mensalidade</div>
-              <div class="fw-semibold">{{ finance_tool.monthly_price_credits }} créditos/mês</div><div class="muted small">{{ "Freemium" if finance_tool.billing_mode == "freemium" else "Pago" }}</div>
+              <div class="fw-semibold">{{ finance_tool.monthly_price_credits }} créditos/mês</div>
             </div>
           </div>
           <div class="col-md-4">
@@ -33701,8 +33353,8 @@ TEMPLATES["ferramentas.html"] = r"""
       <div class="card p-4 h-100">
         <h6 class="mb-3">Como funciona</h6>
         <ol class="small mb-0 ps-3">
-          <li>A equipe define se a ferramenta será freemium ou paga e quando o período grátis começa.</li>
-          <li>{% if finance_tool.billing_mode == "freemium" %}Após o período grátis, a ferramenta consome {{ finance_tool.monthly_price_credits }} créditos por mês.{% else %}Ferramenta paga: {{ finance_tool.monthly_price_credits }} créditos por mês.{% endif %}</li>
+          <li>Ao liberar a ferramenta para o cliente, o primeiro acesso ativa 1 mês grátis.</li>
+          <li>Após o período grátis, a ferramenta consome {{ finance_tool.monthly_price_credits }} créditos por mês.</li>
           <li>Sem saldo suficiente, o acesso fica bloqueado até nova recarga.</li>
         </ol>
       </div>
@@ -33741,7 +33393,7 @@ TEMPLATES["ferramentas_financeiro.html"] = r"""
     <div class="col-md-3">
       <div class="card p-3 h-100">
         <div class="muted small">Mensalidade</div>
-        <div class="fw-semibold">{{ finance_tool.monthly_price_credits }} créditos/mês</div><div class="muted small">{{ "Freemium" if finance_tool.billing_mode == "freemium" else "Pago" }}</div>
+        <div class="fw-semibold">{{ finance_tool.monthly_price_credits }} créditos/mês</div>
       </div>
     </div>
     <div class="col-md-3">
@@ -33764,7 +33416,6 @@ TEMPLATES["ferramentas_financeiro.html"] = r"""
 
   {% if finance_tool.access_ok %}
     <div class="d-flex gap-2 flex-wrap mb-3">
-      <a class="btn btn-outline-secondary" href="/mensagens">Mensagens</a>
       <a class="btn btn-primary" href="/ferramentas/financeiro/novo">Novo lançamento</a>
       <a class="btn btn-outline-primary" href="/ferramentas/financeiro/lancamentos">Ver lançamentos</a>
       <a class="btn btn-outline-secondary" href="/ferramentas/financeiro/cadastros">Cadastros</a>
@@ -35507,7 +35158,7 @@ TEMPLATES["ferramentas_financeiro.html"] = r"""
     <div class="col-md-3">
       <div class="card p-3 h-100">
         <div class="muted small">Mensalidade</div>
-        <div class="fw-semibold">{{ finance_tool.monthly_price_credits }} créditos/mês</div><div class="muted small">{{ "Freemium" if finance_tool.billing_mode == "freemium" else "Pago" }}</div>
+        <div class="fw-semibold">{{ finance_tool.monthly_price_credits }} créditos/mês</div>
       </div>
     </div>
     <div class="col-md-3">
@@ -35530,7 +35181,6 @@ TEMPLATES["ferramentas_financeiro.html"] = r"""
 
   {% if finance_tool.access_ok %}
     <div class="d-flex gap-2 flex-wrap mb-3">
-      <a class="btn btn-outline-secondary" href="/mensagens">Mensagens</a>
       <a class="btn btn-primary" href="/ferramentas/financeiro/novo">Novo lançamento</a>
       <a class="btn btn-outline-primary" href="/ferramentas/financeiro/lancamentos">Ver lançamentos</a>
       <a class="btn btn-outline-primary" href="/ferramentas/financeiro/dre">DRE</a>
@@ -37609,164 +37259,807 @@ async def whatsapp_webhook_receive(request: Request, session: Session = Depends(
 
 
 
+# =========================
+# Safe layout/rules patch (retry)
+# =========================
 
-TEMPLATES["client_access.html"] = r"""
+def _normalize_date_input(value: Any) -> str:
+    s = (str(value or "")).strip()
+    if not s:
+        return ""
+    for fmt in ("%d/%m/%Y", "%Y-%m-%d", "%d-%m-%Y", "%Y/%m/%d"):
+        try:
+            return datetime.strptime(s, fmt).strftime("%Y-%m-%d")
+        except Exception:
+            pass
+    return s
+
+def _format_date_br(value: Any) -> str:
+    s = (str(value or "")).strip()
+    if not s:
+        return ""
+    for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S.%f"):
+        try:
+            dt = datetime.strptime(s, fmt)
+            return dt.strftime("%d/%m/%Y")
+        except Exception:
+            pass
+    try:
+        if isinstance(value, datetime):
+            return value.strftime("%d/%m/%Y")
+    except Exception:
+        pass
+    return s
+
+def _format_dt_br(value: Any) -> str:
+    if isinstance(value, datetime):
+        return value.strftime("%d/%m/%Y %H:%M")
+    s = (str(value or "")).strip()
+    if not s:
+        return ""
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S.%f"):
+        try:
+            return datetime.strptime(s, fmt).strftime("%d/%m/%Y %H:%M")
+        except Exception:
+            pass
+    return s
+
+def _meeting_meta(meeting: Meeting) -> dict[str, Any]:
+    raw = {}
+    try:
+        raw = json.loads(meeting.raw_json or "{}")
+        if not isinstance(raw, dict):
+            raw = {}
+    except Exception:
+        raw = {}
+    ext = raw.get("_app_meta")
+    if not isinstance(ext, dict):
+        ext = {}
+        raw["_app_meta"] = ext
+    return ext
+
+def _meeting_meta_save(session: Session, meeting: Meeting, meta: dict[str, Any]) -> None:
+    raw = {}
+    try:
+        raw = json.loads(meeting.raw_json or "{}")
+        if not isinstance(raw, dict):
+            raw = {}
+    except Exception:
+        raw = {}
+    raw["_app_meta"] = meta
+    meeting.raw_json = json.dumps(raw, ensure_ascii=False)
+    meeting.updated_at = utcnow()
+    session.add(meeting)
+    session.commit()
+
+def _meeting_hours_total(meta: dict[str, Any]) -> float:
+    started = meta.get("checked_in_at") or ""
+    ended = meta.get("checked_out_at") or ""
+    if not started or not ended:
+        return float(meta.get("total_hours", 0.0) or 0.0)
+    try:
+        start_dt = datetime.fromisoformat(started)
+        end_dt = datetime.fromisoformat(ended)
+        delta_h = max(0.0, (end_dt - start_dt).total_seconds() / 3600.0)
+        return round(delta_h, 2)
+    except Exception:
+        return float(meta.get("total_hours", 0.0) or 0.0)
+
+def _tool_admin_payload(
+    session: Session,
+    *,
+    company_id: int,
+    client_id: int,
+    tool_code: str = CLIENT_TOOL_FINANCE_CODE,
+) -> dict[str, Any]:
+    sub = _get_or_create_client_tool_subscription(
+        session,
+        company_id=company_id,
+        client_id=client_id,
+        tool_code=tool_code,
+    )
+    pricing_mode = "free" if int(sub.monthly_price_credits or 0) <= 0 and sub.is_active else ("trial" if sub.status == "trial" or (sub.trial_ends_at and not sub.last_billed_period) else "paid")
+    trial_days = 30
+    if sub.trial_started_at and sub.trial_ends_at:
+        try:
+            trial_days = max(0, (sub.trial_ends_at.date() - sub.trial_started_at.date()).days)
+        except Exception:
+            trial_days = 30
+    return {
+        "is_active": bool(sub.is_active),
+        "status": sub.status,
+        "pricing_mode": pricing_mode,
+        "trial_days": int(trial_days),
+        "monthly_price_credits": int(sub.monthly_price_credits or CLIENT_TOOL_FINANCE_MONTHLY_CREDITS),
+        "trial_started_at": sub.trial_started_at,
+        "trial_ends_at": sub.trial_ends_at,
+        "last_billed_period": sub.last_billed_period or "",
+        "next_billing_at": sub.next_billing_at,
+    }
+
+# override helper: do not auto-start trial
+def _get_or_create_client_tool_subscription(
+    session: Session,
+    *,
+    company_id: int,
+    client_id: int,
+    tool_code: str = CLIENT_TOOL_FINANCE_CODE,
+) -> ClientToolSubscription:
+    row = session.exec(
+        select(ClientToolSubscription).where(
+            ClientToolSubscription.company_id == company_id,
+            ClientToolSubscription.client_id == client_id,
+            ClientToolSubscription.tool_code == tool_code,
+        )
+    ).first()
+    if row:
+        return row
+
+    now = utcnow()
+    row = ClientToolSubscription(
+        company_id=company_id,
+        client_id=client_id,
+        tool_code=tool_code,
+        status="blocked",
+        trial_started_at=None,
+        trial_ends_at=None,
+        monthly_price_credits=CLIENT_TOOL_FINANCE_MONTHLY_CREDITS,
+        next_billing_at=None,
+        is_active=False,
+        created_at=now,
+        updated_at=now,
+    )
+    session.add(row)
+    session.commit()
+    session.refresh(row)
+    return row
+
+# override helper: respect manual release/trial/pricing
+def _tool_subscription_status_payload(
+    session: Session,
+    *,
+    company_id: int,
+    client_id: int,
+    tool_code: str = CLIENT_TOOL_FINANCE_CODE,
+) -> dict[str, Any]:
+    sub = _get_or_create_client_tool_subscription(
+        session,
+        company_id=company_id,
+        client_id=client_id,
+        tool_code=tool_code,
+    )
+    wallet = _get_or_create_wallet(session, company_id=company_id, client_id=client_id)
+
+    now = utcnow()
+    now_naive = now.replace(tzinfo=None) if getattr(now, "tzinfo", None) else now
+    trial_ends = sub.trial_ends_at
+    trial_ends_naive = trial_ends.replace(tzinfo=None) if trial_ends and getattr(trial_ends, "tzinfo", None) else trial_ends
+
+    message = ""
+    access_ok = False
+    status_label = "Bloqueado"
+    billed_this_month = sub.last_billed_period == _tool_period_label(now)
+
+    if not sub.is_active or sub.status in {"blocked", "cancelled"}:
+        message = "Ferramenta não liberada pela equipe."
+        access_ok = False
+        status_label = "Bloqueado"
+    elif int(sub.monthly_price_credits or 0) <= 0 and sub.status == "active":
+        message = "Ferramenta liberada sem cobrança."
+        access_ok = True
+        status_label = "Ativa"
+    elif trial_ends_naive and now_naive < trial_ends_naive:
+        sub.status = "trial"
+        access_ok = True
+        status_label = "Período grátis"
+        days_left = max(0, (trial_ends_naive.date() - now_naive.date()).days)
+        message = f"Período grátis ativo. Restam {days_left} dia(s)."
+    else:
+        if billed_this_month and sub.status == "active":
+            access_ok = True
+            status_label = "Ativa"
+            message = f"Mensalidade do período {_tool_period_label(now)} já debitada."
+        else:
+            debit_ok = _wallet_debit_tool_fee(
+                session,
+                company_id=company_id,
+                client_id=client_id,
+                subscription_id=int(sub.id or 0),
+                amount_credits=int(sub.monthly_price_credits or CLIENT_TOOL_FINANCE_MONTHLY_CREDITS),
+                tool_code=tool_code,
+            )
+            if debit_ok:
+                sub.status = "active"
+                sub.last_billed_period = _tool_period_label(now)
+                next_ref = (now_naive + timedelta(days=32)).replace(day=1)
+                sub.next_billing_at = next_ref
+                sub.updated_at = utcnow()
+                session.add(sub)
+                session.commit()
+                access_ok = True
+                status_label = "Ativa"
+                message = f"Mensalidade de {int(sub.monthly_price_credits or 0)} créditos debitada para o período {sub.last_billed_period}."
+                wallet = _get_or_create_wallet(session, company_id=company_id, client_id=client_id)
+            else:
+                sub.status = "blocked"
+                sub.updated_at = utcnow()
+                session.add(sub)
+                session.commit()
+                access_ok = False
+                status_label = "Saldo insuficiente"
+                message = f"Não foi possível debitar {int(sub.monthly_price_credits or 0)} créditos. Recarregue sua carteira."
+
+    trial_active = bool(trial_ends_naive and now_naive < trial_ends_naive)
+
+    return {
+        "subscription": sub,
+        "wallet": wallet,
+        "access_ok": access_ok,
+        "status_label": status_label,
+        "message": message,
+        "trial_active": trial_active,
+        "trial_started_at": sub.trial_started_at,
+        "trial_ends_at": sub.trial_ends_at,
+        "monthly_price_credits": int(sub.monthly_price_credits or 0),
+        "last_billed_period": sub.last_billed_period or "",
+        "next_billing_at": sub.next_billing_at,
+        "wallet_balance_credits": round(float(wallet.balance_cents or 0) / 100.0, 2),
+    }
+
+# simulator compat: accept rate_pct as well
+def _loan_sim_inputs_from_form_safe(cls, **form) -> "LoanInput":
+    chosen_rate = str(form.get("rate_pct") or form.get("rate") or "1,79")
+    return build_loan_input(
+        loan_type=form.get("loan_type", "Empréstimo"),
+        amortization=form.get("amortization", "price"),
+        rate_pct=chosen_rate,
+        rate_base=form.get("rate_base", "am"),
+        term_months=int(form.get("term_months", 24) or 24),
+        principal=str(form.get("principal", "") or ""),
+        collateral_value=str(form.get("collateral_value", "") or ""),
+        ltv_pct=str(form.get("ltv_pct", "") or ""),
+        start_date=form.get("start_date") or date.today(),
+        grace_months=int(form.get("grace_months", 0) or 0),
+        io_months=int(form.get("io_months", 0) or 0),
+        fee_amount=str(form.get("fee_amount", "0") or "0"),
+        monthly_insurance=str(form.get("monthly_insurance", "0") or "0"),
+        monthly_admin_fee=str(form.get("monthly_admin_fee", "0") or "0"),
+        borrower_name=str(form.get("borrower_name", "") or ""),
+        notes=str(form.get("notes", "") or ""),
+    )
+LoanSimInputs.from_form = classmethod(_loan_sim_inputs_from_form_safe)
+
+def _deal_lost_reason(deal: BusinessDeal) -> str:
+    notes = deal.notes or ""
+    m = re.search(r"\[LOST_REASON:(.*?)\]", notes, flags=re.IGNORECASE | re.DOTALL)
+    return (m.group(1).strip() if m else "")
+
+def _set_deal_lost_reason(notes: str, reason: str) -> str:
+    base = re.sub(r"\s*\[LOST_REASON:.*?\]\s*", " ", notes or "", flags=re.IGNORECASE | re.DOTALL).strip()
+    reason_clean = (reason or "").strip()
+    return (base + (f"\n[LOST_REASON:{reason_clean}]" if reason_clean else "")).strip()
+
+# Jinja filters/globals
+try:
+    templates_env.filters["brdate"] = _format_date_br
+    templates_env.filters["brdatetime"] = _format_dt_br
+    templates_env.globals["meeting_meta"] = _meeting_meta
+    templates_env.globals["meeting_hours_total"] = _meeting_hours_total
+    templates_env.globals["deal_lost_reason"] = _deal_lost_reason
+except Exception:
+    pass
+
+# Template overrides
+TEMPLATES["ofertas.html"] = r"""
 {% extends "base.html" %}
 {% block content %}
 <div class="card p-4">
-  <div class="d-flex justify-content-between align-items-start gap-2 flex-wrap">
+  <div class="d-flex justify-content-between align-items-start gap-3 flex-wrap">
     <div>
-      <h4 class="mb-1">Permissões do cliente</h4>
-      <div class="muted">{{ client.name }}</div>
+      <h4 class="mb-1">Oportunidades Liberadas</h4>
+      <div class="muted">Somente ofertas aprovadas pela equipe aparecem para o cliente.</div>
     </div>
-    <a class="btn btn-outline-secondary" href="/admin/gestao">Voltar</a>
+    {% if role in ["admin","equipe"] %}
+      <a class="btn btn-outline-secondary" href="/motor-ofertas">Ver motor</a>
+    {% endif %}
   </div>
-  <form method="post" action="/admin/clients/{{ client.id }}/access" class="mt-3">
+  <hr class="my-3"/>
+  {% if not current_client %}
+    <div class="alert alert-warning">Nenhum cliente selecionado.</div>
+  {% elif matches %}
+    <div class="alert alert-warning border-0 shadow-sm mb-4">
+      <div class="fw-semibold">Temos ofertas alinhadas ao seu perfil. Confira aqui.</div>
+      <div class="small">Essas oportunidades foram revisadas pela equipe antes de aparecer para sua empresa.</div>
+    </div>
     <div class="row g-3">
-      <div class="col-12 col-lg-7">
-        <div class="card p-3 h-100">
-          <h6 class="mb-2">Features liberadas</h6>
-          {% for group in feature_groups %}
-            <div class="mb-3">
-              <div class="fw-semibold mb-2">{{ group.title }}</div>
-              <div class="row g-2">
-                {% for fk in group.features %}
-                  {% set meta = feature_keys.get(fk) %}
-                  {% if meta %}
-                    <div class="col-md-6">
-                      <label class="form-check">
-                        <input class="form-check-input" type="checkbox" name="features" value="{{ fk }}" {% if fk in allowed %}checked{% endif %}>
-                        <span class="form-check-label"><b>{{ meta.title }}</b><br><span class="muted small">{{ meta.desc }}</span></span>
-                      </label>
-                    </div>
-                  {% endif %}
-                {% endfor %}
-              </div>
+      {% for m in matches %}
+      <div class="col-lg-6">
+        <div class="border rounded p-3 h-100">
+          <div class="d-flex justify-content-between align-items-start gap-2">
+            <div>
+              <div class="fw-semibold">{{ m.product_name }}</div>
+              <div class="small muted">{{ m.partner_name or "Maffezzolli Capital" }}</div>
             </div>
-          {% endfor %}
-          {% if feature_standalone %}
-          <div class="mb-2">
-            <div class="fw-semibold mb-2">Outros</div>
-            <div class="row g-2">
-              {% for fk in feature_standalone %}
-                {% set meta = feature_keys.get(fk) %}
-                {% if meta %}
-                  <div class="col-md-6">
-                    <label class="form-check">
-                      <input class="form-check-input" type="checkbox" name="features" value="{{ fk }}" {% if fk in allowed %}checked{% endif %}>
-                      <span class="form-check-label"><b>{{ meta.title }}</b><br><span class="muted small">{{ meta.desc }}</span></span>
-                    </label>
-                  </div>
-                {% endif %}
-              {% endfor %}
-            </div>
+            <span class="badge text-bg-light border">{{ m.priority_level }}</span>
           </div>
+          <div class="small mt-2"><span class="mono">{{ m.family_code }}</span> • score {{ "%.1f"|format(m.score_fit) }}</div>
+          <div class="mt-2">{{ m.client_summary or m.reason_summary }}</div>
+          {% if m.partner_options_count %}
+            <div class="small muted mt-2">{{ m.partner_options_count }} parceiro(s) elegível(eis) nessa família.</div>
           {% endif %}
-        </div>
-      </div>
-
-      <div class="col-12 col-lg-5">
-        <div class="card p-3 mb-3">
-          <h6 class="mb-2">Ferramenta: Financeiro Gerencial</h6>
-          <div class="row g-2">
-            <div class="col-12">
-              <label class="form-check">
-                <input class="form-check-input" type="checkbox" name="tool_finance_enabled" value="1" {% if tool_subscription and tool_subscription.is_active %}checked{% endif %}>
-                <span class="form-check-label">Ferramenta liberada</span>
-              </label>
-            </div>
-            <div class="col-md-6">
-              <label class="form-label">Modelo</label>
-              <select class="form-select" name="tool_finance_billing_mode">
-                {% set current_mode = (tool_subscription.billing_mode if tool_subscription else tool_payload.billing_mode) %}
-                <option value="freemium" {% if current_mode == "freemium" %}selected{% endif %}>Freemium</option>
-                <option value="paid" {% if current_mode == "paid" %}selected{% endif %}>Pago</option>
-              </select>
-            </div>
-            <div class="col-md-6">
-              <label class="form-label">Preço mensal (créditos)</label>
-              <input class="form-control" type="number" min="0" name="tool_finance_price_credits" value="{{ tool_payload.monthly_price_credits }}">
-            </div>
-            <div class="col-md-6">
-              <label class="form-label">Período grátis (dias)</label>
-              <input class="form-control" type="number" min="0" name="tool_finance_trial_days" value="{{ tool_payload.trial_days }}">
-            </div>
-            <div class="col-md-6">
-              <label class="form-label">Status atual</label>
-              <div class="form-control bg-light">{{ tool_payload.status_label }}</div>
-            </div>
-            <div class="col-12">
-              <label class="form-check">
-                <input class="form-check-input" type="checkbox" name="tool_finance_start_trial_now" value="1">
-                <span class="form-check-label">Iniciar período grátis agora</span>
-              </label>
-              <div class="form-text">O trial não começa automaticamente. Só inicia quando você marcar esta opção ao salvar.</div>
-            </div>
-            <div class="col-12">
-              <div class="small muted">{{ tool_payload.message }}</div>
-            </div>
+          <div class="mt-3 d-flex gap-2">
+            <a class="btn btn-sm btn-outline-primary" href="/simulador">Simular</a>
+            <a class="btn btn-sm btn-outline-secondary" href="/propostas">Solicitar proposta</a>
           </div>
         </div>
-
-        <div class="card p-3">
-          <h6 class="mb-2">Usuários vinculados</h6>
-          {% if linked_users %}
-            <ul class="mb-0">
-              {% for item in linked_users %}
-                <li>{{ item.user.name }} — {{ item.user.email }} <span class="muted">({{ item.membership.role }})</span></li>
-              {% endfor %}
-            </ul>
-          {% else %}
-            <div class="muted">Nenhum usuário vinculado.</div>
-          {% endif %}
-        </div>
       </div>
+      {% endfor %}
     </div>
-
-    <div class="mt-4 d-flex gap-2">
-      <button class="btn btn-primary" type="submit">Salvar</button>
-      <a class="btn btn-outline-secondary" href="/admin/gestao">Cancelar</a>
-    </div>
-  </form>
+  {% else %}
+    <div class="muted">Ainda não há oportunidades liberadas para sua empresa.</div>
+  {% endif %}
 </div>
 {% endblock %}
 """
 
+TEMPLATES["fin_detail.html"] = r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <div class="d-flex justify-content-between">
+    <div>
+      <h4 class="mb-1">{{ inv.title }}</h4>
+      <div class="muted">
+        Status: <b>{{ inv.status }}</b> • Valor: <b>{{ inv.amount_brl|brl }}</b>
+        {% if inv.due_date %} • Venc: <b>{{ inv.due_date|brdate }}</b>{% endif %}
+        {% if role in ["admin","equipe"] %} • Cliente: <b>{{ client.name }}</b>{% endif %}
+      </div>
+    </div>
+    <div class="d-flex gap-2">
+      <a class="btn btn-outline-secondary" href="/financeiro">Voltar</a>
+      {% if role in ["admin","equipe"] %}
+        <a class="btn btn-outline-primary" href="/financeiro/{{ inv.id }}/editar">Editar</a>
+        <form method="post" action="/financeiro/{{ inv.id }}/excluir" onsubmit="return confirm('Excluir lançamento? Remova anexos antes.');">
+          <button class="btn btn-outline-danger" type="submit">Excluir</button>
+        </form>
+      {% endif %}
+    </div>
+  </div>
 
-@app.on_event("startup")
-def _startup_meeting_columns() -> None:
-    try:
-        ensure_meeting_extra_columns()
-    except Exception:
-        pass
+  <hr class="my-3"/>
+  <pre>{{ inv.notes }}</pre>
 
+  <hr class="my-3"/>
+  <h6>Anexos</h6>
+  {% if attachments %}
+    <div class="list-group">
+      {% for a in attachments %}
+        {% set fname = (a.original_filename or "")|lower %}
+        <div class="list-group-item d-flex justify-content-between align-items-center gap-2">
+          <div>
+            <div class="fw-semibold">{{ a.original_filename }}</div>
+            <div class="small muted">
+              {% if "boleto" in fname %}Boleto{% elif "nf" in fname or "nota" in fname %}Nota fiscal{% else %}Arquivo{% endif %}
+            </div>
+          </div>
+          <div class="d-flex gap-2">
+            <a class="btn btn-outline-primary btn-sm" href="/download/{{ a.id }}">Download</a>
+            {% if role in ["admin","equipe"] %}
+              <form method="post" action="/attachments/{{ a.id }}/delete">
+                <input type="hidden" name="next" value="/financeiro/{{ inv.id }}">
+                <button class="btn btn-outline-danger btn-sm" type="submit">Excluir</button>
+              </form>
+            {% endif %}
+          </div>
+        </div>
+      {% endfor %}
+    </div>
+  {% else %}
+    <div class="muted">Sem anexos.</div>
+  {% endif %}
 
-def ensure_businessdeal_extra_columns() -> None:
-    try:
-        backend = engine.url.get_backend_name()
-        with engine.begin() as conn:
-            if backend.startswith("postgres"):
-                try:
-                    conn.exec_driver_sql("ALTER TABLE IF EXISTS businessdeal ADD COLUMN IF NOT EXISTS lost_reason TEXT NOT NULL DEFAULT ''")
-                except Exception:
-                    pass
-            elif backend.startswith("sqlite"):
-                try:
-                    rows = conn.exec_driver_sql("PRAGMA table_info('businessdeal')").fetchall()
-                    existing = {str(r[1]) for r in rows}
-                except Exception:
-                    existing = set()
-                if "lost_reason" not in existing:
-                    try:
-                        conn.exec_driver_sql("ALTER TABLE businessdeal ADD COLUMN lost_reason TEXT NOT NULL DEFAULT ''")
-                    except Exception:
-                        pass
-    except Exception:
-        pass
+  {% if role in ["admin","equipe"] %}
+  <hr class="my-3"/>
+  <form method="post" action="/financeiro/{{ inv.id }}/anexar" enctype="multipart/form-data" class="row g-2">
+    <div class="col-md-9"><input class="form-control" type="file" name="file" required></div>
+    <div class="col-md-3"><button class="btn btn-primary w-100" type="submit">Anexar</button></div>
+  </form>
+  {% endif %}
+</div>
+{% endblock %}
+"""
 
-@app.on_event("startup")
-def _startup_businessdeal_columns() -> None:
-    try:
-        ensure_businessdeal_extra_columns()
-    except Exception:
-        pass
+TEMPLATES["meetings_detail.html"] = r"""
+{% extends "base.html" %}
+{% block content %}
+{% set meta = meeting_meta(meeting) %}
+<div class="card p-4">
+  <div class="d-flex justify-content-between align-items-start">
+    <div>
+      <h4 class="mb-1">{{ meeting.title or "Reunião" }}</h4>
+      <div class="muted">
+        {% if role in ["admin","equipe"] %}Cliente: <b>{{ client.name }}</b> • {% endif %}
+        {% if meeting.meeting_date %}Data: <b>{{ meeting.meeting_date|brdate }}</b> • {% endif %}
+        Status Notion: <b>{{ meeting.notion_status or "—" }}</b>
+      </div>
+      {% if meeting.notion_url %}
+        <div class="small mt-1"><a href="{{ meeting.notion_url }}" target="_blank" rel="noopener">Abrir no Notion</a></div>
+      {% endif %}
+      {% if meeting.last_synced_at %}
+        <div class="muted small mt-1">Última sincronização: {{ meeting.last_synced_at|brdatetime }}</div>
+      {% endif %}
+    </div>
+
+    <div class="d-flex gap-2 flex-wrap">
+      <a class="btn btn-outline-secondary" href="/reunioes">Voltar</a>
+      {% if role in ["admin","equipe"] %}
+        <form method="post" action="/reunioes/{{ meeting.id }}/checkin">
+          <button class="btn btn-outline-success" type="submit">Check-in</button>
+        </form>
+        <form method="post" action="/reunioes/{{ meeting.id }}/checkout">
+          <button class="btn btn-outline-warning" type="submit">Check-out</button>
+        </form>
+        <form method="post" action="/reunioes/{{ meeting.id }}/sync">
+          <button class="btn btn-outline-primary" type="submit">Sincronizar</button>
+        </form>
+      {% endif %}
+    </div>
+  </div>
+
+  <hr class="my-3"/>
+
+  <div class="row g-3 mb-3">
+    <div class="col-md-4">
+      <div class="card p-3 h-100">
+        <div class="muted small">Check-in</div>
+        <div class="fw-semibold">{{ meta.checked_in_at|brdatetime if meta.checked_in_at else "—" }}</div>
+      </div>
+    </div>
+    <div class="col-md-4">
+      <div class="card p-3 h-100">
+        <div class="muted small">Check-out</div>
+        <div class="fw-semibold">{{ meta.checked_out_at|brdatetime if meta.checked_out_at else "—" }}</div>
+      </div>
+    </div>
+    <div class="col-md-4">
+      <div class="card p-3 h-100">
+        <div class="muted small">Total em reunião</div>
+        <div class="fw-semibold">{{ "%.2f"|format(meeting_hours_total(meta)) }} h</div>
+      </div>
+    </div>
+  </div>
+
+  {% if meta.visible_to_client or role in ["admin","equipe"] %}
+  <div class="card p-3 mb-3">
+    <div class="d-flex justify-content-between align-items-start gap-2">
+      <div>
+        <h6 class="mb-1">Anotações da reunião</h6>
+        <div class="small muted">
+          {% if meta.visible_to_client %}Visível ao cliente{% else %}Interna{% endif %}
+        </div>
+      </div>
+    </div>
+    <div class="mt-2" style="white-space: pre-wrap;">{{ meta.annotation_text or "Sem anotações." }}</div>
+  </div>
+  {% endif %}
+
+  {% if role in ["admin","equipe"] %}
+  <div class="card p-3 mb-3">
+    <h6 class="mb-2">Atualizar anotações</h6>
+    <form method="post" action="/reunioes/{{ meeting.id }}/anotacoes">
+      <div class="mb-2">
+        <textarea class="form-control" name="annotation_text" rows="4">{{ meta.annotation_text or "" }}</textarea>
+      </div>
+      <div class="form-check mb-2">
+        <input class="form-check-input" type="checkbox" name="visible_to_client" value="1" {% if meta.visible_to_client %}checked{% endif %}>
+        <label class="form-check-label">Visível ao cliente</label>
+      </div>
+      <button class="btn btn-primary">Salvar anotações</button>
+    </form>
+  </div>
+  {% endif %}
+
+  <div class="row g-3">
+    <div class="col-lg-6">
+      <div class="card p-3 h-100">
+        <h6>Resumo</h6>
+        <div style="white-space: pre-wrap;">{{ meeting.summary_text or "—" }}</div>
+      </div>
+    </div>
+    <div class="col-lg-6">
+      <div class="card p-3 h-100">
+        <h6>Action Items</h6>
+        <div style="white-space: pre-wrap;">{{ meeting.action_items_text or "—" }}</div>
+      </div>
+    </div>
+    <div class="col-lg-12">
+      <div class="card p-3">
+        <h6>Notas</h6>
+        <div style="white-space: pre-wrap;">{{ meeting.notes_text or "—" }}</div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+"""
+
+TEMPLATES["crm_detail.html"] = r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <div class="d-flex justify-content-between align-items-start">
+    <div>
+      <h4 class="mb-1">{{ deal.title }}</h4>
+      <div class="muted">
+        Cliente: <b>{{ client.name }}</b>
+        {% if deal.service_name %} • Serviço: <b>{{ deal.service_name }}</b>{% endif %}
+      </div>
+      <div class="muted small mt-1">
+        Etapa: <b>{{ stage_label }}</b>
+        {% if owner_name %} • Responsável: <b>{{ owner_name }}</b>{% endif %}
+        {% if deal.next_step_date %} • Próx: <b>{{ deal.next_step_date|brdate }}</b>{% endif %}
+      </div>
+      {% if deal.value_estimate_brl and deal.value_estimate_brl>0 %}
+        <div class="muted small mt-1">Valor estimado: <b>{{ deal.value_estimate_brl|brl }}</b> • Prob.: <b>{{ deal.probability_pct }}%</b></div>
+      {% endif %}
+    </div>
+    <div class="d-flex gap-2">
+      <a class="btn btn-outline-secondary" href="/negocios">Voltar</a>
+      <a class="btn btn-outline-primary" href="/negocios/{{ deal.id }}/editar">Editar</a>
+    </div>
+  </div>
+
+  <hr class="my-3"/>
+
+  {% if deal.stage == "perdido" %}
+    <div class="alert alert-warning">
+      <div class="fw-semibold">Motivo da perda</div>
+      <div>{{ deal_lost_reason(deal) or "Ainda não informado." }}</div>
+    </div>
+    <form method="post" action="/negocios/{{ deal.id }}/perdido" class="row g-2 mb-3">
+      <div class="col-md-9">
+        <input class="form-control" name="lost_reason" placeholder="Motivo da perda" value="{{ deal_lost_reason(deal) }}">
+      </div>
+      <div class="col-md-3">
+        <button class="btn btn-outline-warning w-100">Salvar motivo</button>
+      </div>
+    </form>
+  {% endif %}
+
+  <div class="row g-3">
+    <div class="col-md-8">
+      <h6 class="mb-2">Demanda / Observações</h6>
+      <pre>{{ deal.demand or deal.notes or "—" }}</pre>
+    </div>
+    <div class="col-md-4">
+      <div class="card p-3 h-100">
+        <h6 class="mb-2">Ações rápidas</h6>
+        <form method="post" action="/negocios/{{ deal.id }}/stage" class="mb-2">
+          <label class="form-label">Etapa</label>
+          <select class="form-select" name="stage">
+            {% for s in stages %}
+              <option value="{{ s.key }}" {% if s.key==deal.stage %}selected{% endif %}>{{ s.label }}</option>
+            {% endfor %}
+          </select>
+          <button class="btn btn-primary mt-2 w-100">Salvar etapa</button>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <hr class="my-3"/>
+
+  <div class="d-flex justify-content-between align-items-center mb-2">
+    <h6 class="mb-0">Histórico</h6>
+  </div>
+  {% if notes %}
+    <div class="list-group">
+      {% for n in notes %}
+        <div class="list-group-item">
+          <div class="small muted">{{ n.created_at|brdatetime }} • {{ n.author_name }}</div>
+          <div class="mt-1">{{ n.message }}</div>
+        </div>
+      {% endfor %}
+    </div>
+  {% else %}
+    <div class="muted">Sem histórico.</div>
+  {% endif %}
+</div>
+{% endblock %}
+"""
+
+TEMPLATES["client_access.html"] = r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4 mb-3">
+  <div class="d-flex justify-content-between align-items-start gap-3 flex-wrap">
+    <div>
+      <h4 class="mb-1">Permissões do Cliente</h4>
+      <div class="muted">Cliente: <b>{{ client.name }}</b></div>
+    </div>
+    <a class="btn btn-outline-secondary" href="/admin/gestao">Voltar</a>
+  </div>
+</div>
+
+<form method="post" action="/admin/clients/{{ client.id }}/access">
+  <div class="row g-3">
+    <div class="col-lg-7">
+      <div class="card p-4">
+        <h5 class="mb-3">Features liberadas</h5>
+        {% for group in feature_groups %}
+          <div class="mb-3">
+            <div class="fw-semibold mb-2">{{ group.title }}</div>
+            <div class="row g-2">
+              {% for key in group.features %}
+                {% set item = feature_keys.get(key) %}
+                {% if item %}
+                <div class="col-md-6">
+                  <label class="border rounded p-3 d-block h-100">
+                    <input class="form-check-input me-2" type="checkbox" name="features" value="{{ key }}" {% if key in allowed %}checked{% endif %}>
+                    <span class="fw-semibold">{{ item.title }}</span>
+                    <div class="small muted mt-1">{{ item.desc }}</div>
+                  </label>
+                </div>
+                {% endif %}
+              {% endfor %}
+            </div>
+          </div>
+        {% endfor %}
+      </div>
+    </div>
+
+    <div class="col-lg-5">
+      <div class="card p-4 mb-3">
+        <h5 class="mb-3">Financeiro Gerencial</h5>
+        <div class="form-check form-switch mb-3">
+          <input class="form-check-input" type="checkbox" name="tool_finance_release_enabled" value="1" {% if finance_tool_admin.is_active %}checked{% endif %}>
+          <label class="form-check-label">Liberar ferramenta para este cliente</label>
+        </div>
+
+        <div class="mb-3">
+          <label class="form-label">Modelo de cobrança</label>
+          <select class="form-select" name="tool_finance_pricing_mode">
+            <option value="trial" {% if finance_tool_admin.pricing_mode == "trial" %}selected{% endif %}>Freemium / Trial</option>
+            <option value="paid" {% if finance_tool_admin.pricing_mode == "paid" %}selected{% endif %}>Pago</option>
+            <option value="free" {% if finance_tool_admin.pricing_mode == "free" %}selected{% endif %}>Grátis</option>
+          </select>
+        </div>
+
+        <div class="row g-2">
+          <div class="col-md-6">
+            <label class="form-label">Dias de trial</label>
+            <input class="form-control" type="number" min="0" name="tool_finance_trial_days" value="{{ finance_tool_admin.trial_days }}">
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">Preço mensal (créditos)</label>
+            <input class="form-control" type="number" min="0" name="tool_finance_monthly_credits" value="{{ finance_tool_admin.monthly_price_credits }}">
+          </div>
+        </div>
+
+        <div class="form-check mt-3">
+          <input class="form-check-input" type="checkbox" name="tool_finance_start_trial_now" value="1">
+          <label class="form-check-label">Iniciar trial agora</label>
+        </div>
+
+        <hr class="my-3"/>
+        <div class="small muted">
+          Status atual: <b>{{ finance_tool_admin.status }}</b><br>
+          {% if finance_tool_admin.trial_started_at %}Início trial: {{ finance_tool_admin.trial_started_at|brdatetime }}<br>{% endif %}
+          {% if finance_tool_admin.trial_ends_at %}Fim trial: {{ finance_tool_admin.trial_ends_at|brdatetime }}<br>{% endif %}
+          {% if finance_tool_admin.next_billing_at %}Próxima cobrança: {{ finance_tool_admin.next_billing_at|brdatetime }}{% endif %}
+        </div>
+      </div>
+
+      <div class="card p-4">
+        <h5 class="mb-3">Usuários vinculados</h5>
+        {% if linked_users %}
+          <ul class="list-group list-group-flush">
+            {% for item in linked_users %}
+              <li class="list-group-item px-0 d-flex justify-content-between">
+                <span>{{ item.user.name }}</span>
+                <span class="badge text-bg-light border">{{ item.membership.role }}</span>
+              </li>
+            {% endfor %}
+          </ul>
+        {% else %}
+          <div class="muted">Nenhum usuário vinculado a este cliente.</div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+  <div class="mt-3 d-flex gap-2">
+    <button class="btn btn-primary">Salvar permissões</button>
+    <a class="btn btn-outline-secondary" href="/admin/gestao">Cancelar</a>
+  </div>
+</form>
+{% endblock %}
+"""
+
+if hasattr(templates_env.loader, "mapping"):
+    templates_env.loader.mapping = TEMPLATES
+
+@app.post("/negocios/{deal_id}/perdido")
+@require_role({"admin", "equipe"})
+async def crm_mark_lost(
+    request: Request,
+    deal_id: int,
+    lost_reason: str = Form(""),
+    session: Session = Depends(get_session),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+    deal = session.get(BusinessDeal, int(deal_id))
+    if not deal or deal.company_id != ctx.company.id:
+        set_flash(request, "Negócio não encontrado.")
+        return RedirectResponse("/negocios", status_code=303)
+    deal.stage = "perdido"
+    deal.notes = _set_deal_lost_reason(deal.notes or "", lost_reason)
+    deal.updated_at = utcnow()
+    session.add(deal)
+    session.add(BusinessDealNote(deal_id=deal.id, author_user_id=ctx.user.id, message=f"Negócio marcado como perdido. Motivo: {(lost_reason or '').strip() or 'não informado'}"))
+    session.commit()
+    set_flash(request, "Motivo de perda atualizado.")
+    return RedirectResponse(f"/negocios/{deal.id}", status_code=303)
+
+@app.post("/reunioes/{meeting_id}/anotacoes")
+@require_role({"admin", "equipe"})
+async def meetings_save_annotations(
+    request: Request,
+    meeting_id: int,
+    annotation_text: str = Form(""),
+    visible_to_client: str = Form(""),
+    session: Session = Depends(get_session),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+    mt = session.get(Meeting, int(meeting_id))
+    if not mt or mt.company_id != ctx.company.id:
+        set_flash(request, "Reunião não encontrada.")
+        return RedirectResponse("/reunioes", status_code=303)
+    meta = _meeting_meta(mt)
+    meta["annotation_text"] = (annotation_text or "").strip()
+    meta["visible_to_client"] = (visible_to_client == "1")
+    _meeting_meta_save(session, mt, meta)
+    set_flash(request, "Anotações salvas.")
+    return RedirectResponse(f"/reunioes/{mt.id}", status_code=303)
+
+@app.post("/reunioes/{meeting_id}/checkin")
+@require_role({"admin", "equipe"})
+async def meetings_checkin(
+    request: Request,
+    meeting_id: int,
+    session: Session = Depends(get_session),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+    mt = session.get(Meeting, int(meeting_id))
+    if not mt or mt.company_id != ctx.company.id:
+        set_flash(request, "Reunião não encontrada.")
+        return RedirectResponse("/reunioes", status_code=303)
+    meta = _meeting_meta(mt)
+    meta["checked_in_at"] = utcnow().isoformat()
+    meta.pop("checked_out_at", None)
+    _meeting_meta_save(session, mt, meta)
+    set_flash(request, "Check-in registrado.")
+    return RedirectResponse(f"/reunioes/{mt.id}", status_code=303)
+
+@app.post("/reunioes/{meeting_id}/checkout")
+@require_role({"admin", "equipe"})
+async def meetings_checkout(
+    request: Request,
+    meeting_id: int,
+    session: Session = Depends(get_session),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+    mt = session.get(Meeting, int(meeting_id))
+    if not mt or mt.company_id != ctx.company.id:
+        set_flash(request, "Reunião não encontrada.")
+        return RedirectResponse("/reunioes", status_code=303)
+    meta = _meeting_meta(mt)
+    meta["checked_out_at"] = utcnow().isoformat()
+    meta["total_hours"] = _meeting_hours_total(meta)
+    _meeting_meta_save(session, mt, meta)
+    set_flash(request, "Check-out registrado.")
+    return RedirectResponse(f"/reunioes/{mt.id}", status_code=303)
