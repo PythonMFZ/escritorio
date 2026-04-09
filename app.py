@@ -11945,7 +11945,7 @@ async def consultoria_edit_stage_action(
     return RedirectResponse(f"/consultoria/{project.id}", status_code=303)
 
 
-@app.post("/consultoria/stages/{stage_id}/excluir")@app.post("/consultoria/stages/{stage_id}/excluir")
+@app.post("/consultoria/stages/{stage_id}/excluir")
 @require_role({"admin", "equipe"})
 
 async def consultoria_delete_stage(request: Request, session: Session = Depends(get_session),
