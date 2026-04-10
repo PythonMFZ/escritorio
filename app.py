@@ -12013,10 +12013,6 @@ async def consultoria_new_page(request: Request, session: Session = Depends(get_
     assert ctx is not None
 
     # Garante tabelas em ambientes sem Alembic
-    if not ensure_credit_consent_table():
-        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
-        return RedirectResponse("/credito", status_code=303)
-
     if not ensure_client_invite_table():
         set_flash(request, "Sistema de convites não está configurado (migração pendente no banco).")
         return RedirectResponse("/client/switch", status_code=303)
@@ -12044,11 +12040,6 @@ async def consultoria_edit_project_page(request: Request, session: Session = Dep
                                         project_id: int = 0) -> HTMLResponse:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
-
-    # Garante tabela em ambientes sem Alembic
-    if not ensure_credit_consent_table():
-        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
-        return RedirectResponse("/credito", status_code=303)
 
     project = session.get(ConsultingProject, int(project_id))
     if not project or project.company_id != ctx.company.id:
@@ -12081,11 +12072,6 @@ async def consultoria_edit_project_action(
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
-    # Garante tabela em ambientes sem Alembic
-    if not ensure_credit_consent_table():
-        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
-        return RedirectResponse("/credito", status_code=303)
-
     project = session.get(ConsultingProject, int(project_id))
     if not project or project.company_id != ctx.company.id:
         set_flash(request, "Projeto não encontrado.")
@@ -12116,11 +12102,6 @@ async def consultoria_delete_project(request: Request, session: Session = Depend
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
-    # Garante tabela em ambientes sem Alembic
-    if not ensure_credit_consent_table():
-        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
-        return RedirectResponse("/credito", status_code=303)
-
     project = session.get(ConsultingProject, int(project_id))
     if not project or project.company_id != ctx.company.id:
         set_flash(request, "Projeto não encontrado.")
@@ -12148,11 +12129,6 @@ async def consultoria_edit_stage_page(request: Request, session: Session = Depen
                                       stage_id: int = 0) -> HTMLResponse:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
-
-    # Garante tabela em ambientes sem Alembic
-    if not ensure_credit_consent_table():
-        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
-        return RedirectResponse("/credito", status_code=303)
 
     stage = session.get(ConsultingStage, int(stage_id))
     if not stage:
@@ -12187,10 +12163,6 @@ async def consultoria_edit_stage_action(
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
-    if not ensure_credit_consent_table():
-        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
-        return RedirectResponse("/credito", status_code=303)
-
     stage = session.get(ConsultingStage, int(stage_id))
     if not stage:
         set_flash(request, "Etapa não encontrada.")
@@ -12202,7 +12174,11 @@ async def consultoria_edit_stage_action(
         return RedirectResponse("/consultoria", status_code=303)
 
     try:
-        stage.name = (name or "").strip()
+        stage_name = (name or "").strip()
+        if not stage_name:
+            set_flash(request, "Informe o nome da etapa.")
+            return RedirectResponse(f"/consultoria/{project.id}", status_code=303)
+        stage.name = stage_name
         stage.due_date = _normalize_date_input(due_date)
         try:
             stage.order = max(1, int(order))
@@ -12224,10 +12200,6 @@ async def consultoria_delete_stage(request: Request, session: Session = Depends(
                                    stage_id: int = 0) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
-
-    if not ensure_credit_consent_table():
-        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
-        return RedirectResponse("/credito", status_code=303)
 
     stage = session.get(ConsultingStage, int(stage_id))
     if not stage:
@@ -12258,11 +12230,6 @@ async def consultoria_edit_step_page(request: Request, session: Session = Depend
                                      step_id: int = 0) -> HTMLResponse:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
-
-    # Garante tabela em ambientes sem Alembic
-    if not ensure_credit_consent_table():
-        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
-        return RedirectResponse("/credito", status_code=303)
 
     step = session.get(ConsultingStep, int(step_id))
     if not step:
@@ -12300,10 +12267,6 @@ async def consultoria_edit_step_action(
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
-    if not ensure_credit_consent_table():
-        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
-        return RedirectResponse("/credito", status_code=303)
-
     step = session.get(ConsultingStep, int(step_id))
     if not step:
         set_flash(request, "Sub-etapa não encontrada.")
@@ -12316,7 +12279,11 @@ async def consultoria_edit_step_action(
         return RedirectResponse("/consultoria", status_code=303)
 
     try:
-        step.title = (title or "").strip()
+        step_title = (title or "").strip()
+        if not step_title:
+            set_flash(request, "Informe o título da sub-etapa.")
+            return RedirectResponse(f"/consultoria/{project.id}", status_code=303)
+        step.title = step_title
         step.description = (description or "").strip()
         step.due_date = _normalize_date_input(due_date)
         try:
@@ -12341,10 +12308,6 @@ async def consultoria_delete_step(request: Request, session: Session = Depends(g
                                   step_id: int = 0) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
-
-    if not ensure_credit_consent_table():
-        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
-        return RedirectResponse("/credito", status_code=303)
 
     step = session.get(ConsultingStep, int(step_id))
     if not step:
@@ -12381,11 +12344,6 @@ async def consultoria_new_action(
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
-
-    # Garante tabela em ambientes sem Alembic
-    if not ensure_credit_consent_table():
-        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
-        return RedirectResponse("/credito", status_code=303)
 
     client = get_client_or_none(session, ctx.company.id, int(client_id))
     if not client:
@@ -12485,19 +12443,19 @@ async def consultoria_add_stage(
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
-    # Garante tabela em ambientes sem Alembic
-    if not ensure_credit_consent_table():
-        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
-        return RedirectResponse("/credito", status_code=303)
-
     project = session.get(ConsultingProject, int(project_id))
     if not project or project.company_id != ctx.company.id:
         set_flash(request, "Projeto não encontrado.")
         return RedirectResponse("/consultoria", status_code=303)
 
+    stage_name = (name or "").strip()
+    if not stage_name:
+        set_flash(request, "Informe o nome da etapa.")
+        return RedirectResponse(f"/consultoria/{project.id}", status_code=303)
+
     stage = ConsultingStage(
         project_id=project.id,
-        name=name.strip(),
+        name=stage_name,
         order=_next_stage_order(session, project.id),
         due_date=_normalize_date_input(due_date),
     )
@@ -12523,11 +12481,6 @@ async def consultoria_add_step(
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
-    # Garante tabela em ambientes sem Alembic
-    if not ensure_credit_consent_table():
-        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
-        return RedirectResponse("/credito", status_code=303)
-
     stage = session.get(ConsultingStage, int(stage_id))
     if not stage:
         set_flash(request, "Etapa não encontrada.")
@@ -12538,12 +12491,22 @@ async def consultoria_add_step(
         set_flash(request, "Projeto inválido.")
         return RedirectResponse("/consultoria", status_code=303)
 
+    step_title = (title or "").strip()
+    if not step_title:
+        set_flash(request, "Informe o título da sub-etapa.")
+        return RedirectResponse(f"/consultoria/{project.id}", status_code=303)
+
+    try:
+        safe_weight = max(0.1, float(weight))
+    except Exception:
+        safe_weight = 1.0
+
     step = ConsultingStep(
         stage_id=stage.id,
-        title=title.strip(),
-        description=description.strip(),
+        title=step_title,
+        description=(description or "").strip(),
         due_date=_normalize_date_input(due_date),
-        weight=max(0.1, float(weight)),
+        weight=safe_weight,
         client_action=(client_action == "1"),
         updated_at=utcnow(),
     )
@@ -13112,11 +13075,6 @@ async def client_switch_action(
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
-    # Garante tabela em ambientes sem Alembic
-    if not ensure_credit_consent_table():
-        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
-        return RedirectResponse("/credito", status_code=303)
-
     client = get_client_or_none(session, ctx.company.id, int(client_id))
     if not client:
         set_flash(request, "Cliente inválido.")
@@ -13493,11 +13451,6 @@ async def members_page(request: Request, session: Session = Depends(get_session)
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
-    # Garante tabela em ambientes sem Alembic
-    if not ensure_credit_consent_table():
-        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
-        return RedirectResponse("/credito", status_code=303)
-
     mems = session.exec(select(Membership).where(Membership.company_id == ctx.company.id)).all()
     rows = []
     for m in mems:
@@ -13556,11 +13509,6 @@ async def members_add_action(
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
-
-    # Garante tabela em ambientes sem Alembic
-    if not ensure_credit_consent_table():
-        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
-        return RedirectResponse("/credito", status_code=303)
 
     role = role.strip().lower()
     if role not in {"admin", "equipe", "cliente"}:
@@ -14579,11 +14527,6 @@ async def pending_new_page(request: Request, session: Session = Depends(get_sess
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
-    # Garante tabela em ambientes sem Alembic
-    if not ensure_credit_consent_table():
-        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
-        return RedirectResponse("/credito", status_code=303)
-
     clients = session.exec(select(Client).where(Client.company_id == ctx.company.id).order_by(Client.created_at)).all()
     current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
     return render(
@@ -14613,10 +14556,6 @@ async def pending_new_action(
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
-
-    if not ensure_credit_consent_table():
-        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
-        return RedirectResponse("/credito", status_code=303)
 
     client = get_client_or_none(session, ctx.company.id, int(client_id))
     if not client:
@@ -14726,11 +14665,6 @@ async def pending_update_status(
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
-    # Garante tabela em ambientes sem Alembic
-    if not ensure_credit_consent_table():
-        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
-        return RedirectResponse("/credito", status_code=303)
-
     item = session.get(PendingItem, int(item_id))
     if not item or item.company_id != ctx.company.id:
         set_flash(request, "Pendência não encontrada.")
@@ -14760,10 +14694,6 @@ async def pending_attach_admin(
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
-
-    if not ensure_credit_consent_table():
-        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
-        return RedirectResponse("/credito", status_code=303)
 
     item = session.get(PendingItem, int(item_id))
     if not item or item.company_id != ctx.company.id:
@@ -14814,10 +14744,6 @@ async def pending_attach_client(
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
-
-    if not ensure_credit_consent_table():
-        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
-        return RedirectResponse("/credito", status_code=303)
 
     item = session.get(PendingItem, int(item_id))
     if not item or item.company_id != ctx.company.id:
@@ -14928,11 +14854,6 @@ async def docs_new_page(request: Request, session: Session = Depends(get_session
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
-    # Garante tabela em ambientes sem Alembic
-    if not ensure_credit_consent_table():
-        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
-        return RedirectResponse("/credito", status_code=303)
-
     clients = session.exec(select(Client).where(Client.company_id == ctx.company.id).order_by(Client.created_at)).all()
     current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
     return render(
@@ -14961,10 +14882,6 @@ async def docs_new_action(
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
-
-    if not ensure_credit_consent_table():
-        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
-        return RedirectResponse("/credito", status_code=303)
 
     client = get_client_or_none(session, ctx.company.id, int(client_id))
     if not client:
@@ -15066,11 +14983,6 @@ async def docs_update_status(
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
-    # Garante tabela em ambientes sem Alembic
-    if not ensure_credit_consent_table():
-        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
-        return RedirectResponse("/credito", status_code=303)
-
     doc = session.get(Document, int(doc_id))
     if not doc or doc.company_id != ctx.company.id:
         set_flash(request, "Documento não encontrado.")
@@ -15101,10 +15013,6 @@ async def docs_attach_admin(
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
-
-    if not ensure_credit_consent_table():
-        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
-        return RedirectResponse("/credito", status_code=303)
 
     doc = session.get(Document, int(doc_id))
     if not doc or doc.company_id != ctx.company.id:
@@ -15154,10 +15062,6 @@ async def docs_attach_client(
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
-
-    if not ensure_credit_consent_table():
-        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
-        return RedirectResponse("/credito", status_code=303)
 
     doc = session.get(Document, int(doc_id))
     if not doc or doc.company_id != ctx.company.id:
@@ -15280,11 +15184,6 @@ async def props_new_staff_page(request: Request, session: Session = Depends(get_
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
-    # Garante tabela em ambientes sem Alembic
-    if not ensure_credit_consent_table():
-        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
-        return RedirectResponse("/credito", status_code=303)
-
     clients = session.exec(select(Client).where(Client.company_id == ctx.company.id).order_by(Client.created_at)).all()
     current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
     return render(
@@ -15315,10 +15214,6 @@ async def props_new_staff_action(
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
-
-    if not ensure_credit_consent_table():
-        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
-        return RedirectResponse("/credito", status_code=303)
 
     client = get_client_or_none(session, ctx.company.id, int(client_id))
     if not client:
@@ -15380,11 +15275,6 @@ async def props_new_client_page(request: Request, session: Session = Depends(get
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
-    # Garante tabela em ambientes sem Alembic
-    if not ensure_credit_consent_table():
-        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
-        return RedirectResponse("/credito", status_code=303)
-
     current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
     return render(
         "props_new_client.html",
@@ -15410,10 +15300,6 @@ async def props_new_client_action(
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
-
-    if not ensure_credit_consent_table():
-        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
-        return RedirectResponse("/credito", status_code=303)
 
     client_id = ctx.membership.client_id
     if not client_id:
@@ -15543,11 +15429,6 @@ async def props_update_staff(
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
-    # Garante tabela em ambientes sem Alembic
-    if not ensure_credit_consent_table():
-        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
-        return RedirectResponse("/credito", status_code=303)
-
     prop = session.get(Proposal, int(prop_id))
     if not prop or prop.company_id != ctx.company.id:
         set_flash(request, "Item não encontrado.")
@@ -15583,11 +15464,6 @@ async def props_delete_staff(request: Request, session: Session = Depends(get_se
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
-    # Garante tabela em ambientes sem Alembic
-    if not ensure_credit_consent_table():
-        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
-        return RedirectResponse("/credito", status_code=303)
-
     prop = session.get(Proposal, int(prop_id))
     if not prop or prop.company_id != ctx.company.id:
         set_flash(request, "Proposta não encontrada.")
@@ -15618,10 +15494,6 @@ async def props_attach_staff(
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
-
-    if not ensure_credit_consent_table():
-        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
-        return RedirectResponse("/credito", status_code=303)
 
     prop = session.get(Proposal, int(prop_id))
     if not prop or prop.company_id != ctx.company.id:
@@ -15665,10 +15537,6 @@ async def props_client_upload(
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
-
-    if not ensure_credit_consent_table():
-        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
-        return RedirectResponse("/credito", status_code=303)
 
     prop = session.get(Proposal, int(prop_id))
     if not prop or prop.company_id != ctx.company.id:
@@ -17599,11 +17467,6 @@ async def fin_new_page(request: Request, session: Session = Depends(get_session)
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
-    # Garante tabela em ambientes sem Alembic
-    if not ensure_credit_consent_table():
-        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
-        return RedirectResponse("/credito", status_code=303)
-
     clients = session.exec(select(Client).where(Client.company_id == ctx.company.id).order_by(Client.created_at)).all()
     current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
     return render(
@@ -17634,11 +17497,6 @@ async def fin_new_action(
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
-
-    # Garante tabela em ambientes sem Alembic
-    if not ensure_credit_consent_table():
-        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
-        return RedirectResponse("/credito", status_code=303)
 
     client = get_client_or_none(session, ctx.company.id, int(client_id))
     if not client:
@@ -17735,11 +17593,6 @@ async def fin_attach(
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
-
-    # Garante tabela em ambientes sem Alembic
-    if not ensure_credit_consent_table():
-        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
-        return RedirectResponse("/credito", status_code=303)
 
     inv = session.get(FinanceInvoice, int(inv_id))
     if not inv or inv.company_id != ctx.company.id:
@@ -18046,11 +17899,6 @@ async def tasks_new_page(
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
-    # Garante tabela em ambientes sem Alembic
-    if not ensure_credit_consent_table():
-        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
-        return RedirectResponse("/credito", status_code=303)
-
     clients = session.exec(select(Client).where(Client.company_id == ctx.company.id).order_by(Client.created_at)).all()
 
     # staff assignees (admin/equipe) + current user always
@@ -18103,11 +17951,6 @@ async def tasks_new_action(
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
-
-    # Garante tabela em ambientes sem Alembic
-    if not ensure_credit_consent_table():
-        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
-        return RedirectResponse("/credito", status_code=303)
 
     client = get_client_or_none(session, ctx.company.id, int(client_id))
     if not client:
@@ -18316,11 +18159,6 @@ async def tasks_toggle_client(request: Request, session: Session = Depends(get_s
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
-    # Garante tabela em ambientes sem Alembic
-    if not ensure_credit_consent_table():
-        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
-        return RedirectResponse("/credito", status_code=303)
-
     task = session.get(Task, int(task_id))
     if not task or not _task_can_view(ctx, task):
         set_flash(request, "Sem permissão.")
@@ -18345,11 +18183,6 @@ async def tasks_set_status(request: Request, session: Session = Depends(get_sess
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
-    # Garante tabela em ambientes sem Alembic
-    if not ensure_credit_consent_table():
-        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
-        return RedirectResponse("/credito", status_code=303)
-
     task = session.get(Task, int(task_id))
     if not task or task.company_id != ctx.company.id:
         set_flash(request, "Tarefa não encontrada.")
@@ -18372,11 +18205,6 @@ async def tasks_set_status(request: Request, session: Session = Depends(get_sess
 async def tasks_edit_page(request: Request, session: Session = Depends(get_session), task_id: int = 0) -> HTMLResponse:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
-
-    # Garante tabela em ambientes sem Alembic
-    if not ensure_credit_consent_table():
-        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
-        return RedirectResponse("/credito", status_code=303)
 
     task = session.get(Task, int(task_id))
     if not task or task.company_id != ctx.company.id:
@@ -18428,11 +18256,6 @@ async def tasks_edit_action(
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
-    # Garante tabela em ambientes sem Alembic
-    if not ensure_credit_consent_table():
-        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
-        return RedirectResponse("/credito", status_code=303)
-
     task = session.get(Task, int(task_id))
     if not task or task.company_id != ctx.company.id:
         set_flash(request, "Tarefa não encontrada.")
@@ -18482,11 +18305,6 @@ async def tasks_delete_action(
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
-    # Garante tabela em ambientes sem Alembic
-    if not ensure_credit_consent_table():
-        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
-        return RedirectResponse("/credito", status_code=303)
-
     task = session.get(Task, int(task_id))
     if not task or task.company_id != ctx.company.id:
         set_flash(request, "Tarefa não encontrada.")
@@ -18522,11 +18340,6 @@ async def delete_attachment(
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
-    # Garante tabela em ambientes sem Alembic
-    if not ensure_credit_consent_table():
-        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
-        return RedirectResponse("/credito", status_code=303)
-
     att = session.get(Attachment, int(attachment_id))
     if not att or att.company_id != ctx.company.id:
         set_flash(request, "Anexo não encontrado.")
@@ -18545,11 +18358,6 @@ async def delete_attachment(
 async def pending_new_client_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
-
-    # Garante tabela em ambientes sem Alembic
-    if not ensure_credit_consent_table():
-        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
-        return RedirectResponse("/credito", status_code=303)
 
     active_client_id = get_active_client_id(request, session, ctx)
     current_client = get_client_or_none(session, ctx.company.id, active_client_id)
@@ -18578,10 +18386,6 @@ async def pending_new_client_action(
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
-
-    if not ensure_credit_consent_table():
-        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
-        return RedirectResponse("/credito", status_code=303)
 
     client_id = ctx.membership.client_id or 0
     client = get_client_or_none(session, ctx.company.id, client_id)
@@ -18651,11 +18455,6 @@ async def docs_send_client_page(request: Request, session: Session = Depends(get
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
-    # Garante tabela em ambientes sem Alembic
-    if not ensure_credit_consent_table():
-        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
-        return RedirectResponse("/credito", status_code=303)
-
     active_client_id = get_active_client_id(request, session, ctx)
     current_client = get_client_or_none(session, ctx.company.id, active_client_id)
 
@@ -18682,10 +18481,6 @@ async def docs_send_client_action(
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
-
-    if not ensure_credit_consent_table():
-        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
-        return RedirectResponse("/credito", status_code=303)
 
     client_id = ctx.membership.client_id or 0
     client = get_client_or_none(session, ctx.company.id, client_id)
@@ -18756,11 +18551,6 @@ async def docs_edit_page(request: Request, session: Session = Depends(get_sessio
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
-    # Garante tabela em ambientes sem Alembic
-    if not ensure_credit_consent_table():
-        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
-        return RedirectResponse("/credito", status_code=303)
-
     doc = session.get(Document, int(doc_id))
     if not doc or doc.company_id != ctx.company.id:
         return render("error.html", request=request, context={"message": "Documento não encontrado."}, status_code=404)
@@ -18794,11 +18584,6 @@ async def docs_edit_action(
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
-    # Garante tabela em ambientes sem Alembic
-    if not ensure_credit_consent_table():
-        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
-        return RedirectResponse("/credito", status_code=303)
-
     doc = session.get(Document, int(doc_id))
     if not doc or doc.company_id != ctx.company.id:
         set_flash(request, "Documento não encontrado.")
@@ -18820,11 +18605,6 @@ async def docs_edit_action(
 async def docs_delete_action(request: Request, session: Session = Depends(get_session), doc_id: int = 0) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
-
-    # Garante tabela em ambientes sem Alembic
-    if not ensure_credit_consent_table():
-        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
-        return RedirectResponse("/credito", status_code=303)
 
     doc = session.get(Document, int(doc_id))
     if not doc or doc.company_id != ctx.company.id:
@@ -18853,11 +18633,6 @@ async def pending_edit_page(request: Request, session: Session = Depends(get_ses
                             item_id: int = 0) -> HTMLResponse:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
-
-    # Garante tabela em ambientes sem Alembic
-    if not ensure_credit_consent_table():
-        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
-        return RedirectResponse("/credito", status_code=303)
 
     item = session.get(PendingItem, int(item_id))
     if not item or item.company_id != ctx.company.id:
@@ -18893,11 +18668,6 @@ async def pending_edit_action(
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
-    # Garante tabela em ambientes sem Alembic
-    if not ensure_credit_consent_table():
-        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
-        return RedirectResponse("/credito", status_code=303)
-
     item = session.get(PendingItem, int(item_id))
     if not item or item.company_id != ctx.company.id:
         set_flash(request, "Pendência não encontrada.")
@@ -18921,11 +18691,6 @@ async def pending_delete_action(request: Request, session: Session = Depends(get
                                 item_id: int = 0) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
-
-    # Garante tabela em ambientes sem Alembic
-    if not ensure_credit_consent_table():
-        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
-        return RedirectResponse("/credito", status_code=303)
 
     item = session.get(PendingItem, int(item_id))
     if not item or item.company_id != ctx.company.id:
@@ -18953,11 +18718,6 @@ async def pending_delete_action(request: Request, session: Session = Depends(get
 async def fin_edit_page(request: Request, session: Session = Depends(get_session), inv_id: int = 0) -> HTMLResponse:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
-
-    # Garante tabela em ambientes sem Alembic
-    if not ensure_credit_consent_table():
-        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
-        return RedirectResponse("/credito", status_code=303)
 
     inv = session.get(FinanceInvoice, int(inv_id))
     if not inv or inv.company_id != ctx.company.id:
@@ -18994,11 +18754,6 @@ async def fin_edit_action(
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
-    # Garante tabela em ambientes sem Alembic
-    if not ensure_credit_consent_table():
-        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
-        return RedirectResponse("/credito", status_code=303)
-
     inv = session.get(FinanceInvoice, int(inv_id))
     if not inv or inv.company_id != ctx.company.id:
         set_flash(request, "Lançamento não encontrado.")
@@ -19022,11 +18777,6 @@ async def fin_edit_action(
 async def fin_delete_action(request: Request, session: Session = Depends(get_session), inv_id: int = 0) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
-
-    # Garante tabela em ambientes sem Alembic
-    if not ensure_credit_consent_table():
-        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
-        return RedirectResponse("/credito", status_code=303)
 
     inv = session.get(FinanceInvoice, int(inv_id))
     if not inv or inv.company_id != ctx.company.id:
@@ -19093,11 +18843,6 @@ async def crm_list(
 ) -> HTMLResponse:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
-
-    # Garante tabela em ambientes sem Alembic
-    if not ensure_credit_consent_table():
-        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
-        return RedirectResponse("/credito", status_code=303)
 
     clients = session.exec(select(Client).where(Client.company_id == ctx.company.id).order_by(Client.created_at)).all()
     owners = _owner_users_for_company(session, ctx.company.id)
@@ -19178,11 +18923,6 @@ async def crm_new_page(request: Request, session: Session = Depends(get_session)
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
-    # Garante tabela em ambientes sem Alembic
-    if not ensure_credit_consent_table():
-        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
-        return RedirectResponse("/credito", status_code=303)
-
     clients = session.exec(select(Client).where(Client.company_id == ctx.company.id).order_by(Client.created_at)).all()
     owners = _owner_users_for_company(session, ctx.company.id)
 
@@ -19233,11 +18973,6 @@ async def crm_new_action(
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
-
-    # Garante tabela em ambientes sem Alembic
-    if not ensure_credit_consent_table():
-        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
-        return RedirectResponse("/credito", status_code=303)
 
     new_client_name = (new_client_name or "").strip()
     new_client_email = (new_client_email or "").strip()
@@ -19320,11 +19055,6 @@ async def crm_detail(request: Request, session: Session = Depends(get_session), 
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
-    # Garante tabela em ambientes sem Alembic
-    if not ensure_credit_consent_table():
-        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
-        return RedirectResponse("/credito", status_code=303)
-
     deal = session.get(BusinessDeal, int(deal_id))
     if not deal or deal.company_id != ctx.company.id:
         return render("error.html", request=request, context={"message": "Negócio não encontrado."}, status_code=404)
@@ -19368,11 +19098,6 @@ async def crm_detail(request: Request, session: Session = Depends(get_session), 
 async def crm_edit_page(request: Request, session: Session = Depends(get_session), deal_id: int = 0) -> HTMLResponse:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
-
-    # Garante tabela em ambientes sem Alembic
-    if not ensure_credit_consent_table():
-        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
-        return RedirectResponse("/credito", status_code=303)
 
     deal = session.get(BusinessDeal, int(deal_id))
     if not deal or deal.company_id != ctx.company.id:
@@ -19421,11 +19146,6 @@ async def crm_edit_action(
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
-
-    # Garante tabela em ambientes sem Alembic
-    if not ensure_credit_consent_table():
-        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
-        return RedirectResponse("/credito", status_code=303)
 
     deal = session.get(BusinessDeal, int(deal_id))
     if not deal or deal.company_id != ctx.company.id:
@@ -19487,11 +19207,6 @@ async def crm_update_stage(
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
-    # Garante tabela em ambientes sem Alembic
-    if not ensure_credit_consent_table():
-        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
-        return RedirectResponse("/credito", status_code=303)
-
     deal = session.get(BusinessDeal, int(deal_id))
     if not deal or deal.company_id != ctx.company.id:
         set_flash(request, "Negócio não encontrado.")
@@ -19521,11 +19236,6 @@ async def crm_update_next(
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
-    # Garante tabela em ambientes sem Alembic
-    if not ensure_credit_consent_table():
-        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
-        return RedirectResponse("/credito", status_code=303)
-
     deal = session.get(BusinessDeal, int(deal_id))
     if not deal or deal.company_id != ctx.company.id:
         set_flash(request, "Negócio não encontrado.")
@@ -19554,11 +19264,6 @@ async def crm_add_note(
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
-    # Garante tabela em ambientes sem Alembic
-    if not ensure_credit_consent_table():
-        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
-        return RedirectResponse("/credito", status_code=303)
-
     deal = session.get(BusinessDeal, int(deal_id))
     if not deal or deal.company_id != ctx.company.id:
         set_flash(request, "Negócio não encontrado.")
@@ -19581,11 +19286,6 @@ async def crm_add_note(
 async def crm_create_proposal(request: Request, session: Session = Depends(get_session), deal_id: int = 0) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
-
-    # Garante tabela em ambientes sem Alembic
-    if not ensure_credit_consent_table():
-        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
-        return RedirectResponse("/credito", status_code=303)
 
     deal = session.get(BusinessDeal, int(deal_id))
     if not deal or deal.company_id != ctx.company.id:
@@ -19628,11 +19328,6 @@ async def crm_create_project(request: Request, session: Session = Depends(get_se
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
-    # Garante tabela em ambientes sem Alembic
-    if not ensure_credit_consent_table():
-        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
-        return RedirectResponse("/credito", status_code=303)
-
     deal = session.get(BusinessDeal, int(deal_id))
     if not deal or deal.company_id != ctx.company.id:
         set_flash(request, "Negócio não encontrado.")
@@ -19672,11 +19367,6 @@ async def crm_delete(request: Request, session: Session = Depends(get_session), 
                      confirm: str = Form("")) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
-
-    # Garante tabela em ambientes sem Alembic
-    if not ensure_credit_consent_table():
-        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
-        return RedirectResponse("/credito", status_code=303)
 
     deal = session.get(BusinessDeal, int(deal_id))
     if not deal or deal.company_id != ctx.company.id:
@@ -19787,11 +19477,6 @@ async def meetings_new_page(request: Request, session: Session = Depends(get_ses
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
-    # Garante tabela em ambientes sem Alembic
-    if not ensure_credit_consent_table():
-        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
-        return RedirectResponse("/credito", status_code=303)
-
     clients = session.exec(select(Client).where(Client.company_id == ctx.company.id).order_by(Client.created_at)).all()
     active_client_id = get_active_client_id(request, session, ctx)
     current_client = get_client_or_none(session, ctx.company.id, active_client_id)
@@ -19823,11 +19508,6 @@ async def meetings_new_action(
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
-
-    # Garante tabela em ambientes sem Alembic
-    if not ensure_credit_consent_table():
-        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
-        return RedirectResponse("/credito", status_code=303)
 
     client = get_client_or_none(session, ctx.company.id, int(client_id))
     if not client:
@@ -19926,11 +19606,6 @@ async def meetings_sync(request: Request, session: Session = Depends(get_session
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
-    # Garante tabela em ambientes sem Alembic
-    if not ensure_credit_consent_table():
-        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
-        return RedirectResponse("/credito", status_code=303)
-
     mt = session.get(Meeting, int(meeting_id))
     if not mt or mt.company_id != ctx.company.id:
         set_flash(request, "Reunião não encontrada.")
@@ -19968,11 +19643,6 @@ async def meetings_generate_tasks(
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
-
-    # Garante tabela em ambientes sem Alembic
-    if not ensure_credit_consent_table():
-        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
-        return RedirectResponse("/credito", status_code=303)
 
     mt = session.get(Meeting, int(meeting_id))
     if not mt or mt.company_id != ctx.company.id:
@@ -20691,11 +20361,6 @@ async def edu_course_new_page(request: Request, session: Session = Depends(get_s
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
-    # Garante tabela em ambientes sem Alembic
-    if not ensure_credit_consent_table():
-        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
-        return RedirectResponse("/credito", status_code=303)
-
     clients = session.exec(select(Client).where(Client.company_id == ctx.company.id).order_by(Client.created_at)).all()
     current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
     return render("edu_course_new.html", request=request,
@@ -20715,11 +20380,6 @@ async def edu_course_new_action(
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
-
-    # Garante tabela em ambientes sem Alembic
-    if not ensure_credit_consent_table():
-        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
-        return RedirectResponse("/credito", status_code=303)
 
     form = await request.form()
     client_ids = [int(x) for x in form.getlist("client_ids") if str(x).isdigit()]
@@ -20780,11 +20440,6 @@ async def edu_course_add_module(request: Request, session: Session = Depends(get
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
-    # Garante tabela em ambientes sem Alembic
-    if not ensure_credit_consent_table():
-        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
-        return RedirectResponse("/credito", status_code=303)
-
     course = session.get(EducationCourse, int(course_id))
     if not course or course.company_id != ctx.company.id:
         set_flash(request, "Curso inválido.")
@@ -20808,11 +20463,6 @@ async def edu_course_edit_page(request: Request, session: Session = Depends(get_
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
-    # Garante tabela em ambientes sem Alembic
-    if not ensure_credit_consent_table():
-        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
-        return RedirectResponse("/credito", status_code=303)
-
     course = session.get(EducationCourse, int(course_id))
     if not course or course.company_id != ctx.company.id:
         return render("error.html", request=request, context={"message": "Curso não encontrado."}, status_code=404)
@@ -20835,11 +20485,6 @@ async def edu_course_edit_action(request: Request, session: Session = Depends(ge
                                  is_active: str = Form("")) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
-
-    # Garante tabela em ambientes sem Alembic
-    if not ensure_credit_consent_table():
-        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
-        return RedirectResponse("/credito", status_code=303)
 
     course = session.get(EducationCourse, int(course_id))
     if not course or course.company_id != ctx.company.id:
@@ -20875,11 +20520,6 @@ async def edu_course_edit_action(request: Request, session: Session = Depends(ge
 async def edu_course_delete(request: Request, session: Session = Depends(get_session), course_id: int = 0) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
-
-    # Garante tabela em ambientes sem Alembic
-    if not ensure_credit_consent_table():
-        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
-        return RedirectResponse("/credito", status_code=303)
 
     course = session.get(EducationCourse, int(course_id))
     if not course or course.company_id != ctx.company.id:
@@ -20938,11 +20578,6 @@ async def edu_module_add_lesson(request: Request, session: Session = Depends(get
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
-    # Garante tabela em ambientes sem Alembic
-    if not ensure_credit_consent_table():
-        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
-        return RedirectResponse("/credito", status_code=303)
-
     module = session.get(EducationModule, int(module_id))
     if not module:
         set_flash(request, "Módulo inválido.")
@@ -20973,11 +20608,6 @@ async def edu_module_edit(request: Request, session: Session = Depends(get_sessi
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
-    # Garante tabela em ambientes sem Alembic
-    if not ensure_credit_consent_table():
-        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
-        return RedirectResponse("/credito", status_code=303)
-
     module = session.get(EducationModule, int(module_id))
     if not module:
         set_flash(request, "Módulo não encontrado.")
@@ -20997,11 +20627,6 @@ async def edu_module_edit(request: Request, session: Session = Depends(get_sessi
 async def edu_module_delete(request: Request, session: Session = Depends(get_session), module_id: int = 0) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
-
-    # Garante tabela em ambientes sem Alembic
-    if not ensure_credit_consent_table():
-        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
-        return RedirectResponse("/credito", status_code=303)
 
     module = session.get(EducationModule, int(module_id))
     if not module:
@@ -21128,11 +20753,6 @@ async def edu_lesson_attach(request: Request, session: Session = Depends(get_ses
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
-    # Garante tabela em ambientes sem Alembic
-    if not ensure_credit_consent_table():
-        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
-        return RedirectResponse("/credito", status_code=303)
-
     lesson = session.get(EducationLesson, int(lesson_id))
     if not lesson:
         set_flash(request, "Aula não encontrada.")
@@ -21174,11 +20794,6 @@ async def edu_lesson_edit(request: Request, session: Session = Depends(get_sessi
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
-    # Garante tabela em ambientes sem Alembic
-    if not ensure_credit_consent_table():
-        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
-        return RedirectResponse("/credito", status_code=303)
-
     lesson = session.get(EducationLesson, int(lesson_id))
     if not lesson:
         set_flash(request, "Aula não encontrada.")
@@ -21199,11 +20814,6 @@ async def edu_lesson_edit(request: Request, session: Session = Depends(get_sessi
 async def edu_lesson_delete(request: Request, session: Session = Depends(get_session), lesson_id: int = 0) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
-
-    # Garante tabela em ambientes sem Alembic
-    if not ensure_credit_consent_table():
-        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
-        return RedirectResponse("/credito", status_code=303)
 
     lesson = session.get(EducationLesson, int(lesson_id))
     if not lesson:
@@ -21801,11 +21411,6 @@ async def credit_generate_consent_link(
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
-    # Garante tabela em ambientes sem Alembic
-    if not ensure_credit_consent_table():
-        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
-        return RedirectResponse("/credito", status_code=303)
-
     current_client = _get_client_for_credit(ctx, request, session)
     if not current_client:
         set_flash(request, "Selecione um cliente.")
@@ -22087,11 +21692,6 @@ async def credit_consult(
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
-    # Garante tabela em ambientes sem Alembic
-    if not ensure_credit_consent_table():
-        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
-        return RedirectResponse("/credito", status_code=303)
-
     current_client = _get_client_for_credit(ctx, request, session)
     if not current_client:
         set_flash(request, "Selecione um cliente.")
@@ -22172,11 +21772,6 @@ async def credit_report_refresh(request: Request, background_tasks: BackgroundTa
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
-    # Garante tabela em ambientes sem Alembic
-    if not ensure_credit_consent_table():
-        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
-        return RedirectResponse("/credito", status_code=303)
-
     report = session.get(CreditReport, int(report_id))
     if not report or report.company_id != ctx.company.id:
         set_flash(request, "Relatório não encontrado.")
@@ -22237,11 +21832,6 @@ async def credit_report_create_deal(request: Request, session: Session = Depends
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
-    # Garante tabela em ambientes sem Alembic
-    if not ensure_credit_consent_table():
-        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
-        return RedirectResponse("/credito", status_code=303)
-
     report = session.get(CreditReport, int(report_id))
     if not report or report.company_id != ctx.company.id:
         set_flash(request, "Relatório não encontrado.")
@@ -22297,11 +21887,6 @@ async def credit_report_generate_tasks(request: Request, session: Session = Depe
                                        report_id: int = 0) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
-
-    # Garante tabela em ambientes sem Alembic
-    if not ensure_credit_consent_table():
-        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
-        return RedirectResponse("/credito", status_code=303)
 
     report = session.get(CreditReport, int(report_id))
     if not report or report.company_id != ctx.company.id:
@@ -38411,7 +37996,10 @@ TEMPLATES["login.html"] = r"""
           <input class="form-control" name="email" type="email" autocomplete="username" required />
         </div>
         <div class="mb-3">
-          <label class="form-label">Senha</label>
+          <div class="d-flex justify-content-between align-items-center mb-1">
+            <label class="form-label mb-0">Senha</label>
+            <a class="small text-decoration-none" href="/forgot-password">Esqueci minha senha</a>
+          </div>
           <input class="form-control" name="password" type="password" autocomplete="current-password" required />
         </div>
         <button class="btn btn-primary w-100">Entrar</button>
@@ -38978,3 +38566,298 @@ def render(
         context=ctx,
         status_code=status_code,
     )
+
+
+# ----------------------------
+# Sprint 1B — reset de senha + edição consultoria
+# ----------------------------
+
+PASSWORD_RESET_TTL_HOURS = int(os.getenv("PASSWORD_RESET_TTL_HOURS", "2"))
+
+
+def _sign_password_reset_token(payload: dict[str, Any]) -> str:
+    raw = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    b64 = _b64url_encode(raw)
+    sig = _hmac_sha256_hex(APP_SECRET_KEY, raw)
+    return f"{b64}.{sig}"
+
+
+def _verify_password_reset_token(token: str) -> dict[str, Any]:
+    tok = (token or "").strip()
+    if "." not in tok:
+        raise ValueError("token inválido")
+    b64, sig = tok.split(".", 1)
+    raw = _b64url_decode(b64)
+    expected = _hmac_sha256_hex(APP_SECRET_KEY, raw)
+    if not hmac.compare_digest(expected, sig):
+        raise ValueError("assinatura inválida")
+    payload = json.loads(raw.decode("utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError("payload inválido")
+    exp = int(payload.get("exp") or 0)
+    if exp and utcnow().timestamp() > exp:
+        raise ValueError("token expirado")
+    return payload
+
+
+def _build_password_reset_url(request: Request, token: str) -> str:
+    return f"{_public_base_url(request)}/reset-password/{token}"
+
+
+@app.get("/forgot-password", response_class=HTMLResponse)
+async def forgot_password_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
+    preview_url = request.session.pop("password_reset_preview_url", "")
+    return render("forgot_password.html", request=request, context={"current_user": None, "preview_url": preview_url})
+
+
+@app.post("/forgot-password")
+async def forgot_password_action(
+    request: Request,
+    session: Session = Depends(get_session),
+    email: str = Form(""),
+) -> Response:
+    email_norm = (email or "").strip().lower()
+    generic_msg = "Se encontrarmos uma conta com esse e-mail, enviaremos um link para redefinir a senha."
+    user = session.exec(select(User).where(User.email == email_norm)).first()
+
+    if user and email_norm:
+        expires_at = utcnow() + timedelta(hours=max(1, PASSWORD_RESET_TTL_HOURS))
+        payload = {
+            "typ": "pwd_reset",
+            "uid": int(user.id or 0),
+            "email": email_norm,
+            "exp": int(expires_at.timestamp()),
+        }
+        token = _sign_password_reset_token(payload)
+        reset_url = _build_password_reset_url(request, token)
+        try:
+            html_body = f"""
+            <div style="font-family:Arial,sans-serif; line-height:1.45">
+              <h2>Redefinição de senha</h2>
+              <p>Recebemos uma solicitação para redefinir a senha da sua conta.</p>
+              <p><a href="{html.escape(reset_url)}">{html.escape(reset_url)}</a></p>
+              <p style="color:#666; font-size:12px">Este link expira em {int(max(1, PASSWORD_RESET_TTL_HOURS))} hora(s).</p>
+            </div>
+            """
+            text_body = f"Para redefinir sua senha, acesse:\n{reset_url}\n"
+            _smtp_send_email(to_email=email_norm, subject="Redefinição de senha", html_body=html_body, text_body=text_body)
+        except Exception:
+            request.session["password_reset_preview_url"] = reset_url
+
+    set_flash(request, generic_msg)
+    return RedirectResponse("/forgot-password", status_code=303)
+
+
+@app.get("/reset-password/{token}", response_class=HTMLResponse)
+async def reset_password_page(request: Request, token: str, session: Session = Depends(get_session)) -> HTMLResponse:
+    message = ""
+    valid = False
+    try:
+        payload = _verify_password_reset_token(token)
+        if str(payload.get("typ") or "") != "pwd_reset":
+            raise ValueError("tipo inválido")
+        valid = True
+    except Exception:
+        message = "Link inválido ou expirado. Solicite um novo reset de senha."
+
+    return render(
+        "reset_password.html",
+        request=request,
+        context={"current_user": None, "token": token, "token_valid": valid, "message": message},
+    )
+
+
+@app.post("/reset-password/{token}")
+async def reset_password_action(
+    request: Request,
+    token: str,
+    session: Session = Depends(get_session),
+    password: str = Form(""),
+    password_confirm: str = Form(""),
+) -> Response:
+    try:
+        payload = _verify_password_reset_token(token)
+        if str(payload.get("typ") or "") != "pwd_reset":
+            raise ValueError("tipo inválido")
+        user_id = int(payload.get("uid") or 0)
+        email = str(payload.get("email") or "").strip().lower()
+    except Exception:
+        set_flash(request, "Link inválido ou expirado. Solicite um novo reset de senha.")
+        return RedirectResponse("/forgot-password", status_code=303)
+
+    if len((password or "").strip()) < 8:
+        set_flash(request, "A nova senha deve ter pelo menos 8 caracteres.")
+        return RedirectResponse(f"/reset-password/{token}", status_code=303)
+
+    if (password or "") != (password_confirm or ""):
+        set_flash(request, "As senhas informadas não conferem.")
+        return RedirectResponse(f"/reset-password/{token}", status_code=303)
+
+    user = session.get(User, user_id)
+    if not user or (user.email or "").strip().lower() != email:
+        set_flash(request, "Conta não encontrada para este link.")
+        return RedirectResponse("/forgot-password", status_code=303)
+
+    user.password_hash = hash_password(password)
+    session.add(user)
+    session.commit()
+    set_flash(request, "Senha redefinida com sucesso. Faça login com a nova senha.")
+    return RedirectResponse("/login", status_code=303)
+
+
+TEMPLATES["forgot_password.html"] = r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="row justify-content-center">
+  <div class="col-md-6 col-lg-5">
+    <div class="card p-4 shadow-sm">
+      <div class="text-center mb-4">
+        <h4 class="mb-1">Redefinir senha</h4>
+        <div class="muted">Informe seu e-mail para receber o link de redefinição.</div>
+      </div>
+
+      <form method="post" action="/forgot-password">
+        <div class="mb-3">
+          <label class="form-label">E-mail</label>
+          <input class="form-control" name="email" type="email" autocomplete="email" required />
+        </div>
+        <button class="btn btn-primary w-100">Enviar link</button>
+      </form>
+
+      {% if preview_url %}
+        <hr class="my-4" />
+        <div class="small">
+          <div class="fw-semibold mb-1">Link gerado</div>
+          <a href="{{ preview_url }}" class="text-break">{{ preview_url }}</a>
+          <div class="muted mt-1">Use este link enquanto o SMTP não estiver configurado.</div>
+        </div>
+      {% endif %}
+
+      <div class="text-center mt-4">
+        <a class="small text-decoration-none" href="/login">Voltar ao login</a>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+"""
+
+TEMPLATES["reset_password.html"] = r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="row justify-content-center">
+  <div class="col-md-6 col-lg-5">
+    <div class="card p-4 shadow-sm">
+      <div class="text-center mb-4">
+        <h4 class="mb-1">Nova senha</h4>
+        <div class="muted">Defina uma nova senha para a sua conta.</div>
+      </div>
+
+      {% if token_valid %}
+        <form method="post" action="/reset-password/{{ token }}">
+          <div class="mb-3">
+            <label class="form-label">Nova senha</label>
+            <input class="form-control" name="password" type="password" autocomplete="new-password" minlength="8" required />
+          </div>
+          <div class="mb-3">
+            <label class="form-label">Confirmar nova senha</label>
+            <input class="form-control" name="password_confirm" type="password" autocomplete="new-password" minlength="8" required />
+          </div>
+          <button class="btn btn-primary w-100">Salvar nova senha</button>
+        </form>
+      {% else %}
+        <div class="alert alert-warning mb-0">{{ message }}</div>
+        <div class="text-center mt-4">
+          <a class="btn btn-outline-primary" href="/forgot-password">Solicitar novo link</a>
+        </div>
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endblock %}
+"""
+
+TEMPLATES["consult_edit_stage.html"] = r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <div class="d-flex justify-content-between align-items-center">
+    <div>
+      <h4 class="mb-0">Editar etapa</h4>
+      <div class="muted">{{ project.name }}</div>
+    </div>
+    <a class="btn btn-outline-secondary" href="/consultoria/{{ project.id }}">Voltar</a>
+  </div>
+  <hr class="my-3"/>
+  <form method="post" action="/consultoria/stages/{{ stage.id }}/editar">
+    <div class="row g-3">
+      <div class="col-md-7">
+        <label class="form-label">Nome da etapa</label>
+        <input class="form-control" name="name" value="{{ stage.name }}" required />
+      </div>
+      <div class="col-md-2">
+        <label class="form-label">Ordem</label>
+        <input class="form-control" name="order" type="number" min="1" value="{{ stage.order or 1 }}" />
+      </div>
+      <div class="col-md-3">
+        <label class="form-label">Prazo</label>
+        <input class="form-control mono" name="due_date" value="{{ stage.due_date|brdate }}" placeholder="DD/MM/AAAA" />
+      </div>
+    </div>
+    <div class="mt-4 d-flex gap-2">
+      <button class="btn btn-primary" type="submit">Salvar etapa</button>
+      <a class="btn btn-outline-secondary" href="/consultoria/{{ project.id }}">Cancelar</a>
+    </div>
+  </form>
+</div>
+{% endblock %}
+"""
+
+TEMPLATES["consult_edit_step.html"] = r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <div class="d-flex justify-content-between align-items-center">
+    <div>
+      <h4 class="mb-0">Editar sub-etapa</h4>
+      <div class="muted">{{ project.name }}</div>
+    </div>
+    <a class="btn btn-outline-secondary" href="/consultoria/{{ project.id }}">Voltar</a>
+  </div>
+  <hr class="my-3"/>
+  <form method="post" action="/consultoria/steps/{{ step.id }}/editar">
+    <div class="row g-3">
+      <div class="col-md-6">
+        <label class="form-label">Título</label>
+        <input class="form-control" name="title" value="{{ step.title }}" required />
+      </div>
+      <div class="col-md-3">
+        <label class="form-label">Prazo</label>
+        <input class="form-control mono" name="due_date" value="{{ step.due_date|brdate }}" placeholder="DD/MM/AAAA" />
+      </div>
+      <div class="col-md-3">
+        <label class="form-label">Peso</label>
+        <input class="form-control" name="weight" type="number" step="0.1" min="0.1" value="{{ step.weight or 1.0 }}" />
+      </div>
+      <div class="col-12">
+        <label class="form-label">Descrição</label>
+        <textarea class="form-control" name="description" rows="4">{{ step.description }}</textarea>
+      </div>
+      <div class="col-12">
+        <div class="form-check">
+          <input class="form-check-input" type="checkbox" name="client_action" value="1" id="client_action_edit" {% if step.client_action %}checked{% endif %}>
+          <label class="form-check-label" for="client_action_edit">Ação do cliente</label>
+        </div>
+      </div>
+    </div>
+    <div class="mt-4 d-flex gap-2">
+      <button class="btn btn-primary" type="submit">Salvar sub-etapa</button>
+      <a class="btn btn-outline-secondary" href="/consultoria/{{ project.id }}">Cancelar</a>
+    </div>
+  </form>
+</div>
+{% endblock %}
+"""
+
+if hasattr(templates_env.loader, "mapping"):
+    templates_env.loader.mapping = TEMPLATES
