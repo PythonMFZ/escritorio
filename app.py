@@ -38433,9 +38433,10 @@ TEMPLATES["dashboard.html"] = r"""
           <h4 class="mb-1">Painel</h4>
           <div class="muted">
             {% if role in ["admin","equipe"] %}
-              Escritório: <b>{{ current_company.name }}</b>{% if current_client %} • Cliente: <b>{{ current_client.name }}</b>{% endif %}
+              Escritório: <b>{{ current_company.name }}</b>.
+              {% if current_client %} Cliente selecionado: <b>{{ current_client.name }}</b>.{% endif %}
             {% else %}
-              Acompanhe suas ofertas, mensagens e próximos passos em um só lugar.
+              Bem-vindo(a)! Você vê apenas seus dados e arquivos.
             {% endif %}
           </div>
         </div>
@@ -38449,11 +38450,23 @@ TEMPLATES["dashboard.html"] = r"""
     </div>
   </div>
 
-  {% if current_client %}
+  {% if dashboard_scores %}
   <div class="col-12">
-    <div class="alert alert-warning border-0 shadow-sm mb-0">
-      <div class="fw-semibold">Temos ofertas alinhadas ao seu perfil. Confira aqui!</div>
-      <div class="small">Veja oportunidades já liberadas, acompanhe pendências e avance mais rápido nas próximas etapas.</div>
+    <div class="row g-3">
+      {% for item in dashboard_scores.score_card %}
+      <div class="col-sm-6 col-xl-3">
+        <div class="card p-4 h-100">
+          <div class="d-flex justify-content-between align-items-start gap-2">
+            <div>
+              <div class="muted small">{{ item.label }}</div>
+              <div class="display-6 fw-semibold">{{ "%.1f"|format(item.value) }}</div>
+              <div class="small muted">{{ item.hint }}</div>
+            </div>
+            <span class="badge text-bg-light border">{{ item.band_label }}</span>
+          </div>
+        </div>
+      </div>
+      {% endfor %}
     </div>
   </div>
   {% endif %}
@@ -38466,7 +38479,7 @@ TEMPLATES["dashboard.html"] = r"""
             <div class="d-flex justify-content-between align-items-start gap-2">
               <div>
                 <div class="fw-semibold">🎯 Ofertas</div>
-                <div class="muted small mt-1">Oportunidades liberadas para o perfil atual.</div>
+                <div class="muted small mt-1">Temos ofertas alinhadas ao seu perfil. Confira aqui.</div>
               </div>
               <span class="badge text-bg-warning">{{ approved_offers_count or 0 }}</span>
             </div>
@@ -38630,31 +38643,30 @@ def render(
     status_code: int = 200,
 ) -> HTMLResponse:
     ctx = dict(context or {})
-    if template_name == "dashboard.html":
-        ctx.setdefault("unread_messages_count", 0)
-        ctx.setdefault("unread_notifications_count", 0)
-        try:
-            with Session(engine) as _db:
-                tenant = get_tenant_context(request, _db)
-                if tenant:
-                    ctx.setdefault(
-                        "unread_messages_count",
-                        unread_messages_count_for_user(
-                            _db,
-                            company_id=tenant.company.id,
-                            user_id=tenant.user.id,
-                        ),
-                    )
-                    ctx.setdefault(
-                        "unread_notifications_count",
-                        unread_notifications_count_for_user(
-                            _db,
-                            company_id=tenant.company.id,
-                            user_id=tenant.user.id,
-                        ),
-                    )
-        except Exception:
-            pass
+    ctx.setdefault("unread_messages_count", 0)
+    ctx.setdefault("unread_notifications_count", 0)
+    try:
+        with Session(engine) as _db:
+            tenant = get_tenant_context(request, _db)
+            if tenant:
+                ctx.setdefault(
+                    "unread_messages_count",
+                    unread_messages_count_for_user(
+                        _db,
+                        company_id=tenant.company.id,
+                        user_id=tenant.user.id,
+                    ),
+                )
+                ctx.setdefault(
+                    "unread_notifications_count",
+                    unread_notifications_count_for_user(
+                        _db,
+                        company_id=tenant.company.id,
+                        user_id=tenant.user.id,
+                    ),
+                )
+    except Exception:
+        pass
     return _original_render_sprint1a(
         template_name,
         request=request,
