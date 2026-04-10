@@ -12456,16 +12456,32 @@ async def logout(request: Request) -> Response:
 # Health
 # ----------------------------
 
-@app.get("/healthz")
-async def healthz() -> Response:
+def _ready_health_payload() -> tuple[dict[str, str], int]:
     if not HEALTHCHECK_DB:
-        return JSONResponse({"status": "ok", "db": "skipped"})
+        return {"status": "ok", "db": "skipped"}, 200
     try:
         with Session(engine) as session:
             session.exec(text("SELECT 1")).one()
-        return JSONResponse({"status": "ok", "db": "ok"})
+        return {"status": "ok", "db": "ok"}, 200
     except Exception:
-        return JSONResponse({"status": "error", "db": "down"}, status_code=503)
+        return {"status": "error", "db": "down"}, 503
+
+
+@app.get("/health/live")
+async def health_live() -> Response:
+    return JSONResponse({"status": "ok"})
+
+
+@app.get("/health/ready")
+async def health_ready() -> Response:
+    payload, status_code = _ready_health_payload()
+    return JSONResponse(payload, status_code=status_code)
+
+
+@app.get("/healthz")
+async def healthz() -> Response:
+    payload, status_code = _ready_health_payload()
+    return JSONResponse(payload, status_code=status_code)
 
 
 # ----------------------------
