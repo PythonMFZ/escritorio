@@ -212,6 +212,16 @@ NOTION_API_BASE = "https://api.notion.com/v1"
 UPLOAD_DIR = Path(os.getenv("UPLOAD_DIR") or "./uploads").resolve()
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
+ENABLE_STARTUP_COMPANY_DEFAULT_SEEDS = os.getenv("ENABLE_STARTUP_COMPANY_DEFAULT_SEEDS", "0") == "1"
+ENABLE_STARTUP_WHATSAPP_DEFAULT_SEEDS = os.getenv("ENABLE_STARTUP_WHATSAPP_DEFAULT_SEEDS", "0") == "1"
+
+_STARTUP_CORE_DONE = False
+_STARTUP_OFFICE_FINANCE_DONE = False
+_STARTUP_OFFER_ENGINE_DONE = False
+_STARTUP_PLUGGY_DONE = False
+_STARTUP_COMPANY_DEFAULTS_DONE = False
+_STARTUP_WHATSAPP_DEFAULTS_DONE = False
+
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 engine = create_engine(
@@ -11657,20 +11667,33 @@ app.add_middleware(SessionMiddleware, secret_key=APP_SECRET_KEY, https_only=http
 
 @app.on_event("startup")
 def _startup() -> None:
-    init_db()
-    ensure_ui_tables()
-    ensure_feature_access_tables()
-    ensure_credit_consent_table()
-    ensure_office_finance_tables()
-    ensure_offer_engine_tables()
-    ensure_offer_engine_columns()
+    global _STARTUP_CORE_DONE, _STARTUP_OFFICE_FINANCE_DONE, _STARTUP_OFFER_ENGINE_DONE, _STARTUP_COMPANY_DEFAULTS_DONE
+
+    if not _STARTUP_CORE_DONE:
+        init_db()
+        ensure_ui_tables()
+        ensure_feature_access_tables()
+        ensure_credit_consent_table()
+        _STARTUP_CORE_DONE = True
+
+    if not _STARTUP_OFFICE_FINANCE_DONE:
+        ensure_office_finance_tables()
+        _STARTUP_OFFICE_FINANCE_DONE = True
+
+    if not _STARTUP_OFFER_ENGINE_DONE:
+        ensure_offer_engine_tables()
+        ensure_offer_engine_columns()
+        _STARTUP_OFFER_ENGINE_DONE = True
+
     with Session(engine) as _s:
         try:
             seed_product_families(_s)
-            ids = [x[0] for x in _s.exec(select(Company.id)).all()]
-            for _cid in ids:
-                seed_internal_services(_s, int(_cid))
-                seed_office_finance_defaults(_s, int(_cid))
+            if ENABLE_STARTUP_COMPANY_DEFAULT_SEEDS and not _STARTUP_COMPANY_DEFAULTS_DONE:
+                ids = [x[0] for x in _s.exec(select(Company.id)).all()]
+                for _cid in ids:
+                    seed_internal_services(_s, int(_cid))
+                    seed_office_finance_defaults(_s, int(_cid))
+                _STARTUP_COMPANY_DEFAULTS_DONE = True
         except Exception:
             pass
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
@@ -26920,11 +26943,19 @@ async def klavi_events_webhook(request: Request) -> JSONResponse:
 
 @app.on_event("startup")
 def _startup() -> None:
-    init_db()
-    ensure_ui_tables()
-    ensure_feature_access_tables()
-    ensure_credit_consent_table()
-    ensure_pluggy_tables()
+    global _STARTUP_CORE_DONE, _STARTUP_PLUGGY_DONE
+
+    if not _STARTUP_CORE_DONE:
+        init_db()
+        ensure_ui_tables()
+        ensure_feature_access_tables()
+        ensure_credit_consent_table()
+        _STARTUP_CORE_DONE = True
+
+    if not _STARTUP_PLUGGY_DONE:
+        ensure_pluggy_tables()
+        _STARTUP_PLUGGY_DONE = True
+
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 
@@ -36075,13 +36106,20 @@ def _whatsapp_stats(session: Session, *, company_id: int) -> dict[str, int]:
 
 @app.on_event("startup")
 def _startup_delivery11_whatsapp() -> None:
+    global _STARTUP_WHATSAPP_DEFAULTS_DONE
+
     ensure_whatsapp_tables()
     ensure_whatsapp_columns()
+
+    if not ENABLE_STARTUP_WHATSAPP_DEFAULT_SEEDS or _STARTUP_WHATSAPP_DEFAULTS_DONE:
+        return
+
     with Session(engine) as _s:
         try:
             ids = [x[0] for x in _s.exec(select(Company.id)).all()]
             for _cid in ids:
                 seed_whatsapp_defaults(_s, int(_cid))
+            _STARTUP_WHATSAPP_DEFAULTS_DONE = True
         except Exception:
             pass
 
