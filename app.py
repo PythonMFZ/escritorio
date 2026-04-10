@@ -6,6 +6,7 @@ import base64
 import hashlib
 import hmac
 import inspect
+import io
 import json
 import html
 import os
@@ -25,7 +26,7 @@ from urllib.parse import urlparse
 
 import httpx
 from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, HTTPException, Request, Response, UploadFile
-from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse, StreamingResponse
 from jinja2 import Environment
 from jinja2.loaders import DictLoader
 from passlib.context import CryptContext
@@ -232,6 +233,12 @@ _STARTUP_OFFER_ENGINE_DONE = False
 _STARTUP_PLUGGY_DONE = False
 _STARTUP_COMPANY_DEFAULTS_DONE = False
 _STARTUP_WHATSAPP_DEFAULTS_DONE = False
+
+FILE_STORAGE_BACKEND = (os.getenv("FILE_STORAGE_BACKEND") or "local").strip().lower()
+APP_S3_BUCKET_NAME = (os.getenv("APP_S3_BUCKET_NAME") or os.getenv("S3_BUCKET_NAME") or "").strip()
+APP_S3_REGION = (os.getenv("APP_S3_REGION") or os.getenv("AWS_REGION") or "us-east-2").strip()
+APP_S3_PREFIX = (os.getenv("APP_S3_PREFIX") or "uploads").strip().strip("/")
+APP_S3_ENDPOINT_URL = (os.getenv("APP_S3_ENDPOINT_URL") or "").strip()
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
@@ -5820,8 +5827,8 @@ a:hover{ color:#00BFBF; }
           <textarea class="form-control" name="description" rows="5"></textarea>
         </div>
         <div class="col-12">
-          <label class="form-label">Anexo (opcional)</label>
-          <input class="form-control" type="file" name="file" />
+          <label class="form-label">Anexos (opcional)</label>
+          <input class="form-control" type="file" name="files" multiple />
         </div>
       </div>
       <div class="mt-4 d-flex gap-2">
@@ -5920,8 +5927,8 @@ a:hover{ color:#00BFBF; }
         <textarea class="form-control" name="message" rows="2"></textarea>
       </div>
       <div class="mb-2">
-        <label class="form-label">Anexar arquivo</label>
-        <input class="form-control" type="file" name="file" required />
+        <label class="form-label">Anexar arquivos</label>
+        <input class="form-control" type="file" name="files" multiple required />
       </div>
       <button class="btn btn-primary">Enviar</button>
     </form>
@@ -5936,8 +5943,8 @@ a:hover{ color:#00BFBF; }
         <textarea class="form-control" name="message" rows="3"></textarea>
       </div>
       <div class="mb-2">
-        <label class="form-label">Anexo (opcional)</label>
-        <input class="form-control" type="file" name="file" />
+        <label class="form-label">Anexos (opcional)</label>
+        <input class="form-control" type="file" name="files" multiple />
       </div>
       <div class="form-check mb-3">
         <input class="form-check-input" type="checkbox" name="mark_done" value="1" id="doneCheck">
@@ -6024,8 +6031,8 @@ a:hover{ color:#00BFBF; }
           <textarea class="form-control" name="content" rows="6" required></textarea>
         </div>
         <div class="col-12">
-          <label class="form-label">Anexo (opcional)</label>
-          <input class="form-control" type="file" name="file" />
+          <label class="form-label">Anexos (opcional)</label>
+          <input class="form-control" type="file" name="files" multiple />
         </div>
       </div>
       <div class="mt-4 d-flex gap-2">
@@ -6124,8 +6131,8 @@ a:hover{ color:#00BFBF; }
         <textarea class="form-control" name="message" rows="2"></textarea>
       </div>
       <div class="mb-2">
-        <label class="form-label">Anexar arquivo</label>
-        <input class="form-control" type="file" name="file" required />
+        <label class="form-label">Anexar arquivos</label>
+        <input class="form-control" type="file" name="files" multiple required />
       </div>
       <button class="btn btn-primary">Enviar</button>
     </form>
@@ -6140,8 +6147,8 @@ a:hover{ color:#00BFBF; }
         <textarea class="form-control" name="message" rows="3"></textarea>
       </div>
       <div class="mb-2">
-        <label class="form-label">Anexo</label>
-        <input class="form-control" type="file" name="file" required />
+        <label class="form-label">Anexos</label>
+        <input class="form-control" type="file" name="files" multiple required />
       </div>
       <button class="btn btn-primary">Enviar</button>
     </form>
@@ -6240,8 +6247,8 @@ a:hover{ color:#00BFBF; }
           <textarea class="form-control" name="description" rows="5"></textarea>
         </div>
         <div class="col-12">
-          <label class="form-label">Anexo (opcional)</label>
-          <input class="form-control" type="file" name="file" />
+          <label class="form-label">Anexos (opcional)</label>
+          <input class="form-control" type="file" name="files" multiple />
         </div>
       </div>
       <div class="mt-4 d-flex gap-2">
@@ -6280,8 +6287,8 @@ a:hover{ color:#00BFBF; }
         <textarea class="form-control" name="description" rows="6" required></textarea>
       </div>
       <div class="col-12">
-        <label class="form-label">Anexo (opcional)</label>
-        <input class="form-control" type="file" name="file" />
+        <label class="form-label">Anexos (opcional)</label>
+        <input class="form-control" type="file" name="files" multiple />
       </div>
     </div>
     <div class="mt-4 d-flex gap-2">
@@ -6394,8 +6401,8 @@ a:hover{ color:#00BFBF; }
 
     <form method="post" action="/propostas/{{ prop.id }}/anexar" enctype="multipart/form-data" class="mt-3">
       <div class="mb-2">
-        <label class="form-label">Anexar arquivo</label>
-        <input class="form-control" type="file" name="file" required />
+        <label class="form-label">Anexar arquivos</label>
+        <input class="form-control" type="file" name="files" multiple required />
       </div>
       <button class="btn btn-primary">Enviar anexo</button>
     </form>
@@ -6409,8 +6416,8 @@ a:hover{ color:#00BFBF; }
         <textarea class="form-control" name="message" rows="3"></textarea>
       </div>
       <div class="mb-2">
-        <label class="form-label">Anexo (opcional)</label>
-        <input class="form-control" type="file" name="file" />
+        <label class="form-label">Anexos (opcional)</label>
+        <input class="form-control" type="file" name="files" multiple />
       </div>
       <button class="btn btn-primary">Enviar</button>
     </form>
@@ -7185,8 +7192,8 @@ TEMPLATES.update({
         <input class="form-control mono" name="due_date" placeholder="2026-03-31" />
       </div>
       <div class="col-12">
-        <label class="form-label">Anexar arquivo (opcional)</label>
-        <input class="form-control" type="file" name="file" />
+        <label class="form-label">Anexar arquivos (opcional)</label>
+        <input class="form-control" type="file" name="files" multiple />
       </div>
     </div>
     <div class="mt-4 d-flex gap-2">
@@ -7215,8 +7222,8 @@ TEMPLATES.update({
         <textarea class="form-control" name="message" rows="3"></textarea>
       </div>
       <div class="col-12">
-        <label class="form-label">Arquivo</label>
-        <input class="form-control" type="file" name="file" required />
+        <label class="form-label">Arquivos</label>
+        <input class="form-control" type="file" name="files" multiple required />
       </div>
     </div>
     <div class="mt-4 d-flex gap-2">
@@ -11014,28 +11021,152 @@ def safe_filename(name: str) -> str:
     return name[:180] if len(name) > 180 else name
 
 
+def _file_storage_is_s3_enabled() -> bool:
+    return FILE_STORAGE_BACKEND in {"s3", "r2"} and bool(APP_S3_BUCKET_NAME)
+
+
+def _attachment_is_s3(stored_filename: str) -> bool:
+    return str(stored_filename or "").startswith("s3:")
+
+
+def _attachment_s3_key(stored_filename: str) -> str:
+    raw = str(stored_filename or "")
+    return raw[3:] if raw.startswith("s3:") else raw
+
+
+def _build_s3_object_key(original_filename: str) -> str:
+    base = f"{uuid.uuid4().hex}_{safe_filename(original_filename or 'arquivo')}"
+    date_prefix = datetime.now(timezone.utc).strftime("%Y/%m/%d")
+    parts = [p for p in (APP_S3_PREFIX, date_prefix, base) if p]
+    return "/".join(parts)
+
+
+def _get_s3_client():
+    try:
+        import boto3  # type: ignore
+    except Exception as exc:
+        raise RuntimeError("boto3 não está instalado no ambiente.") from exc
+
+    kwargs: dict[str, Any] = {"region_name": APP_S3_REGION}
+    if APP_S3_ENDPOINT_URL:
+        kwargs["endpoint_url"] = APP_S3_ENDPOINT_URL
+    return boto3.client("s3", **kwargs)
+
+
+def _s3_put_bytes(*, object_key: str, body: bytes, content_type: str) -> None:
+    client = _get_s3_client()
+    client.put_object(
+        Bucket=APP_S3_BUCKET_NAME,
+        Key=object_key,
+        Body=body,
+        ContentType=content_type or "application/octet-stream",
+    )
+
+
+def _s3_get_bytes(stored_filename: str) -> bytes:
+    client = _get_s3_client()
+    obj = client.get_object(Bucket=APP_S3_BUCKET_NAME, Key=_attachment_s3_key(stored_filename))
+    body = obj.get("Body")
+    return body.read() if body else b""
+
+
+def _s3_delete_object(stored_filename: str) -> None:
+    client = _get_s3_client()
+    client.delete_object(Bucket=APP_S3_BUCKET_NAME, Key=_attachment_s3_key(stored_filename))
+
+
+def _delete_stored_upload(stored_filename: str) -> None:
+    if _attachment_is_s3(stored_filename):
+        try:
+            _s3_delete_object(stored_filename)
+        except Exception:
+            pass
+        return
+
+    path = UPLOAD_DIR / str(stored_filename or "")
+    try:
+        if path.exists():
+            path.unlink()
+    except Exception:
+        pass
+
+
+def _normalize_uploads(files: list[UploadFile] | None) -> list[UploadFile]:
+    out: list[UploadFile] = []
+    for upload in files or []:
+        if upload and (upload.filename or "").strip():
+            out.append(upload)
+    return out
+
+
+async def _build_attachments_from_uploads(
+        *,
+        files: list[UploadFile] | None,
+        company_id: int,
+        client_id: int,
+        uploaded_by_user_id: int,
+        proposal_id: Optional[int] = None,
+        pending_item_id: Optional[int] = None,
+        document_id: Optional[int] = None,
+        finance_invoice_id: Optional[int] = None,
+) -> list["Attachment"]:
+    uploads = _normalize_uploads(files)
+    created: list[str] = []
+    attachments: list[Attachment] = []
+
+    try:
+        for upload in uploads:
+            stored, mime, size = await save_upload(upload)
+            created.append(stored)
+            attachments.append(
+                Attachment(
+                    company_id=company_id,
+                    client_id=client_id,
+                    uploaded_by_user_id=uploaded_by_user_id,
+                    proposal_id=proposal_id,
+                    pending_item_id=pending_item_id,
+                    document_id=document_id,
+                    finance_invoice_id=finance_invoice_id,
+                    original_filename=upload.filename or "arquivo",
+                    stored_filename=stored,
+                    mime_type=mime,
+                    size_bytes=size,
+                )
+            )
+    except Exception:
+        for stored in created:
+            _delete_stored_upload(stored)
+        raise
+
+    return attachments
+
+
 async def save_upload(upload: UploadFile) -> tuple[str, str, int]:
     original = upload.filename or "arquivo"
-    stored = f"{uuid.uuid4().hex}_{safe_filename(original)}"
-    path = UPLOAD_DIR / stored
+    mime = upload.content_type or "application/octet-stream"
 
     size = 0
-    with path.open("wb") as f:
-        while True:
-            chunk = await upload.read(1024 * 1024)
-            if not chunk:
-                break
-            size += len(chunk)
-            if size > _MAX_UPLOAD_BYTES:
-                try:
-                    f.close()
-                finally:
-                    if path.exists():
-                        path.unlink(missing_ok=True)
-                raise ValueError("Arquivo excede o limite de tamanho.")
-            f.write(chunk)
+    chunks: list[bytes] = []
 
-    mime = upload.content_type or "application/octet-stream"
+    while True:
+        chunk = await upload.read(1024 * 1024)
+        if not chunk:
+            break
+        size += len(chunk)
+        if size > _MAX_UPLOAD_BYTES:
+            raise ValueError("Arquivo excede o limite de tamanho.")
+        chunks.append(chunk)
+
+    if _file_storage_is_s3_enabled():
+        object_key = _build_s3_object_key(original)
+        _s3_put_bytes(object_key=object_key, body=b"".join(chunks), content_type=mime)
+        return f"s3:{object_key}", mime, size
+
+    stored = f"{uuid.uuid4().hex}_{safe_filename(original)}"
+    path = UPLOAD_DIR / stored
+    with path.open("wb") as f:
+        for chunk in chunks:
+            f.write(chunk)
     return stored, mime, size
 
 
@@ -14375,12 +14506,11 @@ async def pending_new_action(
         description: str = Form(""),
         status: str = Form("aberto"),
         due_date: str = Form(""),
-        file: UploadFile | None = File(default=None),
+        files: list[UploadFile] = File(default=[]),
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
-    # Garante tabela em ambientes sem Alembic
     if not ensure_credit_consent_table():
         set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
         return RedirectResponse("/credito", status_code=303)
@@ -14388,7 +14518,7 @@ async def pending_new_action(
     client = get_client_or_none(session, ctx.company.id, int(client_id))
     if not client:
         set_flash(request, "Cliente inválido.")
-        return RedirectResponse("/pendencias/novo", status_code=303)
+        return RedirectResponse("/pendencias/nova", status_code=303)
 
     status = status.strip().lower()
     if status not in PENDING_STATUSES:
@@ -14402,36 +14532,39 @@ async def pending_new_action(
         description=description.strip(),
         status=status,
         due_date=_normalize_date_input(due_date),
+        created_at=utcnow(),
         updated_at=utcnow(),
     )
     session.add(item)
     session.commit()
     session.refresh(item)
 
-    if file and file.filename:
-        try:
-            stored, mime, size = await save_upload(file)
-        except ValueError:
-            set_flash(request, "Arquivo muito grande.")
-            return RedirectResponse("/pendencias/novo", status_code=303)
+    if description.strip():
+        session.add(PendingMessage(pending_item_id=item.id, author_user_id=ctx.user.id, message=description.strip()))
 
-        session.add(
-            Attachment(
+    uploads = _normalize_uploads(files)
+    if uploads:
+        try:
+            attachments = await _build_attachments_from_uploads(
+                files=uploads,
                 company_id=ctx.company.id,
-                client_id=client.id,
+                client_id=item.client_id,
                 uploaded_by_user_id=ctx.user.id,
                 pending_item_id=item.id,
-                original_filename=file.filename,
-                stored_filename=stored,
-                mime_type=mime,
-                size_bytes=size,
             )
-        )
-        session.commit()
+        except ValueError:
+            set_flash(request, "Um dos arquivos excede o limite de tamanho.")
+            return RedirectResponse("/pendencias/nova", status_code=303)
+        except RuntimeError as exc:
+            set_flash(request, f"Falha no storage: {exc}")
+            return RedirectResponse("/pendencias/nova", status_code=303)
 
+        for att in attachments:
+            session.add(att)
+
+    session.commit()
     set_flash(request, "Pendência criada.")
-    return RedirectResponse("/pendencias", status_code=303)
-
+    return RedirectResponse(f"/pendencias/{item.id}", status_code=303)
 
 @app.get("/pendencias/{item_id}", response_class=HTMLResponse)
 @require_login
@@ -14520,12 +14653,11 @@ async def pending_attach_admin(
         session: Session = Depends(get_session),
         item_id: int = 0,
         message: str = Form(""),
-        file: UploadFile = File(...),
+        files: list[UploadFile] = File(default=[]),
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
-    # Garante tabela em ambientes sem Alembic
     if not ensure_credit_consent_table():
         set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
         return RedirectResponse("/credito", status_code=303)
@@ -14535,24 +14667,28 @@ async def pending_attach_admin(
         set_flash(request, "Pendência não encontrada.")
         return RedirectResponse("/pendencias", status_code=303)
 
-    try:
-        stored, mime, size = await save_upload(file)
-    except ValueError:
-        set_flash(request, "Arquivo muito grande.")
+    uploads = _normalize_uploads(files)
+    if not uploads:
+        set_flash(request, "Selecione ao menos um arquivo.")
         return RedirectResponse(f"/pendencias/{item.id}", status_code=303)
 
-    session.add(
-        Attachment(
+    try:
+        attachments = await _build_attachments_from_uploads(
+            files=uploads,
             company_id=ctx.company.id,
             client_id=item.client_id,
             uploaded_by_user_id=ctx.user.id,
             pending_item_id=item.id,
-            original_filename=file.filename or "arquivo",
-            stored_filename=stored,
-            mime_type=mime,
-            size_bytes=size,
         )
-    )
+    except ValueError:
+        set_flash(request, "Um dos arquivos excede o limite de tamanho.")
+        return RedirectResponse(f"/pendencias/{item.id}", status_code=303)
+    except RuntimeError as exc:
+        set_flash(request, f"Falha no storage: {exc}")
+        return RedirectResponse(f"/pendencias/{item.id}", status_code=303)
+
+    for att in attachments:
+        session.add(att)
     if message.strip():
         session.add(PendingMessage(pending_item_id=item.id, author_user_id=ctx.user.id, message=message.strip()))
 
@@ -14560,9 +14696,8 @@ async def pending_attach_admin(
     session.add(item)
     session.commit()
 
-    set_flash(request, "Enviado.")
+    set_flash(request, f"{len(attachments)} anexo(s) enviado(s).")
     return RedirectResponse(f"/pendencias/{item.id}", status_code=303)
-
 
 @app.post("/pendencias/{item_id}/cliente-upload")
 @require_role({"cliente"})
@@ -14572,12 +14707,11 @@ async def pending_attach_client(
         item_id: int = 0,
         message: str = Form(""),
         mark_done: str = Form(""),
-        file: UploadFile | None = File(default=None),
+        files: list[UploadFile] = File(default=[]),
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
-    # Garante tabela em ambientes sem Alembic
     if not ensure_credit_consent_table():
         set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
         return RedirectResponse("/credito", status_code=303)
@@ -14591,25 +14725,25 @@ async def pending_attach_client(
         set_flash(request, "Sem permissão.")
         return RedirectResponse("/pendencias", status_code=303)
 
-    if file and file.filename:
+    uploads = _normalize_uploads(files)
+    if uploads:
         try:
-            stored, mime, size = await save_upload(file)
-        except ValueError:
-            set_flash(request, "Arquivo muito grande.")
-            return RedirectResponse(f"/pendencias/{item.id}", status_code=303)
-
-        session.add(
-            Attachment(
+            attachments = await _build_attachments_from_uploads(
+                files=uploads,
                 company_id=ctx.company.id,
                 client_id=item.client_id,
                 uploaded_by_user_id=ctx.user.id,
                 pending_item_id=item.id,
-                original_filename=file.filename,
-                stored_filename=stored,
-                mime_type=mime,
-                size_bytes=size,
             )
-        )
+        except ValueError:
+            set_flash(request, "Um dos arquivos excede o limite de tamanho.")
+            return RedirectResponse(f"/pendencias/{item.id}", status_code=303)
+        except RuntimeError as exc:
+            set_flash(request, f"Falha no storage: {exc}")
+            return RedirectResponse(f"/pendencias/{item.id}", status_code=303)
+
+        for att in attachments:
+            session.add(att)
 
     if message.strip():
         session.add(PendingMessage(pending_item_id=item.id, author_user_id=ctx.user.id, message=message.strip()))
@@ -14720,12 +14854,11 @@ async def docs_new_action(
         title: str = Form(...),
         content: str = Form(...),
         status: str = Form("rascunho"),
-        file: UploadFile | None = File(default=None),
+        files: list[UploadFile] = File(default=[]),
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
-    # Garante tabela em ambientes sem Alembic
     if not ensure_credit_consent_table():
         set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
         return RedirectResponse("/credito", status_code=303)
@@ -14752,45 +14885,29 @@ async def docs_new_action(
     session.commit()
     session.refresh(doc)
 
-    if file and file.filename:
+    uploads = _normalize_uploads(files)
+    if uploads:
         try:
-            stored, mime, size = await save_upload(file)
-        except ValueError:
-            set_flash(request, "Arquivo muito grande.")
-            return RedirectResponse("/documentos/novo", status_code=303)
-
-        session.add(
-            Attachment(
+            attachments = await _build_attachments_from_uploads(
+                files=uploads,
                 company_id=ctx.company.id,
                 client_id=client.id,
                 uploaded_by_user_id=ctx.user.id,
                 document_id=doc.id,
-                original_filename=file.filename,
-                stored_filename=stored,
-                mime_type=mime,
-                size_bytes=size,
             )
-        )
-        session.commit()
+        except ValueError:
+            set_flash(request, "Um dos arquivos excede o limite de tamanho.")
+            return RedirectResponse("/documentos/novo", status_code=303)
+        except RuntimeError as exc:
+            set_flash(request, f"Falha no storage: {exc}")
+            return RedirectResponse("/documentos/novo", status_code=303)
 
-    try:
-        if doc.status != "rascunho":
-            notify_client_members(
-                session,
-                company_id=ctx.company.id,
-                client_id=client.id,
-                kind="documento",
-                title="Novo documento disponível",
-                message=doc.title,
-                href=f"/documentos/{doc.id}",
-                created_by_user_id=ctx.user.id,
-            )
-    except Exception:
-        pass
+        for att in attachments:
+            session.add(att)
 
+    session.commit()
     set_flash(request, "Documento criado.")
-    return RedirectResponse("/documentos", status_code=303)
-
+    return RedirectResponse(f"/documentos/{doc.id}", status_code=303)
 
 @app.get("/documentos/{doc_id}", response_class=HTMLResponse)
 @require_login
@@ -14877,12 +14994,11 @@ async def docs_attach_admin(
         session: Session = Depends(get_session),
         doc_id: int = 0,
         message: str = Form(""),
-        file: UploadFile = File(...),
+        files: list[UploadFile] = File(default=[]),
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
-    # Garante tabela em ambientes sem Alembic
     if not ensure_credit_consent_table():
         set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
         return RedirectResponse("/credito", status_code=303)
@@ -14892,24 +15008,28 @@ async def docs_attach_admin(
         set_flash(request, "Documento não encontrado.")
         return RedirectResponse("/documentos", status_code=303)
 
-    try:
-        stored, mime, size = await save_upload(file)
-    except ValueError:
-        set_flash(request, "Arquivo muito grande.")
+    uploads = _normalize_uploads(files)
+    if not uploads:
+        set_flash(request, "Selecione ao menos um arquivo.")
         return RedirectResponse(f"/documentos/{doc.id}", status_code=303)
 
-    session.add(
-        Attachment(
+    try:
+        attachments = await _build_attachments_from_uploads(
+            files=uploads,
             company_id=ctx.company.id,
             client_id=doc.client_id,
             uploaded_by_user_id=ctx.user.id,
             document_id=doc.id,
-            original_filename=file.filename or "arquivo",
-            stored_filename=stored,
-            mime_type=mime,
-            size_bytes=size,
         )
-    )
+    except ValueError:
+        set_flash(request, "Um dos arquivos excede o limite de tamanho.")
+        return RedirectResponse(f"/documentos/{doc.id}", status_code=303)
+    except RuntimeError as exc:
+        set_flash(request, f"Falha no storage: {exc}")
+        return RedirectResponse(f"/documentos/{doc.id}", status_code=303)
+
+    for att in attachments:
+        session.add(att)
     if message.strip():
         session.add(DocumentMessage(document_id=doc.id, author_user_id=ctx.user.id, message=message.strip()))
 
@@ -14917,9 +15037,8 @@ async def docs_attach_admin(
     session.add(doc)
     session.commit()
 
-    set_flash(request, "Enviado.")
+    set_flash(request, f"{len(attachments)} anexo(s) enviado(s).")
     return RedirectResponse(f"/documentos/{doc.id}", status_code=303)
-
 
 @app.post("/documentos/{doc_id}/cliente-upload")
 @require_role({"cliente"})
@@ -14928,12 +15047,11 @@ async def docs_attach_client(
         session: Session = Depends(get_session),
         doc_id: int = 0,
         message: str = Form(""),
-        file: UploadFile = File(...),
+        files: list[UploadFile] = File(default=[]),
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
-    # Garante tabela em ambientes sem Alembic
     if not ensure_credit_consent_table():
         set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
         return RedirectResponse("/credito", status_code=303)
@@ -14947,24 +15065,28 @@ async def docs_attach_client(
         set_flash(request, "Sem permissão.")
         return RedirectResponse("/documentos", status_code=303)
 
-    try:
-        stored, mime, size = await save_upload(file)
-    except ValueError:
-        set_flash(request, "Arquivo muito grande.")
+    uploads = _normalize_uploads(files)
+    if not uploads:
+        set_flash(request, "Selecione ao menos um arquivo.")
         return RedirectResponse(f"/documentos/{doc.id}", status_code=303)
 
-    session.add(
-        Attachment(
+    try:
+        attachments = await _build_attachments_from_uploads(
+            files=uploads,
             company_id=ctx.company.id,
             client_id=doc.client_id,
             uploaded_by_user_id=ctx.user.id,
             document_id=doc.id,
-            original_filename=file.filename or "arquivo",
-            stored_filename=stored,
-            mime_type=mime,
-            size_bytes=size,
         )
-    )
+    except ValueError:
+        set_flash(request, "Um dos arquivos excede o limite de tamanho.")
+        return RedirectResponse(f"/documentos/{doc.id}", status_code=303)
+    except RuntimeError as exc:
+        set_flash(request, f"Falha no storage: {exc}")
+        return RedirectResponse(f"/documentos/{doc.id}", status_code=303)
+
+    for att in attachments:
+        session.add(att)
     if message.strip():
         session.add(DocumentMessage(document_id=doc.id, author_user_id=ctx.user.id, message=message.strip()))
 
@@ -14988,7 +15110,7 @@ async def docs_attach_client(
     except Exception:
         pass
 
-    set_flash(request, "Enviado.")
+    set_flash(request, f"{len(attachments)} anexo(s) enviado(s).")
     return RedirectResponse(f"/documentos/{doc.id}", status_code=303)
 
 
@@ -15086,12 +15208,11 @@ async def props_new_staff_action(
         service_name: str = Form(""),
         value_brl: float = Form(0.0),
         status: str = Form("rascunho"),
-        file: UploadFile | None = File(default=None),
+        files: list[UploadFile] = File(default=[]),
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
-    # Garante tabela em ambientes sem Alembic
     if not ensure_credit_consent_table():
         set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
         return RedirectResponse("/credito", status_code=303)
@@ -15126,30 +15247,29 @@ async def props_new_staff_action(
     session.commit()
     session.refresh(prop)
 
-    if file and file.filename:
+    uploads = _normalize_uploads(files)
+    if uploads:
         try:
-            stored, mime, size = await save_upload(file)
-        except ValueError:
-            set_flash(request, "Arquivo muito grande.")
-            return RedirectResponse("/propostas/nova", status_code=303)
-
-        session.add(
-            Attachment(
+            attachments = await _build_attachments_from_uploads(
+                files=uploads,
                 company_id=ctx.company.id,
                 client_id=client.id,
                 uploaded_by_user_id=ctx.user.id,
                 proposal_id=prop.id,
-                original_filename=file.filename,
-                stored_filename=stored,
-                mime_type=mime,
-                size_bytes=size,
             )
-        )
-        session.commit()
+        except ValueError:
+            set_flash(request, "Um dos arquivos excede o limite de tamanho.")
+            return RedirectResponse("/propostas/nova", status_code=303)
+        except RuntimeError as exc:
+            set_flash(request, f"Falha no storage: {exc}")
+            return RedirectResponse("/propostas/nova", status_code=303)
 
+        for att in attachments:
+            session.add(att)
+
+    session.commit()
     set_flash(request, "Proposta criada.")
-    return RedirectResponse("/propostas", status_code=303)
-
+    return RedirectResponse(f"/propostas/{prop.id}", status_code=303)
 
 @app.get("/propostas/solicitacao", response_class=HTMLResponse)
 @require_role({"cliente"})
@@ -15183,12 +15303,11 @@ async def props_new_client_action(
         title: str = Form(...),
         service_name: str = Form(""),
         description: str = Form(...),
-        file: UploadFile | None = File(default=None),
+        files: list[UploadFile] = File(default=[]),
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
-    # Garante tabela em ambientes sem Alembic
     if not ensure_credit_consent_table():
         set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
         return RedirectResponse("/credito", status_code=303)
@@ -15219,32 +15338,44 @@ async def props_new_client_action(
     session.commit()
     session.refresh(prop)
 
-    if file and file.filename:
+    uploads = _normalize_uploads(files)
+    if uploads:
         try:
-            stored, mime, size = await save_upload(file)
-        except ValueError:
-            set_flash(request, "Arquivo muito grande.")
-            return RedirectResponse("/propostas/solicitacao", status_code=303)
-
-        session.add(
-            Attachment(
+            attachments = await _build_attachments_from_uploads(
+                files=uploads,
                 company_id=ctx.company.id,
                 client_id=client_id,
                 uploaded_by_user_id=ctx.user.id,
                 proposal_id=prop.id,
-                original_filename=file.filename,
-                stored_filename=stored,
-                mime_type=mime,
-                size_bytes=size,
             )
-        )
+        except ValueError:
+            set_flash(request, "Um dos arquivos excede o limite de tamanho.")
+            return RedirectResponse("/propostas/solicitacao", status_code=303)
+        except RuntimeError as exc:
+            set_flash(request, f"Falha no storage: {exc}")
+            return RedirectResponse("/propostas/solicitacao", status_code=303)
+
+        for att in attachments:
+            session.add(att)
 
     session.add(ProposalMessage(proposal_id=prop.id, author_user_id=ctx.user.id, message="Solicitação criada."))
     session.commit()
 
-    set_flash(request, "Solicitação enviada.")
-    return RedirectResponse(f"/propostas/{prop.id}", status_code=303)
+    try:
+        _notify_staff_about_client_activity(
+            session,
+            ctx=ctx,
+            client_id=client_id,
+            kind="solicitacao",
+            title="Cliente criou uma solicitação",
+            message=(prop.title or "Solicitação")[:160],
+            href=f"/propostas/{prop.id}",
+        )
+    except Exception:
+        pass
 
+    set_flash(request, "Solicitação criada.")
+    return RedirectResponse(f"/propostas/{prop.id}", status_code=303)
 
 @app.get("/propostas/{prop_id}", response_class=HTMLResponse)
 @require_login
@@ -15380,12 +15511,11 @@ async def props_attach_staff(
         request: Request,
         session: Session = Depends(get_session),
         prop_id: int = 0,
-        file: UploadFile = File(...),
+        files: list[UploadFile] = File(default=[]),
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
-    # Garante tabela em ambientes sem Alembic
     if not ensure_credit_consent_table():
         set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
         return RedirectResponse("/credito", status_code=303)
@@ -15395,28 +15525,31 @@ async def props_attach_staff(
         set_flash(request, "Item não encontrado.")
         return RedirectResponse("/propostas", status_code=303)
 
-    try:
-        stored, mime, size = await save_upload(file)
-    except ValueError:
-        set_flash(request, "Arquivo muito grande.")
+    uploads = _normalize_uploads(files)
+    if not uploads:
+        set_flash(request, "Selecione ao menos um arquivo.")
         return RedirectResponse(f"/propostas/{prop.id}", status_code=303)
 
-    session.add(
-        Attachment(
+    try:
+        attachments = await _build_attachments_from_uploads(
+            files=uploads,
             company_id=ctx.company.id,
             client_id=prop.client_id,
             uploaded_by_user_id=ctx.user.id,
             proposal_id=prop.id,
-            original_filename=file.filename or "arquivo",
-            stored_filename=stored,
-            mime_type=mime,
-            size_bytes=size,
         )
-    )
-    session.commit()
-    set_flash(request, "Anexo enviado.")
-    return RedirectResponse(f"/propostas/{prop.id}", status_code=303)
+    except ValueError:
+        set_flash(request, "Um dos arquivos excede o limite de tamanho.")
+        return RedirectResponse(f"/propostas/{prop.id}", status_code=303)
+    except RuntimeError as exc:
+        set_flash(request, f"Falha no storage: {exc}")
+        return RedirectResponse(f"/propostas/{prop.id}", status_code=303)
 
+    for att in attachments:
+        session.add(att)
+    session.commit()
+    set_flash(request, f"{len(attachments)} anexo(s) enviado(s).")
+    return RedirectResponse(f"/propostas/{prop.id}", status_code=303)
 
 @app.post("/propostas/{prop_id}/cliente-upload")
 @require_role({"cliente"})
@@ -15425,12 +15558,11 @@ async def props_client_upload(
         session: Session = Depends(get_session),
         prop_id: int = 0,
         message: str = Form(""),
-        file: UploadFile | None = File(default=None),
+        files: list[UploadFile] = File(default=[]),
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
-    # Garante tabela em ambientes sem Alembic
     if not ensure_credit_consent_table():
         set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
         return RedirectResponse("/credito", status_code=303)
@@ -15444,25 +15576,25 @@ async def props_client_upload(
         set_flash(request, "Sem permissão.")
         return RedirectResponse("/propostas", status_code=303)
 
-    if file and file.filename:
+    uploads = _normalize_uploads(files)
+    if uploads:
         try:
-            stored, mime, size = await save_upload(file)
-        except ValueError:
-            set_flash(request, "Arquivo muito grande.")
-            return RedirectResponse(f"/propostas/{prop.id}", status_code=303)
-
-        session.add(
-            Attachment(
+            attachments = await _build_attachments_from_uploads(
+                files=uploads,
                 company_id=ctx.company.id,
                 client_id=prop.client_id,
                 uploaded_by_user_id=ctx.user.id,
                 proposal_id=prop.id,
-                original_filename=file.filename,
-                stored_filename=stored,
-                mime_type=mime,
-                size_bytes=size,
             )
-        )
+        except ValueError:
+            set_flash(request, "Um dos arquivos excede o limite de tamanho.")
+            return RedirectResponse(f"/propostas/{prop.id}", status_code=303)
+        except RuntimeError as exc:
+            set_flash(request, f"Falha no storage: {exc}")
+            return RedirectResponse(f"/propostas/{prop.id}", status_code=303)
+
+        for att in attachments:
+            session.add(att)
 
     if message.strip():
         session.add(ProposalMessage(proposal_id=prop.id, author_user_id=ctx.user.id, message=message.strip()))
@@ -17558,6 +17690,22 @@ async def download_attachment(request: Request, session: Session = Depends(get_s
     if not ensure_can_access_client(ctx, att.client_id):
         return render("error.html", request=request, context={"message": "Sem permissão."}, status_code=403)
 
+    if _attachment_is_s3(att.stored_filename):
+        try:
+            data = _s3_get_bytes(att.stored_filename)
+        except Exception:
+            return render(
+                "error.html",
+                request=request,
+                context={"message": "Arquivo não está mais disponível no storage."},
+                status_code=404,
+            )
+        return StreamingResponse(
+            io.BytesIO(data),
+            media_type=att.mime_type or "application/octet-stream",
+            headers={"Content-Disposition": f'attachment; filename="{att.original_filename}"'},
+        )
+
     path = UPLOAD_DIR / att.stored_filename
     if not path.exists():
         return render("error.html", request=request, context={"message": "Arquivo não está mais no servidor."},
@@ -17571,12 +17719,7 @@ async def download_attachment(request: Request, session: Session = Depends(get_s
 # ----------------------------
 
 def _delete_attachment_file(att: Attachment) -> None:
-    path = UPLOAD_DIR / att.stored_filename
-    try:
-        if path.exists():
-            path.unlink()
-    except Exception:
-        pass
+    _delete_stored_upload(att.stored_filename)
 
 
 @app.get("/agenda", response_class=HTMLResponse)
@@ -18328,12 +18471,11 @@ async def pending_new_client_action(
         title: str = Form(...),
         description: str = Form(""),
         due_date: str = Form(""),
-        file: UploadFile | None = File(default=None),
+        files: list[UploadFile] = File(default=[]),
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
-    # Garante tabela em ambientes sem Alembic
     if not ensure_credit_consent_table():
         set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
         return RedirectResponse("/credito", status_code=303)
@@ -18361,28 +18503,28 @@ async def pending_new_client_action(
 
     if description.strip():
         session.add(PendingMessage(pending_item_id=item.id, author_user_id=ctx.user.id, message=description.strip()))
-        session.commit()
 
-    if file and file.filename:
+    uploads = _normalize_uploads(files)
+    if uploads:
         try:
-            stored, mime, size = await save_upload(file)
-        except ValueError:
-            set_flash(request, "Arquivo muito grande.")
-            return RedirectResponse(f"/pendencias/{item.id}", status_code=303)
-
-        session.add(
-            Attachment(
+            attachments = await _build_attachments_from_uploads(
+                files=uploads,
                 company_id=ctx.company.id,
                 client_id=item.client_id,
                 uploaded_by_user_id=ctx.user.id,
                 pending_item_id=item.id,
-                original_filename=file.filename or "arquivo",
-                stored_filename=stored,
-                mime_type=mime,
-                size_bytes=size,
             )
-        )
-        session.commit()
+        except ValueError:
+            set_flash(request, "Um dos arquivos excede o limite de tamanho.")
+            return RedirectResponse(f"/pendencias/{item.id}", status_code=303)
+        except RuntimeError as exc:
+            set_flash(request, f"Falha no storage: {exc}")
+            return RedirectResponse(f"/pendencias/{item.id}", status_code=303)
+
+        for att in attachments:
+            session.add(att)
+
+    session.commit()
 
     try:
         _notify_staff_about_client_activity(
@@ -18390,16 +18532,15 @@ async def pending_new_client_action(
             ctx=ctx,
             client_id=item.client_id,
             kind="pendencia",
-            title="Cliente criou uma nova pendência",
+            title="Cliente criou uma pendência",
             message=(item.title or "Pendência")[:160],
             href=f"/pendencias/{item.id}",
         )
     except Exception:
         pass
 
-    set_flash(request, "Pendência criada.")
+    set_flash(request, "Solicitação criada.")
     return RedirectResponse(f"/pendencias/{item.id}", status_code=303)
-
 
 @app.get("/documentos/cliente/enviar", response_class=HTMLResponse)
 @require_role({"cliente"})
@@ -18434,12 +18575,11 @@ async def docs_send_client_action(
         session: Session = Depends(get_session),
         title: str = Form(...),
         message: str = Form(""),
-        file: UploadFile = File(...),
+        files: list[UploadFile] = File(default=[]),
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
-    # Garante tabela em ambientes sem Alembic
     if not ensure_credit_consent_table():
         set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
         return RedirectResponse("/credito", status_code=303)
@@ -18450,52 +18590,54 @@ async def docs_send_client_action(
         set_flash(request, "Seu usuário não está vinculado a um cliente.")
         return RedirectResponse("/documentos", status_code=303)
 
-    content = message.strip() or "Enviado pelo cliente."
+    uploads = _normalize_uploads(files)
+    if not uploads:
+        set_flash(request, "Selecione ao menos um arquivo.")
+        return RedirectResponse("/documentos/enviar", status_code=303)
+
     doc = Document(
         company_id=ctx.company.id,
         client_id=client.id,
         created_by_user_id=ctx.user.id,
         title=title.strip(),
-        content=content,
+        content=message.strip(),
         status="cliente_enviou",
-        created_at=utcnow(),
         updated_at=utcnow(),
     )
     session.add(doc)
     session.commit()
     session.refresh(doc)
 
-    if message.strip():
-        session.add(DocumentMessage(document_id=doc.id, author_user_id=ctx.user.id, message=message.strip()))
-        session.commit()
-
     try:
-        stored, mime, size = await save_upload(file)
-    except ValueError:
-        set_flash(request, "Arquivo muito grande.")
-        return RedirectResponse(f"/documentos/{doc.id}", status_code=303)
-
-    session.add(
-        Attachment(
+        attachments = await _build_attachments_from_uploads(
+            files=uploads,
             company_id=ctx.company.id,
-            client_id=doc.client_id,
+            client_id=client.id,
             uploaded_by_user_id=ctx.user.id,
             document_id=doc.id,
-            original_filename=file.filename or "arquivo",
-            stored_filename=stored,
-            mime_type=mime,
-            size_bytes=size,
         )
-    )
+    except ValueError:
+        set_flash(request, "Um dos arquivos excede o limite de tamanho.")
+        return RedirectResponse("/documentos/enviar", status_code=303)
+    except RuntimeError as exc:
+        set_flash(request, f"Falha no storage: {exc}")
+        return RedirectResponse("/documentos/enviar", status_code=303)
+
+    for att in attachments:
+        session.add(att)
+
+    if message.strip():
+        session.add(DocumentMessage(document_id=doc.id, author_user_id=ctx.user.id, message=message.strip()))
+
     session.commit()
 
     try:
         _notify_staff_about_client_activity(
             session,
             ctx=ctx,
-            client_id=doc.client_id,
+            client_id=client.id,
             kind="documento",
-            title="Cliente enviou um novo documento",
+            title="Cliente enviou um documento",
             message=(doc.title or "Documento")[:160],
             href=f"/documentos/{doc.id}",
         )
@@ -18504,7 +18646,6 @@ async def docs_send_client_action(
 
     set_flash(request, "Documento enviado.")
     return RedirectResponse(f"/documentos/{doc.id}", status_code=303)
-
 
 @app.get("/documentos/{doc_id}/editar", response_class=HTMLResponse)
 @require_role({"admin", "equipe"})
