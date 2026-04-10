@@ -38389,3 +38389,275 @@ async def meetings_checkout(
     _meeting_meta_save(session, mt, meta)
     set_flash(request, "Check-out registrado.")
     return RedirectResponse(f"/reunioes/{mt.id}", status_code=303)
+
+
+# ----------------------------
+# Sprint 1A — Login / Dashboard / CTA / Badges
+# ----------------------------
+
+TEMPLATES["login.html"] = r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="row justify-content-center">
+  <div class="col-md-6 col-lg-5">
+    <div class="card p-4 shadow-sm">
+      <div class="text-center mb-4">
+        <h4 class="mb-1">Entrar</h4>
+        <div class="muted">Acesse sua conta para continuar</div>
+      </div>
+      <form method="post" action="/login">
+        <div class="mb-3">
+          <label class="form-label">E-mail</label>
+          <input class="form-control" name="email" type="email" autocomplete="username" required />
+        </div>
+        <div class="mb-3">
+          <label class="form-label">Senha</label>
+          <input class="form-control" name="password" type="password" autocomplete="current-password" required />
+        </div>
+        <button class="btn btn-primary w-100">Entrar</button>
+      </form>
+    </div>
+  </div>
+</div>
+{% endblock %}
+"""
+
+TEMPLATES["dashboard.html"] = r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="row g-3">
+  <div class="col-12">
+    <div class="card p-4">
+      <div class="d-flex flex-wrap justify-content-between align-items-start gap-3">
+        <div>
+          <h4 class="mb-1">Painel</h4>
+          <div class="muted">
+            {% if role in ["admin","equipe"] %}
+              Escritório: <b>{{ current_company.name }}</b>{% if current_client %} • Cliente: <b>{{ current_client.name }}</b>{% endif %}
+            {% else %}
+              Acompanhe suas ofertas, mensagens e próximos passos em um só lugar.
+            {% endif %}
+          </div>
+        </div>
+        {% if role in ["admin","equipe"] %}
+          <div class="d-flex gap-2">
+            <a class="btn btn-outline-primary btn-sm" href="/admin/members">Gerenciar membros</a>
+            <a class="btn btn-outline-secondary btn-sm" href="/client/switch">Trocar cliente</a>
+          </div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+  {% if current_client %}
+  <div class="col-12">
+    <div class="alert alert-warning border-0 shadow-sm mb-0">
+      <div class="fw-semibold">Temos ofertas alinhadas ao seu perfil. Confira aqui!</div>
+      <div class="small">Veja oportunidades já liberadas, acompanhe pendências e avance mais rápido nas próximas etapas.</div>
+    </div>
+  </div>
+  {% endif %}
+
+  <div class="col-12">
+    <div class="row g-3">
+      <div class="col-md-6 col-xl-3">
+        <a href="/ofertas">
+          <div class="card p-4 h-100">
+            <div class="d-flex justify-content-between align-items-start gap-2">
+              <div>
+                <div class="fw-semibold">🎯 Ofertas</div>
+                <div class="muted small mt-1">Oportunidades liberadas para o perfil atual.</div>
+              </div>
+              <span class="badge text-bg-warning">{{ approved_offers_count or 0 }}</span>
+            </div>
+          </div>
+        </a>
+      </div>
+      <div class="col-md-6 col-xl-3">
+        <a href="/pendencias">
+          <div class="card p-4 h-100">
+            <div class="d-flex justify-content-between align-items-start gap-2">
+              <div>
+                <div class="fw-semibold">📌 Pendências</div>
+                <div class="muted small mt-1">Itens aguardando envio, revisão ou conclusão.</div>
+              </div>
+              <span class="badge text-bg-light border">{{ pending_items_count or 0 }}</span>
+            </div>
+          </div>
+        </a>
+      </div>
+      <div class="col-md-6 col-xl-3">
+        <a href="/mensagens">
+          <div class="card p-4 h-100">
+            <div class="d-flex justify-content-between align-items-start gap-2">
+              <div>
+                <div class="fw-semibold">💬 Mensagens</div>
+                <div class="muted small mt-1">Converse com a equipe e acompanhe respostas.</div>
+              </div>
+              <span class="badge text-bg-danger">{{ unread_messages_count or 0 }}</span>
+            </div>
+          </div>
+        </a>
+      </div>
+      <div class="col-md-6 col-xl-3">
+        <a href="/notificacoes">
+          <div class="card p-4 h-100">
+            <div class="d-flex justify-content-between align-items-start gap-2">
+              <div>
+                <div class="fw-semibold">🔔 Notificações</div>
+                <div class="muted small mt-1">Avisos importantes, novidades e ações recentes.</div>
+              </div>
+              <span class="badge text-bg-danger">{{ unread_notifications_count or 0 }}</span>
+            </div>
+          </div>
+        </a>
+      </div>
+    </div>
+  </div>
+
+  {% if tabs %}
+  <div class="col-12">
+    <ul class="nav nav-pills gap-2" id="dashTabs" role="tablist">
+      {% for t in tabs %}
+        <li class="nav-item" role="presentation">
+          <button class="nav-link {% if loop.first %}active{% endif %}" id="tab-{{ t.key }}" data-bs-toggle="pill"
+                  data-bs-target="#pane-{{ t.key }}" type="button" role="tab">
+            {{ t.title }}
+          </button>
+        </li>
+      {% endfor %}
+    </ul>
+
+    <div class="tab-content mt-3">
+      {% for t in tabs %}
+        <div class="tab-pane fade {% if loop.first %}show active{% endif %}" id="pane-{{ t.key }}" role="tabpanel">
+          <div class="row g-3">
+            {% for item in t["items"] %}
+              <div class="col-md-6 col-lg-4">
+                <a href="{{ item.href }}">
+                  <div class="card p-4 h-100">
+                    <div class="d-flex justify-content-between align-items-start">
+                      <div>
+                        <div class="fw-semibold">{{ item.title }}</div>
+                        <div class="muted small mt-1">{{ item.desc }}</div>
+                      </div>
+                      <span class="badge text-bg-light border">→</span>
+                    </div>
+                  </div>
+                </a>
+              </div>
+            {% endfor %}
+          </div>
+        </div>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+
+  {% if standalone %}
+  <div class="col-12 mt-2">
+    <div class="d-flex align-items-center justify-content-between">
+      <div class="fw-semibold">{{ standalone_title or "Acesso rápido" }}</div>
+      <div class="muted small">{{ standalone_desc or "Pendências, Agenda e Educação" }}</div>
+    </div>
+  </div>
+
+  {% for item in standalone %}
+    <div class="col-md-6 col-lg-4">
+      <a href="{{ item.href }}">
+        <div class="card p-4 h-100">
+          <div class="d-flex justify-content-between align-items-start">
+            <div>
+              <div class="fw-semibold">{{ item.title }}</div>
+              <div class="muted small mt-1">{{ item.desc }}</div>
+            </div>
+            <span class="badge text-bg-light border">→</span>
+          </div>
+        </div>
+      </a>
+    </div>
+  {% endfor %}
+  {% endif %}
+</div>
+
+<script>
+(function(){
+  const tabs = document.getElementById("dashTabs");
+  if (!tabs) return;
+
+  const key = "dash_active_tab";
+  const saved = localStorage.getItem(key);
+  if (saved) {
+    const btn = document.getElementById("tab-" + saved);
+    if (btn) btn.click();
+  }
+  tabs.addEventListener("click", (e) => {
+    const btn = e.target.closest("button[id^='tab-']");
+    if (!btn) return;
+    localStorage.setItem(key, btn.id.replace("tab-",""));
+  });
+})();
+</script>
+{% endblock %}
+"""
+
+_base_tpl_sprint1a = TEMPLATES.get("base.html", "")
+if _base_tpl_sprint1a:
+    _base_tpl_sprint1a = _base_tpl_sprint1a.replace(
+        '<span class="fw-semibold" style="color:#0B1E1E; font-size:0.95rem; letter-spacing:0.2px; opacity:0.9;">Bem-vindo</span>',
+        '<span class="fw-semibold" style="color:#0B1E1E; font-size:0.95rem; letter-spacing:0.2px; opacity:0.9;">Área do cliente</span>',
+    )
+    _base_tpl_sprint1a = _base_tpl_sprint1a.replace(
+        '<div>Uploads protegidos por login (download via rota).</div>',
+        '<div>Ambiente seguro para mensagens, documentos e acompanhamento do cliente.</div>',
+    )
+    if 'href="/notificacoes"' not in _base_tpl_sprint1a:
+        _base_tpl_sprint1a = _base_tpl_sprint1a.replace(
+            '<a class="btn btn-outline-secondary btn-sm" href="/logout">Sair</a>',
+            '<a class="btn btn-outline-secondary btn-sm position-relative" href="/mensagens" aria-label="Mensagens">💬{% if unread_messages_count %}<span class="position-absolute top-0 start-100 translate-middle badge rounded-pill text-bg-danger">{{ unread_messages_count }}</span>{% endif %}</a>\n'
+            '            <a class="btn btn-outline-secondary btn-sm position-relative" href="/notificacoes" aria-label="Notificações">🔔{% if unread_notifications_count %}<span class="position-absolute top-0 start-100 translate-middle badge rounded-pill text-bg-danger">{{ unread_notifications_count }}</span>{% endif %}</a>\n'
+            '            <a class="btn btn-outline-secondary btn-sm" href="/logout">Sair</a>'
+        )
+    TEMPLATES["base.html"] = _base_tpl_sprint1a
+
+_original_render_sprint1a = render
+
+def render(
+    template_name: str,
+    *,
+    request: Request,
+    context: Optional[dict[str, Any]] = None,
+    status_code: int = 200,
+) -> HTMLResponse:
+    ctx = dict(context or {})
+    if template_name == "dashboard.html":
+        ctx.setdefault("unread_messages_count", 0)
+        ctx.setdefault("unread_notifications_count", 0)
+        try:
+            with Session(engine) as _db:
+                tenant = get_tenant_context(request, _db)
+                if tenant:
+                    ctx.setdefault(
+                        "unread_messages_count",
+                        unread_messages_count_for_user(
+                            _db,
+                            company_id=tenant.company.id,
+                            user_id=tenant.user.id,
+                        ),
+                    )
+                    ctx.setdefault(
+                        "unread_notifications_count",
+                        unread_notifications_count_for_user(
+                            _db,
+                            company_id=tenant.company.id,
+                            user_id=tenant.user.id,
+                        ),
+                    )
+        except Exception:
+            pass
+    return _original_render_sprint1a(
+        template_name,
+        request=request,
+        context=ctx,
+        status_code=status_code,
+    )
