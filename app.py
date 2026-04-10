@@ -41,7 +41,18 @@ from fastapi.staticfiles import StaticFiles
 # ----------------------------
 
 APP_SECRET_KEY = os.getenv("APP_SECRET_KEY") or secrets.token_urlsafe(32)
-DATABASE_URL = os.getenv("DATABASE_URL") or "sqlite:///./app.db"
+
+RENDER_SERVICE_ID = (os.getenv("RENDER_SERVICE_ID") or "").strip()
+APP_ENV = (os.getenv("APP_ENV") or os.getenv("ENVIRONMENT") or ("production" if RENDER_SERVICE_ID else "development")).strip().lower()
+IS_PRODUCTION = APP_ENV in {"prod", "production"} or bool(RENDER_SERVICE_ID)
+
+DATABASE_URL = (os.getenv("DATABASE_URL") or "").strip()
+if IS_PRODUCTION and not DATABASE_URL:
+    raise RuntimeError("DATABASE_URL é obrigatória em produção.")
+if IS_PRODUCTION and DATABASE_URL.startswith("sqlite"):
+    raise RuntimeError("SQLite não é permitido em produção.")
+DATABASE_URL = DATABASE_URL or "sqlite:///./app.db"
+
 ALLOW_COMPANY_SIGNUP = os.getenv("ALLOW_COMPANY_SIGNUP", "0") == "1"
 
 CLIENT_INVITE_TTL_HOURS = int(os.getenv("CLIENT_INVITE_TTL_HOURS", "168"))  # 7 dias
