@@ -44,6 +44,13 @@ APP_SECRET_KEY = os.getenv("APP_SECRET_KEY") or secrets.token_urlsafe(32)
 DATABASE_URL = os.getenv("DATABASE_URL") or "sqlite:///./app.db"
 ALLOW_COMPANY_SIGNUP = os.getenv("ALLOW_COMPANY_SIGNUP", "0") == "1"
 
+ENABLE_STARTUP_SCHEMA_SYNC = os.getenv("ENABLE_STARTUP_SCHEMA_SYNC", "0") == "1"
+ENABLE_STARTUP_SEEDS = os.getenv("ENABLE_STARTUP_SEEDS", "0") == "1"
+ENABLE_ACTIVITY_TRACKING = os.getenv("ENABLE_ACTIVITY_TRACKING", "0") == "1"
+ENABLE_TEMPLATE_LIVE_COUNTS = os.getenv("ENABLE_TEMPLATE_LIVE_COUNTS", "0") == "1"
+UI_NEWS_HTTP_TIMEOUT_S = float(os.getenv("UI_NEWS_HTTP_TIMEOUT_S", "4"))
+UI_NEWS_CACHE_TTL_SEC = int(os.getenv("UI_NEWS_CACHE_TTL_SEC", "3600"))
+
 CLIENT_INVITE_TTL_HOURS = int(os.getenv("CLIENT_INVITE_TTL_HOURS", "168"))  # 7 dias
 CLIENT_INVITE_REQUIRE_LAST4 = os.getenv("CLIENT_INVITE_REQUIRE_LAST4",
                                         "1") == "1"  # valida últimos 4 dígitos do CNPJ/CPF quando disponível
@@ -11659,16 +11666,18 @@ def _startup() -> None:
     ensure_credit_consent_table()
     ensure_office_finance_tables()
     ensure_offer_engine_tables()
-    ensure_offer_engine_columns()
-    with Session(engine) as _s:
-        try:
-            seed_product_families(_s)
-            ids = [x[0] for x in _s.exec(select(Company.id)).all()]
-            for _cid in ids:
-                seed_internal_services(_s, int(_cid))
-                seed_office_finance_defaults(_s, int(_cid))
-        except Exception:
-            pass
+    if ENABLE_STARTUP_SCHEMA_SYNC:
+        ensure_offer_engine_columns()
+    if ENABLE_STARTUP_SEEDS:
+        with Session(engine) as _s:
+            try:
+                seed_product_families(_s)
+                ids = [x[0] for x in _s.exec(select(Company.id)).all()]
+                for _cid in ids:
+                    seed_internal_services(_s, int(_cid))
+                    seed_office_finance_defaults(_s, int(_cid))
+            except Exception:
+                pass
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 
@@ -12430,8 +12439,13 @@ async def logout(request: Request) -> Response:
 # ----------------------------
 
 @app.get("/healthz")
-async def healthz() -> dict[str, str]:
-    return {"status": "ok"}
+async def healthz() -> dict[str, Any]:
+    try:
+        with Session(engine) as session:
+            session.exec(text("SELECT 1")).first()
+        return {"status": "ok", "database": "ok"}
+    except Exception as exc:
+        return JSONResponse(status_code=503, content={"status": "degraded", "database": "error", "detail": str(exc)[:200]})
 
 
 # ----------------------------
@@ -22880,7 +22894,7 @@ from email.utils import parsedate_to_datetime
 
 _UI_CACHE: dict[tuple[int, str], tuple[float, Any]] = {}
 _UI_CACHE_TTL_BANNER_SEC = 60
-_UI_CACHE_TTL_NEWS_SEC = 600
+_UI_CACHE_TTL_NEWS_SEC = UI_NEWS_CACHE_TTL_SEC
 
 BANNERS_DIR = STATIC_DIR / "banners"
 BANNERS_DIR.mkdir(parents=True, exist_ok=True)
@@ -22978,7 +22992,7 @@ async def _ui_fetch_bytes(url: str) -> bytes:
         return b""
     headers = {"User-Agent": "MaffezzolliCapitalApp/1.0 (+rss)"}
     try:
-        async with httpx.AsyncClient(timeout=12, headers=headers, follow_redirects=True) as client:
+        async with httpx.AsyncClient(timeout=UI_NEWS_HTTP_TIMEOUT_S, headers=headers, follow_redirects=True) as client:
             r = await client.get(url)
             if 200 <= r.status_code < 300:
                 return r.content or b""
@@ -23821,7 +23835,8 @@ def ensure_credit_wallet_tables() -> None:
 
 @app.on_event("startup")
 def _startup_credit_wallet_tables() -> None:
-    ensure_credit_wallet_tables()
+    if ENABLE_STARTUP_SCHEMA_SYNC:
+        ensure_credit_wallet_tables()
 
 
 def _stripe_enabled() -> bool:
@@ -28539,8 +28554,9 @@ TEMPLATES["ofertas.html"] = r"""
 
 @app.on_event("startup")
 def _startup_offer_visibility() -> None:
-    ensure_offer_engine_tables()
-    ensure_offer_engine_columns()
+    if ENABLE_STARTUP_SCHEMA_SYNC:
+        ensure_offer_engine_tables()
+        ensure_offer_engine_columns()
 
 # === /CREDIT_WALLET_MODULE_V1 ===
 # ----------------------------
@@ -29504,8 +29520,9 @@ def ensure_delivery3_columns() -> None:
 
 @app.on_event("startup")
 def _startup_delivery3_rebuild() -> None:
-    ensure_delivery3_tables()
-    ensure_delivery3_columns()
+    if ENABLE_STARTUP_SCHEMA_SYNC:
+        ensure_delivery3_tables()
+        ensure_delivery3_columns()
 
 
 def _only_digits(value: str) -> str:
@@ -29709,6 +29726,8 @@ def current_online_users_count(session: Session, *, company_id: int, within_minu
 @app.middleware("http")
 async def activity_tracking_middleware(request: Request, call_next: Callable[..., Any]) -> Response:
     response = await call_next(request)
+    if not ENABLE_ACTIVITY_TRACKING:
+        return response
     try:
         path = request.url.path
         if (
@@ -30481,8 +30500,9 @@ def ensure_delivery4_columns() -> None:
 
 @app.on_event("startup")
 def _startup_delivery4() -> None:
-    ensure_delivery4_tables()
-    ensure_delivery4_columns()
+    if ENABLE_STARTUP_SCHEMA_SYNC:
+        ensure_delivery4_tables()
+        ensure_delivery4_columns()
 
 
 def unread_messages_count_for_user(session: Session, *, company_id: int, user_id: int) -> int:
@@ -31520,10 +31540,11 @@ def ensure_office_finance_delivery_c_tables() -> bool:
 
 @app.on_event("startup")
 def _startup_office_finance_delivery_c() -> None:
-    try:
-        ensure_office_finance_delivery_c_tables()
-    except Exception:
-        pass
+    if ENABLE_STARTUP_SCHEMA_SYNC:
+        try:
+            ensure_office_finance_delivery_c_tables()
+        except Exception:
+            pass
 
 
 OFFICE_RECURRENCE_RULES: list[tuple[str, str]] = [
@@ -33006,7 +33027,8 @@ def ensure_client_tool_tables() -> None:
 
 @app.on_event("startup")
 def _startup_client_tools() -> None:
-    ensure_client_tool_tables()
+    if ENABLE_STARTUP_SCHEMA_SYNC:
+        ensure_client_tool_tables()
 
 
 def _tool_period_label(dt: Optional[datetime]) -> str:
@@ -33746,7 +33768,8 @@ def ensure_client_finance_tables() -> bool:
 
 @app.on_event("startup")
 def _startup_client_finance() -> None:
-    ensure_client_finance_tables()
+    if ENABLE_STARTUP_SCHEMA_SYNC:
+        ensure_client_finance_tables()
 
 
 def seed_client_finance_defaults(session: Session, *, company_id: int, client_id: int) -> None:
@@ -36058,15 +36081,17 @@ def _whatsapp_stats(session: Session, *, company_id: int) -> dict[str, int]:
 
 @app.on_event("startup")
 def _startup_delivery11_whatsapp() -> None:
-    ensure_whatsapp_tables()
-    ensure_whatsapp_columns()
-    with Session(engine) as _s:
-        try:
-            ids = [x[0] for x in _s.exec(select(Company.id)).all()]
-            for _cid in ids:
-                seed_whatsapp_defaults(_s, int(_cid))
-        except Exception:
-            pass
+    if ENABLE_STARTUP_SCHEMA_SYNC:
+        ensure_whatsapp_tables()
+        ensure_whatsapp_columns()
+    if ENABLE_STARTUP_SEEDS:
+        with Session(engine) as _s:
+            try:
+                ids = [x[0] for x in _s.exec(select(Company.id)).all()]
+                for _cid in ids:
+                    seed_whatsapp_defaults(_s, int(_cid))
+            except Exception:
+                pass
 
 
 _original_resolve_feature_key_delivery11 = resolve_feature_key
@@ -38063,3 +38088,45 @@ async def meetings_checkout(
     _meeting_meta_save(session, mt, meta)
     set_flash(request, "Check-out registrado.")
     return RedirectResponse(f"/reunioes/{mt.id}", status_code=303)
+
+
+_render_stability_base = globals().get("_original_render_delivery3") or render
+
+def render(
+    template_name: str,
+    *,
+    request: Request,
+    context: Optional[dict[str, Any]] = None,
+    status_code: int = 200,
+) -> HTMLResponse:
+    ctx = dict(context or {})
+    ctx.setdefault("unread_notifications_count", 0)
+    ctx.setdefault("group_company_count", 0)
+    ctx.setdefault("unread_messages_count", 0)
+
+    if ENABLE_TEMPLATE_LIVE_COUNTS:
+        try:
+            with Session(engine) as _db:
+                tenant = get_tenant_context(request, _db)
+                if tenant:
+                    ctx["unread_notifications_count"] = unread_notifications_count_for_user(
+                        _db,
+                        company_id=tenant.company.id,
+                        user_id=tenant.user.id,
+                    )
+                    ctx["unread_messages_count"] = unread_messages_count_for_user(
+                        _db,
+                        company_id=tenant.company.id,
+                        user_id=tenant.user.id,
+                    )
+                    active_client_id = get_active_client_id(request, _db, tenant)
+                    if active_client_id:
+                        ctx["group_company_count"] = group_company_count(
+                            _db,
+                            company_id=tenant.company.id,
+                            client_id=active_client_id,
+                        )
+        except Exception:
+            pass
+
+    return _render_stability_base(template_name, request=request, context=ctx, status_code=status_code)
