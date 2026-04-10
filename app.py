@@ -11,6 +11,9 @@ import json
 import html
 import os
 import asyncio
+import logging
+import time
+import traceback
 import re
 import secrets
 import uuid
@@ -53,6 +56,40 @@ if IS_PRODUCTION and not DATABASE_URL:
 if IS_PRODUCTION and DATABASE_URL.startswith("sqlite"):
     raise RuntimeError("SQLite não é permitido em produção.")
 DATABASE_URL = DATABASE_URL or "sqlite:///./app.db"
+
+LOG_LEVEL = (os.getenv("LOG_LEVEL") or "INFO").strip().upper()
+ENABLE_REQUEST_LOGGING = os.getenv("ENABLE_REQUEST_LOGGING", "1") == "1"
+ENABLE_GLOBAL_EXCEPTION_LOGGING = os.getenv("ENABLE_GLOBAL_EXCEPTION_LOGGING", "1") == "1"
+
+logging.basicConfig(
+    level=getattr(logging, LOG_LEVEL, logging.INFO),
+    format="%(asctime)s %(levelname)s %(name)s %(message)s",
+)
+logger = logging.getLogger("escritorio.app")
+
+
+def _request_id_from_request(request: Request) -> str:
+    try:
+        incoming = (request.headers.get("x-request-id") or "").strip()
+    except Exception:
+        incoming = ""
+    return incoming[:128] if incoming else uuid.uuid4().hex[:12]
+
+
+def _is_json_request(request: Request) -> bool:
+    path = request.url.path or ""
+    accept = (request.headers.get("accept") or "").lower()
+    return path.startswith("/api/") or "application/json" in accept or path.startswith("/health")
+
+
+def _log_extra_from_request(request: Request, **extra: Any) -> dict[str, Any]:
+    payload = {
+        "request_id": getattr(getattr(request, "state", None), "request_id", "-"),
+        "method": request.method,
+        "path": request.url.path,
+        **extra,
+    }
+    return payload
 
 ALLOW_COMPANY_SIGNUP = os.getenv("ALLOW_COMPANY_SIGNUP", "0") == "1"
 
@@ -11723,7 +11760,7 @@ async def __routes() -> list[str]:
 
 @app.get("/__build", include_in_schema=False)
 async def __build() -> dict:
-    return {"build": "stable_debug_v2"}
+    return {"build": "stable_debug_v2", "env": APP_ENV, "log_level": LOG_LEVEL}
 
 https_only = os.getenv("SESSION_HTTPS_ONLY", "0") == "1"
 # NOTE: SessionMiddleware must wrap feature_access_middleware, installed later.
@@ -11732,6 +11769,38 @@ STATIC_DIR = Path(__file__).with_name("static").resolve()
 STATIC_DIR.mkdir(parents=True, exist_ok=True)
 
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+
+@app.middleware("http")
+async def request_logging_middleware(request: Request, call_next: Callable[..., Any]) -> Response:
+    request_id = _request_id_from_request(request)
+    request.state.request_id = request_id
+    start = time.perf_counter()
+    try:
+        response = await call_next(request)
+    except Exception as exc:
+        duration_ms = round((time.perf_counter() - start) * 1000, 2)
+        logger.exception(
+            "request_unhandled_exception request_id=%s method=%s path=%s duration_ms=%s exc_type=%s",
+            request_id,
+            request.method,
+            request.url.path,
+            duration_ms,
+            type(exc).__name__,
+        )
+        raise
+    duration_ms = round((time.perf_counter() - start) * 1000, 2)
+    response.headers["X-Request-ID"] = request_id
+    if ENABLE_REQUEST_LOGGING and not request.url.path.startswith("/static"):
+        logger.info(
+            "request_completed request_id=%s method=%s path=%s status_code=%s duration_ms=%s",
+            request_id,
+            request.method,
+            request.url.path,
+            getattr(response, "status_code", 0),
+            duration_ms,
+        )
+    return response
 
 @app.middleware("http")
 async def feature_access_middleware(request: Request, call_next: Callable[..., Any]) -> Response:
@@ -11803,6 +11872,34 @@ async def feature_access_middleware(request: Request, call_next: Callable[..., A
 
 
 
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception) -> Response:
+    request_id = getattr(getattr(request, "state", None), "request_id", uuid.uuid4().hex[:12])
+    if ENABLE_GLOBAL_EXCEPTION_LOGGING:
+        logger.exception(
+            "global_exception request_id=%s method=%s path=%s exc_type=%s",
+            request_id,
+            request.method,
+            request.url.path,
+            type(exc).__name__,
+        )
+    if _is_json_request(request):
+        return JSONResponse(
+            {"detail": "Erro interno do servidor.", "request_id": request_id},
+            status_code=500,
+            headers={"X-Request-ID": request_id},
+        )
+    body = (
+        "<html><body style=\"font-family:Arial,sans-serif;padding:24px\">"
+        "<h1>Erro interno</h1>"
+        "<p>Ocorreu um erro inesperado.</p>"
+        f"<p><strong>Request ID:</strong> {html.escape(request_id)}</p>"
+        "</body></html>"
+    )
+    return HTMLResponse(body, status_code=500, headers={"X-Request-ID": request_id})
+
+
 # Install SessionMiddleware last so request.session is available inside BaseHTTPMiddleware.
 app.add_middleware(SessionMiddleware, secret_key=APP_SECRET_KEY, https_only=https_only, same_site="lax")
 
@@ -11840,6 +11937,12 @@ def _startup() -> None:
             pass
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
+
+
+
+@app.on_event("shutdown")
+def _shutdown_log() -> None:
+    logger.info("shutdown_begin env=%s", APP_ENV)
 
 # ----------------------------
 # Auth routes
