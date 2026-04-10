@@ -38673,3 +38673,308 @@ def render(
         context=ctx,
         status_code=status_code,
     )
+
+
+# ============================
+# Fix Sprint 1A regressões: scores completos + badges dinâmicos
+# ============================
+TEMPLATES["dashboard.html"] = r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="row g-3">
+  <div class="col-12">
+    <div class="card p-4">
+      <div class="d-flex flex-wrap justify-content-between align-items-start gap-3">
+        <div>
+          <h4 class="mb-1">Painel</h4>
+          <div class="muted">
+            {% if role in ["admin","equipe"] %}
+              Escritório: <b>{{ current_company.name }}</b>.
+              {% if current_client %} Cliente selecionado: <b>{{ current_client.name }}</b>.{% endif %}
+            {% else %}
+              Bem-vindo(a)! Você vê apenas seus dados e arquivos.
+            {% endif %}
+          </div>
+        </div>
+        {% if role in ["admin","equipe"] %}
+          <div class="d-flex gap-2">
+            <a class="btn btn-outline-primary btn-sm" href="/admin/members">Gerenciar membros</a>
+            <a class="btn btn-outline-secondary btn-sm" href="/client/switch">Trocar cliente</a>
+          </div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+  {% if dashboard_scores and current_client %}
+    <div class="col-12">
+      <div class="card p-4">
+        <div class="d-flex flex-wrap justify-content-between align-items-center gap-2">
+          <div>
+            <h5 class="mb-1">Resumo analítico da empresa</h5>
+            <div class="muted">Cards e barras visuais para dar mais clareza ao diagnóstico financeiro.</div>
+          </div>
+          <div class="d-flex gap-2 flex-wrap">
+            <span class="badge text-bg-light border">{{ approved_offers_count }} oportunidade(s) liberada(s)</span>
+            <span class="badge text-bg-light border">{{ pending_items_count }} pendência(s)</span>
+          </div>
+        </div>
+        <div class="row g-3 mt-1">
+          {% for card in dashboard_scores.score_card %}
+          <div class="col-md-6 col-xl-3">
+            <div class="mc-stat-card">
+              <div class="d-flex align-items-center">
+                <div class="muted small">{{ card.label }}</div>
+                <span class="mc-help" data-bs-toggle="tooltip" data-bs-placement="top" title="{{ card.tooltip }}">i</span>
+              </div>
+              <div class="fs-3 fw-bold">{{ "%.0f"|format(card.value) }}</div>
+              <div class="small muted">{{ card.hint }}</div>
+              <div class="small mc-score-band mt-1"><span class="badge text-bg-light border">{{ card.band_label }}</span></div>
+            </div>
+          </div>
+          {% endfor %}
+        </div>
+        <div class="row g-3 mt-1">
+          <div class="col-lg-7">
+            <div class="border rounded p-3 h-100">
+              <div class="fw-semibold mb-3">Leitura visual dos scores</div>
+              {% for bar in dashboard_scores.bars %}
+                <div class="mb-3">
+                  <div class="d-flex justify-content-between small">
+                    <span>{{ bar.label }} <span class="mc-help" data-bs-toggle="tooltip" data-bs-placement="top" title="{{ bar.tooltip }}">i</span></span>
+                    <span>{{ "%.0f"|format(bar.value) }}</span>
+                  </div>
+                  <div class="progress" style="height: 12px;">
+                    <div class="progress-bar {{ bar.class }}" role="progressbar" style="width: {{ bar.value }}%;" aria-valuenow="{{ bar.value }}" aria-valuemin="0" aria-valuemax="100"></div>
+                  </div>
+                  <div class="small muted mt-1">{{ bar.band_label }}</div>
+                </div>
+              {% endfor %}
+            </div>
+          </div>
+          <div class="col-lg-5">
+            <div class="border rounded p-3 h-100">
+              <div class="fw-semibold mb-3">Indicadores-chave</div>
+              <div class="small d-flex justify-content-between mb-2"><span>Capital de giro líquido</span><b>{{ dashboard_scores.working_capital|brl }}</b></div>
+              <div class="small d-flex justify-content-between mb-2"><span>Liquidez corrente</span><b>{{ dashboard_scores.current_ratio|brnum }}</b></div>
+              <div class="small d-flex justify-content-between mb-2"><span>Patrimônio líquido</span><b>{{ dashboard_scores.equity|brl }}</b></div>
+              <div class="small d-flex justify-content-between mb-2"><span>Endividamento / patrimônio</span><b>{{ dashboard_scores.debt_to_equity|brnum }}</b></div>
+              <div class="small d-flex justify-content-between"><span>Status do motor</span><span class="badge text-bg-light border">{{ dashboard_scores.status_label }}</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  {% endif %}
+
+  <div class="col-12">
+    <div class="row g-3">
+      <div class="col-md-6 col-xl-3">
+        <a href="/ofertas">
+          <div class="card p-4 h-100">
+            <div class="d-flex justify-content-between align-items-start gap-2">
+              <div>
+                <div class="fw-semibold">🎯 Ofertas</div>
+                <div class="muted small mt-1">Temos ofertas alinhadas ao seu perfil. Confira aqui.</div>
+              </div>
+              <span class="badge text-bg-warning">{{ approved_offers_count or 0 }}</span>
+            </div>
+          </div>
+        </a>
+      </div>
+      <div class="col-md-6 col-xl-3">
+        <a href="/pendencias">
+          <div class="card p-4 h-100">
+            <div class="d-flex justify-content-between align-items-start gap-2">
+              <div>
+                <div class="fw-semibold">📌 Pendências</div>
+                <div class="muted small mt-1">Itens aguardando envio, revisão ou conclusão.</div>
+              </div>
+              <span class="badge text-bg-light border">{{ pending_items_count or 0 }}</span>
+            </div>
+          </div>
+        </a>
+      </div>
+      <div class="col-md-6 col-xl-3">
+        <a href="/mensagens">
+          <div class="card p-4 h-100">
+            <div class="d-flex justify-content-between align-items-start gap-2">
+              <div>
+                <div class="fw-semibold">💬 Mensagens</div>
+                <div class="muted small mt-1">Converse com a equipe e acompanhe respostas.</div>
+              </div>
+              <span class="badge text-bg-danger">{{ unread_messages_count or 0 }}</span>
+            </div>
+          </div>
+        </a>
+      </div>
+      <div class="col-md-6 col-xl-3">
+        <a href="/notificacoes">
+          <div class="card p-4 h-100">
+            <div class="d-flex justify-content-between align-items-start gap-2">
+              <div>
+                <div class="fw-semibold">🔔 Notificações</div>
+                <div class="muted small mt-1">Avisos importantes, novidades e ações recentes.</div>
+              </div>
+              <span class="badge text-bg-danger">{{ unread_notifications_count or 0 }}</span>
+            </div>
+          </div>
+        </a>
+      </div>
+    </div>
+  </div>
+
+  {% if tabs %}
+  <div class="col-12">
+    <ul class="nav nav-pills gap-2" id="dashTabs" role="tablist">
+      {% for t in tabs %}
+        <li class="nav-item" role="presentation">
+          <button class="nav-link {% if loop.first %}active{% endif %}" id="tab-{{ t.key }}" data-bs-toggle="pill"
+                  data-bs-target="#pane-{{ t.key }}" type="button" role="tab">
+            {{ t.title }}
+          </button>
+        </li>
+      {% endfor %}
+    </ul>
+
+    <div class="tab-content mt-3">
+      {% for t in tabs %}
+        <div class="tab-pane fade {% if loop.first %}show active{% endif %}" id="pane-{{ t.key }}" role="tabpanel">
+          <div class="row g-3">
+            {% for item in t["items"] %}
+              <div class="col-md-6 col-lg-4">
+                <a href="{{ item.href }}">
+                  <div class="card p-4 h-100">
+                    <div class="d-flex justify-content-between align-items-start">
+                      <div>
+                        <div class="fw-semibold">{{ item.title }}</div>
+                        <div class="muted small mt-1">{{ item.desc }}</div>
+                      </div>
+                      <span class="badge text-bg-light border">→</span>
+                    </div>
+                  </div>
+                </a>
+              </div>
+            {% endfor %}
+          </div>
+        </div>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+
+  {% if standalone %}
+  <div class="col-12 mt-2">
+    <div class="d-flex align-items-center justify-content-between">
+      <div class="fw-semibold">{{ standalone_title or "Acesso rápido" }}</div>
+      <div class="muted small">{{ standalone_desc or "Pendências, Agenda e Educação" }}</div>
+    </div>
+  </div>
+
+  {% for item in standalone %}
+    <div class="col-md-6 col-lg-4">
+      <a href="{{ item.href }}">
+        <div class="card p-4 h-100">
+          <div class="d-flex justify-content-between align-items-start">
+            <div>
+              <div class="fw-semibold">{{ item.title }}</div>
+              <div class="muted small mt-1">{{ item.desc }}</div>
+            </div>
+            <span class="badge text-bg-light border">→</span>
+          </div>
+        </div>
+      </a>
+    </div>
+  {% endfor %}
+  {% endif %}
+</div>
+
+<script>
+(function(){
+  const tabs = document.getElementById("dashTabs");
+  if (!tabs) return;
+
+  const key = "dash_active_tab";
+  const saved = localStorage.getItem(key);
+  if (saved) {
+    const btn = document.getElementById("tab-" + saved);
+    if (btn) btn.click();
+  }
+  tabs.addEventListener("click", (e) => {
+    const btn = e.target.closest("button[id^='tab-']");
+    if (!btn) return;
+    localStorage.setItem(key, btn.id.replace("tab-",""));
+  });
+})();
+</script>
+{% endblock %}
+"""
+if hasattr(templates_env.loader, "mapping"):
+    templates_env.loader.mapping = TEMPLATES
+
+_base_tpl_fix_badges_dyn = TEMPLATES.get("base.html", "")
+if _base_tpl_fix_badges_dyn:
+    _msg_btn = (
+        '<a class="btn btn-outline-secondary btn-sm position-relative" href="/mensagens" aria-label="Mensagens">💬'
+        '{% if unread_messages_count %}<span class="position-absolute top-0 start-100 translate-middle badge rounded-pill text-bg-danger">{{ unread_messages_count }}</span>{% endif %}</a>'
+    )
+    _notif_btn = (
+        '<a class="btn btn-outline-secondary btn-sm position-relative" href="/notificacoes" aria-label="Notificações">🔔'
+        '{% if unread_notifications_count %}<span class="position-absolute top-0 start-100 translate-middle badge rounded-pill text-bg-danger">{{ unread_notifications_count }}</span>{% endif %}</a>'
+    )
+    # garante os dois botões antes do logout
+    if 'href="/logout"' in _base_tpl_fix_badges_dyn:
+        _before_logout = _msg_btn + '\n            ' + _notif_btn + '\n            <a class="btn btn-outline-secondary btn-sm" href="/logout">Sair</a>'
+        _base_tpl_fix_badges_dyn = re.sub(
+            r'(?:<a[^>]+href="/mensagens"[^>]*>.*?</a>\s*)?(?:<a[^>]+href="/notificacoes"[^>]*>.*?</a>\s*)?<a class="btn btn-outline-secondary btn-sm" href="/logout">Sair</a>',
+            _before_logout,
+            _base_tpl_fix_badges_dyn,
+            count=1,
+            flags=re.DOTALL,
+        )
+    TEMPLATES["base.html"] = _base_tpl_fix_badges_dyn
+    if hasattr(templates_env.loader, "mapping"):
+        templates_env.loader.mapping = TEMPLATES
+
+_render_fix_scores_badges = render
+
+def render(
+    template_name: str,
+    *,
+    request: Request,
+    context: Optional[dict[str, Any]] = None,
+    status_code: int = 200,
+) -> HTMLResponse:
+    ctx = dict(context or {})
+    ctx.setdefault("unread_messages_count", 0)
+    ctx.setdefault("unread_notifications_count", 0)
+    ctx.setdefault("group_company_count", 0)
+    try:
+        with Session(engine) as _db:
+            tenant = get_tenant_context(request, _db)
+            if tenant:
+                ctx["unread_messages_count"] = unread_messages_count_for_user(
+                    _db,
+                    company_id=tenant.company.id,
+                    user_id=tenant.user.id,
+                )
+                ctx["unread_notifications_count"] = unread_notifications_count_for_user(
+                    _db,
+                    company_id=tenant.company.id,
+                    user_id=tenant.user.id,
+                )
+                active_client_id = get_active_client_id(request, _db, tenant)
+                if active_client_id:
+                    ctx["group_company_count"] = group_company_count(
+                        _db,
+                        company_id=tenant.company.id,
+                        client_id=active_client_id,
+                    )
+    except Exception:
+        pass
+    return _render_fix_scores_badges(
+        template_name,
+        request=request,
+        context=ctx,
+        status_code=status_code,
+    )
