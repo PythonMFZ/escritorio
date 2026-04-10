@@ -6472,356 +6472,6 @@ a:hover{ color:#00BFBF; }
       <h4 class="mb-0">Financeiro</h4>
       <div class="muted">Notas/Boletos de honorários (manual) + sincronizado do Conta Azul.</div>
     </div>
-    {% if role in ["admin","equipe"] %}
-      <a class="btn btn-primary" href="/financeiro/novo">Nova cobrança</a>
-    {% endif %}
-  </div>
-
-  <hr class="my-3"/>
-
-  {% if items %}
-    <div class="list-group">
-      {% for it in items %}
-        <a class="list-group-item list-group-item-action" href="/financeiro/{{ it.id }}">
-          <div class="d-flex justify-content-between">
-            <div class="fw-semibold">{{ it.title }}</div>
-            <span class="badge text-bg-light border">{{ it.status }}</span>
-          </div>
-          <div class="muted small">
-            {% if role in ["admin","equipe"] %}Cliente: {{ it.client_name }} • {% endif %}
-            Valor: R$ {{ "%.2f"|format(it.amount_brl) }} •
-            {% if it.due_date %}Venc: {{ it.due_date }} • {% endif %}
-            {{ it.created_at }}
-          </div>
-        </a>
-      {% endfor %}
-    </div>
-  {% else %}
-    <div class="muted">Sem cobranças manuais.</div>
-  {% endif %}
-</div>
-
-<div class="card p-4 mt-3">
-  <div class="d-flex justify-content-between align-items-center">
-    <div>
-      <h5 class="mb-0">Conta Azul</h5>
-      <div class="muted small">Sincroniza notas fiscais e contas a receber do ERP (filtrado pelo cliente selecionado).</div>
-    </div>
-    {% if role in ["admin","equipe"] %}
-      <a class="btn btn-outline-secondary" href="/integrations/contaazul">Configurar</a>
-    {% endif %}
-  </div>
-
-  <hr class="my-3"/>
-
-  {% if not ca_configured %}
-    <div class="alert alert-warning">
-      Configure <code>CONTA_AZUL_CLIENT_ID</code> e <code>CONTA_AZUL_CLIENT_SECRET</code> no Render.
-    </div>
-  {% elif not ca_connected %}
-    <div class="alert alert-info">
-      Conta Azul não conectada. <a href="/integrations/contaazul">Clique aqui para conectar</a>.
-    </div>
-  {% else %}
-    <div class="d-flex flex-wrap align-items-center gap-2">
-      <span class="badge text-bg-light border">Conectado</span>
-      {% if ca_last_sync %}<span class="muted small">Última sync: {{ ca_last_sync }}</span>{% endif %}
-      {% if role in ["admin","equipe"] %}
-        <form method="post" action="/financeiro/contaazul/sync">
-          <button class="btn btn-sm btn-outline-primary">Sincronizar agora</button>
-        </form>
-      {% endif %}
-    </div>
-
-    {% if role in ["admin","equipe"] and current_client %}
-      <div class="border rounded p-3 mt-3">
-        <div class="fw-semibold mb-1">Vínculo do cliente (Conta Azul)</div>
-        <div class="muted small">
-          Cliente: <b>{{ current_client.name }}</b> • Doc: {{ ca_client_doc or "—" }} • E-mail: {{ ca_client_email or "—" }}
-        </div>
-        <div class="mono small mt-1">person_id: {{ ca_person_id or "—" }}</div>
-
-        <div class="d-flex flex-wrap gap-2 mt-2">
-          <form method="post" action="/financeiro/contaazul/auto_vincular">
-            <button class="btn btn-sm btn-outline-secondary">Auto-vincular</button>
-          </form>
-
-          <form method="post" action="/financeiro/contaazul/vincular" class="d-flex gap-2">
-            <input name="person_id" class="form-control form-control-sm" placeholder="UUID do cliente no Conta Azul (Pessoa)" style="min-width: 280px;" />
-            <button class="btn btn-sm btn-outline-primary">Salvar vínculo</button>
-          </form>
-        </div>
-
-        <div class="muted small mt-2">
-          Se não aparecer nada após sincronizar, geralmente o documento/e-mail do cliente no Conta Azul está diferente. Nesse caso, cole o UUID da pessoa (Cliente) do Conta Azul aqui.
-        </div>
-      </div>
-    {% endif %}
-
-    <div class="mt-4">
-      <h6 class="mb-2">Contas a receber / Boletos</h6>
-      {% if ca_receivables %}
-        <div class="table-responsive">
-          <table class="table table-sm align-middle">
-            <thead>
-              <tr>
-                <th>Venc.</th>
-                <th>Descrição</th>
-                <th>Status</th>
-                <th>Aberto</th>
-                <th>Pago</th>
-                <th>Fatura</th>
-                <th>Boleto</th>
-                <th>Download</th>
-              </tr>
-            </thead>
-            <tbody>
-              {% for r in ca_receivables %}
-                <tr>
-                  <td class="mono small">{{ fin_human_date(r.due_date) }}</td>
-                  <td>{{ r.description }}</td>
-                  <td><span class="badge text-bg-light border">{{ r.status }}</span></td>
-                  <td>R$ {{ "%.2f"|format(r.amount_open) }}</td>
-                  <td>R$ {{ "%.2f"|format(r.amount_paid) }}</td>
-                  <td class="mono small">{% if r.invoice_number %}{{ r.invoice_type }} #{{ r.invoice_number }}{% else %}—{% endif %}</td>
-                  <td>
-                    {% if r.payment_url %}
-                      <a class="btn btn-sm btn-outline-primary" href="{{ r.payment_url }}" target="_blank" rel="noopener">Boleto</a>
-                    {% else %}
-                      —
-                    {% endif %}
-                  </td>
-                  <td>
-                    <a class="btn btn-sm btn-outline-secondary" href="/financeiro/contaazul/receivable/{{ r.id }}/fatura.pdf" target="_blank" rel="noopener">Fatura PDF</a>
-                  </td>
-                </tr>
-              {% endfor %}
-            </tbody>
-          </table>
-        </div>
-      {% else %}
-        <div class="muted small">Nenhuma parcela encontrada. Clique em “Sincronizar agora”.</div>
-      {% endif %}
-    </div>
-
-    <div class="mt-4">
-      <h6 class="mb-2">Notas fiscais</h6>
-      {% if ca_invoices %}
-        <div class="table-responsive">
-          <table class="table table-sm align-middle">
-            <thead>
-              <tr>
-                <th>Data</th>
-                <th>Número</th>
-                <th>Tipo</th>
-                <th>Status</th>
-                <th>Download</th>
-              </tr>
-            </thead>
-            <tbody>
-              {% for n in ca_invoices %}
-                <tr>
-                  <td class="mono small">{{ fin_human_date(n.issue_date) }}</td>
-                  <td class="mono small">{{ n.number or "—" }}</td>
-                  <td class="mono small">{{ n.invoice_type }}</td>
-                  <td><span class="badge text-bg-light border">{{ n.status }}</span></td>
-                  <td>
-                    {% if n.invoice_type.upper() == "NFSE" %}
-                      <a class="btn btn-sm btn-outline-secondary" href="/financeiro/contaazul/invoice/{{ n.id }}/pdf" target="_blank" rel="noopener">NF PDF</a>
-                    {% elif n.invoice_type.upper() == "NFE" %}
-                      <a class="btn btn-sm btn-outline-secondary" href="/financeiro/contaazul/invoice/{{ n.id }}/xml" target="_blank" rel="noopener">NF XML</a>
-                    {% else %}
-                      —
-                    {% endif %}
-                  </td>
-                </tr>
-              {% endfor %}
-            </tbody>
-          </table>
-        </div>
-      {% else %}
-        <div class="muted small">Nenhuma nota encontrada. Clique em “Sincronizar agora”.</div>
-      {% endif %}
-    </div>
-  {% endif %}
-</div>
-{% endblock %}
-""",
-    "fin_new.html": r"""
-{% extends "base.html" %}
-{% block content %}
-<div class="card p-4">
-  <h4>Nova cobrança (nota/boleto)</h4>
-  <div class="muted">Só admin/equipe cria e anexa PDF/arquivo para o cliente baixar.</div>
-
-  {% if not clients %}
-    <div class="alert alert-warning mt-3">Nenhum cliente cadastrado. Vá em “Membros”.</div>
-    <div class="d-flex gap-2">
-      <a class="btn btn-outline-secondary" href="/financeiro">Voltar</a>
-      {% if role in ["admin","equipe"] %}
-        <a class="btn btn-outline-primary" href="/financeiro/{{ inv.id }}/editar">Editar</a>
-      {% endif %}
-    </div>
-  {% else %}
-    <form method="post" action="/financeiro/novo" enctype="multipart/form-data" class="mt-3">
-      <div class="row g-3">
-        <div class="col-12">
-          <label class="form-label">Cliente</label>
-          <select class="form-select" name="client_id" required>
-            {% for c in clients %}
-              <option value="{{ c.id }}" {% if current_client and c.id==current_client.id %}selected{% endif %}>{{ c.name }}</option>
-            {% endfor %}
-          </select>
-        </div>
-        <div class="col-md-8">
-          <label class="form-label">Título</label>
-          <input class="form-control" name="title" required placeholder="Honorários - Março/2026" />
-        </div>
-        <div class="col-md-4">
-          <label class="form-label">Status</label>
-          <select class="form-select" name="status">
-            <option value="emitido">emitido</option>
-            <option value="pago">pago</option>
-            <option value="atrasado">atrasado</option>
-            <option value="cancelado">cancelado</option>
-          </select>
-        </div>
-        <div class="col-md-6">
-          <label class="form-label">Valor (R$)</label>
-          <input class="form-control" name="amount_brl" type="number" step="0.01" min="0" value="0" required />
-        </div>
-        <div class="col-md-6">
-          <label class="form-label">Vencimento (DD/MM/AAAA)</label>
-          <input class="form-control mono" name="due_date" placeholder="2026-03-20" />
-        </div>
-        <div class="col-12">
-          <label class="form-label">Observações</label>
-          <textarea class="form-control" name="notes" rows="3"></textarea>
-        </div>
-        <div class="col-12">
-          <label class="form-label">Anexo (PDF/arquivo)</label>
-          <input class="form-control" type="file" name="file" required />
-        </div>
-      </div>
-      <div class="mt-4 d-flex gap-2">
-        <button class="btn btn-primary">Salvar</button>
-        <a class="btn btn-outline-secondary" href="/financeiro">Cancelar</a>
-      </div>
-    </form>
-  {% endif %}
-</div>
-{% endblock %}
-""",
-    "fin_detail.html": r"""
-{% extends "base.html" %}
-{% block content %}
-<div class="card p-4">
-  <div class="d-flex justify-content-between">
-    <div>
-      <h4 class="mb-1">{{ inv.title }}</h4>
-      <div class="muted">
-        Status: <b>{{ inv.status }}</b> • Valor: <b>R$ {{ "%.2f"|format(inv.amount_brl) }}</b>
-        {% if inv.due_date %} • Venc: <b>{{ inv.due_date }}</b>{% endif %}
-        {% if role in ["admin","equipe"] %} • Cliente: <b>{{ client.name }}</b>{% endif %}
-      </div>
-    </div>
-    <div class="d-flex gap-2">
-      <a class="btn btn-outline-secondary" href="/financeiro">Voltar</a>
-      {% if role in ["admin","equipe"] %}
-        <a class="btn btn-outline-primary" href="/financeiro/{{ inv.id }}/editar">Editar</a>
-        <form method="post" action="/financeiro/{{ inv.id }}/excluir" onsubmit="return confirm('Excluir lançamento? Remova anexos antes.');">
-          <button class="btn btn-outline-danger" type="submit">Excluir</button>
-        </form>
-      {% endif %}
-    </div>
-  </div>
-
-  <hr class="my-3"/>
-  <pre>{{ inv.notes }}</pre>
-
-  <hr class="my-3"/>
-  <h6>Anexos / Downloads</h6>
-  <div class="muted small mb-2">Baixe aqui a NF, boleto ou outros arquivos anexados a esta cobrança, quando houver.</div>
-  {% if attachments %}
-    <ul>
-      {% for a in attachments %}
-        <li class="d-flex justify-content-between align-items-center">
-          <a href="/download/{{ a.id }}">{{ a.original_filename }}</a>
-          {% if role in ["admin","equipe"] %}
-            <form method="post" action="/attachments/{{ a.id }}/delete" class="ms-2">
-              <input type="hidden" name="next" value="/financeiro/{{ inv.id }}">
-              <button class="btn btn-outline-danger btn-sm" type="submit">Excluir</button>
-            </form>
-          {% endif %}
-        </li>
-      {% endfor %}
-    </ul>
-  {% else %}
-    <div class="muted">Sem anexos.</div>
-  {% endif %}
-
-  {% if role in ["admin","equipe"] %}
-    <hr class="my-3"/>
-    <form method="post" action="/financeiro/{{ inv.id }}/anexar" enctype="multipart/form-data">
-      <div class="mb-2">
-        <label class="form-label">Anexar novo arquivo</label>
-        <input class="form-control" type="file" name="file" required />
-      </div>
-      <button class="btn btn-primary">Enviar</button>
-    </form>
-  {% endif %}
-</div>
-{% endblock %}
-""",
-}
-
-TEMPLATES.update({
-    "contaazul_settings.html": r"""
-{% extends "base.html" %}
-{% block content %}
-<div class="card p-4">
-  <div class="d-flex justify-content-between align-items-start">
-    <div>
-      <h4 class="mb-1">Integração: Conta Azul</h4>
-      <div class="muted">Sincroniza notas e cobranças (boletos) para aparecerem no Financeiro.</div>
-    </div>
-    <a class="btn btn-outline-secondary" href="/financeiro">Voltar</a>
-  </div>
-
-  <hr class="my-3"/>
-
-  {% if not configured %}
-    <div class="alert alert-warning">
-      Configure as variáveis no Render: <code>CONTA_AZUL_CLIENT_ID</code> e <code>CONTA_AZUL_CLIENT_SECRET</code>.
-    </div>
-  {% endif %}
-
-  <div class="mb-2">
-    <div class="muted small">Redirect URI (cadastre no Portal do Desenvolvedor Conta Azul):</div>
-    <div class="mono">{{ redirect_uri }}</div>
-  </div>
-
-  {% if connected %}
-    <div class="alert alert-success">Conectado{% if last_sync %} • Última sync: {{ last_sync }}{% endif %}</div>
-    <form method="post" action="/integrations/contaazul/disconnect" onsubmit="return confirm('Desconectar Conta Azul?');">
-      <button class="btn btn-outline-danger">Desconectar</button>
-    </form>
-  {% else %}
-    <div class="alert alert-info">Ainda não conectado.</div>
-    <a class="btn btn-primary" href="/integrations/contaazul/connect">Conectar Conta Azul</a>
-  {% endif %}
-</div>
-{% endblock %}
-""",
-    "fin_list.html": r"""
-{% extends "base.html" %}
-{% block content %}
-<div class="card p-4">
-  <div class="d-flex justify-content-between align-items-center">
-    <div>
-      <h4 class="mb-0">Financeiro</h4>
-      <div class="muted">Notas/Boletos de honorários (manual) + sincronizado do Conta Azul.</div>
-    </div>
     <div class="d-flex gap-2">
       {% if role in ["admin","equipe"] %}
         <a class="btn btn-outline-secondary" href="/integrations/contaazul">Conta Azul</a>
@@ -6869,54 +6519,89 @@ TEMPLATES.update({
   {% endif %}
 
   <hr class="my-4"/>
-  <h6 class="mb-2">Conta Azul: Boletos / Contas a receber</h6>
+  <h6 class="mb-2">Contas a receber / Boletos</h6>
   {% if ca_receivables %}
-    <div class="list-group">
-      {% for r in ca_receivables %}
-        <div class="list-group-item">
-          <div class="d-flex justify-content-between">
-            <div class="fw-semibold">{{ r.description }}</div>
-            <span class="badge text-bg-light border">{{ r.status }}</span>
-          </div>
-          <div class="muted small mt-1">
-            Valor: R$ {{ "%.2f"|format(r.amount_total) }} • Aberto: R$ {{ "%.2f"|format(r.amount_open) }}
-            {% if r.due_date %} • Venc: {{ r.due_date }}{% endif %}
-            {% if r.invoice_type or r.invoice_number %} • {{ r.invoice_type }} {{ r.invoice_number }}{% endif %}
-            {% if r.boleto_status %} • Boleto: {{ r.boleto_status }}{% endif %}
-          </div>
-          {% if r.payment_url %}
-            <div class="mt-2">
-              <a class="btn btn-sm btn-outline-primary" href="{{ r.payment_url }}" target="_blank" rel="noopener">Abrir link de pagamento</a>
-            </div>
-          {% endif %}
-        </div>
-      {% endfor %}
+    <div class="table-responsive">
+      <table class="table table-sm align-middle">
+        <thead>
+          <tr>
+            <th>Venc.</th>
+            <th>Descrição</th>
+            <th>Status</th>
+            <th>Aberto</th>
+            <th>Pago</th>
+            <th>Fatura</th>
+            <th>Boleto</th>
+            <th>Download</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in ca_receivables %}
+            <tr>
+              <td class="mono small">{{ fin_human_date(r.due_date) }}</td>
+              <td>{{ r.description }}</td>
+              <td><span class="badge text-bg-light border">{{ r.status }}</span></td>
+              <td>R$ {{ "%.2f"|format(r.amount_open) }}</td>
+              <td>R$ {{ "%.2f"|format(r.amount_paid) }}</td>
+              <td class="mono small">{% if r.invoice_number %}{{ r.invoice_type }} #{{ r.invoice_number }}{% else %}—{% endif %}</td>
+              <td>
+                {% if r.payment_url %}
+                  <a class="btn btn-sm btn-outline-primary" href="{{ r.payment_url }}" target="_blank" rel="noopener">Boleto</a>
+                {% else %}
+                  —
+                {% endif %}
+              </td>
+              <td>
+                <a class="btn btn-sm btn-outline-secondary" href="/financeiro/contaazul/receivable/{{ r.id }}/fatura.pdf" target="_blank" rel="noopener">Fatura PDF</a>
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
     </div>
   {% else %}
-    <div class="muted">Sem itens sincronizados.</div>
+    <div class="muted small">Nenhuma parcela encontrada. Clique em “Sincronizar agora”.</div>
   {% endif %}
 
-  <hr class="my-4"/>
-  <h6 class="mb-2">Conta Azul: Notas fiscais</h6>
-  {% if ca_invoices %}
-    <div class="list-group">
-      {% for n in ca_invoices %}
-        <div class="list-group-item">
-          <div class="d-flex justify-content-between">
-            <div class="fw-semibold">{{ n.invoice_type }} {{ n.number }}</div>
-            <span class="badge text-bg-light border">{{ n.status }}</span>
-          </div>
-          <div class="muted small mt-1">
-            {% if n.issue_date %}Emissão/Competência: {{ n.issue_date }} • {% endif %}
-            {% if n.amount %}Valor: R$ {{ "%.2f"|format(n.amount) }} • {% endif %}
-            ID: {{ n.external_id }}
-          </div>
-        </div>
-      {% endfor %}
-    </div>
-  {% else %}
-    <div class="muted">Sem notas sincronizadas.</div>
-  {% endif %}
+  <div class="mt-4">
+    <h6 class="mb-2">Notas fiscais</h6>
+    {% if ca_invoices %}
+      <div class="table-responsive">
+        <table class="table table-sm align-middle">
+          <thead>
+            <tr>
+              <th>Data</th>
+              <th>Número</th>
+              <th>Tipo</th>
+              <th>Status</th>
+              <th>Download</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for n in ca_invoices %}
+              <tr>
+                <td class="mono small">{{ fin_human_date(n.issue_date) }}</td>
+                <td class="mono small">{{ n.number or "—" }}</td>
+                <td class="mono small">{{ n.invoice_type }}</td>
+                <td><span class="badge text-bg-light border">{{ n.status }}</span></td>
+                <td>
+                  {% if n.invoice_type.upper() == "NFSE" %}
+                    <a class="btn btn-sm btn-outline-secondary" href="/financeiro/contaazul/invoice/{{ n.id }}/pdf" target="_blank" rel="noopener">NF PDF</a>
+                  {% elif n.invoice_type.upper() == "NFE" %}
+                    <a class="btn btn-sm btn-outline-secondary" href="/financeiro/contaazul/invoice/{{ n.id }}/xml" target="_blank" rel="noopener">NF XML</a>
+                  {% else %}
+                    —
+                  {% endif %}
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <div class="muted small">Nenhuma nota encontrada. Clique em “Sincronizar agora”.</div>
+    {% endif %}
+  </div>
 </div>
 {% endblock %}
 """,
@@ -22273,7 +21958,7 @@ def simulate_loan(inp: LoanInput) -> LoanSimResult:
     return LoanSimResult(
         inp=inp,
         schedule=schedule,
-        monthly_rate=_d2(i),
+        monthly_rate=i,
         total_payment=_d2(total_payment),
         total_interest=_d2(total_interest),
         total_amort=_d2(total_amort),
