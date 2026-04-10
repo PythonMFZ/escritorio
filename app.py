@@ -6568,18 +6568,17 @@ a:hover{ color:#00BFBF; }
                 <th>Venc.</th>
                 <th>Descrição</th>
                 <th>Status</th>
-                <th>Download</th>
                 <th>Aberto</th>
                 <th>Pago</th>
                 <th>Fatura</th>
-                <th>Link</th>
+                <th>Boleto</th>
                 <th>Download</th>
               </tr>
             </thead>
             <tbody>
               {% for r in ca_receivables %}
                 <tr>
-                  <td class="mono small">{{ r.due_date }}</td>
+                  <td class="mono small">{{ fin_human_date(r.due_date) }}</td>
                   <td>{{ r.description }}</td>
                   <td><span class="badge text-bg-light border">{{ r.status }}</span></td>
                   <td>R$ {{ "%.2f"|format(r.amount_open) }}</td>
@@ -6587,13 +6586,13 @@ a:hover{ color:#00BFBF; }
                   <td class="mono small">{% if r.invoice_number %}{{ r.invoice_type }} #{{ r.invoice_number }}{% else %}—{% endif %}</td>
                   <td>
                     {% if r.payment_url %}
-                      <a class="btn btn-sm btn-outline-primary" href="{{ r.payment_url }}" target="_blank" rel="noopener">Abrir</a>
+                      <a class="btn btn-sm btn-outline-primary" href="{{ r.payment_url }}" target="_blank" rel="noopener">Boleto</a>
                     {% else %}
                       —
                     {% endif %}
                   </td>
                   <td>
-                    <a class="btn btn-sm btn-outline-secondary" href="/financeiro/contaazul/receivable/{{ r.id }}/fatura.pdf" target="_blank" rel="noopener">PDF</a>
+                    <a class="btn btn-sm btn-outline-secondary" href="/financeiro/contaazul/receivable/{{ r.id }}/fatura.pdf" target="_blank" rel="noopener">Fatura PDF</a>
                   </td>
                 </tr>
               {% endfor %}
@@ -6622,15 +6621,15 @@ a:hover{ color:#00BFBF; }
             <tbody>
               {% for n in ca_invoices %}
                 <tr>
-                  <td class="mono small">{{ n.issue_date }}</td>
+                  <td class="mono small">{{ fin_human_date(n.issue_date) }}</td>
                   <td class="mono small">{{ n.number or "—" }}</td>
                   <td class="mono small">{{ n.invoice_type }}</td>
                   <td><span class="badge text-bg-light border">{{ n.status }}</span></td>
                   <td>
                     {% if n.invoice_type.upper() == "NFSE" %}
-                      <a class="btn btn-sm btn-outline-secondary" href="/financeiro/contaazul/invoice/{{ n.id }}/pdf" target="_blank" rel="noopener">PDF</a>
+                      <a class="btn btn-sm btn-outline-secondary" href="/financeiro/contaazul/invoice/{{ n.id }}/pdf" target="_blank" rel="noopener">NF PDF</a>
                     {% elif n.invoice_type.upper() == "NFE" %}
-                      <a class="btn btn-sm btn-outline-secondary" href="/financeiro/contaazul/invoice/{{ n.id }}/xml" target="_blank" rel="noopener">XML</a>
+                      <a class="btn btn-sm btn-outline-secondary" href="/financeiro/contaazul/invoice/{{ n.id }}/xml" target="_blank" rel="noopener">NF XML</a>
                     {% else %}
                       —
                     {% endif %}
@@ -6741,7 +6740,8 @@ a:hover{ color:#00BFBF; }
   <pre>{{ inv.notes }}</pre>
 
   <hr class="my-3"/>
-  <h6>Anexos (download)</h6>
+  <h6>Anexos / Downloads</h6>
+  <div class="muted small mb-2">Baixe aqui a NF, boleto ou outros arquivos anexados a esta cobrança, quando houver.</div>
   {% if attachments %}
     <ul>
       {% for a in attachments %}
@@ -16202,6 +16202,22 @@ async def contaazul_receivable_fatura_pdf(
     )
 
 
+def _fin_human_date(value: str) -> str:
+    s = (value or "").strip()
+    if not s:
+        return "—"
+    try:
+        if re.fullmatch(r"\d{4}-\d{2}-\d{2}", s):
+            y, m, d = s.split("-")
+            return f"{d}/{m}/{y}"
+        if re.fullmatch(r"\d{4}-\d{2}-\d{2}T.*", s):
+            base = s[:10]
+            y, m, d = base.split("-")
+            return f"{d}/{m}/{y}"
+    except Exception:
+        pass
+    return s
+
 def _office_date_key(value: str) -> tuple[int, int, int]:
     s = (value or "").strip()
     if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", s):
@@ -17275,6 +17291,7 @@ async def fin_list(request: Request, session: Session = Depends(get_session)) ->
             "ca_client_email": ca_client_email,
             "ca_invoices": ca_invoices,
             "ca_receivables": ca_receivables,
+            "fin_human_date": _fin_human_date,
         },
     )
 
@@ -22139,10 +22156,15 @@ class LoanSimInputs:
     @classmethod
     def from_form(cls, **form) -> "LoanInput":
         # build_loan_input espera taxa em percentual (string), ex: "1,79" -> 1.79%
+        chosen_rate = (
+            str(form.get("rate_pct", "") or "").strip()
+            or str(form.get("rate", "") or "").strip()
+            or "1,79"
+        )
         return build_loan_input(
             loan_type=form.get("loan_type", "Empréstimo"),
             amortization=form.get("amortization", "price"),
-            rate_pct=str(form.get("rate", "1,79") or "1,79"),
+            rate_pct=chosen_rate,
             rate_base=form.get("rate_base", "am"),
             term_months=int(form.get("term_months", 24) or 24),
             principal=str(form.get("principal", "") or ""),
