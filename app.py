@@ -225,6 +225,10 @@ engine = create_engine(
 _MAX_PASSWORD_BYTES = 1024
 _MAX_UPLOAD_BYTES = 20 * 1024 * 1024  # 20MB (ajuste se quiser)
 
+ENABLE_ACTIVITY_TRACKING = os.getenv("ENABLE_ACTIVITY_TRACKING", "0") == "1"
+ENABLE_TEMPLATE_LIVE_COUNTS = os.getenv("ENABLE_TEMPLATE_LIVE_COUNTS", "0") == "1"
+HEALTHCHECK_DB = os.getenv("HEALTHCHECK_DB", "1") == "1"
+
 
 def utcnow() -> datetime:
     return datetime.now(timezone.utc)
@@ -12430,8 +12434,15 @@ async def logout(request: Request) -> Response:
 # ----------------------------
 
 @app.get("/healthz")
-async def healthz() -> dict[str, str]:
-    return {"status": "ok"}
+async def healthz() -> Response:
+    if not HEALTHCHECK_DB:
+        return JSONResponse({"status": "ok", "db": "skipped"})
+    try:
+        with Session(engine) as session:
+            session.exec(text("SELECT 1")).one()
+        return JSONResponse({"status": "ok", "db": "ok"})
+    except Exception:
+        return JSONResponse({"status": "error", "db": "down"}, status_code=503)
 
 
 # ----------------------------
@@ -29709,6 +29720,8 @@ def current_online_users_count(session: Session, *, company_id: int, within_minu
 @app.middleware("http")
 async def activity_tracking_middleware(request: Request, call_next: Callable[..., Any]) -> Response:
     response = await call_next(request)
+    if not ENABLE_ACTIVITY_TRACKING:
+        return response
     try:
         path = request.url.path
         if (
@@ -29766,6 +29779,8 @@ def render(
     ctx = dict(context or {})
     ctx.setdefault("unread_notifications_count", 0)
     ctx.setdefault("group_company_count", 0)
+    if not ENABLE_TEMPLATE_LIVE_COUNTS:
+        return _original_render_delivery3(template_name, request=request, context=ctx, status_code=status_code)
     try:
         with Session(engine) as _db:
             tenant = get_tenant_context(request, _db)
@@ -30654,6 +30669,8 @@ def render(
 ) -> HTMLResponse:
     ctx = dict(context or {})
     ctx.setdefault("unread_messages_count", 0)
+    if not ENABLE_TEMPLATE_LIVE_COUNTS:
+        return _original_render_delivery4(template_name, request=request, context=ctx, status_code=status_code)
     try:
         with Session(engine) as _db:
             tenant = get_tenant_context(request, _db)
