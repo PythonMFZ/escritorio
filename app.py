@@ -18266,15 +18266,19 @@ def _task_assignee_label(session: Session, user_id: Optional[int]) -> str:
 
 
 def _task_work_minutes(session_obj: TaskWorkSession) -> int:
-    if session_obj.ended_at:
+    try:
+        started_at = session_obj.started_at
+        ended_at = session_obj.ended_at
+        if started_at and ended_at:
+            return max(0, int((ended_at - started_at).total_seconds() // 60))
+        if started_at:
+            return max(0, int((utcnow() - started_at).total_seconds() // 60))
+        return max(0, int(session_obj.duration_minutes or 0))
+    except Exception:
         try:
             return max(0, int(session_obj.duration_minutes or 0))
         except Exception:
             return 0
-    try:
-        return max(0, int((utcnow() - session_obj.started_at).total_seconds() // 60))
-    except Exception:
-        return 0
 
 
 def _human_minutes_label(total_minutes: int) -> str:
@@ -38247,25 +38251,43 @@ def _format_date_br(value: Any) -> str:
     for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S.%f"):
         try:
             dt = datetime.strptime(s, fmt)
+            if fmt != "%Y-%m-%d" and fmt != "%d/%m/%Y":
+                dt = _to_brasilia_dt(dt.replace(tzinfo=timezone.utc))
             return dt.strftime("%d/%m/%Y")
         except Exception:
             pass
     try:
         if isinstance(value, datetime):
-            return value.strftime("%d/%m/%Y")
+            try:
+                return _to_brasilia_dt(value).strftime("%d/%m/%Y")
+            except Exception:
+                return value.strftime("%d/%m/%Y")
     except Exception:
         pass
     return s
 
+BRASILIA_TZ = timezone(timedelta(hours=-3))
+
+
+def _to_brasilia_dt(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.astimezone(BRASILIA_TZ)
+
+
 def _format_dt_br(value: Any) -> str:
     if isinstance(value, datetime):
-        return value.strftime("%d/%m/%Y %H:%M")
+        try:
+            return _to_brasilia_dt(value).strftime("%d/%m/%Y %H:%M")
+        except Exception:
+            return value.strftime("%d/%m/%Y %H:%M")
     s = (str(value or "")).strip()
     if not s:
         return ""
     for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S.%f"):
         try:
-            return datetime.strptime(s, fmt).strftime("%d/%m/%Y %H:%M")
+            dt = datetime.strptime(s, fmt).replace(tzinfo=timezone.utc)
+            return _to_brasilia_dt(dt).strftime("%d/%m/%Y %H:%M")
         except Exception:
             pass
     return s
