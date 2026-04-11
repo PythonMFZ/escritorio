@@ -209,6 +209,10 @@ DIRECTDATA_POLL_MIN_INTERVAL_S = float(os.getenv("DIRECTDATA_POLL_MIN_INTERVAL_S
 NOTION_VERSION = os.getenv("NOTION_VERSION", "2026-03-11")
 NOTION_API_BASE = "https://api.notion.com/v1"
 
+BRUSQUE_NFSE_AUTH_URL = "https://www.brusque.sc.gov.br/autoatendimento/servicos/consulta-de-autenticidade-de-nota-fiscal-eletronica-nfse"
+NACIONAL_NFSE_DANFSE_URL = "https://www.nfse.gov.br/ConsultaPublica/Download/DANFSe?chave={chave}"
+NACIONAL_NFSE_CONSULTA_URL = "https://www.nfse.gov.br/consultapublica"
+
 UPLOAD_DIR = Path(os.getenv("UPLOAD_DIR") or "./uploads").resolve()
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -3122,6 +3126,144 @@ def _extract_nfse_real_document_url(payload: dict[str, Any]) -> str:
 
     return walk(payload) or ""
 
+
+def _extract_nfse_payload_value(payload: Any, wanted_keys: set[str]) -> str:
+    if not wanted_keys:
+        return ""
+
+    def walk(obj: Any) -> str:
+        if isinstance(obj, dict):
+            for key, value in obj.items():
+                key_norm = str(key or "").strip().lower()
+                if key_norm in wanted_keys:
+                    s = str(value or "").strip()
+                    if s:
+                        return s
+                found = walk(value)
+                if found:
+                    return found
+        elif isinstance(obj, list):
+            for item in obj:
+                found = walk(item)
+                if found:
+                    return found
+        return ""
+
+    return walk(payload)
+
+
+def _extract_nfse_public_fields(payload: dict[str, Any]) -> dict[str, str]:
+    if not isinstance(payload, dict):
+        return {}
+
+    fields: dict[str, str] = {}
+
+    def first(keys: set[str]) -> str:
+        return _extract_nfse_payload_value(payload, keys)
+
+    fields["chave_acesso"] = first({
+        "chave", "chave_acesso", "chave_acesso_nfse", "chave_nfe", "access_key"
+    })
+    fields["codigo_verificacao"] = first({
+        "codigo_verificacao", "codigoverificacao", "verification_code", "codigo"
+    })
+    fields["numero_nfse"] = first({
+        "numero_nfse", "numero", "numero_nota", "numeroNota", "numeroNfse"
+    })
+    fields["numero_dps"] = first({
+        "numero_dps", "numerodps", "dps_numero", "numero_rps", "numeroRps"
+    })
+    fields["serie_dps"] = first({
+        "serie_dps", "seriedps", "serie", "serie_rps", "serieRps"
+    })
+    fields["cnpj_prestador"] = _digits_only(first({
+        "cnpj_prestador", "cpf_cnpj_prestador", "cpfcnpjprestador", "documento_prestador",
+        "cnpj_emitente", "cpf_cnpj_emitente", "cpfcnpjemitente"
+    }))
+    fields["municipio"] = first({"municipio", "municipio_prestacao", "municipio_emissao"})
+    fields["external_id"] = str(payload.get("id") or "").strip()
+    return {k: v for k, v in fields.items() if v}
+
+
+def _build_nfse_public_document_url(payload: dict[str, Any]) -> str:
+    direct = _extract_nfse_real_document_url(payload)
+    if direct:
+        return direct
+
+    fields = _extract_nfse_public_fields(payload)
+    chave = str(fields.get("chave_acesso") or "").strip()
+    if chave:
+        from urllib.parse import quote
+        return NACIONAL_NFSE_DANFSE_URL.format(chave=quote(chave, safe=""))
+
+    return ""
+
+
+def _render_nfse_lookup_page(*, inv: "ContaAzulInvoice", payload: dict[str, Any]) -> str:
+    fields = _extract_nfse_public_fields(payload)
+    numero = html.escape(str(fields.get("numero_nfse") or inv.number or "—"))
+    codigo = html.escape(str(fields.get("codigo_verificacao") or "—"))
+    chave = html.escape(str(fields.get("chave_acesso") or "—"))
+    dps_num = html.escape(str(fields.get("numero_dps") or "—"))
+    dps_serie = html.escape(str(fields.get("serie_dps") or "—"))
+    cnpj = html.escape(str(fields.get("cnpj_prestador") or "—"))
+    issue_date = html.escape(str(getattr(inv, "issue_date", "") or "—"))
+    external_id = html.escape(str(getattr(inv, "external_id", "") or "—"))
+    brusque_url = html.escape(BRUSQUE_NFSE_AUTH_URL)
+    nacional_url = html.escape(NACIONAL_NFSE_CONSULTA_URL)
+
+    return f"""<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>NFS-e oficial indisponível</title>
+  <style>
+    body {{ font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 0; background: #f6f7fb; color: #111827; }}
+    .wrap {{ max-width: 820px; margin: 40px auto; padding: 0 20px; }}
+    .card {{ background: #fff; border: 1px solid #e5e7eb; border-radius: 16px; padding: 24px; box-shadow: 0 8px 20px rgba(0,0,0,.04); }}
+    h1 {{ font-size: 24px; margin: 0 0 8px; }}
+    p {{ line-height: 1.5; }}
+    .muted {{ color: #6b7280; }}
+    .grid {{ display: grid; grid-template-columns: 220px 1fr; gap: 10px 14px; margin: 18px 0 22px; }}
+    .k {{ color: #374151; font-weight: 600; }}
+    .v {{ font-family: ui-monospace, SFMono-Regular, Menlo, monospace; word-break: break-all; }}
+    .actions {{ display: flex; gap: 12px; flex-wrap: wrap; margin-top: 18px; }}
+    .btn {{ display: inline-block; padding: 10px 14px; border-radius: 10px; text-decoration: none; border: 1px solid #d1d5db; }}
+    .btn-primary {{ background: #111827; color: #fff; border-color: #111827; }}
+    .btn-light {{ background: #fff; color: #111827; }}
+    .note {{ background: #fff7ed; border: 1px solid #fed7aa; color: #9a3412; padding: 12px 14px; border-radius: 12px; margin-top: 16px; }}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <h1>NFS-e oficial não veio com link direto na integração</h1>
+      <p class="muted">A Conta Azul sincronizou a nota, mas não entregou um link direto do PDF oficial. Use os dados abaixo para consultar a NFS-e na prefeitura de Brusque ou no portal nacional.</p>
+
+      <div class="grid">
+        <div class="k">Número da NFS-e</div><div class="v">{numero}</div>
+        <div class="k">Data de emissão</div><div class="v">{issue_date}</div>
+        <div class="k">Código de verificação</div><div class="v">{codigo}</div>
+        <div class="k">Chave de acesso</div><div class="v">{chave}</div>
+        <div class="k">Número DPS / RPS</div><div class="v">{dps_num}</div>
+        <div class="k">Série DPS / RPS</div><div class="v">{dps_serie}</div>
+        <div class="k">CNPJ do prestador</div><div class="v">{cnpj}</div>
+        <div class="k">ID externo da integração</div><div class="v">{external_id}</div>
+      </div>
+
+      <div class="actions">
+        <a class="btn btn-primary" href="{brusque_url}" target="_blank" rel="noopener">Consultar na Prefeitura de Brusque</a>
+        <a class="btn btn-light" href="{nacional_url}" target="_blank" rel="noopener">Consultar no portal nacional</a>
+      </div>
+
+      <div class="note">
+        Dica: se a prefeitura ou o portal nacional pedir número, código de verificação, DPS/RPS, série ou CNPJ do prestador, eles já estão listados acima.
+      </div>
+    </div>
+  </div>
+</body>
+</html>"""
 
 def _extract_sale_id_from_nfse_payload(payload: dict[str, Any]) -> str:
     if not isinstance(payload, dict):
@@ -16105,11 +16247,17 @@ async def contaazul_invoice_xml(
     )
 
 
+
 @app.get("/financeiro/contaazul/invoice/{invoice_id}/pdf")
 @require_login
 async def contaazul_invoice_pdf(
     invoice_id: int, request: Request, session: Session = Depends(get_session)
 ) -> Response:
+    """
+    Para NFSE, tenta abrir o documento real da prefeitura / DANFSE quando o payload trouxer
+    link direto ou chave de acesso suficiente. Se não houver, mostra uma página orientando
+    a consulta oficial com os dados já extraídos da nota.
+    """
     ctx = get_tenant_context(request, session)
     if not ctx:
         request.session.clear()
@@ -16136,27 +16284,26 @@ async def contaazul_invoice_pdf(
     except Exception:
         payload = {}
 
-    real_url = _extract_nfse_real_document_url(payload)
-    if real_url:
-        return RedirectResponse(real_url, status_code=302)
+    public_url = _build_nfse_public_document_url(payload)
+    if public_url:
+        return RedirectResponse(public_url, status_code=302)
 
     _ca_log(
-        "contaazul_nfse_real_pdf_unavailable "
+        "nfse real pdf indisponivel "
         f"invoice_id={invoice_id} company_id={company_id} "
-        f"external_id={getattr(inv, 'external_id', None)} number={getattr(inv, 'number', None)} "
-        f"raw_json_len={len(inv.raw_json or '')}"
+        f"external_id={getattr(inv, 'external_id', None)} number={getattr(inv, 'number', None)}"
     )
-    raise HTTPException(
-        status_code=404,
-        detail="PDF real da NFS-e indisponível na integração. Use o documento de venda/fatura ou baixe pela prefeitura/Conta Azul."
-    )
+    return HTMLResponse(_render_nfse_lookup_page(inv=inv, payload=payload), status_code=200)
 
 
-@app.get("/financeiro/contaazul/invoice/{invoice_id}/sale-pdf")
+@app.get("/financeiro/contaazul/invoice/{invoice_id}/sale-pdf")@app.get("/financeiro/contaazul/invoice/{invoice_id}/sale-pdf")
 @require_login
 async def contaazul_invoice_sale_pdf(
     invoice_id: int, request: Request, session: Session = Depends(get_session)
 ) -> Response:
+    """
+    PDF do documento de venda/fatura associado à NFS-e.
+    """
     ctx = get_tenant_context(request, session)
     if not ctx:
         request.session.clear()
@@ -16185,11 +16332,15 @@ async def contaazul_invoice_sale_pdf(
 
     sale_id = _extract_sale_id_from_nfse_payload(payload)
     if not sale_id:
-        _ca_log(
-            "contaazul_invoice_sale_pdf_missing_sale_id "
-            f"invoice_id={invoice_id} company_id={company_id} "
-            f"external_id={getattr(inv, 'external_id', None)} number={getattr(inv, 'number', None)} "
-            f"raw_json_len={len(inv.raw_json or '')}"
+        logger.error(
+            "contaazul_invoice_sale_pdf_missing_sale_id",
+            extra={
+                "invoice_id": invoice_id,
+                "company_id": company_id,
+                "external_id": getattr(inv, "external_id", None),
+                "number": getattr(inv, "number", None),
+                "raw_json_len": len(inv.raw_json or ""),
+            },
         )
         raise HTTPException(status_code=404, detail="Sem id_venda para gerar o documento de venda/fatura.")
 
@@ -16201,11 +16352,16 @@ async def contaazul_invoice_sale_pdf(
             accept="application/pdf",
         )
     except Exception as e:
-        _ca_log(
-            "contaazul_invoice_sale_pdf_failed "
-            f"invoice_id={invoice_id} company_id={company_id} sale_id={sale_id} "
-            f"external_id={getattr(inv, 'external_id', None)} number={getattr(inv, 'number', None)} "
-            f"error={str(e)}"
+        logger.exception(
+            "contaazul_invoice_sale_pdf_failed",
+            extra={
+                "invoice_id": invoice_id,
+                "company_id": company_id,
+                "sale_id": sale_id,
+                "external_id": getattr(inv, "external_id", None),
+                "number": getattr(inv, "number", None),
+                "error": str(e),
+            },
         )
         raise HTTPException(status_code=500, detail="Falha ao gerar PDF da venda/fatura.")
 
