@@ -16110,10 +16110,6 @@ async def contaazul_invoice_xml(
 async def contaazul_invoice_pdf(
     invoice_id: int, request: Request, session: Session = Depends(get_session)
 ) -> Response:
-    """
-    Para NFSE, tenta abrir o documento real da prefeitura / DANFSE quando o payload trouxer um link.
-    Se não houver link real disponível na integração, informa isso claramente.
-    """
     ctx = get_tenant_context(request, session)
     if not ctx:
         request.session.clear()
@@ -16144,15 +16140,11 @@ async def contaazul_invoice_pdf(
     if real_url:
         return RedirectResponse(real_url, status_code=302)
 
-    logger.error(
-        "contaazul_nfse_real_pdf_unavailable",
-        extra={
-            "invoice_id": invoice_id,
-            "company_id": company_id,
-            "external_id": getattr(inv, "external_id", None),
-            "number": getattr(inv, "number", None),
-            "raw_json_len": len(inv.raw_json or ""),
-        },
+    _ca_log(
+        "contaazul_nfse_real_pdf_unavailable "
+        f"invoice_id={invoice_id} company_id={company_id} "
+        f"external_id={getattr(inv, 'external_id', None)} number={getattr(inv, 'number', None)} "
+        f"raw_json_len={len(inv.raw_json or '')}"
     )
     raise HTTPException(
         status_code=404,
@@ -16165,9 +16157,6 @@ async def contaazul_invoice_pdf(
 async def contaazul_invoice_sale_pdf(
     invoice_id: int, request: Request, session: Session = Depends(get_session)
 ) -> Response:
-    """
-    PDF do documento de venda/fatura associado à NFS-e.
-    """
     ctx = get_tenant_context(request, session)
     if not ctx:
         request.session.clear()
@@ -16196,15 +16185,11 @@ async def contaazul_invoice_sale_pdf(
 
     sale_id = _extract_sale_id_from_nfse_payload(payload)
     if not sale_id:
-        logger.error(
-            "contaazul_invoice_sale_pdf_missing_sale_id",
-            extra={
-                "invoice_id": invoice_id,
-                "company_id": company_id,
-                "external_id": getattr(inv, "external_id", None),
-                "number": getattr(inv, "number", None),
-                "raw_json_len": len(inv.raw_json or ""),
-            },
+        _ca_log(
+            "contaazul_invoice_sale_pdf_missing_sale_id "
+            f"invoice_id={invoice_id} company_id={company_id} "
+            f"external_id={getattr(inv, 'external_id', None)} number={getattr(inv, 'number', None)} "
+            f"raw_json_len={len(inv.raw_json or '')}"
         )
         raise HTTPException(status_code=404, detail="Sem id_venda para gerar o documento de venda/fatura.")
 
@@ -16216,16 +16201,11 @@ async def contaazul_invoice_sale_pdf(
             accept="application/pdf",
         )
     except Exception as e:
-        logger.exception(
-            "contaazul_invoice_sale_pdf_failed",
-            extra={
-                "invoice_id": invoice_id,
-                "company_id": company_id,
-                "sale_id": sale_id,
-                "external_id": getattr(inv, "external_id", None),
-                "number": getattr(inv, "number", None),
-                "error": str(e),
-            },
+        _ca_log(
+            "contaazul_invoice_sale_pdf_failed "
+            f"invoice_id={invoice_id} company_id={company_id} sale_id={sale_id} "
+            f"external_id={getattr(inv, 'external_id', None)} number={getattr(inv, 'number', None)} "
+            f"error={str(e)}"
         )
         raise HTTPException(status_code=500, detail="Falha ao gerar PDF da venda/fatura.")
 
