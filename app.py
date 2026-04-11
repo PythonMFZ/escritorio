@@ -8910,7 +8910,7 @@ TEMPLATES.update({
 {% extends "base.html" %}
 {% block content %}
 <div class="card p-4">
-  <div class="d-flex justify-content-between align-items-center">
+  <div class="d-flex justify-content-between align-items-center flex-wrap gap-3">
     <div>
       <h4 class="mb-0">Reuniões</h4>
       <div class="muted">Sincronização com Notion AI Meeting Notes</div>
@@ -8941,18 +8941,50 @@ TEMPLATES.update({
   </form>
   {% endif %}
 
+  <div class="row g-3 mb-3">
+    <div class="col-md-4">
+      <div class="card p-3 h-100">
+        <div class="muted small">Reuniões listadas</div>
+        <div class="fw-semibold">{{ meetings|length }}</div>
+      </div>
+    </div>
+    <div class="col-md-4">
+      <div class="card p-3 h-100">
+        <div class="muted small">Em andamento</div>
+        <div class="fw-semibold">{{ meetings_in_progress }}</div>
+      </div>
+    </div>
+    <div class="col-md-4">
+      <div class="card p-3 h-100">
+        <div class="muted small">Horas totais</div>
+        <div class="fw-semibold">{{ "%.2f"|format(meetings_total_hours) }} h</div>
+      </div>
+    </div>
+  </div>
+
   {% if meetings %}
     <div class="list-group">
       {% for m in meetings %}
         <a class="list-group-item list-group-item-action" href="/reunioes/{{ m.id }}">
-          <div class="d-flex justify-content-between">
-            <div class="fw-semibold">{{ m.title or "Reunião" }}</div>
-            <span class="badge text-bg-light border">{{ m.notion_status or "—" }}</span>
-          </div>
-          <div class="muted small mt-1">
-            {% if role in ["admin","equipe"] %}Cliente: {{ m.client_name }} • {% endif %}
-            {% if m.meeting_date %}Data: {{ m.meeting_date }} • {% endif %}
-            {% if m.last_synced_at %}Sync: {{ m.last_synced_at }}{% endif %}
+          <div class="d-flex justify-content-between align-items-start gap-2">
+            <div>
+              <div class="fw-semibold">{{ m.title or "Reunião" }}</div>
+              <div class="muted small mt-1">
+                {% if role in ["admin","equipe"] %}Cliente: {{ m.client_name }} • {% endif %}
+                {% if m.meeting_date %}Data: {{ m.meeting_date|brdate }} • {% endif %}
+                {% if m.last_synced_at %}Sync: {{ m.last_synced_at|brdatetime }}{% endif %}
+              </div>
+              <div class="small mt-2 d-flex flex-wrap gap-2">
+                <span class="badge text-bg-light border">{{ m.notion_status or "—" }}</span>
+                <span class="badge text-bg-light border">{{ "%.2f"|format(m.total_hours or 0) }} h</span>
+                {% if m.in_progress %}
+                  <span class="badge text-bg-success">Em andamento</span>
+                {% endif %}
+                {% if m.has_client_notes %}
+                  <span class="badge text-bg-info">Anotação cliente</span>
+                {% endif %}
+              </div>
+            </div>
           </div>
         </a>
       {% endfor %}
@@ -8997,7 +9029,7 @@ TEMPLATES.update({
 
       <div class="col-md-6">
         <label class="form-label">Data (DD/MM/AAAA)</label>
-        <input class="form-control mono" name="meeting_date" placeholder="2026-03-12" />
+        <input class="form-control mono" name="meeting_date" placeholder="12/03/2026" />
       </div>
 
       <div class="col-12">
@@ -19973,7 +20005,8 @@ async def meetings_list(
         q = q.where(Meeting.client_id == (ctx.membership.client_id or -1))
     else:
         clients = session.exec(
-            select(Client).where(Client.company_id == ctx.company.id).order_by(Client.created_at)).all()
+            select(Client).where(Client.company_id == ctx.company.id).order_by(Client.created_at)
+        ).all()
         if client_id and client_id > 0:
             fc = get_client_or_none(session, ctx.company.id, int(client_id))
             if not fc:
@@ -19984,16 +20017,29 @@ async def meetings_list(
 
     meetings = session.exec(q).all()
     out = []
+    total_hours_filtered = 0.0
+    meetings_in_progress = 0
+
     for m in meetings:
         c = session.get(Client, m.client_id)
+        meta = _meeting_meta(m)
+        total_hours = _meeting_hours_total(meta)
+        in_progress = bool(meta.get("checked_in_at")) and not bool(meta.get("checked_out_at"))
+        total_hours_filtered += total_hours
+        if in_progress:
+            meetings_in_progress += 1
+
         out.append(
             {
                 "id": m.id,
                 "title": m.title,
                 "meeting_date": m.meeting_date,
                 "notion_status": m.notion_status,
-                "last_synced_at": m.last_synced_at.isoformat(timespec="minutes") if m.last_synced_at else "",
+                "last_synced_at": m.last_synced_at,
                 "client_name": c.name if c else "—",
+                "total_hours": total_hours,
+                "in_progress": in_progress,
+                "has_client_notes": bool(meta.get("client_annotation_text")),
             }
         )
 
@@ -20008,6 +20054,8 @@ async def meetings_list(
             "clients": clients,
             "filter_client_id": filter_client_id,
             "meetings": out,
+            "meetings_total_hours": round(total_hours_filtered, 2),
+            "meetings_in_progress": meetings_in_progress,
         },
     )
 
@@ -20124,7 +20172,6 @@ async def meetings_detail(request: Request, session: Session = Depends(get_sessi
 
     client = session.get(Client, mt.client_id)
 
-    # assignees for task generation
     assignees = []
     if ctx.membership.role in {"admin", "equipe"}:
         memberships = session.exec(select(Membership).where(Membership.company_id == ctx.company.id)).all()
@@ -20135,6 +20182,7 @@ async def meetings_detail(request: Request, session: Session = Depends(get_sessi
 
     active_client_id = get_active_client_id(request, session, ctx)
     current_client = get_client_or_none(session, ctx.company.id, active_client_id)
+    client_meeting_hours_total = _meeting_client_hours_total(session, ctx.company.id, mt.client_id)
 
     return render(
         "meetings_detail.html",
@@ -20147,6 +20195,7 @@ async def meetings_detail(request: Request, session: Session = Depends(get_sessi
             "meeting": mt,
             "client": client,
             "assignees": assignees,
+            "client_meeting_hours_total": client_meeting_hours_total,
         },
     )
 
@@ -37840,6 +37889,7 @@ def _format_dt_br(value: Any) -> str:
             pass
     return s
 
+
 def _meeting_meta(meeting: Meeting) -> dict[str, Any]:
     raw = {}
     try:
@@ -37852,7 +37902,26 @@ def _meeting_meta(meeting: Meeting) -> dict[str, Any]:
     if not isinstance(ext, dict):
         ext = {}
         raw["_app_meta"] = ext
-    return ext
+
+    meta = dict(ext)
+    legacy_text = str(meta.get("annotation_text") or "").strip()
+    legacy_visible = bool(meta.get("visible_to_client"))
+
+    internal_text = str(meta.get("internal_annotation_text") or "").strip()
+    client_text = str(meta.get("client_annotation_text") or "").strip()
+
+    if legacy_text:
+        if legacy_visible and not client_text:
+            client_text = legacy_text
+        elif not internal_text:
+            internal_text = legacy_text
+
+    meta["internal_annotation_text"] = internal_text
+    meta["client_annotation_text"] = client_text
+    meta["visible_to_client"] = bool(client_text)
+    meta["total_hours"] = _meeting_hours_total(meta)
+    return meta
+
 
 def _meeting_meta_save(session: Session, meeting: Meeting, meta: dict[str, Any]) -> None:
     raw = {}
@@ -37862,11 +37931,22 @@ def _meeting_meta_save(session: Session, meeting: Meeting, meta: dict[str, Any])
             raw = {}
     except Exception:
         raw = {}
+
+    meta = dict(meta or {})
+    meta["internal_annotation_text"] = str(meta.get("internal_annotation_text") or "").strip()
+    meta["client_annotation_text"] = str(meta.get("client_annotation_text") or "").strip()
+    meta["visible_to_client"] = bool(meta.get("client_annotation_text"))
+    meta["total_hours"] = _meeting_hours_total(meta)
+
+    if "annotation_text" in meta:
+        meta.pop("annotation_text", None)
+
     raw["_app_meta"] = meta
     meeting.raw_json = json.dumps(raw, ensure_ascii=False)
     meeting.updated_at = utcnow()
     session.add(meeting)
     session.commit()
+
 
 def _meeting_hours_total(meta: dict[str, Any]) -> float:
     started = meta.get("checked_in_at") or ""
@@ -37874,14 +37954,29 @@ def _meeting_hours_total(meta: dict[str, Any]) -> float:
     if not started or not ended:
         return float(meta.get("total_hours", 0.0) or 0.0)
     try:
-        start_dt = datetime.fromisoformat(started)
-        end_dt = datetime.fromisoformat(ended)
+        start_dt = datetime.fromisoformat(str(started))
+        end_dt = datetime.fromisoformat(str(ended))
         delta_h = max(0.0, (end_dt - start_dt).total_seconds() / 3600.0)
         return round(delta_h, 2)
     except Exception:
         return float(meta.get("total_hours", 0.0) or 0.0)
 
+
+def _meeting_client_hours_total(session: Session, company_id: int, client_id: int) -> float:
+    total = 0.0
+    rows = session.exec(
+        select(Meeting).where(
+            Meeting.company_id == int(company_id),
+            Meeting.client_id == int(client_id),
+        )
+    ).all()
+    for row in rows:
+        total += _meeting_hours_total(_meeting_meta(row))
+    return round(total, 2)
+
+
 def _tool_admin_payload(
+
     session: Session,
     *,
     company_id: int,
@@ -38210,7 +38305,7 @@ TEMPLATES["meetings_detail.html"] = r"""
 {% block content %}
 {% set meta = meeting_meta(meeting) %}
 <div class="card p-4">
-  <div class="d-flex justify-content-between align-items-start">
+  <div class="d-flex justify-content-between align-items-start flex-wrap gap-3">
     <div>
       <h4 class="mb-1">{{ meeting.title or "Reunião" }}</h4>
       <div class="muted">
@@ -38245,52 +38340,106 @@ TEMPLATES["meetings_detail.html"] = r"""
   <hr class="my-3"/>
 
   <div class="row g-3 mb-3">
-    <div class="col-md-4">
+    <div class="col-md-3">
       <div class="card p-3 h-100">
         <div class="muted small">Check-in</div>
         <div class="fw-semibold">{{ meta.checked_in_at|brdatetime if meta.checked_in_at else "—" }}</div>
       </div>
     </div>
-    <div class="col-md-4">
+    <div class="col-md-3">
       <div class="card p-3 h-100">
         <div class="muted small">Check-out</div>
         <div class="fw-semibold">{{ meta.checked_out_at|brdatetime if meta.checked_out_at else "—" }}</div>
       </div>
     </div>
-    <div class="col-md-4">
+    <div class="col-md-3">
       <div class="card p-3 h-100">
-        <div class="muted small">Total em reunião</div>
+        <div class="muted small">Horas desta reunião</div>
         <div class="fw-semibold">{{ "%.2f"|format(meeting_hours_total(meta)) }} h</div>
+      </div>
+    </div>
+    <div class="col-md-3">
+      <div class="card p-3 h-100">
+        <div class="muted small">Horas do cliente</div>
+        <div class="fw-semibold">{{ "%.2f"|format(client_meeting_hours_total or 0) }} h</div>
       </div>
     </div>
   </div>
 
-  {% if meta.visible_to_client or role in ["admin","equipe"] %}
-  <div class="card p-3 mb-3">
-    <div class="d-flex justify-content-between align-items-start gap-2">
-      <div>
-        <h6 class="mb-1">Anotações da reunião</h6>
-        <div class="small muted">
-          {% if meta.visible_to_client %}Visível ao cliente{% else %}Interna{% endif %}
+  <div class="row g-3 mb-3">
+    {% if role in ["admin","equipe"] %}
+    <div class="col-lg-6">
+      <div class="card p-3 h-100">
+        <div class="d-flex justify-content-between align-items-start gap-2">
+          <div>
+            <h6 class="mb-1">Anotações internas</h6>
+            <div class="small muted">Visíveis apenas para admin e equipe.</div>
+          </div>
         </div>
+        <div class="mt-2" style="white-space: pre-wrap;">{{ meta.internal_annotation_text or "Sem anotações internas." }}</div>
       </div>
     </div>
-    <div class="mt-2" style="white-space: pre-wrap;">{{ meta.annotation_text or "Sem anotações." }}</div>
+    {% endif %}
+
+    {% if meta.client_annotation_text or role in ["admin","equipe"] %}
+    <div class="col-lg-6">
+      <div class="card p-3 h-100">
+        <div class="d-flex justify-content-between align-items-start gap-2">
+          <div>
+            <h6 class="mb-1">Anotações visíveis ao cliente</h6>
+            <div class="small muted">Aparecem também no acesso do cliente.</div>
+          </div>
+        </div>
+        <div class="mt-2" style="white-space: pre-wrap;">{{ meta.client_annotation_text or "Sem anotações para o cliente." }}</div>
+      </div>
+    </div>
+    {% endif %}
   </div>
-  {% endif %}
 
   {% if role in ["admin","equipe"] %}
   <div class="card p-3 mb-3">
     <h6 class="mb-2">Atualizar anotações</h6>
     <form method="post" action="/reunioes/{{ meeting.id }}/anotacoes">
-      <div class="mb-2">
-        <textarea class="form-control" name="annotation_text" rows="4">{{ meta.annotation_text or "" }}</textarea>
+      <div class="row g-3">
+        <div class="col-lg-6">
+          <label class="form-label">Anotações internas</label>
+          <textarea class="form-control" name="internal_annotation_text" rows="5">{{ meta.internal_annotation_text or "" }}</textarea>
+        </div>
+        <div class="col-lg-6">
+          <label class="form-label">Anotações visíveis ao cliente</label>
+          <textarea class="form-control" name="client_annotation_text" rows="5">{{ meta.client_annotation_text or "" }}</textarea>
+        </div>
       </div>
-      <div class="form-check mb-2">
-        <input class="form-check-input" type="checkbox" name="visible_to_client" value="1" {% if meta.visible_to_client %}checked{% endif %}>
-        <label class="form-check-label">Visível ao cliente</label>
+      <div class="mt-3">
+        <button class="btn btn-primary">Salvar anotações</button>
       </div>
-      <button class="btn btn-primary">Salvar anotações</button>
+    </form>
+  </div>
+  {% endif %}
+
+  {% if role in ["admin","equipe"] and meeting.action_items_text %}
+  <div class="card p-3 mb-3">
+    <div class="fw-semibold mb-2">Gerar tarefas a partir de Action Items</div>
+    <form method="post" action="/reunioes/{{ meeting.id }}/gerar_tarefas" class="row g-2">
+      <div class="col-md-6">
+        <label class="form-label">Responsável (opcional)</label>
+        <select class="form-select" name="assignee_user_id">
+          <option value="0">Sem responsável</option>
+          {% for a in assignees %}
+            <option value="{{ a.id }}">{{ a.name }} ({{ a.role }})</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-md-6">
+        <label class="form-label">Visibilidade das tarefas</label>
+        <select class="form-select" name="visible_to_client">
+          <option value="0">Interno</option>
+          <option value="1">Visível ao cliente</option>
+        </select>
+      </div>
+      <div class="col-12">
+        <button class="btn btn-outline-primary" type="submit">Gerar tarefas</button>
+      </div>
     </form>
   </div>
   {% endif %}
@@ -38310,7 +38459,7 @@ TEMPLATES["meetings_detail.html"] = r"""
     </div>
     <div class="col-lg-12">
       <div class="card p-3">
-        <h6>Notas</h6>
+        <h6>Notas do Notion</h6>
         <div style="white-space: pre-wrap;">{{ meeting.notes_text or "—" }}</div>
       </div>
     </div>
@@ -38545,6 +38694,8 @@ async def meetings_save_annotations(
     meeting_id: int,
     annotation_text: str = Form(""),
     visible_to_client: str = Form(""),
+    internal_annotation_text: str = Form(""),
+    client_annotation_text: str = Form(""),
     session: Session = Depends(get_session),
 ) -> Response:
     ctx = get_tenant_context(request, session)
@@ -38553,9 +38704,20 @@ async def meetings_save_annotations(
     if not mt or mt.company_id != ctx.company.id:
         set_flash(request, "Reunião não encontrada.")
         return RedirectResponse("/reunioes", status_code=303)
+
     meta = _meeting_meta(mt)
-    meta["annotation_text"] = (annotation_text or "").strip()
-    meta["visible_to_client"] = (visible_to_client == "1")
+
+    legacy_text = (annotation_text or "").strip()
+    if legacy_text and not (internal_annotation_text or client_annotation_text):
+        if visible_to_client == "1":
+            client_annotation_text = legacy_text
+        else:
+            internal_annotation_text = legacy_text
+
+    meta["internal_annotation_text"] = (internal_annotation_text or "").strip()
+    meta["client_annotation_text"] = (client_annotation_text or "").strip()
+    meta["visible_to_client"] = bool(meta["client_annotation_text"])
+
     _meeting_meta_save(session, mt, meta)
     set_flash(request, "Anotações salvas.")
     return RedirectResponse(f"/reunioes/{mt.id}", status_code=303)
