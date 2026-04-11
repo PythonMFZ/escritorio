@@ -16292,10 +16292,10 @@ async def contaazul_invoice_xml(
     )
 
 
-@app.get("/financeiro/contaazul/invoice/{invoice_id}/pdf")
+@@app.get("/financeiro/contaazul/invoice/{invoice_id}/pdf")
 @require_login
 async def contaazul_invoice_pdf(
-        invoice_id: int, request: Request, session: Session = Depends(get_session)
+    invoice_id: int, request: Request, session: Session = Depends(get_session)
 ) -> Response:
     ctx = get_tenant_context(request, session)
     if not ctx:
@@ -16312,19 +16312,51 @@ async def contaazul_invoice_pdf(
     if (inv.invoice_type or "").upper() != "NFSE":
         raise HTTPException(status_code=400, detail="Esta nota não é NFS-e.")
 
-    # A API aberta de notas fiscais não expõe download do DANFSE; alternativa: PDF da venda.
-    # Endpoint: GET /v1/venda/{id}/imprimir.
     try:
         payload = json.loads(inv.raw_json or "{}")
+        if not isinstance(payload, dict):
+            payload = {}
     except Exception:
         payload = {}
-    sale_id = (payload.get("id_venda") or "").strip()
-    if not sale_id:
-        raise HTTPException(status_code=404, detail="Sem id_venda para gerar PDF.")
 
-    content, ctype = await _contaazul_get_bytes(session, ctx["company_id"], f"/v1/venda/{sale_id}/imprimir",
-                                                accept="application/pdf")
-    filename = f"nfse_{(inv.number or inv.external_id)}.pdf"
+    sale_id: str = ""
+
+    candidates = [
+        payload.get("id_venda"),
+        payload.get("sale_id"),
+        payload.get("venda_id"),
+    ]
+
+    venda = payload.get("venda")
+    if isinstance(venda, dict):
+        candidates.extend(
+            [
+                venda.get("id"),
+                venda.get("id_venda"),
+                venda.get("sale_id"),
+            ]
+        )
+
+    for candidate in candidates:
+        text_value = str(candidate or "").strip()
+        if text_value:
+            sale_id = text_value
+            break
+
+    if not sale_id:
+        raise HTTPException(
+            status_code=404,
+            detail="Sem id_venda para gerar PDF."
+        )
+
+    content, ctype = await _contaazul_get_bytes(
+        session,
+        ctx["company_id"],
+        f"/v1/venda/{sale_id}/imprimir",
+        accept="application/pdf",
+    )
+
+    filename = f'nfse_{(inv.number or inv.external_id or sale_id)}.pdf'
     return Response(
         content=content,
         media_type=ctype or "application/pdf",
