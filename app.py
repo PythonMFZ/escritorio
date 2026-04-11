@@ -16296,7 +16296,7 @@ async def contaazul_invoice_pdf(
     return HTMLResponse(_render_nfse_lookup_page(inv=inv, payload=payload), status_code=200)
 
 
-@app.get("/financeiro/contaazul/invoice/{invoice_id}/sale-pdf")@app.get("/financeiro/contaazul/invoice/{invoice_id}/sale-pdf")
+@app.get("/financeiro/contaazul/invoice/{invoice_id}/sale-pdf")
 @require_login
 async def contaazul_invoice_sale_pdf(
     invoice_id: int, request: Request, session: Session = Depends(get_session)
