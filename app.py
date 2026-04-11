@@ -6976,10 +6976,12 @@ TEMPLATES.update({
             {% if r.boleto_status %} • Boleto: {{ r.boleto_status }}{% endif %}
           </div>
           {% if r.payment_url %}
-            <div class="mt-2">
-              <a class="btn btn-sm btn-outline-primary" href="{{ r.payment_url }}" target="_blank" rel="noopener">Abrir link de pagamento</a>
-            </div>
-          {% endif %}
+  <a class="btn btn-sm btn-outline-primary"
+     href="/financeiro/contaazul/receivable/{{ r.id }}/boleto"
+     target="_blank" rel="noopener">Boleto</a>
+{% else %}
+  —
+{% endif %}
         </div>
       {% endfor %}
     </div>
@@ -16334,11 +16336,15 @@ async def contaazul_invoice_pdf(
         request.session.clear()
         return RedirectResponse("/login", status_code=303)
 
+    company_id = int(ctx.company.id)
+    role = str(getattr(ctx, "role", getattr(ctx.membership, "role", "")) or "")
+    client_id_ctx = int(ctx.membership.client_id) if getattr(ctx.membership, "client_id", None) is not None else None
+
     inv = session.get(ContaAzulInvoice, invoice_id)
-    if not inv or inv.company_id != ctx["company_id"]:
+    if not inv or inv.company_id != company_id:
         raise HTTPException(status_code=404, detail="Nota não encontrada.")
 
-    if ctx["role"] == "cliente" and inv.client_id != ctx["client_id"]:
+    if role == "cliente" and client_id_ctx is not None and inv.client_id != client_id_ctx:
         raise HTTPException(status_code=403, detail="Sem permissão.")
 
     if (inv.invoice_type or "").upper() != "NFSE":
@@ -16351,12 +16357,12 @@ async def contaazul_invoice_pdf(
     except Exception:
         payload = {}
 
-    sale_id: str = ""
-
+    sale_id = ""
     candidates = [
         payload.get("id_venda"),
         payload.get("sale_id"),
         payload.get("venda_id"),
+        payload.get("id"),
     ]
 
     venda = payload.get("venda")
@@ -16366,6 +16372,7 @@ async def contaazul_invoice_pdf(
                 venda.get("id"),
                 venda.get("id_venda"),
                 venda.get("sale_id"),
+                venda.get("venda_id"),
             ]
         )
 
@@ -16376,17 +16383,37 @@ async def contaazul_invoice_pdf(
             break
 
     if not sale_id:
-        raise HTTPException(
-            status_code=404,
-            detail="Sem id_venda para gerar PDF."
+        logger.error(
+            "contaazul_invoice_pdf_missing_sale_id",
+            extra={
+                "invoice_id": invoice_id,
+                "company_id": company_id,
+                "external_id": getattr(inv, "external_id", None),
+                "number": getattr(inv, "number", None),
+            },
         )
+        raise HTTPException(status_code=404, detail="Sem id_venda para gerar PDF.")
 
-    content, ctype = await _contaazul_get_bytes(
-        session,
-        ctx["company_id"],
-        f"/v1/venda/{sale_id}/imprimir",
-        accept="application/pdf",
-    )
+    try:
+        content, ctype = await _contaazul_get_bytes(
+            session,
+            company_id,
+            f"/v1/venda/{sale_id}/imprimir",
+            accept="application/pdf",
+        )
+    except Exception as e:
+        logger.exception(
+            "contaazul_invoice_pdf_failed",
+            extra={
+                "invoice_id": invoice_id,
+                "company_id": company_id,
+                "sale_id": sale_id,
+                "external_id": getattr(inv, "external_id", None),
+                "number": getattr(inv, "number", None),
+                "error": str(e),
+            },
+        )
+        raise HTTPException(status_code=500, detail="Falha ao gerar NF PDF.")
 
     filename = f'nfse_{(inv.number or inv.external_id or sale_id)}.pdf'
     return Response(
@@ -16395,6 +16422,32 @@ async def contaazul_invoice_pdf(
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
+@app.get("/financeiro/contaazul/receivable/{rid}/boleto")
+@require_login
+async def contaazul_receivable_boleto(
+    rid: int, request: Request, session: Session = Depends(get_session)
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+
+    company_id = int(ctx.company.id)
+    role = str(getattr(ctx, "role", getattr(ctx.membership, "role", "")) or "")
+    client_id_ctx = int(ctx.membership.client_id) if getattr(ctx.membership, "client_id", None) is not None else None
+
+    r = session.get(ContaAzulReceivable, rid)
+    if not r or r.company_id != company_id:
+        raise HTTPException(status_code=404, detail="Cobrança não encontrada.")
+
+    if role == "cliente" and client_id_ctx is not None and r.client_id != client_id_ctx:
+        raise HTTPException(status_code=403, detail="Sem permissão.")
+
+    payment_url = str(getattr(r, "payment_url", "") or "").strip()
+    if not payment_url:
+        raise HTTPException(status_code=404, detail="Boleto indisponível.")
+
+    return RedirectResponse(payment_url, status_code=302)
 
 @app.get("/financeiro/contaazul/receivable/{rid}/fatura.pdf")
 @require_login
