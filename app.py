@@ -2996,6 +2996,160 @@ def _extract_first_url(text: str) -> str:
     return (m.group(1).rstrip(").,;") if m else "")
 
 
+def _deep_iter_values(value: Any):
+    if isinstance(value, dict):
+        for v in value.values():
+            yield from _deep_iter_values(v)
+    elif isinstance(value, list):
+        for item in value:
+            yield from _deep_iter_values(item)
+    else:
+        yield value
+
+
+def _deep_find_urls(value: Any) -> list[str]:
+    urls: list[str] = []
+    for raw in _deep_iter_values(value):
+        if raw is None:
+            continue
+        text_value = str(raw).strip()
+        if not text_value:
+            continue
+        for m in re.finditer(r"(https?://\S+)", text_value):
+            url = m.group(1).rstrip(").,;")
+            if url and url not in urls:
+                urls.append(url)
+    return urls
+
+
+def _extract_boleto_url_from_receivable_payload(det: dict[str, Any]) -> str:
+    # 1) tenta campos explícitos mais comuns
+    explicit_candidates = [
+        det.get("url_pagamento"),
+        det.get("payment_url"),
+        det.get("link_pagamento"),
+        det.get("link_boleto"),
+        det.get("boleto_url"),
+    ]
+    fatura = det.get("fatura")
+    if isinstance(fatura, dict):
+        explicit_candidates.extend(
+            [
+                fatura.get("url_pagamento"),
+                fatura.get("payment_url"),
+                fatura.get("link_pagamento"),
+                fatura.get("link_boleto"),
+                fatura.get("boleto_url"),
+            ]
+        )
+    for candidate in explicit_candidates:
+        url = _extract_first_url(str(candidate or ""))
+        if url:
+            return url
+
+    # 2) tenta nas solicitações de cobrança, priorizando a mais recente
+    solicitacoes = det.get("solicitacoes_cobrancas") or []
+    if isinstance(solicitacoes, list):
+        for raw_last in reversed(solicitacoes):
+            last = raw_last if isinstance(raw_last, dict) else {}
+            notif = last.get("notificacao_cobranca") or {}
+            body = str(notif.get("corpo") or "")
+            url = _extract_first_url(body)
+            if url:
+                return url
+
+            for candidate in _deep_find_urls(last):
+                if candidate:
+                    return candidate
+
+    # 3) fallback: procura qualquer URL no payload inteiro
+    for candidate in _deep_find_urls(det):
+        if candidate:
+            return candidate
+
+    return ""
+
+
+def _extract_nfse_real_document_url(payload: dict[str, Any]) -> str:
+    if not isinstance(payload, dict):
+        return ""
+
+    # prioriza chaves/links típicos de NFS-e real / prefeitura / DANFSE
+    preferred_keys = {
+        "link_prefeitura",
+        "url_prefeitura",
+        "danfse",
+        "danfse_url",
+        "url_danfse",
+        "pdf",
+        "pdf_url",
+        "url_pdf",
+        "link_pdf",
+        "arquivo_pdf",
+        "download_pdf",
+        "link_nota_fiscal",
+        "url_nota_fiscal",
+        "espelho_nota",
+        "url_espelho_nota",
+    }
+
+    def walk(obj: Any):
+        if isinstance(obj, dict):
+            for key, value in obj.items():
+                key_norm = str(key or "").strip().lower()
+                if key_norm in preferred_keys:
+                    url = _extract_first_url(str(value or ""))
+                    if url:
+                        return url
+                result = walk(value)
+                if result:
+                    return result
+        elif isinstance(obj, list):
+            for item in obj:
+                result = walk(item)
+                if result:
+                    return result
+        else:
+            text_value = str(obj or "").strip()
+            if text_value.startswith("http://") or text_value.startswith("https://"):
+                lowered = text_value.lower()
+                if any(
+                    token in lowered
+                    for token in ["prefeitura", "nfse", "danfse", "nota", "pdf", "govbr", "issdigital"]
+                ):
+                    return text_value
+        return ""
+
+    return walk(payload) or ""
+
+
+def _extract_sale_id_from_nfse_payload(payload: dict[str, Any]) -> str:
+    if not isinstance(payload, dict):
+        return ""
+    candidates = [
+        payload.get("id_venda"),
+        payload.get("sale_id"),
+        payload.get("venda_id"),
+        payload.get("id"),
+    ]
+    venda = payload.get("venda")
+    if isinstance(venda, dict):
+        candidates.extend(
+            [
+                venda.get("id"),
+                venda.get("id_venda"),
+                venda.get("sale_id"),
+                venda.get("venda_id"),
+            ]
+        )
+
+    for candidate in candidates:
+        text_value = str(candidate or "").strip()
+        if text_value:
+            return text_value
+    return ""
+
+
 def _contaazul_get_auth(session: Session, company_id: int) -> Optional[ContaAzulAuth]:
     return session.exec(select(ContaAzulAuth).where(ContaAzulAuth.company_id == company_id)).first()
 
@@ -3206,9 +3360,7 @@ def contaazul_sync_client_job(company_id: int, client_id: int) -> None:
                 if isinstance(solicitacoes, list) and solicitacoes:
                     last = solicitacoes[-1] if isinstance(solicitacoes[-1], dict) else {}
                     boleto_status = str(last.get("status_solicitacao_cobranca") or "")
-                    notif = last.get("notificacao_cobranca") or {}
-                    body = str(notif.get("corpo") or "")
-                    payment_url = _extract_first_url(body)
+                payment_url = _extract_boleto_url_from_receivable_payload(det)
 
                 rec = session.exec(
                     select(ContaAzulReceivable).where(
@@ -6470,10 +6622,12 @@ a:hover{ color:#00BFBF; }
               <a class="btn btn-sm btn-outline-primary"
                  href="/financeiro/contaazul/receivable/{{ r.id }}/boleto"
                  target="_blank" rel="noopener">Boleto</a>
+            {% else %}
+              <span class="badge text-bg-light border">Sem boleto</span>
             {% endif %}
             <a class="btn btn-sm btn-outline-secondary"
                href="/financeiro/contaazul/receivable/{{ r.id }}/fatura.pdf"
-               target="_blank" rel="noopener">Fatura PDF</a>
+               target="_blank" rel="noopener">Resumo cobrança</a>
           </div>
         </div>
       {% endfor %}
@@ -6501,7 +6655,10 @@ a:hover{ color:#00BFBF; }
             {% if (n.invoice_type or "").upper() == "NFSE" %}
               <a class="btn btn-sm btn-outline-secondary"
                  href="/financeiro/contaazul/invoice/{{ n.id }}/pdf"
-                 target="_blank" rel="noopener">NF PDF</a>
+                 target="_blank" rel="noopener">NFS-e PDF</a>
+              <a class="btn btn-sm btn-outline-secondary"
+                 href="/financeiro/contaazul/invoice/{{ n.id }}/sale-pdf"
+                 target="_blank" rel="noopener">Venda / Fatura</a>
             {% endif %}
             {% if (n.invoice_type or "").upper() == "NFE" %}
               <a class="btn btn-sm btn-outline-secondary"
@@ -6759,10 +6916,12 @@ TEMPLATES.update({
               <a class="btn btn-sm btn-outline-primary"
                  href="/financeiro/contaazul/receivable/{{ r.id }}/boleto"
                  target="_blank" rel="noopener">Boleto</a>
+            {% else %}
+              <span class="badge text-bg-light border">Sem boleto</span>
             {% endif %}
             <a class="btn btn-sm btn-outline-secondary"
                href="/financeiro/contaazul/receivable/{{ r.id }}/fatura.pdf"
-               target="_blank" rel="noopener">Fatura PDF</a>
+               target="_blank" rel="noopener">Resumo cobrança</a>
           </div>
         </div>
       {% endfor %}
@@ -6790,7 +6949,10 @@ TEMPLATES.update({
             {% if (n.invoice_type or "").upper() == "NFSE" %}
               <a class="btn btn-sm btn-outline-secondary"
                  href="/financeiro/contaazul/invoice/{{ n.id }}/pdf"
-                 target="_blank" rel="noopener">NF PDF</a>
+                 target="_blank" rel="noopener">NFS-e PDF</a>
+              <a class="btn btn-sm btn-outline-secondary"
+                 href="/financeiro/contaazul/invoice/{{ n.id }}/sale-pdf"
+                 target="_blank" rel="noopener">Venda / Fatura</a>
             {% endif %}
             {% if (n.invoice_type or "").upper() == "NFE" %}
               <a class="btn btn-sm btn-outline-secondary"
@@ -15948,6 +16110,10 @@ async def contaazul_invoice_xml(
 async def contaazul_invoice_pdf(
     invoice_id: int, request: Request, session: Session = Depends(get_session)
 ) -> Response:
+    """
+    Para NFSE, tenta abrir o documento real da prefeitura / DANFSE quando o payload trouxer um link.
+    Se não houver link real disponível na integração, informa isso claramente.
+    """
     ctx = get_tenant_context(request, session)
     if not ctx:
         request.session.clear()
@@ -15974,34 +16140,64 @@ async def contaazul_invoice_pdf(
     except Exception:
         payload = {}
 
-    sale_id = ""
-    candidates = [
-        payload.get("id_venda"),
-        payload.get("sale_id"),
-        payload.get("venda_id"),
-        payload.get("id"),
-    ]
+    real_url = _extract_nfse_real_document_url(payload)
+    if real_url:
+        return RedirectResponse(real_url, status_code=302)
 
-    venda = payload.get("venda")
-    if isinstance(venda, dict):
-        candidates.extend(
-            [
-                venda.get("id"),
-                venda.get("id_venda"),
-                venda.get("sale_id"),
-                venda.get("venda_id"),
-            ]
-        )
+    logger.error(
+        "contaazul_nfse_real_pdf_unavailable",
+        extra={
+            "invoice_id": invoice_id,
+            "company_id": company_id,
+            "external_id": getattr(inv, "external_id", None),
+            "number": getattr(inv, "number", None),
+            "raw_json_len": len(inv.raw_json or ""),
+        },
+    )
+    raise HTTPException(
+        status_code=404,
+        detail="PDF real da NFS-e indisponível na integração. Use o documento de venda/fatura ou baixe pela prefeitura/Conta Azul."
+    )
 
-    for candidate in candidates:
-        text_value = str(candidate or "").strip()
-        if text_value:
-            sale_id = text_value
-            break
 
+@app.get("/financeiro/contaazul/invoice/{invoice_id}/sale-pdf")
+@require_login
+async def contaazul_invoice_sale_pdf(
+    invoice_id: int, request: Request, session: Session = Depends(get_session)
+) -> Response:
+    """
+    PDF do documento de venda/fatura associado à NFS-e.
+    """
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+
+    company_id = int(ctx.company.id)
+    role = str(getattr(ctx.membership, "role", "") or "")
+    client_id_ctx = int(ctx.membership.client_id) if getattr(ctx.membership, "client_id", None) is not None else None
+
+    inv = session.get(ContaAzulInvoice, invoice_id)
+    if not inv or inv.company_id != company_id:
+        raise HTTPException(status_code=404, detail="Nota não encontrada.")
+
+    if role == "cliente" and client_id_ctx is not None and inv.client_id != client_id_ctx:
+        raise HTTPException(status_code=403, detail="Sem permissão.")
+
+    if (inv.invoice_type or "").upper() != "NFSE":
+        raise HTTPException(status_code=400, detail="Este documento não é uma NFS-e.")
+
+    try:
+        payload = json.loads(inv.raw_json or "{}")
+        if not isinstance(payload, dict):
+            payload = {}
+    except Exception:
+        payload = {}
+
+    sale_id = _extract_sale_id_from_nfse_payload(payload)
     if not sale_id:
         logger.error(
-            "contaazul_invoice_pdf_missing_sale_id",
+            "contaazul_invoice_sale_pdf_missing_sale_id",
             extra={
                 "invoice_id": invoice_id,
                 "company_id": company_id,
@@ -16010,7 +16206,7 @@ async def contaazul_invoice_pdf(
                 "raw_json_len": len(inv.raw_json or ""),
             },
         )
-        raise HTTPException(status_code=404, detail="Sem id_venda para gerar PDF.")
+        raise HTTPException(status_code=404, detail="Sem id_venda para gerar o documento de venda/fatura.")
 
     try:
         content, ctype = await _contaazul_get_bytes(
@@ -16021,7 +16217,7 @@ async def contaazul_invoice_pdf(
         )
     except Exception as e:
         logger.exception(
-            "contaazul_invoice_pdf_failed",
+            "contaazul_invoice_sale_pdf_failed",
             extra={
                 "invoice_id": invoice_id,
                 "company_id": company_id,
@@ -16031,9 +16227,9 @@ async def contaazul_invoice_pdf(
                 "error": str(e),
             },
         )
-        raise HTTPException(status_code=500, detail="Falha ao gerar NF PDF.")
+        raise HTTPException(status_code=500, detail="Falha ao gerar PDF da venda/fatura.")
 
-    filename = f'nfse_{(inv.number or inv.external_id or sale_id)}.pdf'
+    filename = f'venda_{(inv.number or inv.external_id or sale_id)}.pdf'
     return Response(
         content=content,
         media_type=ctype or "application/pdf",
