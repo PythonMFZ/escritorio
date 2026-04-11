@@ -3127,62 +3127,166 @@ def _extract_nfse_real_document_url(payload: dict[str, Any]) -> str:
     return walk(payload) or ""
 
 
+def _nfse_norm_key(value: Any) -> str:
+    import unicodedata
+    s = unicodedata.normalize("NFKD", str(value or ""))
+    s = "".join(ch for ch in s if not unicodedata.combining(ch))
+    s = s.lower().strip()
+    s = re.sub(r"[^a-z0-9]+", "", s)
+    return s
+
+
+def _walk_nfse_scalars(obj: Any, path: Optional[list[str]] = None) -> list[tuple[list[str], str]]:
+    path = list(path or [])
+    items: list[tuple[list[str], str]] = []
+
+    if isinstance(obj, dict):
+        for key, value in obj.items():
+            key_norm = _nfse_norm_key(key)
+            items.extend(_walk_nfse_scalars(value, path + [key_norm]))
+        return items
+
+    if isinstance(obj, list):
+        for idx, value in enumerate(obj):
+            items.extend(_walk_nfse_scalars(value, path + [str(idx)]))
+        return items
+
+    if obj is None:
+        return items
+
+    s = str(obj).strip()
+    if s:
+        items.append((path, s))
+    return items
+
+
 def _extract_nfse_payload_value(payload: Any, wanted_keys: set[str]) -> str:
     if not wanted_keys:
         return ""
 
-    def walk(obj: Any) -> str:
-        if isinstance(obj, dict):
-            for key, value in obj.items():
-                key_norm = str(key or "").strip().lower()
-                if key_norm in wanted_keys:
-                    s = str(value or "").strip()
-                    if s:
-                        return s
-                found = walk(value)
-                if found:
-                    return found
-        elif isinstance(obj, list):
-            for item in obj:
-                found = walk(item)
-                if found:
-                    return found
+    wanted = {_nfse_norm_key(x) for x in wanted_keys if str(x or "").strip()}
+    if not wanted:
         return ""
 
-    return walk(payload)
+    for path, value in _walk_nfse_scalars(payload):
+        if path and path[-1] in wanted and str(value).strip():
+            return str(value).strip()
+    return ""
 
 
 def _extract_nfse_public_fields(payload: dict[str, Any]) -> dict[str, str]:
     if not isinstance(payload, dict):
         return {}
 
+    flat = _walk_nfse_scalars(payload)
     fields: dict[str, str] = {}
 
-    def first(keys: set[str]) -> str:
-        return _extract_nfse_payload_value(payload, keys)
+    def path_has(path: list[str], tokens: set[str]) -> bool:
+        return any(tok in tokens for tok in path)
 
-    fields["chave_acesso"] = first({
-        "chave", "chave_acesso", "chave_acesso_nfse", "chave_nfe", "access_key"
-    })
-    fields["codigo_verificacao"] = first({
-        "codigo_verificacao", "codigoverificacao", "verification_code", "codigo"
-    })
-    fields["numero_nfse"] = first({
-        "numero_nfse", "numero", "numero_nota", "numeroNota", "numeroNfse"
-    })
-    fields["numero_dps"] = first({
-        "numero_dps", "numerodps", "dps_numero", "numero_rps", "numeroRps"
-    })
-    fields["serie_dps"] = first({
-        "serie_dps", "seriedps", "serie", "serie_rps", "serieRps"
-    })
-    fields["cnpj_prestador"] = _digits_only(first({
-        "cnpj_prestador", "cpf_cnpj_prestador", "cpfcnpjprestador", "documento_prestador",
-        "cnpj_emitente", "cpf_cnpj_emitente", "cpfcnpjemitente"
-    }))
-    fields["municipio"] = first({"municipio", "municipio_prestacao", "municipio_emissao"})
+    def first(
+        *,
+        exact_keys: Optional[set[str]] = None,
+        bare_keys: Optional[set[str]] = None,
+        contexts: Optional[set[str]] = None,
+    ) -> str:
+        exact_keys_norm = {_nfse_norm_key(x) for x in (exact_keys or set()) if str(x or "").strip()}
+        bare_keys_norm = {_nfse_norm_key(x) for x in (bare_keys or set()) if str(x or "").strip()}
+        contexts_norm = {_nfse_norm_key(x) for x in (contexts or set()) if str(x or "").strip()}
+
+        for path, value in flat:
+            if not path or not str(value).strip():
+                continue
+            last = path[-1]
+            if exact_keys_norm and last in exact_keys_norm:
+                return str(value).strip()
+            if bare_keys_norm and last in bare_keys_norm:
+                if not contexts_norm or path_has(path[:-1], contexts_norm):
+                    return str(value).strip()
+        return ""
+
+    def first_regex(pattern: str, *, contexts: Optional[set[str]] = None) -> str:
+        rx = re.compile(pattern, re.IGNORECASE)
+        contexts_norm = {_nfse_norm_key(x) for x in (contexts or set()) if str(x or "").strip()}
+        for path, value in flat:
+            if contexts_norm and not path_has(path, contexts_norm):
+                continue
+            m = rx.search(str(value))
+            if m:
+                return m.group(1) if m.groups() else m.group(0)
+        return ""
+
+    numero_nfse = first(
+        exact_keys={"numero_nfse", "numeroNfse", "numeroNota", "numero_nota"},
+        bare_keys={"numero"},
+        contexts={"nfse", "notafiscal", "notafiscalservico", "notaservico", "nfservico"},
+    )
+    numero_dps = first(
+        exact_keys={"numero_dps", "numeroRps", "numero_rps", "dps_numero", "rps_numero"},
+        bare_keys={"numero"},
+        contexts={"dps", "rps"},
+    )
+    serie_dps = first(
+        exact_keys={"serie_dps", "serieRps", "serie_rps", "rps_serie", "dps_serie"},
+        bare_keys={"serie"},
+        contexts={"dps", "rps"},
+    )
+    codigo = first(
+        exact_keys={"codigo_verificacao", "codigoVerificacao", "verification_code", "codigoautenticidade"},
+        bare_keys={"codigo"},
+        contexts={"verificacao", "autenticidade"},
+    )
+    chave = first(
+        exact_keys={"chave_acesso", "chaveAcesso", "access_key", "chave_nfse", "chavenfse"},
+        bare_keys={"chave"},
+        contexts={"acesso", "nfse", "notafiscal"},
+    )
+    cnpj = first(
+        exact_keys={
+            "cnpj_prestador", "cpf_cnpj_prestador", "cpfcnpjprestador", "documento_prestador",
+            "cnpj_emitente", "cpf_cnpj_emitente", "cpfcnpjemitente",
+        },
+        bare_keys={"cnpj", "cpfcnpj", "documento"},
+        contexts={"prestador", "emitente"},
+    )
+
+    if not cnpj:
+        cnpj = first_regex(r'(\d{2}\.?\d{3}\.?\d{3}/?\d{4}-?\d{2})', contexts={"prestador", "emitente"})
+    if not chave:
+        chave = first_regex(r'(\d{20,60})', contexts={"chave", "acesso", "nfse"})
+    if not codigo:
+        codigo = first_regex(r'([A-Z0-9]{6,})', contexts={"verificacao", "autenticidade"})
+
+    chave_digits = _digits_only(chave)
+    if not cnpj and len(chave_digits) >= 23:
+        candidate = chave_digits[9:23]
+        if len(candidate) == 14:
+            cnpj = candidate
+
+    fields["numero_nfse"] = str(numero_nfse or payload.get("numero_nfse") or payload.get("numero") or "").strip()
+    fields["numero_dps"] = str(numero_dps or payload.get("numero_dps") or payload.get("numero_rps") or "").strip()
+    fields["serie_dps"] = str(serie_dps or payload.get("serie_dps") or payload.get("serie_rps") or "").strip()
+    fields["codigo_verificacao"] = str(codigo or payload.get("codigo_verificacao") or "").strip()
+    fields["chave_acesso"] = str(chave or payload.get("chave_acesso") or payload.get("chave") or "").strip()
+    fields["cnpj_prestador"] = _digits_only(cnpj)
+    fields["municipio"] = first(
+        exact_keys={"municipio_prestacao", "municipio_emissao", "municipio"},
+        bare_keys={"municipio"},
+        contexts={"prestador", "enderecoprestador"},
+    )
     fields["external_id"] = str(payload.get("id") or "").strip()
+
     return {k: v for k, v in fields.items() if v}
+
+
+def _format_nfse_lookup_date(value: Any) -> str:
+    s = str(value or "").strip()
+    if not s:
+        return "—"
+    m = re.match(r"^(\d{4})-(\d{2})-(\d{2})", s)
+    if m:
+        return f"{m.group(3)}/{m.group(2)}/{m.group(1)}"
+    return s
 
 
 def _build_nfse_public_document_url(payload: dict[str, Any]) -> str:
@@ -3207,10 +3311,23 @@ def _render_nfse_lookup_page(*, inv: "ContaAzulInvoice", payload: dict[str, Any]
     dps_num = html.escape(str(fields.get("numero_dps") or "—"))
     dps_serie = html.escape(str(fields.get("serie_dps") or "—"))
     cnpj = html.escape(str(fields.get("cnpj_prestador") or "—"))
-    issue_date = html.escape(str(getattr(inv, "issue_date", "") or "—"))
+    issue_date = html.escape(_format_nfse_lookup_date(getattr(inv, "issue_date", "") or payload.get("data_competencia") or payload.get("data_emissao") or "—"))
     external_id = html.escape(str(getattr(inv, "external_id", "") or "—"))
     brusque_url = html.escape(BRUSQUE_NFSE_AUTH_URL)
     nacional_url = html.escape(NACIONAL_NFSE_CONSULTA_URL)
+
+    missing = []
+    for label, value in [
+        ("código de verificação", codigo),
+        ("chave de acesso", chave),
+        ("série DPS/RPS", dps_serie),
+        ("CNPJ do prestador", cnpj),
+    ]:
+        if value == "—":
+            missing.append(label)
+    missing_note = ""
+    if missing:
+        missing_note = f'<div class="note subtle">A integração não trouxe automaticamente: {html.escape(", ".join(missing))}. Os demais dados já ajudam na busca manual.</div>'
 
     return f"""<!doctype html>
 <html lang="pt-BR">
@@ -3233,6 +3350,7 @@ def _render_nfse_lookup_page(*, inv: "ContaAzulInvoice", payload: dict[str, Any]
     .btn-primary {{ background: #111827; color: #fff; border-color: #111827; }}
     .btn-light {{ background: #fff; color: #111827; }}
     .note {{ background: #fff7ed; border: 1px solid #fed7aa; color: #9a3412; padding: 12px 14px; border-radius: 12px; margin-top: 16px; }}
+    .note.subtle {{ background: #eff6ff; border-color: #bfdbfe; color: #1d4ed8; }}
   </style>
 </head>
 <body>
@@ -3260,10 +3378,12 @@ def _render_nfse_lookup_page(*, inv: "ContaAzulInvoice", payload: dict[str, Any]
       <div class="note">
         Dica: se a prefeitura ou o portal nacional pedir número, código de verificação, DPS/RPS, série ou CNPJ do prestador, eles já estão listados acima.
       </div>
+      {missing_note}
     </div>
   </div>
 </body>
 </html>"""
+
 
 def _extract_sale_id_from_nfse_payload(payload: dict[str, Any]) -> str:
     if not isinstance(payload, dict):
