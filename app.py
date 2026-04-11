@@ -16292,7 +16292,7 @@ async def contaazul_invoice_xml(
     )
 
 
-@@app.get("/financeiro/contaazul/invoice/{invoice_id}/pdf")
+@app.get("/financeiro/contaazul/invoice/{invoice_id}/pdf")
 @require_login
 async def contaazul_invoice_pdf(
     invoice_id: int, request: Request, session: Session = Depends(get_session)
