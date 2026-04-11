@@ -8016,6 +8016,7 @@ TEMPLATES.update({
       <a class="btn btn-outline-secondary" href="/tarefas">Voltar</a>
       {% if role in ["admin","equipe"] %}
         <a class="btn btn-outline-primary" href="/tarefas/{{ task.id }}/editar">Editar</a>
+        <a class="btn btn-outline-danger" href="#excluir-tarefa">Excluir</a>
       {% endif %}
     </div>
   </div>
@@ -8053,8 +8054,8 @@ TEMPLATES.update({
 
   {% if role in ["admin","equipe"] %}
     <hr class="my-3"/>
-    <form method="post" action="/tarefas/{{ task.id }}/excluir" class="card p-3">
-      <div class="fw-semibold">Excluir (seguro)</div>
+    <form method="post" action="/tarefas/{{ task.id }}/excluir" class="card p-3 border-danger-subtle" id="excluir-tarefa">
+      <div class="fw-semibold text-danger">Excluir tarefa</div>
       <div class="muted small">Para excluir, digite <b>EXCLUIR</b> e confirme.</div>
       <div class="row g-2 align-items-end mt-2">
         <div class="col-md-6">
@@ -8073,13 +8074,13 @@ TEMPLATES.update({
   <div class="row g-3 mb-3">
     <div class="col-12 col-md-4">
       <div class="card p-3 h-100">
-        <div class="muted small">Horas desta tarefa</div>
+        <div class="muted small">Tempo desta tarefa</div>
         <div class="fw-semibold fs-4">{{ task_total_hours_label }}</div>
       </div>
     </div>
     <div class="col-12 col-md-4">
       <div class="card p-3 h-100">
-        <div class="muted small">Horas do cliente</div>
+        <div class="muted small">Tempo do cliente</div>
         <div class="fw-semibold fs-4">{{ client_total_hours_label }}</div>
       </div>
     </div>
@@ -8121,7 +8122,7 @@ TEMPLATES.update({
               <th>Usuário</th>
               <th>Início</th>
               <th>Fim</th>
-              <th>Horas</th>
+              <th>Tempo</th>
               <th>Observação</th>
             </tr>
           </thead>
@@ -9090,8 +9091,8 @@ TEMPLATES.update({
     </div>
     <div class="col-md-4">
       <div class="card p-3 h-100">
-        <div class="muted small">Horas totais</div>
-        <div class="fw-semibold">{{ "%.2f"|format(meetings_total_hours) }} h</div>
+        <div class="muted small">Tempo total</div>
+        <div class="fw-semibold">{{ human_duration_hours(meetings_total_hours) }}</div>
       </div>
     </div>
   </div>
@@ -9110,7 +9111,7 @@ TEMPLATES.update({
               </div>
               <div class="small mt-2 d-flex flex-wrap gap-2">
                 <span class="badge text-bg-light border">{{ m.notion_status or "—" }}</span>
-                <span class="badge text-bg-light border">{{ "%.2f"|format(m.total_hours or 0) }} h</span>
+                <span class="badge text-bg-light border">{{ human_duration_hours(m.total_hours or 0) }}</span>
                 {% if m.in_progress %}
                   <span class="badge text-bg-success">Em andamento</span>
                 {% endif %}
@@ -18276,9 +18277,29 @@ def _task_work_minutes(session_obj: TaskWorkSession) -> int:
         return 0
 
 
+def _human_minutes_label(total_minutes: int) -> str:
+    try:
+        minutes = max(0, int(round(float(total_minutes or 0))))
+    except Exception:
+        minutes = 0
+    hours, rem = divmod(minutes, 60)
+    if hours <= 0:
+        return f"{rem} min"
+    if rem <= 0:
+        return f"{hours}h"
+    return f"{hours}h {rem:02d}min"
+
+
+def _human_hours_label(total_hours: Any) -> str:
+    try:
+        minutes = int(round(float(total_hours or 0.0) * 60.0))
+    except Exception:
+        minutes = 0
+    return _human_minutes_label(minutes)
+
+
 def _task_work_hours_label(total_minutes: int) -> str:
-    hours = max(0.0, float(total_minutes or 0) / 60.0)
-    return f"{hours:.2f} h"
+    return _human_minutes_label(total_minutes)
 
 
 def _task_work_active_for_user(session: Session, *, company_id: int, user_id: int) -> Optional[TaskWorkSession]:
@@ -38536,6 +38557,8 @@ try:
     templates_env.filters["brdatetime"] = _format_dt_br
     templates_env.globals["meeting_meta"] = _meeting_meta
     templates_env.globals["meeting_hours_total"] = _meeting_hours_total
+    templates_env.globals["human_duration_minutes"] = _human_minutes_label
+    templates_env.globals["human_duration_hours"] = _human_hours_label
     templates_env.globals["deal_lost_reason"] = _deal_lost_reason
 except Exception:
     pass
@@ -38714,14 +38737,14 @@ TEMPLATES["meetings_detail.html"] = r"""
     </div>
     <div class="col-md-3">
       <div class="card p-3 h-100">
-        <div class="muted small">Horas desta reunião</div>
-        <div class="fw-semibold">{{ "%.2f"|format(meeting_hours_total(meta)) }} h</div>
+        <div class="muted small">Tempo desta reunião</div>
+        <div class="fw-semibold">{{ human_duration_hours(meeting_hours_total(meta)) }}</div>
       </div>
     </div>
     <div class="col-md-3">
       <div class="card p-3 h-100">
-        <div class="muted small">Horas do cliente</div>
-        <div class="fw-semibold">{{ "%.2f"|format(client_meeting_hours_total or 0) }} h</div>
+        <div class="muted small">Tempo do cliente</div>
+        <div class="fw-semibold">{{ human_duration_hours(client_meeting_hours_total or 0) }}</div>
       </div>
     </div>
   </div>
