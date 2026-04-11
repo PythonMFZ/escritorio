@@ -6,14 +6,10 @@ import base64
 import hashlib
 import hmac
 import inspect
-import io
 import json
 import html
 import os
 import asyncio
-import logging
-import time
-import traceback
 import re
 import secrets
 import uuid
@@ -29,7 +25,7 @@ from urllib.parse import urlparse
 
 import httpx
 from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, HTTPException, Request, Response, UploadFile
-from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 from jinja2 import Environment
 from jinja2.loaders import DictLoader
 from passlib.context import CryptContext
@@ -45,54 +41,7 @@ from fastapi.staticfiles import StaticFiles
 # ----------------------------
 
 APP_SECRET_KEY = os.getenv("APP_SECRET_KEY") or secrets.token_urlsafe(32)
-
-RENDER_SERVICE_ID = (os.getenv("RENDER_SERVICE_ID") or "").strip()
-APP_ENV = (os.getenv("APP_ENV") or os.getenv("ENVIRONMENT") or (
-    "production" if RENDER_SERVICE_ID else "development")).strip().lower()
-IS_PRODUCTION = APP_ENV in {"prod", "production"} or bool(RENDER_SERVICE_ID)
-
-DATABASE_URL = (os.getenv("DATABASE_URL") or "").strip()
-if IS_PRODUCTION and not DATABASE_URL:
-    raise RuntimeError("DATABASE_URL é obrigatória em produção.")
-if IS_PRODUCTION and DATABASE_URL.startswith("sqlite"):
-    raise RuntimeError("SQLite não é permitido em produção.")
-DATABASE_URL = DATABASE_URL or "sqlite:///./app.db"
-
-LOG_LEVEL = (os.getenv("LOG_LEVEL") or "INFO").strip().upper()
-ENABLE_REQUEST_LOGGING = os.getenv("ENABLE_REQUEST_LOGGING", "1") == "1"
-ENABLE_GLOBAL_EXCEPTION_LOGGING = os.getenv("ENABLE_GLOBAL_EXCEPTION_LOGGING", "1") == "1"
-
-logging.basicConfig(
-    level=getattr(logging, LOG_LEVEL, logging.INFO),
-    format="%(asctime)s %(levelname)s %(name)s %(message)s",
-)
-logger = logging.getLogger("escritorio.app")
-
-
-def _request_id_from_request(request: Request) -> str:
-    try:
-        incoming = (request.headers.get("x-request-id") or "").strip()
-    except Exception:
-        incoming = ""
-    return incoming[:128] if incoming else uuid.uuid4().hex[:12]
-
-
-def _is_json_request(request: Request) -> bool:
-    path = request.url.path or ""
-    accept = (request.headers.get("accept") or "").lower()
-    return path.startswith("/api/") or "application/json" in accept or path.startswith("/health")
-
-
-def _log_extra_from_request(request: Request, **extra: Any) -> dict[str, Any]:
-    payload = {
-        "request_id": getattr(getattr(request, "state", None), "request_id", "-"),
-        "method": request.method,
-        "path": request.url.path,
-        **extra,
-    }
-    return payload
-
-
+DATABASE_URL = os.getenv("DATABASE_URL") or "sqlite:///./app.db"
 ALLOW_COMPANY_SIGNUP = os.getenv("ALLOW_COMPANY_SIGNUP", "0") == "1"
 
 CLIENT_INVITE_TTL_HOURS = int(os.getenv("CLIENT_INVITE_TTL_HOURS", "168"))  # 7 dias
@@ -263,22 +212,6 @@ NOTION_API_BASE = "https://api.notion.com/v1"
 UPLOAD_DIR = Path(os.getenv("UPLOAD_DIR") or "./uploads").resolve()
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
-ENABLE_STARTUP_COMPANY_DEFAULT_SEEDS = os.getenv("ENABLE_STARTUP_COMPANY_DEFAULT_SEEDS", "0") == "1"
-ENABLE_STARTUP_WHATSAPP_DEFAULT_SEEDS = os.getenv("ENABLE_STARTUP_WHATSAPP_DEFAULT_SEEDS", "0") == "1"
-
-_STARTUP_CORE_DONE = False
-_STARTUP_OFFICE_FINANCE_DONE = False
-_STARTUP_OFFER_ENGINE_DONE = False
-_STARTUP_PLUGGY_DONE = False
-_STARTUP_COMPANY_DEFAULTS_DONE = False
-_STARTUP_WHATSAPP_DEFAULTS_DONE = False
-
-FILE_STORAGE_BACKEND = (os.getenv("FILE_STORAGE_BACKEND") or "local").strip().lower()
-APP_S3_BUCKET_NAME = (os.getenv("APP_S3_BUCKET_NAME") or os.getenv("S3_BUCKET_NAME") or "").strip()
-APP_S3_REGION = (os.getenv("APP_S3_REGION") or os.getenv("AWS_REGION") or "us-east-2").strip()
-APP_S3_PREFIX = (os.getenv("APP_S3_PREFIX") or "uploads").strip().strip("/")
-APP_S3_ENDPOINT_URL = (os.getenv("APP_S3_ENDPOINT_URL") or "").strip()
-
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 engine = create_engine(
@@ -291,10 +224,6 @@ engine = create_engine(
 
 _MAX_PASSWORD_BYTES = 1024
 _MAX_UPLOAD_BYTES = 20 * 1024 * 1024  # 20MB (ajuste se quiser)
-
-ENABLE_ACTIVITY_TRACKING = os.getenv("ENABLE_ACTIVITY_TRACKING", "0") == "1"
-ENABLE_TEMPLATE_LIVE_COUNTS = os.getenv("ENABLE_TEMPLATE_LIVE_COUNTS", "0") == "1"
-HEALTHCHECK_DB = os.getenv("HEALTHCHECK_DB", "1") == "1"
 
 
 def utcnow() -> datetime:
@@ -399,6 +328,7 @@ def _public_base_url(request: Request) -> str:
 
 
 CONSENT_LINK_NOTE_PREFIX = "CONSENT_LINK_JSON:"
+
 
 # ----------------------------
 # E-mail (SMTP) - usado para links de aceite SCR nas Consultas
@@ -615,7 +545,6 @@ class Membership(SQLModel, table=True):
     client_id: Optional[int] = Field(default=None, index=True, foreign_key="client.id")
     created_at: datetime = Field(default_factory=utcnow)
 
-
 class UiBannerSlide(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     company_id: int = Field(index=True, foreign_key="company.id")
@@ -636,7 +565,6 @@ class UiNewsFeed(SQLModel, table=True):
     is_active: bool = Field(default=True, index=True)
     created_at: datetime = Field(default_factory=utcnow)
 
-
 class AdminEntityState(SQLModel, table=True):
     """Admin-managed state for entities (soft deactivate/delete) without altering core tables.
 
@@ -655,7 +583,6 @@ class AdminEntityState(SQLModel, table=True):
     updated_at: datetime = Field(default_factory=utcnow, index=True)
     updated_by_user_id: Optional[int] = Field(default=None, index=True)
     deleted_at: Optional[datetime] = Field(default=None, index=True)
-
 
 class MembershipFeatureAccess(SQLModel, table=True):
     """Per-member feature visibility/access controls (JSON list of feature keys).
@@ -802,6 +729,8 @@ def score_total(process_score: float, financial_score: float, nps_score: int) ->
     nps01 = max(0, min(10, int(nps_score))) / 10.0  # 0..1
     nps100 = nps01 * 100.0
     return round(_clamp_0_100(0.5 * float(process_score) + 0.4 * float(financial_score) + 0.1 * float(nps100)), 2)
+
+
 
 
 # ----------------------------
@@ -989,140 +918,87 @@ class OfferVisibilityReview(SQLModel, table=True):
 
 
 PRODUCT_FAMILY_SEED: list[dict[str, Any]] = [
-    {"code": "turnaround", "area": "advisory", "label": "Turnaround",
-     "description": "Reestruturacao financeira e operacional."},
+    {"code": "turnaround", "area": "advisory", "label": "Turnaround", "description": "Reestruturacao financeira e operacional."},
     {"code": "valuation", "area": "advisory", "label": "Valuation", "description": "Avaliacao de empresas."},
-    {"code": "estrategia_financeira", "area": "advisory", "label": "Consultoria Estrategica Financeira",
-     "description": "Planejamento e governanca financeira."},
-    {"code": "plano_rj", "area": "advisory", "label": "Plano de Recuperacao Judicial",
-     "description": "Preparacao do plano e estrategia."},
-    {"code": "rodada_seed", "area": "ib", "label": "Rodada Anjo/Seed/Serie A",
-     "description": "Captacao com investidores."},
+    {"code": "estrategia_financeira", "area": "advisory", "label": "Consultoria Estrategica Financeira", "description": "Planejamento e governanca financeira."},
+    {"code": "plano_rj", "area": "advisory", "label": "Plano de Recuperacao Judicial", "description": "Preparacao do plano e estrategia."},
+    {"code": "rodada_seed", "area": "ib", "label": "Rodada Anjo/Seed/Serie A", "description": "Captacao com investidores."},
     {"code": "equity_roadshow", "area": "ib", "label": "Roadshow de Equity", "description": "Roadshow com fundos."},
     {"code": "debenture", "area": "ib", "label": "Debenture", "description": "Emissao de divida no mercado."},
     {"code": "cri_cra", "area": "ib", "label": "CRI/CRA", "description": "Estruturacoes com recebiveis."},
     {"code": "ma_sell_side", "area": "ib", "label": "M&A Sell-side", "description": "Mandato de venda."},
     {"code": "ma_buy_side", "area": "ib", "label": "M&A Buy-side", "description": "Mandato de compra."},
-    {"code": "distressed_ma", "area": "special_sits", "label": "Distressed M&A",
-     "description": "Ativos estressados e situacoes especiais."},
-    {"code": "credito_rj", "area": "special_sits", "label": "Creditos de RJ",
-     "description": "Intermediacao de creditos de recuperacao judicial."},
-    {"code": "credito_tributario", "area": "special_sits", "label": "Creditos Tributarios",
-     "description": "Monetizacao de ativos tributarios."},
+    {"code": "distressed_ma", "area": "special_sits", "label": "Distressed M&A", "description": "Ativos estressados e situacoes especiais."},
+    {"code": "credito_rj", "area": "special_sits", "label": "Creditos de RJ", "description": "Intermediacao de creditos de recuperacao judicial."},
+    {"code": "credito_tributario", "area": "special_sits", "label": "Creditos Tributarios", "description": "Monetizacao de ativos tributarios."},
     {"code": "dip_financing", "area": "special_sits", "label": "DIP Financing", "description": "Financiamento DIP."},
     {"code": "capital_giro", "area": "baas", "label": "Capital de Giro", "description": "Capital de giro."},
-    {"code": "conta_garantida", "area": "baas", "label": "Conta Garantida",
-     "description": "Credito rotativo em conta."},
-    {"code": "antecipacao_recebiveis", "area": "baas", "label": "Antecipacao de Recebiveis",
-     "description": "Desconto de duplicatas e titulos."},
-    {"code": "antecipacao_cartoes", "area": "baas", "label": "Antecipacao de Cartoes",
-     "description": "Antecipacao de vendas no cartao."},
+    {"code": "conta_garantida", "area": "baas", "label": "Conta Garantida", "description": "Credito rotativo em conta."},
+    {"code": "antecipacao_recebiveis", "area": "baas", "label": "Antecipacao de Recebiveis", "description": "Desconto de duplicatas e titulos."},
+    {"code": "antecipacao_cartoes", "area": "baas", "label": "Antecipacao de Cartoes", "description": "Antecipacao de vendas no cartao."},
     {"code": "cambio", "area": "baas", "label": "Cambio", "description": "Operacoes de cambio."},
-    {"code": "trade_finance", "area": "baas", "label": "Trade Finance",
-     "description": "ACC/ACE e funding de comercio exterior."},
-    {"code": "financiamento_veiculos", "area": "baas", "label": "Financiamento de Veiculos",
-     "description": "Aquisicao/renovacao de frota."},
+    {"code": "trade_finance", "area": "baas", "label": "Trade Finance", "description": "ACC/ACE e funding de comercio exterior."},
+    {"code": "financiamento_veiculos", "area": "baas", "label": "Financiamento de Veiculos", "description": "Aquisicao/renovacao de frota."},
     {"code": "consorcio", "area": "baas", "label": "Consorcio", "description": "Consorcios."},
-    {"code": "cessao_credito", "area": "baas", "label": "Cessao de Credito",
-     "description": "Cessao de credito e recebiveis."},
+    {"code": "cessao_credito", "area": "baas", "label": "Cessao de Credito", "description": "Cessao de credito e recebiveis."},
     {"code": "auto_equity", "area": "baas", "label": "Auto Equity", "description": "Credito com garantia de veiculo."},
-    {"code": "credito_corporativo_estruturado", "area": "baas", "label": "Credito Corporativo Estruturado",
-     "description": "Credito sob medida."},
-    {"code": "home_equity", "area": "baas", "label": "Home Equity",
-     "description": "Emprestimo com garantia de imovel."},
-    {"code": "credito_habitacional", "area": "baas", "label": "Credito Habitacional",
-     "description": "Financiamento habitacional."},
-    {"code": "plano_empresario", "area": "baas", "label": "Financiamento a Producao",
-     "description": "Plano empresario."},
+    {"code": "credito_corporativo_estruturado", "area": "baas", "label": "Credito Corporativo Estruturado", "description": "Credito sob medida."},
+    {"code": "home_equity", "area": "baas", "label": "Home Equity", "description": "Emprestimo com garantia de imovel."},
+    {"code": "credito_habitacional", "area": "baas", "label": "Credito Habitacional", "description": "Financiamento habitacional."},
+    {"code": "plano_empresario", "area": "baas", "label": "Financiamento a Producao", "description": "Plano empresario."},
     {"code": "analise_credito", "area": "baas", "label": "Analise de Credito", "description": "Relatorio de risco."},
 ]
 
 INTERNAL_SERVICE_SEED: list[dict[str, Any]] = [
-    {"area": "advisory", "family_code": "turnaround", "name": "Advisory - Consultoria Turnaround",
-     "description": "Consultoria em reestruturacao de empresas", "priority_weight": 95},
-    {"area": "advisory", "family_code": "valuation", "name": "Advisory - Consultoria Valuation",
-     "description": "Avaliacao de empresas", "priority_weight": 72},
-    {"area": "advisory", "family_code": "estrategia_financeira",
-     "name": "Advisory - Consultoria Estrategica Financeira", "description": "Consultoria em financas empresariais",
-     "priority_weight": 86},
-    {"area": "advisory", "family_code": "plano_rj", "name": "Advisory - Plano de Recuperacao Judicial",
-     "description": "Preparacao do plano de RJ", "priority_weight": 89},
-    {"area": "ib", "family_code": "rodada_seed", "name": "IB - Assessoria em Rodada Anjo/Seed/Serie A (ECM)",
-     "description": "Captacao com investidores", "priority_weight": 70},
-    {"area": "ib", "family_code": "equity_roadshow", "name": "IB - Roadshow para Captacao de Equity (ECM)",
-     "description": "Roadshow com fundos", "priority_weight": 68},
-    {"area": "ib", "family_code": "debenture", "name": "IB - Estruturacao de Debenture (DCM)",
-     "description": "Emissao de divida", "priority_weight": 76},
-    {"area": "ib", "family_code": "cri_cra", "name": "IB - Estruturacao de CRI/CRA (DCM)",
-     "description": "Estruturacao CRI/CRA", "priority_weight": 74},
-    {"area": "ib", "family_code": "ma_sell_side", "name": "IB - Mandato de Venda (M&A Sell-side)",
-     "description": "Mandato de venda", "priority_weight": 80},
-    {"area": "ib", "family_code": "ma_buy_side", "name": "IB - Mandato de Compra (M&A Buy-side)",
-     "description": "Mandato de compra", "priority_weight": 66},
-    {"area": "special_sits", "family_code": "distressed_ma",
-     "name": "Special Sits - Assessoria em M&A de Ativos Estressados", "description": "Ativos estressados",
-     "priority_weight": 88},
-    {"area": "special_sits", "family_code": "credito_rj", "name": "Special Sits - Intermediacao de Creditos de RJ",
-     "description": "Creditos de RJ", "priority_weight": 84},
-    {"area": "special_sits", "family_code": "credito_tributario",
-     "name": "Special Sits - Venda de Creditos Tributarios", "description": "Creditos tributarios",
-     "priority_weight": 82},
-    {"area": "special_sits", "family_code": "dip_financing", "name": "Special Sits - Captacao de Financiamento DIP",
-     "description": "DIP Financing", "priority_weight": 90},
-    {"area": "baas", "family_code": "capital_giro", "name": "BaaS - Capital de Giro", "description": "Capital de giro",
-     "priority_weight": 85},
-    {"area": "baas", "family_code": "conta_garantida", "name": "BaaS - Conta Garantida",
-     "description": "Conta garantida", "priority_weight": 72},
-    {"area": "baas", "family_code": "antecipacao_recebiveis",
-     "name": "BaaS - Desconto de Duplicatas / Antecipacao de Titulos", "description": "Antecipacao de recebiveis",
-     "priority_weight": 83},
-    {"area": "baas", "family_code": "antecipacao_cartoes", "name": "BaaS - Antecipacao de Cartoes",
-     "description": "Antecipacao de cartoes", "priority_weight": 79},
-    {"area": "baas", "family_code": "cambio", "name": "BaaS - Cambio Pronto (PF e PJ)", "description": "Cambio",
-     "priority_weight": 58},
-    {"area": "baas", "family_code": "trade_finance", "name": "BaaS - Trade Finance", "description": "Trade Finance",
-     "priority_weight": 65},
-    {"area": "baas", "family_code": "financiamento_veiculos", "name": "BaaS - Financiamento de Veiculos",
-     "description": "Financiamento de veiculos", "priority_weight": 60},
-    {"area": "baas", "family_code": "consorcio", "name": "BaaS - Consorcio", "description": "Consorcio",
-     "priority_weight": 61},
-    {"area": "baas", "family_code": "cessao_credito", "name": "BaaS - Cessao de Credito",
-     "description": "Cessao de credito", "priority_weight": 63},
-    {"area": "baas", "family_code": "auto_equity", "name": "BaaS - Auto Equity", "description": "Auto equity",
-     "priority_weight": 70},
-    {"area": "baas", "family_code": "credito_corporativo_estruturado", "name": "BaaS - Credito Corporativo Estruturado",
-     "description": "Credito estruturado", "priority_weight": 84},
-    {"area": "baas", "family_code": "home_equity", "name": "BaaS - Home Equity (Emprestimo com Garantia de Imovel)",
-     "description": "Home Equity", "priority_weight": 92},
-    {"area": "baas", "family_code": "credito_habitacional", "name": "BaaS - Credito Habitacional",
-     "description": "Credito Habitacional", "priority_weight": 59},
-    {"area": "baas", "family_code": "plano_empresario", "name": "BaaS - Financiamento a Producao (Plano Empresario)",
-     "description": "Plano Empresario", "priority_weight": 68},
-    {"area": "baas", "family_code": "analise_credito", "name": "BaaS - Analise de Credito",
-     "description": "Analise de Credito", "priority_weight": 55},
+    {"area": "advisory", "family_code": "turnaround", "name": "Advisory - Consultoria Turnaround", "description": "Consultoria em reestruturacao de empresas", "priority_weight": 95},
+    {"area": "advisory", "family_code": "valuation", "name": "Advisory - Consultoria Valuation", "description": "Avaliacao de empresas", "priority_weight": 72},
+    {"area": "advisory", "family_code": "estrategia_financeira", "name": "Advisory - Consultoria Estrategica Financeira", "description": "Consultoria em financas empresariais", "priority_weight": 86},
+    {"area": "advisory", "family_code": "plano_rj", "name": "Advisory - Plano de Recuperacao Judicial", "description": "Preparacao do plano de RJ", "priority_weight": 89},
+    {"area": "ib", "family_code": "rodada_seed", "name": "IB - Assessoria em Rodada Anjo/Seed/Serie A (ECM)", "description": "Captacao com investidores", "priority_weight": 70},
+    {"area": "ib", "family_code": "equity_roadshow", "name": "IB - Roadshow para Captacao de Equity (ECM)", "description": "Roadshow com fundos", "priority_weight": 68},
+    {"area": "ib", "family_code": "debenture", "name": "IB - Estruturacao de Debenture (DCM)", "description": "Emissao de divida", "priority_weight": 76},
+    {"area": "ib", "family_code": "cri_cra", "name": "IB - Estruturacao de CRI/CRA (DCM)", "description": "Estruturacao CRI/CRA", "priority_weight": 74},
+    {"area": "ib", "family_code": "ma_sell_side", "name": "IB - Mandato de Venda (M&A Sell-side)", "description": "Mandato de venda", "priority_weight": 80},
+    {"area": "ib", "family_code": "ma_buy_side", "name": "IB - Mandato de Compra (M&A Buy-side)", "description": "Mandato de compra", "priority_weight": 66},
+    {"area": "special_sits", "family_code": "distressed_ma", "name": "Special Sits - Assessoria em M&A de Ativos Estressados", "description": "Ativos estressados", "priority_weight": 88},
+    {"area": "special_sits", "family_code": "credito_rj", "name": "Special Sits - Intermediacao de Creditos de RJ", "description": "Creditos de RJ", "priority_weight": 84},
+    {"area": "special_sits", "family_code": "credito_tributario", "name": "Special Sits - Venda de Creditos Tributarios", "description": "Creditos tributarios", "priority_weight": 82},
+    {"area": "special_sits", "family_code": "dip_financing", "name": "Special Sits - Captacao de Financiamento DIP", "description": "DIP Financing", "priority_weight": 90},
+    {"area": "baas", "family_code": "capital_giro", "name": "BaaS - Capital de Giro", "description": "Capital de giro", "priority_weight": 85},
+    {"area": "baas", "family_code": "conta_garantida", "name": "BaaS - Conta Garantida", "description": "Conta garantida", "priority_weight": 72},
+    {"area": "baas", "family_code": "antecipacao_recebiveis", "name": "BaaS - Desconto de Duplicatas / Antecipacao de Titulos", "description": "Antecipacao de recebiveis", "priority_weight": 83},
+    {"area": "baas", "family_code": "antecipacao_cartoes", "name": "BaaS - Antecipacao de Cartoes", "description": "Antecipacao de cartoes", "priority_weight": 79},
+    {"area": "baas", "family_code": "cambio", "name": "BaaS - Cambio Pronto (PF e PJ)", "description": "Cambio", "priority_weight": 58},
+    {"area": "baas", "family_code": "trade_finance", "name": "BaaS - Trade Finance", "description": "Trade Finance", "priority_weight": 65},
+    {"area": "baas", "family_code": "financiamento_veiculos", "name": "BaaS - Financiamento de Veiculos", "description": "Financiamento de veiculos", "priority_weight": 60},
+    {"area": "baas", "family_code": "consorcio", "name": "BaaS - Consorcio", "description": "Consorcio", "priority_weight": 61},
+    {"area": "baas", "family_code": "cessao_credito", "name": "BaaS - Cessao de Credito", "description": "Cessao de credito", "priority_weight": 63},
+    {"area": "baas", "family_code": "auto_equity", "name": "BaaS - Auto Equity", "description": "Auto equity", "priority_weight": 70},
+    {"area": "baas", "family_code": "credito_corporativo_estruturado", "name": "BaaS - Credito Corporativo Estruturado", "description": "Credito estruturado", "priority_weight": 84},
+    {"area": "baas", "family_code": "home_equity", "name": "BaaS - Home Equity (Emprestimo com Garantia de Imovel)", "description": "Home Equity", "priority_weight": 92},
+    {"area": "baas", "family_code": "credito_habitacional", "name": "BaaS - Credito Habitacional", "description": "Credito Habitacional", "priority_weight": 59},
+    {"area": "baas", "family_code": "plano_empresario", "name": "BaaS - Financiamento a Producao (Plano Empresario)", "description": "Plano Empresario", "priority_weight": 68},
+    {"area": "baas", "family_code": "analise_credito", "name": "BaaS - Analise de Credito", "description": "Analise de Credito", "priority_weight": 55},
 ]
 
 PROFILE_SURVEY_V2 = PROFILE_SURVEY_V1 + [
-    {"id": "governanca", "section": "Governanca", "q": "A empresa possui governanca e ritos de decisao definidos?",
-     "type": "bool", "w": 8},
-    {"id": "erp", "section": "Tecnologia", "q": "A empresa utiliza ERP ou sistema financeiro centralizado?",
-     "type": "bool", "w": 8},
-    {"id": "demonstracoes_auditadas", "section": "Governanca",
-     "q": "A empresa possui demonstracoes auditadas ou revisadas?", "type": "bool", "w": 6},
+    {"id": "governanca", "section": "Governanca", "q": "A empresa possui governanca e ritos de decisao definidos?", "type": "bool", "w": 8},
+    {"id": "erp", "section": "Tecnologia", "q": "A empresa utiliza ERP ou sistema financeiro centralizado?", "type": "bool", "w": 8},
+    {"id": "demonstracoes_auditadas", "section": "Governanca", "q": "A empresa possui demonstracoes auditadas ou revisadas?", "type": "bool", "w": 6},
 ]
 
 
 def ensure_offer_engine_tables() -> bool:
     ok = True
     for tbl in (
-            ProductFamily.__table__,
-            ClientBusinessProfile.__table__,
-            InternalService.__table__,
-            Partner.__table__,
-            PartnerProduct.__table__,
-            PartnerCampaign.__table__,
-            OfferMatch.__table__,
-            OfferVisibilityReview.__table__,
+        ProductFamily.__table__,
+        ClientBusinessProfile.__table__,
+        InternalService.__table__,
+        Partner.__table__,
+        PartnerProduct.__table__,
+        PartnerCampaign.__table__,
+        OfferMatch.__table__,
+        OfferVisibilityReview.__table__,
     ):
         try:
             tbl.create(engine, checkfirst=True)
@@ -1370,7 +1246,6 @@ def seed_internal_services(session: Session, company_id: int) -> None:
         )
     session.commit()
 
-
 def _json_dump_list(items: list[str]) -> str:
     return json.dumps([str(x).strip() for x in items if str(x).strip()], ensure_ascii=False)
 
@@ -1381,6 +1256,8 @@ def _json_list(s: str) -> list[str]:
         return [str(x).strip() for x in data if str(x).strip()]
     except Exception:
         return []
+
+
 
 
 def _table_columns_meta(session: Session, table_name: str) -> list[dict[str, Any]]:
@@ -1577,16 +1454,16 @@ def _insert_or_ignore_business_profile_compat(session: Session, *, company_id: i
 
 
 def _upsert_internal_service_compat(
-        session: Session,
-        *,
-        company_id: int,
-        area: str,
-        family: str,
-        name: str,
-        description: str,
-        priority_weight: int,
-        notes: str = "",
-        is_active: bool = True,
+    session: Session,
+    *,
+    company_id: int,
+    area: str,
+    family: str,
+    name: str,
+    description: str,
+    priority_weight: int,
+    notes: str = "",
+    is_active: bool = True,
 ) -> None:
     cols_meta = _table_columns_meta(session, "internalservice")
     if not cols_meta:
@@ -1661,16 +1538,17 @@ def _upsert_internal_service_compat(
     session.commit()
 
 
+
 def _upsert_partner_compat(
-        session: Session,
-        *,
-        company_id: int,
-        name: str,
-        partner_type: str,
-        contact_name: str,
-        contact_email: str,
-        notes: str,
-        is_active: bool = True,
+    session: Session,
+    *,
+    company_id: int,
+    name: str,
+    partner_type: str,
+    contact_name: str,
+    contact_email: str,
+    notes: str,
+    is_active: bool = True,
 ) -> None:
     cols_meta = _table_columns_meta(session, "partner")
     if not cols_meta:
@@ -1740,40 +1618,39 @@ def _upsert_partner_compat(
     session.execute(text(f"INSERT INTO partner ({cols_sql}) VALUES ({placeholders})"), params)
     session.commit()
 
-
 def _upsert_partner_product_compat(
-        session: Session,
-        *,
-        company_id: int,
-        partner_id: int,
-        area: str,
-        family: str,
-        name: str,
-        pf_pj: str,
-        ticket_min_brl: float,
-        ticket_max_brl: float,
-        revenue_min_brl: float,
-        revenue_max_brl: float,
-        score_total_min: float,
-        score_financial_min: float,
-        max_debt_ratio: float,
-        requires_collateral: bool,
-        allowed_states_json: str,
-        allowed_segments_json: str,
-        rate_default_pct: float,
-        cet_default_pct: float,
-        term_min_months: int,
-        term_max_months: int,
-        grace_max_months: int,
-        amortization_default: str,
-        tariff_default_brl: float,
-        insurance_default_brl: float,
-        admin_fee_default_brl: float,
-        ltv_max_pct: float,
-        commission_text: str,
-        payout_term: str,
-        notes: str,
-        is_active: bool = True,
+    session: Session,
+    *,
+    company_id: int,
+    partner_id: int,
+    area: str,
+    family: str,
+    name: str,
+    pf_pj: str,
+    ticket_min_brl: float,
+    ticket_max_brl: float,
+    revenue_min_brl: float,
+    revenue_max_brl: float,
+    score_total_min: float,
+    score_financial_min: float,
+    max_debt_ratio: float,
+    requires_collateral: bool,
+    allowed_states_json: str,
+    allowed_segments_json: str,
+    rate_default_pct: float,
+    cet_default_pct: float,
+    term_min_months: int,
+    term_max_months: int,
+    grace_max_months: int,
+    amortization_default: str,
+    tariff_default_brl: float,
+    insurance_default_brl: float,
+    admin_fee_default_brl: float,
+    ltv_max_pct: float,
+    commission_text: str,
+    payout_term: str,
+    notes: str,
+    is_active: bool = True,
 ) -> None:
     cols_meta = _table_columns_meta(session, "partnerproduct")
     if not cols_meta:
@@ -1851,8 +1728,7 @@ def _upsert_partner_product_compat(
     placeholders = ", ".join(f":{c}" for c in names)
 
     existing_id = session.execute(
-        text(
-            "SELECT id FROM partnerproduct WHERE company_id = :company_id AND partner_id = :partner_id AND name = :name ORDER BY id LIMIT 1"),
+        text("SELECT id FROM partnerproduct WHERE company_id = :company_id AND partner_id = :partner_id AND name = :name ORDER BY id LIMIT 1"),
         {"company_id": company_id, "partner_id": partner_id, "name": name},
     ).scalar()
 
@@ -1871,7 +1747,6 @@ def _upsert_partner_product_compat(
 
     session.execute(text(f"INSERT INTO partnerproduct ({cols_sql}) VALUES ({placeholders})"), params)
     session.commit()
-
 
 def get_or_create_business_profile(session: Session, *, company_id: int, client_id: int) -> ClientBusinessProfile:
     row = session.exec(
@@ -1902,12 +1777,12 @@ def get_or_create_business_profile(session: Session, *, company_id: int, client_
             row.banking_relationships_count = int(getattr(row, "banks_count", 0) or 0)
         return row
 
-    row = ClientBusinessProfile(company_id=company_id, client_id=client_id, banks_count=0,
-                                banking_relationships_count=0)
+    row = ClientBusinessProfile(company_id=company_id, client_id=client_id, banks_count=0, banking_relationships_count=0)
     session.add(row)
     session.commit()
     session.refresh(row)
     return row
+
 
 
 def _sync_business_profile_legacy_columns(session: Session, profile: ClientBusinessProfile) -> None:
@@ -1941,7 +1816,6 @@ def _sync_business_profile_legacy_columns(session: Session, profile: ClientBusin
         except Exception:
             pass
 
-
 def list_product_families(session: Session, area: str = "") -> list[ProductFamily]:
     q = select(ProductFamily).where(ProductFamily.is_active == True)
     if area:
@@ -1949,8 +1823,7 @@ def list_product_families(session: Session, area: str = "") -> list[ProductFamil
     return session.exec(q.order_by(ProductFamily.sort_order.asc(), ProductFamily.label.asc())).all()
 
 
-def compute_offer_engine(*, session: Session, company_id: int, client: Client, profile: ClientBusinessProfile,
-                         latest_snapshot: Optional[ClientSnapshot]) -> list[dict[str, Any]]:
+def compute_offer_engine(*, session: Session, company_id: int, client: Client, profile: ClientBusinessProfile, latest_snapshot: Optional[ClientSnapshot]) -> list[dict[str, Any]]:
     score_total_snap = float(latest_snapshot.score_total) if latest_snapshot else 0.0
     score_fin_snap = float(latest_snapshot.score_financial) if latest_snapshot else 0.0
     score_proc_snap = float(latest_snapshot.score_process) if latest_snapshot else 0.0
@@ -1958,9 +1831,7 @@ def compute_offer_engine(*, session: Session, company_id: int, client: Client, p
     debt_total = max(float(client.debt_total_brl or 0.0), 0.0)
     cash_balance = float(client.cash_balance_brl or 0.0)
     debt_ratio = debt_total / max(revenue_monthly, 1.0)
-    txt = " ".join(
-        [profile.strategic_goal or "", profile.pain_points or "", " ".join(_json_list(profile.interests_json)),
-         latest_snapshot.notes if latest_snapshot else ""]).lower()
+    txt = " ".join([profile.strategic_goal or "", profile.pain_points or "", " ".join(_json_list(profile.interests_json)), latest_snapshot.notes if latest_snapshot else ""]).lower()
 
     scores = {item["code"]: 0.0 for item in PRODUCT_FAMILY_SEED}
     if revenue_monthly > 0:
@@ -2012,12 +1883,8 @@ def compute_offer_engine(*, session: Session, company_id: int, client: Client, p
         if interest in scores:
             scores[interest] += 24
 
-    services = session.exec(select(InternalService).where(InternalService.company_id == company_id,
-                                                          InternalService.is_active == True).order_by(
-        InternalService.priority_weight.desc())).all()
-    partner_products = session.exec(select(PartnerProduct).where(PartnerProduct.company_id == company_id,
-                                                                 PartnerProduct.is_active == True).order_by(
-        PartnerProduct.name.asc())).all()
+    services = session.exec(select(InternalService).where(InternalService.company_id == company_id, InternalService.is_active == True).order_by(InternalService.priority_weight.desc())).all()
+    partner_products = session.exec(select(PartnerProduct).where(PartnerProduct.company_id == company_id, PartnerProduct.is_active == True).order_by(PartnerProduct.name.asc())).all()
     families = {f.code: f for f in list_product_families(session)}
     partners = {pp.id: session.get(Partner, pp.partner_id) for pp in partner_products}
 
@@ -2053,37 +1920,27 @@ def compute_offer_engine(*, session: Session, company_id: int, client: Client, p
         if base <= 0:
             continue
         svc_family = (svc.family_code or getattr(svc, 'family_slug', '') or '').strip()
-        elig = [pp for pp in partner_products if
-                ((pp.family_code or getattr(pp, 'family_slug', '') or '').strip() == svc_family) and eligible(pp)]
+        elig = [pp for pp in partner_products if ((pp.family_code or getattr(pp, 'family_slug', '') or '').strip() == svc_family) and eligible(pp)]
         score_fit = round(min(100.0, base + max(0, svc.priority_weight - 50) * 0.4 + min(len(elig) * 2, 8)), 2)
         priority = "alta" if score_fit >= 75 else "media" if score_fit >= 55 else "baixa"
         fam = families.get(svc_family or svc.family_code)
-        out.append({"source_kind": "internal", "family_code": svc_family or svc.family_code, "area": svc.area,
-                    "product_name": svc.name, "partner_name": "", "priority_level": priority, "score_fit": score_fit,
-                    "reason_summary": f"Solucao interna recomendada. Parceiros elegiveis nesta familia: {len(elig)}.",
-                    "partner_options_count": len(elig), "internal_service_id": svc.id, "partner_product_id": None,
-                    "family_label": fam.label if fam else (svc_family or svc.family_code)})
+        out.append({"source_kind":"internal","family_code":svc_family or svc.family_code,"area":svc.area,"product_name":svc.name,"partner_name":"","priority_level":priority,"score_fit":score_fit,"reason_summary":f"Solucao interna recomendada. Parceiros elegiveis nesta familia: {len(elig)}.","partner_options_count":len(elig),"internal_service_id":svc.id,"partner_product_id":None,"family_label":fam.label if fam else (svc_family or svc.family_code)})
         for pp in elig:
             partner = partners.get(pp.id)
-            out.append({"source_kind": "partner", "family_code": svc_family or svc.family_code, "area": svc.area,
-                        "product_name": pp.name, "partner_name": partner.name if partner else "Parceiro",
-                        "priority_level": priority, "score_fit": min(100.0, score_fit + 4),
-                        "reason_summary": f"Parceiro elegivel para a familia {fam.label if fam else (svc_family or svc.family_code)}.",
-                        "partner_options_count": len(elig), "internal_service_id": svc.id, "partner_product_id": pp.id,
-                        "family_label": fam.label if fam else (svc_family or svc.family_code)})
+            out.append({"source_kind":"partner","family_code":svc_family or svc.family_code,"area":svc.area,"product_name":pp.name,"partner_name":partner.name if partner else "Parceiro","priority_level":priority,"score_fit":min(100.0, score_fit + 4),"reason_summary":f"Parceiro elegivel para a familia {fam.label if fam else (svc_family or svc.family_code)}.","partner_options_count":len(elig),"internal_service_id":svc.id,"partner_product_id":pp.id,"family_label":fam.label if fam else (svc_family or svc.family_code)})
 
-    out.sort(key=lambda x: (
-    0 if x["priority_level"] == "alta" else 1 if x["priority_level"] == "media" else 2, -float(x["score_fit"])))
+    out.sort(key=lambda x: (0 if x["priority_level"] == "alta" else 1 if x["priority_level"] == "media" else 2, -float(x["score_fit"])))
     return out
 
 
+
 def _insert_offer_match_compat(
-        session: Session,
-        *,
-        company_id: int,
-        client_id: int,
-        subject_doc: str,
-        item: dict[str, Any],
+    session: Session,
+    *,
+    company_id: int,
+    client_id: int,
+    subject_doc: str,
+    item: dict[str, Any],
 ) -> None:
     cols_meta = _table_columns_meta(session, "offermatch")
     if not cols_meta:
@@ -2147,6 +2004,7 @@ def _insert_offer_match_compat(
     session.execute(text(sql), params)
 
 
+
 def persist_offer_matches(session: Session, *, company_id: int, client_id: int, matches: list[dict[str, Any]]) -> None:
     old = session.exec(
         select(OfferMatch).where(
@@ -2191,7 +2049,6 @@ def persist_offer_matches(session: Session, *, company_id: int, client_id: int, 
         sync_offer_reviews(session, company_id=company_id, client_id=client_id)
     except Exception:
         session.rollback()
-
 
 # ----------------------------
 # Documentos# ----------------------------
@@ -2258,6 +2115,8 @@ class CreditConsent(SQLModel, table=True):
     notes: str = ""
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)
+
+
 
 
 # ----------------------------
@@ -2642,8 +2501,7 @@ class OfficeCostCenter(SQLModel, table=True):
 
 
 class OfficeCategory(SQLModel, table=True):
-    __table_args__ = (
-    UniqueConstraint("company_id", "name", "category_kind", name="uq_officecategory_company_name_kind"),)
+    __table_args__ = (UniqueConstraint("company_id", "name", "category_kind", name="uq_officecategory_company_name_kind"),)
     id: Optional[int] = Field(default=None, primary_key=True)
     company_id: int = Field(index=True, foreign_key="company.id")
     name: str
@@ -2857,6 +2715,8 @@ def ensure_credit_consent_table() -> bool:
         return False
 
 
+
+
 OFFICE_FINANCE_DEFAULT_COST_CENTERS: list[tuple[str, str]] = [
     ("ADM", "Administrativo"),
     ("COM", "Comercial"),
@@ -2987,8 +2847,7 @@ def _refresh_consulta_scr_consent_status(consent: ConsultaScrConsent) -> None:
         pass
 
 
-def _get_latest_consulta_scr_consent(session: Session, *, company_id: int, subject_doc: str) -> Optional[
-    ConsultaScrConsent]:
+def _get_latest_consulta_scr_consent(session: Session, *, company_id: int, subject_doc: str) -> Optional[ConsultaScrConsent]:
     d = _digits_only(subject_doc)
     if not d:
         return None
@@ -3009,8 +2868,6 @@ def _has_valid_consulta_scr_consent(session: Session, *, company_id: int, subjec
 
 def _is_scr_consulta_product(code: str) -> bool:
     return (code or "").strip() in SCR_CONSULTA_PRODUCT_CODES
-
-
 # ----------------------------
 # Integração: Conta Azul (OAuth + Sync)
 # ----------------------------
@@ -3702,6 +3559,8 @@ def _move_stage_to_order(session: Session, stage: "ConsultingStage", new_order: 
     session.commit()
 
 
+
+
 def get_tenant_context(request: Request, session: Session) -> Optional[TenantContext]:
     user = get_current_user(request, session)
     if not user:
@@ -3726,12 +3585,10 @@ def get_tenant_context(request: Request, session: Session) -> Optional[TenantCon
     if membership.id is not None and not entity_is_allowed(session, entity_type="membership", entity_id=membership.id):
         return None
 
-    if membership.role == "cliente" and membership.client_id and not entity_is_allowed(session, entity_type="client",
-                                                                                       entity_id=membership.client_id):
+    if membership.role == "cliente" and membership.client_id and not entity_is_allowed(session, entity_type="client", entity_id=membership.client_id):
         return None
 
     return TenantContext(user=user, company=company, membership=membership)
-
 
 SUPERADMIN_EMAILS: set[str] = {
     e.strip().lower() for e in (os.getenv("SUPERADMIN_EMAILS", "") or "").split(",") if e.strip()
@@ -3763,14 +3620,14 @@ def entity_is_allowed(session: Session, *, entity_type: str, entity_id: int) -> 
 
 
 def set_entity_state(
-        session: Session,
-        *,
-        entity_type: str,
-        entity_id: int,
-        company_id: Optional[int],
-        is_active: Optional[bool] = None,
-        is_deleted: Optional[bool] = None,
-        updated_by_user_id: Optional[int] = None,
+    session: Session,
+    *,
+    entity_type: str,
+    entity_id: int,
+    company_id: Optional[int],
+    is_active: Optional[bool] = None,
+    is_deleted: Optional[bool] = None,
+    updated_by_user_id: Optional[int] = None,
 ) -> AdminEntityState:
     st = _get_state(session, entity_type=entity_type, entity_id=entity_id)
     if not st:
@@ -3852,8 +3709,7 @@ FEATURE_KEYS: dict[str, dict[str, str]] = {
     "empresa": {"title": "Empresa", "desc": "Dados completos do cliente.", "href": "/empresa"},
     "perfil": {"title": "Perfil", "desc": "Indicadores do cliente.", "href": "/perfil"},
     "financeiro": {"title": "Financeiro", "desc": "Notas/boletos de honorários.", "href": "/financeiro"},
-    "financeiro_escritorio": {"title": "Financeiro Interno", "desc": "Contas a pagar/receber e cadastros internos.",
-                              "href": "/admin/financeiro"},
+    "financeiro_escritorio": {"title": "Financeiro Interno", "desc": "Contas a pagar/receber e cadastros internos.", "href": "/admin/financeiro"},
     "documentos": {"title": "Documentos", "desc": "Contratos e docs importantes.", "href": "/documentos"},
     "consultoria": {"title": "Consultoria", "desc": "Projetos, etapas e progresso.", "href": "/consultoria"},
     "reunioes": {"title": "Reuniões", "desc": "Atas e notas (Notion).", "href": "/reunioes"},
@@ -3875,10 +3731,10 @@ FEATURE_KEYS.setdefault(
     },
 )
 
+
 FEATURE_GROUPS: list[dict[str, Any]] = [
     {"key": "admin", "title": "Admin", "features": ["ui", "gestao", "credito", "crm"]},
-    {"key": "minha_empresa", "title": "Minha Empresa",
-     "features": ["empresa", "perfil", "financeiro", "documentos", "consultas", "openfinance", "creditos"]},
+    {"key": "minha_empresa", "title": "Minha Empresa", "features": ["empresa", "perfil", "financeiro", "documentos", "consultas", "openfinance", "creditos"]},
     {"key": "meu_projeto", "title": "Meu Projeto", "features": ["consultoria", "reunioes", "tarefas"]},
     {"key": "minhas_propostas", "title": "Minhas Propostas", "features": ["simulador", "propostas"]},
 ]
@@ -3905,27 +3761,20 @@ ROLE_DEFAULT_FEATURES: dict[str, set[str]] = {
 
 ROLE_DEFAULT_FEATURES["admin"].add("openfinance")
 ROLE_DEFAULT_FEATURES["equipe"].add("openfinance")
-ROLE_DEFAULT_FEATURES["admin"].update(
-    {"familias", "servicos_internos", "parceiros", "motor_ofertas", "ofertas", "financeiro_escritorio"})
-ROLE_DEFAULT_FEATURES["equipe"].update({"motor_ofertas", "ofertas", "financeiro_escritorio"})
+ROLE_DEFAULT_FEATURES["admin"].update({"familias","servicos_internos","parceiros","motor_ofertas","ofertas","financeiro_escritorio"})
+ROLE_DEFAULT_FEATURES["equipe"].update({"motor_ofertas","ofertas","financeiro_escritorio"})
 ROLE_DEFAULT_FEATURES["cliente"].add("ofertas")
 
 FEATURE_KEYS.update({
     "ofertas": {"title": "Ofertas", "desc": "Produtos e servicos aderentes ao seu perfil.", "href": "/ofertas"},
     "familias": {"title": "Familias", "desc": "Familias canonicas de produto.", "href": "/admin/familias"},
-    "servicos_internos": {"title": "Produtos Internos", "desc": "Catalogo interno por area e familia.",
-                          "href": "/admin/servicos-internos"},
+    "servicos_internos": {"title": "Produtos Internos", "desc": "Catalogo interno por area e familia.", "href": "/admin/servicos-internos"},
     "parceiros": {"title": "Parceiros", "desc": "Parceiros, produtos e campanhas.", "href": "/admin/parceiros"},
-    "motor_ofertas": {"title": "Motor de Ofertas", "desc": "Ranking de ofertas internas e de parceiros.",
-                      "href": "/motor-ofertas"},
+    "motor_ofertas": {"title": "Motor de Ofertas", "desc": "Ranking de ofertas internas e de parceiros.", "href": "/motor-ofertas"},
 })
 FEATURE_GROUPS = [
-    {"key": "cliente", "title": "Cliente",
-     "features": ["empresa", "perfil", "ofertas", "financeiro", "documentos", "consultas", "openfinance", "creditos",
-                  "propostas"]},
-    {"key": "escritorio", "title": "Escritorio",
-     "features": ["crm", "credito", "motor_ofertas", "financeiro_escritorio", "consultoria", "reunioes", "tarefas",
-                  "simulador"]},
+    {"key": "cliente", "title": "Cliente", "features": ["empresa", "perfil", "ofertas", "financeiro", "documentos", "consultas", "openfinance", "creditos", "propostas"]},
+    {"key": "escritorio", "title": "Escritorio", "features": ["crm", "credito", "motor_ofertas", "financeiro_escritorio", "consultoria", "reunioes", "tarefas", "simulador"]},
     {"key": "admin", "title": "Admin", "features": ["ui", "gestao", "familias", "servicos_internos", "parceiros"]},
 ]
 
@@ -3936,20 +3785,17 @@ PLUGGY_API_BASE = (os.getenv("PLUGGY_API_BASE") or "https://api.pluggy.ai").rstr
 PLUGGY_CLIENT_ID = (os.getenv("PLUGGY_CLIENT_ID") or "").strip()
 PLUGGY_CLIENT_SECRET = (os.getenv("PLUGGY_CLIENT_SECRET") or "").strip()
 PLUGGY_INCLUDE_SANDBOX = os.getenv("PLUGGY_INCLUDE_SANDBOX", "0") == "1"
-PLUGGY_CONNECT_JS_URL = (os.getenv(
-    "PLUGGY_CONNECT_JS_URL") or "https://cdn.pluggy.ai/pluggy-connect/v2.8.2/pluggy-connect.js").strip()
+PLUGGY_CONNECT_JS_URL = (os.getenv("PLUGGY_CONNECT_JS_URL") or "https://cdn.pluggy.ai/pluggy-connect/v2.8.2/pluggy-connect.js").strip()
 PLUGGY_HTTP_TIMEOUT_S = float(os.getenv("PLUGGY_HTTP_TIMEOUT_S", "20") or "20")
 # ----------------------------
 # Open Finance (Klavi) - Link/Consents + Loans report
 # ----------------------------
 
 KLAVI_ENV = (os.getenv("KLAVI_ENV") or "sandbox").strip().lower()
-KLAVI_API_BASE = (os.getenv("KLAVI_API_BASE") or (
-    "https://api-sandbox.klavi.ai" if KLAVI_ENV == "sandbox" else "https://api.klavi.ai")).rstrip("/")
+KLAVI_API_BASE = (os.getenv("KLAVI_API_BASE") or ("https://api-sandbox.klavi.ai" if KLAVI_ENV == "sandbox" else "https://api.klavi.ai")).rstrip("/")
 KLAVI_ACCESS_KEY = (os.getenv("KLAVI_ACCESS_KEY") or "").strip()
 KLAVI_SECRET_KEY = (os.getenv("KLAVI_SECRET_KEY") or "").strip()
 KLAVI_HTTP_TIMEOUT_S = float(os.getenv("KLAVI_HTTP_TIMEOUT_S", "25") or "25")
-
 
 def _klavi_normalize_phone(phone: str) -> str:
     """Normaliza telefone para E.164 no padrão BR (+55...).
@@ -3982,7 +3828,6 @@ def _klavi_normalize_phone(phone: str) -> str:
     if not re.fullmatch(r"\+55\d{10,11}", e164):
         raise ValueError("Invalid phone")
     return e164
-
 
 PLUGGY_WEBHOOK_KEY = (os.getenv("PLUGGY_WEBHOOK_KEY") or "").strip()
 PLUGGY_WEBHOOK_TRUSTED_IPS = {
@@ -4114,8 +3959,7 @@ class PluggyOffer(SQLModel, table=True):
 
 class PluggyOpportunity(SQLModel, table=True):
     """Resultado de comparação (Loan x Offer)."""
-    __table_args__ = (
-    UniqueConstraint("company_id", "subject_doc", "pluggy_loan_id", "offer_id", name="uq_pluggy_opp_unique"),)
+    __table_args__ = (UniqueConstraint("company_id", "subject_doc", "pluggy_loan_id", "offer_id", name="uq_pluggy_opp_unique"),)
 
     id: Optional[int] = Field(default=None, primary_key=True)
     company_id: int = Field(index=True, foreign_key="company.id")
@@ -4180,13 +4024,13 @@ def ensure_pluggy_tables() -> bool:
     """Garante tabelas do módulo Pluggy (ambientes sem Alembic)."""
     ok = True
     for tbl in (
-            PluggyConnectInvite.__table__,
-            PluggyConnection.__table__,
-            PluggyLoan.__table__,
-            PluggyOffer.__table__,
-            PluggyOpportunity.__table__,
-            KlaviFlow.__table__,
-            KlaviReport.__table__,
+        PluggyConnectInvite.__table__,
+        PluggyConnection.__table__,
+        PluggyLoan.__table__,
+        PluggyOffer.__table__,
+        PluggyOpportunity.__table__,
+        KlaviFlow.__table__,
+        KlaviReport.__table__,
     ):
         try:
             tbl.create(engine, checkfirst=True)
@@ -4247,8 +4091,7 @@ def _klavi_auth_header(token: str) -> dict[str, str]:
 async def _klavi_post_json(*, path: str, bearer: str, payload: dict[str, Any]) -> dict[str, Any]:
     url = f"{KLAVI_API_BASE}{path}"
     async with httpx.AsyncClient(timeout=KLAVI_HTTP_TIMEOUT_S) as client:
-        r = await client.post(url, json=payload,
-                              headers={**_klavi_auth_header(bearer), "content-type": "application/json"})
+        r = await client.post(url, json=payload, headers={**_klavi_auth_header(bearer), "content-type": "application/json"})
         r.raise_for_status()
         return r.json() if r.content else {}
 
@@ -4317,9 +4160,7 @@ def _klavi_extract_contract_dicts(payload: Any) -> list[dict[str, Any]]:
     candidates: list[dict[str, Any]] = []
     for d in _deep_iter_dicts(payload):
         has_id = any(k in d for k in ("contractNumber", "contractId", "ipocCode", "loanId", "id"))
-        has_money = any(k in d for k in (
-        "contractAmount", "contractedAmount", "principalAmount", "outstandingBalance", "installmentAmount", "cet",
-        "CET"))
+        has_money = any(k in d for k in ("contractAmount", "contractedAmount", "principalAmount", "outstandingBalance", "installmentAmount", "cet", "CET"))
         if has_id and has_money:
             candidates.append(d)
     # dedup by repr hash
@@ -4334,8 +4175,7 @@ def _klavi_extract_contract_dicts(payload: Any) -> list[dict[str, Any]]:
     return uniq[:200]
 
 
-def _klavi_contract_to_loan(*, company_id: int, subject_doc: str, link_id: str, contract: dict[str, Any],
-                            raw_payload: Any) -> PluggyLoan:
+def _klavi_contract_to_loan(*, company_id: int, subject_doc: str, link_id: str, contract: dict[str, Any], raw_payload: Any) -> PluggyLoan:
     contract_number = _klavi_pick_str(contract, "contractNumber", "contractId", "number")
     ipoc_code = _klavi_pick_str(contract, "ipocCode", "ipoc", "ipoc_code")
 
@@ -4344,10 +4184,8 @@ def _klavi_contract_to_loan(*, company_id: int, subject_doc: str, link_id: str, 
     amort = _klavi_pick_str(contract, "amortizationType", "amortizationScheduled", "amortization", "amortization_type")
 
     principal = _klavi_pick_float(contract, "contractAmount", "contractedAmount", "principalAmount", "amount")
-    outstanding = _klavi_pick_float(contract, "outstandingBalance", "contractOutstandingBalance", "balance",
-                                    "outstanding_brl")
-    installment = _klavi_pick_float(contract, "installmentAmount", "instalmentAmount", "scheduledInstalmentAmount",
-                                    "installment_brl")
+    outstanding = _klavi_pick_float(contract, "outstandingBalance", "contractOutstandingBalance", "balance", "outstanding_brl")
+    installment = _klavi_pick_float(contract, "installmentAmount", "instalmentAmount", "scheduledInstalmentAmount", "installment_brl")
 
     term_total = _klavi_pick_int(contract, "installmentQuantity", "instalmentQuantity", "termTotalMonths", "term")
     term_rem = _klavi_pick_int(contract, "remainingInstallments", "remainingInstalments", "termRemainingMonths")
@@ -4355,7 +4193,7 @@ def _klavi_contract_to_loan(*, company_id: int, subject_doc: str, link_id: str, 
     cet = _klavi_pick_float(contract, "CET", "cet", "cetAnnual", "cet_aa")
     interest = _klavi_pick_float(contract, "interestRate", "interestRates", "interestAnnual", "interest_aa")
 
-    pluggy_loan_id = f"klavi:{contract_number or ipoc_code or _klavi_pick_str(contract, 'id', 'loanId') or secrets.token_hex(6)}"
+    pluggy_loan_id = f"klavi:{contract_number or ipoc_code or _klavi_pick_str(contract,'id','loanId') or secrets.token_hex(6)}"
     return PluggyLoan(
         company_id=company_id,
         subject_doc=subject_doc,
@@ -4504,8 +4342,7 @@ async def _pluggy_get_api_key() -> str:
     return api_key
 
 
-async def _pluggy_create_connect_token(*, request: Request, company_id: int, subject_doc: str,
-                                       update_item_id: str | None) -> str:
+async def _pluggy_create_connect_token(*, request: Request, company_id: int, subject_doc: str, update_item_id: str | None) -> str:
     api_key = await _pluggy_get_api_key()
     url = f"{PLUGGY_API_BASE}/connect_token"
 
@@ -4551,8 +4388,7 @@ async def _pluggy_fetch_loans(*, item_id: str) -> list[dict[str, Any]]:
     api_key = await _pluggy_get_api_key()
     url = f"{PLUGGY_API_BASE}/loans"
     async with httpx.AsyncClient(timeout=PLUGGY_HTTP_TIMEOUT_S) as client:
-        r = await client.get(url, params={"itemId": item_id},
-                             headers={"accept": "application/json", "X-API-KEY": api_key})
+        r = await client.get(url, params={"itemId": item_id}, headers={"accept": "application/json", "X-API-KEY": api_key})
         r.raise_for_status()
         data = r.json() if r.content else {}
     if isinstance(data, list):
@@ -4611,8 +4447,7 @@ def _extract_loan_fields(raw: dict[str, Any]) -> dict[str, Any]:
         else (raw.get("amortizationType") or raw.get("amortization") or "")
     ).strip()
 
-    principal = float(raw.get("contractAmount") or raw.get("principal") or 0.0) if str(
-        raw.get("contractAmount") or raw.get("principal") or "").strip() else 0.0
+    principal = float(raw.get("contractAmount") or raw.get("principal") or 0.0) if str(raw.get("contractAmount") or raw.get("principal") or "").strip() else 0.0
 
     # outstanding balance pode aparecer em payments.contractOutstandingBalance
     outstanding = 0.0
@@ -4815,6 +4650,11 @@ def _compute_opportunities_for_doc(*, session: Session, company_id: int, subject
 
     session.commit()
     return inserted
+
+
+
+
+
 
 
 TEMPLATES: dict[str, str] = {
@@ -5955,8 +5795,8 @@ a:hover{ color:#00BFBF; }
           <textarea class="form-control" name="description" rows="5"></textarea>
         </div>
         <div class="col-12">
-          <label class="form-label">Anexos (opcional)</label>
-          <input class="form-control" type="file" name="files" multiple />
+          <label class="form-label">Anexo (opcional)</label>
+          <input class="form-control" type="file" name="file" />
         </div>
       </div>
       <div class="mt-4 d-flex gap-2">
@@ -6055,8 +5895,8 @@ a:hover{ color:#00BFBF; }
         <textarea class="form-control" name="message" rows="2"></textarea>
       </div>
       <div class="mb-2">
-        <label class="form-label">Anexar arquivos</label>
-        <input class="form-control" type="file" name="files" multiple required />
+        <label class="form-label">Anexar arquivo</label>
+        <input class="form-control" type="file" name="file" required />
       </div>
       <button class="btn btn-primary">Enviar</button>
     </form>
@@ -6071,8 +5911,8 @@ a:hover{ color:#00BFBF; }
         <textarea class="form-control" name="message" rows="3"></textarea>
       </div>
       <div class="mb-2">
-        <label class="form-label">Anexos (opcional)</label>
-        <input class="form-control" type="file" name="files" multiple />
+        <label class="form-label">Anexo (opcional)</label>
+        <input class="form-control" type="file" name="file" />
       </div>
       <div class="form-check mb-3">
         <input class="form-check-input" type="checkbox" name="mark_done" value="1" id="doneCheck">
@@ -6159,8 +5999,8 @@ a:hover{ color:#00BFBF; }
           <textarea class="form-control" name="content" rows="6" required></textarea>
         </div>
         <div class="col-12">
-          <label class="form-label">Anexos (opcional)</label>
-          <input class="form-control" type="file" name="files" multiple />
+          <label class="form-label">Anexo (opcional)</label>
+          <input class="form-control" type="file" name="file" />
         </div>
       </div>
       <div class="mt-4 d-flex gap-2">
@@ -6259,8 +6099,8 @@ a:hover{ color:#00BFBF; }
         <textarea class="form-control" name="message" rows="2"></textarea>
       </div>
       <div class="mb-2">
-        <label class="form-label">Anexar arquivos</label>
-        <input class="form-control" type="file" name="files" multiple required />
+        <label class="form-label">Anexar arquivo</label>
+        <input class="form-control" type="file" name="file" required />
       </div>
       <button class="btn btn-primary">Enviar</button>
     </form>
@@ -6275,8 +6115,8 @@ a:hover{ color:#00BFBF; }
         <textarea class="form-control" name="message" rows="3"></textarea>
       </div>
       <div class="mb-2">
-        <label class="form-label">Anexos</label>
-        <input class="form-control" type="file" name="files" multiple required />
+        <label class="form-label">Anexo</label>
+        <input class="form-control" type="file" name="file" required />
       </div>
       <button class="btn btn-primary">Enviar</button>
     </form>
@@ -6375,8 +6215,8 @@ a:hover{ color:#00BFBF; }
           <textarea class="form-control" name="description" rows="5"></textarea>
         </div>
         <div class="col-12">
-          <label class="form-label">Anexos (opcional)</label>
-          <input class="form-control" type="file" name="files" multiple />
+          <label class="form-label">Anexo (opcional)</label>
+          <input class="form-control" type="file" name="file" />
         </div>
       </div>
       <div class="mt-4 d-flex gap-2">
@@ -6415,8 +6255,8 @@ a:hover{ color:#00BFBF; }
         <textarea class="form-control" name="description" rows="6" required></textarea>
       </div>
       <div class="col-12">
-        <label class="form-label">Anexos (opcional)</label>
-        <input class="form-control" type="file" name="files" multiple />
+        <label class="form-label">Anexo (opcional)</label>
+        <input class="form-control" type="file" name="file" />
       </div>
     </div>
     <div class="mt-4 d-flex gap-2">
@@ -6529,8 +6369,8 @@ a:hover{ color:#00BFBF; }
 
     <form method="post" action="/propostas/{{ prop.id }}/anexar" enctype="multipart/form-data" class="mt-3">
       <div class="mb-2">
-        <label class="form-label">Anexar arquivos</label>
-        <input class="form-control" type="file" name="files" multiple required />
+        <label class="form-label">Anexar arquivo</label>
+        <input class="form-control" type="file" name="file" required />
       </div>
       <button class="btn btn-primary">Enviar anexo</button>
     </form>
@@ -6544,8 +6384,8 @@ a:hover{ color:#00BFBF; }
         <textarea class="form-control" name="message" rows="3"></textarea>
       </div>
       <div class="mb-2">
-        <label class="form-label">Anexos (opcional)</label>
-        <input class="form-control" type="file" name="files" multiple />
+        <label class="form-label">Anexo (opcional)</label>
+        <input class="form-control" type="file" name="file" />
       </div>
       <button class="btn btn-primary">Enviar</button>
     </form>
@@ -6563,13 +6403,31 @@ a:hover{ color:#00BFBF; }
       <h4 class="mb-0">Financeiro</h4>
       <div class="muted">Notas/Boletos de honorários (manual) + sincronizado do Conta Azul.</div>
     </div>
-    {% if role in ["admin","equipe"] %}
-      <a class="btn btn-primary" href="/financeiro/novo">Nova cobrança</a>
-    {% endif %}
+    <div class="d-flex gap-2">
+      {% if role in ["admin","equipe"] %}
+        <a class="btn btn-outline-secondary" href="/integrations/contaazul">Conta Azul</a>
+        {% if ca_connected %}
+          <form method="post" action="/financeiro/contaazul/sync">
+            <button class="btn btn-outline-primary" type="submit">Sincronizar</button>
+          </form>
+        {% endif %}
+        <a class="btn btn-primary" href="/financeiro/novo">Nova cobrança</a>
+      {% endif %}
+    </div>
   </div>
 
-  <hr class="my-3"/>
+  {% if ca_configured and role in ["admin","equipe"] and not ca_connected %}
+    <div class="alert alert-warning mt-3">
+      Conta Azul não conectado. Vá em <a href="/integrations/contaazul">Integrações / Conta Azul</a>.
+    </div>
+  {% endif %}
 
+  {% if ca_last_sync %}
+    <div class="muted small mt-2">Conta Azul: última sync em {{ ca_last_sync }}</div>
+  {% endif %}
+
+  <hr class="my-3"/>
+  <h6 class="mb-2">Cobranças (manual)</h6>
   {% if items %}
     <div class="list-group">
       {% for it in items %}
@@ -6590,150 +6448,72 @@ a:hover{ color:#00BFBF; }
   {% else %}
     <div class="muted">Sem cobranças manuais.</div>
   {% endif %}
-</div>
 
-<div class="card p-4 mt-3">
-  <div class="d-flex justify-content-between align-items-center">
-    <div>
-      <h5 class="mb-0">Conta Azul</h5>
-      <div class="muted small">Sincroniza notas fiscais e contas a receber do ERP (filtrado pelo cliente selecionado).</div>
-    </div>
-    {% if role in ["admin","equipe"] %}
-      <a class="btn btn-outline-secondary" href="/integrations/contaazul">Configurar</a>
-    {% endif %}
-  </div>
-
-  <hr class="my-3"/>
-
-  {% if not ca_configured %}
-    <div class="alert alert-warning">
-      Configure <code>CONTA_AZUL_CLIENT_ID</code> e <code>CONTA_AZUL_CLIENT_SECRET</code> no Render.
-    </div>
-  {% elif not ca_connected %}
-    <div class="alert alert-info">
-      Conta Azul não conectada. <a href="/integrations/contaazul">Clique aqui para conectar</a>.
+  <hr class="my-4"/>
+  <h6 class="mb-2">Conta Azul: Boletos / Contas a receber</h6>
+  {% if ca_receivables %}
+    <div class="list-group">
+      {% for r in ca_receivables %}
+        <div class="list-group-item">
+          <div class="d-flex justify-content-between">
+            <div class="fw-semibold">{{ r.description }}</div>
+            <span class="badge text-bg-light border">{{ r.status }}</span>
+          </div>
+          <div class="muted small mt-1">
+            Valor: R$ {{ "%.2f"|format(r.amount_total or 0) }} • Aberto: R$ {{ "%.2f"|format(r.amount_open or 0) }}
+            {% if r.due_date %} • Venc: {{ r.due_date }}{% endif %}
+            {% if r.invoice_type or r.invoice_number %} • {{ r.invoice_type }} {{ r.invoice_number }}{% endif %}
+            {% if r.boleto_status %} • Boleto: {{ r.boleto_status }}{% endif %}
+          </div>
+          <div class="d-flex flex-wrap gap-2 mt-2">
+            {% if r.payment_url %}
+              <a class="btn btn-sm btn-outline-primary"
+                 href="/financeiro/contaazul/receivable/{{ r.id }}/boleto"
+                 target="_blank" rel="noopener">Boleto</a>
+            {% endif %}
+            <a class="btn btn-sm btn-outline-secondary"
+               href="/financeiro/contaazul/receivable/{{ r.id }}/fatura.pdf"
+               target="_blank" rel="noopener">Fatura PDF</a>
+          </div>
+        </div>
+      {% endfor %}
     </div>
   {% else %}
-    <div class="d-flex flex-wrap align-items-center gap-2">
-      <span class="badge text-bg-light border">Conectado</span>
-      {% if ca_last_sync %}<span class="muted small">Última sync: {{ ca_last_sync }}</span>{% endif %}
-      {% if role in ["admin","equipe"] %}
-        <form method="post" action="/financeiro/contaazul/sync">
-          <button class="btn btn-sm btn-outline-primary">Sincronizar agora</button>
-        </form>
-      {% endif %}
+    <div class="muted">Sem itens sincronizados.</div>
+  {% endif %}
+
+  <hr class="my-4"/>
+  <h6 class="mb-2">Conta Azul: Notas fiscais</h6>
+  {% if ca_invoices %}
+    <div class="list-group">
+      {% for n in ca_invoices %}
+        <div class="list-group-item">
+          <div class="d-flex justify-content-between">
+            <div class="fw-semibold">{{ n.invoice_type }} {{ n.number }}</div>
+            <span class="badge text-bg-light border">{{ n.status }}</span>
+          </div>
+          <div class="muted small mt-1">
+            {% if n.issue_date %}Emissão/Competência: {{ n.issue_date }} • {% endif %}
+            {% if n.amount %}Valor: R$ {{ "%.2f"|format(n.amount) }} • {% endif %}
+            ID: {{ n.external_id }}
+          </div>
+          <div class="d-flex flex-wrap gap-2 mt-2">
+            {% if (n.invoice_type or "").upper() == "NFSE" %}
+              <a class="btn btn-sm btn-outline-secondary"
+                 href="/financeiro/contaazul/invoice/{{ n.id }}/pdf"
+                 target="_blank" rel="noopener">NF PDF</a>
+            {% endif %}
+            {% if (n.invoice_type or "").upper() == "NFE" %}
+              <a class="btn btn-sm btn-outline-secondary"
+                 href="/financeiro/contaazul/invoice/{{ n.id }}/xml"
+                 target="_blank" rel="noopener">NF XML</a>
+            {% endif %}
+          </div>
+        </div>
+      {% endfor %}
     </div>
-
-    {% if role in ["admin","equipe"] and current_client %}
-      <div class="border rounded p-3 mt-3">
-        <div class="fw-semibold mb-1">Vínculo do cliente (Conta Azul)</div>
-        <div class="muted small">
-          Cliente: <b>{{ current_client.name }}</b> • Doc: {{ ca_client_doc or "—" }} • E-mail: {{ ca_client_email or "—" }}
-        </div>
-        <div class="mono small mt-1">person_id: {{ ca_person_id or "—" }}</div>
-
-        <div class="d-flex flex-wrap gap-2 mt-2">
-          <form method="post" action="/financeiro/contaazul/auto_vincular">
-            <button class="btn btn-sm btn-outline-secondary">Auto-vincular</button>
-          </form>
-
-          <form method="post" action="/financeiro/contaazul/vincular" class="d-flex gap-2">
-            <input name="person_id" class="form-control form-control-sm" placeholder="UUID do cliente no Conta Azul (Pessoa)" style="min-width: 280px;" />
-            <button class="btn btn-sm btn-outline-primary">Salvar vínculo</button>
-          </form>
-        </div>
-
-        <div class="muted small mt-2">
-          Se não aparecer nada após sincronizar, geralmente o documento/e-mail do cliente no Conta Azul está diferente. Nesse caso, cole o UUID da pessoa (Cliente) do Conta Azul aqui.
-        </div>
-      </div>
-    {% endif %}
-
-    <div class="mt-4">
-      <h6 class="mb-2">Contas a receber / Boletos</h6>
-      {% if ca_receivables %}
-        <div class="table-responsive">
-          <table class="table table-sm align-middle">
-            <thead>
-              <tr>
-                <th>Venc.</th>
-                <th>Descrição</th>
-                <th>Status</th>
-                <th>Aberto</th>
-                <th>Pago</th>
-                <th>Fatura</th>
-                <th>Boleto</th>
-                <th>Download</th>
-              </tr>
-            </thead>
-            <tbody>
-              {% for r in ca_receivables %}
-                <tr>
-                  <td class="mono small">{{ fin_human_date(r.due_date) }}</td>
-                  <td>{{ r.description }}</td>
-                  <td><span class="badge text-bg-light border">{{ r.status }}</span></td>
-                  <td>R$ {{ "%.2f"|format(r.amount_open) }}</td>
-                  <td>R$ {{ "%.2f"|format(r.amount_paid) }}</td>
-                  <td class="mono small">{% if r.invoice_number %}{{ r.invoice_type }} #{{ r.invoice_number }}{% else %}—{% endif %}</td>
-                  <td>
-                    {% if r.payment_url %}
-                      <a class="btn btn-sm btn-outline-primary" href="{{ r.payment_url }}" target="_blank" rel="noopener">Boleto</a>
-                    {% else %}
-                      —
-                    {% endif %}
-                  </td>
-                  <td>
-                    <a class="btn btn-sm btn-outline-secondary" href="/financeiro/contaazul/receivable/{{ r.id }}/fatura.pdf" target="_blank" rel="noopener">Fatura PDF</a>
-                  </td>
-                </tr>
-              {% endfor %}
-            </tbody>
-          </table>
-        </div>
-      {% else %}
-        <div class="muted small">Nenhuma parcela encontrada. Clique em “Sincronizar agora”.</div>
-      {% endif %}
-    </div>
-
-    <div class="mt-4">
-      <h6 class="mb-2">Notas fiscais</h6>
-      {% if ca_invoices %}
-        <div class="table-responsive">
-          <table class="table table-sm align-middle">
-            <thead>
-              <tr>
-                <th>Data</th>
-                <th>Número</th>
-                <th>Tipo</th>
-                <th>Status</th>
-                <th>Download</th>
-              </tr>
-            </thead>
-            <tbody>
-              {% for n in ca_invoices %}
-                <tr>
-                  <td class="mono small">{{ fin_human_date(n.issue_date) }}</td>
-                  <td class="mono small">{{ n.number or "—" }}</td>
-                  <td class="mono small">{{ n.invoice_type }}</td>
-                  <td><span class="badge text-bg-light border">{{ n.status }}</span></td>
-                  <td>
-                    {% if n.invoice_type.upper() == "NFSE" %}
-                      <a class="btn btn-sm btn-outline-secondary" href="/financeiro/contaazul/invoice/{{ n.id }}/pdf" target="_blank" rel="noopener">NF PDF</a>
-                    {% elif n.invoice_type.upper() == "NFE" %}
-                      <a class="btn btn-sm btn-outline-secondary" href="/financeiro/contaazul/invoice/{{ n.id }}/xml" target="_blank" rel="noopener">NF XML</a>
-                    {% else %}
-                      —
-                    {% endif %}
-                  </td>
-                </tr>
-              {% endfor %}
-            </tbody>
-          </table>
-        </div>
-      {% else %}
-        <div class="muted small">Nenhuma nota encontrada. Clique em “Sincronizar agora”.</div>
-      {% endif %}
-    </div>
+  {% else %}
+    <div class="muted">Sem notas sincronizadas.</div>
   {% endif %}
 </div>
 {% endblock %}
@@ -6831,8 +6611,7 @@ a:hover{ color:#00BFBF; }
   <pre>{{ inv.notes }}</pre>
 
   <hr class="my-3"/>
-  <h6>Anexos / Downloads</h6>
-  <div class="muted small mb-2">Baixe aqui a NF, boleto ou outros arquivos anexados a esta cobrança, quando houver.</div>
+  <h6>Anexos (download)</h6>
   {% if attachments %}
     <ul>
       {% for a in attachments %}
@@ -6928,7 +6707,7 @@ TEMPLATES.update({
 
   {% if ca_configured and role in ["admin","equipe"] and not ca_connected %}
     <div class="alert alert-warning mt-3">
-      Conta Azul não conectado. Vá em <a href="/integrations/contaazul">Integrações → Conta Azul</a>.
+      Conta Azul não conectado. Vá em <a href="/integrations/contaazul">Integrações / Conta Azul</a>.
     </div>
   {% endif %}
 
@@ -6970,18 +6749,21 @@ TEMPLATES.update({
             <span class="badge text-bg-light border">{{ r.status }}</span>
           </div>
           <div class="muted small mt-1">
-            Valor: R$ {{ "%.2f"|format(r.amount_total) }} • Aberto: R$ {{ "%.2f"|format(r.amount_open) }}
+            Valor: R$ {{ "%.2f"|format(r.amount_total or 0) }} • Aberto: R$ {{ "%.2f"|format(r.amount_open or 0) }}
             {% if r.due_date %} • Venc: {{ r.due_date }}{% endif %}
             {% if r.invoice_type or r.invoice_number %} • {{ r.invoice_type }} {{ r.invoice_number }}{% endif %}
             {% if r.boleto_status %} • Boleto: {{ r.boleto_status }}{% endif %}
           </div>
-          {% if r.payment_url %}
-  <a class="btn btn-sm btn-outline-primary"
-     href="/financeiro/contaazul/receivable/{{ r.id }}/boleto"
-     target="_blank" rel="noopener">Boleto</a>
-{% else %}
-  —
-{% endif %}
+          <div class="d-flex flex-wrap gap-2 mt-2">
+            {% if r.payment_url %}
+              <a class="btn btn-sm btn-outline-primary"
+                 href="/financeiro/contaazul/receivable/{{ r.id }}/boleto"
+                 target="_blank" rel="noopener">Boleto</a>
+            {% endif %}
+            <a class="btn btn-sm btn-outline-secondary"
+               href="/financeiro/contaazul/receivable/{{ r.id }}/fatura.pdf"
+               target="_blank" rel="noopener">Fatura PDF</a>
+          </div>
         </div>
       {% endfor %}
     </div>
@@ -7003,6 +6785,18 @@ TEMPLATES.update({
             {% if n.issue_date %}Emissão/Competência: {{ n.issue_date }} • {% endif %}
             {% if n.amount %}Valor: R$ {{ "%.2f"|format(n.amount) }} • {% endif %}
             ID: {{ n.external_id }}
+          </div>
+          <div class="d-flex flex-wrap gap-2 mt-2">
+            {% if (n.invoice_type or "").upper() == "NFSE" %}
+              <a class="btn btn-sm btn-outline-secondary"
+                 href="/financeiro/contaazul/invoice/{{ n.id }}/pdf"
+                 target="_blank" rel="noopener">NF PDF</a>
+            {% endif %}
+            {% if (n.invoice_type or "").upper() == "NFE" %}
+              <a class="btn btn-sm btn-outline-secondary"
+                 href="/financeiro/contaazul/invoice/{{ n.id }}/xml"
+                 target="_blank" rel="noopener">NF XML</a>
+            {% endif %}
           </div>
         </div>
       {% endfor %}
@@ -7322,8 +7116,8 @@ TEMPLATES.update({
         <input class="form-control mono" name="due_date" placeholder="2026-03-31" />
       </div>
       <div class="col-12">
-        <label class="form-label">Anexar arquivos (opcional)</label>
-        <input class="form-control" type="file" name="files" multiple />
+        <label class="form-label">Anexar arquivo (opcional)</label>
+        <input class="form-control" type="file" name="file" />
       </div>
     </div>
     <div class="mt-4 d-flex gap-2">
@@ -7352,8 +7146,8 @@ TEMPLATES.update({
         <textarea class="form-control" name="message" rows="3"></textarea>
       </div>
       <div class="col-12">
-        <label class="form-label">Arquivos</label>
-        <input class="form-control" type="file" name="files" multiple required />
+        <label class="form-label">Arquivo</label>
+        <input class="form-control" type="file" name="file" required />
       </div>
     </div>
     <div class="mt-4 d-flex gap-2">
@@ -9319,6 +9113,7 @@ TEMPLATES.update({
 """,
 })
 
+
 TEMPLATES.update({
     "office_finance_dashboard.html": r"""
 {% extends "base.html" %}
@@ -9743,6 +9538,8 @@ TEMPLATES.update({
 """,
 })
 
+
+
 TEMPLATES.update({
     "office_finance_dre.html": r"""
 {% extends "base.html" %}
@@ -9975,7 +9772,6 @@ TEMPLATES.update({
 })
 templates_env = Environment(loader=DictLoader(TEMPLATES), autoescape=True)
 
-
 def _format_brl(value: Any) -> str:
     try:
         number = float(value or 0.0)
@@ -9984,7 +9780,6 @@ def _format_brl(value: Any) -> str:
     sign = "-" if number < 0 else ""
     raw = f"{abs(number):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
     return f"{sign}R$ {raw}"
-
 
 def _format_number_br(value: Any, decimals: int = 2) -> str:
     try:
@@ -9995,9 +9790,9 @@ def _format_number_br(value: Any, decimals: int = 2) -> str:
     raw = f"{abs(number):,.{int(decimals)}f}".replace(",", "X").replace(".", ",").replace("X", ".")
     return f"{sign}{raw}"
 
-
 templates_env.filters["brl"] = _format_brl
 templates_env.filters["brnum"] = _format_number_br
+
 
 # ----------------------------
 # Templates (Oferta Engine / Perfil ampliado)
@@ -10052,6 +9847,8 @@ TEMPLATES["ofertas.html"] = r"""
 </div>
 {% endblock %}
 """
+
+
 
 # ----------------------------
 # Templates (Perfil, Motor e Catálogo)
@@ -10810,6 +10607,7 @@ TEMPLATES.setdefault("openfinance_klavi_return.html", r"""{% extends "base.html"
 {% endblock %}
 """)
 
+
 TEMPLATES.setdefault("openfinance_connect.html", r"""{% extends "base.html" %}
 {% block content %}
 <div class="container py-4" style="max-width: 920px;">
@@ -10966,6 +10764,7 @@ def _openfinance_require_client(request: Request, session: Session, ctx: TenantC
     return get_client_or_none(session, ctx.company.id, int(active_client_id))
 
 
+
 def ensure_feature_access_tables() -> None:
     try:
         SQLModel.metadata.create_all(
@@ -11015,7 +10814,6 @@ def get_membership_allowed_features(session: Session, *, company_id: int, member
             return set(lst)
     return base
 
-
 def get_client_allowed_features(session: Session, *, company_id: int, client_id: int) -> Optional[set[str]]:
     try:
         row = session.exec(
@@ -11036,14 +10834,12 @@ def get_client_allowed_features(session: Session, *, company_id: int, client_id:
     lst = _parse_json_list(row.features_json)
     return set(lst) if lst else None
 
-
 def effective_allowed_features(session: Session, *, ctx: TenantContext, current_client: Optional[Client]) -> set[str]:
     try:
         allowed = get_membership_allowed_features(session, company_id=ctx.company.id, membership=ctx.membership)
 
         if ctx.membership.role == "cliente" and current_client and current_client.id:
-            client_allowed = get_client_allowed_features(session, company_id=ctx.company.id,
-                                                         client_id=current_client.id)
+            client_allowed = get_client_allowed_features(session, company_id=ctx.company.id, client_id=current_client.id)
             if client_allowed is not None:
                 allowed = allowed.intersection(client_allowed)
 
@@ -11051,7 +10847,6 @@ def effective_allowed_features(session: Session, *, ctx: TenantContext, current_
     except Exception:
         base = set(ROLE_DEFAULT_FEATURES.get(ctx.membership.role, set()))
         return {k for k in base if k in FEATURE_KEYS}
-
 
 def resolve_feature_key(path: str) -> Optional[str]:
     if path.startswith("/static/") or path.startswith("/login") or path.startswith("/logout"):
@@ -11087,7 +10882,6 @@ def resolve_feature_key(path: str) -> Optional[str]:
             return key
     return None
 
-
 def _is_staff(role: str) -> bool:
     return role in {"admin", "equipe"}
 
@@ -11109,8 +10903,7 @@ def _get_selected_client_for_staff(request: Request, session: Session, company_i
     clients = session.exec(
         select(Client).where(Client.company_id == company_id).order_by(Client.created_at)
     ).all()
-    first_client = next(
-        (c for c in clients if c.id and entity_is_allowed(session, entity_type="client", entity_id=c.id)), None)
+    first_client = next((c for c in clients if c.id and entity_is_allowed(session, entity_type="client", entity_id=c.id)), None)
     if not first_client:
         return None
 
@@ -11152,152 +10945,28 @@ def safe_filename(name: str) -> str:
     return name[:180] if len(name) > 180 else name
 
 
-def _file_storage_is_s3_enabled() -> bool:
-    return FILE_STORAGE_BACKEND in {"s3", "r2"} and bool(APP_S3_BUCKET_NAME)
-
-
-def _attachment_is_s3(stored_filename: str) -> bool:
-    return str(stored_filename or "").startswith("s3:")
-
-
-def _attachment_s3_key(stored_filename: str) -> str:
-    raw = str(stored_filename or "")
-    return raw[3:] if raw.startswith("s3:") else raw
-
-
-def _build_s3_object_key(original_filename: str) -> str:
-    base = f"{uuid.uuid4().hex}_{safe_filename(original_filename or 'arquivo')}"
-    date_prefix = datetime.now(timezone.utc).strftime("%Y/%m/%d")
-    parts = [p for p in (APP_S3_PREFIX, date_prefix, base) if p]
-    return "/".join(parts)
-
-
-def _get_s3_client():
-    try:
-        import boto3  # type: ignore
-    except Exception as exc:
-        raise RuntimeError("boto3 não está instalado no ambiente.") from exc
-
-    kwargs: dict[str, Any] = {"region_name": APP_S3_REGION}
-    if APP_S3_ENDPOINT_URL:
-        kwargs["endpoint_url"] = APP_S3_ENDPOINT_URL
-    return boto3.client("s3", **kwargs)
-
-
-def _s3_put_bytes(*, object_key: str, body: bytes, content_type: str) -> None:
-    client = _get_s3_client()
-    client.put_object(
-        Bucket=APP_S3_BUCKET_NAME,
-        Key=object_key,
-        Body=body,
-        ContentType=content_type or "application/octet-stream",
-    )
-
-
-def _s3_get_bytes(stored_filename: str) -> bytes:
-    client = _get_s3_client()
-    obj = client.get_object(Bucket=APP_S3_BUCKET_NAME, Key=_attachment_s3_key(stored_filename))
-    body = obj.get("Body")
-    return body.read() if body else b""
-
-
-def _s3_delete_object(stored_filename: str) -> None:
-    client = _get_s3_client()
-    client.delete_object(Bucket=APP_S3_BUCKET_NAME, Key=_attachment_s3_key(stored_filename))
-
-
-def _delete_stored_upload(stored_filename: str) -> None:
-    if _attachment_is_s3(stored_filename):
-        try:
-            _s3_delete_object(stored_filename)
-        except Exception:
-            pass
-        return
-
-    path = UPLOAD_DIR / str(stored_filename or "")
-    try:
-        if path.exists():
-            path.unlink()
-    except Exception:
-        pass
-
-
-def _normalize_uploads(files: list[UploadFile] | None) -> list[UploadFile]:
-    out: list[UploadFile] = []
-    for upload in files or []:
-        if upload and (upload.filename or "").strip():
-            out.append(upload)
-    return out
-
-
-async def _build_attachments_from_uploads(
-        *,
-        files: list[UploadFile] | None,
-        company_id: int,
-        client_id: int,
-        uploaded_by_user_id: int,
-        proposal_id: Optional[int] = None,
-        pending_item_id: Optional[int] = None,
-        document_id: Optional[int] = None,
-        finance_invoice_id: Optional[int] = None,
-) -> list["Attachment"]:
-    uploads = _normalize_uploads(files)
-    created: list[str] = []
-    attachments: list[Attachment] = []
-
-    try:
-        for upload in uploads:
-            stored, mime, size = await save_upload(upload)
-            created.append(stored)
-            attachments.append(
-                Attachment(
-                    company_id=company_id,
-                    client_id=client_id,
-                    uploaded_by_user_id=uploaded_by_user_id,
-                    proposal_id=proposal_id,
-                    pending_item_id=pending_item_id,
-                    document_id=document_id,
-                    finance_invoice_id=finance_invoice_id,
-                    original_filename=upload.filename or "arquivo",
-                    stored_filename=stored,
-                    mime_type=mime,
-                    size_bytes=size,
-                )
-            )
-    except Exception:
-        for stored in created:
-            _delete_stored_upload(stored)
-        raise
-
-    return attachments
-
-
 async def save_upload(upload: UploadFile) -> tuple[str, str, int]:
     original = upload.filename or "arquivo"
-    mime = upload.content_type or "application/octet-stream"
-
-    size = 0
-    chunks: list[bytes] = []
-
-    while True:
-        chunk = await upload.read(1024 * 1024)
-        if not chunk:
-            break
-        size += len(chunk)
-        if size > _MAX_UPLOAD_BYTES:
-            raise ValueError("Arquivo excede o limite de tamanho.")
-        chunks.append(chunk)
-
-    if _file_storage_is_s3_enabled():
-        object_key = _build_s3_object_key(original)
-        _s3_put_bytes(object_key=object_key, body=b"".join(chunks), content_type=mime)
-        return f"s3:{object_key}", mime, size
-
     stored = f"{uuid.uuid4().hex}_{safe_filename(original)}"
     path = UPLOAD_DIR / stored
+
+    size = 0
     with path.open("wb") as f:
-        for chunk in chunks:
+        while True:
+            chunk = await upload.read(1024 * 1024)
+            if not chunk:
+                break
+            size += len(chunk)
+            if size > _MAX_UPLOAD_BYTES:
+                try:
+                    f.close()
+                finally:
+                    if path.exists():
+                        path.unlink(missing_ok=True)
+                raise ValueError("Arquivo excede o limite de tamanho.")
             f.write(chunk)
+
+    mime = upload.content_type or "application/octet-stream"
     return stored, mime, size
 
 
@@ -11569,6 +11238,7 @@ async def notion_sync_meeting_from_page(page_id_or_url: str) -> dict[str, Any]:
     }
 
 
+
 TEMPLATES.setdefault("consulta_consent_accept.html", r"""{% extends "base.html" %}
 {% block content %}
 <div class="container py-4" style="max-width: 900px;">
@@ -11798,7 +11468,8 @@ TEMPLATES.update({"admin_ui.html": r"""{% extends "base.html" %}
   </div>
 
 </div>
-{% endblock %}""", })
+{% endblock %}""",})
+
 
 
 def render(
@@ -11850,11 +11521,9 @@ def _pluggy_schedule_sync_loans(*, company_id: int, subject_doc: str, item_id: s
 async def __routes() -> list[str]:
     return sorted({getattr(r, "path", "") for r in app.router.routes})
 
-
 @app.get("/__build", include_in_schema=False)
 async def __build() -> dict:
-    return {"build": "stable_debug_v2", "env": APP_ENV, "log_level": LOG_LEVEL}
-
+    return {"build": "stable_debug_v2"}
 
 https_only = os.getenv("SESSION_HTTPS_ONLY", "0") == "1"
 # NOTE: SessionMiddleware must wrap feature_access_middleware, installed later.
@@ -11864,49 +11533,16 @@ STATIC_DIR.mkdir(parents=True, exist_ok=True)
 
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
-
-@app.middleware("http")
-async def request_logging_middleware(request: Request, call_next: Callable[..., Any]) -> Response:
-    request_id = _request_id_from_request(request)
-    request.state.request_id = request_id
-    start = time.perf_counter()
-    try:
-        response = await call_next(request)
-    except Exception as exc:
-        duration_ms = round((time.perf_counter() - start) * 1000, 2)
-        logger.exception(
-            "request_unhandled_exception request_id=%s method=%s path=%s duration_ms=%s exc_type=%s",
-            request_id,
-            request.method,
-            request.url.path,
-            duration_ms,
-            type(exc).__name__,
-        )
-        raise
-    duration_ms = round((time.perf_counter() - start) * 1000, 2)
-    response.headers["X-Request-ID"] = request_id
-    if ENABLE_REQUEST_LOGGING and not request.url.path.startswith("/static"):
-        logger.info(
-            "request_completed request_id=%s method=%s path=%s status_code=%s duration_ms=%s",
-            request_id,
-            request.method,
-            request.url.path,
-            getattr(response, "status_code", 0),
-            duration_ms,
-        )
-    return response
-
-
 @app.middleware("http")
 async def feature_access_middleware(request: Request, call_next: Callable[..., Any]) -> Response:
     path = request.url.path
     if (
-            path.startswith("/__")
-            or path.startswith("/health")
-            or path.startswith("/healthz")
-            or path.startswith("/static")
-            or path.startswith("/api/ui/")
-            or path.startswith("/stripe/webhook")
+        path.startswith("/__")
+        or path.startswith("/health")
+        or path.startswith("/healthz")
+        or path.startswith("/static")
+        or path.startswith("/api/ui/")
+        or path.startswith("/stripe/webhook")
     ):
         return await call_next(request)
 
@@ -11965,31 +11601,6 @@ async def feature_access_middleware(request: Request, call_next: Callable[..., A
         session.close()
 
 
-@app.exception_handler(Exception)
-async def global_exception_handler(request: Request, exc: Exception) -> Response:
-    request_id = getattr(getattr(request, "state", None), "request_id", uuid.uuid4().hex[:12])
-    if ENABLE_GLOBAL_EXCEPTION_LOGGING:
-        logger.exception(
-            "global_exception request_id=%s method=%s path=%s exc_type=%s",
-            request_id,
-            request.method,
-            request.url.path,
-            type(exc).__name__,
-        )
-    if _is_json_request(request):
-        return JSONResponse(
-            {"detail": "Erro interno do servidor.", "request_id": request_id},
-            status_code=500,
-            headers={"X-Request-ID": request_id},
-        )
-    body = (
-        "<html><body style=\"font-family:Arial,sans-serif;padding:24px\">"
-        "<h1>Erro interno</h1>"
-        "<p>Ocorreu um erro inesperado.</p>"
-        f"<p><strong>Request ID:</strong> {html.escape(request_id)}</p>"
-        "</body></html>"
-    )
-    return HTMLResponse(body, status_code=500, headers={"X-Request-ID": request_id})
 
 
 # Install SessionMiddleware last so request.session is available inside BaseHTTPMiddleware.
@@ -11998,41 +11609,23 @@ app.add_middleware(SessionMiddleware, secret_key=APP_SECRET_KEY, https_only=http
 
 @app.on_event("startup")
 def _startup() -> None:
-    global _STARTUP_CORE_DONE, _STARTUP_OFFICE_FINANCE_DONE, _STARTUP_OFFER_ENGINE_DONE, _STARTUP_COMPANY_DEFAULTS_DONE
-
-    if not _STARTUP_CORE_DONE:
-        init_db()
-        ensure_ui_tables()
-        ensure_feature_access_tables()
-        ensure_credit_consent_table()
-        _STARTUP_CORE_DONE = True
-
-    if not _STARTUP_OFFICE_FINANCE_DONE:
-        ensure_office_finance_tables()
-        _STARTUP_OFFICE_FINANCE_DONE = True
-
-    if not _STARTUP_OFFER_ENGINE_DONE:
-        ensure_offer_engine_tables()
-        ensure_offer_engine_columns()
-        _STARTUP_OFFER_ENGINE_DONE = True
-
+    init_db()
+    ensure_ui_tables()
+    ensure_feature_access_tables()
+    ensure_credit_consent_table()
+    ensure_office_finance_tables()
+    ensure_offer_engine_tables()
+    ensure_offer_engine_columns()
     with Session(engine) as _s:
         try:
             seed_product_families(_s)
-            if ENABLE_STARTUP_COMPANY_DEFAULT_SEEDS and not _STARTUP_COMPANY_DEFAULTS_DONE:
-                ids = [x[0] for x in _s.exec(select(Company.id)).all()]
-                for _cid in ids:
-                    seed_internal_services(_s, int(_cid))
-                    seed_office_finance_defaults(_s, int(_cid))
-                _STARTUP_COMPANY_DEFAULTS_DONE = True
+            ids = [x[0] for x in _s.exec(select(Company.id)).all()]
+            for _cid in ids:
+                seed_internal_services(_s, int(_cid))
+                seed_office_finance_defaults(_s, int(_cid))
         except Exception:
             pass
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-
-
-@app.on_event("shutdown")
-def _shutdown_log() -> None:
-    logger.info("shutdown_begin env=%s", APP_ENV)
 
 
 # ----------------------------
@@ -12104,6 +11697,10 @@ async def consultoria_new_page(request: Request, session: Session = Depends(get_
     assert ctx is not None
 
     # Garante tabelas em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
     if not ensure_client_invite_table():
         set_flash(request, "Sistema de convites não está configurado (migração pendente no banco).")
         return RedirectResponse("/client/switch", status_code=303)
@@ -12131,6 +11728,11 @@ async def consultoria_edit_project_page(request: Request, session: Session = Dep
                                         project_id: int = 0) -> HTMLResponse:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
 
     project = session.get(ConsultingProject, int(project_id))
     if not project or project.company_id != ctx.company.id:
@@ -12163,6 +11765,11 @@ async def consultoria_edit_project_action(
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
     project = session.get(ConsultingProject, int(project_id))
     if not project or project.company_id != ctx.company.id:
         set_flash(request, "Projeto não encontrado.")
@@ -12193,6 +11800,11 @@ async def consultoria_delete_project(request: Request, session: Session = Depend
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
     project = session.get(ConsultingProject, int(project_id))
     if not project or project.company_id != ctx.company.id:
         set_flash(request, "Projeto não encontrado.")
@@ -12221,6 +11833,11 @@ async def consultoria_edit_stage_page(request: Request, session: Session = Depen
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
     stage = session.get(ConsultingStage, int(stage_id))
     if not stage:
         return render("error.html", request=request, context={"message": "Etapa não encontrada."}, status_code=404)
@@ -12242,6 +11859,7 @@ async def consultoria_edit_stage_page(request: Request, session: Session = Depen
 
 @app.post("/consultoria/stages/{stage_id}/editar")
 @require_role({"admin", "equipe"})
+
 async def consultoria_edit_stage_action(
         request: Request,
         session: Session = Depends(get_session),
@@ -12252,6 +11870,10 @@ async def consultoria_edit_stage_action(
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
+
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
 
     stage = session.get(ConsultingStage, int(stage_id))
     if not stage:
@@ -12264,11 +11886,7 @@ async def consultoria_edit_stage_action(
         return RedirectResponse("/consultoria", status_code=303)
 
     try:
-        stage_name = (name or "").strip()
-        if not stage_name:
-            set_flash(request, "Informe o nome da etapa.")
-            return RedirectResponse(f"/consultoria/{project.id}", status_code=303)
-        stage.name = stage_name
+        stage.name = (name or "").strip()
         stage.due_date = _normalize_date_input(due_date)
         try:
             stage.order = max(1, int(order))
@@ -12285,10 +11903,15 @@ async def consultoria_edit_stage_action(
 
 @app.post("/consultoria/stages/{stage_id}/excluir")
 @require_role({"admin", "equipe"})
+
 async def consultoria_delete_stage(request: Request, session: Session = Depends(get_session),
                                    stage_id: int = 0) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
+
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
 
     stage = session.get(ConsultingStage, int(stage_id))
     if not stage:
@@ -12320,6 +11943,11 @@ async def consultoria_edit_step_page(request: Request, session: Session = Depend
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
     step = session.get(ConsultingStep, int(step_id))
     if not step:
         return render("error.html", request=request, context={"message": "Sub-etapa não encontrada."}, status_code=404)
@@ -12342,6 +11970,7 @@ async def consultoria_edit_step_page(request: Request, session: Session = Depend
 
 @app.post("/consultoria/steps/{step_id}/editar")
 @require_role({"admin", "equipe"})
+
 async def consultoria_edit_step_action(
         request: Request,
         session: Session = Depends(get_session),
@@ -12355,6 +11984,10 @@ async def consultoria_edit_step_action(
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
     step = session.get(ConsultingStep, int(step_id))
     if not step:
         set_flash(request, "Sub-etapa não encontrada.")
@@ -12367,11 +12000,7 @@ async def consultoria_edit_step_action(
         return RedirectResponse("/consultoria", status_code=303)
 
     try:
-        step_title = (title or "").strip()
-        if not step_title:
-            set_flash(request, "Informe o título da sub-etapa.")
-            return RedirectResponse(f"/consultoria/{project.id}", status_code=303)
-        step.title = step_title
+        step.title = (title or "").strip()
         step.description = (description or "").strip()
         step.due_date = _normalize_date_input(due_date)
         try:
@@ -12391,10 +12020,15 @@ async def consultoria_edit_step_action(
 
 @app.post("/consultoria/steps/{step_id}/excluir")
 @require_role({"admin", "equipe"})
+
 async def consultoria_delete_step(request: Request, session: Session = Depends(get_session),
                                   step_id: int = 0) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
+
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
 
     step = session.get(ConsultingStep, int(step_id))
     if not step:
@@ -12431,6 +12065,11 @@ async def consultoria_new_action(
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
 
     client = get_client_or_none(session, ctx.company.id, int(client_id))
     if not client:
@@ -12530,19 +12169,19 @@ async def consultoria_add_stage(
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
     project = session.get(ConsultingProject, int(project_id))
     if not project or project.company_id != ctx.company.id:
         set_flash(request, "Projeto não encontrado.")
         return RedirectResponse("/consultoria", status_code=303)
 
-    stage_name = (name or "").strip()
-    if not stage_name:
-        set_flash(request, "Informe o nome da etapa.")
-        return RedirectResponse(f"/consultoria/{project.id}", status_code=303)
-
     stage = ConsultingStage(
         project_id=project.id,
-        name=stage_name,
+        name=name.strip(),
         order=_next_stage_order(session, project.id),
         due_date=_normalize_date_input(due_date),
     )
@@ -12568,6 +12207,11 @@ async def consultoria_add_step(
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
     stage = session.get(ConsultingStage, int(stage_id))
     if not stage:
         set_flash(request, "Etapa não encontrada.")
@@ -12578,22 +12222,12 @@ async def consultoria_add_step(
         set_flash(request, "Projeto inválido.")
         return RedirectResponse("/consultoria", status_code=303)
 
-    step_title = (title or "").strip()
-    if not step_title:
-        set_flash(request, "Informe o título da sub-etapa.")
-        return RedirectResponse(f"/consultoria/{project.id}", status_code=303)
-
-    try:
-        safe_weight = max(0.1, float(weight))
-    except Exception:
-        safe_weight = 1.0
-
     step = ConsultingStep(
         stage_id=stage.id,
-        title=step_title,
-        description=(description or "").strip(),
+        title=title.strip(),
+        description=description.strip(),
         due_date=_normalize_date_input(due_date),
-        weight=safe_weight,
+        weight=max(0.1, float(weight)),
         client_action=(client_action == "1"),
         updated_at=utcnow(),
     )
@@ -12751,32 +12385,9 @@ async def logout(request: Request) -> Response:
 # Health
 # ----------------------------
 
-def _ready_health_payload() -> tuple[dict[str, str], int]:
-    if not HEALTHCHECK_DB:
-        return {"status": "ok", "db": "skipped"}, 200
-    try:
-        with Session(engine) as session:
-            session.exec(text("SELECT 1")).one()
-        return {"status": "ok", "db": "ok"}, 200
-    except Exception:
-        return {"status": "error", "db": "down"}, 503
-
-
-@app.get("/health/live")
-async def health_live() -> Response:
-    return JSONResponse({"status": "ok"})
-
-
-@app.get("/health/ready")
-async def health_ready() -> Response:
-    payload, status_code = _ready_health_payload()
-    return JSONResponse(payload, status_code=status_code)
-
-
 @app.get("/healthz")
-async def healthz() -> Response:
-    payload, status_code = _ready_health_payload()
-    return JSONResponse(payload, status_code=status_code)
+async def healthz() -> dict[str, str]:
+    return {"status": "ok"}
 
 
 # ----------------------------
@@ -12824,8 +12435,7 @@ async def dashboard(request: Request, session: Session = Depends(get_session)) -
     approved_offers_count = 0
     pending_items_count = 0
     if current_client and ensure_can_access_client(ctx, current_client.id):
-        business_profile = get_or_create_business_profile(session, company_id=ctx.company.id,
-                                                          client_id=current_client.id)
+        business_profile = get_or_create_business_profile(session, company_id=ctx.company.id, client_id=current_client.id)
         latest_snapshot = session.exec(
             select(ClientSnapshot)
             .where(ClientSnapshot.company_id == ctx.company.id, ClientSnapshot.client_id == current_client.id)
@@ -12891,9 +12501,7 @@ async def admin_familias_page(request: Request, session: Session = Depends(get_s
     ensure_offer_engine_columns()
     seed_product_families(session)
     families = list_product_families(session)
-    return render("admin_familias.html", request=request,
-                  context={"current_user": ctx.user, "current_company": ctx.company, "role": ctx.membership.role,
-                           "families": families})
+    return render("admin_familias.html", request=request, context={"current_user": ctx.user, "current_company": ctx.company, "role": ctx.membership.role, "families": families})
 
 
 @app.get("/admin/servicos-internos", response_class=HTMLResponse)
@@ -12905,21 +12513,14 @@ async def admin_servicos_internos_page(request: Request, session: Session = Depe
     ensure_offer_engine_columns()
     seed_product_families(session)
     seed_internal_services(session, ctx.company.id)
-    services = session.exec(
-        select(InternalService).where(InternalService.company_id == ctx.company.id).order_by(InternalService.area.asc(),
-                                                                                             InternalService.priority_weight.desc(),
-                                                                                             InternalService.name.asc())).all()
+    services = session.exec(select(InternalService).where(InternalService.company_id == ctx.company.id).order_by(InternalService.area.asc(), InternalService.priority_weight.desc(), InternalService.name.asc())).all()
     families = list_product_families(session)
-    return render("admin_servicos_internos.html", request=request,
-                  context={"current_user": ctx.user, "current_company": ctx.company, "role": ctx.membership.role,
-                           "services": services, "families": families})
+    return render("admin_servicos_internos.html", request=request, context={"current_user": ctx.user, "current_company": ctx.company, "role": ctx.membership.role, "services": services, "families": families})
 
 
 @app.post("/admin/servicos-internos/add")
 @require_role({"admin"})
-async def admin_servicos_internos_add(request: Request, session: Session = Depends(get_session), area: str = Form(...),
-                                      family_code: str = Form(...), name: str = Form(...), description: str = Form(""),
-                                      priority_weight: int = Form(50), notes: str = Form("")) -> Response:
+async def admin_servicos_internos_add(request: Request, session: Session = Depends(get_session), area: str = Form(...), family_code: str = Form(...), name: str = Form(...), description: str = Form(""), priority_weight: int = Form(50), notes: str = Form("")) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
     fc = (family_code or "").strip()
@@ -12937,7 +12538,6 @@ async def admin_servicos_internos_add(request: Request, session: Session = Depen
     set_flash(request, "Produto interno salvo.")
     return RedirectResponse("/admin/servicos-internos", status_code=303)
 
-
 @app.get("/admin/parceiros", response_class=HTMLResponse)
 @require_role({"admin"})
 async def admin_parceiros_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
@@ -12946,25 +12546,17 @@ async def admin_parceiros_page(request: Request, session: Session = Depends(get_
     ensure_offer_engine_tables()
     ensure_offer_engine_columns()
     seed_product_families(session)
-    partners = session.exec(
-        select(Partner).where(Partner.company_id == ctx.company.id).order_by(Partner.name.asc())).all()
-    products = session.exec(select(PartnerProduct).where(PartnerProduct.company_id == ctx.company.id).order_by(
-        PartnerProduct.partner_id.asc(), PartnerProduct.name.asc())).all()
-    campaigns = session.exec(select(PartnerCampaign).where(PartnerCampaign.company_id == ctx.company.id).order_by(
-        PartnerCampaign.starts_at.desc())).all()
+    partners = session.exec(select(Partner).where(Partner.company_id == ctx.company.id).order_by(Partner.name.asc())).all()
+    products = session.exec(select(PartnerProduct).where(PartnerProduct.company_id == ctx.company.id).order_by(PartnerProduct.partner_id.asc(), PartnerProduct.name.asc())).all()
+    campaigns = session.exec(select(PartnerCampaign).where(PartnerCampaign.company_id == ctx.company.id).order_by(PartnerCampaign.starts_at.desc())).all()
     partner_map = {p.id: p for p in partners}
     families = list_product_families(session)
-    return render("admin_parceiros.html", request=request,
-                  context={"current_user": ctx.user, "current_company": ctx.company, "role": ctx.membership.role,
-                           "partners": partners, "products": products, "campaigns": campaigns,
-                           "partner_map": partner_map, "families": families})
+    return render("admin_parceiros.html", request=request, context={"current_user": ctx.user, "current_company": ctx.company, "role": ctx.membership.role, "partners": partners, "products": products, "campaigns": campaigns, "partner_map": partner_map, "families": families})
 
 
 @app.post("/admin/parceiros/add")
 @require_role({"admin"})
-async def admin_parceiros_add(request: Request, session: Session = Depends(get_session), name: str = Form(...),
-                              partner_type: str = Form("financeiro"), contact_name: str = Form(""),
-                              contact_email: str = Form(""), notes: str = Form("")) -> Response:
+async def admin_parceiros_add(request: Request, session: Session = Depends(get_session), name: str = Form(...), partner_type: str = Form("financeiro"), contact_name: str = Form(""), contact_email: str = Form(""), notes: str = Form("")) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
     try:
@@ -12988,20 +12580,7 @@ async def admin_parceiros_add(request: Request, session: Session = Depends(get_s
 
 @app.post("/admin/parceiros/products/add")
 @require_role({"admin"})
-async def admin_partner_product_add(request: Request, session: Session = Depends(get_session),
-                                    partner_id: int = Form(...), area: str = Form(...), family_code: str = Form(...),
-                                    name: str = Form(...), pf_pj: str = Form("PJ"), ticket_min_brl: float = Form(0.0),
-                                    ticket_max_brl: float = Form(0.0), revenue_min_brl: float = Form(0.0),
-                                    revenue_max_brl: float = Form(0.0), score_total_min: float = Form(0.0),
-                                    score_financial_min: float = Form(0.0), max_debt_ratio: float = Form(0.0),
-                                    requires_collateral: Optional[str] = Form(None), allowed_states_csv: str = Form(""),
-                                    allowed_segments_csv: str = Form(""), rate_default_pct: float = Form(0.0),
-                                    cet_default_pct: float = Form(0.0), term_min_months: int = Form(0),
-                                    term_max_months: int = Form(0), grace_max_months: int = Form(0),
-                                    amortization_default: str = Form("PRICE"), tariff_default_brl: float = Form(0.0),
-                                    insurance_default_brl: float = Form(0.0), admin_fee_default_brl: float = Form(0.0),
-                                    ltv_max_pct: float = Form(0.0), commission_text: str = Form(""),
-                                    payout_term: str = Form(""), notes: str = Form("")) -> Response:
+async def admin_partner_product_add(request: Request, session: Session = Depends(get_session), partner_id: int = Form(...), area: str = Form(...), family_code: str = Form(...), name: str = Form(...), pf_pj: str = Form("PJ"), ticket_min_brl: float = Form(0.0), ticket_max_brl: float = Form(0.0), revenue_min_brl: float = Form(0.0), revenue_max_brl: float = Form(0.0), score_total_min: float = Form(0.0), score_financial_min: float = Form(0.0), max_debt_ratio: float = Form(0.0), requires_collateral: Optional[str] = Form(None), allowed_states_csv: str = Form(""), allowed_segments_csv: str = Form(""), rate_default_pct: float = Form(0.0), cet_default_pct: float = Form(0.0), term_min_months: int = Form(0), term_max_months: int = Form(0), grace_max_months: int = Form(0), amortization_default: str = Form("PRICE"), tariff_default_brl: float = Form(0.0), insurance_default_brl: float = Form(0.0), admin_fee_default_brl: float = Form(0.0), ltv_max_pct: float = Form(0.0), commission_text: str = Form(""), payout_term: str = Form(""), notes: str = Form("")) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
     _upsert_partner_product_compat(
@@ -13020,10 +12599,8 @@ async def admin_partner_product_add(request: Request, session: Session = Depends
         score_financial_min=max(0.0, float(score_financial_min or 0.0)),
         max_debt_ratio=max(0.0, float(max_debt_ratio or 0.0)),
         requires_collateral=_parse_bool(requires_collateral),
-        allowed_states_json=_json_dump_list(
-            [x.strip().upper() for x in (allowed_states_csv or "").split(",") if x.strip()]),
-        allowed_segments_json=_json_dump_list(
-            [x.strip() for x in (allowed_segments_csv or "").split(",") if x.strip()]),
+        allowed_states_json=_json_dump_list([x.strip().upper() for x in (allowed_states_csv or "").split(",") if x.strip()]),
+        allowed_segments_json=_json_dump_list([x.strip() for x in (allowed_segments_csv or "").split(",") if x.strip()]),
         rate_default_pct=max(0.0, float(rate_default_pct or 0.0)),
         cet_default_pct=max(0.0, float(cet_default_pct or 0.0)),
         term_min_months=max(0, int(term_min_months or 0)),
@@ -13045,13 +12622,9 @@ async def admin_partner_product_add(request: Request, session: Session = Depends
 
 @app.post("/admin/parceiros/campaigns/add")
 @require_role({"admin"})
-async def admin_partner_campaign_add(request: Request, session: Session = Depends(get_session),
-                                     partner_product_id: int = Form(...), title: str = Form(...),
-                                     starts_at: str = Form(""), ends_at: str = Form(""), bonus_pct: float = Form(0.0),
-                                     rule_summary: str = Form("")) -> Response:
+async def admin_partner_campaign_add(request: Request, session: Session = Depends(get_session), partner_product_id: int = Form(...), title: str = Form(...), starts_at: str = Form(""), ends_at: str = Form(""), bonus_pct: float = Form(0.0), rule_summary: str = Form("")) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
-
     def _parse_dt(v: str, fallback_days: int) -> datetime:
         raw = (v or "").strip()
         if not raw:
@@ -13063,11 +12636,7 @@ async def admin_partner_campaign_add(request: Request, session: Session = Depend
                 return datetime.fromisoformat(raw + "T00:00:00").replace(tzinfo=timezone.utc)
             except Exception:
                 return utcnow() + timedelta(days=fallback_days)
-
-    row = PartnerCampaign(company_id=ctx.company.id, partner_product_id=int(partner_product_id),
-                          title=(title or "").strip(), starts_at=_parse_dt(starts_at, -1),
-                          ends_at=_parse_dt(ends_at, 30), bonus_pct=max(0.0, float(bonus_pct or 0.0)),
-                          rule_summary=(rule_summary or "").strip(), is_active=True)
+    row = PartnerCampaign(company_id=ctx.company.id, partner_product_id=int(partner_product_id), title=(title or "").strip(), starts_at=_parse_dt(starts_at, -1), ends_at=_parse_dt(ends_at, 30), bonus_pct=max(0.0, float(bonus_pct or 0.0)), rule_summary=(rule_summary or "").strip(), is_active=True)
     session.add(row)
     session.commit()
     set_flash(request, "Campanha salva.")
@@ -13089,9 +12658,7 @@ async def motor_ofertas_page(request: Request, session: Session = Depends(get_se
             client_id=current_client.id,
             role=ctx.membership.role,
         )
-    return render("motor_ofertas.html", request=request,
-                  context={"current_user": ctx.user, "current_company": ctx.company, "role": ctx.membership.role,
-                           "current_client": current_client, "matches": matches})
+    return render("motor_ofertas.html", request=request, context={"current_user": ctx.user, "current_company": ctx.company, "role": ctx.membership.role, "current_client": current_client, "matches": matches})
 
 
 @app.post("/motor-ofertas/gerar")
@@ -13104,13 +12671,10 @@ async def motor_ofertas_generate(request: Request, session: Session = Depends(ge
         set_flash(request, "Selecione um cliente para gerar o motor.")
         return RedirectResponse("/motor-ofertas", status_code=303)
     profile = get_or_create_business_profile(session, company_id=ctx.company.id, client_id=current_client.id)
-    latest_snapshot = session.exec(select(ClientSnapshot).where(ClientSnapshot.company_id == ctx.company.id,
-                                                                ClientSnapshot.client_id == current_client.id).order_by(
-        ClientSnapshot.created_at.desc()).limit(1)).first()
+    latest_snapshot = session.exec(select(ClientSnapshot).where(ClientSnapshot.company_id == ctx.company.id, ClientSnapshot.client_id == current_client.id).order_by(ClientSnapshot.created_at.desc()).limit(1)).first()
     seed_product_families(session)
     seed_internal_services(session, ctx.company.id)
-    matches = compute_offer_engine(session=session, company_id=ctx.company.id, client=current_client, profile=profile,
-                                   latest_snapshot=latest_snapshot)
+    matches = compute_offer_engine(session=session, company_id=ctx.company.id, client=current_client, profile=profile, latest_snapshot=latest_snapshot)
     persist_offer_matches(session, company_id=ctx.company.id, client_id=current_client.id, matches=matches)
     set_flash(request, f"Motor de ofertas gerado: {len(matches)} sugestao(oes).")
     return RedirectResponse("/motor-ofertas", status_code=303)
@@ -13134,10 +12698,7 @@ async def ofertas_page(request: Request, session: Session = Depends(get_session)
             role=ctx.membership.role,
             only_client_visible=(ctx.membership.role == "cliente"),
         )
-    return render("ofertas.html", request=request,
-                  context={"current_user": ctx.user, "current_company": ctx.company, "role": ctx.membership.role,
-                           "current_client": current_client, "matches": matches})
-
+    return render("ofertas.html", request=request, context={"current_user": ctx.user, "current_company": ctx.company, "role": ctx.membership.role, "current_client": current_client, "matches": matches})
 
 # ----------------------------
 # Staff: trocar cliente
@@ -13211,6 +12772,11 @@ async def client_switch_action(
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
 
     client = get_client_or_none(session, ctx.company.id, int(client_id))
     if not client:
@@ -13588,6 +13154,11 @@ async def members_page(request: Request, session: Session = Depends(get_session)
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
     mems = session.exec(select(Membership).where(Membership.company_id == ctx.company.id)).all()
     rows = []
     for m in mems:
@@ -13603,13 +13174,13 @@ async def members_page(request: Request, session: Session = Depends(get_session)
 
     rows.sort(key=lambda x: (x["membership"].role, x["user"].name.lower()))
 
+
     clients = session.exec(select(Client).where(Client.company_id == ctx.company.id).order_by(Client.created_at)).all()
 
     for row in rows:
         m = row["membership"]
         row["is_active"] = entity_is_allowed(session, entity_type="membership", entity_id=m.id) if m.id else True
-        row["allowed_features"] = sorted(
-            get_membership_allowed_features(session, company_id=ctx.company.id, membership=m))
+        row["allowed_features"] = sorted(get_membership_allowed_features(session, company_id=ctx.company.id, membership=m))
 
     active_client_id = get_active_client_id(request, session, ctx)
     current_client = get_client_or_none(session, ctx.company.id, active_client_id)
@@ -13646,6 +13217,11 @@ async def members_add_action(
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
 
     role = role.strip().lower()
     if role not in {"admin", "equipe", "cliente"}:
@@ -13713,9 +13289,9 @@ async def members_add_action(
 @app.post("/admin/members/{membership_id}/features")
 @require_role({"admin", "equipe"})
 async def member_features_update(
-        request: Request,
-        membership_id: int,
-        session: Session = Depends(get_session),
+    request: Request,
+    membership_id: int,
+    session: Session = Depends(get_session),
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
@@ -13749,10 +13325,10 @@ async def member_features_update(
 @app.post("/admin/members/{membership_id}/link-client")
 @require_role({"admin", "equipe"})
 async def member_link_client(
-        request: Request,
-        membership_id: int,
-        session: Session = Depends(get_session),
-        client_id: str = Form(""),
+    request: Request,
+    membership_id: int,
+    session: Session = Depends(get_session),
+    client_id: str = Form(""),
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
@@ -13785,10 +13361,11 @@ async def member_link_client(
 
 @app.get("/admin/clients/{client_id}/access", response_class=HTMLResponse)
 @require_role({"admin", "equipe"})
+
 async def client_access_page(
-        request: Request,
-        client_id: int,
-        session: Session = Depends(get_session),
+    request: Request,
+    client_id: int,
+    session: Session = Depends(get_session),
 ) -> HTMLResponse:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
@@ -13854,9 +13431,9 @@ async def client_access_page(
 @app.post("/admin/clients/{client_id}/access")
 @require_role({"admin", "equipe"})
 async def client_access_save(
-        request: Request,
-        client_id: int,
-        session: Session = Depends(get_session),
+    request: Request,
+    client_id: int,
+    session: Session = Depends(get_session),
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
@@ -13893,8 +13470,7 @@ async def client_access_save(
         )
         pricing_mode = (str(form.get("tool_finance_pricing_mode") or "trial").strip().lower() or "trial")
         trial_days = max(0, int(str(form.get("tool_finance_trial_days") or "30") or 30))
-        monthly_credits = max(0, int(str(form.get("tool_finance_monthly_credits") or str(
-            CLIENT_TOOL_FINANCE_MONTHLY_CREDITS)) or CLIENT_TOOL_FINANCE_MONTHLY_CREDITS))
+        monthly_credits = max(0, int(str(form.get("tool_finance_monthly_credits") or str(CLIENT_TOOL_FINANCE_MONTHLY_CREDITS)) or CLIENT_TOOL_FINANCE_MONTHLY_CREDITS))
         release_enabled = str(form.get("tool_finance_release_enabled") or "") == "1"
         start_trial_now = str(form.get("tool_finance_start_trial_now") or "") == "1"
 
@@ -13935,7 +13511,6 @@ async def client_access_save(
     set_flash(request, "Permissões do cliente atualizadas.")
     return RedirectResponse(f"/admin/clients/{client_id}/access", status_code=303)
 
-
 # ----------------------------
 # Empresa / Perfil# ----------------------------
 # Empresa / Perfil
@@ -13953,8 +13528,7 @@ async def empresa_page(request: Request, session: Session = Depends(get_session)
     current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
     business_profile = None
     if current_client and ensure_can_access_client(ctx, current_client.id):
-        business_profile = get_or_create_business_profile(session, company_id=ctx.company.id,
-                                                          client_id=current_client.id)
+        business_profile = get_or_create_business_profile(session, company_id=ctx.company.id, client_id=current_client.id)
 
     return render(
         "empresa.html",
@@ -13969,8 +13543,7 @@ async def empresa_page(request: Request, session: Session = Depends(get_session)
             "selected_interest_codes": _json_list(business_profile.interests_json) if business_profile else [],
             "company_size_options": COMPANY_SIZE_OPTIONS,
             "segment_options": COMPANY_SEGMENT_OPTIONS,
-            "subsegment_options": SEGMENT_SUBSEGMENT_OPTIONS.get(
-                (business_profile.segment if business_profile else "") or "", []),
+            "subsegment_options": SEGMENT_SUBSEGMENT_OPTIONS.get((business_profile.segment if business_profile else "") or "", []),
             "segment_subsegments_json": json.dumps(SEGMENT_SUBSEGMENT_OPTIONS, ensure_ascii=False),
             "tax_regime_options": TAX_REGIME_OPTIONS,
             "business_model_options": BUSINESS_MODEL_OPTIONS,
@@ -14217,8 +13790,7 @@ async def perfil_page(request: Request, session: Session = Depends(get_session))
     offer_matches: list[dict[str, Any]] = []
     financial_analysis = None
     if current_client and ensure_can_access_client(ctx, current_client.id):
-        business_profile = get_or_create_business_profile(session, company_id=ctx.company.id,
-                                                          client_id=current_client.id)
+        business_profile = get_or_create_business_profile(session, company_id=ctx.company.id, client_id=current_client.id)
         financial_analysis = build_client_dashboard_analysis(
             client=current_client,
             profile=business_profile,
@@ -14314,9 +13886,7 @@ async def perfil_save(
         "other_non_current_liabilities_brl": _safe_money(other_non_current_liabilities_brl),
     }
     detail_provided = any(abs(v) > 0 for v in detail_values.values())
-    aggregate_provided = any(_safe_money(v) > 0 for v in
-                             [current_assets_brl, non_current_assets_brl, current_liabilities_brl,
-                              non_current_liabilities_brl])
+    aggregate_provided = any(_safe_money(v) > 0 for v in [current_assets_brl, non_current_assets_brl, current_liabilities_brl, non_current_liabilities_brl])
 
     if detail_provided:
         profile.cash_and_investments_brl = detail_values["cash_balance_brl"]
@@ -14366,8 +13936,7 @@ async def perfil_save(
         .order_by(ClientSnapshot.created_at.desc())
         .limit(1)
     ).first()
-    matches = compute_offer_engine(session=session, company_id=ctx.company.id, client=current_client, profile=profile,
-                                   latest_snapshot=latest_snapshot)
+    matches = compute_offer_engine(session=session, company_id=ctx.company.id, client=current_client, profile=profile, latest_snapshot=latest_snapshot)
     persist_offer_matches(session, company_id=ctx.company.id, client_id=current_client.id, matches=matches)
 
     try:
@@ -14507,39 +14076,27 @@ async def perfil_snapshot_new_action(
     except Exception:
         pass
     profile.annual_revenue_brl = max(float(form2.get("annual_revenue_brl") or profile.annual_revenue_brl or 0.0), 0.0)
-    profile.monthly_fixed_cost_brl = max(
-        float(form2.get("monthly_fixed_cost_brl") or profile.monthly_fixed_cost_brl or 0.0), 0.0)
-    profile.payroll_monthly_brl = max(float(form2.get("payroll_monthly_brl") or profile.payroll_monthly_brl or 0.0),
-                                      0.0)
+    profile.monthly_fixed_cost_brl = max(float(form2.get("monthly_fixed_cost_brl") or profile.monthly_fixed_cost_brl or 0.0), 0.0)
+    profile.payroll_monthly_brl = max(float(form2.get("payroll_monthly_brl") or profile.payroll_monthly_brl or 0.0), 0.0)
     profile.average_ticket_brl = max(float(form2.get("average_ticket_brl") or profile.average_ticket_brl or 0.0), 0.0)
     profile.inventory_brl = max(float(form2.get("inventory_brl") or profile.inventory_brl or 0.0), 0.0)
     profile.receivables_brl = max(float(form2.get("receivables_brl") or profile.receivables_brl or 0.0), 0.0)
-    profile.cash_and_investments_brl = float(
-        form2.get("cash_and_investments_brl") or profile.cash_and_investments_brl or cash_balance_brl or 0.0)
-    profile.other_current_assets_brl = max(
-        float(form2.get("other_current_assets_brl") or profile.other_current_assets_brl or 0.0), 0.0)
+    profile.cash_and_investments_brl = float(form2.get("cash_and_investments_brl") or profile.cash_and_investments_brl or cash_balance_brl or 0.0)
+    profile.other_current_assets_brl = max(float(form2.get("other_current_assets_brl") or profile.other_current_assets_brl or 0.0), 0.0)
     profile.immobilized_brl = max(float(form2.get("immobilized_brl") or profile.immobilized_brl or 0.0), 0.0)
-    profile.other_non_current_assets_brl = max(
-        float(form2.get("other_non_current_assets_brl") or profile.other_non_current_assets_brl or 0.0), 0.0)
+    profile.other_non_current_assets_brl = max(float(form2.get("other_non_current_assets_brl") or profile.other_non_current_assets_brl or 0.0), 0.0)
     profile.payables_360_brl = max(float(form2.get("payables_360_brl") or profile.payables_360_brl or 0.0), 0.0)
-    profile.short_term_debt_brl = max(float(form2.get("short_term_debt_brl") or profile.short_term_debt_brl or 0.0),
-                                      0.0)
-    profile.tax_liabilities_brl = max(float(form2.get("tax_liabilities_brl") or profile.tax_liabilities_brl or 0.0),
-                                      0.0)
-    profile.labor_liabilities_brl = max(
-        float(form2.get("labor_liabilities_brl") or profile.labor_liabilities_brl or 0.0), 0.0)
-    profile.other_current_liabilities_brl = max(
-        float(form2.get("other_current_liabilities_brl") or profile.other_current_liabilities_brl or 0.0), 0.0)
+    profile.short_term_debt_brl = max(float(form2.get("short_term_debt_brl") or profile.short_term_debt_brl or 0.0), 0.0)
+    profile.tax_liabilities_brl = max(float(form2.get("tax_liabilities_brl") or profile.tax_liabilities_brl or 0.0), 0.0)
+    profile.labor_liabilities_brl = max(float(form2.get("labor_liabilities_brl") or profile.labor_liabilities_brl or 0.0), 0.0)
+    profile.other_current_liabilities_brl = max(float(form2.get("other_current_liabilities_brl") or profile.other_current_liabilities_brl or 0.0), 0.0)
     profile.long_term_debt_brl = max(float(form2.get("long_term_debt_brl") or profile.long_term_debt_brl or 0.0), 0.0)
-    profile.other_non_current_liabilities_brl = max(
-        float(form2.get("other_non_current_liabilities_brl") or profile.other_non_current_liabilities_brl or 0.0), 0.0)
-    profile.current_assets_brl = max(profile.cash_and_investments_brl,
-                                     0.0) + profile.receivables_brl + profile.inventory_brl + profile.other_current_assets_brl
+    profile.other_non_current_liabilities_brl = max(float(form2.get("other_non_current_liabilities_brl") or profile.other_non_current_liabilities_brl or 0.0), 0.0)
+    profile.current_assets_brl = max(profile.cash_and_investments_brl, 0.0) + profile.receivables_brl + profile.inventory_brl + profile.other_current_assets_brl
     profile.non_current_assets_brl = profile.immobilized_brl + profile.other_non_current_assets_brl
     profile.current_liabilities_brl = profile.payables_360_brl + profile.short_term_debt_brl + profile.tax_liabilities_brl + profile.labor_liabilities_brl + profile.other_current_liabilities_brl
     profile.non_current_liabilities_brl = profile.long_term_debt_brl + profile.other_non_current_liabilities_brl
-    profile.equity_brl = (profile.current_assets_brl + profile.non_current_assets_brl) - (
-                profile.current_liabilities_brl + profile.non_current_liabilities_brl)
+    profile.equity_brl = (profile.current_assets_brl + profile.non_current_assets_brl) - (profile.current_liabilities_brl + profile.non_current_liabilities_brl)
     profile.collateral_brl = max(float(form2.get("collateral_brl") or profile.collateral_brl or 0.0), 0.0)
     profile.delinquency_brl = max(float(form2.get("delinquency_brl") or profile.delinquency_brl or 0.0), 0.0)
     profile.desired_credit_brl = max(float(form2.get("desired_credit_brl") or profile.desired_credit_brl or 0.0), 0.0)
@@ -14554,8 +14111,7 @@ async def perfil_snapshot_new_action(
     profile.updated_at = utcnow()
     session.add(profile)
     session.commit()
-    matches = compute_offer_engine(session=session, company_id=ctx.company.id, client=current_client, profile=profile,
-                                   latest_snapshot=snap)
+    matches = compute_offer_engine(session=session, company_id=ctx.company.id, client=current_client, profile=profile, latest_snapshot=snap)
     persist_offer_matches(session, company_id=ctx.company.id, client_id=current_client.id, matches=matches)
 
     try:
@@ -14684,6 +14240,11 @@ async def pending_new_page(request: Request, session: Session = Depends(get_sess
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
     clients = session.exec(select(Client).where(Client.company_id == ctx.company.id).order_by(Client.created_at)).all()
     current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
     return render(
@@ -14709,15 +14270,20 @@ async def pending_new_action(
         description: str = Form(""),
         status: str = Form("aberto"),
         due_date: str = Form(""),
-        files: list[UploadFile] = File(default=[]),
+        file: UploadFile | None = File(default=None),
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
     client = get_client_or_none(session, ctx.company.id, int(client_id))
     if not client:
         set_flash(request, "Cliente inválido.")
-        return RedirectResponse("/pendencias/nova", status_code=303)
+        return RedirectResponse("/pendencias/novo", status_code=303)
 
     status = status.strip().lower()
     if status not in PENDING_STATUSES:
@@ -14731,39 +14297,35 @@ async def pending_new_action(
         description=description.strip(),
         status=status,
         due_date=_normalize_date_input(due_date),
-        created_at=utcnow(),
         updated_at=utcnow(),
     )
     session.add(item)
     session.commit()
     session.refresh(item)
 
-    if description.strip():
-        session.add(PendingMessage(pending_item_id=item.id, author_user_id=ctx.user.id, message=description.strip()))
-
-    uploads = _normalize_uploads(files)
-    if uploads:
+    if file and file.filename:
         try:
-            attachments = await _build_attachments_from_uploads(
-                files=uploads,
+            stored, mime, size = await save_upload(file)
+        except ValueError:
+            set_flash(request, "Arquivo muito grande.")
+            return RedirectResponse("/pendencias/novo", status_code=303)
+
+        session.add(
+            Attachment(
                 company_id=ctx.company.id,
-                client_id=item.client_id,
+                client_id=client.id,
                 uploaded_by_user_id=ctx.user.id,
                 pending_item_id=item.id,
+                original_filename=file.filename,
+                stored_filename=stored,
+                mime_type=mime,
+                size_bytes=size,
             )
-        except ValueError:
-            set_flash(request, "Um dos arquivos excede o limite de tamanho.")
-            return RedirectResponse("/pendencias/nova", status_code=303)
-        except RuntimeError as exc:
-            set_flash(request, f"Falha no storage: {exc}")
-            return RedirectResponse("/pendencias/nova", status_code=303)
+        )
+        session.commit()
 
-        for att in attachments:
-            session.add(att)
-
-    session.commit()
     set_flash(request, "Pendência criada.")
-    return RedirectResponse(f"/pendencias/{item.id}", status_code=303)
+    return RedirectResponse("/pendencias", status_code=303)
 
 
 @app.get("/pendencias/{item_id}", response_class=HTMLResponse)
@@ -14823,6 +14385,11 @@ async def pending_update_status(
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
     item = session.get(PendingItem, int(item_id))
     if not item or item.company_id != ctx.company.id:
         set_flash(request, "Pendência não encontrada.")
@@ -14848,38 +14415,39 @@ async def pending_attach_admin(
         session: Session = Depends(get_session),
         item_id: int = 0,
         message: str = Form(""),
-        files: list[UploadFile] = File(default=[]),
+        file: UploadFile = File(...),
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
 
     item = session.get(PendingItem, int(item_id))
     if not item or item.company_id != ctx.company.id:
         set_flash(request, "Pendência não encontrada.")
         return RedirectResponse("/pendencias", status_code=303)
 
-    uploads = _normalize_uploads(files)
-    if not uploads:
-        set_flash(request, "Selecione ao menos um arquivo.")
+    try:
+        stored, mime, size = await save_upload(file)
+    except ValueError:
+        set_flash(request, "Arquivo muito grande.")
         return RedirectResponse(f"/pendencias/{item.id}", status_code=303)
 
-    try:
-        attachments = await _build_attachments_from_uploads(
-            files=uploads,
+    session.add(
+        Attachment(
             company_id=ctx.company.id,
             client_id=item.client_id,
             uploaded_by_user_id=ctx.user.id,
             pending_item_id=item.id,
+            original_filename=file.filename or "arquivo",
+            stored_filename=stored,
+            mime_type=mime,
+            size_bytes=size,
         )
-    except ValueError:
-        set_flash(request, "Um dos arquivos excede o limite de tamanho.")
-        return RedirectResponse(f"/pendencias/{item.id}", status_code=303)
-    except RuntimeError as exc:
-        set_flash(request, f"Falha no storage: {exc}")
-        return RedirectResponse(f"/pendencias/{item.id}", status_code=303)
-
-    for att in attachments:
-        session.add(att)
+    )
     if message.strip():
         session.add(PendingMessage(pending_item_id=item.id, author_user_id=ctx.user.id, message=message.strip()))
 
@@ -14887,7 +14455,7 @@ async def pending_attach_admin(
     session.add(item)
     session.commit()
 
-    set_flash(request, f"{len(attachments)} anexo(s) enviado(s).")
+    set_flash(request, "Enviado.")
     return RedirectResponse(f"/pendencias/{item.id}", status_code=303)
 
 
@@ -14899,10 +14467,15 @@ async def pending_attach_client(
         item_id: int = 0,
         message: str = Form(""),
         mark_done: str = Form(""),
-        files: list[UploadFile] = File(default=[]),
+        file: UploadFile | None = File(default=None),
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
 
     item = session.get(PendingItem, int(item_id))
     if not item or item.company_id != ctx.company.id:
@@ -14913,25 +14486,25 @@ async def pending_attach_client(
         set_flash(request, "Sem permissão.")
         return RedirectResponse("/pendencias", status_code=303)
 
-    uploads = _normalize_uploads(files)
-    if uploads:
+    if file and file.filename:
         try:
-            attachments = await _build_attachments_from_uploads(
-                files=uploads,
+            stored, mime, size = await save_upload(file)
+        except ValueError:
+            set_flash(request, "Arquivo muito grande.")
+            return RedirectResponse(f"/pendencias/{item.id}", status_code=303)
+
+        session.add(
+            Attachment(
                 company_id=ctx.company.id,
                 client_id=item.client_id,
                 uploaded_by_user_id=ctx.user.id,
                 pending_item_id=item.id,
+                original_filename=file.filename,
+                stored_filename=stored,
+                mime_type=mime,
+                size_bytes=size,
             )
-        except ValueError:
-            set_flash(request, "Um dos arquivos excede o limite de tamanho.")
-            return RedirectResponse(f"/pendencias/{item.id}", status_code=303)
-        except RuntimeError as exc:
-            set_flash(request, f"Falha no storage: {exc}")
-            return RedirectResponse(f"/pendencias/{item.id}", status_code=303)
-
-        for att in attachments:
-            session.add(att)
+        )
 
     if message.strip():
         session.add(PendingMessage(pending_item_id=item.id, author_user_id=ctx.user.id, message=message.strip()))
@@ -15013,6 +14586,11 @@ async def docs_new_page(request: Request, session: Session = Depends(get_session
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
     clients = session.exec(select(Client).where(Client.company_id == ctx.company.id).order_by(Client.created_at)).all()
     current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
     return render(
@@ -15037,10 +14615,15 @@ async def docs_new_action(
         title: str = Form(...),
         content: str = Form(...),
         status: str = Form("rascunho"),
-        files: list[UploadFile] = File(default=[]),
+        file: UploadFile | None = File(default=None),
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
 
     client = get_client_or_none(session, ctx.company.id, int(client_id))
     if not client:
@@ -15064,29 +14647,44 @@ async def docs_new_action(
     session.commit()
     session.refresh(doc)
 
-    uploads = _normalize_uploads(files)
-    if uploads:
+    if file and file.filename:
         try:
-            attachments = await _build_attachments_from_uploads(
-                files=uploads,
+            stored, mime, size = await save_upload(file)
+        except ValueError:
+            set_flash(request, "Arquivo muito grande.")
+            return RedirectResponse("/documentos/novo", status_code=303)
+
+        session.add(
+            Attachment(
                 company_id=ctx.company.id,
                 client_id=client.id,
                 uploaded_by_user_id=ctx.user.id,
                 document_id=doc.id,
+                original_filename=file.filename,
+                stored_filename=stored,
+                mime_type=mime,
+                size_bytes=size,
             )
-        except ValueError:
-            set_flash(request, "Um dos arquivos excede o limite de tamanho.")
-            return RedirectResponse("/documentos/novo", status_code=303)
-        except RuntimeError as exc:
-            set_flash(request, f"Falha no storage: {exc}")
-            return RedirectResponse("/documentos/novo", status_code=303)
+        )
+        session.commit()
 
-        for att in attachments:
-            session.add(att)
+    try:
+        if doc.status != "rascunho":
+            notify_client_members(
+                session,
+                company_id=ctx.company.id,
+                client_id=client.id,
+                kind="documento",
+                title="Novo documento disponível",
+                message=doc.title,
+                href=f"/documentos/{doc.id}",
+                created_by_user_id=ctx.user.id,
+            )
+    except Exception:
+        pass
 
-    session.commit()
     set_flash(request, "Documento criado.")
-    return RedirectResponse(f"/documentos/{doc.id}", status_code=303)
+    return RedirectResponse("/documentos", status_code=303)
 
 
 @app.get("/documentos/{doc_id}", response_class=HTMLResponse)
@@ -15143,6 +14741,11 @@ async def docs_update_status(
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
     doc = session.get(Document, int(doc_id))
     if not doc or doc.company_id != ctx.company.id:
         set_flash(request, "Documento não encontrado.")
@@ -15169,38 +14772,39 @@ async def docs_attach_admin(
         session: Session = Depends(get_session),
         doc_id: int = 0,
         message: str = Form(""),
-        files: list[UploadFile] = File(default=[]),
+        file: UploadFile = File(...),
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
 
     doc = session.get(Document, int(doc_id))
     if not doc or doc.company_id != ctx.company.id:
         set_flash(request, "Documento não encontrado.")
         return RedirectResponse("/documentos", status_code=303)
 
-    uploads = _normalize_uploads(files)
-    if not uploads:
-        set_flash(request, "Selecione ao menos um arquivo.")
+    try:
+        stored, mime, size = await save_upload(file)
+    except ValueError:
+        set_flash(request, "Arquivo muito grande.")
         return RedirectResponse(f"/documentos/{doc.id}", status_code=303)
 
-    try:
-        attachments = await _build_attachments_from_uploads(
-            files=uploads,
+    session.add(
+        Attachment(
             company_id=ctx.company.id,
             client_id=doc.client_id,
             uploaded_by_user_id=ctx.user.id,
             document_id=doc.id,
+            original_filename=file.filename or "arquivo",
+            stored_filename=stored,
+            mime_type=mime,
+            size_bytes=size,
         )
-    except ValueError:
-        set_flash(request, "Um dos arquivos excede o limite de tamanho.")
-        return RedirectResponse(f"/documentos/{doc.id}", status_code=303)
-    except RuntimeError as exc:
-        set_flash(request, f"Falha no storage: {exc}")
-        return RedirectResponse(f"/documentos/{doc.id}", status_code=303)
-
-    for att in attachments:
-        session.add(att)
+    )
     if message.strip():
         session.add(DocumentMessage(document_id=doc.id, author_user_id=ctx.user.id, message=message.strip()))
 
@@ -15208,7 +14812,7 @@ async def docs_attach_admin(
     session.add(doc)
     session.commit()
 
-    set_flash(request, f"{len(attachments)} anexo(s) enviado(s).")
+    set_flash(request, "Enviado.")
     return RedirectResponse(f"/documentos/{doc.id}", status_code=303)
 
 
@@ -15219,10 +14823,15 @@ async def docs_attach_client(
         session: Session = Depends(get_session),
         doc_id: int = 0,
         message: str = Form(""),
-        files: list[UploadFile] = File(default=[]),
+        file: UploadFile = File(...),
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
 
     doc = session.get(Document, int(doc_id))
     if not doc or doc.company_id != ctx.company.id:
@@ -15233,28 +14842,24 @@ async def docs_attach_client(
         set_flash(request, "Sem permissão.")
         return RedirectResponse("/documentos", status_code=303)
 
-    uploads = _normalize_uploads(files)
-    if not uploads:
-        set_flash(request, "Selecione ao menos um arquivo.")
+    try:
+        stored, mime, size = await save_upload(file)
+    except ValueError:
+        set_flash(request, "Arquivo muito grande.")
         return RedirectResponse(f"/documentos/{doc.id}", status_code=303)
 
-    try:
-        attachments = await _build_attachments_from_uploads(
-            files=uploads,
+    session.add(
+        Attachment(
             company_id=ctx.company.id,
             client_id=doc.client_id,
             uploaded_by_user_id=ctx.user.id,
             document_id=doc.id,
+            original_filename=file.filename or "arquivo",
+            stored_filename=stored,
+            mime_type=mime,
+            size_bytes=size,
         )
-    except ValueError:
-        set_flash(request, "Um dos arquivos excede o limite de tamanho.")
-        return RedirectResponse(f"/documentos/{doc.id}", status_code=303)
-    except RuntimeError as exc:
-        set_flash(request, f"Falha no storage: {exc}")
-        return RedirectResponse(f"/documentos/{doc.id}", status_code=303)
-
-    for att in attachments:
-        session.add(att)
+    )
     if message.strip():
         session.add(DocumentMessage(document_id=doc.id, author_user_id=ctx.user.id, message=message.strip()))
 
@@ -15278,7 +14883,7 @@ async def docs_attach_client(
     except Exception:
         pass
 
-    set_flash(request, f"{len(attachments)} anexo(s) enviado(s).")
+    set_flash(request, "Enviado.")
     return RedirectResponse(f"/documentos/{doc.id}", status_code=303)
 
 
@@ -15345,6 +14950,11 @@ async def props_new_staff_page(request: Request, session: Session = Depends(get_
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
     clients = session.exec(select(Client).where(Client.company_id == ctx.company.id).order_by(Client.created_at)).all()
     current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
     return render(
@@ -15371,10 +14981,15 @@ async def props_new_staff_action(
         service_name: str = Form(""),
         value_brl: float = Form(0.0),
         status: str = Form("rascunho"),
-        files: list[UploadFile] = File(default=[]),
+        file: UploadFile | None = File(default=None),
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
 
     client = get_client_or_none(session, ctx.company.id, int(client_id))
     if not client:
@@ -15406,29 +15021,29 @@ async def props_new_staff_action(
     session.commit()
     session.refresh(prop)
 
-    uploads = _normalize_uploads(files)
-    if uploads:
+    if file and file.filename:
         try:
-            attachments = await _build_attachments_from_uploads(
-                files=uploads,
+            stored, mime, size = await save_upload(file)
+        except ValueError:
+            set_flash(request, "Arquivo muito grande.")
+            return RedirectResponse("/propostas/nova", status_code=303)
+
+        session.add(
+            Attachment(
                 company_id=ctx.company.id,
                 client_id=client.id,
                 uploaded_by_user_id=ctx.user.id,
                 proposal_id=prop.id,
+                original_filename=file.filename,
+                stored_filename=stored,
+                mime_type=mime,
+                size_bytes=size,
             )
-        except ValueError:
-            set_flash(request, "Um dos arquivos excede o limite de tamanho.")
-            return RedirectResponse("/propostas/nova", status_code=303)
-        except RuntimeError as exc:
-            set_flash(request, f"Falha no storage: {exc}")
-            return RedirectResponse("/propostas/nova", status_code=303)
+        )
+        session.commit()
 
-        for att in attachments:
-            session.add(att)
-
-    session.commit()
     set_flash(request, "Proposta criada.")
-    return RedirectResponse(f"/propostas/{prop.id}", status_code=303)
+    return RedirectResponse("/propostas", status_code=303)
 
 
 @app.get("/propostas/solicitacao", response_class=HTMLResponse)
@@ -15436,6 +15051,11 @@ async def props_new_staff_action(
 async def props_new_client_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
 
     current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
     return render(
@@ -15458,10 +15078,15 @@ async def props_new_client_action(
         title: str = Form(...),
         service_name: str = Form(""),
         description: str = Form(...),
-        files: list[UploadFile] = File(default=[]),
+        file: UploadFile | None = File(default=None),
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
 
     client_id = ctx.membership.client_id
     if not client_id:
@@ -15489,43 +15114,30 @@ async def props_new_client_action(
     session.commit()
     session.refresh(prop)
 
-    uploads = _normalize_uploads(files)
-    if uploads:
+    if file and file.filename:
         try:
-            attachments = await _build_attachments_from_uploads(
-                files=uploads,
+            stored, mime, size = await save_upload(file)
+        except ValueError:
+            set_flash(request, "Arquivo muito grande.")
+            return RedirectResponse("/propostas/solicitacao", status_code=303)
+
+        session.add(
+            Attachment(
                 company_id=ctx.company.id,
                 client_id=client_id,
                 uploaded_by_user_id=ctx.user.id,
                 proposal_id=prop.id,
+                original_filename=file.filename,
+                stored_filename=stored,
+                mime_type=mime,
+                size_bytes=size,
             )
-        except ValueError:
-            set_flash(request, "Um dos arquivos excede o limite de tamanho.")
-            return RedirectResponse("/propostas/solicitacao", status_code=303)
-        except RuntimeError as exc:
-            set_flash(request, f"Falha no storage: {exc}")
-            return RedirectResponse("/propostas/solicitacao", status_code=303)
-
-        for att in attachments:
-            session.add(att)
+        )
 
     session.add(ProposalMessage(proposal_id=prop.id, author_user_id=ctx.user.id, message="Solicitação criada."))
     session.commit()
 
-    try:
-        _notify_staff_about_client_activity(
-            session,
-            ctx=ctx,
-            client_id=client_id,
-            kind="solicitacao",
-            title="Cliente criou uma solicitação",
-            message=(prop.title or "Solicitação")[:160],
-            href=f"/propostas/{prop.id}",
-        )
-    except Exception:
-        pass
-
-    set_flash(request, "Solicitação criada.")
+    set_flash(request, "Solicitação enviada.")
     return RedirectResponse(f"/propostas/{prop.id}", status_code=303)
 
 
@@ -15592,6 +15204,11 @@ async def props_update_staff(
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
     prop = session.get(Proposal, int(prop_id))
     if not prop or prop.company_id != ctx.company.id:
         set_flash(request, "Item não encontrado.")
@@ -15627,6 +15244,11 @@ async def props_delete_staff(request: Request, session: Session = Depends(get_se
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
     prop = session.get(Proposal, int(prop_id))
     if not prop or prop.company_id != ctx.company.id:
         set_flash(request, "Proposta não encontrada.")
@@ -15653,40 +15275,41 @@ async def props_attach_staff(
         request: Request,
         session: Session = Depends(get_session),
         prop_id: int = 0,
-        files: list[UploadFile] = File(default=[]),
+        file: UploadFile = File(...),
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
 
     prop = session.get(Proposal, int(prop_id))
     if not prop or prop.company_id != ctx.company.id:
         set_flash(request, "Item não encontrado.")
         return RedirectResponse("/propostas", status_code=303)
 
-    uploads = _normalize_uploads(files)
-    if not uploads:
-        set_flash(request, "Selecione ao menos um arquivo.")
+    try:
+        stored, mime, size = await save_upload(file)
+    except ValueError:
+        set_flash(request, "Arquivo muito grande.")
         return RedirectResponse(f"/propostas/{prop.id}", status_code=303)
 
-    try:
-        attachments = await _build_attachments_from_uploads(
-            files=uploads,
+    session.add(
+        Attachment(
             company_id=ctx.company.id,
             client_id=prop.client_id,
             uploaded_by_user_id=ctx.user.id,
             proposal_id=prop.id,
+            original_filename=file.filename or "arquivo",
+            stored_filename=stored,
+            mime_type=mime,
+            size_bytes=size,
         )
-    except ValueError:
-        set_flash(request, "Um dos arquivos excede o limite de tamanho.")
-        return RedirectResponse(f"/propostas/{prop.id}", status_code=303)
-    except RuntimeError as exc:
-        set_flash(request, f"Falha no storage: {exc}")
-        return RedirectResponse(f"/propostas/{prop.id}", status_code=303)
-
-    for att in attachments:
-        session.add(att)
+    )
     session.commit()
-    set_flash(request, f"{len(attachments)} anexo(s) enviado(s).")
+    set_flash(request, "Anexo enviado.")
     return RedirectResponse(f"/propostas/{prop.id}", status_code=303)
 
 
@@ -15697,10 +15320,15 @@ async def props_client_upload(
         session: Session = Depends(get_session),
         prop_id: int = 0,
         message: str = Form(""),
-        files: list[UploadFile] = File(default=[]),
+        file: UploadFile | None = File(default=None),
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
 
     prop = session.get(Proposal, int(prop_id))
     if not prop or prop.company_id != ctx.company.id:
@@ -15711,25 +15339,25 @@ async def props_client_upload(
         set_flash(request, "Sem permissão.")
         return RedirectResponse("/propostas", status_code=303)
 
-    uploads = _normalize_uploads(files)
-    if uploads:
+    if file and file.filename:
         try:
-            attachments = await _build_attachments_from_uploads(
-                files=uploads,
+            stored, mime, size = await save_upload(file)
+        except ValueError:
+            set_flash(request, "Arquivo muito grande.")
+            return RedirectResponse(f"/propostas/{prop.id}", status_code=303)
+
+        session.add(
+            Attachment(
                 company_id=ctx.company.id,
                 client_id=prop.client_id,
                 uploaded_by_user_id=ctx.user.id,
                 proposal_id=prop.id,
+                original_filename=file.filename,
+                stored_filename=stored,
+                mime_type=mime,
+                size_bytes=size,
             )
-        except ValueError:
-            set_flash(request, "Um dos arquivos excede o limite de tamanho.")
-            return RedirectResponse(f"/propostas/{prop.id}", status_code=303)
-        except RuntimeError as exc:
-            set_flash(request, f"Falha no storage: {exc}")
-            return RedirectResponse(f"/propostas/{prop.id}", status_code=303)
-
-        for att in attachments:
-            session.add(att)
+        )
 
     if message.strip():
         session.add(ProposalMessage(proposal_id=prop.id, author_user_id=ctx.user.id, message=message.strip()))
@@ -16207,22 +15835,8 @@ async def _contaazul_get_bytes(
     return resp.content, ctype
 
 
-def _safe_money(value: Any) -> float:
-    try:
-        if value is None:
-            return 0.0
-        return float(value)
-    except Exception:
-        return 0.0
-
-
-def _safe_text(value: Any, default: str = "—") -> str:
-    s = str(value).strip() if value is not None else ""
-    return s or default
-
-
 def _pdf_fatura_bytes(*, company_name: str, client_name: str, receivable: ContaAzulReceivable) -> bytes:
-    """Gera um PDF simples (fatura) localmente, tolerando campos nulos/legados.
+    """Gera um PDF simples (fatura) localmente.
 
     Observação: a API aberta do Conta Azul não expõe um endpoint documentado para baixar o PDF do boleto.
     Este PDF é um comprovante/fatura com os dados + link de pagamento (quando existir).
@@ -16233,17 +15847,7 @@ def _pdf_fatura_bytes(*, company_name: str, client_name: str, receivable: ContaA
 
     buf = BytesIO()
     c = canvas.Canvas(buf, pagesize=A4)
-    _w, h = A4
-
-    due_date = _safe_text(getattr(receivable, "due_date", ""))
-    status = _safe_text(getattr(receivable, "status", ""))
-    description = _safe_text(getattr(receivable, "description", ""))
-    invoice_type = _safe_text(getattr(receivable, "invoice_type", ""), default="")
-    invoice_number = _safe_text(getattr(receivable, "invoice_number", ""), default="")
-    payment_url = _safe_text(getattr(receivable, "payment_url", ""), default="")
-    amount_open = _safe_money(getattr(receivable, "amount_open", 0))
-    amount_paid = _safe_money(getattr(receivable, "amount_paid", 0))
-    amount_total = _safe_money(getattr(receivable, "amount_total", 0))
+    w, h = A4
 
     y = h - 60
     c.setFont("Helvetica-Bold", 14)
@@ -16251,40 +15855,32 @@ def _pdf_fatura_bytes(*, company_name: str, client_name: str, receivable: ContaA
     y -= 22
 
     c.setFont("Helvetica", 10)
-    c.drawString(40, y, f"Empresa: {_safe_text(company_name, 'Empresa')}")
+    c.drawString(40, y, f"Empresa: {company_name}")
     y -= 14
-    c.drawString(40, y, f"Cliente: {_safe_text(client_name, 'Cliente')}")
+    c.drawString(40, y, f"Cliente: {client_name}")
     y -= 14
-    c.drawString(40, y, f"Descrição: {description}")
+    c.drawString(40, y, f"Descrição: {receivable.description or '—'}")
     y -= 14
-    c.drawString(40, y, f"Vencimento: {due_date}   Status: {status}")
+    c.drawString(40, y, f"Vencimento: {receivable.due_date or '—'}   Status: {receivable.status or '—'}")
     y -= 14
-    c.drawString(
-        40,
-        y,
-        f"Valor total: R$ {amount_total:.2f}   Em aberto: R$ {amount_open:.2f}   Pago: R$ {amount_paid:.2f}",
-    )
+    c.drawString(40, y, f"Valor em aberto: R$ {receivable.amount_open:.2f}   Pago: R$ {receivable.amount_paid:.2f}")
     y -= 14
-
-    if invoice_number:
-        ref = f"{invoice_type} #{invoice_number}" if invoice_type else invoice_number
-        c.drawString(40, y, f"Referência: {ref}")
+    if receivable.invoice_number:
+        c.drawString(40, y, f"Referência: {receivable.invoice_type} #{receivable.invoice_number}")
         y -= 14
 
-    if payment_url and payment_url != "—":
+    if receivable.payment_url:
         y -= 6
         c.setFont("Helvetica-Bold", 10)
         c.drawString(40, y, "Link de pagamento:")
         y -= 12
         c.setFont("Helvetica", 9)
+        # quebra simples em linhas
+        url = receivable.payment_url.strip()
         chunk = 90
-        for i in range(0, len(payment_url), chunk):
-            c.drawString(40, y, payment_url[i:i + chunk])
+        for i in range(0, len(url), chunk):
+            c.drawString(40, y, url[i: i + chunk])
             y -= 11
-            if y < 50:
-                c.showPage()
-                c.setFont("Helvetica", 9)
-                y = h - 50
 
     c.showPage()
     c.save()
@@ -16301,23 +15897,44 @@ async def contaazul_invoice_xml(
         request.session.clear()
         return RedirectResponse("/login", status_code=303)
 
+    company_id = int(ctx.company.id)
+    role = str(getattr(ctx.membership, "role", "") or "")
+    client_id_ctx = int(ctx.membership.client_id) if getattr(ctx.membership, "client_id", None) is not None else None
+
     inv = session.get(ContaAzulInvoice, invoice_id)
-    if not inv or inv.company_id != ctx["company_id"]:
+    if not inv or inv.company_id != company_id:
         raise HTTPException(status_code=404, detail="Nota não encontrada.")
 
-    if ctx["role"] == "cliente" and inv.client_id != ctx["client_id"]:
+    if role == "cliente" and client_id_ctx is not None and inv.client_id != client_id_ctx:
         raise HTTPException(status_code=403, detail="Sem permissão.")
 
     if (inv.invoice_type or "").upper() != "NFE":
         raise HTTPException(status_code=400, detail="Esta nota não é NF-e.")
 
-    # OpenAPI: GET /v1/notas-fiscais/{chave} retorna XML.
-    chave = (inv.external_id or "").strip()
+    chave = str(inv.external_id or "").strip()
     if not chave:
         raise HTTPException(status_code=400, detail="Chave de acesso ausente.")
 
-    content, ctype = await _contaazul_get_bytes(session, ctx["company_id"], f"/v1/notas-fiscais/{chave}",
-                                                accept="application/xml")
+    try:
+        content, ctype = await _contaazul_get_bytes(
+            session,
+            company_id,
+            f"/v1/notas-fiscais/{chave}",
+            accept="application/xml",
+        )
+    except Exception as e:
+        logger.exception(
+            "contaazul_invoice_xml_failed",
+            extra={
+                "invoice_id": invoice_id,
+                "company_id": company_id,
+                "external_id": chave,
+                "number": getattr(inv, "number", None),
+                "error": str(e),
+            },
+        )
+        raise HTTPException(status_code=500, detail="Falha ao gerar NF XML.")
+
     filename = f"nfe_{(inv.number or chave)}.xml"
     return Response(
         content=content,
@@ -16337,7 +15954,7 @@ async def contaazul_invoice_pdf(
         return RedirectResponse("/login", status_code=303)
 
     company_id = int(ctx.company.id)
-    role = str(getattr(ctx, "role", getattr(ctx.membership, "role", "")) or "")
+    role = str(getattr(ctx.membership, "role", "") or "")
     client_id_ctx = int(ctx.membership.client_id) if getattr(ctx.membership, "client_id", None) is not None else None
 
     inv = session.get(ContaAzulInvoice, invoice_id)
@@ -16390,6 +16007,7 @@ async def contaazul_invoice_pdf(
                 "company_id": company_id,
                 "external_id": getattr(inv, "external_id", None),
                 "number": getattr(inv, "number", None),
+                "raw_json_len": len(inv.raw_json or ""),
             },
         )
         raise HTTPException(status_code=404, detail="Sem id_venda para gerar PDF.")
@@ -16422,6 +16040,7 @@ async def contaazul_invoice_pdf(
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
+
 @app.get("/financeiro/contaazul/receivable/{rid}/boleto")
 @require_login
 async def contaazul_receivable_boleto(
@@ -16433,7 +16052,7 @@ async def contaazul_receivable_boleto(
         return RedirectResponse("/login", status_code=303)
 
     company_id = int(ctx.company.id)
-    role = str(getattr(ctx, "role", getattr(ctx.membership, "role", "")) or "")
+    role = str(getattr(ctx.membership, "role", "") or "")
     client_id_ctx = int(ctx.membership.client_id) if getattr(ctx.membership, "client_id", None) is not None else None
 
     r = session.get(ContaAzulReceivable, rid)
@@ -16449,6 +16068,7 @@ async def contaazul_receivable_boleto(
 
     return RedirectResponse(payment_url, status_code=302)
 
+
 @app.get("/financeiro/contaazul/receivable/{rid}/fatura.pdf")
 @require_login
 async def contaazul_receivable_fatura_pdf(
@@ -16460,8 +16080,8 @@ async def contaazul_receivable_fatura_pdf(
         return RedirectResponse("/login", status_code=303)
 
     company_id = int(ctx.company.id)
-    role = str(getattr(ctx, "role", getattr(ctx.membership, "role", "")) or "")
-    client_id_ctx = int(ctx.client.id) if getattr(ctx, "client", None) and ctx.client.id is not None else None
+    role = str(getattr(ctx.membership, "role", "") or "")
+    client_id_ctx = int(ctx.membership.client_id) if getattr(ctx.membership, "client_id", None) is not None else None
 
     r = session.get(ContaAzulReceivable, rid)
     if not r or r.company_id != company_id:
@@ -16502,23 +16122,6 @@ async def contaazul_receivable_fatura_pdf(
     )
 
 
-def _fin_human_date(value: str) -> str:
-    s = (value or "").strip()
-    if not s:
-        return "—"
-    try:
-        if re.fullmatch(r"\d{4}-\d{2}-\d{2}", s):
-            y, m, d = s.split("-")
-            return f"{d}/{m}/{y}"
-        if re.fullmatch(r"\d{4}-\d{2}-\d{2}T.*", s):
-            base = s[:10]
-            y, m, d = base.split("-")
-            return f"{d}/{m}/{y}"
-    except Exception:
-        pass
-    return s
-
-
 def _office_date_key(value: str) -> tuple[int, int, int]:
     s = (value or "").strip()
     if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", s):
@@ -16541,30 +16144,16 @@ def _office_catalog(session: Session, company_id: int) -> dict[str, list[Any]]:
     seed_office_finance_defaults(session, company_id)
     return {
         "clients": session.exec(select(Client).where(Client.company_id == company_id).order_by(Client.name)).all(),
-        "suppliers": session.exec(select(OfficeSupplier).where(OfficeSupplier.company_id == company_id,
-                                                               OfficeSupplier.is_active == True).order_by(
-            OfficeSupplier.name)).all(),
-        "cost_centers": session.exec(select(OfficeCostCenter).where(OfficeCostCenter.company_id == company_id,
-                                                                    OfficeCostCenter.is_active == True).order_by(
-            OfficeCostCenter.code, OfficeCostCenter.name)).all(),
-        "categories": session.exec(select(OfficeCategory).where(OfficeCategory.company_id == company_id,
-                                                                OfficeCategory.is_active == True).order_by(
-            OfficeCategory.category_kind, OfficeCategory.name)).all(),
-        "revenue_types": session.exec(select(OfficeRevenueType).where(OfficeRevenueType.company_id == company_id,
-                                                                      OfficeRevenueType.is_active == True).order_by(
-            OfficeRevenueType.name)).all(),
-        "bank_accounts": session.exec(select(OfficeBankAccount).where(OfficeBankAccount.company_id == company_id,
-                                                                      OfficeBankAccount.is_active == True).order_by(
-            OfficeBankAccount.name)).all(),
-        "services": session.exec(select(InternalService).where(InternalService.company_id == company_id,
-                                                               InternalService.is_active == True).order_by(
-            InternalService.area, InternalService.name)).all(),
+        "suppliers": session.exec(select(OfficeSupplier).where(OfficeSupplier.company_id == company_id, OfficeSupplier.is_active == True).order_by(OfficeSupplier.name)).all(),
+        "cost_centers": session.exec(select(OfficeCostCenter).where(OfficeCostCenter.company_id == company_id, OfficeCostCenter.is_active == True).order_by(OfficeCostCenter.code, OfficeCostCenter.name)).all(),
+        "categories": session.exec(select(OfficeCategory).where(OfficeCategory.company_id == company_id, OfficeCategory.is_active == True).order_by(OfficeCategory.category_kind, OfficeCategory.name)).all(),
+        "revenue_types": session.exec(select(OfficeRevenueType).where(OfficeRevenueType.company_id == company_id, OfficeRevenueType.is_active == True).order_by(OfficeRevenueType.name)).all(),
+        "bank_accounts": session.exec(select(OfficeBankAccount).where(OfficeBankAccount.company_id == company_id, OfficeBankAccount.is_active == True).order_by(OfficeBankAccount.name)).all(),
+        "services": session.exec(select(InternalService).where(InternalService.company_id == company_id, InternalService.is_active == True).order_by(InternalService.area, InternalService.name)).all(),
     }
 
 
-def _office_finance_rows(session: Session, company_id: int, *, q: str = "", entry_kind: str = "", status: str = "",
-                         month: str = "", client_id: str = "") -> tuple[
-    list[dict[str, Any]], dict[str, Any], list[Client]]:
+def _office_finance_rows(session: Session, company_id: int, *, q: str = "", entry_kind: str = "", status: str = "", month: str = "", client_id: str = "") -> tuple[list[dict[str, Any]], dict[str, Any], list[Client]]:
     clients = session.exec(select(Client).where(Client.company_id == company_id).order_by(Client.name)).all()
     entries = session.exec(
         select(OfficeFinancialEntry)
@@ -16573,13 +16162,9 @@ def _office_finance_rows(session: Session, company_id: int, *, q: str = "", entr
     ).all()
 
     client_by_id = {int(x.id): x for x in clients if x.id}
-    supplier_by_id = {int(x.id): x for x in
-                      session.exec(select(OfficeSupplier).where(OfficeSupplier.company_id == company_id)).all() if x.id}
-    cost_center_by_id = {int(x.id): x for x in
-                         session.exec(select(OfficeCostCenter).where(OfficeCostCenter.company_id == company_id)).all()
-                         if x.id}
-    category_by_id = {int(x.id): x for x in
-                      session.exec(select(OfficeCategory).where(OfficeCategory.company_id == company_id)).all() if x.id}
+    supplier_by_id = {int(x.id): x for x in session.exec(select(OfficeSupplier).where(OfficeSupplier.company_id == company_id)).all() if x.id}
+    cost_center_by_id = {int(x.id): x for x in session.exec(select(OfficeCostCenter).where(OfficeCostCenter.company_id == company_id)).all() if x.id}
+    category_by_id = {int(x.id): x for x in session.exec(select(OfficeCategory).where(OfficeCategory.company_id == company_id)).all() if x.id}
 
     q_norm = (q or "").strip().lower()
     rows: list[dict[str, Any]] = []
@@ -16650,6 +16235,8 @@ def _office_finance_rows(session: Session, company_id: int, *, q: str = "", entr
     return rows, summary, clients
 
 
+
+
 def _office_selected_month(month: str) -> str:
     s = (month or "").strip()
     if re.fullmatch(r"\d{4}-\d{2}", s):
@@ -16684,15 +16271,15 @@ def _office_entry_realized_amount(entry: OfficeFinancialEntry) -> float:
 
 
 def _office_filter_entries(
-        session: Session,
-        company_id: int,
-        *,
-        month: str = "",
-        client_id: str = "",
-        cost_center_id: str = "",
-        internal_service_id: str = "",
-        family_code: str = "",
-        bank_account_id: str = "",
+    session: Session,
+    company_id: int,
+    *,
+    month: str = "",
+    client_id: str = "",
+    cost_center_id: str = "",
+    internal_service_id: str = "",
+    family_code: str = "",
+    bank_account_id: str = "",
 ) -> tuple[list[OfficeFinancialEntry], dict[str, Any]]:
     entries = session.exec(
         select(OfficeFinancialEntry)
@@ -16718,8 +16305,7 @@ def _office_filter_entries(
             continue
         filtered.append(entry)
 
-    family_codes = sorted(
-        {str(x.product_family_code or "").strip() for x in entries if str(x.product_family_code or "").strip()})
+    family_codes = sorted({str(x.product_family_code or "").strip() for x in entries if str(x.product_family_code or "").strip()})
     families = session.exec(
         select(ProductFamily)
         .where(ProductFamily.code.in_(family_codes))
@@ -16732,9 +16318,7 @@ def _office_filter_entries(
         "services": catalog["services"],
         "bank_accounts": catalog["bank_accounts"],
         "families": families,
-        "categories_by_id": {int(x.id): x for x in
-                             session.exec(select(OfficeCategory).where(OfficeCategory.company_id == company_id)).all()
-                             if x.id},
+        "categories_by_id": {int(x.id): x for x in session.exec(select(OfficeCategory).where(OfficeCategory.company_id == company_id)).all() if x.id},
         "clients_by_id": {int(x.id): x for x in catalog["clients"] if x.id},
         "services_by_id": {int(x.id): x for x in catalog["services"] if x.id},
         "bank_accounts_by_id": {int(x.id): x for x in catalog["bank_accounts"] if x.id},
@@ -16743,14 +16327,14 @@ def _office_filter_entries(
 
 
 def _office_dre_report(
-        session: Session,
-        company_id: int,
-        *,
-        month: str = "",
-        client_id: str = "",
-        cost_center_id: str = "",
-        internal_service_id: str = "",
-        family_code: str = "",
+    session: Session,
+    company_id: int,
+    *,
+    month: str = "",
+    client_id: str = "",
+    cost_center_id: str = "",
+    internal_service_id: str = "",
+    family_code: str = "",
 ) -> tuple[list[dict[str, Any]], dict[str, Any], dict[str, Any]]:
     entries, lookups = _office_filter_entries(
         session,
@@ -16817,8 +16401,7 @@ def _office_dre_report(
     resultado_periodo_e = ebitda_e + resultado_fin_e + outras_receitas_e + outras_despesas_e
     resultado_periodo_r = ebitda_r + resultado_fin_r + outras_receitas_r + outras_despesas_r
 
-    ordered_groups = [g for g in base_groups if g in group_totals] + [g for g in group_totals.keys() if
-                                                                      g not in base_groups]
+    ordered_groups = [g for g in base_groups if g in group_totals] + [g for g in group_totals.keys() if g not in base_groups]
     rows: list[dict[str, Any]] = []
     for group in ordered_groups:
         rows.append({
@@ -16828,17 +16411,12 @@ def _office_dre_report(
             "kind": "group",
         })
         if group == "Deduções/Impostos":
-            rows.append({"label": "Receita líquida", "expected": round(receita_liquida_e, 2),
-                         "realized": round(receita_liquida_r, 2), "kind": "result"})
+            rows.append({"label": "Receita líquida", "expected": round(receita_liquida_e, 2), "realized": round(receita_liquida_r, 2), "kind": "result"})
         if group == "Custos Diretos":
-            rows.append(
-                {"label": "Margem bruta", "expected": round(margem_bruta_e, 2), "realized": round(margem_bruta_r, 2),
-                 "kind": "result"})
+            rows.append({"label": "Margem bruta", "expected": round(margem_bruta_e, 2), "realized": round(margem_bruta_r, 2), "kind": "result"})
         if group == "Despesas Operacionais":
-            rows.append(
-                {"label": "EBITDA", "expected": round(ebitda_e, 2), "realized": round(ebitda_r, 2), "kind": "result"})
-    rows.append({"label": "Resultado do período", "expected": round(resultado_periodo_e, 2),
-                 "realized": round(resultado_periodo_r, 2), "kind": "result"})
+            rows.append({"label": "EBITDA", "expected": round(ebitda_e, 2), "realized": round(ebitda_r, 2), "kind": "result"})
+    rows.append({"label": "Resultado do período", "expected": round(resultado_periodo_e, 2), "realized": round(resultado_periodo_r, 2), "kind": "result"})
 
     summary = {
         "entry_count": len(entries),
@@ -16853,15 +16431,15 @@ def _office_dre_report(
 
 
 def _office_cashflow_report(
-        session: Session,
-        company_id: int,
-        *,
-        month: str = "",
-        client_id: str = "",
-        cost_center_id: str = "",
-        internal_service_id: str = "",
-        family_code: str = "",
-        bank_account_id: str = "",
+    session: Session,
+    company_id: int,
+    *,
+    month: str = "",
+    client_id: str = "",
+    cost_center_id: str = "",
+    internal_service_id: str = "",
+    family_code: str = "",
+    bank_account_id: str = "",
 ) -> tuple[list[dict[str, Any]], dict[str, Any], dict[str, Any]]:
     entries, lookups = _office_filter_entries(
         session,
@@ -16878,8 +16456,7 @@ def _office_cashflow_report(
 
     bank_accounts = lookups["bank_accounts"]
     if bank_account_id:
-        initial_balance = sum(
-            float(x.initial_balance_brl or 0.0) for x in bank_accounts if str(x.id or "") == str(bank_account_id))
+        initial_balance = sum(float(x.initial_balance_brl or 0.0) for x in bank_accounts if str(x.id or "") == str(bank_account_id))
     else:
         initial_balance = sum(float(x.initial_balance_brl or 0.0) for x in bank_accounts)
 
@@ -16968,7 +16545,6 @@ def _office_cashflow_report(
     }
     return rows, summary, lookups
 
-
 def _office_entry_form_data(entry: Optional[OfficeFinancialEntry] = None) -> dict[str, str]:
     if not entry:
         return {
@@ -16994,8 +16570,7 @@ def _office_entry_form_data(entry: Optional[OfficeFinancialEntry] = None) -> dic
         "entry_kind": str(entry.entry_kind or "receber"),
         "status": str(entry.status or "aberto"),
         "amount_expected_brl": _format_number_br(entry.amount_expected_brl or 0.0, 2),
-        "amount_realized_brl": _format_number_br(entry.amount_realized_brl or 0.0, 2) if float(
-            entry.amount_realized_brl or 0.0) else "",
+        "amount_realized_brl": _format_number_br(entry.amount_realized_brl or 0.0, 2) if float(entry.amount_realized_brl or 0.0) else "",
         "description": str(entry.description or ""),
         "document_number": str(entry.document_number or ""),
         "client_id": str(entry.client_id or ""),
@@ -17012,8 +16587,7 @@ def _office_entry_form_data(entry: Optional[OfficeFinancialEntry] = None) -> dic
     }
 
 
-def _office_entry_apply_form(*, entry: OfficeFinancialEntry, company_id: int, current_user_id: int,
-                             form: dict[str, Any], session: Session) -> tuple[bool, str]:
+def _office_entry_apply_form(*, entry: OfficeFinancialEntry, company_id: int, current_user_id: int, form: dict[str, Any], session: Session) -> tuple[bool, str]:
     entry_kind = str(form.get("entry_kind") or "receber").strip().lower()
     if entry_kind not in OFFICE_ENTRY_KINDS:
         return False, "Tipo de lançamento inválido."
@@ -17027,8 +16601,7 @@ def _office_entry_apply_form(*, entry: OfficeFinancialEntry, company_id: int, cu
         return False, "Informe a descrição."
 
     amount_expected = _parse_brl_amount(form.get("amount_expected_brl"))
-    amount_realized = _parse_brl_amount(form.get("amount_realized_brl")) if str(
-        form.get("amount_realized_brl") or "").strip() else 0.0
+    amount_realized = _parse_brl_amount(form.get("amount_realized_brl")) if str(form.get("amount_realized_brl") or "").strip() else 0.0
 
     client_id = _safe_int(form.get("client_id"))
     supplier_id = _safe_int(form.get("supplier_id"))
@@ -17123,8 +16696,7 @@ async def office_finance_dashboard(request: Request, session: Session = Depends(
     assert ctx is not None
 
     if not ensure_office_finance_tables():
-        return render("error.html", request=request,
-                      context={"message": "Não foi possível inicializar o Financeiro Interno."}, status_code=500)
+        return render("error.html", request=request, context={"message": "Não foi possível inicializar o Financeiro Interno."}, status_code=500)
 
     seed_office_finance_defaults(session, ctx.company.id)
 
@@ -17163,8 +16735,7 @@ async def office_finance_registry_page(request: Request, session: Session = Depe
     assert ctx is not None
 
     if not ensure_office_finance_tables():
-        return render("error.html", request=request,
-                      context={"message": "Não foi possível inicializar o Financeiro Interno."}, status_code=500)
+        return render("error.html", request=request, context={"message": "Não foi possível inicializar o Financeiro Interno."}, status_code=500)
 
     catalog = _office_catalog(session, ctx.company.id)
     current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
@@ -17185,13 +16756,13 @@ async def office_finance_registry_page(request: Request, session: Session = Depe
 @app.post("/admin/financeiro/cadastros/fornecedores")
 @require_role({"admin", "equipe"})
 async def office_finance_supplier_create(
-        request: Request,
-        session: Session = Depends(get_session),
-        name: str = Form(""),
-        document: str = Form(""),
-        email: str = Form(""),
-        phone: str = Form(""),
-        notes: str = Form(""),
+    request: Request,
+    session: Session = Depends(get_session),
+    name: str = Form(""),
+    document: str = Form(""),
+    email: str = Form(""),
+    phone: str = Form(""),
+    notes: str = Form(""),
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
@@ -17203,15 +16774,12 @@ async def office_finance_supplier_create(
         set_flash(request, "Informe o nome do fornecedor.")
         return RedirectResponse("/admin/financeiro/cadastros", status_code=303)
 
-    exists = session.exec(select(OfficeSupplier).where(OfficeSupplier.company_id == ctx.company.id,
-                                                       OfficeSupplier.name == name.strip())).first()
+    exists = session.exec(select(OfficeSupplier).where(OfficeSupplier.company_id == ctx.company.id, OfficeSupplier.name == name.strip())).first()
     if exists:
         set_flash(request, "Fornecedor já cadastrado.")
         return RedirectResponse("/admin/financeiro/cadastros", status_code=303)
 
-    session.add(
-        OfficeSupplier(company_id=ctx.company.id, name=name.strip(), document=document.strip(), email=email.strip(),
-                       phone=phone.strip(), notes=notes.strip()))
+    session.add(OfficeSupplier(company_id=ctx.company.id, name=name.strip(), document=document.strip(), email=email.strip(), phone=phone.strip(), notes=notes.strip()))
     session.commit()
     set_flash(request, "Fornecedor cadastrado.")
     return RedirectResponse("/admin/financeiro/cadastros", status_code=303)
@@ -17220,11 +16788,11 @@ async def office_finance_supplier_create(
 @app.post("/admin/financeiro/cadastros/centros-custo")
 @require_role({"admin", "equipe"})
 async def office_finance_cost_center_create(
-        request: Request,
-        session: Session = Depends(get_session),
-        code: str = Form(""),
-        name: str = Form(""),
-        notes: str = Form(""),
+    request: Request,
+    session: Session = Depends(get_session),
+    code: str = Form(""),
+    name: str = Form(""),
+    notes: str = Form(""),
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
@@ -17233,8 +16801,7 @@ async def office_finance_cost_center_create(
         return RedirectResponse("/admin/financeiro/cadastros", status_code=303)
 
     code_norm = code.strip().upper()
-    exists = session.exec(select(OfficeCostCenter).where(OfficeCostCenter.company_id == ctx.company.id,
-                                                         OfficeCostCenter.code == code_norm)).first()
+    exists = session.exec(select(OfficeCostCenter).where(OfficeCostCenter.company_id == ctx.company.id, OfficeCostCenter.code == code_norm)).first()
     if exists:
         set_flash(request, "Centro de custo já cadastrado.")
         return RedirectResponse("/admin/financeiro/cadastros", status_code=303)
@@ -17248,12 +16815,12 @@ async def office_finance_cost_center_create(
 @app.post("/admin/financeiro/cadastros/categorias")
 @require_role({"admin", "equipe"})
 async def office_finance_category_create(
-        request: Request,
-        session: Session = Depends(get_session),
-        name: str = Form(""),
-        category_kind: str = Form("despesa"),
-        dre_group: str = Form(""),
-        notes: str = Form(""),
+    request: Request,
+    session: Session = Depends(get_session),
+    name: str = Form(""),
+    category_kind: str = Form("despesa"),
+    dre_group: str = Form(""),
+    notes: str = Form(""),
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
@@ -17274,9 +16841,7 @@ async def office_finance_category_create(
         set_flash(request, "Categoria já cadastrada.")
         return RedirectResponse("/admin/financeiro/cadastros", status_code=303)
 
-    session.add(
-        OfficeCategory(company_id=ctx.company.id, name=name.strip(), category_kind=kind, dre_group=dre_group.strip(),
-                       notes=notes.strip()))
+    session.add(OfficeCategory(company_id=ctx.company.id, name=name.strip(), category_kind=kind, dre_group=dre_group.strip(), notes=notes.strip()))
     session.commit()
     set_flash(request, "Categoria cadastrada.")
     return RedirectResponse("/admin/financeiro/cadastros", status_code=303)
@@ -17285,10 +16850,10 @@ async def office_finance_category_create(
 @app.post("/admin/financeiro/cadastros/tipos-receita")
 @require_role({"admin", "equipe"})
 async def office_finance_revenue_type_create(
-        request: Request,
-        session: Session = Depends(get_session),
-        name: str = Form(""),
-        description: str = Form(""),
+    request: Request,
+    session: Session = Depends(get_session),
+    name: str = Form(""),
+    description: str = Form(""),
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
@@ -17297,8 +16862,7 @@ async def office_finance_revenue_type_create(
         set_flash(request, "Informe o tipo de receita.")
         return RedirectResponse("/admin/financeiro/cadastros", status_code=303)
 
-    exists = session.exec(select(OfficeRevenueType).where(OfficeRevenueType.company_id == ctx.company.id,
-                                                          OfficeRevenueType.name == name.strip())).first()
+    exists = session.exec(select(OfficeRevenueType).where(OfficeRevenueType.company_id == ctx.company.id, OfficeRevenueType.name == name.strip())).first()
     if exists:
         set_flash(request, "Tipo de receita já cadastrado.")
         return RedirectResponse("/admin/financeiro/cadastros", status_code=303)
@@ -17312,14 +16876,14 @@ async def office_finance_revenue_type_create(
 @app.post("/admin/financeiro/cadastros/contas")
 @require_role({"admin", "equipe"})
 async def office_finance_bank_account_create(
-        request: Request,
-        session: Session = Depends(get_session),
-        name: str = Form(""),
-        bank_name: str = Form(""),
-        branch_number: str = Form(""),
-        account_number: str = Form(""),
-        initial_balance_brl: str = Form(""),
-        notes: str = Form(""),
+    request: Request,
+    session: Session = Depends(get_session),
+    name: str = Form(""),
+    bank_name: str = Form(""),
+    branch_number: str = Form(""),
+    account_number: str = Form(""),
+    initial_balance_brl: str = Form(""),
+    notes: str = Form(""),
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
@@ -17328,8 +16892,7 @@ async def office_finance_bank_account_create(
         set_flash(request, "Informe o nome da conta.")
         return RedirectResponse("/admin/financeiro/cadastros", status_code=303)
 
-    exists = session.exec(select(OfficeBankAccount).where(OfficeBankAccount.company_id == ctx.company.id,
-                                                          OfficeBankAccount.name == name.strip())).first()
+    exists = session.exec(select(OfficeBankAccount).where(OfficeBankAccount.company_id == ctx.company.id, OfficeBankAccount.name == name.strip())).first()
     if exists:
         set_flash(request, "Conta já cadastrada.")
         return RedirectResponse("/admin/financeiro/cadastros", status_code=303)
@@ -17356,8 +16919,7 @@ async def office_finance_new_page(request: Request, session: Session = Depends(g
     ctx = get_tenant_context(request, session)
     assert ctx is not None
     if not ensure_office_finance_tables():
-        return render("error.html", request=request,
-                      context={"message": "Não foi possível inicializar o Financeiro Interno."}, status_code=500)
+        return render("error.html", request=request, context={"message": "Não foi possível inicializar o Financeiro Interno."}, status_code=500)
 
     catalog = _office_catalog(session, ctx.company.id)
     current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
@@ -17386,8 +16948,7 @@ async def office_finance_new_action(request: Request, session: Session = Depends
 
     form = await request.form()
     entry = OfficeFinancialEntry(company_id=ctx.company.id, created_by_user_id=ctx.user.id, description="")
-    ok, msg = _office_entry_apply_form(entry=entry, company_id=ctx.company.id, current_user_id=ctx.user.id,
-                                       form=dict(form), session=session)
+    ok, msg = _office_entry_apply_form(entry=entry, company_id=ctx.company.id, current_user_id=ctx.user.id, form=dict(form), session=session)
     if not ok:
         set_flash(request, msg)
         return RedirectResponse("/admin/financeiro/novo", status_code=303)
@@ -17400,8 +16961,7 @@ async def office_finance_new_action(request: Request, session: Session = Depends
 
 @app.get("/admin/financeiro/{entry_id}/editar", response_class=HTMLResponse)
 @require_role({"admin", "equipe"})
-async def office_finance_edit_page(request: Request, session: Session = Depends(get_session),
-                                   entry_id: int = 0) -> HTMLResponse:
+async def office_finance_edit_page(request: Request, session: Session = Depends(get_session), entry_id: int = 0) -> HTMLResponse:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
@@ -17430,8 +16990,7 @@ async def office_finance_edit_page(request: Request, session: Session = Depends(
 
 @app.post("/admin/financeiro/{entry_id}/editar")
 @require_role({"admin", "equipe"})
-async def office_finance_edit_action(request: Request, session: Session = Depends(get_session),
-                                     entry_id: int = 0) -> Response:
+async def office_finance_edit_action(request: Request, session: Session = Depends(get_session), entry_id: int = 0) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
@@ -17441,8 +17000,7 @@ async def office_finance_edit_action(request: Request, session: Session = Depend
         return RedirectResponse("/admin/financeiro", status_code=303)
 
     form = await request.form()
-    ok, msg = _office_entry_apply_form(entry=entry, company_id=ctx.company.id, current_user_id=ctx.user.id,
-                                       form=dict(form), session=session)
+    ok, msg = _office_entry_apply_form(entry=entry, company_id=ctx.company.id, current_user_id=ctx.user.id, form=dict(form), session=session)
     if not ok:
         set_flash(request, msg)
         return RedirectResponse(f"/admin/financeiro/{entry.id}/editar", status_code=303)
@@ -17453,14 +17011,16 @@ async def office_finance_edit_action(request: Request, session: Session = Depend
     return RedirectResponse("/admin/financeiro", status_code=303)
 
 
+
+
+
 @app.get("/admin/financeiro/dre", response_class=HTMLResponse)
 @require_role({"admin", "equipe"})
 async def office_finance_dre_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
     if not ensure_office_finance_tables():
-        return render("error.html", request=request,
-                      context={"message": "Não foi possível inicializar o Financeiro Interno."}, status_code=500)
+        return render("error.html", request=request, context={"message": "Não foi possível inicializar o Financeiro Interno."}, status_code=500)
 
     filters = {
         "month": _office_selected_month((request.query_params.get("month") or "").strip()),
@@ -17497,8 +17057,7 @@ async def office_finance_cashflow_page(request: Request, session: Session = Depe
     ctx = get_tenant_context(request, session)
     assert ctx is not None
     if not ensure_office_finance_tables():
-        return render("error.html", request=request,
-                      context={"message": "Não foi possível inicializar o Financeiro Interno."}, status_code=500)
+        return render("error.html", request=request, context={"message": "Não foi possível inicializar o Financeiro Interno."}, status_code=500)
 
     filters = {
         "month": _office_selected_month((request.query_params.get("month") or "").strip()),
@@ -17529,7 +17088,6 @@ async def office_finance_cashflow_page(request: Request, session: Session = Depe
             "bank_accounts": lookups["bank_accounts"],
         },
     )
-
 
 @app.get("/financeiro", response_class=HTMLResponse)
 @require_login
@@ -17637,7 +17195,6 @@ async def fin_list(request: Request, session: Session = Depends(get_session)) ->
             "ca_client_email": ca_client_email,
             "ca_invoices": ca_invoices,
             "ca_receivables": ca_receivables,
-            "fin_human_date": _fin_human_date,
         },
     )
 
@@ -17830,6 +17387,11 @@ async def fin_new_page(request: Request, session: Session = Depends(get_session)
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
     clients = session.exec(select(Client).where(Client.company_id == ctx.company.id).order_by(Client.created_at)).all()
     current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
     return render(
@@ -17860,6 +17422,11 @@ async def fin_new_action(
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
 
     client = get_client_or_none(session, ctx.company.id, int(client_id))
     if not client:
@@ -17957,6 +17524,11 @@ async def fin_attach(
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
     inv = session.get(FinanceInvoice, int(inv_id))
     if not inv or inv.company_id != ctx.company.id:
         set_flash(request, "Cobrança não encontrada.")
@@ -18009,22 +17581,6 @@ async def download_attachment(request: Request, session: Session = Depends(get_s
     if not ensure_can_access_client(ctx, att.client_id):
         return render("error.html", request=request, context={"message": "Sem permissão."}, status_code=403)
 
-    if _attachment_is_s3(att.stored_filename):
-        try:
-            data = _s3_get_bytes(att.stored_filename)
-        except Exception:
-            return render(
-                "error.html",
-                request=request,
-                context={"message": "Arquivo não está mais disponível no storage."},
-                status_code=404,
-            )
-        return StreamingResponse(
-            io.BytesIO(data),
-            media_type=att.mime_type or "application/octet-stream",
-            headers={"Content-Disposition": f'attachment; filename="{att.original_filename}"'},
-        )
-
     path = UPLOAD_DIR / att.stored_filename
     if not path.exists():
         return render("error.html", request=request, context={"message": "Arquivo não está mais no servidor."},
@@ -18038,7 +17594,12 @@ async def download_attachment(request: Request, session: Session = Depends(get_s
 # ----------------------------
 
 def _delete_attachment_file(att: Attachment) -> None:
-    _delete_stored_upload(att.stored_filename)
+    path = UPLOAD_DIR / att.stored_filename
+    try:
+        if path.exists():
+            path.unlink()
+    except Exception:
+        pass
 
 
 @app.get("/agenda", response_class=HTMLResponse)
@@ -18262,6 +17823,11 @@ async def tasks_new_page(
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
     clients = session.exec(select(Client).where(Client.company_id == ctx.company.id).order_by(Client.created_at)).all()
 
     # staff assignees (admin/equipe) + current user always
@@ -18314,6 +17880,11 @@ async def tasks_new_action(
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
 
     client = get_client_or_none(session, ctx.company.id, int(client_id))
     if not client:
@@ -18522,6 +18093,11 @@ async def tasks_toggle_client(request: Request, session: Session = Depends(get_s
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
     task = session.get(Task, int(task_id))
     if not task or not _task_can_view(ctx, task):
         set_flash(request, "Sem permissão.")
@@ -18546,6 +18122,11 @@ async def tasks_set_status(request: Request, session: Session = Depends(get_sess
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
     task = session.get(Task, int(task_id))
     if not task or task.company_id != ctx.company.id:
         set_flash(request, "Tarefa não encontrada.")
@@ -18568,6 +18149,11 @@ async def tasks_set_status(request: Request, session: Session = Depends(get_sess
 async def tasks_edit_page(request: Request, session: Session = Depends(get_session), task_id: int = 0) -> HTMLResponse:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
 
     task = session.get(Task, int(task_id))
     if not task or task.company_id != ctx.company.id:
@@ -18619,6 +18205,11 @@ async def tasks_edit_action(
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
     task = session.get(Task, int(task_id))
     if not task or task.company_id != ctx.company.id:
         set_flash(request, "Tarefa não encontrada.")
@@ -18668,6 +18259,11 @@ async def tasks_delete_action(
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
     task = session.get(Task, int(task_id))
     if not task or task.company_id != ctx.company.id:
         set_flash(request, "Tarefa não encontrada.")
@@ -18703,6 +18299,11 @@ async def delete_attachment(
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
     att = session.get(Attachment, int(attachment_id))
     if not att or att.company_id != ctx.company.id:
         set_flash(request, "Anexo não encontrado.")
@@ -18721,6 +18322,11 @@ async def delete_attachment(
 async def pending_new_client_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
 
     active_client_id = get_active_client_id(request, session, ctx)
     current_client = get_client_or_none(session, ctx.company.id, active_client_id)
@@ -18745,10 +18351,15 @@ async def pending_new_client_action(
         title: str = Form(...),
         description: str = Form(""),
         due_date: str = Form(""),
-        files: list[UploadFile] = File(default=[]),
+        file: UploadFile | None = File(default=None),
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
 
     client_id = ctx.membership.client_id or 0
     client = get_client_or_none(session, ctx.company.id, client_id)
@@ -18773,28 +18384,28 @@ async def pending_new_client_action(
 
     if description.strip():
         session.add(PendingMessage(pending_item_id=item.id, author_user_id=ctx.user.id, message=description.strip()))
+        session.commit()
 
-    uploads = _normalize_uploads(files)
-    if uploads:
+    if file and file.filename:
         try:
-            attachments = await _build_attachments_from_uploads(
-                files=uploads,
+            stored, mime, size = await save_upload(file)
+        except ValueError:
+            set_flash(request, "Arquivo muito grande.")
+            return RedirectResponse(f"/pendencias/{item.id}", status_code=303)
+
+        session.add(
+            Attachment(
                 company_id=ctx.company.id,
                 client_id=item.client_id,
                 uploaded_by_user_id=ctx.user.id,
                 pending_item_id=item.id,
+                original_filename=file.filename or "arquivo",
+                stored_filename=stored,
+                mime_type=mime,
+                size_bytes=size,
             )
-        except ValueError:
-            set_flash(request, "Um dos arquivos excede o limite de tamanho.")
-            return RedirectResponse(f"/pendencias/{item.id}", status_code=303)
-        except RuntimeError as exc:
-            set_flash(request, f"Falha no storage: {exc}")
-            return RedirectResponse(f"/pendencias/{item.id}", status_code=303)
-
-        for att in attachments:
-            session.add(att)
-
-    session.commit()
+        )
+        session.commit()
 
     try:
         _notify_staff_about_client_activity(
@@ -18802,14 +18413,14 @@ async def pending_new_client_action(
             ctx=ctx,
             client_id=item.client_id,
             kind="pendencia",
-            title="Cliente criou uma pendência",
+            title="Cliente criou uma nova pendência",
             message=(item.title or "Pendência")[:160],
             href=f"/pendencias/{item.id}",
         )
     except Exception:
         pass
 
-    set_flash(request, "Solicitação criada.")
+    set_flash(request, "Pendência criada.")
     return RedirectResponse(f"/pendencias/{item.id}", status_code=303)
 
 
@@ -18818,6 +18429,11 @@ async def pending_new_client_action(
 async def docs_send_client_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
 
     active_client_id = get_active_client_id(request, session, ctx)
     current_client = get_client_or_none(session, ctx.company.id, active_client_id)
@@ -18841,10 +18457,15 @@ async def docs_send_client_action(
         session: Session = Depends(get_session),
         title: str = Form(...),
         message: str = Form(""),
-        files: list[UploadFile] = File(default=[]),
+        file: UploadFile = File(...),
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
 
     client_id = ctx.membership.client_id or 0
     client = get_client_or_none(session, ctx.company.id, client_id)
@@ -18852,54 +18473,52 @@ async def docs_send_client_action(
         set_flash(request, "Seu usuário não está vinculado a um cliente.")
         return RedirectResponse("/documentos", status_code=303)
 
-    uploads = _normalize_uploads(files)
-    if not uploads:
-        set_flash(request, "Selecione ao menos um arquivo.")
-        return RedirectResponse("/documentos/enviar", status_code=303)
-
+    content = message.strip() or "Enviado pelo cliente."
     doc = Document(
         company_id=ctx.company.id,
         client_id=client.id,
         created_by_user_id=ctx.user.id,
         title=title.strip(),
-        content=message.strip(),
+        content=content,
         status="cliente_enviou",
+        created_at=utcnow(),
         updated_at=utcnow(),
     )
     session.add(doc)
     session.commit()
     session.refresh(doc)
 
-    try:
-        attachments = await _build_attachments_from_uploads(
-            files=uploads,
-            company_id=ctx.company.id,
-            client_id=client.id,
-            uploaded_by_user_id=ctx.user.id,
-            document_id=doc.id,
-        )
-    except ValueError:
-        set_flash(request, "Um dos arquivos excede o limite de tamanho.")
-        return RedirectResponse("/documentos/enviar", status_code=303)
-    except RuntimeError as exc:
-        set_flash(request, f"Falha no storage: {exc}")
-        return RedirectResponse("/documentos/enviar", status_code=303)
-
-    for att in attachments:
-        session.add(att)
-
     if message.strip():
         session.add(DocumentMessage(document_id=doc.id, author_user_id=ctx.user.id, message=message.strip()))
+        session.commit()
 
+    try:
+        stored, mime, size = await save_upload(file)
+    except ValueError:
+        set_flash(request, "Arquivo muito grande.")
+        return RedirectResponse(f"/documentos/{doc.id}", status_code=303)
+
+    session.add(
+        Attachment(
+            company_id=ctx.company.id,
+            client_id=doc.client_id,
+            uploaded_by_user_id=ctx.user.id,
+            document_id=doc.id,
+            original_filename=file.filename or "arquivo",
+            stored_filename=stored,
+            mime_type=mime,
+            size_bytes=size,
+        )
+    )
     session.commit()
 
     try:
         _notify_staff_about_client_activity(
             session,
             ctx=ctx,
-            client_id=client.id,
+            client_id=doc.client_id,
             kind="documento",
-            title="Cliente enviou um documento",
+            title="Cliente enviou um novo documento",
             message=(doc.title or "Documento")[:160],
             href=f"/documentos/{doc.id}",
         )
@@ -18915,6 +18534,11 @@ async def docs_send_client_action(
 async def docs_edit_page(request: Request, session: Session = Depends(get_session), doc_id: int = 0) -> HTMLResponse:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
 
     doc = session.get(Document, int(doc_id))
     if not doc or doc.company_id != ctx.company.id:
@@ -18949,6 +18573,11 @@ async def docs_edit_action(
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
     doc = session.get(Document, int(doc_id))
     if not doc or doc.company_id != ctx.company.id:
         set_flash(request, "Documento não encontrado.")
@@ -18970,6 +18599,11 @@ async def docs_edit_action(
 async def docs_delete_action(request: Request, session: Session = Depends(get_session), doc_id: int = 0) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
 
     doc = session.get(Document, int(doc_id))
     if not doc or doc.company_id != ctx.company.id:
@@ -18998,6 +18632,11 @@ async def pending_edit_page(request: Request, session: Session = Depends(get_ses
                             item_id: int = 0) -> HTMLResponse:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
 
     item = session.get(PendingItem, int(item_id))
     if not item or item.company_id != ctx.company.id:
@@ -19033,6 +18672,11 @@ async def pending_edit_action(
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
     item = session.get(PendingItem, int(item_id))
     if not item or item.company_id != ctx.company.id:
         set_flash(request, "Pendência não encontrada.")
@@ -19056,6 +18700,11 @@ async def pending_delete_action(request: Request, session: Session = Depends(get
                                 item_id: int = 0) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
 
     item = session.get(PendingItem, int(item_id))
     if not item or item.company_id != ctx.company.id:
@@ -19083,6 +18732,11 @@ async def pending_delete_action(request: Request, session: Session = Depends(get
 async def fin_edit_page(request: Request, session: Session = Depends(get_session), inv_id: int = 0) -> HTMLResponse:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
 
     inv = session.get(FinanceInvoice, int(inv_id))
     if not inv or inv.company_id != ctx.company.id:
@@ -19119,6 +18773,11 @@ async def fin_edit_action(
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
     inv = session.get(FinanceInvoice, int(inv_id))
     if not inv or inv.company_id != ctx.company.id:
         set_flash(request, "Lançamento não encontrado.")
@@ -19142,6 +18801,11 @@ async def fin_edit_action(
 async def fin_delete_action(request: Request, session: Session = Depends(get_session), inv_id: int = 0) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
 
     inv = session.get(FinanceInvoice, int(inv_id))
     if not inv or inv.company_id != ctx.company.id:
@@ -19208,6 +18872,11 @@ async def crm_list(
 ) -> HTMLResponse:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
 
     clients = session.exec(select(Client).where(Client.company_id == ctx.company.id).order_by(Client.created_at)).all()
     owners = _owner_users_for_company(session, ctx.company.id)
@@ -19288,6 +18957,11 @@ async def crm_new_page(request: Request, session: Session = Depends(get_session)
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
     clients = session.exec(select(Client).where(Client.company_id == ctx.company.id).order_by(Client.created_at)).all()
     owners = _owner_users_for_company(session, ctx.company.id)
 
@@ -19338,6 +19012,11 @@ async def crm_new_action(
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
 
     new_client_name = (new_client_name or "").strip()
     new_client_email = (new_client_email or "").strip()
@@ -19420,6 +19099,11 @@ async def crm_detail(request: Request, session: Session = Depends(get_session), 
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
     deal = session.get(BusinessDeal, int(deal_id))
     if not deal or deal.company_id != ctx.company.id:
         return render("error.html", request=request, context={"message": "Negócio não encontrado."}, status_code=404)
@@ -19463,6 +19147,11 @@ async def crm_detail(request: Request, session: Session = Depends(get_session), 
 async def crm_edit_page(request: Request, session: Session = Depends(get_session), deal_id: int = 0) -> HTMLResponse:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
 
     deal = session.get(BusinessDeal, int(deal_id))
     if not deal or deal.company_id != ctx.company.id:
@@ -19511,6 +19200,11 @@ async def crm_edit_action(
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
 
     deal = session.get(BusinessDeal, int(deal_id))
     if not deal or deal.company_id != ctx.company.id:
@@ -19572,6 +19266,11 @@ async def crm_update_stage(
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
     deal = session.get(BusinessDeal, int(deal_id))
     if not deal or deal.company_id != ctx.company.id:
         set_flash(request, "Negócio não encontrado.")
@@ -19601,6 +19300,11 @@ async def crm_update_next(
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
     deal = session.get(BusinessDeal, int(deal_id))
     if not deal or deal.company_id != ctx.company.id:
         set_flash(request, "Negócio não encontrado.")
@@ -19629,6 +19333,11 @@ async def crm_add_note(
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
     deal = session.get(BusinessDeal, int(deal_id))
     if not deal or deal.company_id != ctx.company.id:
         set_flash(request, "Negócio não encontrado.")
@@ -19651,6 +19360,11 @@ async def crm_add_note(
 async def crm_create_proposal(request: Request, session: Session = Depends(get_session), deal_id: int = 0) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
 
     deal = session.get(BusinessDeal, int(deal_id))
     if not deal or deal.company_id != ctx.company.id:
@@ -19693,6 +19407,11 @@ async def crm_create_project(request: Request, session: Session = Depends(get_se
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
     deal = session.get(BusinessDeal, int(deal_id))
     if not deal or deal.company_id != ctx.company.id:
         set_flash(request, "Negócio não encontrado.")
@@ -19732,6 +19451,11 @@ async def crm_delete(request: Request, session: Session = Depends(get_session), 
                      confirm: str = Form("")) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
 
     deal = session.get(BusinessDeal, int(deal_id))
     if not deal or deal.company_id != ctx.company.id:
@@ -19842,6 +19566,11 @@ async def meetings_new_page(request: Request, session: Session = Depends(get_ses
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
     clients = session.exec(select(Client).where(Client.company_id == ctx.company.id).order_by(Client.created_at)).all()
     active_client_id = get_active_client_id(request, session, ctx)
     current_client = get_client_or_none(session, ctx.company.id, active_client_id)
@@ -19873,6 +19602,11 @@ async def meetings_new_action(
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
 
     client = get_client_or_none(session, ctx.company.id, int(client_id))
     if not client:
@@ -19971,6 +19705,11 @@ async def meetings_sync(request: Request, session: Session = Depends(get_session
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
     mt = session.get(Meeting, int(meeting_id))
     if not mt or mt.company_id != ctx.company.id:
         set_flash(request, "Reunião não encontrada.")
@@ -20008,6 +19747,11 @@ async def meetings_generate_tasks(
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
 
     mt = session.get(Meeting, int(meeting_id))
     if not mt or mt.company_id != ctx.company.id:
@@ -20726,6 +20470,11 @@ async def edu_course_new_page(request: Request, session: Session = Depends(get_s
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
     clients = session.exec(select(Client).where(Client.company_id == ctx.company.id).order_by(Client.created_at)).all()
     current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
     return render("edu_course_new.html", request=request,
@@ -20745,6 +20494,11 @@ async def edu_course_new_action(
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
 
     form = await request.form()
     client_ids = [int(x) for x in form.getlist("client_ids") if str(x).isdigit()]
@@ -20805,6 +20559,11 @@ async def edu_course_add_module(request: Request, session: Session = Depends(get
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
     course = session.get(EducationCourse, int(course_id))
     if not course or course.company_id != ctx.company.id:
         set_flash(request, "Curso inválido.")
@@ -20828,6 +20587,11 @@ async def edu_course_edit_page(request: Request, session: Session = Depends(get_
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
     course = session.get(EducationCourse, int(course_id))
     if not course or course.company_id != ctx.company.id:
         return render("error.html", request=request, context={"message": "Curso não encontrado."}, status_code=404)
@@ -20850,6 +20614,11 @@ async def edu_course_edit_action(request: Request, session: Session = Depends(ge
                                  is_active: str = Form("")) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
 
     course = session.get(EducationCourse, int(course_id))
     if not course or course.company_id != ctx.company.id:
@@ -20885,6 +20654,11 @@ async def edu_course_edit_action(request: Request, session: Session = Depends(ge
 async def edu_course_delete(request: Request, session: Session = Depends(get_session), course_id: int = 0) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
 
     course = session.get(EducationCourse, int(course_id))
     if not course or course.company_id != ctx.company.id:
@@ -20943,6 +20717,11 @@ async def edu_module_add_lesson(request: Request, session: Session = Depends(get
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
     module = session.get(EducationModule, int(module_id))
     if not module:
         set_flash(request, "Módulo inválido.")
@@ -20973,6 +20752,11 @@ async def edu_module_edit(request: Request, session: Session = Depends(get_sessi
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
     module = session.get(EducationModule, int(module_id))
     if not module:
         set_flash(request, "Módulo não encontrado.")
@@ -20992,6 +20776,11 @@ async def edu_module_edit(request: Request, session: Session = Depends(get_sessi
 async def edu_module_delete(request: Request, session: Session = Depends(get_session), module_id: int = 0) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
 
     module = session.get(EducationModule, int(module_id))
     if not module:
@@ -21118,6 +20907,11 @@ async def edu_lesson_attach(request: Request, session: Session = Depends(get_ses
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
     lesson = session.get(EducationLesson, int(lesson_id))
     if not lesson:
         set_flash(request, "Aula não encontrada.")
@@ -21159,6 +20953,11 @@ async def edu_lesson_edit(request: Request, session: Session = Depends(get_sessi
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
     lesson = session.get(EducationLesson, int(lesson_id))
     if not lesson:
         set_flash(request, "Aula não encontrada.")
@@ -21179,6 +20978,11 @@ async def edu_lesson_edit(request: Request, session: Session = Depends(get_sessi
 async def edu_lesson_delete(request: Request, session: Session = Depends(get_session), lesson_id: int = 0) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
 
     lesson = session.get(EducationLesson, int(lesson_id))
     if not lesson:
@@ -21346,8 +21150,7 @@ def _directdata_meta_is_processing(meta: dict[str, Any]) -> bool:
     return any(k in txt for k in ("process", "aguard", "fila", "assíncr", "assincr", "gerando"))
 
 
-async def _directdata_scr_request(*, document_type: str, document_value: str, consulta_uid: str = "",
-                                  url_override: str | None = None) -> tuple[
+async def _directdata_scr_request(*, document_type: str, document_value: str, consulta_uid: str = "", url_override: str | None = None) -> tuple[
     int, dict[str, Any] | None, str]:
     """Consulta Direct Data (SCR) via HTTP (assíncrono).
 
@@ -21777,6 +21580,11 @@ async def credit_generate_consent_link(
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
     current_client = _get_client_for_credit(ctx, request, session)
     if not current_client:
         set_flash(request, "Selecione um cliente.")
@@ -22058,6 +21866,11 @@ async def credit_consult(
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
     current_client = _get_client_for_credit(ctx, request, session)
     if not current_client:
         set_flash(request, "Selecione um cliente.")
@@ -22138,6 +21951,11 @@ async def credit_report_refresh(request: Request, background_tasks: BackgroundTa
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
     report = session.get(CreditReport, int(report_id))
     if not report or report.company_id != ctx.company.id:
         set_flash(request, "Relatório não encontrado.")
@@ -22198,6 +22016,11 @@ async def credit_report_create_deal(request: Request, session: Session = Depends
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
     report = session.get(CreditReport, int(report_id))
     if not report or report.company_id != ctx.company.id:
         set_flash(request, "Relatório não encontrado.")
@@ -22254,6 +22077,11 @@ async def credit_report_generate_tasks(request: Request, session: Session = Depe
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
     report = session.get(CreditReport, int(report_id))
     if not report or report.company_id != ctx.company.id:
         set_flash(request, "Relatório não encontrado.")
@@ -22302,6 +22130,7 @@ async def credit_report_generate_tasks(request: Request, session: Session = Depe
     return RedirectResponse("/tarefas", status_code=303)
 
 
+
 # ==============================
 # SIMULADOR DE EMPRÉSTIMOS + PDF
 # ==============================
@@ -22327,8 +22156,8 @@ from reportlab.lib.enums import TA_LEFT, TA_RIGHT
 
 
 class LoanAmortization(str, Enum):
-    PRICE = "price"  # parcela fixa (Sistema Francês)
-    SAC = "sac"  # amortização constante
+    PRICE = "price"          # parcela fixa (Sistema Francês)
+    SAC = "sac"              # amortização constante
     AMERICANO = "americano"  # juros + balloon
 
 
@@ -22340,7 +22169,6 @@ class LoanRateBase(str, Enum):
 def _to_decimal(v: str) -> Decimal:
     """Compat alias for older simulator code."""
     return _dec(v)
-
 
 def _dec(x: Any) -> Decimal:
     if x is None:
@@ -22442,23 +22270,23 @@ class LoanSimResult:
 
 
 def build_loan_input(
-        *,
-        loan_type: str,
-        amortization: str,
-        rate_pct: str,
-        rate_base: str,
-        term_months: int,
-        principal: str,
-        collateral_value: str,
-        ltv_pct: str,
-        start_date: date,
-        grace_months: int,
-        io_months: int,
-        fee_amount: str,
-        monthly_insurance: str,
-        monthly_admin_fee: str,
-        borrower_name: str,
-        notes: str,
+    *,
+    loan_type: str,
+    amortization: str,
+    rate_pct: str,
+    rate_base: str,
+    term_months: int,
+    principal: str,
+    collateral_value: str,
+    ltv_pct: str,
+    start_date: date,
+    grace_months: int,
+    io_months: int,
+    fee_amount: str,
+    monthly_insurance: str,
+    monthly_admin_fee: str,
+    borrower_name: str,
+    notes: str,
 ) -> LoanInput:
     amort = LoanAmortization(amortization)
     rb = LoanRateBase(rate_base)
@@ -22505,15 +22333,10 @@ class LoanSimInputs:
     @classmethod
     def from_form(cls, **form) -> "LoanInput":
         # build_loan_input espera taxa em percentual (string), ex: "1,79" -> 1.79%
-        chosen_rate = (
-                str(form.get("rate_pct", "") or "").strip()
-                or str(form.get("rate", "") or "").strip()
-                or "1,79"
-        )
         return build_loan_input(
             loan_type=form.get("loan_type", "Empréstimo"),
             amortization=form.get("amortization", "price"),
-            rate_pct=chosen_rate,
+            rate_pct=str(form.get("rate", "1,79") or "1,79"),
             rate_base=form.get("rate_base", "am"),
             term_months=int(form.get("term_months", 24) or 24),
             principal=str(form.get("principal", "") or ""),
@@ -22528,7 +22351,6 @@ class LoanSimInputs:
             borrower_name=str(form.get("borrower_name", "") or ""),
             notes=str(form.get("notes", "") or ""),
         )
-
 
 def simulate_loan(inp: LoanInput) -> LoanSimResult:
     if inp.rate_base == LoanRateBase.AM:
@@ -22623,7 +22445,7 @@ def simulate_loan(inp: LoanInput) -> LoanSimResult:
     return LoanSimResult(
         inp=inp,
         schedule=schedule,
-        monthly_rate=i,
+        monthly_rate=_d2(i),
         total_payment=_d2(total_payment),
         total_interest=_d2(total_interest),
         total_amort=_d2(total_amort),
@@ -22667,7 +22489,7 @@ def render_loan_pdf(res: LoanSimResult) -> bytes:
     kv("Tipo:", inp.loan_type)
     kv("Amortização:", inp.amortization.value.upper())
     kv("Prazo:", f"{inp.term_months} meses")
-    kv("Taxa:", f"{(inp.rate * Decimal("100")):.2f} {'a.m.' if inp.rate_base == LoanRateBase.AM else 'a.a.'}")
+    kv("Taxa:", f"{(inp.rate * Decimal("100")):.2f} {'a.m.' if inp.rate_base==LoanRateBase.AM else 'a.a.'}")
     kv("Taxa mensal (calc):", f"{(res.monthly_rate * Decimal("100")):.2f} a.m.")
     kv("Valor empréstimo:", _brl(inp.principal))
     if inp.collateral_value > 0:
@@ -22753,12 +22575,11 @@ def render_loan_pdf(res: LoanSimResult) -> bytes:
         c.drawRightString(w - 20 * mm, h - 22 * mm, datetime.now().strftime("%d/%m/%Y %H:%M"))
         y0 = h - 34 * mm
         c.setFont("Helvetica-Bold", 8)
-        cols = [("#", 20 * mm), ("Venc.", 30 * mm), ("Parcela", 55 * mm), ("Juros", 85 * mm), ("Amort.", 110 * mm),
-                ("Encargos", 135 * mm), ("Saldo", 165 * mm)]
+        cols = [("#", 20*mm), ("Venc.", 30*mm), ("Parcela", 55*mm), ("Juros", 85*mm), ("Amort.", 110*mm), ("Encargos", 135*mm), ("Saldo", 165*mm)]
         for name, x in cols:
             c.drawString(x, y0, name)
-        c.line(20 * mm, y0 - 2 * mm, w - 20 * mm, y0 - 2 * mm)
-        return y0 - 7 * mm
+        c.line(20*mm, y0-2*mm, w-20*mm, y0-2*mm)
+        return y0 - 7*mm
 
     y = table_header("Cronograma de Pagamentos")
     c.setFont("Helvetica", 8)
@@ -22768,24 +22589,23 @@ def render_loan_pdf(res: LoanSimResult) -> bytes:
         if (idx - 1) % rows_per_page == 0 and idx != 1:
             # footer disclaimer on page
             c.setFont("Helvetica-Oblique", 7)
-            c.drawString(20 * mm, 12 * mm,
-                         "Simulação – não constitui proposta de crédito. Sujeito à análise e aprovação.")
+            c.drawString(20*mm, 12*mm, "Simulação – não constitui proposta de crédito. Sujeito à análise e aprovação.")
             c.showPage()
             y = table_header("Cronograma (cont.)")
             c.setFont("Helvetica", 8)
 
         encargos = _d2(row.fees + row.insurance)
-        c.drawString(20 * mm, y, str(row.n))
-        c.drawString(30 * mm, y, row.due_date.strftime("%d/%m/%Y"))
-        c.drawRightString(77 * mm, y, _brl(row.payment))
-        c.drawRightString(107 * mm, y, _brl(row.interest))
-        c.drawRightString(132 * mm, y, _brl(row.amort))
-        c.drawRightString(157 * mm, y, _brl(encargos))
-        c.drawRightString(w - 20 * mm, y, _brl(row.balance))
+        c.drawString(20*mm, y, str(row.n))
+        c.drawString(30*mm, y, row.due_date.strftime("%d/%m/%Y"))
+        c.drawRightString(77*mm, y, _brl(row.payment))
+        c.drawRightString(107*mm, y, _brl(row.interest))
+        c.drawRightString(132*mm, y, _brl(row.amort))
+        c.drawRightString(157*mm, y, _brl(encargos))
+        c.drawRightString(w-20*mm, y, _brl(row.balance))
         y -= 5 * mm
 
     c.setFont("Helvetica-Oblique", 7)
-    c.drawString(20 * mm, 12 * mm, "Simulação – não constitui proposta de crédito. Sujeito à análise e aprovação.")
+    c.drawString(20*mm, 12*mm, "Simulação – não constitui proposta de crédito. Sujeito à análise e aprovação.")
     c.save()
     return buf.getvalue()
 
@@ -22930,6 +22750,7 @@ SIMULADOR_TEMPLATE = r"""
 """
 
 
+
 @app.get("/simulador", response_class=HTMLResponse)
 @require_login
 async def simulador_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
@@ -22970,26 +22791,27 @@ async def simulador_page(request: Request, session: Session = Depends(get_sessio
     )
 
 
+
 @app.post("/simulador/json", response_class=JSONResponse)
 @require_login
 async def simulador_json(
-        request: Request,
-        loan_type: str = Form("Empréstimo"),
-        amortization: str = Form("price"),
-        rate_pct: str = Form("1,79"),
-        rate_base: str = Form("am"),
-        term_months: int = Form(24),
-        principal: str = Form(""),
-        collateral_value: str = Form(""),
-        ltv_pct: str = Form(""),
-        grace_months: int = Form(0),
-        io_months: int = Form(0),
-        fee_amount: str = Form("0"),
-        monthly_insurance: str = Form("0"),
-        monthly_admin_fee: str = Form("0"),
-        borrower_name: str = Form(""),
-        notes: str = Form(""),
-        session: Session = Depends(get_session),
+    request: Request,
+    loan_type: str = Form("Empréstimo"),
+    amortization: str = Form("price"),
+    rate_pct: str = Form("1,79"),
+    rate_base: str = Form("am"),
+    term_months: int = Form(24),
+    principal: str = Form(""),
+    collateral_value: str = Form(""),
+    ltv_pct: str = Form(""),
+    grace_months: int = Form(0),
+    io_months: int = Form(0),
+    fee_amount: str = Form("0"),
+    monthly_insurance: str = Form("0"),
+    monthly_admin_fee: str = Form("0"),
+    borrower_name: str = Form(""),
+    notes: str = Form(""),
+    session: Session = Depends(get_session),
 ) -> JSONResponse:
     ctx = get_tenant_context(request, session)
     current_client = None
@@ -23073,23 +22895,23 @@ async def simulador_json(
 @app.post("/simulador/pdf")
 @require_login
 async def simulador_pdf(
-        request: Request,
-        loan_type: str = Form("Empréstimo"),
-        amortization: str = Form("price"),
-        rate_pct: str = Form("1,79"),
-        rate_base: str = Form("am"),
-        term_months: int = Form(24),
-        principal: str = Form(""),
-        collateral_value: str = Form(""),
-        ltv_pct: str = Form(""),
-        grace_months: int = Form(0),
-        io_months: int = Form(0),
-        fee_amount: str = Form("0"),
-        monthly_insurance: str = Form("0"),
-        monthly_admin_fee: str = Form("0"),
-        borrower_name: str = Form(""),
-        notes: str = Form(""),
-        session: Session = Depends(get_session),
+    request: Request,
+    loan_type: str = Form("Empréstimo"),
+    amortization: str = Form("price"),
+    rate_pct: str = Form("1,79"),
+    rate_base: str = Form("am"),
+    term_months: int = Form(24),
+    principal: str = Form(""),
+    collateral_value: str = Form(""),
+    ltv_pct: str = Form(""),
+    grace_months: int = Form(0),
+    io_months: int = Form(0),
+    fee_amount: str = Form("0"),
+    monthly_insurance: str = Form("0"),
+    monthly_admin_fee: str = Form("0"),
+    borrower_name: str = Form(""),
+    notes: str = Form(""),
+    session: Session = Depends(get_session),
 ):
     ctx = get_tenant_context(request, session)
     current_client = None
@@ -23228,8 +23050,7 @@ def _ui_parse_rss_atom(xml_bytes: bytes) -> list[dict[str, Any]]:
         title = (e.findtext("title") or e.findtext("atom:title", default="", namespaces=ns) or "").strip()
         link_el = e.find("link") or e.find("atom:link", ns)
         link = (link_el.attrib.get("href") if link_el is not None else "") or ""
-        pub = _ui_parse_date(
-            (e.findtext("updated") or e.findtext("atom:updated", default="", namespaces=ns) or "").strip())
+        pub = _ui_parse_date((e.findtext("updated") or e.findtext("atom:updated", default="", namespaces=ns) or "").strip())
         if title and link:
             items.append({"title": title, "url": link.strip(), "published_dt": pub, "source": source})
     return items
@@ -23326,7 +23147,6 @@ async def _ui_load_news(company_id: int, session: Session, limit: int = 10) -> l
     _ui_cache_set(company_id, "news", out)
     return out
 
-
 def _ui_load_banner(company_id: int, session: Session) -> list[dict[str, Any]]:
     cached = _ui_cache_get(company_id, "banner")
     if cached is not None:
@@ -23349,29 +23169,30 @@ def _ui_load_banner(company_id: int, session: Session) -> list[dict[str, Any]]:
     return out
 
 
+
 @app.post("/simulador/proposta")
 @require_login
 async def simulador_criar_proposta(
-        request: Request,
-        session: Session = Depends(get_session),
-        # client selection
-        client_id: str = Form(""),
-        # simulation params (same as simulador/pdf)
-        loan_type: str = Form("Empréstimo"),
-        amortization: str = Form("price"),
-        rate: str = Form("1,79"),
-        rate_base: str = Form("am"),
-        term_months: int = Form(24),
-        principal: str = Form(""),
-        collateral_value: str = Form(""),
-        ltv_pct: str = Form(""),
-        grace_months: int = Form(0),
-        io_months: int = Form(0),
-        fee_amount: str = Form("0"),
-        monthly_insurance: str = Form("0"),
-        monthly_admin_fee: str = Form("0"),
-        borrower_name: str = Form(""),
-        notes: str = Form(""),
+    request: Request,
+    session: Session = Depends(get_session),
+    # client selection
+    client_id: str = Form(""),
+    # simulation params (same as simulador/pdf)
+    loan_type: str = Form("Empréstimo"),
+    amortization: str = Form("price"),
+    rate: str = Form("1,79"),
+    rate_base: str = Form("am"),
+    term_months: int = Form(24),
+    principal: str = Form(""),
+    collateral_value: str = Form(""),
+    ltv_pct: str = Form(""),
+    grace_months: int = Form(0),
+    io_months: int = Form(0),
+    fee_amount: str = Form("0"),
+    monthly_insurance: str = Form("0"),
+    monthly_admin_fee: str = Form("0"),
+    borrower_name: str = Form(""),
+    notes: str = Form(""),
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
@@ -23400,10 +23221,10 @@ async def simulador_criar_proposta(
     # Constrói inputs + simula (para preencher descrição/valor)
     raw_form = await request.form()
     chosen_rate = (
-            str(raw_form.get("rate_pct") or "").strip()
-            or str(raw_form.get("rate") or "").strip()
-            or str(rate or "").strip()
-            or "1,79"
+        str(raw_form.get("rate_pct") or "").strip()
+        or str(raw_form.get("rate") or "").strip()
+        or str(rate or "").strip()
+        or "1,79"
     )
     inp = LoanSimInputs.from_form(
         loan_type=loan_type,
@@ -23430,7 +23251,7 @@ async def simulador_criar_proposta(
     desc = (
         f"Simulação de crédito ({inp.amortization.value.upper()}):\n"
         f"Valor: {float(inp.principal):.2f} | Prazo: {inp.term_months} meses | "
-        f"Taxa base: {inp.rate_base.value} | Taxa: {float(inp.rate) * 100:.2f}%\n"
+        f"Taxa base: {inp.rate_base.value} | Taxa: {float(inp.rate)*100:.2f}%\n"
         f"LTV: {float(inp.ltv_pct):.2f}% | Carência: {inp.grace_months}m | IO-only: {inp.io_months}m\n"
     )
     if inp.notes:
@@ -23474,13 +23295,11 @@ async def simulador_criar_proposta(
     session.add(deal)
     session.commit()
     session.refresh(deal)
-    session.add(BusinessDealNote(deal_id=deal.id, author_user_id=ctx.user.id,
-                                 message=f"Proposta criada (#{prop.id}) via Simulador."))
+    session.add(BusinessDealNote(deal_id=deal.id, author_user_id=ctx.user.id, message=f"Proposta criada (#{prop.id}) via Simulador."))
     session.commit()
 
     set_flash(request, "Proposta criada e card gerado no CRM.")
     return RedirectResponse(f"/propostas/{prop.id}", status_code=303)
-
 
 @app.get("/api/ui/banner", response_class=JSONResponse)
 @require_login
@@ -23518,8 +23337,7 @@ async def admin_ui_page(request: Request, session: Session = Depends(get_session
             .order_by(UiNewsFeed.sort_order, UiNewsFeed.id)
         ).all()
     except Exception:
-        request.session["flash"] = {"kind": "danger",
-                                    "msg": "Não foi possível carregar/salvar UI (tabelas ausentes ou banco sem permissão)."}
+        request.session["flash"] = {"kind": "danger", "msg": "Não foi possível carregar/salvar UI (tabelas ausentes ou banco sem permissão)."}
         slides = []
         feeds = []
     return render("admin_ui.html", request=request, context={
@@ -23536,14 +23354,14 @@ async def admin_ui_page(request: Request, session: Session = Depends(get_session
 @app.post("/admin/ui/banner/add")
 @require_role({"admin"})
 async def admin_ui_banner_add(
-        request: Request,
-        title: str = Form(""),
-        link_path: str = Form("/"),
-        image_url: str = Form(""),
-        sort_order: int = Form(0),
-        is_active: Optional[str] = Form(None),
-        image_file: Optional[UploadFile] = File(None),
-        session: Session = Depends(get_session),
+    request: Request,
+    title: str = Form(""),
+    link_path: str = Form("/"),
+    image_url: str = Form(""),
+    sort_order: int = Form(0),
+    is_active: Optional[str] = Form(None),
+    image_file: Optional[UploadFile] = File(None),
+    session: Session = Depends(get_session),
 ):
     ctx = get_tenant_context(request, session)
     company_id = ctx.company.id
@@ -23609,12 +23427,12 @@ async def admin_ui_banner_delete(slide_id: int, request: Request, session: Sessi
 @app.post("/admin/ui/feed/add")
 @require_role({"admin"})
 async def admin_ui_feed_add(
-        request: Request,
-        name: str = Form(...),
-        url: str = Form(...),
-        sort_order: int = Form(0),
-        is_active: Optional[str] = Form(None),
-        session: Session = Depends(get_session),
+    request: Request,
+    name: str = Form(...),
+    url: str = Form(...),
+    sort_order: int = Form(0),
+    is_active: Optional[str] = Form(None),
+    session: Session = Depends(get_session),
 ):
     ctx = get_tenant_context(request, session)
     company_id = ctx.company.id
@@ -23810,7 +23628,6 @@ TEMPLATES.update({
 """,
 })
 
-
 @app.get("/admin/gestao", response_class=HTMLResponse)
 @require_role({"admin"})
 async def admin_gestao(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
@@ -23827,10 +23644,8 @@ async def admin_gestao(request: Request, session: Session = Depends(get_session)
         members = session.exec(select(Membership).order_by(Membership.created_at)).all()
     else:
         companies = [ctx.company]
-        clients = session.exec(
-            select(Client).where(Client.company_id == ctx.company.id).order_by(Client.created_at)).all()
-        members = session.exec(
-            select(Membership).where(Membership.company_id == ctx.company.id).order_by(Membership.created_at)).all()
+        clients = session.exec(select(Client).where(Client.company_id == ctx.company.id).order_by(Client.created_at)).all()
+        members = session.exec(select(Membership).where(Membership.company_id == ctx.company.id).order_by(Membership.created_at)).all()
 
     company_ids = [c.id for c in companies if c.id]
     client_ids = [c.id for c in clients if c.id]
@@ -23901,8 +23716,7 @@ def _admin_check_scope(ctx: TenantContext, session: Session, entity_type: str, e
     return "Tipo inválido."
 
 
-def _derive_company_id_for_state(session: Session, entity_type: str, entity_id: int, fallback_company_id: int) -> \
-Optional[int]:
+def _derive_company_id_for_state(session: Session, entity_type: str, entity_id: int, fallback_company_id: int) -> Optional[int]:
     if entity_type == "company":
         return int(entity_id)
     if entity_type == "client":
@@ -23916,8 +23730,7 @@ Optional[int]:
 
 @app.post("/admin/entity/{entity_type}/{entity_id}/toggle")
 @require_role({"admin"})
-async def admin_entity_toggle(request: Request, entity_type: str, entity_id: int,
-                              session: Session = Depends(get_session)):
+async def admin_entity_toggle(request: Request, entity_type: str, entity_id: int, session: Session = Depends(get_session)):
     ctx = get_tenant_context(request, session)
     if not ctx:
         request.session.clear()
@@ -23950,8 +23763,7 @@ async def admin_entity_toggle(request: Request, entity_type: str, entity_id: int
 
 @app.post("/admin/entity/{entity_type}/{entity_id}/delete")
 @require_role({"admin"})
-async def admin_entity_delete(request: Request, entity_type: str, entity_id: int,
-                              session: Session = Depends(get_session)):
+async def admin_entity_delete(request: Request, entity_type: str, entity_id: int, session: Session = Depends(get_session)):
     ctx = get_tenant_context(request, session)
     if not ctx:
         request.session.clear()
@@ -23981,8 +23793,7 @@ async def admin_entity_delete(request: Request, entity_type: str, entity_id: int
 
 @app.post("/admin/entity/{entity_type}/{entity_id}/hard_delete")
 @require_role({"admin"})
-async def admin_entity_hard_delete(request: Request, entity_type: str, entity_id: int,
-                                   session: Session = Depends(get_session)):
+async def admin_entity_hard_delete(request: Request, entity_type: str, entity_id: int, session: Session = Depends(get_session)):
     ctx = get_tenant_context(request, session)
     if not ctx or not is_superadmin(ctx.user):
         request.session["flash"] = {"kind": "danger", "message": "Apenas superadmin."}
@@ -24001,8 +23812,7 @@ async def admin_entity_hard_delete(request: Request, entity_type: str, entity_id
                 session.delete(obj)
                 session.commit()
         else:
-            request.session["flash"] = {"kind": "warning",
-                                        "message": "Hard delete disponível apenas para company/client."}
+            request.session["flash"] = {"kind": "warning", "message": "Hard delete disponível apenas para company/client."}
             return RedirectResponse("/admin/gestao", status_code=303)
     except Exception as e:
         request.session["flash"] = {"kind": "danger", "message": f"Falha hard delete: {e}"}
@@ -24010,7 +23820,6 @@ async def admin_entity_hard_delete(request: Request, entity_type: str, entity_id
 
     request.session["flash"] = {"kind": "success", "message": f"{et} excluído definitivamente."}
     return RedirectResponse("/admin/gestao", status_code=303)
-
 
 # === CREDIT_WALLET_MODULE_V1 ===
 # Créditos (1 crédito = R$1,00) + Consultas (catálogo) + Stripe Checkout (opcional)
@@ -24122,15 +23931,15 @@ def _get_or_create_wallet(session: Session, *, company_id: int, client_id: int) 
 
 
 def _wallet_add_ledger(
-        session: Session,
-        *,
-        company_id: int,
-        client_id: int,
-        kind: str,
-        amount_cents: int,
-        ref_type: str = "",
-        ref_id: str = "",
-        note: str = "",
+    session: Session,
+    *,
+    company_id: int,
+    client_id: int,
+    kind: str,
+    amount_cents: int,
+    ref_type: str = "",
+    ref_id: str = "",
+    note: str = "",
 ) -> None:
     session.add(
         CreditLedger(
@@ -24147,8 +23956,7 @@ def _wallet_add_ledger(
     session.commit()
 
 
-def _wallet_credit(session: Session, *, company_id: int, client_id: int, amount_cents: int,
-                   stripe_session_id: str) -> None:
+def _wallet_credit(session: Session, *, company_id: int, client_id: int, amount_cents: int, stripe_session_id: str) -> None:
     w = _get_or_create_wallet(session, company_id=company_id, client_id=client_id)
     w.balance_cents += int(amount_cents)
     w.updated_at = utcnow()
@@ -24162,12 +23970,11 @@ def _wallet_credit(session: Session, *, company_id: int, client_id: int, amount_
         amount_cents=int(amount_cents),
         ref_type="stripe_session",
         ref_id=stripe_session_id,
-        note=f"Recarga Stripe (+{amount_cents / 100:.2f} créditos)",
+        note=f"Recarga Stripe (+{amount_cents/100:.2f} créditos)",
     )
 
 
-def _wallet_debit_or_402(session: Session, *, company_id: int, client_id: int, amount_cents: int, run_id: int,
-                         note: str) -> None:
+def _wallet_debit_or_402(session: Session, *, company_id: int, client_id: int, amount_cents: int, run_id: int, note: str) -> None:
     w = _get_or_create_wallet(session, company_id=company_id, client_id=client_id)
     if w.balance_cents < int(amount_cents):
         raise HTTPException(status_code=402, detail="Saldo insuficiente de créditos.")
@@ -24186,9 +23993,7 @@ def _wallet_debit_or_402(session: Session, *, company_id: int, client_id: int, a
         note=note,
     )
 
-
-def _wallet_refund(session: Session, *, company_id: int, client_id: int, amount_cents: int, run_id: int,
-                   note: str) -> None:
+def _wallet_refund(session: Session, *, company_id: int, client_id: int, amount_cents: int, run_id: int, note: str) -> None:
     """Estorna créditos quando a consulta falha após débito."""
     w = _get_or_create_wallet(session, company_id=company_id, client_id=client_id)
     w.balance_cents += int(amount_cents)
@@ -24256,6 +24061,7 @@ def _disable_unwanted_products(session: Session, company_id: int) -> None:
         return
 
 
+
 def _directdata_url_for(path: str, fallback: str = "") -> str:
     """
     Resolve URL de uma consulta Direct Data.
@@ -24274,9 +24080,7 @@ def _dd_is_processing(data: dict) -> bool:
     resultado = (md.get("resultado") or "").lower()
     return (data.get("retorno") is None) or ("process" in resultado)
 
-
-async def _directdata_generic_request(*, url: str, params: dict[str, str], timeout_s: int = 30) -> tuple[
-    int, dict[str, Any] | None, str]:
+async def _directdata_generic_request(*, url: str, params: dict[str, str], timeout_s: int = 30) -> tuple[int, dict[str, Any] | None, str]:
     """
     Request GET genérico para Direct Data.
     - Inclui TOKEN via query param.
@@ -24308,7 +24112,6 @@ async def _directdata_generic_request(*, url: str, params: dict[str, str], timeo
         return 200, data, "OK"
     except Exception as e:
         return 0, None, str(e)
-
 
 async def _directdata_call_real(*, product_code: str, doc_digits: str) -> tuple[int, dict[str, Any] | None, str]:
     """Chama Direct Data para produtos do catálogo (SCR + Score)."""
@@ -24380,9 +24183,7 @@ async def _directdata_wait_result(consulta_uid: str, *, timeout_s: int = 60) -> 
 
     return False, None, f"Timeout aguardando processamento ({last_msg})"
 
-
-def _pdf_draw_wrapped(c: canvas.Canvas, text: str, x: float, y: float, max_width: float, line_h: float,
-                      max_lines: int = 999) -> float:
+def _pdf_draw_wrapped(c: canvas.Canvas, text: str, x: float, y: float, max_width: float, line_h: float, max_lines: int = 999) -> float:
     styles = getSampleStyleSheet()
     # simple wrapping without heavy platypus table
     words = (text or "").split()
@@ -24402,7 +24203,6 @@ def _pdf_draw_wrapped(c: canvas.Canvas, text: str, x: float, y: float, max_width
         y -= line_h
     return y
 
-
 def _mask_doc(doc: str) -> str:
     """Mascara CPF/CNPJ para exibição em relatórios."""
     d = re.sub(r"\D+", "", doc or "")
@@ -24411,7 +24211,6 @@ def _mask_doc(doc: str) -> str:
     if len(d) == 14:
         return f"{d[:2]}.***.***/****-{d[-2:]}"
     return d
-
 
 def _as_str(v: object) -> str:
     if v is None:
@@ -24442,13 +24241,13 @@ def _draw_logo_on_canvas(c: canvas.Canvas, logo_path: str) -> None:
 
 
 def _build_scr_pdf(
-        *,
-        company_name: str,
-        client_name: str,
-        product_label: str,
-        product_code: str,
-        subject_doc: str,
-        data: dict,
+    *,
+    company_name: str,
+    client_name: str,
+    product_label: str,
+    product_code: str,
+    subject_doc: str,
+    data: dict,
 ) -> bytes:
     """
     Relatório PDF tratado (sem "print de JSON").
@@ -24471,8 +24270,7 @@ def _build_scr_pdf(
 
     styles = getSampleStyleSheet()
     h1 = ParagraphStyle("h1", parent=styles["Heading1"], fontName="Helvetica-Bold", fontSize=14, spaceAfter=6)
-    h2 = ParagraphStyle("h2", parent=styles["Heading2"], fontName="Helvetica-Bold", fontSize=11, spaceBefore=10,
-                        spaceAfter=6)
+    h2 = ParagraphStyle("h2", parent=styles["Heading2"], fontName="Helvetica-Bold", fontSize=11, spaceBefore=10, spaceAfter=6)
     p = ParagraphStyle("p", parent=styles["BodyText"], fontName="Helvetica", fontSize=9, leading=12)
     small = ParagraphStyle("small", parent=styles["BodyText"], fontName="Helvetica-Oblique", fontSize=8, leading=10)
 
@@ -24639,7 +24437,6 @@ def _build_scr_pdf(
     doc.build(story, onFirstPage=lambda c, d: _draw_logo_on_canvas(c, logo_path))
     return buf.getvalue()
 
-
 # === /CONSULTAS_PDF_REPORT_V1 ===
 
 def _extract_score_fields(data: Any) -> dict[str, str]:
@@ -24730,9 +24527,7 @@ def _extract_score_fields(data: Any) -> dict[str, str]:
             risco = _pick(it, "risco")
             status = _pick(it, "status")
             obs = _pick(it, "observacao")
-            parts = [x for x in
-                     [ind, f"risco={risco}" if risco != "-" else "-", f"status={status}" if status != "-" else "-", obs]
-                     if x and x != "-"]
+            parts = [x for x in [ind, f"risco={risco}" if risco != "-" else "-", f"status={status}" if status != "-" else "-", obs] if x and x != "-"]
             if parts:
                 lines.append(" - ".join(parts))
         indicadores_txt = "\n".join([f"• {l}" for l in lines]) if lines else "-"
@@ -24761,14 +24556,15 @@ def _extract_score_fields(data: Any) -> dict[str, str]:
     }
 
 
+
 def _build_score_pdf(
-        *,
-        company_name: str,
-        client_name: str,
-        product_label: str,
-        product_code: str,
-        subject_doc: str,
-        data: dict,
+    *,
+    company_name: str,
+    client_name: str,
+    product_label: str,
+    product_code: str,
+    subject_doc: str,
+    data: dict,
 ) -> bytes:
     """PDF específico para Score (não usa layout SCR)."""
     buf = io.BytesIO()
@@ -24785,8 +24581,7 @@ def _build_score_pdf(
 
     styles = getSampleStyleSheet()
     h1 = ParagraphStyle("h1", parent=styles["Heading1"], fontName="Helvetica-Bold", fontSize=14, spaceAfter=6)
-    h2 = ParagraphStyle("h2", parent=styles["Heading2"], fontName="Helvetica-Bold", fontSize=11, spaceBefore=10,
-                        spaceAfter=6)
+    h2 = ParagraphStyle("h2", parent=styles["Heading2"], fontName="Helvetica-Bold", fontSize=11, spaceBefore=10, spaceAfter=6)
     p = ParagraphStyle("p", parent=styles["BodyText"], fontName="Helvetica", fontSize=9, leading=12)
     small = ParagraphStyle("small", parent=styles["BodyText"], fontName="Helvetica-Oblique", fontSize=8, leading=10)
 
@@ -24922,13 +24717,13 @@ def _build_score_pdf(
 
 
 def build_consulta_pdf(
-        *,
-        company_name: str,
-        client_name: str,
-        product_label: str,
-        product_code: str,
-        subject_doc: str,
-        data: dict,
+    *,
+    company_name: str,
+    client_name: str,
+    product_label: str,
+    product_code: str,
+    subject_doc: str,
+    data: dict,
 ) -> bytes:
     """Wrapper: escolhe layout correto (Score vs SCR)."""
     if "score" in (product_code or ""):
@@ -24948,6 +24743,10 @@ def build_consulta_pdf(
         subject_doc=subject_doc,
         data=data,
     )
+
+
+
+
 
     return 0, None, f"Produto não mapeado para Direct Data: {product_code}"
 
@@ -25224,6 +25023,7 @@ TEMPLATES.setdefault("consulta_run.html", r"""
 {% endblock %}
 """)
 
+
 TEMPLATES.setdefault("consultas_historico.html", r"""
 {% extends "base.html" %}
 {% block content %}
@@ -25275,7 +25075,6 @@ TEMPLATES.setdefault("consultas_historico.html", r"""
 {% endblock %}
 """)
 
-
 @app.get("/creditos", response_class=HTMLResponse)
 @require_login
 async def creditos_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
@@ -25307,7 +25106,7 @@ async def creditos_page(request: Request, session: Session = Depends(get_session
 
     return render("creditos.html", request=request, context={
         "title": "Créditos",
-        "wallet_balance": f"{w.balance_cents / 100:.2f}",
+        "wallet_balance": f"{w.balance_cents/100:.2f}",
         "ledger": ledger,
         "stripe_enabled": _stripe_enabled(),
     })
@@ -25315,8 +25114,7 @@ async def creditos_page(request: Request, session: Session = Depends(get_session
 
 @app.post("/creditos/checkout")
 @require_login
-async def creditos_checkout(request: Request, session: Session = Depends(get_session),
-                            pack: str = Form("50")) -> Response:
+async def creditos_checkout(request: Request, session: Session = Depends(get_session), pack: str = Form("50")) -> Response:
     ctx = get_tenant_context(request, session)
     if not ctx:
         request.session.clear()
@@ -25395,10 +25193,11 @@ async def stripe_webhook(request: Request, session: Session = Depends(get_sessio
                 CreditLedger.kind == "TOPUP_CONFIRMED",
             )).first()
             if not already:
-                _wallet_credit(session, company_id=company_id, client_id=client_id, amount_cents=credits * 100,
-                               stripe_session_id=session_id)
+                _wallet_credit(session, company_id=company_id, client_id=client_id, amount_cents=credits * 100, stripe_session_id=session_id)
 
     return Response(status_code=200)
+
+
 
 
 # ----------------------------
@@ -25535,14 +25334,12 @@ async def consultas_consent_accept_page(
     try:
         payload = _verify_consent_token(token)
     except Exception as e:
-        return render("error.html", request=request,
-                      context={"current_user": None, "current_company": None, "role": "public",
-                               "message": f"Link inválido/expirado: {e}"}, status_code=400)
+        return render("error.html", request=request, context={"current_user": None, "current_company": None, "role": "public",
+                                                            "message": f"Link inválido/expirado: {e}"}, status_code=400)
 
     if str(payload.get("scope") or "") != "consultas_scr":
-        return render("error.html", request=request,
-                      context={"current_user": None, "current_company": None, "role": "public",
-                               "message": "Link inválido para este fluxo."}, status_code=400)
+        return render("error.html", request=request, context={"current_user": None, "current_company": None, "role": "public",
+                                                            "message": "Link inválido para este fluxo."}, status_code=400)
 
     company_id = int(payload.get("company_id") or 0)
     subject_doc = _digits_only(str(payload.get("subject_doc") or ""))
@@ -25550,15 +25347,12 @@ async def consultas_consent_accept_page(
 
     company = session.get(Company, company_id) if company_id else None
     if not company or not subject_doc:
-        return render("error.html", request=request,
-                      context={"current_user": None, "current_company": None, "role": "public",
-                               "message": "Link inválido: empresa/documento não encontrados."}, status_code=404)
+        return render("error.html", request=request, context={"current_user": None, "current_company": None, "role": "public",
+                                                            "message": "Link inválido: empresa/documento não encontrados."}, status_code=404)
 
     if not ensure_consulta_scr_consent_table():
-        return render("error.html", request=request,
-                      context={"current_user": None, "current_company": company, "role": "public",
-                               "message": "Sistema de aceite ainda não está configurado (tabela ausente)."},
-                      status_code=500)
+        return render("error.html", request=request, context={"current_user": None, "current_company": company, "role": "public",
+                                                            "message": "Sistema de aceite ainda não está configurado (tabela ausente)."}, status_code=500)
 
     consent = session.exec(
         select(ConsultaScrConsent)
@@ -25571,15 +25365,13 @@ async def consultas_consent_accept_page(
     ).first()
 
     if not consent:
-        return render("error.html", request=request,
-                      context={"current_user": None, "current_company": company, "role": "public",
-                               "message": "Solicitação de aceite não encontrada."}, status_code=404)
+        return render("error.html", request=request, context={"current_user": None, "current_company": company, "role": "public",
+                                                            "message": "Solicitação de aceite não encontrada."}, status_code=404)
 
     _refresh_consulta_scr_consent_status(consent)
     if consent.status == "valida":
-        return render("success.html", request=request,
-                      context={"current_user": None, "current_company": company, "role": "public",
-                               "message": "Autorização já registrada. Obrigado!"})
+        return render("success.html", request=request, context={"current_user": None, "current_company": company, "role": "public",
+                                                               "message": "Autorização já registrada. Obrigado!"})
 
     terms_html = templates_env.from_string(CREDIT_CONSENT_TERMS_HTML).render(term_version=CREDIT_CONSENT_TERM_VERSION)
 
@@ -25610,8 +25402,7 @@ async def consultas_consent_accept_submit(
         doc_last4: str = Form(""),
 ) -> Response:
     def render_form(company: Company, subject_doc: str, msg: str) -> HTMLResponse:
-        terms_html = templates_env.from_string(CREDIT_CONSENT_TERMS_HTML).render(
-            term_version=CREDIT_CONSENT_TERM_VERSION)
+        terms_html = templates_env.from_string(CREDIT_CONSENT_TERMS_HTML).render(term_version=CREDIT_CONSENT_TERM_VERSION)
         return render(
             "consulta_consent_accept.html",
             request=request,
@@ -25632,14 +25423,12 @@ async def consultas_consent_accept_submit(
     try:
         payload = _verify_consent_token(token)
     except Exception as e:
-        return render("error.html", request=request,
-                      context={"current_user": None, "current_company": None, "role": "public",
-                               "message": f"Link inválido/expirado: {e}"}, status_code=400)
+        return render("error.html", request=request, context={"current_user": None, "current_company": None, "role": "public",
+                                                            "message": f"Link inválido/expirado: {e}"}, status_code=400)
 
     if str(payload.get("scope") or "") != "consultas_scr":
-        return render("error.html", request=request,
-                      context={"current_user": None, "current_company": None, "role": "public",
-                               "message": "Link inválido para este fluxo."}, status_code=400)
+        return render("error.html", request=request, context={"current_user": None, "current_company": None, "role": "public",
+                                                            "message": "Link inválido para este fluxo."}, status_code=400)
 
     company_id = int(payload.get("company_id") or 0)
     subject_doc = _digits_only(str(payload.get("subject_doc") or ""))
@@ -25647,9 +25436,8 @@ async def consultas_consent_accept_submit(
 
     company = session.get(Company, company_id) if company_id else None
     if not company or not subject_doc:
-        return render("error.html", request=request,
-                      context={"current_user": None, "current_company": None, "role": "public",
-                               "message": "Link inválido: empresa/documento não encontrados."}, status_code=404)
+        return render("error.html", request=request, context={"current_user": None, "current_company": None, "role": "public",
+                                                            "message": "Link inválido: empresa/documento não encontrados."}, status_code=404)
 
     if not str(agree).strip():
         return render_form(company, subject_doc, "É necessário marcar o aceite.")
@@ -25659,9 +25447,8 @@ async def consultas_consent_accept_submit(
         return render_form(company, subject_doc, "Os 4 últimos dígitos não conferem.")
 
     if not ensure_consulta_scr_consent_table():
-        return render("error.html", request=request,
-                      context={"current_user": None, "current_company": company, "role": "public",
-                               "message": "Sistema de aceite não está configurado (tabela ausente)."}, status_code=500)
+        return render("error.html", request=request, context={"current_user": None, "current_company": company, "role": "public",
+                                                            "message": "Sistema de aceite não está configurado (tabela ausente)."}, status_code=500)
 
     consent = session.exec(
         select(ConsultaScrConsent)
@@ -25673,9 +25460,8 @@ async def consultas_consent_accept_submit(
         .order_by(ConsultaScrConsent.created_at.desc())
     ).first()
     if not consent:
-        return render("error.html", request=request,
-                      context={"current_user": None, "current_company": company, "role": "public",
-                               "message": "Solicitação de aceite não encontrada."}, status_code=404)
+        return render("error.html", request=request, context={"current_user": None, "current_company": company, "role": "public",
+                                                            "message": "Solicitação de aceite não encontrada."}, status_code=404)
 
     now = utcnow()
     expires_at = now + timedelta(days=int(CREDIT_CONSENT_MAX_DAYS))
@@ -25713,8 +25499,6 @@ async def consultas_consent_accept_submit(
             "message": "Autorização registrada com sucesso. Você já pode fechar esta página.",
         },
     )
-
-
 @app.get("/consultas", response_class=HTMLResponse)
 @require_login
 async def consultas_home(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
@@ -25755,7 +25539,7 @@ async def consultas_home(request: Request, session: Session = Depends(get_sessio
     w = _get_or_create_wallet(session, company_id=ctx.company.id, client_id=client.id)
     return render("consultas.html", request=request, context={
         "title": "Consultas",
-        "wallet_balance": f"{w.balance_cents / 100:.2f}",
+        "wallet_balance": f"{w.balance_cents/100:.2f}",
         "products": enriched,
     })
 
@@ -25807,8 +25591,7 @@ async def consultas_historico(request: Request, session: Session = Depends(get_s
         info_msg = f"Erro ao carregar histórico: {e}"
         runs = []
 
-    products = {p.code: p.label for p in
-                session.exec(select(QueryProduct).where(QueryProduct.company_id == ctx.company.id)).all()}
+    products = {p.code: p.label for p in session.exec(select(QueryProduct).where(QueryProduct.company_id == ctx.company.id)).all()}
     view = []
     for r in runs:
         view.append({
@@ -25820,9 +25603,7 @@ async def consultas_historico(request: Request, session: Session = Depends(get_s
             "price_cents": r.price_cents,
         })
 
-    return render("consultas_historico.html", request=request,
-                  context={"title": "Histórico de Consultas", "runs": view, "info_msg": info_msg})
-
+    return render("consultas_historico.html", request=request, context={"title": "Histórico de Consultas", "runs": view, "info_msg": info_msg})
 
 @app.get("/consultas/{code}", response_class=HTMLResponse)
 @require_login
@@ -25891,7 +25672,7 @@ async def consultas_product(request: Request, session: Session = Depends(get_ses
     return render("consulta_run.html", request=request, context={
         "title": p.label,
         "product": pv,
-        "wallet_balance": f"{w.balance_cents / 100:.2f}",
+        "wallet_balance": f"{w.balance_cents/100:.2f}",
         "run": None,
         "doc_value": doc_value,
         "product_is_scr": bool(product_is_scr),
@@ -25900,11 +25681,9 @@ async def consultas_product(request: Request, session: Session = Depends(get_ses
         "consulta_consent_link_url": consent_link_url,
     })
 
-
 @app.post("/consultas/{code}/run", response_class=HTMLResponse)
 @require_login
-async def consultas_run(request: Request, session: Session = Depends(get_session), code: str = "",
-                        doc: str = Form("")) -> HTMLResponse:
+async def consultas_run(request: Request, session: Session = Depends(get_session), code: str = "", doc: str = Form("")) -> HTMLResponse:
     ctx = get_tenant_context(request, session)
     if not ctx:
         request.session.clear()
@@ -25933,6 +25712,7 @@ async def consultas_run(request: Request, session: Session = Depends(get_session
     if not norm_doc:
         set_flash(request, "Documento inválido.")
         return RedirectResponse(f"/consultas/{code}", status_code=303)
+
 
     # SCR exige aceite do titular do CPF/CNPJ consultado (link + e-mail)
     if _is_scr_consulta_product(p.code):
@@ -25979,8 +25759,7 @@ async def consultas_run(request: Request, session: Session = Depends(get_session
         md = (data.get("metaDados") or {})
         run.provider_uid = md.get("consultaUid") or run.provider_uid
 
-        if (_dd_is_processing(data) or (
-                (data.get("metaDados") or {}).get("resultado", "").lower().find("process") != -1)) and run.provider_uid:
+        if (_dd_is_processing(data) or ((data.get("metaDados") or {}).get("resultado","").lower().find("process")!=-1)) and run.provider_uid:
             ok, final_data, _ = await _directdata_wait_result(run.provider_uid, timeout_s=60)
             if ok and final_data is not None:
                 data = final_data
@@ -25993,19 +25772,18 @@ async def consultas_run(request: Request, session: Session = Depends(get_session
                 session.commit()
                 # render pendente
                 w = _get_or_create_wallet(session, company_id=ctx.company.id, client_id=client.id)
-                product_view = {"code": p.code, "label": p.label, "category": p.category,
-                                "price_cents": int(run.price_cents)}
+                product_view = {"code": p.code, "label": p.label, "category": p.category, "price_cents": int(run.price_cents)}
                 return render("consulta_run.html", request=request, context={
                     "title": p.label,
                     "product": product_view,
-                    "wallet_balance": f"{w.balance_cents / 100:.2f}",
+                    "wallet_balance": f"{w.balance_cents/100:.2f}",
                     "run": run,
 
-                    "doc_value": norm_doc,
-                    "product_is_scr": bool(_is_scr_consulta_product(p.code)),
-                    "scr_consent_status": ("valida" if _is_scr_consulta_product(p.code) else ""),
-                    "scr_consent_expires_at": None,
-                    "consulta_consent_link_url": str(request.session.get("consulta_consent_link_url") or ""),
+"doc_value": norm_doc,
+"product_is_scr": bool(_is_scr_consulta_product(p.code)),
+"scr_consent_status": ("valida" if _is_scr_consulta_product(p.code) else ""),
+"scr_consent_expires_at": None,
+"consulta_consent_link_url": str(request.session.get("consulta_consent_link_url") or ""),
                     "client": client,
                 })
 
@@ -26016,8 +25794,7 @@ async def consultas_run(request: Request, session: Session = Depends(get_session
         session.add(run)
         session.commit()
     except Exception as e:
-        _wallet_refund(session, company_id=ctx.company.id, client_id=client.id, amount_cents=run.price_cents,
-                       run_id=run.id, note=f"Estorno por falha Direct Data: {p.code}")
+        _wallet_refund(session, company_id=ctx.company.id, client_id=client.id, amount_cents=run.price_cents, run_id=run.id, note=f"Estorno por falha Direct Data: {p.code}")
         run.status = "FAILED"
         run.error = str(e)
         run.updated_at = utcnow()
@@ -26029,21 +25806,22 @@ async def consultas_run(request: Request, session: Session = Depends(get_session
     return render("consulta_run.html", request=request, context={
         "title": p.label,
         "product": pv,
-        "wallet_balance": f"{w.balance_cents / 100:.2f}",
+        "wallet_balance": f"{w.balance_cents/100:.2f}",
         "run": run,
 
-        "doc_value": norm_doc,
-        "product_is_scr": bool(_is_scr_consulta_product(p.code)),
-        "scr_consent_status": ("valida" if _is_scr_consulta_product(p.code) else ""),
-        "scr_consent_expires_at": None,
-        "consulta_consent_link_url": str(request.session.get("consulta_consent_link_url") or ""),
+"doc_value": norm_doc,
+"product_is_scr": bool(_is_scr_consulta_product(p.code)),
+"scr_consent_status": ("valida" if _is_scr_consulta_product(p.code) else ""),
+"scr_consent_expires_at": None,
+"consulta_consent_link_url": str(request.session.get("consulta_consent_link_url") or ""),
     })
+
+
 
 
 @app.get("/consultas/run/{run_id}", response_class=HTMLResponse)
 @require_login
-async def consultas_run_view(request: Request, session: Session = Depends(get_session),
-                             run_id: int = 0) -> HTMLResponse:
+async def consultas_run_view(request: Request, session: Session = Depends(get_session), run_id: int = 0) -> HTMLResponse:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
     run = session.get(QueryRun, int(run_id))
@@ -26068,18 +25846,16 @@ async def consultas_run_view(request: Request, session: Session = Depends(get_se
             pass
 
     # recuperar product
-    p = session.exec(select(QueryProduct).where(QueryProduct.company_id == ctx.company.id,
-                                                QueryProduct.code == run.product_code)).first()
+    p = session.exec(select(QueryProduct).where(QueryProduct.company_id == ctx.company.id, QueryProduct.code == run.product_code)).first()
     label = p.label if p else run.product_code
     price_cents = run.price_cents
 
     w = _get_or_create_wallet(session, company_id=ctx.company.id, client_id=client.id)
-    product_view = {"code": run.product_code, "label": label, "category": (p.category if p else "credito"),
-                    "price_cents": int(run.price_cents)}
+    product_view = {"code": run.product_code, "label": label, "category": (p.category if p else "credito"), "price_cents": int(run.price_cents)}
     return render("consulta_run.html", request=request, context={
         "title": label,
         "product": product_view,
-        "wallet_balance": f"{w.balance_cents / 100:.2f}",
+        "wallet_balance": f"{w.balance_cents/100:.2f}",
         "run": run,
         "client": client,
     })
@@ -26101,8 +25877,7 @@ async def consultas_run_pdf(request: Request, session: Session = Depends(get_ses
     if run.status != "READY":
         raise HTTPException(status_code=409, detail="Consulta ainda não finalizada.")
 
-    p = session.exec(select(QueryProduct).where(QueryProduct.company_id == ctx.company.id,
-                                                QueryProduct.code == run.product_code)).first()
+    p = session.exec(select(QueryProduct).where(QueryProduct.company_id == ctx.company.id, QueryProduct.code == run.product_code)).first()
     label = p.label if p else run.product_code
 
     data = {}
@@ -26134,8 +25909,7 @@ async def admin_consultas(request: Request, session: Session = Depends(get_sessi
         return RedirectResponse("/login", status_code=303)
 
     _seed_credit_products(session, ctx.company.id)
-    products = session.exec(
-        select(QueryProduct).where(QueryProduct.company_id == ctx.company.id).order_by(QueryProduct.label)).all()
+    products = session.exec(select(QueryProduct).where(QueryProduct.company_id == ctx.company.id).order_by(QueryProduct.label)).all()
     enriched = [{
         "code": p.code,
         "label": p.label,
@@ -26151,12 +25925,12 @@ async def admin_consultas(request: Request, session: Session = Depends(get_sessi
 @app.post("/admin/consultas/save")
 @require_role({"admin"})
 async def admin_consultas_save(
-        request: Request,
-        session: Session = Depends(get_session),
-        code: str = Form(...),
-        label: str = Form(...),
-        provider_cost: str = Form("0"),
-        markup_pct: int = Form(50),
+    request: Request,
+    session: Session = Depends(get_session),
+    code: str = Form(...),
+    label: str = Form(...),
+    provider_cost: str = Form("0"),
+    markup_pct: int = Form(50),
 ) -> Response:
     ctx = get_tenant_context(request, session)
     if not ctx:
@@ -26166,8 +25940,7 @@ async def admin_consultas_save(
     cost_cents = int(_dec(provider_cost) * Decimal("100"))
     markup = max(50, int(markup_pct or 50))
 
-    p = session.exec(
-        select(QueryProduct).where(QueryProduct.company_id == ctx.company.id, QueryProduct.code == code)).first()
+    p = session.exec(select(QueryProduct).where(QueryProduct.company_id == ctx.company.id, QueryProduct.code == code)).first()
     if p:
         p.label = label
         p.provider_cost_cents = cost_cents
@@ -26196,15 +25969,13 @@ async def admin_consultas_save(
 
 @app.post("/admin/consultas/toggle")
 @require_role({"admin"})
-async def admin_consultas_toggle(request: Request, session: Session = Depends(get_session),
-                                 code: str = Form(...)) -> Response:
+async def admin_consultas_toggle(request: Request, session: Session = Depends(get_session), code: str = Form(...)) -> Response:
     ctx = get_tenant_context(request, session)
     if not ctx:
         request.session.clear()
         return RedirectResponse("/login", status_code=303)
 
-    p = session.exec(
-        select(QueryProduct).where(QueryProduct.company_id == ctx.company.id, QueryProduct.code == code)).first()
+    p = session.exec(select(QueryProduct).where(QueryProduct.company_id == ctx.company.id, QueryProduct.code == code)).first()
     if not p:
         return RedirectResponse("/admin/consultas", status_code=303)
 
@@ -26215,10 +25986,10 @@ async def admin_consultas_toggle(request: Request, session: Session = Depends(ge
     return RedirectResponse("/admin/consultas", status_code=303)
 
 
+
 @app.get("/openfinance", response_class=HTMLResponse)
 @require_login
-async def openfinance_home(request: Request, doc: str = "", email: str = "",
-                           session: Session = Depends(get_session)) -> HTMLResponse:
+async def openfinance_home(request: Request, doc: str = "", email: str = "", session: Session = Depends(get_session)) -> HTMLResponse:
     ctx = get_tenant_context(request, session)
     if not ctx:
         request.session.clear()
@@ -26245,8 +26016,7 @@ async def openfinance_home(request: Request, doc: str = "", email: str = "",
 
     conn = None
     loans: list[PluggyLoan] = []
-    offers = session.exec(select(PluggyOffer).where(PluggyOffer.company_id == ctx.company.id).order_by(
-        PluggyOffer.created_at.desc())).all()
+    offers = session.exec(select(PluggyOffer).where(PluggyOffer.company_id == ctx.company.id).order_by(PluggyOffer.created_at.desc())).all()
     opp_rows = []
     invite_link = ""
     self_connect_link = ""
@@ -26295,8 +26065,7 @@ async def openfinance_home(request: Request, doc: str = "", email: str = "",
             )
 
         # link auto para cliente (se o próprio cliente estiver logado)
-        payload = {"t": "pluggy_invite", "company_id": ctx.company.id, "doc": doc_digits,
-                   "exp": int((utcnow() + timedelta(hours=24)).timestamp())}
+        payload = {"t": "pluggy_invite", "company_id": ctx.company.id, "doc": doc_digits, "exp": int((utcnow() + timedelta(hours=24)).timestamp())}
         token = _sign_consent_token(payload)
         self_connect_link = f"/openfinance/connect/{token}"
 
@@ -26324,10 +26093,10 @@ async def openfinance_home(request: Request, doc: str = "", email: str = "",
 @app.post("/openfinance/invite")
 @require_role({"admin", "equipe"})
 async def openfinance_invite(
-        request: Request,
-        doc: str = Form(...),
-        email: str = Form(...),
-        session: Session = Depends(get_session),
+    request: Request,
+    doc: str = Form(...),
+    email: str = Form(...),
+    session: Session = Depends(get_session),
 ) -> Response:
     ctx = get_tenant_context(request, session)
     if not ctx:
@@ -26364,8 +26133,7 @@ async def openfinance_invite(
     session.commit()
     session.refresh(inv)
 
-    payload = {"t": "pluggy_invite", "invite_id": int(inv.id or 0), "company_id": ctx.company.id, "doc": doc_digits,
-               "exp": int(expires_at.timestamp())}
+    payload = {"t": "pluggy_invite", "invite_id": int(inv.id or 0), "company_id": ctx.company.id, "doc": doc_digits, "exp": int(expires_at.timestamp())}
     token = _sign_consent_token(payload)
     link = f"{_public_base_url(request)}/openfinance/connect/{token}"
 
@@ -26386,8 +26154,7 @@ async def openfinance_invite(
     """
 
     try:
-        _smtp_send_email(to_email=invited_email, subject="Conexão Open Finance (Pluggy) — autorização",
-                         html_body=html_body)
+        _smtp_send_email(to_email=invited_email, subject="Conexão Open Finance (Pluggy) — autorização", html_body=html_body)
         set_flash(request, f"E-mail de conexão enviado para {invited_email}.")
     except Exception as e:
         set_flash(request, f"Não foi possível enviar e-mail (SMTP). Copie o link manualmente. Erro: {e}")
@@ -26397,8 +26164,7 @@ async def openfinance_invite(
 
 @app.get("/openfinance/klavi", response_class=HTMLResponse)
 @require_login
-async def openfinance_klavi_home(request: Request, doc: str = "", email: str = "",
-                                 session: Session = Depends(get_session)) -> HTMLResponse:
+async def openfinance_klavi_home(request: Request, doc: str = "", email: str = "", session: Session = Depends(get_session)) -> HTMLResponse:
     ctx = get_tenant_context(request, session)
     if not ctx:
         request.session.clear()
@@ -26451,11 +26217,11 @@ async def openfinance_klavi_home(request: Request, doc: str = "", email: str = "
 @app.post("/openfinance/klavi/start")
 @require_login
 async def openfinance_klavi_start(
-        request: Request,
-        doc_input: str = Form(...),
-        email: str = Form(...),
-        phone: str = Form(...),
-        session: Session = Depends(get_session),
+    request: Request,
+    doc_input: str = Form(...),
+    email: str = Form(...),
+    phone: str = Form(...),
+    session: Session = Depends(get_session),
 ) -> HTMLResponse:
     ctx = get_tenant_context(request, session)
     if not ctx:
@@ -26501,6 +26267,7 @@ async def openfinance_klavi_start(
     else:
         link_payload["businesstaxid"] = doc_digits
 
+
     # Klavi compatibility: some endpoints validate camelCase fields.
     link_payload.setdefault("redirectUrl", link_payload.get("redirecturl"))
     link_payload.setdefault("redirectURL", link_payload.get("redirecturl"))
@@ -26530,8 +26297,7 @@ async def openfinance_klavi_start(
 
     expires_at = utcnow() + timedelta(seconds=max(60, exp_in))
 
-    flow = session.exec(
-        select(KlaviFlow).where(KlaviFlow.company_id == ctx.company.id, KlaviFlow.subject_doc == doc_digits)).first()
+    flow = session.exec(select(KlaviFlow).where(KlaviFlow.company_id == ctx.company.id, KlaviFlow.subject_doc == doc_digits)).first()
     if not flow:
         flow = KlaviFlow(company_id=ctx.company.id, subject_doc=doc_digits, created_at=utcnow())
     flow.email = email_v
@@ -26568,11 +26334,11 @@ async def openfinance_klavi_start(
 @app.post("/openfinance/klavi/consent")
 @require_login
 async def openfinance_klavi_consent(
-        request: Request,
-        doc: str = Form(...),
-        institution_code: str = Form(...),
-        institution_name: str = Form(""),
-        session: Session = Depends(get_session),
+    request: Request,
+    doc: str = Form(...),
+    institution_code: str = Form(...),
+    institution_name: str = Form(""),
+    session: Session = Depends(get_session),
 ) -> Response:
     ctx = get_tenant_context(request, session)
     if not ctx:
@@ -26585,8 +26351,7 @@ async def openfinance_klavi_consent(
         return RedirectResponse("/", status_code=303)
 
     doc_digits = _digits(doc)
-    flow = session.exec(
-        select(KlaviFlow).where(KlaviFlow.company_id == ctx.company.id, KlaviFlow.subject_doc == doc_digits)).first()
+    flow = session.exec(select(KlaviFlow).where(KlaviFlow.company_id == ctx.company.id, KlaviFlow.subject_doc == doc_digits)).first()
     if not flow or not flow.link_token:
         set_flash(request, "Fluxo Klavi não iniciado. Refaça o passo 1.")
         return RedirectResponse(f"/openfinance/klavi?doc={doc_digits}", status_code=303)
@@ -26618,6 +26383,7 @@ async def openfinance_klavi_consent(
     else:
         consent_payload["businesstaxid"] = doc_digits
 
+
     # Klavi compatibility: some endpoints validate camelCase fields.
     consent_payload.setdefault("externalTrackId", consent_payload.get("externaltrackid"))
     consent_payload.setdefault("institutionCode", consent_payload.get("institutioncode"))
@@ -26628,6 +26394,7 @@ async def openfinance_klavi_consent(
         consent_payload.setdefault("personalTaxId", consent_payload["personaltaxid"])
     if "businesstaxid" in consent_payload:
         consent_payload.setdefault("businessTaxId", consent_payload["businesstaxid"])
+
 
     try:
         consent_data = await _klavi_post_json(path="/data/v1/consents", bearer=flow.link_token, payload=consent_payload)
@@ -26650,8 +26417,7 @@ async def openfinance_klavi_consent(
         return RedirectResponse(f"/openfinance/klavi?doc={doc_digits}", status_code=303)
 
     consent_id = str(consent_data.get("consentid") or consent_data.get("consentId") or "").strip()
-    consent_redirect_url = str(
-        consent_data.get("consentredirecturl") or consent_data.get("consentRedirectUrl") or "").strip()
+    consent_redirect_url = str(consent_data.get("consentredirecturl") or consent_data.get("consentRedirectUrl") or "").strip()
 
     if not consent_id or not consent_redirect_url:
         raise HTTPException(status_code=502, detail="Klavi: consentId/consentRedirectUrl ausente.")
@@ -26669,11 +26435,11 @@ async def openfinance_klavi_consent(
 
 @app.get("/openfinance/klavi/retorno", response_class=HTMLResponse)
 async def openfinance_klavi_return(
-        request: Request,
-        doc: str = "",
-        error: str = "",
-        error_description: str = "",
-        session: Session = Depends(get_session),
+    request: Request,
+    doc: str = "",
+    error: str = "",
+    error_description: str = "",
+    session: Session = Depends(get_session),
 ) -> HTMLResponse:
     # Retorno do LGDP/Instituição (não exige login; pode ser usado pelo titular)
     doc_digits = _digits(doc)
@@ -26698,9 +26464,9 @@ async def openfinance_klavi_return(
 @app.post("/openfinance/klavi/request")
 @require_login
 async def openfinance_klavi_request_report(
-        request: Request,
-        doc: str = Form(...),
-        session: Session = Depends(get_session),
+    request: Request,
+    doc: str = Form(...),
+    session: Session = Depends(get_session),
 ) -> Response:
     ctx = get_tenant_context(request, session)
     if not ctx:
@@ -26713,8 +26479,7 @@ async def openfinance_klavi_request_report(
         return RedirectResponse("/", status_code=303)
 
     doc_digits = _digits(doc)
-    flow = session.exec(
-        select(KlaviFlow).where(KlaviFlow.company_id == ctx.company.id, KlaviFlow.subject_doc == doc_digits)).first()
+    flow = session.exec(select(KlaviFlow).where(KlaviFlow.company_id == ctx.company.id, KlaviFlow.subject_doc == doc_digits)).first()
     if not flow or not flow.consent_id:
         set_flash(request, "Consentimento não encontrado. Faça a autorização primeiro.")
         return RedirectResponse(f"/openfinance/klavi?doc={doc_digits}", status_code=303)
@@ -26737,6 +26502,7 @@ async def openfinance_klavi_request_report(
     return RedirectResponse(f"/openfinance/klavi?doc={doc_digits}", status_code=303)
 
 
+
 @app.post("/openfinance/sync")
 @require_login
 async def openfinance_sync(request: Request, doc: str = Form(...), session: Session = Depends(get_session)) -> Response:
@@ -26746,15 +26512,13 @@ async def openfinance_sync(request: Request, doc: str = Form(...), session: Sess
         return RedirectResponse("/login", status_code=303)
     doc_digits = _digits(doc)
 
-    conn = session.exec(select(PluggyConnection).where(PluggyConnection.company_id == ctx.company.id,
-                                                       PluggyConnection.subject_doc == doc_digits)).first()
+    conn = session.exec(select(PluggyConnection).where(PluggyConnection.company_id == ctx.company.id, PluggyConnection.subject_doc == doc_digits)).first()
     if not conn or not conn.pluggy_item_id:
         set_flash(request, "Sem conexão Pluggy para este documento.")
         return RedirectResponse(f"/openfinance?doc={doc_digits}", status_code=303)
 
     try:
-        await pluggy_sync_loans(session=session, company_id=ctx.company.id, subject_doc=doc_digits,
-                                item_id=conn.pluggy_item_id)
+        await pluggy_sync_loans(session=session, company_id=ctx.company.id, subject_doc=doc_digits, item_id=conn.pluggy_item_id)
         set_flash(request, "Sincronização concluída.")
     except Exception as e:
         set_flash(request, f"Falha ao sincronizar: {e}")
@@ -26765,13 +26529,13 @@ async def openfinance_sync(request: Request, doc: str = Form(...), session: Sess
 @app.post("/openfinance/offers/add")
 @require_role({"admin", "equipe"})
 async def openfinance_add_offer(
-        request: Request,
-        label: str = Form(...),
-        cet_aa_pct: str = Form(...),
-        product_type: str = Form(""),
-        term_min: str = Form("0"),
-        term_max: str = Form("0"),
-        session: Session = Depends(get_session),
+    request: Request,
+    label: str = Form(...),
+    cet_aa_pct: str = Form(...),
+    product_type: str = Form(""),
+    term_min: str = Form("0"),
+    term_max: str = Form("0"),
+    session: Session = Depends(get_session),
 ) -> Response:
     ctx = get_tenant_context(request, session)
     if not ctx:
@@ -26801,8 +26565,7 @@ async def openfinance_add_offer(
 
 @app.post("/openfinance/opportunities/generate")
 @require_login
-async def openfinance_generate_opportunities(request: Request, doc: str = Form(...),
-                                             session: Session = Depends(get_session)) -> Response:
+async def openfinance_generate_opportunities(request: Request, doc: str = Form(...), session: Session = Depends(get_session)) -> Response:
     ctx = get_tenant_context(request, session)
     if not ctx:
         request.session.clear()
@@ -26819,8 +26582,7 @@ async def openfinance_generate_opportunities(request: Request, doc: str = Form(.
 
 
 @app.get("/openfinance/connect/{token}", response_class=HTMLResponse)
-async def openfinance_connect_page(token: str, request: Request,
-                                   session: Session = Depends(get_session)) -> HTMLResponse:
+async def openfinance_connect_page(token: str, request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
     try:
         payload = _verify_consent_token(token)
         if payload.get("t") != "pluggy_invite":
@@ -26829,30 +26591,22 @@ async def openfinance_connect_page(token: str, request: Request,
         doc_digits = _digits(str(payload.get("doc") or ""))
         invite_id = int(payload.get("invite_id") or 0)
     except Exception as e:
-        return render("error.html", request=request,
-                      context={"current_user": None, "current_company": None, "role": "", "current_client": None,
-                               "message": f"Link inválido: {e}"})
+        return render("error.html", request=request, context={"current_user": None, "current_company": None, "role": "", "current_client": None, "message": f"Link inválido: {e}"})
 
     invited_email = ""
     inv = None
     if invite_id:
         inv = session.get(PluggyConnectInvite, invite_id)
         if not inv or int(inv.company_id or 0) != company_id:
-            return render("error.html", request=request,
-                          context={"current_user": None, "current_company": None, "role": "", "current_client": None,
-                                   "message": "Convite não encontrado."})
+            return render("error.html", request=request, context={"current_user": None, "current_company": None, "role": "", "current_client": None, "message": "Convite não encontrado."})
         if inv.status in ("revogada", "expirada"):
-            return render("error.html", request=request,
-                          context={"current_user": None, "current_company": None, "role": "", "current_client": None,
-                                   "message": f"Convite {inv.status}."})
+            return render("error.html", request=request, context={"current_user": None, "current_company": None, "role": "", "current_client": None, "message": f"Convite {inv.status}."})
         if inv.expires_at and utcnow() > inv.expires_at:
             inv.status = "expirada"
             inv.updated_at = utcnow()
             session.add(inv)
             session.commit()
-            return render("error.html", request=request,
-                          context={"current_user": None, "current_company": None, "role": "", "current_client": None,
-                                   "message": "Convite expirado."})
+            return render("error.html", request=request, context={"current_user": None, "current_company": None, "role": "", "current_client": None, "message": "Convite expirado."})
         invited_email = inv.invited_email
 
     return render(
@@ -26874,8 +26628,7 @@ async def openfinance_connect_page(token: str, request: Request,
 
 
 @app.post("/api/pluggy/connect_token")
-async def pluggy_api_connect_token(request: Request, payload: dict[str, Any],
-                                   session: Session = Depends(get_session)) -> JSONResponse:
+async def pluggy_api_connect_token(request: Request, payload: dict[str, Any], session: Session = Depends(get_session)) -> JSONResponse:
     token = str(payload.get("token") or "").strip()
     signed_by_name = str(payload.get("signed_by_name") or "").strip()
     doc_last4 = str(payload.get("doc_last4") or "").strip()
@@ -26915,14 +26668,12 @@ async def pluggy_api_connect_token(request: Request, payload: dict[str, Any],
         session.commit()
 
     existing = session.exec(
-        select(PluggyConnection).where(PluggyConnection.company_id == company_id,
-                                       PluggyConnection.subject_doc == doc_digits)
+        select(PluggyConnection).where(PluggyConnection.company_id == company_id, PluggyConnection.subject_doc == doc_digits)
     ).first()
     update_item_id = existing.pluggy_item_id if (existing and existing.pluggy_item_id) else None
 
     try:
-        access_token = await _pluggy_create_connect_token(request=request, company_id=company_id,
-                                                          subject_doc=doc_digits, update_item_id=update_item_id)
+        access_token = await _pluggy_create_connect_token(request=request, company_id=company_id, subject_doc=doc_digits, update_item_id=update_item_id)
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Falha ao gerar connect token: {e}")
 
@@ -26936,8 +26687,7 @@ async def pluggy_api_connect_token(request: Request, payload: dict[str, Any],
 
 
 @app.post("/api/pluggy/item_success")
-async def pluggy_api_item_success(request: Request, payload: dict[str, Any],
-                                  session: Session = Depends(get_session)) -> JSONResponse:
+async def pluggy_api_item_success(request: Request, payload: dict[str, Any], session: Session = Depends(get_session)) -> JSONResponse:
     token = str(payload.get("token") or "").strip()
     item_data = payload.get("itemData") or {}
     try:
@@ -26958,8 +26708,7 @@ async def pluggy_api_item_success(request: Request, payload: dict[str, Any],
             item_id = str(item_data.get("id") or item_data.get("itemId") or "").strip()
             if not item_id and isinstance(item_data.get("item"), dict):
                 item_id = str(item_data["item"].get("id") or "").strip()
-            connector_id = item_data.get("connectorId") or (item_data.get("connector") or {}).get("id") if isinstance(
-                item_data.get("connector"), dict) else None
+            connector_id = item_data.get("connectorId") or (item_data.get("connector") or {}).get("id") if isinstance(item_data.get("connector"), dict) else None
     except Exception:
         item_id = ""
 
@@ -26967,8 +26716,7 @@ async def pluggy_api_item_success(request: Request, payload: dict[str, Any],
         raise HTTPException(status_code=400, detail="ItemID ausente no retorno do Pluggy Connect.")
 
     # upsert connection
-    conn = session.exec(select(PluggyConnection).where(PluggyConnection.company_id == company_id,
-                                                       PluggyConnection.subject_doc == doc_digits)).first()
+    conn = session.exec(select(PluggyConnection).where(PluggyConnection.company_id == company_id, PluggyConnection.subject_doc == doc_digits)).first()
     if not conn:
         conn = PluggyConnection(company_id=company_id, subject_doc=doc_digits)
 
@@ -27053,8 +26801,7 @@ async def pluggy_webhook(request: Request, k: str = "", session: Session = Depen
     if not company_id or not doc_digits:
         return JSONResponse({"ok": True})
 
-    conn = session.exec(select(PluggyConnection).where(PluggyConnection.company_id == company_id,
-                                                       PluggyConnection.subject_doc == doc_digits)).first()
+    conn = session.exec(select(PluggyConnection).where(PluggyConnection.company_id == company_id, PluggyConnection.subject_doc == doc_digits)).first()
     if conn:
         conn.last_event = event
         if event in ("item/updated", "item/created", "item/login_succeeded"):
@@ -27121,8 +26868,7 @@ def _klavi_process_products_webhook(payload: Any) -> None:
 
             flow = None
             if doc_digits:
-                flow = session.exec(select(KlaviFlow).where(KlaviFlow.subject_doc == doc_digits).order_by(
-                    KlaviFlow.updated_at.desc())).first()
+                flow = session.exec(select(KlaviFlow).where(KlaviFlow.subject_doc == doc_digits).order_by(KlaviFlow.updated_at.desc())).first()
                 if flow and not company_id:
                     company_id = int(flow.company_id or 0)
                 if flow and not link_id:
@@ -27152,31 +26898,29 @@ def _klavi_process_products_webhook(payload: Any) -> None:
             # Importar contratos para PluggyLoan (normalizado)
             if doc_digits:
                 for contract in _klavi_extract_contract_dicts(payload):
-                    loan = _klavi_contract_to_loan(company_id=company_id, subject_doc=doc_digits,
-                                                   link_id=link_id or "unknown", contract=contract, raw_payload=payload)
+                    loan = _klavi_contract_to_loan(company_id=company_id, subject_doc=doc_digits, link_id=link_id or "unknown", contract=contract, raw_payload=payload)
                     existing = session.exec(
-                        select(PluggyLoan).where(PluggyLoan.company_id == company_id,
-                                                 PluggyLoan.pluggy_loan_id == loan.pluggy_loan_id)
+                        select(PluggyLoan).where(PluggyLoan.company_id == company_id, PluggyLoan.pluggy_loan_id == loan.pluggy_loan_id)
                     ).first()
                     if existing:
                         for k in (
-                                "subject_doc",
-                                "pluggy_item_id",
-                                "pluggy_loan_id",
-                                "contract_number",
-                                "ipoc_code",
-                                "lender_name",
-                                "product_type",
-                                "amortization_type",
-                                "principal_brl",
-                                "outstanding_brl",
-                                "installment_brl",
-                                "term_total_months",
-                                "term_remaining_months",
-                                "cet_aa",
-                                "interest_aa",
-                                "fetched_at",
-                                "raw_json",
+                            "subject_doc",
+                            "pluggy_item_id",
+                            "pluggy_loan_id",
+                            "contract_number",
+                            "ipoc_code",
+                            "lender_name",
+                            "product_type",
+                            "amortization_type",
+                            "principal_brl",
+                            "outstanding_brl",
+                            "installment_brl",
+                            "term_total_months",
+                            "term_remaining_months",
+                            "cet_aa",
+                            "interest_aa",
+                            "fetched_at",
+                            "raw_json",
                         ):
                             setattr(existing, k, getattr(loan, k))
                         session.add(existing)
@@ -27202,8 +26946,7 @@ def _klavi_process_events_webhook(payload: Any) -> None:
             company_id, doc_digits, _ = _klavi_extract_meta(payload)
             if not doc_digits:
                 return
-            flow = session.exec(select(KlaviFlow).where(KlaviFlow.subject_doc == doc_digits).order_by(
-                KlaviFlow.updated_at.desc())).first()
+            flow = session.exec(select(KlaviFlow).where(KlaviFlow.subject_doc == doc_digits).order_by(KlaviFlow.updated_at.desc())).first()
             if not flow:
                 return
             if company_id and int(flow.company_id or 0) != int(company_id):
@@ -27247,21 +26990,14 @@ async def klavi_events_webhook(request: Request) -> JSONResponse:
     return JSONResponse({"ok": True})
 
 
+
 @app.on_event("startup")
 def _startup() -> None:
-    global _STARTUP_CORE_DONE, _STARTUP_PLUGGY_DONE
-
-    if not _STARTUP_CORE_DONE:
-        init_db()
-        ensure_ui_tables()
-        ensure_feature_access_tables()
-        ensure_credit_consent_table()
-        _STARTUP_CORE_DONE = True
-
-    if not _STARTUP_PLUGGY_DONE:
-        ensure_pluggy_tables()
-        _STARTUP_PLUGGY_DONE = True
-
+    init_db()
+    ensure_ui_tables()
+    ensure_feature_access_tables()
+    ensure_credit_consent_table()
+    ensure_pluggy_tables()
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 
@@ -27311,38 +27047,28 @@ SEGMENT_SUBSEGMENT_OPTIONS: dict[str, list[str]] = {
     "Outro": ["Outro"],
 }
 TAX_REGIME_OPTIONS = ["Simples Nacional", "Lucro Presumido", "Lucro Real", "MEI", "Outro"]
-BUSINESS_MODEL_OPTIONS = ["B2B", "B2C", "B2B2C", "Assinatura", "Projeto/serviço", "Marketplace", "Indústria própria",
-                          "Distribuição", "Outro"]
+BUSINESS_MODEL_OPTIONS = ["B2B", "B2C", "B2B2C", "Assinatura", "Projeto/serviço", "Marketplace", "Indústria própria", "Distribuição", "Outro"]
 SALES_CHANNEL_OPTIONS = ["Presencial", "Online", "Híbrido", "Comercial externo", "Marketplace", "Franquia", "Outro"]
 URGENCY_LEVEL_OPTIONS = ["Baixa", "Média", "Alta", "Imediata"]
-UF_OPTIONS = ["AC", "AL", "AM", "AP", "BA", "CE", "DF", "ES", "GO", "MA", "MG", "MS", "MT", "PA", "PB", "PE", "PI",
-              "PR", "RJ", "RN", "RO", "RR", "RS", "SC", "SE", "SP", "TO"]
+UF_OPTIONS = ["AC","AL","AM","AP","BA","CE","DF","ES","GO","MA","MG","MS","MT","PA","PB","PE","PI","PR","RJ","RN","RO","RR","RS","SC","SE","SP","TO"]
 
 FEATURE_KEYS.update({
     "empresa": {"title": "Empresa", "desc": "Dados mestre, classificação e estrutura da empresa.", "href": "/empresa"},
-    "perfil": {"title": "Diagnóstico Financeiro", "desc": "Balanço, indicadores, scores e evolução.",
-               "href": "/perfil"},
-    "financeiro": {"title": "Cobranças e Notas Fiscais", "desc": "Boletos, notas fiscais e honorários.",
-                   "href": "/financeiro"},
-    "documentos": {"title": "Documentos", "desc": "Contratos e arquivos importantes da empresa.",
-                   "href": "/documentos"},
-    "consultas": {"title": "Consultas de Risco", "desc": "Consultas e evidências para análise de risco.",
-                  "href": "/consultas"},
+    "perfil": {"title": "Diagnóstico Financeiro", "desc": "Balanço, indicadores, scores e evolução.", "href": "/perfil"},
+    "financeiro": {"title": "Cobranças e Notas Fiscais", "desc": "Boletos, notas fiscais e honorários.", "href": "/financeiro"},
+    "documentos": {"title": "Documentos", "desc": "Contratos e arquivos importantes da empresa.", "href": "/documentos"},
+    "consultas": {"title": "Consultas de Risco", "desc": "Consultas e evidências para análise de risco.", "href": "/consultas"},
     "creditos": {"title": "Créditos de Consulta", "desc": "Saldo e recargas para consultas.", "href": "/creditos"},
     "openfinance": {"title": "Open Finance", "desc": "Contratos e dados via Open Finance.", "href": "/openfinance"},
-    "ofertas": {"title": "Oportunidades Liberadas", "desc": "Soluções aprovadas pela equipe para sua empresa.",
-                "href": "/ofertas"},
-    "motor_ofertas": {"title": "Motor de Ofertas", "desc": "Análise interna e fila de revisão comercial.",
-                      "href": "/motor-ofertas"},
-    "credito": {"title": "Mesa de Crédito", "desc": "SCR, estruturação e análise interna de crédito.",
-                "href": "/credito"},
+    "ofertas": {"title": "Oportunidades Liberadas", "desc": "Soluções aprovadas pela equipe para sua empresa.", "href": "/ofertas"},
+    "motor_ofertas": {"title": "Motor de Ofertas", "desc": "Análise interna e fila de revisão comercial.", "href": "/motor-ofertas"},
+    "credito": {"title": "Mesa de Crédito", "desc": "SCR, estruturação e análise interna de crédito.", "href": "/credito"},
     "crm": {"title": "CRM", "desc": "Negócios e funil comercial do escritório.", "href": "/negocios"},
 })
 FEATURE_GROUPS = [
     {"key": "minha_empresa", "title": "Minha Empresa", "features": ["empresa", "financeiro", "documentos"]},
     {"key": "diagnostico", "title": "Diagnóstico Financeiro", "features": ["perfil"]},
-    {"key": "compliance_risco", "title": "Compliance e Análise de Risco",
-     "features": ["consultas", "creditos", "openfinance"]},
+    {"key": "compliance_risco", "title": "Compliance e Análise de Risco", "features": ["consultas", "creditos", "openfinance"]},
     {"key": "solucoes", "title": "Soluções Financeiras", "features": ["ofertas", "simulador", "propostas"]},
     {"key": "meu_projeto", "title": "Meu Projeto", "features": ["consultoria", "reunioes", "tarefas"]},
     {"key": "escritorio_comercial", "title": "Escritório • Comercial", "features": ["crm", "motor_ofertas"]},
@@ -27361,8 +27087,7 @@ FEATURE_VISIBLE_ROLES.update({
     "parceiros": {"admin"},
 })
 ROLE_DEFAULT_FEATURES["admin"] = set(FEATURE_KEYS.keys())
-ROLE_DEFAULT_FEATURES["equipe"] = set(FEATURE_KEYS.keys()) - {"ui", "gestao", "familias", "servicos_internos",
-                                                              "parceiros"}
+ROLE_DEFAULT_FEATURES["equipe"] = set(FEATURE_KEYS.keys()) - {"ui", "gestao", "familias", "servicos_internos", "parceiros"}
 ROLE_DEFAULT_FEATURES["cliente"] = {
     "empresa",
     "perfil",
@@ -27384,11 +27109,9 @@ ROLE_DEFAULT_FEATURES["cliente"] = {
 ROLE_DEFAULT_FEATURES["admin"].add("financeiro_escritorio")
 ROLE_DEFAULT_FEATURES["equipe"].add("financeiro_escritorio")
 
-
 def _clean_text(value: Any, max_len: int = 255) -> str:
     raw = html.escape(str(value or "").strip())
     return raw[:max_len]
-
 
 def _safe_money(value: Any) -> float:
     try:
@@ -27401,7 +27124,6 @@ def _safe_money(value: Any) -> float:
         return 1_000_000_000_000.0
     return round(out, 2)
 
-
 def _safe_signed_money(value: Any) -> float:
     try:
         out = float(value or 0.0)
@@ -27412,7 +27134,6 @@ def _safe_signed_money(value: Any) -> float:
     if out < -1_000_000_000_000:
         out = -1_000_000_000_000.0
     return round(out, 2)
-
 
 def _financial_breakdown(profile: Optional[ClientBusinessProfile], client: Optional[Client] = None) -> dict[str, float]:
     profile = profile or ClientBusinessProfile(company_id=0, client_id=0)
@@ -27439,8 +27160,7 @@ def _financial_breakdown(profile: Optional[ClientBusinessProfile], client: Optio
 
     current_assets = round(cash_asset + receivables + inventory + other_current_assets, 2)
     non_current_assets = round(immobilized + other_non_current_assets, 2)
-    current_liabilities = round(
-        payables_360 + short_term_debt + tax_liabilities + labor_liabilities + other_current_liabilities + overdraft, 2)
+    current_liabilities = round(payables_360 + short_term_debt + tax_liabilities + labor_liabilities + other_current_liabilities + overdraft, 2)
     non_current_liabilities = round(long_term_debt + other_non_current_liabilities, 2)
 
     total_assets = round(current_assets + non_current_assets, 2)
@@ -27448,8 +27168,7 @@ def _financial_breakdown(profile: Optional[ClientBusinessProfile], client: Optio
     equity = round(total_assets - total_liabilities, 2)
 
     operating_current_assets = round(receivables + inventory + other_current_assets, 2)
-    operating_current_liabilities = round(
-        payables_360 + tax_liabilities + labor_liabilities + other_current_liabilities, 2)
+    operating_current_liabilities = round(payables_360 + tax_liabilities + labor_liabilities + other_current_liabilities, 2)
     working_capital = round(current_assets - current_liabilities, 2)
     working_capital_need = round(operating_current_assets - operating_current_liabilities, 2)
     treasury_balance = round(working_capital - working_capital_need, 2)
@@ -27496,7 +27215,6 @@ def _safe_int(value: Any) -> int:
         out = 0
     return max(0, min(out, 1_000_000))
 
-
 def _safe_year(value: Any) -> int:
     year = _safe_int(value)
     now_year = datetime.now().year
@@ -27504,11 +27222,9 @@ def _safe_year(value: Any) -> int:
         return 0
     return year
 
-
 def _normalize_document(value: str) -> str:
     digits = re.sub(r"\D+", "", str(value or ""))
     return digits[:18]
-
 
 def _normalize_email(value: str) -> str:
     raw = str(value or "").strip().lower()
@@ -27516,27 +27232,22 @@ def _normalize_email(value: str) -> str:
         return ""
     return raw[:160]
 
-
 def _normalize_phone(value: str) -> str:
     digits = re.sub(r"\D+", "", str(value or ""))
     return digits[:20]
 
-
 def _normalize_zip_code(value: str) -> str:
     digits = re.sub(r"\D+", "", str(value or ""))
     return digits[:8]
-
 
 def _coerce_choice(value: str, allowed: list[str]) -> str:
     raw = str(value or "").strip()
     allowed_map = {item.lower(): item for item in allowed}
     return allowed_map.get(raw.lower(), "") if raw else ""
 
-
 def _coerce_interest_codes(values: list[str]) -> list[str]:
     families = {str(item["code"]).strip() for item in PRODUCT_FAMILY_SEED}
     return sorted({str(v).strip() for v in values if str(v).strip() in families})
-
 
 def _is_openfinance_enabled() -> bool:
     provider = (os.getenv("OPENFINANCE_PROVIDER_DEFAULT") or "klavi").strip().lower()
@@ -27544,28 +27255,21 @@ def _is_openfinance_enabled() -> bool:
         return bool(PLUGGY_CLIENT_ID and PLUGGY_CLIENT_SECRET)
     return bool(KLAVI_ACCESS_KEY and KLAVI_SECRET_KEY)
 
-
 def _safe_ratio(num: float, den: float) -> Optional[float]:
     if den <= 0:
         return None
     return round(num / den, 4)
 
 
-def build_client_dashboard_analysis(*, client: Client, profile: ClientBusinessProfile,
-                                    latest_snapshot: Optional[ClientSnapshot]) -> dict[str, Any]:
+def build_client_dashboard_analysis(*, client: Client, profile: ClientBusinessProfile, latest_snapshot: Optional[ClientSnapshot]) -> dict[str, Any]:
     breakdown = _financial_breakdown(profile, client)
-    revenue_monthly = max(_safe_money(getattr(client, "revenue_monthly_brl", 0.0)),
-                          _safe_money(getattr(profile, "annual_revenue_brl", 0.0)) / 12.0)
+    revenue_monthly = max(_safe_money(getattr(client, "revenue_monthly_brl", 0.0)), _safe_money(getattr(profile, "annual_revenue_brl", 0.0)) / 12.0)
     debt_total = breakdown["debt_total"] or _safe_money(getattr(client, "debt_total_brl", 0.0))
-    cash_balance = breakdown["cash_signed"] if breakdown["cash_signed"] or getattr(profile, "cash_and_investments_brl",
-                                                                                   0.0) else _safe_signed_money(
-        getattr(client, "cash_balance_brl", 0.0))
+    cash_balance = breakdown["cash_signed"] if breakdown["cash_signed"] or getattr(profile, "cash_and_investments_brl", 0.0) else _safe_signed_money(getattr(client, "cash_balance_brl", 0.0))
     current_assets = breakdown["current_assets"] or _safe_money(getattr(profile, "current_assets_brl", 0.0))
     non_current_assets = breakdown["non_current_assets"] or _safe_money(getattr(profile, "non_current_assets_brl", 0.0))
-    current_liabilities = breakdown["current_liabilities"] or _safe_money(
-        getattr(profile, "current_liabilities_brl", 0.0))
-    non_current_liabilities = breakdown["non_current_liabilities"] or _safe_money(
-        getattr(profile, "non_current_liabilities_brl", 0.0))
+    current_liabilities = breakdown["current_liabilities"] or _safe_money(getattr(profile, "current_liabilities_brl", 0.0))
+    non_current_liabilities = breakdown["non_current_liabilities"] or _safe_money(getattr(profile, "non_current_liabilities_brl", 0.0))
     total_assets = round(current_assets + non_current_assets, 2)
     total_liabilities = round(current_liabilities + non_current_liabilities, 2)
     equity = round(total_assets - total_liabilities, 2)
@@ -27604,13 +27308,10 @@ def build_client_dashboard_analysis(*, client: Client, profile: ClientBusinessPr
     treasury_bonus = 8.0 if breakdown["treasury_balance"] >= 0 else -6.0
     ccl_bonus = 8.0 if working_capital >= 0 else -8.0
 
-    patrimonial_score = max(0.0, min(100.0, round(
-        50.0 + liquidity_bonus + treasury_bonus + ccl_bonus + min(max(equity, 0.0) / max(revenue_monthly, 1.0),
-                                                                  1.0) * 12.0, 1)))
+    patrimonial_score = max(0.0, min(100.0, round(50.0 + liquidity_bonus + treasury_bonus + ccl_bonus + min(max(equity, 0.0) / max(revenue_monthly, 1.0), 1.0) * 12.0, 1)))
     score_total_calc = float(getattr(latest_snapshot, "score_total", 0.0) or 0.0)
     if score_total_calc <= 0:
-        score_total_calc = round(
-            _clamp_0_100((score_process * 0.35) + (score_financial * 0.35) + (patrimonial_score * 0.30)), 1)
+        score_total_calc = round(_clamp_0_100((score_process * 0.35) + (score_financial * 0.35) + (patrimonial_score * 0.30)), 1)
 
     score_banking = 42.0
     if revenue_monthly > 0:
@@ -27657,28 +27358,28 @@ def build_client_dashboard_analysis(*, client: Client, profile: ClientBusinessPr
     score_card = []
     for label, value, hint, tooltip in [
         (
-                "Score Bancário",
-                score_banking,
-                "Potencial estimado de crédito",
-                "Indica o potencial da empresa para acesso a crédito com base no perfil financeiro, endividamento, garantias e relacionamento bancário.",
+            "Score Bancário",
+            score_banking,
+            "Potencial estimado de crédito",
+            "Indica o potencial da empresa para acesso a crédito com base no perfil financeiro, endividamento, garantias e relacionamento bancário.",
         ),
         (
-                "Score Financeiro",
-                round(score_financial, 1),
-                "Saúde financeira e capacidade de pagamento",
-                "Mostra a saúde financeira da empresa considerando caixa, dívidas, liquidez e estrutura patrimonial.",
+            "Score Financeiro",
+            round(score_financial, 1),
+            "Saúde financeira e capacidade de pagamento",
+            "Mostra a saúde financeira da empresa considerando caixa, dívidas, liquidez e estrutura patrimonial.",
         ),
         (
-                "Score de Estrutura",
-                round(score_process, 1),
-                "Processos, controles e governança",
-                "Avalia o nível de organização da empresa, como controles, processos, indicadores, orçamento e gestão financeira.",
+            "Score de Estrutura",
+            round(score_process, 1),
+            "Processos, controles e governança",
+            "Avalia o nível de organização da empresa, como controles, processos, indicadores, orçamento e gestão financeira.",
         ),
         (
-                "Score Geral",
-                round(score_total_calc, 1),
-                "Síntese consolidada do perfil",
-                "É a visão consolidada dos demais scores, usada para apoiar a análise de oportunidades e prioridades.",
+            "Score Geral",
+            round(score_total_calc, 1),
+            "Síntese consolidada do perfil",
+            "É a visão consolidada dos demais scores, usada para apoiar a análise de oportunidades e prioridades.",
         ),
     ]:
         band_label, css_class = _score_band(float(value))
@@ -27783,15 +27484,14 @@ def sync_offer_reviews(session: Session, *, company_id: int, client_id: int) -> 
     if changed:
         session.commit()
 
-
 def list_offer_matches_for_role(
-        *,
-        session: Session,
-        company_id: int,
-        client_id: int,
-        role: str,
-        limit: int = 0,
-        only_client_visible: bool = False,
+    *,
+    session: Session,
+    company_id: int,
+    client_id: int,
+    role: str,
+    limit: int = 0,
+    only_client_visible: bool = False,
 ) -> list[dict[str, Any]]:
     q = (
         select(OfferMatch, OfferVisibilityReview)
@@ -27828,24 +27528,19 @@ def list_offer_matches_for_role(
             break
     return out
 
-
-def compute_offer_engine(*, session: Session, company_id: int, client: Client, profile: ClientBusinessProfile,
-                         latest_snapshot: Optional[ClientSnapshot]) -> list[dict[str, Any]]:
+def compute_offer_engine(*, session: Session, company_id: int, client: Client, profile: ClientBusinessProfile, latest_snapshot: Optional[ClientSnapshot]) -> list[dict[str, Any]]:
     score_total_snap = float(latest_snapshot.score_total) if latest_snapshot else 0.0
     score_fin_snap = float(latest_snapshot.score_financial) if latest_snapshot else 0.0
     score_proc_snap = float(latest_snapshot.score_process) if latest_snapshot else 0.0
     revenue_monthly = max(float(client.revenue_monthly_brl or 0.0), float(profile.annual_revenue_brl or 0.0) / 12.0)
     debt_total = max(float(client.debt_total_brl or 0.0), 0.0)
     cash_balance = max(float(client.cash_balance_brl or 0.0), 0.0)
-    current_assets = max(float(getattr(profile, "current_assets_brl", 0.0) or 0.0),
-                         cash_balance + float(profile.receivables_brl or 0.0) + float(profile.inventory_brl or 0.0))
+    current_assets = max(float(getattr(profile, "current_assets_brl", 0.0) or 0.0), cash_balance + float(profile.receivables_brl or 0.0) + float(profile.inventory_brl or 0.0))
     current_liabilities = max(float(getattr(profile, "current_liabilities_brl", 0.0) or 0.0), 0.0)
     equity = max(float(getattr(profile, "equity_brl", 0.0) or 0.0), 0.0)
     debt_ratio = debt_total / max(revenue_monthly, 1.0)
     current_ratio = current_assets / max(current_liabilities, 1.0) if current_liabilities > 0 else 0.0
-    txt = " ".join(
-        [profile.strategic_goal or "", profile.pain_points or "", " ".join(_json_list(profile.interests_json)),
-         latest_snapshot.notes if latest_snapshot else ""]).lower()
+    txt = " ".join([profile.strategic_goal or "", profile.pain_points or "", " ".join(_json_list(profile.interests_json)), latest_snapshot.notes if latest_snapshot else ""]).lower()
 
     scores = {item["code"]: 0.0 for item in PRODUCT_FAMILY_SEED}
     if revenue_monthly > 0:
@@ -27909,12 +27604,8 @@ def compute_offer_engine(*, session: Session, company_id: int, client: Client, p
         if interest in scores:
             scores[interest] += 24
 
-    services = session.exec(select(InternalService).where(InternalService.company_id == company_id,
-                                                          InternalService.is_active == True).order_by(
-        InternalService.priority_weight.desc())).all()
-    partner_products = session.exec(select(PartnerProduct).where(PartnerProduct.company_id == company_id,
-                                                                 PartnerProduct.is_active == True).order_by(
-        PartnerProduct.name.asc())).all()
+    services = session.exec(select(InternalService).where(InternalService.company_id == company_id, InternalService.is_active == True).order_by(InternalService.priority_weight.desc())).all()
+    partner_products = session.exec(select(PartnerProduct).where(PartnerProduct.company_id == company_id, PartnerProduct.is_active == True).order_by(PartnerProduct.name.asc())).all()
     families = {f.code: f for f in list_product_families(session)}
     partners = {pp.id: session.get(Partner, pp.partner_id) for pp in partner_products}
 
@@ -27950,8 +27641,7 @@ def compute_offer_engine(*, session: Session, company_id: int, client: Client, p
         if base <= 0:
             continue
         svc_family = (svc.family_code or getattr(svc, 'family_slug', '') or '').strip()
-        elig = [pp for pp in partner_products if
-                ((pp.family_code or getattr(pp, 'family_slug', '') or '').strip() == svc_family) and eligible(pp)]
+        elig = [pp for pp in partner_products if ((pp.family_code or getattr(pp, 'family_slug', '') or '').strip() == svc_family) and eligible(pp)]
         score_fit = round(min(100.0, base + max(0, svc.priority_weight - 50) * 0.4 + min(len(elig) * 2, 8)), 2)
         priority = "alta" if score_fit >= 75 else "media" if score_fit >= 55 else "baixa"
         fam = families.get(svc_family or svc.family_code)
@@ -27988,18 +27678,14 @@ def compute_offer_engine(*, session: Session, company_id: int, client: Client, p
             "partner_options_count": 1,
         })
 
-    out.sort(key=lambda x: ({"alta": 3, "media": 2, "baixa": 1}.get(x["priority_level"], 0), float(x["score_fit"])),
-             reverse=True)
+    out.sort(key=lambda x: ({"alta": 3, "media": 2, "baixa": 1}.get(x["priority_level"], 0), float(x["score_fit"])), reverse=True)
     return out[:24]
 
-
 def persist_offer_matches(session: Session, *, company_id: int, client_id: int, matches: list[dict[str, Any]]) -> None:
-    old = session.exec(
-        select(OfferMatch).where(OfferMatch.company_id == company_id, OfferMatch.client_id == client_id)).all()
+    old = session.exec(select(OfferMatch).where(OfferMatch.company_id == company_id, OfferMatch.client_id == client_id)).all()
     old_ids = [int(row.id) for row in old if row.id]
     if old_ids:
-        for review in session.exec(
-                select(OfferVisibilityReview).where(OfferVisibilityReview.offer_match_id.in_(old_ids))).all():
+        for review in session.exec(select(OfferVisibilityReview).where(OfferVisibilityReview.offer_match_id.in_(old_ids))).all():
             session.delete(review)
     for row in old:
         session.delete(row)
@@ -28021,16 +27707,15 @@ def persist_offer_matches(session: Session, *, company_id: int, client_id: int, 
     session.commit()
     sync_offer_reviews(session, company_id=company_id, client_id=client_id)
 
-
 @app.post("/motor-ofertas/review/{offer_id}")
 @require_role({"admin", "equipe"})
 async def motor_ofertas_review_save(
-        request: Request,
-        offer_id: int,
-        session: Session = Depends(get_session),
-        action: str = Form("interna"),
-        review_notes: str = Form(""),
-        client_summary: str = Form(""),
+    request: Request,
+    offer_id: int,
+    session: Session = Depends(get_session),
+    action: str = Form("interna"),
+    review_notes: str = Form(""),
+    client_summary: str = Form(""),
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
@@ -28070,12 +27755,10 @@ async def motor_ofertas_review_save(
     set_flash(request, "Revisão da oferta atualizada.")
     return RedirectResponse("/motor-ofertas", status_code=303)
 
-
 @app.get("/open-finance")
 @require_login
 async def openfinance_alias() -> Response:
     return RedirectResponse("/openfinance", status_code=307)
-
 
 TEMPLATES["empresa.html"] = r"""
 {% extends "base.html" %}
@@ -28342,6 +28025,7 @@ TEMPLATES["empresa.html"] = r"""
 </div>
 {% endblock %}
 """
+
 
 TEMPLATES["perfil.html"] = r"""
 {% extends "base.html" %}
@@ -28645,6 +28329,7 @@ TEMPLATES["perfil.html"] = r"""
 {% endblock %}
 """
 
+
 TEMPLATES["dashboard.html"] = r"""
 {% extends "base.html" %}
 {% block content %}
@@ -28936,12 +28621,10 @@ TEMPLATES["ofertas.html"] = r"""
 {% endblock %}
 """
 
-
 @app.on_event("startup")
 def _startup_offer_visibility() -> None:
     ensure_offer_engine_tables()
     ensure_offer_engine_columns()
-
 
 # === /CREDIT_WALLET_MODULE_V1 ===
 # ----------------------------
@@ -29807,9 +29490,9 @@ class UserActivity(SQLModel, table=True):
 def ensure_delivery3_tables() -> bool:
     ok = True
     for tbl in (
-            ClientGroupCompany.__table__,
-            Notification.__table__,
-            UserActivity.__table__,
+        ClientGroupCompany.__table__,
+        Notification.__table__,
+        UserActivity.__table__,
     ):
         try:
             tbl.create(engine, checkfirst=True)
@@ -29919,16 +29602,16 @@ def _normalize_group_relationship(value: str) -> str:
 
 
 def create_user_notification(
-        session: Session,
-        *,
-        company_id: int,
-        user_id: int,
-        kind: str,
-        title: str,
-        message: str = "",
-        href: str = "",
-        client_id: Optional[int] = None,
-        created_by_user_id: Optional[int] = None,
+    session: Session,
+    *,
+    company_id: int,
+    user_id: int,
+    kind: str,
+    title: str,
+    message: str = "",
+    href: str = "",
+    client_id: Optional[int] = None,
+    created_by_user_id: Optional[int] = None,
 ) -> Notification:
     row = Notification(
         company_id=company_id,
@@ -29948,15 +29631,15 @@ def create_user_notification(
 
 
 def notify_client_members(
-        session: Session,
-        *,
-        company_id: int,
-        client_id: int,
-        kind: str,
-        title: str,
-        message: str = "",
-        href: str = "",
-        created_by_user_id: Optional[int] = None,
+    session: Session,
+    *,
+    company_id: int,
+    client_id: int,
+    kind: str,
+    title: str,
+    message: str = "",
+    href: str = "",
+    created_by_user_id: Optional[int] = None,
 ) -> int:
     memberships = session.exec(
         select(Membership).where(
@@ -29988,16 +29671,16 @@ def notify_client_members(
 
 
 def notify_staff_members(
-        session: Session,
-        *,
-        company_id: int,
-        client_id: Optional[int],
-        kind: str,
-        title: str,
-        message: str = "",
-        href: str = "",
-        created_by_user_id: Optional[int] = None,
-        exclude_user_ids: Optional[set[int]] = None,
+    session: Session,
+    *,
+    company_id: int,
+    client_id: Optional[int],
+    kind: str,
+    title: str,
+    message: str = "",
+    href: str = "",
+    created_by_user_id: Optional[int] = None,
+    exclude_user_ids: Optional[set[int]] = None,
 ) -> int:
     exclude = {int(x) for x in (exclude_user_ids or set()) if int(x or 0)}
     memberships = session.exec(
@@ -30029,14 +29712,14 @@ def notify_staff_members(
 
 
 def _notify_staff_about_client_activity(
-        session: Session,
-        *,
-        ctx: TenantContext,
-        client_id: Optional[int],
-        title: str,
-        message: str = "",
-        href: str = "",
-        kind: str = "atividade_cliente",
+    session: Session,
+    *,
+    ctx: TenantContext,
+    client_id: Optional[int],
+    title: str,
+    message: str = "",
+    href: str = "",
+    kind: str = "atividade_cliente",
 ) -> int:
     if ctx.membership.role != "cliente":
         return 0
@@ -30110,16 +29793,14 @@ def current_online_users_count(session: Session, *, company_id: int, within_minu
 @app.middleware("http")
 async def activity_tracking_middleware(request: Request, call_next: Callable[..., Any]) -> Response:
     response = await call_next(request)
-    if not ENABLE_ACTIVITY_TRACKING:
-        return response
     try:
         path = request.url.path
         if (
-                path.startswith("/static")
-                or path.startswith("/api/ui/")
-                or path.startswith("/health")
-                or path.startswith("/__")
-                or path.startswith("/favicon")
+            path.startswith("/static")
+            or path.startswith("/api/ui/")
+            or path.startswith("/health")
+            or path.startswith("/__")
+            or path.startswith("/favicon")
         ):
             return response
         if session_user_id(request) is None:
@@ -30159,19 +29840,16 @@ async def activity_tracking_middleware(request: Request, call_next: Callable[...
 
 _original_render_delivery3 = render
 
-
 def render(
-        template_name: str,
-        *,
-        request: Request,
-        context: Optional[dict[str, Any]] = None,
-        status_code: int = 200,
+    template_name: str,
+    *,
+    request: Request,
+    context: Optional[dict[str, Any]] = None,
+    status_code: int = 200,
 ) -> HTMLResponse:
     ctx = dict(context or {})
     ctx.setdefault("unread_notifications_count", 0)
     ctx.setdefault("group_company_count", 0)
-    if not ENABLE_TEMPLATE_LIVE_COUNTS:
-        return _original_render_delivery3(template_name, request=request, context=ctx, status_code=status_code)
     try:
         with Session(engine) as _db:
             tenant = get_tenant_context(request, _db)
@@ -30200,7 +29878,6 @@ def render(
 
 
 _original_resolve_feature_key_delivery3 = resolve_feature_key
-
 
 def resolve_feature_key(path: str) -> Optional[str]:
     extra_mapping = [
@@ -30248,9 +29925,7 @@ if "minha_empresa" in _group_map and "grupo_empresa" not in _group_map["minha_em
 if "admin" in _group_map and "analytics" not in _group_map["admin"]["features"]:
     _group_map["admin"]["features"].append("analytics")
 if "escritorio_financeiro" not in _group_map:
-    FEATURE_GROUPS.insert(max(len(FEATURE_GROUPS) - 1, 0),
-                          {"key": "escritorio_financeiro", "title": "Escritório • Financeiro",
-                           "features": ["financeiro_escritorio"]})
+    FEATURE_GROUPS.insert(max(len(FEATURE_GROUPS) - 1, 0), {"key": "escritorio_financeiro", "title": "Escritório • Financeiro", "features": ["financeiro_escritorio"]})
 elif "financeiro_escritorio" not in _group_map["escritorio_financeiro"]["features"]:
     _group_map["escritorio_financeiro"]["features"].append("financeiro_escritorio")
 
@@ -30270,149 +29945,6 @@ if _empresa_tpl and 'href="/empresa/grupo"' not in _empresa_tpl:
         '<a class="btn btn-outline-secondary" href="/perfil">Ir para diagnóstico</a>\n      <a class="btn btn-outline-primary" href="/empresa/grupo">Grupo econômico{% if group_company_count %} ({{ group_company_count }}){% endif %}</a>'
     )
     TEMPLATES["empresa.html"] = _empresa_tpl
-
-TEMPLATES["fin_list.html"] = r"""
-{% extends "base.html" %}
-{% block content %}
-<div class="card p-4">
-  <div class="d-flex justify-content-between align-items-center">
-    <div>
-      <h4 class="mb-0">Financeiro</h4>
-      <div class="muted">Notas/Boletos de honorários (manual) + sincronizado do Conta Azul.</div>
-    </div>
-    <div class="d-flex gap-2">
-      {% if role in ["admin","equipe"] %}
-        <a class="btn btn-outline-secondary" href="/integrations/contaazul">Conta Azul</a>
-        {% if ca_connected %}
-          <form method="post" action="/financeiro/contaazul/sync">
-            <button class="btn btn-outline-primary" type="submit">Sincronizar</button>
-          </form>
-        {% endif %}
-        <a class="btn btn-primary" href="/financeiro/novo">Nova cobrança</a>
-      {% endif %}
-    </div>
-  </div>
-
-  {% if ca_configured and role in ["admin","equipe"] and not ca_connected %}
-    <div class="alert alert-warning mt-3">
-      Conta Azul não conectado. Vá em <a href="/integrations/contaazul">Integrações → Conta Azul</a>.
-    </div>
-  {% endif %}
-
-  {% if ca_last_sync %}
-    <div class="muted small mt-2">Conta Azul: última sync em {{ ca_last_sync }}</div>
-  {% endif %}
-
-  <hr class="my-3"/>
-  <h6 class="mb-2">Cobranças (manual)</h6>
-  {% if items %}
-    <div class="list-group">
-      {% for it in items %}
-        <a class="list-group-item list-group-item-action" href="/financeiro/{{ it.id }}">
-          <div class="d-flex justify-content-between">
-            <div class="fw-semibold">{{ it.title }}</div>
-            <span class="badge text-bg-light border">{{ it.status }}</span>
-          </div>
-          <div class="muted small">
-            {% if role in ["admin","equipe"] %}Cliente: {{ it.client_name }} • {% endif %}
-            Valor: R$ {{ "%.2f"|format(it.amount_brl) }} •
-            {% if it.due_date %}Venc: {{ it.due_date|brdate }} • {% endif %}
-            {{ it.created_at|brdatetime }}
-          </div>
-        </a>
-      {% endfor %}
-    </div>
-  {% else %}
-    <div class="muted">Sem cobranças manuais.</div>
-  {% endif %}
-
-  <hr class="my-4"/>
-  <h6 class="mb-2">Conta Azul: Boletos / Contas a receber</h6>
-  {% if ca_receivables %}
-    <div class="table-responsive">
-      <table class="table table-sm align-middle">
-        <thead>
-          <tr>
-            <th>Venc.</th>
-            <th>Descrição</th>
-            <th>Status</th>
-            <th>Aberto</th>
-            <th>Pago</th>
-            <th>Fatura</th>
-            <th>Boleto</th>
-            <th>Download</th>
-          </tr>
-        </thead>
-        <tbody>
-          {% for r in ca_receivables %}
-            <tr>
-              <td class="mono small">{{ fin_human_date(r.due_date) }}</td>
-              <td>{{ r.description }}</td>
-              <td><span class="badge text-bg-light border">{{ r.status }}</span></td>
-              <td>R$ {{ "%.2f"|format(r.amount_open) }}</td>
-              <td>R$ {{ "%.2f"|format(r.amount_paid) }}</td>
-              <td class="mono small">{% if r.invoice_number %}{{ r.invoice_type }} #{{ r.invoice_number }}{% else %}—{% endif %}</td>
-              <td>
-                {% if r.payment_url %}
-                  <a class="btn btn-sm btn-outline-primary" href="{{ r.payment_url }}" target="_blank" rel="noopener">Boleto</a>
-                {% else %}
-                  —
-                {% endif %}
-              </td>
-              <td>
-                <a class="btn btn-sm btn-outline-secondary" href="/financeiro/contaazul/receivable/{{ r.id }}/fatura.pdf" target="_blank" rel="noopener">Fatura PDF</a>
-              </td>
-            </tr>
-          {% endfor %}
-        </tbody>
-      </table>
-    </div>
-  {% else %}
-    <div class="muted small">Nenhuma parcela encontrada. Clique em “Sincronizar”.</div>
-  {% endif %}
-
-  <div class="mt-4">
-    <h6 class="mb-2">Notas fiscais</h6>
-    {% if ca_invoices %}
-      <div class="table-responsive">
-        <table class="table table-sm align-middle">
-          <thead>
-            <tr>
-              <th>Data</th>
-              <th>Número</th>
-              <th>Tipo</th>
-              <th>Status</th>
-              <th>Download</th>
-            </tr>
-          </thead>
-          <tbody>
-            {% for n in ca_invoices %}
-              <tr>
-                <td class="mono small">{{ fin_human_date(n.issue_date) }}</td>
-                <td class="mono small">{{ n.number or "—" }}</td>
-                <td class="mono small">{{ n.invoice_type }}</td>
-                <td><span class="badge text-bg-light border">{{ n.status }}</span></td>
-                <td>
-                  {% if n.invoice_type.upper() == "NFSE" %}
-                    <a class="btn btn-sm btn-outline-secondary" href="/financeiro/contaazul/invoice/{{ n.id }}/pdf" target="_blank" rel="noopener">NF PDF</a>
-                  {% elif n.invoice_type.upper() == "NFE" %}
-                    <a class="btn btn-sm btn-outline-secondary" href="/financeiro/contaazul/invoice/{{ n.id }}/xml" target="_blank" rel="noopener">NF XML</a>
-                  {% else %}
-                    —
-                  {% endif %}
-                </td>
-              </tr>
-            {% endfor %}
-          </tbody>
-        </table>
-      </div>
-    {% else %}
-      <div class="muted small">Nenhuma nota encontrada. Clique em “Sincronizar”.</div>
-    {% endif %}
-  </div>
-</div>
-{% endblock %}
-"""
 
 if hasattr(templates_env.loader, "mapping"):
     templates_env.loader.mapping = TEMPLATES
@@ -30635,149 +30167,6 @@ TEMPLATES["admin_analytics.html"] = r"""
 {% endblock %}
 """
 
-TEMPLATES["fin_list.html"] = r"""
-{% extends "base.html" %}
-{% block content %}
-<div class="card p-4">
-  <div class="d-flex justify-content-between align-items-center">
-    <div>
-      <h4 class="mb-0">Financeiro</h4>
-      <div class="muted">Notas/Boletos de honorários (manual) + sincronizado do Conta Azul.</div>
-    </div>
-    <div class="d-flex gap-2">
-      {% if role in ["admin","equipe"] %}
-        <a class="btn btn-outline-secondary" href="/integrations/contaazul">Conta Azul</a>
-        {% if ca_connected %}
-          <form method="post" action="/financeiro/contaazul/sync">
-            <button class="btn btn-outline-primary" type="submit">Sincronizar</button>
-          </form>
-        {% endif %}
-        <a class="btn btn-primary" href="/financeiro/novo">Nova cobrança</a>
-      {% endif %}
-    </div>
-  </div>
-
-  {% if ca_configured and role in ["admin","equipe"] and not ca_connected %}
-    <div class="alert alert-warning mt-3">
-      Conta Azul não conectado. Vá em <a href="/integrations/contaazul">Integrações → Conta Azul</a>.
-    </div>
-  {% endif %}
-
-  {% if ca_last_sync %}
-    <div class="muted small mt-2">Conta Azul: última sync em {{ ca_last_sync }}</div>
-  {% endif %}
-
-  <hr class="my-3"/>
-  <h6 class="mb-2">Cobranças (manual)</h6>
-  {% if items %}
-    <div class="list-group">
-      {% for it in items %}
-        <a class="list-group-item list-group-item-action" href="/financeiro/{{ it.id }}">
-          <div class="d-flex justify-content-between">
-            <div class="fw-semibold">{{ it.title }}</div>
-            <span class="badge text-bg-light border">{{ it.status }}</span>
-          </div>
-          <div class="muted small">
-            {% if role in ["admin","equipe"] %}Cliente: {{ it.client_name }} • {% endif %}
-            Valor: R$ {{ "%.2f"|format(it.amount_brl) }} •
-            {% if it.due_date %}Venc: {{ it.due_date|brdate }} • {% endif %}
-            {{ it.created_at|brdatetime }}
-          </div>
-        </a>
-      {% endfor %}
-    </div>
-  {% else %}
-    <div class="muted">Sem cobranças manuais.</div>
-  {% endif %}
-
-  <hr class="my-4"/>
-  <h6 class="mb-2">Conta Azul: Boletos / Contas a receber</h6>
-  {% if ca_receivables %}
-    <div class="table-responsive">
-      <table class="table table-sm align-middle">
-        <thead>
-          <tr>
-            <th>Venc.</th>
-            <th>Descrição</th>
-            <th>Status</th>
-            <th>Aberto</th>
-            <th>Pago</th>
-            <th>Fatura</th>
-            <th>Boleto</th>
-            <th>Download</th>
-          </tr>
-        </thead>
-        <tbody>
-          {% for r in ca_receivables %}
-            <tr>
-              <td class="mono small">{{ fin_human_date(r.due_date) }}</td>
-              <td>{{ r.description }}</td>
-              <td><span class="badge text-bg-light border">{{ r.status }}</span></td>
-              <td>R$ {{ "%.2f"|format(r.amount_open) }}</td>
-              <td>R$ {{ "%.2f"|format(r.amount_paid) }}</td>
-              <td class="mono small">{% if r.invoice_number %}{{ r.invoice_type }} #{{ r.invoice_number }}{% else %}—{% endif %}</td>
-              <td>
-                {% if r.payment_url %}
-                  <a class="btn btn-sm btn-outline-primary" href="{{ r.payment_url }}" target="_blank" rel="noopener">Boleto</a>
-                {% else %}
-                  —
-                {% endif %}
-              </td>
-              <td>
-                <a class="btn btn-sm btn-outline-secondary" href="/financeiro/contaazul/receivable/{{ r.id }}/fatura.pdf" target="_blank" rel="noopener">Fatura PDF</a>
-              </td>
-            </tr>
-          {% endfor %}
-        </tbody>
-      </table>
-    </div>
-  {% else %}
-    <div class="muted small">Nenhuma parcela encontrada. Clique em “Sincronizar”.</div>
-  {% endif %}
-
-  <div class="mt-4">
-    <h6 class="mb-2">Notas fiscais</h6>
-    {% if ca_invoices %}
-      <div class="table-responsive">
-        <table class="table table-sm align-middle">
-          <thead>
-            <tr>
-              <th>Data</th>
-              <th>Número</th>
-              <th>Tipo</th>
-              <th>Status</th>
-              <th>Download</th>
-            </tr>
-          </thead>
-          <tbody>
-            {% for n in ca_invoices %}
-              <tr>
-                <td class="mono small">{{ fin_human_date(n.issue_date) }}</td>
-                <td class="mono small">{{ n.number or "—" }}</td>
-                <td class="mono small">{{ n.invoice_type }}</td>
-                <td><span class="badge text-bg-light border">{{ n.status }}</span></td>
-                <td>
-                  {% if n.invoice_type.upper() == "NFSE" %}
-                    <a class="btn btn-sm btn-outline-secondary" href="/financeiro/contaazul/invoice/{{ n.id }}/pdf" target="_blank" rel="noopener">NF PDF</a>
-                  {% elif n.invoice_type.upper() == "NFE" %}
-                    <a class="btn btn-sm btn-outline-secondary" href="/financeiro/contaazul/invoice/{{ n.id }}/xml" target="_blank" rel="noopener">NF XML</a>
-                  {% else %}
-                    —
-                  {% endif %}
-                </td>
-              </tr>
-            {% endfor %}
-          </tbody>
-        </table>
-      </div>
-    {% else %}
-      <div class="muted small">Nenhuma nota encontrada. Clique em “Sincronizar”.</div>
-    {% endif %}
-  </div>
-</div>
-{% endblock %}
-"""
-
 if hasattr(templates_env.loader, "mapping"):
     templates_env.loader.mapping = TEMPLATES
 
@@ -30826,12 +30215,12 @@ async def empresa_grupo_page(request: Request, session: Session = Depends(get_se
 @app.post("/empresa/grupo")
 @require_login
 async def empresa_grupo_save(
-        request: Request,
-        session: Session = Depends(get_session),
-        cnpj: str = Form(...),
-        legal_name: str = Form(""),
-        relationship_type: str = Form("filial"),
-        notes: str = Form(""),
+    request: Request,
+    session: Session = Depends(get_session),
+    cnpj: str = Form(...),
+    legal_name: str = Form(""),
+    relationship_type: str = Form("filial"),
+    notes: str = Form(""),
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
@@ -30978,8 +30367,7 @@ async def notifications_mark_all(request: Request, session: Session = Depends(ge
 
 @app.post("/notificacoes/{notification_id}/ler")
 @require_login
-async def notifications_mark_one(request: Request, notification_id: int,
-                                 session: Session = Depends(get_session)) -> Response:
+async def notifications_mark_one(request: Request, notification_id: int, session: Session = Depends(get_session)) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
     row = session.get(Notification, int(notification_id))
@@ -31090,9 +30478,9 @@ class ConversationMessage(SQLModel, table=True):
 def ensure_delivery4_tables() -> bool:
     ok = True
     for tbl in (
-            Conversation.__table__,
-            ConversationParticipant.__table__,
-            ConversationMessage.__table__,
+        Conversation.__table__,
+        ConversationParticipant.__table__,
+        ConversationMessage.__table__,
     ):
         try:
             tbl.create(engine, checkfirst=True)
@@ -31252,8 +30640,7 @@ def _ensure_participant(session: Session, *, conversation_id: int, user_id: int)
     return row
 
 
-def _eligible_chat_memberships(session: Session, *, company_id: int, client_id: Optional[int], creator_role: str) -> \
-list[Membership]:
+def _eligible_chat_memberships(session: Session, *, company_id: int, client_id: Optional[int], creator_role: str) -> list[Membership]:
     rows = session.exec(
         select(Membership).where(Membership.company_id == company_id).order_by(Membership.created_at.asc())
     ).all()
@@ -31308,12 +30695,12 @@ def _participants_for_conversation(session: Session, conversation_id: int) -> li
 
 
 def _notify_conversation_participants(
-        session: Session,
-        *,
-        conversation: Conversation,
-        sender_user_id: int,
-        title: str,
-        message: str,
+    session: Session,
+    *,
+    conversation: Conversation,
+    sender_user_id: int,
+    title: str,
+    message: str,
 ) -> None:
     participants = session.exec(
         select(ConversationParticipant).where(
@@ -31342,18 +30729,15 @@ def _notify_conversation_participants(
 
 _original_render_delivery4 = render
 
-
 def render(
-        template_name: str,
-        *,
-        request: Request,
-        context: Optional[dict[str, Any]] = None,
-        status_code: int = 200,
+    template_name: str,
+    *,
+    request: Request,
+    context: Optional[dict[str, Any]] = None,
+    status_code: int = 200,
 ) -> HTMLResponse:
     ctx = dict(context or {})
     ctx.setdefault("unread_messages_count", 0)
-    if not ENABLE_TEMPLATE_LIVE_COUNTS:
-        return _original_render_delivery4(template_name, request=request, context=ctx, status_code=status_code)
     try:
         with Session(engine) as _db:
             tenant = get_tenant_context(request, _db)
@@ -31372,7 +30756,6 @@ def render(
 
 
 _original_resolve_feature_key_delivery4 = resolve_feature_key
-
 
 def resolve_feature_key(path: str) -> Optional[str]:
     extra_mapping = [
@@ -31616,149 +30999,6 @@ TEMPLATES["message_detail.html"] = r"""
 {% endblock %}
 """
 
-TEMPLATES["fin_list.html"] = r"""
-{% extends "base.html" %}
-{% block content %}
-<div class="card p-4">
-  <div class="d-flex justify-content-between align-items-center">
-    <div>
-      <h4 class="mb-0">Financeiro</h4>
-      <div class="muted">Notas/Boletos de honorários (manual) + sincronizado do Conta Azul.</div>
-    </div>
-    <div class="d-flex gap-2">
-      {% if role in ["admin","equipe"] %}
-        <a class="btn btn-outline-secondary" href="/integrations/contaazul">Conta Azul</a>
-        {% if ca_connected %}
-          <form method="post" action="/financeiro/contaazul/sync">
-            <button class="btn btn-outline-primary" type="submit">Sincronizar</button>
-          </form>
-        {% endif %}
-        <a class="btn btn-primary" href="/financeiro/novo">Nova cobrança</a>
-      {% endif %}
-    </div>
-  </div>
-
-  {% if ca_configured and role in ["admin","equipe"] and not ca_connected %}
-    <div class="alert alert-warning mt-3">
-      Conta Azul não conectado. Vá em <a href="/integrations/contaazul">Integrações → Conta Azul</a>.
-    </div>
-  {% endif %}
-
-  {% if ca_last_sync %}
-    <div class="muted small mt-2">Conta Azul: última sync em {{ ca_last_sync }}</div>
-  {% endif %}
-
-  <hr class="my-3"/>
-  <h6 class="mb-2">Cobranças (manual)</h6>
-  {% if items %}
-    <div class="list-group">
-      {% for it in items %}
-        <a class="list-group-item list-group-item-action" href="/financeiro/{{ it.id }}">
-          <div class="d-flex justify-content-between">
-            <div class="fw-semibold">{{ it.title }}</div>
-            <span class="badge text-bg-light border">{{ it.status }}</span>
-          </div>
-          <div class="muted small">
-            {% if role in ["admin","equipe"] %}Cliente: {{ it.client_name }} • {% endif %}
-            Valor: R$ {{ "%.2f"|format(it.amount_brl) }} •
-            {% if it.due_date %}Venc: {{ it.due_date|brdate }} • {% endif %}
-            {{ it.created_at|brdatetime }}
-          </div>
-        </a>
-      {% endfor %}
-    </div>
-  {% else %}
-    <div class="muted">Sem cobranças manuais.</div>
-  {% endif %}
-
-  <hr class="my-4"/>
-  <h6 class="mb-2">Conta Azul: Boletos / Contas a receber</h6>
-  {% if ca_receivables %}
-    <div class="table-responsive">
-      <table class="table table-sm align-middle">
-        <thead>
-          <tr>
-            <th>Venc.</th>
-            <th>Descrição</th>
-            <th>Status</th>
-            <th>Aberto</th>
-            <th>Pago</th>
-            <th>Fatura</th>
-            <th>Boleto</th>
-            <th>Download</th>
-          </tr>
-        </thead>
-        <tbody>
-          {% for r in ca_receivables %}
-            <tr>
-              <td class="mono small">{{ fin_human_date(r.due_date) }}</td>
-              <td>{{ r.description }}</td>
-              <td><span class="badge text-bg-light border">{{ r.status }}</span></td>
-              <td>R$ {{ "%.2f"|format(r.amount_open) }}</td>
-              <td>R$ {{ "%.2f"|format(r.amount_paid) }}</td>
-              <td class="mono small">{% if r.invoice_number %}{{ r.invoice_type }} #{{ r.invoice_number }}{% else %}—{% endif %}</td>
-              <td>
-                {% if r.payment_url %}
-                  <a class="btn btn-sm btn-outline-primary" href="{{ r.payment_url }}" target="_blank" rel="noopener">Boleto</a>
-                {% else %}
-                  —
-                {% endif %}
-              </td>
-              <td>
-                <a class="btn btn-sm btn-outline-secondary" href="/financeiro/contaazul/receivable/{{ r.id }}/fatura.pdf" target="_blank" rel="noopener">Fatura PDF</a>
-              </td>
-            </tr>
-          {% endfor %}
-        </tbody>
-      </table>
-    </div>
-  {% else %}
-    <div class="muted small">Nenhuma parcela encontrada. Clique em “Sincronizar”.</div>
-  {% endif %}
-
-  <div class="mt-4">
-    <h6 class="mb-2">Notas fiscais</h6>
-    {% if ca_invoices %}
-      <div class="table-responsive">
-        <table class="table table-sm align-middle">
-          <thead>
-            <tr>
-              <th>Data</th>
-              <th>Número</th>
-              <th>Tipo</th>
-              <th>Status</th>
-              <th>Download</th>
-            </tr>
-          </thead>
-          <tbody>
-            {% for n in ca_invoices %}
-              <tr>
-                <td class="mono small">{{ fin_human_date(n.issue_date) }}</td>
-                <td class="mono small">{{ n.number or "—" }}</td>
-                <td class="mono small">{{ n.invoice_type }}</td>
-                <td><span class="badge text-bg-light border">{{ n.status }}</span></td>
-                <td>
-                  {% if n.invoice_type.upper() == "NFSE" %}
-                    <a class="btn btn-sm btn-outline-secondary" href="/financeiro/contaazul/invoice/{{ n.id }}/pdf" target="_blank" rel="noopener">NF PDF</a>
-                  {% elif n.invoice_type.upper() == "NFE" %}
-                    <a class="btn btn-sm btn-outline-secondary" href="/financeiro/contaazul/invoice/{{ n.id }}/xml" target="_blank" rel="noopener">NF XML</a>
-                  {% else %}
-                    —
-                  {% endif %}
-                </td>
-              </tr>
-            {% endfor %}
-          </tbody>
-        </table>
-      </div>
-    {% else %}
-      <div class="muted small">Nenhuma nota encontrada. Clique em “Sincronizar”.</div>
-    {% endif %}
-  </div>
-</div>
-{% endblock %}
-"""
-
 if hasattr(templates_env.loader, "mapping"):
     templates_env.loader.mapping = TEMPLATES
 
@@ -31833,8 +31073,7 @@ async def messages_page(request: Request, session: Session = Depends(get_session
         )
         message_count = int(
             session.exec(
-                select(func.count()).select_from(ConversationMessage).where(
-                    ConversationMessage.conversation_id == conv.id)
+                select(func.count()).select_from(ConversationMessage).where(ConversationMessage.conversation_id == conv.id)
             ).one() or 0
         )
         items.append({
@@ -31890,22 +31129,21 @@ async def message_new_page(request: Request, session: Session = Depends(get_sess
             "role": membership.role,
             "client_name": client.name if client else "",
             "selected": (
-                    membership.user_id == ctx.user.id
-                    or membership.role in {"admin", "equipe"}
-                    or (
-                            current_client
-                            and membership.role == "cliente"
-                            and membership.client_id == current_client.id
-                    )
-                    or (
-                            ctx.membership.role == "cliente"
-                            and membership.client_id == ctx.membership.client_id
-                    )
+                membership.user_id == ctx.user.id
+                or membership.role in {"admin", "equipe"}
+                or (
+                    current_client
+                    and membership.role == "cliente"
+                    and membership.client_id == current_client.id
+                )
+                or (
+                    ctx.membership.role == "cliente"
+                    and membership.client_id == ctx.membership.client_id
+                )
             ),
         })
 
-    client_rows = session.exec(
-        select(Client).where(Client.company_id == ctx.company.id).order_by(Client.name.asc())).all()
+    client_rows = session.exec(select(Client).where(Client.company_id == ctx.company.id).order_by(Client.name.asc())).all()
     client_options = [{"id": row.id, "name": row.name} for row in client_rows if row.id]
 
     return render(
@@ -31926,13 +31164,13 @@ async def message_new_page(request: Request, session: Session = Depends(get_sess
 @app.post("/mensagens/nova")
 @require_login
 async def message_new_submit(
-        request: Request,
-        title: str = Form(""),
-        scope_kind: str = Form("geral"),
-        client_id: Optional[str] = Form(None),
-        body: str = Form(""),
-        participant_user_ids: list[str] = Form(default=[]),
-        session: Session = Depends(get_session),
+    request: Request,
+    title: str = Form(""),
+    scope_kind: str = Form("geral"),
+    client_id: Optional[str] = Form(None),
+    body: str = Form(""),
+    participant_user_ids: list[str] = Form(default=[]),
+    session: Session = Depends(get_session),
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
@@ -32029,8 +31267,7 @@ async def message_new_submit(
 
 @app.get("/mensagens/{conversation_id}", response_class=HTMLResponse)
 @require_login
-async def message_detail_page(request: Request, conversation_id: int,
-                              session: Session = Depends(get_session)) -> HTMLResponse:
+async def message_detail_page(request: Request, conversation_id: int, session: Session = Depends(get_session)) -> HTMLResponse:
     ctx = get_tenant_context(request, session)
     if not ctx:
         request.session.clear()
@@ -32115,10 +31352,10 @@ async def message_detail_page(request: Request, conversation_id: int,
 @app.post("/mensagens/{conversation_id}/enviar")
 @require_login
 async def message_send_submit(
-        request: Request,
-        conversation_id: int,
-        body: str = Form(""),
-        session: Session = Depends(get_session),
+    request: Request,
+    conversation_id: int,
+    body: str = Form(""),
+    session: Session = Depends(get_session),
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
@@ -32185,10 +31422,10 @@ async def message_send_submit(
 @app.post("/mensagens/{conversation_id}/participantes")
 @require_role({"admin", "equipe"})
 async def message_add_participants(
-        request: Request,
-        conversation_id: int,
-        participant_user_ids: list[str] = Form(default=[]),
-        session: Session = Depends(get_session),
+    request: Request,
+    conversation_id: int,
+    participant_user_ids: list[str] = Form(default=[]),
+    session: Session = Depends(get_session),
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
@@ -32250,7 +31487,6 @@ ROLE_DEFAULT_FEATURES.setdefault("admin", set()).add("mensagens")
 ROLE_DEFAULT_FEATURES.setdefault("equipe", set()).add("mensagens")
 ROLE_DEFAULT_FEATURES.setdefault("cliente", set()).add("mensagens")
 
-
 def _ensure_feature_in_group(feature_key: str, group_key: str, insert_pos: int = 0) -> None:
     for g in FEATURE_GROUPS:
         if str(g.get("key") or "") == group_key:
@@ -32259,7 +31495,6 @@ def _ensure_feature_in_group(feature_key: str, group_key: str, insert_pos: int =
                 pos = min(max(insert_pos, 0), len(feats))
                 feats.insert(pos, feature_key)
             return
-
 
 _ensure_feature_in_group("mensagens", "cliente", 3)
 _ensure_feature_in_group("mensagens", "escritorio", 3)
@@ -32286,152 +31521,8 @@ if _base_tpl_fix_mensagens and 'href="/mensagens"' not in _base_tpl_fix_mensagen
             _msg_btn + '\n            <a class="btn btn-outline-secondary btn-sm" href="/logout">Sair</a>',
         )
     TEMPLATES["base.html"] = _base_tpl_fix_mensagens
-
-TEMPLATES["fin_list.html"] = r"""
-{% extends "base.html" %}
-{% block content %}
-<div class="card p-4">
-  <div class="d-flex justify-content-between align-items-center">
-    <div>
-      <h4 class="mb-0">Financeiro</h4>
-      <div class="muted">Notas/Boletos de honorários (manual) + sincronizado do Conta Azul.</div>
-    </div>
-    <div class="d-flex gap-2">
-      {% if role in ["admin","equipe"] %}
-        <a class="btn btn-outline-secondary" href="/integrations/contaazul">Conta Azul</a>
-        {% if ca_connected %}
-          <form method="post" action="/financeiro/contaazul/sync">
-            <button class="btn btn-outline-primary" type="submit">Sincronizar</button>
-          </form>
-        {% endif %}
-        <a class="btn btn-primary" href="/financeiro/novo">Nova cobrança</a>
-      {% endif %}
-    </div>
-  </div>
-
-  {% if ca_configured and role in ["admin","equipe"] and not ca_connected %}
-    <div class="alert alert-warning mt-3">
-      Conta Azul não conectado. Vá em <a href="/integrations/contaazul">Integrações → Conta Azul</a>.
-    </div>
-  {% endif %}
-
-  {% if ca_last_sync %}
-    <div class="muted small mt-2">Conta Azul: última sync em {{ ca_last_sync }}</div>
-  {% endif %}
-
-  <hr class="my-3"/>
-  <h6 class="mb-2">Cobranças (manual)</h6>
-  {% if items %}
-    <div class="list-group">
-      {% for it in items %}
-        <a class="list-group-item list-group-item-action" href="/financeiro/{{ it.id }}">
-          <div class="d-flex justify-content-between">
-            <div class="fw-semibold">{{ it.title }}</div>
-            <span class="badge text-bg-light border">{{ it.status }}</span>
-          </div>
-          <div class="muted small">
-            {% if role in ["admin","equipe"] %}Cliente: {{ it.client_name }} • {% endif %}
-            Valor: R$ {{ "%.2f"|format(it.amount_brl) }} •
-            {% if it.due_date %}Venc: {{ it.due_date|brdate }} • {% endif %}
-            {{ it.created_at|brdatetime }}
-          </div>
-        </a>
-      {% endfor %}
-    </div>
-  {% else %}
-    <div class="muted">Sem cobranças manuais.</div>
-  {% endif %}
-
-  <hr class="my-4"/>
-  <h6 class="mb-2">Conta Azul: Boletos / Contas a receber</h6>
-  {% if ca_receivables %}
-    <div class="table-responsive">
-      <table class="table table-sm align-middle">
-        <thead>
-          <tr>
-            <th>Venc.</th>
-            <th>Descrição</th>
-            <th>Status</th>
-            <th>Aberto</th>
-            <th>Pago</th>
-            <th>Fatura</th>
-            <th>Boleto</th>
-            <th>Download</th>
-          </tr>
-        </thead>
-        <tbody>
-          {% for r in ca_receivables %}
-            <tr>
-              <td class="mono small">{{ fin_human_date(r.due_date) }}</td>
-              <td>{{ r.description }}</td>
-              <td><span class="badge text-bg-light border">{{ r.status }}</span></td>
-              <td>R$ {{ "%.2f"|format(r.amount_open) }}</td>
-              <td>R$ {{ "%.2f"|format(r.amount_paid) }}</td>
-              <td class="mono small">{% if r.invoice_number %}{{ r.invoice_type }} #{{ r.invoice_number }}{% else %}—{% endif %}</td>
-              <td>
-                {% if r.payment_url %}
-                  <a class="btn btn-sm btn-outline-primary" href="{{ r.payment_url }}" target="_blank" rel="noopener">Boleto</a>
-                {% else %}
-                  —
-                {% endif %}
-              </td>
-              <td>
-                <a class="btn btn-sm btn-outline-secondary" href="/financeiro/contaazul/receivable/{{ r.id }}/fatura.pdf" target="_blank" rel="noopener">Fatura PDF</a>
-              </td>
-            </tr>
-          {% endfor %}
-        </tbody>
-      </table>
-    </div>
-  {% else %}
-    <div class="muted small">Nenhuma parcela encontrada. Clique em “Sincronizar”.</div>
-  {% endif %}
-
-  <div class="mt-4">
-    <h6 class="mb-2">Notas fiscais</h6>
-    {% if ca_invoices %}
-      <div class="table-responsive">
-        <table class="table table-sm align-middle">
-          <thead>
-            <tr>
-              <th>Data</th>
-              <th>Número</th>
-              <th>Tipo</th>
-              <th>Status</th>
-              <th>Download</th>
-            </tr>
-          </thead>
-          <tbody>
-            {% for n in ca_invoices %}
-              <tr>
-                <td class="mono small">{{ fin_human_date(n.issue_date) }}</td>
-                <td class="mono small">{{ n.number or "—" }}</td>
-                <td class="mono small">{{ n.invoice_type }}</td>
-                <td><span class="badge text-bg-light border">{{ n.status }}</span></td>
-                <td>
-                  {% if n.invoice_type.upper() == "NFSE" %}
-                    <a class="btn btn-sm btn-outline-secondary" href="/financeiro/contaazul/invoice/{{ n.id }}/pdf" target="_blank" rel="noopener">NF PDF</a>
-                  {% elif n.invoice_type.upper() == "NFE" %}
-                    <a class="btn btn-sm btn-outline-secondary" href="/financeiro/contaazul/invoice/{{ n.id }}/xml" target="_blank" rel="noopener">NF XML</a>
-                  {% else %}
-                    —
-                  {% endif %}
-                </td>
-              </tr>
-            {% endfor %}
-          </tbody>
-        </table>
-      </div>
-    {% else %}
-      <div class="muted small">Nenhuma nota encontrada. Clique em “Sincronizar”.</div>
-    {% endif %}
-  </div>
-</div>
-{% endblock %}
-"""
-
-if hasattr(templates_env.loader, "mapping"):
-    templates_env.loader.mapping = TEMPLATES
+    if hasattr(templates_env.loader, "mapping"):
+        templates_env.loader.mapping = TEMPLATES
 
 
 # ============================
@@ -32583,13 +31674,13 @@ def _office_build_entry_description(base_description: str, seq: int, total: int)
 
 
 def _office_create_financial_entry_from_payload(
-        session: Session,
-        *,
-        company_id: int,
-        user_id: int,
-        payload: dict[str, Any],
-        seq: int = 1,
-        total: int = 1,
+    session: Session,
+    *,
+    company_id: int,
+    user_id: int,
+    payload: dict[str, Any],
+    seq: int = 1,
+    total: int = 1,
 ) -> OfficeFinancialEntry:
     entry = OfficeFinancialEntry(
         company_id=int(company_id),
@@ -32620,21 +31711,21 @@ def _office_create_financial_entry_from_payload(
 
 
 def _office_series_payload_from_form(
-        session: Session,
-        *,
-        entry_kind: str,
-        description: str,
-        document_number: str,
-        client_id: str,
-        supplier_id: str,
-        cost_center_id: str,
-        category_id: str,
-        revenue_type_id: str,
-        bank_account_id: str,
-        internal_service_id: str,
-        start_date: str,
-        amount_expected_brl: str,
-        notes: str,
+    session: Session,
+    *,
+    entry_kind: str,
+    description: str,
+    document_number: str,
+    client_id: str,
+    supplier_id: str,
+    cost_center_id: str,
+    category_id: str,
+    revenue_type_id: str,
+    bank_account_id: str,
+    internal_service_id: str,
+    start_date: str,
+    amount_expected_brl: str,
+    notes: str,
 ) -> dict[str, Any]:
     service_id_int = _safe_int(internal_service_id)
     return {
@@ -32660,14 +31751,14 @@ def _office_series_payload_from_form(
 
 
 def _office_create_recurrence_series(
-        session: Session,
-        *,
-        company_id: int,
-        user_id: int,
-        payload: dict[str, Any],
-        recurrence_rule: str,
-        occurrences_total: int,
-        start_date: str,
+    session: Session,
+    *,
+    company_id: int,
+    user_id: int,
+    payload: dict[str, Any],
+    recurrence_rule: str,
+    occurrences_total: int,
+    start_date: str,
 ) -> OfficeFinancialRecurrence:
     rec = OfficeFinancialRecurrence(
         company_id=int(company_id),
@@ -32731,10 +31822,8 @@ def _office_recurrence_catalog(session: Session, company_id: int) -> dict[str, l
 
 
 def _office_recurrence_row(session: Session, recurrence: OfficeFinancialRecurrence) -> dict[str, Any]:
-    clients_by_id = {int(x.id): x for x in
-                     session.exec(select(Client).where(Client.company_id == recurrence.company_id)).all() if x.id}
-    suppliers_by_id = {int(x.id): x for x in session.exec(
-        select(OfficeSupplier).where(OfficeSupplier.company_id == recurrence.company_id)).all() if x.id}
+    clients_by_id = {int(x.id): x for x in session.exec(select(Client).where(Client.company_id == recurrence.company_id)).all() if x.id}
+    suppliers_by_id = {int(x.id): x for x in session.exec(select(OfficeSupplier).where(OfficeSupplier.company_id == recurrence.company_id)).all() if x.id}
     occurrences = session.exec(
         select(OfficeFinancialRecurrenceOccurrence)
         .where(OfficeFinancialRecurrenceOccurrence.recurrence_id == int(recurrence.id))
@@ -32765,13 +31854,13 @@ def _office_recurrence_row(session: Session, recurrence: OfficeFinancialRecurren
 
 
 def _office_conciliation_rows(
-        session: Session,
-        company_id: int,
-        *,
-        entry_kind: str = "",
-        bank_account_id: str = "",
-        only_open: bool = True,
-        month: str = "",
+    session: Session,
+    company_id: int,
+    *,
+    entry_kind: str = "",
+    bank_account_id: str = "",
+    only_open: bool = True,
+    month: str = "",
 ) -> tuple[list[dict[str, Any]], dict[str, Any], dict[str, list[Any]]]:
     selected_month = _office_selected_month(month)
     entries = session.exec(
@@ -32839,15 +31928,15 @@ def _office_conciliation_rows(
 
 
 def _office_management_dashboard(
-        session: Session,
-        company_id: int,
-        *,
-        month: str = "",
-        client_id: str = "",
-        cost_center_id: str = "",
-        internal_service_id: str = "",
-        family_code: str = "",
-        bank_account_id: str = "",
+    session: Session,
+    company_id: int,
+    *,
+    month: str = "",
+    client_id: str = "",
+    cost_center_id: str = "",
+    internal_service_id: str = "",
+    family_code: str = "",
+    bank_account_id: str = "",
 ) -> tuple[dict[str, Any], dict[str, list[Any]]]:
     entries, lookups = _office_filter_entries(
         session,
@@ -32969,8 +32058,7 @@ async def office_finance_recurrences_page(request: Request, session: Session = D
     ctx = get_tenant_context(request, session)
     assert ctx is not None
     if not ensure_office_finance_tables() or not ensure_office_finance_delivery_c_tables():
-        return render("error.html", request=request, context={"message": "Não foi possível inicializar Recorrências."},
-                      status_code=500)
+        return render("error.html", request=request, context={"message": "Não foi possível inicializar Recorrências."}, status_code=500)
 
     catalog = _office_recurrence_catalog(session, ctx.company.id)
     recurrence_rows = [_office_recurrence_row(session, rec) for rec in catalog["recurrences"]]
@@ -32994,23 +32082,23 @@ async def office_finance_recurrences_page(request: Request, session: Session = D
 @app.post("/admin/financeiro/recorrencias")
 @require_role({"admin", "equipe"})
 async def office_finance_recurrences_create(
-        request: Request,
-        session: Session = Depends(get_session),
-        entry_kind: str = Form("receber"),
-        description: str = Form(""),
-        document_number: str = Form(""),
-        client_id: str = Form(""),
-        supplier_id: str = Form(""),
-        cost_center_id: str = Form(""),
-        category_id: str = Form(""),
-        revenue_type_id: str = Form(""),
-        bank_account_id: str = Form(""),
-        internal_service_id: str = Form(""),
-        amount_expected_brl: str = Form("0"),
-        start_date: str = Form(""),
-        recurrence_rule: str = Form("mensal"),
-        occurrences_total: str = Form("12"),
-        notes: str = Form(""),
+    request: Request,
+    session: Session = Depends(get_session),
+    entry_kind: str = Form("receber"),
+    description: str = Form(""),
+    document_number: str = Form(""),
+    client_id: str = Form(""),
+    supplier_id: str = Form(""),
+    cost_center_id: str = Form(""),
+    category_id: str = Form(""),
+    revenue_type_id: str = Form(""),
+    bank_account_id: str = Form(""),
+    internal_service_id: str = Form(""),
+    amount_expected_brl: str = Form("0"),
+    start_date: str = Form(""),
+    recurrence_rule: str = Form("mensal"),
+    occurrences_total: str = Form("12"),
+    notes: str = Form(""),
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
@@ -33074,9 +32162,9 @@ async def office_finance_recurrences_create(
 @app.post("/admin/financeiro/recorrencias/{recurrence_id}/toggle")
 @require_role({"admin", "equipe"})
 async def office_finance_recurrence_toggle(
-        recurrence_id: int,
-        request: Request,
-        session: Session = Depends(get_session),
+    recurrence_id: int,
+    request: Request,
+    session: Session = Depends(get_session),
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
@@ -33099,8 +32187,7 @@ async def office_finance_conciliation_page(request: Request, session: Session = 
     ctx = get_tenant_context(request, session)
     assert ctx is not None
     if not ensure_office_finance_tables() or not ensure_office_finance_delivery_c_tables():
-        return render("error.html", request=request, context={"message": "Não foi possível inicializar a Conciliação."},
-                      status_code=500)
+        return render("error.html", request=request, context={"message": "Não foi possível inicializar a Conciliação."}, status_code=500)
 
     filters = {
         "entry_kind": (request.query_params.get("entry_kind") or "").strip().lower(),
@@ -33138,13 +32225,13 @@ async def office_finance_conciliation_page(request: Request, session: Session = 
 @app.post("/admin/financeiro/conciliacao/{entry_id}")
 @require_role({"admin", "equipe"})
 async def office_finance_conciliate_entry(
-        entry_id: int,
-        request: Request,
-        session: Session = Depends(get_session),
-        settlement_date: str = Form(""),
-        amount_realized_brl: str = Form("0"),
-        bank_account_id: str = Form(""),
-        notes: str = Form(""),
+    entry_id: int,
+    request: Request,
+    session: Session = Depends(get_session),
+    settlement_date: str = Form(""),
+    amount_realized_brl: str = Form("0"),
+    bank_account_id: str = Form(""),
+    notes: str = Form(""),
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
@@ -33164,9 +32251,7 @@ async def office_finance_conciliate_entry(
         realized = expected
 
     entry.amount_realized_brl = float(realized)
-    entry.settlement_date = settlement_date.strip() if re.fullmatch(r"\d{4}-\d{2}-\d{2}",
-                                                                    settlement_date.strip()) else datetime.now().strftime(
-        "%Y-%m-%d")
+    entry.settlement_date = settlement_date.strip() if re.fullmatch(r"\d{4}-\d{2}-\d{2}", settlement_date.strip()) else datetime.now().strftime("%Y-%m-%d")
     entry.updated_by_user_id = ctx.user.id
     entry.updated_at = utcnow()
     if _safe_int(bank_account_id):
@@ -33198,13 +32283,11 @@ async def office_finance_conciliate_entry(
 
 @app.get("/admin/financeiro/dashboard-gerencial", response_class=HTMLResponse)
 @require_role({"admin", "equipe"})
-async def office_finance_management_dashboard(request: Request,
-                                              session: Session = Depends(get_session)) -> HTMLResponse:
+async def office_finance_management_dashboard(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
     if not ensure_office_finance_tables():
-        return render("error.html", request=request,
-                      context={"message": "Não foi possível inicializar o dashboard gerencial."}, status_code=500)
+        return render("error.html", request=request, context={"message": "Não foi possível inicializar o dashboard gerencial."}, status_code=500)
 
     filters = {
         "month": _office_selected_month((request.query_params.get("month") or "").strip()),
@@ -33257,8 +32340,7 @@ async def office_finance_export_entries_xlsx(request: Request, session: Session 
     wb = Workbook()
     ws = wb.active
     ws.title = "Lançamentos"
-    ws.append(["Tipo", "Status", "Descrição", "Cliente/Fornecedor", "Categoria", "Centro de custo", "Competência",
-               "Vencimento", "Previsto", "Realizado"])
+    ws.append(["Tipo", "Status", "Descrição", "Cliente/Fornecedor", "Categoria", "Centro de custo", "Competência", "Vencimento", "Previsto", "Realizado"])
     for row in rows:
         ws.append([
             row["entry_kind"],
@@ -33972,6 +33054,7 @@ TEMPLATES.update({
 """,
 })
 
+
 # ----------------------------
 # Ferramentas para Cliente - Entrega 1
 # ----------------------------
@@ -33981,8 +33064,7 @@ CLIENT_TOOL_FINANCE_MONTHLY_CREDITS = 70
 
 
 class ClientToolSubscription(SQLModel, table=True):
-    __table_args__ = (
-    UniqueConstraint("company_id", "client_id", "tool_code", name="uq_clienttoolsubscription_company_client_tool"),)
+    __table_args__ = (UniqueConstraint("company_id", "client_id", "tool_code", name="uq_clienttoolsubscription_company_client_tool"),)
 
     id: Optional[int] = Field(default=None, primary_key=True)
     company_id: int = Field(index=True, foreign_key="company.id")
@@ -34031,11 +33113,11 @@ def _client_current_client(request: Request, session: Session, ctx: TenantContex
 
 
 def _get_or_create_client_tool_subscription(
-        session: Session,
-        *,
-        company_id: int,
-        client_id: int,
-        tool_code: str = CLIENT_TOOL_FINANCE_CODE,
+    session: Session,
+    *,
+    company_id: int,
+    client_id: int,
+    tool_code: str = CLIENT_TOOL_FINANCE_CODE,
 ) -> ClientToolSubscription:
     row = session.exec(
         select(ClientToolSubscription).where(
@@ -34068,13 +33150,13 @@ def _get_or_create_client_tool_subscription(
 
 
 def _wallet_debit_tool_fee(
-        session: Session,
-        *,
-        company_id: int,
-        client_id: int,
-        subscription_id: int,
-        amount_credits: int,
-        tool_code: str = CLIENT_TOOL_FINANCE_CODE,
+    session: Session,
+    *,
+    company_id: int,
+    client_id: int,
+    subscription_id: int,
+    amount_credits: int,
+    tool_code: str = CLIENT_TOOL_FINANCE_CODE,
 ) -> bool:
     amount_cents = int(max(0, int(amount_credits)) * 100)
     if amount_cents <= 0:
@@ -34102,11 +33184,11 @@ def _wallet_debit_tool_fee(
 
 
 def _tool_subscription_status_payload(
-        session: Session,
-        *,
-        company_id: int,
-        client_id: int,
-        tool_code: str = CLIENT_TOOL_FINANCE_CODE,
+    session: Session,
+    *,
+    company_id: int,
+    client_id: int,
+    tool_code: str = CLIENT_TOOL_FINANCE_CODE,
 ) -> dict[str, Any]:
     sub = _get_or_create_client_tool_subscription(
         session,
@@ -34119,8 +33201,7 @@ def _tool_subscription_status_payload(
     now = utcnow()
     now_naive = now.replace(tzinfo=None) if getattr(now, "tzinfo", None) else now
     trial_ends = sub.trial_ends_at
-    trial_ends_naive = trial_ends.replace(tzinfo=None) if trial_ends and getattr(trial_ends, "tzinfo",
-                                                                                 None) else trial_ends
+    trial_ends_naive = trial_ends.replace(tzinfo=None) if trial_ends and getattr(trial_ends, "tzinfo", None) else trial_ends
 
     message = ""
     access_ok = False
@@ -34180,13 +33261,11 @@ def _tool_subscription_status_payload(
         "status_label": status_label,
         "message": message,
         "trial_active": bool(sub.status == "trial" and trial_ends_naive and now_naive < trial_ends_naive),
-        "trial_days_left": max(0, (
-                    trial_ends_naive.date() - now_naive.date()).days) if trial_ends_naive and now_naive < trial_ends_naive else 0,
+        "trial_days_left": max(0, (trial_ends_naive.date() - now_naive.date()).days) if trial_ends_naive and now_naive < trial_ends_naive else 0,
         "monthly_price_credits": int(sub.monthly_price_credits or CLIENT_TOOL_FINANCE_MONTHLY_CREDITS),
         "wallet_balance_credits": round((wallet.balance_cents or 0) / 100.0, 2),
         "trial_ends_at": trial_ends_naive,
-        "next_billing_at": sub.next_billing_at.replace(tzinfo=None) if sub.next_billing_at and getattr(
-            sub.next_billing_at, "tzinfo", None) else sub.next_billing_at,
+        "next_billing_at": sub.next_billing_at.replace(tzinfo=None) if sub.next_billing_at and getattr(sub.next_billing_at, "tzinfo", None) else sub.next_billing_at,
     }
 
 
@@ -34199,8 +33278,7 @@ FEATURE_KEYS["ferramentas"] = {
 FEATURE_GROUPS = [
     {"key": "minha_empresa", "title": "Minha Empresa", "features": ["empresa", "financeiro", "documentos"]},
     {"key": "diagnostico", "title": "Diagnóstico Financeiro", "features": ["perfil"]},
-    {"key": "compliance_risco", "title": "Compliance e Análise de Risco",
-     "features": ["consultas", "creditos", "openfinance"]},
+    {"key": "compliance_risco", "title": "Compliance e Análise de Risco", "features": ["consultas", "creditos", "openfinance"]},
     {"key": "solucoes", "title": "Soluções Financeiras", "features": ["ofertas", "simulador", "propostas"]},
     {"key": "meu_projeto", "title": "Meu Projeto", "features": ["consultoria", "reunioes", "tarefas"]},
     {"key": "ferramentas_conteudo", "title": "Ferramentas e Conteúdo", "features": ["ferramentas", "educacao"]},
@@ -34222,8 +33300,7 @@ FEATURE_VISIBLE_ROLES.update({
     "parceiros": {"admin"},
 })
 ROLE_DEFAULT_FEATURES["admin"] = set(FEATURE_KEYS.keys())
-ROLE_DEFAULT_FEATURES["equipe"] = set(FEATURE_KEYS.keys()) - {"ui", "gestao", "familias", "servicos_internos",
-                                                              "parceiros"}
+ROLE_DEFAULT_FEATURES["equipe"] = set(FEATURE_KEYS.keys()) - {"ui", "gestao", "familias", "servicos_internos", "parceiros"}
 ROLE_DEFAULT_FEATURES["cliente"] = {
     "empresa",
     "perfil",
@@ -34370,6 +33447,7 @@ TEMPLATES["ferramentas.html"] = r"""
 {% endif %}
 {% endblock %}
 """
+
 
 TEMPLATES["ferramentas_financeiro.html"] = r"""
 {% extends "base.html" %}
@@ -34573,8 +33651,7 @@ async def ferramentas_financeiro_page(request: Request, session: Session = Depen
         ensure_client_finance_tables()
         seed_client_finance_defaults(session, company_id=ctx.company.id, client_id=current_client.id)
         finance_summary = _client_finance_summary(session, company_id=ctx.company.id, client_id=current_client.id)
-        recent_entries = _client_finance_recent_entries(session, company_id=ctx.company.id, client_id=current_client.id,
-                                                        limit=8)
+        recent_entries = _client_finance_recent_entries(session, company_id=ctx.company.id, client_id=current_client.id, limit=8)
 
     return render(
         "ferramentas_financeiro.html",
@@ -34590,6 +33667,7 @@ async def ferramentas_financeiro_page(request: Request, session: Session = Depen
             "recent_entries": recent_entries,
         },
     )
+
 
 
 # ----------------------------
@@ -34628,8 +33706,7 @@ CLIENT_FINANCE_DEFAULT_REVENUE_TYPES = [
 
 
 class ClientFinanceSupplier(SQLModel, table=True):
-    __table_args__ = (
-    UniqueConstraint("company_id", "client_id", "name", name="uq_clientfin_supplier_company_client_name"),)
+    __table_args__ = (UniqueConstraint("company_id", "client_id", "name", name="uq_clientfin_supplier_company_client_name"),)
     id: Optional[int] = Field(default=None, primary_key=True)
     company_id: int = Field(index=True, foreign_key="company.id")
     client_id: int = Field(index=True, foreign_key="client.id")
@@ -34657,8 +33734,7 @@ class ClientFinanceCostCenter(SQLModel, table=True):
 
 
 class ClientFinanceCategory(SQLModel, table=True):
-    __table_args__ = (UniqueConstraint("company_id", "client_id", "name", "category_kind",
-                                       name="uq_clientfin_cat_company_client_name_kind"),)
+    __table_args__ = (UniqueConstraint("company_id", "client_id", "name", "category_kind", name="uq_clientfin_cat_company_client_name_kind"),)
     id: Optional[int] = Field(default=None, primary_key=True)
     company_id: int = Field(index=True, foreign_key="company.id")
     client_id: int = Field(index=True, foreign_key="client.id")
@@ -34672,8 +33748,7 @@ class ClientFinanceCategory(SQLModel, table=True):
 
 
 class ClientFinanceRevenueType(SQLModel, table=True):
-    __table_args__ = (
-    UniqueConstraint("company_id", "client_id", "name", name="uq_clientfin_revtype_company_client_name"),)
+    __table_args__ = (UniqueConstraint("company_id", "client_id", "name", name="uq_clientfin_revtype_company_client_name"),)
     id: Optional[int] = Field(default=None, primary_key=True)
     company_id: int = Field(index=True, foreign_key="company.id")
     client_id: int = Field(index=True, foreign_key="client.id")
@@ -34685,8 +33760,7 @@ class ClientFinanceRevenueType(SQLModel, table=True):
 
 
 class ClientFinanceBankAccount(SQLModel, table=True):
-    __table_args__ = (
-    UniqueConstraint("company_id", "client_id", "name", name="uq_clientfin_bank_company_client_name"),)
+    __table_args__ = (UniqueConstraint("company_id", "client_id", "name", name="uq_clientfin_bank_company_client_name"),)
     id: Optional[int] = Field(default=None, primary_key=True)
     company_id: int = Field(index=True, foreign_key="company.id")
     client_id: int = Field(index=True, foreign_key="client.id")
@@ -34771,8 +33845,7 @@ def seed_client_finance_defaults(session: Session, *, company_id: int, client_id
     for code, name in CLIENT_FINANCE_DEFAULT_COST_CENTERS:
         if code.upper() in existing_cc:
             continue
-        session.add(ClientFinanceCostCenter(company_id=company_id, client_id=client_id, code=code.upper(), name=name,
-                                            is_active=True))
+        session.add(ClientFinanceCostCenter(company_id=company_id, client_id=client_id, code=code.upper(), name=name, is_active=True))
         changed = True
 
     existing_cat = {
@@ -34825,8 +33898,8 @@ def seed_client_finance_defaults(session: Session, *, company_id: int, client_id
 
 
 def _client_finance_require_access(
-        request: Request,
-        session: Session,
+    request: Request,
+    session: Session,
 ) -> tuple[TenantContext, Client, dict[str, Any]] | Response:
     ctx = get_tenant_context(request, session)
     if not ctx:
@@ -34955,8 +34028,7 @@ def _client_finance_row_view(row: ClientFinancialEntry, name_maps: dict[str, dic
     }
 
 
-def _client_finance_recent_entries(session: Session, *, company_id: int, client_id: int, limit: int = 8) -> list[
-    dict[str, Any]]:
+def _client_finance_recent_entries(session: Session, *, company_id: int, client_id: int, limit: int = 8) -> list[dict[str, Any]]:
     name_maps = _client_finance_name_maps(session, company_id=company_id, client_id=client_id)
     rows = session.exec(
         select(ClientFinancialEntry)
@@ -35360,8 +34432,7 @@ TEMPLATES["ferramentas_financeiro_lancamentos.html"] = r"""
 
 @app.get("/ferramentas/financeiro/cadastros", response_class=HTMLResponse)
 @require_login
-async def ferramentas_financeiro_cadastros_page(request: Request,
-                                                session: Session = Depends(get_session)) -> HTMLResponse:
+async def ferramentas_financeiro_cadastros_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
     access = _client_finance_require_access(request, session)
     if isinstance(access, Response):
         return access
@@ -35377,26 +34448,11 @@ async def ferramentas_financeiro_cadastros_page(request: Request,
             "role": ctx.membership.role,
             "current_client": current_client,
             "finance_tool": finance_tool,
-            "suppliers": session.exec(
-                select(ClientFinanceSupplier).where(ClientFinanceSupplier.company_id == ctx.company.id,
-                                                    ClientFinanceSupplier.client_id == current_client.id).order_by(
-                    ClientFinanceSupplier.name.asc())).all(),
-            "cost_centers": session.exec(
-                select(ClientFinanceCostCenter).where(ClientFinanceCostCenter.company_id == ctx.company.id,
-                                                      ClientFinanceCostCenter.client_id == current_client.id).order_by(
-                    ClientFinanceCostCenter.code.asc())).all(),
-            "categories": session.exec(
-                select(ClientFinanceCategory).where(ClientFinanceCategory.company_id == ctx.company.id,
-                                                    ClientFinanceCategory.client_id == current_client.id).order_by(
-                    ClientFinanceCategory.category_kind.asc(), ClientFinanceCategory.name.asc())).all(),
-            "revenue_types": session.exec(
-                select(ClientFinanceRevenueType).where(ClientFinanceRevenueType.company_id == ctx.company.id,
-                                                       ClientFinanceRevenueType.client_id == current_client.id).order_by(
-                    ClientFinanceRevenueType.name.asc())).all(),
-            "bank_accounts": session.exec(
-                select(ClientFinanceBankAccount).where(ClientFinanceBankAccount.company_id == ctx.company.id,
-                                                       ClientFinanceBankAccount.client_id == current_client.id).order_by(
-                    ClientFinanceBankAccount.name.asc())).all(),
+            "suppliers": session.exec(select(ClientFinanceSupplier).where(ClientFinanceSupplier.company_id == ctx.company.id, ClientFinanceSupplier.client_id == current_client.id).order_by(ClientFinanceSupplier.name.asc())).all(),
+            "cost_centers": session.exec(select(ClientFinanceCostCenter).where(ClientFinanceCostCenter.company_id == ctx.company.id, ClientFinanceCostCenter.client_id == current_client.id).order_by(ClientFinanceCostCenter.code.asc())).all(),
+            "categories": session.exec(select(ClientFinanceCategory).where(ClientFinanceCategory.company_id == ctx.company.id, ClientFinanceCategory.client_id == current_client.id).order_by(ClientFinanceCategory.category_kind.asc(), ClientFinanceCategory.name.asc())).all(),
+            "revenue_types": session.exec(select(ClientFinanceRevenueType).where(ClientFinanceRevenueType.company_id == ctx.company.id, ClientFinanceRevenueType.client_id == current_client.id).order_by(ClientFinanceRevenueType.name.asc())).all(),
+            "bank_accounts": session.exec(select(ClientFinanceBankAccount).where(ClientFinanceBankAccount.company_id == ctx.company.id, ClientFinanceBankAccount.client_id == current_client.id).order_by(ClientFinanceBankAccount.name.asc())).all(),
         },
     )
 
@@ -35404,12 +34460,12 @@ async def ferramentas_financeiro_cadastros_page(request: Request,
 @app.post("/ferramentas/financeiro/cadastros/fornecedores")
 @require_login
 async def ferramentas_financeiro_supplier_create(
-        request: Request,
-        session: Session = Depends(get_session),
-        name: str = Form(""),
-        document: str = Form(""),
-        email: str = Form(""),
-        phone: str = Form(""),
+    request: Request,
+    session: Session = Depends(get_session),
+    name: str = Form(""),
+    document: str = Form(""),
+    email: str = Form(""),
+    phone: str = Form(""),
 ) -> Response:
     access = _client_finance_require_access(request, session)
     if isinstance(access, Response):
@@ -35441,10 +34497,10 @@ async def ferramentas_financeiro_supplier_create(
 @app.post("/ferramentas/financeiro/cadastros/centros-custo")
 @require_login
 async def ferramentas_financeiro_cost_center_create(
-        request: Request,
-        session: Session = Depends(get_session),
-        code: str = Form(""),
-        name: str = Form(""),
+    request: Request,
+    session: Session = Depends(get_session),
+    code: str = Form(""),
+    name: str = Form(""),
 ) -> Response:
     access = _client_finance_require_access(request, session)
     if isinstance(access, Response):
@@ -35455,8 +34511,7 @@ async def ferramentas_financeiro_cost_center_create(
     if not c or not nm:
         set_flash(request, "Informe código e nome do centro de custo.")
         return RedirectResponse("/ferramentas/financeiro/cadastros", status_code=303)
-    row = ClientFinanceCostCenter(company_id=ctx.company.id, client_id=current_client.id, code=c, name=nm,
-                                  is_active=True)
+    row = ClientFinanceCostCenter(company_id=ctx.company.id, client_id=current_client.id, code=c, name=nm, is_active=True)
     session.add(row)
     try:
         session.commit()
@@ -35470,11 +34525,11 @@ async def ferramentas_financeiro_cost_center_create(
 @app.post("/ferramentas/financeiro/cadastros/categorias")
 @require_login
 async def ferramentas_financeiro_category_create(
-        request: Request,
-        session: Session = Depends(get_session),
-        name: str = Form(""),
-        category_kind: str = Form("despesa"),
-        dre_group: str = Form(""),
+    request: Request,
+    session: Session = Depends(get_session),
+    name: str = Form(""),
+    category_kind: str = Form("despesa"),
+    dre_group: str = Form(""),
 ) -> Response:
     access = _client_finance_require_access(request, session)
     if isinstance(access, Response):
@@ -35506,10 +34561,10 @@ async def ferramentas_financeiro_category_create(
 @app.post("/ferramentas/financeiro/cadastros/tipos-receita")
 @require_login
 async def ferramentas_financeiro_revenue_type_create(
-        request: Request,
-        session: Session = Depends(get_session),
-        name: str = Form(""),
-        description: str = Form(""),
+    request: Request,
+    session: Session = Depends(get_session),
+    name: str = Form(""),
+    description: str = Form(""),
 ) -> Response:
     access = _client_finance_require_access(request, session)
     if isinstance(access, Response):
@@ -35539,11 +34594,11 @@ async def ferramentas_financeiro_revenue_type_create(
 @app.post("/ferramentas/financeiro/cadastros/contas")
 @require_login
 async def ferramentas_financeiro_bank_account_create(
-        request: Request,
-        session: Session = Depends(get_session),
-        name: str = Form(""),
-        bank_name: str = Form(""),
-        initial_balance_brl: float = Form(0.0),
+    request: Request,
+    session: Session = Depends(get_session),
+    name: str = Form(""),
+    bank_name: str = Form(""),
+    initial_balance_brl: float = Form(0.0),
 ) -> Response:
     access = _client_finance_require_access(request, session)
     if isinstance(access, Response):
@@ -35594,12 +34649,12 @@ def _client_finance_form_defaults(entry: Optional[ClientFinancialEntry] = None) 
 @app.get("/ferramentas/financeiro/lancamentos", response_class=HTMLResponse)
 @require_login
 async def ferramentas_financeiro_lancamentos_page(
-        request: Request,
-        q: str = "",
-        entry_kind: str = "",
-        status: str = "",
-        month: str = "",
-        session: Session = Depends(get_session),
+    request: Request,
+    q: str = "",
+    entry_kind: str = "",
+    status: str = "",
+    month: str = "",
+    session: Session = Depends(get_session),
 ) -> HTMLResponse:
     access = _client_finance_require_access(request, session)
     if isinstance(access, Response):
@@ -35671,23 +34726,23 @@ async def ferramentas_financeiro_new_page(request: Request, session: Session = D
 @app.post("/ferramentas/financeiro/novo")
 @require_login
 async def ferramentas_financeiro_create(
-        request: Request,
-        session: Session = Depends(get_session),
-        entry_kind: str = Form("receber"),
-        status: str = Form("aberto"),
-        description: str = Form(""),
-        document_number: str = Form(""),
-        competence_date: str = Form(""),
-        due_date: str = Form(""),
-        settlement_date: str = Form(""),
-        amount_expected_brl: float = Form(0.0),
-        amount_realized_brl: float = Form(0.0),
-        supplier_id: str = Form(""),
-        cost_center_id: str = Form(""),
-        category_id: str = Form(""),
-        revenue_type_id: str = Form(""),
-        bank_account_id: str = Form(""),
-        notes: str = Form(""),
+    request: Request,
+    session: Session = Depends(get_session),
+    entry_kind: str = Form("receber"),
+    status: str = Form("aberto"),
+    description: str = Form(""),
+    document_number: str = Form(""),
+    competence_date: str = Form(""),
+    due_date: str = Form(""),
+    settlement_date: str = Form(""),
+    amount_expected_brl: float = Form(0.0),
+    amount_realized_brl: float = Form(0.0),
+    supplier_id: str = Form(""),
+    cost_center_id: str = Form(""),
+    category_id: str = Form(""),
+    revenue_type_id: str = Form(""),
+    bank_account_id: str = Form(""),
+    notes: str = Form(""),
 ) -> Response:
     access = _client_finance_require_access(request, session)
     if isinstance(access, Response):
@@ -35730,8 +34785,7 @@ async def ferramentas_financeiro_create(
 
 @app.get("/ferramentas/financeiro/{entry_id}/editar", response_class=HTMLResponse)
 @require_login
-async def ferramentas_financeiro_edit_page(entry_id: int, request: Request,
-                                           session: Session = Depends(get_session)) -> HTMLResponse:
+async def ferramentas_financeiro_edit_page(entry_id: int, request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
     access = _client_finance_require_access(request, session)
     if isinstance(access, Response):
         return access
@@ -35771,24 +34825,24 @@ async def ferramentas_financeiro_edit_page(entry_id: int, request: Request,
 @app.post("/ferramentas/financeiro/{entry_id}/editar")
 @require_login
 async def ferramentas_financeiro_edit(
-        entry_id: int,
-        request: Request,
-        session: Session = Depends(get_session),
-        entry_kind: str = Form("receber"),
-        status: str = Form("aberto"),
-        description: str = Form(""),
-        document_number: str = Form(""),
-        competence_date: str = Form(""),
-        due_date: str = Form(""),
-        settlement_date: str = Form(""),
-        amount_expected_brl: float = Form(0.0),
-        amount_realized_brl: float = Form(0.0),
-        supplier_id: str = Form(""),
-        cost_center_id: str = Form(""),
-        category_id: str = Form(""),
-        revenue_type_id: str = Form(""),
-        bank_account_id: str = Form(""),
-        notes: str = Form(""),
+    entry_id: int,
+    request: Request,
+    session: Session = Depends(get_session),
+    entry_kind: str = Form("receber"),
+    status: str = Form("aberto"),
+    description: str = Form(""),
+    document_number: str = Form(""),
+    competence_date: str = Form(""),
+    due_date: str = Form(""),
+    settlement_date: str = Form(""),
+    amount_expected_brl: float = Form(0.0),
+    amount_realized_brl: float = Form(0.0),
+    supplier_id: str = Form(""),
+    cost_center_id: str = Form(""),
+    category_id: str = Form(""),
+    revenue_type_id: str = Form(""),
+    bank_account_id: str = Form(""),
+    notes: str = Form(""),
 ) -> Response:
     access = _client_finance_require_access(request, session)
     if isinstance(access, Response):
@@ -35902,14 +34956,14 @@ def _client_finance_catalog(session: Session, company_id: int, client_id: int) -
 
 
 def _client_finance_filter_entries(
-        session: Session,
-        company_id: int,
-        client_id: int,
-        *,
-        month: str = "",
-        cost_center_id: str = "",
-        category_id: str = "",
-        bank_account_id: str = "",
+    session: Session,
+    company_id: int,
+    client_id: int,
+    *,
+    month: str = "",
+    cost_center_id: str = "",
+    category_id: str = "",
+    bank_account_id: str = "",
 ) -> tuple[list[ClientFinancialEntry], dict[str, Any]]:
     entries = session.exec(
         select(ClientFinancialEntry)
@@ -35946,13 +35000,13 @@ def _client_finance_filter_entries(
 
 
 def _client_finance_dre_report(
-        session: Session,
-        company_id: int,
-        client_id: int,
-        *,
-        month: str = "",
-        cost_center_id: str = "",
-        category_id: str = "",
+    session: Session,
+    company_id: int,
+    client_id: int,
+    *,
+    month: str = "",
+    cost_center_id: str = "",
+    category_id: str = "",
 ) -> tuple[list[dict[str, Any]], dict[str, Any], dict[str, Any]]:
     entries, lookups = _client_finance_filter_entries(
         session,
@@ -36018,8 +35072,7 @@ def _client_finance_dre_report(
     resultado_periodo_e = ebitda_e + resultado_fin_e + outras_receitas_e + outras_despesas_e
     resultado_periodo_r = ebitda_r + resultado_fin_r + outras_receitas_r + outras_despesas_r
 
-    ordered_groups = [g for g in base_groups if g in group_totals] + [g for g in group_totals.keys() if
-                                                                      g not in base_groups]
+    ordered_groups = [g for g in base_groups if g in group_totals] + [g for g in group_totals.keys() if g not in base_groups]
     rows: list[dict[str, Any]] = []
     for group in ordered_groups:
         rows.append({
@@ -36029,17 +35082,12 @@ def _client_finance_dre_report(
             "kind": "group",
         })
         if group == "Deduções/Impostos":
-            rows.append({"label": "Receita líquida", "expected": round(receita_liquida_e, 2),
-                         "realized": round(receita_liquida_r, 2), "kind": "result"})
+            rows.append({"label": "Receita líquida", "expected": round(receita_liquida_e, 2), "realized": round(receita_liquida_r, 2), "kind": "result"})
         if group == "Custos Diretos":
-            rows.append(
-                {"label": "Margem bruta", "expected": round(margem_bruta_e, 2), "realized": round(margem_bruta_r, 2),
-                 "kind": "result"})
+            rows.append({"label": "Margem bruta", "expected": round(margem_bruta_e, 2), "realized": round(margem_bruta_r, 2), "kind": "result"})
         if group == "Despesas Operacionais":
-            rows.append(
-                {"label": "EBITDA", "expected": round(ebitda_e, 2), "realized": round(ebitda_r, 2), "kind": "result"})
-    rows.append({"label": "Resultado do período", "expected": round(resultado_periodo_e, 2),
-                 "realized": round(resultado_periodo_r, 2), "kind": "result"})
+            rows.append({"label": "EBITDA", "expected": round(ebitda_e, 2), "realized": round(ebitda_r, 2), "kind": "result"})
+    rows.append({"label": "Resultado do período", "expected": round(resultado_periodo_e, 2), "realized": round(resultado_periodo_r, 2), "kind": "result"})
 
     summary = {
         "entry_count": len(entries),
@@ -36054,14 +35102,14 @@ def _client_finance_dre_report(
 
 
 def _client_finance_cashflow_report(
-        session: Session,
-        company_id: int,
-        client_id: int,
-        *,
-        month: str = "",
-        cost_center_id: str = "",
-        category_id: str = "",
-        bank_account_id: str = "",
+    session: Session,
+    company_id: int,
+    client_id: int,
+    *,
+    month: str = "",
+    cost_center_id: str = "",
+    category_id: str = "",
+    bank_account_id: str = "",
 ) -> tuple[list[dict[str, Any]], dict[str, Any], dict[str, Any]]:
     entries, lookups = _client_finance_filter_entries(
         session,
@@ -36077,8 +35125,7 @@ def _client_finance_cashflow_report(
 
     bank_accounts = lookups["bank_accounts"]
     if bank_account_id:
-        initial_balance = sum(
-            float(x.initial_balance_brl or 0.0) for x in bank_accounts if str(x.id or "") == str(bank_account_id))
+        initial_balance = sum(float(x.initial_balance_brl or 0.0) for x in bank_accounts if str(x.id or "") == str(bank_account_id))
     else:
         initial_balance = sum(float(x.initial_balance_brl or 0.0) for x in bank_accounts)
 
@@ -36492,8 +35539,8 @@ TEMPLATES["ferramentas_financeiro_fluxo_caixa.html"] = r"""
 @app.get("/ferramentas/financeiro/dre", response_class=HTMLResponse)
 @require_login
 async def ferramentas_financeiro_dre_page(
-        request: Request,
-        session: Session = Depends(get_session),
+    request: Request,
+    session: Session = Depends(get_session),
 ) -> HTMLResponse:
     access = _client_finance_require_access(request, session)
     if isinstance(access, Response):
@@ -36535,8 +35582,8 @@ async def ferramentas_financeiro_dre_page(
 @app.get("/ferramentas/financeiro/fluxo-caixa", response_class=HTMLResponse)
 @require_login
 async def ferramentas_financeiro_fluxo_caixa_page(
-        request: Request,
-        session: Session = Depends(get_session),
+    request: Request,
+    session: Session = Depends(get_session),
 ) -> HTMLResponse:
     access = _client_finance_require_access(request, session)
     if isinstance(access, Response):
@@ -36576,6 +35623,7 @@ async def ferramentas_financeiro_fluxo_caixa_page(
             "bank_accounts": lookups["bank_accounts"],
         },
     )
+
 
 
 # ----------------------------
@@ -36653,10 +35701,10 @@ class WhatsAppThreadMessage(SQLModel, table=True):
 def ensure_whatsapp_tables() -> bool:
     ok = True
     for tbl in (
-            WhatsAppChannelConfig.__table__,
-            WhatsAppQueue.__table__,
-            WhatsAppThread.__table__,
-            WhatsAppThreadMessage.__table__,
+        WhatsAppChannelConfig.__table__,
+        WhatsAppQueue.__table__,
+        WhatsAppThread.__table__,
+        WhatsAppThreadMessage.__table__,
     ):
         try:
             tbl.create(engine, checkfirst=True)
@@ -36867,19 +35915,19 @@ def _whatsapp_thread_display_name(thread: WhatsAppThread) -> str:
 
 
 def _whatsapp_create_thread(
-        session: Session,
-        *,
-        company_id: int,
-        client_id: Optional[int],
-        contact_name: str,
-        contact_phone: str,
-        is_group: bool,
-        group_name: str,
-        topic_code: str,
-        assigned_user_id: Optional[int],
-        status: str,
-        source_kind: str,
-        created_by_user_id: Optional[int],
+    session: Session,
+    *,
+    company_id: int,
+    client_id: Optional[int],
+    contact_name: str,
+    contact_phone: str,
+    is_group: bool,
+    group_name: str,
+    topic_code: str,
+    assigned_user_id: Optional[int],
+    status: str,
+    source_kind: str,
+    created_by_user_id: Optional[int],
 ) -> WhatsAppThread:
     row = WhatsAppThread(
         company_id=company_id,
@@ -36904,15 +35952,15 @@ def _whatsapp_create_thread(
 
 
 def _whatsapp_add_message(
-        session: Session,
-        *,
-        thread: WhatsAppThread,
-        direction: str,
-        body: str,
-        sender_name: str,
-        created_by_user_id: Optional[int],
-        delivery_status: str = "",
-        external_message_id: str = "",
+    session: Session,
+    *,
+    thread: WhatsAppThread,
+    direction: str,
+    body: str,
+    sender_name: str,
+    created_by_user_id: Optional[int],
+    delivery_status: str = "",
+    external_message_id: str = "",
 ) -> WhatsAppThreadMessage:
     clean_body = _clean_text(body, 5000)
     row = WhatsAppThreadMessage(
@@ -36958,10 +36006,10 @@ def _whatsapp_menu_choice_to_topic(text_value: str) -> Optional[str]:
 
 
 async def _try_send_whatsapp_text(
-        *,
-        config: WhatsAppChannelConfig,
-        to_phone: str,
-        body: str,
+    *,
+    config: WhatsAppChannelConfig,
+    to_phone: str,
+    body: str,
 ) -> tuple[bool, str, str]:
     digits = _only_digits(to_phone)
     if not digits:
@@ -36999,8 +36047,7 @@ async def _try_send_whatsapp_text(
         return False, f"Falha de envio: {exc}", ""
 
 
-def _whatsapp_find_open_thread_by_phone(session: Session, *, company_id: int, phone_digits: str) -> Optional[
-    WhatsAppThread]:
+def _whatsapp_find_open_thread_by_phone(session: Session, *, company_id: int, phone_digits: str) -> Optional[WhatsAppThread]:
     digits = _only_digits(phone_digits)
     if not digits:
         return None
@@ -37016,8 +36063,7 @@ def _whatsapp_find_open_thread_by_phone(session: Session, *, company_id: int, ph
     return rows[0] if rows else None
 
 
-def _whatsapp_notify_new_inbound(session: Session, *, thread: WhatsAppThread, preview: str,
-                                 created_by_user_id: Optional[int] = None) -> None:
+def _whatsapp_notify_new_inbound(session: Session, *, thread: WhatsAppThread, preview: str, created_by_user_id: Optional[int] = None) -> None:
     title = f"WhatsApp • {_whatsapp_thread_display_name(thread)}"
     href = f"/admin/whatsapp/conversas/{thread.id}"
     if thread.assigned_user_id:
@@ -37096,26 +36142,18 @@ def _whatsapp_stats(session: Session, *, company_id: int) -> dict[str, int]:
 
 @app.on_event("startup")
 def _startup_delivery11_whatsapp() -> None:
-    global _STARTUP_WHATSAPP_DEFAULTS_DONE
-
     ensure_whatsapp_tables()
     ensure_whatsapp_columns()
-
-    if not ENABLE_STARTUP_WHATSAPP_DEFAULT_SEEDS or _STARTUP_WHATSAPP_DEFAULTS_DONE:
-        return
-
     with Session(engine) as _s:
         try:
             ids = [x[0] for x in _s.exec(select(Company.id)).all()]
             for _cid in ids:
                 seed_whatsapp_defaults(_s, int(_cid))
-            _STARTUP_WHATSAPP_DEFAULTS_DONE = True
         except Exception:
             pass
 
 
 _original_resolve_feature_key_delivery11 = resolve_feature_key
-
 
 def resolve_feature_key(path: str) -> Optional[str]:
     extra_mapping = [
@@ -37152,6 +36190,7 @@ else:
         "title": "Escritório • Atendimento",
         "features": ["whatsapp_central"],
     })
+
 
 TEMPLATES["whatsapp_hub.html"] = r"""
 {% extends "base.html" %}
@@ -37712,9 +36751,7 @@ async def whatsapp_hub_page(request: Request, session: Session = Depends(get_ses
             "id": q.id,
             "code": q.code,
             "label": q.label,
-            "default_assignee_name": users.get(
-                int(q.default_assignee_user_id or 0)).name if q.default_assignee_user_id and users.get(
-                int(q.default_assignee_user_id or 0)) else "",
+            "default_assignee_name": users.get(int(q.default_assignee_user_id or 0)).name if q.default_assignee_user_id and users.get(int(q.default_assignee_user_id or 0)) else "",
             "is_active": q.is_active,
         })
     return render(
@@ -37748,14 +36785,14 @@ async def whatsapp_config_page(request: Request, session: Session = Depends(get_
 @app.post("/admin/whatsapp/config")
 @require_role({"admin", "equipe"})
 async def whatsapp_config_save(
-        request: Request,
-        display_name: str = Form(default=""),
-        business_phone: str = Form(default=""),
-        meta_phone_number_id: str = Form(default=""),
-        welcome_message: str = Form(default=""),
-        after_hours_message: str = Form(default=""),
-        is_enabled: Optional[str] = Form(default=None),
-        session: Session = Depends(get_session),
+    request: Request,
+    display_name: str = Form(default=""),
+    business_phone: str = Form(default=""),
+    meta_phone_number_id: str = Form(default=""),
+    welcome_message: str = Form(default=""),
+    after_hours_message: str = Form(default=""),
+    is_enabled: Optional[str] = Form(default=None),
+    session: Session = Depends(get_session),
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
@@ -37776,9 +36813,9 @@ async def whatsapp_config_save(
 @app.get("/admin/whatsapp/filas")
 @require_role({"admin", "equipe"})
 async def whatsapp_queues_page(
-        request: Request,
-        queue_id: Optional[int] = None,
-        session: Session = Depends(get_session),
+    request: Request,
+    queue_id: Optional[int] = None,
+    session: Session = Depends(get_session),
 ) -> HTMLResponse:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
@@ -37828,14 +36865,14 @@ async def whatsapp_queues_page(
 @app.post("/admin/whatsapp/filas/salvar")
 @require_role({"admin", "equipe"})
 async def whatsapp_queues_save(
-        request: Request,
-        queue_id: Optional[str] = Form(default=""),
-        code: str = Form(default=""),
-        label: str = Form(default=""),
-        sort_order: int = Form(default=50),
-        default_assignee_user_id: Optional[str] = Form(default=""),
-        is_active: Optional[str] = Form(default=None),
-        session: Session = Depends(get_session),
+    request: Request,
+    queue_id: Optional[str] = Form(default=""),
+    code: str = Form(default=""),
+    label: str = Form(default=""),
+    sort_order: int = Form(default=50),
+    default_assignee_user_id: Optional[str] = Form(default=""),
+    is_active: Optional[str] = Form(default=None),
+    session: Session = Depends(get_session),
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
@@ -37874,11 +36911,11 @@ async def whatsapp_queues_save(
 @app.get("/admin/whatsapp/caixa")
 @require_role({"admin", "equipe"})
 async def whatsapp_inbox_page(
-        request: Request,
-        q: str = "",
-        status: str = "",
-        topic_code: str = "",
-        session: Session = Depends(get_session),
+    request: Request,
+    q: str = "",
+    status: str = "",
+    topic_code: str = "",
+    session: Session = Depends(get_session),
 ) -> HTMLResponse:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
@@ -37923,15 +36960,13 @@ async def whatsapp_inbox_page(
         rows.append({
             "id": t.id,
             "display_name": _whatsapp_thread_display_name(t),
-            "client_name": clients.get(int(t.client_id or 0)).name if t.client_id and clients.get(
-                int(t.client_id or 0)) else "",
+            "client_name": clients.get(int(t.client_id or 0)).name if t.client_id and clients.get(int(t.client_id or 0)) else "",
             "contact_phone": t.contact_phone,
             "is_group": t.is_group,
             "group_name": t.group_name,
             "topic_label": topic_map.get(t.topic_code, t.topic_code.title()),
             "status_label": _status_label(t.status),
-            "assigned_name": users.get(int(t.assigned_user_id or 0)).name if t.assigned_user_id and users.get(
-                int(t.assigned_user_id or 0)) else "",
+            "assigned_name": users.get(int(t.assigned_user_id or 0)).name if t.assigned_user_id and users.get(int(t.assigned_user_id or 0)) else "",
             "last_message": getattr(last_messages.get(int(t.id)), "body", ""),
             "last_message_at": t.last_message_at,
         })
@@ -37980,16 +37015,16 @@ async def whatsapp_thread_new_page(request: Request, session: Session = Depends(
 @app.post("/admin/whatsapp/conversas/nova")
 @require_role({"admin", "equipe"})
 async def whatsapp_thread_new_submit(
-        request: Request,
-        client_id: Optional[str] = Form(default=""),
-        topic_code: str = Form(default="geral"),
-        contact_name: str = Form(default=""),
-        contact_phone: str = Form(default=""),
-        assigned_user_id: Optional[str] = Form(default=""),
-        is_group: Optional[str] = Form(default=None),
-        group_name: str = Form(default=""),
-        first_message: str = Form(default=""),
-        session: Session = Depends(get_session),
+    request: Request,
+    client_id: Optional[str] = Form(default=""),
+    topic_code: str = Form(default="geral"),
+    contact_name: str = Form(default=""),
+    contact_phone: str = Form(default=""),
+    assigned_user_id: Optional[str] = Form(default=""),
+    is_group: Optional[str] = Form(default=None),
+    group_name: str = Form(default=""),
+    first_message: str = Form(default=""),
+    session: Session = Depends(get_session),
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
@@ -38049,9 +37084,9 @@ async def whatsapp_thread_new_submit(
 @app.get("/admin/whatsapp/conversas/{thread_id}")
 @require_role({"admin", "equipe"})
 async def whatsapp_thread_detail_page(
-        request: Request,
-        thread_id: int,
-        session: Session = Depends(get_session),
+    request: Request,
+    thread_id: int,
+    session: Session = Depends(get_session),
 ) -> HTMLResponse:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
@@ -38096,13 +37131,13 @@ async def whatsapp_thread_detail_page(
 @app.post("/admin/whatsapp/conversas/{thread_id}/salvar")
 @require_role({"admin", "equipe"})
 async def whatsapp_thread_save(
-        request: Request,
-        thread_id: int,
-        status: str = Form(default="aberto"),
-        topic_code: str = Form(default="geral"),
-        assigned_user_id: Optional[str] = Form(default=""),
-        client_id: Optional[str] = Form(default=""),
-        session: Session = Depends(get_session),
+    request: Request,
+    thread_id: int,
+    status: str = Form(default="aberto"),
+    topic_code: str = Form(default="geral"),
+    assigned_user_id: Optional[str] = Form(default=""),
+    client_id: Optional[str] = Form(default=""),
+    session: Session = Depends(get_session),
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
@@ -38128,12 +37163,12 @@ async def whatsapp_thread_save(
 @app.post("/admin/whatsapp/conversas/{thread_id}/mensagens")
 @require_role({"admin", "equipe"})
 async def whatsapp_thread_add_message(
-        request: Request,
-        thread_id: int,
-        direction: str = Form(default="outbound"),
-        body: str = Form(default=""),
-        send_live: Optional[str] = Form(default=None),
-        session: Session = Depends(get_session),
+    request: Request,
+    thread_id: int,
+    direction: str = Form(default="outbound"),
+    body: str = Form(default=""),
+    send_live: Optional[str] = Form(default=None),
+    session: Session = Depends(get_session),
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
@@ -38307,6 +37342,7 @@ async def whatsapp_webhook_receive(request: Request, session: Session = Depends(
     return JSONResponse({"ok": True, "processed": processed})
 
 
+
 # =========================
 # Safe layout/rules patch (retry)
 # =========================
@@ -38321,7 +37357,6 @@ def _normalize_date_input(value: Any) -> str:
         except Exception:
             pass
     return s
-
 
 def _format_date_br(value: Any) -> str:
     s = (str(value or "")).strip()
@@ -38340,7 +37375,6 @@ def _format_date_br(value: Any) -> str:
         pass
     return s
 
-
 def _format_dt_br(value: Any) -> str:
     if isinstance(value, datetime):
         return value.strftime("%d/%m/%Y %H:%M")
@@ -38353,7 +37387,6 @@ def _format_dt_br(value: Any) -> str:
         except Exception:
             pass
     return s
-
 
 def _meeting_meta(meeting: Meeting) -> dict[str, Any]:
     raw = {}
@@ -38369,7 +37402,6 @@ def _meeting_meta(meeting: Meeting) -> dict[str, Any]:
         raw["_app_meta"] = ext
     return ext
 
-
 def _meeting_meta_save(session: Session, meeting: Meeting, meta: dict[str, Any]) -> None:
     raw = {}
     try:
@@ -38384,7 +37416,6 @@ def _meeting_meta_save(session: Session, meeting: Meeting, meta: dict[str, Any])
     session.add(meeting)
     session.commit()
 
-
 def _meeting_hours_total(meta: dict[str, Any]) -> float:
     started = meta.get("checked_in_at") or ""
     ended = meta.get("checked_out_at") or ""
@@ -38398,13 +37429,12 @@ def _meeting_hours_total(meta: dict[str, Any]) -> float:
     except Exception:
         return float(meta.get("total_hours", 0.0) or 0.0)
 
-
 def _tool_admin_payload(
-        session: Session,
-        *,
-        company_id: int,
-        client_id: int,
-        tool_code: str = CLIENT_TOOL_FINANCE_CODE,
+    session: Session,
+    *,
+    company_id: int,
+    client_id: int,
+    tool_code: str = CLIENT_TOOL_FINANCE_CODE,
 ) -> dict[str, Any]:
     sub = _get_or_create_client_tool_subscription(
         session,
@@ -38412,8 +37442,7 @@ def _tool_admin_payload(
         client_id=client_id,
         tool_code=tool_code,
     )
-    pricing_mode = "free" if int(sub.monthly_price_credits or 0) <= 0 and sub.is_active else (
-        "trial" if sub.status == "trial" or (sub.trial_ends_at and not sub.last_billed_period) else "paid")
+    pricing_mode = "free" if int(sub.monthly_price_credits or 0) <= 0 and sub.is_active else ("trial" if sub.status == "trial" or (sub.trial_ends_at and not sub.last_billed_period) else "paid")
     trial_days = 30
     if sub.trial_started_at and sub.trial_ends_at:
         try:
@@ -38432,14 +37461,13 @@ def _tool_admin_payload(
         "next_billing_at": sub.next_billing_at,
     }
 
-
 # override helper: do not auto-start trial
 def _get_or_create_client_tool_subscription(
-        session: Session,
-        *,
-        company_id: int,
-        client_id: int,
-        tool_code: str = CLIENT_TOOL_FINANCE_CODE,
+    session: Session,
+    *,
+    company_id: int,
+    client_id: int,
+    tool_code: str = CLIENT_TOOL_FINANCE_CODE,
 ) -> ClientToolSubscription:
     row = session.exec(
         select(ClientToolSubscription).where(
@@ -38470,14 +37498,13 @@ def _get_or_create_client_tool_subscription(
     session.refresh(row)
     return row
 
-
 # override helper: respect manual release/trial/pricing
 def _tool_subscription_status_payload(
-        session: Session,
-        *,
-        company_id: int,
-        client_id: int,
-        tool_code: str = CLIENT_TOOL_FINANCE_CODE,
+    session: Session,
+    *,
+    company_id: int,
+    client_id: int,
+    tool_code: str = CLIENT_TOOL_FINANCE_CODE,
 ) -> dict[str, Any]:
     sub = _get_or_create_client_tool_subscription(
         session,
@@ -38490,8 +37517,7 @@ def _tool_subscription_status_payload(
     now = utcnow()
     now_naive = now.replace(tzinfo=None) if getattr(now, "tzinfo", None) else now
     trial_ends = sub.trial_ends_at
-    trial_ends_naive = trial_ends.replace(tzinfo=None) if trial_ends and getattr(trial_ends, "tzinfo",
-                                                                                 None) else trial_ends
+    trial_ends_naive = trial_ends.replace(tzinfo=None) if trial_ends and getattr(trial_ends, "tzinfo", None) else trial_ends
 
     message = ""
     access_ok = False
@@ -38564,7 +37590,6 @@ def _tool_subscription_status_payload(
         "wallet_balance_credits": round(float(wallet.balance_cents or 0) / 100.0, 2),
     }
 
-
 # simulator compat: accept rate_pct as well
 def _loan_sim_inputs_from_form_safe(cls, **form) -> "LoanInput":
     chosen_rate = str(form.get("rate_pct") or form.get("rate") or "1,79")
@@ -38586,22 +37611,17 @@ def _loan_sim_inputs_from_form_safe(cls, **form) -> "LoanInput":
         borrower_name=str(form.get("borrower_name", "") or ""),
         notes=str(form.get("notes", "") or ""),
     )
-
-
 LoanSimInputs.from_form = classmethod(_loan_sim_inputs_from_form_safe)
-
 
 def _deal_lost_reason(deal: BusinessDeal) -> str:
     notes = deal.notes or ""
     m = re.search(r"\[LOST_REASON:(.*?)\]", notes, flags=re.IGNORECASE | re.DOTALL)
     return (m.group(1).strip() if m else "")
 
-
 def _set_deal_lost_reason(notes: str, reason: str) -> str:
     base = re.sub(r"\s*\[LOST_REASON:.*?\]\s*", " ", notes or "", flags=re.IGNORECASE | re.DOTALL).strip()
     reason_clean = (reason or "").strip()
     return (base + (f"\n[LOST_REASON:{reason_clean}]" if reason_clean else "")).strip()
-
 
 # Jinja filters/globals
 try:
@@ -39040,160 +38060,16 @@ TEMPLATES["client_access.html"] = r"""
 {% endblock %}
 """
 
-TEMPLATES["fin_list.html"] = r"""
-{% extends "base.html" %}
-{% block content %}
-<div class="card p-4">
-  <div class="d-flex justify-content-between align-items-center">
-    <div>
-      <h4 class="mb-0">Financeiro</h4>
-      <div class="muted">Notas/Boletos de honorários (manual) + sincronizado do Conta Azul.</div>
-    </div>
-    <div class="d-flex gap-2">
-      {% if role in ["admin","equipe"] %}
-        <a class="btn btn-outline-secondary" href="/integrations/contaazul">Conta Azul</a>
-        {% if ca_connected %}
-          <form method="post" action="/financeiro/contaazul/sync">
-            <button class="btn btn-outline-primary" type="submit">Sincronizar</button>
-          </form>
-        {% endif %}
-        <a class="btn btn-primary" href="/financeiro/novo">Nova cobrança</a>
-      {% endif %}
-    </div>
-  </div>
-
-  {% if ca_configured and role in ["admin","equipe"] and not ca_connected %}
-    <div class="alert alert-warning mt-3">
-      Conta Azul não conectado. Vá em <a href="/integrations/contaazul">Integrações → Conta Azul</a>.
-    </div>
-  {% endif %}
-
-  {% if ca_last_sync %}
-    <div class="muted small mt-2">Conta Azul: última sync em {{ ca_last_sync }}</div>
-  {% endif %}
-
-  <hr class="my-3"/>
-  <h6 class="mb-2">Cobranças (manual)</h6>
-  {% if items %}
-    <div class="list-group">
-      {% for it in items %}
-        <a class="list-group-item list-group-item-action" href="/financeiro/{{ it.id }}">
-          <div class="d-flex justify-content-between">
-            <div class="fw-semibold">{{ it.title }}</div>
-            <span class="badge text-bg-light border">{{ it.status }}</span>
-          </div>
-          <div class="muted small">
-            {% if role in ["admin","equipe"] %}Cliente: {{ it.client_name }} • {% endif %}
-            Valor: R$ {{ "%.2f"|format(it.amount_brl) }} •
-            {% if it.due_date %}Venc: {{ it.due_date|brdate }} • {% endif %}
-            {{ it.created_at|brdatetime }}
-          </div>
-        </a>
-      {% endfor %}
-    </div>
-  {% else %}
-    <div class="muted">Sem cobranças manuais.</div>
-  {% endif %}
-
-  <hr class="my-4"/>
-  <h6 class="mb-2">Conta Azul: Boletos / Contas a receber</h6>
-  {% if ca_receivables %}
-    <div class="table-responsive">
-      <table class="table table-sm align-middle">
-        <thead>
-          <tr>
-            <th>Venc.</th>
-            <th>Descrição</th>
-            <th>Status</th>
-            <th>Aberto</th>
-            <th>Pago</th>
-            <th>Fatura</th>
-            <th>Boleto</th>
-            <th>Download</th>
-          </tr>
-        </thead>
-        <tbody>
-          {% for r in ca_receivables %}
-            <tr>
-              <td class="mono small">{{ fin_human_date(r.due_date) }}</td>
-              <td>{{ r.description }}</td>
-              <td><span class="badge text-bg-light border">{{ r.status }}</span></td>
-              <td>R$ {{ "%.2f"|format(r.amount_open) }}</td>
-              <td>R$ {{ "%.2f"|format(r.amount_paid) }}</td>
-              <td class="mono small">{% if r.invoice_number %}{{ r.invoice_type }} #{{ r.invoice_number }}{% else %}—{% endif %}</td>
-              <td>
-                {% if r.payment_url %}
-                  <a class="btn btn-sm btn-outline-primary" href="{{ r.payment_url }}" target="_blank" rel="noopener">Boleto</a>
-                {% else %}
-                  —
-                {% endif %}
-              </td>
-              <td>
-                <a class="btn btn-sm btn-outline-secondary" href="/financeiro/contaazul/receivable/{{ r.id }}/fatura.pdf" target="_blank" rel="noopener">Fatura PDF</a>
-              </td>
-            </tr>
-          {% endfor %}
-        </tbody>
-      </table>
-    </div>
-  {% else %}
-    <div class="muted small">Nenhuma parcela encontrada. Clique em “Sincronizar”.</div>
-  {% endif %}
-
-  <div class="mt-4">
-    <h6 class="mb-2">Notas fiscais</h6>
-    {% if ca_invoices %}
-      <div class="table-responsive">
-        <table class="table table-sm align-middle">
-          <thead>
-            <tr>
-              <th>Data</th>
-              <th>Número</th>
-              <th>Tipo</th>
-              <th>Status</th>
-              <th>Download</th>
-            </tr>
-          </thead>
-          <tbody>
-            {% for n in ca_invoices %}
-              <tr>
-                <td class="mono small">{{ fin_human_date(n.issue_date) }}</td>
-                <td class="mono small">{{ n.number or "—" }}</td>
-                <td class="mono small">{{ n.invoice_type }}</td>
-                <td><span class="badge text-bg-light border">{{ n.status }}</span></td>
-                <td>
-                  {% if n.invoice_type.upper() == "NFSE" %}
-                    <a class="btn btn-sm btn-outline-secondary" href="/financeiro/contaazul/invoice/{{ n.id }}/pdf" target="_blank" rel="noopener">NF PDF</a>
-                  {% elif n.invoice_type.upper() == "NFE" %}
-                    <a class="btn btn-sm btn-outline-secondary" href="/financeiro/contaazul/invoice/{{ n.id }}/xml" target="_blank" rel="noopener">NF XML</a>
-                  {% else %}
-                    —
-                  {% endif %}
-                </td>
-              </tr>
-            {% endfor %}
-          </tbody>
-        </table>
-      </div>
-    {% else %}
-      <div class="muted small">Nenhuma nota encontrada. Clique em “Sincronizar”.</div>
-    {% endif %}
-  </div>
-</div>
-{% endblock %}
-"""
-
 if hasattr(templates_env.loader, "mapping"):
     templates_env.loader.mapping = TEMPLATES
-
 
 @app.post("/negocios/{deal_id}/perdido")
 @require_role({"admin", "equipe"})
 async def crm_mark_lost(
-        request: Request,
-        deal_id: int,
-        lost_reason: str = Form(""),
-        session: Session = Depends(get_session),
+    request: Request,
+    deal_id: int,
+    lost_reason: str = Form(""),
+    session: Session = Depends(get_session),
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
@@ -39205,21 +38081,19 @@ async def crm_mark_lost(
     deal.notes = _set_deal_lost_reason(deal.notes or "", lost_reason)
     deal.updated_at = utcnow()
     session.add(deal)
-    session.add(BusinessDealNote(deal_id=deal.id, author_user_id=ctx.user.id,
-                                 message=f"Negócio marcado como perdido. Motivo: {(lost_reason or '').strip() or 'não informado'}"))
+    session.add(BusinessDealNote(deal_id=deal.id, author_user_id=ctx.user.id, message=f"Negócio marcado como perdido. Motivo: {(lost_reason or '').strip() or 'não informado'}"))
     session.commit()
     set_flash(request, "Motivo de perda atualizado.")
     return RedirectResponse(f"/negocios/{deal.id}", status_code=303)
 
-
 @app.post("/reunioes/{meeting_id}/anotacoes")
 @require_role({"admin", "equipe"})
 async def meetings_save_annotations(
-        request: Request,
-        meeting_id: int,
-        annotation_text: str = Form(""),
-        visible_to_client: str = Form(""),
-        session: Session = Depends(get_session),
+    request: Request,
+    meeting_id: int,
+    annotation_text: str = Form(""),
+    visible_to_client: str = Form(""),
+    session: Session = Depends(get_session),
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
@@ -39234,13 +38108,12 @@ async def meetings_save_annotations(
     set_flash(request, "Anotações salvas.")
     return RedirectResponse(f"/reunioes/{mt.id}", status_code=303)
 
-
 @app.post("/reunioes/{meeting_id}/checkin")
 @require_role({"admin", "equipe"})
 async def meetings_checkin(
-        request: Request,
-        meeting_id: int,
-        session: Session = Depends(get_session),
+    request: Request,
+    meeting_id: int,
+    session: Session = Depends(get_session),
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
@@ -39255,13 +38128,12 @@ async def meetings_checkin(
     set_flash(request, "Check-in registrado.")
     return RedirectResponse(f"/reunioes/{mt.id}", status_code=303)
 
-
 @app.post("/reunioes/{meeting_id}/checkout")
 @require_role({"admin", "equipe"})
 async def meetings_checkout(
-        request: Request,
-        meeting_id: int,
-        session: Session = Depends(get_session),
+    request: Request,
+    meeting_id: int,
+    session: Session = Depends(get_session),
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
@@ -39275,1324 +38147,3 @@ async def meetings_checkout(
     _meeting_meta_save(session, mt, meta)
     set_flash(request, "Check-out registrado.")
     return RedirectResponse(f"/reunioes/{mt.id}", status_code=303)
-
-
-# ----------------------------
-# Sprint 1A — Login / Dashboard / CTA / Badges
-# ----------------------------
-
-TEMPLATES["login.html"] = r"""
-{% extends "base.html" %}
-{% block content %}
-<div class="row justify-content-center">
-  <div class="col-md-6 col-lg-5">
-    <div class="card p-4 shadow-sm">
-      <div class="text-center mb-4">
-        <h4 class="mb-1">Entrar</h4>
-        <div class="muted">Acesse sua conta para continuar</div>
-      </div>
-      <form method="post" action="/login">
-        <div class="mb-3">
-          <label class="form-label">E-mail</label>
-          <input class="form-control" name="email" type="email" autocomplete="username" required />
-        </div>
-        <div class="mb-3">
-          <div class="d-flex justify-content-between align-items-center mb-1">
-            <label class="form-label mb-0">Senha</label>
-            <a class="small text-decoration-none" href="/forgot-password">Esqueci minha senha</a>
-          </div>
-          <input class="form-control" name="password" type="password" autocomplete="current-password" required />
-        </div>
-        <button class="btn btn-primary w-100">Entrar</button>
-      </form>
-    </div>
-  </div>
-</div>
-{% endblock %}
-"""
-
-TEMPLATES["dashboard.html"] = r"""
-{% extends "base.html" %}
-{% block content %}
-<div class="row g-3">
-  <div class="col-12">
-    <div class="card p-4">
-      <div class="d-flex flex-wrap justify-content-between align-items-start gap-3">
-        <div>
-          <h4 class="mb-1">Painel</h4>
-          <div class="muted">
-            {% if role in ["admin","equipe"] %}
-              Escritório: <b>{{ current_company.name }}</b>.
-              {% if current_client %} Cliente selecionado: <b>{{ current_client.name }}</b>.{% endif %}
-            {% else %}
-              Bem-vindo(a)! Você vê apenas seus dados e arquivos.
-            {% endif %}
-          </div>
-        </div>
-        {% if role in ["admin","equipe"] %}
-          <div class="d-flex gap-2">
-            <a class="btn btn-outline-primary btn-sm" href="/admin/members">Gerenciar membros</a>
-            <a class="btn btn-outline-secondary btn-sm" href="/client/switch">Trocar cliente</a>
-          </div>
-        {% endif %}
-      </div>
-    </div>
-  </div>
-
-  {% if dashboard_scores %}
-  <div class="col-12">
-    <div class="row g-3">
-      {% for item in dashboard_scores.score_card %}
-      <div class="col-sm-6 col-xl-3">
-        <div class="card p-4 h-100">
-          <div class="d-flex justify-content-between align-items-start gap-2">
-            <div>
-              <div class="muted small">{{ item.label }}</div>
-              <div class="display-6 fw-semibold">{{ "%.1f"|format(item.value) }}</div>
-              <div class="small muted">{{ item.hint }}</div>
-            </div>
-            <span class="badge text-bg-light border">{{ item.band_label }}</span>
-          </div>
-        </div>
-      </div>
-      {% endfor %}
-    </div>
-  </div>
-  {% endif %}
-
-  <div class="col-12">
-    <div class="row g-3">
-      <div class="col-md-6 col-xl-3">
-        <a href="/ofertas">
-          <div class="card p-4 h-100">
-            <div class="d-flex justify-content-between align-items-start gap-2">
-              <div>
-                <div class="fw-semibold">🎯 Ofertas</div>
-                <div class="muted small mt-1">Temos ofertas alinhadas ao seu perfil. Confira aqui.</div>
-              </div>
-              <span class="badge text-bg-warning">{{ approved_offers_count or 0 }}</span>
-            </div>
-          </div>
-        </a>
-      </div>
-      <div class="col-md-6 col-xl-3">
-        <a href="/pendencias">
-          <div class="card p-4 h-100">
-            <div class="d-flex justify-content-between align-items-start gap-2">
-              <div>
-                <div class="fw-semibold">📌 Pendências</div>
-                <div class="muted small mt-1">Itens aguardando envio, revisão ou conclusão.</div>
-              </div>
-              <span class="badge text-bg-light border">{{ pending_items_count or 0 }}</span>
-            </div>
-          </div>
-        </a>
-      </div>
-      <div class="col-md-6 col-xl-3">
-        <a href="/mensagens">
-          <div class="card p-4 h-100">
-            <div class="d-flex justify-content-between align-items-start gap-2">
-              <div>
-                <div class="fw-semibold">💬 Mensagens</div>
-                <div class="muted small mt-1">Converse com a equipe e acompanhe respostas.</div>
-              </div>
-              <span class="badge text-bg-danger">{{ unread_messages_count or 0 }}</span>
-            </div>
-          </div>
-        </a>
-      </div>
-      <div class="col-md-6 col-xl-3">
-        <a href="/notificacoes">
-          <div class="card p-4 h-100">
-            <div class="d-flex justify-content-between align-items-start gap-2">
-              <div>
-                <div class="fw-semibold">🔔 Notificações</div>
-                <div class="muted small mt-1">Avisos importantes, novidades e ações recentes.</div>
-              </div>
-              <span class="badge text-bg-danger">{{ unread_notifications_count or 0 }}</span>
-            </div>
-          </div>
-        </a>
-      </div>
-    </div>
-  </div>
-
-  {% if tabs %}
-  <div class="col-12">
-    <ul class="nav nav-pills gap-2" id="dashTabs" role="tablist">
-      {% for t in tabs %}
-        <li class="nav-item" role="presentation">
-          <button class="nav-link {% if loop.first %}active{% endif %}" id="tab-{{ t.key }}" data-bs-toggle="pill"
-                  data-bs-target="#pane-{{ t.key }}" type="button" role="tab">
-            {{ t.title }}
-          </button>
-        </li>
-      {% endfor %}
-    </ul>
-
-    <div class="tab-content mt-3">
-      {% for t in tabs %}
-        <div class="tab-pane fade {% if loop.first %}show active{% endif %}" id="pane-{{ t.key }}" role="tabpanel">
-          <div class="row g-3">
-            {% for item in t["items"] %}
-              <div class="col-md-6 col-lg-4">
-                <a href="{{ item.href }}">
-                  <div class="card p-4 h-100">
-                    <div class="d-flex justify-content-between align-items-start">
-                      <div>
-                        <div class="fw-semibold">{{ item.title }}</div>
-                        <div class="muted small mt-1">{{ item.desc }}</div>
-                      </div>
-                      <span class="badge text-bg-light border">→</span>
-                    </div>
-                  </div>
-                </a>
-              </div>
-            {% endfor %}
-          </div>
-        </div>
-      {% endfor %}
-    </div>
-  </div>
-  {% endif %}
-
-  {% if standalone %}
-  <div class="col-12 mt-2">
-    <div class="d-flex align-items-center justify-content-between">
-      <div class="fw-semibold">{{ standalone_title or "Acesso rápido" }}</div>
-      <div class="muted small">{{ standalone_desc or "Pendências, Agenda e Educação" }}</div>
-    </div>
-  </div>
-
-  {% for item in standalone %}
-    <div class="col-md-6 col-lg-4">
-      <a href="{{ item.href }}">
-        <div class="card p-4 h-100">
-          <div class="d-flex justify-content-between align-items-start">
-            <div>
-              <div class="fw-semibold">{{ item.title }}</div>
-              <div class="muted small mt-1">{{ item.desc }}</div>
-            </div>
-            <span class="badge text-bg-light border">→</span>
-          </div>
-        </div>
-      </a>
-    </div>
-  {% endfor %}
-  {% endif %}
-</div>
-
-<script>
-(function(){
-  const tabs = document.getElementById("dashTabs");
-  if (!tabs) return;
-
-  const key = "dash_active_tab";
-  const saved = localStorage.getItem(key);
-  if (saved) {
-    const btn = document.getElementById("tab-" + saved);
-    if (btn) btn.click();
-  }
-  tabs.addEventListener("click", (e) => {
-    const btn = e.target.closest("button[id^='tab-']");
-    if (!btn) return;
-    localStorage.setItem(key, btn.id.replace("tab-",""));
-  });
-})();
-</script>
-{% endblock %}
-"""
-
-_base_tpl_sprint1a = TEMPLATES.get("base.html", "")
-if _base_tpl_sprint1a:
-    _base_tpl_sprint1a = _base_tpl_sprint1a.replace(
-        '<span class="fw-semibold" style="color:#0B1E1E; font-size:0.95rem; letter-spacing:0.2px; opacity:0.9;">Bem-vindo</span>',
-        '<span class="fw-semibold" style="color:#0B1E1E; font-size:0.95rem; letter-spacing:0.2px; opacity:0.9;">Área do cliente</span>',
-    )
-    _base_tpl_sprint1a = _base_tpl_sprint1a.replace(
-        '<div>Uploads protegidos por login (download via rota).</div>',
-        '<div>Ambiente seguro para mensagens, documentos e acompanhamento do cliente.</div>',
-    )
-    if 'href="/notificacoes"' not in _base_tpl_sprint1a:
-        _base_tpl_sprint1a = _base_tpl_sprint1a.replace(
-            '<a class="btn btn-outline-secondary btn-sm" href="/logout">Sair</a>',
-            '<a class="btn btn-outline-secondary btn-sm position-relative" href="/mensagens" aria-label="Mensagens">💬{% if unread_messages_count %}<span class="position-absolute top-0 start-100 translate-middle badge rounded-pill text-bg-danger">{{ unread_messages_count }}</span>{% endif %}</a>\n'
-            '            <a class="btn btn-outline-secondary btn-sm position-relative" href="/notificacoes" aria-label="Notificações">🔔{% if unread_notifications_count %}<span class="position-absolute top-0 start-100 translate-middle badge rounded-pill text-bg-danger">{{ unread_notifications_count }}</span>{% endif %}</a>\n'
-            '            <a class="btn btn-outline-secondary btn-sm" href="/logout">Sair</a>'
-        )
-    TEMPLATES["base.html"] = _base_tpl_sprint1a
-
-_original_render_sprint1a = render
-
-
-def render(
-        template_name: str,
-        *,
-        request: Request,
-        context: Optional[dict[str, Any]] = None,
-        status_code: int = 200,
-) -> HTMLResponse:
-    ctx = dict(context or {})
-    ctx.setdefault("unread_messages_count", 0)
-    ctx.setdefault("unread_notifications_count", 0)
-    try:
-        with Session(engine) as _db:
-            tenant = get_tenant_context(request, _db)
-            if tenant:
-                ctx.setdefault(
-                    "unread_messages_count",
-                    unread_messages_count_for_user(
-                        _db,
-                        company_id=tenant.company.id,
-                        user_id=tenant.user.id,
-                    ),
-                )
-                ctx.setdefault(
-                    "unread_notifications_count",
-                    unread_notifications_count_for_user(
-                        _db,
-                        company_id=tenant.company.id,
-                        user_id=tenant.user.id,
-                    ),
-                )
-    except Exception:
-        pass
-    return _original_render_sprint1a(
-        template_name,
-        request=request,
-        context=ctx,
-        status_code=status_code,
-    )
-
-
-# ============================
-# Fix Sprint 1A regressões: scores completos + badges dinâmicos
-# ============================
-TEMPLATES["dashboard.html"] = r"""
-{% extends "base.html" %}
-{% block content %}
-<div class="row g-3">
-  <div class="col-12">
-    <div class="card p-4">
-      <div class="d-flex flex-wrap justify-content-between align-items-start gap-3">
-        <div>
-          <h4 class="mb-1">Painel</h4>
-          <div class="muted">
-            {% if role in ["admin","equipe"] %}
-              Escritório: <b>{{ current_company.name }}</b>.
-              {% if current_client %} Cliente selecionado: <b>{{ current_client.name }}</b>.{% endif %}
-            {% else %}
-              Bem-vindo(a)! Você vê apenas seus dados e arquivos.
-            {% endif %}
-          </div>
-        </div>
-        {% if role in ["admin","equipe"] %}
-          <div class="d-flex gap-2">
-            <a class="btn btn-outline-primary btn-sm" href="/admin/members">Gerenciar membros</a>
-            <a class="btn btn-outline-secondary btn-sm" href="/client/switch">Trocar cliente</a>
-          </div>
-        {% endif %}
-      </div>
-    </div>
-  </div>
-
-  {% if dashboard_scores and current_client %}
-    <div class="col-12">
-      <div class="card p-4">
-        <div class="d-flex flex-wrap justify-content-between align-items-center gap-2">
-          <div>
-            <h5 class="mb-1">Resumo analítico da empresa</h5>
-            <div class="muted">Cards e barras visuais para dar mais clareza ao diagnóstico financeiro.</div>
-          </div>
-          <div class="d-flex gap-2 flex-wrap">
-            <span class="badge text-bg-light border">{{ approved_offers_count }} oportunidade(s) liberada(s)</span>
-            <span class="badge text-bg-light border">{{ pending_items_count }} pendência(s)</span>
-          </div>
-        </div>
-        <div class="row g-3 mt-1">
-          {% for card in dashboard_scores.score_card %}
-          <div class="col-md-6 col-xl-3">
-            <div class="mc-stat-card">
-              <div class="d-flex align-items-center">
-                <div class="muted small">{{ card.label }}</div>
-                <span class="mc-help" data-bs-toggle="tooltip" data-bs-placement="top" title="{{ card.tooltip }}">i</span>
-              </div>
-              <div class="fs-3 fw-bold">{{ "%.0f"|format(card.value) }}</div>
-              <div class="small muted">{{ card.hint }}</div>
-              <div class="small mc-score-band mt-1"><span class="badge text-bg-light border">{{ card.band_label }}</span></div>
-            </div>
-          </div>
-          {% endfor %}
-        </div>
-        <div class="row g-3 mt-1">
-          <div class="col-lg-7">
-            <div class="border rounded p-3 h-100">
-              <div class="fw-semibold mb-3">Leitura visual dos scores</div>
-              {% for bar in dashboard_scores.bars %}
-                <div class="mb-3">
-                  <div class="d-flex justify-content-between small">
-                    <span>{{ bar.label }} <span class="mc-help" data-bs-toggle="tooltip" data-bs-placement="top" title="{{ bar.tooltip }}">i</span></span>
-                    <span>{{ "%.0f"|format(bar.value) }}</span>
-                  </div>
-                  <div class="progress" style="height: 12px;">
-                    <div class="progress-bar {{ bar.class }}" role="progressbar" style="width: {{ bar.value }}%;" aria-valuenow="{{ bar.value }}" aria-valuemin="0" aria-valuemax="100"></div>
-                  </div>
-                  <div class="small muted mt-1">{{ bar.band_label }}</div>
-                </div>
-              {% endfor %}
-            </div>
-          </div>
-          <div class="col-lg-5">
-            <div class="border rounded p-3 h-100">
-              <div class="fw-semibold mb-3">Indicadores-chave</div>
-              <div class="small d-flex justify-content-between mb-2"><span>Capital de giro líquido</span><b>{{ dashboard_scores.working_capital|brl }}</b></div>
-              <div class="small d-flex justify-content-between mb-2"><span>Liquidez corrente</span><b>{{ dashboard_scores.current_ratio|brnum }}</b></div>
-              <div class="small d-flex justify-content-between mb-2"><span>Patrimônio líquido</span><b>{{ dashboard_scores.equity|brl }}</b></div>
-              <div class="small d-flex justify-content-between mb-2"><span>Endividamento / patrimônio</span><b>{{ dashboard_scores.debt_to_equity|brnum }}</b></div>
-              <div class="small d-flex justify-content-between"><span>Status do motor</span><span class="badge text-bg-light border">{{ dashboard_scores.status_label }}</span></div>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-  {% endif %}
-
-  <div class="col-12">
-    <div class="row g-3">
-      <div class="col-md-6 col-xl-3">
-        <a href="/ofertas">
-          <div class="card p-4 h-100">
-            <div class="d-flex justify-content-between align-items-start gap-2">
-              <div>
-                <div class="fw-semibold">🎯 Ofertas</div>
-                <div class="muted small mt-1">Temos ofertas alinhadas ao seu perfil. Confira aqui.</div>
-              </div>
-              <span class="badge text-bg-warning">{{ approved_offers_count or 0 }}</span>
-            </div>
-          </div>
-        </a>
-      </div>
-      <div class="col-md-6 col-xl-3">
-        <a href="/pendencias">
-          <div class="card p-4 h-100">
-            <div class="d-flex justify-content-between align-items-start gap-2">
-              <div>
-                <div class="fw-semibold">📌 Pendências</div>
-                <div class="muted small mt-1">Itens aguardando envio, revisão ou conclusão.</div>
-              </div>
-              <span class="badge text-bg-light border">{{ pending_items_count or 0 }}</span>
-            </div>
-          </div>
-        </a>
-      </div>
-      <div class="col-md-6 col-xl-3">
-        <a href="/mensagens">
-          <div class="card p-4 h-100">
-            <div class="d-flex justify-content-between align-items-start gap-2">
-              <div>
-                <div class="fw-semibold">💬 Mensagens</div>
-                <div class="muted small mt-1">Converse com a equipe e acompanhe respostas.</div>
-              </div>
-              <span class="badge text-bg-danger">{{ unread_messages_count or 0 }}</span>
-            </div>
-          </div>
-        </a>
-      </div>
-      <div class="col-md-6 col-xl-3">
-        <a href="/notificacoes">
-          <div class="card p-4 h-100">
-            <div class="d-flex justify-content-between align-items-start gap-2">
-              <div>
-                <div class="fw-semibold">🔔 Notificações</div>
-                <div class="muted small mt-1">Avisos importantes, novidades e ações recentes.</div>
-              </div>
-              <span class="badge text-bg-danger">{{ unread_notifications_count or 0 }}</span>
-            </div>
-          </div>
-        </a>
-      </div>
-    </div>
-  </div>
-
-  {% if tabs %}
-  <div class="col-12">
-    <ul class="nav nav-pills gap-2" id="dashTabs" role="tablist">
-      {% for t in tabs %}
-        <li class="nav-item" role="presentation">
-          <button class="nav-link {% if loop.first %}active{% endif %}" id="tab-{{ t.key }}" data-bs-toggle="pill"
-                  data-bs-target="#pane-{{ t.key }}" type="button" role="tab">
-            {{ t.title }}
-          </button>
-        </li>
-      {% endfor %}
-    </ul>
-
-    <div class="tab-content mt-3">
-      {% for t in tabs %}
-        <div class="tab-pane fade {% if loop.first %}show active{% endif %}" id="pane-{{ t.key }}" role="tabpanel">
-          <div class="row g-3">
-            {% for item in t["items"] %}
-              <div class="col-md-6 col-lg-4">
-                <a href="{{ item.href }}">
-                  <div class="card p-4 h-100">
-                    <div class="d-flex justify-content-between align-items-start">
-                      <div>
-                        <div class="fw-semibold">{{ item.title }}</div>
-                        <div class="muted small mt-1">{{ item.desc }}</div>
-                      </div>
-                      <span class="badge text-bg-light border">→</span>
-                    </div>
-                  </div>
-                </a>
-              </div>
-            {% endfor %}
-          </div>
-        </div>
-      {% endfor %}
-    </div>
-  </div>
-  {% endif %}
-
-  {% if standalone %}
-  <div class="col-12 mt-2">
-    <div class="d-flex align-items-center justify-content-between">
-      <div class="fw-semibold">{{ standalone_title or "Acesso rápido" }}</div>
-      <div class="muted small">{{ standalone_desc or "Pendências, Agenda e Educação" }}</div>
-    </div>
-  </div>
-
-  {% for item in standalone %}
-    <div class="col-md-6 col-lg-4">
-      <a href="{{ item.href }}">
-        <div class="card p-4 h-100">
-          <div class="d-flex justify-content-between align-items-start">
-            <div>
-              <div class="fw-semibold">{{ item.title }}</div>
-              <div class="muted small mt-1">{{ item.desc }}</div>
-            </div>
-            <span class="badge text-bg-light border">→</span>
-          </div>
-        </div>
-      </a>
-    </div>
-  {% endfor %}
-  {% endif %}
-</div>
-
-<script>
-(function(){
-  const tabs = document.getElementById("dashTabs");
-  if (!tabs) return;
-
-  const key = "dash_active_tab";
-  const saved = localStorage.getItem(key);
-  if (saved) {
-    const btn = document.getElementById("tab-" + saved);
-    if (btn) btn.click();
-  }
-  tabs.addEventListener("click", (e) => {
-    const btn = e.target.closest("button[id^='tab-']");
-    if (!btn) return;
-    localStorage.setItem(key, btn.id.replace("tab-",""));
-  });
-})();
-</script>
-{% endblock %}
-"""
-
-TEMPLATES["fin_list.html"] = r"""
-{% extends "base.html" %}
-{% block content %}
-<div class="card p-4">
-  <div class="d-flex justify-content-between align-items-center">
-    <div>
-      <h4 class="mb-0">Financeiro</h4>
-      <div class="muted">Notas/Boletos de honorários (manual) + sincronizado do Conta Azul.</div>
-    </div>
-    <div class="d-flex gap-2">
-      {% if role in ["admin","equipe"] %}
-        <a class="btn btn-outline-secondary" href="/integrations/contaazul">Conta Azul</a>
-        {% if ca_connected %}
-          <form method="post" action="/financeiro/contaazul/sync">
-            <button class="btn btn-outline-primary" type="submit">Sincronizar</button>
-          </form>
-        {% endif %}
-        <a class="btn btn-primary" href="/financeiro/novo">Nova cobrança</a>
-      {% endif %}
-    </div>
-  </div>
-
-  {% if ca_configured and role in ["admin","equipe"] and not ca_connected %}
-    <div class="alert alert-warning mt-3">
-      Conta Azul não conectado. Vá em <a href="/integrations/contaazul">Integrações → Conta Azul</a>.
-    </div>
-  {% endif %}
-
-  {% if ca_last_sync %}
-    <div class="muted small mt-2">Conta Azul: última sync em {{ ca_last_sync }}</div>
-  {% endif %}
-
-  <hr class="my-3"/>
-  <h6 class="mb-2">Cobranças (manual)</h6>
-  {% if items %}
-    <div class="list-group">
-      {% for it in items %}
-        <a class="list-group-item list-group-item-action" href="/financeiro/{{ it.id }}">
-          <div class="d-flex justify-content-between">
-            <div class="fw-semibold">{{ it.title }}</div>
-            <span class="badge text-bg-light border">{{ it.status }}</span>
-          </div>
-          <div class="muted small">
-            {% if role in ["admin","equipe"] %}Cliente: {{ it.client_name }} • {% endif %}
-            Valor: R$ {{ "%.2f"|format(it.amount_brl) }} •
-            {% if it.due_date %}Venc: {{ it.due_date|brdate }} • {% endif %}
-            {{ it.created_at|brdatetime }}
-          </div>
-        </a>
-      {% endfor %}
-    </div>
-  {% else %}
-    <div class="muted">Sem cobranças manuais.</div>
-  {% endif %}
-
-  <hr class="my-4"/>
-  <h6 class="mb-2">Conta Azul: Boletos / Contas a receber</h6>
-  {% if ca_receivables %}
-    <div class="table-responsive">
-      <table class="table table-sm align-middle">
-        <thead>
-          <tr>
-            <th>Venc.</th>
-            <th>Descrição</th>
-            <th>Status</th>
-            <th>Aberto</th>
-            <th>Pago</th>
-            <th>Fatura</th>
-            <th>Boleto</th>
-            <th>Download</th>
-          </tr>
-        </thead>
-        <tbody>
-          {% for r in ca_receivables %}
-            <tr>
-              <td class="mono small">{{ fin_human_date(r.due_date) }}</td>
-              <td>{{ r.description }}</td>
-              <td><span class="badge text-bg-light border">{{ r.status }}</span></td>
-              <td>R$ {{ "%.2f"|format(r.amount_open) }}</td>
-              <td>R$ {{ "%.2f"|format(r.amount_paid) }}</td>
-              <td class="mono small">{% if r.invoice_number %}{{ r.invoice_type }} #{{ r.invoice_number }}{% else %}—{% endif %}</td>
-              <td>
-                {% if r.payment_url %}
-                  <a class="btn btn-sm btn-outline-primary" href="{{ r.payment_url }}" target="_blank" rel="noopener">Boleto</a>
-                {% else %}
-                  —
-                {% endif %}
-              </td>
-              <td>
-                <a class="btn btn-sm btn-outline-secondary" href="/financeiro/contaazul/receivable/{{ r.id }}/fatura.pdf" target="_blank" rel="noopener">Fatura PDF</a>
-              </td>
-            </tr>
-          {% endfor %}
-        </tbody>
-      </table>
-    </div>
-  {% else %}
-    <div class="muted small">Nenhuma parcela encontrada. Clique em “Sincronizar”.</div>
-  {% endif %}
-
-  <div class="mt-4">
-    <h6 class="mb-2">Notas fiscais</h6>
-    {% if ca_invoices %}
-      <div class="table-responsive">
-        <table class="table table-sm align-middle">
-          <thead>
-            <tr>
-              <th>Data</th>
-              <th>Número</th>
-              <th>Tipo</th>
-              <th>Status</th>
-              <th>Download</th>
-            </tr>
-          </thead>
-          <tbody>
-            {% for n in ca_invoices %}
-              <tr>
-                <td class="mono small">{{ fin_human_date(n.issue_date) }}</td>
-                <td class="mono small">{{ n.number or "—" }}</td>
-                <td class="mono small">{{ n.invoice_type }}</td>
-                <td><span class="badge text-bg-light border">{{ n.status }}</span></td>
-                <td>
-                  {% if n.invoice_type.upper() == "NFSE" %}
-                    <a class="btn btn-sm btn-outline-secondary" href="/financeiro/contaazul/invoice/{{ n.id }}/pdf" target="_blank" rel="noopener">NF PDF</a>
-                  {% elif n.invoice_type.upper() == "NFE" %}
-                    <a class="btn btn-sm btn-outline-secondary" href="/financeiro/contaazul/invoice/{{ n.id }}/xml" target="_blank" rel="noopener">NF XML</a>
-                  {% else %}
-                    —
-                  {% endif %}
-                </td>
-              </tr>
-            {% endfor %}
-          </tbody>
-        </table>
-      </div>
-    {% else %}
-      <div class="muted small">Nenhuma nota encontrada. Clique em “Sincronizar”.</div>
-    {% endif %}
-  </div>
-</div>
-{% endblock %}
-"""
-
-if hasattr(templates_env.loader, "mapping"):
-    templates_env.loader.mapping = TEMPLATES
-
-_base_tpl_fix_badges_dyn = TEMPLATES.get("base.html", "")
-if _base_tpl_fix_badges_dyn:
-    _msg_btn = (
-        '<a class="btn btn-outline-secondary btn-sm position-relative" href="/mensagens" aria-label="Mensagens">💬'
-        '{% if unread_messages_count %}<span class="position-absolute top-0 start-100 translate-middle badge rounded-pill text-bg-danger">{{ unread_messages_count }}</span>{% endif %}</a>'
-    )
-    _notif_btn = (
-        '<a class="btn btn-outline-secondary btn-sm position-relative" href="/notificacoes" aria-label="Notificações">🔔'
-        '{% if unread_notifications_count %}<span class="position-absolute top-0 start-100 translate-middle badge rounded-pill text-bg-danger">{{ unread_notifications_count }}</span>{% endif %}</a>'
-    )
-    # garante os dois botões antes do logout
-    if 'href="/logout"' in _base_tpl_fix_badges_dyn:
-        _before_logout = _msg_btn + '\n            ' + _notif_btn + '\n            <a class="btn btn-outline-secondary btn-sm" href="/logout">Sair</a>'
-        _base_tpl_fix_badges_dyn = re.sub(
-            r'(?:<a[^>]+href="/mensagens"[^>]*>.*?</a>\s*)?(?:<a[^>]+href="/notificacoes"[^>]*>.*?</a>\s*)?<a class="btn btn-outline-secondary btn-sm" href="/logout">Sair</a>',
-            _before_logout,
-            _base_tpl_fix_badges_dyn,
-            count=1,
-            flags=re.DOTALL,
-        )
-    TEMPLATES["base.html"] = _base_tpl_fix_badges_dyn
-
-TEMPLATES["fin_list.html"] = r"""
-{% extends "base.html" %}
-{% block content %}
-<div class="card p-4">
-  <div class="d-flex justify-content-between align-items-center">
-    <div>
-      <h4 class="mb-0">Financeiro</h4>
-      <div class="muted">Notas/Boletos de honorários (manual) + sincronizado do Conta Azul.</div>
-    </div>
-    <div class="d-flex gap-2">
-      {% if role in ["admin","equipe"] %}
-        <a class="btn btn-outline-secondary" href="/integrations/contaazul">Conta Azul</a>
-        {% if ca_connected %}
-          <form method="post" action="/financeiro/contaazul/sync">
-            <button class="btn btn-outline-primary" type="submit">Sincronizar</button>
-          </form>
-        {% endif %}
-        <a class="btn btn-primary" href="/financeiro/novo">Nova cobrança</a>
-      {% endif %}
-    </div>
-  </div>
-
-  {% if ca_configured and role in ["admin","equipe"] and not ca_connected %}
-    <div class="alert alert-warning mt-3">
-      Conta Azul não conectado. Vá em <a href="/integrations/contaazul">Integrações → Conta Azul</a>.
-    </div>
-  {% endif %}
-
-  {% if ca_last_sync %}
-    <div class="muted small mt-2">Conta Azul: última sync em {{ ca_last_sync }}</div>
-  {% endif %}
-
-  <hr class="my-3"/>
-  <h6 class="mb-2">Cobranças (manual)</h6>
-  {% if items %}
-    <div class="list-group">
-      {% for it in items %}
-        <a class="list-group-item list-group-item-action" href="/financeiro/{{ it.id }}">
-          <div class="d-flex justify-content-between">
-            <div class="fw-semibold">{{ it.title }}</div>
-            <span class="badge text-bg-light border">{{ it.status }}</span>
-          </div>
-          <div class="muted small">
-            {% if role in ["admin","equipe"] %}Cliente: {{ it.client_name }} • {% endif %}
-            Valor: R$ {{ "%.2f"|format(it.amount_brl) }} •
-            {% if it.due_date %}Venc: {{ it.due_date|brdate }} • {% endif %}
-            {{ it.created_at|brdatetime }}
-          </div>
-        </a>
-      {% endfor %}
-    </div>
-  {% else %}
-    <div class="muted">Sem cobranças manuais.</div>
-  {% endif %}
-
-  <hr class="my-4"/>
-  <h6 class="mb-2">Conta Azul: Boletos / Contas a receber</h6>
-  {% if ca_receivables %}
-    <div class="table-responsive">
-      <table class="table table-sm align-middle">
-        <thead>
-          <tr>
-            <th>Venc.</th>
-            <th>Descrição</th>
-            <th>Status</th>
-            <th>Aberto</th>
-            <th>Pago</th>
-            <th>Fatura</th>
-            <th>Boleto</th>
-            <th>Download</th>
-          </tr>
-        </thead>
-        <tbody>
-          {% for r in ca_receivables %}
-            <tr>
-              <td class="mono small">{{ fin_human_date(r.due_date) }}</td>
-              <td>{{ r.description }}</td>
-              <td><span class="badge text-bg-light border">{{ r.status }}</span></td>
-              <td>R$ {{ "%.2f"|format(r.amount_open) }}</td>
-              <td>R$ {{ "%.2f"|format(r.amount_paid) }}</td>
-              <td class="mono small">{% if r.invoice_number %}{{ r.invoice_type }} #{{ r.invoice_number }}{% else %}—{% endif %}</td>
-              <td>
-                {% if r.payment_url %}
-                  <a class="btn btn-sm btn-outline-primary" href="{{ r.payment_url }}" target="_blank" rel="noopener">Boleto</a>
-                {% else %}
-                  —
-                {% endif %}
-              </td>
-              <td>
-                <a class="btn btn-sm btn-outline-secondary" href="/financeiro/contaazul/receivable/{{ r.id }}/fatura.pdf" target="_blank" rel="noopener">Fatura PDF</a>
-              </td>
-            </tr>
-          {% endfor %}
-        </tbody>
-      </table>
-    </div>
-  {% else %}
-    <div class="muted small">Nenhuma parcela encontrada. Clique em “Sincronizar”.</div>
-  {% endif %}
-
-  <div class="mt-4">
-    <h6 class="mb-2">Notas fiscais</h6>
-    {% if ca_invoices %}
-      <div class="table-responsive">
-        <table class="table table-sm align-middle">
-          <thead>
-            <tr>
-              <th>Data</th>
-              <th>Número</th>
-              <th>Tipo</th>
-              <th>Status</th>
-              <th>Download</th>
-            </tr>
-          </thead>
-          <tbody>
-            {% for n in ca_invoices %}
-              <tr>
-                <td class="mono small">{{ fin_human_date(n.issue_date) }}</td>
-                <td class="mono small">{{ n.number or "—" }}</td>
-                <td class="mono small">{{ n.invoice_type }}</td>
-                <td><span class="badge text-bg-light border">{{ n.status }}</span></td>
-                <td>
-                  {% if n.invoice_type.upper() == "NFSE" %}
-                    <a class="btn btn-sm btn-outline-secondary" href="/financeiro/contaazul/invoice/{{ n.id }}/pdf" target="_blank" rel="noopener">NF PDF</a>
-                  {% elif n.invoice_type.upper() == "NFE" %}
-                    <a class="btn btn-sm btn-outline-secondary" href="/financeiro/contaazul/invoice/{{ n.id }}/xml" target="_blank" rel="noopener">NF XML</a>
-                  {% else %}
-                    —
-                  {% endif %}
-                </td>
-              </tr>
-            {% endfor %}
-          </tbody>
-        </table>
-      </div>
-    {% else %}
-      <div class="muted small">Nenhuma nota encontrada. Clique em “Sincronizar”.</div>
-    {% endif %}
-  </div>
-</div>
-{% endblock %}
-"""
-
-if hasattr(templates_env.loader, "mapping"):
-    templates_env.loader.mapping = TEMPLATES
-
-_render_fix_scores_badges = render
-
-
-def render(
-        template_name: str,
-        *,
-        request: Request,
-        context: Optional[dict[str, Any]] = None,
-        status_code: int = 200,
-) -> HTMLResponse:
-    ctx = dict(context or {})
-    ctx.setdefault("unread_messages_count", 0)
-    ctx.setdefault("unread_notifications_count", 0)
-    ctx.setdefault("group_company_count", 0)
-    try:
-        with Session(engine) as _db:
-            tenant = get_tenant_context(request, _db)
-            if tenant:
-                ctx["unread_messages_count"] = unread_messages_count_for_user(
-                    _db,
-                    company_id=tenant.company.id,
-                    user_id=tenant.user.id,
-                )
-                ctx["unread_notifications_count"] = unread_notifications_count_for_user(
-                    _db,
-                    company_id=tenant.company.id,
-                    user_id=tenant.user.id,
-                )
-                active_client_id = get_active_client_id(request, _db, tenant)
-                if active_client_id:
-                    ctx["group_company_count"] = group_company_count(
-                        _db,
-                        company_id=tenant.company.id,
-                        client_id=active_client_id,
-                    )
-    except Exception:
-        pass
-    return _render_fix_scores_badges(
-        template_name,
-        request=request,
-        context=ctx,
-        status_code=status_code,
-    )
-
-
-# ----------------------------
-# Sprint 1B — reset de senha + edição consultoria
-# ----------------------------
-
-PASSWORD_RESET_TTL_HOURS = int(os.getenv("PASSWORD_RESET_TTL_HOURS", "2"))
-
-
-def _sign_password_reset_token(payload: dict[str, Any]) -> str:
-    raw = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-    b64 = _b64url_encode(raw)
-    sig = _hmac_sha256_hex(APP_SECRET_KEY, raw)
-    return f"{b64}.{sig}"
-
-
-def _verify_password_reset_token(token: str) -> dict[str, Any]:
-    tok = (token or "").strip()
-    if "." not in tok:
-        raise ValueError("token inválido")
-    b64, sig = tok.split(".", 1)
-    raw = _b64url_decode(b64)
-    expected = _hmac_sha256_hex(APP_SECRET_KEY, raw)
-    if not hmac.compare_digest(expected, sig):
-        raise ValueError("assinatura inválida")
-    payload = json.loads(raw.decode("utf-8"))
-    if not isinstance(payload, dict):
-        raise ValueError("payload inválido")
-    exp = int(payload.get("exp") or 0)
-    if exp and utcnow().timestamp() > exp:
-        raise ValueError("token expirado")
-    return payload
-
-
-def _build_password_reset_url(request: Request, token: str) -> str:
-    return f"{_public_base_url(request)}/reset-password/{token}"
-
-
-@app.get("/forgot-password", response_class=HTMLResponse)
-async def forgot_password_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
-    preview_url = request.session.pop("password_reset_preview_url", "")
-    return render("forgot_password.html", request=request, context={"current_user": None, "preview_url": preview_url})
-
-
-@app.post("/forgot-password")
-async def forgot_password_action(
-        request: Request,
-        session: Session = Depends(get_session),
-        email: str = Form(""),
-) -> Response:
-    email_norm = (email or "").strip().lower()
-    generic_msg = "Se encontrarmos uma conta com esse e-mail, enviaremos um link para redefinir a senha."
-    user = session.exec(select(User).where(User.email == email_norm)).first()
-
-    if user and email_norm:
-        expires_at = utcnow() + timedelta(hours=max(1, PASSWORD_RESET_TTL_HOURS))
-        payload = {
-            "typ": "pwd_reset",
-            "uid": int(user.id or 0),
-            "email": email_norm,
-            "exp": int(expires_at.timestamp()),
-        }
-        token = _sign_password_reset_token(payload)
-        reset_url = _build_password_reset_url(request, token)
-        try:
-            html_body = f"""
-            <div style="font-family:Arial,sans-serif; line-height:1.45">
-              <h2>Redefinição de senha</h2>
-              <p>Recebemos uma solicitação para redefinir a senha da sua conta.</p>
-              <p><a href="{html.escape(reset_url)}">{html.escape(reset_url)}</a></p>
-              <p style="color:#666; font-size:12px">Este link expira em {int(max(1, PASSWORD_RESET_TTL_HOURS))} hora(s).</p>
-            </div>
-            """
-            text_body = f"Para redefinir sua senha, acesse:\n{reset_url}\n"
-            _smtp_send_email(to_email=email_norm, subject="Redefinição de senha", html_body=html_body,
-                             text_body=text_body)
-        except Exception:
-            request.session["password_reset_preview_url"] = reset_url
-
-    set_flash(request, generic_msg)
-    return RedirectResponse("/forgot-password", status_code=303)
-
-
-@app.get("/reset-password/{token}", response_class=HTMLResponse)
-async def reset_password_page(request: Request, token: str, session: Session = Depends(get_session)) -> HTMLResponse:
-    message = ""
-    valid = False
-    try:
-        payload = _verify_password_reset_token(token)
-        if str(payload.get("typ") or "") != "pwd_reset":
-            raise ValueError("tipo inválido")
-        valid = True
-    except Exception:
-        message = "Link inválido ou expirado. Solicite um novo reset de senha."
-
-    return render(
-        "reset_password.html",
-        request=request,
-        context={"current_user": None, "token": token, "token_valid": valid, "message": message},
-    )
-
-
-@app.post("/reset-password/{token}")
-async def reset_password_action(
-        request: Request,
-        token: str,
-        session: Session = Depends(get_session),
-        password: str = Form(""),
-        password_confirm: str = Form(""),
-) -> Response:
-    try:
-        payload = _verify_password_reset_token(token)
-        if str(payload.get("typ") or "") != "pwd_reset":
-            raise ValueError("tipo inválido")
-        user_id = int(payload.get("uid") or 0)
-        email = str(payload.get("email") or "").strip().lower()
-    except Exception:
-        set_flash(request, "Link inválido ou expirado. Solicite um novo reset de senha.")
-        return RedirectResponse("/forgot-password", status_code=303)
-
-    if len((password or "").strip()) < 8:
-        set_flash(request, "A nova senha deve ter pelo menos 8 caracteres.")
-        return RedirectResponse(f"/reset-password/{token}", status_code=303)
-
-    if (password or "") != (password_confirm or ""):
-        set_flash(request, "As senhas informadas não conferem.")
-        return RedirectResponse(f"/reset-password/{token}", status_code=303)
-
-    user = session.get(User, user_id)
-    if not user or (user.email or "").strip().lower() != email:
-        set_flash(request, "Conta não encontrada para este link.")
-        return RedirectResponse("/forgot-password", status_code=303)
-
-    user.password_hash = hash_password(password)
-    session.add(user)
-    session.commit()
-    set_flash(request, "Senha redefinida com sucesso. Faça login com a nova senha.")
-    return RedirectResponse("/login", status_code=303)
-
-
-TEMPLATES["forgot_password.html"] = r"""
-{% extends "base.html" %}
-{% block content %}
-<div class="row justify-content-center">
-  <div class="col-md-6 col-lg-5">
-    <div class="card p-4 shadow-sm">
-      <div class="text-center mb-4">
-        <h4 class="mb-1">Redefinir senha</h4>
-        <div class="muted">Informe seu e-mail para receber o link de redefinição.</div>
-      </div>
-
-      <form method="post" action="/forgot-password">
-        <div class="mb-3">
-          <label class="form-label">E-mail</label>
-          <input class="form-control" name="email" type="email" autocomplete="email" required />
-        </div>
-        <button class="btn btn-primary w-100">Enviar link</button>
-      </form>
-
-      {% if preview_url %}
-        <hr class="my-4" />
-        <div class="small">
-          <div class="fw-semibold mb-1">Link gerado</div>
-          <a href="{{ preview_url }}" class="text-break">{{ preview_url }}</a>
-          <div class="muted mt-1">Use este link enquanto o SMTP não estiver configurado.</div>
-        </div>
-      {% endif %}
-
-      <div class="text-center mt-4">
-        <a class="small text-decoration-none" href="/login">Voltar ao login</a>
-      </div>
-    </div>
-  </div>
-</div>
-{% endblock %}
-"""
-
-TEMPLATES["reset_password.html"] = r"""
-{% extends "base.html" %}
-{% block content %}
-<div class="row justify-content-center">
-  <div class="col-md-6 col-lg-5">
-    <div class="card p-4 shadow-sm">
-      <div class="text-center mb-4">
-        <h4 class="mb-1">Nova senha</h4>
-        <div class="muted">Defina uma nova senha para a sua conta.</div>
-      </div>
-
-      {% if token_valid %}
-        <form method="post" action="/reset-password/{{ token }}">
-          <div class="mb-3">
-            <label class="form-label">Nova senha</label>
-            <input class="form-control" name="password" type="password" autocomplete="new-password" minlength="8" required />
-          </div>
-          <div class="mb-3">
-            <label class="form-label">Confirmar nova senha</label>
-            <input class="form-control" name="password_confirm" type="password" autocomplete="new-password" minlength="8" required />
-          </div>
-          <button class="btn btn-primary w-100">Salvar nova senha</button>
-        </form>
-      {% else %}
-        <div class="alert alert-warning mb-0">{{ message }}</div>
-        <div class="text-center mt-4">
-          <a class="btn btn-outline-primary" href="/forgot-password">Solicitar novo link</a>
-        </div>
-      {% endif %}
-    </div>
-  </div>
-</div>
-{% endblock %}
-"""
-
-TEMPLATES["consult_edit_stage.html"] = r"""
-{% extends "base.html" %}
-{% block content %}
-<div class="card p-4">
-  <div class="d-flex justify-content-between align-items-center">
-    <div>
-      <h4 class="mb-0">Editar etapa</h4>
-      <div class="muted">{{ project.name }}</div>
-    </div>
-    <a class="btn btn-outline-secondary" href="/consultoria/{{ project.id }}">Voltar</a>
-  </div>
-  <hr class="my-3"/>
-  <form method="post" action="/consultoria/stages/{{ stage.id }}/editar">
-    <div class="row g-3">
-      <div class="col-md-7">
-        <label class="form-label">Nome da etapa</label>
-        <input class="form-control" name="name" value="{{ stage.name }}" required />
-      </div>
-      <div class="col-md-2">
-        <label class="form-label">Ordem</label>
-        <input class="form-control" name="order" type="number" min="1" value="{{ stage.order or 1 }}" />
-      </div>
-      <div class="col-md-3">
-        <label class="form-label">Prazo</label>
-        <input class="form-control mono" name="due_date" value="{{ stage.due_date|brdate }}" placeholder="DD/MM/AAAA" />
-      </div>
-    </div>
-    <div class="mt-4 d-flex gap-2">
-      <button class="btn btn-primary" type="submit">Salvar etapa</button>
-      <a class="btn btn-outline-secondary" href="/consultoria/{{ project.id }}">Cancelar</a>
-    </div>
-  </form>
-</div>
-{% endblock %}
-"""
-
-TEMPLATES["consult_edit_step.html"] = r"""
-{% extends "base.html" %}
-{% block content %}
-<div class="card p-4">
-  <div class="d-flex justify-content-between align-items-center">
-    <div>
-      <h4 class="mb-0">Editar sub-etapa</h4>
-      <div class="muted">{{ project.name }}</div>
-    </div>
-    <a class="btn btn-outline-secondary" href="/consultoria/{{ project.id }}">Voltar</a>
-  </div>
-  <hr class="my-3"/>
-  <form method="post" action="/consultoria/steps/{{ step.id }}/editar">
-    <div class="row g-3">
-      <div class="col-md-6">
-        <label class="form-label">Título</label>
-        <input class="form-control" name="title" value="{{ step.title }}" required />
-      </div>
-      <div class="col-md-3">
-        <label class="form-label">Prazo</label>
-        <input class="form-control mono" name="due_date" value="{{ step.due_date|brdate }}" placeholder="DD/MM/AAAA" />
-      </div>
-      <div class="col-md-3">
-        <label class="form-label">Peso</label>
-        <input class="form-control" name="weight" type="number" step="0.1" min="0.1" value="{{ step.weight or 1.0 }}" />
-      </div>
-      <div class="col-12">
-        <label class="form-label">Descrição</label>
-        <textarea class="form-control" name="description" rows="4">{{ step.description }}</textarea>
-      </div>
-      <div class="col-12">
-        <div class="form-check">
-          <input class="form-check-input" type="checkbox" name="client_action" value="1" id="client_action_edit" {% if step.client_action %}checked{% endif %}>
-          <label class="form-check-label" for="client_action_edit">Ação do cliente</label>
-        </div>
-      </div>
-    </div>
-    <div class="mt-4 d-flex gap-2">
-      <button class="btn btn-primary" type="submit">Salvar sub-etapa</button>
-      <a class="btn btn-outline-secondary" href="/consultoria/{{ project.id }}">Cancelar</a>
-    </div>
-  </form>
-</div>
-{% endblock %}
-"""
-
-TEMPLATES["fin_list.html"] = r"""
-{% extends "base.html" %}
-{% block content %}
-<div class="card p-4">
-  <div class="d-flex justify-content-between align-items-center">
-    <div>
-      <h4 class="mb-0">Financeiro</h4>
-      <div class="muted">Notas/Boletos de honorários (manual) + sincronizado do Conta Azul.</div>
-    </div>
-    <div class="d-flex gap-2">
-      {% if role in ["admin","equipe"] %}
-        <a class="btn btn-outline-secondary" href="/integrations/contaazul">Conta Azul</a>
-        {% if ca_connected %}
-          <form method="post" action="/financeiro/contaazul/sync">
-            <button class="btn btn-outline-primary" type="submit">Sincronizar</button>
-          </form>
-        {% endif %}
-        <a class="btn btn-primary" href="/financeiro/novo">Nova cobrança</a>
-      {% endif %}
-    </div>
-  </div>
-
-  {% if ca_configured and role in ["admin","equipe"] and not ca_connected %}
-    <div class="alert alert-warning mt-3">
-      Conta Azul não conectado. Vá em <a href="/integrations/contaazul">Integrações → Conta Azul</a>.
-    </div>
-  {% endif %}
-
-  {% if ca_last_sync %}
-    <div class="muted small mt-2">Conta Azul: última sync em {{ ca_last_sync }}</div>
-  {% endif %}
-
-  <hr class="my-3"/>
-  <h6 class="mb-2">Cobranças (manual)</h6>
-  {% if items %}
-    <div class="list-group">
-      {% for it in items %}
-        <a class="list-group-item list-group-item-action" href="/financeiro/{{ it.id }}">
-          <div class="d-flex justify-content-between">
-            <div class="fw-semibold">{{ it.title }}</div>
-            <span class="badge text-bg-light border">{{ it.status }}</span>
-          </div>
-          <div class="muted small">
-            {% if role in ["admin","equipe"] %}Cliente: {{ it.client_name }} • {% endif %}
-            Valor: R$ {{ "%.2f"|format(it.amount_brl) }} •
-            {% if it.due_date %}Venc: {{ it.due_date|brdate }} • {% endif %}
-            {{ it.created_at|brdatetime }}
-          </div>
-        </a>
-      {% endfor %}
-    </div>
-  {% else %}
-    <div class="muted">Sem cobranças manuais.</div>
-  {% endif %}
-
-  <hr class="my-4"/>
-  <h6 class="mb-2">Conta Azul: Boletos / Contas a receber</h6>
-  {% if ca_receivables %}
-    <div class="table-responsive">
-      <table class="table table-sm align-middle">
-        <thead>
-          <tr>
-            <th>Venc.</th>
-            <th>Descrição</th>
-            <th>Status</th>
-            <th>Aberto</th>
-            <th>Pago</th>
-            <th>Fatura</th>
-            <th>Boleto</th>
-            <th>Download</th>
-          </tr>
-        </thead>
-        <tbody>
-          {% for r in ca_receivables %}
-            <tr>
-              <td class="mono small">{{ fin_human_date(r.due_date) }}</td>
-              <td>{{ r.description }}</td>
-              <td><span class="badge text-bg-light border">{{ r.status }}</span></td>
-              <td>R$ {{ "%.2f"|format(r.amount_open) }}</td>
-              <td>R$ {{ "%.2f"|format(r.amount_paid) }}</td>
-              <td class="mono small">{% if r.invoice_number %}{{ r.invoice_type }} #{{ r.invoice_number }}{% else %}—{% endif %}</td>
-              <td>
-                {% if r.payment_url %}
-                  <a class="btn btn-sm btn-outline-primary" href="{{ r.payment_url }}" target="_blank" rel="noopener">Boleto</a>
-                {% else %}
-                  —
-                {% endif %}
-              </td>
-              <td>
-                <a class="btn btn-sm btn-outline-secondary" href="/financeiro/contaazul/receivable/{{ r.id }}/fatura.pdf" target="_blank" rel="noopener">Fatura PDF</a>
-              </td>
-            </tr>
-          {% endfor %}
-        </tbody>
-      </table>
-    </div>
-  {% else %}
-    <div class="muted small">Nenhuma parcela encontrada. Clique em “Sincronizar”.</div>
-  {% endif %}
-
-  <div class="mt-4">
-    <h6 class="mb-2">Notas fiscais</h6>
-    {% if ca_invoices %}
-      <div class="table-responsive">
-        <table class="table table-sm align-middle">
-          <thead>
-            <tr>
-              <th>Data</th>
-              <th>Número</th>
-              <th>Tipo</th>
-              <th>Status</th>
-              <th>Download</th>
-            </tr>
-          </thead>
-          <tbody>
-            {% for n in ca_invoices %}
-              <tr>
-                <td class="mono small">{{ fin_human_date(n.issue_date) }}</td>
-                <td class="mono small">{{ n.number or "—" }}</td>
-                <td class="mono small">{{ n.invoice_type }}</td>
-                <td><span class="badge text-bg-light border">{{ n.status }}</span></td>
-                <td>
-                  {% if n.invoice_type.upper() == "NFSE" %}
-                    <a class="btn btn-sm btn-outline-secondary" href="/financeiro/contaazul/invoice/{{ n.id }}/pdf" target="_blank" rel="noopener">NF PDF</a>
-                  {% elif n.invoice_type.upper() == "NFE" %}
-                    <a class="btn btn-sm btn-outline-secondary" href="/financeiro/contaazul/invoice/{{ n.id }}/xml" target="_blank" rel="noopener">NF XML</a>
-                  {% else %}
-                    —
-                  {% endif %}
-                </td>
-              </tr>
-            {% endfor %}
-          </tbody>
-        </table>
-      </div>
-    {% else %}
-      <div class="muted small">Nenhuma nota encontrada. Clique em “Sincronizar”.</div>
-    {% endif %}
-  </div>
-</div>
-{% endblock %}
-"""
-
-if hasattr(templates_env.loader, "mapping"):
-    templates_env.loader.mapping = TEMPLATES
