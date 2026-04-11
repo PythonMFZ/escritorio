@@ -2324,6 +2324,27 @@ class TaskComment(SQLModel, table=True):
     created_at: datetime = Field(default_factory=utcnow)
 
 
+class TaskWorkSession(SQLModel, table=True):
+    """
+    Sessão de trabalho em uma tarefa para apontamento de horas.
+    Um usuário pode ter apenas uma sessão ativa por vez na empresa.
+    """
+    id: Optional[int] = Field(default=None, primary_key=True)
+
+    company_id: int = Field(index=True, foreign_key="company.id")
+    client_id: int = Field(index=True, foreign_key="client.id")
+    task_id: int = Field(index=True, foreign_key="task.id")
+    user_id: int = Field(index=True, foreign_key="user.id")
+
+    started_at: datetime = Field(default_factory=utcnow, index=True)
+    ended_at: Optional[datetime] = Field(default=None, index=True)
+    duration_minutes: int = Field(default=0)
+    note: str = ""
+
+    created_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime = Field(default_factory=utcnow)
+
+
 class Document(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     company_id: int = Field(index=True, foreign_key="company.id")
@@ -2653,6 +2674,16 @@ def ensure_ui_tables() -> None:
         )
     except Exception:
         pass
+
+
+
+
+def ensure_task_work_session_table() -> bool:
+    try:
+        TaskWorkSession.__table__.create(engine, checkfirst=True)
+        return True
+    except Exception:
+        return False
 
 
 def init_db() -> None:
@@ -5150,6 +5181,27 @@ a:hover{ color:#00BFBF; }
 
   <!-- Banner (carrossel) -->
   <div id="mc-banner" class="mb-3"></div>
+
+  <div class="row g-3 mb-3">
+    <div class="col-12 col-md-4">
+      <div class="card p-3 h-100">
+        <div class="muted small">Tarefas filtradas</div>
+        <div class="fw-semibold fs-4">{{ filtered_total_tasks }}</div>
+      </div>
+    </div>
+    <div class="col-12 col-md-4">
+      <div class="card p-3 h-100">
+        <div class="muted small">Com apontamento ativo</div>
+        <div class="fw-semibold fs-4">{{ filtered_active_count }}</div>
+      </div>
+    </div>
+    <div class="col-12 col-md-4">
+      <div class="card p-3 h-100">
+        <div class="muted small">Horas apontadas</div>
+        <div class="fw-semibold fs-4">{{ filtered_total_hours_label }}</div>
+      </div>
+    </div>
+  </div>
 
   <div class="row g-3">
     <div class="col-12 col-lg-9">
@@ -7833,9 +7885,15 @@ TEMPLATES.update({
                     {% if t.due_date %}Prazo: {{ t.due_date }} • {% endif %}
                     {% if t.assignee_name %}Resp: {{ t.assignee_name }}{% endif %}
                   </div>
-                  {% if t.visible_to_client %}
-                    <div class="mt-2"><span class="badge text-bg-light border">visível ao cliente</span></div>
-                  {% endif %}
+                  <div class="mt-2 d-flex gap-2 flex-wrap">
+                    {% if t.visible_to_client %}
+                      <span class="badge text-bg-light border">visível ao cliente</span>
+                    {% endif %}
+                    {% if t.has_active_session %}
+                      <span class="badge text-bg-light border">apontamento ativo</span>
+                    {% endif %}
+                    <span class="badge text-bg-light border">{{ t.tracked_hours_label }}</span>
+                  </div>
                 </a>
               {% endfor %}
             </div>
@@ -8007,6 +8065,82 @@ TEMPLATES.update({
         </div>
       </div>
     </form>
+  {% endif %}
+
+  <hr class="my-3"/>
+  <h5>Apontamento de tempo</h5>
+
+  <div class="row g-3 mb-3">
+    <div class="col-12 col-md-4">
+      <div class="card p-3 h-100">
+        <div class="muted small">Horas desta tarefa</div>
+        <div class="fw-semibold fs-4">{{ task_total_hours_label }}</div>
+      </div>
+    </div>
+    <div class="col-12 col-md-4">
+      <div class="card p-3 h-100">
+        <div class="muted small">Horas do cliente</div>
+        <div class="fw-semibold fs-4">{{ client_total_hours_label }}</div>
+      </div>
+    </div>
+    <div class="col-12 col-md-4">
+      <div class="card p-3 h-100">
+        <div class="muted small">Status do meu apontamento</div>
+        <div class="fw-semibold fs-6">
+          {% if active_work_session %}
+            Em andamento desde {{ active_work_started_at }}
+          {% else %}
+            Nenhum apontamento ativo
+          {% endif %}
+        </div>
+      </div>
+    </div>
+  </div>
+
+  {% if role in ["admin","equipe"] %}
+    <div class="d-flex gap-2 flex-wrap mb-3">
+      {% if active_work_session %}
+        <form method="post" action="/tarefas/{{ task.id }}/parar">
+          <button class="btn btn-outline-warning" type="submit">Parar trabalho</button>
+        </form>
+      {% else %}
+        <form method="post" action="/tarefas/{{ task.id }}/iniciar">
+          <button class="btn btn-outline-success" type="submit">Iniciar trabalho</button>
+        </form>
+      {% endif %}
+    </div>
+  {% endif %}
+
+  {% if work_sessions %}
+    <div class="card p-3 mb-3">
+      <div class="fw-semibold mb-2">Histórico de apontamentos</div>
+      <div class="table-responsive">
+        <table class="table align-middle">
+          <thead>
+            <tr>
+              <th>Usuário</th>
+              <th>Início</th>
+              <th>Fim</th>
+              <th>Horas</th>
+              <th>Observação</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for s in work_sessions %}
+              <tr>
+                <td>{{ s.user_name }}</td>
+                <td>{{ s.started_at }}</td>
+                <td>{{ s.ended_at }}</td>
+                <td>{{ s.hours_label }}</td>
+                <td>{{ s.note or "—" }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  {% else %}
+    <div class="muted mb-3">Nenhum apontamento nesta tarefa.</div>
   {% endif %}
 
   <hr class="my-3"/>
@@ -12072,6 +12206,7 @@ def _startup() -> None:
     ensure_office_finance_tables()
     ensure_offer_engine_tables()
     ensure_offer_engine_columns()
+    ensure_task_work_session_table()
     with Session(engine) as _s:
         try:
             seed_product_families(_s)
@@ -18129,6 +18264,92 @@ def _task_assignee_label(session: Session, user_id: Optional[int]) -> str:
     return u.name if u else ""
 
 
+def _task_work_minutes(session_obj: TaskWorkSession) -> int:
+    if session_obj.ended_at:
+        try:
+            return max(0, int(session_obj.duration_minutes or 0))
+        except Exception:
+            return 0
+    try:
+        return max(0, int((utcnow() - session_obj.started_at).total_seconds() // 60))
+    except Exception:
+        return 0
+
+
+def _task_work_hours_label(total_minutes: int) -> str:
+    hours = max(0.0, float(total_minutes or 0) / 60.0)
+    return f"{hours:.2f} h"
+
+
+def _task_work_active_for_user(session: Session, *, company_id: int, user_id: int) -> Optional[TaskWorkSession]:
+    return session.exec(
+        select(TaskWorkSession)
+        .where(
+            TaskWorkSession.company_id == int(company_id),
+            TaskWorkSession.user_id == int(user_id),
+            TaskWorkSession.ended_at.is_(None),
+        )
+        .order_by(TaskWorkSession.started_at.desc())
+    ).first()
+
+
+def _task_work_active_for_task_user(session: Session, *, task_id: int, user_id: int) -> Optional[TaskWorkSession]:
+    return session.exec(
+        select(TaskWorkSession)
+        .where(
+            TaskWorkSession.task_id == int(task_id),
+            TaskWorkSession.user_id == int(user_id),
+            TaskWorkSession.ended_at.is_(None),
+        )
+        .order_by(TaskWorkSession.started_at.desc())
+    ).first()
+
+
+def _task_work_sessions_for_task(session: Session, *, task_id: int) -> list[TaskWorkSession]:
+    return session.exec(
+        select(TaskWorkSession)
+        .where(TaskWorkSession.task_id == int(task_id))
+        .order_by(TaskWorkSession.started_at.desc())
+    ).all()
+
+
+def _task_work_total_minutes_for_task(session: Session, *, task_id: int) -> int:
+    total = 0
+    for ws in _task_work_sessions_for_task(session, task_id=task_id):
+        total += _task_work_minutes(ws)
+    return total
+
+
+def _task_work_total_minutes_for_client(session: Session, *, company_id: int, client_id: int) -> int:
+    total = 0
+    rows = session.exec(
+        select(TaskWorkSession)
+        .where(
+            TaskWorkSession.company_id == int(company_id),
+            TaskWorkSession.client_id == int(client_id),
+        )
+        .order_by(TaskWorkSession.started_at.desc())
+    ).all()
+    for ws in rows:
+        total += _task_work_minutes(ws)
+    return total
+
+
+def _task_work_row(session: Session, ws: TaskWorkSession) -> dict[str, Any]:
+    user = session.get(User, ws.user_id)
+    minutes = _task_work_minutes(ws)
+    return {
+        "id": ws.id,
+        "user_name": user.name if user else "—",
+        "started_at": _format_dt_br(ws.started_at),
+        "ended_at": _format_dt_br(ws.ended_at) if ws.ended_at else "Em andamento",
+        "minutes": minutes,
+        "hours_label": _task_work_hours_label(minutes),
+        "note": str(ws.note or "").strip(),
+        "is_active": ws.ended_at is None,
+    }
+
+
 @app.get("/tarefas", response_class=HTMLResponse)
 @require_login
 async def tasks_list(
@@ -18148,6 +18369,10 @@ async def tasks_list(
 
     active_client_id = get_active_client_id(request, session, ctx)
     current_client = get_client_or_none(session, ctx.company.id, active_client_id)
+
+    if not ensure_task_work_session_table():
+        set_flash(request, "Apontamento de horas não está configurado no banco.")
+        return RedirectResponse("/", status_code=303)
 
     q = select(Task).where(Task.company_id == ctx.company.id)
 
@@ -18232,6 +18457,8 @@ async def tasks_list(
 
     view = []
     today = datetime.now(timezone.utc).date()
+    total_filtered_minutes = 0
+    active_filtered_count = 0
     for t in tasks:
         due_state = ""
         due_label = ""
@@ -18248,6 +18475,16 @@ async def tasks_list(
         except Exception:
             due_state = ""
             due_label = ""
+        tracked_minutes = _task_work_total_minutes_for_task(session, task_id=t.id)
+        active_session = session.exec(
+            select(TaskWorkSession)
+            .where(TaskWorkSession.task_id == t.id, TaskWorkSession.ended_at.is_(None))
+            .order_by(TaskWorkSession.started_at.desc())
+        ).first()
+        total_filtered_minutes += tracked_minutes
+        if active_session:
+            active_filtered_count += 1
+
         view.append(
             {
                 "id": t.id,
@@ -18260,6 +18497,8 @@ async def tasks_list(
                 "client_name": (session.get(Client, t.client_id).name if session.get(Client, t.client_id) else ""),
                 "due_state": due_state,
                 "due_label": due_label,
+                "tracked_hours_label": _task_work_hours_label(tracked_minutes),
+                "has_active_session": bool(active_session),
             }
         )
 
@@ -18293,6 +18532,9 @@ async def tasks_list(
             "filter_due": filter_due,
             "filter_mine": filter_mine,
             "columns": columns,
+            "filtered_total_tasks": len(view),
+            "filtered_active_count": active_filtered_count,
+            "filtered_total_hours_label": _task_work_hours_label(total_filtered_minutes),
         },
     )
 
@@ -18440,6 +18682,14 @@ async def tasks_detail(request: Request, session: Session = Depends(get_session)
             status_code=404,
         )
 
+    if not ensure_task_work_session_table():
+        return render(
+            "error.html",
+            request=request,
+            context={"message": "Apontamento de horas não está configurado no banco."},
+            status_code=500,
+        )
+
     active_client_id = get_active_client_id(request, session, ctx)
     current_client = get_client_or_none(session, ctx.company.id, active_client_id)
 
@@ -18475,6 +18725,10 @@ async def tasks_detail(request: Request, session: Session = Depends(get_session)
         )
 
     assignee_name = _task_assignee_label(session, task.assignee_user_id)
+    task_minutes_total = _task_work_total_minutes_for_task(session, task_id=task.id)
+    client_minutes_total = _task_work_total_minutes_for_client(session, company_id=ctx.company.id, client_id=task.client_id)
+    active_work_session = _task_work_active_for_task_user(session, task_id=task.id, user_id=ctx.user.id) if ctx.membership.role in ["admin", "equipe"] else None
+    work_sessions = [_task_work_row(session, ws) for ws in _task_work_sessions_for_task(session, task_id=task.id)]
 
     return render(
         "tasks_detail.html",
@@ -18488,6 +18742,13 @@ async def tasks_detail(request: Request, session: Session = Depends(get_session)
             "assignee_name": assignee_name,
             "comments": out_comments,
             "attachments": out_attachments,
+            "task_total_minutes": task_minutes_total,
+            "task_total_hours_label": _task_work_hours_label(task_minutes_total),
+            "client_total_minutes": client_minutes_total,
+            "client_total_hours_label": _task_work_hours_label(client_minutes_total),
+            "active_work_session": active_work_session,
+            "active_work_started_at": _format_dt_br(active_work_session.started_at) if active_work_session else "",
+            "work_sessions": work_sessions,
         },
     )
 
@@ -18568,6 +18829,105 @@ async def tasks_attach_file(
     session.commit()
 
     set_flash(request, "Anexo enviado.")
+    return RedirectResponse(f"/tarefas/{task.id}", status_code=303)
+
+
+@app.post("/tarefas/{task_id}/iniciar")
+@require_role({"admin", "equipe"})
+async def tasks_start_work(
+        request: Request,
+        session: Session = Depends(get_session),
+        task_id: int = 0,
+        note: str = Form(""),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    if not ensure_task_work_session_table():
+        set_flash(request, "Apontamento de horas não está configurado no banco.")
+        return RedirectResponse(f"/tarefas/{task_id}", status_code=303)
+
+    task = session.get(Task, int(task_id))
+    if not task or task.company_id != ctx.company.id:
+        set_flash(request, "Tarefa não encontrada.")
+        return RedirectResponse("/tarefas", status_code=303)
+
+    if task.status == "concluida":
+        set_flash(request, "Reabra a tarefa antes de iniciar um apontamento.")
+        return RedirectResponse(f"/tarefas/{task.id}", status_code=303)
+
+    active = _task_work_active_for_user(session, company_id=ctx.company.id, user_id=ctx.user.id)
+    if active and active.task_id == task.id:
+        set_flash(request, "Você já está apontando tempo nesta tarefa.")
+        return RedirectResponse(f"/tarefas/{task.id}", status_code=303)
+
+    if active and active.task_id != task.id:
+        active.ended_at = utcnow()
+        active.duration_minutes = _task_work_minutes(active)
+        active.updated_at = utcnow()
+        session.add(active)
+
+    started = utcnow()
+    session.add(
+        TaskWorkSession(
+            company_id=ctx.company.id,
+            client_id=task.client_id,
+            task_id=task.id,
+            user_id=ctx.user.id,
+            started_at=started,
+            ended_at=None,
+            duration_minutes=0,
+            note=str(note or "").strip(),
+            created_at=started,
+            updated_at=started,
+        )
+    )
+    if task.status == "nao_iniciada":
+        task.status = "em_andamento"
+    task.updated_at = utcnow()
+    session.add(task)
+    session.commit()
+
+    if active and active.task_id != task.id:
+        set_flash(request, "Sessão anterior encerrada e novo apontamento iniciado.")
+    else:
+        set_flash(request, "Apontamento iniciado.")
+    return RedirectResponse(f"/tarefas/{task.id}", status_code=303)
+
+
+@app.post("/tarefas/{task_id}/parar")
+@require_role({"admin", "equipe"})
+async def tasks_stop_work(
+        request: Request,
+        session: Session = Depends(get_session),
+        task_id: int = 0,
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    if not ensure_task_work_session_table():
+        set_flash(request, "Apontamento de horas não está configurado no banco.")
+        return RedirectResponse(f"/tarefas/{task_id}", status_code=303)
+
+    task = session.get(Task, int(task_id))
+    if not task or task.company_id != ctx.company.id:
+        set_flash(request, "Tarefa não encontrada.")
+        return RedirectResponse("/tarefas", status_code=303)
+
+    active = _task_work_active_for_task_user(session, task_id=task.id, user_id=ctx.user.id)
+    if not active:
+        set_flash(request, "Nenhum apontamento ativo nesta tarefa.")
+        return RedirectResponse(f"/tarefas/{task.id}", status_code=303)
+
+    active.ended_at = utcnow()
+    active.duration_minutes = _task_work_minutes(active)
+    active.updated_at = utcnow()
+    task.updated_at = utcnow()
+    session.add(active)
+    session.add(task)
+    session.commit()
+
+    set_flash(request, "Apontamento encerrado.")
     return RedirectResponse(f"/tarefas/{task.id}", status_code=303)
 
 
