@@ -16399,21 +16399,25 @@ async def contaazul_invoice_pdf(
 @app.get("/financeiro/contaazul/receivable/{rid}/fatura.pdf")
 @require_login
 async def contaazul_receivable_fatura_pdf(
-        rid: int, request: Request, session: Session = Depends(get_session)
+    rid: int, request: Request, session: Session = Depends(get_session)
 ) -> Response:
     ctx = get_tenant_context(request, session)
     if not ctx:
         request.session.clear()
         return RedirectResponse("/login", status_code=303)
 
+    company_id = int(ctx.company.id)
+    role = str(getattr(ctx, "role", getattr(ctx.membership, "role", "")) or "")
+    client_id_ctx = int(ctx.client.id) if getattr(ctx, "client", None) and ctx.client.id is not None else None
+
     r = session.get(ContaAzulReceivable, rid)
-    if not r or r.company_id != ctx["company_id"]:
+    if not r or r.company_id != company_id:
         raise HTTPException(status_code=404, detail="Cobrança não encontrada.")
 
-    if ctx["role"] == "cliente" and r.client_id != ctx["client_id"]:
+    if role == "cliente" and client_id_ctx is not None and r.client_id != client_id_ctx:
         raise HTTPException(status_code=403, detail="Sem permissão.")
 
-    company = session.get(Company, ctx["company_id"])
+    company = session.get(Company, company_id)
     client = session.get(Client, r.client_id) if getattr(r, "client_id", None) else None
 
     try:
@@ -16427,7 +16431,7 @@ async def contaazul_receivable_fatura_pdf(
             "contaazul_receivable_fatura_pdf_failed",
             extra={
                 "rid": rid,
-                "company_id": ctx["company_id"],
+                "company_id": company_id,
                 "client_id": getattr(r, "client_id", None),
                 "installment_id": getattr(r, "installment_id", None),
                 "error": str(e),
@@ -16435,8 +16439,9 @@ async def contaazul_receivable_fatura_pdf(
         )
         raise HTTPException(status_code=500, detail="Falha ao gerar fatura PDF.")
 
-    filename_base = _safe_text(getattr(r, "installment_id", ""), default=f"receivable_{rid}")
+    filename_base = str(getattr(r, "installment_id", "") or f"receivable_{rid}").strip()
     filename = f"fatura_{filename_base}.pdf"
+
     return Response(
         content=pdf,
         media_type="application/pdf",
