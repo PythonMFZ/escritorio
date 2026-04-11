@@ -16205,8 +16205,22 @@ async def _contaazul_get_bytes(
     return resp.content, ctype
 
 
+def _safe_money(value: Any) -> float:
+    try:
+        if value is None:
+            return 0.0
+        return float(value)
+    except Exception:
+        return 0.0
+
+
+def _safe_text(value: Any, default: str = "—") -> str:
+    s = str(value).strip() if value is not None else ""
+    return s or default
+
+
 def _pdf_fatura_bytes(*, company_name: str, client_name: str, receivable: ContaAzulReceivable) -> bytes:
-    """Gera um PDF simples (fatura) localmente.
+    """Gera um PDF simples (fatura) localmente, tolerando campos nulos/legados.
 
     Observação: a API aberta do Conta Azul não expõe um endpoint documentado para baixar o PDF do boleto.
     Este PDF é um comprovante/fatura com os dados + link de pagamento (quando existir).
@@ -16217,7 +16231,17 @@ def _pdf_fatura_bytes(*, company_name: str, client_name: str, receivable: ContaA
 
     buf = BytesIO()
     c = canvas.Canvas(buf, pagesize=A4)
-    w, h = A4
+    _w, h = A4
+
+    due_date = _safe_text(getattr(receivable, "due_date", ""))
+    status = _safe_text(getattr(receivable, "status", ""))
+    description = _safe_text(getattr(receivable, "description", ""))
+    invoice_type = _safe_text(getattr(receivable, "invoice_type", ""), default="")
+    invoice_number = _safe_text(getattr(receivable, "invoice_number", ""), default="")
+    payment_url = _safe_text(getattr(receivable, "payment_url", ""), default="")
+    amount_open = _safe_money(getattr(receivable, "amount_open", 0))
+    amount_paid = _safe_money(getattr(receivable, "amount_paid", 0))
+    amount_total = _safe_money(getattr(receivable, "amount_total", 0))
 
     y = h - 60
     c.setFont("Helvetica-Bold", 14)
@@ -16225,32 +16249,40 @@ def _pdf_fatura_bytes(*, company_name: str, client_name: str, receivable: ContaA
     y -= 22
 
     c.setFont("Helvetica", 10)
-    c.drawString(40, y, f"Empresa: {company_name}")
+    c.drawString(40, y, f"Empresa: {_safe_text(company_name, 'Empresa')}")
     y -= 14
-    c.drawString(40, y, f"Cliente: {client_name}")
+    c.drawString(40, y, f"Cliente: {_safe_text(client_name, 'Cliente')}")
     y -= 14
-    c.drawString(40, y, f"Descrição: {receivable.description or '—'}")
+    c.drawString(40, y, f"Descrição: {description}")
     y -= 14
-    c.drawString(40, y, f"Vencimento: {receivable.due_date or '—'}   Status: {receivable.status or '—'}")
+    c.drawString(40, y, f"Vencimento: {due_date}   Status: {status}")
     y -= 14
-    c.drawString(40, y, f"Valor em aberto: R$ {receivable.amount_open:.2f}   Pago: R$ {receivable.amount_paid:.2f}")
+    c.drawString(
+        40,
+        y,
+        f"Valor total: R$ {amount_total:.2f}   Em aberto: R$ {amount_open:.2f}   Pago: R$ {amount_paid:.2f}",
+    )
     y -= 14
-    if receivable.invoice_number:
-        c.drawString(40, y, f"Referência: {receivable.invoice_type} #{receivable.invoice_number}")
+
+    if invoice_number:
+        ref = f"{invoice_type} #{invoice_number}" if invoice_type else invoice_number
+        c.drawString(40, y, f"Referência: {ref}")
         y -= 14
 
-    if receivable.payment_url:
+    if payment_url and payment_url != "—":
         y -= 6
         c.setFont("Helvetica-Bold", 10)
         c.drawString(40, y, "Link de pagamento:")
         y -= 12
         c.setFont("Helvetica", 9)
-        # quebra simples em linhas
-        url = receivable.payment_url.strip()
         chunk = 90
-        for i in range(0, len(url), chunk):
-            c.drawString(40, y, url[i: i + chunk])
+        for i in range(0, len(payment_url), chunk):
+            c.drawString(40, y, payment_url[i:i + chunk])
             y -= 11
+            if y < 50:
+                c.showPage()
+                c.setFont("Helvetica", 9)
+                y = h - 50
 
     c.showPage()
     c.save()
@@ -16382,13 +16414,29 @@ async def contaazul_receivable_fatura_pdf(
         raise HTTPException(status_code=403, detail="Sem permissão.")
 
     company = session.get(Company, ctx["company_id"])
-    client = session.get(Client, r.client_id)
-    pdf = _pdf_fatura_bytes(
-        company_name=(company.name if company else "Empresa"),
-        client_name=(client.name if client else "Cliente"),
-        receivable=r,
-    )
-    filename = f"fatura_{r.installment_id}.pdf"
+    client = session.get(Client, r.client_id) if getattr(r, "client_id", None) else None
+
+    try:
+        pdf = _pdf_fatura_bytes(
+            company_name=(company.name if company else "Empresa"),
+            client_name=(client.name if client else "Cliente"),
+            receivable=r,
+        )
+    except Exception as e:
+        logger.exception(
+            "contaazul_receivable_fatura_pdf_failed",
+            extra={
+                "rid": rid,
+                "company_id": ctx["company_id"],
+                "client_id": getattr(r, "client_id", None),
+                "installment_id": getattr(r, "installment_id", None),
+                "error": str(e),
+            },
+        )
+        raise HTTPException(status_code=500, detail="Falha ao gerar fatura PDF.")
+
+    filename_base = _safe_text(getattr(r, "installment_id", ""), default=f"receivable_{rid}")
+    filename = f"fatura_{filename_base}.pdf"
     return Response(
         content=pdf,
         media_type="application/pdf",
