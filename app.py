@@ -30598,15 +30598,18 @@ TEMPLATES["tasks_list.html"] = r"""
 {% extends "base.html" %}
 {% block content %}
 <div class="card p-4">
-  <div class="d-flex justify-content-between align-items-center">
-    <div>
-      <h4 class="mb-0">Tarefas</h4>
-      <div class="muted">Kanban por status • filtros • prazos • prioridade</div>
-    </div>
-    {% if role in ["admin","equipe"] %}
-      <a class="btn btn-primary" href="/tarefas/nova{% if filter_client_id %}?client_id={{ filter_client_id }}{% endif %}">Nova tarefa</a>
-    {% endif %}
+  <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
+  <div>
+    <h4 class="mb-0">Tarefas</h4>
+    <div class="muted">Kanban por status • filtros • prazos • prioridade</div>
   </div>
+  {% if role in ["admin","equipe"] %}
+    <div class="d-flex gap-2 flex-wrap">
+      <a class="btn btn-outline-secondary" href="/tarefas/relatorio-horas">Relatório de horas</a>
+      <a class="btn btn-primary" href="/tarefas/nova{% if filter_client_id %}?client_id={{ filter_client_id }}{% endif %}">Nova tarefa</a>
+    </div>
+  {% endif %}
+</div>
 
   <hr class="my-3"/>
 
