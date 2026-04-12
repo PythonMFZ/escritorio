@@ -10690,6 +10690,10 @@ def _format_brl(value: Any) -> str:
     return f"{sign}R$ {raw}"
 
 
+def _fmt_brl(value: Any) -> str:
+    return _format_brl(value)
+
+
 def _format_number_br(value: Any, decimals: int = 2) -> str:
     try:
         number = float(value or 0.0)
@@ -13339,11 +13343,14 @@ async def dashboard(request: Request, session: Session = Depends(get_session)) -
     standalone = [dict(FEATURE_KEYS[fk], key=fk) for fk in FEATURE_STANDALONE if _is_visible(fk)]
 
     dashboard_scores = None
+    dashboard_gauge = None
+    dashboard_insights: list[dict[str, str]] = []
+    dashboard_critical_points: list[dict[str, str]] = []
+    dashboard_next_steps: list[dict[str, str]] = []
     approved_offers_count = 0
     pending_items_count = 0
     if current_client and ensure_can_access_client(ctx, current_client.id):
-        business_profile = get_or_create_business_profile(session, company_id=ctx.company.id,
-                                                          client_id=current_client.id)
+        business_profile = get_or_create_business_profile(session, company_id=ctx.company.id, client_id=current_client.id)
         latest_snapshot = session.exec(
             select(ClientSnapshot)
             .where(ClientSnapshot.company_id == ctx.company.id, ClientSnapshot.client_id == current_client.id)
@@ -13355,6 +13362,10 @@ async def dashboard(request: Request, session: Session = Depends(get_session)) -
             profile=business_profile,
             latest_snapshot=latest_snapshot,
         )
+        dashboard_gauge = _dashboard_gauge(_dashboard_score_value(dashboard_scores, "Score Geral"))
+        dashboard_insights = _dashboard_score_insights(dashboard_scores)
+        dashboard_critical_points = _dashboard_critical_points(dashboard_scores)
+        dashboard_next_steps = _dashboard_next_steps(dashboard_scores)
         try:
             approved_offers_count = session.exec(
                 select(func.count())
@@ -13388,6 +13399,10 @@ async def dashboard(request: Request, session: Session = Depends(get_session)) -
             "tabs": tabs,
             "standalone": standalone,
             "dashboard_scores": dashboard_scores,
+            "dashboard_gauge": dashboard_gauge,
+            "dashboard_insights": dashboard_insights,
+            "dashboard_critical_points": dashboard_critical_points,
+            "dashboard_next_steps": dashboard_next_steps,
             "approved_offers_count": approved_offers_count,
             "pending_items_count": pending_items_count,
             "standalone_title": "Atendimento e Conteúdo",
@@ -13643,18 +13658,58 @@ async def ofertas_page(request: Request, session: Session = Depends(get_session)
         return RedirectResponse("/login", status_code=303)
     current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
     matches: list[dict[str, Any]] = []
+    offer_stage = _offer_stage_payload(None, 0)
+    financial_analysis = None
     if current_client and ensure_can_access_client(ctx, current_client.id):
         sync_offer_reviews(session, company_id=ctx.company.id, client_id=current_client.id)
-        matches = list_offer_matches_for_role(
+        business_profile = get_or_create_business_profile(session, company_id=ctx.company.id, client_id=current_client.id)
+        latest_snapshot = session.exec(
+            select(ClientSnapshot)
+            .where(ClientSnapshot.company_id == ctx.company.id, ClientSnapshot.client_id == current_client.id)
+            .order_by(ClientSnapshot.created_at.desc())
+            .limit(1)
+        ).first()
+        financial_analysis = build_client_dashboard_analysis(
+            client=current_client,
+            profile=business_profile,
+            latest_snapshot=latest_snapshot,
+        )
+        raw_matches = list_offer_matches_for_role(
             session=session,
             company_id=ctx.company.id,
             client_id=current_client.id,
             role=ctx.membership.role,
             only_client_visible=(ctx.membership.role == "cliente"),
         )
-    return render("ofertas.html", request=request,
-                  context={"current_user": ctx.user, "current_company": ctx.company, "role": ctx.membership.role,
-                           "current_client": current_client, "matches": matches})
+        offer_stage = _offer_stage_payload(financial_analysis, len(raw_matches))
+        for row in raw_matches:
+            getv = (lambda k, d="": row.get(k, d)) if isinstance(row, dict) else (lambda k, d="": getattr(row, k, d))
+            matches.append(
+                {
+                    "product_name": getv("product_name"),
+                    "partner_name": getv("partner_name"),
+                    "priority_level": getv("priority_level"),
+                    "family_code": getv("family_code"),
+                    "score_fit": float(getv("score_fit", 0.0) or 0.0),
+                    "client_summary": getv("client_summary"),
+                    "reason_summary": getv("reason_summary"),
+                    "partner_options_count": int(getv("partner_options_count", 0) or 0),
+                    "display_reason": _offer_reason_for_display(row, financial_analysis),
+                }
+            )
+    return render(
+        "ofertas.html",
+        request=request,
+        context={
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "role": ctx.membership.role,
+            "current_client": current_client,
+            "matches": matches,
+            "offer_stage": offer_stage,
+            "financial_analysis": financial_analysis,
+        },
+    )
 
 
 # ----------------------------
@@ -14749,14 +14804,21 @@ async def perfil_page(request: Request, session: Session = Depends(get_session))
     business_profile = None
     offer_matches: list[dict[str, Any]] = []
     financial_analysis = None
+    financial_gauge = None
+    financial_insights: list[dict[str, str]] = []
+    financial_critical_points: list[dict[str, str]] = []
+    financial_next_steps: list[dict[str, str]] = []
     if current_client and ensure_can_access_client(ctx, current_client.id):
-        business_profile = get_or_create_business_profile(session, company_id=ctx.company.id,
-                                                          client_id=current_client.id)
+        business_profile = get_or_create_business_profile(session, company_id=ctx.company.id, client_id=current_client.id)
         financial_analysis = build_client_dashboard_analysis(
             client=current_client,
             profile=business_profile,
             latest_snapshot=snapshots[0] if snapshots else None,
         )
+        financial_gauge = _dashboard_gauge(_dashboard_score_value(financial_analysis, "Score Geral"))
+        financial_insights = _dashboard_score_insights(financial_analysis)
+        financial_critical_points = _dashboard_critical_points(financial_analysis)
+        financial_next_steps = _dashboard_next_steps(financial_analysis)
         offer_matches = list_offer_matches_for_role(
             session=session,
             company_id=ctx.company.id,
@@ -14780,6 +14842,10 @@ async def perfil_page(request: Request, session: Session = Depends(get_session))
             "offer_matches": offer_matches,
             "business_profile_interests": _json_list(business_profile.interests_json) if business_profile else [],
             "financial_analysis": financial_analysis,
+            "financial_gauge": financial_gauge,
+            "financial_insights": financial_insights,
+            "financial_critical_points": financial_critical_points,
+            "financial_next_steps": financial_next_steps,
         },
     )
 
@@ -29059,6 +29125,250 @@ def build_client_dashboard_analysis(*, client: Client, profile: ClientBusinessPr
     }
 
 
+def _dashboard_score_value(analysis: Optional[dict[str, Any]], label: str, default: float = 0.0) -> float:
+    if not analysis:
+        return float(default)
+    for item in list(analysis.get("score_card") or []):
+        try:
+            if str(item.get("label") or "") == label:
+                return float(item.get("value") or 0.0)
+        except Exception:
+            continue
+    return float(default)
+
+
+def _score_tone_meta(score: float) -> dict[str, str]:
+    value = max(0.0, min(100.0, float(score or 0.0)))
+    if value >= 70:
+        return {
+            "tone": "success",
+            "label": "Saudável",
+            "message": "Sua empresa está em um bom nível de saúde financeira e organização.",
+            "color": "#198754",
+        }
+    if value >= 45:
+        return {
+            "tone": "warning",
+            "label": "Pontos de atenção",
+            "message": "Sua empresa tem espaço para evoluir antes de capturar mais crédito com conforto.",
+            "color": "#f0ad4e",
+        }
+    return {
+        "tone": "danger",
+        "label": "Em risco",
+        "message": "Sua empresa precisa priorizar organização, caixa e estrutura antes de buscar crédito tradicional.",
+        "color": "#dc3545",
+    }
+
+
+def _dashboard_gauge(score: float) -> dict[str, Any]:
+    meta = _score_tone_meta(score)
+    value = max(0.0, min(100.0, float(score or 0.0)))
+    return {
+        "value": round(value, 1),
+        "label": meta["label"],
+        "message": meta["message"],
+        "tone": meta["tone"],
+        "color": meta["color"],
+        "angle": round(value * 3.6, 1),
+    }
+
+
+def _dashboard_score_insights(analysis: Optional[dict[str, Any]]) -> list[dict[str, str]]:
+    if not analysis:
+        return []
+    geral = _dashboard_score_value(analysis, "Score Geral")
+    bancario = _dashboard_score_value(analysis, "Score Bancário")
+    financeiro = _dashboard_score_value(analysis, "Score Financeiro")
+    estrutura = _dashboard_score_value(analysis, "Score de Estrutura")
+    current_ratio = float(analysis.get("current_ratio") or 0.0)
+    working_capital = float(analysis.get("working_capital") or 0.0)
+    debt_to_equity = analysis.get("debt_to_equity")
+    insights: list[dict[str, str]] = []
+
+    insights.append({
+        "title": "Saúde geral",
+        "text": (
+            "Sua empresa tem perfil executivo consistente para avançar em crédito e oportunidades."
+            if geral >= 70 else
+            "Sua empresa já tem base para avançar, mas ainda há ajustes importantes para ganhar tração."
+            if geral >= 45 else
+            "Sua empresa precisa organizar caixa, estrutura e governança antes de priorizar expansão financeira."
+        ),
+    })
+    insights.append({
+        "title": "Potencial bancário",
+        "text": (
+            "O potencial de crédito está forte e tende a responder melhor a linhas competitivas."
+            if bancario >= 75 else
+            "Há acesso a crédito possível, mas com necessidade de reforçar garantias, estrutura ou liquidez."
+            if bancario >= 50 else
+            "O motor indica baixa atratividade para crédito tradicional neste momento."
+        ),
+    })
+
+    if working_capital < 0:
+        financial_text = f"O capital de giro está negativo em {_fmt_brl(working_capital)}, pressionando a operação do dia a dia."
+    elif current_ratio and current_ratio < 1:
+        financial_text = f"A liquidez corrente está em {_format_number_br(current_ratio, 2)}, abaixo do nível confortável para curto prazo."
+    elif debt_to_equity is not None and float(debt_to_equity or 0.0) > 1.5:
+        financial_text = f"O endividamento sobre patrimônio está em {_format_number_br(debt_to_equity, 2)}x e exige disciplina financeira."
+    else:
+        financial_text = (
+            "O caixa e a liquidez estão em patamar mais saudável para sustentar o crescimento."
+            if financeiro >= 60 else
+            "A saúde financeira ainda pede ajustes para reduzir pressão de caixa e endividamento."
+        )
+    insights.append({"title": "Leitura financeira", "text": financial_text})
+
+    insights.append({
+        "title": "Estrutura de gestão",
+        "text": (
+            "Os processos e controles já sustentam uma operação mais madura."
+            if estrutura >= 70 else
+            "Ainda existem oportunidades claras para evoluir orçamento, indicadores e rotina de gestão."
+            if estrutura >= 45 else
+            "A empresa ainda precisa fortalecer controles, indicadores e ritos de gestão financeira."
+        ),
+    })
+    return insights
+
+
+def _dashboard_critical_points(analysis: Optional[dict[str, Any]]) -> list[dict[str, str]]:
+    if not analysis:
+        return []
+    points: list[dict[str, str]] = []
+    working_capital = float(analysis.get("working_capital") or 0.0)
+    current_ratio = float(analysis.get("current_ratio") or 0.0)
+    debt_to_equity = analysis.get("debt_to_equity")
+    equity = float(analysis.get("equity") or 0.0)
+    cash_balance = float(analysis.get("cash_balance") or 0.0)
+
+    if working_capital < 0:
+        points.append({
+            "title": "Capital de giro líquido",
+            "value": _fmt_brl(working_capital),
+            "tone": "danger",
+            "text": "Sua empresa está financiando a operação com passivos de curto prazo.",
+        })
+    if current_ratio and current_ratio < 1:
+        points.append({
+            "title": "Liquidez corrente",
+            "value": _format_number_br(current_ratio, 2),
+            "tone": "danger",
+            "text": "Há menos ativo circulante do que obrigação de curto prazo.",
+        })
+    if debt_to_equity is not None and float(debt_to_equity or 0.0) > 1.5:
+        points.append({
+            "title": "Endividamento / patrimônio",
+            "value": f"{_format_number_br(debt_to_equity, 2)}x",
+            "tone": "warning",
+            "text": "O passivo está elevado em relação ao patrimônio líquido.",
+        })
+    if equity <= 0:
+        points.append({
+            "title": "Patrimônio líquido",
+            "value": _fmt_brl(equity),
+            "tone": "danger",
+            "text": "O patrimônio está pressionado e reduz a capacidade de absorver perdas.",
+        })
+    if cash_balance < 0:
+        points.append({
+            "title": "Disponibilidades líquidas",
+            "value": _fmt_brl(cash_balance),
+            "tone": "warning",
+            "text": "O caixa líquido está negativo e exige gestão diária de tesouraria.",
+        })
+    if not points:
+        points.append({
+            "title": "Sem alerta crítico relevante",
+            "value": "Operação estável",
+            "tone": "success",
+            "text": "Os principais indicadores não apontam ruptura imediata de caixa ou estrutura.",
+        })
+    return points[:4]
+
+
+def _dashboard_next_steps(analysis: Optional[dict[str, Any]]) -> list[dict[str, str]]:
+    if not analysis:
+        return [
+            {"title": "Atualizar diagnóstico", "text": "Complete os dados financeiros para liberar a leitura executiva.", "href": "/perfil"},
+            {"title": "Explorar ofertas", "text": "Veja oportunidades já revisadas pela equipe.", "href": "/ofertas"},
+        ]
+    geral = _dashboard_score_value(analysis, "Score Geral")
+    if geral >= 70:
+        return [
+            {"title": "Explorar ofertas de crédito", "text": "Priorize linhas e oportunidades já aderentes ao perfil atual.", "href": "/ofertas"},
+            {"title": "Simular condições", "text": "Use o simulador para avaliar cenários de captação.", "href": "/simulador"},
+            {"title": "Atualizar diagnóstico", "text": "Mantenha a leitura do painel sempre atualizada.", "href": "/perfil/avaliacao/nova"},
+        ]
+    if geral >= 45:
+        return [
+            {"title": "Ver oportunidades", "text": "Há espaço para crédito e estruturação financeira combinadas.", "href": "/ofertas"},
+            {"title": "Refinar diagnóstico", "text": "Ajuste os números e fortaleça a leitura financeira.", "href": "/perfil"},
+            {"title": "Simular alternativas", "text": "Compare cenários antes de tomar uma decisão.", "href": "/simulador"},
+        ]
+    return [
+        {"title": "Falar com um especialista", "text": "O melhor próximo passo é reorganizar caixa e estrutura.", "href": "/consultoria"},
+        {"title": "Atualizar diagnóstico", "text": "Revise os dados para entender onde está a maior pressão.", "href": "/perfil"},
+        {"title": "Ver oportunidades liberadas", "text": "Consulte apenas oportunidades coerentes com o estágio atual.", "href": "/ofertas"},
+    ]
+
+
+def _offer_stage_payload(analysis: Optional[dict[str, Any]], matches_count: int) -> dict[str, str]:
+    score = _dashboard_score_value(analysis, "Score Geral")
+    if score >= 70:
+        return {
+            "tone": "success",
+            "title": "Sua empresa está mais saudável para explorar crédito.",
+            "subtitle": f"Há {matches_count} oportunidade(s) alinhada(s) ao perfil atual. Priorize linhas e simulações.",
+            "badge": "Foco em crédito",
+            "cta_href": "/simulador",
+            "cta_label": "Simular crédito",
+        }
+    if score >= 45:
+        return {
+            "tone": "warning",
+            "title": "Há oportunidades, mas com pontos de atenção.",
+            "subtitle": "O ideal é combinar avanço comercial com ajustes de estrutura e tesouraria.",
+            "badge": "Crédito + estrutura",
+            "cta_href": "/perfil",
+            "cta_label": "Revisar diagnóstico",
+        }
+    return {
+        "tone": "danger",
+        "title": "O foco agora é reorganizar a casa antes de ampliar crédito.",
+        "subtitle": "As melhores decisões neste estágio tendem a passar por consultoria, caixa e reestruturação.",
+        "badge": "Prioridade consultiva",
+        "cta_href": "/consultoria",
+        "cta_label": "Falar com especialista",
+    }
+
+
+def _offer_reason_for_display(match_row: Any, analysis: Optional[dict[str, Any]]) -> str:
+    getv = (lambda k, d="": match_row.get(k, d)) if isinstance(match_row, dict) else (lambda k, d="": getattr(match_row, k, d))
+    family = str(getv("family_code", "") or "").strip().lower()
+    reason_summary = str(getv("reason_summary", "") or "").strip()
+    working_capital = float((analysis or {}).get("working_capital") or 0.0)
+    current_ratio = float((analysis or {}).get("current_ratio") or 0.0)
+    receivables = float((analysis or {}).get("receivables") or 0.0)
+    debt_to_equity = (analysis or {}).get("debt_to_equity")
+
+    if family == "capital_giro" and working_capital < 0:
+        return f"Recomendado porque o capital de giro está em {_fmt_brl(working_capital)}, indicando necessidade de caixa para operação."
+    if family == "antecipacao_recebiveis" and receivables > 0:
+        return f"Recomendado porque a empresa possui {_fmt_brl(receivables)} em recebíveis que podem apoiar liquidez."
+    if family in {"turnaround", "estrategia_financeira"} and current_ratio and current_ratio < 1:
+        return f"Recomendado porque a liquidez corrente está em {_format_number_br(current_ratio, 2)}, abaixo do nível confortável."
+    if family in {"turnaround", "plano_rj"} and debt_to_equity is not None and float(debt_to_equity or 0.0) > 1.5:
+        return f"Recomendado porque o endividamento está em {_format_number_br(debt_to_equity, 2)}x do patrimônio, pedindo reestruturação."
+    if family == "home_equity":
+        return "Recomendado porque operações com garantia tendem a melhorar prazo e custo quando a estrutura da empresa já comporta crédito."
+    if family == "auto_equity":
+        return "Recomendado para reforçar caixa com garantia real e menor pressão de curto prazo."
+    return reason_summary or "Oportunidade coerente com o perfil financeiro e operacional identificado no diagnóstico."
+
+
 def sync_offer_reviews(session: Session, *, company_id: int, client_id: int) -> None:
     ensure_offer_engine_tables()
     ensure_offer_engine_columns()
@@ -30728,12 +31038,12 @@ TEMPLATES["dashboard.html"] = r"""
     <div class="card p-4">
       <div class="d-flex flex-wrap justify-content-between align-items-start gap-3">
         <div>
-          <h4 class="mb-1">Painel</h4>
+          <h4 class="mb-1">Painel de Saúde Financeira</h4>
           <div class="muted">
             {% if role in ["admin","equipe"] %}
               Escritório: <b>{{ current_company.name }}</b>.{% if current_client %} Cliente selecionado: <b>{{ current_client.name }}</b>.{% endif %}
             {% else %}
-              Bem-vindo(a)! Você vê apenas os dados, indicadores e oportunidades liberadas para sua empresa.
+              Você vê apenas os indicadores, oportunidades e próximos passos liberados para sua empresa.
             {% endif %}
           </div>
         </div>
@@ -30748,16 +31058,78 @@ TEMPLATES["dashboard.html"] = r"""
   </div>
 
   {% if dashboard_scores and current_client %}
+    <div class="col-xl-4">
+      <div class="card p-4 h-100">
+        <div class="d-flex justify-content-between align-items-start gap-2">
+          <div>
+            <div class="text-uppercase small muted">Saúde geral</div>
+            <h5 class="mb-1">Visão executiva</h5>
+          </div>
+          <span class="badge text-bg-light border">{{ dashboard_gauge.label }}</span>
+        </div>
+        <div class="d-flex justify-content-center my-3">
+          <div style="width:220px;height:220px;border-radius:50%;background:conic-gradient({{ dashboard_gauge.color }} 0deg {{ dashboard_gauge.angle }}deg, #edf0f5 {{ dashboard_gauge.angle }}deg 360deg);display:flex;align-items:center;justify-content:center;">
+            <div style="width:150px;height:150px;border-radius:50%;background:#fff;display:flex;flex-direction:column;align-items:center;justify-content:center;box-shadow:inset 0 0 0 1px #eef2f7;">
+              <div class="small muted">Score geral</div>
+              <div class="display-6 fw-bold">{{ "%.0f"|format(dashboard_gauge.value) }}</div>
+              <div class="small text-center px-2">{{ dashboard_gauge.label }}</div>
+            </div>
+          </div>
+        </div>
+        <div class="alert alert-{% if dashboard_gauge.tone == 'success' %}success{% elif dashboard_gauge.tone == 'warning' %}warning{% else %}danger{% endif %} border-0 shadow-sm mb-3">
+          <div class="fw-semibold">Leitura imediata</div>
+          <div class="small">{{ dashboard_gauge.message }}</div>
+        </div>
+        <div class="d-flex gap-2 flex-wrap">
+          <span class="badge text-bg-light border">{{ approved_offers_count }} oportunidade(s) liberada(s)</span>
+          <span class="badge text-bg-light border">{{ pending_items_count }} pendência(s)</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="col-xl-8">
+      <div class="card p-4 h-100">
+        <div class="d-flex justify-content-between align-items-start gap-2 flex-wrap">
+          <div>
+            <h5 class="mb-1">Insights e pontos de atenção</h5>
+            <div class="muted">O painel resume o que os scores significam e onde agir primeiro.</div>
+          </div>
+          <a class="btn btn-outline-secondary btn-sm" href="/perfil">Abrir diagnóstico completo</a>
+        </div>
+        <div class="row g-3 mt-1">
+          {% for insight in dashboard_insights %}
+            <div class="col-md-6">
+              <div class="border rounded p-3 h-100">
+                <div class="fw-semibold mb-1">{{ insight.title }}</div>
+                <div class="small">{{ insight.text }}</div>
+              </div>
+            </div>
+          {% endfor %}
+        </div>
+        <hr class="my-3"/>
+        <div class="fw-semibold mb-2">Pontos críticos</div>
+        <div class="row g-3">
+          {% for item in dashboard_critical_points %}
+            <div class="col-md-6">
+              <div class="border rounded p-3 h-100 {% if item.tone == 'danger' %}border-danger-subtle{% elif item.tone == 'warning' %}border-warning-subtle{% else %}border-success-subtle{% endif %}">
+                <div class="d-flex justify-content-between align-items-start gap-2">
+                  <div class="fw-semibold">{{ item.title }}</div>
+                  <span class="badge {% if item.tone == 'danger' %}text-bg-danger{% elif item.tone == 'warning' %}text-bg-warning{% else %}text-bg-success{% endif %}">{{ item.value }}</span>
+                </div>
+                <div class="small mt-2">{{ item.text }}</div>
+              </div>
+            </div>
+          {% endfor %}
+        </div>
+      </div>
+    </div>
+
     <div class="col-12">
       <div class="card p-4">
-        <div class="d-flex flex-wrap justify-content-between align-items-center gap-2">
+        <div class="d-flex justify-content-between align-items-start gap-2 flex-wrap">
           <div>
             <h5 class="mb-1">Resumo analítico da empresa</h5>
-            <div class="muted">Cards e barras visuais para dar mais clareza ao diagnóstico financeiro.</div>
-          </div>
-          <div class="d-flex gap-2 flex-wrap">
-            <span class="badge text-bg-light border">{{ approved_offers_count }} oportunidade(s) liberada(s)</span>
-            <span class="badge text-bg-light border">{{ pending_items_count }} pendência(s)</span>
+            <div class="muted">Scores, barras visuais e indicadores-chave para a leitura diária.</div>
           </div>
         </div>
         <div class="row g-3 mt-1">
@@ -30803,6 +31175,29 @@ TEMPLATES["dashboard.html"] = r"""
               <div class="small d-flex justify-content-between"><span>Status do motor</span><span class="badge text-bg-light border">{{ dashboard_scores.status_label }}</span></div>
             </div>
           </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="col-12">
+      <div class="card p-4">
+        <div class="d-flex justify-content-between align-items-start gap-2 flex-wrap">
+          <div>
+            <h5 class="mb-1">Próximos passos</h5>
+            <div class="muted">O sistema sugere uma trilha de ação com base no estágio atual da empresa.</div>
+          </div>
+        </div>
+        <div class="row g-3 mt-1">
+          {% for step in dashboard_next_steps %}
+            <div class="col-md-4">
+              <a href="{{ step.href }}">
+                <div class="border rounded p-3 h-100">
+                  <div class="fw-semibold">{{ step.title }}</div>
+                  <div class="small muted mt-2">{{ step.text }}</div>
+                </div>
+              </a>
+            </div>
+          {% endfor %}
         </div>
       </div>
     </div>
@@ -30913,6 +31308,24 @@ TEMPLATES["perfil.html"] = r"""
         <a class="btn btn-outline-secondary" href="/empresa">Editar dados da empresa</a>
         <a class="btn btn-primary" href="/perfil/avaliacao/nova">Nova avaliação</a>
       </div>
+
+      {% if financial_gauge %}
+        <hr>
+        <div class="text-uppercase small muted">Saúde geral</div>
+        <div class="d-flex justify-content-center my-3">
+          <div style="width:190px;height:190px;border-radius:50%;background:conic-gradient({{ financial_gauge.color }} 0deg {{ financial_gauge.angle }}deg, #edf0f5 {{ financial_gauge.angle }}deg 360deg);display:flex;align-items:center;justify-content:center;">
+            <div style="width:128px;height:128px;border-radius:50%;background:#fff;display:flex;flex-direction:column;align-items:center;justify-content:center;">
+              <div class="small muted">Score geral</div>
+              <div class="fs-1 fw-bold">{{ "%.0f"|format(financial_gauge.value) }}</div>
+              <div class="small text-center px-2">{{ financial_gauge.label }}</div>
+            </div>
+          </div>
+        </div>
+        <div class="alert alert-{% if financial_gauge.tone == 'success' %}success{% elif financial_gauge.tone == 'warning' %}warning{% else %}danger{% endif %} border-0 shadow-sm">
+          <div class="small">{{ financial_gauge.message }}</div>
+        </div>
+      {% endif %}
+
       {% if financial_analysis %}
       <hr>
       <div class="row g-2">
@@ -30935,20 +31348,77 @@ TEMPLATES["perfil.html"] = r"""
   </div>
 
   <div class="col-xl-8">
+    {% if financial_analysis %}
+      <div class="card p-4 mb-3">
+        <div class="d-flex justify-content-between align-items-start gap-2 flex-wrap">
+          <div>
+            <h4 class="mb-1">Leitura executiva</h4>
+            <div class="muted">Interpretação prática dos scores e principais alertas do diagnóstico.</div>
+          </div>
+          <div class="text-end">
+            <div class="muted small">Score atual</div>
+            <div class="fs-3 fw-bold">{{ "%.1f"|format(latest_score or 0) }}</div>
+            {% if delta is not none %}
+              <div class="small {% if delta >= 0 %}text-success{% else %}text-danger{% endif %}">
+                {% if delta >= 0 %}+{% endif %}{{ "%.1f"|format(delta) }} vs. avaliação anterior
+              </div>
+            {% endif %}
+          </div>
+        </div>
+
+        <div class="row g-3 mt-1">
+          {% for insight in financial_insights %}
+            <div class="col-md-6">
+              <div class="border rounded p-3 h-100">
+                <div class="fw-semibold mb-1">{{ insight.title }}</div>
+                <div class="small">{{ insight.text }}</div>
+              </div>
+            </div>
+          {% endfor %}
+        </div>
+
+        <hr class="my-3"/>
+        <div class="fw-semibold mb-2">Pontos críticos</div>
+        <div class="row g-3">
+          {% for item in financial_critical_points %}
+            <div class="col-md-6">
+              <div class="border rounded p-3 h-100 {% if item.tone == 'danger' %}border-danger-subtle{% elif item.tone == 'warning' %}border-warning-subtle{% else %}border-success-subtle{% endif %}">
+                <div class="d-flex justify-content-between align-items-start gap-2">
+                  <div class="fw-semibold">{{ item.title }}</div>
+                  <span class="badge {% if item.tone == 'danger' %}text-bg-danger{% elif item.tone == 'warning' %}text-bg-warning{% else %}text-bg-success{% endif %}">{{ item.value }}</span>
+                </div>
+                <div class="small mt-2">{{ item.text }}</div>
+              </div>
+            </div>
+          {% endfor %}
+        </div>
+
+        <hr class="my-3"/>
+        <div class="fw-semibold mb-2">Próximos passos</div>
+        <div class="row g-3">
+          {% for step in financial_next_steps %}
+            <div class="col-md-4">
+              <a href="{{ step.href }}">
+                <div class="border rounded p-3 h-100">
+                  <div class="fw-semibold">{{ step.title }}</div>
+                  <div class="small muted mt-2">{{ step.text }}</div>
+                </div>
+              </a>
+            </div>
+          {% endfor %}
+        </div>
+      </div>
+    {% endif %}
+
     <div class="card p-4 mb-3">
       <div class="d-flex justify-content-between align-items-start">
         <div>
           <h4 class="mb-1">Indicadores e balanço</h4>
-          <div class="muted">Faturamento, endividamento, caixa e estrutura patrimonial.</div>
+          <div class="muted">Atualize os componentes principais do balanço para recalcular o diagnóstico.</div>
         </div>
         <div class="text-end">
-          <div class="muted small">Score atual</div>
-          <div class="fs-3 fw-bold">{{ "%.1f"|format(latest_score or 0) }}</div>
-          {% if delta is not none %}
-            <div class="small {% if delta >= 0 %}text-success{% else %}text-danger{% endif %}">
-              {% if delta >= 0 %}+{% endif %}{{ "%.1f"|format(delta) }} vs. avaliação anterior
-            </div>
-          {% endif %}
+          <div class="muted small">Status do motor</div>
+          <div class="fs-6 fw-semibold">{{ financial_analysis.status_label if financial_analysis else "-" }}</div>
         </div>
       </div>
 
@@ -30957,99 +31427,124 @@ TEMPLATES["perfil.html"] = r"""
       {% else %}
         <form method="post" action="/perfil" class="mt-3">
           <div class="row g-3">
-            <div class="col-md-6">
+            <div class="col-md-4">
               <label class="form-label">Faturamento mensal (R$)</label>
               <input class="form-control" name="revenue_monthly_brl" type="number" step="0.01" min="0" value="{{ current_client.revenue_monthly_brl }}" />
             </div>
-            <div class="col-md-6">
-              <label class="form-label">Endividamento total (R$)</label>
-              <input class="form-control" name="debt_total_brl" type="number" step="0.01" min="0" value="{{ current_client.debt_total_brl }}" />
+            <div class="col-md-4">
+              <label class="form-label">Disponibilidades líquidas (R$)</label>
+              <input class="form-control" name="cash_balance_brl" type="number" step="0.01" value="{{ financial_analysis.cash_balance if financial_analysis else current_client.cash_balance_brl }}" />
+              <div class="small muted">Aceita negativo quando houver pressão imediata de caixa.</div>
             </div>
-            <div class="col-md-6">
-              <label class="form-label">Saldo em caixa (R$)</label>
-              <input class="form-control" name="cash_balance_brl" type="number" step="0.01" min="0" value="{{ current_client.cash_balance_brl }}" />
-            </div>
-            <div class="col-md-6">
+            <div class="col-md-4">
               <label class="form-label">Funcionários</label>
               <input class="form-control" name="employees_count" type="number" min="0" value="{{ current_client.employees_count }}" />
             </div>
 
-            <div class="col-12 mt-2"><div class="fw-semibold">Balanço patrimonial resumido</div></div>
+            <div class="col-12 mt-2"><div class="fw-semibold">Ativo circulante</div></div>
+            <div class="col-md-3">
+              <label class="form-label">Caixa e aplicações</label>
+              <input class="form-control" name="cash_balance_brl" type="number" step="0.01" value="{{ financial_analysis.cash_balance if financial_analysis else current_client.cash_balance_brl }}" />
+            </div>
+            <div class="col-md-3">
+              <label class="form-label">Recebíveis</label>
+              <input class="form-control" name="receivables_brl" type="number" step="0.01" min="0" value="{{ financial_analysis.receivables if financial_analysis else 0 }}" />
+            </div>
+            <div class="col-md-3">
+              <label class="form-label">Estoque</label>
+              <input class="form-control" name="inventory_brl" type="number" step="0.01" min="0" value="{{ financial_analysis.inventory if financial_analysis else 0 }}" />
+            </div>
+            <div class="col-md-3">
+              <label class="form-label">Outros ativos circulantes</label>
+              <input class="form-control" name="other_current_assets_brl" type="number" step="0.01" min="0" value="{{ financial_analysis.other_current_assets if financial_analysis else 0 }}" />
+            </div>
+
+            <div class="col-12 mt-2"><div class="fw-semibold">Ativo não circulante</div></div>
             <div class="col-md-6">
-              <label class="form-label">Ativo circulante (R$)</label>
-              <input class="form-control" name="current_assets_brl" type="number" step="0.01" min="0" value="{{ business_profile.current_assets_brl if business_profile else 0 }}" />
+              <label class="form-label">Imobilizado</label>
+              <input class="form-control" name="immobilized_brl" type="number" step="0.01" min="0" value="{{ financial_analysis.immobilized if financial_analysis else 0 }}" />
             </div>
             <div class="col-md-6">
-              <label class="form-label">Ativo não circulante (R$)</label>
-              <input class="form-control" name="non_current_assets_brl" type="number" step="0.01" min="0" value="{{ business_profile.non_current_assets_brl if business_profile else 0 }}" />
+              <label class="form-label">Outros ativos não circulantes</label>
+              <input class="form-control" name="other_non_current_assets_brl" type="number" step="0.01" min="0" value="{{ financial_analysis.other_non_current_assets if financial_analysis else 0 }}" />
+            </div>
+
+            <div class="col-12 mt-2"><div class="fw-semibold">Passivo circulante</div></div>
+            <div class="col-md-3">
+              <label class="form-label">Fornecedores / contas até 360 dias</label>
+              <input class="form-control" name="payables_360_brl" type="number" step="0.01" min="0" value="{{ financial_analysis.payables_360 if financial_analysis else 0 }}" />
+            </div>
+            <div class="col-md-3">
+              <label class="form-label">Dívida de curto prazo</label>
+              <input class="form-control" name="short_term_debt_brl" type="number" step="0.01" min="0" value="{{ financial_analysis.short_term_debt if financial_analysis else 0 }}" />
+            </div>
+            <div class="col-md-3">
+              <label class="form-label">Passivo tributário</label>
+              <input class="form-control" name="tax_liabilities_brl" type="number" step="0.01" min="0" value="{{ financial_analysis.tax_liabilities if financial_analysis else 0 }}" />
+            </div>
+            <div class="col-md-3">
+              <label class="form-label">Passivo trabalhista</label>
+              <input class="form-control" name="labor_liabilities_brl" type="number" step="0.01" min="0" value="{{ financial_analysis.labor_liabilities if financial_analysis else 0 }}" />
             </div>
             <div class="col-md-6">
-              <label class="form-label">Passivo circulante (R$)</label>
-              <input class="form-control" name="current_liabilities_brl" type="number" step="0.01" min="0" value="{{ business_profile.current_liabilities_brl if business_profile else 0 }}" />
+              <label class="form-label">Outros passivos circulantes</label>
+              <input class="form-control" name="other_current_liabilities_brl" type="number" step="0.01" min="0" value="{{ financial_analysis.other_current_liabilities if financial_analysis else 0 }}" />
+            </div>
+
+            <div class="col-12 mt-2"><div class="fw-semibold">Passivo não circulante</div></div>
+            <div class="col-md-6">
+              <label class="form-label">Dívida de longo prazo</label>
+              <input class="form-control" name="long_term_debt_brl" type="number" step="0.01" min="0" value="{{ financial_analysis.long_term_debt if financial_analysis else 0 }}" />
             </div>
             <div class="col-md-6">
-              <label class="form-label">Passivo não circulante (R$)</label>
-              <input class="form-control" name="non_current_liabilities_brl" type="number" step="0.01" min="0" value="{{ business_profile.non_current_liabilities_brl if business_profile else 0 }}" />
+              <label class="form-label">Outros passivos não circulantes</label>
+              <input class="form-control" name="other_non_current_liabilities_brl" type="number" step="0.01" min="0" value="{{ financial_analysis.other_non_current_liabilities if financial_analysis else 0 }}" />
+            </div>
+
+            <div class="col-12 mt-2"><div class="fw-semibold">Consolidação manual</div></div>
+            <div class="col-md-4">
+              <label class="form-label">Ativo circulante total</label>
+              <input class="form-control" name="current_assets_brl" type="number" step="0.01" min="0" value="{{ financial_analysis.current_assets if financial_analysis else 0 }}" />
+            </div>
+            <div class="col-md-4">
+              <label class="form-label">Ativo não circulante total</label>
+              <input class="form-control" name="non_current_assets_brl" type="number" step="0.01" min="0" value="{{ financial_analysis.non_current_assets if financial_analysis else 0 }}" />
+            </div>
+            <div class="col-md-4">
+              <label class="form-label">Passivo circulante total</label>
+              <input class="form-control" name="current_liabilities_brl" type="number" step="0.01" min="0" value="{{ financial_analysis.current_liabilities if financial_analysis else 0 }}" />
             </div>
             <div class="col-md-6">
-              <label class="form-label">Patrimônio líquido (R$)</label>
-              <input class="form-control" name="equity_brl" type="number" step="0.01" min="0" value="{{ business_profile.equity_brl if business_profile else 0 }}" />
-              <div class="form-text">Se deixar zerado, o sistema calcula automaticamente com base em ativo total - passivo total.</div>
+              <label class="form-label">Passivo não circulante total</label>
+              <input class="form-control" name="non_current_liabilities_brl" type="number" step="0.01" min="0" value="{{ financial_analysis.non_current_liabilities if financial_analysis else 0 }}" />
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">Patrimônio líquido informado</label>
+              <input class="form-control" name="equity_brl" type="number" step="0.01" value="{{ financial_analysis.equity if financial_analysis else 0 }}" />
             </div>
           </div>
           <div class="mt-4 d-flex gap-2">
             <button class="btn btn-primary">Salvar diagnóstico</button>
-            <a class="btn btn-outline-secondary" href="/empresa">Editar dados da empresa</a>
+            <a class="btn btn-outline-secondary" href="/ofertas">Ver oportunidades</a>
           </div>
         </form>
       {% endif %}
     </div>
 
-    {% if financial_analysis %}
-      <div class="card p-4 mb-3">
-        <div class="d-flex justify-content-between align-items-center">
+    {% if offer_matches %}
+      <div class="card p-4">
+        <div class="d-flex justify-content-between align-items-start gap-2 flex-wrap">
           <div>
-            <h5 class="mb-1">Painel visual do motor</h5>
-            <div class="muted">Indicadores resumidos para leitura rápida do cliente.</div>
+            <h4 class="mb-1">Oportunidades relacionadas</h4>
+            <div class="muted">As melhores sugestões do motor aparecem resumidas aqui.</div>
           </div>
-          <span class="badge text-bg-light border">Elegibilidade {{ financial_analysis.status_label }}</span>
+          <a class="btn btn-outline-secondary btn-sm" href="/ofertas">Abrir página de ofertas</a>
         </div>
-        <div class="mt-3">
-          {% for bar in financial_analysis.bars %}
-            <div class="mb-3">
-              <div class="d-flex justify-content-between small">
-                <span>{{ bar.label }} <span class="mc-help" data-bs-toggle="tooltip" data-bs-placement="top" title="{{ bar.tooltip }}">i</span></span>
-                <span>{{ "%.0f"|format(bar.value) }}</span>
-              </div>
-              <div class="progress" style="height: 12px;">
-                <div class="progress-bar {{ bar.class }}" role="progressbar" style="width: {{ bar.value }}%;" aria-valuenow="{{ bar.value }}" aria-valuemin="0" aria-valuemax="100"></div>
-              </div>
-              <div class="small muted mt-1">{{ bar.band_label }}</div>
-            </div>
-          {% endfor %}
-        </div>
-        <div class="row g-3 mt-1">
-          <div class="col-md-4"><div class="border rounded p-3 h-100"><div class="muted small">Capital de giro líquido</div><div class="fw-semibold">{{ financial_analysis.working_capital|brl }}</div></div></div>
-          <div class="col-md-4"><div class="border rounded p-3 h-100"><div class="muted small">Liquidez corrente</div><div class="fw-semibold">{{ financial_analysis.current_ratio|brnum }}</div></div></div>
-          <div class="col-md-4"><div class="border rounded p-3 h-100"><div class="muted small">Dívida / patrimônio</div><div class="fw-semibold">{{ financial_analysis.debt_to_equity|brnum }}</div></div></div>
-        </div>
-      </div>
-    {% endif %}
-
-    <div class="card p-4">
-      <div class="d-flex justify-content-between align-items-start gap-2">
-        <div>
-          <h5 class="mb-1">Oportunidades relacionadas</h5>
-          <div class="muted">Ofertas já tratadas pelo motor e visíveis para o seu papel.</div>
-        </div>
-        <a class="btn btn-outline-secondary btn-sm" href="/ofertas">Abrir oportunidades</a>
-      </div>
-      {% if offer_matches %}
         <div class="row g-3 mt-1">
           {% for m in offer_matches %}
-            <div class="col-lg-6">
+            <div class="col-md-6">
               <div class="border rounded p-3 h-100">
-                <div class="d-flex justify-content-between align-items-start">
+                <div class="d-flex justify-content-between align-items-start gap-2">
                   <div>
                     <div class="fw-semibold">{{ m.product_name }}</div>
                     <div class="small muted">{{ m.partner_name or "Maffezzolli Capital" }}</div>
@@ -31057,15 +31552,36 @@ TEMPLATES["perfil.html"] = r"""
                   <span class="badge text-bg-light border">{{ m.priority_level }}</span>
                 </div>
                 <div class="small mt-2"><span class="mono">{{ m.family_code }}</span> • score {{ "%.1f"|format(m.score_fit) }}</div>
-                <div class="mt-2">{{ m.client_summary or m.reason_summary }}</div>
+                <div class="small mt-2">{{ m.client_summary or m.reason_summary }}</div>
               </div>
             </div>
           {% endfor %}
         </div>
-      {% else %}
-        <div class="muted mt-3">Ainda não há oportunidades liberadas.</div>
-      {% endif %}
-    </div>
+      </div>
+    {% endif %}
+
+    {% if snapshots %}
+      <div class="card p-4 mt-3">
+        <h4 class="mb-1">Evolução das avaliações</h4>
+        <div class="muted mb-3">Histórico dos snapshots registrados.</div>
+        <div class="table-responsive">
+          <table class="table align-middle">
+            <thead><tr><th>Data</th><th>Score Total</th><th>Processo</th><th>Financeiro</th><th>NPS</th></tr></thead>
+            <tbody>
+              {% for s in snapshots %}
+                <tr>
+                  <td>{{ s.created_at.strftime("%d/%m/%Y %H:%M") if s.created_at else "-" }}</td>
+                  <td><b>{{ "%.1f"|format(s.score_total) }}</b></td>
+                  <td>{{ "%.1f"|format(s.score_process) }}</td>
+                  <td>{{ "%.1f"|format(s.score_financial) }}</td>
+                  <td>{{ s.nps_score }}</td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    {% endif %}
   </div>
 </div>
 {% endblock %}
@@ -39412,51 +39928,68 @@ except Exception:
 TEMPLATES["ofertas.html"] = r"""
 {% extends "base.html" %}
 {% block content %}
-<div class="card p-4">
-  <div class="d-flex justify-content-between align-items-start gap-3 flex-wrap">
-    <div>
-      <h4 class="mb-1">Oportunidades Liberadas</h4>
-      <div class="muted">Somente ofertas aprovadas pela equipe aparecem para o cliente.</div>
-    </div>
-    {% if role in ["admin","equipe"] %}
-      <a class="btn btn-outline-secondary" href="/motor-ofertas">Ver motor</a>
-    {% endif %}
-  </div>
-  <hr class="my-3"/>
-  {% if not current_client %}
-    <div class="alert alert-warning">Nenhum cliente selecionado.</div>
-  {% elif matches %}
-    <div class="alert alert-warning border-0 shadow-sm mb-4">
-      <div class="fw-semibold">Temos ofertas alinhadas ao seu perfil. Confira aqui.</div>
-      <div class="small">Essas oportunidades foram revisadas pela equipe antes de aparecer para sua empresa.</div>
-    </div>
-    <div class="row g-3">
-      {% for m in matches %}
-      <div class="col-lg-6">
-        <div class="border rounded p-3 h-100">
-          <div class="d-flex justify-content-between align-items-start gap-2">
-            <div>
-              <div class="fw-semibold">{{ m.product_name }}</div>
-              <div class="small muted">{{ m.partner_name or "Maffezzolli Capital" }}</div>
-            </div>
-            <span class="badge text-bg-light border">{{ m.priority_level }}</span>
-          </div>
-          <div class="small mt-2"><span class="mono">{{ m.family_code }}</span> • score {{ "%.1f"|format(m.score_fit) }}</div>
-          <div class="mt-2">{{ m.client_summary or m.reason_summary }}</div>
-          {% if m.partner_options_count %}
-            <div class="small muted mt-2">{{ m.partner_options_count }} parceiro(s) elegível(eis) nessa família.</div>
+<div class="row g-3">
+  <div class="col-12">
+    <div class="card p-4">
+      <div class="d-flex justify-content-between align-items-start gap-3 flex-wrap">
+        <div>
+          <h4 class="mb-1">Oportunidades Liberadas</h4>
+          <div class="muted">As oportunidades abaixo já foram filtradas e priorizadas para o estágio atual da empresa.</div>
+        </div>
+        <div class="d-flex gap-2 flex-wrap">
+          <span class="badge text-bg-light border">{{ offer_stage.badge }}</span>
+          {% if role in ["admin","equipe"] %}
+            <a class="btn btn-outline-secondary" href="/motor-ofertas">Ver motor</a>
           {% endif %}
-          <div class="mt-3 d-flex gap-2">
-            <a class="btn btn-sm btn-outline-primary" href="/simulador">Simular</a>
-            <a class="btn btn-sm btn-outline-secondary" href="/propostas">Solicitar proposta</a>
-          </div>
         </div>
       </div>
-      {% endfor %}
+      <hr class="my-3"/>
+      {% if not current_client %}
+        <div class="alert alert-warning">Nenhum cliente selecionado.</div>
+      {% else %}
+        <div class="alert alert-{% if offer_stage.tone == 'success' %}success{% elif offer_stage.tone == 'warning' %}warning{% else %}danger{% endif %} border-0 shadow-sm mb-4">
+          <div class="fw-semibold">{{ offer_stage.title }}</div>
+          <div class="small mt-1">{{ offer_stage.subtitle }}</div>
+          <div class="mt-3 d-flex gap-2 flex-wrap">
+            <a class="btn btn-sm btn-primary" href="{{ offer_stage.cta_href }}">{{ offer_stage.cta_label }}</a>
+            <a class="btn btn-sm btn-outline-secondary" href="/perfil">Rever diagnóstico</a>
+          </div>
+        </div>
+
+        {% if matches %}
+          <div class="row g-3">
+            {% for m in matches %}
+              <div class="col-lg-6">
+                <div class="border rounded p-3 h-100">
+                  <div class="d-flex justify-content-between align-items-start gap-2">
+                    <div>
+                      <div class="fw-semibold">{{ m.product_name }}</div>
+                      <div class="small muted">{{ m.partner_name or "Maffezzolli Capital" }}</div>
+                    </div>
+                    <span class="badge text-bg-light border">{{ m.priority_level }}</span>
+                  </div>
+                  <div class="small mt-2"><span class="mono">{{ m.family_code }}</span> • score {{ "%.1f"|format(m.score_fit) }}</div>
+                  <div class="mt-3">
+                    <div class="fw-semibold small">Por que essa oferta?</div>
+                    <div class="small mt-1">{{ m.display_reason }}</div>
+                  </div>
+                  {% if m.partner_options_count %}
+                    <div class="small muted mt-2">{{ m.partner_options_count }} parceiro(s) elegível(eis) nessa família.</div>
+                  {% endif %}
+                  <div class="mt-3 d-flex gap-2 flex-wrap">
+                    <a class="btn btn-sm btn-outline-primary" href="/simulador">Simular</a>
+                    <a class="btn btn-sm btn-outline-secondary" href="/propostas">Solicitar proposta</a>
+                  </div>
+                </div>
+              </div>
+            {% endfor %}
+          </div>
+        {% else %}
+          <div class="muted">Ainda não há oportunidades liberadas para sua empresa.</div>
+        {% endif %}
+      {% endif %}
     </div>
-  {% else %}
-    <div class="muted">Ainda não há oportunidades liberadas para sua empresa.</div>
-  {% endif %}
+  </div>
 </div>
 {% endblock %}
 """
