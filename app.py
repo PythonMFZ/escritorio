@@ -1890,6 +1890,12 @@ def compute_offer_engine(*, session: Session, company_id: int, client: Client, p
     revenue_monthly = max(float(client.revenue_monthly_brl or 0.0), float(profile.annual_revenue_brl or 0.0) / 12.0)
     debt_total = max(float(client.debt_total_brl or 0.0), 0.0)
     cash_balance = float(client.cash_balance_brl or 0.0)
+    current_assets = max(float(getattr(profile, "current_assets_brl", 0.0) or 0.0),
+                         max(cash_balance, 0.0) + float(profile.receivables_brl or 0.0) + float(
+                             profile.inventory_brl or 0.0))
+    current_liabilities = max(float(getattr(profile, "current_liabilities_brl", 0.0) or 0.0), 0.0)
+    working_capital = round(current_assets - current_liabilities, 2)
+    current_ratio = current_assets / max(current_liabilities, 1.0) if current_liabilities > 0 else 0.0
     debt_ratio = debt_total / max(revenue_monthly, 1.0)
     txt = " ".join(
         [profile.strategic_goal or "", profile.pain_points or "", " ".join(_json_list(profile.interests_json)),
@@ -1902,9 +1908,12 @@ def compute_offer_engine(*, session: Session, company_id: int, client: Client, p
             scores["capital_giro"] += 12
         if profile.receivables_brl > 0:
             scores["antecipacao_recebiveis"] += 22
-        if profile.collateral_brl > 0:
+        if float(profile.collateral_brl or 0.0) > 0:
             scores["home_equity"] += 24
             scores["auto_equity"] += 10
+        if current_liabilities > current_assets:
+            scores["conta_garantida"] += 10
+            scores["capital_giro"] += 10
         if "cart" in txt:
             scores["antecipacao_cartoes"] += 18
         if "consorcio" in txt:
@@ -1980,7 +1989,7 @@ def compute_offer_engine(*, session: Session, company_id: int, client: Client, p
             return False
         return True
 
-    out = []
+    out: list[dict[str, Any]] = []
     for svc in services:
         base = scores.get(svc.family_code, 0.0)
         if base <= 0:
@@ -1991,22 +2000,40 @@ def compute_offer_engine(*, session: Session, company_id: int, client: Client, p
         score_fit = round(min(100.0, base + max(0, svc.priority_weight - 50) * 0.4 + min(len(elig) * 2, 8)), 2)
         priority = "alta" if score_fit >= 75 else "media" if score_fit >= 55 else "baixa"
         fam = families.get(svc_family or svc.family_code)
+        family_label = fam.label if fam else (svc_family or svc.family_code)
         out.append({"source_kind": "internal", "family_code": svc_family or svc.family_code, "area": svc.area,
                     "product_name": svc.name, "partner_name": "", "priority_level": priority, "score_fit": score_fit,
-                    "reason_summary": f"Solucao interna recomendada. Parceiros elegiveis nesta familia: {len(elig)}.",
+                    "reason_summary": _offer_reason_summary(family_code=svc_family or svc.family_code,
+                                                            source_kind="internal", score_fit=score_fit,
+                                                            partner_count=len(elig), debt_ratio=debt_ratio,
+                                                            cash_balance=cash_balance,
+                                                            current_ratio=current_ratio,
+                                                            working_capital=working_capital,
+                                                            collateral_brl=float(profile.collateral_brl or 0.0)),
                     "partner_options_count": len(elig), "internal_service_id": svc.id, "partner_product_id": None,
-                    "family_label": fam.label if fam else (svc_family or svc.family_code)})
+                    "family_label": family_label})
         for pp in elig:
             partner = partners.get(pp.id)
+            partner_score = round(min(100.0, score_fit + (
+                6 if pp.requires_collateral and float(profile.collateral_brl or 0.0) > 0 else 0) + (
+                                          4 if float(pp.rate_default_pct or 0.0) > 0 else 0.0)), 2)
+            partner_priority = "alta" if partner_score >= 78 else "media" if partner_score >= 58 else "baixa"
             out.append({"source_kind": "partner", "family_code": svc_family or svc.family_code, "area": svc.area,
                         "product_name": pp.name, "partner_name": partner.name if partner else "Parceiro",
-                        "priority_level": priority, "score_fit": min(100.0, score_fit + 4),
-                        "reason_summary": f"Parceiro elegivel para a familia {fam.label if fam else (svc_family or svc.family_code)}.",
+                        "priority_level": partner_priority, "score_fit": partner_score,
+                        "reason_summary": _offer_reason_summary(family_code=svc_family or svc.family_code,
+                                                                source_kind="partner", score_fit=partner_score,
+                                                                partner_count=len(elig), debt_ratio=debt_ratio,
+                                                                cash_balance=cash_balance,
+                                                                current_ratio=current_ratio,
+                                                                working_capital=working_capital,
+                                                                collateral_brl=float(profile.collateral_brl or 0.0)),
                         "partner_options_count": len(elig), "internal_service_id": svc.id, "partner_product_id": pp.id,
-                        "family_label": fam.label if fam else (svc_family or svc.family_code)})
+                        "family_label": family_label})
 
     out.sort(key=lambda x: (
-    0 if x["priority_level"] == "alta" else 1 if x["priority_level"] == "media" else 2, -float(x["score_fit"])))
+    0 if x["priority_level"] == "alta" else 1 if x["priority_level"] == "media" else 2, -float(x["score_fit"]),
+    str(x.get("product_name") or "")))
     return out
 
 
@@ -10744,1777 +10771,84 @@ TEMPLATES["ofertas.html"] = r"""
 {% extends "base.html" %}
 {% block content %}
 <div class="card p-4">
-  <h4 class="mb-1">Minhas Ofertas</h4>
-  <div class="muted mb-3">Ofertas aderentes ao perfil da sua empresa.</div>
+  <div class="d-flex justify-content-between align-items-start gap-3">
+    <div>
+      <h4 class="mb-1">Oportunidades Liberadas</h4>
+      <div class="muted">Somente ofertas aprovadas pela equipe aparecem para o cliente.</div>
+    </div>
+    <div class="d-flex gap-2">
+      {% if role in ["admin","equipe"] %}
+        <a class="btn btn-outline-secondary" href="/motor-ofertas">Ver motor</a>
+      {% endif %}
+      <a class="btn btn-outline-primary" href="/perfil">Voltar ao diagnóstico</a>
+    </div>
+  </div>
+  <hr class="my-3"/>
+
   {% if not current_client %}
     <div class="alert alert-warning">Nenhum cliente selecionado.</div>
   {% else %}
+    {% if offer_strategy %}
+      <div class="p-3 rounded border mb-3">
+        <div class="d-flex justify-content-between align-items-start gap-3 flex-wrap">
+          <div>
+            <div class="fw-semibold">{{ offer_strategy.headline }}</div>
+            <div class="muted mt-1">{{ offer_strategy.message }}</div>
+          </div>
+          <div class="d-flex gap-2 flex-wrap">
+            <span class="badge {{ offer_strategy.badge_class }}">{{ offer_strategy.key|upper }}</span>
+            <a class="btn btn-primary btn-sm" href="{{ offer_strategy.cta_href }}">{{ offer_strategy.cta_label }}</a>
+          </div>
+        </div>
+      </div>
+    {% endif %}
+
+    {% if financial_analysis %}
+      <div class="row g-3 mb-3">
+        <div class="col-md-4"><div class="card p-3 h-100"><div class="muted small">Score geral</div><div class="fs-4 fw-bold">{{ "%.0f"|format(financial_analysis.general_health.score) }}</div><div class="small {{ financial_analysis.general_health.css_class }}">{{ financial_analysis.general_health.label }}</div></div></div>
+        <div class="col-md-4"><div class="card p-3 h-100"><div class="muted small">Liquidez corrente</div><div class="fs-4 fw-bold">{{ "%.2f"|format(financial_analysis.current_ratio or 0) }}</div><div class="small muted">Capacidade de pagar obrigações de curto prazo.</div></div></div>
+        <div class="col-md-4"><div class="card p-3 h-100"><div class="muted small">Capital de giro líquido</div><div class="fs-4 fw-bold">{{ financial_analysis.working_capital|brl }}</div><div class="small muted">Fôlego operacional da empresa.</div></div></div>
+      </div>
+    {% endif %}
+
     {% if matches %}
-      <div class="row g-3">{% for m in matches %}<div class="col-lg-6"><div class="border rounded p-3 h-100"><div class="d-flex justify-content-between"><b>{{ m.product_name }}</b><span class="badge text-bg-light">{{ m.priority_level }}</span></div><div class="muted small">{{ m.partner_name or "Maffezzolli Capital" }}</div><div class="small mt-2"><span class="mono">{{ m.family_code }}</span> | Score {{ "%.1f"|format(m.score_fit) }}</div><div class="mt-2">{{ m.reason_summary }}</div>{% if m.partner_options_count %}<div class="mt-2 small muted">{{ m.partner_options_count }} parceiro(s) elegivel(eis) nessa familia.</div>{% endif %}<div class="mt-3 d-flex gap-2"><a class="btn btn-sm btn-outline-primary" href="/simulador">Simular</a><a class="btn btn-sm btn-outline-secondary" href="/propostas">Solicitar proposta</a></div></div></div>{% endfor %}</div>
-    {% else %}<div class="muted">Ainda nao ha ofertas geradas para sua empresa.</div>{% endif %}
-  {% endif %}
-</div>
-{% endblock %}
-"""
-
-# ----------------------------
-# Templates (Perfil, Motor e Catálogo)
-# ----------------------------
-
-TEMPLATES["motor_ofertas.html"] = r"""
-{% extends "base.html" %}
-{% block content %}
-<div class="card p-4 mb-3">
-  <div class="d-flex flex-wrap justify-content-between align-items-start gap-3">
-    <div>
-      <h4 class="mb-1">Motor de Ofertas</h4>
-      <div class="muted">O motor cruza perfil empresarial, histórico de avaliações, score e elegibilidade por família de produto e parceiro.</div>
-    </div>
-    <form method="post" action="/motor-ofertas/gerar">
-      <button class="btn btn-primary">Gerar motor</button>
-    </form>
-  </div>
-</div>
-
-{% if not current_client %}
-  <div class="alert alert-warning">Nenhum cliente selecionado.</div>
-{% else %}
-  <div class="row g-3 mb-3">
-    <div class="col-md-3"><div class="card p-3 h-100"><div class="muted small">Cliente</div><div class="fw-semibold">{{ current_client.name }}</div></div></div>
-    <div class="col-md-3"><div class="card p-3 h-100"><div class="muted small">Sugestões</div><div class="fw-semibold">{{ matches|length }}</div></div></div>
-    <div class="col-md-3"><div class="card p-3 h-100"><div class="muted small">Prioridade alta</div><div class="fw-semibold">{{ matches|selectattr("priority_level", "equalto", "alta")|list|length }}</div></div></div>
-    <div class="col-md-3"><div class="card p-3 h-100"><div class="muted small">Parceiros elegíveis</div><div class="fw-semibold">{{ matches|selectattr("source_kind", "equalto", "partner")|list|length }}</div></div></div>
-  </div>
-
-  {% if matches %}
-    <div class="row g-3">
-      {% for m in matches %}
-      <div class="col-lg-6">
-        <div class="card p-4 h-100">
-          <div class="d-flex justify-content-between align-items-start">
-            <div>
-              <div class="fw-semibold">{{ m.product_name }}</div>
-              <div class="small muted">{{ m.partner_name or "Maffezzolli Capital" }}</div>
-            </div>
-            <span class="badge text-bg-light border">{{ m.priority_level }}</span>
-          </div>
-          <div class="small mt-2"><span class="mono">{{ m.family_code }}</span> • score {{ "%.1f"|format(m.score_fit) }}</div>
-          <div class="mt-2">{{ m.reason_summary }}</div>
-          {% if m.partner_options_count %}
-            <div class="mt-2 small muted">{{ m.partner_options_count }} parceiro(s) elegível(eis) nessa família.</div>
-          {% endif %}
-          <div class="mt-3 d-flex gap-2">
-            <a class="btn btn-sm btn-outline-primary" href="/simulador">Simular</a>
-            <a class="btn btn-sm btn-outline-secondary" href="/propostas">Gerar proposta</a>
-          </div>
-        </div>
-      </div>
-      {% endfor %}
-    </div>
-  {% else %}
-    <div class="card p-4">
-      <div class="fw-semibold mb-2">Ainda não há recomendações</div>
-      <div class="muted">Complete o perfil empresarial, faça uma avaliação em <b>/perfil/avaliacao/nova</b>, cadastre parceiros/produtos e gere o motor novamente.</div>
-      <div class="mt-3 d-flex gap-2">
-        <a class="btn btn-outline-secondary" href="/empresa">Completar perfil</a>
-        <a class="btn btn-outline-secondary" href="/admin/parceiros">Cadastrar parceiros</a>
-      </div>
-    </div>
-  {% endif %}
-{% endif %}
-{% endblock %}
-"""
-
-TEMPLATES["ofertas.html"] = r"""
-{% extends "base.html" %}
-{% block content %}
-<div class="card p-4">
-  <div class="d-flex justify-content-between align-items-start">
-    <div>
-      <h4 class="mb-1">Minhas Ofertas</h4>
-      <div class="muted">Ofertas aderentes ao perfil da sua empresa, organizadas por família e parceiro.</div>
-    </div>
-    <a class="btn btn-outline-secondary" href="/motor-ofertas">Ver motor</a>
-  </div>
-  <hr class="my-3"/>
-  {% if not current_client %}
-    <div class="alert alert-warning">Nenhum cliente selecionado.</div>
-  {% elif matches %}
-    <div class="row g-3">
-      {% for m in matches %}
-      <div class="col-lg-6">
-        <div class="border rounded p-3 h-100">
-          <div class="d-flex justify-content-between align-items-start gap-2">
-            <div>
-              <div class="fw-semibold">{{ m.product_name }}</div>
-              <div class="small muted">{{ m.partner_name or "Maffezzolli Capital" }}</div>
-            </div>
-            <span class="badge text-bg-light border">{{ m.priority_level }}</span>
-          </div>
-          <div class="small mt-2"><span class="mono">{{ m.family_code }}</span> • score {{ "%.1f"|format(m.score_fit) }}</div>
-          <div class="mt-2">{{ m.reason_summary }}</div>
-          {% if m.partner_options_count %}
-            <div class="small muted mt-2">{{ m.partner_options_count }} parceiro(s) elegível(eis) nessa família.</div>
-          {% endif %}
-          <div class="mt-3 d-flex gap-2">
-            <a class="btn btn-sm btn-outline-primary" href="/simulador">Simular</a>
-            <a class="btn btn-sm btn-outline-secondary" href="/propostas">Solicitar proposta</a>
-          </div>
-        </div>
-      </div>
-      {% endfor %}
-    </div>
-  {% else %}
-    <div class="muted">Ainda não há ofertas geradas para sua empresa.</div>
-  {% endif %}
-</div>
-{% endblock %}
-"""
-
-TEMPLATES["admin_servicos_internos.html"] = r"""
-{% extends "base.html" %}
-{% block content %}
-<div class="card p-4 mb-3">
-  <div class="d-flex flex-wrap justify-content-between align-items-start gap-3">
-    <div>
-      <h4 class="mb-1">Produtos internos</h4>
-      <div class="muted">Catálogo próprio da Maffezzolli Capital, vinculado às famílias canônicas do motor.</div>
-    </div>
-    <div class="d-flex gap-2">
-      <a class="btn btn-outline-secondary" href="/admin/familias">Ver famílias</a>
-      <a class="btn btn-outline-secondary" href="/motor-ofertas">Abrir motor</a>
-    </div>
-  </div>
-</div>
-
-<div class="row g-3">
-  <div class="col-lg-5">
-    <div class="card p-4">
-      <h5 class="mb-3">Cadastrar produto interno</h5>
-      <form method="post" action="/admin/servicos-internos/add">
-        <div class="mb-3">
-          <label class="form-label">Área</label>
-          <select class="form-select" name="area">
-            <option value="advisory">Advisory</option>
-            <option value="ib">IB</option>
-            <option value="baas">BaaS</option>
-            <option value="special_sits">Special Sits</option>
-          </select>
-        </div>
-        <div class="mb-3">
-          <label class="form-label">Família</label>
-          <select class="form-select" name="family_code" required>
-            {% for fam in families %}
-              <option value="{{ fam.code }}">{{ fam.label }} ({{ fam.area }})</option>
-            {% endfor %}
-          </select>
-        </div>
-        <div class="mb-3">
-          <label class="form-label">Nome do produto</label>
-          <input class="form-control" name="name" required />
-        </div>
-        <div class="mb-3">
-          <label class="form-label">Descrição</label>
-          <textarea class="form-control" name="description" rows="3"></textarea>
-        </div>
-        <div class="mb-3">
-          <label class="form-label">Peso/prioridade</label>
-          <input class="form-control" type="number" min="0" name="priority_weight" value="50" />
-        </div>
-        <div class="mb-3">
-          <label class="form-label">Notas</label>
-          <textarea class="form-control" name="notes" rows="2"></textarea>
-        </div>
-        <button class="btn btn-primary">Salvar produto interno</button>
-      </form>
-    </div>
-  </div>
-
-  <div class="col-lg-7">
-    <div class="card p-4">
-      <h5 class="mb-3">Catálogo atual</h5>
-      {% if services %}
-        <div class="table-responsive">
-          <table class="table align-middle">
-            <thead><tr><th>Área</th><th>Família</th><th>Produto</th><th>Peso</th></tr></thead>
-            <tbody>
-            {% for s in services %}
-              <tr>
-                <td>{{ s.area }}</td>
-                <td><span class="mono">{{ s.family_code or s.family_slug }}</span></td>
-                <td><b>{{ s.name }}</b><br><small class="muted">{{ s.description }}</small></td>
-                <td>{{ s.priority_weight }}</td>
-              </tr>
-            {% endfor %}
-            </tbody>
-          </table>
-        </div>
-      {% else %}
-        <div class="muted">Nenhum produto interno cadastrado.</div>
-      {% endif %}
-    </div>
-  </div>
-</div>
-{% endblock %}
-"""
-
-TEMPLATES["admin_parceiros.html"] = r"""
-{% extends "base.html" %}
-{% block content %}
-<div class="card p-4 mb-3">
-  <div class="d-flex flex-wrap justify-content-between align-items-start gap-3">
-    <div>
-      <h4 class="mb-1">Parceiros e produtos</h4>
-      <div class="muted">Cadastre parceiros, vincule seus produtos às famílias canônicas e use isso no motor de ofertas e no simulador.</div>
-    </div>
-    <a class="btn btn-outline-secondary" href="/admin/familias">Ver famílias</a>
-  </div>
-</div>
-
-<div class="row g-3">
-  <div class="col-lg-4">
-    <div class="card p-4 mb-3">
-      <h5 class="mb-3">Novo parceiro</h5>
-      <form method="post" action="/admin/parceiros/add">
-        <div class="mb-3"><label class="form-label">Nome</label><input class="form-control" name="name" required /></div>
-        <div class="mb-3"><label class="form-label">Tipo</label><input class="form-control" name="partner_type" value="financeiro" /></div>
-        <div class="mb-3"><label class="form-label">Contato</label><input class="form-control" name="contact_name" /></div>
-        <div class="mb-3"><label class="form-label">E-mail</label><input class="form-control" type="email" name="contact_email" /></div>
-        <div class="mb-3"><label class="form-label">Notas</label><textarea class="form-control" name="notes" rows="2"></textarea></div>
-        <button class="btn btn-primary">Salvar parceiro</button>
-      </form>
-    </div>
-
-    <div class="card p-4">
-      <h5 class="mb-3">Nova campanha</h5>
-      <form method="post" action="/admin/parceiros/campaigns/add">
-        <div class="mb-3">
-          <label class="form-label">Produto do parceiro</label>
-          <select class="form-select" name="partner_product_id">
-            {% for p in products %}
-              <option value="{{ p.id }}">{{ partner_map[p.partner_id].name if p.partner_id in partner_map else 'Parceiro' }} — {{ p.name }}</option>
-            {% endfor %}
-          </select>
-        </div>
-        <div class="mb-3"><label class="form-label">Título</label><input class="form-control" name="title" required /></div>
-        <div class="row g-2">
-          <div class="col-md-6"><label class="form-label">Início</label><input class="form-control" type="date" name="starts_at" /></div>
-          <div class="col-md-6"><label class="form-label">Fim</label><input class="form-control" type="date" name="ends_at" /></div>
-        </div>
-        <div class="mb-3 mt-3"><label class="form-label">Bônus (%)</label><input class="form-control" type="number" step="0.01" name="bonus_pct" value="0" /></div>
-        <div class="mb-3"><label class="form-label">Resumo da regra</label><textarea class="form-control" name="rule_summary" rows="2"></textarea></div>
-        <button class="btn btn-outline-primary">Salvar campanha</button>
-      </form>
-    </div>
-  </div>
-
-  <div class="col-lg-8">
-    <div class="card p-4 mb-3">
-      <h5 class="mb-3">Novo produto de parceiro</h5>
-      <form method="post" action="/admin/parceiros/products/add">
-        <div class="row g-3">
-          <div class="col-md-6">
-            <label class="form-label">Parceiro</label>
-            <select class="form-select" name="partner_id" required>
-              {% for p in partners %}
-                <option value="{{ p.id }}">{{ p.name }}</option>
-              {% endfor %}
-            </select>
-          </div>
-          <div class="col-md-3">
-            <label class="form-label">Área</label>
-            <select class="form-select" name="area">
-              <option value="advisory">Advisory</option>
-              <option value="ib">IB</option>
-              <option value="baas">BaaS</option>
-              <option value="special_sits">Special Sits</option>
-            </select>
-          </div>
-          <div class="col-md-3">
-            <label class="form-label">Público</label>
-            <select class="form-select" name="pf_pj">
-              <option value="PJ">PJ</option>
-              <option value="PF">PF</option>
-              <option value="PF/PJ">PF/PJ</option>
-            </select>
-          </div>
-          <div class="col-md-6">
-            <label class="form-label">Família</label>
-            <select class="form-select" name="family_code" required>
-              {% for fam in families %}
-                <option value="{{ fam.code }}">{{ fam.label }} ({{ fam.area }})</option>
-              {% endfor %}
-            </select>
-          </div>
-          <div class="col-md-6">
-            <label class="form-label">Nome do produto</label>
-            <input class="form-control" name="name" required />
-          </div>
-          <div class="col-md-3"><label class="form-label">Ticket min. (R$)</label><input class="form-control" type="number" step="0.01" name="ticket_min_brl" value="0" /></div>
-          <div class="col-md-3"><label class="form-label">Ticket max. (R$)</label><input class="form-control" type="number" step="0.01" name="ticket_max_brl" value="0" /></div>
-          <div class="col-md-3"><label class="form-label">Receita min. mensal (R$)</label><input class="form-control" type="number" step="0.01" name="revenue_min_brl" value="0" /></div>
-          <div class="col-md-3"><label class="form-label">Receita max. mensal (R$)</label><input class="form-control" type="number" step="0.01" name="revenue_max_brl" value="0" /></div>
-          <div class="col-md-3"><label class="form-label">Score total min.</label><input class="form-control" type="number" step="0.01" name="score_total_min" value="0" /></div>
-          <div class="col-md-3"><label class="form-label">Score financeiro min.</label><input class="form-control" type="number" step="0.01" name="score_financial_min" value="0" /></div>
-          <div class="col-md-3"><label class="form-label">Debt ratio max.</label><input class="form-control" type="number" step="0.01" name="max_debt_ratio" value="0" /></div>
-          <div class="col-md-3"><label class="form-label">Exige garantia?</label><div class="form-check mt-2"><input class="form-check-input" type="checkbox" name="requires_collateral"></div></div>
-          <div class="col-md-3"><label class="form-label">Taxa padrão (%)</label><input class="form-control" type="number" step="0.01" name="rate_default_pct" value="0" /></div>
-          <div class="col-md-3"><label class="form-label">CET padrão (%)</label><input class="form-control" type="number" step="0.01" name="cet_default_pct" value="0" /></div>
-          <div class="col-md-2"><label class="form-label">Prazo min.</label><input class="form-control" type="number" name="term_min_months" value="0" /></div>
-          <div class="col-md-2"><label class="form-label">Prazo max.</label><input class="form-control" type="number" name="term_max_months" value="0" /></div>
-          <div class="col-md-2"><label class="form-label">Carência max.</label><input class="form-control" type="number" name="grace_max_months" value="0" /></div>
-          <div class="col-md-3"><label class="form-label">Amortização</label><input class="form-control" name="amortization_default" value="PRICE" /></div>
-          <div class="col-md-3"><label class="form-label">LTV max. (%)</label><input class="form-control" type="number" step="0.01" name="ltv_max_pct" value="0" /></div>
-          <div class="col-md-4"><label class="form-label">UFs permitidas (CSV)</label><input class="form-control" name="allowed_states_csv" /></div>
-          <div class="col-md-4"><label class="form-label">Segmentos permitidos (CSV)</label><input class="form-control" name="allowed_segments_csv" /></div>
-          <div class="col-md-4"><label class="form-label">Comissão</label><input class="form-control" name="commission_text" /></div>
-          <div class="col-md-4"><label class="form-label">Payout</label><input class="form-control" name="payout_term" /></div>
-          <div class="col-md-8"><label class="form-label">Notas</label><input class="form-control" name="notes" /></div>
-        </div>
-        <button class="btn btn-primary mt-3">Salvar produto do parceiro</button>
-      </form>
-    </div>
-
-    <div class="card p-4 mb-3">
-      <h5 class="mb-3">Parceiros cadastrados</h5>
-      {% if partners %}
-      <div class="table-responsive">
-        <table class="table align-middle">
-          <thead><tr><th>Nome</th><th>Tipo</th><th>Contato</th><th>E-mail</th></tr></thead>
-          <tbody>
-            {% for p in partners %}
-            <tr><td><b>{{ p.name }}</b></td><td>{{ p.partner_type }}</td><td>{{ p.contact_name or "-" }}</td><td>{{ p.contact_email or "-" }}</td></tr>
-            {% endfor %}
-          </tbody>
-        </table>
-      </div>
-      {% else %}<div class="muted">Nenhum parceiro cadastrado.</div>{% endif %}
-    </div>
-
-    <div class="card p-4 mb-3">
-      <h5 class="mb-3">Produtos dos parceiros</h5>
-      {% if products %}
-      <div class="table-responsive">
-        <table class="table align-middle">
-          <thead><tr><th>Parceiro</th><th>Produto</th><th>Família</th><th>Regras</th></tr></thead>
-          <tbody>
-            {% for p in products %}
-            <tr>
-              <td>{{ partner_map[p.partner_id].name if p.partner_id in partner_map else p.partner_id }}</td>
-              <td><b>{{ p.name }}</b><br><small class="muted">{{ p.pf_pj }}</small></td>
-              <td><span class="mono">{{ p.family_code or p.family_slug }}</span></td>
-              <td class="small muted">Receita min. {{ "%.0f"|format(p.revenue_min_brl or 0) }} • Ticket {{ "%.0f"|format(p.ticket_min_brl or 0) }}–{{ "%.0f"|format(p.ticket_max_brl or 0) }}</td>
-            </tr>
-            {% endfor %}
-          </tbody>
-        </table>
-      </div>
-      {% else %}<div class="muted">Nenhum produto de parceiro cadastrado.</div>{% endif %}
-    </div>
-
-    <div class="card p-4">
-      <h5 class="mb-3">Campanhas</h5>
-      {% if campaigns %}
-      <div class="table-responsive">
-        <table class="table align-middle">
-          <thead><tr><th>Título</th><th>Produto</th><th>Bônus</th><th>Vigência</th></tr></thead>
-          <tbody>
-          {% for c in campaigns %}
-            <tr>
-              <td><b>{{ c.title }}</b><br><small class="muted">{{ c.rule_summary }}</small></td>
-              <td>{% for p in products %}{% if p.id == c.partner_product_id %}{{ p.name }}{% endif %}{% endfor %}</td>
-              <td>{{ "%.2f"|format(c.bonus_pct or 0) }}%</td>
-              <td>{{ c.starts_at }}<br>{{ c.ends_at }}</td>
-            </tr>
-          {% endfor %}
-          </tbody>
-        </table>
-      </div>
-      {% else %}<div class="muted">Nenhuma campanha cadastrada.</div>{% endif %}
-    </div>
-  </div>
-</div>
-{% endblock %}
-"""
-
-# ----------------------------
-# Templates (Open Finance)
-# ----------------------------
-
-TEMPLATES.setdefault("openfinance.html", r"""{% extends "base.html" %}
-{% block content %}
-<div class="d-flex align-items-center justify-content-between mb-3">
-  <div>
-    <div class="h4 mb-0">🌐 Open Finance — Contratos</div>
-    <div class="muted">Conecte a conta do titular e importe contratos (Loans) para comparar ofertas.</div>
-  </div>
-  <a class="btn btn-outline-secondary" href="/">Voltar</a>
-</div>
-
-
-<div class="alert alert-info d-flex justify-content-between align-items-center">
-  <div><strong>Klavi:</strong> se o Pluggy estiver instável, use a conexão via Klavi (Sandbox/Produção).</div>
-  <a class="btn btn-outline-primary btn-sm" href="/openfinance/klavi?doc={{ doc or '' }}&email={{ email_default or '' }}">Abrir Klavi</a>
-</div>
-
-<div class="card p-3 mb-3">
-  <form method="get" action="/openfinance" class="row g-2 align-items-end">
-    <div class="col-md-4">
-      <label class="form-label">CPF/CNPJ</label>
-      <input class="form-control mono" name="doc" value="{{ doc or '' }}" placeholder="Somente números ou com máscara" required>
-    </div>
-    <div class="col-md-4">
-      <label class="form-label">E-mail do titular (para enviar link)</label>
-      <input class="form-control" name="email" value="{{ email_default or '' }}" placeholder="email@exemplo.com">
-      <div class="form-text">Opcional se o próprio titular estiver logado.</div>
-    </div>
-    <div class="col-md-4 d-flex gap-2">
-      <button class="btn btn-primary w-100" type="submit">Abrir</button>
-      {% if doc %}
-        <button class="btn btn-outline-primary" type="submit" formmethod="post" formaction="/openfinance/sync">Sincronizar</button>
-      {% endif %}
-    </div>
-  </form>
-</div>
-
-{% if doc %}
-  <div class="row g-3">
-    <div class="col-12 col-lg-5">
-      <div class="card p-3">
-        <div class="fw-semibold mb-1">Status da conexão</div>
-        {% if conn %}
-          <div class="muted small">Item:</div>
-          <div class="mono">{{ conn.pluggy_item_id }}</div>
-          <div class="muted small mt-2">Status:</div>
-          <div><span class="badge text-bg-light border">{{ conn.status }}</span></div>
-          <div class="muted small mt-2">Última sincronização:</div>
-          <div>{{ conn.last_synced_at or "-" }}</div>
-          {% if conn.last_error %}
-            <div class="alert alert-warning mt-3 mb-0">{{ conn.last_error }}</div>
-          {% endif %}
-        {% else %}
-          <div class="muted">Nenhuma conexão ainda para este documento.</div>
-        {% endif %}
-
-        <hr>
-
-        {% if role in ["admin","equipe"] %}
-          <div class="fw-semibold">Enviar link de conexão ao titular</div>
-          <form method="post" action="/openfinance/invite" class="row g-2 mt-1">
-            <input type="hidden" name="doc" value="{{ doc }}">
-            <div class="col-12">
-              <label class="form-label">E-mail</label>
-              <input class="form-control" name="email" value="{{ email_default or '' }}" required>
-            </div>
-            <div class="col-12 d-flex gap-2">
-              <button class="btn btn-primary" type="submit">Enviar link</button>
-              {% if invite_link %}
-                <button class="btn btn-outline-secondary" type="button" onclick="navigator.clipboard.writeText('{{ invite_link }}'); alert('Link copiado!');">Copiar link</button>
-              {% endif %}
-            </div>
-          </form>
-          {% if invite_link %}
-            <div class="mt-2 small muted">Link: <span class="mono">{{ invite_link }}</span></div>
-          {% endif %}
-        {% else %}
-          <div class="fw-semibold">Conectar agora</div>
-          {% if self_connect_link %}
-            <a class="btn btn-primary mt-2" href="{{ self_connect_link }}">Abrir Pluggy Connect</a>
-          {% else %}
-            <div class="muted small">Peça para o administrador/equipe gerar um link.</div>
-          {% endif %}
-        {% endif %}
-      </div>
-
-      <div class="card p-3 mt-3">
-        <div class="fw-semibold mb-2">Catálogo de ofertas</div>
-        {% if role in ["admin","equipe"] %}
-          <form method="post" action="/openfinance/offers/add" class="row g-2">
-            <div class="col-12">
-              <label class="form-label">Nome da oferta</label>
-              <input class="form-control" name="label" placeholder="Ex.: Refinanciamento Banco X" required>
-            </div>
-            <div class="col-md-6">
-              <label class="form-label">CET a.a. (%)</label>
-              <input class="form-control" name="cet_aa_pct" inputmode="decimal" placeholder="Ex.: 28.5" required>
-            </div>
-            <div class="col-md-6">
-              <label class="form-label">Tipo (opcional)</label>
-              <input class="form-control" name="product_type" placeholder="Ex.: PERSONAL_LOAN">
-            </div>
-            <div class="col-md-6">
-              <label class="form-label">Prazo mín (meses)</label>
-              <input class="form-control" name="term_min" inputmode="numeric" placeholder="0">
-            </div>
-            <div class="col-md-6">
-              <label class="form-label">Prazo máx (meses)</label>
-              <input class="form-control" name="term_max" inputmode="numeric" placeholder="0">
-            </div>
-            <div class="col-12">
-              <button class="btn btn-outline-primary w-100" type="submit">Adicionar oferta</button>
-            </div>
-          </form>
-        {% endif %}
-
-        <div class="mt-2">
-          {% if offers %}
-            <ul class="list-group">
-              {% for o in offers %}
-                <li class="list-group-item d-flex justify-content-between align-items-center">
-                  <div>
-                    <div class="fw-semibold">{{ o.label }}</div>
-                    <div class="muted small">CET a.a.: {{ (o.cet_aa * 100) | round(2) }}% {% if o.product_type %}• {{ o.product_type }}{% endif %}</div>
-                  </div>
-                  <span class="badge text-bg-light border">{% if o.is_active %}ativa{% else %}inativa{% endif %}</span>
-                </li>
-              {% endfor %}
-            </ul>
-          {% else %}
-            <div class="muted small">Nenhuma oferta cadastrada ainda.</div>
-          {% endif %}
-        </div>
-      </div>
-    </div>
-
-    <div class="col-12 col-lg-7">
-      <div class="card p-3">
-        <div class="d-flex justify-content-between align-items-center">
-          <div class="fw-semibold">Contratos (Loans)</div>
-          <form method="post" action="/openfinance/opportunities/generate">
-            <input type="hidden" name="doc" value="{{ doc }}">
-            <button class="btn btn-outline-success btn-sm" type="submit">Gerar oportunidades</button>
-          </form>
-        </div>
-
-        {% if loans %}
-          <div class="table-responsive mt-2">
-            <table class="table table-sm align-middle">
-              <thead>
-                <tr>
-                  <th>Contrato</th>
-                  <th>CET a.a.</th>
-                  <th>Saldo</th>
-                  <th>Parcela</th>
-                  <th>Prazo (rem/total)</th>
-                </tr>
-              </thead>
-              <tbody>
-                {% for l in loans %}
-                  <tr>
-                    <td class="mono">{{ l.contract_number or l.pluggy_loan_id }}</td>
-                    <td>{{ (l.cet_aa * 100) | round(2) }}%</td>
-                    <td>R$ {{ l.outstanding_brl | round(2) }}</td>
-                    <td>R$ {{ l.installment_brl | round(2) }}</td>
-                    <td>{{ l.term_remaining_months }}/{{ l.term_total_months }}</td>
-                  </tr>
-                {% endfor %}
-              </tbody>
-            </table>
-          </div>
-        {% else %}
-          <div class="muted small mt-2">Sem contratos importados ainda. Conecte e sincronize.</div>
-        {% endif %}
-      </div>
-
-      <div class="card p-3 mt-3">
-        <div class="fw-semibold mb-2">Oportunidades (comparação)</div>
-        {% if opportunities %}
-          <div class="table-responsive">
-            <table class="table table-sm align-middle">
-              <thead>
-                <tr>
-                  <th>Contrato</th>
-                  <th>Oferta</th>
-                  <th>Parcela atual</th>
-                  <th>Nova parcela</th>
-                  <th>Economia/mês</th>
-                  <th>Economia total</th>
-                </tr>
-              </thead>
-              <tbody>
-                {% for o in opportunities %}
-                  <tr>
-                    <td class="mono">{{ o.pluggy_loan_id }}</td>
-                    <td>{{ o.offer_label }}</td>
-                    <td>R$ {{ o.old_payment_brl | round(2) }}</td>
-                    <td>R$ {{ o.new_payment_brl | round(2) }}</td>
-                    <td>R$ {{ o.monthly_savings_brl | round(2) }}</td>
-                    <td>R$ {{ o.total_savings_brl | round(2) }}</td>
-                  </tr>
-                {% endfor %}
-              </tbody>
-            </table>
-          </div>
-          <div class="muted small">Cálculo aproximado (PRICE/SAC médio) usando CET anual informado.</div>
-        {% else %}
-          <div class="muted small">Sem oportunidades ainda (adicione ofertas e clique em “Gerar oportunidades”).</div>
-        {% endif %}
-      </div>
-    </div>
-  </div>
-{% endif %}
-{% endblock %}
-""")
-
-TEMPLATES.setdefault("openfinance_klavi.html", r"""{% extends "base.html" %}
-{% block content %}
-<div class="d-flex align-items-center justify-content-between mb-3">
-  <div>
-    <div class="h4 mb-0">🌐 Open Finance (Klavi) — Contratos</div>
-    <div class="muted">Fluxo Link → Consent → Report (pf loans) via Klavi. Use sandbox para testes.</div>
-  </div>
-  <div class="d-flex gap-2">
-    <a class="btn btn-outline-secondary" href="/openfinance?doc={{ doc or '' }}">Voltar</a>
-  </div>
-</div>
-
-<div class="card p-3 mb-3">
-  <form method="post" action="/openfinance/klavi/start" class="row g-2 align-items-end">
-    <input type="hidden" name="doc" value="{{ doc or '' }}"/>
-    <div class="col-md-4">
-      <label class="form-label">CPF/CNPJ</label>
-      <input class="form-control mono" name="doc_input" value="{{ doc or '' }}" required>
-    </div>
-    <div class="col-md-4">
-      <label class="form-label">E-mail do titular</label>
-      <input class="form-control" name="email" value="{{ email_default or '' }}" placeholder="email@exemplo.com" required>
-    </div>
-    <div class="col-md-4">
-      <label class="form-label">Telefone do titular</label>
-      <input class="form-control" name="phone" value="{{ phone_default or '' }}" placeholder="+55DD9XXXXYYYY" required>
-    </div>
-    <div class="col-12 d-flex gap-2 mt-2">
-      <button class="btn btn-primary">Iniciar (criar Link + listar instituições)</button>
-      <a class="btn btn-outline-secondary" href="/openfinance?doc={{ doc or '' }}">Ver contratos/importados</a>
-    </div>
-    <div class="form-text">A Klavi usa Link/Consent do Open Finance. Após autorizar, solicitaremos o relatório <strong>pf loans</strong>.</div>
-  </form>
-</div>
-
-{% if flow %}
-<div class="card p-3 mb-3">
-  <div class="d-flex justify-content-between align-items-center">
-    <div>
-      <div><strong>Status:</strong> {{ flow.consent_status or "—" }}</div>
-      <div class="muted mono">link_id={{ flow.link_id }} | consent_id={{ flow.consent_id }}</div>
-      {% if flow.institution_name %}
-        <div class="muted">Instituição: {{ flow.institution_name }} ({{ flow.institution_code }})</div>
-      {% endif %}
-      {% if flow.last_error %}
-        <div class="text-danger mt-2"><strong>Erro:</strong> {{ flow.last_error }}</div>
-      {% endif %}
-    </div>
-
-    <div class="d-flex gap-2">
-      {% if flow.consent_id %}
-        <form method="post" action="/openfinance/klavi/request">
-          <input type="hidden" name="doc" value="{{ doc or '' }}"/>
-          <button class="btn btn-outline-primary">Solicitar relatório (Loans)</button>
-        </form>
-      {% endif %}
-    </div>
-  </div>
-</div>
-{% endif %}
-
-{% if reports %}
-<div class="card p-3">
-  <h6 class="mb-3">Últimos relatórios recebidos</h6>
-  <div class="table-responsive">
-    <table class="table table-sm align-middle">
-      <thead><tr><th>Quando</th><th>Produto</th><th>Request</th></tr></thead>
-      <tbody>
-        {% for r in reports %}
-          <tr>
-            <td class="mono">{{ r.received_at }}</td>
-            <td>{{ r.product }}</td>
-            <td class="mono">{{ r.request_id }}</td>
-          </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </div>
-  <div class="form-text">Quando o relatório <code>loans</code> chegar, os contratos aparecerão em <a href="/openfinance?doc={{ doc or '' }}">Open Finance</a>.</div>
-</div>
-{% endif %}
-{% endblock %}
-""")
-
-TEMPLATES.setdefault("openfinance_klavi_institutions.html", r"""{% extends "base.html" %}
-{% block content %}
-<div class="d-flex align-items-center justify-content-between mb-3">
-  <div>
-    <div class="h4 mb-0">Escolha a instituição (Klavi)</div>
-    <div class="muted">Documento: <span class="mono">{{ doc }}</span></div>
-  </div>
-  <a class="btn btn-outline-secondary" href="/openfinance/klavi?doc={{ doc }}">Voltar</a>
-</div>
-
-<div class="card p-3">
-  <div class="mb-2 form-text">Selecione a instituição para autorizar no Open Finance. Itens com “outage” podem falhar.</div>
-
-  <div class="list-group">
-    {% for it in institutions %}
-      <div class="list-group-item">
-        <div class="d-flex justify-content-between align-items-center gap-2">
-          <div class="d-flex align-items-center gap-3">
-            {% if it.avatar %}
-              <img src="{{ it.avatar }}" alt="logo" style="width:28px;height:28px;border-radius:6px;object-fit:contain;background:#fff;border:1px solid #eee">
-            {% endif %}
-            <div>
-              <div><strong>{{ it.name }}</strong> <span class="muted mono">({{ it.institutionCode }})</span></div>
-              <div class="muted" style="font-size:12px">
-                {% if it.isOutage %}<span class="text-warning">outage</span>{% else %}ok{% endif %}
-                {% if it.availableResources %} • recursos: {{ it.availableResources|join(", ") }}{% endif %}
+      <div class="row g-3">
+        {% for m in matches %}
+        <div class="col-lg-6">
+          <div class="border rounded p-3 h-100">
+            <div class="d-flex justify-content-between align-items-start gap-2">
+              <div>
+                <div class="fw-semibold">{{ m.product_name }}</div>
+                <div class="small muted">{{ m.partner_name or "Maffezzolli Capital" }}</div>
               </div>
+              <span class="badge text-bg-light border">{{ m.priority_level }}</span>
+            </div>
+            <div class="small mt-2"><span class="mono">{{ m.family_code }}</span> • score {{ "%.1f"|format(m.score_fit) }}</div>
+            <div class="mt-3 p-3 rounded bg-light">
+              <div class="small fw-semibold mb-1">Por que essa oferta?</div>
+              <div>{{ m.client_summary or m.reason_summary }}</div>
+            </div>
+            {% if m.partner_options_count %}
+              <div class="small muted mt-2">{{ m.partner_options_count }} parceiro(s) elegível(eis) nessa família.</div>
+            {% endif %}
+            <div class="mt-3 d-flex gap-2 flex-wrap">
+              <a class="btn btn-sm btn-outline-primary" href="/simulador">Simular</a>
+              <a class="btn btn-sm btn-outline-secondary" href="/propostas">Solicitar proposta</a>
             </div>
           </div>
-
-          <form method="post" action="/openfinance/klavi/consent">
-            <input type="hidden" name="doc" value="{{ doc }}"/>
-            <input type="hidden" name="institution_code" value="{{ it.institutionCode }}"/>
-            <input type="hidden" name="institution_name" value="{{ it.name }}"/>
-            <button class="btn btn-primary btn-sm">Autorizar</button>
-          </form>
         </div>
+        {% endfor %}
       </div>
-    {% endfor %}
-  </div>
-</div>
-{% endblock %}
-""")
-
-TEMPLATES.setdefault("openfinance_klavi_return.html", r"""{% extends "base.html" %}
-{% block content %}
-<div class="card p-4">
-  <div class="d-flex justify-content-between align-items-start">
-    <div>
-      <h4 class="mb-1">Autorização recebida</h4>
-      <div class="muted mono">{{ doc }}</div>
-      {% if message %}
-        <div class="mt-2">{{ message }}</div>
-      {% endif %}
-      {% if error %}
-        <div class="text-danger mt-2"><strong>Erro:</strong> {{ error }}</div>
-      {% endif %}
-    </div>
-    <a class="btn btn-outline-secondary" href="/openfinance/klavi?doc={{ doc }}">Voltar</a>
-  </div>
-
-  <hr class="my-3"/>
-
-  <form method="post" action="/openfinance/klavi/request" class="d-flex gap-2">
-    <input type="hidden" name="doc" value="{{ doc }}"/>
-    <button class="btn btn-primary">Solicitar relatório (Loans)</button>
-    <a class="btn btn-outline-secondary" href="/openfinance?doc={{ doc }}">Ver contratos/importados</a>
-  </form>
-
-  <div class="form-text mt-2">Após solicitar, aguarde o webhook de produto chegar. A página “Open Finance” mostrará os contratos importados.</div>
-</div>
-{% endblock %}
-""")
-
-TEMPLATES.setdefault("openfinance_connect.html", r"""{% extends "base.html" %}
-{% block content %}
-<div class="container py-4" style="max-width: 920px;">
-  <div class="d-flex justify-content-between align-items-start">
-    <div>
-      <div class="h4 mb-0">🌐 Conectar Open Finance</div>
-      <div class="muted">Conecte sua instituição para importar seus contratos (Loans).</div>
-    </div>
-    <a class="btn btn-outline-secondary" href="/">Fechar</a>
-  </div>
-
-  <div class="card p-3 mt-3">
-    <div class="row g-3">
-      <div class="col-md-6">
-        <div class="muted small">Documento</div>
-        <div class="mono fw-semibold">{{ doc_masked }}</div>
+    {% else %}
+      <div class="card p-4">
+        <div class="fw-semibold mb-2">Ainda não há oportunidades liberadas.</div>
+        <div class="muted">Complete o diagnóstico, gere o motor e revise as ofertas que serão mostradas ao cliente.</div>
       </div>
-      <div class="col-md-6">
-        <div class="muted small">E-mail</div>
-        <div class="fw-semibold">{{ invited_email }}</div>
-      </div>
-    </div>
-
-    {% if error %}
-      <div class="alert alert-danger mt-3 mb-0">{{ error }}</div>
     {% endif %}
-
-    <hr>
-
-    <div class="row g-2">
-      <div class="col-md-8">
-        <label class="form-label">Seu nome (para registro)</label>
-        <input class="form-control" id="signed_by_name" placeholder="Nome completo" required>
-      </div>
-      <div class="col-md-4">
-        <label class="form-label">4 últimos dígitos</label>
-        <input class="form-control mono" id="doc_last4" maxlength="4" inputmode="numeric" placeholder="XXXX">
-      </div>
-      <div class="col-12">
-        <div class="form-check mt-1">
-          <input class="form-check-input" type="checkbox" value="1" id="chk">
-          <label class="form-check-label" for="chk">
-            Confirmo que sou o titular e autorizo a conexão para análise de melhores ofertas de crédito.
-          </label>
-        </div>
-      </div>
-      <div class="col-12 d-flex gap-2">
-        <button class="btn btn-primary" id="btnConnect" type="button">Conectar instituição</button>
-        <span class="muted small align-self-center" id="status"></span>
-      </div>
-    </div>
-  </div>
-
-  <div class="mt-3 muted small">
-    Após concluir a conexão, você pode fechar esta página.
-  </div>
-</div>
-
-<script src="{{ pluggy_js_url }}"></script>
-<script>
-(function(){
-  const token = {{ token|tojson }};
-  const statusEl = document.getElementById("status");
-  const btn = document.getElementById("btnConnect");
-
-  function setStatus(msg){ statusEl.textContent = msg || ""; }
-
-  async function postJSON(url, payload){
-    const r = await fetch(url, {
-      method: "POST",
-      headers: {"Content-Type":"application/json", "Accept":"application/json"},
-      body: JSON.stringify(payload || {})
-    });
-    const t = await r.text();
-    let j = {};
-    try { j = JSON.parse(t); } catch(e) {}
-    if(!r.ok){
-      const err = (j && (j.detail || j.error)) ? (j.detail || j.error) : t;
-      throw new Error(err || ("HTTP "+r.status));
-    }
-    return j;
-  }
-
-  btn.addEventListener("click", async function(){
-    try{
-      const name = (document.getElementById("signed_by_name").value || "").trim();
-      const last4 = (document.getElementById("doc_last4").value || "").trim();
-      const chk = document.getElementById("chk").checked;
-
-      if(!name){ alert("Informe seu nome."); return; }
-      if(!chk){ alert("Marque a autorização para continuar."); return; }
-
-      btn.disabled = true;
-      setStatus("Gerando token de conexão...");
-
-      const tk = await postJSON("/api/pluggy/connect_token", { token, signed_by_name: name, doc_last4: last4 });
-      const accessToken = tk.accessToken;
-
-      setStatus("Abrindo Pluggy Connect...");
-
-      const pc = new PluggyConnect({
-        connectToken: accessToken,
-        includeSandbox: !!tk.includeSandbox,
-        onSuccess: async (itemData) => {
-          try{
-            setStatus("Salvando conexão e importando contratos...");
-            await postJSON("/api/pluggy/item_success", { token, itemData });
-            setStatus("Concluído! Você pode fechar esta página.");
-          }catch(e){
-            console.error(e);
-            setStatus("Conectou, mas falhou ao registrar no sistema: " + (e.message || e));
-          }
-        },
-        onError: (error) => {
-          console.error(error);
-          setStatus("Erro no Pluggy Connect: " + (error && (error.message || JSON.stringify(error))) );
-          btn.disabled = false;
-        }
-      });
-
-      pc.init();
-    }catch(e){
-      console.error(e);
-      alert(e.message || String(e));
-      btn.disabled = false;
-      setStatus("");
-    }
-  });
-})();
-</script>
-{% endblock %}
-""")
-
-
-# ----------------------------
-# Routes (Open Finance)
-# ----------------------------
-
-def _mask_doc(doc_digits: str) -> str:
-    d = _digits(doc_digits)
-    if len(d) == 11:
-        return f"{d[0:3]}.{d[3:6]}.{d[6:9]}-{d[9:11]}"
-    if len(d) == 14:
-        return f"{d[0:2]}.{d[2:5]}.{d[5:8]}/{d[8:12]}-{d[12:14]}"
-    return d
-
-
-def _openfinance_require_client(request: Request, session: Session, ctx: TenantContext) -> Optional[Client]:
-    active_client_id = get_active_client_id(request, session, ctx)
-    if not active_client_id and getattr(ctx.membership, "client_id", None):
-        active_client_id = int(ctx.membership.client_id)
-    if not active_client_id:
-        return None
-    return get_client_or_none(session, ctx.company.id, int(active_client_id))
-
-
-def ensure_feature_access_tables() -> None:
-    try:
-        SQLModel.metadata.create_all(
-            engine,
-            tables=[MembershipFeatureAccess.__table__, ClientFeatureAccess.__table__],
-            checkfirst=True,
-        )
-    except Exception:
-        pass
-
-
-def _parse_json_list(raw: str) -> list[str]:
-    raw = (raw or "").strip()
-    if not raw:
-        return []
-    try:
-        v = json.loads(raw)
-        if isinstance(v, list):
-            return [str(x) for x in v]
-    except Exception:
-        pass
-    return []
-
-
-def get_membership_allowed_features(session: Session, *, company_id: int, membership: Membership) -> set[str]:
-    base = set(ROLE_DEFAULT_FEATURES.get(membership.role, set()))
-    if not membership.id:
-        return base
-
-    try:
-        row = session.exec(
-            select(MembershipFeatureAccess).where(
-                MembershipFeatureAccess.company_id == company_id,
-                MembershipFeatureAccess.membership_id == membership.id,
-            )
-        ).first()
-    except Exception:
-        try:
-            ensure_feature_access_tables()
-        except Exception:
-            pass
-        return base
-
-    if row:
-        lst = _parse_json_list(row.features_json)
-        if lst:
-            return set(lst)
-    return base
-
-
-def get_client_allowed_features(session: Session, *, company_id: int, client_id: int) -> Optional[set[str]]:
-    try:
-        row = session.exec(
-            select(ClientFeatureAccess).where(
-                ClientFeatureAccess.company_id == company_id,
-                ClientFeatureAccess.client_id == client_id,
-            )
-        ).first()
-    except Exception:
-        try:
-            ensure_feature_access_tables()
-        except Exception:
-            pass
-        return None
-
-    if not row:
-        return None
-    lst = _parse_json_list(row.features_json)
-    return set(lst) if lst else None
-
-
-def effective_allowed_features(session: Session, *, ctx: TenantContext, current_client: Optional[Client]) -> set[str]:
-    try:
-        allowed = get_membership_allowed_features(session, company_id=ctx.company.id, membership=ctx.membership)
-
-        if ctx.membership.role == "cliente" and current_client and current_client.id:
-            client_allowed = get_client_allowed_features(session, company_id=ctx.company.id,
-                                                         client_id=current_client.id)
-            if client_allowed is not None:
-                allowed = allowed.intersection(client_allowed)
-
-        return {k for k in allowed if k in FEATURE_KEYS}
-    except Exception:
-        base = set(ROLE_DEFAULT_FEATURES.get(ctx.membership.role, set()))
-        return {k for k in base if k in FEATURE_KEYS}
-
-
-def resolve_feature_key(path: str) -> Optional[str]:
-    if path.startswith("/static/") or path.startswith("/login") or path.startswith("/logout"):
-        return None
-    if path.startswith("/api/"):
-        return None
-    if path in {"/", "/health"}:
-        return None
-
-    mapping = [
-        ("/admin/ui", "ui"),
-        ("/admin/financeiro", "financeiro_escritorio"),
-        ("/admin/gestao", "gestao"),
-        ("/admin/members", "gestao"),
-        ("/admin/clients", "gestao"),
-        ("/negocios", "crm"),
-        ("/credito", "credito"),
-        ("/empresa", "empresa"),
-        ("/perfil", "perfil"),
-        ("/financeiro", "financeiro"),
-        ("/documentos", "documentos"),
-        ("/consultoria", "consultoria"),
-        ("/reunioes", "reunioes"),
-        ("/tarefas", "tarefas"),
-        ("/simulador", "simulador"),
-        ("/propostas", "propostas"),
-        ("/pendencias", "pendencias"),
-        ("/agenda", "agenda"),
-        ("/educacao", "educacao"),
-    ]
-    for prefix, key in mapping:
-        if path == prefix or path.startswith(prefix + "/"):
-            return key
-    return None
-
-
-def _is_staff(role: str) -> bool:
-    return role in {"admin", "equipe"}
-
-
-def _safe_int(value: Any) -> Optional[int]:
-    try:
-        return int(value)
-    except Exception:
-        return None
-
-
-def _get_selected_client_for_staff(request: Request, session: Session, company_id: int) -> Optional[int]:
-    cid = _safe_int(request.session.get("selected_client_id"))
-    if cid:
-        c = session.get(Client, cid)
-        if c and c.company_id == company_id and entity_is_allowed(session, entity_type="client", entity_id=c.id):
-            return cid
-
-    clients = session.exec(
-        select(Client).where(Client.company_id == company_id).order_by(Client.created_at)
-    ).all()
-    first_client = next(
-        (c for c in clients if c.id and entity_is_allowed(session, entity_type="client", entity_id=c.id)), None)
-    if not first_client:
-        return None
-
-    request.session["selected_client_id"] = first_client.id
-    return first_client.id
-
-
-def get_active_client_id(request: Request, session: Session, ctx: TenantContext) -> Optional[int]:
-    if ctx.membership.role == "cliente":
-        return ctx.membership.client_id
-    return _get_selected_client_for_staff(request, session, ctx.company.id)
-
-
-def get_client_or_none(session: Session, company_id: int, client_id: Optional[int]) -> Optional[Client]:
-    if not client_id:
-        return None
-    c = session.get(Client, int(client_id))
-    if not c or c.company_id != company_id:
-        return None
-    return c
-
-
-def ensure_can_access_client(ctx: TenantContext, client_id: int) -> bool:
-    if _is_staff(ctx.membership.role):
-        return True
-    return ctx.membership.client_id == client_id
-
-
-# ----------------------------
-# Uploads
-# ----------------------------
-
-_FILENAME_RE = re.compile(r"[^A-Za-z0-9._-]+")
-
-
-def safe_filename(name: str) -> str:
-    name = name.strip().replace(" ", "_")
-    name = _FILENAME_RE.sub("_", name)
-    return name[:180] if len(name) > 180 else name
-
-
-async def save_upload(upload: UploadFile) -> tuple[str, str, int]:
-    original = upload.filename or "arquivo"
-    stored = f"{uuid.uuid4().hex}_{safe_filename(original)}"
-    path = UPLOAD_DIR / stored
-
-    size = 0
-    with path.open("wb") as f:
-        while True:
-            chunk = await upload.read(1024 * 1024)
-            if not chunk:
-                break
-            size += len(chunk)
-            if size > _MAX_UPLOAD_BYTES:
-                try:
-                    f.close()
-                finally:
-                    if path.exists():
-                        path.unlink(missing_ok=True)
-                raise ValueError("Arquivo excede o limite de tamanho.")
-            f.write(chunk)
-
-    mime = upload.content_type or "application/octet-stream"
-    return stored, mime, size
-
-
-# ----------------------------
-# Templates
-# ----------------------------
-
-
-# =========================
-# Meetings (Notion AI Meeting Notes sync)
-# =========================
-
-class Meeting(SQLModel, table=True):
-    """Meeting record linked to a client; can be synced from a Notion AI Meeting Notes page."""
-    id: Optional[int] = Field(default=None, primary_key=True)
-
-    company_id: int = Field(index=True, foreign_key="company.id")
-    client_id: int = Field(index=True, foreign_key="client.id")
-    created_by_user_id: int = Field(index=True, foreign_key="user.id")
-
-    title: str = ""
-    meeting_date: str = ""  # DD/MM/AAAA (simple)
-    source: str = Field(default="notion", index=True)
-
-    notion_page_id: str = Field(default="", index=True)  # normalized UUID (with hyphens)
-    notion_url: str = ""
-    notion_meeting_block_id: str = Field(default="", index=True)
-    notion_status: str = Field(default="", index=True)
-
-    summary_text: str = ""
-    notes_text: str = ""
-    transcript_text: str = ""
-    action_items_text: str = ""
-
-    raw_json: str = Field(default="{}")
-    last_synced_at: Optional[datetime] = None
-
-    created_at: datetime = Field(default_factory=utcnow)
-    updated_at: datetime = Field(default_factory=utcnow)
-
-
-class MeetingMessage(SQLModel, table=True):
-    """Thread messages about a meeting (internal + client)."""
-    id: Optional[int] = Field(default=None, primary_key=True)
-
-    meeting_id: int = Field(index=True, foreign_key="meeting.id")
-    author_user_id: int = Field(index=True, foreign_key="user.id")
-
-    message: str
-    created_at: datetime = Field(default_factory=utcnow)
-
-
-_MEETING_NOTION_STATUSES = {
-    "transcription_not_started",
-    "transcription_paused",
-    "transcription_in_progress",
-    "summary_in_progress",
-    "notes_ready",
-}
-
-
-def _normalize_uuid(raw: str) -> str:
-    s = (raw or "").strip()
-    # Extract 32 hex chars if URL-like
-    m = re.search(r"([0-9a-fA-F]{32})", s)
-    if m:
-        s = m.group(1)
-    s = s.replace("-", "").lower()
-    if len(s) != 32 or not re.fullmatch(r"[0-9a-f]{32}", s):
-        return ""
-    return f"{s[0:8]}-{s[8:12]}-{s[12:16]}-{s[16:20]}-{s[20:32]}"
-
-
-def _notion_headers() -> dict[str, str]:
-    if not NOTION_TOKEN:
-        raise RuntimeError("NOTION_TOKEN não está configurado.")
-    return {
-        "Authorization": f"Bearer {NOTION_TOKEN}",
-        "Notion-Version": NOTION_VERSION,
-    }
-
-
-async def _notion_get_json(path: str, *, params: Optional[dict[str, Any]] = None) -> dict[str, Any]:
-    url = f"{NOTION_API_BASE}{path}"
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        r = await client.get(url, headers=_notion_headers(), params=params or {})
-        r.raise_for_status()
-        data = r.json()
-        return data if isinstance(data, dict) else {}
-
-
-async def _notion_list_block_children_all(block_id: str) -> list[dict[str, Any]]:
-    results: list[dict[str, Any]] = []
-    cursor: Optional[str] = None
-    while True:
-        params = {"page_size": 100}
-        if cursor:
-            params["start_cursor"] = cursor
-        data = await _notion_get_json(f"/blocks/{block_id}/children", params=params)
-        chunk = data.get("results") or []
-        if isinstance(chunk, list):
-            results.extend([x for x in chunk if isinstance(x, dict)])
-        if not data.get("has_more"):
-            break
-        cursor = data.get("next_cursor")
-        if not cursor:
-            break
-    return results
-
-
-def _rt_plain(rich_text: Any) -> str:
-    if not isinstance(rich_text, list):
-        return ""
-    parts: list[str] = []
-    for rt in rich_text:
-        if not isinstance(rt, dict):
-            continue
-        pt = rt.get("plain_text")
-        if isinstance(pt, str):
-            parts.append(pt)
-        else:
-            t = rt.get("text", {})
-            if isinstance(t, dict) and isinstance(t.get("content"), str):
-                parts.append(t["content"])
-    return "".join(parts).strip()
-
-
-async def _notion_blocks_to_lines(block_id: str, *, depth: int = 0, max_depth: int = 4) -> list[str]:
-    if depth > max_depth:
-        return []
-    blocks = await _notion_list_block_children_all(block_id)
-    out: list[str] = []
-    for b in blocks:
-        btype = b.get("type")
-        if not isinstance(btype, str):
-            continue
-        data = b.get(btype, {}) if isinstance(b.get(btype), dict) else {}
-
-        line = ""
-        if btype in {"paragraph", "quote", "callout"}:
-            line = _rt_plain(data.get("rich_text") or data.get("text"))
-            if btype == "quote" and line:
-                line = f"> {line}"
-            if btype == "callout" and line:
-                line = f"💬 {line}"
-        elif btype in {"heading_1", "heading_2", "heading_3"}:
-            h = _rt_plain(data.get("rich_text") or data.get("text"))
-            if h:
-                prefix = "#" if btype == "heading_1" else "##" if btype == "heading_2" else "###"
-                line = f"{prefix} {h}"
-        elif btype in {"bulleted_list_item", "numbered_list_item"}:
-            t = _rt_plain(data.get("rich_text") or data.get("text"))
-            if t:
-                bullet = "-" if btype == "bulleted_list_item" else "1."
-                line = f"{bullet} {t}"
-        elif btype == "to_do":
-            t = _rt_plain(data.get("rich_text") or data.get("text"))
-            checked = bool(data.get("checked"))
-            box = "☑" if checked else "☐"
-            if t:
-                line = f"{box} {t}"
-        elif btype == "toggle":
-            t = _rt_plain(data.get("rich_text") or data.get("text"))
-            if t:
-                line = f"▸ {t}"
-        elif btype == "code":
-            t = _rt_plain(data.get("rich_text") or data.get("text"))
-            lang = data.get("language") if isinstance(data.get("language"), str) else ""
-            if t:
-                line = f"```{lang}\n{t}\n```"
-        else:
-            # Fallback for other blocks that have rich_text
-            if isinstance(data, dict):
-                t = _rt_plain(data.get("rich_text") or data.get("text"))
-                if t:
-                    line = t
-
-        if line:
-            out.append(("  " * depth) + line)
-
-        if b.get("has_children") and isinstance(b.get("id"), str):
-            child_lines = await _notion_blocks_to_lines(b["id"], depth=depth + 1, max_depth=max_depth)
-            out.extend(child_lines)
-
-    return [x for x in out if isinstance(x, str) and x.strip()]
-
-
-def _extract_action_items_from_lines(lines: list[str]) -> str:
-    if not lines:
-        return ""
-    actions: list[str] = []
-    in_actions = False
-    for ln in lines:
-        low = ln.lower()
-        if low.startswith("#") and ("action" in low or "ação" in low or "acoes" in low or "ações" in low):
-            in_actions = True
-            continue
-        if low.startswith("#") and in_actions:
-            # next heading ends action section
-            in_actions = False
-        if in_actions:
-            if ln.strip().startswith(("-", "☐", "☑", "1.")):
-                actions.append(ln.strip())
-        else:
-            # also accept to-do items anywhere
-            if ln.strip().startswith(("☐", "☑")):
-                actions.append(ln.strip())
-    return "\n".join(actions).strip()
-
-
-async def _notion_find_meeting_notes_block(page_id: str) -> Optional[dict[str, Any]]:
-    # BFS up to a small depth: page children -> nested children
-    queue = [(page_id, 0)]
-    seen: set[str] = set()
-    while queue:
-        bid, depth = queue.pop(0)
-        if bid in seen:
-            continue
-        seen.add(bid)
-        blocks = await _notion_list_block_children_all(bid)
-        for b in blocks:
-            btype = b.get("type")
-            if btype in {"meeting_notes", "transcription"}:
-                return b
-        if depth < 3:
-            for b in blocks:
-                if b.get("has_children") and isinstance(b.get("id"), str):
-                    queue.append((b["id"], depth + 1))
-    return None
-
-
-async def notion_sync_meeting_from_page(page_id_or_url: str) -> dict[str, Any]:
-    page_id = _normalize_uuid(page_id_or_url)
-    if not page_id:
-        raise ValueError("Não foi possível extrair o ID da página do Notion.")
-    meeting_block = await _notion_find_meeting_notes_block(page_id)
-    if not meeting_block:
-        raise ValueError("Não encontrei um bloco de AI Meeting Notes nessa página (meeting_notes/transcription).")
-
-    block_id = meeting_block.get("id", "")
-    prop = meeting_block.get("meeting_notes") or meeting_block.get("transcription") or {}
-    title = _rt_plain(prop.get("title")) if isinstance(prop, dict) else ""
-    status = prop.get("status") if isinstance(prop, dict) and isinstance(prop.get("status"), str) else ""
-    children = prop.get("children") if isinstance(prop, dict) else {}
-    if not isinstance(children, dict):
-        children = {}
-
-    summary_block_id = children.get("summary_block_id") if isinstance(children.get("summary_block_id"), str) else ""
-    notes_block_id = children.get("notes_block_id") if isinstance(children.get("notes_block_id"), str) else ""
-    transcript_block_id = children.get("transcript_block_id") if isinstance(children.get("transcript_block_id"),
-                                                                            str) else ""
-
-    summary_lines = await _notion_blocks_to_lines(summary_block_id) if summary_block_id else []
-    notes_lines = await _notion_blocks_to_lines(notes_block_id) if notes_block_id else []
-    transcript_lines = await _notion_blocks_to_lines(transcript_block_id) if transcript_block_id else []
-
-    action_items = _extract_action_items_from_lines(summary_lines + notes_lines)
-
-    return {
-        "page_id": page_id,
-        "meeting_block_id": block_id,
-        "title": title,
-        "status": status,
-        "summary_text": "\n".join(summary_lines).strip(),
-        "notes_text": "\n".join(notes_lines).strip(),
-        "transcript_text": "\n".join(transcript_lines).strip(),
-        "action_items_text": action_items,
-        "raw": meeting_block,
-    }
-
-
-TEMPLATES.setdefault("consulta_consent_accept.html", r"""{% extends "base.html" %}
-{% block content %}
-<div class="container py-4" style="max-width: 900px;">
-  <div class="card p-4">
-    <div class="d-flex align-items-center justify-content-between">
-      <div>
-        <div class="fw-semibold">Aceite para consulta ao SCR (Bacen)</div>
-        <div class="muted small">{{ company.name }}</div>
-      </div>
-      <span class="badge bg-secondary">Público</span>
-    </div>
-
-    <hr class="my-3"/>
-
-    <div class="mb-2">
-      <div class="muted small">Documento (CPF/CNPJ) consultado:</div>
-      <div class="fw-semibold mono">{{ doc_masked }}</div>
-    </div>
-
-    <div class="border rounded p-3 bg-light" style="max-height: 260px; overflow:auto;">
-      {{ terms_html|safe }}
-    </div>
-
-    {% if error %}
-      <div class="alert alert-danger mt-3 mb-0">{{ error }}</div>
-    {% endif %}
-
-    <form method="post" action="/consultas/consent/aceite/{{ token }}" class="mt-3">
-      <div class="row g-2">
-        <div class="col-md-8">
-          <label class="form-label">Seu nome</label>
-          <input class="form-control" name="signed_by_name" value="{{ form.name }}" required>
-        </div>
-        <div class="col-md-4">
-          <label class="form-label">4 últimos dígitos</label>
-          <input class="form-control" name="doc_last4" placeholder="XXXX" maxlength="4" inputmode="numeric">
-          <div class="form-text">Para confirmar que você é o titular do documento.</div>
-        </div>
-        <div class="col-12">
-          <div class="form-check mt-1">
-            <input class="form-check-input" type="checkbox" name="agree" id="agree" required>
-            <label class="form-check-label" for="agree">Li o termo e autorizo a consulta ao SCR.</label>
-          </div>
-          <div class="muted small mt-2">
-            Registraremos evidências do aceite (data/hora, IP e navegador) para auditoria.
-          </div>
-        </div>
-        <div class="col-12">
-          <button class="btn btn-primary" type="submit">Confirmar aceite</button>
-        </div>
-      </div>
-    </form>
-
-    <div class="muted small mt-3">Você pode fechar esta página após confirmar.</div>
-  </div>
+  {% endif %}
 </div>
 {% endblock %}
-""")
-
-TEMPLATES.update({"admin_ui.html": r"""{% extends "base.html" %}
-{% block content %}
-<div class="d-flex align-items-center justify-content-between">
-  <div>
-    <h4 class="mb-0">Configurações de UI</h4>
-    <div class="muted small">Banner do topo e feeds de notícias.</div>
-  </div>
-</div>
-
-<div class="row g-3 mt-2">
-
-  <div class="col-12">
-    <div class="card p-3">
-      <div class="fw-semibold mb-2">Banner (carrossel)</div>
-
-      <form method="post" action="/admin/ui/banner/add" enctype="multipart/form-data" class="row g-2">
-        <div class="col-md-3">
-          <label class="form-label small muted">Título</label>
-          <input class="form-control" name="title" placeholder="Ex.: Simule seu crédito">
-        </div>
-        <div class="col-md-3">
-          <label class="form-label small muted">Link interno</label>
-          <input class="form-control" name="link_path" placeholder="/simulador" value="/simulador">
-        </div>
-        <div class="col-md-3">
-          <label class="form-label small muted">Imagem (URL)</label>
-          <input class="form-control" name="image_url" placeholder="https://...">
-          <div class="form-text">Ou envie um arquivo.</div>
-        </div>
-        <div class="col-md-3">
-          <label class="form-label small muted">Upload</label>
-          <input class="form-control" type="file" name="image_file" accept="image/*">
-        </div>
-        <div class="col-md-2">
-          <label class="form-label small muted">Ordem</label>
-          <input class="form-control" name="sort_order" value="0">
-        </div>
-        <div class="col-md-2 d-flex align-items-end">
-          <div class="form-check">
-            <input class="form-check-input" type="checkbox" name="is_active" checked>
-            <label class="form-check-label small">Ativo</label>
-          </div>
-        </div>
-        <div class="col-md-8 d-flex align-items-end gap-2">
-          <button class="btn btn-primary" type="submit">Adicionar</button>
-          <a class="btn btn-outline-secondary" href="/">Voltar</a>
-        </div>
-      </form>
-
-      <hr class="my-3"/>
-
-      {% if slides %}
-        <div class="table-responsive">
-          <table class="table table-sm align-middle">
-            <thead>
-              <tr class="muted small">
-                <th>#</th><th>Preview</th><th>Título</th><th>Link</th><th>Ordem</th><th>Status</th><th></th>
-              </tr>
-            </thead>
-            <tbody>
-              {% for s in slides %}
-              <tr>
-                <td class="mono">{{ s.id }}</td>
-                <td style="width:140px;">
-                  <img src="{{ s.image_url }}" style="height:44px; width:120px; object-fit:cover; border-radius:10px;" />
-                </td>
-                <td>{{ s.title }}</td>
-                <td class="mono">{{ s.link_path }}</td>
-                <td>{{ s.sort_order }}</td>
-                <td>
-                  {% if s.is_active %}
-                    <span class="badge text-bg-success">Ativo</span>
-                  {% else %}
-                    <span class="badge text-bg-secondary">Inativo</span>
-                  {% endif %}
-                </td>
-                <td class="text-end">
-                  <form method="post" action="/admin/ui/banner/{{ s.id }}/toggle" style="display:inline;">
-                    <button class="btn btn-sm btn-outline-primary" type="submit">Alternar</button>
-                  </form>
-                  <form method="post" action="/admin/ui/banner/{{ s.id }}/delete" style="display:inline;" onsubmit="return confirm('Remover slide?');">
-                    <button class="btn btn-sm btn-outline-danger" type="submit">Excluir</button>
-                  </form>
-                </td>
-              </tr>
-              {% endfor %}
-            </tbody>
-          </table>
-        </div>
-      {% else %}
-        <div class="muted small">Nenhum slide cadastrado.</div>
-      {% endif %}
-    </div>
-  </div>
-
-  <div class="col-12">
-    <div class="card p-3">
-      <div class="fw-semibold mb-2">Feeds de notícias</div>
-
-      <form method="post" action="/admin/ui/feed/add" class="row g-2">
-        <div class="col-md-3">
-          <label class="form-label small muted">Nome</label>
-          <input class="form-control" name="name" placeholder="Ex.: Money Times" required>
-        </div>
-        <div class="col-md-7">
-          <label class="form-label small muted">URL do RSS/Atom</label>
-          <input class="form-control" name="url" placeholder="https://..." required>
-        </div>
-        <div class="col-md-2">
-          <label class="form-label small muted">Ordem</label>
-          <input class="form-control" name="sort_order" value="0">
-        </div>
-        <div class="col-md-2 d-flex align-items-end">
-          <div class="form-check">
-            <input class="form-check-input" type="checkbox" name="is_active" checked>
-            <label class="form-check-label small">Ativo</label>
-          </div>
-        </div>
-        <div class="col-md-10 d-flex align-items-end">
-          <button class="btn btn-primary" type="submit">Adicionar feed</button>
-        </div>
-      </form>
-
-      <hr class="my-3"/>
-
-      {% if feeds %}
-        <div class="table-responsive">
-          <table class="table table-sm align-middle">
-            <thead>
-              <tr class="muted small">
-                <th>#</th><th>Nome</th><th>URL</th><th>Ordem</th><th>Status</th><th></th>
-              </tr>
-            </thead>
-            <tbody>
-              {% for f in feeds %}
-              <tr>
-                <td class="mono">{{ f.id }}</td>
-                <td>{{ f.name }}</td>
-                <td class="mono">{{ f.url }}</td>
-                <td>{{ f.sort_order }}</td>
-                <td>
-                  {% if f.is_active %}
-                    <span class="badge text-bg-success">Ativo</span>
-                  {% else %}
-                    <span class="badge text-bg-secondary">Inativo</span>
-                  {% endif %}
-                </td>
-                <td class="text-end">
-                  <form method="post" action="/admin/ui/feed/{{ f.id }}/toggle" style="display:inline;">
-                    <button class="btn btn-sm btn-outline-primary" type="submit">Alternar</button>
-                  </form>
-                  <form method="post" action="/admin/ui/feed/{{ f.id }}/delete" style="display:inline;" onsubmit="return confirm('Remover feed?');">
-                    <button class="btn btn-sm btn-outline-danger" type="submit">Excluir</button>
-                  </form>
-                </td>
-              </tr>
-              {% endfor %}
-            </tbody>
-          </table>
-        </div>
-      {% else %}
-        <div class="muted small">Nenhum feed cadastrado.</div>
-      {% endif %}
-      <div class="muted small mt-2">
-        Dica: use feeds RSS/Atom oficiais sempre que possível.
-      </div>
-    </div>
-  </div>
-
-</div>
-{% endblock %}""", })
-
-
-def render(
-        template_name: str,
-        *,
-        request: Request,
-        context: Optional[dict[str, Any]] = None,
-        status_code: int = 200,
-) -> HTMLResponse:
-    ctx = context or {}
-    ctx["request"] = request
-    ctx.setdefault("title", "App Escritório")
-    ctx.setdefault("flash", request.session.pop("flash", None) if hasattr(request, "session") else None)
-    ctx.setdefault("allow_company_signup", ALLOW_COMPANY_SIGNUP)
-    ctx.setdefault("service_catalog", SERVICE_CATALOG)
-    ctx.setdefault("bookings_url", BOOKINGS_URL)
-
-    # Inject tenant context defaults for templates that expect them.
-    try:
-        with Session(engine) as _db:
-            _t = get_tenant_context(request, _db)
-            if _t:
-                ctx.setdefault("current_user", _t.user)
-                ctx.setdefault("current_company", _t.company)
-                active_client_id = get_active_client_id(request, _db, _t)
-                ctx.setdefault("current_client", get_client_or_none(_db, _t.company.id, active_client_id))
-                ctx.setdefault("role", _t.membership.role)
-    except Exception:
-        pass
-    return HTMLResponse(templates_env.get_template(template_name).render(**ctx), status_code=status_code)
-
-
-# ----------------------------
-# App
-# ----------------------------
-
-app = FastAPI()
-
-
-def _pluggy_schedule_sync_loans(*, company_id: int, subject_doc: str, item_id: str) -> None:
-    async def _runner() -> None:
-        with Session(engine) as s:
-            await pluggy_sync_loans(session=s, company_id=company_id, subject_doc=subject_doc, item_id=item_id)
-
-    asyncio.create_task(_runner())
-
-
-@app.get("/__routes", include_in_schema=False)
-async def __routes() -> list[str]:
-    return sorted({getattr(r, "path", "") for r in app.router.routes})
-
-
-@app.get("/__build", include_in_schema=False)
-async def __build() -> dict:
-    return {"build": "stable_debug_v2"}
-
-
-https_only = os.getenv("SESSION_HTTPS_ONLY", "0") == "1"
-# NOTE: SessionMiddleware must wrap feature_access_middleware, installed later.
-
-STATIC_DIR = Path(__file__).with_name("static").resolve()
-STATIC_DIR.mkdir(parents=True, exist_ok=True)
-
-app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
-
-
-@app.middleware("http")
-async def feature_access_middleware(request: Request, call_next: Callable[..., Any]) -> Response:
-    path = request.url.path
-    if (
-            path.startswith("/__")
-            or path.startswith("/health")
-            or path.startswith("/healthz")
-            or path.startswith("/static")
-            or path.startswith("/api/ui/")
-            or path.startswith("/stripe/webhook")
-    ):
-        return await call_next(request)
-
-    key = resolve_feature_key(request.url.path)
-    if key is None:
-        return await call_next(request)
-
-    if session_user_id(request) is None:
-        return await call_next(request)
-
-    session = Session(engine)
-    try:
-        ctx = get_tenant_context(request, session)
-        if not ctx:
-            return await call_next(request)
-
-        active_client_id = get_active_client_id(request, session, ctx)
-        current_client = get_client_or_none(session, ctx.company.id, active_client_id)
-
-        try:
-            allowed = effective_allowed_features(session, ctx=ctx, current_client=current_client)
-        except Exception:
-            allowed = set(ROLE_DEFAULT_FEATURES.get(ctx.membership.role, set()))
-
-        roles = FEATURE_VISIBLE_ROLES.get(key)
-        if roles and ctx.membership.role not in roles:
-            return render(
-                "error.html",
-                request=request,
-                context={
-                    "current_user": ctx.user,
-                    "current_company": ctx.company,
-                    "role": ctx.membership.role,
-                    "current_client": current_client,
-                    "message": "Você não tem permissão para acessar esta área.",
-                },
-                status_code=403,
-            )
-
-        if key not in allowed:
-            return render(
-                "error.html",
-                request=request,
-                context={
-                    "current_user": ctx.user,
-                    "current_company": ctx.company,
-                    "role": ctx.membership.role,
-                    "current_client": current_client,
-                    "message": "Acesso não habilitado para este usuário/cliente.",
-                },
-                status_code=403,
-            )
-
-        return await call_next(request)
-    finally:
-        session.close()
-
-
-# Install SessionMiddleware last so request.session is available inside BaseHTTPMiddleware.
-app.add_middleware(SessionMiddleware, secret_key=APP_SECRET_KEY, https_only=https_only, same_site="lax")
+"""
 
 
 @app.on_event("startup")
@@ -13339,6 +11673,7 @@ async def dashboard(request: Request, session: Session = Depends(get_session)) -
     standalone = [dict(FEATURE_KEYS[fk], key=fk) for fk in FEATURE_STANDALONE if _is_visible(fk)]
 
     dashboard_scores = None
+    dashboard_next_steps: list[dict[str, str]] = []
     approved_offers_count = 0
     pending_items_count = 0
     if current_client and ensure_can_access_client(ctx, current_client.id):
@@ -13376,6 +11711,7 @@ async def dashboard(request: Request, session: Session = Depends(get_session)) -
             ).one() or 0
         except Exception:
             pending_items_count = 0
+        dashboard_next_steps = list(dashboard_scores.get("next_steps") or []) if dashboard_scores else []
 
     return render(
         "dashboard.html",
@@ -13388,6 +11724,7 @@ async def dashboard(request: Request, session: Session = Depends(get_session)) -
             "tabs": tabs,
             "standalone": standalone,
             "dashboard_scores": dashboard_scores,
+            "dashboard_next_steps": dashboard_next_steps,
             "approved_offers_count": approved_offers_count,
             "pending_items_count": pending_items_count,
             "standalone_title": "Atendimento e Conteúdo",
@@ -13643,6 +11980,8 @@ async def ofertas_page(request: Request, session: Session = Depends(get_session)
         return RedirectResponse("/login", status_code=303)
     current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
     matches: list[dict[str, Any]] = []
+    strategy: Optional[dict[str, Any]] = None
+    financial_analysis = None
     if current_client and ensure_can_access_client(ctx, current_client.id):
         sync_offer_reviews(session, company_id=ctx.company.id, client_id=current_client.id)
         matches = list_offer_matches_for_role(
@@ -13652,9 +11991,30 @@ async def ofertas_page(request: Request, session: Session = Depends(get_session)
             role=ctx.membership.role,
             only_client_visible=(ctx.membership.role == "cliente"),
         )
-    return render("ofertas.html", request=request,
-                  context={"current_user": ctx.user, "current_company": ctx.company, "role": ctx.membership.role,
-                           "current_client": current_client, "matches": matches})
+        business_profile = get_or_create_business_profile(session, company_id=ctx.company.id,
+                                                          client_id=current_client.id)
+        latest_snapshot = session.exec(
+            select(ClientSnapshot)
+            .where(ClientSnapshot.company_id == ctx.company.id, ClientSnapshot.client_id == current_client.id)
+            .order_by(ClientSnapshot.created_at.desc())
+            .limit(1)
+        ).first()
+        financial_analysis = build_client_dashboard_analysis(
+            client=current_client,
+            profile=business_profile,
+            latest_snapshot=latest_snapshot,
+        )
+        strategy = _offer_strategy_from_score(float(financial_analysis.get("general_health", {}).get("score") or 0.0))
+        matches = _filter_matches_for_strategy(matches, strategy, ctx.membership.role)
+    return render("ofertas.html", request=request, context={
+        "current_user": ctx.user,
+        "current_company": ctx.company,
+        "role": ctx.membership.role,
+        "current_client": current_client,
+        "matches": matches,
+        "offer_strategy": strategy,
+        "financial_analysis": financial_analysis,
+    })
 
 
 # ----------------------------
@@ -14749,6 +13109,7 @@ async def perfil_page(request: Request, session: Session = Depends(get_session))
     business_profile = None
     offer_matches: list[dict[str, Any]] = []
     financial_analysis = None
+    profile_next_steps: list[dict[str, str]] = []
     if current_client and ensure_can_access_client(ctx, current_client.id):
         business_profile = get_or_create_business_profile(session, company_id=ctx.company.id,
                                                           client_id=current_client.id)
@@ -14764,6 +13125,7 @@ async def perfil_page(request: Request, session: Session = Depends(get_session))
             role=ctx.membership.role,
             limit=8,
         )
+        profile_next_steps = list(financial_analysis.get("next_steps") or []) if financial_analysis else []
 
     return render(
         "perfil.html",
@@ -14780,6 +13142,7 @@ async def perfil_page(request: Request, session: Session = Depends(get_session))
             "offer_matches": offer_matches,
             "business_profile_interests": _json_list(business_profile.interests_json) if business_profile else [],
             "financial_analysis": financial_analysis,
+            "profile_next_steps": profile_next_steps,
         },
     )
 
@@ -28867,6 +27230,203 @@ def _safe_ratio(num: float, den: float) -> Optional[float]:
     return round(num / den, 4)
 
 
+def _format_brl_display(value: float) -> str:
+    return "R$ " + "{:,.2f}".format(float(value or 0.0)).replace(",", "X").replace(".", ",").replace("X", ".")
+
+
+def _health_band(value: float) -> dict[str, Any]:
+    score = max(0.0, min(100.0, float(value or 0.0)))
+    if score >= 70:
+        return {
+            "label": "Saudável",
+            "short_label": "Saudável",
+            "message": "Sua empresa está saudável e tende a acessar crédito com mais segurança.",
+            "color": "#198754",
+            "css_class": "text-success",
+            "bg_class": "bg-success-subtle",
+            "border_class": "border-success-subtle",
+        }
+    if score >= 40:
+        return {
+            "label": "Pontos de Atenção",
+            "short_label": "Atenção",
+            "message": "Sua empresa tem pontos de atenção. Há espaço para crédito, mas a estrutura precisa de ajustes.",
+            "color": "#ffc107",
+            "css_class": "text-warning",
+            "bg_class": "bg-warning-subtle",
+            "border_class": "border-warning-subtle",
+        }
+    return {
+        "label": "Em Risco",
+        "short_label": "Em risco",
+        "message": "Sua empresa está em risco e precisa de reestruturação antes de buscar crédito tradicional.",
+        "color": "#dc3545",
+        "css_class": "text-danger",
+        "bg_class": "bg-danger-subtle",
+        "border_class": "border-danger-subtle",
+    }
+
+
+def _score_insight(label: str, value: float, *, current_ratio: Optional[float], working_capital: float,
+                   debt_ratio: float, collateral_brl: float, treasury_balance: float) -> str:
+    score = float(value or 0.0)
+    if label == "Score Bancário":
+        if score >= 75:
+            if collateral_brl > 0:
+                return "Você tem bom potencial de crédito e já possui garantias para operações maiores."
+            return "Você tem bom potencial de crédito, mas ainda pode melhorar garantias para linhas maiores."
+        if score >= 50:
+            return "Você pode acessar crédito, mas liquidez, garantias ou endividamento ainda limitam melhores condições."
+        return "Seu perfil bancário ainda está fraco para crédito tradicional. O foco deve ser reequilibrar a estrutura."
+    if label == "Score Financeiro":
+        if treasury_balance < 0 or working_capital < 0:
+            return "Seu caixa exige atenção: há pressão de capital de giro e necessidade de reforço operacional."
+        if debt_ratio > 2.0:
+            return "A dívida está pesada para o faturamento atual e reduz a margem para novas operações."
+        return "Seu fluxo financeiro está relativamente equilibrado para o estágio atual da empresa."
+    if label == "Score de Estrutura":
+        if score >= 70:
+            return "A empresa demonstra boa organização de processos, controles e governança."
+        if score >= 40:
+            return "Há estrutura mínima, mas orçamento, governança e rotinas de gestão ainda podem evoluir."
+        return "Os controles e processos ainda estão frágeis. Isso reduz previsibilidade e confiança no diagnóstico."
+    if score >= 70:
+        return "A saúde geral está favorável para avançar com oportunidades e conversões."
+    if score >= 40:
+        return "A saúde geral permite avançar, mas com recomendações de ajuste em paralelo."
+    return "A saúde geral pede reestruturação e priorização de estabilidade antes da tomada de crédito."
+
+
+def _analysis_next_steps(score_total: float) -> list[dict[str, str]]:
+    if score_total >= 70:
+        return [
+            {"label": "Explorar ofertas de crédito", "href": "/ofertas", "variant": "primary"},
+            {"label": "Simular linhas", "href": "/simulador", "variant": "outline-primary"},
+            {"label": "Aprender com cursos", "href": "/educacao", "variant": "outline-secondary"},
+        ]
+    if score_total >= 40:
+        return [
+            {"label": "Explorar ofertas", "href": "/ofertas", "variant": "primary"},
+            {"label": "Falar com um especialista", "href": "/consultoria", "variant": "outline-primary"},
+            {"label": "Aprender com cursos", "href": "/educacao", "variant": "outline-secondary"},
+        ]
+    return [
+        {"label": "Falar com um especialista", "href": "/consultoria", "variant": "primary"},
+        {"label": "Organizar o diagnóstico", "href": "/perfil/avaliacao/nova", "variant": "outline-primary"},
+        {"label": "Aprender com cursos", "href": "/educacao", "variant": "outline-secondary"},
+    ]
+
+
+def _build_critical_indicators(*, working_capital: float, current_ratio: Optional[float], debt_ratio: float,
+                               treasury_balance: float, delinquency_brl: float) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+
+    def add_item(label: str, display: str, severity: str, explanation: str) -> None:
+        css = "text-danger" if severity == "critico" else "text-warning" if severity == "atencao" else "text-success"
+        badge = "CRÍTICO" if severity == "critico" else "ATENÇÃO" if severity == "atencao" else "OK"
+        rows.append(
+            {
+                "label": label,
+                "display": display,
+                "severity": severity,
+                "css_class": css,
+                "badge": badge,
+                "explanation": explanation,
+            }
+        )
+
+    if working_capital < 0:
+        add_item(
+            "Capital de giro líquido",
+            _format_brl_display(working_capital),
+            "critico",
+            "Sua empresa está financiando a operação com pressão de caixa e passivos de curto prazo.",
+        )
+    elif working_capital < max(abs(treasury_balance), 1.0):
+        add_item(
+            "Capital de giro líquido",
+            _format_brl_display(working_capital),
+            "atencao",
+            "O capital de giro ainda é apertado para sustentar a operação com conforto.",
+        )
+    else:
+        add_item(
+            "Capital de giro líquido",
+            _format_brl_display(working_capital),
+            "ok",
+            "O capital de giro está em nível mais saudável para o dia a dia operacional.",
+        )
+
+    ratio = float(current_ratio or 0.0)
+    if current_ratio is None or ratio < 0.8:
+        add_item(
+            "Liquidez corrente",
+            f"{ratio:.2f}",
+            "critico",
+            "Você tem menos ativo circulante do que o necessário para cobrir as dívidas de curto prazo.",
+        )
+    elif ratio < 1.2:
+        add_item(
+            "Liquidez corrente",
+            f"{ratio:.2f}",
+            "atencao",
+            "A capacidade de pagamento de curto prazo existe, mas ainda com folga limitada.",
+        )
+    else:
+        add_item(
+            "Liquidez corrente",
+            f"{ratio:.2f}",
+            "ok",
+            "A liquidez corrente está em patamar mais saudável para o curto prazo.",
+        )
+
+    if debt_ratio > 2.0:
+        add_item(
+            "Dívida / faturamento",
+            f"{debt_ratio:.2f}x",
+            "critico",
+            "O endividamento está pesado para a receita atual e reduz a margem para novas operações.",
+        )
+    elif debt_ratio > 1.0:
+        add_item(
+            "Dívida / faturamento",
+            f"{debt_ratio:.2f}x",
+            "atencao",
+            "A dívida está controlável, mas já pede atenção na alavancagem.",
+        )
+    else:
+        add_item(
+            "Dívida / faturamento",
+            f"{debt_ratio:.2f}x",
+            "ok",
+            "A alavancagem está mais compatível com o faturamento atual.",
+        )
+
+    if treasury_balance < 0:
+        add_item(
+            "Tesouraria",
+            _format_brl_display(treasury_balance),
+            "critico",
+            "Há descasamento entre necessidade operacional e recursos disponíveis em caixa.",
+        )
+    else:
+        add_item(
+            "Tesouraria",
+            _format_brl_display(treasury_balance),
+            "ok",
+            "A tesouraria está positiva e reduz o risco operacional de curtíssimo prazo.",
+        )
+
+    if delinquency_brl > 0:
+        add_item(
+            "Inadimplência",
+            _format_brl_display(delinquency_brl),
+            "critico",
+            "Existe inadimplência em aberto, o que pesa contra crédito e percepção de risco.",
+        )
+    return rows
+
+
 def build_client_dashboard_analysis(*, client: Client, profile: ClientBusinessProfile,
                                     latest_snapshot: Optional[ClientSnapshot]) -> dict[str, Any]:
     breakdown = _financial_breakdown(profile, client)
@@ -29006,6 +27566,15 @@ def build_client_dashboard_analysis(*, client: Client, profile: ClientBusinessPr
                 "tooltip": tooltip,
                 "band_label": band_label,
                 "css_class": css_class,
+                "insight": _score_insight(
+                    label,
+                    float(value),
+                    current_ratio=current_ratio,
+                    working_capital=working_capital,
+                    debt_ratio=debt_ratio,
+                    collateral_brl=float(getattr(profile, "collateral_brl", 0.0) or 0.0),
+                    treasury_balance=float(breakdown["treasury_balance"] or 0.0),
+                ),
             }
         )
 
@@ -29019,6 +27588,14 @@ def build_client_dashboard_analysis(*, client: Client, profile: ClientBusinessPr
         }
         for item in score_card
     ]
+    health = _health_band(score_total_calc)
+    critical_indicators = _build_critical_indicators(
+        working_capital=working_capital,
+        current_ratio=current_ratio,
+        debt_ratio=debt_ratio,
+        treasury_balance=float(breakdown["treasury_balance"] or 0.0),
+        delinquency_brl=float(getattr(profile, "delinquency_brl", 0.0) or 0.0),
+    )
     return {
         "revenue_monthly": revenue_monthly,
         "debt_total": debt_total,
@@ -29051,12 +27628,127 @@ def build_client_dashboard_analysis(*, client: Client, profile: ClientBusinessPr
         "net_debt": breakdown["net_debt"],
         "current_ratio": current_ratio,
         "debt_to_equity": debt_to_equity,
+        "debt_ratio": debt_ratio,
         "patrimonial_score": patrimonial_score,
         "score_card": score_card,
         "bars": bars,
         "compliance_score": compliance_score,
         "status_label": "Alta" if score_banking >= 75 else "Média" if score_banking >= 50 else "Baixa",
+        "general_health": {
+            "score": round(score_total_calc, 1),
+            "label": health["label"],
+            "short_label": health["short_label"],
+            "message": health["message"],
+            "color": health["color"],
+            "css_class": health["css_class"],
+            "bg_class": health["bg_class"],
+            "border_class": health["border_class"],
+        },
+        "critical_indicators": critical_indicators,
+        "next_steps": _analysis_next_steps(score_total_calc),
+        "hero_message": health["message"],
     }
+
+
+def _offer_bucket(item: dict[str, Any]) -> str:
+    area = str(item.get("area") or "").strip().lower()
+    family_code = str(item.get("family_code") or "").strip().lower()
+    if area == "baas":
+        return "credito"
+    if area == "advisory":
+        return "advisory"
+    if family_code in {"turnaround", "estrategia_financeira", "plano_rj", "distressed_ma", "credito_rj",
+                       "dip_financing"}:
+        return "advisory"
+    if family_code in {"capital_giro", "conta_garantida", "antecipacao_recebiveis", "antecipacao_cartoes",
+                       "trade_finance", "home_equity", "auto_equity", "credito_habitacional",
+                       "credito_corporativo_estruturado", "plano_empresario", "analise_credito", "consorcio",
+                       "financiamento_veiculos", "cambio"}:
+        return "credito"
+    return "estrategico"
+
+
+def _offer_strategy_from_score(score_total: float) -> dict[str, Any]:
+    score = float(score_total or 0.0)
+    if score >= 70:
+        return {
+            "key": "verde",
+            "headline": "Sua empresa está saudável para explorar crédito.",
+            "message": "Vamos priorizar linhas com melhor aderência ao seu perfil e às necessidades de caixa.",
+            "allow_buckets": {"credito", "estrategico"},
+            "cta_label": "Ver ofertas de crédito",
+            "cta_href": "/ofertas",
+            "badge_class": "text-bg-success",
+        }
+    if score >= 40:
+        return {
+            "key": "amarelo",
+            "headline": "Há crédito possível, mas com pontos de atenção.",
+            "message": "Vale avaliar ofertas e, em paralelo, agir em estrutura e capital de giro para melhorar condições.",
+            "allow_buckets": {"credito", "advisory", "estrategico"},
+            "cta_label": "Explorar ofertas e ajustes",
+            "cta_href": "/ofertas",
+            "badge_class": "text-bg-warning",
+        }
+    return {
+        "key": "vermelho",
+        "headline": "O momento pede reestruturação antes do crédito tradicional.",
+        "message": "Vamos destacar soluções consultivas e estratégicas para organizar a casa antes de buscar linhas mais agressivas.",
+        "allow_buckets": {"advisory", "estrategico"},
+        "cta_label": "Falar com um especialista",
+        "cta_href": "/consultoria",
+        "badge_class": "text-bg-danger",
+    }
+
+
+def _filter_matches_for_strategy(matches: list[dict[str, Any]], strategy: Optional[dict[str, Any]], role: str) -> list[
+    dict[str, Any]]:
+    if role in {"admin", "equipe"} or not strategy:
+        return matches
+    allowed = set(strategy.get("allow_buckets") or [])
+    filtered = [item for item in matches if _offer_bucket(item) in allowed]
+    return filtered or matches
+
+
+def _offer_reason_summary(*, family_code: str, source_kind: str, score_fit: float,
+                          partner_count: int, debt_ratio: float, cash_balance: float,
+                          current_ratio: float, working_capital: float, collateral_brl: float) -> str:
+    reasons: list[str] = []
+    fc = (family_code or "").strip().lower()
+    if fc == "capital_giro":
+        if working_capital < 0:
+            reasons.append(f"capital de giro líquido negativo ({_format_brl_display(working_capital)})")
+        if cash_balance < 0:
+            reasons.append(f"caixa pressionado ({_format_brl_display(cash_balance)})")
+    elif fc == "antecipacao_recebiveis":
+        reasons.append("existem recebíveis que podem ser transformados em caixa")
+    elif fc in {"home_equity", "auto_equity"} and collateral_brl > 0:
+        reasons.append(f"há garantias disponíveis ({_format_brl_display(collateral_brl)})")
+    elif fc in {"turnaround", "estrategia_financeira", "plano_rj"}:
+        if current_ratio and current_ratio < 1:
+            reasons.append(f"liquidez corrente baixa ({current_ratio:.2f})")
+        if debt_ratio > 1:
+            reasons.append(f"endividamento elevado ({debt_ratio:.2f}x receita mensal)")
+        if working_capital < 0:
+            reasons.append("pressão de capital de giro")
+    elif fc == "trade_finance":
+        reasons.append("o perfil sugere necessidade de importação, exportação ou comércio exterior")
+    elif fc == "consorcio":
+        reasons.append("houve interesse em aquisição planejada")
+    elif fc == "analise_credito":
+        reasons.append("o perfil pede preparação e leitura detalhada de crédito")
+    elif score_fit >= 80:
+        reasons.append("o perfil financeiro e estratégico está muito aderente a essa solução")
+    elif score_fit >= 60:
+        reasons.append("a empresa apresenta sinais consistentes de aderência a essa solução")
+    else:
+        reasons.append("a solução foi priorizada pelo contexto do diagnóstico e das dores informadas")
+
+    prefix = "Recomendado porque " if source_kind == "internal" else "Parceiro aderente porque "
+    summary = prefix + "; ".join(reasons[:2]) + "."
+    if partner_count and source_kind == "internal":
+        summary += f" Há {partner_count} parceiro(s) elegível(eis) nesta família."
+    return summary
 
 
 def sync_offer_reviews(session: Session, *, company_id: int, client_id: int) -> None:
@@ -29703,6 +28395,33 @@ TEMPLATES["perfil.html"] = r"""
           </div>
         {% endif %}
       </div>
+      {% if financial_analysis and financial_analysis.critical_indicators %}
+        <div class="row g-2 mt-3">
+          <div class="col-12">
+            <div class="border rounded p-3">
+              <div class="fw-semibold mb-2">Pontos críticos do diagnóstico</div>
+              <div class="row g-2">
+                {% for item in financial_analysis.critical_indicators %}
+                  <div class="col-md-6">
+                    <div class="border rounded p-2 h-100">
+                      <div class="d-flex justify-content-between align-items-start gap-2">
+                        <div>
+                          <div class="small fw-semibold">{{ item.label }}</div>
+                          <div class="small {{ item.css_class }}">{{ item.explanation }}</div>
+                        </div>
+                        <div class="text-end">
+                          <div class="fw-semibold {{ item.css_class }}">{{ item.display }}</div>
+                          <div class="small {{ item.css_class }}">{{ item.badge }}</div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                {% endfor %}
+              </div>
+            </div>
+          </div>
+        </div>
+      {% endif %}
       {% if not current_client %}
         <div class="alert alert-warning mt-3">Nenhum cliente selecionado/vinculado.</div>
       {% else %}
@@ -29868,6 +28587,22 @@ TEMPLATES["perfil.html"] = r"""
       </div>
     {% endif %}
 
+    {% if profile_next_steps %}
+    <div class="card p-4 mb-3">
+      <div class="d-flex justify-content-between align-items-start gap-2">
+        <div>
+          <h5 class="mb-1">Próximos passos</h5>
+          <div class="muted">O sistema sugere o próximo movimento com base no score geral e nos principais indicadores.</div>
+        </div>
+      </div>
+      <div class="d-flex gap-2 flex-wrap mt-3">
+        {% for step in profile_next_steps %}
+          <a class="btn btn-{{ step.variant }}" href="{{ step.href }}">{{ step.label }}</a>
+        {% endfor %}
+      </div>
+    </div>
+    {% endif %}
+
     <div class="card p-4">
       <div class="d-flex justify-content-between align-items-start gap-2">
         <div>
@@ -29991,27 +28726,63 @@ TEMPLATES["dashboard.html"] = r"""
   {% if dashboard_scores and current_client %}
     <div class="col-12">
       <div class="card p-4">
-        <div class="d-flex flex-wrap justify-content-between align-items-center gap-2">
-          <div>
-            <h5 class="mb-1">Resumo analítico da empresa</h5>
-            <div class="muted">Cards e barras visuais para dar mais clareza ao diagnóstico financeiro.</div>
+        <div class="row g-4 align-items-center">
+          <div class="col-lg-4">
+            <div class="text-center">
+              <div class="muted small mb-2">Saúde geral da empresa</div>
+              <div style="width: 220px; height: 220px; margin: 0 auto; border-radius: 50%; background: conic-gradient({{ dashboard_scores.general_health.color }} {{ dashboard_scores.general_health.score * 3.6 }}deg, #e9ecef 0deg); display:flex; align-items:center; justify-content:center;">
+                <div style="width: 150px; height: 150px; border-radius: 50%; background: white; display:flex; flex-direction:column; align-items:center; justify-content:center;">
+                  <div class="muted small">Score geral</div>
+                  <div class="display-6 fw-bold">{{ "%.0f"|format(dashboard_scores.general_health.score) }}</div>
+                  <div class="small {{ dashboard_scores.general_health.css_class }} fw-semibold">{{ dashboard_scores.general_health.label }}</div>
+                </div>
+              </div>
+            </div>
           </div>
-          <div class="d-flex gap-2 flex-wrap">
-            <span class="badge text-bg-light border">{{ approved_offers_count }} oportunidade(s) liberada(s)</span>
-            <span class="badge text-bg-light border">{{ pending_items_count }} pendência(s)</span>
+          <div class="col-lg-8">
+            <div class="d-flex flex-wrap justify-content-between align-items-start gap-3">
+              <div>
+                <h5 class="mb-1">Resumo executivo</h5>
+                <div class="muted">Leitura imediata da saúde financeira, estrutura e potencial comercial.</div>
+              </div>
+              <div class="d-flex gap-2 flex-wrap">
+                <span class="badge text-bg-light border">{{ approved_offers_count }} oportunidade(s) liberada(s)</span>
+                <span class="badge text-bg-light border">{{ pending_items_count }} pendência(s)</span>
+              </div>
+            </div>
+            <div class="mt-3 p-3 rounded border {{ dashboard_scores.general_health.bg_class }} {{ dashboard_scores.general_health.border_class }}">
+              <div class="fw-semibold">Leitura automática</div>
+              <div class="mt-1">{{ dashboard_scores.hero_message }}</div>
+            </div>
+            {% if dashboard_next_steps %}
+            <div class="mt-3">
+              <div class="fw-semibold mb-2">Próximos passos</div>
+              <div class="d-flex flex-wrap gap-2">
+                {% for step in dashboard_next_steps %}
+                  <a class="btn btn-{{ step.variant }}" href="{{ step.href }}">{{ step.label }}</a>
+                {% endfor %}
+              </div>
+            </div>
+            {% endif %}
           </div>
         </div>
+
         <div class="row g-3 mt-1">
           {% for card in dashboard_scores.score_card %}
           <div class="col-md-6 col-xl-3">
             <div class="border rounded p-3 h-100">
-              <div class="muted small">{{ card.label }}</div>
+              <div class="d-flex justify-content-between align-items-start gap-2">
+                <div class="muted small">{{ card.label }}</div>
+                <span class="badge text-bg-light border">{{ card.band_label }}</span>
+              </div>
               <div class="fs-3 fw-bold">{{ "%.0f"|format(card.value) }}</div>
               <div class="small muted">{{ card.hint }}</div>
+              <div class="small mt-2">{{ card.insight }}</div>
             </div>
           </div>
           {% endfor %}
         </div>
+
         <div class="row g-3 mt-1">
           <div class="col-lg-7">
             <div class="border rounded p-3 h-100">
@@ -30031,12 +28802,22 @@ TEMPLATES["dashboard.html"] = r"""
           </div>
           <div class="col-lg-5">
             <div class="border rounded p-3 h-100">
-              <div class="fw-semibold mb-3">Indicadores-chave</div>
-              <div class="small d-flex justify-content-between mb-2"><span>Capital de giro líquido</span><b>R$ {{ "{:,.2f}".format(dashboard_scores.working_capital).replace(",", "X").replace(".", ",").replace("X", ".") }}</b></div>
-              <div class="small d-flex justify-content-between mb-2"><span>Liquidez corrente</span><b>{{ "%.2f"|format(dashboard_scores.current_ratio or 0) }}</b></div>
-              <div class="small d-flex justify-content-between mb-2"><span>Patrimônio líquido</span><b>R$ {{ "{:,.2f}".format(dashboard_scores.equity).replace(",", "X").replace(".", ",").replace("X", ".") }}</b></div>
-              <div class="small d-flex justify-content-between mb-2"><span>Endividamento / patrimônio</span><b>{{ "%.2f"|format(dashboard_scores.debt_to_equity or 0) }}</b></div>
-              <div class="small d-flex justify-content-between"><span>Status do motor</span><span class="badge text-bg-light border">{{ dashboard_scores.status_label }}</span></div>
+              <div class="fw-semibold mb-3">Pontos críticos e atenção</div>
+              {% for item in dashboard_scores.critical_indicators %}
+                <div class="border rounded p-2 mb-2">
+                  <div class="d-flex justify-content-between align-items-start gap-2">
+                    <div>
+                      <div class="small fw-semibold">{{ item.label }}</div>
+                      <div class="small {{ item.css_class }}">{{ item.explanation }}</div>
+                    </div>
+                    <div class="text-end">
+                      <div class="fw-semibold {{ item.css_class }}">{{ item.display }}</div>
+                      <div class="small {{ item.css_class }}">{{ item.badge }}</div>
+                    </div>
+                  </div>
+                </div>
+              {% endfor %}
+              <div class="small d-flex justify-content-between mt-3"><span>Status do motor</span><span class="badge text-bg-light border">{{ dashboard_scores.status_label }}</span></div>
             </div>
           </div>
         </div>
@@ -30128,7 +28909,6 @@ TEMPLATES["dashboard.html"] = r"""
 </script>
 {% endblock %}
 """
-
 TEMPLATES["motor_ofertas.html"] = r"""
 {% extends "base.html" %}
 {% block content %}
@@ -30598,18 +29378,15 @@ TEMPLATES["tasks_list.html"] = r"""
 {% extends "base.html" %}
 {% block content %}
 <div class="card p-4">
-  <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
-  <div>
-    <h4 class="mb-0">Tarefas</h4>
-    <div class="muted">Kanban por status • filtros • prazos • prioridade</div>
-  </div>
-  {% if role in ["admin","equipe"] %}
-    <div class="d-flex gap-2 flex-wrap">
-      <a class="btn btn-outline-secondary" href="/tarefas/relatorio-horas">Relatório de horas</a>
-      <a class="btn btn-primary" href="/tarefas/nova{% if filter_client_id %}?client_id={{ filter_client_id }}{% endif %}">Nova tarefa</a>
+  <div class="d-flex justify-content-between align-items-center">
+    <div>
+      <h4 class="mb-0">Tarefas</h4>
+      <div class="muted">Kanban por status • filtros • prazos • prioridade</div>
     </div>
-  {% endif %}
-</div>
+    {% if role in ["admin","equipe"] %}
+      <a class="btn btn-primary" href="/tarefas/nova{% if filter_client_id %}?client_id={{ filter_client_id }}{% endif %}">Nova tarefa</a>
+    {% endif %}
+  </div>
 
   <hr class="my-3"/>
 
