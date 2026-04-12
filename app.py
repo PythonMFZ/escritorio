@@ -10690,6 +10690,10 @@ def _format_brl(value: Any) -> str:
     return f"{sign}R$ {raw}"
 
 
+def _fmt_brl(value: Any) -> str:
+    return _format_brl(value)
+
+
 def _format_number_br(value: Any, decimals: int = 2) -> str:
     try:
         number = float(value or 0.0)
