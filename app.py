@@ -31646,6 +31646,105 @@ TEMPLATES["perfil.html"] = r"""
 """
 
 
+def ensure_delivery3_tables() -> bool:
+    ok = True
+    for tbl in (
+            ClientGroupCompany.__table__,
+            Notification.__table__,
+            UserActivity.__table__,
+    ):
+        try:
+            tbl.create(engine, checkfirst=True)
+        except Exception:
+            ok = False
+    return ok
+
+
+def ensure_delivery3_columns() -> None:
+    group_columns = [
+        ("cnpj", "VARCHAR NOT NULL DEFAULT ''", "TEXT NOT NULL DEFAULT ''"),
+        ("legal_name", "TEXT NOT NULL DEFAULT ''", "TEXT NOT NULL DEFAULT ''"),
+        ("relationship_type", "VARCHAR NOT NULL DEFAULT 'filial'", "TEXT NOT NULL DEFAULT 'filial'"),
+        ("is_active", "BOOLEAN NOT NULL DEFAULT TRUE", "INTEGER NOT NULL DEFAULT 1"),
+        ("notes", "TEXT NOT NULL DEFAULT ''", "TEXT NOT NULL DEFAULT ''"),
+        ("created_by_user_id", "INTEGER", "INTEGER"),
+        ("created_at", "TIMESTAMP WITHOUT TIME ZONE DEFAULT NOW()", "TEXT"),
+        ("updated_at", "TIMESTAMP WITHOUT TIME ZONE DEFAULT NOW()", "TEXT"),
+    ]
+    notification_columns = [
+        ("client_id", "INTEGER", "INTEGER"),
+        ("user_id", "INTEGER NOT NULL DEFAULT 0", "INTEGER NOT NULL DEFAULT 0"),
+        ("kind", "VARCHAR NOT NULL DEFAULT 'sistema'", "TEXT NOT NULL DEFAULT 'sistema'"),
+        ("title", "TEXT NOT NULL DEFAULT ''", "TEXT NOT NULL DEFAULT ''"),
+        ("message", "TEXT NOT NULL DEFAULT ''", "TEXT NOT NULL DEFAULT ''"),
+        ("href", "TEXT NOT NULL DEFAULT ''", "TEXT NOT NULL DEFAULT ''"),
+        ("is_read", "BOOLEAN NOT NULL DEFAULT FALSE", "INTEGER NOT NULL DEFAULT 0"),
+        ("created_by_user_id", "INTEGER", "INTEGER"),
+        ("created_at", "TIMESTAMP WITHOUT TIME ZONE DEFAULT NOW()", "TEXT"),
+        ("read_at", "TIMESTAMP WITHOUT TIME ZONE", "TEXT"),
+    ]
+    activity_columns = [
+        ("role", "VARCHAR NOT NULL DEFAULT ''", "TEXT NOT NULL DEFAULT ''"),
+        ("last_client_id", "INTEGER", "INTEGER"),
+        ("last_path", "TEXT NOT NULL DEFAULT ''", "TEXT NOT NULL DEFAULT ''"),
+        ("last_method", "VARCHAR NOT NULL DEFAULT ''", "TEXT NOT NULL DEFAULT ''"),
+        ("request_count", "INTEGER NOT NULL DEFAULT 0", "INTEGER NOT NULL DEFAULT 0"),
+        ("last_seen_at", "TIMESTAMP WITHOUT TIME ZONE DEFAULT NOW()", "TEXT"),
+        ("created_at", "TIMESTAMP WITHOUT TIME ZONE DEFAULT NOW()", "TEXT"),
+        ("updated_at", "TIMESTAMP WITHOUT TIME ZONE DEFAULT NOW()", "TEXT"),
+    ]
+    all_by_table = {
+        "clientgroupcompany": group_columns,
+        "notification": notification_columns,
+        "useractivity": activity_columns,
+    }
+    try:
+        backend = engine.url.get_backend_name()
+        with engine.begin() as conn:
+            if backend.startswith("postgres"):
+                for table_name, cols in all_by_table.items():
+                    for col, ddl_pg, _ddl_sqlite in cols:
+                        try:
+                            conn.exec_driver_sql(
+                                f"ALTER TABLE IF EXISTS {table_name} "
+                                f"ADD COLUMN IF NOT EXISTS {col} {ddl_pg}"
+                            )
+                        except Exception:
+                            pass
+                for stmt in [
+                    "UPDATE clientgroupcompany SET relationship_type = COALESCE(NULLIF(relationship_type, ''), 'filial')",
+                    "UPDATE clientgroupcompany SET legal_name = COALESCE(legal_name, '')",
+                    "UPDATE clientgroupcompany SET notes = COALESCE(notes, '')",
+                    "UPDATE notification SET kind = COALESCE(NULLIF(kind, ''), 'sistema')",
+                    "UPDATE notification SET title = COALESCE(title, '')",
+                    "UPDATE notification SET message = COALESCE(message, '')",
+                    "UPDATE notification SET href = COALESCE(href, '')",
+                    "UPDATE useractivity SET role = COALESCE(role, '')",
+                    "UPDATE useractivity SET last_path = COALESCE(last_path, '')",
+                    "UPDATE useractivity SET last_method = COALESCE(last_method, '')",
+                    "UPDATE useractivity SET request_count = COALESCE(request_count, 0)",
+                ]:
+                    try:
+                        conn.exec_driver_sql(stmt)
+                    except Exception:
+                        pass
+            elif backend.startswith("sqlite"):
+                for table_name, cols in all_by_table.items():
+                    try:
+                        rows = conn.exec_driver_sql(f"PRAGMA table_info('{table_name}')").fetchall()
+                        existing = {str(r[1]) for r in rows}
+                    except Exception:
+                        existing = set()
+                    for col, _ddl_pg, ddl_sqlite in cols:
+                        if col not in existing:
+                            try:
+                                conn.exec_driver_sql(f"ALTER TABLE {table_name} ADD COLUMN {col} {ddl_sqlite}")
+                            except Exception:
+                                pass
+    except Exception:
+        pass
+
+
 @app.on_event("startup")
 def _startup_delivery3_rebuild() -> None:
     ensure_delivery3_tables()
