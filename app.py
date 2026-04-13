@@ -3486,6 +3486,249 @@ def _render_nfse_lookup_page(*, inv: "ContaAzulInvoice", payload: dict[str, Any]
 </body>
 </html>"""
 
+TEMPLATES["public_base.html"] = r"""
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ title or "Maffezzolli Capital" }}</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <style>
+    body { background: #f6f7fb; color: #1f2937; }
+    .page-wrap { max-width: 920px; margin: 40px auto; padding: 0 16px; }
+    .card-public {
+      background: #fff;
+      border: 1px solid #e5e7eb;
+      border-radius: 18px;
+      box-shadow: 0 8px 30px rgba(0,0,0,.04);
+      overflow: hidden;
+    }
+    .header-public {
+      padding: 24px 28px;
+      border-bottom: 1px solid #e5e7eb;
+      background: linear-gradient(180deg, #ffffff 0%, #fafafa 100%);
+    }
+    .body-public { padding: 28px; }
+    h1 { font-size: 1.8rem; margin: 0; }
+    h2 { font-size: 1.1rem; margin-top: 1.75rem; }
+    p, li { line-height: 1.65; }
+    .muted { color: #6b7280; }
+    .footer-public {
+      padding: 18px 28px;
+      border-top: 1px solid #e5e7eb;
+      background: #fafafa;
+      font-size: .95rem;
+      color: #6b7280;
+    }
+    a { text-decoration: none; }
+    .top-links a { margin-right: 14px; }
+    code { background: #f3f4f6; padding: 2px 6px; border-radius: 6px; }
+  </style>
+</head>
+<body>
+  <div class="page-wrap">
+    <div class="mb-3 top-links">
+      <a href="/politica-de-privacidade">Política de Privacidade</a>
+      <a href="/termos-de-servico">Termos de Serviço</a>
+      <a href="/exclusao-de-dados">Exclusão de Dados</a>
+    </div>
+    <div class="card-public">
+      <div class="header-public">
+        <h1>{{ page_title }}</h1>
+        {% if page_subtitle %}
+          <div class="muted mt-2">{{ page_subtitle }}</div>
+        {% endif %}
+      </div>
+      <div class="body-public">
+        {% block content %}{% endblock %}
+      </div>
+      <div class="footer-public">
+        Maffezzolli Capital • Última atualização: {{ updated_at }}
+      </div>
+    </div>
+  </div>
+</body>
+</html>
+"""
+
+TEMPLATES["politica_privacidade_public.html"] = r"""
+{% extends "public_base.html" %}
+{% block content %}
+<p>
+  A Maffezzolli Capital valoriza a privacidade e a proteção dos dados pessoais de clientes,
+  leads, parceiros e usuários da plataforma.
+</p>
+
+<h2>1. Dados coletados</h2>
+<p>
+  Podemos coletar nome, telefone, e-mail, empresa, mensagens trocadas via WhatsApp,
+  dados cadastrais, informações comerciais e operacionais, além de registros necessários
+  para atendimento, suporte, relacionamento e execução dos serviços.
+</p>
+
+<h2>2. Finalidade do uso dos dados</h2>
+<p>Os dados podem ser utilizados para:</p>
+<ul>
+  <li>atendimento ao cliente e resposta a solicitações;</li>
+  <li>gestão de relacionamento comercial e operacional;</li>
+  <li>envio de comunicações relacionadas aos serviços;</li>
+  <li>registro do histórico de interações e conversas;</li>
+  <li>cumprimento de obrigações legais, regulatórias e contratuais;</li>
+  <li>segurança, prevenção a fraude e melhoria dos processos internos.</li>
+</ul>
+
+<h2>3. Compartilhamento</h2>
+<p>
+  Os dados poderão ser tratados por fornecedores de tecnologia e infraestrutura
+  necessários ao funcionamento da operação, incluindo hospedagem, banco de dados,
+  integrações, envio de mensagens e ferramentas operacionais, sempre no limite do necessário.
+</p>
+
+<h2>4. WhatsApp e serviços de terceiros</h2>
+<p>
+  Ao interagir com a Maffezzolli Capital por canais como WhatsApp, algumas informações
+  poderão ser processadas por provedores terceiros, conforme as políticas dessas plataformas.
+</p>
+
+<h2>5. Segurança</h2>
+<p>
+  Adotamos medidas técnicas e administrativas razoáveis para proteger os dados contra
+  acesso não autorizado, destruição, perda, alteração, comunicação ou difusão indevida.
+</p>
+
+<h2>6. Retenção</h2>
+<p>
+  Os dados são armazenados pelo período necessário para cumprir as finalidades desta política,
+  obrigações legais, regulatórias, contratuais e exercício regular de direitos.
+</p>
+
+<h2>7. Direitos do titular</h2>
+<p>
+  O titular poderá solicitar acesso, correção, atualização ou exclusão de seus dados,
+  quando aplicável, por meio do canal de contato informado nesta página.
+</p>
+
+<h2>8. Exclusão de dados</h2>
+<p>
+  Para solicitar exclusão de dados, consulte:
+  <a href="/exclusao-de-dados">/exclusao-de-dados</a>.
+</p>
+
+<h2>9. Contato</h2>
+<p>
+  Solicitações relacionadas à privacidade e proteção de dados podem ser enviadas para:
+  <br>
+  <strong>rafael@maffezzollicapital.com.br</strong>
+</p>
+
+<h2>10. Atualizações</h2>
+<p>
+  Esta política poderá ser alterada periodicamente para refletir mudanças operacionais,
+  legais, regulatórias ou técnicas.
+</p>
+{% endblock %}
+"""
+
+TEMPLATES["termos_servico_public.html"] = r"""
+{% extends "public_base.html" %}
+{% block content %}
+<p>
+  Ao utilizar os canais, a plataforma e os serviços da Maffezzolli Capital,
+  o usuário concorda com estes Termos de Serviço.
+</p>
+
+<h2>1. Objeto</h2>
+<p>
+  Os serviços possuem finalidade comercial, operacional, administrativa,
+  de atendimento ao cliente e relacionamento com usuários e parceiros.
+</p>
+
+<h2>2. Uso adequado</h2>
+<p>
+  O usuário concorda em utilizar a plataforma e os canais de atendimento de forma lícita,
+  sem envio de conteúdo abusivo, fraudulento, ilícito ou que viole direitos de terceiros.
+</p>
+
+<h2>3. Disponibilidade</h2>
+<p>
+  Os serviços poderão passar por manutenção, atualização, interrupções temporárias
+  ou evolução funcional, sem garantia de disponibilidade ininterrupta.
+</p>
+
+<h2>4. Comunicações</h2>
+<p>
+  O usuário reconhece que poderá receber comunicações operacionais e respostas
+  por meios digitais, inclusive WhatsApp e e-mail, quando houver interação prévia
+  ou outra base legal aplicável.
+</p>
+
+<h2>5. Limitação de responsabilidade</h2>
+<p>
+  A Maffezzolli Capital emprega esforços razoáveis para manter os serviços operacionais,
+  mas não garante funcionamento ininterrupto, ausência total de falhas
+  ou adequação a finalidades específicas de terceiros.
+</p>
+
+<h2>6. Privacidade</h2>
+<p>
+  O tratamento de dados pessoais segue a
+  <a href="/politica-de-privacidade">Política de Privacidade</a>.
+</p>
+
+<h2>7. Alterações</h2>
+<p>
+  Estes termos poderão ser atualizados a qualquer momento, com vigência a partir
+  da publicação da versão mais recente nesta página.
+</p>
+
+<h2>8. Contato</h2>
+<p>
+  Dúvidas sobre estes termos podem ser enviadas para:
+  <br>
+  <strong>rafael@maffezzollicapital.com.br</strong>
+</p>
+{% endblock %}
+"""
+
+TEMPLATES["exclusao_dados_public.html"] = r"""
+{% extends "public_base.html" %}
+{% block content %}
+<p>
+  Se você deseja solicitar a exclusão dos seus dados pessoais tratados pela
+  Maffezzolli Capital, envie uma solicitação para:
+</p>
+
+<p><strong>rafael@maffezzollicapital.com.br</strong></p>
+
+<h2>Informações que devem constar no pedido</h2>
+<ul>
+  <li>nome completo;</li>
+  <li>telefone;</li>
+  <li>e-mail;</li>
+  <li>dados que ajudem a localizar o cadastro;</li>
+  <li>descrição objetiva da solicitação.</li>
+</ul>
+
+<h2>Prazo e análise</h2>
+<p>
+  Após o recebimento, a solicitação será analisada e respondida em prazo razoável,
+  observadas as obrigações legais, regulatórias, contratuais e de retenção aplicáveis.
+</p>
+
+<h2>Hipóteses de retenção parcial</h2>
+<p>Alguns dados poderão ser mantidos quando necessários para:</p>
+<ul>
+  <li>cumprimento de obrigação legal ou regulatória;</li>
+  <li>exercício regular de direitos;</li>
+  <li>prevenção a fraude e segurança;</li>
+  <li>manutenção de registros mínimos obrigatórios.</li>
+</ul>
+{% endblock %}
+"""
+
+if hasattr(templates_env.loader, "mapping"):
+    templates_env.loader.mapping = TEMPLATES
 
 def _extract_sale_id_from_nfse_payload(payload: dict[str, Any]) -> str:
     if not isinstance(payload, dict):
@@ -12448,41 +12691,296 @@ STATIC_DIR.mkdir(parents=True, exist_ok=True)
 
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
+def _public_page_html(*, title: str, heading: str, subtitle: str, body_html: str) -> str:
+    updated_at = datetime.now().strftime("%d/%m/%Y")
+    return f"""<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{html.escape(title)}</title>
+  <style>
+    body {{
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+      background: #f6f7fb;
+      color: #1f2937;
+    }}
+    .page-wrap {{
+      max-width: 920px;
+      margin: 40px auto;
+      padding: 0 16px;
+    }}
+    .top-links {{
+      margin-bottom: 14px;
+      font-size: 14px;
+    }}
+    .top-links a {{
+      margin-right: 14px;
+      color: #1d4ed8;
+      text-decoration: none;
+    }}
+    .card-public {{
+      background: #fff;
+      border: 1px solid #e5e7eb;
+      border-radius: 18px;
+      box-shadow: 0 8px 30px rgba(0,0,0,.04);
+      overflow: hidden;
+    }}
+    .header-public {{
+      padding: 24px 28px;
+      border-bottom: 1px solid #e5e7eb;
+      background: linear-gradient(180deg, #ffffff 0%, #fafafa 100%);
+    }}
+    .body-public {{
+      padding: 28px;
+    }}
+    .footer-public {{
+      padding: 18px 28px;
+      border-top: 1px solid #e5e7eb;
+      background: #fafafa;
+      font-size: 14px;
+      color: #6b7280;
+    }}
+    h1 {{
+      font-size: 1.8rem;
+      margin: 0;
+    }}
+    h2 {{
+      font-size: 1.1rem;
+      margin-top: 1.75rem;
+    }}
+    p, li {{
+      line-height: 1.65;
+    }}
+    .muted {{
+      color: #6b7280;
+      margin-top: 8px;
+    }}
+    a {{
+      color: #1d4ed8;
+    }}
+  </style>
+</head>
+<body>
+  <div class="page-wrap">
+    <div class="top-links">
+      <a href="/politica-de-privacidade">Política de Privacidade</a>
+      <a href="/termos-de-servico">Termos de Serviço</a>
+      <a href="/exclusao-de-dados">Exclusão de Dados</a>
+    </div>
+    <div class="card-public">
+      <div class="header-public">
+        <h1>{html.escape(heading)}</h1>
+        <div class="muted">{html.escape(subtitle)}</div>
+      </div>
+      <div class="body-public">
+        {body_html}
+      </div>
+      <div class="footer-public">
+        Maffezzolli Capital • Última atualização: {html.escape(updated_at)}
+      </div>
+    </div>
+  </div>
+</body>
+</html>"""
+
+
 @app.get("/politica-de-privacidade", response_class=HTMLResponse)
-async def politica_privacidade_public(request: Request) -> HTMLResponse:
+async def politica_privacidade_public() -> HTMLResponse:
+    body_html = """
+    <p>
+      A Maffezzolli Capital valoriza a privacidade e a proteção dos dados pessoais de clientes,
+      leads, parceiros e usuários da plataforma.
+    </p>
+
+    <h2>1. Dados coletados</h2>
+    <p>
+      Podemos coletar nome, telefone, e-mail, empresa, mensagens trocadas via WhatsApp,
+      dados cadastrais, informações comerciais e operacionais, além de registros necessários
+      para atendimento, suporte, relacionamento e execução dos serviços.
+    </p>
+
+    <h2>2. Finalidade do uso dos dados</h2>
+    <p>Os dados podem ser utilizados para:</p>
+    <ul>
+      <li>atendimento ao cliente e resposta a solicitações;</li>
+      <li>gestão de relacionamento comercial e operacional;</li>
+      <li>envio de comunicações relacionadas aos serviços;</li>
+      <li>registro do histórico de interações e conversas;</li>
+      <li>cumprimento de obrigações legais, regulatórias e contratuais;</li>
+      <li>segurança, prevenção a fraude e melhoria dos processos internos.</li>
+    </ul>
+
+    <h2>3. Compartilhamento</h2>
+    <p>
+      Os dados poderão ser tratados por fornecedores de tecnologia e infraestrutura
+      necessários ao funcionamento da operação, incluindo hospedagem, banco de dados,
+      integrações, envio de mensagens e ferramentas operacionais, sempre no limite do necessário.
+    </p>
+
+    <h2>4. WhatsApp e serviços de terceiros</h2>
+    <p>
+      Ao interagir com a Maffezzolli Capital por canais como WhatsApp, algumas informações
+      poderão ser processadas por provedores terceiros, conforme as políticas dessas plataformas.
+    </p>
+
+    <h2>5. Segurança</h2>
+    <p>
+      Adotamos medidas técnicas e administrativas razoáveis para proteger os dados contra
+      acesso não autorizado, destruição, perda, alteração, comunicação ou difusão indevida.
+    </p>
+
+    <h2>6. Retenção</h2>
+    <p>
+      Os dados são armazenados pelo período necessário para cumprir as finalidades desta política,
+      obrigações legais, regulatórias, contratuais e exercício regular de direitos.
+    </p>
+
+    <h2>7. Direitos do titular</h2>
+    <p>
+      O titular poderá solicitar acesso, correção, atualização ou exclusão de seus dados,
+      quando aplicável, por meio do canal de contato informado nesta página.
+    </p>
+
+    <h2>8. Exclusão de dados</h2>
+    <p>
+      Para solicitar exclusão de dados, consulte:
+      <a href="/exclusao-de-dados">/exclusao-de-dados</a>.
+    </p>
+
+    <h2>9. Contato</h2>
+    <p>
+      Solicitações relacionadas à privacidade e proteção de dados podem ser enviadas para:
+      <br>
+      <strong>rafael@maffezzollicapital.com.br</strong>
+    </p>
+
+    <h2>10. Atualizações</h2>
+    <p>
+      Esta política poderá ser alterada periodicamente para refletir mudanças operacionais,
+      legais, regulatórias ou técnicas.
+    </p>
+    """
     return HTMLResponse(
-        templates_env.get_template("politica_privacidade_public.html").render(
-            request=request,
+        _public_page_html(
             title="Política de Privacidade - Maffezzolli Capital",
-            page_title="Política de Privacidade",
-            page_subtitle="Informações sobre coleta, uso, proteção e direitos relacionados aos dados pessoais.",
-            updated_at=datetime.now().strftime("%d/%m/%Y"),
+            heading="Política de Privacidade",
+            subtitle="Informações sobre coleta, uso, proteção e direitos relacionados aos dados pessoais.",
+            body_html=body_html,
         )
     )
 
 
 @app.get("/termos-de-servico", response_class=HTMLResponse)
-async def termos_servico_public(request: Request) -> HTMLResponse:
+async def termos_servico_public() -> HTMLResponse:
+    body_html = """
+    <p>
+      Ao utilizar os canais, a plataforma e os serviços da Maffezzolli Capital,
+      o usuário concorda com estes Termos de Serviço.
+    </p>
+
+    <h2>1. Objeto</h2>
+    <p>
+      Os serviços possuem finalidade comercial, operacional, administrativa,
+      de atendimento ao cliente e relacionamento com usuários e parceiros.
+    </p>
+
+    <h2>2. Uso adequado</h2>
+    <p>
+      O usuário concorda em utilizar a plataforma e os canais de atendimento de forma lícita,
+      sem envio de conteúdo abusivo, fraudulento, ilícito ou que viole direitos de terceiros.
+    </p>
+
+    <h2>3. Disponibilidade</h2>
+    <p>
+      Os serviços poderão passar por manutenção, atualização, interrupções temporárias
+      ou evolução funcional, sem garantia de disponibilidade ininterrupta.
+    </p>
+
+    <h2>4. Comunicações</h2>
+    <p>
+      O usuário reconhece que poderá receber comunicações operacionais e respostas
+      por meios digitais, inclusive WhatsApp e e-mail, quando houver interação prévia
+      ou outra base legal aplicável.
+    </p>
+
+    <h2>5. Limitação de responsabilidade</h2>
+    <p>
+      A Maffezzolli Capital emprega esforços razoáveis para manter os serviços operacionais,
+      mas não garante funcionamento ininterrupto, ausência total de falhas
+      ou adequação a finalidades específicas de terceiros.
+    </p>
+
+    <h2>6. Privacidade</h2>
+    <p>
+      O tratamento de dados pessoais segue a
+      <a href="/politica-de-privacidade">Política de Privacidade</a>.
+    </p>
+
+    <h2>7. Alterações</h2>
+    <p>
+      Estes termos poderão ser atualizados a qualquer momento, com vigência a partir
+      da publicação da versão mais recente nesta página.
+    </p>
+
+    <h2>8. Contato</h2>
+    <p>
+      Dúvidas sobre estes termos podem ser enviadas para:
+      <br>
+      <strong>rafael@maffezzollicapital.com.br</strong>
+    </p>
+    """
     return HTMLResponse(
-        templates_env.get_template("termos_servico_public.html").render(
-            request=request,
+        _public_page_html(
             title="Termos de Serviço - Maffezzolli Capital",
-            page_title="Termos de Serviço",
-            page_subtitle="Condições gerais de uso dos canais, sistema e serviços da Maffezzolli Capital.",
-            updated_at=datetime.now().strftime("%d/%m/%Y"),
+            heading="Termos de Serviço",
+            subtitle="Condições gerais de uso dos canais, sistema e serviços da Maffezzolli Capital.",
+            body_html=body_html,
         )
     )
 
 
 @app.get("/exclusao-de-dados", response_class=HTMLResponse)
-async def exclusao_dados_public(request: Request) -> HTMLResponse:
+async def exclusao_dados_public() -> HTMLResponse:
+    body_html = """
+    <p>
+      Se você deseja solicitar a exclusão dos seus dados pessoais tratados pela
+      Maffezzolli Capital, envie uma solicitação para:
+    </p>
+
+    <p><strong>rafael@maffezzollicapital.com.br</strong></p>
+
+    <h2>Informações que devem constar no pedido</h2>
+    <ul>
+      <li>nome completo;</li>
+      <li>telefone;</li>
+      <li>e-mail;</li>
+      <li>dados que ajudem a localizar o cadastro;</li>
+      <li>descrição objetiva da solicitação.</li>
+    </ul>
+
+    <h2>Prazo e análise</h2>
+    <p>
+      Após o recebimento, a solicitação será analisada e respondida em prazo razoável,
+      observadas as obrigações legais, regulatórias, contratuais e de retenção aplicáveis.
+    </p>
+
+    <h2>Hipóteses de retenção parcial</h2>
+    <p>Alguns dados poderão ser mantidos quando necessários para:</p>
+    <ul>
+      <li>cumprimento de obrigação legal ou regulatória;</li>
+      <li>exercício regular de direitos;</li>
+      <li>prevenção a fraude e segurança;</li>
+      <li>manutenção de registros mínimos obrigatórios.</li>
+    </ul>
+    """
     return HTMLResponse(
-        templates_env.get_template("exclusao_dados_public.html").render(
-            request=request,
+        _public_page_html(
             title="Exclusão de Dados - Maffezzolli Capital",
-            page_title="Exclusão de Dados do Usuário",
-            page_subtitle="Canal público para solicitação de exclusão de dados pessoais.",
-            updated_at=datetime.now().strftime("%d/%m/%Y"),
+            heading="Exclusão de Dados do Usuário",
+            subtitle="Canal público para solicitação de exclusão de dados pessoais.",
+            body_html=body_html,
         )
     )
 
