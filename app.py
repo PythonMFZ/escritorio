@@ -38562,6 +38562,151 @@ def _whatsapp_menu_choice_to_topic(text_value: str) -> Optional[str]:
     return None
 
 
+
+def _whatsapp_meta_error_message(resp: httpx.Response) -> str:
+    detail = ""
+    try:
+        data = resp.json()
+    except Exception:
+        data = None
+    if isinstance(data, dict):
+        err = data.get("error")
+        if isinstance(err, dict):
+            detail = str(err.get("message") or err.get("error_user_msg") or "").strip()
+    if detail:
+        return f"Falha Meta API ({resp.status_code}): {detail}"
+    return f"Falha Meta API ({resp.status_code})"
+
+
+def _whatsapp_attachment_send_kind(filename: str, mime_type: str) -> str:
+    mime = (mime_type or "").strip().lower()
+    ext = _whatsapp_attachment_ext(filename).lower()
+
+    if mime.startswith("image/") or ext in {".jpg", ".jpeg", ".png", ".webp"}:
+        return "image"
+
+    document_exts = {
+        ".pdf", ".txt", ".csv", ".doc", ".docx", ".xls", ".xlsx",
+        ".ppt", ".pptx", ".zip", ".rar",
+    }
+    if mime.startswith("application/") or mime.startswith("text/") or ext in document_exts:
+        return "document"
+
+    return ""
+
+
+def _whatsapp_attachment_effective_mime_type(filename: str, mime_type: str) -> str:
+    mime = (mime_type or "").strip().lower()
+    if mime:
+        return mime
+    ext = _whatsapp_attachment_ext(filename).lower()
+    mapping = {
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".png": "image/png",
+        ".webp": "image/webp",
+        ".pdf": "application/pdf",
+        ".txt": "text/plain",
+        ".csv": "text/csv",
+        ".doc": "application/msword",
+        ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        ".xls": "application/vnd.ms-excel",
+        ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        ".ppt": "application/vnd.ms-powerpoint",
+        ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        ".zip": "application/zip",
+        ".rar": "application/vnd.rar",
+    }
+    return mapping.get(ext, "application/octet-stream")
+
+
+async def _try_send_whatsapp_media(
+        *,
+        config: WhatsAppChannelConfig,
+        to_phone: str,
+        attachment_storage_path: str,
+        attachment_mime_type: str,
+        attachment_name: str,
+        caption: str = "",
+) -> tuple[bool, str, str]:
+    digits = _only_digits(to_phone)
+    if not digits:
+        return False, "Telefone inválido.", ""
+    if not config.is_enabled or not config.meta_phone_number_id:
+        return False, "Canal não configurado para envio via API.", ""
+    if not WHATSAPP_ACCESS_TOKEN:
+        return False, "WHATSAPP_ACCESS_TOKEN não configurado no ambiente.", ""
+
+    path = Path(attachment_storage_path or "").resolve()
+    if not path.exists():
+        return False, "Arquivo do anexo não encontrado para envio.", ""
+
+    filename = (attachment_name or path.name).strip() or path.name
+    mime_type = _whatsapp_attachment_effective_mime_type(filename, attachment_mime_type)
+    media_kind = _whatsapp_attachment_send_kind(filename, mime_type)
+    if media_kind not in {"image", "document"}:
+        return False, "Tipo de anexo ainda não suportado para envio oficial.", ""
+
+    upload_url = f"https://graph.facebook.com/{WHATSAPP_GRAPH_VERSION}/{config.meta_phone_number_id}/media"
+    message_url = f"https://graph.facebook.com/{WHATSAPP_GRAPH_VERSION}/{config.meta_phone_number_id}/messages"
+    headers = {"Authorization": f"Bearer {WHATSAPP_ACCESS_TOKEN}"}
+
+    try:
+        with path.open("rb") as fh:
+            files = {"file": (filename, fh, mime_type)}
+            data = {
+                "messaging_product": "whatsapp",
+                "type": mime_type,
+            }
+            async with httpx.AsyncClient(timeout=45.0) as client:
+                upload_resp = await client.post(upload_url, headers=headers, data=data, files=files)
+
+        if not (200 <= upload_resp.status_code < 300):
+            return False, _whatsapp_meta_error_message(upload_resp), ""
+
+        upload_data = upload_resp.json() if upload_resp.headers.get("content-type", "").startswith("application/json") else {}
+        media_id = str(upload_data.get("id") or "")
+        if not media_id:
+            return False, "Meta não retornou media_id do anexo.", ""
+
+        media_payload: dict[str, Any]
+        safe_caption = str(caption or "")[:1024]
+        if media_kind == "image":
+            media_payload = {"id": media_id}
+            if safe_caption:
+                media_payload["caption"] = safe_caption
+        else:
+            media_payload = {"id": media_id, "filename": filename[:240]}
+            if safe_caption:
+                media_payload["caption"] = safe_caption
+
+        payload = {
+            "messaging_product": "whatsapp",
+            "to": digits,
+            "type": media_kind,
+            media_kind: media_payload,
+        }
+
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            send_resp = await client.post(
+                message_url,
+                headers={**headers, "Content-Type": "application/json"},
+                json=payload,
+            )
+
+        if 200 <= send_resp.status_code < 300:
+            data = send_resp.json() if send_resp.headers.get("content-type", "").startswith("application/json") else {}
+            ext_id = ""
+            msgs = data.get("messages") if isinstance(data, dict) else None
+            if isinstance(msgs, list) and msgs and isinstance(msgs[0], dict):
+                ext_id = str(msgs[0].get("id") or "")
+            return True, "", ext_id
+
+        return False, _whatsapp_meta_error_message(send_resp), ""
+    except Exception as exc:
+        return False, f"Falha de envio: {exc}", ""
+
+
 async def _try_send_whatsapp_text(
         *,
         config: WhatsAppChannelConfig,
@@ -38599,7 +38744,7 @@ async def _try_send_whatsapp_text(
             if isinstance(msgs, list) and msgs and isinstance(msgs[0], dict):
                 ext_id = str(msgs[0].get("id") or "")
             return True, "", ext_id
-        return False, f"Falha Meta API ({resp.status_code})", ""
+        return False, _whatsapp_meta_error_message(resp), ""
     except Exception as exc:
         return False, f"Falha de envio: {exc}", ""
 
@@ -39249,12 +39394,12 @@ TEMPLATES["whatsapp_thread_detail.html"] = r"""
         </div>
         <div class="col-12">
           <textarea class="form-control" rows="5" name="body" placeholder="Digite a mensagem..."></textarea>
-          <div class="form-text">Você pode registrar só texto, só anexo interno, ou ambos.</div>
+          <div class="form-text">Você pode enviar só texto, só anexo, ou ambos. Quando o envio oficial estiver ligado, imagem e documento também vão para o WhatsApp.</div>
         </div>
         <div class="col-12">
           <label class="form-label">Anexo interno</label>
           <input class="form-control" type="file" name="attachment_file" />
-          <div class="form-text">Nesta etapa o anexo fica salvo no app. O envio oficial de mídia pela Meta ficará para o próximo patch.</div>
+          <div class="form-text">Suporta envio oficial de imagem e documento. Outros tipos continuam salvos apenas no app.</div>
         </div>
         <div class="col-12">
           <button class="btn btn-primary">Registrar mensagem</button>
@@ -39803,9 +39948,23 @@ async def whatsapp_thread_add_message(
 
     delivery_status = "local"
     external_id = ""
-    if direction == "outbound" and send_live and clean_body and not has_file:
+    if direction == "outbound" and send_live:
         config = _get_or_create_whatsapp_config(session, company_id=ctx.company.id)
-        ok, err, ext_id = await _try_send_whatsapp_text(config=config, to_phone=thread.contact_phone, body=clean_body)
+        if has_file:
+            ok, err, ext_id = await _try_send_whatsapp_media(
+                config=config,
+                to_phone=thread.contact_phone,
+                attachment_storage_path=attachment_storage_path,
+                attachment_mime_type=attachment_mime_type,
+                attachment_name=attachment_name,
+                caption=clean_body,
+            )
+        else:
+            ok, err, ext_id = await _try_send_whatsapp_text(
+                config=config,
+                to_phone=thread.contact_phone,
+                body=clean_body,
+            )
         if ok:
             delivery_status = "sent"
             external_id = ext_id
@@ -39813,8 +39972,6 @@ async def whatsapp_thread_add_message(
             delivery_status = "failed"
             if err:
                 set_flash(request, f"Mensagem registrada no app, mas não enviada via WhatsApp: {err}")
-    elif direction == "outbound" and send_live and has_file:
-        set_flash(request, "Anexo salvo no app. O envio oficial de mídia será ativado em um próximo patch.")
 
     msg = _whatsapp_add_message(
         session,
