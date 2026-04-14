@@ -8,6 +8,7 @@ import hmac
 import inspect
 import json
 import html
+import mimetypes
 import os
 import asyncio
 import re
@@ -11884,6 +11885,62 @@ async def save_upload(upload: UploadFile) -> tuple[str, str, int]:
 
     mime = upload.content_type or "application/octet-stream"
     return stored, mime, size
+
+
+def save_upload_bytes(*, original_filename: str, content: bytes, mime_type: str = "application/octet-stream") -> tuple[str, str, int]:
+    filename = safe_filename(original_filename or "arquivo")
+    stored = f"{uuid.uuid4().hex}_{filename}"
+    path = UPLOAD_DIR / stored
+    size = len(content or b"")
+    if size > _MAX_UPLOAD_BYTES:
+        raise ValueError("Arquivo excede o limite de tamanho.")
+    path.write_bytes(content or b"")
+    return stored, (mime_type or "application/octet-stream"), size
+
+
+async def read_upload_bytes(upload: UploadFile) -> tuple[str, str, bytes]:
+    original = upload.filename or "arquivo"
+    mime = upload.content_type or "application/octet-stream"
+    await upload.seek(0)
+    content = await upload.read()
+    if len(content) > _MAX_UPLOAD_BYTES:
+        raise ValueError("Arquivo excede o limite de tamanho.")
+    await upload.seek(0)
+    return original, mime, content
+
+
+def _whatsapp_media_kind(*, mime_type: str = "", filename: str = "") -> str:
+    mime = (mime_type or "").lower()
+    name = (filename or "").lower()
+    if mime.startswith("image/") or name.endswith((".jpg", ".jpeg", ".png", ".gif", ".webp")):
+        return "image"
+    if mime.startswith("audio/") or name.endswith((".mp3", ".ogg", ".opus", ".aac", ".m4a", ".wav")):
+        return "audio"
+    return "document"
+
+
+def _guess_extension_from_mime(mime_type: str) -> str:
+    guessed = mimetypes.guess_extension(mime_type or "") or ""
+    if guessed == ".jpe":
+        guessed = ".jpg"
+    return guessed
+
+
+def _infer_filename_from_media(*, message_type: str, mime_type: str, provided_filename: str = "") -> str:
+    filename = safe_filename(provided_filename or "")
+    if filename:
+        return filename
+    ext = _guess_extension_from_mime(mime_type)
+    base = {
+        "image": "imagem",
+        "document": "documento",
+        "audio": "audio",
+    }.get((message_type or "").lower(), "arquivo")
+    return f"{base}{ext or ''}"
+
+
+def _whatsapp_message_media_href(message_id: int) -> str:
+    return f"/admin/whatsapp/mensagens/{int(message_id)}/arquivo"
 
 
 # ----------------------------
@@ -38198,6 +38255,12 @@ class WhatsAppThreadMessage(SQLModel, table=True):
     created_by_user_id: Optional[int] = Field(default=None, index=True, foreign_key="user.id")
     delivery_status: str = Field(default="local", index=True)  # local | sent | delivered | read | failed | received
     external_message_id: str = Field(default="", index=True)
+    message_type: str = Field(default="text", index=True)  # text | image | document | audio
+    media_external_id: str = Field(default="", index=True)
+    media_mime_type: str = Field(default="")
+    media_filename: str = Field(default="")
+    media_stored_filename: str = Field(default="")
+    media_size_bytes: int = Field(default=0)
     created_at: datetime = Field(default_factory=utcnow, index=True)
 
 
@@ -38267,6 +38330,12 @@ def ensure_whatsapp_columns() -> None:
             ("created_by_user_id", "INTEGER", "INTEGER"),
             ("delivery_status", "TEXT NOT NULL DEFAULT 'local'", "TEXT NOT NULL DEFAULT 'local'"),
             ("external_message_id", "TEXT NOT NULL DEFAULT ''", "TEXT NOT NULL DEFAULT ''"),
+            ("message_type", "TEXT NOT NULL DEFAULT 'text'", "TEXT NOT NULL DEFAULT 'text'"),
+            ("media_external_id", "TEXT NOT NULL DEFAULT ''", "TEXT NOT NULL DEFAULT ''"),
+            ("media_mime_type", "TEXT NOT NULL DEFAULT ''", "TEXT NOT NULL DEFAULT ''"),
+            ("media_filename", "TEXT NOT NULL DEFAULT ''", "TEXT NOT NULL DEFAULT ''"),
+            ("media_stored_filename", "TEXT NOT NULL DEFAULT ''", "TEXT NOT NULL DEFAULT ''"),
+            ("media_size_bytes", "INTEGER NOT NULL DEFAULT 0", "INTEGER NOT NULL DEFAULT 0"),
             ("created_at", "TIMESTAMP WITHOUT TIME ZONE", "TEXT"),
         ],
     }
@@ -38464,8 +38533,17 @@ def _whatsapp_add_message(
         created_by_user_id: Optional[int],
         delivery_status: str = "",
         external_message_id: str = "",
+        message_type: str = "text",
+        media_external_id: str = "",
+        media_mime_type: str = "",
+        media_filename: str = "",
+        media_stored_filename: str = "",
+        media_size_bytes: int = 0,
 ) -> WhatsAppThreadMessage:
     clean_body = _clean_text(body, 5000)
+    normalized_type = (message_type or "text").strip().lower()
+    if normalized_type not in {"text", "image", "document", "audio"}:
+        normalized_type = "text"
     row = WhatsAppThreadMessage(
         company_id=thread.company_id,
         thread_id=thread.id,
@@ -38475,6 +38553,12 @@ def _whatsapp_add_message(
         created_by_user_id=created_by_user_id,
         delivery_status=_clean_text(delivery_status or ("received" if direction == "inbound" else "local"), 40),
         external_message_id=_clean_text(external_message_id, 120),
+        message_type=normalized_type,
+        media_external_id=_clean_text(media_external_id, 120),
+        media_mime_type=_clean_text(media_mime_type, 160),
+        media_filename=_clean_text(media_filename, 240),
+        media_stored_filename=_clean_text(media_stored_filename, 240),
+        media_size_bytes=max(0, int(media_size_bytes or 0)),
         created_at=utcnow(),
     )
     session.add(row)
@@ -38545,9 +38629,190 @@ async def _try_send_whatsapp_text(
             if isinstance(msgs, list) and msgs and isinstance(msgs[0], dict):
                 ext_id = str(msgs[0].get("id") or "")
             return True, "", ext_id
-        return False, f"Falha Meta API ({resp.status_code})", ""
+        detail = ""
+        try:
+            data = resp.json()
+            if isinstance(data, dict):
+                err = data.get("error") or {}
+                if isinstance(err, dict):
+                    detail = str(err.get("message") or "")
+        except Exception:
+            detail = ""
+        label = f"Falha Meta API ({resp.status_code})"
+        return False, f"{label}: {detail}" if detail else label, ""
     except Exception as exc:
         return False, f"Falha de envio: {exc}", ""
+
+
+async def _whatsapp_upload_media_bytes(
+        *,
+        config: WhatsAppChannelConfig,
+        original_filename: str,
+        mime_type: str,
+        content: bytes,
+) -> tuple[bool, str, str]:
+    if not config.is_enabled or not config.meta_phone_number_id:
+        return False, "Canal não configurado para envio via API.", ""
+    if not WHATSAPP_ACCESS_TOKEN:
+        return False, "WHATSAPP_ACCESS_TOKEN não configurado no ambiente.", ""
+    if not content:
+        return False, "Arquivo vazio.", ""
+    url = f"https://graph.facebook.com/{WHATSAPP_GRAPH_VERSION}/{config.meta_phone_number_id}/media"
+    files = {
+        "file": (
+            safe_filename(original_filename or "arquivo"),
+            content,
+            mime_type or "application/octet-stream",
+        )
+    }
+    data = {"messaging_product": "whatsapp"}
+    try:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            resp = await client.post(
+                url,
+                headers={"Authorization": f"Bearer {WHATSAPP_ACCESS_TOKEN}"},
+                data=data,
+                files=files,
+            )
+        if 200 <= resp.status_code < 300:
+            payload = resp.json() if resp.headers.get("content-type", "").startswith("application/json") else {}
+            media_id = str((payload or {}).get("id") or "")
+            if media_id:
+                return True, "", media_id
+            return False, "Upload concluído sem media id.", ""
+        detail = ""
+        try:
+            payload = resp.json()
+            if isinstance(payload, dict):
+                err = payload.get("error") or {}
+                if isinstance(err, dict):
+                    detail = str(err.get("message") or "")
+        except Exception:
+            detail = ""
+        label = f"Falha upload Meta ({resp.status_code})"
+        return False, f"{label}: {detail}" if detail else label, ""
+    except Exception as exc:
+        return False, f"Falha no upload do anexo: {exc}", ""
+
+
+async def _try_send_whatsapp_media(
+        *,
+        config: WhatsAppChannelConfig,
+        to_phone: str,
+        media_kind: str,
+        media_id: str,
+        body: str = "",
+        filename: str = "",
+) -> tuple[bool, str, str]:
+    digits = _only_digits(to_phone)
+    if not digits:
+        return False, "Telefone inválido.", ""
+    if not config.is_enabled or not config.meta_phone_number_id:
+        return False, "Canal não configurado para envio via API.", ""
+    if not WHATSAPP_ACCESS_TOKEN:
+        return False, "WHATSAPP_ACCESS_TOKEN não configurado no ambiente.", ""
+    kind = (media_kind or "").strip().lower()
+    if kind not in {"image", "document", "audio"}:
+        return False, "Tipo de anexo não suportado pelo WhatsApp.", ""
+    if not media_id:
+        return False, "Mídia do WhatsApp não enviada.", ""
+
+    payload: dict[str, Any] = {
+        "messaging_product": "whatsapp",
+        "to": digits,
+        "type": kind,
+    }
+    caption = str(body or "").strip()
+    if kind == "image":
+        payload["image"] = {"id": media_id}
+        if caption:
+            payload["image"]["caption"] = caption[:1024]
+    elif kind == "document":
+        payload["document"] = {"id": media_id}
+        if filename:
+            payload["document"]["filename"] = safe_filename(filename)
+        if caption:
+            payload["document"]["caption"] = caption[:1024]
+    else:
+        payload["audio"] = {"id": media_id}
+
+    url = f"https://graph.facebook.com/{WHATSAPP_GRAPH_VERSION}/{config.meta_phone_number_id}/messages"
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.post(
+                url,
+                headers={
+                    "Authorization": f"Bearer {WHATSAPP_ACCESS_TOKEN}",
+                    "Content-Type": "application/json",
+                },
+                json=payload,
+            )
+        if 200 <= resp.status_code < 300:
+            data = resp.json() if resp.headers.get("content-type", "").startswith("application/json") else {}
+            ext_id = ""
+            msgs = data.get("messages") if isinstance(data, dict) else None
+            if isinstance(msgs, list) and msgs and isinstance(msgs[0], dict):
+                ext_id = str(msgs[0].get("id") or "")
+            return True, "", ext_id
+        detail = ""
+        try:
+            data = resp.json()
+            if isinstance(data, dict):
+                err = data.get("error") or {}
+                if isinstance(err, dict):
+                    detail = str(err.get("message") or "")
+        except Exception:
+            detail = ""
+        label = f"Falha Meta API ({resp.status_code})"
+        return False, f"{label}: {detail}" if detail else label, ""
+    except Exception as exc:
+        return False, f"Falha de envio: {exc}", ""
+
+
+async def _whatsapp_download_media(
+        *,
+        media_id: str,
+        message_type: str,
+        suggested_filename: str = "",
+) -> tuple[bool, str, str, str, int]:
+    media_ref = (media_id or "").strip()
+    if not media_ref:
+        return False, "", "", "", 0
+    if not WHATSAPP_ACCESS_TOKEN:
+        return False, "", "", "", 0
+    meta_url = f"https://graph.facebook.com/{WHATSAPP_GRAPH_VERSION}/{media_ref}"
+    try:
+        async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
+            meta_resp = await client.get(
+                meta_url,
+                headers={"Authorization": f"Bearer {WHATSAPP_ACCESS_TOKEN}"},
+            )
+            if not (200 <= meta_resp.status_code < 300):
+                return False, "", "", "", 0
+            meta_payload = meta_resp.json() if meta_resp.headers.get("content-type", "").startswith("application/json") else {}
+            download_url = str((meta_payload or {}).get("url") or "")
+            mime_type = str((meta_payload or {}).get("mime_type") or "application/octet-stream")
+            if not download_url:
+                return False, "", "", "", 0
+            file_resp = await client.get(
+                download_url,
+                headers={"Authorization": f"Bearer {WHATSAPP_ACCESS_TOKEN}"},
+            )
+            if not (200 <= file_resp.status_code < 300):
+                return False, "", "", "", 0
+            filename = _infer_filename_from_media(
+                message_type=message_type,
+                mime_type=mime_type,
+                provided_filename=suggested_filename,
+            )
+            stored, mime, size = save_upload_bytes(
+                original_filename=filename,
+                content=file_resp.content,
+                mime_type=mime_type,
+            )
+            return True, stored, mime, filename, size
+    except Exception:
+        return False, "", "", "", 0
 
 
 def _whatsapp_find_open_thread_by_phone(session: Session, *, company_id: int, phone_digits: str) -> Optional[
@@ -39144,7 +39409,30 @@ TEMPLATES["whatsapp_thread_detail.html"] = r"""
               </div>
               <div class="small muted">{{ msg.created_at.strftime("%d/%m/%Y %H:%M") if msg.created_at else "-" }}</div>
             </div>
-            <div class="mt-2">{{ msg.body }}</div>
+
+            {% if msg.body %}
+              <div class="mt-2" style="white-space: pre-wrap;">{{ msg.body }}</div>
+            {% endif %}
+
+            {% if msg.media_stored_filename %}
+              <div class="mt-3">
+                {% if msg.message_type == "image" %}
+                  <a href="{{ _whatsapp_message_media_href(msg.id) }}" target="_blank" rel="noopener">
+                    <img src="{{ _whatsapp_message_media_href(msg.id) }}" alt="{{ msg.media_filename or 'imagem' }}" class="img-fluid rounded border" style="max-height: 320px;"/>
+                  </a>
+                {% else %}
+                  <a class="btn btn-sm btn-outline-secondary" href="{{ _whatsapp_message_media_href(msg.id) }}" target="_blank" rel="noopener">
+                    Baixar {{ msg.media_filename or "arquivo" }}
+                  </a>
+                {% endif %}
+                <div class="small muted mt-2">
+                  {{ msg.message_type }}
+                  {% if msg.media_mime_type %} • {{ msg.media_mime_type }}{% endif %}
+                  {% if msg.media_size_bytes %} • {{ (msg.media_size_bytes / 1024)|round(1) }} KB{% endif %}
+                </div>
+              </div>
+            {% endif %}
+
             <div class="small muted mt-2">
               {{ msg.delivery_status }}
               {% if msg.external_message_id %} • <span class="mono">{{ msg.external_message_id }}</span>{% endif %}
@@ -39158,7 +39446,7 @@ TEMPLATES["whatsapp_thread_detail.html"] = r"""
 
     <div class="card p-4 mt-3">
       <div class="fw-semibold mb-3">Nova mensagem</div>
-      <form method="post" action="/admin/whatsapp/conversas/{{ thread.id }}/mensagens" class="row g-3">
+      <form method="post" action="/admin/whatsapp/conversas/{{ thread.id }}/mensagens" class="row g-3" enctype="multipart/form-data">
         <div class="col-md-4">
           <label class="form-label">Tipo</label>
           <select class="form-select" name="direction">
@@ -39174,7 +39462,12 @@ TEMPLATES["whatsapp_thread_detail.html"] = r"""
           </div>
         </div>
         <div class="col-12">
-          <textarea class="form-control" rows="5" name="body" placeholder="Digite a mensagem..." required></textarea>
+          <textarea class="form-control" rows="5" name="body" placeholder="Digite a mensagem ou legenda do anexo..."></textarea>
+        </div>
+        <div class="col-12">
+          <label class="form-label">Anexo opcional</label>
+          <input class="form-control" type="file" name="file" accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv"/>
+          <div class="small muted mt-2">Este patch suporta imagem e documento. Áudio e múltiplos anexos ficam para a próxima etapa.</div>
         </div>
         <div class="col-12">
           <button class="btn btn-primary">Registrar mensagem</button>
@@ -39633,7 +39926,35 @@ async def whatsapp_thread_detail_page(
             "clients": clients,
             "client": client,
             "staff_options": staff_options,
+            "_whatsapp_message_media_href": _whatsapp_message_media_href,
         },
+    )
+
+
+
+
+@app.get("/admin/whatsapp/mensagens/{message_id}/arquivo")
+@require_role({"admin", "equipe"})
+async def whatsapp_message_media_download(
+        request: Request,
+        message_id: int,
+        session: Session = Depends(get_session),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+    msg = session.get(WhatsAppThreadMessage, int(message_id))
+    if not msg or msg.company_id != ctx.company.id or not (msg.media_stored_filename or "").strip():
+        return render("error.html", request=request, context={"message": "Arquivo não encontrado."}, status_code=404)
+    thread = session.get(WhatsAppThread, int(msg.thread_id or 0))
+    if not thread or thread.company_id != ctx.company.id:
+        return render("error.html", request=request, context={"message": "Conversa não encontrada."}, status_code=404)
+    path = UPLOAD_DIR / msg.media_stored_filename
+    if not path.exists():
+        return render("error.html", request=request, context={"message": "Arquivo não encontrado."}, status_code=404)
+    return FileResponse(
+        path=str(path),
+        media_type=msg.media_mime_type or "application/octet-stream",
+        filename=msg.media_filename or path.name,
     )
 
 
@@ -39677,6 +39998,7 @@ async def whatsapp_thread_add_message(
         direction: str = Form(default="outbound"),
         body: str = Form(default=""),
         send_live: Optional[str] = Form(default=None),
+        file: UploadFile | None = File(default=None),
         session: Session = Depends(get_session),
 ) -> Response:
     ctx = get_tenant_context(request, session)
@@ -39685,35 +40007,101 @@ async def whatsapp_thread_add_message(
     if not thread or thread.company_id != ctx.company.id:
         set_flash(request, "Conversa não encontrada.")
         return RedirectResponse("/admin/whatsapp/caixa", status_code=303)
+
+    direction_norm = direction if direction in {"inbound", "outbound", "internal_note"} else "outbound"
     clean_body = _clean_text(body, 5000)
-    if not clean_body:
-        set_flash(request, "Escreva uma mensagem.")
+    has_file = bool(file and getattr(file, "filename", ""))
+
+    if not clean_body and not has_file:
+        set_flash(request, "Escreva uma mensagem ou selecione um anexo.")
         return RedirectResponse(f"/admin/whatsapp/conversas/{thread.id}", status_code=303)
 
     delivery_status = "local"
     external_id = ""
-    if direction == "outbound" and send_live:
-        config = _get_or_create_whatsapp_config(session, company_id=ctx.company.id)
-        ok, err, ext_id = await _try_send_whatsapp_text(config=config, to_phone=thread.contact_phone, body=clean_body)
-        if ok:
-            delivery_status = "sent"
-            external_id = ext_id
-        else:
-            delivery_status = "failed"
-            if err:
-                set_flash(request, f"Mensagem registrada no app, mas não enviada via WhatsApp: {err}")
+    message_type = "text"
+    media_external_id = ""
+    media_mime_type = ""
+    media_filename = ""
+    media_stored_filename = ""
+    media_size_bytes = 0
 
-    msg = _whatsapp_add_message(
+    if has_file:
+        try:
+            original_filename, media_mime_type, content = await read_upload_bytes(file)  # type: ignore[arg-type]
+            media_filename = original_filename or "arquivo"
+            media_size_bytes = len(content or b"")
+            message_type = _whatsapp_media_kind(mime_type=media_mime_type, filename=media_filename)
+            media_stored_filename, media_mime_type, media_size_bytes = save_upload_bytes(
+                original_filename=media_filename,
+                content=content,
+                mime_type=media_mime_type,
+            )
+        except ValueError:
+            set_flash(request, "Arquivo muito grande.")
+            return RedirectResponse(f"/admin/whatsapp/conversas/{thread.id}", status_code=303)
+
+        if direction_norm == "outbound" and send_live:
+            if message_type not in {"image", "document"}:
+                delivery_status = "failed"
+                set_flash(request, "Mensagem registrada no app, mas o envio oficial suporta apenas imagem e documento neste patch.")
+            else:
+                config = _get_or_create_whatsapp_config(session, company_id=ctx.company.id)
+                ok_upload, upload_err, meta_media_id = await _whatsapp_upload_media_bytes(
+                    config=config,
+                    original_filename=media_filename,
+                    mime_type=media_mime_type,
+                    content=content,
+                )
+                if not ok_upload:
+                    delivery_status = "failed"
+                    if upload_err:
+                        set_flash(request, f"Mensagem registrada no app, mas o upload do anexo falhou: {upload_err}")
+                else:
+                    media_external_id = meta_media_id
+                    ok_send, err, ext_id = await _try_send_whatsapp_media(
+                        config=config,
+                        to_phone=thread.contact_phone,
+                        media_kind=message_type,
+                        media_id=meta_media_id,
+                        body=clean_body,
+                        filename=media_filename,
+                    )
+                    if ok_send:
+                        delivery_status = "sent"
+                        external_id = ext_id
+                    else:
+                        delivery_status = "failed"
+                        if err:
+                            set_flash(request, f"Mensagem registrada no app, mas não enviada via WhatsApp: {err}")
+    else:
+        if direction_norm == "outbound" and send_live:
+            config = _get_or_create_whatsapp_config(session, company_id=ctx.company.id)
+            ok, err, ext_id = await _try_send_whatsapp_text(config=config, to_phone=thread.contact_phone, body=clean_body)
+            if ok:
+                delivery_status = "sent"
+                external_id = ext_id
+            else:
+                delivery_status = "failed"
+                if err:
+                    set_flash(request, f"Mensagem registrada no app, mas não enviada via WhatsApp: {err}")
+
+    _whatsapp_add_message(
         session,
         thread=thread,
-        direction=direction if direction in {"inbound", "outbound", "internal_note"} else "outbound",
+        direction=direction_norm,
         body=clean_body,
         sender_name=ctx.user.name,
         created_by_user_id=ctx.user.id,
         delivery_status=delivery_status,
         external_message_id=external_id,
+        message_type=message_type,
+        media_external_id=media_external_id,
+        media_mime_type=media_mime_type,
+        media_filename=media_filename,
+        media_stored_filename=media_stored_filename,
+        media_size_bytes=media_size_bytes,
     )
-    chosen_topic = _whatsapp_menu_choice_to_topic(clean_body) if direction == "inbound" else None
+    chosen_topic = _whatsapp_menu_choice_to_topic(clean_body) if direction_norm == "inbound" else None
     if chosen_topic:
         thread.topic_code = chosen_topic
         thread.assigned_user_id = thread.assigned_user_id or _whatsapp_pick_default_assignee(
@@ -39722,8 +40110,9 @@ async def whatsapp_thread_add_message(
         session.add(thread)
         session.commit()
 
-    if direction == "inbound":
-        _whatsapp_notify_new_inbound(session, thread=thread, preview=clean_body, created_by_user_id=ctx.user.id)
+    if direction_norm == "inbound":
+        preview = clean_body or media_filename or f"[mensagem {message_type}]"
+        _whatsapp_notify_new_inbound(session, thread=thread, preview=preview, created_by_user_id=ctx.user.id)
 
     return RedirectResponse(f"/admin/whatsapp/conversas/{thread.id}", status_code=303)
 
@@ -39763,8 +40152,12 @@ def _extract_meta_whatsapp_messages(payload: dict[str, Any]) -> list[dict[str, A
                 if not isinstance(msg, dict):
                     continue
                 wa_from = str(msg.get("from") or "")
-                msg_type = str(msg.get("type") or "")
+                msg_type = str(msg.get("type") or "").strip().lower()
                 body = ""
+                media_external_id = ""
+                media_mime_type = ""
+                media_filename = ""
+
                 if msg_type == "text":
                     body = str((msg.get("text") or {}).get("body") or "")
                 elif msg_type == "button":
@@ -39775,6 +40168,17 @@ def _extract_meta_whatsapp_messages(payload: dict[str, Any]) -> list[dict[str, A
                         body = str((interactive.get("button_reply") or {}).get("title") or "")
                     elif "list_reply" in interactive:
                         body = str((interactive.get("list_reply") or {}).get("title") or "")
+                elif msg_type in {"image", "document", "audio"}:
+                    media_obj = msg.get(msg_type) or {}
+                    if isinstance(media_obj, dict):
+                        body = str(media_obj.get("caption") or "")
+                        media_external_id = str(media_obj.get("id") or "")
+                        media_mime_type = str(media_obj.get("mime_type") or "")
+                        media_filename = str(media_obj.get("filename") or "")
+                    if not body:
+                        label = {"image": "imagem", "document": "documento", "audio": "áudio"}.get(msg_type, msg_type or "arquivo")
+                        body = f"[mensagem {label}]"
+
                 if not body:
                     body = f"[mensagem {msg_type or 'sem texto'}]"
                 items.append({
@@ -39783,6 +40187,10 @@ def _extract_meta_whatsapp_messages(payload: dict[str, Any]) -> list[dict[str, A
                     "profile_name": contact_map.get(wa_from, ""),
                     "body": body,
                     "message_id": str(msg.get("id") or ""),
+                    "message_type": msg_type or "text",
+                    "media_external_id": media_external_id,
+                    "media_mime_type": media_mime_type,
+                    "media_filename": media_filename,
                 })
     return items
 
@@ -39828,6 +40236,25 @@ async def whatsapp_webhook_receive(request: Request, session: Session = Depends(
                 created_by_user_id=None,
             )
         body = str(event.get("body") or "")
+        message_type = str(event.get("message_type") or "text").strip().lower()
+        media_external_id = str(event.get("media_external_id") or "")
+        media_mime_type = str(event.get("media_mime_type") or "")
+        media_filename = str(event.get("media_filename") or "")
+        media_stored_filename = ""
+        media_size_bytes = 0
+
+        if message_type in {"image", "document", "audio"} and media_external_id:
+            ok_media, stored_name, mime_name, original_name, size_value = await _whatsapp_download_media(
+                media_id=media_external_id,
+                message_type=message_type,
+                suggested_filename=media_filename,
+            )
+            if ok_media:
+                media_stored_filename = stored_name
+                media_mime_type = mime_name or media_mime_type
+                media_filename = original_name or media_filename
+                media_size_bytes = int(size_value or 0)
+
         choice_topic = _whatsapp_menu_choice_to_topic(body)
         if choice_topic:
             thread.topic_code = choice_topic
@@ -39845,8 +40272,14 @@ async def whatsapp_webhook_receive(request: Request, session: Session = Depends(
             created_by_user_id=None,
             delivery_status="received",
             external_message_id=str(event.get("message_id") or ""),
+            message_type=message_type,
+            media_external_id=media_external_id,
+            media_mime_type=media_mime_type,
+            media_filename=media_filename,
+            media_stored_filename=media_stored_filename,
+            media_size_bytes=media_size_bytes,
         )
-        _whatsapp_notify_new_inbound(session, thread=thread, preview=body)
+        _whatsapp_notify_new_inbound(session, thread=thread, preview=body or media_filename or f"[mensagem {message_type}]")
         processed += 1
     return JSONResponse({"ok": True, "processed": processed})
 
