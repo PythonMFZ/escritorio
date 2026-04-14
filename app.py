@@ -38205,13 +38205,7 @@ class WhatsAppThreadMessage(SQLModel, table=True):
     attachment_storage_path: str = Field(default="")
     attachment_mime_type: str = Field(default="")
     attachment_size_bytes: int = Field(default=0)
-    message_type: str = Field(default="text", index=True)
-    media_id: str = Field(default="", index=True)
-    media_sha256: str = Field(default="")
-    group_sender_phone: str = Field(default="", index=True)
-    group_sender_name: str = Field(default="")
     created_at: datetime = Field(default_factory=utcnow, index=True)
-
 
 
 def ensure_whatsapp_tables() -> bool:
@@ -38284,11 +38278,6 @@ def ensure_whatsapp_columns() -> None:
             ("attachment_storage_path", "TEXT NOT NULL DEFAULT ''", "TEXT NOT NULL DEFAULT ''"),
             ("attachment_mime_type", "TEXT NOT NULL DEFAULT ''", "TEXT NOT NULL DEFAULT ''"),
             ("attachment_size_bytes", "INTEGER NOT NULL DEFAULT 0", "INTEGER NOT NULL DEFAULT 0"),
-            ("message_type", "TEXT NOT NULL DEFAULT 'text'", "TEXT NOT NULL DEFAULT 'text'"),
-            ("media_id", "TEXT NOT NULL DEFAULT ''", "TEXT NOT NULL DEFAULT ''"),
-            ("media_sha256", "TEXT NOT NULL DEFAULT ''", "TEXT NOT NULL DEFAULT ''"),
-            ("group_sender_phone", "TEXT NOT NULL DEFAULT ''", "TEXT NOT NULL DEFAULT ''"),
-            ("group_sender_name", "TEXT NOT NULL DEFAULT ''", "TEXT NOT NULL DEFAULT ''"),
             ("created_at", "TIMESTAMP WITHOUT TIME ZONE", "TEXT"),
         ],
     }
@@ -38453,20 +38442,18 @@ def _whatsapp_create_thread(
         status: str,
         source_kind: str,
         created_by_user_id: Optional[int],
-        external_thread_id: str = "",
 ) -> WhatsAppThread:
     row = WhatsAppThread(
         company_id=company_id,
         client_id=client_id,
         contact_name=_clean_text(contact_name, 120),
-        contact_phone=_only_digits(contact_phone)[:40],
+        contact_phone=_only_digits(contact_phone)[:20],
         is_group=bool(is_group),
         group_name=_clean_text(group_name, 120),
         topic_code=_normalize_whatsapp_topic(topic_code),
         status=_normalize_whatsapp_status(status),
         assigned_user_id=assigned_user_id,
         source_kind=_clean_text(source_kind, 30) or "manual",
-        external_thread_id=_clean_text(external_thread_id, 255),
         created_by_user_id=created_by_user_id,
         last_message_at=utcnow(),
         created_at=utcnow(),
@@ -38476,24 +38463,6 @@ def _whatsapp_create_thread(
     session.commit()
     session.refresh(row)
     return row
-
-
-def _whatsapp_find_thread_by_external_id(
-        session: Session,
-        *,
-        company_id: int,
-        external_thread_id: str,
-) -> Optional[WhatsAppThread]:
-    ext_id = _clean_text(external_thread_id, 255)
-    if not ext_id:
-        return None
-    return session.exec(
-        select(WhatsAppThread).where(
-            WhatsAppThread.company_id == int(company_id),
-            WhatsAppThread.external_thread_id == ext_id,
-        ).order_by(WhatsAppThread.updated_at.desc())
-    ).first()
-
 
 
 def _whatsapp_add_message(
@@ -38510,11 +38479,6 @@ def _whatsapp_add_message(
         attachment_storage_path: str = "",
         attachment_mime_type: str = "",
         attachment_size_bytes: int = 0,
-        message_type: str = "text",
-        media_id: str = "",
-        media_sha256: str = "",
-        group_sender_phone: str = "",
-        group_sender_name: str = "",
 ) -> WhatsAppThreadMessage:
     clean_body = _clean_text(body, 5000)
     row = WhatsAppThreadMessage(
@@ -38530,11 +38494,6 @@ def _whatsapp_add_message(
         attachment_storage_path=_clean_text(attachment_storage_path, 1000),
         attachment_mime_type=_clean_text(attachment_mime_type, 120),
         attachment_size_bytes=max(0, int(attachment_size_bytes or 0)),
-        message_type=_clean_text(message_type or ("text" if clean_body else "file"), 40) or "text",
-        media_id=_clean_text(media_id, 120),
-        media_sha256=_clean_text(media_sha256, 120),
-        group_sender_phone=_clean_text(_only_digits(group_sender_phone), 40),
-        group_sender_name=_clean_text(group_sender_name, 120),
         created_at=utcnow(),
     )
     session.add(row)
@@ -38555,47 +38514,13 @@ def _whatsapp_add_message(
     return row
 
 
-
 def _whatsapp_is_image_mime(mime_type: str) -> bool:
     return str(mime_type or "").lower().startswith("image/")
-
-
-def _whatsapp_is_audio_mime(mime_type: str) -> bool:
-    return str(mime_type or "").lower().startswith("audio/")
 
 
 def _whatsapp_attachment_ext(filename: str) -> str:
     suffix = Path(filename or "").suffix.strip().lower()
     return suffix[:12]
-
-
-def _whatsapp_ext_from_mime_type(mime_type: str) -> str:
-    mime = (mime_type or "").strip().lower()
-    mapping = {
-        "image/jpeg": ".jpg",
-        "image/png": ".png",
-        "image/webp": ".webp",
-        "image/gif": ".gif",
-        "application/pdf": ".pdf",
-        "text/plain": ".txt",
-        "text/csv": ".csv",
-        "application/msword": ".doc",
-        "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
-        "application/vnd.ms-excel": ".xls",
-        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": ".xlsx",
-        "application/vnd.ms-powerpoint": ".ppt",
-        "application/vnd.openxmlformats-officedocument.presentationml.presentation": ".pptx",
-        "application/zip": ".zip",
-        "application/vnd.rar": ".rar",
-        "audio/ogg": ".ogg",
-        "audio/opus": ".opus",
-        "audio/mpeg": ".mp3",
-        "audio/mp4": ".m4a",
-        "audio/aac": ".aac",
-        "audio/wav": ".wav",
-        "audio/x-wav": ".wav",
-    }
-    return mapping.get(mime, "")
 
 
 async def _save_whatsapp_attachment_local(file: UploadFile) -> tuple[str, str, str, int]:
@@ -38637,6 +38562,7 @@ def _whatsapp_menu_choice_to_topic(text_value: str) -> Optional[str]:
     return None
 
 
+
 def _whatsapp_meta_error_message(resp: httpx.Response) -> str:
     detail = ""
     try:
@@ -38655,16 +38581,21 @@ def _whatsapp_meta_error_message(resp: httpx.Response) -> str:
 def _whatsapp_attachment_send_kind(filename: str, mime_type: str) -> str:
     mime = (mime_type or "").strip().lower()
     ext = _whatsapp_attachment_ext(filename).lower()
-    if mime.startswith("image/") or ext in {".jpg", ".jpeg", ".png", ".webp", ".gif"}:
+
+    if mime.startswith("image/") or ext in {".jpg", ".jpeg", ".png", ".webp"}:
         return "image"
-    if mime.startswith("audio/") or ext in {".ogg", ".opus", ".mp3", ".m4a", ".aac", ".wav"}:
+
+    audio_exts = {".aac", ".amr", ".mp3", ".m4a", ".ogg", ".opus", ".wav"}
+    if mime.startswith("audio/") or ext in audio_exts:
         return "audio"
+
     document_exts = {
         ".pdf", ".txt", ".csv", ".doc", ".docx", ".xls", ".xlsx",
         ".ppt", ".pptx", ".zip", ".rar",
     }
     if mime.startswith("application/") or mime.startswith("text/") or ext in document_exts:
         return "document"
+
     return ""
 
 
@@ -38678,7 +38609,6 @@ def _whatsapp_attachment_effective_mime_type(filename: str, mime_type: str) -> s
         ".jpeg": "image/jpeg",
         ".png": "image/png",
         ".webp": "image/webp",
-        ".gif": "image/gif",
         ".pdf": "application/pdf",
         ".txt": "text/plain",
         ".csv": "text/csv",
@@ -38690,90 +38620,161 @@ def _whatsapp_attachment_effective_mime_type(filename: str, mime_type: str) -> s
         ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
         ".zip": "application/zip",
         ".rar": "application/vnd.rar",
-        ".ogg": "audio/ogg",
-        ".opus": "audio/ogg",
+        ".aac": "audio/aac",
+        ".amr": "audio/amr",
         ".mp3": "audio/mpeg",
         ".m4a": "audio/mp4",
-        ".aac": "audio/aac",
+        ".ogg": "audio/ogg",
+        ".opus": "audio/ogg",
         ".wav": "audio/wav",
     }
     return mapping.get(ext, "application/octet-stream")
 
 
-def _whatsapp_media_default_filename(
-        *,
-        message_type: str,
-        mime_type: str,
-        original_name: str = "",
-) -> str:
-    filename = (original_name or "").strip()
-    if filename:
-        return re.sub(r"[^A-Za-z0-9._-]+", "_", filename).strip("._") or "arquivo"
-    ext = _whatsapp_ext_from_mime_type(mime_type)
-    base_map = {
-        "image": "imagem_recebida",
-        "document": "documento_recebido",
-        "audio": "audio_recebido",
-        "video": "video_recebido",
+def _whatsapp_filename_ext_from_mime(mime_type: str) -> str:
+    mime = (mime_type or "").strip().lower()
+    mapping = {
+        "image/jpeg": ".jpg",
+        "image/png": ".png",
+        "image/webp": ".webp",
+        "application/pdf": ".pdf",
+        "text/plain": ".txt",
+        "text/csv": ".csv",
+        "application/msword": ".doc",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
+        "application/vnd.ms-excel": ".xls",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": ".xlsx",
+        "application/vnd.ms-powerpoint": ".ppt",
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation": ".pptx",
+        "application/zip": ".zip",
+        "application/vnd.rar": ".rar",
+        "audio/aac": ".aac",
+        "audio/amr": ".amr",
+        "audio/mpeg": ".mp3",
+        "audio/mp4": ".m4a",
+        "audio/ogg": ".ogg",
+        "audio/wav": ".wav",
     }
-    base = base_map.get(str(message_type or "").strip().lower(), "arquivo_recebido")
-    return f"{base}{ext}" if ext else base
+    return mapping.get(mime, "")
 
 
-async def _download_meta_media_to_local(
+def _whatsapp_sanitize_attachment_name(filename: str, *, mime_type: str = "") -> str:
+    raw_name = (filename or "").strip() or "arquivo"
+    safe_name = re.sub(r"[^A-Za-z0-9._-]+", "_", raw_name).strip("._") or "arquivo"
+    if "." not in safe_name:
+        ext = _whatsapp_filename_ext_from_mime(mime_type)
+        if ext:
+            safe_name = f"{safe_name}{ext}"
+    return safe_name
+
+
+def _whatsapp_media_download_filename(
+        *,
+        filename_hint: str = "",
+        mime_type: str = "",
+        media_kind: str = "",
+        external_message_id: str = "",
+) -> str:
+    safe = _whatsapp_sanitize_attachment_name(filename_hint, mime_type=mime_type)
+    if safe and safe != "arquivo":
+        return safe
+    prefix_map = {"image": "imagem", "document": "documento", "audio": "audio"}
+    prefix = prefix_map.get((media_kind or "").strip().lower(), "arquivo")
+    suffix = _clean_text(external_message_id, 40) or uuid.uuid4().hex[:10]
+    ext = _whatsapp_filename_ext_from_mime(mime_type)
+    return f"{prefix}_{suffix}{ext}"
+
+
+def _save_whatsapp_bytes_attachment(
+        *,
+        filename_hint: str,
+        mime_type: str,
+        content: bytes,
+) -> tuple[str, str, str, int]:
+    data = content or b""
+    total = len(data)
+    if total > _MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=400, detail="Arquivo excede o limite permitido.")
+    safe_name = _whatsapp_sanitize_attachment_name(filename_hint, mime_type=mime_type)
+    ext = _whatsapp_attachment_ext(safe_name) or _whatsapp_filename_ext_from_mime(mime_type)
+    storage_name = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex}{ext}"
+    storage_path = (WHATSAPP_MEDIA_DIR / storage_name).resolve()
+    storage_path.write_bytes(data)
+    return safe_name, str(storage_path), (mime_type or "").strip().lower(), total
+
+
+async def _download_meta_whatsapp_media(
         *,
         media_id: str,
-        fallback_filename: str = "",
-        fallback_mime_type: str = "",
-        message_type: str = "",
+        mime_type: str,
+        filename_hint: str = "",
+        media_kind: str = "",
+        external_message_id: str = "",
 ) -> tuple[str, str, str, int]:
-    mid = (media_id or "").strip()
-    if not mid:
+    media_key = (media_id or "").strip()
+    if not media_key:
         raise RuntimeError("media_id ausente.")
     if not WHATSAPP_ACCESS_TOKEN:
         raise RuntimeError("WHATSAPP_ACCESS_TOKEN não configurado no ambiente.")
-    media_url = f"https://graph.facebook.com/{WHATSAPP_GRAPH_VERSION}/{mid}"
+
+    info_url = f"https://graph.facebook.com/{WHATSAPP_GRAPH_VERSION}/{media_key}"
     headers = {"Authorization": f"Bearer {WHATSAPP_ACCESS_TOKEN}"}
-    async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
-        meta_resp = await client.get(media_url, headers=headers)
-        if not (200 <= meta_resp.status_code < 300):
-            raise RuntimeError(_whatsapp_meta_error_message(meta_resp))
-        meta_data = meta_resp.json() if meta_resp.headers.get("content-type", "").startswith("application/json") else {}
-        if not isinstance(meta_data, dict):
-            meta_data = {}
-        download_url = str(meta_data.get("url") or "").strip()
-        effective_mime_type = str(meta_data.get("mime_type") or fallback_mime_type or "").strip().lower()
+    async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
+        info_resp = await client.get(info_url, headers=headers)
+        if not (200 <= info_resp.status_code < 300):
+            raise RuntimeError(_whatsapp_meta_error_message(info_resp))
+        info = info_resp.json() if info_resp.headers.get("content-type", "").startswith("application/json") else {}
+        download_url = str(info.get("url") or "").strip()
+        resolved_mime = str(info.get("mime_type") or mime_type or "").strip().lower()
         if not download_url:
-            raise RuntimeError("Meta não retornou URL da mídia.")
-        file_resp = await client.get(download_url, headers=headers)
-        if not (200 <= file_resp.status_code < 300):
-            raise RuntimeError(_whatsapp_meta_error_message(file_resp))
-        content = file_resp.content
-    size_bytes = len(content or b"")
-    if size_bytes <= 0:
-        raise RuntimeError("Mídia vazia.")
-    if size_bytes > _MAX_UPLOAD_BYTES:
-        raise RuntimeError("Mídia recebida excede o limite configurado no app.")
-    safe_name = _whatsapp_media_default_filename(
-        message_type=message_type,
-        mime_type=effective_mime_type,
-        original_name=fallback_filename,
+            raise RuntimeError("Meta não retornou a URL da mídia.")
+        download_resp = await client.get(download_url, headers=headers)
+        if not (200 <= download_resp.status_code < 300):
+            raise RuntimeError(_whatsapp_meta_error_message(download_resp))
+        content = download_resp.content or b""
+
+    final_filename = _whatsapp_media_download_filename(
+        filename_hint=filename_hint,
+        mime_type=resolved_mime,
+        media_kind=media_kind,
+        external_message_id=external_message_id,
     )
-    ext = _whatsapp_attachment_ext(safe_name) or _whatsapp_ext_from_mime_type(effective_mime_type)
-    storage_name = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex}{ext}"
-    storage_path = (WHATSAPP_MEDIA_DIR / storage_name).resolve()
-    with storage_path.open("wb") as out:
-        out.write(content)
-    return safe_name, str(storage_path), effective_mime_type, size_bytes
+    return _save_whatsapp_bytes_attachment(
+        filename_hint=final_filename,
+        mime_type=resolved_mime,
+        content=content,
+    )
 
 
-def _whatsapp_send_target(thread: WhatsAppThread) -> tuple[str, str]:
-    if bool(thread.is_group):
-        ext_id = str(thread.external_thread_id or "").strip()
-        if not ext_id:
-            return "group", ""
-        return "group", ext_id
-    return "individual", _only_digits(thread.contact_phone)
+def _whatsapp_find_open_thread_by_external_id(
+        session: Session,
+        *,
+        company_id: int,
+        external_thread_id: str,
+) -> Optional[WhatsAppThread]:
+    external_id = _clean_text(external_thread_id, 255)
+    if not external_id:
+        return None
+    rows = session.exec(
+        select(WhatsAppThread)
+        .where(
+            WhatsAppThread.company_id == company_id,
+            WhatsAppThread.external_thread_id == external_id,
+            WhatsAppThread.status != "resolvido",
+        )
+        .order_by(WhatsAppThread.last_message_at.desc())
+    ).all()
+    return rows[0] if rows else None
+
+
+def _whatsapp_group_display_name(group_id: str, group_name: str = "") -> str:
+    clean_name = _clean_text(group_name, 120)
+    if clean_name:
+        return clean_name
+    gid = _clean_text(group_id, 120)
+    if gid:
+        return f"Grupo {gid[-8:]}"
+    return "Grupo"
 
 
 async def _try_send_whatsapp_media(
@@ -38786,41 +38787,51 @@ async def _try_send_whatsapp_media(
         attachment_name: str,
         caption: str = "",
 ) -> tuple[bool, str, str]:
-    target = (recipient_id or "").strip()
-    if recipient_type == "individual":
-        target = _only_digits(target)
+    recipient_kind = "group" if str(recipient_type or "").strip().lower() == "group" else "individual"
+    target = _clean_text(recipient_id, 255) if recipient_kind == "group" else _only_digits(recipient_id)
     if not target:
-        return False, "Destino inválido.", ""
+        return False, "Destinatário inválido.", ""
     if not config.is_enabled or not config.meta_phone_number_id:
         return False, "Canal não configurado para envio via API.", ""
     if not WHATSAPP_ACCESS_TOKEN:
         return False, "WHATSAPP_ACCESS_TOKEN não configurado no ambiente.", ""
+
     path = Path(attachment_storage_path or "").resolve()
     if not path.exists():
         return False, "Arquivo do anexo não encontrado para envio.", ""
+
     filename = (attachment_name or path.name).strip() or path.name
     mime_type = _whatsapp_attachment_effective_mime_type(filename, attachment_mime_type)
     media_kind = _whatsapp_attachment_send_kind(filename, mime_type)
     if media_kind not in {"image", "document", "audio"}:
         return False, "Tipo de anexo ainda não suportado para envio oficial.", ""
+
     upload_url = f"https://graph.facebook.com/{WHATSAPP_GRAPH_VERSION}/{config.meta_phone_number_id}/media"
     message_url = f"https://graph.facebook.com/{WHATSAPP_GRAPH_VERSION}/{config.meta_phone_number_id}/messages"
     headers = {"Authorization": f"Bearer {WHATSAPP_ACCESS_TOKEN}"}
+
     try:
         with path.open("rb") as fh:
             files = {"file": (filename, fh, mime_type)}
-            data = {"messaging_product": "whatsapp", "type": mime_type}
-            async with httpx.AsyncClient(timeout=60.0) as client:
+            data = {
+                "messaging_product": "whatsapp",
+                "type": mime_type,
+            }
+            async with httpx.AsyncClient(timeout=45.0) as client:
                 upload_resp = await client.post(upload_url, headers=headers, data=data, files=files)
+
         if not (200 <= upload_resp.status_code < 300):
             return False, _whatsapp_meta_error_message(upload_resp), ""
+
         upload_data = upload_resp.json() if upload_resp.headers.get("content-type", "").startswith("application/json") else {}
         media_id = str(upload_data.get("id") or "")
         if not media_id:
             return False, "Meta não retornou media_id do anexo.", ""
+
         safe_caption = str(caption or "")[:1024]
+        media_payload: dict[str, Any]
         if media_kind == "image":
-            media_payload: dict[str, Any] = {"id": media_id}
+            media_payload = {"id": media_id}
             if safe_caption:
                 media_payload["caption"] = safe_caption
         elif media_kind == "document":
@@ -38829,19 +38840,22 @@ async def _try_send_whatsapp_media(
                 media_payload["caption"] = safe_caption
         else:
             media_payload = {"id": media_id}
-        payload: dict[str, Any] = {
+
+        payload = {
             "messaging_product": "whatsapp",
-            "recipient_type": recipient_type if recipient_type in {"group", "individual"} else "individual",
+            "recipient_type": recipient_kind,
             "to": target,
             "type": media_kind,
             media_kind: media_payload,
         }
+
         async with httpx.AsyncClient(timeout=30.0) as client:
             send_resp = await client.post(
                 message_url,
                 headers={**headers, "Content-Type": "application/json"},
                 json=payload,
             )
+
         if 200 <= send_resp.status_code < 300:
             data = send_resp.json() if send_resp.headers.get("content-type", "").startswith("application/json") else {}
             ext_id = ""
@@ -38849,6 +38863,7 @@ async def _try_send_whatsapp_media(
             if isinstance(msgs, list) and msgs and isinstance(msgs[0], dict):
                 ext_id = str(msgs[0].get("id") or "")
             return True, "", ext_id
+
         return False, _whatsapp_meta_error_message(send_resp), ""
     except Exception as exc:
         return False, f"Falha de envio: {exc}", ""
@@ -38861,11 +38876,10 @@ async def _try_send_whatsapp_text(
         recipient_type: str = "individual",
         body: str,
 ) -> tuple[bool, str, str]:
-    target = (recipient_id or "").strip()
-    if recipient_type == "individual":
-        target = _only_digits(target)
+    recipient_kind = "group" if str(recipient_type or "").strip().lower() == "group" else "individual"
+    target = _clean_text(recipient_id, 255) if recipient_kind == "group" else _only_digits(recipient_id)
     if not target:
-        return False, "Destino inválido.", ""
+        return False, "Destinatário inválido.", ""
     if not config.is_enabled or not config.meta_phone_number_id:
         return False, "Canal não configurado para envio via API.", ""
     if not WHATSAPP_ACCESS_TOKEN:
@@ -38873,7 +38887,7 @@ async def _try_send_whatsapp_text(
     url = f"https://graph.facebook.com/{WHATSAPP_GRAPH_VERSION}/{config.meta_phone_number_id}/messages"
     payload = {
         "messaging_product": "whatsapp",
-        "recipient_type": recipient_type if recipient_type in {"group", "individual"} else "individual",
+        "recipient_type": recipient_kind,
         "to": target,
         "type": "text",
         "text": {"preview_url": False, "body": str(body or "")[:4096]},
@@ -38898,6 +38912,1180 @@ async def _try_send_whatsapp_text(
         return False, _whatsapp_meta_error_message(resp), ""
     except Exception as exc:
         return False, f"Falha de envio: {exc}", ""
+
+
+def _whatsapp_find_open_thread_by_phone(session: Session, *, company_id: int, phone_digits: str) -> Optional[
+    WhatsAppThread]:
+    digits = _only_digits(phone_digits)
+    if not digits:
+        return None
+    rows = session.exec(
+        select(WhatsAppThread)
+        .where(
+            WhatsAppThread.company_id == company_id,
+            WhatsAppThread.contact_phone == digits,
+            WhatsAppThread.status != "resolvido",
+        )
+        .order_by(WhatsAppThread.last_message_at.desc())
+    ).all()
+    return rows[0] if rows else None
+
+
+def _whatsapp_notify_new_inbound(session: Session, *, thread: WhatsAppThread, preview: str,
+                                 created_by_user_id: Optional[int] = None) -> None:
+    title = f"WhatsApp • {_whatsapp_thread_display_name(thread)}"
+    href = f"/admin/whatsapp/conversas/{thread.id}"
+    if thread.assigned_user_id:
+        try:
+            create_user_notification(
+                session,
+                company_id=thread.company_id,
+                client_id=thread.client_id,
+                user_id=int(thread.assigned_user_id),
+                kind="whatsapp",
+                title=title,
+                message=preview[:220],
+                href=href,
+                created_by_user_id=created_by_user_id,
+            )
+        except Exception:
+            pass
+        notify_staff_members(
+            session,
+            company_id=thread.company_id,
+            client_id=thread.client_id,
+            kind="whatsapp",
+            title=title,
+            message=preview[:220],
+            href=href,
+            created_by_user_id=created_by_user_id,
+            exclude_user_ids={int(thread.assigned_user_id)},
+        )
+    else:
+        notify_staff_members(
+            session,
+            company_id=thread.company_id,
+            client_id=thread.client_id,
+            kind="whatsapp",
+            title=title,
+            message=preview[:220],
+            href=href,
+            created_by_user_id=created_by_user_id,
+        )
+
+
+def _whatsapp_stats(session: Session, *, company_id: int) -> dict[str, int]:
+    try:
+        total_aberto = int(session.exec(
+            select(func.count()).select_from(WhatsAppThread).where(
+                WhatsAppThread.company_id == company_id,
+                WhatsAppThread.status == "aberto",
+            )
+        ).one())
+    except Exception:
+        total_aberto = 0
+    try:
+        total_aguardando = int(session.exec(
+            select(func.count()).select_from(WhatsAppThread).where(
+                WhatsAppThread.company_id == company_id,
+                WhatsAppThread.status == "aguardando_cliente",
+            )
+        ).one())
+    except Exception:
+        total_aguardando = 0
+    try:
+        total_resolvido = int(session.exec(
+            select(func.count()).select_from(WhatsAppThread).where(
+                WhatsAppThread.company_id == company_id,
+                WhatsAppThread.status == "resolvido",
+            )
+        ).one())
+    except Exception:
+        total_resolvido = 0
+    return {
+        "aberto": total_aberto,
+        "aguardando_cliente": total_aguardando,
+        "resolvido": total_resolvido,
+    }
+
+
+@app.on_event("startup")
+def _startup_delivery11_whatsapp() -> None:
+    ensure_whatsapp_tables()
+    ensure_whatsapp_columns()
+    with Session(engine) as _s:
+        try:
+            ids = [x[0] for x in _s.exec(select(Company.id)).all()]
+            for _cid in ids:
+                seed_whatsapp_defaults(_s, int(_cid))
+        except Exception:
+            pass
+
+
+_original_resolve_feature_key_delivery11 = resolve_feature_key
+
+
+def resolve_feature_key(path: str) -> Optional[str]:
+    extra_mapping = [
+        ("/admin/whatsapp", "whatsapp_central"),
+    ]
+    for prefix, key in extra_mapping:
+        if path == prefix or path.startswith(prefix + "/"):
+            return key
+    return _original_resolve_feature_key_delivery11(path)
+
+
+FEATURE_KEYS["whatsapp_central"] = {
+    "title": "WhatsApp",
+    "desc": "Caixa central, filas e triagem do WhatsApp do escritório.",
+    "href": "/admin/whatsapp",
+}
+FEATURE_VISIBLE_ROLES["whatsapp_central"] = {"admin", "equipe"}
+ROLE_DEFAULT_FEATURES.setdefault("admin", set()).add("whatsapp_central")
+ROLE_DEFAULT_FEATURES.setdefault("equipe", set()).add("whatsapp_central")
+
+_group_map_delivery11 = {g.get("key"): g for g in FEATURE_GROUPS}
+if "escritorio" in _group_map_delivery11:
+    feats = _group_map_delivery11["escritorio"]["features"]
+    if "whatsapp_central" not in feats:
+        insert_at = 1 if len(feats) >= 1 else 0
+        feats.insert(insert_at, "whatsapp_central")
+elif "escritorio_comercial" in _group_map_delivery11:
+    feats = _group_map_delivery11["escritorio_comercial"]["features"]
+    if "whatsapp_central" not in feats:
+        feats.insert(0, "whatsapp_central")
+else:
+    FEATURE_GROUPS.append({
+        "key": "escritorio_atendimento",
+        "title": "Escritório • Atendimento",
+        "features": ["whatsapp_central"],
+    })
+
+TEMPLATES["whatsapp_hub.html"] = r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="d-flex flex-wrap justify-content-between align-items-start gap-3 mb-3">
+  <div>
+    <h4 class="mb-1">WhatsApp do Escritório</h4>
+    <div class="muted">Central operacional para triagem, filas e atendimento da equipe.</div>
+  </div>
+  <div class="d-flex gap-2 flex-wrap">
+    <a class="btn btn-outline-secondary" href="/admin/whatsapp/config">Configuração</a>
+    <a class="btn btn-outline-secondary" href="/admin/whatsapp/filas">Filas</a>
+    <a class="btn btn-primary" href="/admin/whatsapp/caixa">Abrir caixa</a>
+  </div>
+</div>
+
+<div class="row g-3">
+  <div class="col-md-4">
+    <div class="card p-3 h-100">
+      <div class="small text-uppercase muted">Canal</div>
+      <div class="fs-5 fw-semibold mt-1">{{ "Ativo" if config.is_enabled else "Em preparação" }}</div>
+      <div class="muted mt-2">{{ config.display_name or "Maffezzolli Capital" }}</div>
+      <div class="mono mt-1">{{ config.business_phone or "Telefone não configurado" }}</div>
+      <div class="mt-3 small">
+        {% if config.meta_phone_number_id %}
+          <div><strong>Phone Number ID:</strong> <span class="mono">{{ config.meta_phone_number_id }}</span></div>
+        {% else %}
+          <div class="text-warning">Informe o Phone Number ID da Meta para ativar envio/webhook.</div>
+        {% endif %}
+      </div>
+      <div class="mt-3">
+        <a class="btn btn-sm btn-outline-secondary" href="/admin/whatsapp/config">Editar canal</a>
+      </div>
+    </div>
+  </div>
+  <div class="col-md-4">
+    <div class="card p-3 h-100">
+      <div class="small text-uppercase muted">Filas padrão do chatbot</div>
+      <div class="mt-2">
+        {% for q in queues %}
+          <div class="d-flex justify-content-between align-items-center border rounded-3 p-2 mb-2">
+            <div>
+              <div class="fw-semibold">{{ q.label }}</div>
+              <div class="small muted mono">{{ q.code }}</div>
+            </div>
+            <div class="small text-end">
+              {% if q.default_assignee_name %}
+                {{ q.default_assignee_name }}
+              {% else %}
+                <span class="muted">Sem responsável padrão</span>
+              {% endif %}
+            </div>
+          </div>
+        {% endfor %}
+      </div>
+      <a class="btn btn-sm btn-outline-secondary mt-2" href="/admin/whatsapp/filas">Gerenciar filas</a>
+    </div>
+  </div>
+  <div class="col-md-4">
+    <div class="card p-3 h-100">
+      <div class="small text-uppercase muted">Caixa</div>
+      <div class="row g-2 mt-1">
+        <div class="col-4">
+          <div class="border rounded-3 p-2 text-center">
+            <div class="small muted">Abertos</div>
+            <div class="fs-4 fw-semibold">{{ stats.aberto }}</div>
+          </div>
+        </div>
+        <div class="col-4">
+          <div class="border rounded-3 p-2 text-center">
+            <div class="small muted">Aguardando</div>
+            <div class="fs-4 fw-semibold">{{ stats.aguardando_cliente }}</div>
+          </div>
+        </div>
+        <div class="col-4">
+          <div class="border rounded-3 p-2 text-center">
+            <div class="small muted">Resolvidos</div>
+            <div class="fs-4 fw-semibold">{{ stats.resolvido }}</div>
+          </div>
+        </div>
+      </div>
+      <div class="mt-3 small muted">
+        Nesta primeira entrega, você já organiza canal, filas e caixa central. O envio/recebimento real depende da configuração do número e credenciais da Meta.
+      </div>
+      <div class="mt-3 d-grid">
+        <a class="btn btn-primary" href="/admin/whatsapp/caixa">Ir para a caixa central</a>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+"""
+
+TEMPLATES["whatsapp_config.html"] = r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="d-flex flex-wrap justify-content-between align-items-start gap-3 mb-3">
+  <div>
+    <h4 class="mb-1">Configuração do canal WhatsApp</h4>
+    <div class="muted">Cadastre o número do escritório e a mensagem inicial do chatbot.</div>
+  </div>
+  <a class="btn btn-outline-secondary" href="/admin/whatsapp">Voltar</a>
+</div>
+
+<div class="row g-3">
+  <div class="col-lg-7">
+    <div class="card p-4">
+      <form method="post" action="/admin/whatsapp/config" class="row g-3">
+        <div class="col-md-6">
+          <label class="form-label">Nome exibido</label>
+          <input class="form-control" name="display_name" value="{{ config.display_name }}" placeholder="Maffezzolli Capital"/>
+        </div>
+        <div class="col-md-6">
+          <label class="form-label">Telefone do escritório</label>
+          <input class="form-control" name="business_phone" value="{{ config.business_phone }}" placeholder="5511999999999"/>
+        </div>
+        <div class="col-md-8">
+          <label class="form-label">Meta Phone Number ID</label>
+          <input class="form-control" name="meta_phone_number_id" value="{{ config.meta_phone_number_id }}" placeholder="ID do número no WhatsApp Cloud API"/>
+          <div class="form-text">Esse ID é usado no webhook e no envio oficial pela API.</div>
+        </div>
+        <div class="col-md-4 d-flex align-items-end">
+          <div class="form-check form-switch">
+            <input class="form-check-input" type="checkbox" id="is_enabled" name="is_enabled" {% if config.is_enabled %}checked{% endif %}/>
+            <label class="form-check-label" for="is_enabled">Canal ativo</label>
+          </div>
+        </div>
+        <div class="col-12">
+          <label class="form-label">Mensagem inicial do chatbot</label>
+          <textarea class="form-control" rows="7" name="welcome_message">{{ config.welcome_message }}</textarea>
+        </div>
+        <div class="col-12">
+          <label class="form-label">Mensagem fora de horário</label>
+          <textarea class="form-control" rows="3" name="after_hours_message">{{ config.after_hours_message }}</textarea>
+        </div>
+        <div class="col-12 d-flex gap-2">
+          <button class="btn btn-primary">Salvar canal</button>
+          <a class="btn btn-outline-secondary" href="/admin/whatsapp/caixa">Ir para caixa</a>
+        </div>
+      </form>
+    </div>
+  </div>
+  <div class="col-lg-5">
+    <div class="card p-4">
+      <div class="small text-uppercase muted">Checklist da entrega 1</div>
+      <ol class="mt-3 small">
+        <li>Definir o número do escritório que será ligado ao canal.</li>
+        <li>Informar o <strong>Meta Phone Number ID</strong>.</li>
+        <li>Configurar <code>WHATSAPP_VERIFY_TOKEN</code> no ambiente.</li>
+        <li>Configurar <code>WHATSAPP_ACCESS_TOKEN</code> quando quiser envio real.</li>
+        <li>Testar a caixa central e a triagem por assunto.</li>
+      </ol>
+      <div class="alert alert-warning mt-3 mb-0">
+        O canal pode ficar ativo no app agora, mas o envio e o recebimento reais só funcionam quando a configuração oficial da Meta estiver pronta.
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+"""
+
+TEMPLATES["whatsapp_queues.html"] = r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="d-flex flex-wrap justify-content-between align-items-start gap-3 mb-3">
+  <div>
+    <h4 class="mb-1">Filas do WhatsApp</h4>
+    <div class="muted">Defina as opções do chatbot e o responsável padrão por assunto.</div>
+  </div>
+  <div class="d-flex gap-2">
+    <a class="btn btn-outline-secondary" href="/admin/whatsapp">Voltar</a>
+    <a class="btn btn-outline-secondary" href="/admin/whatsapp/caixa">Caixa</a>
+  </div>
+</div>
+
+<div class="row g-3">
+  <div class="col-lg-5">
+    <div class="card p-4">
+      <div class="fw-semibold mb-3">{{ "Editar fila" if editing_queue else "Nova fila" }}</div>
+      <form method="post" action="/admin/whatsapp/filas/salvar" class="row g-3">
+        <input type="hidden" name="queue_id" value="{{ editing_queue.id if editing_queue else '' }}"/>
+        <div class="col-md-5">
+          <label class="form-label">Código</label>
+          <input class="form-control" name="code" value="{{ editing_queue.code if editing_queue else '' }}" placeholder="financeiro"/>
+        </div>
+        <div class="col-md-7">
+          <label class="form-label">Rótulo</label>
+          <input class="form-control" name="label" value="{{ editing_queue.label if editing_queue else '' }}" placeholder="Financeiro"/>
+        </div>
+        <div class="col-md-4">
+          <label class="form-label">Ordem</label>
+          <input class="form-control" type="number" name="sort_order" value="{{ editing_queue.sort_order if editing_queue else 50 }}"/>
+        </div>
+        <div class="col-md-8">
+          <label class="form-label">Responsável padrão</label>
+          <select class="form-select" name="default_assignee_user_id">
+            <option value="">Sem responsável padrão</option>
+            {% for row in staff_options %}
+              <option value="{{ row.user_id }}" {% if editing_queue and editing_queue.default_assignee_user_id == row.user_id %}selected{% endif %}>{{ row.label }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="col-12">
+          <div class="form-check form-switch">
+            <input class="form-check-input" id="queue_active" type="checkbox" name="is_active" {% if not editing_queue or editing_queue.is_active %}checked{% endif %}/>
+            <label class="form-check-label" for="queue_active">Fila ativa</label>
+          </div>
+        </div>
+        <div class="col-12 d-flex gap-2">
+          <button class="btn btn-primary">Salvar fila</button>
+          <a class="btn btn-outline-secondary" href="/admin/whatsapp/filas">Limpar</a>
+        </div>
+      </form>
+    </div>
+  </div>
+  <div class="col-lg-7">
+    <div class="card p-4">
+      <div class="fw-semibold mb-3">Filas cadastradas</div>
+      <div class="vstack gap-2">
+        {% for q in queues %}
+          <div class="border rounded-3 p-3">
+            <div class="d-flex flex-wrap justify-content-between align-items-start gap-2">
+              <div>
+                <div class="fw-semibold">{{ q.label }}</div>
+                <div class="small muted mono">{{ q.code }}</div>
+              </div>
+              <div class="small text-end">
+                {% if q.default_assignee_name %}
+                  {{ q.default_assignee_name }}
+                {% else %}
+                  <span class="muted">Sem responsável padrão</span>
+                {% endif %}
+                <div class="mt-1">
+                  <span class="badge text-bg-light border">{{ "Ativa" if q.is_active else "Inativa" }}</span>
+                </div>
+              </div>
+            </div>
+            <div class="mt-2 d-flex gap-2">
+              <a class="btn btn-sm btn-outline-secondary" href="/admin/whatsapp/filas?queue_id={{ q.id }}">Editar</a>
+            </div>
+          </div>
+        {% else %}
+          <div class="muted">Nenhuma fila cadastrada.</div>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+"""
+
+TEMPLATES["whatsapp_inbox.html"] = r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="d-flex flex-wrap justify-content-between align-items-start gap-3 mb-3">
+  <div>
+    <h4 class="mb-1">Caixa central do WhatsApp</h4>
+    <div class="muted">Triagem, acompanhamento e distribuição das conversas do escritório.</div>
+  </div>
+  <div class="d-flex gap-2">
+    <a class="btn btn-outline-secondary" href="/admin/whatsapp">Voltar</a>
+    <a class="btn btn-primary" href="/admin/whatsapp/conversas/nova">Nova conversa</a>
+  </div>
+</div>
+
+<div class="card p-3 mb-3">
+  <form method="get" action="/admin/whatsapp/caixa" class="row g-2">
+    <div class="col-md-4">
+      <input class="form-control" name="q" value="{{ filters.q }}" placeholder="Buscar por nome, telefone ou grupo"/>
+    </div>
+    <div class="col-md-3">
+      <select class="form-select" name="status">
+        <option value="">Todos os status</option>
+        {% for status_value, status_label in status_options %}
+          <option value="{{ status_value }}" {% if filters.status == status_value %}selected{% endif %}>{{ status_label }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-md-3">
+      <select class="form-select" name="topic_code">
+        <option value="">Todos os assuntos</option>
+        {% for code, label in topic_options %}
+          <option value="{{ code }}" {% if filters.topic_code == code %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-md-2 d-grid">
+      <button class="btn btn-outline-secondary">Filtrar</button>
+    </div>
+  </form>
+</div>
+
+<div class="row g-3 mb-3">
+  <div class="col-md-4">
+    <div class="card p-3 text-center">
+      <div class="small muted">Abertos</div>
+      <div class="fs-4 fw-semibold">{{ stats.aberto }}</div>
+    </div>
+  </div>
+  <div class="col-md-4">
+    <div class="card p-3 text-center">
+      <div class="small muted">Aguardando cliente</div>
+      <div class="fs-4 fw-semibold">{{ stats.aguardando_cliente }}</div>
+    </div>
+  </div>
+  <div class="col-md-4">
+    <div class="card p-3 text-center">
+      <div class="small muted">Resolvidos</div>
+      <div class="fs-4 fw-semibold">{{ stats.resolvido }}</div>
+    </div>
+  </div>
+</div>
+
+<div class="card p-3">
+  <div class="vstack gap-2">
+    {% for row in threads %}
+      <a class="border rounded-3 p-3 d-block text-reset" href="/admin/whatsapp/conversas/{{ row.id }}">
+        <div class="d-flex flex-wrap justify-content-between align-items-start gap-2">
+          <div>
+            <div class="fw-semibold">{{ row.display_name }}</div>
+            <div class="small muted">
+              {% if row.client_name %}Cliente: {{ row.client_name }} • {% endif %}
+              {{ row.contact_phone or "Sem telefone" }}
+              {% if row.is_group and row.group_name %} • Grupo{% endif %}
+            </div>
+          </div>
+          <div class="text-end small">
+            <span class="badge text-bg-light border">{{ row.status_label }}</span>
+            <div class="muted mt-1">{{ row.topic_label }}</div>
+          </div>
+        </div>
+        {% if row.last_message %}
+          <div class="mt-2">{{ row.last_message }}</div>
+        {% endif %}
+        <div class="small muted mt-2">
+          {% if row.assigned_name %}Responsável: {{ row.assigned_name }} • {% endif %}
+          Última movimentação: {{ row.last_message_at.strftime("%d/%m/%Y %H:%M") if row.last_message_at else "-" }}
+        </div>
+      </a>
+    {% else %}
+      <div class="muted">Nenhuma conversa encontrada.</div>
+    {% endfor %}
+  </div>
+</div>
+{% endblock %}
+"""
+
+TEMPLATES["whatsapp_thread_new.html"] = r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="d-flex flex-wrap justify-content-between align-items-start gap-3 mb-3">
+  <div>
+    <h4 class="mb-1">Nova conversa de WhatsApp</h4>
+    <div class="muted">Abra uma conversa manual, já classificada e atribuída para a fila certa.</div>
+  </div>
+  <a class="btn btn-outline-secondary" href="/admin/whatsapp/caixa">Voltar</a>
+</div>
+
+<div class="card p-4">
+  <form method="post" action="/admin/whatsapp/conversas/nova" class="row g-3">
+    <div class="col-md-6">
+      <label class="form-label">Cliente vinculado</label>
+      <select class="form-select" name="client_id">
+        <option value="">Sem vínculo agora</option>
+        {% for c in clients %}
+          <option value="{{ c.id }}">{{ c.name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-md-6">
+      <label class="form-label">Assunto</label>
+      <select class="form-select" name="topic_code">
+        {% for code, label in topic_options %}
+          <option value="{{ code }}">{{ label }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-md-6">
+      <label class="form-label">Nome do contato</label>
+      <input class="form-control" name="contact_name" placeholder="Nome do cliente"/>
+    </div>
+    <div class="col-md-6">
+      <label class="form-label">Telefone</label>
+      <input class="form-control" name="contact_phone" placeholder="5511999999999"/>
+    </div>
+    <div class="col-md-6">
+      <label class="form-label">Responsável</label>
+      <select class="form-select" name="assigned_user_id">
+        <option value="">Atribuir automaticamente</option>
+        {% for row in staff_options %}
+          <option value="{{ row.user_id }}">{{ row.label }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-md-6 d-flex align-items-end">
+      <div class="form-check form-switch">
+        <input class="form-check-input" id="is_group" type="checkbox" name="is_group"/>
+        <label class="form-check-label" for="is_group">Conversa de grupo</label>
+      </div>
+    </div>
+    <div class="col-12">
+      <label class="form-label">Nome do grupo (se aplicável)</label>
+      <input class="form-control" name="group_name" placeholder="Grupo dos sócios"/>
+    </div>
+    <div class="col-12">
+      <label class="form-label">Primeira mensagem</label>
+      <textarea class="form-control" rows="4" name="first_message" placeholder="Escreva a primeira resposta ou registre a entrada inicial..."></textarea>
+      <div class="form-text">Se o canal Meta ainda não estiver ligado, a mensagem fica registrada localmente na central.</div>
+    </div>
+    <div class="col-12">
+      <button class="btn btn-primary">Criar conversa</button>
+    </div>
+  </form>
+</div>
+{% endblock %}
+"""
+
+TEMPLATES["whatsapp_thread_detail.html"] = r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="d-flex flex-wrap justify-content-between align-items-start gap-3 mb-3">
+  <div>
+    <h4 class="mb-1">WhatsApp • {{ display_name }}</h4>
+    <div class="muted">
+      {% if client %}Cliente vinculado: {{ client.name }} • {% endif %}
+      {{ thread.contact_phone or "Sem telefone" }}
+      {% if thread.is_group and thread.group_name %} • Grupo{% endif %}
+    </div>
+  </div>
+  <div class="d-flex gap-2 flex-wrap">
+    <a class="btn btn-outline-secondary" href="/admin/whatsapp/caixa">Voltar</a>
+    <a class="btn btn-outline-secondary" href="/admin/whatsapp/config">Canal</a>
+  </div>
+</div>
+
+<div class="row g-3">
+  <div class="col-lg-8">
+    <div class="card p-3">
+      <div class="vstack gap-2">
+        {% for msg in messages %}
+          <div class="border rounded-3 p-3 {% if msg.direction == 'inbound' %}bg-light{% endif %}">
+            <div class="d-flex justify-content-between align-items-start gap-2">
+              <div class="fw-semibold">
+                {% if msg.direction == "inbound" %}Cliente{% elif msg.direction == "outbound" %}Equipe{% else %}Nota interna{% endif %}
+                {% if msg.sender_name %} • {{ msg.sender_name }}{% endif %}
+              </div>
+              <div class="small muted">{{ msg.created_at.strftime("%d/%m/%Y %H:%M") if msg.created_at else "-" }}</div>
+            </div>
+            {% if msg.body %}
+              <div class="mt-2" style="white-space: pre-wrap;">{{ msg.body }}</div>
+            {% endif %}
+            {% if msg.attachment_storage_path %}
+              <div class="mt-3">
+                {% if msg.attachment_mime_type and msg.attachment_mime_type.startswith("image/") %}
+                  <div class="mb-2">
+                    <img src="/admin/whatsapp/mensagens/{{ msg.id }}/anexo" alt="{{ msg.attachment_name or 'imagem' }}" class="img-fluid rounded border" style="max-height: 320px;" />
+                  </div>
+                {% elif msg.attachment_mime_type and msg.attachment_mime_type.startswith("audio/") %}
+                  <div class="mb-2">
+                    <audio controls preload="none" style="width: 100%;">
+                      <source src="/admin/whatsapp/mensagens/{{ msg.id }}/anexo" type="{{ msg.attachment_mime_type }}">
+                      Seu navegador não suporta reprodução de áudio.
+                    </audio>
+                  </div>
+                {% endif %}
+                <a class="btn btn-sm btn-outline-secondary" href="/admin/whatsapp/mensagens/{{ msg.id }}/anexo" target="_blank">
+                  {% if msg.attachment_mime_type and msg.attachment_mime_type.startswith("image/") %}
+                    Abrir imagem
+                  {% elif msg.attachment_mime_type and msg.attachment_mime_type.startswith("audio/") %}
+                    Baixar áudio
+                  {% else %}
+                    Baixar anexo
+                  {% endif %}
+                </a>
+                {% if msg.attachment_name %}
+                  <span class="small muted ms-2">{{ msg.attachment_name }}</span>
+                {% endif %}
+                {% if msg.attachment_size_bytes %}
+                  <span class="small muted"> • {{ "{:,}".format(msg.attachment_size_bytes).replace(",", ".") }} bytes</span>
+                {% endif %}
+              </div>
+            {% endif %}
+            <div class="small muted mt-2">
+              {{ msg.delivery_status }}
+              {% if msg.external_message_id %} • <span class="mono">{{ msg.external_message_id }}</span>{% endif %}
+            </div>
+          </div>
+        {% else %}
+          <div class="muted">Ainda não há mensagens nesta conversa.</div>
+        {% endfor %}
+      </div>
+    </div>
+
+    <div class="card p-4 mt-3">
+      <div class="fw-semibold mb-3">Nova mensagem</div>
+      <form method="post" action="/admin/whatsapp/conversas/{{ thread.id }}/mensagens" enctype="multipart/form-data" class="row g-3">
+        <div class="col-md-4">
+          <label class="form-label">Tipo</label>
+          <select class="form-select" name="direction">
+            <option value="outbound">Resposta da equipe</option>
+            <option value="internal_note">Nota interna</option>
+            <option value="inbound">Registrar mensagem recebida</option>
+          </select>
+        </div>
+        <div class="col-md-8 d-flex align-items-end">
+          <div class="form-check form-switch">
+            <input class="form-check-input" id="send_live" type="checkbox" name="send_live" {% if config.is_enabled and config.meta_phone_number_id %}checked{% endif %}/>
+            <label class="form-check-label" for="send_live">Tentar enviar via WhatsApp oficial</label>
+          </div>
+        </div>
+        <div class="col-12">
+          <textarea class="form-control" rows="5" name="body" placeholder="Digite a mensagem..."></textarea>
+          <div class="form-text">Você pode enviar só texto, só anexo, ou ambos. Quando o envio oficial estiver ligado, imagem e documento também vão para o WhatsApp.</div>
+        </div>
+        <div class="col-12">
+          <label class="form-label">Anexo interno</label>
+          <input class="form-control" type="file" name="attachment_file" />
+          <div class="form-text">Suporta envio oficial de imagem, documento e áudio. Outros tipos continuam salvos apenas no app.</div>
+        </div>
+        <div class="col-12">
+          <button class="btn btn-primary">Registrar mensagem</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div class="col-lg-4">
+    <div class="card p-4">
+      <div class="fw-semibold mb-3">Classificação</div>
+      <form method="post" action="/admin/whatsapp/conversas/{{ thread.id }}/salvar" class="row g-3">
+        <div class="col-12">
+          <label class="form-label">Status</label>
+          <select class="form-select" name="status">
+            {% for value, label in status_options %}
+              <option value="{{ value }}" {% if thread.status == value %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="col-12">
+          <label class="form-label">Assunto</label>
+          <select class="form-select" name="topic_code">
+            {% for value, label in topic_options %}
+              <option value="{{ value }}" {% if thread.topic_code == value %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="col-12">
+          <label class="form-label">Responsável</label>
+          <select class="form-select" name="assigned_user_id">
+            <option value="">Não atribuído</option>
+            {% for item in staff_options %}
+              <option value="{{ item.user_id }}" {% if thread.assigned_user_id == item.user_id %}selected{% endif %}>{{ item.label }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="col-12">
+          <label class="form-label">Vincular cliente</label>
+          <select class="form-select" name="client_id">
+            <option value="">Sem vínculo</option>
+            {% for c in clients %}
+              <option value="{{ c.id }}" {% if thread.client_id == c.id %}selected{% endif %}>{{ c.name }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="col-12">
+          <button class="btn btn-outline-primary">Salvar classificação</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+{% endblock %}
+"""
+
+
+@app.get("/admin/whatsapp")
+@require_role({"admin", "equipe"})
+async def whatsapp_hub_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+    config = _get_or_create_whatsapp_config(session, company_id=ctx.company.id)
+    queues = session.exec(
+        select(WhatsAppQueue)
+        .where(WhatsAppQueue.company_id == ctx.company.id)
+        .order_by(WhatsAppQueue.sort_order, WhatsAppQueue.label)
+    ).all()
+    users = {int(u.id): u for u in session.exec(select(User)).all()}
+    queue_rows = []
+    for q in queues:
+        queue_rows.append({
+            "id": q.id,
+            "code": q.code,
+            "label": q.label,
+            "default_assignee_name": users.get(
+                int(q.default_assignee_user_id or 0)).name if q.default_assignee_user_id and users.get(
+                int(q.default_assignee_user_id or 0)) else "",
+            "is_active": q.is_active,
+        })
+    return render(
+        "whatsapp_hub.html",
+        request=request,
+        context={
+            "title": "WhatsApp",
+            "config": config,
+            "queues": queue_rows,
+            "stats": _whatsapp_stats(session, company_id=ctx.company.id),
+        },
+    )
+
+
+@app.get("/admin/whatsapp/config")
+@require_role({"admin", "equipe"})
+async def whatsapp_config_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+    config = _get_or_create_whatsapp_config(session, company_id=ctx.company.id)
+    return render(
+        "whatsapp_config.html",
+        request=request,
+        context={
+            "title": "Configuração WhatsApp",
+            "config": config,
+        },
+    )
+
+
+@app.post("/admin/whatsapp/config")
+@require_role({"admin", "equipe"})
+async def whatsapp_config_save(
+        request: Request,
+        display_name: str = Form(default=""),
+        business_phone: str = Form(default=""),
+        meta_phone_number_id: str = Form(default=""),
+        welcome_message: str = Form(default=""),
+        after_hours_message: str = Form(default=""),
+        is_enabled: Optional[str] = Form(default=None),
+        session: Session = Depends(get_session),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+    config = _get_or_create_whatsapp_config(session, company_id=ctx.company.id)
+    config.display_name = _clean_text(display_name, 120) or "Maffezzolli Capital"
+    config.business_phone = _only_digits(business_phone)[:20]
+    config.meta_phone_number_id = _clean_text(meta_phone_number_id, 120)
+    config.welcome_message = _clean_text(welcome_message, 4000) or _default_whatsapp_welcome()
+    config.after_hours_message = _clean_text(after_hours_message, 2000)
+    config.is_enabled = bool(is_enabled)
+    config.updated_at = utcnow()
+    session.add(config)
+    session.commit()
+    set_flash(request, "Configuração do WhatsApp salva.")
+    return RedirectResponse("/admin/whatsapp/config", status_code=303)
+
+
+@app.get("/admin/whatsapp/filas")
+@require_role({"admin", "equipe"})
+async def whatsapp_queues_page(
+        request: Request,
+        queue_id: Optional[int] = None,
+        session: Session = Depends(get_session),
+) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+    seed_whatsapp_defaults(session, ctx.company.id)
+    queues = session.exec(
+        select(WhatsAppQueue)
+        .where(WhatsAppQueue.company_id == ctx.company.id)
+        .order_by(WhatsAppQueue.sort_order, WhatsAppQueue.label)
+    ).all()
+    staff_memberships = _whatsapp_staff_memberships(session, company_id=ctx.company.id)
+    users = {int(u.id): u for u in session.exec(select(User)).all()}
+    staff_options = []
+    for m in staff_memberships:
+        u = users.get(int(m.user_id or 0))
+        if not u:
+            continue
+        staff_options.append({"user_id": int(u.id), "label": f"{u.name} • {m.role}"})
+    editing = None
+    if queue_id:
+        editing = session.get(WhatsAppQueue, int(queue_id))
+        if editing and editing.company_id != ctx.company.id:
+            editing = None
+    queue_rows = []
+    for q in queues:
+        u = users.get(int(q.default_assignee_user_id or 0)) if q.default_assignee_user_id else None
+        queue_rows.append({
+            "id": q.id,
+            "code": q.code,
+            "label": q.label,
+            "sort_order": q.sort_order,
+            "default_assignee_name": u.name if u else "",
+            "default_assignee_user_id": int(q.default_assignee_user_id or 0) or None,
+            "is_active": q.is_active,
+        })
+    return render(
+        "whatsapp_queues.html",
+        request=request,
+        context={
+            "title": "Filas WhatsApp",
+            "queues": queue_rows,
+            "editing_queue": editing,
+            "staff_options": staff_options,
+        },
+    )
+
+
+@app.post("/admin/whatsapp/filas/salvar")
+@require_role({"admin", "equipe"})
+async def whatsapp_queues_save(
+        request: Request,
+        queue_id: Optional[str] = Form(default=""),
+        code: str = Form(default=""),
+        label: str = Form(default=""),
+        sort_order: int = Form(default=50),
+        default_assignee_user_id: Optional[str] = Form(default=""),
+        is_active: Optional[str] = Form(default=None),
+        session: Session = Depends(get_session),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+    clean_code = _normalize_whatsapp_topic(code)
+    clean_label = _clean_text(label, 80) or clean_code.title()
+    row = None
+    if queue_id and str(queue_id).strip():
+        row = session.get(WhatsAppQueue, int(queue_id))
+        if row and row.company_id != ctx.company.id:
+            row = None
+    if not row:
+        row = session.exec(
+            select(WhatsAppQueue).where(
+                WhatsAppQueue.company_id == ctx.company.id,
+                WhatsAppQueue.code == clean_code,
+            )
+        ).first()
+    if not row:
+        row = WhatsAppQueue(company_id=ctx.company.id, code=clean_code, created_at=utcnow())
+    uid = _safe_int(default_assignee_user_id)
+    if uid:
+        allowed_user_ids = {int(m.user_id) for m in _whatsapp_staff_memberships(session, company_id=ctx.company.id)}
+        row.default_assignee_user_id = uid if uid in allowed_user_ids else None
+    else:
+        row.default_assignee_user_id = None
+    row.label = clean_label
+    row.sort_order = int(sort_order or 50)
+    row.is_active = bool(is_active)
+    row.updated_at = utcnow()
+    session.add(row)
+    session.commit()
+    set_flash(request, "Fila salva.")
+    return RedirectResponse("/admin/whatsapp/filas", status_code=303)
+
+
+@app.get("/admin/whatsapp/caixa")
+@require_role({"admin", "equipe"})
+async def whatsapp_inbox_page(
+        request: Request,
+        q: str = "",
+        status: str = "",
+        topic_code: str = "",
+        session: Session = Depends(get_session),
+) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+    query = select(WhatsAppThread).where(WhatsAppThread.company_id == ctx.company.id)
+    if q.strip():
+        term = f"%{q.strip()}%"
+        query = query.where(
+            WhatsAppThread.contact_name.ilike(term)
+            | WhatsAppThread.group_name.ilike(term)
+            | WhatsAppThread.contact_phone.ilike(term)
+        )
+    if status.strip():
+        query = query.where(WhatsAppThread.status == _normalize_whatsapp_status(status))
+    if topic_code.strip():
+        query = query.where(WhatsAppThread.topic_code == _normalize_whatsapp_topic(topic_code))
+    threads = session.exec(query.order_by(WhatsAppThread.last_message_at.desc()).limit(200)).all()
+    users = {int(u.id): u for u in session.exec(select(User)).all()}
+    clients = {int(c.id): c for c in session.exec(select(Client).where(Client.company_id == ctx.company.id)).all()}
+    topic_map = _whatsapp_queue_label_map(session, company_id=ctx.company.id)
+    last_messages = {}
+    try:
+        msg_rows = session.exec(
+            select(WhatsAppThreadMessage)
+            .where(WhatsAppThreadMessage.company_id == ctx.company.id)
+            .order_by(WhatsAppThreadMessage.id.desc())
+            .limit(1000)
+        ).all()
+        for m in msg_rows:
+            last_messages.setdefault(int(m.thread_id), m)
+    except Exception:
+        pass
+
+    def _status_label(val: str) -> str:
+        return {
+            "aberto": "Aberto",
+            "aguardando_cliente": "Aguardando cliente",
+            "resolvido": "Resolvido",
+        }.get(val, val)
+
+    rows = []
+    for t in threads:
+        rows.append({
+            "id": t.id,
+            "display_name": _whatsapp_thread_display_name(t),
+            "client_name": clients.get(int(t.client_id or 0)).name if t.client_id and clients.get(
+                int(t.client_id or 0)) else "",
+            "contact_phone": t.contact_phone,
+            "is_group": t.is_group,
+            "group_name": t.group_name,
+            "topic_label": topic_map.get(t.topic_code, t.topic_code.title()),
+            "status_label": _status_label(t.status),
+            "assigned_name": users.get(int(t.assigned_user_id or 0)).name if t.assigned_user_id and users.get(
+                int(t.assigned_user_id or 0)) else "",
+            "last_message": getattr(last_messages.get(int(t.id)), "body", ""),
+            "last_message_at": t.last_message_at,
+        })
+    topic_options = list(topic_map.items())
+    status_options = [("aberto", "Aberto"), ("aguardando_cliente", "Aguardando cliente"), ("resolvido", "Resolvido")]
+    return render(
+        "whatsapp_inbox.html",
+        request=request,
+        context={
+            "title": "Caixa WhatsApp",
+            "threads": rows,
+            "stats": _whatsapp_stats(session, company_id=ctx.company.id),
+            "topic_options": topic_options,
+            "status_options": status_options,
+            "filters": {"q": q, "status": status, "topic_code": topic_code},
+        },
+    )
+
+
+@app.get("/admin/whatsapp/conversas/nova")
+@require_role({"admin", "equipe"})
+async def whatsapp_thread_new_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+    clients = session.exec(select(Client).where(Client.company_id == ctx.company.id).order_by(Client.name)).all()
+    staff_memberships = _whatsapp_staff_memberships(session, company_id=ctx.company.id)
+    users = {int(u.id): u for u in session.exec(select(User)).all()}
+    staff_options = []
+    for m in staff_memberships:
+        u = users.get(int(m.user_id or 0))
+        if u:
+            staff_options.append({"user_id": int(u.id), "label": f"{u.name} • {m.role}"})
+    topic_options = list(_whatsapp_queue_label_map(session, company_id=ctx.company.id).items())
+    return render(
+        "whatsapp_thread_new.html",
+        request=request,
+        context={
+            "title": "Nova conversa WhatsApp",
+            "clients": clients,
+            "staff_options": staff_options,
+            "topic_options": topic_options,
+        },
+    )
+
+
+@app.post("/admin/whatsapp/conversas/nova")
+@require_role({"admin", "equipe"})
+async def whatsapp_thread_new_submit(
+        request: Request,
+        client_id: Optional[str] = Form(default=""),
+        topic_code: str = Form(default="geral"),
+        contact_name: str = Form(default=""),
+        contact_phone: str = Form(default=""),
+        assigned_user_id: Optional[str] = Form(default=""),
+        is_group: Optional[str] = Form(default=None),
+        group_name: str = Form(default=""),
+        first_message: str = Form(default=""),
+        session: Session = Depends(get_session),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+    selected_client_id = _safe_int(client_id)
+    client = get_client_or_none(session, ctx.company.id, selected_client_id)
+    phone = _only_digits(contact_phone) or _only_digits(getattr(client, "phone", "") if client else "")
+    name = _clean_text(contact_name, 120) or (getattr(client, "name", "") if client else "")
+    if not phone:
+        set_flash(request, "Informe o telefone da conversa.")
+        return RedirectResponse("/admin/whatsapp/conversas/nova", status_code=303)
+    assignee_id = _safe_int(assigned_user_id) or _whatsapp_pick_default_assignee(
+        session, company_id=ctx.company.id, topic_code=_normalize_whatsapp_topic(topic_code)
+    )
+    thread = _whatsapp_create_thread(
+        session,
+        company_id=ctx.company.id,
+        client_id=client.id if client else None,
+        contact_name=name,
+        contact_phone=phone,
+        is_group=bool(is_group),
+        group_name=group_name,
+        topic_code=topic_code,
+        assigned_user_id=assignee_id,
+        status="aberto",
+        source_kind="manual",
+        created_by_user_id=ctx.user.id,
+    )
+    if first_message.strip():
+        _whatsapp_add_message(
+            session,
+            thread=thread,
+            direction="outbound",
+            body=first_message,
+            sender_name=ctx.user.name,
+            created_by_user_id=ctx.user.id,
+            delivery_status="local",
+        )
+    if assignee_id and assignee_id != ctx.user.id:
+        try:
+            create_user_notification(
+                session,
+                company_id=ctx.company.id,
+                client_id=thread.client_id,
+                user_id=int(assignee_id),
+                kind="whatsapp",
+                title=f"Nova conversa WhatsApp • {_whatsapp_thread_display_name(thread)}",
+                message="A conversa foi atribuída para você.",
+                href=f"/admin/whatsapp/conversas/{thread.id}",
+                created_by_user_id=ctx.user.id,
+            )
+        except Exception:
+            pass
+    set_flash(request, "Conversa criada.")
+    return RedirectResponse(f"/admin/whatsapp/conversas/{thread.id}", status_code=303)
+
+
+@app.get("/admin/whatsapp/conversas/{thread_id}")
+@require_role({"admin", "equipe"})
+async def whatsapp_thread_detail_page(
+        request: Request,
+        thread_id: int,
+        session: Session = Depends(get_session),
+) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+    thread = session.get(WhatsAppThread, int(thread_id))
+    if not thread or thread.company_id != ctx.company.id:
+        return render("error.html", request=request, context={"message": "Conversa não encontrada."}, status_code=404)
+    messages = session.exec(
+        select(WhatsAppThreadMessage)
+        .where(WhatsAppThreadMessage.thread_id == thread.id, WhatsAppThreadMessage.company_id == ctx.company.id)
+        .order_by(WhatsAppThreadMessage.created_at.asc(), WhatsAppThreadMessage.id.asc())
+    ).all()
+    config = _get_or_create_whatsapp_config(session, company_id=ctx.company.id)
+    topic_options = list(_whatsapp_queue_label_map(session, company_id=ctx.company.id).items())
+    status_options = [("aberto", "Aberto"), ("aguardando_cliente", "Aguardando cliente"), ("resolvido", "Resolvido")]
+    clients = session.exec(select(Client).where(Client.company_id == ctx.company.id).order_by(Client.name)).all()
+    client = get_client_or_none(session, ctx.company.id, thread.client_id)
+    staff_memberships = _whatsapp_staff_memberships(session, company_id=ctx.company.id)
+    users = {int(u.id): u for u in session.exec(select(User)).all()}
+    staff_options = []
+    for m in staff_memberships:
+        u = users.get(int(m.user_id or 0))
+        if u:
+            staff_options.append({"user_id": int(u.id), "label": f"{u.name} • {m.role}"})
+    return render(
+        "whatsapp_thread_detail.html",
+        request=request,
+        context={
+            "title": "Conversa WhatsApp",
+            "thread": thread,
+            "messages": messages,
+            "config": config,
+            "display_name": _whatsapp_thread_display_name(thread),
+            "topic_options": topic_options,
+            "status_options": status_options,
+            "clients": clients,
+            "client": client,
+            "staff_options": staff_options,
+        },
+    )
+
+
+@app.get("/admin/whatsapp/mensagens/{message_id}/anexo")
+@require_role({"admin", "equipe"})
+async def whatsapp_message_attachment_download(
+        request: Request,
+        message_id: int,
+        session: Session = Depends(get_session),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+    msg = session.get(WhatsAppThreadMessage, int(message_id))
+    if not msg or msg.company_id != ctx.company.id or not (msg.attachment_storage_path or "").strip():
+        return render("error.html", request=request, context={"message": "Anexo não encontrado."}, status_code=404)
+    path = Path(msg.attachment_storage_path).resolve()
+    if not path.exists():
+        return render("error.html", request=request, context={"message": "Arquivo do anexo não encontrado."}, status_code=404)
+    media_type = (msg.attachment_mime_type or "").strip() or None
+    filename = (msg.attachment_name or path.name).strip() or path.name
+    return FileResponse(path, media_type=media_type, filename=filename)
+
+
+@app.post("/admin/whatsapp/conversas/{thread_id}/salvar")
+@require_role({"admin", "equipe"})
+async def whatsapp_thread_save(
+        request: Request,
+        thread_id: int,
+        status: str = Form(default="aberto"),
+        topic_code: str = Form(default="geral"),
+        assigned_user_id: Optional[str] = Form(default=""),
+        client_id: Optional[str] = Form(default=""),
+        session: Session = Depends(get_session),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+    thread = session.get(WhatsAppThread, int(thread_id))
+    if not thread or thread.company_id != ctx.company.id:
+        set_flash(request, "Conversa não encontrada.")
+        return RedirectResponse("/admin/whatsapp/caixa", status_code=303)
+    thread.status = _normalize_whatsapp_status(status)
+    thread.topic_code = _normalize_whatsapp_topic(topic_code)
+    assignee_id = _safe_int(assigned_user_id)
+    allowed_user_ids = {int(m.user_id) for m in _whatsapp_staff_memberships(session, company_id=ctx.company.id)}
+    thread.assigned_user_id = assignee_id if assignee_id in allowed_user_ids else None
+    chosen_client_id = _safe_int(client_id)
+    chosen_client = get_client_or_none(session, ctx.company.id, chosen_client_id)
+    thread.client_id = chosen_client.id if chosen_client else None
+    thread.updated_at = utcnow()
+    session.add(thread)
+    session.commit()
+    set_flash(request, "Classificação da conversa atualizada.")
+    return RedirectResponse(f"/admin/whatsapp/conversas/{thread.id}", status_code=303)
+
+
 @app.post("/admin/whatsapp/conversas/{thread_id}/mensagens")
 @require_role({"admin", "equipe"})
 async def whatsapp_thread_add_message(
@@ -38917,7 +40105,6 @@ async def whatsapp_thread_add_message(
         return RedirectResponse("/admin/whatsapp/caixa", status_code=303)
 
     clean_body = _clean_text(body, 5000)
-    normalized_direction = direction if direction in {"inbound", "outbound", "internal_note"} else "outbound"
     has_file = bool(attachment_file and (attachment_file.filename or "").strip())
     if not clean_body and not has_file:
         set_flash(request, "Escreva uma mensagem ou selecione um anexo.")
@@ -38927,15 +40114,9 @@ async def whatsapp_thread_add_message(
     attachment_storage_path = ""
     attachment_mime_type = ""
     attachment_size_bytes = 0
-    message_type = "text" if clean_body else "file"
     if has_file:
         try:
             attachment_name, attachment_storage_path, attachment_mime_type, attachment_size_bytes = await _save_whatsapp_attachment_local(attachment_file)
-            detected_kind = _whatsapp_attachment_send_kind(attachment_name, attachment_mime_type)
-            if detected_kind:
-                message_type = detected_kind
-            elif attachment_name:
-                message_type = _whatsapp_attachment_ext(attachment_name).lstrip(".") or "file"
         except HTTPException as exc:
             set_flash(request, str(exc.detail))
             return RedirectResponse(f"/admin/whatsapp/conversas/{thread.id}", status_code=303)
@@ -38943,15 +40124,20 @@ async def whatsapp_thread_add_message(
             set_flash(request, "Não foi possível salvar o anexo.")
             return RedirectResponse(f"/admin/whatsapp/conversas/{thread.id}", status_code=303)
 
+    recipient_type = "group" if thread.is_group else "individual"
+    recipient_id = (thread.external_thread_id or "").strip() if thread.is_group else _only_digits(thread.contact_phone)
+
     delivery_status = "local"
     external_id = ""
-    if normalized_direction == "outbound" and send_live:
-        config = _get_or_create_whatsapp_config(session, company_id=ctx.company.id)
-        recipient_type, recipient_id = _whatsapp_send_target(thread)
-        if recipient_type == "group" and not recipient_id:
+    if direction == "outbound" and send_live:
+        if not recipient_id:
             delivery_status = "failed"
-            set_flash(request, "Conversa de grupo ainda sem identificador externo para envio oficial.")
+            set_flash(
+                request,
+                "Mensagem registrada no app, mas não enviada via WhatsApp: conversa sem destinatário configurado.",
+            )
         else:
+            config = _get_or_create_whatsapp_config(session, company_id=ctx.company.id)
             if has_file:
                 ok, err, ext_id = await _try_send_whatsapp_media(
                     config=config,
@@ -38977,10 +40163,83 @@ async def whatsapp_thread_add_message(
                 if err:
                     set_flash(request, f"Mensagem registrada no app, mas não enviada via WhatsApp: {err}")
 
-    _whatsapp_add_message(
+    msg = _whatsapp_add_message(
         session,
         thread=thread,
-        direction=normalized_direction,
+        direction=direction if direction in {"inbound", "outbound", "internal_note"} else "outbound",
+        body=clean_body,
+        sender_name=ctx.user.name if direction != "inbound" else thread.contact_name,
+        created_by_user_id=ctx.user.id,
+        delivery_status=delivery_status,
+        external_message_id=external_id,
+        attachment_name=attachment_name,
+        attachment_storage_path=attachment_storage_path,
+        attachment_mime_type=attachment_mime_type,
+        attachment_size_bytes=attachment_size_bytes,
+    )
+    if direction == "outbound" and send_live and not has_file and delivery_status == "sent":
+        set_flash(request, "Mensagem enviada via WhatsApp oficial.")
+    elif direction == "outbound" and send_live and has_file and delivery_status == "sent":
+        kind = _whatsapp_attachment_send_kind(attachment_name, attachment_mime_type)
+        if kind == "audio":
+            set_flash(request, "Áudio enviado via WhatsApp oficial.")
+        elif kind == "image":
+            set_flash(request, "Imagem enviada via WhatsApp oficial.")
+        elif kind == "document":
+            set_flash(request, "Documento enviado via WhatsApp oficial.")
+        else:
+            set_flash(request, "Anexo enviado via WhatsApp oficial.")
+    elif direction == "outbound" and has_file:
+        set_flash(request, "Anexo salvo na conversa do app.")
+    elif direction == "outbound":
+        set_flash(request, "Mensagem registrada na conversa.")
+    return RedirectResponse(f"/admin/whatsapp/conversas/{thread.id}", status_code=303)
+
+    attachment_name = ""
+    attachment_storage_path = ""
+    attachment_mime_type = ""
+    attachment_size_bytes = 0
+    if has_file:
+        try:
+            attachment_name, attachment_storage_path, attachment_mime_type, attachment_size_bytes = await _save_whatsapp_attachment_local(attachment_file)
+        except HTTPException as exc:
+            set_flash(request, str(exc.detail))
+            return RedirectResponse(f"/admin/whatsapp/conversas/{thread.id}", status_code=303)
+        except Exception:
+            set_flash(request, "Não foi possível salvar o anexo.")
+            return RedirectResponse(f"/admin/whatsapp/conversas/{thread.id}", status_code=303)
+
+    delivery_status = "local"
+    external_id = ""
+    if direction == "outbound" and send_live:
+        config = _get_or_create_whatsapp_config(session, company_id=ctx.company.id)
+        if has_file:
+            ok, err, ext_id = await _try_send_whatsapp_media(
+                config=config,
+                to_phone=thread.contact_phone,
+                attachment_storage_path=attachment_storage_path,
+                attachment_mime_type=attachment_mime_type,
+                attachment_name=attachment_name,
+                caption=clean_body,
+            )
+        else:
+            ok, err, ext_id = await _try_send_whatsapp_text(
+                config=config,
+                to_phone=thread.contact_phone,
+                body=clean_body,
+            )
+        if ok:
+            delivery_status = "sent"
+            external_id = ext_id
+        else:
+            delivery_status = "failed"
+            if err:
+                set_flash(request, f"Mensagem registrada no app, mas não enviada via WhatsApp: {err}")
+
+    msg = _whatsapp_add_message(
+        session,
+        thread=thread,
+        direction=direction if direction in {"inbound", "outbound", "internal_note"} else "outbound",
         body=clean_body,
         sender_name=ctx.user.name,
         created_by_user_id=ctx.user.id,
@@ -38990,9 +40249,8 @@ async def whatsapp_thread_add_message(
         attachment_storage_path=attachment_storage_path,
         attachment_mime_type=attachment_mime_type,
         attachment_size_bytes=attachment_size_bytes,
-        message_type=message_type,
     )
-    chosen_topic = _whatsapp_menu_choice_to_topic(clean_body) if normalized_direction == "inbound" else None
+    chosen_topic = _whatsapp_menu_choice_to_topic(clean_body) if direction == "inbound" else None
     if chosen_topic:
         thread.topic_code = chosen_topic
         thread.assigned_user_id = thread.assigned_user_id or _whatsapp_pick_default_assignee(
@@ -39001,16 +40259,10 @@ async def whatsapp_thread_add_message(
         session.add(thread)
         session.commit()
 
-    if normalized_direction == "inbound":
-        _whatsapp_notify_new_inbound(
-            session,
-            thread=thread,
-            preview=clean_body or attachment_name or "[mídia recebida]",
-            created_by_user_id=ctx.user.id,
-        )
+    if direction == "inbound":
+        _whatsapp_notify_new_inbound(session, thread=thread, preview=clean_body, created_by_user_id=ctx.user.id)
 
     return RedirectResponse(f"/admin/whatsapp/conversas/{thread.id}", status_code=303)
-
 
 
 @app.get("/api/whatsapp/webhook")
@@ -39049,12 +40301,12 @@ def _extract_meta_whatsapp_messages(payload: dict[str, Any]) -> list[dict[str, A
                     continue
                 wa_from = str(msg.get("from") or "")
                 msg_type = str(msg.get("type") or "").strip().lower()
-                media_block = msg.get(msg_type) if isinstance(msg.get(msg_type), dict) else {}
                 body = ""
+                media_id = ""
                 attachment_name = ""
                 attachment_mime_type = ""
-                media_id = ""
-                media_sha256 = ""
+                media_kind = ""
+                media_caption = ""
                 if msg_type == "text":
                     body = str((msg.get("text") or {}).get("body") or "")
                 elif msg_type == "button":
@@ -39065,44 +40317,32 @@ def _extract_meta_whatsapp_messages(payload: dict[str, Any]) -> list[dict[str, A
                         body = str((interactive.get("button_reply") or {}).get("title") or "")
                     elif "list_reply" in interactive:
                         body = str((interactive.get("list_reply") or {}).get("title") or "")
-                elif msg_type in {"image", "document", "audio", "video", "sticker"}:
-                    media_id = str(media_block.get("id") or "")
-                    media_sha256 = str(media_block.get("sha256") or "")
-                    attachment_mime_type = str(media_block.get("mime_type") or "")
-                    attachment_name = str(media_block.get("filename") or "")
-                    caption = str(media_block.get("caption") or "")
+                elif msg_type in {"image", "document", "audio"}:
+                    media = msg.get(msg_type) or {}
+                    if isinstance(media, dict):
+                        media_id = str(media.get("id") or "")
+                        attachment_name = str(media.get("filename") or "")
+                        attachment_mime_type = str(media.get("mime_type") or "")
+                        media_caption = str(media.get("caption") or "")
+                    media_kind = msg_type
                     if msg_type == "image":
-                        body = caption or "[imagem recebida]"
+                        body = media_caption or "[mensagem image]"
                     elif msg_type == "document":
-                        body = caption or attachment_name or "[documento recebido]"
+                        body = media_caption or "[mensagem document]"
                     elif msg_type == "audio":
-                        body = "[áudio recebido]"
-                    elif msg_type == "video":
-                        body = caption or "[vídeo recebido]"
-                    else:
-                        body = "[sticker recebido]"
+                        body = "[mensagem audio]"
                 if not body:
                     body = f"[mensagem {msg_type or 'sem texto'}]"
 
-                group_obj = msg.get("group") if isinstance(msg.get("group"), dict) else {}
-                group_id = str(
-                    msg.get("group_id")
-                    or group_obj.get("id")
-                    or value.get("group_id")
-                    or ""
-                ).strip()
-                group_name = str(
-                    msg.get("group_name")
-                    or group_obj.get("subject")
-                    or group_obj.get("name")
-                    or value.get("group_name")
-                    or ""
-                ).strip()
-                participant_id = str(msg.get("author") or msg.get("participant") or "").strip()
-                is_group = bool(group_id or participant_id)
-                sender_lookup_id = participant_id or wa_from
-                group_sender_phone = _only_digits(sender_lookup_id or wa_from)
-                group_sender_name = contact_map.get(sender_lookup_id) or contact_map.get(wa_from) or ""
+                group_id = str(msg.get("group_id") or value.get("group_id") or "")
+                group_data = msg.get("group") or value.get("group") or {}
+                group_name = ""
+                if isinstance(group_data, dict):
+                    group_name = str(group_data.get("subject") or group_data.get("name") or "")
+                if not group_name:
+                    context = msg.get("context") or {}
+                    if isinstance(context, dict):
+                        group_name = str(context.get("group_subject") or "")
 
                 items.append({
                     "phone_number_id": phone_number_id,
@@ -39110,16 +40350,13 @@ def _extract_meta_whatsapp_messages(payload: dict[str, Any]) -> list[dict[str, A
                     "profile_name": contact_map.get(wa_from, ""),
                     "body": body,
                     "message_id": str(msg.get("id") or ""),
-                    "raw_type": msg_type or "text",
+                    "message_type": msg_type,
+                    "media_kind": media_kind,
+                    "media_id": media_id,
                     "attachment_name": attachment_name,
                     "attachment_mime_type": attachment_mime_type,
-                    "media_id": media_id,
-                    "media_sha256": media_sha256,
-                    "is_group": is_group,
                     "group_id": group_id,
                     "group_name": group_name,
-                    "group_sender_phone": group_sender_phone,
-                    "group_sender_name": group_sender_name,
                 })
     return items
 
@@ -39144,34 +40381,40 @@ async def whatsapp_webhook_receive(request: Request, session: Session = Depends(
         if not config:
             continue
         company_id = int(config.company_id)
+        incoming_phone = _only_digits(str(event.get("from") or ""))
+        group_id = _clean_text(str(event.get("group_id") or ""), 255)
+        is_group = bool(group_id)
 
-        thread: Optional[WhatsAppThread] = None
-        if bool(event.get("is_group")):
-            group_id = str(event.get("group_id") or "").strip()
-            if group_id:
-                thread = _whatsapp_find_thread_by_external_id(
-                    session,
-                    company_id=company_id,
-                    external_thread_id=group_id,
-                )
+        thread: Optional[WhatsAppThread]
+        if is_group:
+            thread = _whatsapp_find_open_thread_by_external_id(
+                session,
+                company_id=company_id,
+                external_thread_id=group_id,
+            )
             if not thread:
                 thread = _whatsapp_create_thread(
                     session,
                     company_id=company_id,
                     client_id=None,
-                    contact_name=str(event.get("group_name") or "") or "Grupo WhatsApp",
-                    contact_phone=str(event.get("group_id") or ""),
+                    contact_name="",
+                    contact_phone="",
                     is_group=True,
-                    group_name=str(event.get("group_name") or "") or "Grupo WhatsApp",
+                    group_name=_whatsapp_group_display_name(group_id, str(event.get("group_name") or "")),
                     topic_code="geral",
                     assigned_user_id=_whatsapp_pick_default_assignee(session, company_id=company_id, topic_code="geral"),
                     status="aberto",
                     source_kind="webhook",
                     created_by_user_id=None,
-                    external_thread_id=str(event.get("group_id") or ""),
                 )
+                thread.external_thread_id = group_id
+            if str(event.get("group_name") or "").strip():
+                thread.group_name = _whatsapp_group_display_name(group_id, str(event.get("group_name") or ""))
+            thread.updated_at = utcnow()
+            session.add(thread)
+            session.commit()
+            session.refresh(thread)
         else:
-            incoming_phone = _only_digits(str(event.get("from") or ""))
             if not incoming_phone:
                 continue
             thread = _whatsapp_find_open_thread_by_phone(session, company_id=company_id, phone_digits=incoming_phone)
@@ -39192,9 +40435,6 @@ async def whatsapp_webhook_receive(request: Request, session: Session = Depends(
                     created_by_user_id=None,
                 )
 
-        if not thread:
-            continue
-
         body = str(event.get("body") or "")
         choice_topic = _whatsapp_menu_choice_to_topic(body)
         if choice_topic:
@@ -39210,30 +40450,31 @@ async def whatsapp_webhook_receive(request: Request, session: Session = Depends(
         attachment_mime_type = ""
         attachment_size_bytes = 0
         media_id = str(event.get("media_id") or "")
+        media_kind = str(event.get("media_kind") or "")
         if media_id:
             try:
-                attachment_name, attachment_storage_path, attachment_mime_type, attachment_size_bytes = await _download_meta_media_to_local(
+                attachment_name, attachment_storage_path, attachment_mime_type, attachment_size_bytes = await _download_meta_whatsapp_media(
                     media_id=media_id,
-                    fallback_filename=str(event.get("attachment_name") or ""),
-                    fallback_mime_type=str(event.get("attachment_mime_type") or ""),
-                    message_type=str(event.get("raw_type") or ""),
+                    mime_type=str(event.get("attachment_mime_type") or ""),
+                    filename_hint=str(event.get("attachment_name") or ""),
+                    media_kind=media_kind,
+                    external_message_id=str(event.get("message_id") or ""),
                 )
             except Exception:
-                attachment_name = str(event.get("attachment_name") or "")
-                attachment_storage_path = ""
-                attachment_mime_type = str(event.get("attachment_mime_type") or "")
-                attachment_size_bytes = 0
+                if not body:
+                    body = f"[mensagem {media_kind or 'media'}]"
+                body = body if "[download falhou]" in body else f"{body}\n[download falhou]"
 
-        sender_name = str(event.get("profile_name") or "") or "Cliente"
-        if bool(thread.is_group):
-            sender_name = str(event.get("group_sender_name") or "") or sender_name or "Participante"
+        sender_name = str(event.get("profile_name") or "").strip()
+        if not sender_name:
+            sender_name = incoming_phone if not is_group else (_only_digits(str(event.get("from") or "")) or "Participante")
 
         _whatsapp_add_message(
             session,
             thread=thread,
             direction="inbound",
             body=body,
-            sender_name=sender_name,
+            sender_name=sender_name or "Cliente",
             created_by_user_id=None,
             delivery_status="received",
             external_message_id=str(event.get("message_id") or ""),
@@ -39241,17 +40482,9 @@ async def whatsapp_webhook_receive(request: Request, session: Session = Depends(
             attachment_storage_path=attachment_storage_path,
             attachment_mime_type=attachment_mime_type,
             attachment_size_bytes=attachment_size_bytes,
-            message_type=str(event.get("raw_type") or "text"),
-            media_id=media_id,
-            media_sha256=str(event.get("media_sha256") or ""),
-            group_sender_phone=str(event.get("group_sender_phone") or ""),
-            group_sender_name=str(event.get("group_sender_name") or ""),
         )
-        _whatsapp_notify_new_inbound(
-            session,
-            thread=thread,
-            preview=body or attachment_name or "[mídia recebida]",
-        )
+        preview = body.strip() or attachment_name or f"[{media_kind or 'mensagem'}]"
+        _whatsapp_notify_new_inbound(session, thread=thread, preview=preview)
         processed += 1
     return JSONResponse({"ok": True, "processed": processed})
 
