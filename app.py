@@ -216,6 +216,9 @@ NACIONAL_NFSE_CONSULTA_URL = "https://www.nfse.gov.br/consultapublica"
 UPLOAD_DIR = Path(os.getenv("UPLOAD_DIR") or "./uploads").resolve()
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
+WHATSAPP_MEDIA_DIR = (UPLOAD_DIR / "whatsapp_media").resolve()
+WHATSAPP_MEDIA_DIR.mkdir(parents=True, exist_ok=True)
+
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 engine = create_engine(
@@ -38198,6 +38201,10 @@ class WhatsAppThreadMessage(SQLModel, table=True):
     created_by_user_id: Optional[int] = Field(default=None, index=True, foreign_key="user.id")
     delivery_status: str = Field(default="local", index=True)  # local | sent | delivered | read | failed | received
     external_message_id: str = Field(default="", index=True)
+    attachment_name: str = Field(default="")
+    attachment_storage_path: str = Field(default="")
+    attachment_mime_type: str = Field(default="")
+    attachment_size_bytes: int = Field(default=0)
     created_at: datetime = Field(default_factory=utcnow, index=True)
 
 
@@ -38267,6 +38274,10 @@ def ensure_whatsapp_columns() -> None:
             ("created_by_user_id", "INTEGER", "INTEGER"),
             ("delivery_status", "TEXT NOT NULL DEFAULT 'local'", "TEXT NOT NULL DEFAULT 'local'"),
             ("external_message_id", "TEXT NOT NULL DEFAULT ''", "TEXT NOT NULL DEFAULT ''"),
+            ("attachment_name", "TEXT NOT NULL DEFAULT ''", "TEXT NOT NULL DEFAULT ''"),
+            ("attachment_storage_path", "TEXT NOT NULL DEFAULT ''", "TEXT NOT NULL DEFAULT ''"),
+            ("attachment_mime_type", "TEXT NOT NULL DEFAULT ''", "TEXT NOT NULL DEFAULT ''"),
+            ("attachment_size_bytes", "INTEGER NOT NULL DEFAULT 0", "INTEGER NOT NULL DEFAULT 0"),
             ("created_at", "TIMESTAMP WITHOUT TIME ZONE", "TEXT"),
         ],
     }
@@ -38464,6 +38475,10 @@ def _whatsapp_add_message(
         created_by_user_id: Optional[int],
         delivery_status: str = "",
         external_message_id: str = "",
+        attachment_name: str = "",
+        attachment_storage_path: str = "",
+        attachment_mime_type: str = "",
+        attachment_size_bytes: int = 0,
 ) -> WhatsAppThreadMessage:
     clean_body = _clean_text(body, 5000)
     row = WhatsAppThreadMessage(
@@ -38475,6 +38490,10 @@ def _whatsapp_add_message(
         created_by_user_id=created_by_user_id,
         delivery_status=_clean_text(delivery_status or ("received" if direction == "inbound" else "local"), 40),
         external_message_id=_clean_text(external_message_id, 120),
+        attachment_name=_clean_text(attachment_name, 255),
+        attachment_storage_path=_clean_text(attachment_storage_path, 1000),
+        attachment_mime_type=_clean_text(attachment_mime_type, 120),
+        attachment_size_bytes=max(0, int(attachment_size_bytes or 0)),
         created_at=utcnow(),
     )
     session.add(row)
@@ -38493,6 +38512,41 @@ def _whatsapp_add_message(
     session.commit()
     session.refresh(row)
     return row
+
+
+def _whatsapp_is_image_mime(mime_type: str) -> bool:
+    return str(mime_type or "").lower().startswith("image/")
+
+
+def _whatsapp_attachment_ext(filename: str) -> str:
+    suffix = Path(filename or "").suffix.strip().lower()
+    return suffix[:12]
+
+
+async def _save_whatsapp_attachment_local(file: UploadFile) -> tuple[str, str, str, int]:
+    filename = (file.filename or "").strip() or "arquivo"
+    safe_name = re.sub(r"[^A-Za-z0-9._-]+", "_", filename).strip("._") or "arquivo"
+    content_type = (file.content_type or "").strip().lower()
+    ext = _whatsapp_attachment_ext(safe_name)
+    storage_name = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex}{ext}"
+    storage_path = (WHATSAPP_MEDIA_DIR / storage_name).resolve()
+    total = 0
+    with storage_path.open("wb") as out:
+        while True:
+            chunk = await file.read(1024 * 1024)
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > _MAX_UPLOAD_BYTES:
+                out.close()
+                try:
+                    storage_path.unlink(missing_ok=True)
+                except Exception:
+                    pass
+                raise HTTPException(status_code=400, detail="Arquivo excede o limite permitido.")
+            out.write(chunk)
+    await file.close()
+    return safe_name, str(storage_path), content_type, total
 
 
 def _whatsapp_menu_choice_to_topic(text_value: str) -> Optional[str]:
@@ -39144,7 +39198,27 @@ TEMPLATES["whatsapp_thread_detail.html"] = r"""
               </div>
               <div class="small muted">{{ msg.created_at.strftime("%d/%m/%Y %H:%M") if msg.created_at else "-" }}</div>
             </div>
-            <div class="mt-2">{{ msg.body }}</div>
+            {% if msg.body %}
+              <div class="mt-2" style="white-space: pre-wrap;">{{ msg.body }}</div>
+            {% endif %}
+            {% if msg.attachment_storage_path %}
+              <div class="mt-3">
+                {% if msg.attachment_mime_type and msg.attachment_mime_type.startswith("image/") %}
+                  <div class="mb-2">
+                    <img src="/admin/whatsapp/mensagens/{{ msg.id }}/anexo" alt="{{ msg.attachment_name or 'imagem' }}" class="img-fluid rounded border" style="max-height: 320px;" />
+                  </div>
+                {% endif %}
+                <a class="btn btn-sm btn-outline-secondary" href="/admin/whatsapp/mensagens/{{ msg.id }}/anexo" target="_blank">
+                  {% if msg.attachment_mime_type and msg.attachment_mime_type.startswith("image/") %}Abrir imagem{% else %}Baixar anexo{% endif %}
+                </a>
+                {% if msg.attachment_name %}
+                  <span class="small muted ms-2">{{ msg.attachment_name }}</span>
+                {% endif %}
+                {% if msg.attachment_size_bytes %}
+                  <span class="small muted"> • {{ "{:,}".format(msg.attachment_size_bytes).replace(",", ".") }} bytes</span>
+                {% endif %}
+              </div>
+            {% endif %}
             <div class="small muted mt-2">
               {{ msg.delivery_status }}
               {% if msg.external_message_id %} • <span class="mono">{{ msg.external_message_id }}</span>{% endif %}
@@ -39158,7 +39232,7 @@ TEMPLATES["whatsapp_thread_detail.html"] = r"""
 
     <div class="card p-4 mt-3">
       <div class="fw-semibold mb-3">Nova mensagem</div>
-      <form method="post" action="/admin/whatsapp/conversas/{{ thread.id }}/mensagens" class="row g-3">
+      <form method="post" action="/admin/whatsapp/conversas/{{ thread.id }}/mensagens" enctype="multipart/form-data" class="row g-3">
         <div class="col-md-4">
           <label class="form-label">Tipo</label>
           <select class="form-select" name="direction">
@@ -39174,7 +39248,13 @@ TEMPLATES["whatsapp_thread_detail.html"] = r"""
           </div>
         </div>
         <div class="col-12">
-          <textarea class="form-control" rows="5" name="body" placeholder="Digite a mensagem..." required></textarea>
+          <textarea class="form-control" rows="5" name="body" placeholder="Digite a mensagem..."></textarea>
+          <div class="form-text">Você pode registrar só texto, só anexo interno, ou ambos.</div>
+        </div>
+        <div class="col-12">
+          <label class="form-label">Anexo interno</label>
+          <input class="form-control" type="file" name="attachment_file" />
+          <div class="form-text">Nesta etapa o anexo fica salvo no app. O envio oficial de mídia pela Meta ficará para o próximo patch.</div>
         </div>
         <div class="col-12">
           <button class="btn btn-primary">Registrar mensagem</button>
@@ -39190,30 +39270,30 @@ TEMPLATES["whatsapp_thread_detail.html"] = r"""
         <div class="col-12">
           <label class="form-label">Status</label>
           <select class="form-select" name="status">
-            {% for status_value, status_label in status_options %}
-              <option value="{{ status_value }}" {% if thread.status == status_value %}selected{% endif %}>{{ status_label }}</option>
+            {% for value, label in status_options %}
+              <option value="{{ value }}" {% if thread.status == value %}selected{% endif %}>{{ label }}</option>
             {% endfor %}
           </select>
         </div>
         <div class="col-12">
           <label class="form-label">Assunto</label>
           <select class="form-select" name="topic_code">
-            {% for code, label in topic_options %}
-              <option value="{{ code }}" {% if thread.topic_code == code %}selected{% endif %}>{{ label }}</option>
+            {% for value, label in topic_options %}
+              <option value="{{ value }}" {% if thread.topic_code == value %}selected{% endif %}>{{ label }}</option>
             {% endfor %}
           </select>
         </div>
         <div class="col-12">
           <label class="form-label">Responsável</label>
           <select class="form-select" name="assigned_user_id">
-            <option value="">Sem responsável</option>
-            {% for row in staff_options %}
-              <option value="{{ row.user_id }}" {% if thread.assigned_user_id == row.user_id %}selected{% endif %}>{{ row.label }}</option>
+            <option value="">Não atribuído</option>
+            {% for item in staff_options %}
+              <option value="{{ item.user_id }}" {% if thread.assigned_user_id == item.user_id %}selected{% endif %}>{{ item.label }}</option>
             {% endfor %}
           </select>
         </div>
         <div class="col-12">
-          <label class="form-label">Cliente vinculado</label>
+          <label class="form-label">Vincular cliente</label>
           <select class="form-select" name="client_id">
             <option value="">Sem vínculo</option>
             {% for c in clients %}
@@ -39222,15 +39302,9 @@ TEMPLATES["whatsapp_thread_detail.html"] = r"""
           </select>
         </div>
         <div class="col-12">
-          <button class="btn btn-outline-secondary">Salvar classificação</button>
+          <button class="btn btn-outline-primary">Salvar classificação</button>
         </div>
       </form>
-    </div>
-
-    <div class="card p-4 mt-3">
-      <div class="fw-semibold mb-3">Triage bot</div>
-      <div class="small muted mb-2">Preview da mensagem inicial do chatbot:</div>
-      <pre class="small border rounded-3 p-3 mb-0" style="white-space:pre-wrap;">{{ config.welcome_message }}</pre>
     </div>
   </div>
 </div>
@@ -39637,6 +39711,26 @@ async def whatsapp_thread_detail_page(
     )
 
 
+@app.get("/admin/whatsapp/mensagens/{message_id}/anexo")
+@require_role({"admin", "equipe"})
+async def whatsapp_message_attachment_download(
+        request: Request,
+        message_id: int,
+        session: Session = Depends(get_session),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+    msg = session.get(WhatsAppThreadMessage, int(message_id))
+    if not msg or msg.company_id != ctx.company.id or not (msg.attachment_storage_path or "").strip():
+        return render("error.html", request=request, context={"message": "Anexo não encontrado."}, status_code=404)
+    path = Path(msg.attachment_storage_path).resolve()
+    if not path.exists():
+        return render("error.html", request=request, context={"message": "Arquivo do anexo não encontrado."}, status_code=404)
+    media_type = (msg.attachment_mime_type or "").strip() or None
+    filename = (msg.attachment_name or path.name).strip() or path.name
+    return FileResponse(path, media_type=media_type, filename=filename)
+
+
 @app.post("/admin/whatsapp/conversas/{thread_id}/salvar")
 @require_role({"admin", "equipe"})
 async def whatsapp_thread_save(
@@ -39677,6 +39771,7 @@ async def whatsapp_thread_add_message(
         direction: str = Form(default="outbound"),
         body: str = Form(default=""),
         send_live: Optional[str] = Form(default=None),
+        attachment_file: Optional[UploadFile] = File(default=None),
         session: Session = Depends(get_session),
 ) -> Response:
     ctx = get_tenant_context(request, session)
@@ -39685,14 +39780,30 @@ async def whatsapp_thread_add_message(
     if not thread or thread.company_id != ctx.company.id:
         set_flash(request, "Conversa não encontrada.")
         return RedirectResponse("/admin/whatsapp/caixa", status_code=303)
+
     clean_body = _clean_text(body, 5000)
-    if not clean_body:
-        set_flash(request, "Escreva uma mensagem.")
+    has_file = bool(attachment_file and (attachment_file.filename or "").strip())
+    if not clean_body and not has_file:
+        set_flash(request, "Escreva uma mensagem ou selecione um anexo.")
         return RedirectResponse(f"/admin/whatsapp/conversas/{thread.id}", status_code=303)
+
+    attachment_name = ""
+    attachment_storage_path = ""
+    attachment_mime_type = ""
+    attachment_size_bytes = 0
+    if has_file:
+        try:
+            attachment_name, attachment_storage_path, attachment_mime_type, attachment_size_bytes = await _save_whatsapp_attachment_local(attachment_file)
+        except HTTPException as exc:
+            set_flash(request, str(exc.detail))
+            return RedirectResponse(f"/admin/whatsapp/conversas/{thread.id}", status_code=303)
+        except Exception:
+            set_flash(request, "Não foi possível salvar o anexo.")
+            return RedirectResponse(f"/admin/whatsapp/conversas/{thread.id}", status_code=303)
 
     delivery_status = "local"
     external_id = ""
-    if direction == "outbound" and send_live:
+    if direction == "outbound" and send_live and clean_body and not has_file:
         config = _get_or_create_whatsapp_config(session, company_id=ctx.company.id)
         ok, err, ext_id = await _try_send_whatsapp_text(config=config, to_phone=thread.contact_phone, body=clean_body)
         if ok:
@@ -39702,6 +39813,8 @@ async def whatsapp_thread_add_message(
             delivery_status = "failed"
             if err:
                 set_flash(request, f"Mensagem registrada no app, mas não enviada via WhatsApp: {err}")
+    elif direction == "outbound" and send_live and has_file:
+        set_flash(request, "Anexo salvo no app. O envio oficial de mídia será ativado em um próximo patch.")
 
     msg = _whatsapp_add_message(
         session,
@@ -39712,6 +39825,10 @@ async def whatsapp_thread_add_message(
         created_by_user_id=ctx.user.id,
         delivery_status=delivery_status,
         external_message_id=external_id,
+        attachment_name=attachment_name,
+        attachment_storage_path=attachment_storage_path,
+        attachment_mime_type=attachment_mime_type,
+        attachment_size_bytes=attachment_size_bytes,
     )
     chosen_topic = _whatsapp_menu_choice_to_topic(clean_body) if direction == "inbound" else None
     if chosen_topic:
