@@ -12403,6 +12403,7 @@ def render(
     ctx.setdefault("allow_company_signup", ALLOW_COMPANY_SIGNUP)
     ctx.setdefault("service_catalog", SERVICE_CATALOG)
     ctx.setdefault("bookings_url", BOOKINGS_URL)
+    ctx.setdefault("format_dt_br", _format_dt_br)
 
     # Inject tenant context defaults for templates that expect them.
     try:
@@ -38624,11 +38625,29 @@ def _whatsapp_attachment_effective_mime_type(filename: str, mime_type: str) -> s
         ".amr": "audio/amr",
         ".mp3": "audio/mpeg",
         ".m4a": "audio/mp4",
-        ".ogg": "audio/ogg",
-        ".opus": "audio/ogg",
+        ".ogg": "audio/ogg; codecs=opus",
+        ".opus": "audio/ogg; codecs=opus",
         ".wav": "audio/wav",
     }
     return mapping.get(ext, "application/octet-stream")
+
+
+def _whatsapp_meta_upload_mime_type(filename: str, mime_type: str) -> str:
+    raw = _whatsapp_attachment_effective_mime_type(filename, mime_type).strip().lower()
+    if not raw:
+        return "application/octet-stream"
+    base = raw.split(";", 1)[0].strip()
+    if base == "audio/ogg":
+        return "audio/ogg; codecs=opus" if "opus" in raw else "audio/ogg"
+    if base == "audio/mp4":
+        return "audio/mp4"
+    if base == "audio/mpeg":
+        return "audio/mpeg"
+    if base == "audio/amr":
+        return "audio/amr"
+    if base == "audio/aac":
+        return "audio/aac"
+    return base
 
 
 def _whatsapp_filename_ext_from_mime(mime_type: str) -> str:
@@ -38672,9 +38691,9 @@ def _whatsapp_sanitize_attachment_name(filename: str, *, mime_type: str = "") ->
 
 def _whatsapp_audio_is_meta_supported(filename: str, mime_type: str) -> bool:
     ext = _whatsapp_attachment_ext(filename).lower()
-    mime = (mime_type or "").strip().lower()
+    mime = _whatsapp_meta_upload_mime_type(filename, mime_type)
     supported_exts = {".aac", ".amr", ".mp3", ".m4a", ".ogg"}
-    supported_mimes = {"audio/aac", "audio/amr", "audio/mpeg", "audio/mp4", "audio/ogg"}
+    supported_mimes = {"audio/aac", "audio/amr", "audio/mpeg", "audio/mp4", "audio/ogg", "audio/ogg; codecs=opus"}
     return ext in supported_exts or mime in supported_mimes
 
 
@@ -38819,6 +38838,7 @@ async def _try_send_whatsapp_media(
 
     filename = (attachment_name or path.name).strip() or path.name
     mime_type = _whatsapp_attachment_effective_mime_type(filename, attachment_mime_type)
+    upload_mime_type = _whatsapp_meta_upload_mime_type(filename, mime_type)
     media_kind = _whatsapp_attachment_send_kind(filename, mime_type)
     if media_kind not in {"image", "document", "audio"}:
         return False, "Tipo de anexo ainda não suportado para envio oficial.", ""
@@ -38831,10 +38851,10 @@ async def _try_send_whatsapp_media(
 
     try:
         with path.open("rb") as fh:
-            files = {"file": (filename, fh, mime_type)}
+            files = {"file": (filename, fh, upload_mime_type)}
             data = {
                 "messaging_product": "whatsapp",
-                "type": mime_type,
+                "type": upload_mime_type,
             }
             async with httpx.AsyncClient(timeout=45.0) as client:
                 upload_resp = await client.post(upload_url, headers=headers, data=data, files=files)
@@ -39525,7 +39545,7 @@ TEMPLATES["whatsapp_thread_detail.html"] = r"""
                 {% if msg.direction == "inbound" %}Cliente{% elif msg.direction == "outbound" %}Equipe{% else %}Nota interna{% endif %}
                 {% if msg.sender_name %} • {{ msg.sender_name }}{% endif %}
               </div>
-              <div class="small muted">{{ msg.created_at.strftime("%d/%m/%Y %H:%M") if msg.created_at else "-" }}</div>
+              <div class="small muted">{{ format_dt_br(msg.created_at) if msg.created_at else "-" }}</div>
             </div>
             {% if msg.body %}
               <div class="mt-2" style="white-space: pre-wrap;">{{ msg.body }}</div>
@@ -40524,13 +40544,111 @@ def _extract_meta_whatsapp_messages(payload: dict[str, Any]) -> list[dict[str, A
     return items
 
 
+def _extract_meta_whatsapp_statuses(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    for entry in payload.get("entry") or []:
+        if not isinstance(entry, dict):
+            continue
+        for change in entry.get("changes") or []:
+            if not isinstance(change, dict):
+                continue
+            value = change.get("value") or {}
+            if not isinstance(value, dict):
+                continue
+            metadata = value.get("metadata") or {}
+            phone_number_id = str(metadata.get("phone_number_id") or "")
+            for status_row in value.get("statuses") or []:
+                if not isinstance(status_row, dict):
+                    continue
+                message_id = _clean_text(str(status_row.get("id") or ""), 120)
+                status_value = _clean_text(str(status_row.get("status") or ""), 40).lower()
+                if not message_id or not status_value:
+                    continue
+                error_text = ""
+                errors = status_row.get("errors") or []
+                if isinstance(errors, list) and errors:
+                    first = errors[0] if isinstance(errors[0], dict) else {}
+                    error_text = str(
+                        first.get("title")
+                        or first.get("message")
+                        or first.get("error_data", {}).get("details")
+                        or first.get("code")
+                        or ""
+                    ).strip()
+                items.append(
+                    {
+                        "phone_number_id": phone_number_id,
+                        "message_id": message_id,
+                        "status": status_value,
+                        "error_text": error_text,
+                    }
+                )
+    return items
+
+
+def _whatsapp_apply_meta_status_event(
+        session: Session,
+        *,
+        company_id: int,
+        message_id: str,
+        status_value: str,
+        error_text: str = "",
+) -> bool:
+    msg = session.exec(
+        select(WhatsAppThreadMessage)
+        .where(
+            WhatsAppThreadMessage.company_id == company_id,
+            WhatsAppThreadMessage.external_message_id == message_id,
+        )
+        .order_by(WhatsAppThreadMessage.id.desc())
+    ).first()
+    if not msg:
+        return False
+
+    normalized = status_value.strip().lower()
+    if normalized not in {"sent", "delivered", "read", "failed"}:
+        normalized = "failed" if normalized.startswith("fail") else normalized[:40]
+
+    msg.delivery_status = normalized or msg.delivery_status
+    session.add(msg)
+    thread = session.get(WhatsAppThread, int(msg.thread_id or 0))
+    if thread:
+        thread.updated_at = utcnow()
+        session.add(thread)
+    session.commit()
+    return True
+
+
 @app.post("/api/whatsapp/webhook")
 async def whatsapp_webhook_receive(request: Request, session: Session = Depends(get_session)) -> JSONResponse:
     try:
         payload = await request.json()
     except Exception:
         payload = {}
-    events = _extract_meta_whatsapp_messages(payload if isinstance(payload, dict) else {})
+    payload_dict = payload if isinstance(payload, dict) else {}
+    status_events = _extract_meta_whatsapp_statuses(payload_dict)
+    status_processed = 0
+    for status_event in status_events:
+        phone_number_id = str(status_event.get("phone_number_id") or "")
+        if not phone_number_id:
+            continue
+        config = session.exec(
+            select(WhatsAppChannelConfig).where(
+                WhatsAppChannelConfig.meta_phone_number_id == phone_number_id
+            )
+        ).first()
+        if not config:
+            continue
+        if _whatsapp_apply_meta_status_event(
+                session,
+                company_id=int(config.company_id),
+                message_id=str(status_event.get("message_id") or ""),
+                status_value=str(status_event.get("status") or ""),
+                error_text=str(status_event.get("error_text") or ""),
+        ):
+            status_processed += 1
+
+    events = _extract_meta_whatsapp_messages(payload_dict)
     processed = 0
     for event in events:
         phone_number_id = str(event.get("phone_number_id") or "")
@@ -40649,7 +40767,7 @@ async def whatsapp_webhook_receive(request: Request, session: Session = Depends(
         preview = body.strip() or attachment_name or f"[{media_kind or 'mensagem'}]"
         _whatsapp_notify_new_inbound(session, thread=thread, preview=preview)
         processed += 1
-    return JSONResponse({"ok": True, "processed": processed})
+    return JSONResponse({"ok": True, "processed": processed, "statuses_processed": status_processed})
 
 
 # =========================
