@@ -38668,6 +38668,23 @@ def _whatsapp_sanitize_attachment_name(filename: str, *, mime_type: str = "") ->
     return safe_name
 
 
+
+
+def _whatsapp_audio_is_meta_supported(filename: str, mime_type: str) -> bool:
+    ext = _whatsapp_attachment_ext(filename).lower()
+    mime = (mime_type or "").strip().lower()
+    supported_exts = {".aac", ".amr", ".mp3", ".m4a", ".ogg"}
+    supported_mimes = {"audio/aac", "audio/amr", "audio/mpeg", "audio/mp4", "audio/ogg"}
+    return ext in supported_exts or mime in supported_mimes
+
+
+def _whatsapp_audio_meta_validation_error(filename: str, mime_type: str) -> str:
+    safe_name = (filename or "").strip() or "audio"
+    return (
+        f"Áudio '{safe_name}' em formato não suportado pela Meta. "
+        "Use OGG/Opus (.ogg), MP3 (.mp3), M4A (.m4a), AMR (.amr) ou AAC (.aac)."
+    )
+
 def _whatsapp_media_download_filename(
         *,
         filename_hint: str = "",
@@ -38805,6 +38822,8 @@ async def _try_send_whatsapp_media(
     media_kind = _whatsapp_attachment_send_kind(filename, mime_type)
     if media_kind not in {"image", "document", "audio"}:
         return False, "Tipo de anexo ainda não suportado para envio oficial.", ""
+    if media_kind == "audio" and not _whatsapp_audio_is_meta_supported(filename, mime_type):
+        return False, _whatsapp_audio_meta_validation_error(filename, mime_type), ""
 
     upload_url = f"https://graph.facebook.com/{WHATSAPP_GRAPH_VERSION}/{config.meta_phone_number_id}/media"
     message_url = f"https://graph.facebook.com/{WHATSAPP_GRAPH_VERSION}/{config.meta_phone_number_id}/messages"
@@ -39572,7 +39591,7 @@ TEMPLATES["whatsapp_thread_detail.html"] = r"""
         </div>
         <div class="col-12">
           <textarea class="form-control" rows="5" name="body" id="wa-body" placeholder="Digite a mensagem..."></textarea>
-          <div class="form-text">Você pode enviar só texto, só anexo, ou ambos. Quando o envio oficial estiver ligado, imagem, documento e áudio vão para o WhatsApp.</div>
+          <div class="form-text">Você pode enviar só texto, só anexo, ou ambos. Para áudio oficial, prefira OGG, MP3, M4A, AAC ou AMR. Quando o envio oficial estiver ligado, imagem, documento e áudio vão para o WhatsApp.</div>
         </div>
         <div class="col-12">
           <label class="form-label">Anexo interno</label>
@@ -39678,7 +39697,9 @@ TEMPLATES["whatsapp_thread_detail.html"] = r"""
 
   function setRecordedFile(blob) {
     const mime = blob.type || "audio/webm";
-    const ext = mime.includes("ogg") ? "ogg" : (mime.includes("mp4") || mime.includes("mpeg") ? "mp3" : "webm");
+    const isOgg = mime.includes("ogg");
+    const isMp4 = mime.includes("mp4") || mime.includes("mpeg");
+    const ext = isOgg ? "ogg" : (isMp4 ? "m4a" : "webm");
     const file = new File([blob], `gravacao-whatsapp.${ext}`, { type: mime });
     const dt = new DataTransfer();
     dt.items.add(file);
@@ -39687,7 +39708,11 @@ TEMPLATES["whatsapp_thread_detail.html"] = r"""
     previewAudio.src = objectUrl;
     previewWrap.classList.remove("d-none");
     clearBtn.disabled = false;
-    statusEl.textContent = "Áudio gravado e anexado à mensagem.";
+    if (isOgg || isMp4) {
+      statusEl.textContent = "Áudio gravado e anexado à mensagem.";
+    } else {
+      statusEl.textContent = "Áudio gravado em WEBM. Ele ficará salvo no app, mas para envio oficial use OGG/MP3/M4A.";
+    }
   }
 
   async function startRecording() {
@@ -39699,9 +39724,9 @@ TEMPLATES["whatsapp_thread_detail.html"] = r"""
       resetPreview();
       mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const preferredTypes = [
-        "audio/webm;codecs=opus",
         "audio/ogg;codecs=opus",
         "audio/mp4",
+        "audio/webm;codecs=opus",
         "audio/webm",
       ];
       let options = {};
