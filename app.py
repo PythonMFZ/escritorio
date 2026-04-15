@@ -9461,7 +9461,7 @@ TEMPLATES.update({
   <div class="d-flex justify-content-between align-items-center">
     <div>
       <h4 class="mb-0">Nova Reunião</h4>
-      <div class="muted">Cole o link (ou ID) da página do Notion que contém AI Meeting Notes.</div>
+      <div class="muted">Você pode iniciar sem link do Notion e importar depois, sem perder check-in/check-out.</div>
     </div>
     <a class="btn btn-outline-secondary" href="/reunioes">Voltar</a>
   </div>
@@ -9470,7 +9470,7 @@ TEMPLATES.update({
 
   {% if not notion_enabled %}
     <div class="alert alert-warning">
-      NOTION_TOKEN não configurado. Configure no Render/ambiente para usar sync.
+      NOTION_TOKEN não configurado. A reunião pode ser criada normalmente, mas a importação do Notion ficará indisponível até configurar.
     </div>
   {% endif %}
 
@@ -9491,19 +9491,19 @@ TEMPLATES.update({
       </div>
 
       <div class="col-12">
-        <label class="form-label">Link ou ID da página do Notion</label>
-        <input class="form-control" name="notion_page" required placeholder="https://www.notion.so/... ou 32-hex" />
-        <div class="form-text">A integração precisa ter acesso à página (Compartilhar → Conexões → sua integração).</div>
+        <label class="form-label">Título</label>
+        <input class="form-control" name="title" placeholder="Ex: Reunião de alinhamento" />
       </div>
 
       <div class="col-12">
-        <label class="form-label">Título (opcional)</label>
-        <input class="form-control" name="title" placeholder="Ex: Reunião de alinhamento" />
+        <label class="form-label">Link ou ID da página do Notion (opcional)</label>
+        <input class="form-control" name="notion_page" placeholder="https://www.notion.so/... ou 32-hex" />
+        <div class="form-text">Se deixar em branco, a reunião é criada agora e você pode vincular/importar depois.</div>
       </div>
 
       <div class="col-12 form-check">
         <input class="form-check-input" type="checkbox" value="1" id="sync_now" name="sync_now" checked>
-        <label class="form-check-label" for="sync_now">Sincronizar agora</label>
+        <label class="form-check-label" for="sync_now">Importar do Notion agora, se o link/ID estiver preenchido</label>
       </div>
     </div>
 
@@ -21459,7 +21459,7 @@ async def meetings_new_action(
         session: Session = Depends(get_session),
         client_id: int = Form(...),
         meeting_date: str = Form(""),
-        notion_page: str = Form(...),
+        notion_page: str = Form(""),
         title: str = Form(""),
         sync_now: str = Form(""),
 ) -> Response:
@@ -21476,8 +21476,9 @@ async def meetings_new_action(
         set_flash(request, "Cliente inválido.")
         return RedirectResponse("/reunioes/nova", status_code=303)
 
-    page_id = _normalize_uuid(notion_page)
-    if not page_id:
+    notion_ref = (notion_page or "").strip()
+    page_id = _normalize_uuid(notion_ref) if notion_ref else ""
+    if notion_ref and not page_id:
         set_flash(request, "Link/ID do Notion inválido.")
         return RedirectResponse("/reunioes/nova", status_code=303)
 
@@ -21485,36 +21486,33 @@ async def meetings_new_action(
         company_id=ctx.company.id,
         client_id=client.id,
         created_by_user_id=ctx.user.id,
-        title=title.strip(),
+        title=(title or "").strip() or "Reunião",
         meeting_date=_normalize_date_input(meeting_date),
         notion_page_id=page_id,
-        notion_url=notion_page.strip(),
+        notion_url=notion_ref,
         updated_at=utcnow(),
     )
     session.add(mt)
     session.commit()
     session.refresh(mt)
 
-    if sync_now == "1":
+    if sync_now == "1" and notion_ref:
         try:
-            data = await notion_sync_meeting_from_page(page_id)
-            mt.title = mt.title or data.get("title", "") or "Reunião"
-            mt.notion_meeting_block_id = data.get("meeting_block_id", "") or ""
-            mt.notion_status = data.get("status", "") or ""
-            mt.summary_text = data.get("summary_text", "") or ""
-            mt.notes_text = data.get("notes_text", "") or ""
-            mt.transcript_text = data.get("transcript_text", "") or ""
-            mt.action_items_text = data.get("action_items_text", "") or ""
-            mt.raw_json = json.dumps(data.get("raw", {}), ensure_ascii=False)
-            mt.last_synced_at = utcnow()
-            mt.updated_at = utcnow()
+            data = await notion_sync_meeting_from_page(page_id or notion_ref)
+            _meeting_apply_sync_data(mt, data)
             session.add(mt)
             session.commit()
             set_flash(request, "Reunião criada e sincronizada.")
         except Exception as e:
             set_flash(request, f"Reunião criada, mas falhou ao sincronizar: {e}")
+    else:
+        if notion_ref:
+            set_flash(request, "Reunião criada. Você pode importar os dados do Notion depois.")
+        else:
+            set_flash(request, "Reunião criada sem vínculo com Notion. Você pode importar depois sem perder check-in e check-out.")
 
     return RedirectResponse(f"/reunioes/{mt.id}", status_code=303)
+
 
 
 @app.get("/reunioes/{meeting_id}", response_class=HTMLResponse)
@@ -21565,7 +21563,12 @@ async def meetings_detail(request: Request, session: Session = Depends(get_sessi
 
 @app.post("/reunioes/{meeting_id}/sync")
 @require_role({"admin", "equipe"})
-async def meetings_sync(request: Request, session: Session = Depends(get_session), meeting_id: int = 0) -> Response:
+async def meetings_sync(
+        request: Request,
+        session: Session = Depends(get_session),
+        meeting_id: int = 0,
+        notion_page: str = Form(""),
+) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
@@ -21579,25 +21582,34 @@ async def meetings_sync(request: Request, session: Session = Depends(get_session
         set_flash(request, "Reunião não encontrada.")
         return RedirectResponse("/reunioes", status_code=303)
 
-    try:
-        data = await notion_sync_meeting_from_page(mt.notion_page_id or mt.notion_url)
-        mt.title = mt.title or data.get("title", "") or "Reunião"
-        mt.notion_meeting_block_id = data.get("meeting_block_id", "") or ""
-        mt.notion_status = data.get("status", "") or ""
-        mt.summary_text = data.get("summary_text", "") or ""
-        mt.notes_text = data.get("notes_text", "") or ""
-        mt.transcript_text = data.get("transcript_text", "") or ""
-        mt.action_items_text = data.get("action_items_text", "") or ""
-        mt.raw_json = json.dumps(data.get("raw", {}), ensure_ascii=False)
-        mt.last_synced_at = utcnow()
+    notion_ref = (notion_page or "").strip()
+    if notion_ref:
+        page_id = _normalize_uuid(notion_ref)
+        if not page_id:
+            set_flash(request, "Link/ID do Notion inválido.")
+            return RedirectResponse(f"/reunioes/{mt.id}", status_code=303)
+        mt.notion_page_id = page_id
+        mt.notion_url = notion_ref
         mt.updated_at = utcnow()
         session.add(mt)
         session.commit()
-        set_flash(request, "Sincronização concluída.")
+
+    notion_source = (mt.notion_page_id or "").strip() or (mt.notion_url or "").strip()
+    if not notion_source:
+        set_flash(request, "Informe primeiro o link ou ID do Notion para importar.")
+        return RedirectResponse(f"/reunioes/{mt.id}", status_code=303)
+
+    try:
+        data = await notion_sync_meeting_from_page(notion_source)
+        _meeting_apply_sync_data(mt, data)
+        session.add(mt)
+        session.commit()
+        set_flash(request, "Importação do Notion concluída sem perder check-in, check-out e anotações.")
     except Exception as e:
         set_flash(request, f"Falha ao sincronizar: {e}")
 
     return RedirectResponse(f"/reunioes/{mt.id}", status_code=303)
+
 
 
 @app.post("/reunioes/{meeting_id}/gerar_tarefas")
@@ -38548,6 +38560,7 @@ async def _save_whatsapp_attachment_local(file: UploadFile) -> tuple[str, str, s
     await file.close()
     return safe_name, str(storage_path), content_type, total
 
+
 def _recorded_audio_ext_from_mime(mime_type: str) -> str:
     mime = (mime_type or "").strip().lower()
     if "webm" in mime:
@@ -40855,6 +40868,26 @@ def _meeting_hours_total(meta: dict[str, Any]) -> float:
         return float(meta.get("total_hours", 0.0) or 0.0)
 
 
+
+
+def _meeting_apply_sync_data(meeting: Meeting, data: dict[str, Any]) -> None:
+    current_meta = _meeting_meta(meeting)
+    raw = data.get("raw", {}) if isinstance(data, dict) else {}
+    if not isinstance(raw, dict):
+        raw = {}
+    raw["_app_meta"] = current_meta
+
+    meeting.title = meeting.title or data.get("title", "") or "Reunião"
+    meeting.notion_meeting_block_id = data.get("meeting_block_id", "") or ""
+    meeting.notion_status = data.get("status", "") or ""
+    meeting.summary_text = data.get("summary_text", "") or ""
+    meeting.notes_text = data.get("notes_text", "") or ""
+    meeting.transcript_text = data.get("transcript_text", "") or ""
+    meeting.action_items_text = data.get("action_items_text", "") or ""
+    meeting.raw_json = json.dumps(raw, ensure_ascii=False)
+    meeting.last_synced_at = utcnow()
+    meeting.updated_at = utcnow()
+
 def _meeting_client_hours_total(session: Session, company_id: int, client_id: int) -> float:
     total = 0.0
     rows = session.exec(
@@ -41252,9 +41285,6 @@ TEMPLATES["meetings_detail.html"] = r"""
         <form method="post" action="/reunioes/{{ meeting.id }}/checkout">
           <button class="btn btn-outline-warning" type="submit">Check-out</button>
         </form>
-        <form method="post" action="/reunioes/{{ meeting.id }}/sync">
-          <button class="btn btn-outline-primary" type="submit">Sincronizar</button>
-        </form>
       {% endif %}
     </div>
   </div>
@@ -41288,48 +41318,32 @@ TEMPLATES["meetings_detail.html"] = r"""
     </div>
   </div>
 
-  <div class="row g-3 mb-3">
-    {% if role in ["admin","equipe"] %}
-    <div class="col-lg-6">
-      <div class="card p-3 h-100">
-        <div class="d-flex justify-content-between align-items-start gap-2">
-          <div>
-            <h6 class="mb-1">Anotações internas</h6>
-            <div class="small muted">Visíveis apenas para admin e equipe.</div>
-          </div>
-        </div>
-        <div class="mt-2" style="white-space: pre-wrap;">{{ meta.internal_annotation_text or "Sem anotações internas." }}</div>
-      </div>
-    </div>
-    {% endif %}
-
-    {% if meta.client_annotation_text or role in ["admin","equipe"] %}
-    <div class="col-lg-6">
-      <div class="card p-3 h-100">
-        <div class="d-flex justify-content-between align-items-start gap-2">
-          <div>
-            <h6 class="mb-1">Anotações visíveis ao cliente</h6>
-            <div class="small muted">Aparecem também no acesso do cliente.</div>
-          </div>
-        </div>
-        <div class="mt-2" style="white-space: pre-wrap;">{{ meta.client_annotation_text or "Sem anotações para o cliente." }}</div>
-      </div>
-    </div>
-    {% endif %}
-  </div>
-
   {% if role in ["admin","equipe"] %}
   <div class="card p-3 mb-3">
-    <h6 class="mb-2">Atualizar anotações</h6>
+    <div class="fw-semibold mb-2">Importar / atualizar dados do Notion</div>
+    <form method="post" action="/reunioes/{{ meeting.id }}/sync" class="row g-3">
+      <div class="col-md-9">
+        <label class="form-label">Link ou ID da página do Notion</label>
+        <input class="form-control" name="notion_page" value="{{ meeting.notion_url or meeting.notion_page_id or '' }}" placeholder="https://www.notion.so/... ou 32-hex" />
+        <div class="form-text">Você pode preencher isso depois do check-out. A importação preserva check-in, check-out e anotações já registradas.</div>
+      </div>
+      <div class="col-md-3 d-flex align-items-end">
+        <button class="btn btn-outline-primary w-100" type="submit">Importar agora</button>
+      </div>
+    </form>
+  </div>
+
+  <div class="card p-3 mb-3">
+    <div class="fw-semibold mb-2">Anotações da reunião</div>
     <form method="post" action="/reunioes/{{ meeting.id }}/anotacoes">
       <div class="row g-3">
-        <div class="col-lg-6">
-          <label class="form-label">Anotações internas</label>
-          <textarea class="form-control" name="internal_annotation_text" rows="5">{{ meta.internal_annotation_text or "" }}</textarea>
+        <div class="col-md-6">
+          <label class="form-label">Anotação interna</label>
+          <textarea class="form-control" name="internal_annotation_text" rows="5" placeholder="Visível apenas para a equipe">{{ meta.internal_annotation_text or "" }}</textarea>
         </div>
-        <div class="col-lg-6">
-          <label class="form-label">Anotações visíveis ao cliente</label>
-          <textarea class="form-control" name="client_annotation_text" rows="5">{{ meta.client_annotation_text or "" }}</textarea>
+        <div class="col-md-6">
+          <label class="form-label">Anotação visível ao cliente</label>
+          <textarea class="form-control" name="client_annotation_text" rows="5" placeholder="Resumo que pode aparecer para o cliente">{{ meta.client_annotation_text or "" }}</textarea>
         </div>
       </div>
       <div class="mt-3">
@@ -41406,7 +41420,7 @@ TEMPLATES["crm_detail.html"] = r"""
         {% if owner_name %} • Responsável: <b>{{ owner_name }}</b>{% endif %}
         {% if deal.next_step_date %} • Próx: <b>{{ deal.next_step_date|brdate }}</b>{% endif %}
       </div>
-      {% if deal.value_estimate_brl and deal.value_estimate_brl>0 %}
+      {% if deal.value_estimate_brl and deal.value_estimate_brl > 0 %}
         <div class="muted small mt-1">Valor estimado: <b>{{ deal.value_estimate_brl|brl }}</b> • Prob.: <b>{{ deal.probability_pct }}%</b></div>
       {% endif %}
     </div>
@@ -41434,43 +41448,53 @@ TEMPLATES["crm_detail.html"] = r"""
   {% endif %}
 
   <div class="row g-3">
-    <div class="col-md-8">
+    <div class="col-lg-8">
       <h6 class="mb-2">Demanda / Observações</h6>
       <pre>{{ deal.demand or deal.notes or "—" }}</pre>
+
+      <hr class="my-3"/>
+
+      <div class="d-flex justify-content-between align-items-center mb-2">
+        <h6 class="mb-0">Histórico</h6>
+      </div>
+      {% if notes %}
+        <div class="list-group">
+          {% for n in notes %}
+            <div class="list-group-item">
+              <div class="small muted">{{ n.created_at|brdatetime }} • {{ n.author_name }}</div>
+              <div class="mt-1" style="white-space: pre-wrap;">{{ n.message }}</div>
+            </div>
+          {% endfor %}
+        </div>
+      {% else %}
+        <div class="muted">Sem histórico.</div>
+      {% endif %}
     </div>
-    <div class="col-md-4">
-      <div class="card p-3 h-100">
+
+    <div class="col-lg-4">
+      <div class="card p-3 mb-3">
         <h6 class="mb-2">Ações rápidas</h6>
         <form method="post" action="/negocios/{{ deal.id }}/stage" class="mb-2">
           <label class="form-label">Etapa</label>
           <select class="form-select" name="stage">
             {% for s in stages %}
-              <option value="{{ s.key }}" {% if s.key==deal.stage %}selected{% endif %}>{{ s.label }}</option>
+              <option value="{{ s.key }}" {% if s.key == deal.stage %}selected{% endif %}>{{ s.label }}</option>
             {% endfor %}
           </select>
           <button class="btn btn-primary mt-2 w-100">Salvar etapa</button>
         </form>
       </div>
+
+      <div class="card p-3">
+        <h6 class="mb-2">Caixa de texto do CRM</h6>
+        <div class="small muted mb-2">Registre aqui histórico, follow-up, observações e próximos passos.</div>
+        <form method="post" action="/negocios/{{ deal.id }}/nota">
+          <textarea class="form-control" name="message" rows="8" placeholder="Ex: Cliente pediu retorno na sexta, enviar proposta revisada e confirmar documentos." required></textarea>
+          <button class="btn btn-primary mt-3 w-100" type="submit">Adicionar ao histórico</button>
+        </form>
+      </div>
     </div>
   </div>
-
-  <hr class="my-3"/>
-
-  <div class="d-flex justify-content-between align-items-center mb-2">
-    <h6 class="mb-0">Histórico</h6>
-  </div>
-  {% if notes %}
-    <div class="list-group">
-      {% for n in notes %}
-        <div class="list-group-item">
-          <div class="small muted">{{ n.created_at|brdatetime }} • {{ n.author_name }}</div>
-          <div class="mt-1">{{ n.message }}</div>
-        </div>
-      {% endfor %}
-    </div>
-  {% else %}
-    <div class="muted">Sem histórico.</div>
-  {% endif %}
 </div>
 {% endblock %}
 """
