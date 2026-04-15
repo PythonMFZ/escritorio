@@ -39572,14 +39572,25 @@ TEMPLATES["whatsapp_thread_detail.html"] = r"""
         </div>
         <div class="col-12">
           <textarea class="form-control" rows="5" name="body" placeholder="Digite a mensagem..."></textarea>
-          <div class="form-text">Você pode enviar só texto, só anexo, ou ambos. Quando o envio oficial estiver ligado, imagem e documento também vão para o WhatsApp.</div>
+          <div class="form-text">Você pode enviar só texto, só anexo, ou ambos. Com envio oficial ligado, o mesmo campo abaixo serve para imagem, PDF/documento e áudio.</div>
         </div>
         <div class="col-12">
-          <label class="form-label">Anexo interno</label>
-          <input class="form-control" type="file" name="attachment_file" />
-          <div class="form-text">Suporta envio oficial de imagem, documento e áudio. Outros tipos continuam salvos apenas no app.</div>
+          <label class="form-label">Anexo / imagem / PDF / áudio</label>
+          <input
+            class="form-control"
+            type="file"
+            name="attachment_file"
+            accept="image/*,audio/*,.pdf,.txt,.csv,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.zip,.rar"
+          />
+          <div class="form-text">
+            Para enviar áudio, selecione aqui um arquivo de áudio e mantenha “Tentar enviar via WhatsApp oficial” ligado.
+            Para imagem e PDF, use o mesmo campo.
+          </div>
         </div>
         <div class="col-12">
+          <div class="small muted mb-2">
+            Dica: áudio, imagem e PDF não têm botão separado. Tudo sai pelo mesmo campo de anexo acima.
+          </div>
           <button class="btn btn-primary">Registrar mensagem</button>
         </div>
       </form>
