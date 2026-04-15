@@ -14,6 +14,8 @@ import re
 import secrets
 import uuid
 import smtplib
+import shutil
+import subprocess
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from dataclasses import dataclass
@@ -38638,8 +38640,7 @@ def _whatsapp_meta_upload_mime_type(filename: str, mime_type: str) -> str:
         return "application/octet-stream"
     base = raw.split(";", 1)[0].strip()
     if base == "audio/ogg":
-        # A Meta usa o MIME base audio/ogg; o arquivo em si precisa estar em Opus.
-        return "audio/ogg"
+        return "audio/ogg; codecs=opus" if "opus" in raw else "audio/ogg"
     if base == "audio/mp4":
         return "audio/mp4"
     if base == "audio/mpeg":
@@ -38694,7 +38695,7 @@ def _whatsapp_audio_is_meta_supported(filename: str, mime_type: str) -> bool:
     ext = _whatsapp_attachment_ext(filename).lower()
     mime = _whatsapp_meta_upload_mime_type(filename, mime_type)
     supported_exts = {".aac", ".amr", ".mp3", ".m4a", ".ogg"}
-    supported_mimes = {"audio/aac", "audio/amr", "audio/mpeg", "audio/mp4", "audio/ogg"}
+    supported_mimes = {"audio/aac", "audio/amr", "audio/mpeg", "audio/mp4", "audio/ogg", "audio/ogg; codecs=opus"}
     return ext in supported_exts or mime in supported_mimes
 
 
@@ -38704,12 +38705,83 @@ def _whatsapp_audio_should_send_as_voice(filename: str, mime_type: str) -> bool:
     return ext in {".ogg", ".opus"} or ("audio/ogg" in raw and "opus" in raw)
 
 
+def _whatsapp_audio_requires_ogg_conversion(filename: str, mime_type: str) -> bool:
+    return not _whatsapp_audio_should_send_as_voice(filename, mime_type)
+
+
+def _whatsapp_convert_audio_to_ogg_opus(
+        *,
+        source_path: str,
+        source_name: str,
+        source_mime_type: str,
+) -> tuple[bool, str, str, str, int, str]:
+    """Converte áudio para OGG/Opus antes do envio oficial para a Meta."""
+    src_path = Path(source_path or "").resolve()
+    if not src_path.exists():
+        return False, "", "", "", 0, "Arquivo de áudio não encontrado para conversão."
+
+    ffmpeg_bin = shutil.which("ffmpeg")
+    if not ffmpeg_bin:
+        return False, "", "", "", 0, "FFmpeg não está disponível no servidor para converter o áudio."
+
+    safe_stem = re.sub(r"[^A-Za-z0-9._-]+", "_", Path(source_name or src_path.name).stem).strip("._") or "gravacao_whatsapp"
+    out_name = f"{safe_stem}.ogg"
+    out_storage_name = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex}.ogg"
+    out_path = (WHATSAPP_MEDIA_DIR / out_storage_name).resolve()
+
+    cmd = [
+        ffmpeg_bin,
+        "-y",
+        "-i", str(src_path),
+        "-vn",
+        "-ac", "1",
+        "-ar", "48000",
+        "-c:a", "libopus",
+        "-b:a", "32k",
+        str(out_path),
+    ]
+    try:
+        proc = subprocess.run(
+            cmd,
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=90,
+        )
+    except Exception as exc:
+        try:
+            out_path.unlink(missing_ok=True)
+        except Exception:
+            pass
+        return False, "", "", "", 0, f"Falha ao converter áudio com FFmpeg: {exc}"
+
+    if proc.returncode != 0 or not out_path.exists() or out_path.stat().st_size <= 0:
+        stderr = (proc.stderr or b"").decode("utf-8", errors="ignore").strip()
+        try:
+            out_path.unlink(missing_ok=True)
+        except Exception:
+            pass
+        detail = stderr.splitlines()[-1] if stderr else "conversão retornou erro."
+        return False, "", "", "", 0, f"Não foi possível converter o áudio para OGG/Opus: {detail}"
+
+    size_bytes = int(out_path.stat().st_size)
+    if size_bytes > _MAX_UPLOAD_BYTES:
+        try:
+            out_path.unlink(missing_ok=True)
+        except Exception:
+            pass
+        return False, "", "", "", 0, "Áudio convertido excede o limite permitido."
+
+    return True, out_name, str(out_path), "audio/ogg; codecs=opus", size_bytes, ""
+
+
 def _whatsapp_audio_meta_validation_error(filename: str, mime_type: str) -> str:
     safe_name = (filename or "").strip() or "audio"
     return (
         f"Áudio '{safe_name}' em formato não suportado pela Meta. "
         "Use OGG/Opus (.ogg), MP3 (.mp3), M4A (.m4a), AMR (.amr) ou AAC (.aac)."
     )
+
 
 def _whatsapp_media_download_filename(
         *,
@@ -39620,7 +39692,7 @@ TEMPLATES["whatsapp_thread_detail.html"] = r"""
         </div>
         <div class="col-12">
           <textarea class="form-control" rows="5" name="body" id="wa-body" placeholder="Digite a mensagem..."></textarea>
-          <div class="form-text">Você pode enviar só texto, só anexo, ou ambos. Para áudio oficial, prefira OGG, MP3, M4A, AAC ou AMR. Quando o envio oficial estiver ligado, imagem, documento e áudio vão para o WhatsApp.</div>
+          <div class="form-text">Você pode enviar só texto, só anexo, ou ambos. Para áudio oficial, o servidor converte gravações para OGG/Opus quando necessário. Quando o envio oficial estiver ligado, imagem, documento e áudio vão para o WhatsApp.</div>
         </div>
         <div class="col-12">
           <label class="form-label">Anexo interno</label>
@@ -39638,7 +39710,7 @@ TEMPLATES["whatsapp_thread_detail.html"] = r"""
             </div>
             <div class="mt-3 d-none" id="wa-record-preview-wrap">
               <audio id="wa-record-preview" controls preload="none" style="width: 100%;"></audio>
-              <div class="small muted mt-2">A gravação será enviada usando o mesmo fluxo do anexo.</div>
+              <div class="small muted mt-2">A gravação será enviada usando o mesmo fluxo do anexo. Se o navegador gravar em M4A, o servidor converte para OGG/Opus antes do envio oficial.</div>
             </div>
           </div>
         </div>
@@ -39704,7 +39776,6 @@ TEMPLATES["whatsapp_thread_detail.html"] = r"""
   const fileInput = document.getElementById("wa-attachment-file");
   const previewWrap = document.getElementById("wa-record-preview-wrap");
   const previewAudio = document.getElementById("wa-record-preview");
-  const sendLiveToggle = document.getElementById("send_live");
   if (!startBtn || !stopBtn || !clearBtn || !statusEl || !fileInput || !previewWrap || !previewAudio) {
     return;
   }
@@ -39713,7 +39784,6 @@ TEMPLATES["whatsapp_thread_detail.html"] = r"""
   let mediaStream = null;
   let chunks = [];
   let objectUrl = "";
-  let ffmpegInstance = null;
 
   function resetPreview() {
     if (objectUrl) {
@@ -39726,113 +39796,23 @@ TEMPLATES["whatsapp_thread_detail.html"] = r"""
     clearBtn.disabled = true;
   }
 
-  function buildRecordedFile(blob) {
-    const mime = (blob.type || "audio/webm").toLowerCase();
-    const isOgg = mime.includes("audio/ogg");
-    const isMp4 = mime.includes("audio/mp4") || mime.includes("audio/x-m4a");
-    const isMp3 = mime.includes("audio/mpeg") || mime.includes("audio/mp3");
-    const ext = isOgg ? "ogg" : (isMp4 ? "m4a" : (isMp3 ? "mp3" : "webm"));
-    const normalizedMime = isOgg ? "audio/ogg; codecs=opus" : (isMp4 ? "audio/mp4" : (isMp3 ? "audio/mpeg" : mime));
-    return new File([blob], `gravacao-whatsapp.${ext}`, { type: normalizedMime });
-  }
-
-  function attachFileToInput(file) {
+  function setRecordedFile(blob) {
+    const mime = blob.type || "audio/webm";
+    const isOgg = mime.includes("ogg");
+    const isMp4 = mime.includes("mp4") || mime.includes("mpeg");
+    const ext = isOgg ? "ogg" : (isMp4 ? "m4a" : "webm");
+    const file = new File([blob], `gravacao-whatsapp.${ext}`, { type: mime });
     const dt = new DataTransfer();
     dt.items.add(file);
     fileInput.files = dt.files;
-    if (objectUrl) {
-      URL.revokeObjectURL(objectUrl);
-    }
-    objectUrl = URL.createObjectURL(file);
+    objectUrl = URL.createObjectURL(blob);
     previewAudio.src = objectUrl;
     previewWrap.classList.remove("d-none");
     clearBtn.disabled = false;
-  }
-
-  async function toBlobURL(url, mimeType) {
-    const response = await fetch(url);
-    if (!response.ok) {
-      throw new Error(`Falha ao baixar dependência (${response.status}).`);
-    }
-    const buffer = await response.arrayBuffer();
-    return URL.createObjectURL(new Blob([buffer], { type: mimeType }));
-  }
-
-  async function loadFfmpeg() {
-    if (ffmpegInstance) {
-      return ffmpegInstance;
-    }
-    statusEl.textContent = "Preparando conversão de áudio para OGG/Opus...";
-    const [{ FFmpeg }] = await Promise.all([
-      import("https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.10/dist/esm/index.js"),
-    ]);
-    const ffmpeg = new FFmpeg();
-    const baseURL = "https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/esm";
-    await ffmpeg.load({
-      coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, "text/javascript"),
-      wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, "application/wasm"),
-      workerURL: await toBlobURL(`${baseURL}/ffmpeg-core.worker.js`, "text/javascript"),
-    });
-    ffmpegInstance = ffmpeg;
-    return ffmpeg;
-  }
-
-  function inputExtensionFromMime(mime) {
-    const raw = (mime || "").toLowerCase();
-    if (raw.includes("mp4") || raw.includes("x-m4a")) return "m4a";
-    if (raw.includes("mpeg") || raw.includes("mp3")) return "mp3";
-    if (raw.includes("ogg")) return "ogg";
-    return "webm";
-  }
-
-  async function convertToOggOpus(blob) {
-    const ffmpeg = await loadFfmpeg();
-    const inExt = inputExtensionFromMime(blob.type);
-    const inputName = `input.${inExt}`;
-    const outputName = "output.ogg";
-    await ffmpeg.writeFile(inputName, new Uint8Array(await blob.arrayBuffer()));
-    await ffmpeg.exec([
-      "-i", inputName,
-      "-vn",
-      "-ac", "1",
-      "-c:a", "libopus",
-      "-b:a", "32k",
-      outputName,
-    ]);
-    const data = await ffmpeg.readFile(outputName);
-    try { await ffmpeg.deleteFile(inputName); } catch (e) {}
-    try { await ffmpeg.deleteFile(outputName); } catch (e) {}
-    return new Blob([data.buffer], { type: "audio/ogg; codecs=opus" });
-  }
-
-  async function setRecordedFile(blob) {
-    let finalBlob = blob;
-    const mime = (blob.type || "audio/webm").toLowerCase();
-    const isOgg = mime.includes("audio/ogg");
-    const wantsOfficial = !!(sendLiveToggle && sendLiveToggle.checked);
-
-    if (!isOgg && wantsOfficial) {
-      try {
-        statusEl.textContent = "Convertendo áudio gravado para OGG/Opus compatível com WhatsApp...";
-        finalBlob = await convertToOggOpus(blob);
-      } catch (error) {
-        console.error(error);
-        statusEl.textContent = "Não foi possível converter o áudio para OGG/Opus. O arquivo ficará salvo no app, mas pode falhar no envio oficial.";
-      }
-    }
-
-    const file = buildRecordedFile(finalBlob);
-    attachFileToInput(file);
-
-    const finalMime = (file.type || "").toLowerCase();
-    if (finalMime.includes("audio/ogg")) {
-      statusEl.textContent = wantsOfficial
-        ? "Áudio convertido para OGG/Opus e anexado à mensagem."
-        : "Áudio em OGG/Opus anexado à mensagem.";
-    } else if (finalMime.includes("audio/mp4") || finalMime.includes("audio/mpeg")) {
-      statusEl.textContent = "Áudio gravado e anexado à mensagem. Para envio oficial, OGG/Opus é mais confiável.";
+    if (isOgg || isMp4) {
+      statusEl.textContent = "Áudio gravado e anexado à mensagem.";
     } else {
-      statusEl.textContent = "Áudio gravado em formato não ideal. Ele ficará salvo no app, mas o envio oficial pode falhar.";
+      statusEl.textContent = "Áudio gravado em WEBM. Ele ficará salvo no app, mas para envio oficial use OGG/MP3/M4A.";
     }
   }
 
@@ -39847,7 +39827,6 @@ TEMPLATES["whatsapp_thread_detail.html"] = r"""
       const preferredTypes = [
         "audio/ogg;codecs=opus",
         "audio/mp4",
-        "audio/mpeg",
         "audio/webm;codecs=opus",
         "audio/webm",
       ];
@@ -39865,10 +39844,10 @@ TEMPLATES["whatsapp_thread_detail.html"] = r"""
           chunks.push(event.data);
         }
       });
-      mediaRecorder.addEventListener("stop", async function () {
+      mediaRecorder.addEventListener("stop", function () {
         const blob = new Blob(chunks, { type: (mediaRecorder && mediaRecorder.mimeType) || "audio/webm" });
         if (blob.size > 0) {
-          await setRecordedFile(blob);
+          setRecordedFile(blob);
         } else {
           statusEl.textContent = "Nenhum áudio foi capturado.";
         }
@@ -40338,6 +40317,61 @@ async def whatsapp_message_attachment_download(
     filename = (msg.attachment_name or path.name).strip() or path.name
     return FileResponse(path, media_type=media_type, filename=filename)
 
+
+@app.post("/admin/whatsapp/conversas/{thread_id}/salvar")
+@require_role({"admin", "equipe"})
+async def whatsapp_thread_save(
+        request: Request,
+        thread_id: int,
+        status: str = Form(default="aberto"),
+        topic_code: str = Form(default="geral"),
+        assigned_user_id: Optional[str] = Form(default=""),
+        client_id: Optional[str] = Form(default=""),
+        session: Session = Depends(get_session),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+    thread = session.get(WhatsAppThread, int(thread_id))
+    if not thread or thread.company_id != ctx.company.id:
+        set_flash(request, "Conversa não encontrada.")
+        return RedirectResponse("/admin/whatsapp/caixa", status_code=303)
+    thread.status = _normalize_whatsapp_status(status)
+    thread.topic_code = _normalize_whatsapp_topic(topic_code)
+    assignee_id = _safe_int(assigned_user_id)
+    allowed_user_ids = {int(m.user_id) for m in _whatsapp_staff_memberships(session, company_id=ctx.company.id)}
+    thread.assigned_user_id = assignee_id if assignee_id in allowed_user_ids else None
+    chosen_client_id = _safe_int(client_id)
+    chosen_client = get_client_or_none(session, ctx.company.id, chosen_client_id)
+    thread.client_id = chosen_client.id if chosen_client else None
+    thread.updated_at = utcnow()
+    session.add(thread)
+    session.commit()
+    set_flash(request, "Classificação da conversa atualizada.")
+    return RedirectResponse(f"/admin/whatsapp/conversas/{thread.id}", status_code=303)
+
+
+    if has_file and direction == "outbound" and send_live:
+        attachment_kind = _whatsapp_attachment_send_kind(attachment_name, attachment_mime_type)
+        if attachment_kind == "audio" and _whatsapp_audio_requires_ogg_conversion(attachment_name, attachment_mime_type):
+            ok_conv, conv_name, conv_path, conv_mime, conv_size, conv_err = _whatsapp_convert_audio_to_ogg_opus(
+                source_path=attachment_storage_path,
+                source_name=attachment_name,
+                source_mime_type=attachment_mime_type,
+            )
+            if ok_conv:
+                try:
+                    Path(attachment_storage_path).unlink(missing_ok=True)
+                except Exception:
+                    pass
+                attachment_name = conv_name
+                attachment_storage_path = conv_path
+                attachment_mime_type = conv_mime
+                attachment_size_bytes = conv_size
+            else:
+                set_flash(
+                    request,
+                    f"Mensagem registrada no app, mas o áudio não pôde ser preparado para envio oficial: {conv_err}",
+                )
 
 @app.post("/admin/whatsapp/conversas/{thread_id}/salvar")
 @require_role({"admin", "equipe"})
