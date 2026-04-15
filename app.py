@@ -38548,6 +38548,61 @@ async def _save_whatsapp_attachment_local(file: UploadFile) -> tuple[str, str, s
     await file.close()
     return safe_name, str(storage_path), content_type, total
 
+def _recorded_audio_ext_from_mime(mime_type: str) -> str:
+    mime = (mime_type or "").strip().lower()
+    if "webm" in mime:
+        return ".webm"
+    if "ogg" in mime or "opus" in mime:
+        return ".ogg"
+    if "mpeg" in mime or "mp3" in mime:
+        return ".mp3"
+    if "mp4" in mime or "m4a" in mime:
+        return ".m4a"
+    if "wav" in mime:
+        return ".wav"
+    if "amr" in mime:
+        return ".amr"
+    return ".webm"
+
+
+def _normalize_recorded_audio_filename(filename: str, mime_type: str) -> str:
+    raw = re.sub(r"[^A-Za-z0-9._-]+", "_", (filename or "").strip()).strip("._") or "gravacao"
+    suffix = Path(raw).suffix.strip().lower()
+    if not suffix:
+        raw = raw + _recorded_audio_ext_from_mime(mime_type)
+    return raw[:120]
+
+
+async def _save_whatsapp_recorded_audio_b64(
+        audio_b64: str,
+        *,
+        mime_type: str = "",
+        filename: str = "",
+) -> tuple[str, str, str, int]:
+    payload = (audio_b64 or "").strip()
+    if not payload:
+        raise HTTPException(status_code=400, detail="Gravação de áudio vazia.")
+    if "," in payload and payload.lower().startswith("data:"):
+        payload = payload.split(",", 1)[1].strip()
+    try:
+        data = base64.b64decode(payload, validate=True)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Gravação de áudio inválida.")
+    total = len(data)
+    if total <= 0:
+        raise HTTPException(status_code=400, detail="Gravação de áudio vazia.")
+    if total > _MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=400, detail="Áudio excede o limite permitido.")
+    safe_mime = (mime_type or "audio/webm").strip().lower()
+    safe_name = _normalize_recorded_audio_filename(filename, safe_mime)
+    ext = _whatsapp_attachment_ext(safe_name) or _recorded_audio_ext_from_mime(safe_mime)
+    storage_name = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex}{ext}"
+    storage_path = (WHATSAPP_MEDIA_DIR / storage_name).resolve()
+    with storage_path.open("wb") as out:
+        out.write(data)
+    return safe_name, str(storage_path), safe_mime, total
+
+
 
 def _whatsapp_menu_choice_to_topic(text_value: str) -> Optional[str]:
     val = (text_value or "").strip().lower()
@@ -39572,29 +39627,159 @@ TEMPLATES["whatsapp_thread_detail.html"] = r"""
         </div>
         <div class="col-12">
           <textarea class="form-control" rows="5" name="body" placeholder="Digite a mensagem..."></textarea>
-          <div class="form-text">Você pode enviar só texto, só anexo, ou ambos. Com envio oficial ligado, o mesmo campo abaixo serve para imagem, PDF/documento e áudio.</div>
+          <div class="form-text">Você pode enviar só texto, só anexo, ou ambos. Quando o envio oficial estiver ligado, imagem e documento também vão para o WhatsApp.</div>
         </div>
         <div class="col-12">
-          <label class="form-label">Anexo / imagem / PDF / áudio</label>
-          <input
-            class="form-control"
-            type="file"
-            name="attachment_file"
-            accept="image/*,audio/*,.pdf,.txt,.csv,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.zip,.rar"
-          />
-          <div class="form-text">
-            Para enviar áudio, selecione aqui um arquivo de áudio e mantenha “Tentar enviar via WhatsApp oficial” ligado.
-            Para imagem e PDF, use o mesmo campo.
+          <label class="form-label">Anexo</label>
+          <input class="form-control" type="file" name="attachment_file" accept="image/*,.pdf,.txt,.csv,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.zip,.rar,audio/*,.mp3,.wav,.ogg,.m4a,.aac,.amr,.opus,.webm" />
+          <div class="form-text">Você pode anexar imagem, PDF, documento ou áudio. Se “Tentar enviar via WhatsApp oficial” estiver ligado, o app tenta enviar os tipos suportados pela Meta.</div>
+        </div>
+        <div class="col-12">
+          <div class="border rounded-3 p-3 bg-light">
+            <div class="d-flex flex-wrap justify-content-between align-items-start gap-2">
+              <div>
+                <div class="fw-semibold">Gravar áudio direto no app</div>
+                <div class="small muted">Use este botão para gravar sem precisar selecionar um arquivo manualmente.</div>
+              </div>
+              <span class="badge text-bg-secondary">Beta</span>
+            </div>
+            <div class="d-flex flex-wrap gap-2 mt-3">
+              <button class="btn btn-outline-danger" type="button" id="wa-record-start">🎙️ Gravar áudio</button>
+              <button class="btn btn-outline-secondary" type="button" id="wa-record-stop" disabled>Parar</button>
+              <button class="btn btn-outline-secondary" type="button" id="wa-record-clear" disabled>Limpar gravação</button>
+            </div>
+            <div class="small muted mt-2" id="wa-record-status">Nenhuma gravação iniciada.</div>
+            <div class="mt-3 d-none" id="wa-record-preview-wrap">
+              <audio id="wa-record-preview" controls preload="none" style="width: 100%;"></audio>
+            </div>
+            <input type="hidden" name="recorded_audio_b64" id="wa-recorded-audio-b64" />
+            <input type="hidden" name="recorded_audio_mime_type" id="wa-recorded-audio-mime-type" />
+            <input type="hidden" name="recorded_audio_filename" id="wa-recorded-audio-filename" />
           </div>
         </div>
         <div class="col-12">
-          <div class="small muted mb-2">
-            Dica: áudio, imagem e PDF não têm botão separado. Tudo sai pelo mesmo campo de anexo acima.
-          </div>
           <button class="btn btn-primary">Registrar mensagem</button>
         </div>
       </form>
     </div>
+    <script>
+      (() => {
+        const startBtn = document.getElementById("wa-record-start");
+        const stopBtn = document.getElementById("wa-record-stop");
+        const clearBtn = document.getElementById("wa-record-clear");
+        const statusEl = document.getElementById("wa-record-status");
+        const previewWrap = document.getElementById("wa-record-preview-wrap");
+        const previewAudio = document.getElementById("wa-record-preview");
+        const audioB64Input = document.getElementById("wa-recorded-audio-b64");
+        const audioMimeInput = document.getElementById("wa-recorded-audio-mime-type");
+        const audioFilenameInput = document.getElementById("wa-recorded-audio-filename");
+        const attachmentInput = document.querySelector('input[name="attachment_file"]');
+
+        if (!startBtn || !stopBtn || !clearBtn || !statusEl || !previewWrap || !previewAudio || !audioB64Input || !audioMimeInput || !audioFilenameInput) {
+          return;
+        }
+
+        let mediaRecorder = null;
+        let mediaStream = null;
+        let chunks = [];
+
+        const resetRecordingState = () => {
+          if (mediaStream) {
+            mediaStream.getTracks().forEach((track) => {
+              try { track.stop(); } catch (e) {}
+            });
+          }
+          mediaRecorder = null;
+          mediaStream = null;
+          chunks = [];
+          startBtn.disabled = false;
+          stopBtn.disabled = true;
+        };
+
+        const clearRecording = () => {
+          audioB64Input.value = "";
+          audioMimeInput.value = "";
+          audioFilenameInput.value = "";
+          previewAudio.removeAttribute("src");
+          previewAudio.load();
+          previewWrap.classList.add("d-none");
+          clearBtn.disabled = true;
+          statusEl.textContent = "Nenhuma gravação iniciada.";
+        };
+
+        startBtn.addEventListener("click", async () => {
+          if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || typeof MediaRecorder === "undefined") {
+            statusEl.textContent = "Seu navegador não suporta gravação de áudio nesta tela.";
+            return;
+          }
+          try {
+            clearRecording();
+            if (attachmentInput) {
+              attachmentInput.value = "";
+            }
+            mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            const preferredTypes = ["audio/webm;codecs=opus", "audio/webm", "audio/ogg;codecs=opus", "audio/ogg"];
+            let selectedType = "";
+            for (const item of preferredTypes) {
+              if (MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(item)) {
+                selectedType = item;
+                break;
+              }
+            }
+            mediaRecorder = selectedType ? new MediaRecorder(mediaStream, { mimeType: selectedType }) : new MediaRecorder(mediaStream);
+            chunks = [];
+            mediaRecorder.ondataavailable = (event) => {
+              if (event.data && event.data.size > 0) {
+                chunks.push(event.data);
+              }
+            };
+            mediaRecorder.onstop = async () => {
+              try {
+                const mimeType = mediaRecorder && mediaRecorder.mimeType ? mediaRecorder.mimeType : (selectedType || "audio/webm");
+                const blob = new Blob(chunks, { type: mimeType });
+                const ext = mimeType.includes("ogg") ? "ogg" : mimeType.includes("mpeg") ? "mp3" : mimeType.includes("mp4") ? "m4a" : mimeType.includes("wav") ? "wav" : mimeType.includes("amr") ? "amr" : "webm";
+                const fileName = `gravacao_${new Date().toISOString().replace(/[:.]/g, "-")}.${ext}`;
+                const objectUrl = URL.createObjectURL(blob);
+                previewAudio.src = objectUrl;
+                previewWrap.classList.remove("d-none");
+                clearBtn.disabled = false;
+                statusEl.textContent = `Áudio gravado: ${fileName}`;
+                audioMimeInput.value = mimeType;
+                audioFilenameInput.value = fileName;
+                const reader = new FileReader();
+                reader.onloadend = () => {
+                  const result = typeof reader.result === "string" ? reader.result : "";
+                  const base64Payload = result.includes(",") ? result.split(",", 2)[1] : result;
+                  audioB64Input.value = base64Payload;
+                };
+                reader.readAsDataURL(blob);
+              } finally {
+                resetRecordingState();
+              }
+            };
+            mediaRecorder.start();
+            startBtn.disabled = true;
+            stopBtn.disabled = false;
+            statusEl.textContent = "Gravando áudio...";
+          } catch (err) {
+            resetRecordingState();
+            statusEl.textContent = "Não foi possível acessar o microfone.";
+          }
+        });
+
+        stopBtn.addEventListener("click", () => {
+          if (mediaRecorder && mediaRecorder.state !== "inactive") {
+            statusEl.textContent = "Finalizando gravação...";
+            mediaRecorder.stop();
+          }
+        });
+
+        clearBtn.addEventListener("click", () => {
+          clearRecording();
+          resetRecordingState();
+        });
+      })();
+    </script>
   </div>
 
   <div class="col-lg-4">
@@ -40106,6 +40291,9 @@ async def whatsapp_thread_add_message(
         body: str = Form(default=""),
         send_live: Optional[str] = Form(default=None),
         attachment_file: Optional[UploadFile] = File(default=None),
+        recorded_audio_b64: str = Form(default=""),
+        recorded_audio_mime_type: str = Form(default=""),
+        recorded_audio_filename: str = Form(default=""),
         session: Session = Depends(get_session),
 ) -> Response:
     ctx = get_tenant_context(request, session)
@@ -40117,8 +40305,9 @@ async def whatsapp_thread_add_message(
 
     clean_body = _clean_text(body, 5000)
     has_file = bool(attachment_file and (attachment_file.filename or "").strip())
-    if not clean_body and not has_file:
-        set_flash(request, "Escreva uma mensagem ou selecione um anexo.")
+    has_recorded_audio = bool((recorded_audio_b64 or "").strip())
+    if not clean_body and not has_file and not has_recorded_audio:
+        set_flash(request, "Escreva uma mensagem, selecione um anexo ou grave um áudio.")
         return RedirectResponse(f"/admin/whatsapp/conversas/{thread.id}", status_code=303)
 
     attachment_name = ""
@@ -40133,6 +40322,20 @@ async def whatsapp_thread_add_message(
             return RedirectResponse(f"/admin/whatsapp/conversas/{thread.id}", status_code=303)
         except Exception:
             set_flash(request, "Não foi possível salvar o anexo.")
+            return RedirectResponse(f"/admin/whatsapp/conversas/{thread.id}", status_code=303)
+    elif has_recorded_audio:
+        try:
+            attachment_name, attachment_storage_path, attachment_mime_type, attachment_size_bytes = await _save_whatsapp_recorded_audio_b64(
+                recorded_audio_b64,
+                mime_type=recorded_audio_mime_type,
+                filename=recorded_audio_filename,
+            )
+            has_file = True
+        except HTTPException as exc:
+            set_flash(request, str(exc.detail))
+            return RedirectResponse(f"/admin/whatsapp/conversas/{thread.id}", status_code=303)
+        except Exception:
+            set_flash(request, "Não foi possível salvar o áudio gravado.")
             return RedirectResponse(f"/admin/whatsapp/conversas/{thread.id}", status_code=303)
 
     recipient_type = "group" if thread.is_group else "individual"
@@ -40218,6 +40421,20 @@ async def whatsapp_thread_add_message(
             return RedirectResponse(f"/admin/whatsapp/conversas/{thread.id}", status_code=303)
         except Exception:
             set_flash(request, "Não foi possível salvar o anexo.")
+            return RedirectResponse(f"/admin/whatsapp/conversas/{thread.id}", status_code=303)
+    elif has_recorded_audio:
+        try:
+            attachment_name, attachment_storage_path, attachment_mime_type, attachment_size_bytes = await _save_whatsapp_recorded_audio_b64(
+                recorded_audio_b64,
+                mime_type=recorded_audio_mime_type,
+                filename=recorded_audio_filename,
+            )
+            has_file = True
+        except HTTPException as exc:
+            set_flash(request, str(exc.detail))
+            return RedirectResponse(f"/admin/whatsapp/conversas/{thread.id}", status_code=303)
+        except Exception:
+            set_flash(request, "Não foi possível salvar o áudio gravado.")
             return RedirectResponse(f"/admin/whatsapp/conversas/{thread.id}", status_code=303)
 
     delivery_status = "local"
