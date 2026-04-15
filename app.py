@@ -38638,7 +38638,8 @@ def _whatsapp_meta_upload_mime_type(filename: str, mime_type: str) -> str:
         return "application/octet-stream"
     base = raw.split(";", 1)[0].strip()
     if base == "audio/ogg":
-        return "audio/ogg; codecs=opus" if "opus" in raw else "audio/ogg"
+        # A Meta usa o MIME base audio/ogg; o arquivo em si precisa estar em Opus.
+        return "audio/ogg"
     if base == "audio/mp4":
         return "audio/mp4"
     if base == "audio/mpeg":
@@ -38693,8 +38694,14 @@ def _whatsapp_audio_is_meta_supported(filename: str, mime_type: str) -> bool:
     ext = _whatsapp_attachment_ext(filename).lower()
     mime = _whatsapp_meta_upload_mime_type(filename, mime_type)
     supported_exts = {".aac", ".amr", ".mp3", ".m4a", ".ogg"}
-    supported_mimes = {"audio/aac", "audio/amr", "audio/mpeg", "audio/mp4", "audio/ogg", "audio/ogg; codecs=opus"}
+    supported_mimes = {"audio/aac", "audio/amr", "audio/mpeg", "audio/mp4", "audio/ogg"}
     return ext in supported_exts or mime in supported_mimes
+
+
+def _whatsapp_audio_should_send_as_voice(filename: str, mime_type: str) -> bool:
+    ext = _whatsapp_attachment_ext(filename).lower()
+    raw = _whatsapp_attachment_effective_mime_type(filename, mime_type).strip().lower()
+    return ext in {".ogg", ".opus"} or ("audio/ogg" in raw and "opus" in raw)
 
 
 def _whatsapp_audio_meta_validation_error(filename: str, mime_type: str) -> str:
@@ -38879,6 +38886,8 @@ async def _try_send_whatsapp_media(
                 media_payload["caption"] = safe_caption
         else:
             media_payload = {"id": media_id}
+            if _whatsapp_audio_should_send_as_voice(filename, mime_type):
+                media_payload["voice"] = True
 
         payload = {
             "messaging_product": "whatsapp",
@@ -39695,6 +39704,7 @@ TEMPLATES["whatsapp_thread_detail.html"] = r"""
   const fileInput = document.getElementById("wa-attachment-file");
   const previewWrap = document.getElementById("wa-record-preview-wrap");
   const previewAudio = document.getElementById("wa-record-preview");
+  const sendLiveToggle = document.getElementById("send_live");
   if (!startBtn || !stopBtn || !clearBtn || !statusEl || !fileInput || !previewWrap || !previewAudio) {
     return;
   }
@@ -39703,6 +39713,7 @@ TEMPLATES["whatsapp_thread_detail.html"] = r"""
   let mediaStream = null;
   let chunks = [];
   let objectUrl = "";
+  let ffmpegInstance = null;
 
   function resetPreview() {
     if (objectUrl) {
@@ -39715,23 +39726,113 @@ TEMPLATES["whatsapp_thread_detail.html"] = r"""
     clearBtn.disabled = true;
   }
 
-  function setRecordedFile(blob) {
-    const mime = blob.type || "audio/webm";
-    const isOgg = mime.includes("ogg");
-    const isMp4 = mime.includes("mp4") || mime.includes("mpeg");
-    const ext = isOgg ? "ogg" : (isMp4 ? "m4a" : "webm");
-    const file = new File([blob], `gravacao-whatsapp.${ext}`, { type: mime });
+  function buildRecordedFile(blob) {
+    const mime = (blob.type || "audio/webm").toLowerCase();
+    const isOgg = mime.includes("audio/ogg");
+    const isMp4 = mime.includes("audio/mp4") || mime.includes("audio/x-m4a");
+    const isMp3 = mime.includes("audio/mpeg") || mime.includes("audio/mp3");
+    const ext = isOgg ? "ogg" : (isMp4 ? "m4a" : (isMp3 ? "mp3" : "webm"));
+    const normalizedMime = isOgg ? "audio/ogg; codecs=opus" : (isMp4 ? "audio/mp4" : (isMp3 ? "audio/mpeg" : mime));
+    return new File([blob], `gravacao-whatsapp.${ext}`, { type: normalizedMime });
+  }
+
+  function attachFileToInput(file) {
     const dt = new DataTransfer();
     dt.items.add(file);
     fileInput.files = dt.files;
-    objectUrl = URL.createObjectURL(blob);
+    if (objectUrl) {
+      URL.revokeObjectURL(objectUrl);
+    }
+    objectUrl = URL.createObjectURL(file);
     previewAudio.src = objectUrl;
     previewWrap.classList.remove("d-none");
     clearBtn.disabled = false;
-    if (isOgg || isMp4) {
-      statusEl.textContent = "Áudio gravado e anexado à mensagem.";
+  }
+
+  async function toBlobURL(url, mimeType) {
+    const response = await fetch(url);
+    if (!response.ok) {
+      throw new Error(`Falha ao baixar dependência (${response.status}).`);
+    }
+    const buffer = await response.arrayBuffer();
+    return URL.createObjectURL(new Blob([buffer], { type: mimeType }));
+  }
+
+  async function loadFfmpeg() {
+    if (ffmpegInstance) {
+      return ffmpegInstance;
+    }
+    statusEl.textContent = "Preparando conversão de áudio para OGG/Opus...";
+    const [{ FFmpeg }] = await Promise.all([
+      import("https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.10/dist/esm/index.js"),
+    ]);
+    const ffmpeg = new FFmpeg();
+    const baseURL = "https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/esm";
+    await ffmpeg.load({
+      coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, "text/javascript"),
+      wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, "application/wasm"),
+      workerURL: await toBlobURL(`${baseURL}/ffmpeg-core.worker.js`, "text/javascript"),
+    });
+    ffmpegInstance = ffmpeg;
+    return ffmpeg;
+  }
+
+  function inputExtensionFromMime(mime) {
+    const raw = (mime || "").toLowerCase();
+    if (raw.includes("mp4") || raw.includes("x-m4a")) return "m4a";
+    if (raw.includes("mpeg") || raw.includes("mp3")) return "mp3";
+    if (raw.includes("ogg")) return "ogg";
+    return "webm";
+  }
+
+  async function convertToOggOpus(blob) {
+    const ffmpeg = await loadFfmpeg();
+    const inExt = inputExtensionFromMime(blob.type);
+    const inputName = `input.${inExt}`;
+    const outputName = "output.ogg";
+    await ffmpeg.writeFile(inputName, new Uint8Array(await blob.arrayBuffer()));
+    await ffmpeg.exec([
+      "-i", inputName,
+      "-vn",
+      "-ac", "1",
+      "-c:a", "libopus",
+      "-b:a", "32k",
+      outputName,
+    ]);
+    const data = await ffmpeg.readFile(outputName);
+    try { await ffmpeg.deleteFile(inputName); } catch (e) {}
+    try { await ffmpeg.deleteFile(outputName); } catch (e) {}
+    return new Blob([data.buffer], { type: "audio/ogg; codecs=opus" });
+  }
+
+  async function setRecordedFile(blob) {
+    let finalBlob = blob;
+    const mime = (blob.type || "audio/webm").toLowerCase();
+    const isOgg = mime.includes("audio/ogg");
+    const wantsOfficial = !!(sendLiveToggle && sendLiveToggle.checked);
+
+    if (!isOgg && wantsOfficial) {
+      try {
+        statusEl.textContent = "Convertendo áudio gravado para OGG/Opus compatível com WhatsApp...";
+        finalBlob = await convertToOggOpus(blob);
+      } catch (error) {
+        console.error(error);
+        statusEl.textContent = "Não foi possível converter o áudio para OGG/Opus. O arquivo ficará salvo no app, mas pode falhar no envio oficial.";
+      }
+    }
+
+    const file = buildRecordedFile(finalBlob);
+    attachFileToInput(file);
+
+    const finalMime = (file.type || "").toLowerCase();
+    if (finalMime.includes("audio/ogg")) {
+      statusEl.textContent = wantsOfficial
+        ? "Áudio convertido para OGG/Opus e anexado à mensagem."
+        : "Áudio em OGG/Opus anexado à mensagem.";
+    } else if (finalMime.includes("audio/mp4") || finalMime.includes("audio/mpeg")) {
+      statusEl.textContent = "Áudio gravado e anexado à mensagem. Para envio oficial, OGG/Opus é mais confiável.";
     } else {
-      statusEl.textContent = "Áudio gravado em WEBM. Ele ficará salvo no app, mas para envio oficial use OGG/MP3/M4A.";
+      statusEl.textContent = "Áudio gravado em formato não ideal. Ele ficará salvo no app, mas o envio oficial pode falhar.";
     }
   }
 
@@ -39746,6 +39847,7 @@ TEMPLATES["whatsapp_thread_detail.html"] = r"""
       const preferredTypes = [
         "audio/ogg;codecs=opus",
         "audio/mp4",
+        "audio/mpeg",
         "audio/webm;codecs=opus",
         "audio/webm",
       ];
@@ -39763,10 +39865,10 @@ TEMPLATES["whatsapp_thread_detail.html"] = r"""
           chunks.push(event.data);
         }
       });
-      mediaRecorder.addEventListener("stop", function () {
+      mediaRecorder.addEventListener("stop", async function () {
         const blob = new Blob(chunks, { type: (mediaRecorder && mediaRecorder.mimeType) || "audio/webm" });
         if (blob.size > 0) {
-          setRecordedFile(blob);
+          await setRecordedFile(blob);
         } else {
           statusEl.textContent = "Nenhum áudio foi capturado.";
         }
