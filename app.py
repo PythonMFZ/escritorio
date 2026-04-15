@@ -9461,7 +9461,7 @@ TEMPLATES.update({
   <div class="d-flex justify-content-between align-items-center">
     <div>
       <h4 class="mb-0">Nova Reunião</h4>
-      <div class="muted">Você pode iniciar sem link do Notion e importar depois, sem perder check-in/check-out.</div>
+      <div class="muted">Cole o link (ou ID) da página do Notion que contém AI Meeting Notes.</div>
     </div>
     <a class="btn btn-outline-secondary" href="/reunioes">Voltar</a>
   </div>
@@ -9470,7 +9470,7 @@ TEMPLATES.update({
 
   {% if not notion_enabled %}
     <div class="alert alert-warning">
-      NOTION_TOKEN não configurado. A reunião pode ser criada normalmente, mas a importação do Notion ficará indisponível até configurar.
+      NOTION_TOKEN não configurado. Configure no Render/ambiente para usar sync.
     </div>
   {% endif %}
 
@@ -9491,19 +9491,19 @@ TEMPLATES.update({
       </div>
 
       <div class="col-12">
-        <label class="form-label">Título</label>
-        <input class="form-control" name="title" placeholder="Ex: Reunião de alinhamento" />
+        <label class="form-label">Link ou ID da página do Notion</label>
+        <input class="form-control" name="notion_page" required placeholder="https://www.notion.so/... ou 32-hex" />
+        <div class="form-text">A integração precisa ter acesso à página (Compartilhar → Conexões → sua integração).</div>
       </div>
 
       <div class="col-12">
-        <label class="form-label">Link ou ID da página do Notion (opcional)</label>
-        <input class="form-control" name="notion_page" placeholder="https://www.notion.so/... ou 32-hex" />
-        <div class="form-text">Se deixar em branco, a reunião é criada agora e você pode vincular/importar depois.</div>
+        <label class="form-label">Título (opcional)</label>
+        <input class="form-control" name="title" placeholder="Ex: Reunião de alinhamento" />
       </div>
 
       <div class="col-12 form-check">
         <input class="form-check-input" type="checkbox" value="1" id="sync_now" name="sync_now" checked>
-        <label class="form-check-label" for="sync_now">Importar do Notion agora, se o link/ID estiver preenchido</label>
+        <label class="form-check-label" for="sync_now">Sincronizar agora</label>
       </div>
     </div>
 
@@ -21459,7 +21459,7 @@ async def meetings_new_action(
         session: Session = Depends(get_session),
         client_id: int = Form(...),
         meeting_date: str = Form(""),
-        notion_page: str = Form(""),
+        notion_page: str = Form(...),
         title: str = Form(""),
         sync_now: str = Form(""),
 ) -> Response:
@@ -21476,9 +21476,8 @@ async def meetings_new_action(
         set_flash(request, "Cliente inválido.")
         return RedirectResponse("/reunioes/nova", status_code=303)
 
-    notion_ref = (notion_page or "").strip()
-    page_id = _normalize_uuid(notion_ref) if notion_ref else ""
-    if notion_ref and not page_id:
+    page_id = _normalize_uuid(notion_page)
+    if not page_id:
         set_flash(request, "Link/ID do Notion inválido.")
         return RedirectResponse("/reunioes/nova", status_code=303)
 
@@ -21486,33 +21485,36 @@ async def meetings_new_action(
         company_id=ctx.company.id,
         client_id=client.id,
         created_by_user_id=ctx.user.id,
-        title=(title or "").strip() or "Reunião",
+        title=title.strip(),
         meeting_date=_normalize_date_input(meeting_date),
         notion_page_id=page_id,
-        notion_url=notion_ref,
+        notion_url=notion_page.strip(),
         updated_at=utcnow(),
     )
     session.add(mt)
     session.commit()
     session.refresh(mt)
 
-    if sync_now == "1" and notion_ref:
+    if sync_now == "1":
         try:
-            data = await notion_sync_meeting_from_page(page_id or notion_ref)
-            _meeting_apply_sync_data(mt, data)
+            data = await notion_sync_meeting_from_page(page_id)
+            mt.title = mt.title or data.get("title", "") or "Reunião"
+            mt.notion_meeting_block_id = data.get("meeting_block_id", "") or ""
+            mt.notion_status = data.get("status", "") or ""
+            mt.summary_text = data.get("summary_text", "") or ""
+            mt.notes_text = data.get("notes_text", "") or ""
+            mt.transcript_text = data.get("transcript_text", "") or ""
+            mt.action_items_text = data.get("action_items_text", "") or ""
+            mt.raw_json = json.dumps(data.get("raw", {}), ensure_ascii=False)
+            mt.last_synced_at = utcnow()
+            mt.updated_at = utcnow()
             session.add(mt)
             session.commit()
             set_flash(request, "Reunião criada e sincronizada.")
         except Exception as e:
             set_flash(request, f"Reunião criada, mas falhou ao sincronizar: {e}")
-    else:
-        if notion_ref:
-            set_flash(request, "Reunião criada. Você pode importar os dados do Notion depois.")
-        else:
-            set_flash(request, "Reunião criada sem vínculo com Notion. Você pode importar depois sem perder check-in e check-out.")
 
     return RedirectResponse(f"/reunioes/{mt.id}", status_code=303)
-
 
 
 @app.get("/reunioes/{meeting_id}", response_class=HTMLResponse)
@@ -21563,12 +21565,7 @@ async def meetings_detail(request: Request, session: Session = Depends(get_sessi
 
 @app.post("/reunioes/{meeting_id}/sync")
 @require_role({"admin", "equipe"})
-async def meetings_sync(
-        request: Request,
-        session: Session = Depends(get_session),
-        meeting_id: int = 0,
-        notion_page: str = Form(""),
-) -> Response:
+async def meetings_sync(request: Request, session: Session = Depends(get_session), meeting_id: int = 0) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
@@ -21582,34 +21579,25 @@ async def meetings_sync(
         set_flash(request, "Reunião não encontrada.")
         return RedirectResponse("/reunioes", status_code=303)
 
-    notion_ref = (notion_page or "").strip()
-    if notion_ref:
-        page_id = _normalize_uuid(notion_ref)
-        if not page_id:
-            set_flash(request, "Link/ID do Notion inválido.")
-            return RedirectResponse(f"/reunioes/{mt.id}", status_code=303)
-        mt.notion_page_id = page_id
-        mt.notion_url = notion_ref
+    try:
+        data = await notion_sync_meeting_from_page(mt.notion_page_id or mt.notion_url)
+        mt.title = mt.title or data.get("title", "") or "Reunião"
+        mt.notion_meeting_block_id = data.get("meeting_block_id", "") or ""
+        mt.notion_status = data.get("status", "") or ""
+        mt.summary_text = data.get("summary_text", "") or ""
+        mt.notes_text = data.get("notes_text", "") or ""
+        mt.transcript_text = data.get("transcript_text", "") or ""
+        mt.action_items_text = data.get("action_items_text", "") or ""
+        mt.raw_json = json.dumps(data.get("raw", {}), ensure_ascii=False)
+        mt.last_synced_at = utcnow()
         mt.updated_at = utcnow()
         session.add(mt)
         session.commit()
-
-    notion_source = (mt.notion_page_id or "").strip() or (mt.notion_url or "").strip()
-    if not notion_source:
-        set_flash(request, "Informe primeiro o link ou ID do Notion para importar.")
-        return RedirectResponse(f"/reunioes/{mt.id}", status_code=303)
-
-    try:
-        data = await notion_sync_meeting_from_page(notion_source)
-        _meeting_apply_sync_data(mt, data)
-        session.add(mt)
-        session.commit()
-        set_flash(request, "Importação do Notion concluída sem perder check-in, check-out e anotações.")
+        set_flash(request, "Sincronização concluída.")
     except Exception as e:
         set_flash(request, f"Falha ao sincronizar: {e}")
 
     return RedirectResponse(f"/reunioes/{mt.id}", status_code=303)
-
 
 
 @app.post("/reunioes/{meeting_id}/gerar_tarefas")
@@ -38561,62 +38549,6 @@ async def _save_whatsapp_attachment_local(file: UploadFile) -> tuple[str, str, s
     return safe_name, str(storage_path), content_type, total
 
 
-def _recorded_audio_ext_from_mime(mime_type: str) -> str:
-    mime = (mime_type or "").strip().lower()
-    if "webm" in mime:
-        return ".webm"
-    if "ogg" in mime or "opus" in mime:
-        return ".ogg"
-    if "mpeg" in mime or "mp3" in mime:
-        return ".mp3"
-    if "mp4" in mime or "m4a" in mime:
-        return ".m4a"
-    if "wav" in mime:
-        return ".wav"
-    if "amr" in mime:
-        return ".amr"
-    return ".webm"
-
-
-def _normalize_recorded_audio_filename(filename: str, mime_type: str) -> str:
-    raw = re.sub(r"[^A-Za-z0-9._-]+", "_", (filename or "").strip()).strip("._") or "gravacao"
-    suffix = Path(raw).suffix.strip().lower()
-    if not suffix:
-        raw = raw + _recorded_audio_ext_from_mime(mime_type)
-    return raw[:120]
-
-
-async def _save_whatsapp_recorded_audio_b64(
-        audio_b64: str,
-        *,
-        mime_type: str = "",
-        filename: str = "",
-) -> tuple[str, str, str, int]:
-    payload = (audio_b64 or "").strip()
-    if not payload:
-        raise HTTPException(status_code=400, detail="Gravação de áudio vazia.")
-    if "," in payload and payload.lower().startswith("data:"):
-        payload = payload.split(",", 1)[1].strip()
-    try:
-        data = base64.b64decode(payload, validate=True)
-    except Exception:
-        raise HTTPException(status_code=400, detail="Gravação de áudio inválida.")
-    total = len(data)
-    if total <= 0:
-        raise HTTPException(status_code=400, detail="Gravação de áudio vazia.")
-    if total > _MAX_UPLOAD_BYTES:
-        raise HTTPException(status_code=400, detail="Áudio excede o limite permitido.")
-    safe_mime = (mime_type or "audio/webm").strip().lower()
-    safe_name = _normalize_recorded_audio_filename(filename, safe_mime)
-    ext = _whatsapp_attachment_ext(safe_name) or _recorded_audio_ext_from_mime(safe_mime)
-    storage_name = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex}{ext}"
-    storage_path = (WHATSAPP_MEDIA_DIR / storage_name).resolve()
-    with storage_path.open("wb") as out:
-        out.write(data)
-    return safe_name, str(storage_path), safe_mime, total
-
-
-
 def _whatsapp_menu_choice_to_topic(text_value: str) -> Optional[str]:
     val = (text_value or "").strip().lower()
     if val in {"1", "financeiro"}:
@@ -39623,10 +39555,10 @@ TEMPLATES["whatsapp_thread_detail.html"] = r"""
 
     <div class="card p-4 mt-3">
       <div class="fw-semibold mb-3">Nova mensagem</div>
-      <form method="post" action="/admin/whatsapp/conversas/{{ thread.id }}/mensagens" enctype="multipart/form-data" class="row g-3">
+      <form id="whatsapp-message-form" method="post" action="/admin/whatsapp/conversas/{{ thread.id }}/mensagens" enctype="multipart/form-data" class="row g-3">
         <div class="col-md-4">
           <label class="form-label">Tipo</label>
-          <select class="form-select" name="direction">
+          <select class="form-select" name="direction" id="wa-direction">
             <option value="outbound">Resposta da equipe</option>
             <option value="internal_note">Nota interna</option>
             <option value="inbound">Registrar mensagem recebida</option>
@@ -39639,35 +39571,27 @@ TEMPLATES["whatsapp_thread_detail.html"] = r"""
           </div>
         </div>
         <div class="col-12">
-          <textarea class="form-control" rows="5" name="body" placeholder="Digite a mensagem..."></textarea>
-          <div class="form-text">Você pode enviar só texto, só anexo, ou ambos. Quando o envio oficial estiver ligado, imagem e documento também vão para o WhatsApp.</div>
+          <textarea class="form-control" rows="5" name="body" id="wa-body" placeholder="Digite a mensagem..."></textarea>
+          <div class="form-text">Você pode enviar só texto, só anexo, ou ambos. Quando o envio oficial estiver ligado, imagem, documento e áudio vão para o WhatsApp.</div>
         </div>
         <div class="col-12">
-          <label class="form-label">Anexo</label>
-          <input class="form-control" type="file" name="attachment_file" accept="image/*,.pdf,.txt,.csv,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.zip,.rar,audio/*,.mp3,.wav,.ogg,.m4a,.aac,.amr,.opus,.webm" />
-          <div class="form-text">Você pode anexar imagem, PDF, documento ou áudio. Se “Tentar enviar via WhatsApp oficial” estiver ligado, o app tenta enviar os tipos suportados pela Meta.</div>
+          <label class="form-label">Anexo interno</label>
+          <input class="form-control" type="file" name="attachment_file" id="wa-attachment-file" accept="audio/*,image/*,.pdf,.txt,.csv,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.zip,.rar" />
+          <div class="form-text">Você também pode gravar áudio direto abaixo. Se gravar, a gravação entra neste mesmo campo de anexo.</div>
         </div>
         <div class="col-12">
           <div class="border rounded-3 p-3 bg-light">
-            <div class="d-flex flex-wrap justify-content-between align-items-start gap-2">
-              <div>
-                <div class="fw-semibold">Gravar áudio direto no app</div>
-                <div class="small muted">Use este botão para gravar sem precisar selecionar um arquivo manualmente.</div>
-              </div>
-              <span class="badge text-bg-secondary">Beta</span>
-            </div>
-            <div class="d-flex flex-wrap gap-2 mt-3">
+            <div class="fw-semibold mb-2">Áudio</div>
+            <div class="d-flex flex-wrap gap-2 align-items-center">
               <button class="btn btn-outline-danger" type="button" id="wa-record-start">🎙️ Gravar áudio</button>
               <button class="btn btn-outline-secondary" type="button" id="wa-record-stop" disabled>Parar</button>
               <button class="btn btn-outline-secondary" type="button" id="wa-record-clear" disabled>Limpar gravação</button>
+              <span class="small muted" id="wa-record-status">Nenhuma gravação iniciada.</span>
             </div>
-            <div class="small muted mt-2" id="wa-record-status">Nenhuma gravação iniciada.</div>
             <div class="mt-3 d-none" id="wa-record-preview-wrap">
               <audio id="wa-record-preview" controls preload="none" style="width: 100%;"></audio>
+              <div class="small muted mt-2">A gravação será enviada usando o mesmo fluxo do anexo.</div>
             </div>
-            <input type="hidden" name="recorded_audio_b64" id="wa-recorded-audio-b64" />
-            <input type="hidden" name="recorded_audio_mime_type" id="wa-recorded-audio-mime-type" />
-            <input type="hidden" name="recorded_audio_filename" id="wa-recorded-audio-filename" />
           </div>
         </div>
         <div class="col-12">
@@ -39675,124 +39599,6 @@ TEMPLATES["whatsapp_thread_detail.html"] = r"""
         </div>
       </form>
     </div>
-    <script>
-      (() => {
-        const startBtn = document.getElementById("wa-record-start");
-        const stopBtn = document.getElementById("wa-record-stop");
-        const clearBtn = document.getElementById("wa-record-clear");
-        const statusEl = document.getElementById("wa-record-status");
-        const previewWrap = document.getElementById("wa-record-preview-wrap");
-        const previewAudio = document.getElementById("wa-record-preview");
-        const audioB64Input = document.getElementById("wa-recorded-audio-b64");
-        const audioMimeInput = document.getElementById("wa-recorded-audio-mime-type");
-        const audioFilenameInput = document.getElementById("wa-recorded-audio-filename");
-        const attachmentInput = document.querySelector('input[name="attachment_file"]');
-
-        if (!startBtn || !stopBtn || !clearBtn || !statusEl || !previewWrap || !previewAudio || !audioB64Input || !audioMimeInput || !audioFilenameInput) {
-          return;
-        }
-
-        let mediaRecorder = null;
-        let mediaStream = null;
-        let chunks = [];
-
-        const resetRecordingState = () => {
-          if (mediaStream) {
-            mediaStream.getTracks().forEach((track) => {
-              try { track.stop(); } catch (e) {}
-            });
-          }
-          mediaRecorder = null;
-          mediaStream = null;
-          chunks = [];
-          startBtn.disabled = false;
-          stopBtn.disabled = true;
-        };
-
-        const clearRecording = () => {
-          audioB64Input.value = "";
-          audioMimeInput.value = "";
-          audioFilenameInput.value = "";
-          previewAudio.removeAttribute("src");
-          previewAudio.load();
-          previewWrap.classList.add("d-none");
-          clearBtn.disabled = true;
-          statusEl.textContent = "Nenhuma gravação iniciada.";
-        };
-
-        startBtn.addEventListener("click", async () => {
-          if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || typeof MediaRecorder === "undefined") {
-            statusEl.textContent = "Seu navegador não suporta gravação de áudio nesta tela.";
-            return;
-          }
-          try {
-            clearRecording();
-            if (attachmentInput) {
-              attachmentInput.value = "";
-            }
-            mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-            const preferredTypes = ["audio/webm;codecs=opus", "audio/webm", "audio/ogg;codecs=opus", "audio/ogg"];
-            let selectedType = "";
-            for (const item of preferredTypes) {
-              if (MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(item)) {
-                selectedType = item;
-                break;
-              }
-            }
-            mediaRecorder = selectedType ? new MediaRecorder(mediaStream, { mimeType: selectedType }) : new MediaRecorder(mediaStream);
-            chunks = [];
-            mediaRecorder.ondataavailable = (event) => {
-              if (event.data && event.data.size > 0) {
-                chunks.push(event.data);
-              }
-            };
-            mediaRecorder.onstop = async () => {
-              try {
-                const mimeType = mediaRecorder && mediaRecorder.mimeType ? mediaRecorder.mimeType : (selectedType || "audio/webm");
-                const blob = new Blob(chunks, { type: mimeType });
-                const ext = mimeType.includes("ogg") ? "ogg" : mimeType.includes("mpeg") ? "mp3" : mimeType.includes("mp4") ? "m4a" : mimeType.includes("wav") ? "wav" : mimeType.includes("amr") ? "amr" : "webm";
-                const fileName = `gravacao_${new Date().toISOString().replace(/[:.]/g, "-")}.${ext}`;
-                const objectUrl = URL.createObjectURL(blob);
-                previewAudio.src = objectUrl;
-                previewWrap.classList.remove("d-none");
-                clearBtn.disabled = false;
-                statusEl.textContent = `Áudio gravado: ${fileName}`;
-                audioMimeInput.value = mimeType;
-                audioFilenameInput.value = fileName;
-                const reader = new FileReader();
-                reader.onloadend = () => {
-                  const result = typeof reader.result === "string" ? reader.result : "";
-                  const base64Payload = result.includes(",") ? result.split(",", 2)[1] : result;
-                  audioB64Input.value = base64Payload;
-                };
-                reader.readAsDataURL(blob);
-              } finally {
-                resetRecordingState();
-              }
-            };
-            mediaRecorder.start();
-            startBtn.disabled = true;
-            stopBtn.disabled = false;
-            statusEl.textContent = "Gravando áudio...";
-          } catch (err) {
-            resetRecordingState();
-            statusEl.textContent = "Não foi possível acessar o microfone.";
-          }
-        });
-
-        stopBtn.addEventListener("click", () => {
-          if (mediaRecorder && mediaRecorder.state !== "inactive") {
-            statusEl.textContent = "Finalizando gravação...";
-            mediaRecorder.stop();
-          }
-        });
-
-        clearBtn.addEventListener("click", () => {
-          clearRecording();
-          resetRecordingState();
-        });
-      })();
-    </script>
   </div>
 
   <div class="col-lg-4">
@@ -39840,6 +39646,129 @@ TEMPLATES["whatsapp_thread_detail.html"] = r"""
     </div>
   </div>
 </div>
+
+<script>
+(function () {
+  const startBtn = document.getElementById("wa-record-start");
+  const stopBtn = document.getElementById("wa-record-stop");
+  const clearBtn = document.getElementById("wa-record-clear");
+  const statusEl = document.getElementById("wa-record-status");
+  const fileInput = document.getElementById("wa-attachment-file");
+  const previewWrap = document.getElementById("wa-record-preview-wrap");
+  const previewAudio = document.getElementById("wa-record-preview");
+  if (!startBtn || !stopBtn || !clearBtn || !statusEl || !fileInput || !previewWrap || !previewAudio) {
+    return;
+  }
+
+  let mediaRecorder = null;
+  let mediaStream = null;
+  let chunks = [];
+  let objectUrl = "";
+
+  function resetPreview() {
+    if (objectUrl) {
+      URL.revokeObjectURL(objectUrl);
+      objectUrl = "";
+    }
+    previewAudio.removeAttribute("src");
+    previewAudio.load();
+    previewWrap.classList.add("d-none");
+    clearBtn.disabled = true;
+  }
+
+  function setRecordedFile(blob) {
+    const mime = blob.type || "audio/webm";
+    const ext = mime.includes("ogg") ? "ogg" : (mime.includes("mp4") || mime.includes("mpeg") ? "mp3" : "webm");
+    const file = new File([blob], `gravacao-whatsapp.${ext}`, { type: mime });
+    const dt = new DataTransfer();
+    dt.items.add(file);
+    fileInput.files = dt.files;
+    objectUrl = URL.createObjectURL(blob);
+    previewAudio.src = objectUrl;
+    previewWrap.classList.remove("d-none");
+    clearBtn.disabled = false;
+    statusEl.textContent = "Áudio gravado e anexado à mensagem.";
+  }
+
+  async function startRecording() {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || typeof MediaRecorder === "undefined") {
+      statusEl.textContent = "Seu navegador não suporta gravação de áudio nesta tela.";
+      return;
+    }
+    try {
+      resetPreview();
+      mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const preferredTypes = [
+        "audio/webm;codecs=opus",
+        "audio/ogg;codecs=opus",
+        "audio/mp4",
+        "audio/webm",
+      ];
+      let options = {};
+      for (const mimeType of preferredTypes) {
+        if (MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(mimeType)) {
+          options = { mimeType };
+          break;
+        }
+      }
+      chunks = [];
+      mediaRecorder = new MediaRecorder(mediaStream, options);
+      mediaRecorder.addEventListener("dataavailable", function (event) {
+        if (event.data && event.data.size > 0) {
+          chunks.push(event.data);
+        }
+      });
+      mediaRecorder.addEventListener("stop", function () {
+        const blob = new Blob(chunks, { type: (mediaRecorder && mediaRecorder.mimeType) || "audio/webm" });
+        if (blob.size > 0) {
+          setRecordedFile(blob);
+        } else {
+          statusEl.textContent = "Nenhum áudio foi capturado.";
+        }
+        if (mediaStream) {
+          mediaStream.getTracks().forEach(track => track.stop());
+          mediaStream = null;
+        }
+        mediaRecorder = null;
+        startBtn.disabled = false;
+        stopBtn.disabled = true;
+      });
+      mediaRecorder.start();
+      startBtn.disabled = true;
+      stopBtn.disabled = false;
+      clearBtn.disabled = true;
+      statusEl.textContent = "Gravando... clique em Parar quando terminar.";
+    } catch (error) {
+      statusEl.textContent = "Não foi possível acessar o microfone. Verifique a permissão do navegador.";
+    }
+  }
+
+  function stopRecording() {
+    if (mediaRecorder && mediaRecorder.state !== "inactive") {
+      mediaRecorder.stop();
+    }
+  }
+
+  function clearRecording() {
+    if (mediaRecorder && mediaRecorder.state !== "inactive") {
+      mediaRecorder.stop();
+    }
+    if (mediaStream) {
+      mediaStream.getTracks().forEach(track => track.stop());
+      mediaStream = null;
+    }
+    fileInput.value = "";
+    resetPreview();
+    startBtn.disabled = false;
+    stopBtn.disabled = true;
+    statusEl.textContent = "Gravação removida.";
+  }
+
+  startBtn.addEventListener("click", startRecording);
+  stopBtn.addEventListener("click", stopRecording);
+  clearBtn.addEventListener("click", clearRecording);
+})();
+</script>
 {% endblock %}
 """
 
@@ -40304,9 +40233,6 @@ async def whatsapp_thread_add_message(
         body: str = Form(default=""),
         send_live: Optional[str] = Form(default=None),
         attachment_file: Optional[UploadFile] = File(default=None),
-        recorded_audio_b64: str = Form(default=""),
-        recorded_audio_mime_type: str = Form(default=""),
-        recorded_audio_filename: str = Form(default=""),
         session: Session = Depends(get_session),
 ) -> Response:
     ctx = get_tenant_context(request, session)
@@ -40318,9 +40244,8 @@ async def whatsapp_thread_add_message(
 
     clean_body = _clean_text(body, 5000)
     has_file = bool(attachment_file and (attachment_file.filename or "").strip())
-    has_recorded_audio = bool((recorded_audio_b64 or "").strip())
-    if not clean_body and not has_file and not has_recorded_audio:
-        set_flash(request, "Escreva uma mensagem, selecione um anexo ou grave um áudio.")
+    if not clean_body and not has_file:
+        set_flash(request, "Escreva uma mensagem ou selecione um anexo.")
         return RedirectResponse(f"/admin/whatsapp/conversas/{thread.id}", status_code=303)
 
     attachment_name = ""
@@ -40335,20 +40260,6 @@ async def whatsapp_thread_add_message(
             return RedirectResponse(f"/admin/whatsapp/conversas/{thread.id}", status_code=303)
         except Exception:
             set_flash(request, "Não foi possível salvar o anexo.")
-            return RedirectResponse(f"/admin/whatsapp/conversas/{thread.id}", status_code=303)
-    elif has_recorded_audio:
-        try:
-            attachment_name, attachment_storage_path, attachment_mime_type, attachment_size_bytes = await _save_whatsapp_recorded_audio_b64(
-                recorded_audio_b64,
-                mime_type=recorded_audio_mime_type,
-                filename=recorded_audio_filename,
-            )
-            has_file = True
-        except HTTPException as exc:
-            set_flash(request, str(exc.detail))
-            return RedirectResponse(f"/admin/whatsapp/conversas/{thread.id}", status_code=303)
-        except Exception:
-            set_flash(request, "Não foi possível salvar o áudio gravado.")
             return RedirectResponse(f"/admin/whatsapp/conversas/{thread.id}", status_code=303)
 
     recipient_type = "group" if thread.is_group else "individual"
@@ -40434,20 +40345,6 @@ async def whatsapp_thread_add_message(
             return RedirectResponse(f"/admin/whatsapp/conversas/{thread.id}", status_code=303)
         except Exception:
             set_flash(request, "Não foi possível salvar o anexo.")
-            return RedirectResponse(f"/admin/whatsapp/conversas/{thread.id}", status_code=303)
-    elif has_recorded_audio:
-        try:
-            attachment_name, attachment_storage_path, attachment_mime_type, attachment_size_bytes = await _save_whatsapp_recorded_audio_b64(
-                recorded_audio_b64,
-                mime_type=recorded_audio_mime_type,
-                filename=recorded_audio_filename,
-            )
-            has_file = True
-        except HTTPException as exc:
-            set_flash(request, str(exc.detail))
-            return RedirectResponse(f"/admin/whatsapp/conversas/{thread.id}", status_code=303)
-        except Exception:
-            set_flash(request, "Não foi possível salvar o áudio gravado.")
             return RedirectResponse(f"/admin/whatsapp/conversas/{thread.id}", status_code=303)
 
     delivery_status = "local"
@@ -40868,26 +40765,6 @@ def _meeting_hours_total(meta: dict[str, Any]) -> float:
         return float(meta.get("total_hours", 0.0) or 0.0)
 
 
-
-
-def _meeting_apply_sync_data(meeting: Meeting, data: dict[str, Any]) -> None:
-    current_meta = _meeting_meta(meeting)
-    raw = data.get("raw", {}) if isinstance(data, dict) else {}
-    if not isinstance(raw, dict):
-        raw = {}
-    raw["_app_meta"] = current_meta
-
-    meeting.title = meeting.title or data.get("title", "") or "Reunião"
-    meeting.notion_meeting_block_id = data.get("meeting_block_id", "") or ""
-    meeting.notion_status = data.get("status", "") or ""
-    meeting.summary_text = data.get("summary_text", "") or ""
-    meeting.notes_text = data.get("notes_text", "") or ""
-    meeting.transcript_text = data.get("transcript_text", "") or ""
-    meeting.action_items_text = data.get("action_items_text", "") or ""
-    meeting.raw_json = json.dumps(raw, ensure_ascii=False)
-    meeting.last_synced_at = utcnow()
-    meeting.updated_at = utcnow()
-
 def _meeting_client_hours_total(session: Session, company_id: int, client_id: int) -> float:
     total = 0.0
     rows = session.exec(
@@ -41285,6 +41162,9 @@ TEMPLATES["meetings_detail.html"] = r"""
         <form method="post" action="/reunioes/{{ meeting.id }}/checkout">
           <button class="btn btn-outline-warning" type="submit">Check-out</button>
         </form>
+        <form method="post" action="/reunioes/{{ meeting.id }}/sync">
+          <button class="btn btn-outline-primary" type="submit">Sincronizar</button>
+        </form>
       {% endif %}
     </div>
   </div>
@@ -41318,32 +41198,48 @@ TEMPLATES["meetings_detail.html"] = r"""
     </div>
   </div>
 
-  {% if role in ["admin","equipe"] %}
-  <div class="card p-3 mb-3">
-    <div class="fw-semibold mb-2">Importar / atualizar dados do Notion</div>
-    <form method="post" action="/reunioes/{{ meeting.id }}/sync" class="row g-3">
-      <div class="col-md-9">
-        <label class="form-label">Link ou ID da página do Notion</label>
-        <input class="form-control" name="notion_page" value="{{ meeting.notion_url or meeting.notion_page_id or '' }}" placeholder="https://www.notion.so/... ou 32-hex" />
-        <div class="form-text">Você pode preencher isso depois do check-out. A importação preserva check-in, check-out e anotações já registradas.</div>
+  <div class="row g-3 mb-3">
+    {% if role in ["admin","equipe"] %}
+    <div class="col-lg-6">
+      <div class="card p-3 h-100">
+        <div class="d-flex justify-content-between align-items-start gap-2">
+          <div>
+            <h6 class="mb-1">Anotações internas</h6>
+            <div class="small muted">Visíveis apenas para admin e equipe.</div>
+          </div>
+        </div>
+        <div class="mt-2" style="white-space: pre-wrap;">{{ meta.internal_annotation_text or "Sem anotações internas." }}</div>
       </div>
-      <div class="col-md-3 d-flex align-items-end">
-        <button class="btn btn-outline-primary w-100" type="submit">Importar agora</button>
+    </div>
+    {% endif %}
+
+    {% if meta.client_annotation_text or role in ["admin","equipe"] %}
+    <div class="col-lg-6">
+      <div class="card p-3 h-100">
+        <div class="d-flex justify-content-between align-items-start gap-2">
+          <div>
+            <h6 class="mb-1">Anotações visíveis ao cliente</h6>
+            <div class="small muted">Aparecem também no acesso do cliente.</div>
+          </div>
+        </div>
+        <div class="mt-2" style="white-space: pre-wrap;">{{ meta.client_annotation_text or "Sem anotações para o cliente." }}</div>
       </div>
-    </form>
+    </div>
+    {% endif %}
   </div>
 
+  {% if role in ["admin","equipe"] %}
   <div class="card p-3 mb-3">
-    <div class="fw-semibold mb-2">Anotações da reunião</div>
+    <h6 class="mb-2">Atualizar anotações</h6>
     <form method="post" action="/reunioes/{{ meeting.id }}/anotacoes">
       <div class="row g-3">
-        <div class="col-md-6">
-          <label class="form-label">Anotação interna</label>
-          <textarea class="form-control" name="internal_annotation_text" rows="5" placeholder="Visível apenas para a equipe">{{ meta.internal_annotation_text or "" }}</textarea>
+        <div class="col-lg-6">
+          <label class="form-label">Anotações internas</label>
+          <textarea class="form-control" name="internal_annotation_text" rows="5">{{ meta.internal_annotation_text or "" }}</textarea>
         </div>
-        <div class="col-md-6">
-          <label class="form-label">Anotação visível ao cliente</label>
-          <textarea class="form-control" name="client_annotation_text" rows="5" placeholder="Resumo que pode aparecer para o cliente">{{ meta.client_annotation_text or "" }}</textarea>
+        <div class="col-lg-6">
+          <label class="form-label">Anotações visíveis ao cliente</label>
+          <textarea class="form-control" name="client_annotation_text" rows="5">{{ meta.client_annotation_text or "" }}</textarea>
         </div>
       </div>
       <div class="mt-3">
@@ -41420,7 +41316,7 @@ TEMPLATES["crm_detail.html"] = r"""
         {% if owner_name %} • Responsável: <b>{{ owner_name }}</b>{% endif %}
         {% if deal.next_step_date %} • Próx: <b>{{ deal.next_step_date|brdate }}</b>{% endif %}
       </div>
-      {% if deal.value_estimate_brl and deal.value_estimate_brl > 0 %}
+      {% if deal.value_estimate_brl and deal.value_estimate_brl>0 %}
         <div class="muted small mt-1">Valor estimado: <b>{{ deal.value_estimate_brl|brl }}</b> • Prob.: <b>{{ deal.probability_pct }}%</b></div>
       {% endif %}
     </div>
@@ -41448,53 +41344,43 @@ TEMPLATES["crm_detail.html"] = r"""
   {% endif %}
 
   <div class="row g-3">
-    <div class="col-lg-8">
+    <div class="col-md-8">
       <h6 class="mb-2">Demanda / Observações</h6>
       <pre>{{ deal.demand or deal.notes or "—" }}</pre>
-
-      <hr class="my-3"/>
-
-      <div class="d-flex justify-content-between align-items-center mb-2">
-        <h6 class="mb-0">Histórico</h6>
-      </div>
-      {% if notes %}
-        <div class="list-group">
-          {% for n in notes %}
-            <div class="list-group-item">
-              <div class="small muted">{{ n.created_at|brdatetime }} • {{ n.author_name }}</div>
-              <div class="mt-1" style="white-space: pre-wrap;">{{ n.message }}</div>
-            </div>
-          {% endfor %}
-        </div>
-      {% else %}
-        <div class="muted">Sem histórico.</div>
-      {% endif %}
     </div>
-
-    <div class="col-lg-4">
-      <div class="card p-3 mb-3">
+    <div class="col-md-4">
+      <div class="card p-3 h-100">
         <h6 class="mb-2">Ações rápidas</h6>
         <form method="post" action="/negocios/{{ deal.id }}/stage" class="mb-2">
           <label class="form-label">Etapa</label>
           <select class="form-select" name="stage">
             {% for s in stages %}
-              <option value="{{ s.key }}" {% if s.key == deal.stage %}selected{% endif %}>{{ s.label }}</option>
+              <option value="{{ s.key }}" {% if s.key==deal.stage %}selected{% endif %}>{{ s.label }}</option>
             {% endfor %}
           </select>
           <button class="btn btn-primary mt-2 w-100">Salvar etapa</button>
         </form>
       </div>
-
-      <div class="card p-3">
-        <h6 class="mb-2">Caixa de texto do CRM</h6>
-        <div class="small muted mb-2">Registre aqui histórico, follow-up, observações e próximos passos.</div>
-        <form method="post" action="/negocios/{{ deal.id }}/nota">
-          <textarea class="form-control" name="message" rows="8" placeholder="Ex: Cliente pediu retorno na sexta, enviar proposta revisada e confirmar documentos." required></textarea>
-          <button class="btn btn-primary mt-3 w-100" type="submit">Adicionar ao histórico</button>
-        </form>
-      </div>
     </div>
   </div>
+
+  <hr class="my-3"/>
+
+  <div class="d-flex justify-content-between align-items-center mb-2">
+    <h6 class="mb-0">Histórico</h6>
+  </div>
+  {% if notes %}
+    <div class="list-group">
+      {% for n in notes %}
+        <div class="list-group-item">
+          <div class="small muted">{{ n.created_at|brdatetime }} • {{ n.author_name }}</div>
+          <div class="mt-1">{{ n.message }}</div>
+        </div>
+      {% endfor %}
+    </div>
+  {% else %}
+    <div class="muted">Sem histórico.</div>
+  {% endif %}
 </div>
 {% endblock %}
 """
