@@ -38640,7 +38640,7 @@ def _whatsapp_meta_upload_mime_type(filename: str, mime_type: str) -> str:
         return "application/octet-stream"
     base = raw.split(";", 1)[0].strip()
     if base == "audio/ogg":
-        return "audio/ogg; codecs=opus" if "opus" in raw else "audio/ogg"
+        return "audio/ogg"
     if base == "audio/mp4":
         return "audio/mp4"
     if base == "audio/mpeg":
@@ -38650,7 +38650,6 @@ def _whatsapp_meta_upload_mime_type(filename: str, mime_type: str) -> str:
     if base == "audio/aac":
         return "audio/aac"
     return base
-
 
 def _whatsapp_filename_ext_from_mime(mime_type: str) -> str:
     mime = (mime_type or "").strip().lower()
@@ -38700,14 +38699,48 @@ def _whatsapp_audio_is_meta_supported(filename: str, mime_type: str) -> bool:
 
 
 def _whatsapp_audio_should_send_as_voice(filename: str, mime_type: str) -> bool:
-    ext = _whatsapp_attachment_ext(filename).lower()
     raw = _whatsapp_attachment_effective_mime_type(filename, mime_type).strip().lower()
-    return ext in {".ogg", ".opus"} or ("audio/ogg" in raw and "opus" in raw)
-
+    ext = _whatsapp_attachment_ext(filename).lower()
+    return ext == ".ogg" and raw.startswith("audio/ogg")
 
 def _whatsapp_audio_requires_ogg_conversion(filename: str, mime_type: str) -> bool:
     return not _whatsapp_audio_should_send_as_voice(filename, mime_type)
 
+
+def _whatsapp_probe_audio_file(path: str) -> tuple[bool, dict[str, Any], str]:
+    audio_path = Path(path or "").resolve()
+    if not audio_path.exists():
+        return False, {}, "Arquivo de áudio não encontrado para inspeção."
+    ffprobe_bin = shutil.which("ffprobe")
+    if not ffprobe_bin:
+        return False, {}, "FFprobe não está disponível no servidor para validar o áudio."
+    cmd = [
+        ffprobe_bin,
+        "-v", "error",
+        "-print_format", "json",
+        "-show_streams",
+        "-show_format",
+        str(audio_path),
+    ]
+    try:
+        proc = subprocess.run(
+            cmd,
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=30,
+        )
+    except Exception as exc:
+        return False, {}, f"Falha ao inspecionar áudio com FFprobe: {exc}"
+    if proc.returncode != 0:
+        detail = (proc.stderr or b"").decode("utf-8", errors="ignore").strip()
+        return False, {}, f"FFprobe retornou erro ao validar áudio: {detail or 'erro desconhecido'}"
+    raw = (proc.stdout or b"").decode("utf-8", errors="ignore").strip() or "{}"
+    try:
+        data = json.loads(raw)
+    except Exception:
+        return False, {}, "FFprobe retornou metadados inválidos para o áudio."
+    return True, data if isinstance(data, dict) else {}, ""
 
 def _whatsapp_convert_audio_to_ogg_opus(
         *,
@@ -38715,7 +38748,7 @@ def _whatsapp_convert_audio_to_ogg_opus(
         source_name: str,
         source_mime_type: str,
 ) -> tuple[bool, str, str, str, int, str]:
-    """Converte áudio para OGG/Opus antes do envio oficial para a Meta."""
+    """Converte áudio para OGG/Opus válido antes do envio oficial para a Meta."""
     src_path = Path(source_path or "").resolve()
     if not src_path.exists():
         return False, "", "", "", 0, "Arquivo de áudio não encontrado para conversão."
@@ -38734,10 +38767,16 @@ def _whatsapp_convert_audio_to_ogg_opus(
         "-y",
         "-i", str(src_path),
         "-vn",
+        "-map_metadata", "-1",
         "-ac", "1",
         "-ar", "48000",
         "-c:a", "libopus",
         "-b:a", "32k",
+        "-vbr", "on",
+        "-application", "voip",
+        "-frame_duration", "20",
+        "-compression_level", "10",
+        "-f", "ogg",
         str(out_path),
     ]
     try:
@@ -38746,7 +38785,7 @@ def _whatsapp_convert_audio_to_ogg_opus(
             check=False,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            timeout=90,
+            timeout=120,
         )
     except Exception as exc:
         try:
@@ -38764,6 +38803,36 @@ def _whatsapp_convert_audio_to_ogg_opus(
         detail = stderr.splitlines()[-1] if stderr else "conversão retornou erro."
         return False, "", "", "", 0, f"Não foi possível converter o áudio para OGG/Opus: {detail}"
 
+    ok_probe, probe, probe_err = _whatsapp_probe_audio_file(str(out_path))
+    if not ok_probe:
+        try:
+            out_path.unlink(missing_ok=True)
+        except Exception:
+            pass
+        return False, "", "", "", 0, probe_err
+
+    streams = probe.get("streams") if isinstance(probe, dict) else None
+    streams = streams if isinstance(streams, list) else []
+    audio_stream = next((s for s in streams if isinstance(s, dict) and str(s.get("codec_type") or "") == "audio"), {})
+    codec_name = str(audio_stream.get("codec_name") or "").strip().lower()
+    channels = int(audio_stream.get("channels") or 0) if str(audio_stream.get("channels") or "").isdigit() else 0
+    format_name = str(((probe.get("format") or {}) if isinstance(probe.get("format"), dict) else {}).get("format_name") or "").lower()
+
+    if codec_name != "opus" or "ogg" not in format_name:
+        try:
+            out_path.unlink(missing_ok=True)
+        except Exception:
+            pass
+        return False, "", "", "", 0, (
+            f"Áudio convertido inválido para WhatsApp (codec={codec_name or '-'}, formato={format_name or '-'})."
+        )
+    if channels and channels != 1:
+        try:
+            out_path.unlink(missing_ok=True)
+        except Exception:
+            pass
+        return False, "", "", "", 0, "Áudio convertido inválido para WhatsApp: é necessário canal mono."
+
     size_bytes = int(out_path.stat().st_size)
     if size_bytes > _MAX_UPLOAD_BYTES:
         try:
@@ -38772,8 +38841,7 @@ def _whatsapp_convert_audio_to_ogg_opus(
             pass
         return False, "", "", "", 0, "Áudio convertido excede o limite permitido."
 
-    return True, out_name, str(out_path), "audio/ogg; codecs=opus", size_bytes, ""
-
+    return True, out_name, str(out_path), "audio/ogg", size_bytes, ""
 
 def _whatsapp_audio_meta_validation_error(filename: str, mime_type: str) -> str:
     safe_name = (filename or "").strip() or "audio"
@@ -38933,6 +39001,20 @@ async def _try_send_whatsapp_media(
         filename = conv_name
         mime_type = _whatsapp_attachment_effective_mime_type(filename, conv_mime)
 
+    if media_kind == "audio":
+        ok_probe, probe, probe_err = _whatsapp_probe_audio_file(str(path))
+        if not ok_probe:
+            return False, probe_err, ""
+        streams = probe.get("streams") if isinstance(probe, dict) else None
+        streams = streams if isinstance(streams, list) else []
+        audio_stream = next((s for s in streams if isinstance(s, dict) and str(s.get("codec_type") or "") == "audio"), {})
+        codec_name = str(audio_stream.get("codec_name") or "").strip().lower()
+        format_name = str(((probe.get("format") or {}) if isinstance(probe.get("format"), dict) else {}).get("format_name") or "").lower()
+        if filename.lower().endswith(".ogg") and (codec_name != "opus" or "ogg" not in format_name):
+            return False, (
+                f"Áudio OGG inválido para WhatsApp (codec={codec_name or '-'}, formato={format_name or '-'})."
+            ), ""
+
     if media_kind == "audio" and not _whatsapp_audio_is_meta_supported(filename, mime_type):
         return False, _whatsapp_audio_meta_validation_error(filename, mime_type), ""
 
@@ -38944,10 +39026,7 @@ async def _try_send_whatsapp_media(
     try:
         with path.open("rb") as fh:
             files = {"file": (filename, fh, upload_mime_type)}
-            data = {
-                "messaging_product": "whatsapp",
-                "type": upload_mime_type,
-            }
+            data = {"messaging_product": "whatsapp"}
             async with httpx.AsyncClient(timeout=45.0) as client:
                 upload_resp = await client.post(upload_url, headers=headers, data=data, files=files)
 
@@ -38971,8 +39050,6 @@ async def _try_send_whatsapp_media(
                 media_payload["caption"] = safe_caption
         else:
             media_payload = {"id": media_id}
-            if _whatsapp_audio_should_send_as_voice(filename, mime_type):
-                media_payload["voice"] = True
 
         payload = {
             "messaging_product": "whatsapp",
@@ -39000,7 +39077,6 @@ async def _try_send_whatsapp_media(
         return False, _whatsapp_meta_error_message(send_resp), ""
     except Exception as exc:
         return False, f"Falha de envio: {exc}", ""
-
 
 async def _try_send_whatsapp_text(
         *,
@@ -40781,6 +40857,10 @@ def _whatsapp_apply_meta_status_event(
         normalized = "failed" if normalized.startswith("fail") else normalized[:40]
 
     msg.delivery_status = normalized or msg.delivery_status
+    if normalized == "failed" and error_text:
+        note = f"[Meta: {error_text.strip()}]"
+        if note not in (msg.body or ""):
+            msg.body = ((msg.body or "").rstrip() + "\n\n" + note).strip()
     session.add(msg)
     thread = session.get(WhatsAppThread, int(msg.thread_id or 0))
     if thread:
@@ -40789,8 +40869,6 @@ def _whatsapp_apply_meta_status_event(
     session.commit()
     return True
 
-
-@app.post("/api/whatsapp/webhook")
 async def whatsapp_webhook_receive(request: Request, session: Session = Depends(get_session)) -> JSONResponse:
     try:
         payload = await request.json()
