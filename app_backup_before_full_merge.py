@@ -9191,25 +9191,29 @@ TEMPLATES.update({
 
       <hr class="my-3"/>
 
-      <h6 class="mb-2">Timeline</h6>
+      <div class="card p-3 mb-3">
+        <div class="fw-semibold mb-2">Histórico do CRM</div>
+        <div class="small muted mb-2">Registre atualizações, próximos passos e contexto do negócio sem sair do card.</div>
+        <form method="post" action="/negocios/{{ deal.id }}/nota">
+          <label class="form-label">Nova anotação</label>
+          <textarea class="form-control" name="message" rows="3" required placeholder="Ex: Cliente pediu retorno até sexta; revisar proposta e atualizar probabilidade."></textarea>
+          <button class="btn btn-primary mt-2" type="submit">Adicionar ao histórico</button>
+        </form>
+      </div>
+
+      <h6 class="mb-2">Histórico</h6>
       {% if notes %}
         <div class="list-group">
           {% for n in notes %}
             <div class="list-group-item">
               <div class="small muted">{{ n.created_at }} • {{ n.author_name }}</div>
-              <div>{{ n.message }}</div>
+              <div style="white-space: pre-wrap;">{{ n.message }}</div>
             </div>
           {% endfor %}
         </div>
       {% else %}
-        <div class="muted">Sem notas.</div>
+        <div class="muted">Sem notas no histórico.</div>
       {% endif %}
-
-      <form method="post" action="/negocios/{{ deal.id }}/nota" class="mt-3">
-        <label class="form-label">Adicionar nota</label>
-        <textarea class="form-control" name="message" rows="3" required></textarea>
-        <button class="btn btn-primary mt-2" type="submit">Adicionar</button>
-      </form>
     </div>
 
     <div class="col-md-4">
@@ -9463,7 +9467,7 @@ TEMPLATES.update({
   <div class="d-flex justify-content-between align-items-center">
     <div>
       <h4 class="mb-0">Nova Reunião</h4>
-      <div class="muted">Você pode criar a reunião sem Notion e vincular o link (ou ID) depois, quando quiser sincronizar.</div>
+      <div class="muted">Você pode criar a reunião agora e vincular o Notion depois, sem perder check-in/check-out.</div>
     </div>
     <a class="btn btn-outline-secondary" href="/reunioes">Voltar</a>
   </div>
@@ -9493,9 +9497,9 @@ TEMPLATES.update({
       </div>
 
       <div class="col-12">
-        <label class="form-label">Link ou ID da página do Notion (opcional)</label>
+        <label class="form-label">Link ou ID da página do Notion <span class="muted">(opcional)</span></label>
         <input class="form-control" name="notion_page" placeholder="https://www.notion.so/... ou 32-hex" />
-        <div class="form-text">Você pode criar a reunião sem esse vínculo e colar o link depois, na própria reunião. Se informar agora, a integração precisa ter acesso à página (Compartilhar → Conexões → sua integração).</div>
+        <div class="form-text">Você pode iniciar a reunião sem o link. Depois, no detalhe da reunião, basta colar o link/ID e importar sem perder check-in, check-out e anotações.</div>
       </div>
 
       <div class="col-12">
@@ -9505,7 +9509,7 @@ TEMPLATES.update({
 
       <div class="col-12 form-check">
         <input class="form-check-input" type="checkbox" value="1" id="sync_now" name="sync_now" checked>
-        <label class="form-check-label" for="sync_now">Sincronizar agora</label>
+        <label class="form-check-label" for="sync_now">Importar do Notion agora, se o link/ID estiver preenchido</label>
       </div>
     </div>
 
@@ -21479,10 +21483,9 @@ async def meetings_new_action(
         set_flash(request, "Cliente inválido.")
         return RedirectResponse("/reunioes/nova", status_code=303)
 
-    notion_ref = (notion_page or "").strip()
-    page_id = _normalize_uuid(notion_ref) if notion_ref else ""
-
-    if notion_ref and not page_id:
+    notion_input = (notion_page or "").strip()
+    page_id = _normalize_uuid(notion_input) if notion_input else ""
+    if notion_input and not page_id:
         set_flash(request, "Link/ID do Notion inválido.")
         return RedirectResponse("/reunioes/nova", status_code=303)
 
@@ -21490,10 +21493,11 @@ async def meetings_new_action(
         company_id=ctx.company.id,
         client_id=client.id,
         created_by_user_id=ctx.user.id,
-        title=title.strip(),
+        title=title.strip() or "Reunião",
         meeting_date=_normalize_date_input(meeting_date),
+        source="notion" if page_id else "manual",
         notion_page_id=page_id,
-        notion_url=notion_ref,
+        notion_url=notion_input,
         updated_at=utcnow(),
     )
     session.add(mt)
@@ -21503,21 +21507,17 @@ async def meetings_new_action(
     if sync_now == "1" and page_id:
         try:
             data = await notion_sync_meeting_from_page(page_id)
-            mt.title = mt.title or data.get("title", "") or "Reunião"
-            mt.notion_meeting_block_id = data.get("meeting_block_id", "") or ""
-            mt.notion_status = data.get("status", "") or ""
-            mt.summary_text = data.get("summary_text", "") or ""
-            mt.notes_text = data.get("notes_text", "") or ""
-            mt.transcript_text = data.get("transcript_text", "") or ""
-            mt.action_items_text = data.get("action_items_text", "") or ""
-            mt.raw_json = json.dumps(data.get("raw", {}), ensure_ascii=False)
-            mt.last_synced_at = utcnow()
-            mt.updated_at = utcnow()
+            _meeting_apply_notion_sync(mt, data)
             session.add(mt)
             session.commit()
             set_flash(request, "Reunião criada e sincronizada.")
         except Exception as e:
             set_flash(request, f"Reunião criada, mas falhou ao sincronizar: {e}")
+    else:
+        if page_id:
+            set_flash(request, "Reunião criada. Você pode importar do Notion quando quiser.")
+        else:
+            set_flash(request, "Reunião criada sem vínculo com Notion. Você pode vincular e importar depois.")
 
     return RedirectResponse(f"/reunioes/{mt.id}", status_code=303)
 
@@ -21568,14 +21568,64 @@ async def meetings_detail(request: Request, session: Session = Depends(get_sessi
     )
 
 
-@app.post("/reunioes/{meeting_id}/sync")
+@app.post("/reunioes/{meeting_id}/vincular_notion")
 @require_role({"admin", "equipe"})
-async def meetings_sync(
+async def meetings_bind_notion(
         request: Request,
         session: Session = Depends(get_session),
         meeting_id: int = 0,
         notion_page: str = Form(""),
+        sync_now: str = Form(""),
 ) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    mt = session.get(Meeting, int(meeting_id))
+    if not mt or mt.company_id != ctx.company.id:
+        set_flash(request, "Reunião não encontrada.")
+        return RedirectResponse("/reunioes", status_code=303)
+
+    notion_input = (notion_page or "").strip()
+    if not notion_input:
+        mt.notion_page_id = ""
+        mt.notion_url = ""
+        mt.source = "manual"
+        mt.updated_at = utcnow()
+        session.add(mt)
+        session.commit()
+        set_flash(request, "Vínculo com Notion removido.")
+        return RedirectResponse(f"/reunioes/{mt.id}", status_code=303)
+
+    page_id = _normalize_uuid(notion_input)
+    if not page_id:
+        set_flash(request, "Link/ID do Notion inválido.")
+        return RedirectResponse(f"/reunioes/{mt.id}", status_code=303)
+
+    mt.notion_page_id = page_id
+    mt.notion_url = notion_input
+    mt.source = "notion"
+    mt.updated_at = utcnow()
+    session.add(mt)
+    session.commit()
+
+    if sync_now == "1":
+        try:
+            data = await notion_sync_meeting_from_page(page_id)
+            _meeting_apply_notion_sync(mt, data)
+            session.add(mt)
+            session.commit()
+            set_flash(request, "Vínculo salvo e reunião importada do Notion.")
+        except Exception as e:
+            set_flash(request, f"Vínculo salvo, mas a importação falhou: {e}")
+    else:
+        set_flash(request, "Vínculo com Notion salvo.")
+
+    return RedirectResponse(f"/reunioes/{mt.id}", status_code=303)
+
+
+@app.post("/reunioes/{meeting_id}/sync")
+@require_role({"admin", "equipe"})
+async def meetings_sync(request: Request, session: Session = Depends(get_session), meeting_id: int = 0) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
 
@@ -21589,53 +21639,14 @@ async def meetings_sync(
         set_flash(request, "Reunião não encontrada.")
         return RedirectResponse("/reunioes", status_code=303)
 
-    notion_ref = (notion_page or "").strip()
-    if notion_ref:
-        page_id = _normalize_uuid(notion_ref)
-        if not page_id:
-            set_flash(request, "Link/ID do Notion inválido.")
-            return RedirectResponse(f"/reunioes/{mt.id}", status_code=303)
-        mt.notion_page_id = page_id
-        mt.notion_url = notion_ref
-        mt.updated_at = utcnow()
-        session.add(mt)
-        session.commit()
-
-    notion_source = (mt.notion_page_id or "").strip() or (mt.notion_url or "").strip()
-    if not notion_source:
-        set_flash(request, "Informe primeiro o link ou ID do Notion para importar.")
+    notion_ref = (mt.notion_page_id or mt.notion_url or "").strip()
+    if not notion_ref:
+        set_flash(request, "Informe primeiro o link/ID do Notion para esta reunião.")
         return RedirectResponse(f"/reunioes/{mt.id}", status_code=303)
 
     try:
-        data = await notion_sync_meeting_from_page(notion_source)
-        mt.title = mt.title or data.get("title", "") or "Reunião"
-        mt.notion_meeting_block_id = data.get("meeting_block_id", "") or ""
-        mt.notion_status = data.get("status", "") or ""
-        mt.summary_text = data.get("summary_text", "") or ""
-        mt.notes_text = data.get("notes_text", "") or ""
-        mt.transcript_text = data.get("transcript_text", "") or ""
-        mt.action_items_text = data.get("action_items_text", "") or ""
-
-        current_raw = {}
-        try:
-            current_raw = json.loads(mt.raw_json or "{}")
-            if not isinstance(current_raw, dict):
-                current_raw = {}
-        except Exception:
-            current_raw = {}
-
-        incoming_raw = data.get("raw", {}) or {}
-        if not isinstance(incoming_raw, dict):
-            incoming_raw = {}
-
-        app_meta = current_raw.get("_app_meta", {})
-        merged_raw = dict(incoming_raw)
-        if isinstance(app_meta, dict) and app_meta:
-            merged_raw["_app_meta"] = app_meta
-
-        mt.raw_json = json.dumps(merged_raw, ensure_ascii=False)
-        mt.last_synced_at = utcnow()
-        mt.updated_at = utcnow()
+        data = await notion_sync_meeting_from_page(notion_ref)
+        _meeting_apply_notion_sync(mt, data)
         session.add(mt)
         session.commit()
         set_flash(request, "Sincronização concluída.")
@@ -32615,6 +32626,28 @@ TEMPLATES["admin_analytics.html"] = r"""
   </div>
   <hr class="my-3"/>
 
+  {% if role in ["admin","equipe"] %}
+  <div class="card p-3 mb-3">
+    <div class="fw-semibold mb-2">Vínculo com Notion</div>
+    <div class="small muted mb-2">Cole o link/ID quando a página estiver pronta. A importação preserva check-in, check-out e anotações da reunião.</div>
+    <form method="post" action="/reunioes/{{ meeting.id }}/vincular_notion">
+      <div class="row g-2 align-items-end">
+        <div class="col-lg-8">
+          <label class="form-label">Link ou ID da página do Notion</label>
+          <input class="form-control" name="notion_page" value="{{ meeting.notion_url or meeting.notion_page_id or ''.strip() }}" placeholder="https://www.notion.so/... ou 32-hex" />
+        </div>
+        <div class="col-lg-4">
+          <div class="form-check mb-2">
+            <input class="form-check-input" type="checkbox" value="1" id="sync_after_bind" name="sync_now" checked>
+            <label class="form-check-label" for="sync_after_bind">Importar agora</label>
+          </div>
+          <button class="btn btn-outline-primary w-100" type="submit">Salvar vínculo</button>
+        </div>
+      </div>
+    </form>
+  </div>
+  {% endif %}
+
   <div class="row g-3 mb-3">
     <div class="col-md-3"><div class="mc-stat-card"><div class="muted small">Usuários com acesso</div><div class="fs-3 fw-semibold">{{ totals.total_users }}</div></div></div>
     <div class="col-md-3"><div class="mc-stat-card"><div class="muted small">Clientes que já acessaram</div><div class="fs-3 fw-semibold">{{ totals.clients_accessed }}</div></div></div>
@@ -41231,6 +41264,42 @@ def _meeting_meta_save(session: Session, meeting: Meeting, meta: dict[str, Any])
     session.commit()
 
 
+
+
+def _meeting_apply_notion_sync(meeting: Meeting, data: dict[str, Any]) -> None:
+    notion_raw = data.get("raw", {})
+    if not isinstance(notion_raw, dict):
+        notion_raw = {}
+
+    existing_raw = {}
+    try:
+        existing_raw = json.loads(meeting.raw_json or "{}")
+        if not isinstance(existing_raw, dict):
+            existing_raw = {}
+    except Exception:
+        existing_raw = {}
+
+    app_meta = existing_raw.get("_app_meta")
+    if isinstance(app_meta, dict):
+        notion_raw["_app_meta"] = app_meta
+
+    normalized_page_id = _normalize_uuid(str(data.get("page_id") or meeting.notion_page_id or meeting.notion_url or ""))
+    if normalized_page_id:
+        meeting.notion_page_id = normalized_page_id
+    if str(data.get("url") or "").strip():
+        meeting.notion_url = str(data.get("url") or "").strip()
+
+    meeting.source = "notion" if meeting.notion_page_id or meeting.notion_url else (meeting.source or "manual")
+    meeting.title = (meeting.title or "").strip() or str(data.get("title") or "").strip() or "Reunião"
+    meeting.notion_meeting_block_id = str(data.get("meeting_block_id") or "").strip()
+    meeting.notion_status = str(data.get("status") or "").strip()
+    meeting.summary_text = str(data.get("summary_text") or "")
+    meeting.notes_text = str(data.get("notes_text") or "")
+    meeting.transcript_text = str(data.get("transcript_text") or "")
+    meeting.action_items_text = str(data.get("action_items_text") or "")
+    meeting.raw_json = json.dumps(notion_raw, ensure_ascii=False)
+    meeting.last_synced_at = utcnow()
+    meeting.updated_at = utcnow()
 def _meeting_hours_total(meta: dict[str, Any]) -> float:
     started = meta.get("checked_in_at") or ""
     ended = meta.get("checked_out_at") or ""
@@ -41649,22 +41718,6 @@ TEMPLATES["meetings_detail.html"] = r"""
     </div>
   </div>
 
-  {% if role in ["admin","equipe"] %}
-    <div class="card p-3 mt-3">
-      <div class="fw-semibold mb-2">Vínculo com Notion</div>
-      <form method="post" action="/reunioes/{{ meeting.id }}/sync" class="row g-2 align-items-end">
-        <div class="col-lg-9">
-          <label class="form-label">Link ou ID da página do Notion</label>
-          <input class="form-control" name="notion_page" value="{{ meeting.notion_url or meeting.notion_page_id or '' }}" placeholder="Cole aqui o link/ID do Notion depois da reunião" />
-          <div class="form-text">Você pode colar o vínculo depois do check-out e sincronizar sem perder check-in, check-out e anotações.</div>
-        </div>
-        <div class="col-lg-3 d-grid">
-          <button class="btn btn-outline-primary" type="submit">Salvar vínculo / sincronizar</button>
-        </div>
-      </form>
-    </div>
-  {% endif %}
-
   <hr class="my-3"/>
 
   <div class="row g-3 mb-3">
@@ -41876,18 +41929,6 @@ TEMPLATES["crm_detail.html"] = r"""
     </div>
   {% else %}
     <div class="muted">Sem histórico.</div>
-  {% endif %}
-
-  {% if role in ["admin","equipe"] %}
-    <div class="card p-3 mt-3">
-      <h6 class="mb-2">Nova anotação</h6>
-      <form method="post" action="/negocios/{{ deal.id }}/nota">
-        <textarea class="form-control" name="message" rows="4" placeholder="Escreva uma anotação para registrar no histórico..." required></textarea>
-        <div class="mt-2">
-          <button class="btn btn-primary" type="submit">Adicionar ao histórico</button>
-        </div>
-      </form>
-    </div>
   {% endif %}
 </div>
 {% endblock %}
@@ -42106,916 +42147,3 @@ async def meetings_checkout(
     _meeting_meta_save(session, mt, meta)
     set_flash(request, "Check-out registrado.")
     return RedirectResponse(f"/reunioes/{mt.id}", status_code=303)
-
-# ----------------------------
-# Obras + Horas (cliente liberado manualmente)
-# ----------------------------
-
-CLIENT_SCOPED_FEATURES: set[str] = set(globals().get("CLIENT_SCOPED_FEATURES", set()))
-CLIENT_SCOPED_FEATURES.add("obras_horas")
-
-FEATURE_KEYS.setdefault(
-    "obras_horas",
-    {
-        "title": "Obras + Horas",
-        "desc": "Controle de obras, funcionários, alocação e horas previstas x realizadas.",
-        "href": "/obras-horas",
-    },
-)
-FEATURE_VISIBLE_ROLES.setdefault("obras_horas", {"admin", "equipe", "cliente"})
-ROLE_DEFAULT_FEATURES.setdefault("admin", set()).add("obras_horas")
-ROLE_DEFAULT_FEATURES.setdefault("equipe", set()).add("obras_horas")
-ROLE_DEFAULT_FEATURES.setdefault("cliente", set()).add("obras_horas")
-
-def _append_feature_once(container: list[str], feature_key: str) -> list[str]:
-    if feature_key not in container:
-        container.append(feature_key)
-    return container
-
-_feature_group_found = False
-for _group in FEATURE_GROUPS:
-    if _group.get("key") == "cliente":
-        _append_feature_once(_group.setdefault("features", []), "obras_horas")
-        _feature_group_found = True
-        break
-if not _feature_group_found:
-    FEATURE_GROUPS.append({"key": "cliente_tools", "title": "Cliente", "features": ["obras_horas"]})
-
-_FEATURE_KEYS_VISIBLE_OBRAS = True
-
-def effective_allowed_features(session: Session, *, ctx: TenantContext, current_client: Optional[Client]) -> set[str]:
-    try:
-        allowed = get_membership_allowed_features(session, company_id=ctx.company.id, membership=ctx.membership)
-        client_allowed = None
-        if current_client and current_client.id:
-            client_allowed = get_client_allowed_features(
-                session,
-                company_id=ctx.company.id,
-                client_id=current_client.id,
-            )
-        if ctx.membership.role == "cliente" and client_allowed is not None:
-            allowed = allowed.intersection(client_allowed)
-        for fk in CLIENT_SCOPED_FEATURES:
-            if not current_client or not current_client.id or client_allowed is None or fk not in client_allowed:
-                allowed.discard(fk)
-        return {k for k in allowed if k in FEATURE_KEYS}
-    except Exception:
-        base = set(ROLE_DEFAULT_FEATURES.get(ctx.membership.role, set()))
-        for fk in CLIENT_SCOPED_FEATURES:
-            base.discard(fk)
-        return {k for k in base if k in FEATURE_KEYS}
-
-
-def resolve_feature_key(path: str) -> Optional[str]:
-    if path.startswith("/static/") or path.startswith("/login") or path.startswith("/logout"):
-        return None
-    if path.startswith("/api/"):
-        return None
-    if path in {"/", "/health"}:
-        return None
-    mapping = [
-        ("/admin/ui", "ui"),
-        ("/admin/financeiro", "financeiro_escritorio"),
-        ("/admin/gestao", "gestao"),
-        ("/admin/members", "gestao"),
-        ("/admin/clients", "gestao"),
-        ("/negocios", "crm"),
-        ("/credito", "credito"),
-        ("/empresa", "empresa"),
-        ("/perfil", "perfil"),
-        ("/financeiro", "financeiro"),
-        ("/documentos", "documentos"),
-        ("/consultoria", "consultoria"),
-        ("/reunioes", "reunioes"),
-        ("/tarefas", "tarefas"),
-        ("/simulador", "simulador"),
-        ("/propostas", "propostas"),
-        ("/pendencias", "pendencias"),
-        ("/agenda", "agenda"),
-        ("/educacao", "educacao"),
-        ("/obras-horas", "obras_horas"),
-    ]
-    for prefix, key in mapping:
-        if path == prefix or path.startswith(prefix + "/"):
-            return key
-    return None
-
-
-class WorkProject(SQLModel, table=True):
-    id: Optional[int] = Field(default=None, primary_key=True)
-    company_id: int = Field(index=True, foreign_key="company.id")
-    client_id: int = Field(index=True, foreign_key="client.id")
-    title: str
-    code: str = Field(default="", index=True)
-    work_kind: str = Field(default="externa", index=True)  # interna | externa | mista
-    status: str = Field(default="planejamento", index=True)  # planejamento | em_andamento | pausada | finalizada
-    budget_hours: float = 0.0
-    budget_workers: int = 0
-    starts_on: str = ""
-    ends_on: str = ""
-    notes: str = ""
-    created_at: datetime = Field(default_factory=utcnow, index=True)
-    updated_at: datetime = Field(default_factory=utcnow, index=True)
-
-
-class WorkEmployee(SQLModel, table=True):
-    __table_args__ = (
-        UniqueConstraint("company_id", "client_id", "name", name="uq_workemployee_company_client_name"),
-    )
-    id: Optional[int] = Field(default=None, primary_key=True)
-    company_id: int = Field(index=True, foreign_key="company.id")
-    client_id: int = Field(index=True, foreign_key="client.id")
-    name: str
-    role_name: str = ""
-    hourly_cost_brl: float = 0.0
-    is_active: bool = Field(default=True, index=True)
-    notes: str = ""
-    created_at: datetime = Field(default_factory=utcnow, index=True)
-    updated_at: datetime = Field(default_factory=utcnow, index=True)
-
-
-class WorkAllocation(SQLModel, table=True):
-    __table_args__ = (
-        UniqueConstraint("project_id", "employee_id", name="uq_workallocation_project_employee"),
-    )
-    id: Optional[int] = Field(default=None, primary_key=True)
-    company_id: int = Field(index=True, foreign_key="company.id")
-    client_id: int = Field(index=True, foreign_key="client.id")
-    project_id: int = Field(index=True, foreign_key="workproject.id")
-    employee_id: int = Field(index=True, foreign_key="workemployee.id")
-    planned_hours: float = 0.0
-    planned_workers: int = 1
-    notes: str = ""
-    created_at: datetime = Field(default_factory=utcnow, index=True)
-    updated_at: datetime = Field(default_factory=utcnow, index=True)
-
-
-class WorkTimeEntry(SQLModel, table=True):
-    id: Optional[int] = Field(default=None, primary_key=True)
-    company_id: int = Field(index=True, foreign_key="company.id")
-    client_id: int = Field(index=True, foreign_key="client.id")
-    project_id: int = Field(index=True, foreign_key="workproject.id")
-    employee_id: int = Field(index=True, foreign_key="workemployee.id")
-    work_date: str = Field(default="", index=True)
-    hours_worked: float = 0.0
-    location_kind: str = Field(default="externa", index=True)  # interna | externa
-    notes: str = ""
-    created_by_user_id: Optional[int] = Field(default=None, index=True, foreign_key="user.id")
-    created_at: datetime = Field(default_factory=utcnow, index=True)
-
-
-def ensure_workforce_tables() -> None:
-    try:
-        SQLModel.metadata.create_all(
-            engine,
-            tables=[
-                WorkProject.__table__,
-                WorkEmployee.__table__,
-                WorkAllocation.__table__,
-                WorkTimeEntry.__table__,
-            ],
-            checkfirst=True,
-        )
-    except Exception:
-        pass
-
-
-@app.on_event("startup")
-def _startup_workforce() -> None:
-    ensure_workforce_tables()
-
-
-def _obras_horas_feature_enabled_for_client(session: Session, *, company_id: int, client_id: int) -> bool:
-    allowed = get_client_allowed_features(session, company_id=company_id, client_id=client_id)
-    return bool(allowed and "obras_horas" in allowed)
-
-
-def _require_obras_horas_context(
-    request: Request,
-    session: Session,
-) -> tuple[TenantContext, Client]:
-    ctx = get_tenant_context(request, session)
-    if not ctx:
-        raise HTTPException(status_code=401, detail="Sessão inválida.")
-    current_client = _client_current_client(request, session, ctx)
-    if not current_client:
-        raise HTTPException(status_code=400, detail="Selecione um cliente.")
-    if not _obras_horas_feature_enabled_for_client(
-        session,
-        company_id=ctx.company.id,
-        client_id=int(current_client.id),
-    ):
-        raise HTTPException(status_code=403, detail="Ferramenta não liberada para este cliente.")
-    return ctx, current_client
-
-
-def _safe_float_br(raw: Any, default: float = 0.0) -> float:
-    s = str(raw or "").strip()
-    if not s:
-        return default
-    s = s.replace(".", "").replace(",", ".") if s.count(",") == 1 and s.count(".") >= 1 else s.replace(",", ".")
-    try:
-        return round(float(s), 2)
-    except Exception:
-        return default
-
-
-def _safe_int_value(raw: Any, default: int = 0) -> int:
-    try:
-        return int(str(raw or "").strip() or default)
-    except Exception:
-        return default
-
-
-def _normalize_work_date(raw: str) -> str:
-    value = (raw or "").strip()
-    if not value:
-        return ""
-    try:
-        return datetime.strptime(value, "%Y-%m-%d").date().isoformat()
-    except Exception:
-        return ""
-
-
-def _work_project_summary(session: Session, *, project: WorkProject) -> dict[str, Any]:
-    allocations = session.exec(
-        select(WorkAllocation).where(WorkAllocation.project_id == int(project.id or 0))
-    ).all()
-    entries = session.exec(
-        select(WorkTimeEntry).where(WorkTimeEntry.project_id == int(project.id or 0)).order_by(WorkTimeEntry.work_date.desc(), WorkTimeEntry.created_at.desc())
-    ).all()
-    planned_hours = round(sum(float(a.planned_hours or 0.0) for a in allocations), 2)
-    actual_hours = round(sum(float(e.hours_worked or 0.0) for e in entries), 2)
-    planned_workers = max(int(project.budget_workers or 0), sum(max(1, int(a.planned_workers or 1)) for a in allocations))
-    actual_workers = len({int(e.employee_id) for e in entries if e.employee_id})
-    budget_hours = round(float(project.budget_hours or 0.0), 2)
-    compare_base = planned_hours if planned_hours > 0 else budget_hours
-    delta_hours = round(actual_hours - compare_base, 2)
-    return {
-        "planned_hours": planned_hours,
-        "budget_hours": budget_hours,
-        "actual_hours": actual_hours,
-        "planned_workers": planned_workers,
-        "actual_workers": actual_workers,
-        "delta_hours": delta_hours,
-        "is_over_budget": delta_hours > 0.009,
-        "remaining_hours": round(compare_base - actual_hours, 2),
-        "entries_count": len(entries),
-    }
-
-
-def _work_project_employee_rows(session: Session, *, project: WorkProject) -> list[dict[str, Any]]:
-    allocations = session.exec(
-        select(WorkAllocation).where(WorkAllocation.project_id == int(project.id or 0))
-    ).all()
-    alloc_by_employee = {int(a.employee_id): a for a in allocations if a.employee_id}
-    entries = session.exec(
-        select(WorkTimeEntry).where(WorkTimeEntry.project_id == int(project.id or 0))
-    ).all()
-    hours_by_employee: dict[int, float] = {}
-    for entry in entries:
-        eid = int(entry.employee_id or 0)
-        if not eid:
-            continue
-        hours_by_employee[eid] = round(hours_by_employee.get(eid, 0.0) + float(entry.hours_worked or 0.0), 2)
-
-    employee_ids = set(hours_by_employee.keys()) | set(alloc_by_employee.keys())
-    rows: list[dict[str, Any]] = []
-    for employee_id in sorted(employee_ids):
-        emp = session.get(WorkEmployee, employee_id)
-        if not emp:
-            continue
-        alloc = alloc_by_employee.get(employee_id)
-        planned_hours = round(float(alloc.planned_hours or 0.0), 2) if alloc else 0.0
-        actual_hours = round(float(hours_by_employee.get(employee_id, 0.0)), 2)
-        rows.append(
-            {
-                "employee": emp,
-                "allocation": alloc,
-                "planned_hours": planned_hours,
-                "actual_hours": actual_hours,
-                "delta_hours": round(actual_hours - planned_hours, 2),
-                "planned_workers": int(alloc.planned_workers or 1) if alloc else 0,
-            }
-        )
-    return rows
-
-
-def _work_entries_for_project(session: Session, *, project_id: int) -> list[dict[str, Any]]:
-    entries = session.exec(
-        select(WorkTimeEntry).where(WorkTimeEntry.project_id == int(project_id)).order_by(WorkTimeEntry.work_date.desc(), WorkTimeEntry.created_at.desc())
-    ).all()
-    out: list[dict[str, Any]] = []
-    for entry in entries:
-        emp = session.get(WorkEmployee, int(entry.employee_id or 0)) if entry.employee_id else None
-        author = session.get(User, int(entry.created_by_user_id or 0)) if entry.created_by_user_id else None
-        out.append(
-            {
-                "entry": entry,
-                "employee_name": emp.name if emp else "Funcionário",
-                "author_name": author.name if author else "",
-            }
-        )
-    return out
-
-
-TEMPLATES["workforce_list.html"] = r"""
-{% extends "base.html" %}
-{% block content %}
-<div class="card p-4">
-  <div class="d-flex justify-content-between align-items-center flex-wrap gap-3">
-    <div>
-      <h4 class="mb-0">Obras + Horas</h4>
-      <div class="muted">Controle previsto x realizado por obra e funcionário.</div>
-    </div>
-    <div class="small muted">
-      Cliente ativo: <b>{{ current_client.name if current_client else "—" }}</b>
-    </div>
-  </div>
-
-  <div class="row g-3 mt-1 mb-3">
-    <div class="col-md-3"><div class="card p-3 h-100"><div class="muted small">Obras abertas</div><div class="fw-semibold fs-4">{{ summary.open_projects }}</div></div></div>
-    <div class="col-md-3"><div class="card p-3 h-100"><div class="muted small">Horas previstas</div><div class="fw-semibold fs-4">{{ summary.planned_hours|round(1) }}</div></div></div>
-    <div class="col-md-3"><div class="card p-3 h-100"><div class="muted small">Horas realizadas</div><div class="fw-semibold fs-4">{{ summary.actual_hours|round(1) }}</div></div></div>
-    <div class="col-md-3"><div class="card p-3 h-100"><div class="muted small">Obras estouradas</div><div class="fw-semibold fs-4">{{ summary.over_budget }}</div></div></div>
-  </div>
-
-  <div class="row g-3">
-    <div class="col-lg-7">
-      <div class="card p-3 h-100">
-        <div class="d-flex justify-content-between align-items-center mb-2">
-          <h6 class="mb-0">Obras / Projetos</h6>
-        </div>
-        {% if projects %}
-        <div class="table-responsive">
-          <table class="table table-sm align-middle">
-            <thead>
-              <tr class="muted small">
-                <th>Obra</th>
-                <th>Tipo</th>
-                <th>Status</th>
-                <th class="text-end">Prev.</th>
-                <th class="text-end">Real.</th>
-                <th class="text-end">Saldo</th>
-              </tr>
-            </thead>
-            <tbody>
-            {% for row in projects %}
-              <tr>
-                <td>
-                  <a href="/obras-horas/projetos/{{ row.project.id }}"><b>{{ row.project.title }}</b></a>
-                  {% if row.project.code %}<div class="small muted mono">{{ row.project.code }}</div>{% endif %}
-                </td>
-                <td><span class="badge text-bg-light border">{{ row.project.work_kind }}</span></td>
-                <td><span class="badge {% if row.project.status == 'finalizada' %}text-bg-success{% elif row.summary.is_over_budget %}text-bg-danger{% else %}text-bg-secondary{% endif %}">{{ row.project.status }}</span></td>
-                <td class="text-end">{{ (row.summary.planned_hours if row.summary.planned_hours > 0 else row.summary.budget_hours)|round(1) }}</td>
-                <td class="text-end">{{ row.summary.actual_hours|round(1) }}</td>
-                <td class="text-end {% if row.summary.delta_hours > 0 %}text-danger{% else %}text-success{% endif %}">{{ row.summary.remaining_hours|round(1) }}</td>
-              </tr>
-            {% endfor %}
-            </tbody>
-          </table>
-        </div>
-        {% else %}
-          <div class="muted">Nenhuma obra cadastrada.</div>
-        {% endif %}
-      </div>
-    </div>
-
-    <div class="col-lg-5">
-      <div class="card p-3 mb-3">
-        <h6>Funcionários</h6>
-        {% if employees %}
-          <div class="table-responsive">
-            <table class="table table-sm align-middle">
-              <thead><tr class="muted small"><th>Nome</th><th>Função</th><th class="text-end">Custo/h</th></tr></thead>
-              <tbody>
-                {% for e in employees %}
-                <tr>
-                  <td>{{ e.name }}</td>
-                  <td>{{ e.role_name or "—" }}</td>
-                  <td class="text-end">{{ e.hourly_cost_brl|brl if e.hourly_cost_brl else "—" }}</td>
-                </tr>
-                {% endfor %}
-              </tbody>
-            </table>
-          </div>
-        {% else %}
-          <div class="muted">Nenhum funcionário cadastrado.</div>
-        {% endif %}
-      </div>
-
-      {% if role in ["admin", "equipe"] %}
-      <div class="card p-3 mb-3">
-        <h6>Nova obra</h6>
-        <form method="post" action="/obras-horas/projetos" class="row g-2">
-          <div class="col-12">
-            <label class="form-label">Título</label>
-            <input class="form-control" name="title" required />
-          </div>
-          <div class="col-md-4">
-            <label class="form-label">Código</label>
-            <input class="form-control" name="code" placeholder="OP-001" />
-          </div>
-          <div class="col-md-4">
-            <label class="form-label">Tipo</label>
-            <select class="form-select" name="work_kind">
-              <option value="interna">Interna</option>
-              <option value="externa" selected>Externa</option>
-              <option value="mista">Mista</option>
-            </select>
-          </div>
-          <div class="col-md-4">
-            <label class="form-label">Status</label>
-            <select class="form-select" name="status">
-              <option value="planejamento">Planejamento</option>
-              <option value="em_andamento" selected>Em andamento</option>
-              <option value="pausada">Pausada</option>
-              <option value="finalizada">Finalizada</option>
-            </select>
-          </div>
-          <div class="col-md-6">
-            <label class="form-label">Horas previstas</label>
-            <input class="form-control" name="budget_hours" placeholder="120" />
-          </div>
-          <div class="col-md-6">
-            <label class="form-label">Qtd. prevista de funcionários</label>
-            <input class="form-control" name="budget_workers" placeholder="3" />
-          </div>
-          <div class="col-md-6">
-            <label class="form-label">Início</label>
-            <input class="form-control" type="date" name="starts_on" />
-          </div>
-          <div class="col-md-6">
-            <label class="form-label">Fim</label>
-            <input class="form-control" type="date" name="ends_on" />
-          </div>
-          <div class="col-12">
-            <label class="form-label">Observações</label>
-            <textarea class="form-control" name="notes" rows="3"></textarea>
-          </div>
-          <div class="col-12">
-            <button class="btn btn-primary">Criar obra</button>
-          </div>
-        </form>
-      </div>
-
-      <div class="card p-3">
-        <h6>Novo funcionário</h6>
-        <form method="post" action="/obras-horas/funcionarios" class="row g-2">
-          <div class="col-md-7">
-            <label class="form-label">Nome</label>
-            <input class="form-control" name="name" required />
-          </div>
-          <div class="col-md-5">
-            <label class="form-label">Função</label>
-            <input class="form-control" name="role_name" placeholder="Montador" />
-          </div>
-          <div class="col-md-6">
-            <label class="form-label">Custo hora (opcional)</label>
-            <input class="form-control" name="hourly_cost_brl" placeholder="25,00" />
-          </div>
-          <div class="col-md-6">
-            <label class="form-label">Status</label>
-            <select class="form-select" name="is_active">
-              <option value="1" selected>Ativo</option>
-              <option value="0">Inativo</option>
-            </select>
-          </div>
-          <div class="col-12">
-            <label class="form-label">Observações</label>
-            <textarea class="form-control" name="notes" rows="2"></textarea>
-          </div>
-          <div class="col-12">
-            <button class="btn btn-outline-primary">Adicionar funcionário</button>
-          </div>
-        </form>
-      </div>
-      {% endif %}
-    </div>
-  </div>
-</div>
-{% endblock %}
-"""
-
-TEMPLATES["workforce_project_detail.html"] = r"""
-{% extends "base.html" %}
-{% block content %}
-<div class="card p-4">
-  <div class="d-flex justify-content-between align-items-start flex-wrap gap-3">
-    <div>
-      <h4 class="mb-1">{{ project.title }}</h4>
-      <div class="muted">
-        {% if project.code %}<span class="mono">{{ project.code }}</span> • {% endif %}
-        Tipo: <b>{{ project.work_kind }}</b> • Status: <b>{{ project.status }}</b>
-      </div>
-      <div class="small muted mt-1">
-        Cliente: {{ current_client.name if current_client else "—" }}
-        {% if project.starts_on %} • Início: {{ project.starts_on|brdate }}{% endif %}
-        {% if project.ends_on %} • Fim: {{ project.ends_on|brdate }}{% endif %}
-      </div>
-    </div>
-    <a class="btn btn-outline-secondary" href="/obras-horas">Voltar</a>
-  </div>
-
-  <div class="row g-3 mt-1 mb-3">
-    <div class="col-md-3"><div class="card p-3 h-100"><div class="muted small">Horas orçamento</div><div class="fw-semibold">{{ summary.budget_hours|round(1) }}</div></div></div>
-    <div class="col-md-3"><div class="card p-3 h-100"><div class="muted small">Horas alocadas</div><div class="fw-semibold">{{ summary.planned_hours|round(1) }}</div></div></div>
-    <div class="col-md-3"><div class="card p-3 h-100"><div class="muted small">Horas realizadas</div><div class="fw-semibold">{{ summary.actual_hours|round(1) }}</div></div></div>
-    <div class="col-md-3"><div class="card p-3 h-100"><div class="muted small">Resultado</div><div class="fw-semibold {% if summary.is_over_budget %}text-danger{% else %}text-success{% endif %}">{{ summary.delta_hours|round(1) }}</div></div></div>
-  </div>
-
-  {% if project.notes %}
-  <div class="card p-3 mb-3">
-    <h6 class="mb-2">Observações</h6>
-    <div style="white-space: pre-wrap;">{{ project.notes }}</div>
-  </div>
-  {% endif %}
-
-  <div class="row g-3">
-    <div class="col-lg-6">
-      <div class="card p-3 h-100">
-        <h6>Planejamento por funcionário</h6>
-        {% if employee_rows %}
-        <div class="table-responsive">
-          <table class="table table-sm align-middle">
-            <thead><tr class="muted small"><th>Funcionário</th><th class="text-end">Prev.</th><th class="text-end">Real.</th><th class="text-end">Dif.</th></tr></thead>
-            <tbody>
-            {% for row in employee_rows %}
-              <tr>
-                <td>{{ row.employee.name }}{% if row.employee.role_name %}<div class="small muted">{{ row.employee.role_name }}</div>{% endif %}</td>
-                <td class="text-end">{{ row.planned_hours|round(1) }}</td>
-                <td class="text-end">{{ row.actual_hours|round(1) }}</td>
-                <td class="text-end {% if row.delta_hours > 0 %}text-danger{% else %}text-success{% endif %}">{{ row.delta_hours|round(1) }}</td>
-              </tr>
-            {% endfor %}
-            </tbody>
-          </table>
-        </div>
-        {% else %}
-          <div class="muted">Nenhuma alocação ainda.</div>
-        {% endif %}
-
-        {% if role in ["admin", "equipe"] %}
-        <hr class="my-3"/>
-        <h6>Alocar funcionário</h6>
-        <form method="post" action="/obras-horas/projetos/{{ project.id }}/alocacoes" class="row g-2">
-          <div class="col-md-6">
-            <label class="form-label">Funcionário</label>
-            <select class="form-select" name="employee_id" required>
-              <option value="">Selecione</option>
-              {% for emp in employees %}
-                <option value="{{ emp.id }}">{{ emp.name }}{% if emp.role_name %} • {{ emp.role_name }}{% endif %}</option>
-              {% endfor %}
-            </select>
-          </div>
-          <div class="col-md-3">
-            <label class="form-label">Horas previstas</label>
-            <input class="form-control" name="planned_hours" placeholder="40" />
-          </div>
-          <div class="col-md-3">
-            <label class="form-label">Qtd.</label>
-            <input class="form-control" name="planned_workers" value="1" />
-          </div>
-          <div class="col-12">
-            <label class="form-label">Observações</label>
-            <input class="form-control" name="notes" />
-          </div>
-          <div class="col-12">
-            <button class="btn btn-outline-primary">Salvar alocação</button>
-          </div>
-        </form>
-        {% endif %}
-      </div>
-    </div>
-
-    <div class="col-lg-6">
-      <div class="card p-3 h-100">
-        <h6>Apontar horas</h6>
-        {% if role in ["admin", "equipe"] %}
-        <form method="post" action="/obras-horas/projetos/{{ project.id }}/apontamentos" class="row g-2">
-          <div class="col-md-6">
-            <label class="form-label">Funcionário</label>
-            <select class="form-select" name="employee_id" required>
-              <option value="">Selecione</option>
-              {% for emp in employees %}
-                <option value="{{ emp.id }}">{{ emp.name }}</option>
-              {% endfor %}
-            </select>
-          </div>
-          <div class="col-md-3">
-            <label class="form-label">Data</label>
-            <input class="form-control" type="date" name="work_date" value="{{ today_iso }}" required />
-          </div>
-          <div class="col-md-3">
-            <label class="form-label">Horas</label>
-            <input class="form-control" name="hours_worked" placeholder="8" required />
-          </div>
-          <div class="col-md-4">
-            <label class="form-label">Local</label>
-            <select class="form-select" name="location_kind">
-              <option value="interna">Interna</option>
-              <option value="externa" selected>Externa</option>
-            </select>
-          </div>
-          <div class="col-md-8">
-            <label class="form-label">Observações</label>
-            <input class="form-control" name="notes" placeholder="Montagem, fabricação, visita técnica..." />
-          </div>
-          <div class="col-12">
-            <button class="btn btn-primary">Registrar horas</button>
-          </div>
-        </form>
-        <hr class="my-3"/>
-        {% endif %}
-
-        <h6 class="mt-0">Histórico de apontamentos</h6>
-        {% if entries %}
-        <div class="table-responsive">
-          <table class="table table-sm align-middle">
-            <thead><tr class="muted small"><th>Data</th><th>Funcionário</th><th>Local</th><th class="text-end">Horas</th><th>Observações</th></tr></thead>
-            <tbody>
-            {% for row in entries %}
-              <tr>
-                <td>{{ row.entry.work_date|brdate if row.entry.work_date else "—" }}</td>
-                <td>{{ row.employee_name }}</td>
-                <td><span class="badge text-bg-light border">{{ row.entry.location_kind }}</span></td>
-                <td class="text-end">{{ row.entry.hours_worked|round(1) }}</td>
-                <td>{{ row.entry.notes or "—" }}</td>
-              </tr>
-            {% endfor %}
-            </tbody>
-          </table>
-        </div>
-        {% else %}
-          <div class="muted">Nenhum apontamento ainda.</div>
-        {% endif %}
-      </div>
-    </div>
-  </div>
-</div>
-{% endblock %}
-"""
-
-if hasattr(templates_env.loader, "mapping"):
-    templates_env.loader.mapping = TEMPLATES
-
-
-@app.get("/obras-horas", response_class=HTMLResponse)
-@require_login
-async def workforce_dashboard(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
-    ctx, current_client = _require_obras_horas_context(request, session)
-    ensure_workforce_tables()
-
-    employees = session.exec(
-        select(WorkEmployee).where(
-            WorkEmployee.company_id == ctx.company.id,
-            WorkEmployee.client_id == int(current_client.id),
-        ).order_by(WorkEmployee.is_active.desc(), WorkEmployee.name)
-    ).all()
-
-    projects = session.exec(
-        select(WorkProject).where(
-            WorkProject.company_id == ctx.company.id,
-            WorkProject.client_id == int(current_client.id),
-        ).order_by(WorkProject.created_at.desc())
-    ).all()
-
-    project_rows = []
-    summary = {"open_projects": 0, "planned_hours": 0.0, "actual_hours": 0.0, "over_budget": 0}
-    for project in projects:
-        proj_summary = _work_project_summary(session, project=project)
-        if str(project.status or "") != "finalizada":
-            summary["open_projects"] += 1
-        summary["planned_hours"] += float(proj_summary["planned_hours"] if proj_summary["planned_hours"] > 0 else proj_summary["budget_hours"])
-        summary["actual_hours"] += float(proj_summary["actual_hours"])
-        if proj_summary["is_over_budget"]:
-            summary["over_budget"] += 1
-        project_rows.append({"project": project, "summary": proj_summary})
-
-    summary["planned_hours"] = round(float(summary["planned_hours"]), 2)
-    summary["actual_hours"] = round(float(summary["actual_hours"]), 2)
-
-    return render(
-        "workforce_list.html",
-        request=request,
-        context={
-            "title": "Obras + Horas",
-            "current_user": ctx.user,
-            "current_company": ctx.company,
-            "role": ctx.membership.role,
-            "current_client": current_client,
-            "projects": project_rows,
-            "employees": employees,
-            "summary": summary,
-        },
-    )
-
-
-@app.post("/obras-horas/funcionarios")
-@require_role({"admin", "equipe"})
-async def workforce_employee_create(
-    request: Request,
-    session: Session = Depends(get_session),
-    name: str = Form(...),
-    role_name: str = Form(""),
-    hourly_cost_brl: str = Form(""),
-    is_active: str = Form("1"),
-    notes: str = Form(""),
-) -> Response:
-    ctx, current_client = _require_obras_horas_context(request, session)
-    ensure_workforce_tables()
-
-    employee = WorkEmployee(
-        company_id=ctx.company.id,
-        client_id=int(current_client.id),
-        name=(name or "").strip(),
-        role_name=(role_name or "").strip(),
-        hourly_cost_brl=_safe_float_br(hourly_cost_brl, 0.0),
-        is_active=str(is_active or "1") == "1",
-        notes=(notes or "").strip(),
-        updated_at=utcnow(),
-    )
-    session.add(employee)
-    session.commit()
-    set_flash(request, "Funcionário cadastrado.")
-    return RedirectResponse("/obras-horas", status_code=303)
-
-
-@app.post("/obras-horas/projetos")
-@require_role({"admin", "equipe"})
-async def workforce_project_create(
-    request: Request,
-    session: Session = Depends(get_session),
-    title: str = Form(...),
-    code: str = Form(""),
-    work_kind: str = Form("externa"),
-    status: str = Form("em_andamento"),
-    budget_hours: str = Form(""),
-    budget_workers: str = Form(""),
-    starts_on: str = Form(""),
-    ends_on: str = Form(""),
-    notes: str = Form(""),
-) -> Response:
-    ctx, current_client = _require_obras_horas_context(request, session)
-    ensure_workforce_tables()
-
-    project = WorkProject(
-        company_id=ctx.company.id,
-        client_id=int(current_client.id),
-        title=(title or "").strip(),
-        code=(code or "").strip(),
-        work_kind=(work_kind or "externa").strip() or "externa",
-        status=(status or "em_andamento").strip() or "em_andamento",
-        budget_hours=_safe_float_br(budget_hours, 0.0),
-        budget_workers=max(0, _safe_int_value(budget_workers, 0)),
-        starts_on=_normalize_work_date(starts_on),
-        ends_on=_normalize_work_date(ends_on),
-        notes=(notes or "").strip(),
-        updated_at=utcnow(),
-    )
-    session.add(project)
-    session.commit()
-    session.refresh(project)
-    set_flash(request, "Obra criada.")
-    return RedirectResponse(f"/obras-horas/projetos/{project.id}", status_code=303)
-
-
-@app.get("/obras-horas/projetos/{project_id}", response_class=HTMLResponse)
-@require_login
-async def workforce_project_detail(
-    request: Request,
-    project_id: int,
-    session: Session = Depends(get_session),
-) -> HTMLResponse:
-    ctx, current_client = _require_obras_horas_context(request, session)
-    ensure_workforce_tables()
-
-    project = session.get(WorkProject, int(project_id))
-    if not project or project.company_id != ctx.company.id or project.client_id != int(current_client.id):
-        set_flash(request, "Obra não encontrada.")
-        return RedirectResponse("/obras-horas", status_code=303)
-
-    employees = session.exec(
-        select(WorkEmployee).where(
-            WorkEmployee.company_id == ctx.company.id,
-            WorkEmployee.client_id == int(current_client.id),
-            WorkEmployee.is_active == True,  # noqa: E712
-        ).order_by(WorkEmployee.name)
-    ).all()
-
-    return render(
-        "workforce_project_detail.html",
-        request=request,
-        context={
-            "title": project.title,
-            "current_user": ctx.user,
-            "current_company": ctx.company,
-            "role": ctx.membership.role,
-            "current_client": current_client,
-            "project": project,
-            "summary": _work_project_summary(session, project=project),
-            "employee_rows": _work_project_employee_rows(session, project=project),
-            "employees": employees,
-            "entries": _work_entries_for_project(session, project_id=int(project.id)),
-            "today_iso": datetime.now().date().isoformat(),
-        },
-    )
-
-
-@app.post("/obras-horas/projetos/{project_id}/alocacoes")
-@require_role({"admin", "equipe"})
-async def workforce_project_allocate(
-    request: Request,
-    project_id: int,
-    session: Session = Depends(get_session),
-    employee_id: int = Form(...),
-    planned_hours: str = Form(""),
-    planned_workers: str = Form("1"),
-    notes: str = Form(""),
-) -> Response:
-    ctx, current_client = _require_obras_horas_context(request, session)
-    ensure_workforce_tables()
-
-    project = session.get(WorkProject, int(project_id))
-    employee = session.get(WorkEmployee, int(employee_id))
-    if not project or project.company_id != ctx.company.id or project.client_id != int(current_client.id):
-        set_flash(request, "Obra não encontrada.")
-        return RedirectResponse("/obras-horas", status_code=303)
-    if not employee or employee.company_id != ctx.company.id or employee.client_id != int(current_client.id):
-        set_flash(request, "Funcionário não encontrado.")
-        return RedirectResponse(f"/obras-horas/projetos/{project_id}", status_code=303)
-
-    allocation = session.exec(
-        select(WorkAllocation).where(
-            WorkAllocation.project_id == int(project.id),
-            WorkAllocation.employee_id == int(employee.id),
-        )
-    ).first()
-    if not allocation:
-        allocation = WorkAllocation(
-            company_id=ctx.company.id,
-            client_id=int(current_client.id),
-            project_id=int(project.id),
-            employee_id=int(employee.id),
-        )
-    allocation.planned_hours = _safe_float_br(planned_hours, 0.0)
-    allocation.planned_workers = max(1, _safe_int_value(planned_workers, 1))
-    allocation.notes = (notes or "").strip()
-    allocation.updated_at = utcnow()
-    session.add(allocation)
-    session.commit()
-    set_flash(request, "Alocação salva.")
-    return RedirectResponse(f"/obras-horas/projetos/{project.id}", status_code=303)
-
-
-@app.post("/obras-horas/projetos/{project_id}/apontamentos")
-@require_role({"admin", "equipe"})
-async def workforce_time_entry_create(
-    request: Request,
-    project_id: int,
-    session: Session = Depends(get_session),
-    employee_id: int = Form(...),
-    work_date: str = Form(...),
-    hours_worked: str = Form(...),
-    location_kind: str = Form("externa"),
-    notes: str = Form(""),
-) -> Response:
-    ctx, current_client = _require_obras_horas_context(request, session)
-    ensure_workforce_tables()
-
-    project = session.get(WorkProject, int(project_id))
-    employee = session.get(WorkEmployee, int(employee_id))
-    if not project or project.company_id != ctx.company.id or project.client_id != int(current_client.id):
-        set_flash(request, "Obra não encontrada.")
-        return RedirectResponse("/obras-horas", status_code=303)
-    if not employee or employee.company_id != ctx.company.id or employee.client_id != int(current_client.id):
-        set_flash(request, "Funcionário não encontrado.")
-        return RedirectResponse(f"/obras-horas/projetos/{project_id}", status_code=303)
-
-    normalized_date = _normalize_work_date(work_date)
-    if not normalized_date:
-        set_flash(request, "Data inválida.")
-        return RedirectResponse(f"/obras-horas/projetos/{project_id}", status_code=303)
-
-    worked = _safe_float_br(hours_worked, 0.0)
-    if worked <= 0:
-        set_flash(request, "Informe horas válidas.")
-        return RedirectResponse(f"/obras-horas/projetos/{project_id}", status_code=303)
-
-    entry = WorkTimeEntry(
-        company_id=ctx.company.id,
-        client_id=int(current_client.id),
-        project_id=int(project.id),
-        employee_id=int(employee.id),
-        work_date=normalized_date,
-        hours_worked=worked,
-        location_kind=(location_kind or project.work_kind or "externa").strip() or "externa",
-        notes=(notes or "").strip(),
-        created_by_user_id=int(ctx.user.id or 0),
-    )
-    session.add(entry)
-    session.commit()
-    set_flash(request, "Horas registradas.")
-    return RedirectResponse(f"/obras-horas/projetos/{project.id}", status_code=303)
-
