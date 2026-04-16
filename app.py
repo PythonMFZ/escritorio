@@ -35905,24 +35905,24 @@ TEMPLATES["ferramentas.html"] = r"""
   <div class="alert alert-warning">Selecione um cliente para acessar as ferramentas.</div>
 {% else %}
   <div class="row g-3">
-    <div class="col-lg-8">
+    <div class="col-lg-6">
       <div class="card p-4 h-100">
         <div class="d-flex justify-content-between align-items-start gap-3 flex-wrap">
           <div>
             <h5 class="mb-1">Financeiro Gerencial</h5>
             <div class="muted">Contas a pagar, contas a receber, DRE e fluxo de caixa para uso do cliente.</div>
           </div>
-          <span class="badge {% if finance_tool.access_ok %}text-bg-success{% elif finance_tool.trial_active %}text-bg-warning{% else %}text-bg-secondary{% endif %}">
-            {{ finance_tool.status_label }}
+          <span class="badge {% if finance_tool and finance_tool.access_ok %}text-bg-success{% elif finance_tool and finance_tool.trial_active %}text-bg-warning{% else %}text-bg-secondary{% endif %}">
+            {% if finance_tool %}{{ finance_tool.status_label }}{% else %}Indisponível{% endif %}
           </span>
         </div>
 
-        <div class="row g-3 mt-1">
+        <div class="row g-3 mt-1 mb-3">
           <div class="col-md-4">
             <div class="border rounded p-3 h-100">
               <div class="muted small">Período grátis</div>
               <div class="fw-semibold">
-                {% if finance_tool.trial_active and finance_tool.trial_ends_at %}
+                {% if finance_tool and finance_tool.trial_active and finance_tool.trial_ends_at %}
                   até {{ finance_tool.trial_ends_at.strftime("%d/%m/%Y") }}
                 {% else %}
                   encerrado
@@ -35933,20 +35933,34 @@ TEMPLATES["ferramentas.html"] = r"""
           <div class="col-md-4">
             <div class="border rounded p-3 h-100">
               <div class="muted small">Mensalidade</div>
-              <div class="fw-semibold">{{ finance_tool.monthly_price_credits }} créditos/mês</div>
+              <div class="fw-semibold">
+                {% if finance_tool %}
+                  {{ finance_tool.monthly_price_credits }} créditos/mês
+                {% else %}
+                  —
+                {% endif %}
+              </div>
             </div>
           </div>
           <div class="col-md-4">
             <div class="border rounded p-3 h-100">
               <div class="muted small">Saldo atual</div>
-              <div class="fw-semibold">{{ finance_tool.wallet_balance_credits|brnum(2) }} créditos</div>
+              <div class="fw-semibold">
+                {% if finance_tool %}
+                  {{ "%.2f"|format(finance_tool.wallet_balance_credits) }} créditos
+                {% else %}
+                  0,00 créditos
+                {% endif %}
+              </div>
             </div>
           </div>
         </div>
 
-        <div class="alert {% if finance_tool.access_ok %}alert-success{% else %}alert-warning{% endif %} mt-3 mb-3">
-          {{ finance_tool.message }}
-        </div>
+        {% if finance_tool and finance_tool.message %}
+          <div class="alert {% if finance_tool.access_ok %}alert-success{% else %}alert-warning{% endif %}">
+            {{ finance_tool.message }}
+          </div>
+        {% endif %}
 
         <div class="d-flex gap-2 flex-wrap">
           <a class="btn btn-primary" href="/ferramentas/financeiro">Abrir Financeiro Gerencial</a>
@@ -35955,14 +35969,48 @@ TEMPLATES["ferramentas.html"] = r"""
       </div>
     </div>
 
-    <div class="col-lg-4">
+    <div class="col-lg-6">
       <div class="card p-4 h-100">
-        <h6 class="mb-3">Como funciona</h6>
-        <ol class="small mb-0 ps-3">
-          <li>Ao liberar a ferramenta para o cliente, o primeiro acesso ativa 1 mês grátis.</li>
-          <li>Após o período grátis, a ferramenta consome {{ finance_tool.monthly_price_credits }} créditos por mês.</li>
-          <li>Sem saldo suficiente, o acesso fica bloqueado até nova recarga.</li>
-        </ol>
+        <div class="d-flex justify-content-between align-items-start gap-3 flex-wrap">
+          <div>
+            <h5 class="mb-1">Obras + Horas</h5>
+            <div class="muted">Controle de obras, funcionários, alocação e horas previstas x realizadas.</div>
+          </div>
+          <span class="badge {% if obras_horas_enabled %}text-bg-success{% else %}text-bg-secondary{% endif %}">
+            {% if obras_horas_enabled %}Liberada{% else %}Bloqueada{% endif %}
+          </span>
+        </div>
+
+        <div class="row g-3 mt-1 mb-3">
+          <div class="col-md-6">
+            <div class="border rounded p-3 h-100">
+              <div class="muted small">Disponibilidade</div>
+              <div class="fw-semibold">
+                {% if obras_horas_enabled %}Cliente liberado{% else %}Ferramenta não liberada{% endif %}
+              </div>
+            </div>
+          </div>
+          <div class="col-md-6">
+            <div class="border rounded p-3 h-100">
+              <div class="muted small">Escopo</div>
+              <div class="fw-semibold">Obras, equipe e apontamento</div>
+            </div>
+          </div>
+        </div>
+
+        {% if obras_horas_enabled %}
+          <div class="alert alert-success">
+            Esta ferramenta está liberada para o cliente ativo.
+          </div>
+        {% else %}
+          <div class="alert alert-warning">
+            Ferramenta não liberada para este cliente nas permissões.
+          </div>
+        {% endif %}
+
+        <div class="d-flex gap-2 flex-wrap">
+          <a class="btn {% if obras_horas_enabled %}btn-primary{% else %}btn-outline-secondary disabled{% endif %}" href="{% if obras_horas_enabled %}/obras-horas{% else %}#{% endif %}">Abrir Obras + Horas</a>
+        </div>
       </div>
     </div>
   </div>
@@ -36118,6 +36166,8 @@ async def ferramentas_page(request: Request, session: Session = Depends(get_sess
 
     current_client = _client_current_client(request, session, ctx)
     finance_tool = None
+    obras_horas_enabled = False
+
     if current_client:
         finance_tool = _tool_subscription_status_payload(
             session,
@@ -36125,6 +36175,15 @@ async def ferramentas_page(request: Request, session: Session = Depends(get_sess
             client_id=current_client.id,
             tool_code=CLIENT_TOOL_FINANCE_CODE,
         )
+        try:
+            client_allowed = get_client_allowed_features(
+                session,
+                company_id=ctx.company.id,
+                client_id=int(current_client.id),
+            )
+            obras_horas_enabled = bool(client_allowed and "obras_horas" in client_allowed)
+        except Exception:
+            obras_horas_enabled = False
 
     return render(
         "ferramentas.html",
@@ -36136,6 +36195,7 @@ async def ferramentas_page(request: Request, session: Session = Depends(get_sess
             "role": ctx.membership.role,
             "current_client": current_client,
             "finance_tool": finance_tool,
+            "obras_horas_enabled": obras_horas_enabled,
         },
     )
 
