@@ -9191,25 +9191,29 @@ TEMPLATES.update({
 
       <hr class="my-3"/>
 
-      <h6 class="mb-2">Timeline</h6>
+      <div class="card p-3 mb-3">
+        <div class="fw-semibold mb-2">Histórico do CRM</div>
+        <div class="small muted mb-2">Registre atualizações, próximos passos e contexto do negócio sem sair do card.</div>
+        <form method="post" action="/negocios/{{ deal.id }}/nota">
+          <label class="form-label">Nova anotação</label>
+          <textarea class="form-control" name="message" rows="3" required placeholder="Ex: Cliente pediu retorno até sexta; revisar proposta e atualizar probabilidade."></textarea>
+          <button class="btn btn-primary mt-2" type="submit">Adicionar ao histórico</button>
+        </form>
+      </div>
+
+      <h6 class="mb-2">Histórico</h6>
       {% if notes %}
         <div class="list-group">
           {% for n in notes %}
             <div class="list-group-item">
               <div class="small muted">{{ n.created_at }} • {{ n.author_name }}</div>
-              <div>{{ n.message }}</div>
+              <div style="white-space: pre-wrap;">{{ n.message }}</div>
             </div>
           {% endfor %}
         </div>
       {% else %}
-        <div class="muted">Sem notas.</div>
+        <div class="muted">Sem notas no histórico.</div>
       {% endif %}
-
-      <form method="post" action="/negocios/{{ deal.id }}/nota" class="mt-3">
-        <label class="form-label">Adicionar nota</label>
-        <textarea class="form-control" name="message" rows="3" required></textarea>
-        <button class="btn btn-primary mt-2" type="submit">Adicionar</button>
-      </form>
     </div>
 
     <div class="col-md-4">
@@ -9463,7 +9467,7 @@ TEMPLATES.update({
   <div class="d-flex justify-content-between align-items-center">
     <div>
       <h4 class="mb-0">Nova Reunião</h4>
-      <div class="muted">Cole o link (ou ID) da página do Notion que contém AI Meeting Notes.</div>
+      <div class="muted">Você pode criar a reunião agora e vincular o Notion depois, sem perder check-in/check-out.</div>
     </div>
     <a class="btn btn-outline-secondary" href="/reunioes">Voltar</a>
   </div>
@@ -9493,9 +9497,9 @@ TEMPLATES.update({
       </div>
 
       <div class="col-12">
-        <label class="form-label">Link ou ID da página do Notion</label>
-        <input class="form-control" name="notion_page" required placeholder="https://www.notion.so/... ou 32-hex" />
-        <div class="form-text">A integração precisa ter acesso à página (Compartilhar → Conexões → sua integração).</div>
+        <label class="form-label">Link ou ID da página do Notion <span class="muted">(opcional)</span></label>
+        <input class="form-control" name="notion_page" placeholder="https://www.notion.so/... ou 32-hex" />
+        <div class="form-text">Você pode iniciar a reunião sem o link. Depois, no detalhe da reunião, basta colar o link/ID e importar sem perder check-in, check-out e anotações.</div>
       </div>
 
       <div class="col-12">
@@ -9505,7 +9509,7 @@ TEMPLATES.update({
 
       <div class="col-12 form-check">
         <input class="form-check-input" type="checkbox" value="1" id="sync_now" name="sync_now" checked>
-        <label class="form-check-label" for="sync_now">Sincronizar agora</label>
+        <label class="form-check-label" for="sync_now">Importar do Notion agora, se o link/ID estiver preenchido</label>
       </div>
     </div>
 
@@ -21462,7 +21466,7 @@ async def meetings_new_action(
         session: Session = Depends(get_session),
         client_id: int = Form(...),
         meeting_date: str = Form(""),
-        notion_page: str = Form(...),
+        notion_page: str = Form(""),
         title: str = Form(""),
         sync_now: str = Form(""),
 ) -> Response:
@@ -21479,8 +21483,9 @@ async def meetings_new_action(
         set_flash(request, "Cliente inválido.")
         return RedirectResponse("/reunioes/nova", status_code=303)
 
-    page_id = _normalize_uuid(notion_page)
-    if not page_id:
+    notion_input = (notion_page or "").strip()
+    page_id = _normalize_uuid(notion_input) if notion_input else ""
+    if notion_input and not page_id:
         set_flash(request, "Link/ID do Notion inválido.")
         return RedirectResponse("/reunioes/nova", status_code=303)
 
@@ -21488,34 +21493,31 @@ async def meetings_new_action(
         company_id=ctx.company.id,
         client_id=client.id,
         created_by_user_id=ctx.user.id,
-        title=title.strip(),
+        title=title.strip() or "Reunião",
         meeting_date=_normalize_date_input(meeting_date),
+        source="notion" if page_id else "manual",
         notion_page_id=page_id,
-        notion_url=notion_page.strip(),
+        notion_url=notion_input,
         updated_at=utcnow(),
     )
     session.add(mt)
     session.commit()
     session.refresh(mt)
 
-    if sync_now == "1":
+    if sync_now == "1" and page_id:
         try:
             data = await notion_sync_meeting_from_page(page_id)
-            mt.title = mt.title or data.get("title", "") or "Reunião"
-            mt.notion_meeting_block_id = data.get("meeting_block_id", "") or ""
-            mt.notion_status = data.get("status", "") or ""
-            mt.summary_text = data.get("summary_text", "") or ""
-            mt.notes_text = data.get("notes_text", "") or ""
-            mt.transcript_text = data.get("transcript_text", "") or ""
-            mt.action_items_text = data.get("action_items_text", "") or ""
-            mt.raw_json = json.dumps(data.get("raw", {}), ensure_ascii=False)
-            mt.last_synced_at = utcnow()
-            mt.updated_at = utcnow()
+            _meeting_apply_notion_sync(mt, data)
             session.add(mt)
             session.commit()
             set_flash(request, "Reunião criada e sincronizada.")
         except Exception as e:
             set_flash(request, f"Reunião criada, mas falhou ao sincronizar: {e}")
+    else:
+        if page_id:
+            set_flash(request, "Reunião criada. Você pode importar do Notion quando quiser.")
+        else:
+            set_flash(request, "Reunião criada sem vínculo com Notion. Você pode vincular e importar depois.")
 
     return RedirectResponse(f"/reunioes/{mt.id}", status_code=303)
 
@@ -21566,6 +21568,61 @@ async def meetings_detail(request: Request, session: Session = Depends(get_sessi
     )
 
 
+@app.post("/reunioes/{meeting_id}/vincular_notion")
+@require_role({"admin", "equipe"})
+async def meetings_bind_notion(
+        request: Request,
+        session: Session = Depends(get_session),
+        meeting_id: int = 0,
+        notion_page: str = Form(""),
+        sync_now: str = Form(""),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    mt = session.get(Meeting, int(meeting_id))
+    if not mt or mt.company_id != ctx.company.id:
+        set_flash(request, "Reunião não encontrada.")
+        return RedirectResponse("/reunioes", status_code=303)
+
+    notion_input = (notion_page or "").strip()
+    if not notion_input:
+        mt.notion_page_id = ""
+        mt.notion_url = ""
+        mt.source = "manual"
+        mt.updated_at = utcnow()
+        session.add(mt)
+        session.commit()
+        set_flash(request, "Vínculo com Notion removido.")
+        return RedirectResponse(f"/reunioes/{mt.id}", status_code=303)
+
+    page_id = _normalize_uuid(notion_input)
+    if not page_id:
+        set_flash(request, "Link/ID do Notion inválido.")
+        return RedirectResponse(f"/reunioes/{mt.id}", status_code=303)
+
+    mt.notion_page_id = page_id
+    mt.notion_url = notion_input
+    mt.source = "notion"
+    mt.updated_at = utcnow()
+    session.add(mt)
+    session.commit()
+
+    if sync_now == "1":
+        try:
+            data = await notion_sync_meeting_from_page(page_id)
+            _meeting_apply_notion_sync(mt, data)
+            session.add(mt)
+            session.commit()
+            set_flash(request, "Vínculo salvo e reunião importada do Notion.")
+        except Exception as e:
+            set_flash(request, f"Vínculo salvo, mas a importação falhou: {e}")
+    else:
+        set_flash(request, "Vínculo com Notion salvo.")
+
+    return RedirectResponse(f"/reunioes/{mt.id}", status_code=303)
+
+
 @app.post("/reunioes/{meeting_id}/sync")
 @require_role({"admin", "equipe"})
 async def meetings_sync(request: Request, session: Session = Depends(get_session), meeting_id: int = 0) -> Response:
@@ -21582,18 +21639,14 @@ async def meetings_sync(request: Request, session: Session = Depends(get_session
         set_flash(request, "Reunião não encontrada.")
         return RedirectResponse("/reunioes", status_code=303)
 
+    notion_ref = (mt.notion_page_id or mt.notion_url or "").strip()
+    if not notion_ref:
+        set_flash(request, "Informe primeiro o link/ID do Notion para esta reunião.")
+        return RedirectResponse(f"/reunioes/{mt.id}", status_code=303)
+
     try:
-        data = await notion_sync_meeting_from_page(mt.notion_page_id or mt.notion_url)
-        mt.title = mt.title or data.get("title", "") or "Reunião"
-        mt.notion_meeting_block_id = data.get("meeting_block_id", "") or ""
-        mt.notion_status = data.get("status", "") or ""
-        mt.summary_text = data.get("summary_text", "") or ""
-        mt.notes_text = data.get("notes_text", "") or ""
-        mt.transcript_text = data.get("transcript_text", "") or ""
-        mt.action_items_text = data.get("action_items_text", "") or ""
-        mt.raw_json = json.dumps(data.get("raw", {}), ensure_ascii=False)
-        mt.last_synced_at = utcnow()
-        mt.updated_at = utcnow()
+        data = await notion_sync_meeting_from_page(notion_ref)
+        _meeting_apply_notion_sync(mt, data)
         session.add(mt)
         session.commit()
         set_flash(request, "Sincronização concluída.")
@@ -32573,6 +32626,28 @@ TEMPLATES["admin_analytics.html"] = r"""
   </div>
   <hr class="my-3"/>
 
+  {% if role in ["admin","equipe"] %}
+  <div class="card p-3 mb-3">
+    <div class="fw-semibold mb-2">Vínculo com Notion</div>
+    <div class="small muted mb-2">Cole o link/ID quando a página estiver pronta. A importação preserva check-in, check-out e anotações da reunião.</div>
+    <form method="post" action="/reunioes/{{ meeting.id }}/vincular_notion">
+      <div class="row g-2 align-items-end">
+        <div class="col-lg-8">
+          <label class="form-label">Link ou ID da página do Notion</label>
+          <input class="form-control" name="notion_page" value="{{ meeting.notion_url or meeting.notion_page_id or ''.strip() }}" placeholder="https://www.notion.so/... ou 32-hex" />
+        </div>
+        <div class="col-lg-4">
+          <div class="form-check mb-2">
+            <input class="form-check-input" type="checkbox" value="1" id="sync_after_bind" name="sync_now" checked>
+            <label class="form-check-label" for="sync_after_bind">Importar agora</label>
+          </div>
+          <button class="btn btn-outline-primary w-100" type="submit">Salvar vínculo</button>
+        </div>
+      </div>
+    </form>
+  </div>
+  {% endif %}
+
   <div class="row g-3 mb-3">
     <div class="col-md-3"><div class="mc-stat-card"><div class="muted small">Usuários com acesso</div><div class="fs-3 fw-semibold">{{ totals.total_users }}</div></div></div>
     <div class="col-md-3"><div class="mc-stat-card"><div class="muted small">Clientes que já acessaram</div><div class="fs-3 fw-semibold">{{ totals.clients_accessed }}</div></div></div>
@@ -41189,6 +41264,42 @@ def _meeting_meta_save(session: Session, meeting: Meeting, meta: dict[str, Any])
     session.commit()
 
 
+
+
+def _meeting_apply_notion_sync(meeting: Meeting, data: dict[str, Any]) -> None:
+    notion_raw = data.get("raw", {})
+    if not isinstance(notion_raw, dict):
+        notion_raw = {}
+
+    existing_raw = {}
+    try:
+        existing_raw = json.loads(meeting.raw_json or "{}")
+        if not isinstance(existing_raw, dict):
+            existing_raw = {}
+    except Exception:
+        existing_raw = {}
+
+    app_meta = existing_raw.get("_app_meta")
+    if isinstance(app_meta, dict):
+        notion_raw["_app_meta"] = app_meta
+
+    normalized_page_id = _normalize_uuid(str(data.get("page_id") or meeting.notion_page_id or meeting.notion_url or ""))
+    if normalized_page_id:
+        meeting.notion_page_id = normalized_page_id
+    if str(data.get("url") or "").strip():
+        meeting.notion_url = str(data.get("url") or "").strip()
+
+    meeting.source = "notion" if meeting.notion_page_id or meeting.notion_url else (meeting.source or "manual")
+    meeting.title = (meeting.title or "").strip() or str(data.get("title") or "").strip() or "Reunião"
+    meeting.notion_meeting_block_id = str(data.get("meeting_block_id") or "").strip()
+    meeting.notion_status = str(data.get("status") or "").strip()
+    meeting.summary_text = str(data.get("summary_text") or "")
+    meeting.notes_text = str(data.get("notes_text") or "")
+    meeting.transcript_text = str(data.get("transcript_text") or "")
+    meeting.action_items_text = str(data.get("action_items_text") or "")
+    meeting.raw_json = json.dumps(notion_raw, ensure_ascii=False)
+    meeting.last_synced_at = utcnow()
+    meeting.updated_at = utcnow()
 def _meeting_hours_total(meta: dict[str, Any]) -> float:
     started = meta.get("checked_in_at") or ""
     ended = meta.get("checked_out_at") or ""
