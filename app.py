@@ -40716,44 +40716,53 @@ def _extract_meta_whatsapp_messages(payload: dict[str, Any]) -> list[dict[str, A
             value = change.get("value") or {}
             if not isinstance(value, dict):
                 continue
+
             metadata = value.get("metadata") or {}
-            phone_number_id = str(metadata.get("phone_number_id") or "")
+            phone_number_id = str(metadata.get("phone_number_id") or "").strip()
+
             contacts = value.get("contacts") or []
             contact_map: dict[str, str] = {}
             for c in contacts:
                 if not isinstance(c, dict):
                     continue
-                waid = str(c.get("wa_id") or "")
+                waid = str(c.get("wa_id") or "").strip()
                 profile = c.get("profile") or {}
-                contact_map[waid] = str(profile.get("name") or "")
+                profile_name = str(profile.get("name") or "").strip()
+                if waid:
+                    contact_map[waid] = profile_name
+
             for msg in value.get("messages") or []:
                 if not isinstance(msg, dict):
                     continue
-                wa_from = str(msg.get("from") or "")
+
+                wa_from = str(msg.get("from") or "").strip()
                 msg_type = str(msg.get("type") or "").strip().lower()
+                message_id = str(msg.get("id") or "").strip()
+
                 body = ""
                 media_id = ""
                 attachment_name = ""
                 attachment_mime_type = ""
                 media_kind = ""
                 media_caption = ""
+
                 if msg_type == "text":
-                    body = str((msg.get("text") or {}).get("body") or "")
+                    body = str((msg.get("text") or {}).get("body") or "").strip()
                 elif msg_type == "button":
-                    body = str((msg.get("button") or {}).get("text") or "")
+                    body = str((msg.get("button") or {}).get("text") or "").strip()
                 elif msg_type == "interactive":
                     interactive = msg.get("interactive") or {}
                     if "button_reply" in interactive:
-                        body = str((interactive.get("button_reply") or {}).get("title") or "")
+                        body = str((interactive.get("button_reply") or {}).get("title") or "").strip()
                     elif "list_reply" in interactive:
-                        body = str((interactive.get("list_reply") or {}).get("title") or "")
+                        body = str((interactive.get("list_reply") or {}).get("title") or "").strip()
                 elif msg_type in {"image", "document", "audio"}:
                     media = msg.get(msg_type) or {}
                     if isinstance(media, dict):
-                        media_id = str(media.get("id") or "")
-                        attachment_name = str(media.get("filename") or "")
-                        attachment_mime_type = str(media.get("mime_type") or "")
-                        media_caption = str(media.get("caption") or "")
+                        media_id = str(media.get("id") or "").strip()
+                        attachment_name = str(media.get("filename") or "").strip()
+                        attachment_mime_type = str(media.get("mime_type") or "").strip()
+                        media_caption = str(media.get("caption") or "").strip()
                     media_kind = msg_type
                     if msg_type == "image":
                         body = media_caption or "[mensagem image]"
@@ -40761,33 +40770,36 @@ def _extract_meta_whatsapp_messages(payload: dict[str, Any]) -> list[dict[str, A
                         body = media_caption or "[mensagem document]"
                     elif msg_type == "audio":
                         body = "[mensagem audio]"
+
                 if not body:
                     body = f"[mensagem {msg_type or 'sem texto'}]"
 
-                group_id = str(msg.get("group_id") or value.get("group_id") or "")
+                group_id = str(msg.get("group_id") or value.get("group_id") or "").strip()
                 group_data = msg.get("group") or value.get("group") or {}
                 group_name = ""
                 if isinstance(group_data, dict):
-                    group_name = str(group_data.get("subject") or group_data.get("name") or "")
+                    group_name = str(group_data.get("subject") or group_data.get("name") or "").strip()
                 if not group_name:
                     context = msg.get("context") or {}
                     if isinstance(context, dict):
-                        group_name = str(context.get("group_subject") or "")
+                        group_name = str(context.get("group_subject") or "").strip()
 
-                items.append({
-                    "phone_number_id": phone_number_id,
-                    "from": wa_from,
-                    "profile_name": contact_map.get(wa_from, ""),
-                    "body": body,
-                    "message_id": str(msg.get("id") or ""),
-                    "message_type": msg_type,
-                    "media_kind": media_kind,
-                    "media_id": media_id,
-                    "attachment_name": attachment_name,
-                    "attachment_mime_type": attachment_mime_type,
-                    "group_id": group_id,
-                    "group_name": group_name,
-                })
+                items.append(
+                    {
+                        "phone_number_id": phone_number_id,
+                        "from": wa_from,
+                        "profile_name": contact_map.get(wa_from, ""),
+                        "body": body,
+                        "message_id": message_id,
+                        "message_type": msg_type,
+                        "media_kind": media_kind,
+                        "media_id": media_id,
+                        "attachment_name": attachment_name,
+                        "attachment_mime_type": attachment_mime_type,
+                        "group_id": group_id,
+                        "group_name": group_name,
+                    }
+                )
     return items
 
 
@@ -40869,16 +40881,17 @@ def _whatsapp_apply_meta_status_event(
     session.commit()
     return True
 
+@app.post("/api/whatsapp/webhook")
 async def whatsapp_webhook_receive(request: Request, session: Session = Depends(get_session)) -> JSONResponse:
     try:
         payload = await request.json()
     except Exception:
         payload = {}
     payload_dict = payload if isinstance(payload, dict) else {}
-    status_events = _extract_meta_whatsapp_statuses(payload_dict)
+
     status_processed = 0
-    for status_event in status_events:
-        phone_number_id = str(status_event.get("phone_number_id") or "")
+    for status_event in _extract_meta_whatsapp_statuses(payload_dict):
+        phone_number_id = str(status_event.get("phone_number_id") or "").strip()
         if not phone_number_id:
             continue
         config = session.exec(
@@ -40889,20 +40902,20 @@ async def whatsapp_webhook_receive(request: Request, session: Session = Depends(
         if not config:
             continue
         if _whatsapp_apply_meta_status_event(
-                session,
-                company_id=int(config.company_id),
-                message_id=str(status_event.get("message_id") or ""),
-                status_value=str(status_event.get("status") or ""),
-                error_text=str(status_event.get("error_text") or ""),
+            session,
+            company_id=int(config.company_id),
+            message_id=str(status_event.get("message_id") or "").strip(),
+            status_value=str(status_event.get("status") or "").strip(),
+            error_text=str(status_event.get("error_text") or "").strip(),
         ):
             status_processed += 1
 
-    events = _extract_meta_whatsapp_messages(payload_dict)
     processed = 0
-    for event in events:
-        phone_number_id = str(event.get("phone_number_id") or "")
+    for event in _extract_meta_whatsapp_messages(payload_dict):
+        phone_number_id = str(event.get("phone_number_id") or "").strip()
         if not phone_number_id:
             continue
+
         config = session.exec(
             select(WhatsAppChannelConfig).where(
                 WhatsAppChannelConfig.meta_phone_number_id == phone_number_id
@@ -40910,6 +40923,7 @@ async def whatsapp_webhook_receive(request: Request, session: Session = Depends(
         ).first()
         if not config:
             continue
+
         company_id = int(config.company_id)
         incoming_phone = _only_digits(str(event.get("from") or ""))
         group_id = _clean_text(str(event.get("group_id") or ""), 255)
@@ -40932,7 +40946,11 @@ async def whatsapp_webhook_receive(request: Request, session: Session = Depends(
                     is_group=True,
                     group_name=_whatsapp_group_display_name(group_id, str(event.get("group_name") or "")),
                     topic_code="geral",
-                    assigned_user_id=_whatsapp_pick_default_assignee(session, company_id=company_id, topic_code="geral"),
+                    assigned_user_id=_whatsapp_pick_default_assignee(
+                        session,
+                        company_id=company_id,
+                        topic_code="geral",
+                    ),
                     status="aberto",
                     source_kind="webhook",
                     created_by_user_id=None,
@@ -40947,9 +40965,17 @@ async def whatsapp_webhook_receive(request: Request, session: Session = Depends(
         else:
             if not incoming_phone:
                 continue
-            thread = _whatsapp_find_open_thread_by_phone(session, company_id=company_id, phone_digits=incoming_phone)
+            thread = _whatsapp_find_open_thread_by_phone(
+                session,
+                company_id=company_id,
+                phone_digits=incoming_phone,
+            )
             if not thread:
-                matched_client = _match_client_by_phone(session, company_id=company_id, phone_digits=incoming_phone)
+                matched_client = _match_client_by_phone(
+                    session,
+                    company_id=company_id,
+                    phone_digits=incoming_phone,
+                )
                 thread = _whatsapp_create_thread(
                     session,
                     company_id=company_id,
@@ -40959,18 +40985,24 @@ async def whatsapp_webhook_receive(request: Request, session: Session = Depends(
                     is_group=False,
                     group_name="",
                     topic_code="geral",
-                    assigned_user_id=_whatsapp_pick_default_assignee(session, company_id=company_id, topic_code="geral"),
+                    assigned_user_id=_whatsapp_pick_default_assignee(
+                        session,
+                        company_id=company_id,
+                        topic_code="geral",
+                    ),
                     status="aberto",
                     source_kind="webhook",
                     created_by_user_id=None,
                 )
 
-        body = str(event.get("body") or "")
+        body = str(event.get("body") or "").strip()
         choice_topic = _whatsapp_menu_choice_to_topic(body)
         if choice_topic:
             thread.topic_code = choice_topic
             thread.assigned_user_id = thread.assigned_user_id or _whatsapp_pick_default_assignee(
-                session, company_id=company_id, topic_code=choice_topic
+                session,
+                company_id=company_id,
+                topic_code=choice_topic,
             )
             session.add(thread)
             session.commit()
@@ -40979,21 +41011,23 @@ async def whatsapp_webhook_receive(request: Request, session: Session = Depends(
         attachment_storage_path = ""
         attachment_mime_type = ""
         attachment_size_bytes = 0
-        media_id = str(event.get("media_id") or "")
-        media_kind = str(event.get("media_kind") or "")
+        media_id = str(event.get("media_id") or "").strip()
+        media_kind = str(event.get("media_kind") or "").strip()
+
         if media_id:
             try:
                 attachment_name, attachment_storage_path, attachment_mime_type, attachment_size_bytes = await _download_meta_whatsapp_media(
                     media_id=media_id,
-                    mime_type=str(event.get("attachment_mime_type") or ""),
-                    filename_hint=str(event.get("attachment_name") or ""),
+                    mime_type=str(event.get("attachment_mime_type") or "").strip(),
+                    filename_hint=str(event.get("attachment_name") or "").strip(),
                     media_kind=media_kind,
-                    external_message_id=str(event.get("message_id") or ""),
+                    external_message_id=str(event.get("message_id") or "").strip(),
                 )
             except Exception:
                 if not body:
                     body = f"[mensagem {media_kind or 'media'}]"
-                body = body if "[download falhou]" in body else f"{body}\n[download falhou]"
+                if "[download falhou]" not in body:
+                    body = (body.rstrip() + "\n[download falhou]").strip()
 
         sender_name = str(event.get("profile_name") or "").strip()
         if not sender_name:
@@ -41007,16 +41041,28 @@ async def whatsapp_webhook_receive(request: Request, session: Session = Depends(
             sender_name=sender_name or "Cliente",
             created_by_user_id=None,
             delivery_status="received",
-            external_message_id=str(event.get("message_id") or ""),
+            external_message_id=str(event.get("message_id") or "").strip(),
             attachment_name=attachment_name,
             attachment_storage_path=attachment_storage_path,
             attachment_mime_type=attachment_mime_type,
             attachment_size_bytes=attachment_size_bytes,
         )
+
         preview = body.strip() or attachment_name or f"[{media_kind or 'mensagem'}]"
-        _whatsapp_notify_new_inbound(session, thread=thread, preview=preview)
+        _whatsapp_notify_new_inbound(
+            session,
+            thread=thread,
+            preview=preview,
+        )
         processed += 1
-    return JSONResponse({"ok": True, "processed": processed, "statuses_processed": status_processed})
+
+    return JSONResponse(
+        {
+            "ok": True,
+            "processed": processed,
+            "statuses_processed": status_processed,
+        }
+    )
 
 
 # =========================
