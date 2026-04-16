@@ -11730,6 +11730,8 @@ def get_membership_allowed_features(session: Session, *, company_id: int, member
     return base
 
 
+CLIENT_FEATURE_DISABLE_PREFIX = "__disabled__:"
+
 def get_client_allowed_features(session: Session, *, company_id: int, client_id: int) -> Optional[set[str]]:
     try:
         row = session.exec(
@@ -11746,9 +11748,24 @@ def get_client_allowed_features(session: Session, *, company_id: int, client_id:
         return None
 
     if not row:
-        return None
-    lst = _parse_json_list(row.features_json)
-    return set(lst) if lst else None
+        base = set(ROLE_DEFAULT_FEATURES.get("cliente", set()))
+        base.add("obras_horas")
+        return base
+
+    raw_values = set(_parse_json_list(row.features_json))
+    allowed = {x for x in raw_values if x in FEATURE_KEYS}
+    disabled = {
+        x[len(CLIENT_FEATURE_DISABLE_PREFIX):]
+        for x in raw_values
+        if isinstance(x, str) and x.startswith(CLIENT_FEATURE_DISABLE_PREFIX)
+    }
+
+    if "obras_horas" not in disabled:
+        allowed.add("obras_horas")
+    else:
+        allowed.discard("obras_horas")
+
+    return allowed
 
 
 def effective_allowed_features(session: Session, *, ctx: TenantContext, current_client: Optional[Client]) -> set[str]:
@@ -14697,13 +14714,11 @@ async def client_access_page(
             status_code=404,
         )
 
-    row = session.exec(
-        select(ClientFeatureAccess).where(
-            ClientFeatureAccess.company_id == ctx.company.id,
-            ClientFeatureAccess.client_id == client_id,
-        )
-    ).first()
-    allowed = set(_parse_json_list(row.features_json)) if row else set(ROLE_DEFAULT_FEATURES["cliente"])
+    allowed = get_client_allowed_features(
+        session,
+        company_id=ctx.company.id,
+        client_id=client_id,
+    ) or set(ROLE_DEFAULT_FEATURES["cliente"])
 
     mems = session.exec(
         select(Membership).where(Membership.company_id == ctx.company.id, Membership.client_id == client_id)
@@ -14758,6 +14773,12 @@ async def client_access_save(
     form = await request.form()
     features = [str(x) for x in form.getlist("features") if str(x) in FEATURE_KEYS]
 
+    stored_features = set(features)
+    if "obras_horas" not in stored_features:
+        stored_features.add(f"{CLIENT_FEATURE_DISABLE_PREFIX}obras_horas")
+    else:
+        stored_features.discard(f"{CLIENT_FEATURE_DISABLE_PREFIX}obras_horas")
+
     row = session.exec(
         select(ClientFeatureAccess).where(
             ClientFeatureAccess.company_id == ctx.company.id,
@@ -14767,7 +14788,7 @@ async def client_access_save(
     if not row:
         row = ClientFeatureAccess(company_id=ctx.company.id, client_id=client_id)
 
-    row.features_json = json.dumps(sorted(set(features)))
+    row.features_json = json.dumps(sorted(stored_features))
     row.updated_at = utcnow()
     session.add(row)
     session.commit()
@@ -41971,6 +41992,7 @@ TEMPLATES["client_access.html"] = r"""
     <div class="col-lg-7">
       <div class="card p-4">
         <h5 class="mb-3">Features liberadas</h5>
+        <div class="small muted mb-3">Obras + Horas vem liberada por padrão para todos os clientes. Para bloquear um cliente específico, desmarque essa opção e salve.</div>
         {% for group in feature_groups %}
           <div class="mb-3">
             <div class="fw-semibold mb-2">{{ group.title }}</div>
