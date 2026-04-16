@@ -38917,13 +38917,26 @@ async def _try_send_whatsapp_media(
 
     filename = (attachment_name or path.name).strip() or path.name
     mime_type = _whatsapp_attachment_effective_mime_type(filename, attachment_mime_type)
-    upload_mime_type = _whatsapp_meta_upload_mime_type(filename, mime_type)
     media_kind = _whatsapp_attachment_send_kind(filename, mime_type)
     if media_kind not in {"image", "document", "audio"}:
         return False, "Tipo de anexo ainda não suportado para envio oficial.", ""
+
+    if media_kind == "audio" and _whatsapp_audio_requires_ogg_conversion(filename, mime_type):
+        ok_conv, conv_name, conv_path, conv_mime, _conv_size, conv_err = _whatsapp_convert_audio_to_ogg_opus(
+            source_path=str(path),
+            source_name=filename,
+            source_mime_type=mime_type,
+        )
+        if not ok_conv:
+            return False, conv_err, ""
+        path = Path(conv_path).resolve()
+        filename = conv_name
+        mime_type = _whatsapp_attachment_effective_mime_type(filename, conv_mime)
+
     if media_kind == "audio" and not _whatsapp_audio_is_meta_supported(filename, mime_type):
         return False, _whatsapp_audio_meta_validation_error(filename, mime_type), ""
 
+    upload_mime_type = _whatsapp_meta_upload_mime_type(filename, mime_type)
     upload_url = f"https://graph.facebook.com/{WHATSAPP_GRAPH_VERSION}/{config.meta_phone_number_id}/media"
     message_url = f"https://graph.facebook.com/{WHATSAPP_GRAPH_VERSION}/{config.meta_phone_number_id}/messages"
     headers = {"Authorization": f"Bearer {WHATSAPP_ACCESS_TOKEN}"}
@@ -40458,15 +40471,36 @@ async def whatsapp_thread_add_message(
         else:
             config = _get_or_create_whatsapp_config(session, company_id=ctx.company.id)
             if has_file:
-                ok, err, ext_id = await _try_send_whatsapp_media(
-                    config=config,
-                    recipient_id=recipient_id,
-                    recipient_type=recipient_type,
-                    attachment_storage_path=attachment_storage_path,
-                    attachment_mime_type=attachment_mime_type,
-                    attachment_name=attachment_name,
-                    caption=clean_body,
-                )
+                attachment_kind = _whatsapp_attachment_send_kind(attachment_name, attachment_mime_type)
+                if attachment_kind == "audio" and _whatsapp_audio_requires_ogg_conversion(attachment_name, attachment_mime_type):
+                    ok_conv, conv_name, conv_path, conv_mime, conv_size, conv_err = _whatsapp_convert_audio_to_ogg_opus(
+                        source_path=attachment_storage_path,
+                        source_name=attachment_name,
+                        source_mime_type=attachment_mime_type,
+                    )
+                    if ok_conv:
+                        attachment_name = conv_name
+                        attachment_storage_path = conv_path
+                        attachment_mime_type = conv_mime
+                        attachment_size_bytes = conv_size
+                    else:
+                        delivery_status = "failed"
+                        set_flash(
+                            request,
+                            f"Mensagem registrada no app, mas o áudio não pôde ser convertido para envio oficial: {conv_err}",
+                        )
+                if delivery_status != "failed":
+                    ok, err, ext_id = await _try_send_whatsapp_media(
+                        config=config,
+                        recipient_id=recipient_id,
+                        recipient_type=recipient_type,
+                        attachment_storage_path=attachment_storage_path,
+                        attachment_mime_type=attachment_mime_type,
+                        attachment_name=attachment_name,
+                        caption=clean_body,
+                    )
+                else:
+                    ok, err, ext_id = False, "", ""
             else:
                 ok, err, ext_id = await _try_send_whatsapp_text(
                     config=config,
@@ -40474,13 +40508,14 @@ async def whatsapp_thread_add_message(
                     recipient_type=recipient_type,
                     body=clean_body,
                 )
-            if ok:
-                delivery_status = "sent"
-                external_id = ext_id
-            else:
-                delivery_status = "failed"
-                if err:
-                    set_flash(request, f"Mensagem registrada no app, mas não enviada via WhatsApp: {err}")
+            if delivery_status != "failed":
+                if ok:
+                    delivery_status = "sent"
+                    external_id = ext_id
+                else:
+                    delivery_status = "failed"
+                    if err:
+                        set_flash(request, f"Mensagem registrada no app, mas não enviada via WhatsApp: {err}")
 
     msg = _whatsapp_add_message(
         session,
