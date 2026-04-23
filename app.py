@@ -670,6 +670,21 @@ class ClientSnapshot(SQLModel, table=True):
     created_at: datetime = Field(default_factory=utcnow)
 
 
+class SmartAlert(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    company_id: int = Field(index=True, foreign_key="company.id")
+    client_id: int = Field(index=True, foreign_key="client.id")
+
+    alert_type: str = Field(index=True)
+    severity: str = Field(default="media", index=True)  # alta | media | baixa
+    message_text: str
+    action_link: str = ""
+    is_read: bool = Field(default=False, index=True)
+    created_at: datetime = Field(default_factory=utcnow, index=True)
+
+
+
+
 PROFILE_SURVEY_V1 = [
     {"id": "dre_mensal", "section": "Processos", "q": "Você fecha DRE mensalmente?", "type": "bool", "w": 10},
     {"id": "fluxo_90d", "section": "Processos", "q": "Você tem fluxo de caixa projetado (90 dias)?", "type": "bool",
@@ -740,6 +755,176 @@ def score_total(process_score: float, financial_score: float, nps_score: int) ->
     nps01 = max(0, min(10, int(nps_score))) / 10.0  # 0..1
     nps100 = nps01 * 100.0
     return round(_clamp_0_100(0.5 * float(process_score) + 0.4 * float(financial_score) + 0.1 * float(nps100)), 2)
+
+
+def ensure_smart_alert_table() -> bool:
+    try:
+        SmartAlert.__table__.create(engine, checkfirst=True)
+        return True
+    except Exception:
+        return False
+
+
+def _smart_alert_exists_recent(
+        session: Session,
+        *,
+        company_id: int,
+        client_id: int,
+        alert_type: str,
+        message_text: str,
+        lookback_hours: int = 72,
+) -> bool:
+    threshold = utcnow() - timedelta(hours=max(1, int(lookback_hours or 72)))
+    row = session.exec(
+        select(SmartAlert)
+        .where(
+            SmartAlert.company_id == company_id,
+            SmartAlert.client_id == client_id,
+            SmartAlert.alert_type == (alert_type or "").strip(),
+            SmartAlert.message_text == (message_text or "").strip(),
+            SmartAlert.created_at >= threshold,
+        )
+        .order_by(SmartAlert.created_at.desc())
+        .limit(1)
+    ).first()
+    return row is not None
+
+
+def _create_smart_alert(
+        session: Session,
+        *,
+        company_id: int,
+        client_id: int,
+        alert_type: str,
+        severity: str,
+        message_text: str,
+        action_link: str = "",
+        lookback_hours: int = 72,
+) -> Optional[SmartAlert]:
+    message = (message_text or "").strip()
+    if not message:
+        return None
+    if _smart_alert_exists_recent(
+            session,
+            company_id=company_id,
+            client_id=client_id,
+            alert_type=(alert_type or "").strip(),
+            message_text=message,
+            lookback_hours=lookback_hours,
+    ):
+        return None
+    alert = SmartAlert(
+        company_id=company_id,
+        client_id=client_id,
+        alert_type=(alert_type or "").strip() or "geral",
+        severity=(severity or "media").strip() or "media",
+        message_text=message,
+        action_link=(action_link or "").strip(),
+        is_read=False,
+    )
+    session.add(alert)
+    return alert
+
+
+def analyze_client_health_job(session: Session, *, company_id: int, client_id: int) -> list[SmartAlert]:
+    snapshots = session.exec(
+        select(ClientSnapshot)
+        .where(ClientSnapshot.company_id == company_id, ClientSnapshot.client_id == client_id)
+        .order_by(ClientSnapshot.created_at.desc())
+        .limit(2)
+    ).all()
+    if not snapshots:
+        return []
+
+    latest = snapshots[0]
+    previous = snapshots[1] if len(snapshots) > 1 else None
+    created: list[SmartAlert] = []
+
+    if float(latest.score_process or 0.0) < 60.0:
+        alert = _create_smart_alert(
+            session,
+            company_id=company_id,
+            client_id=client_id,
+            alert_type="processos_desorganizados",
+            severity="media",
+            message_text="Seus processos financeiros estão desorganizados. Recomendamos estruturar a operação antes de avançar para crédito.",
+            action_link="/perfil",
+            lookback_hours=120,
+        )
+        if alert:
+            created.append(alert)
+
+    revenue = max(float(latest.revenue_monthly_brl or 0.0), 1.0)
+    debt_ratio = max(float(latest.debt_total_brl or 0.0), 0.0) / revenue
+    if debt_ratio > 3.0:
+        alert = _create_smart_alert(
+            session,
+            company_id=company_id,
+            client_id=client_id,
+            alert_type="endividamento_alto",
+            severity="alta",
+            message_text="Seu endividamento está alto frente ao faturamento. Vale avaliar uma reestruturação de dívida ou capital de giro mais adequado.",
+            action_link="/ofertas",
+            lookback_hours=72,
+        )
+        if alert:
+            created.append(alert)
+
+    if previous:
+        financial_drop = float(previous.score_financial or 0.0) - float(latest.score_financial or 0.0)
+        if financial_drop > 15.0:
+            alert = _create_smart_alert(
+                session,
+                company_id=company_id,
+                client_id=client_id,
+                alert_type="score_caindo",
+                severity="alta",
+                message_text="Seu score financeiro caiu de forma relevante. Você pode estar próximo de não qualificar para algumas linhas de crédito.",
+                action_link="/perfil",
+                lookback_hours=72,
+            )
+            if alert:
+                created.append(alert)
+
+        total_gain = float(latest.score_total or 0.0) - float(previous.score_total or 0.0)
+        if total_gain >= 10.0:
+            alert = _create_smart_alert(
+                session,
+                company_id=company_id,
+                client_id=client_id,
+                alert_type="score_desbloqueado",
+                severity="baixa",
+                message_text="Parabéns! Sua saúde financeira melhorou e isso pode destravar acesso a ofertas melhores dentro da plataforma.",
+                action_link="/ofertas",
+                lookback_hours=168,
+            )
+            if alert:
+                created.append(alert)
+
+    if created:
+        session.commit()
+    return created
+
+
+def get_unread_smart_alerts(
+        session: Session,
+        *,
+        company_id: int,
+        client_id: int,
+        limit: int = 5,
+) -> list[SmartAlert]:
+    return session.exec(
+        select(SmartAlert)
+        .where(
+            SmartAlert.company_id == company_id,
+            SmartAlert.client_id == client_id,
+            SmartAlert.is_read == False,
+        )
+        .order_by(SmartAlert.created_at.desc())
+        .limit(max(1, int(limit or 5)))
+    ).all()
+
+
 
 
 # ----------------------------
@@ -4255,14 +4440,18 @@ FEATURE_KEYS.setdefault(
 )
 
 FEATURE_GROUPS: list[dict[str, Any]] = [
-    {"key": "admin", "title": "Admin", "features": ["ui", "gestao", "credito", "crm"]},
-    {"key": "minha_empresa", "title": "Minha Empresa",
-     "features": ["empresa", "perfil", "financeiro", "documentos", "consultas", "openfinance", "creditos"]},
-    {"key": "meu_projeto", "title": "Meu Projeto", "features": ["consultoria", "reunioes", "tarefas"]},
-    {"key": "minhas_propostas", "title": "Minhas Propostas", "features": ["simulador", "propostas"]},
+    {"key": "gestao_interna", "title": "Gestão Interna",
+     "features": ["ui", "gestao", "crm", "credito", "motor_ofertas", "financeiro_escritorio", "familias",
+                  "servicos_internos", "parceiros"]},
+    {"key": "cliente", "title": "Cliente",
+     "features": ["empresa", "perfil", "financeiro", "documentos", "consultoria", "reunioes", "tarefas",
+                  "propostas", "pendencias", "agenda"]},
+    {"key": "ferramentas", "title": "Ferramentas",
+     "features": ["consultas", "openfinance", "creditos", "simulador", "ofertas"]},
+    {"key": "conteudos", "title": "Conteúdos", "features": ["educacao"]},
 ]
 
-FEATURE_STANDALONE: list[str] = ["pendencias", "agenda", "educacao"]
+FEATURE_STANDALONE: list[str] = []
 
 FEATURE_VISIBLE_ROLES: dict[str, set[str]] = {
     "ui": {"admin"},
@@ -4299,13 +4488,15 @@ FEATURE_KEYS.update({
                       "href": "/motor-ofertas"},
 })
 FEATURE_GROUPS = [
+    {"key": "gestao_interna", "title": "Gestão Interna",
+     "features": ["ui", "gestao", "crm", "credito", "motor_ofertas", "financeiro_escritorio", "familias",
+                  "servicos_internos", "parceiros"]},
     {"key": "cliente", "title": "Cliente",
-     "features": ["empresa", "perfil", "ofertas", "financeiro", "documentos", "consultas", "openfinance", "creditos",
-                  "propostas"]},
-    {"key": "escritorio", "title": "Escritorio",
-     "features": ["crm", "credito", "motor_ofertas", "financeiro_escritorio", "consultoria", "reunioes", "tarefas",
-                  "simulador"]},
-    {"key": "admin", "title": "Admin", "features": ["ui", "gestao", "familias", "servicos_internos", "parceiros"]},
+     "features": ["empresa", "perfil", "financeiro", "documentos", "consultoria", "reunioes", "tarefas",
+                  "propostas", "pendencias", "agenda"]},
+    {"key": "ferramentas", "title": "Ferramentas",
+     "features": ["consultas", "openfinance", "creditos", "simulador", "ofertas"]},
+    {"key": "conteudos", "title": "Conteúdos", "features": ["educacao"]},
 ]
 
 # Open Finance (Pluggy) - Loans module
@@ -5532,6 +5723,48 @@ a:hover{ color:#00BFBF; }
       {% endif %}
     </div>
   </div>
+
+  {% if smart_alerts %}
+  <div class="col-12">
+    <div class="card p-4">
+      <div class="d-flex justify-content-between align-items-center mb-3">
+        <div>
+          <h5 class="mb-0">Alertas do CFO Virtual</h5>
+          <div class="muted small">Leituras automáticas sobre a saúde do cliente com base nas avaliações salvas.</div>
+        </div>
+        <span class="badge text-bg-light border">{{ smart_alerts_unread_count }} não lido(s)</span>
+      </div>
+
+      <div class="row g-3">
+        {% for alert in smart_alerts %}
+          <div class="col-12">
+            <div class="border rounded-4 p-3 h-100">
+              <div class="d-flex justify-content-between align-items-start gap-3">
+                <div>
+                  <div class="d-flex align-items-center gap-2 flex-wrap">
+                    <span class="badge {% if alert.severity == 'alta' %}text-bg-danger{% elif alert.severity == 'media' %}text-bg-warning{% else %}text-bg-success{% endif %}">
+                      {{ alert.severity|capitalize }}
+                    </span>
+                    <span class="muted small">{{ alert.created_at.strftime("%d/%m/%Y %H:%M") if alert.created_at else "" }}</span>
+                  </div>
+                  <div class="fw-semibold mt-2">{{ alert.message_text }}</div>
+                </div>
+                <div class="d-flex gap-2 flex-wrap">
+                  {% if alert.action_link %}
+                    <a class="btn btn-outline-primary btn-sm" href="{{ alert.action_link }}">Abrir</a>
+                  {% endif %}
+                  <form method="post" action="/alerts/{{ alert.id }}/read">
+                    <button class="btn btn-outline-secondary btn-sm">Marcar como lido</button>
+                  </form>
+                </div>
+              </div>
+            </div>
+          </div>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+  {% endif %}
 
   {% if tabs %}
   <div class="col-12">
@@ -12848,6 +13081,7 @@ def _startup() -> None:
     ensure_office_finance_tables()
     ensure_offer_engine_tables()
     ensure_offer_engine_columns()
+    ensure_smart_alert_table()
     ensure_task_work_session_table()
     with Session(engine) as _s:
         try:
@@ -13665,6 +13899,8 @@ async def dashboard(request: Request, session: Session = Depends(get_session)) -
     dashboard_insights: list[dict[str, str]] = []
     dashboard_critical_points: list[dict[str, str]] = []
     dashboard_next_steps: list[dict[str, str]] = []
+    smart_alerts: list[SmartAlert] = []
+    smart_alerts_unread_count = 0
     approved_offers_count = 0
     pending_items_count = 0
     if current_client and ensure_can_access_client(ctx, current_client.id):
@@ -13706,6 +13942,23 @@ async def dashboard(request: Request, session: Session = Depends(get_session)) -
         except Exception:
             pending_items_count = 0
 
+        try:
+            analyze_client_health_job(session, company_id=ctx.company.id, client_id=current_client.id)
+        except Exception:
+            pass
+
+        try:
+            smart_alerts = get_unread_smart_alerts(
+                session,
+                company_id=ctx.company.id,
+                client_id=current_client.id,
+                limit=5,
+            )
+            smart_alerts_unread_count = len(smart_alerts)
+        except Exception:
+            smart_alerts = []
+            smart_alerts_unread_count = 0
+
     return render(
         "dashboard.html",
         request=request,
@@ -13721,12 +13974,40 @@ async def dashboard(request: Request, session: Session = Depends(get_session)) -
             "dashboard_insights": dashboard_insights,
             "dashboard_critical_points": dashboard_critical_points,
             "dashboard_next_steps": dashboard_next_steps,
+            "smart_alerts": smart_alerts,
+            "smart_alerts_unread_count": smart_alerts_unread_count,
             "approved_offers_count": approved_offers_count,
             "pending_items_count": pending_items_count,
-            "standalone_title": "Atendimento e Conteúdo",
-            "standalone_desc": "Pendências, Agenda e Educação",
+            "standalone_title": "Acesso rápido",
+            "standalone_desc": "Atalhos complementares",
         },
     )
+
+
+@app.post("/alerts/{alert_id}/read")
+@require_login
+async def smart_alert_mark_read(request: Request, alert_id: int, session: Session = Depends(get_session)) -> Response:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+
+    alert = session.get(SmartAlert, int(alert_id or 0))
+    if not alert or alert.company_id != ctx.company.id:
+        set_flash(request, "Alerta não encontrado.")
+        return RedirectResponse("/", status_code=303)
+
+    if not ensure_can_access_client(ctx, alert.client_id):
+        set_flash(request, "Sem permissão para este alerta.")
+        return RedirectResponse("/", status_code=303)
+
+    alert.is_read = True
+    session.add(alert)
+    session.commit()
+    back_to = (request.headers.get("referer") or "/").strip() or "/"
+    return RedirectResponse(back_to, status_code=303)
+
+
 
 
 # ----------------------------
@@ -14556,10 +14837,6 @@ async def members_add_action(
     role = role.strip().lower()
     if role not in {"admin", "equipe", "cliente"}:
         set_flash(request, "Role inválida.")
-        return RedirectResponse("/admin/members", status_code=303)
-
-    if role == "admin" and ctx.membership.role != "admin":
-        set_flash(request, "Somente admins podem criar outro admin.")
         return RedirectResponse("/admin/members", status_code=303)
 
     if len(password) < 8:
@@ -15479,9 +15756,7 @@ async def perfil_snapshot_new_action(
     profile.updated_at = utcnow()
     session.add(profile)
     session.commit()
-    _sync_business_profile_legacy_columns(session, profile)
 
-    warning_message = ""
     try:
         matches = compute_offer_engine(
             session=session,
@@ -15492,11 +15767,12 @@ async def perfil_snapshot_new_action(
         )
         persist_offer_matches(session, company_id=ctx.company.id, client_id=current_client.id, matches=matches)
     except Exception:
-        try:
-            session.rollback()
-        except Exception:
-            pass
-        warning_message = " A avaliação foi salva, mas o motor de ofertas não foi atualizado agora."
+        set_flash(request, "Avaliação salva, mas o motor de ofertas não pôde ser atualizado agora.")
+
+    try:
+        analyze_client_health_job(session, company_id=ctx.company.id, client_id=current_client.id)
+    except Exception:
+        pass
 
     try:
         _notify_staff_about_client_activity(
@@ -15511,7 +15787,8 @@ async def perfil_snapshot_new_action(
     except Exception:
         pass
 
-    set_flash(request, "Avaliação registrada." + warning_message)
+    if not getattr(request, "session", {}).get("flash"):
+        set_flash(request, "Avaliação registrada.")
     return RedirectResponse("/perfil", status_code=303)
 
 
@@ -36243,14 +36520,37 @@ async def ferramentas_page(request: Request, session: Session = Depends(get_sess
 @app.get("/ferramentas/financeiro", response_class=HTMLResponse)
 @require_login
 async def ferramentas_financeiro_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
-    access = _client_finance_require_access(request, session)
-    if isinstance(access, Response):
-        return access
-    ctx, current_client, finance_tool = access
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
 
-    finance_summary = _client_finance_summary(session, company_id=ctx.company.id, client_id=current_client.id)
-    recent_entries = _client_finance_recent_entries(session, company_id=ctx.company.id, client_id=current_client.id,
-                                                    limit=8)
+    current_client = _client_current_client(request, session, ctx)
+    if not current_client:
+        set_flash(request, "Selecione um cliente para acessar a ferramenta.")
+        return RedirectResponse("/ferramentas", status_code=303)
+
+    finance_tool = _tool_subscription_status_payload(
+        session,
+        company_id=ctx.company.id,
+        client_id=current_client.id,
+        tool_code=CLIENT_TOOL_FINANCE_CODE,
+    )
+
+    finance_summary = {
+        "open_receivable": 0.0,
+        "open_payable": 0.0,
+        "projected_30d": 0.0,
+        "overdue_count": 0,
+    }
+    recent_entries: list[dict[str, Any]] = []
+
+    if finance_tool.get("access_ok"):
+        ensure_client_finance_tables()
+        seed_client_finance_defaults(session, company_id=ctx.company.id, client_id=current_client.id)
+        finance_summary = _client_finance_summary(session, company_id=ctx.company.id, client_id=current_client.id)
+        recent_entries = _client_finance_recent_entries(session, company_id=ctx.company.id, client_id=current_client.id,
+                                                        limit=8)
 
     return render(
         "ferramentas_financeiro.html",
@@ -43097,646 +43397,3 @@ async def workforce_time_entry_create(
     set_flash(request, "Horas registradas.")
     return RedirectResponse(f"/obras-horas/projetos/{project.id}", status_code=303)
 
-
-
-# ============================
-# Late patch: navegação, roles e escopos do Financeiro Gerencial
-# ============================
-
-def _feature_existing(*keys: str) -> list[str]:
-    seen: set[str] = set()
-    out: list[str] = []
-    for key in keys:
-        if key and key in FEATURE_KEYS and key not in seen:
-            out.append(key)
-            seen.add(key)
-    return out
-
-
-FEATURE_VISIBLE_ROLES.update({
-    "ui": {"admin"},
-    "gestao": {"admin"},
-    "familias": {"admin"},
-    "servicos_internos": {"admin"},
-    "parceiros": {"admin"},
-    "crm": {"admin", "equipe"},
-    "credito": {"admin", "equipe"},
-    "motor_ofertas": {"admin", "equipe"},
-    "financeiro_escritorio": {"admin", "equipe"},
-})
-
-ROLE_DEFAULT_FEATURES["admin"] = set(FEATURE_KEYS.keys())
-ROLE_DEFAULT_FEATURES["equipe"] = {
-    key for key in FEATURE_KEYS.keys()
-    if key not in {"ui", "gestao", "familias", "servicos_internos", "parceiros"}
-}
-ROLE_DEFAULT_FEATURES["cliente"] = set(_feature_existing(
-    "empresa",
-    "perfil",
-    "financeiro",
-    "documentos",
-    "consultoria",
-    "reunioes",
-    "tarefas",
-    "propostas",
-    "consultas",
-    "openfinance",
-    "creditos",
-    "ofertas",
-    "simulador",
-    "educacao",
-))
-ROLE_DEFAULT_FEATURES["cliente"].update({"pendencias", "agenda"})
-
-FEATURE_GROUPS = [
-    {
-        "key": "gestao_interna",
-        "title": "Gestão Interna",
-        "features": _feature_existing(
-            "ui",
-            "gestao",
-            "crm",
-            "credito",
-            "motor_ofertas",
-            "financeiro_escritorio",
-            "familias",
-            "servicos_internos",
-            "parceiros",
-        ),
-    },
-    {
-        "key": "cliente",
-        "title": "Cliente",
-        "features": _feature_existing(
-            "empresa",
-            "perfil",
-            "financeiro",
-            "documentos",
-            "consultoria",
-            "reunioes",
-            "tarefas",
-            "propostas",
-        ),
-    },
-    {
-        "key": "ferramentas",
-        "title": "Ferramentas",
-        "features": _feature_existing(
-            "consultas",
-            "openfinance",
-            "creditos",
-            "ofertas",
-            "simulador",
-        ),
-    },
-    {
-        "key": "conteudos",
-        "title": "Conteúdos",
-        "features": _feature_existing("educacao"),
-    },
-]
-FEATURE_STANDALONE = _feature_existing("pendencias", "agenda")
-
-
-class MembershipClientToolAccess(SQLModel, table=True):
-    __table_args__ = (
-        UniqueConstraint(
-            "company_id",
-            "membership_id",
-            "client_id",
-            "tool_code",
-            name="uq_membershipclienttoolaccess_company_membership_client_tool",
-        ),
-    )
-
-    id: Optional[int] = Field(default=None, primary_key=True)
-    company_id: int = Field(index=True, foreign_key="company.id")
-    membership_id: int = Field(index=True, foreign_key="membership.id")
-    client_id: int = Field(index=True, foreign_key="client.id")
-    tool_code: str = Field(index=True, default=CLIENT_TOOL_FINANCE_CODE)
-    scopes_json: str = Field(default="[]")
-    updated_at: datetime = Field(default_factory=utcnow, index=True)
-
-
-CLIENT_TOOL_FINANCE_SCOPE_LABELS: dict[str, str] = {
-    "finance_dashboard": "Dashboard resumido",
-    "finance_lancamentos": "Lista de lançamentos",
-    "finance_editar": "Criar e editar lançamentos",
-    "finance_cadastros": "Cadastros financeiros",
-    "finance_dre": "DRE gerencial",
-    "finance_fluxo_caixa": "Fluxo de caixa",
-}
-CLIENT_TOOL_FINANCE_SCOPE_ORDER: list[str] = list(CLIENT_TOOL_FINANCE_SCOPE_LABELS.keys())
-CLIENT_TOOL_FINANCE_DEFAULT_SCOPES: dict[str, set[str]] = {
-    "admin": set(CLIENT_TOOL_FINANCE_SCOPE_ORDER),
-    "equipe": set(CLIENT_TOOL_FINANCE_SCOPE_ORDER),
-    "cliente": set(CLIENT_TOOL_FINANCE_SCOPE_ORDER),
-}
-
-
-def ensure_feature_access_tables() -> None:
-    try:
-        SQLModel.metadata.create_all(
-            engine,
-            tables=[
-                MembershipFeatureAccess.__table__,
-                ClientFeatureAccess.__table__,
-                MembershipClientToolAccess.__table__,
-            ],
-            checkfirst=True,
-        )
-    except Exception:
-        pass
-
-
-def _sanitize_finance_scope_keys(scopes: list[str] | set[str] | tuple[str, ...] | None) -> list[str]:
-    raw = [str(x).strip() for x in (scopes or [])]
-    return [x for x in CLIENT_TOOL_FINANCE_SCOPE_ORDER if x in raw]
-
-
-def resolve_finance_tool_scope(path: str, method: str = "GET") -> Optional[str]:
-    normalized = (path or "").strip()
-    http_method = (method or "GET").upper()
-
-    if normalized == "/ferramentas/financeiro":
-        return "finance_dashboard"
-    if normalized == "/ferramentas/financeiro/lancamentos":
-        return "finance_lancamentos"
-    if normalized == "/ferramentas/financeiro/cadastros" or normalized.startswith("/ferramentas/financeiro/cadastros/"):
-        return "finance_cadastros"
-    if normalized == "/ferramentas/financeiro/dre":
-        return "finance_dre"
-    if normalized == "/ferramentas/financeiro/fluxo-caixa":
-        return "finance_fluxo_caixa"
-    if normalized == "/ferramentas/financeiro/novo":
-        return "finance_editar"
-    if re.match(r"^/ferramentas/financeiro/\d+/editar$", normalized):
-        return "finance_editar"
-    if normalized.startswith("/ferramentas/financeiro/") and http_method in {"POST", "PUT", "PATCH", "DELETE"}:
-        return "finance_editar"
-    return None
-
-
-def get_membership_client_tool_scopes(
-        session: Session,
-        *,
-        company_id: int,
-        membership: Membership,
-        client_id: int,
-        tool_code: str = CLIENT_TOOL_FINANCE_CODE,
-) -> set[str]:
-    base = set(CLIENT_TOOL_FINANCE_DEFAULT_SCOPES.get(str(membership.role or "").strip(), set()))
-    if membership.role in {"admin", "equipe"}:
-        return base
-    if not membership.id or not client_id:
-        return base
-
-    try:
-        row = session.exec(
-            select(MembershipClientToolAccess).where(
-                MembershipClientToolAccess.company_id == company_id,
-                MembershipClientToolAccess.membership_id == int(membership.id),
-                MembershipClientToolAccess.client_id == int(client_id),
-                MembershipClientToolAccess.tool_code == tool_code,
-            )
-        ).first()
-    except Exception:
-        try:
-            ensure_feature_access_tables()
-        except Exception:
-            pass
-        return base
-
-    if not row:
-        return base
-
-    scopes = _sanitize_finance_scope_keys(_parse_json_list(row.scopes_json))
-    return set(scopes) if scopes else base
-
-
-def save_membership_client_tool_scopes(
-        session: Session,
-        *,
-        company_id: int,
-        membership_id: int,
-        client_id: int,
-        scopes: list[str] | set[str] | tuple[str, ...] | None,
-        tool_code: str = CLIENT_TOOL_FINANCE_CODE,
-) -> MembershipClientToolAccess:
-    clean_scopes = _sanitize_finance_scope_keys(scopes)
-    row = session.exec(
-        select(MembershipClientToolAccess).where(
-            MembershipClientToolAccess.company_id == company_id,
-            MembershipClientToolAccess.membership_id == membership_id,
-            MembershipClientToolAccess.client_id == client_id,
-            MembershipClientToolAccess.tool_code == tool_code,
-        )
-    ).first()
-    if not row:
-        row = MembershipClientToolAccess(
-            company_id=company_id,
-            membership_id=membership_id,
-            client_id=client_id,
-            tool_code=tool_code,
-        )
-
-    row.scopes_json = json.dumps(clean_scopes, ensure_ascii=False)
-    row.updated_at = utcnow()
-    session.add(row)
-    session.commit()
-    session.refresh(row)
-    return row
-
-
-def _company_admin_membership_count(session: Session, company_id: int) -> int:
-    return int(
-        session.exec(
-            select(func.count()).select_from(Membership).where(
-                Membership.company_id == company_id,
-                Membership.role == "admin",
-            )
-        ).one()
-        or 0
-    )
-
-
-@app.post("/admin/members/{membership_id}/role")
-@require_role({"admin"})
-async def member_role_update(
-        request: Request,
-        membership_id: int,
-        session: Session = Depends(get_session),
-        role: str = Form(...),
-        client_id: str = Form(""),
-) -> Response:
-    ctx = get_tenant_context(request, session)
-    assert ctx is not None
-
-    m = session.get(Membership, membership_id)
-    if not m or m.company_id != ctx.company.id:
-        set_flash(request, "Membro não encontrado.")
-        return RedirectResponse("/admin/members", status_code=303)
-
-    new_role = (role or "").strip().lower()
-    if new_role not in {"admin", "equipe", "cliente"}:
-        set_flash(request, "Role inválida.")
-        return RedirectResponse("/admin/members", status_code=303)
-
-    if m.role == "admin" and new_role != "admin" and _company_admin_membership_count(session, ctx.company.id) <= 1:
-        set_flash(request, "Não é possível remover o último admin do escritório.")
-        return RedirectResponse("/admin/members", status_code=303)
-
-    new_client_id: Optional[int] = None
-    if new_role == "cliente":
-        cid = _safe_int(client_id)
-        if cid:
-            c = session.get(Client, cid)
-            if not c or c.company_id != ctx.company.id:
-                set_flash(request, "Cliente inválido.")
-                return RedirectResponse("/admin/members", status_code=303)
-            new_client_id = int(c.id)
-            request.session["selected_client_id"] = int(c.id)
-        else:
-            new_client_id = m.client_id if m.role == "cliente" else None
-
-    m.role = new_role
-    m.client_id = new_client_id
-    session.add(m)
-
-    row = session.exec(
-        select(MembershipFeatureAccess).where(
-            MembershipFeatureAccess.company_id == ctx.company.id,
-            MembershipFeatureAccess.membership_id == membership_id,
-        )
-    ).first()
-    if not row:
-        row = MembershipFeatureAccess(company_id=ctx.company.id, membership_id=membership_id)
-    row.features_json = json.dumps(sorted(ROLE_DEFAULT_FEATURES.get(new_role, set())))
-    row.updated_at = utcnow()
-    session.add(row)
-    session.commit()
-
-    set_flash(request, "Role do membro atualizada.")
-    return RedirectResponse("/admin/members", status_code=303)
-
-
-@app.post("/admin/clients/{client_id}/access/member/{membership_id}/finance-scopes")
-@require_role({"admin", "equipe"})
-async def client_member_finance_scopes_save(
-        request: Request,
-        client_id: int,
-        membership_id: int,
-        session: Session = Depends(get_session),
-) -> Response:
-    ctx = get_tenant_context(request, session)
-    assert ctx is not None
-
-    client = session.get(Client, client_id)
-    if not client or client.company_id != ctx.company.id:
-        set_flash(request, "Cliente não encontrado.")
-        return RedirectResponse("/admin/gestao", status_code=303)
-
-    membership = session.get(Membership, membership_id)
-    if not membership or membership.company_id != ctx.company.id:
-        set_flash(request, "Membro não encontrado.")
-        return RedirectResponse(f"/admin/clients/{client_id}/access", status_code=303)
-
-    if membership.role != "cliente" or int(membership.client_id or 0) != int(client_id):
-        set_flash(request, "Somente usuários vinculados a este cliente podem receber escopos do Financeiro.")
-        return RedirectResponse(f"/admin/clients/{client_id}/access", status_code=303)
-
-    form = await request.form()
-    requested = [str(x) for x in form.getlist("finance_scopes")]
-    save_membership_client_tool_scopes(
-        session,
-        company_id=ctx.company.id,
-        membership_id=int(membership.id or 0),
-        client_id=int(client.id or 0),
-        scopes=requested,
-        tool_code=CLIENT_TOOL_FINANCE_CODE,
-    )
-    set_flash(request, "Escopos do Financeiro Gerencial atualizados para o usuário.")
-    return RedirectResponse(f"/admin/clients/{client_id}/access", status_code=303)
-
-
-def _client_finance_require_access(
-        request: Request,
-        session: Session,
-) -> tuple[TenantContext, Client, dict[str, Any]] | Response:
-    ctx = get_tenant_context(request, session)
-    if not ctx:
-        request.session.clear()
-        return RedirectResponse("/login", status_code=303)
-
-    current_client = _client_current_client(request, session, ctx)
-    if not current_client:
-        set_flash(request, "Selecione um cliente para acessar a ferramenta.")
-        return RedirectResponse("/ferramentas", status_code=303)
-
-    finance_tool = _tool_subscription_status_payload(
-        session,
-        company_id=ctx.company.id,
-        client_id=current_client.id,
-        tool_code=CLIENT_TOOL_FINANCE_CODE,
-    )
-    if not finance_tool.get("access_ok"):
-        set_flash(request, finance_tool.get("message") or "Ferramenta indisponível.")
-        return RedirectResponse("/ferramentas", status_code=303)
-
-    required_scope = resolve_finance_tool_scope(str(request.url.path), getattr(request, "method", "GET"))
-    if required_scope:
-        allowed_scopes = get_membership_client_tool_scopes(
-            session,
-            company_id=ctx.company.id,
-            membership=ctx.membership,
-            client_id=int(current_client.id),
-            tool_code=CLIENT_TOOL_FINANCE_CODE,
-        )
-        if required_scope not in allowed_scopes:
-            set_flash(request, "Este usuário não tem acesso a esta área do Financeiro Gerencial.")
-            return RedirectResponse("/ferramentas/financeiro", status_code=303)
-
-    ensure_client_finance_tables()
-    seed_client_finance_defaults(session, company_id=ctx.company.id, client_id=current_client.id)
-    return ctx, current_client, finance_tool
-
-
-def _member_finance_scope_flags(company_id: int, membership_id: int, client_id: int) -> dict[str, bool]:
-    flags = {key: False for key in CLIENT_TOOL_FINANCE_SCOPE_ORDER}
-    if not company_id or not membership_id or not client_id:
-        return flags
-    with Session(engine) as session:
-        membership = session.get(Membership, int(membership_id))
-        if not membership or membership.company_id != int(company_id):
-            return flags
-        allowed = get_membership_client_tool_scopes(
-            session,
-            company_id=int(company_id),
-            membership=membership,
-            client_id=int(client_id),
-            tool_code=CLIENT_TOOL_FINANCE_CODE,
-        )
-    return {key: (key in allowed) for key in CLIENT_TOOL_FINANCE_SCOPE_ORDER}
-
-
-def _finance_scope_allowed_for_template(request: Request, current_client: Optional[Client], scope_key: str) -> bool:
-    if scope_key not in CLIENT_TOOL_FINANCE_SCOPE_LABELS:
-        return False
-    if not request or not current_client or not getattr(current_client, "id", None):
-        return False
-    with Session(engine) as session:
-        ctx = get_tenant_context(request, session)
-        if not ctx:
-            return False
-        allowed = get_membership_client_tool_scopes(
-            session,
-            company_id=ctx.company.id,
-            membership=ctx.membership,
-            client_id=int(current_client.id),
-            tool_code=CLIENT_TOOL_FINANCE_CODE,
-        )
-    return scope_key in allowed
-
-
-templates_env.globals["finance_scope_allowed"] = _finance_scope_allowed_for_template
-templates_env.globals["finance_scope_keys"] = lambda: list(CLIENT_TOOL_FINANCE_SCOPE_ORDER)
-templates_env.globals["finance_scope_labels"] = lambda: dict(CLIENT_TOOL_FINANCE_SCOPE_LABELS)
-templates_env.globals["member_finance_scope_flags"] = _member_finance_scope_flags
-
-
-_members_tpl_patch = TEMPLATES.get("members.html", "")
-_old_members_actions = """              <div class="text-end">
-                {% if row.membership.role == "cliente" %}
-                <form class="d-inline" method="post" action="/admin/members/{{ row.membership.id }}/link-client">
-                  <select class="form-select form-select-sm" name="client_id" style="min-width: 220px;">
-                    <option value="">(sem cliente)</option>
-                    {% for c in clients %}
-                      <option value="{{ c.id }}" {% if row.membership.client_id==c.id %}selected{% endif %}>{{ c.name }}</option>
-                    {% endfor %}
-                  </select>
-                  <button class="btn btn-sm btn-outline-primary mt-2 w-100">Vincular</button>
-                </form>
-                {% endif %}
-              </div>"""
-_new_members_actions = """              <div class="text-end" style="min-width: 260px;">
-                {% if role == "admin" %}
-                <form method="post" action="/admin/members/{{ row.membership.id }}/role" class="d-grid gap-2">
-                  <select class="form-select form-select-sm" name="role">
-                    <option value="cliente" {% if row.membership.role == "cliente" %}selected{% endif %}>cliente</option>
-                    <option value="equipe" {% if row.membership.role == "equipe" %}selected{% endif %}>equipe</option>
-                    <option value="admin" {% if row.membership.role == "admin" %}selected{% endif %}>admin</option>
-                  </select>
-                  <select class="form-select form-select-sm" name="client_id">
-                    <option value="">(sem cliente)</option>
-                    {% for c in clients %}
-                      <option value="{{ c.id }}" {% if row.membership.client_id==c.id %}selected{% endif %}>{{ c.name }}</option>
-                    {% endfor %}
-                  </select>
-                  <button class="btn btn-sm btn-outline-primary w-100">Salvar role / vínculo</button>
-                </form>
-                {% elif row.membership.role == "cliente" %}
-                <form class="d-inline" method="post" action="/admin/members/{{ row.membership.id }}/link-client">
-                  <select class="form-select form-select-sm" name="client_id" style="min-width: 220px;">
-                    <option value="">(sem cliente)</option>
-                    {% for c in clients %}
-                      <option value="{{ c.id }}" {% if row.membership.client_id==c.id %}selected{% endif %}>{{ c.name }}</option>
-                    {% endfor %}
-                  </select>
-                  <button class="btn btn-sm btn-outline-primary mt-2 w-100">Vincular</button>
-                </form>
-                {% endif %}
-              </div>"""
-if _members_tpl_patch and _old_members_actions in _members_tpl_patch:
-    _members_tpl_patch = _members_tpl_patch.replace(_old_members_actions, _new_members_actions, 1)
-    TEMPLATES["members.html"] = _members_tpl_patch
-
-
-_client_access_tpl_patch = TEMPLATES.get("client_access.html", "")
-_old_linked_users_block = """        {% if linked_users %}
-          <ul class="list-group list-group-flush">
-            {% for item in linked_users %}
-              <li class="list-group-item px-0 d-flex justify-content-between">
-                <span>{{ item.user.name }}</span>
-                <span class="badge text-bg-light border">{{ item.membership.role }}</span>
-              </li>
-            {% endfor %}
-          </ul>
-        {% else %}
-          <div class="muted">Nenhum usuário vinculado a este cliente.</div>
-        {% endif %}"""
-_new_linked_users_block = """        {% if linked_users %}
-          <div class="d-grid gap-3">
-            {% for item in linked_users %}
-              {% set finance_flags = member_finance_scope_flags(current_company.id, item.membership.id, client.id) %}
-              <div class="border rounded p-3">
-                <div class="d-flex justify-content-between align-items-start gap-2 flex-wrap">
-                  <div>
-                    <div class="fw-semibold">{{ item.user.name }}</div>
-                    <div class="small muted">{{ item.user.email }}</div>
-                  </div>
-                  <span class="badge text-bg-light border">{{ item.membership.role }}</span>
-                </div>
-
-                {% if item.membership.role == "cliente" %}
-                  <form method="post" action="/admin/clients/{{ client.id }}/access/member/{{ item.membership.id }}/finance-scopes" class="mt-3">
-                    <div class="small fw-semibold mb-2">Escopos do Financeiro Gerencial</div>
-                    <div class="row g-2">
-                      {% for scope_key in finance_scope_keys() %}
-                        <div class="col-12">
-                          <label class="border rounded p-2 d-block">
-                            <input class="form-check-input me-2" type="checkbox" name="finance_scopes" value="{{ scope_key }}" {% if finance_flags[scope_key] %}checked{% endif %}>
-                            <span class="fw-semibold">{{ finance_scope_labels()[scope_key] }}</span>
-                          </label>
-                        </div>
-                      {% endfor %}
-                    </div>
-                    <button class="btn btn-sm btn-outline-primary mt-3">Salvar escopos</button>
-                  </form>
-                {% else %}
-                  <div class="small muted mt-2">Escopos do Financeiro Gerencial são controlados por usuário vinculado como cliente.</div>
-                {% endif %}
-              </div>
-            {% endfor %}
-          </div>
-        {% else %}
-          <div class="muted">Nenhum usuário vinculado a este cliente.</div>
-        {% endif %}"""
-if _client_access_tpl_patch and _old_linked_users_block in _client_access_tpl_patch:
-    _client_access_tpl_patch = _client_access_tpl_patch.replace(_old_linked_users_block, _new_linked_users_block, 1)
-    TEMPLATES["client_access.html"] = _client_access_tpl_patch
-
-
-_ferramentas_tpl_patch = TEMPLATES.get("ferramentas.html", "")
-if _ferramentas_tpl_patch:
-    _ferramentas_tpl_patch = _ferramentas_tpl_patch.replace(
-        '<a class="btn btn-primary" href="/ferramentas/financeiro">Abrir Financeiro Gerencial</a>',
-        '{% if finance_scope_allowed(request, current_client, "finance_dashboard") %}<a class="btn btn-primary" href="/ferramentas/financeiro">Abrir Financeiro Gerencial</a>{% else %}<span class="btn btn-outline-secondary disabled">Financeiro restrito para este usuário</span>{% endif %}',
-        1,
-    )
-    TEMPLATES["ferramentas.html"] = _ferramentas_tpl_patch
-
-
-_fin_dash_tpl_patch = TEMPLATES.get("ferramentas_financeiro.html", "")
-if _fin_dash_tpl_patch:
-    _fin_dash_tpl_patch = _fin_dash_tpl_patch.replace(
-        """    <div class="d-flex gap-2 flex-wrap mb-3">
-      <a class="btn btn-primary" href="/ferramentas/financeiro/novo">Novo lançamento</a>
-      <a class="btn btn-outline-primary" href="/ferramentas/financeiro/lancamentos">Ver lançamentos</a>
-      <a class="btn btn-outline-secondary" href="/ferramentas/financeiro/cadastros">Cadastros</a>
-      <a class="btn btn-outline-secondary" href="/creditos">Créditos</a>
-    </div>""",
-        """    <div class="d-flex gap-2 flex-wrap mb-3">
-      {% if finance_scope_allowed(request, current_client, "finance_editar") %}<a class="btn btn-primary" href="/ferramentas/financeiro/novo">Novo lançamento</a>{% endif %}
-      {% if finance_scope_allowed(request, current_client, "finance_lancamentos") %}<a class="btn btn-outline-primary" href="/ferramentas/financeiro/lancamentos">Ver lançamentos</a>{% endif %}
-      {% if finance_scope_allowed(request, current_client, "finance_cadastros") %}<a class="btn btn-outline-secondary" href="/ferramentas/financeiro/cadastros">Cadastros</a>{% endif %}
-      {% if finance_scope_allowed(request, current_client, "finance_dre") %}<a class="btn btn-outline-secondary" href="/ferramentas/financeiro/dre">DRE</a>{% endif %}
-      {% if finance_scope_allowed(request, current_client, "finance_fluxo_caixa") %}<a class="btn btn-outline-secondary" href="/ferramentas/financeiro/fluxo-caixa">Fluxo de caixa</a>{% endif %}
-      <a class="btn btn-outline-secondary" href="/creditos">Créditos</a>
-    </div>
-    {% if not (
-      finance_scope_allowed(request, current_client, "finance_lancamentos")
-      or finance_scope_allowed(request, current_client, "finance_editar")
-      or finance_scope_allowed(request, current_client, "finance_cadastros")
-      or finance_scope_allowed(request, current_client, "finance_dre")
-      or finance_scope_allowed(request, current_client, "finance_fluxo_caixa")
-    ) %}
-      <div class="alert alert-info mb-3">Este usuário está com acesso apenas ao painel resumido do Financeiro Gerencial.</div>
-    {% endif %}""",
-        1,
-    )
-    _fin_dash_tpl_patch = _fin_dash_tpl_patch.replace(
-        '<a class="btn btn-sm btn-outline-primary" href="/ferramentas/financeiro/lancamentos">Abrir lista completa</a>',
-        '{% if finance_scope_allowed(request, current_client, "finance_lancamentos") %}<a class="btn btn-sm btn-outline-primary" href="/ferramentas/financeiro/lancamentos">Abrir lista completa</a>{% endif %}',
-        1,
-    )
-    _fin_dash_tpl_patch = _fin_dash_tpl_patch.replace(
-        '<td class="text-end"><a class="btn btn-sm btn-outline-secondary" href="/ferramentas/financeiro/{{ row.id }}/editar">Editar</a></td>',
-        '<td class="text-end">{% if finance_scope_allowed(request, current_client, "finance_editar") %}<a class="btn btn-sm btn-outline-secondary" href="/ferramentas/financeiro/{{ row.id }}/editar">Editar</a>{% else %}<span class="muted small">Restrito</span>{% endif %}</td>',
-        1,
-    )
-    TEMPLATES["ferramentas_financeiro.html"] = _fin_dash_tpl_patch
-
-
-_fin_lanc_tpl_patch = TEMPLATES.get("ferramentas_financeiro_lancamentos.html", "")
-if _fin_lanc_tpl_patch:
-    _fin_lanc_tpl_patch = _fin_lanc_tpl_patch.replace(
-        """    <div class="d-flex gap-2 flex-wrap">
-      <a class="btn btn-primary" href="/ferramentas/financeiro/novo">Novo lançamento</a>
-      <a class="btn btn-outline-secondary" href="/ferramentas/financeiro/cadastros">Cadastros</a>
-    </div>""",
-        """    <div class="d-flex gap-2 flex-wrap">
-      {% if finance_scope_allowed(request, current_client, "finance_editar") %}<a class="btn btn-primary" href="/ferramentas/financeiro/novo">Novo lançamento</a>{% endif %}
-      {% if finance_scope_allowed(request, current_client, "finance_cadastros") %}<a class="btn btn-outline-secondary" href="/ferramentas/financeiro/cadastros">Cadastros</a>{% endif %}
-    </div>""",
-        1,
-    )
-    _fin_lanc_tpl_patch = _fin_lanc_tpl_patch.replace(
-        '<td class="text-end"><a class="btn btn-sm btn-outline-secondary" href="/ferramentas/financeiro/{{ row.id }}/editar">Editar</a></td>',
-        '<td class="text-end">{% if finance_scope_allowed(request, current_client, "finance_editar") %}<a class="btn btn-sm btn-outline-secondary" href="/ferramentas/financeiro/{{ row.id }}/editar">Editar</a>{% else %}<span class="muted small">Restrito</span>{% endif %}</td>',
-        1,
-    )
-    TEMPLATES["ferramentas_financeiro_lancamentos.html"] = _fin_lanc_tpl_patch
-
-
-_fin_dre_tpl_patch = TEMPLATES.get("ferramentas_financeiro_dre.html", "")
-if _fin_dre_tpl_patch:
-    _fin_dre_tpl_patch = _fin_dre_tpl_patch.replace(
-        '<a class="btn btn-outline-primary" href="/ferramentas/financeiro/fluxo-caixa?month={{ filters.month }}{% if filters.cost_center_id %}&cost_center_id={{ filters.cost_center_id }}{% endif %}{% if filters.category_id %}&category_id={{ filters.category_id }}{% endif %}">Ir para fluxo</a>',
-        '{% if finance_scope_allowed(request, current_client, "finance_fluxo_caixa") %}<a class="btn btn-outline-primary" href="/ferramentas/financeiro/fluxo-caixa?month={{ filters.month }}{% if filters.cost_center_id %}&cost_center_id={{ filters.cost_center_id }}{% endif %}{% if filters.category_id %}&category_id={{ filters.category_id }}{% endif %}">Ir para fluxo</a>{% endif %}',
-        1,
-    )
-    TEMPLATES["ferramentas_financeiro_dre.html"] = _fin_dre_tpl_patch
-
-
-_fin_fluxo_tpl_patch = TEMPLATES.get("ferramentas_financeiro_fluxo_caixa.html", "")
-if _fin_fluxo_tpl_patch:
-    _fin_fluxo_tpl_patch = _fin_fluxo_tpl_patch.replace(
-        '<a class="btn btn-outline-primary" href="/ferramentas/financeiro/dre?month={{ filters.month }}{% if filters.cost_center_id %}&cost_center_id={{ filters.cost_center_id }}{% endif %}{% if filters.category_id %}&category_id={{ filters.category_id }}{% endif %}">Ir para DRE</a>',
-        '{% if finance_scope_allowed(request, current_client, "finance_dre") %}<a class="btn btn-outline-primary" href="/ferramentas/financeiro/dre?month={{ filters.month }}{% if filters.cost_center_id %}&cost_center_id={{ filters.cost_center_id }}{% endif %}{% if filters.category_id %}&category_id={{ filters.category_id }}{% endif %}">Ir para DRE</a>{% endif %}',
-        1,
-    )
-    TEMPLATES["ferramentas_financeiro_fluxo_caixa.html"] = _fin_fluxo_tpl_patch
-
-
-if hasattr(templates_env.loader, "mapping"):
-    templates_env.loader.mapping = TEMPLATES
