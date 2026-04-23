@@ -43800,3 +43800,441 @@ def _sprint1_patch_dashboard_template() -> None:
 
 _sprint1_patch_base_template()
 _sprint1_patch_dashboard_template()
+
+
+# ----------------------------
+# Business OS - Fase 1A
+# Hero prescritivo + feed de ações da IA no dashboard
+# ----------------------------
+
+def _phase1a_normalize_segment(value: Any) -> str:
+    raw = str(value or "").strip().lower()
+    if not raw:
+        return "pme"
+    if "constr" in raw:
+        return "construtora"
+    if "middle" in raw or "maior" in raw or "corporate" in raw or "mid" in raw:
+        return "middle_market"
+    return "pme"
+
+
+def _phase1a_segment_meta(segment: str) -> dict[str, str]:
+    slug = _phase1a_normalize_segment(segment)
+    if slug == "construtora":
+        return {
+            "slug": slug,
+            "label": "Construtora",
+            "eyebrow": "Smartwatch de Obras e Compliance",
+            "focus": "Priorize risco, recebíveis, estrutura de capital e qualidade da carteira.",
+            "offer_href": "/consultas",
+            "offer_label": "Ver risco e compliance",
+        }
+    if slug == "middle_market":
+        return {
+            "slug": slug,
+            "label": "Empresa Maior",
+            "eyebrow": "Smartwatch de Estrutura Financeira",
+            "focus": "Olhe estrutura de capital, liquidez, governança e oportunidades estruturadas.",
+            "offer_href": "/ofertas",
+            "offer_label": "Ver oportunidades",
+        }
+    return {
+        "slug": "pme",
+        "label": "PME",
+        "eyebrow": "Smartwatch de Caixa e Gestão",
+        "focus": "Priorize caixa, organização financeira e ganho rápido de estrutura.",
+        "offer_href": "/ferramentas",
+        "offer_label": "Abrir ferramentas",
+    }
+
+
+def _phase1a_get_segment_meta(
+        request: Request,
+        context: dict[str, Any],
+) -> dict[str, str]:
+    current_client = context.get("current_client")
+    current_company = context.get("current_company")
+    if not current_client or not current_company:
+        return _phase1a_segment_meta("pme")
+    try:
+        with Session(engine) as _db:
+            profile = _db.exec(
+                select(ClientBusinessProfile)
+                .where(
+                    ClientBusinessProfile.company_id == int(current_company.id),
+                    ClientBusinessProfile.client_id == int(current_client.id),
+                )
+                .limit(1)
+            ).first()
+            segment = getattr(profile, "segment", "") if profile else ""
+            return _phase1a_segment_meta(segment)
+    except Exception:
+        return _phase1a_segment_meta("pme")
+
+
+def _phase1a_pick_href(*candidates: str) -> str:
+    for item in candidates:
+        value = (item or "").strip()
+        if value:
+            return value
+    return ""
+
+
+def _phase1a_build_ai_feed(
+        context: dict[str, Any],
+        *,
+        segment_meta: dict[str, str],
+) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+
+    def add_item(
+            *,
+            title: str,
+            text: str,
+            href: str = "",
+            label: str = "Abrir",
+            tone: str = "primary",
+            source: str = "IA",
+    ) -> None:
+        key = ((title or "").strip().lower(), (href or "").strip())
+        if not title or key in seen:
+            return
+        seen.add(key)
+        items.append({
+            "title": (title or "").strip(),
+            "text": (text or "").strip(),
+            "href": (href or "").strip(),
+            "label": (label or "Abrir").strip(),
+            "tone": (tone or "primary").strip(),
+            "source": (source or "IA").strip(),
+        })
+
+    alerts = context.get("smart_alerts") or []
+    for alert in alerts[:3]:
+        severity = str(getattr(alert, "severity", "") or "").lower()
+        tone = "danger" if severity == "alta" else "warning" if severity == "media" else "success"
+        add_item(
+            title=(getattr(alert, "message_text", "") or "Alerta automático").strip(),
+            text=(
+                "Leitura automática baseada nos dados mais recentes da empresa."
+                if tone == "success"
+                else "A IA detectou um ponto que merece ação prática agora."
+            ),
+            href=_phase1a_pick_href(getattr(alert, "action_link", ""), "/perfil"),
+            label="Ver ação",
+            tone=tone,
+            source="Alerta",
+        )
+
+    critical = context.get("dashboard_critical_points") or []
+    for point in critical[:2]:
+        tone = point.get("tone") if isinstance(point, dict) else getattr(point, "tone", "warning")
+        mapped_tone = "danger" if tone == "danger" else "warning" if tone == "warning" else "success"
+        title = point.get("title") if isinstance(point, dict) else getattr(point, "title", "")
+        text = point.get("text") if isinstance(point, dict) else getattr(point, "text", "")
+        value = point.get("value") if isinstance(point, dict) else getattr(point, "value", "")
+        if value:
+            text = f"{text} Indicador atual: {value}."
+        add_item(
+            title=title or "Ponto de atenção no diagnóstico",
+            text=text or "O painel identificou um risco que pede revisão.",
+            href="/perfil",
+            label="Ver diagnóstico",
+            tone=mapped_tone,
+            source="Diagnóstico",
+        )
+
+    next_steps = context.get("dashboard_next_steps") or []
+    for step in next_steps[:2]:
+        title = step.get("title") if isinstance(step, dict) else getattr(step, "title", "")
+        text = step.get("text") if isinstance(step, dict) else getattr(step, "text", "")
+        href = step.get("href") if isinstance(step, dict) else getattr(step, "href", "")
+        add_item(
+            title=title or "Próximo passo recomendado",
+            text=text or segment_meta.get("focus", ""),
+            href=href or segment_meta.get("offer_href", "/perfil"),
+            label="Executar",
+            tone="primary",
+            source="Próximo passo",
+        )
+
+    approved_offers_count = int(context.get("approved_offers_count") or 0)
+    if approved_offers_count > 0:
+        add_item(
+            title=f"{approved_offers_count} oportunidade(s) já revisada(s) para você",
+            text="O motor comercial já encontrou ofertas coerentes com o momento atual da empresa.",
+            href="/ofertas",
+            label="Ver ofertas",
+            tone="success",
+            source="Creditplace",
+        )
+
+    pending_items_count = int(context.get("pending_items_count") or 0)
+    if pending_items_count > 0:
+        add_item(
+            title=f"{pending_items_count} pendência(s) aberta(s) travando sua evolução",
+            text="Resolver pendências acelera diagnóstico, documentos e avanço comercial.",
+            href="/pendencias",
+            label="Resolver",
+            tone="warning",
+            source="Operação",
+        )
+
+    if not items:
+        add_item(
+            title="Atualize o diagnóstico para liberar leituras automáticas",
+            text=segment_meta.get("focus", "Mantenha seus dados atualizados para receber alertas e ações recomendadas."),
+            href="/perfil/avaliacao/nova",
+            label="Atualizar agora",
+            tone="primary",
+            source="IA",
+        )
+
+    return items[:4]
+
+
+def _phase1a_build_summary_strip(
+        context: dict[str, Any],
+        *,
+        segment_meta: dict[str, str],
+) -> list[dict[str, str]]:
+    score_geral = _dashboard_score_value(context.get("dashboard_scores"), "Score Geral")
+    tone = "success" if score_geral >= 70 else "warning" if score_geral >= 45 else "danger"
+    return [
+        {
+            "label": "Segmento",
+            "value": segment_meta.get("label", "PME"),
+            "tone": "neutral",
+        },
+        {
+            "label": "Score geral",
+            "value": f"{int(round(score_geral))}/100",
+            "tone": tone,
+        },
+        {
+            "label": "Ofertas liberadas",
+            "value": str(int(context.get("approved_offers_count") or 0)),
+            "tone": "success" if int(context.get("approved_offers_count") or 0) > 0 else "neutral",
+        },
+        {
+            "label": "Pendências",
+            "value": str(int(context.get("pending_items_count") or 0)),
+            "tone": "warning" if int(context.get("pending_items_count") or 0) > 0 else "neutral",
+        },
+    ]
+
+
+def _phase1a_build_dashboard_hero(
+        context: dict[str, Any],
+        *,
+        segment_meta: dict[str, str],
+) -> dict[str, Any]:
+    alerts = context.get("smart_alerts") or []
+    for alert in alerts:
+        severity = str(getattr(alert, "severity", "") or "").lower()
+        if severity == "alta":
+            title = (getattr(alert, "message_text", "") or "").strip() or "A IA detectou um risco relevante."
+            return {
+                "tone": "danger",
+                "eyebrow": segment_meta.get("eyebrow", "Ação recomendada hoje"),
+                "title": title,
+                "subtitle": (
+                    "Atue agora para evitar deterioração do caixa, do score ou do acesso a crédito."
+                    if segment_meta.get("slug") != "construtora"
+                    else "Atue agora para reduzir risco, caixa pressionado ou travas de compliance."
+                ),
+                "cta_label": "Abrir ação recomendada",
+                "cta_href": _phase1a_pick_href(getattr(alert, "action_link", ""), "/perfil"),
+                "secondary_label": segment_meta.get("offer_label", "Ver oportunidades"),
+                "secondary_href": segment_meta.get("offer_href", "/ofertas"),
+            }
+
+    approved_offers_count = int(context.get("approved_offers_count") or 0)
+    if approved_offers_count > 0:
+        return {
+            "tone": "primary",
+            "eyebrow": segment_meta.get("eyebrow", "Oportunidade ativa"),
+            "title": f"Há {approved_offers_count} oportunidade(s) pronta(s) para análise.",
+            "subtitle": "A plataforma já identificou caminhos aderentes ao momento atual da empresa.",
+            "cta_label": "Ver oportunidades",
+            "cta_href": "/ofertas",
+            "secondary_label": "Atualizar diagnóstico",
+            "secondary_href": "/perfil/avaliacao/nova",
+        }
+
+    next_steps = context.get("dashboard_next_steps") or []
+    if next_steps:
+        step = next_steps[0]
+        title = step.get("title") if isinstance(step, dict) else getattr(step, "title", "")
+        text = step.get("text") if isinstance(step, dict) else getattr(step, "text", "")
+        href = step.get("href") if isinstance(step, dict) else getattr(step, "href", "")
+        return {
+            "tone": "primary",
+            "eyebrow": segment_meta.get("eyebrow", "Próxima ação recomendada"),
+            "title": title or "Siga a próxima ação do painel",
+            "subtitle": text or segment_meta.get("focus", ""),
+            "cta_label": "Executar agora",
+            "cta_href": href or "/perfil",
+            "secondary_label": segment_meta.get("offer_label", ""),
+            "secondary_href": segment_meta.get("offer_href", ""),
+        }
+
+    return {
+        "tone": "primary",
+        "eyebrow": segment_meta.get("eyebrow", "Smartwatch Empresarial"),
+        "title": "Mantenha o diagnóstico vivo para receber ações da IA.",
+        "subtitle": segment_meta.get("focus", ""),
+        "cta_label": "Atualizar diagnóstico",
+        "cta_href": "/perfil/avaliacao/nova",
+        "secondary_label": segment_meta.get("offer_label", ""),
+        "secondary_href": segment_meta.get("offer_href", ""),
+    }
+
+
+_render_phase1a_previous = render
+
+
+def render(
+        template_name: str,
+        *,
+        request: Request,
+        context: Optional[dict[str, Any]] = None,
+        status_code: int = 200,
+) -> HTMLResponse:
+    ctx = dict(context or {})
+    if template_name == "dashboard.html":
+        segment_meta = _phase1a_get_segment_meta(request, ctx)
+        ctx.setdefault("dashboard_segment_slug", segment_meta.get("slug", "pme"))
+        ctx.setdefault("dashboard_segment_label", segment_meta.get("label", "PME"))
+        ctx.setdefault("dashboard_focus_text", segment_meta.get("focus", ""))
+        ctx["dashboard_summary_strip"] = _phase1a_build_summary_strip(ctx, segment_meta=segment_meta)
+        ctx["dashboard_ai_feed"] = _phase1a_build_ai_feed(ctx, segment_meta=segment_meta)
+        ctx["dashboard_hero"] = _phase1a_build_dashboard_hero(ctx, segment_meta=segment_meta)
+    return _render_phase1a_previous(
+        template_name,
+        request=request,
+        context=ctx,
+        status_code=status_code,
+    )
+
+
+_PHASE1A_CSS = """
+      /* MC_PHASE1A */
+      .mc-summary-strip .mc-summary-item{
+        border:1px solid rgba(15,23,42,.08); border-radius:14px; padding:.8rem .95rem; height:100%;
+        background:linear-gradient(180deg,#fff,rgba(15,23,42,.02));
+      }
+      .mc-summary-strip .mc-summary-label{
+        font-size:var(--mc-text-xs); text-transform:uppercase; letter-spacing:.08em; opacity:.7;
+      }
+      .mc-summary-strip .mc-summary-value{
+        font-size:var(--mc-text-lg); font-weight:var(--mc-weight-bold); margin-top:.1rem;
+      }
+      .mc-summary-strip .tone-danger .mc-summary-value{ color:#dc3545; }
+      .mc-summary-strip .tone-warning .mc-summary-value{ color:#b45309; }
+      .mc-summary-strip .tone-success .mc-summary-value{ color:#15803d; }
+      .mc-ai-card{
+        border:1px solid rgba(15,23,42,.08); border-radius:16px; padding:1rem; height:100%;
+        background:linear-gradient(180deg,#fff,rgba(224,112,32,.035));
+      }
+      .mc-ai-card.tone-danger{ background:linear-gradient(180deg,#fff,rgba(220,53,69,.05)); border-color:rgba(220,53,69,.18); }
+      .mc-ai-card.tone-warning{ background:linear-gradient(180deg,#fff,rgba(245,158,11,.07)); border-color:rgba(245,158,11,.18); }
+      .mc-ai-card.tone-success{ background:linear-gradient(180deg,#fff,rgba(34,197,94,.05)); border-color:rgba(34,197,94,.18); }
+      .mc-ai-card .mc-ai-source{
+        font-size:var(--mc-text-xs); text-transform:uppercase; letter-spacing:.08em; opacity:.72;
+      }
+      .mc-ai-card .mc-ai-title{
+        font-weight:var(--mc-weight-bold); margin:.2rem 0 .35rem;
+      }
+      .mc-ai-card .mc-ai-text{
+        font-size:var(--mc-text-sm); color:#475569; min-height:40px;
+      }
+"""
+
+
+def _phase1a_patch_base_template() -> None:
+    tpl = TEMPLATES.get("base.html", "")
+    if not tpl or "/* MC_PHASE1A */" in tpl:
+        return
+    anchor = "      /* MC_SPRINT1 */"
+    if anchor in tpl:
+        tpl = tpl.replace(anchor, anchor + _PHASE1A_CSS, 1)
+    elif "</style>" in tpl:
+        tpl = tpl.replace("</style>", _PHASE1A_CSS + "    </style>", 1)
+    TEMPLATES["base.html"] = tpl
+    if hasattr(templates_env.loader, "mapping"):
+        templates_env.loader.mapping = TEMPLATES
+
+
+def _phase1a_patch_dashboard_template() -> None:
+    tpl = TEMPLATES.get("dashboard.html", "")
+    if not tpl or "MC_PHASE1A_FEED" in tpl:
+        return
+
+    tpl = tpl.replace("Alertas do CFO Virtual", "Alertas da IA")
+    tpl = tpl.replace(
+        "Leituras automáticas sobre a saúde do cliente com base nas avaliações salvas.",
+        "Leituras automáticas e sinais acionáveis com base nas avaliações e no diagnóstico do cliente.",
+    )
+
+    insert_before = "\n  {% if smart_alerts %}\n"
+    ai_block = (
+        '\n  {# MC_PHASE1A_FEED #}\n'
+        '  {% if dashboard_summary_strip %}\n'
+        '  <div class="col-12">\n'
+        '    <div class="card p-3 mc-summary-strip">\n'
+        '      <div class="row g-3">\n'
+        '        {% for item in dashboard_summary_strip %}\n'
+        '        <div class="col-6 col-lg-3">\n'
+        '          <div class="mc-summary-item tone-{{ item.tone }}">\n'
+        '            <div class="mc-summary-label">{{ item.label }}</div>\n'
+        '            <div class="mc-summary-value">{{ item.value }}</div>\n'
+        '          </div>\n'
+        '        </div>\n'
+        '        {% endfor %}\n'
+        '      </div>\n'
+        '    </div>\n'
+        '  </div>\n'
+        '  {% endif %}\n'
+        '\n'
+        '  {% if dashboard_ai_feed %}\n'
+        '  <div class="col-12">\n'
+        '    <div class="card p-4">\n'
+        '      <div class="d-flex justify-content-between align-items-center mb-3 gap-2 flex-wrap">\n'
+        '        <div>\n'
+        '          <h5 class="mb-0">Ações recomendadas pela IA</h5>\n'
+        '          <div class="muted small">Prioridades sugeridas agora para o segmento {{ dashboard_segment_label }}.</div>\n'
+        '        </div>\n'
+        '        <span class="badge text-bg-light border">{{ dashboard_segment_label }}</span>\n'
+        '      </div>\n'
+        '      <div class="row g-3">\n'
+        '        {% for item in dashboard_ai_feed %}\n'
+        '        <div class="col-md-6 col-xl-3">\n'
+        '          <div class="mc-ai-card tone-{{ item.tone }}">\n'
+        '            <div class="mc-ai-source">{{ item.source }}</div>\n'
+        '            <div class="mc-ai-title">{{ item.title }}</div>\n'
+        '            <div class="mc-ai-text">{{ item.text }}</div>\n'
+        '            {% if item.href %}<div class="mt-3"><a class="btn btn-sm btn-outline-primary" href="{{ item.href }}">{{ item.label }}</a></div>{% endif %}\n'
+        '          </div>\n'
+        '        </div>\n'
+        '        {% endfor %}\n'
+        '      </div>\n'
+        '    </div>\n'
+        '  </div>\n'
+        '  {% endif %}\n'
+    )
+    if insert_before in tpl:
+        tpl = tpl.replace(insert_before, ai_block + insert_before, 1)
+    else:
+        marker = "{% block content %}"
+        if marker in tpl:
+            tpl = tpl.replace(marker, marker + ai_block, 1)
+
+    TEMPLATES["dashboard.html"] = tpl
+    if hasattr(templates_env.loader, "mapping"):
+        templates_env.loader.mapping = TEMPLATES
+
+
+_phase1a_patch_base_template()
+_phase1a_patch_dashboard_template()
