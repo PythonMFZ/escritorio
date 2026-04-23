@@ -31233,16 +31233,6 @@ def _startup_offer_visibility() -> None:
 # ----------------------------
 # Entrypoint (local / platforms that run `python app.py`)
 # ----------------------------
-if __name__ == "__main__":
-    import uvicorn
-
-    uvicorn.run(
-        app,
-        host="0.0.0.0",
-        port=int(os.getenv("PORT", "8000")),
-        log_level=os.getenv("LOG_LEVEL", "info").lower(),
-    )
-
 # ----------------------------
 # Entrega 1: UX, menu, visibilidade e leitura visual
 # ----------------------------
@@ -43397,3 +43387,14 @@ async def workforce_time_entry_create(
     set_flash(request, "Horas registradas.")
     return RedirectResponse(f"/obras-horas/projetos/{project.id}", status_code=303)
 
+
+if __name__ == "__main__":
+    import uvicorn
+
+    uvicorn.run(
+        "app_run_ready:app",
+        host="0.0.0.0",
+        port=int(os.getenv("PORT", "8000")),
+        log_level=os.getenv("LOG_LEVEL", "info").lower(),
+        reload=False,
+    )
