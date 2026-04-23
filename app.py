@@ -13095,11 +13095,6 @@ def _startup() -> None:
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 
-# ----------------------------
-# Auth routes
-# ----------------------------
-
-
 @app.get("/login", response_class=HTMLResponse)
 async def login_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
     if get_current_user(request, session):
@@ -43398,3 +43393,410 @@ if __name__ == "__main__":
         log_level=os.getenv("LOG_LEVEL", "info").lower(),
         reload=False,
     )
+
+# ============================
+# Sprint 1 UX — "O Smartwatch acende"
+# G1  Sino de SmartAlerts no navbar com badge + dropdown (visível em qualquer tela)
+# G2  Hero prescritivo no topo do dashboard (próxima ação única)
+# G10 Ícones SVG inline no lugar de emojis na navbar
+# G11 Escala tipográfica consolidada em :root
+# G12 Acessibilidade: focus-visible com cor da marca, prefers-reduced-motion, aria
+# ============================
+
+_SPRINT1_SVG: dict[str, str] = {
+    "building": (
+        '<svg class="mc-ico" width="14" height="14" viewBox="0 0 24 24" fill="none" '
+        'stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" '
+        'aria-hidden="true" focusable="false">'
+        '<path d="M3 21h18"/><path d="M5 21V7l8-4v18"/><path d="M19 21V11l-6-4"/>'
+        '<path d="M9 9v.01"/><path d="M9 12v.01"/><path d="M9 15v.01"/><path d="M9 18v.01"/>'
+        '</svg>'
+    ),
+    "briefcase": (
+        '<svg class="mc-ico" width="14" height="14" viewBox="0 0 24 24" fill="none" '
+        'stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" '
+        'aria-hidden="true" focusable="false">'
+        '<rect x="2" y="7" width="20" height="14" rx="2"/>'
+        '<path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/>'
+        '</svg>'
+    ),
+    "user": (
+        '<svg class="mc-ico" width="14" height="14" viewBox="0 0 24 24" fill="none" '
+        'stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" '
+        'aria-hidden="true" focusable="false">'
+        '<path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>'
+        '</svg>'
+    ),
+    "chat": (
+        '<svg class="mc-ico" width="16" height="16" viewBox="0 0 24 24" fill="none" '
+        'stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" '
+        'aria-hidden="true" focusable="false">'
+        '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>'
+        '</svg>'
+    ),
+    "bell": (
+        '<svg class="mc-ico" width="16" height="16" viewBox="0 0 24 24" fill="none" '
+        'stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" '
+        'aria-hidden="true" focusable="false">'
+        '<path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/>'
+        '<path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/>'
+        '</svg>'
+    ),
+    "alert": (
+        '<svg class="mc-ico" width="16" height="16" viewBox="0 0 24 24" fill="none" '
+        'stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" '
+        'aria-hidden="true" focusable="false">'
+        '<path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>'
+        '<line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>'
+        '</svg>'
+    ),
+    "news": (
+        '<svg class="mc-ico" width="14" height="14" viewBox="0 0 24 24" fill="none" '
+        'stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" '
+        'aria-hidden="true" focusable="false">'
+        '<path d="M4 22h16a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2H8a2 2 0 0 0-2 2v16a2 2 0 0 1-2 2z"/>'
+        '<path d="M18 14h-8"/><path d="M15 18h-5"/><path d="M18 6h-8v4h8z"/>'
+        '</svg>'
+    ),
+}
+
+
+def _sprint1_alert_preview(alert: SmartAlert) -> dict[str, Any]:
+    sev = str(alert.severity or "media").lower()
+    tone = {"alta": "danger", "media": "warning", "baixa": "info"}.get(sev, "warning")
+    msg = (alert.message_text or "").strip()
+    if len(msg) > 140:
+        msg = msg[:137].rstrip() + "…"
+    return {
+        "id": int(alert.id or 0),
+        "severity": sev,
+        "tone": tone,
+        "message": msg,
+        "href": (alert.action_link or "").strip() or "/",
+        "kind": (alert.alert_type or "").strip(),
+    }
+
+
+def _sprint1_fetch_nav_alerts(
+        db: Session, *, company_id: int, user_id: int
+) -> tuple[int, list[dict[str, Any]]]:
+    try:
+        memberships = db.exec(
+            select(Membership).where(
+                Membership.company_id == company_id,
+                Membership.user_id == user_id,
+            )
+        ).all()
+    except Exception:
+        return 0, []
+    if not memberships:
+        return 0, []
+    roles = {str(m.role or "").lower() for m in memberships}
+    if roles & {"admin", "equipe"}:
+        try:
+            rows = db.exec(
+                select(Client.id).where(Client.company_id == company_id)
+            ).all()
+            client_ids = [int(r) for r in rows if r]
+        except Exception:
+            client_ids = []
+    else:
+        client_ids = [int(m.client_id) for m in memberships if m.client_id]
+    if not client_ids:
+        return 0, []
+    try:
+        total = int(db.exec(
+            select(func.count()).select_from(SmartAlert).where(
+                SmartAlert.company_id == company_id,
+                SmartAlert.client_id.in_(client_ids),
+                SmartAlert.is_read == False,
+            )
+        ).one() or 0)
+    except Exception:
+        total = 0
+    try:
+        rows = db.exec(
+            select(SmartAlert)
+            .where(
+                SmartAlert.company_id == company_id,
+                SmartAlert.client_id.in_(client_ids),
+                SmartAlert.is_read == False,
+            )
+            .order_by(SmartAlert.created_at.desc())
+            .limit(5)
+        ).all()
+    except Exception:
+        rows = []
+    return total, [_sprint1_alert_preview(a) for a in rows]
+
+
+def _sprint1_hero_from_context(context: dict[str, Any]) -> Optional[dict[str, Any]]:
+    alerts = context.get("smart_alerts") or []
+    for a in alerts:
+        sev = str(getattr(a, "severity", "") or "").lower()
+        if sev == "alta":
+            title = (getattr(a, "message_text", "") or "").strip() or "Alerta crítico aberto"
+            href = (getattr(a, "action_link", "") or "").strip() or "/notificacoes"
+            return {
+                "tone": "danger",
+                "eyebrow": "Ação recomendada hoje",
+                "title": title,
+                "subtitle": "Alerta de alta severidade detectado pela análise automática. Revise agora.",
+                "cta_label": "Abrir alerta",
+                "cta_href": href,
+                "secondary_label": "Ver todos os alertas",
+                "secondary_href": "/notificacoes",
+            }
+    critical = context.get("dashboard_critical_points") or []
+    for item in critical:
+        tone = item.get("tone") if isinstance(item, dict) else getattr(item, "tone", "")
+        if tone == "danger":
+            title = item.get("title") if isinstance(item, dict) else getattr(item, "title", "")
+            text = item.get("text") if isinstance(item, dict) else getattr(item, "text", "")
+            return {
+                "tone": "danger",
+                "eyebrow": "Ponto crítico em aberto",
+                "title": title or "Risco identificado no diagnóstico",
+                "subtitle": text or "O diagnóstico apontou um risco que pede atenção imediata.",
+                "cta_label": "Ver diagnóstico",
+                "cta_href": "/perfil",
+                "secondary_label": "Ver ofertas",
+                "secondary_href": "/ofertas",
+            }
+    steps = context.get("dashboard_next_steps") or []
+    if steps:
+        step = steps[0]
+        title = step.get("title") if isinstance(step, dict) else getattr(step, "title", "")
+        text = step.get("text") if isinstance(step, dict) else getattr(step, "text", "")
+        href = step.get("href") if isinstance(step, dict) else getattr(step, "href", "")
+        return {
+            "tone": "primary",
+            "eyebrow": "Próxima ação recomendada",
+            "title": title or "Continue o diagnóstico",
+            "subtitle": text or "Mantenha a leitura do painel sempre atualizada.",
+            "cta_label": "Executar agora",
+            "cta_href": href or "/perfil",
+            "secondary_label": "",
+            "secondary_href": "",
+        }
+    return None
+
+
+_original_render_sprint1 = render
+
+
+def render(
+        template_name: str,
+        *,
+        request: Request,
+        context: Optional[dict[str, Any]] = None,
+        status_code: int = 200,
+) -> HTMLResponse:
+    ctx = dict(context or {})
+    ctx.setdefault("smart_alerts_nav_count", 0)
+    ctx.setdefault("smart_alerts_nav_preview", [])
+    try:
+        with Session(engine) as _db:
+            tenant = get_tenant_context(request, _db)
+            if tenant:
+                total, preview = _sprint1_fetch_nav_alerts(
+                    _db,
+                    company_id=tenant.company.id,
+                    user_id=tenant.user.id,
+                )
+                ctx["smart_alerts_nav_count"] = total
+                ctx["smart_alerts_nav_preview"] = preview
+    except Exception:
+        pass
+    if template_name == "dashboard.html":
+        hero = _sprint1_hero_from_context(ctx)
+        if hero:
+            ctx.setdefault("dashboard_hero", hero)
+    return _original_render_sprint1(template_name, request=request, context=ctx, status_code=status_code)
+
+
+_SPRINT1_CSS = """
+      :root{
+        --mc-text-xs:13px; --mc-text-sm:14px; --mc-text-base:15px;
+        --mc-text-lg:18px; --mc-text-xl:22px; --mc-text-h1:28px;
+        --mc-weight-regular:400; --mc-weight-medium:600; --mc-weight-bold:700;
+        --mc-focus-ring:0 0 0 3px rgba(224,112,32,.35);
+      }
+      body{ font-size:var(--mc-text-base); font-weight:var(--mc-weight-regular); }
+      h1,.h1{ font-size:var(--mc-text-h1); font-weight:var(--mc-weight-bold); letter-spacing:-.01em; }
+      h2,.h2{ font-size:var(--mc-text-xl); font-weight:var(--mc-weight-bold); }
+      h3,.h3{ font-size:var(--mc-text-xl); font-weight:var(--mc-weight-medium); }
+      h4,.h4{ font-size:var(--mc-text-lg); font-weight:var(--mc-weight-medium); }
+      h5,.h5{ font-size:var(--mc-text-lg); font-weight:var(--mc-weight-medium); }
+      h6,.h6{ font-size:var(--mc-text-sm); font-weight:var(--mc-weight-medium); text-transform:uppercase; letter-spacing:.04em; }
+      .muted,.text-muted{ font-size:var(--mc-text-xs); }
+      :focus{ outline:none; }
+      :focus-visible{ outline:none; box-shadow:var(--mc-focus-ring)!important; border-radius:10px; }
+      .btn:focus-visible,.form-control:focus-visible,.form-select:focus-visible,a:focus-visible{
+        box-shadow:var(--mc-focus-ring)!important;
+      }
+      .mc-ico{ display:inline-block; vertical-align:-2px; }
+      .mc-nav-btn{ display:inline-flex; align-items:center; justify-content:center; gap:.3rem; position:relative; }
+      .mc-nav-btn > .badge{ position:absolute; top:-6px; right:-6px; font-size:10px; padding:.2em .45em; }
+      .mc-hero{ border-left:6px solid var(--mc-primary); padding:1.25rem 1.5rem; }
+      .mc-hero.mc-hero-danger{ border-left-color:#dc3545; background:linear-gradient(180deg,#fff,rgba(220,53,69,.05)); }
+      .mc-hero.mc-hero-primary{ background:linear-gradient(180deg,#fff,rgba(224,112,32,.06)); }
+      .mc-hero .eyebrow{ text-transform:uppercase; letter-spacing:.08em; font-size:var(--mc-text-xs);
+        font-weight:var(--mc-weight-medium); opacity:.7; color:var(--mc-primary-dark); }
+      .mc-hero h3{ margin:.15rem 0 .35rem; font-weight:var(--mc-weight-bold); }
+      .mc-alert-drop{ min-width:340px; max-width:380px; padding:.5rem; }
+      .mc-alert-drop .drop-item{ padding:.55rem .65rem; border-radius:10px; display:block; color:inherit; }
+      .mc-alert-drop .drop-item:hover{ background:rgba(224,112,32,.07); color:inherit; }
+      .mc-alert-drop .sev-dot{ width:8px; height:8px; border-radius:999px; display:inline-block; margin-top:.35rem; flex-shrink:0; }
+      .mc-alert-drop .sev-danger{ background:#dc3545; }
+      .mc-alert-drop .sev-warning{ background:#e9c46a; }
+      .mc-alert-drop .sev-info{ background:#0ea5e9; }
+      @media (prefers-reduced-motion: reduce){
+        *,*::before,*::after{
+          animation-duration:.001ms!important;
+          animation-iteration-count:1!important;
+          transition-duration:.001ms!important;
+          scroll-behavior:auto!important;
+        }
+      }
+"""
+
+_SPRINT1_BELL_HTML = (
+        '<div class="dropdown">'
+        '<button class="btn btn-outline-secondary btn-sm mc-nav-btn" type="button" '
+        'data-bs-toggle="dropdown" data-bs-auto-close="outside" aria-expanded="false" '
+        'aria-label="Alertas inteligentes">'
+        + _SPRINT1_SVG["alert"] +
+        '{% if smart_alerts_nav_count %}<span class="badge rounded-pill text-bg-danger">{{ smart_alerts_nav_count }}</span>{% endif %}'
+        '</button>'
+        '<div class="dropdown-menu dropdown-menu-end shadow mc-alert-drop" role="menu">'
+        '<div class="d-flex justify-content-between align-items-center px-2 pt-1 pb-2 border-bottom">'
+        '<span class="fw-semibold">Alertas</span>'
+        '<a class="small" href="/notificacoes">Ver todos</a>'
+        '</div>'
+        '{% if smart_alerts_nav_preview %}'
+        '{% for a in smart_alerts_nav_preview %}'
+        '<a class="drop-item text-decoration-none" href="{{ a.href or \'/\' }}">'
+        '<div class="d-flex align-items-start gap-2">'
+        '<span class="sev-dot sev-{{ a.tone }}" aria-hidden="true"></span>'
+        '<div class="flex-grow-1">'
+        '<div class="small">{{ a.message }}</div>'
+        '<div class="muted" style="font-size:11px;">{{ a.kind or "Alerta" }}</div>'
+        '</div>'
+        '</div>'
+        '</a>'
+        '{% endfor %}'
+        '{% else %}'
+        '<div class="p-3 text-center muted small">Nenhum alerta aberto.</div>'
+        '{% endif %}'
+        '</div>'
+        '</div>'
+)
+
+
+def _sprint1_patch_base_template() -> None:
+    tpl = TEMPLATES.get("base.html", "")
+    if not tpl or "/* MC_SPRINT1 */" in tpl:
+        return
+    css_anchor = "      a:hover{ color:#00BFBF; }\n    </style>"
+    if css_anchor in tpl:
+        tpl = tpl.replace(
+            css_anchor,
+            "      a:hover{ color:#00BFBF; }\n      /* MC_SPRINT1 */" + _SPRINT1_CSS + "    </style>",
+            1,
+        )
+    replacements = [
+        (
+            '<span class="badge text-bg-light border">\U0001f3e2 {{ current_company.name }}</span>',
+            '<span class="badge text-bg-light border d-inline-flex align-items-center gap-1">'
+            + _SPRINT1_SVG["building"]
+            + '<span>{{ current_company.name }}</span></span>',
+        ),
+        (
+            '<span class="badge text-bg-light border">\U0001f9d1‍\U0001f4bc Cliente: {{ current_client.name }}</span>',
+            '<span class="badge text-bg-light border d-inline-flex align-items-center gap-1">'
+            + _SPRINT1_SVG["briefcase"]
+            + '<span>Cliente: {{ current_client.name }}</span></span>',
+        ),
+        (
+            '<span class="badge text-bg-light border">\U0001f464 {{ current_user.name }} • {{ role }}</span>',
+            '<span class="badge text-bg-light border d-inline-flex align-items-center gap-1">'
+            + _SPRINT1_SVG["user"]
+            + '<span>{{ current_user.name }} &bull; {{ role }}</span></span>',
+        ),
+        (
+            '<div class="fw-semibold">\U0001f4f0 Notícias (economia)</div>',
+            '<div class="fw-semibold d-inline-flex align-items-center gap-1">'
+            + _SPRINT1_SVG["news"]
+            + '<span>Notícias (economia)</span></div>',
+        ),
+    ]
+    for old, new in replacements:
+        if old in tpl:
+            tpl = tpl.replace(old, new, 1)
+    tpl = tpl.replace("<span>\U0001f4ac</span>", _SPRINT1_SVG["chat"])
+    tpl = tpl.replace('aria-label="Mensagens">\U0001f4ac', 'aria-label="Mensagens">' + _SPRINT1_SVG["chat"])
+    tpl = tpl.replace("<span>\U0001f514</span>", _SPRINT1_SVG["bell"])
+    if "{{ smart_alerts_nav_count }}" not in tpl:
+        bell_block = _SPRINT1_BELL_HTML
+        if 'href="/mensagens"' in tpl:
+            tpl = re.sub(
+                r'(<a[^>]+href="/mensagens"[^>]*>|<div class="dropdown"><button[^>]*aria-label="Mensagens"[^>]*>)',
+                bell_block + r"\1",
+                tpl,
+                count=1,
+            )
+        elif 'href="/notificacoes"' in tpl:
+            tpl = re.sub(
+                r'(<a[^>]+href="/notificacoes"[^>]*>)',
+                bell_block + r"\1",
+                tpl,
+                count=1,
+            )
+        else:
+            tpl = tpl.replace(
+                '<a class="btn btn-outline-secondary btn-sm" href="/logout">Sair</a>',
+                bell_block + '\n            <a class="btn btn-outline-secondary btn-sm" href="/logout">Sair</a>',
+                1,
+            )
+    TEMPLATES["base.html"] = tpl
+    if hasattr(templates_env.loader, "mapping"):
+        templates_env.loader.mapping = TEMPLATES
+
+
+def _sprint1_patch_dashboard_template() -> None:
+    tpl = TEMPLATES.get("dashboard.html", "")
+    if not tpl or "MC_SPRINT1_HERO" in tpl:
+        return
+    hero_block = (
+        "{# MC_SPRINT1_HERO #}\n"
+        "{% if dashboard_hero %}\n"
+        '<div class="row g-3 mb-1">\n'
+        '  <div class="col-12">\n'
+        '    <div class="card mc-hero mc-hero-{{ dashboard_hero.tone }}">\n'
+        '      <div class="d-flex flex-wrap align-items-start justify-content-between gap-3">\n'
+        '        <div class="flex-grow-1">\n'
+        '          <div class="eyebrow">{{ dashboard_hero.eyebrow }}</div>\n'
+        '          <h3 class="mb-1">{{ dashboard_hero.title }}</h3>\n'
+        '          <div class="muted">{{ dashboard_hero.subtitle }}</div>\n'
+        "        </div>\n"
+        '        <div class="d-flex gap-2 flex-wrap">\n'
+        '          {% if dashboard_hero.cta_href %}<a class="btn btn-primary" href="{{ dashboard_hero.cta_href }}">{{ dashboard_hero.cta_label or "Abrir" }}</a>{% endif %}\n'
+        '          {% if dashboard_hero.secondary_href %}<a class="btn btn-outline-secondary" href="{{ dashboard_hero.secondary_href }}">{{ dashboard_hero.secondary_label }}</a>{% endif %}\n'
+        "        </div>\n"
+        "      </div>\n"
+        "    </div>\n"
+        "  </div>\n"
+        "</div>\n"
+        "{% endif %}\n"
+    )
+    marker = "{% block content %}"
+    if marker in tpl:
+        tpl = tpl.replace(marker, marker + "\n" + hero_block, 1)
+        TEMPLATES["dashboard.html"] = tpl
+        if hasattr(templates_env.loader, "mapping"):
+            templates_env.loader.mapping = TEMPLATES
+
+
+_sprint1_patch_base_template()
+_sprint1_patch_dashboard_template()
