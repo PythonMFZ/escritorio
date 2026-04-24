@@ -44654,3 +44654,722 @@ _patch_dashboard_template()
 # ============================================================================
 # FIM DO PATCH — Sprint 2 incremental
 # ============================================================================
+# ============================================================================
+# PATCH — Sprint 3: Diagnóstico Guiado (Wizard Multi-Step)
+# ============================================================================
+# Cole APÓS os blocos dos Sprints 1 e 2 no final do app.py.
+#
+# ASSUME QUE JÁ EXISTEM:
+#   - Rota GET  /perfil/avaliacao/nova  (perfil_snapshot_new_page)
+#   - Rota POST /perfil/avaliacao/nova  (perfil_snapshot_new_action) — NÃO TOCADA
+#   - ClientSnapshot, ClientBusinessProfile, PROFILE_SURVEY_V2
+#   - SmartAlert, _create_smart_alert, analyze_client_health_job
+#
+# O QUE ESTE PATCH FAZ:
+#   1. Substitui TEMPLATES["perfil_snapshot_new.html"] pelo wizard 4 etapas
+#      — o POST continua recebendo os mesmos campos, zero mudança no backend
+#   2. Adiciona lembrete mensal ao SmartAlert via nova regra em
+#      analyze_client_health_job (monkey-patch aditivo)
+#   3. Injeta banner "Diagnóstico pendente" no dashboard se snapshot
+#      mais recente for > 30 dias — via middleware do render()
+#
+# REVERSÍVEL: remova o bloco. Rotas e dados intactos.
+# ============================================================================
+
+
+# ── 1. LEMBRETE MENSAL: nova regra no motor de alertas ───────────────────────
+
+_analyze_health_original = analyze_client_health_job
+
+
+def analyze_client_health_job(
+    session: Session, *, company_id: int, client_id: int
+) -> list:
+    """
+    Versão Sprint 3: adiciona verificação de snapshot atrasado
+    ao motor original, sem remover nenhuma regra existente.
+    """
+    created = _analyze_health_original(session, company_id=company_id, client_id=client_id)
+
+    # Regra: último snapshot há mais de 30 dias → lembrete mensal
+    try:
+        latest = session.exec(
+            select(ClientSnapshot)
+            .where(
+                ClientSnapshot.company_id == company_id,
+                ClientSnapshot.client_id  == client_id,
+            )
+            .order_by(ClientSnapshot.created_at.desc())
+            .limit(1)
+        ).first()
+
+        cutoff = utcnow() - timedelta(days=30)
+        is_overdue = (latest is None) or (latest.created_at < cutoff)
+
+        if is_overdue:
+            days_ago = (
+                (utcnow() - latest.created_at).days if latest else 999
+            )
+            msg = (
+                "Seu diagnóstico financeiro está desatualizado. "
+                f"O último foi há {days_ago} dias. "
+                "Atualize agora para manter seus scores e ofertas precisos."
+            ) if latest else (
+                "Você ainda não fez seu primeiro diagnóstico financeiro. "
+                "Leva menos de 5 minutos e destrava as ofertas de crédito."
+            )
+            alert = _create_smart_alert(
+                session,
+                company_id=company_id,
+                client_id=client_id,
+                alert_type="diagnostico_desatualizado",
+                severity="media",
+                message_text=msg,
+                action_link="/perfil/avaliacao/nova",
+                lookback_hours=168,  # não repete por 7 dias
+            )
+            if alert:
+                created.append(alert)
+                session.commit()
+    except Exception:
+        pass
+
+    return created
+
+
+# ── 2. MIDDLEWARE: injeta banner de diagnóstico pendente no dashboard ─────────
+
+_render_before_s3 = render
+
+
+def render(
+    template_name: str,
+    *,
+    request: Request,
+    context: Optional[dict[str, Any]] = None,
+    status_code: int = 200,
+) -> HTMLResponse:
+    ctx_dict = dict(context or {})
+
+    if template_name == "dashboard.html" and "diagnostico_banner" not in ctx_dict:
+        try:
+            client = ctx_dict.get("current_client")
+            if client:
+                with Session(engine) as _db:
+                    latest = _db.exec(
+                        select(ClientSnapshot)
+                        .where(ClientSnapshot.client_id == client.id)
+                        .order_by(ClientSnapshot.created_at.desc())
+                        .limit(1)
+                    ).first()
+                    cutoff = utcnow() - timedelta(days=30)
+                    if latest is None:
+                        ctx_dict["diagnostico_banner"] = {
+                            "type": "first",
+                            "msg": "Você ainda não fez o diagnóstico financeiro. Leva menos de 5 min e destrava as ofertas.",
+                            "cta": "Fazer agora",
+                            "href": "/perfil/avaliacao/nova",
+                        }
+                    elif latest.created_at < cutoff:
+                        days = (utcnow() - latest.created_at).days
+                        ctx_dict["diagnostico_banner"] = {
+                            "type": "stale",
+                            "msg": f"Diagnóstico há {days} dias. Atualize para manter scores e ofertas precisos.",
+                            "cta": "Atualizar agora",
+                            "href": "/perfil/avaliacao/nova",
+                        }
+                    else:
+                        ctx_dict["diagnostico_banner"] = None
+        except Exception:
+            ctx_dict["diagnostico_banner"] = None
+
+    return _render_before_s3(
+        template_name,
+        request=request,
+        context=ctx_dict,
+        status_code=status_code,
+    )
+
+
+# ── 3. PATCH DO DASHBOARD.HTML: inserir banner ────────────────────────────────
+
+_DIAG_BANNER_JINJA = r"""
+{# ── SPRINT 3: banner de diagnóstico pendente ── #}
+{% if diagnostico_banner %}
+<div class="alert d-flex align-items-center justify-content-between gap-3 mb-3 border-0"
+     style="
+       border-radius:14px; padding:1rem 1.25rem;
+       {% if diagnostico_banner.type == 'first' %}
+         background:linear-gradient(135deg,#fff7f1,#ffede0);
+         border:1px solid rgba(224,112,32,.25)!important;
+       {% else %}
+         background:linear-gradient(135deg,#fffaed,#fff3d0);
+         border:1px solid rgba(233,196,106,.45)!important;
+       {% endif %}
+     ">
+  <div class="d-flex align-items-center gap-3">
+    <div style="font-size:1.5rem;">
+      {% if diagnostico_banner.type == 'first' %}🩺{% else %}⏰{% endif %}
+    </div>
+    <div>
+      <div style="font-weight:600; font-size:.95rem;">{{ diagnostico_banner.msg }}</div>
+      <div class="tiny muted mt-1">Score, alertas e ofertas dependem de dados atualizados.</div>
+    </div>
+  </div>
+  <a href="{{ diagnostico_banner.href }}"
+     class="btn btn-primary btn-sm flex-shrink-0">
+    {{ diagnostico_banner.cta }}
+  </a>
+</div>
+{% endif %}
+{# ── /SPRINT 3 banner ── #}
+"""
+
+# Ancora: insere antes do hero (primeira coisa visível no dashboard)
+_DASH_ANCHOR_HERO = "{# ════════════════ HERO"
+if _DASH_ANCHOR_HERO not in TEMPLATES.get("dashboard.html", ""):
+    # Fallback: tenta ancora alternativa do Sprint 1
+    _DASH_ANCHOR_HERO = "{% if current_client and (top_alert"
+
+_tpl_dash = TEMPLATES.get("dashboard.html", "")
+if _tpl_dash and "SPRINT 3: banner" not in _tpl_dash and _DASH_ANCHOR_HERO in _tpl_dash:
+    TEMPLATES["dashboard.html"] = _tpl_dash.replace(
+        _DASH_ANCHOR_HERO,
+        _DIAG_BANNER_JINJA + "\n" + _DASH_ANCHOR_HERO,
+        1,
+    )
+    if hasattr(templates_env.loader, "mapping"):
+        templates_env.loader.mapping = TEMPLATES
+
+
+# ── 4. WIZARD MULTI-STEP: novo template perfil_snapshot_new.html ─────────────
+#
+# 4 etapas — o POST continua recebendo os mesmos campos de sempre:
+#   Etapa 1 — Contexto       : segmento, fase, setor, maior dor
+#   Etapa 2 — Números        : receita, dívida, caixa, funcionários
+#   Etapa 3 — Processos      : checklist PROFILE_SURVEY_V2 (sim/não)
+#   Etapa 4 — Revisão + NPS  : resumo antes de confirmar
+#
+# Tudo num único <form> com JS controlando qual step é visível.
+# Submit vai direto para POST /perfil/avaliacao/nova — zero mudança no backend.
+
+TEMPLATES["perfil_snapshot_new.html"] = r"""
+{% extends "base.html" %}
+{% block content %}
+<style>
+  /* ── Wizard container ── */
+  .wz-wrap{ max-width:680px; margin:0 auto; }
+
+  /* Progress bar */
+  .wz-progress{ display:flex; gap:.5rem; margin-bottom:2rem; }
+  .wz-step-dot{
+    flex:1; height:6px; border-radius:99px;
+    background:var(--mc-border); transition:background .3s;
+  }
+  .wz-step-dot.done{ background:var(--mc-primary); }
+  .wz-step-dot.active{ background:var(--mc-primary); opacity:.5; }
+
+  /* Step header */
+  .wz-step-head{ margin-bottom:1.5rem; }
+  .wz-step-eye{
+    display:inline-flex; align-items:center; gap:.4rem;
+    font-size:.72rem; font-weight:700; text-transform:uppercase; letter-spacing:.08em;
+    color:var(--mc-primary-dark); background:var(--mc-primary-soft);
+    padding:.3rem .75rem; border-radius:999px; margin-bottom:.6rem;
+  }
+  .wz-step-title{ font-size:22px; font-weight:700; letter-spacing:-.02em; margin:0 0 .3rem; }
+  .wz-step-sub{ color:var(--mc-muted); font-size:.92rem; margin:0; }
+
+  /* Cards de opção (segmento, fase, dor) */
+  .wz-options{ display:grid; gap:.65rem; }
+  .wz-options.cols-2{ grid-template-columns:1fr 1fr; }
+  .wz-options.cols-3{ grid-template-columns:1fr 1fr 1fr; }
+  .wz-opt{
+    border:2px solid var(--mc-border); border-radius:14px;
+    padding:.85rem 1rem; cursor:pointer; transition:all .15s;
+    display:flex; align-items:flex-start; gap:.75rem;
+    background:#fff;
+  }
+  .wz-opt:hover{ border-color:rgba(224,112,32,.4); }
+  .wz-opt.selected{ border-color:var(--mc-primary); background:var(--mc-primary-soft); }
+  .wz-opt input[type=radio],
+  .wz-opt input[type=checkbox]{ display:none; }
+  .wz-opt-icon{ font-size:1.4rem; flex-shrink:0; line-height:1; }
+  .wz-opt-label{ font-weight:600; font-size:.92rem; }
+  .wz-opt-desc{ color:var(--mc-muted); font-size:.78rem; margin-top:.15rem; }
+
+  /* Campos numéricos */
+  .wz-num-grid{ display:grid; grid-template-columns:1fr 1fr; gap:1rem; }
+  .wz-field label{ font-weight:600; font-size:.85rem; display:block; margin-bottom:.35rem; }
+  .wz-field .hint{ color:var(--mc-muted); font-size:.75rem; margin-top:.3rem; }
+  .wz-field .warn{ color:var(--mc-danger); font-size:.75rem; margin-top:.3rem; display:none; }
+  .wz-input{
+    width:100%; border:2px solid var(--mc-border); border-radius:10px;
+    padding:.6rem .85rem; font-size:.95rem; outline:none; transition:border .15s;
+    background:#fff;
+  }
+  .wz-input:focus{ border-color:var(--mc-primary); }
+  .wz-input.invalid{ border-color:var(--mc-danger); }
+
+  /* Checklist de processos */
+  .wz-check-grid{ display:grid; gap:.5rem; }
+  .wz-check-item{
+    border:2px solid var(--mc-border); border-radius:12px;
+    padding:.75rem 1rem; cursor:pointer; transition:all .15s;
+    display:flex; align-items:center; gap:.85rem; background:#fff;
+  }
+  .wz-check-item:hover{ border-color:rgba(224,112,32,.35); }
+  .wz-check-item.checked{ border-color:var(--mc-primary); background:var(--mc-primary-soft); }
+  .wz-check-item input{ display:none; }
+  .wz-check-box{
+    width:20px; height:20px; border-radius:6px; flex-shrink:0;
+    border:2px solid var(--mc-border); background:#fff;
+    display:flex; align-items:center; justify-content:center;
+    font-size:.8rem; transition:all .15s;
+  }
+  .wz-check-item.checked .wz-check-box{
+    background:var(--mc-primary); border-color:var(--mc-primary); color:#fff;
+  }
+  .wz-check-section{ font-size:.72rem; font-weight:700; text-transform:uppercase;
+    letter-spacing:.06em; color:var(--mc-muted); margin:.85rem 0 .4rem; }
+
+  /* NPS */
+  .nps-row{ display:flex; gap:.4rem; flex-wrap:wrap; }
+  .nps-btn{
+    width:44px; height:44px; border-radius:10px; border:2px solid var(--mc-border);
+    background:#fff; font-weight:700; font-size:.9rem; cursor:pointer; transition:all .15s;
+  }
+  .nps-btn:hover{ border-color:var(--mc-primary); }
+  .nps-btn.selected{ background:var(--mc-primary); border-color:var(--mc-primary); color:#fff; }
+
+  /* Revisão */
+  .wz-review-row{
+    display:flex; justify-content:space-between; align-items:center;
+    padding:.6rem 0; border-bottom:1px solid var(--mc-border); font-size:.9rem;
+  }
+  .wz-review-row:last-child{ border-bottom:0; }
+  .wz-review-label{ color:var(--mc-muted); }
+  .wz-review-val{ font-weight:600; }
+
+  /* Nav buttons */
+  .wz-nav{ display:flex; justify-content:space-between; align-items:center; margin-top:2rem; }
+
+  @media(max-width:576px){
+    .wz-options.cols-2,
+    .wz-options.cols-3{ grid-template-columns:1fr; }
+    .wz-num-grid{ grid-template-columns:1fr; }
+  }
+</style>
+
+<div class="wz-wrap">
+  <div class="mb-3">
+    <a href="/perfil" class="btn btn-outline-secondary btn-sm">
+      <i class="bi bi-arrow-left"></i> Voltar
+    </a>
+  </div>
+
+  {# Progress dots #}
+  <div class="wz-progress" id="wzProgress">
+    <div class="wz-step-dot active" id="dot-1"></div>
+    <div class="wz-step-dot"       id="dot-2"></div>
+    <div class="wz-step-dot"       id="dot-3"></div>
+    <div class="wz-step-dot"       id="dot-4"></div>
+  </div>
+
+  <form method="post" action="/perfil/avaliacao/nova" id="wzForm" novalidate>
+
+    {# ═══════════════════════════════════════════════
+       ETAPA 1 — Contexto
+    ═══════════════════════════════════════════════ #}
+    <div class="wz-step" id="step-1">
+      <div class="wz-step-head">
+        <div class="wz-step-eye"><i class="bi bi-building"></i> Etapa 1 de 4</div>
+        <h2 class="wz-step-title">Conte sobre sua empresa</h2>
+        <p class="wz-step-sub">Isso personaliza seu diagnóstico. Menos de 1 minuto.</p>
+      </div>
+
+      <div class="mb-4">
+        <div class="wz-field">
+          <label>Qual é o porte da sua empresa?</label>
+        </div>
+        <div class="wz-options cols-3">
+          {% set seg_val = business_profile.segment if business_profile else "" %}
+          <label class="wz-opt {% if seg_val == 'pme' %}selected{% endif %}">
+            <input type="radio" name="segment" value="pme" {% if seg_val == 'pme' %}checked{% endif %}>
+            <span class="wz-opt-icon">🏪</span>
+            <span><div class="wz-opt-label">PME</div><div class="wz-opt-desc">Até R$ 5M/ano</div></span>
+          </label>
+          <label class="wz-opt {% if seg_val == 'middle' %}selected{% endif %}">
+            <input type="radio" name="segment" value="middle" {% if seg_val == 'middle' %}checked{% endif %}>
+            <span class="wz-opt-icon">🏢</span>
+            <span><div class="wz-opt-label">Middle Market</div><div class="wz-opt-desc">R$ 5M–50M/ano</div></span>
+          </label>
+          <label class="wz-opt {% if seg_val == 'construtora' %}selected{% endif %}">
+            <input type="radio" name="segment" value="construtora" {% if seg_val == 'construtora' %}checked{% endif %}>
+            <span class="wz-opt-icon">🏗️</span>
+            <span><div class="wz-opt-label">Construtora</div><div class="wz-opt-desc">VGV R$ 20M+</div></span>
+          </label>
+        </div>
+      </div>
+
+      <div class="mb-4">
+        <div class="wz-field"><label>Em que fase está o negócio?</label></div>
+        <div class="wz-options cols-2">
+          {% set size_val = business_profile.company_size if business_profile else "" %}
+          {% for opt in [
+            ("crescimento", "🚀", "Crescendo", "Faturamento subindo, preciso escalar"),
+            ("estabilizacao", "⚖️", "Estabilizando", "Quero consolidar e profissionalizar"),
+            ("reestruturacao", "🔧", "Reestruturando", "Estou reorganizando dívidas ou processos"),
+            ("expansao", "🌐", "Expandindo", "Nova unidade, novo mercado ou M&A"),
+          ] %}
+            <label class="wz-opt {% if size_val == opt[0] %}selected{% endif %}">
+              <input type="radio" name="company_size" value="{{ opt[0] }}" {% if size_val == opt[0] %}checked{% endif %}>
+              <span class="wz-opt-icon">{{ opt[1] }}</span>
+              <span><div class="wz-opt-label">{{ opt[2] }}</div><div class="wz-opt-desc">{{ opt[3] }}</div></span>
+            </label>
+          {% endfor %}
+        </div>
+      </div>
+
+      <div class="mb-4">
+        <div class="wz-field"><label>Qual é sua maior dor financeira agora?</label></div>
+        <div class="wz-options">
+          {% set pain_val = business_profile.pain_points if business_profile else "" %}
+          {% for opt in [
+            ("fluxo_caixa",   "💸", "Fluxo de caixa",        "Não sei se vou ter dinheiro para pagar as contas"),
+            ("acesso_credito","🏦", "Acesso a crédito",       "Preciso de capital e os bancos negam"),
+            ("margem",        "📉", "Margem apertada",        "Vendo muito mas sobra pouco no final do mês"),
+            ("dividas",       "⚠️", "Dívidas descontroladas", "Juros altos consumindo o caixa"),
+            ("organizacao",   "📋", "Desorganização",         "Não tenho clareza dos números do negócio"),
+          ] %}
+            <label class="wz-opt {% if pain_val == opt[0] %}selected{% endif %}">
+              <input type="radio" name="pain_points" value="{{ opt[0] }}" {% if pain_val == opt[0] %}checked{% endif %}>
+              <span class="wz-opt-icon">{{ opt[1] }}</span>
+              <span><div class="wz-opt-label">{{ opt[2] }}</div><div class="wz-opt-desc">{{ opt[3] }}</div></span>
+            </label>
+          {% endfor %}
+        </div>
+      </div>
+
+      <div class="wz-nav">
+        <div class="tiny muted">Etapa 1 de 4</div>
+        <button type="button" class="btn btn-primary px-4" onclick="wzNext(1)">
+          Próximo <i class="bi bi-arrow-right ms-1"></i>
+        </button>
+      </div>
+    </div>
+
+    {# ═══════════════════════════════════════════════
+       ETAPA 2 — Números
+    ═══════════════════════════════════════════════ #}
+    <div class="wz-step d-none" id="step-2">
+      <div class="wz-step-head">
+        <div class="wz-step-eye"><i class="bi bi-cash-coin"></i> Etapa 2 de 4</div>
+        <h2 class="wz-step-title">Os números do negócio</h2>
+        <p class="wz-step-sub">Use valores aproximados — precisão de 10% já é suficiente para o score.</p>
+      </div>
+
+      <div class="wz-num-grid mb-4">
+        {% set bp = business_profile %}
+        <div class="wz-field">
+          <label>Faturamento mensal (R$) <span style="color:var(--mc-danger)">*</span></label>
+          <input class="wz-input" type="number" name="revenue_monthly_brl" id="fld-revenue"
+                 min="0" step="1000" placeholder="ex: 150000"
+                 value="{{ current_client.revenue_monthly_brl|int if current_client.revenue_monthly_brl else '' }}">
+          <div class="warn" id="warn-revenue">Informe o faturamento para calcular o score.</div>
+          <div class="hint">Média dos últimos 3 meses.</div>
+        </div>
+
+        <div class="wz-field">
+          <label>Total de dívidas (R$)</label>
+          <input class="wz-input" type="number" name="debt_total_brl" id="fld-debt"
+                 min="0" step="1000" placeholder="ex: 80000"
+                 value="{{ current_client.debt_total_brl|int if current_client.debt_total_brl else '' }}">
+          <div class="hint">Empréstimos + parcelas em aberto.</div>
+        </div>
+
+        <div class="wz-field">
+          <label>Caixa disponível (R$)</label>
+          <input class="wz-input" type="number" name="cash_balance_brl" id="fld-cash"
+                 min="0" step="1000" placeholder="ex: 30000"
+                 value="{{ current_client.cash_balance_brl|int if current_client.cash_balance_brl else '' }}">
+          <div class="hint">Conta corrente + aplicações.</div>
+        </div>
+
+        <div class="wz-field">
+          <label>Funcionários (CLT + PJ)</label>
+          <input class="wz-input" type="number" name="employees_count" id="fld-emp"
+                 min="0" step="1" placeholder="ex: 12"
+                 value="{{ current_client.employees_count if current_client.employees_count else '' }}">
+        </div>
+      </div>
+
+      {# Alerta de consistência em tempo real #}
+      <div id="consistency-warn" class="alert border-0 d-none"
+           style="border-radius:12px; background:#fff3cd; border:1px solid rgba(233,196,106,.6)!important; font-size:.88rem;">
+        <i class="bi bi-exclamation-triangle"></i> <span id="consistency-msg"></span>
+      </div>
+
+      <div class="wz-nav">
+        <button type="button" class="btn btn-outline-secondary" onclick="wzBack(2)">
+          <i class="bi bi-arrow-left me-1"></i> Voltar
+        </button>
+        <button type="button" class="btn btn-primary px-4" onclick="wzNext(2)">
+          Próximo <i class="bi bi-arrow-right ms-1"></i>
+        </button>
+      </div>
+    </div>
+
+    {# ═══════════════════════════════════════════════
+       ETAPA 3 — Processos (checklist)
+    ═══════════════════════════════════════════════ #}
+    <div class="wz-step d-none" id="step-3">
+      <div class="wz-step-head">
+        <div class="wz-step-eye"><i class="bi bi-gear"></i> Etapa 3 de 4</div>
+        <h2 class="wz-step-title">Como está a gestão?</h2>
+        <p class="wz-step-sub">Marque o que você já faz na empresa. Sem julgamento — apenas o que existe.</p>
+      </div>
+
+      <div class="wz-check-grid">
+        {% set last_answers = {} %}
+        {% if business_profile and business_profile.answers_json %}
+          {# Pré-marca com as últimas respostas se existirem #}
+        {% endif %}
+        {% set current_section = namespace(val="") %}
+        {% for q in survey %}
+          {% if q.section != current_section.val %}
+            {% set current_section.val = q.section %}
+            <div class="wz-check-section">{{ q.section }}</div>
+          {% endif %}
+          <label class="wz-check-item" id="chk-{{ q.id }}">
+            <input type="checkbox" name="{{ q.id }}" value="1">
+            <span class="wz-check-box"><i class="bi bi-check-lg"></i></span>
+            <span style="font-size:.9rem;">{{ q.q }}</span>
+          </label>
+        {% endfor %}
+      </div>
+
+      <div class="wz-nav mt-4">
+        <button type="button" class="btn btn-outline-secondary" onclick="wzBack(3)">
+          <i class="bi bi-arrow-left me-1"></i> Voltar
+        </button>
+        <button type="button" class="btn btn-primary px-4" onclick="wzNext(3)">
+          Revisar <i class="bi bi-arrow-right ms-1"></i>
+        </button>
+      </div>
+    </div>
+
+    {# ═══════════════════════════════════════════════
+       ETAPA 4 — Revisão + NPS
+    ═══════════════════════════════════════════════ #}
+    <div class="wz-step d-none" id="step-4">
+      <div class="wz-step-head">
+        <div class="wz-step-eye"><i class="bi bi-check-circle"></i> Etapa 4 de 4</div>
+        <h2 class="wz-step-title">Revisão e envio</h2>
+        <p class="wz-step-sub">Confirme os dados antes de calcular seu score.</p>
+      </div>
+
+      {# Resumo dos dados — preenchido por JS #}
+      <div class="card p-3 mb-4">
+        <div class="fw-semibold mb-3">Resumo do diagnóstico</div>
+        <div id="review-content">
+          <div class="wz-review-row"><span class="wz-review-label">Porte</span><span class="wz-review-val" id="rv-segment">—</span></div>
+          <div class="wz-review-row"><span class="wz-review-label">Fase</span><span class="wz-review-val" id="rv-fase">—</span></div>
+          <div class="wz-review-row"><span class="wz-review-label">Maior dor</span><span class="wz-review-val" id="rv-dor">—</span></div>
+          <div class="wz-review-row"><span class="wz-review-label">Faturamento mensal</span><span class="wz-review-val" id="rv-revenue">—</span></div>
+          <div class="wz-review-row"><span class="wz-review-label">Dívidas</span><span class="wz-review-val" id="rv-debt">—</span></div>
+          <div class="wz-review-row"><span class="wz-review-label">Caixa disponível</span><span class="wz-review-val" id="rv-cash">—</span></div>
+          <div class="wz-review-row"><span class="wz-review-label">Processos marcados</span><span class="wz-review-val" id="rv-checks">—</span></div>
+        </div>
+      </div>
+
+      <div class="mb-4">
+        <div class="wz-field">
+          <label>De 0 a 10, o quanto você recomendaria a Maffezzolli Capital?</label>
+        </div>
+        <div class="nps-row mt-2" id="npsRow">
+          {% for i in range(11) %}
+            <button type="button" class="nps-btn" data-val="{{ i }}" onclick="selectNps({{ i }})">{{ i }}</button>
+          {% endfor %}
+        </div>
+        <input type="hidden" name="nps_score" id="npsInput" value="0">
+        <div class="tiny muted mt-2">0 = não recomendaria · 10 = recomendaria com certeza</div>
+      </div>
+
+      <div class="mb-4">
+        <div class="wz-field">
+          <label>Observação (opcional)</label>
+          <textarea class="wz-input" name="notes" rows="3"
+                    placeholder="Algum contexto relevante para o seu consultor..."></textarea>
+        </div>
+      </div>
+
+      <div class="wz-nav">
+        <button type="button" class="btn btn-outline-secondary" onclick="wzBack(4)">
+          <i class="bi bi-arrow-left me-1"></i> Voltar
+        </button>
+        <button type="submit" class="btn btn-primary px-5" id="submitBtn">
+          <i class="bi bi-send-fill me-2"></i> Calcular meu score
+        </button>
+      </div>
+    </div>
+
+  </form>{# /wzForm #}
+</div>
+
+<script>
+(function(){
+  // ── Navegação entre steps ──────────────────────────────────────────────
+  const TOTAL = 4;
+  let current = 1;
+
+  function showStep(n){
+    for(let i=1; i<=TOTAL; i++){
+      const el = document.getElementById("step-"+i);
+      if(el) el.classList.toggle("d-none", i!==n);
+      const dot = document.getElementById("dot-"+i);
+      if(dot){
+        dot.classList.remove("done","active");
+        if(i < n) dot.classList.add("done");
+        else if(i === n) dot.classList.add("active");
+      }
+    }
+    current = n;
+    window.scrollTo({top:0, behavior:"smooth"});
+  }
+
+  window.wzNext = function(step){
+    if(step === 2 && !validateNumbers()) return;
+    if(step === 4) fillReview();
+    showStep(step + 1);
+  };
+
+  window.wzBack = function(step){
+    showStep(step - 1);
+  };
+
+  // ── Opções clicáveis (radio/checkbox via label) ────────────────────────
+  document.querySelectorAll(".wz-opt").forEach(label => {
+    const inp = label.querySelector("input");
+    if(!inp) return;
+    label.addEventListener("click", () => {
+      if(inp.type === "radio"){
+        // desmarca todos do mesmo name
+        document.querySelectorAll(`input[name="${inp.name}"]`).forEach(r => {
+          r.closest(".wz-opt")?.classList.remove("selected");
+        });
+      }
+      label.classList.toggle("selected", inp.type === "checkbox" ? !label.classList.contains("selected") : true);
+      if(inp.type === "radio") inp.checked = true;
+      else inp.checked = label.classList.contains("selected");
+    });
+  });
+
+  // ── Checklist de processos ─────────────────────────────────────────────
+  document.querySelectorAll(".wz-check-item").forEach(label => {
+    const inp = label.querySelector("input");
+    if(!inp) return;
+    label.addEventListener("click", () => {
+      inp.checked = !inp.checked;
+      label.classList.toggle("checked", inp.checked);
+    });
+  });
+
+  // ── NPS ───────────────────────────────────────────────────────────────
+  window.selectNps = function(val){
+    document.querySelectorAll(".nps-btn").forEach(b => {
+      b.classList.toggle("selected", parseInt(b.dataset.val) === val);
+    });
+    document.getElementById("npsInput").value = val;
+  };
+
+  // ── Validação dos números ──────────────────────────────────────────────
+  function validateNumbers(){
+    const rev = parseFloat(document.getElementById("fld-revenue").value || 0);
+    const warn = document.getElementById("warn-revenue");
+    const inp  = document.getElementById("fld-revenue");
+    if(rev <= 0){
+      inp.classList.add("invalid");
+      warn.style.display = "block";
+      inp.focus();
+      return false;
+    }
+    inp.classList.remove("invalid");
+    warn.style.display = "none";
+    return true;
+  }
+
+  // Alerta de consistência em tempo real
+  function checkConsistency(){
+    const rev  = parseFloat(document.getElementById("fld-revenue")?.value || 0);
+    const cash = parseFloat(document.getElementById("fld-cash")?.value || 0);
+    const debt = parseFloat(document.getElementById("fld-debt")?.value || 0);
+    const box  = document.getElementById("consistency-warn");
+    const msg  = document.getElementById("consistency-msg");
+    if(!box || !msg) return;
+    let warning = "";
+    if(rev > 0 && cash > rev * 12)
+      warning = `Caixa de ${brl(cash)} parece alto para um faturamento de ${brl(rev)}/mês. Confirma?`;
+    else if(rev > 0 && debt > rev * 36)
+      warning = `Dívida de ${brl(debt)} é mais de 3 anos de faturamento. Confirma?`;
+    box.classList.toggle("d-none", !warning);
+    msg.textContent = warning;
+  }
+
+  ["fld-revenue","fld-cash","fld-debt"].forEach(id => {
+    document.getElementById(id)?.addEventListener("input", checkConsistency);
+  });
+
+  // ── Revisão ───────────────────────────────────────────────────────────
+  const segLabels = {pme:"PME", middle:"Middle Market", construtora:"Construtora"};
+  const faseLabels = {crescimento:"Crescendo 🚀", estabilizacao:"Estabilizando ⚖️",
+                      reestruturacao:"Reestruturando 🔧", expansao:"Expandindo 🌐"};
+  const dorLabels  = {fluxo_caixa:"Fluxo de caixa 💸", acesso_credito:"Acesso a crédito 🏦",
+                      margem:"Margem apertada 📉", dividas:"Dívidas descontroladas ⚠️",
+                      organizacao:"Desorganização 📋"};
+
+  function brl(v){
+    return new Intl.NumberFormat("pt-BR",{style:"currency",currency:"BRL",maximumFractionDigits:0}).format(v||0);
+  }
+
+  function fillReview(){
+    const seg  = document.querySelector("input[name=segment]:checked")?.value || "";
+    const fase = document.querySelector("input[name=company_size]:checked")?.value || "";
+    const dor  = document.querySelector("input[name=pain_points]:checked")?.value || "";
+    const rev  = parseFloat(document.getElementById("fld-revenue")?.value || 0);
+    const debt = parseFloat(document.getElementById("fld-debt")?.value || 0);
+    const cash = parseFloat(document.getElementById("fld-cash")?.value || 0);
+    const checks = document.querySelectorAll(".wz-check-item.checked").length;
+    const total  = document.querySelectorAll(".wz-check-item").length;
+
+    setText("rv-segment", segLabels[seg]  || seg  || "—");
+    setText("rv-fase",    faseLabels[fase] || fase || "—");
+    setText("rv-dor",     dorLabels[dor]   || dor  || "—");
+    setText("rv-revenue", rev  > 0 ? brl(rev)  : "Não informado");
+    setText("rv-debt",    debt > 0 ? brl(debt) : "Não informado");
+    setText("rv-cash",    cash > 0 ? brl(cash) : "Não informado");
+    setText("rv-checks",  `${checks} de ${total} marcados`);
+  }
+
+  function setText(id, val){
+    const el = document.getElementById(id);
+    if(el) el.textContent = val;
+  }
+
+  // ── Previne double-submit ──────────────────────────────────────────────
+  document.getElementById("wzForm")?.addEventListener("submit", () => {
+    const btn = document.getElementById("submitBtn");
+    if(btn){ btn.disabled = true; btn.innerHTML = '<i class="bi bi-hourglass-split me-2"></i> Calculando…'; }
+  });
+
+})();
+</script>
+{% endblock %}
+"""
+
+if hasattr(templates_env.loader, "mapping"):
+    templates_env.loader.mapping = TEMPLATES
+
+# ============================================================================
+# FIM DO PATCH — Sprint 3: Diagnóstico Guiado
+# ============================================================================
