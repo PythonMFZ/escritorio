@@ -44238,3 +44238,419 @@ def _phase1a_patch_dashboard_template() -> None:
 
 _phase1a_patch_base_template()
 _phase1a_patch_dashboard_template()
+
+# ============================================================================
+# PATCH INCREMENTAL — Sprint 2 (só o que falta)
+# ============================================================================
+# Cole APÓS o bloco do Sprint 1 no final do app.py.
+#
+# ASSUME QUE JÁ EXISTEM:
+#   - SmartAlert, analyze_client_health_job, get_unread_smart_alerts
+#   - dashboard_gauge, dashboard_next_steps, approved_offers_count
+#   - pending_items_count, smart_alerts_unread_count no contexto
+#   - TEMPLATES["dashboard.html"] com hero prescritivo (Sprint 1)
+#   - Rota GET / já funcionando
+#
+# O QUE ESTE PATCH ADICIONA (e só isso):
+#   1. _infer_segment / _segment_meta / _score_evolution_narrative
+#   2. Rota GET /api/spark/{client_id}
+#   3. Middleware que injeta segment/segment_meta/score_evolution/snapshots_count
+#      na rota / sem reescrever ela
+#   4. Inserção cirúrgica no dashboard.html:
+#      - card de segmento (logo após o hero existente)
+#      - sparklines reais nos 3 KPIs (via canvas + fetch)
+#
+# REVERSÍVEL: remova o bloco. Sprint 1 volta intacto.
+# ============================================================================
+
+
+# ── 1. HELPERS DE SEGMENTO E EVOLUÇÃO ────────────────────────────────────────
+
+def _infer_segment(client: Any) -> str:
+    """PME | middle | construtora — inferido pelo faturamento mensal."""
+    rev = float(getattr(client, "revenue_monthly_brl", 0.0) or 0.0)
+    if rev >= 4_200_000:
+        return "construtora"
+    if rev >= 500_000:
+        return "middle"
+    return "pme"
+
+
+def _segment_meta(segment: str) -> dict:
+    """Metadados de UX por segmento: label, ícone, cor, headline, CTA."""
+    _map = {
+        "pme": {
+            "label": "PME",
+            "icon": "bi-shop",
+            "color": "#E07020",
+            "bg": "rgba(224,112,32,.09)",
+            "headline": "CFO de Bolso",
+            "desc": "Foco em organização financeira, precificação e primeiro acesso a crédito.",
+            "cta_text": "Ver trilha de profissionalização",
+            "cta_href": "/perfil",
+            "kpi_focus": "Processos e fluxo de caixa",
+        },
+        "middle": {
+            "label": "Middle Market",
+            "icon": "bi-building",
+            "color": "#0B7285",
+            "bg": "rgba(11,114,133,.09)",
+            "headline": "Inteligência Preditiva",
+            "desc": "Foco em previsibilidade de caixa, redução de inadimplência e crédito estruturado.",
+            "cta_text": "Abrir projeção de caixa",
+            "cta_href": "/perfil",
+            "kpi_focus": "Projeção 90 dias e capital de giro",
+        },
+        "construtora": {
+            "label": "Construtora / Alto Ticket",
+            "icon": "bi-buildings",
+            "color": "#1A3A2A",
+            "bg": "rgba(26,58,42,.09)",
+            "headline": "Engenharia Financeira",
+            "desc": "Foco em compliance dos compradores, VGV e estruturação de CRI/FIDC.",
+            "cta_text": "Abrir compliance e consultas",
+            "cta_href": "/consultas",
+            "kpi_focus": "Compliance e estruturação de crédito",
+        },
+    }
+    return _map.get(segment, _map["pme"])
+
+
+def _score_evolution_narrative(snapshots: list) -> dict:
+    """
+    Gera narrativa textual da evolução do score_total.
+    Recebe lista ordenada do mais antigo ao mais novo.
+    Retorna: { text, direction: 'up'|'down'|'stable', delta }
+    """
+    if not snapshots or len(snapshots) < 2:
+        return {"text": "Primeiro diagnóstico registrado.", "direction": "stable", "delta": 0.0}
+
+    newest = float(getattr(snapshots[-1], "score_total", 0.0) or 0.0)
+    oldest = float(getattr(snapshots[0],  "score_total", 0.0) or 0.0)
+    delta  = round(newest - oldest, 1)
+
+    try:
+        days = (snapshots[-1].created_at - snapshots[0].created_at).days
+        period = (
+            f"{days // 30} meses" if days >= 60
+            else f"{days // 7} semanas" if days >= 14
+            else f"{days} dias"
+        )
+    except Exception:
+        period = f"{len(snapshots) - 1} diagnóstico(s)"
+
+    if abs(delta) < 2:
+        return {"text": f"Score estável há {period}.", "direction": "stable", "delta": delta}
+    if delta > 0:
+        return {"text": f"Score subiu {delta:+.0f} pts em {period}.", "direction": "up",   "delta": delta}
+    return     {"text": f"Score caiu {delta:.0f} pts em {period}.",   "direction": "down", "delta": delta}
+
+
+# ── 2. ROTA /api/spark/{client_id} ───────────────────────────────────────────
+
+@app.get("/api/spark/{client_id}", response_class=JSONResponse)
+@require_login
+async def api_spark_s2(
+    request: Request,
+    client_id: int,
+    session: Session = Depends(get_session),
+) -> JSONResponse:
+    """Últimos 6 snapshots como JSON para as sparklines do dashboard."""
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        return JSONResponse({"error": "auth"}, status_code=401)
+    if not ensure_can_access_client(ctx, client_id):
+        return JSONResponse({"error": "forbidden"}, status_code=403)
+    try:
+        snaps = session.exec(
+            select(ClientSnapshot)
+            .where(
+                ClientSnapshot.company_id == ctx.company.id,
+                ClientSnapshot.client_id == client_id,
+            )
+            .order_by(ClientSnapshot.created_at.asc())
+            .limit(6)
+        ).all()
+        return JSONResponse([
+            {
+                "date":           s.created_at.strftime("%d/%m") if s.created_at else "",
+                "score_total":    round(float(s.score_total    or 0), 1),
+                "score_financial":round(float(s.score_financial or 0), 1),
+                "score_process":  round(float(s.score_process  or 0), 1),
+                "cash":           round(float(s.cash_balance_brl or 0), 2),
+            }
+            for s in snaps
+        ])
+    except Exception:
+        return JSONResponse([])
+
+
+# ── 3. MIDDLEWARE: injeta segment/evolution no contexto da rota / ─────────────
+#
+# Em vez de reescrever a rota existente, envolvemos o render() para que,
+# quando o template for "dashboard.html", os 4 campos novos sejam
+# adicionados ao contexto automaticamente — se ainda não estiverem lá.
+
+_render_before_s2 = render   # guarda o render atual (pode ser o do Sprint 1 ou o original)
+
+
+def render(
+    template_name: str,
+    *,
+    request: Request,
+    context: Optional[dict[str, Any]] = None,
+    status_code: int = 200,
+) -> HTMLResponse:
+    ctx_dict = dict(context or {})
+
+    if template_name == "dashboard.html":
+        # Só injeta se a rota ainda não passou esses valores
+        if "segment" not in ctx_dict:
+            client = ctx_dict.get("current_client")
+            segment = _infer_segment(client) if client else "pme"
+            ctx_dict["segment"]      = segment
+            ctx_dict["segment_meta"] = _segment_meta(segment)
+
+        if "score_evolution" not in ctx_dict:
+            # Busca snapshots para narrativa — sessão via request.state se disponível
+            snapshots: list = []
+            try:
+                with Session(engine) as _db:
+                    tenant = get_tenant_context(request, _db)
+                    client = ctx_dict.get("current_client")
+                    if tenant and client and ensure_can_access_client(tenant, client.id):
+                        snaps_raw = _db.exec(
+                            select(ClientSnapshot)
+                            .where(
+                                ClientSnapshot.company_id == tenant.company.id,
+                                ClientSnapshot.client_id  == client.id,
+                            )
+                            .order_by(ClientSnapshot.created_at.asc())
+                            .limit(6)
+                        ).all()
+                        snapshots = list(snaps_raw)
+            except Exception:
+                snapshots = []
+
+            ctx_dict["score_evolution"]  = _score_evolution_narrative(snapshots)
+            ctx_dict["snapshots_count"]  = len(snapshots)
+
+    return _render_before_s2(
+        template_name,
+        request=request,
+        context=ctx_dict,
+        status_code=status_code,
+    )
+
+
+# ── 4. INSERÇÃO CIRÚRGICA NO DASHBOARD.HTML ──────────────────────────────────
+#
+# Estratégia: usamos str.replace para injetar 2 blocos no template existente,
+# sem tocar em hero, alertas, gauge ou tabs.
+#
+# ÂNCORA A: logo após o fechamento do bloco hero (</div> do mc-hero ou do card
+#           alternativo). Inserimos o card de segmento.
+#
+# ÂNCORA B: dentro do bloco KPI Score Geral, após o mc-kpi-foot.
+#           Inserimos os <canvas> das sparklines + o script de fetch.
+#
+# Se as âncoras não forem encontradas (template muito diferente do Sprint 1),
+# o patch pula silenciosamente — sem crash.
+
+_SEGMENT_CARD_HTML = r"""
+{# ── SPRINT 2: card de segmento + narrativa de evolução ── #}
+{% if current_client and segment_meta %}
+<div style="
+  border-radius:16px; padding:1.25rem 1.5rem; margin-bottom:1rem;
+  border:1px solid var(--mc-border); background:#fff;
+  display:flex; gap:1.25rem; align-items:flex-start; flex-wrap:wrap;
+">
+  <div style="
+    width:48px; height:48px; border-radius:14px; flex-shrink:0;
+    display:flex; align-items:center; justify-content:center; font-size:1.5rem;
+    background:{{ segment_meta.bg }}; color:{{ segment_meta.color }};
+  ">
+    <i class="bi {{ segment_meta.icon }}"></i>
+  </div>
+  <div style="flex:1; min-width:0;">
+    <div class="d-flex align-items-center gap-2 flex-wrap">
+      <span style="
+        font-size:.72rem; font-weight:700; text-transform:uppercase; letter-spacing:.07em;
+        padding:.25rem .65rem; border-radius:999px;
+        background:{{ segment_meta.bg }}; color:{{ segment_meta.color }};
+      ">{{ segment_meta.label }}</span>
+      <span style="font-weight:700; font-size:15px;">{{ segment_meta.headline }}</span>
+    </div>
+    <div class="muted tiny mt-1">{{ segment_meta.desc }}</div>
+    {% if score_evolution and score_evolution.text %}
+      <div class="mt-2">
+        <span style="
+          display:inline-flex; align-items:center; gap:.4rem;
+          font-size:.82rem; font-weight:500; padding:.3rem .75rem;
+          border-radius:999px; border:1px solid var(--mc-border);
+          {% if score_evolution.direction == 'up' %}
+            color:#198754; border-color:rgba(25,135,84,.2); background:rgba(25,135,84,.06);
+          {% elif score_evolution.direction == 'down' %}
+            color:#dc3545; border-color:rgba(220,53,69,.2); background:rgba(220,53,69,.06);
+          {% else %}
+            color:var(--mc-muted);
+          {% endif %}
+        ">
+          {% if score_evolution.direction == 'up' %}<i class="bi bi-arrow-up-right"></i>
+          {% elif score_evolution.direction == 'down' %}<i class="bi bi-arrow-down-right"></i>
+          {% else %}<i class="bi bi-dash"></i>{% endif %}
+          {{ score_evolution.text }}
+          {% if snapshots_count and snapshots_count > 1 %} · {{ snapshots_count }} diagnósticos{% endif %}
+        </span>
+      </div>
+    {% endif %}
+  </div>
+  <div class="d-none d-md-flex align-items-center">
+    <a class="btn btn-outline-primary btn-sm" href="{{ segment_meta.cta_href }}">
+      {{ segment_meta.cta_text }}
+    </a>
+  </div>
+</div>
+{% endif %}
+{# ── /SPRINT 2 segmento ── #}
+"""
+
+_SPARKLINES_HTML = r"""
+{# ── SPRINT 2: sparklines reais ── #}
+{% if current_client %}
+<canvas id="mc-spark-score"   data-field="score_total"   data-color="#E07020"
+        data-client="{{ current_client.id }}"
+        style="width:100%; height:32px; display:block; margin-top:.5rem;"></canvas>
+{% endif %}
+{# ── /SPRINT 2 sparklines score ── #}
+"""
+
+# Âncoras: strings que existem no template gerado pelo Sprint 1.
+# Tolerantes: se não achar, não quebra.
+
+_ANCHOR_AFTER_HERO = "{# ════════════════ 3 KPIs CRÍTICOS"  # logo antes dos KPIs
+
+_ANCHOR_AFTER_GAUGE_FOOT = (
+    "{% if dashboard_gauge %}{{ dashboard_gauge.label }}"
+    "{% else %}Sem diagnóstico recente{% endif %}\n"
+    "      </div>"
+)  # fecha o mc-kpi-foot do Score Geral
+
+_SPARKLINES_SCRIPT = r"""
+{# ── SPRINT 2: script sparklines ── #}
+{% if current_client %}
+<script>
+(function(){
+  const cid = {{ current_client.id }};
+  function norm(arr){
+    const mn=Math.min(...arr), mx=Math.max(...arr);
+    if(mx===mn) return arr.map(()=>0.5);
+    return arr.map(v=>(v-mn)/(mx-mn));
+  }
+  function draw(canvas, vals, color){
+    if(!canvas||vals.length<2) return;
+    const W=canvas.offsetWidth||200, H=canvas.offsetHeight||32;
+    canvas.width=W*devicePixelRatio; canvas.height=H*devicePixelRatio;
+    const ctx=canvas.getContext("2d");
+    ctx.scale(devicePixelRatio,devicePixelRatio);
+    const nv=norm(vals), pad=3, step=(W-pad*2)/(nv.length-1);
+    const pts=nv.map((v,i)=>({x:pad+i*step, y:pad+(1-v)*(H-pad*2)}));
+    ctx.beginPath(); ctx.moveTo(pts[0].x,H);
+    pts.forEach(p=>ctx.lineTo(p.x,p.y));
+    ctx.lineTo(pts[pts.length-1].x,H); ctx.closePath();
+    ctx.fillStyle=color+"22"; ctx.fill();
+    ctx.beginPath(); ctx.moveTo(pts[0].x,pts[0].y);
+    for(let i=1;i<pts.length;i++){
+      const mx=(pts[i-1].x+pts[i].x)/2;
+      ctx.bezierCurveTo(mx,pts[i-1].y,mx,pts[i].y,pts[i].x,pts[i].y);
+    }
+    ctx.strokeStyle=color; ctx.lineWidth=2;
+    ctx.lineJoin="round"; ctx.lineCap="round"; ctx.stroke();
+    const l=pts[pts.length-1];
+    ctx.beginPath(); ctx.arc(l.x,l.y,3,0,Math.PI*2);
+    ctx.fillStyle=color; ctx.fill();
+  }
+  async function load(){
+    let data=[];
+    try{
+      const r=await fetch(`/api/spark/${cid}`,{credentials:"same-origin"});
+      if(r.ok) data=await r.json();
+    }catch(e){return;}
+    if(!Array.isArray(data)||data.length<2) return;
+    document.querySelectorAll("canvas[data-field][data-client]").forEach(c=>{
+      if(parseInt(c.dataset.client)!==cid) return;
+      draw(c, data.map(d=>parseFloat(d[c.dataset.field]||0)), c.dataset.color||"#E07020");
+    });
+  }
+  document.readyState==="loading"
+    ? document.addEventListener("DOMContentLoaded",load)
+    : setTimeout(load,0);
+})();
+</script>
+{% endif %}
+{# ── /SPRINT 2 script sparklines ── #}
+"""
+
+# ── aplicar as inserções no template em memória ──────────────────────────────
+
+def _patch_dashboard_template() -> None:
+    tpl: str = TEMPLATES.get("dashboard.html", "")
+    if not tpl:
+        return
+
+    changed = False
+
+    # Inserção A: card de segmento antes dos KPIs
+    if _ANCHOR_AFTER_HERO in tpl and "SPRINT 2: card de segmento" not in tpl:
+        tpl = tpl.replace(
+            _ANCHOR_AFTER_HERO,
+            _SEGMENT_CARD_HTML + "\n" + _ANCHOR_AFTER_HERO,
+            1,
+        )
+        changed = True
+
+    # Inserção B: canvas do sparkline de score após o mc-kpi-foot do Score Geral
+    if _ANCHOR_AFTER_GAUGE_FOOT in tpl and "mc-spark-score" not in tpl:
+        tpl = tpl.replace(
+            _ANCHOR_AFTER_GAUGE_FOOT,
+            _ANCHOR_AFTER_GAUGE_FOOT + "\n" + _SPARKLINES_HTML,
+            1,
+        )
+        changed = True
+
+    # Inserção C: script de fetch/draw antes do fechamento do endblock
+    if "{% endblock %}" in tpl and "SPRINT 2: script sparklines" not in tpl:
+        tpl = tpl.replace(
+            "{% endblock %}",
+            _SPARKLINES_SCRIPT + "\n{% endblock %}",
+            1,
+        )
+        changed = True
+
+    if changed:
+        TEMPLATES["dashboard.html"] = tpl
+        if hasattr(templates_env.loader, "mapping"):
+            templates_env.loader.mapping = TEMPLATES
+
+
+_patch_dashboard_template()
+
+# ── canvas extras para cash e processos (adicionados via JS dinamicamente) ───
+#
+# O script acima já lida com qualquer canvas que tenha data-field + data-client.
+# Se quiser adicionar sparklines nos KPIs de Caixa e Processos, basta colocar
+# no seu dashboard.html (após os respectivos mc-kpi-foot):
+#
+#   <canvas data-field="cash"          data-color="#198754" data-client="{{ current_client.id }}"
+#           style="width:100%;height:32px;display:block;margin-top:.5rem;"></canvas>
+#
+#   <canvas data-field="score_process" data-color="#0B7285" data-client="{{ current_client.id }}"
+#           style="width:100%;height:32px;display:block;margin-top:.5rem;"></canvas>
+#
+# Não inserimos automaticamente esses dois porque as âncoras dos KPIs de Caixa
+# e Processos variam conforme o template do seu app. Cole manualmente onde
+# quiser que apareçam.
+
+# ============================================================================
+# FIM DO PATCH — Sprint 2 incremental
+# ============================================================================
