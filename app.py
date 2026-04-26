@@ -46133,3 +46133,226 @@ if hasattr(templates_env.loader, "mapping"):
 # ============================================================================
 # FIM DO PATCH — Sprint 3 revisado (wizard 5 etapas com balanço)
 # ============================================================================
+# ============================================================================
+# FIX — Remove formulário antigo de /perfil, redireciona para wizard
+# ============================================================================
+# Cole APÓS todos os blocos de Sprint no final do app.py.
+#
+# PROBLEMA:
+#   O TEMPLATES["perfil.html"] tem um <form> inline com campos soltos de
+#   balanço (POST para /perfil). Isso duplica o wizard do Sprint 3 e confunde
+#   o cliente — ele vê campos para preencher sem o fluxo guiado.
+#
+# FIX:
+#   Substitui o bloco "Indicadores e balanço" (form antigo) por um card
+#   que direciona para /perfil/avaliacao/nova (o wizard novo).
+#   O resto do perfil.html (scores, leitura executiva, gauge, ofertas) fica
+#   intacto — só o formulário é removido.
+# ============================================================================
+
+_PERFIL_OLD_FORM_START = '<div class="card p-4 mb-3">\n      <div class="d-flex justify-content-between align-items-start">\n        <div>\n          <h4 class="mb-1">Indicadores e balanço</h4>'
+
+_PERFIL_OLD_FORM_END = """          <div class="mt-4 d-flex gap-2">
+            <button class="btn btn-primary">Salvar diagnóstico</button>
+            <a class="btn btn-outline-secondary" href="/ofertas">Ver oportunidades</a>
+          </div>
+        </form>
+      {% endif %}
+    </div>"""
+
+_PERFIL_NEW_CARD = """<div class="card p-4 mb-3">
+      <div class="d-flex justify-content-between align-items-start flex-wrap gap-3">
+        <div>
+          <h4 class="mb-1">Diagnóstico financeiro</h4>
+          <div class="muted">
+            Mantenha seu diagnóstico atualizado mensalmente para scores precisos
+            e acesso às melhores ofertas de crédito.
+          </div>
+        </div>
+        {% if financial_analysis %}
+          <div class="text-end flex-shrink-0">
+            <div class="muted small">Status do motor</div>
+            <div class="fw-semibold">{{ financial_analysis.status_label }}</div>
+          </div>
+        {% endif %}
+      </div>
+
+      <div class="row g-3 mt-2">
+        {# ── Card: fazer/atualizar diagnóstico ── #}
+        <div class="col-md-6">
+          <div style="
+            border-radius:14px; padding:1.25rem;
+            background:linear-gradient(135deg,#fff7f1,#ffede0);
+            border:1px solid rgba(224,112,32,.25);
+            height:100%;
+          ">
+            <div style="font-size:1.5rem; margin-bottom:.5rem;">🩺</div>
+            <div class="fw-semibold mb-1">
+              {% if not latest_snapshot %}
+                Fazer primeiro diagnóstico
+              {% else %}
+                Atualizar diagnóstico
+              {% endif %}
+            </div>
+            <div class="muted small mb-3">
+              {% if not latest_snapshot %}
+                Leva menos de 5 minutos e destrava as ofertas de crédito.
+              {% else %}
+                Última avaliação:
+                <strong>{{ latest_snapshot.created_at.strftime("%d/%m/%Y") }}</strong>
+                · Score: <strong>{{ "%.0f"|format(latest_snapshot.score_total) }}</strong>
+              {% endif %}
+            </div>
+            <a class="btn btn-primary btn-sm" href="/perfil/avaliacao/nova">
+              <i class="bi bi-clipboard2-pulse me-1"></i>
+              {% if not latest_snapshot %}Iniciar diagnóstico{% else %}Nova avaliação{% endif %}
+            </a>
+          </div>
+        </div>
+
+        {# ── Card: histórico de avaliações ── #}
+        <div class="col-md-6">
+          <div style="
+            border-radius:14px; padding:1.25rem;
+            border:1px solid var(--mc-border);
+            background:#fff; height:100%;
+          ">
+            <div style="font-size:1.5rem; margin-bottom:.5rem;">📈</div>
+            <div class="fw-semibold mb-1">Histórico de avaliações</div>
+            {% if snapshots %}
+              <div class="muted small mb-2">{{ snapshots|length }} diagnóstico(s) registrado(s).</div>
+              <div class="d-flex flex-column gap-1">
+                {% for s in snapshots[:3] %}
+                  <a href="/perfil/avaliacao/{{ s.id }}"
+                     class="d-flex justify-content-between align-items-center small"
+                     style="padding:.35rem .5rem; border-radius:8px; background:var(--mc-bg); text-decoration:none; color:inherit;">
+                    <span class="muted">{{ s.created_at.strftime("%d/%m/%Y") }}</span>
+                    <span class="fw-semibold">Score {{ "%.0f"|format(s.score_total) }}</span>
+                  </a>
+                {% endfor %}
+              </div>
+            {% else %}
+              <div class="muted small">Nenhuma avaliação ainda.</div>
+            {% endif %}
+          </div>
+        </div>
+      </div>
+    </div>"""
+
+
+def _fix_perfil_template() -> None:
+    tpl = TEMPLATES.get("perfil.html", "")
+    if not tpl:
+        return
+
+    # Já foi corrigido antes?
+    if "Fazer primeiro diagnóstico" in tpl or "/perfil/avaliacao/nova" in tpl:
+        # Pode já ter o botão "Nova avaliação" mas ainda ter o form antigo
+        if _PERFIL_OLD_FORM_START not in tpl:
+            return  # já está correto
+
+    # Localiza o bloco antigo e substitui
+    start_idx = tpl.find(_PERFIL_OLD_FORM_START)
+    if start_idx == -1:
+        # Tenta fallback mais curto
+        fallback = '<h4 class="mb-1">Indicadores e balanço</h4>'
+        start_idx = tpl.find(fallback)
+        if start_idx == -1:
+            return  # não encontrou — não altera nada
+
+        # Acha o <div class="card p-4 mb-3"> antes do fallback
+        card_start = tpl.rfind('<div class="card p-4 mb-3">', 0, start_idx)
+        if card_start == -1:
+            return
+        start_idx = card_start
+
+    end_idx = tpl.find(_PERFIL_OLD_FORM_END, start_idx)
+    if end_idx == -1:
+        # Fallback: procura pelo botão "Salvar diagnóstico"
+        end_idx = tpl.find('"btn btn-primary">Salvar diagnóstico</button>', start_idx)
+        if end_idx == -1:
+            return
+        # Avança até o fechamento do card (próximo </div> após o form)
+        end_idx = tpl.find("</div>", tpl.find("</form>", end_idx))
+        if end_idx == -1:
+            return
+        end_idx += len("</div>")
+    else:
+        end_idx += len(_PERFIL_OLD_FORM_END)
+
+    TEMPLATES["perfil.html"] = tpl[:start_idx] + _PERFIL_NEW_CARD + tpl[end_idx:]
+
+    # Atualiza loader Jinja2
+    if hasattr(templates_env.loader, "mapping"):
+        templates_env.loader.mapping = TEMPLATES
+
+
+# ── Patch na rota /perfil: injeta `snapshots` e `latest_snapshot` no contexto
+# (necessários para o novo card mostrar histórico e data da última avaliação)
+
+_perfil_route_original = None
+for _r in app.routes:
+    if hasattr(_r, "path") and _r.path == "/perfil" and hasattr(_r, "endpoint"):
+        if _r.methods and "GET" in _r.methods:
+            _perfil_route_original = _r.endpoint
+            break
+
+
+if _perfil_route_original:
+    @app.get("/perfil", response_class=HTMLResponse, include_in_schema=False)
+    @require_login
+    async def perfil_page_fixed(
+        request: Request,
+        session: Session = Depends(get_session),
+    ) -> HTMLResponse:
+        # Chama a rota original e captura o contexto que ela passaria
+        # Como não temos acesso direto ao contexto, re-executamos a lógica
+        # mínima para injetar snapshots + latest_snapshot.
+        # A rota original continua fazendo tudo — só adicionamos via middleware.
+        return await _perfil_route_original(request=request, session=session)
+
+# Alternativa mais simples: patch no render() para injetar quando template=perfil.html
+
+_render_before_perfil_fix = render
+
+
+def render(
+    template_name: str,
+    *,
+    request: Request,
+    context: Optional[dict[str, Any]] = None,
+    status_code: int = 200,
+) -> HTMLResponse:
+    ctx = dict(context or {})
+
+    if template_name == "perfil.html" and "snapshots" not in ctx:
+        try:
+            client = ctx.get("current_client")
+            if client:
+                with Session(engine) as _db:
+                    snaps = _db.exec(
+                        select(ClientSnapshot)
+                        .where(ClientSnapshot.client_id == client.id)
+                        .order_by(ClientSnapshot.created_at.desc())
+                        .limit(6)
+                    ).all()
+                    ctx["snapshots"] = list(snaps)
+                    ctx["latest_snapshot"] = snaps[0] if snaps else None
+        except Exception:
+            ctx["snapshots"] = []
+            ctx["latest_snapshot"] = None
+
+    return _render_before_perfil_fix(
+        template_name,
+        request=request,
+        context=ctx,
+        status_code=status_code,
+    )
+
+
+# Aplica o fix no template
+_fix_perfil_template()
+
+# ============================================================================
+# FIM DO FIX — formulário antigo removido do /perfil
+# ============================================================================
