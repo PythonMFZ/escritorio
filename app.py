@@ -45373,3 +45373,763 @@ if hasattr(templates_env.loader, "mapping"):
 # ============================================================================
 # FIM DO PATCH — Sprint 3: Diagnóstico Guiado
 # ============================================================================
+# ============================================================================
+# PATCH — Sprint 3 revisado: Wizard 5 etapas (com Balanço Patrimonial)
+# ============================================================================
+# Substitui o TEMPLATES["perfil_snapshot_new.html"] do Sprint 3 original.
+# Cole APÓS o bloco do Sprint 3 no final do app.py.
+#
+# ETAPAS:
+#   1 — Contexto       (segmento, fase, maior dor)
+#   2 — Números        (faturamento, dívida, caixa, funcionários)
+#   3 — Balanço        (ativo circulante/não circ, passivo CP/LP, garantias)
+#   4 — Processos      (checklist PROFILE_SURVEY_V2)
+#   5 — Revisão + NPS
+#
+# POST continua 100% igual — mesmos campos, mesma rota /perfil/avaliacao/nova.
+# ============================================================================
+
+TEMPLATES["perfil_snapshot_new.html"] = r"""
+{% extends "base.html" %}
+{% block content %}
+<style>
+  .wz-wrap{ max-width:720px; margin:0 auto; }
+
+  /* Progress */
+  .wz-progress{ display:flex; gap:.4rem; margin-bottom:2rem; }
+  .wz-dot{ flex:1; height:6px; border-radius:99px; background:var(--mc-border); transition:background .3s; }
+  .wz-dot.done{ background:var(--mc-primary); }
+  .wz-dot.active{ background:var(--mc-primary); opacity:.55; }
+
+  /* Step header */
+  .wz-eye{
+    display:inline-flex; align-items:center; gap:.4rem;
+    font-size:.72rem; font-weight:700; text-transform:uppercase; letter-spacing:.08em;
+    color:var(--mc-primary-dark); background:var(--mc-primary-soft);
+    padding:.3rem .75rem; border-radius:999px; margin-bottom:.65rem;
+  }
+  .wz-title{ font-size:22px; font-weight:700; letter-spacing:-.02em; margin:0 0 .25rem; }
+  .wz-sub{ color:var(--mc-muted); font-size:.92rem; margin:0 0 1.5rem; }
+
+  /* Opções clicáveis */
+  .wz-opts{ display:grid; gap:.6rem; }
+  .wz-opts.c2{ grid-template-columns:1fr 1fr; }
+  .wz-opts.c3{ grid-template-columns:1fr 1fr 1fr; }
+  .wz-opt{
+    border:2px solid var(--mc-border); border-radius:14px;
+    padding:.8rem 1rem; cursor:pointer; transition:all .15s;
+    display:flex; align-items:flex-start; gap:.75rem; background:#fff;
+    user-select:none;
+  }
+  .wz-opt:hover{ border-color:rgba(224,112,32,.4); }
+  .wz-opt.sel{ border-color:var(--mc-primary); background:var(--mc-primary-soft); }
+  .wz-opt input{ display:none; }
+  .wz-opt-icon{ font-size:1.35rem; flex-shrink:0; line-height:1.2; }
+  .wz-opt-label{ font-weight:600; font-size:.9rem; }
+  .wz-opt-desc{ color:var(--mc-muted); font-size:.76rem; margin-top:.1rem; }
+
+  /* Campos numéricos */
+  .wz-grid2{ display:grid; grid-template-columns:1fr 1fr; gap:1rem; }
+  .wz-grid3{ display:grid; grid-template-columns:1fr 1fr 1fr; gap:1rem; }
+  .wz-grid4{ display:grid; grid-template-columns:1fr 1fr 1fr 1fr; gap:1rem; }
+  .wz-fld label{ font-weight:600; font-size:.83rem; display:block; margin-bottom:.3rem; }
+  .wz-fld .hint{ color:var(--mc-muted); font-size:.74rem; margin-top:.25rem; }
+  .wz-fld .err{ color:var(--mc-danger); font-size:.74rem; margin-top:.25rem; display:none; }
+  .wz-inp{
+    width:100%; border:2px solid var(--mc-border); border-radius:10px;
+    padding:.55rem .8rem; font-size:.92rem; outline:none;
+    transition:border .15s; background:#fff;
+  }
+  .wz-inp:focus{ border-color:var(--mc-primary); }
+  .wz-inp.bad{ border-color:var(--mc-danger); }
+
+  /* Subtítulos do balanço */
+  .wz-bal-section{
+    font-size:.72rem; font-weight:700; text-transform:uppercase;
+    letter-spacing:.07em; color:var(--mc-muted);
+    margin:1.25rem 0 .6rem; padding-bottom:.4rem;
+    border-bottom:1px solid var(--mc-border);
+  }
+  .wz-bal-total{
+    background:var(--mc-primary-soft); border-radius:10px;
+    padding:.6rem 1rem; font-size:.88rem; font-weight:600;
+    display:flex; justify-content:space-between; align-items:center;
+    margin-top:.5rem;
+  }
+
+  /* Checklist */
+  .wz-chk-grid{ display:grid; gap:.45rem; }
+  .wz-chk-sec{
+    font-size:.72rem; font-weight:700; text-transform:uppercase;
+    letter-spacing:.06em; color:var(--mc-muted); margin:.9rem 0 .35rem;
+  }
+  .wz-chk{
+    border:2px solid var(--mc-border); border-radius:12px;
+    padding:.7rem 1rem; cursor:pointer; transition:all .15s;
+    display:flex; align-items:center; gap:.8rem; background:#fff;
+    user-select:none;
+  }
+  .wz-chk:hover{ border-color:rgba(224,112,32,.35); }
+  .wz-chk.on{ border-color:var(--mc-primary); background:var(--mc-primary-soft); }
+  .wz-chk input{ display:none; }
+  .wz-chk-box{
+    width:20px; height:20px; border-radius:6px; flex-shrink:0;
+    border:2px solid var(--mc-border); background:#fff;
+    display:flex; align-items:center; justify-content:center;
+    font-size:.8rem; transition:all .15s;
+  }
+  .wz-chk.on .wz-chk-box{ background:var(--mc-primary); border-color:var(--mc-primary); color:#fff; }
+
+  /* NPS */
+  .nps-row{ display:flex; gap:.35rem; flex-wrap:wrap; margin-top:.5rem; }
+  .nps-btn{
+    width:42px; height:42px; border-radius:10px;
+    border:2px solid var(--mc-border); background:#fff;
+    font-weight:700; font-size:.88rem; cursor:pointer; transition:all .15s;
+  }
+  .nps-btn:hover{ border-color:var(--mc-primary); }
+  .nps-btn.on{ background:var(--mc-primary); border-color:var(--mc-primary); color:#fff; }
+
+  /* Revisão */
+  .rv-row{
+    display:flex; justify-content:space-between;
+    padding:.55rem 0; border-bottom:1px solid var(--mc-border); font-size:.88rem;
+  }
+  .rv-row:last-child{ border-bottom:0; }
+  .rv-lbl{ color:var(--mc-muted); }
+  .rv-val{ font-weight:600; text-align:right; max-width:60%; }
+
+  /* Nav */
+  .wz-nav{ display:flex; justify-content:space-between; align-items:center; margin-top:2rem; }
+
+  /* Consistency warning */
+  .wz-consistency{
+    border-radius:12px; padding:.75rem 1rem; font-size:.86rem;
+    background:#fff3cd; border:1px solid rgba(233,196,106,.6);
+    display:none; margin-top:.75rem;
+  }
+
+  @media(max-width:600px){
+    .wz-opts.c2,.wz-opts.c3{ grid-template-columns:1fr; }
+    .wz-grid2,.wz-grid3,.wz-grid4{ grid-template-columns:1fr 1fr; }
+  }
+  @media(max-width:400px){
+    .wz-grid2,.wz-grid3,.wz-grid4{ grid-template-columns:1fr; }
+  }
+</style>
+
+<div class="wz-wrap">
+  <div class="mb-3">
+    <a href="/perfil" class="btn btn-outline-secondary btn-sm">
+      <i class="bi bi-arrow-left"></i> Voltar
+    </a>
+  </div>
+
+  {% if not current_client %}
+    <div class="alert alert-warning">Nenhum cliente selecionado.</div>
+  {% else %}
+
+  <div class="mb-1 tiny muted">{{ current_client.name }}</div>
+
+  {# Barra de progresso #}
+  <div class="wz-progress" id="wzProg">
+    {% for i in range(1,6) %}
+      <div class="wz-dot {% if i==1 %}active{% endif %}" id="dot-{{i}}"></div>
+    {% endfor %}
+  </div>
+
+  <form method="post" action="/perfil/avaliacao/nova" id="wzForm" novalidate>
+
+    {# ══════════════════════════════════════════════════════
+       ETAPA 1 — Contexto
+    ══════════════════════════════════════════════════════ #}
+    <div class="wz-step" id="step-1">
+      <div class="wz-eye"><i class="bi bi-building"></i> Etapa 1 de 5 · Contexto</div>
+      <h2 class="wz-title">Conte sobre sua empresa</h2>
+      <p class="wz-sub">Personaliza seu diagnóstico. Menos de 1 minuto.</p>
+
+      {% set bp = business_profile %}
+
+      <div class="mb-4">
+        <div class="wz-fld"><label>Porte da empresa</label></div>
+        <div class="wz-opts c3">
+          {% for v,icon,lbl,desc in [
+            ("pme","🏪","PME","Até R$ 5M/ano"),
+            ("middle","🏢","Middle Market","R$ 5M–50M/ano"),
+            ("construtora","🏗️","Construtora","VGV R$ 20M+"),
+          ] %}
+            <label class="wz-opt {% if bp and bp.segment==v %}sel{% endif %}">
+              <input type="radio" name="segment" value="{{ v }}" {% if bp and bp.segment==v %}checked{% endif %}>
+              <span class="wz-opt-icon">{{ icon }}</span>
+              <span><div class="wz-opt-label">{{ lbl }}</div><div class="wz-opt-desc">{{ desc }}</div></span>
+            </label>
+          {% endfor %}
+        </div>
+      </div>
+
+      <div class="mb-4">
+        <div class="wz-fld"><label>Fase atual do negócio</label></div>
+        <div class="wz-opts c2">
+          {% for v,icon,lbl,desc in [
+            ("crescimento","🚀","Crescendo","Faturamento subindo, preciso escalar"),
+            ("estabilizacao","⚖️","Estabilizando","Consolidar e profissionalizar"),
+            ("reestruturacao","🔧","Reestruturando","Reorganizando dívidas ou processos"),
+            ("expansao","🌐","Expandindo","Nova unidade, mercado ou M&A"),
+          ] %}
+            <label class="wz-opt {% if bp and bp.company_size==v %}sel{% endif %}">
+              <input type="radio" name="company_size" value="{{ v }}" {% if bp and bp.company_size==v %}checked{% endif %}>
+              <span class="wz-opt-icon">{{ icon }}</span>
+              <span><div class="wz-opt-label">{{ lbl }}</div><div class="wz-opt-desc">{{ desc }}</div></span>
+            </label>
+          {% endfor %}
+        </div>
+      </div>
+
+      <div class="mb-4">
+        <div class="wz-fld"><label>Maior dor financeira agora</label></div>
+        <div class="wz-opts">
+          {% for v,icon,lbl,desc in [
+            ("fluxo_caixa","💸","Fluxo de caixa","Não sei se vou ter dinheiro para pagar as contas"),
+            ("acesso_credito","🏦","Acesso a crédito","Preciso de capital e os bancos negam"),
+            ("margem","📉","Margem apertada","Vendo muito mas sobra pouco no final do mês"),
+            ("dividas","⚠️","Dívidas descontroladas","Juros altos consumindo o caixa"),
+            ("organizacao","📋","Desorganização financeira","Não tenho clareza dos números do negócio"),
+          ] %}
+            <label class="wz-opt {% if bp and bp.pain_points==v %}sel{% endif %}">
+              <input type="radio" name="pain_points" value="{{ v }}" {% if bp and bp.pain_points==v %}checked{% endif %}>
+              <span class="wz-opt-icon">{{ icon }}</span>
+              <span><div class="wz-opt-label">{{ lbl }}</div><div class="wz-opt-desc">{{ desc }}</div></span>
+            </label>
+          {% endfor %}
+        </div>
+      </div>
+
+      <div class="wz-nav">
+        <span class="tiny muted">Etapa 1 de 5</span>
+        <button type="button" class="btn btn-primary px-4" onclick="wzNext(1)">
+          Próximo <i class="bi bi-arrow-right ms-1"></i>
+        </button>
+      </div>
+    </div>
+
+    {# ══════════════════════════════════════════════════════
+       ETAPA 2 — Números principais
+    ══════════════════════════════════════════════════════ #}
+    <div class="wz-step d-none" id="step-2">
+      <div class="wz-eye"><i class="bi bi-cash-coin"></i> Etapa 2 de 5 · Números</div>
+      <h2 class="wz-title">Os números do negócio</h2>
+      <p class="wz-sub">Valores aproximados já são suficientes. Precisão de ~10% gera score confiável.</p>
+
+      <div class="wz-grid2 mb-3">
+        {% set c = current_client %}
+        <div class="wz-fld">
+          <label>Faturamento mensal (R$) <span style="color:var(--mc-danger)">*</span></label>
+          <input class="wz-inp" type="number" name="revenue_monthly_brl" id="f-rev"
+                 min="0" step="1000" placeholder="ex: 150.000"
+                 value="{{ c.revenue_monthly_brl|int if c.revenue_monthly_brl else '' }}">
+          <div class="err" id="err-rev">Informe o faturamento para gerar o score.</div>
+          <div class="hint">Média dos últimos 3 meses.</div>
+        </div>
+        <div class="wz-fld">
+          <label>Funcionários (CLT + PJ)</label>
+          <input class="wz-inp" type="number" name="employees_count"
+                 min="0" step="1" placeholder="ex: 12"
+                 value="{{ c.employees_count if c.employees_count else '' }}">
+        </div>
+        <div class="wz-fld">
+          <label>Total de dívidas (R$)</label>
+          <input class="wz-inp" type="number" name="debt_total_brl" id="f-debt"
+                 min="0" step="1000" placeholder="ex: 80.000"
+                 value="{{ c.debt_total_brl|int if c.debt_total_brl else '' }}">
+          <div class="hint">Empréstimos + parcelas em aberto.</div>
+        </div>
+        <div class="wz-fld">
+          <label>Disponibilidades líquidas (R$)</label>
+          <input class="wz-inp" type="number" name="cash_balance_brl" id="f-cash"
+                 step="1000" placeholder="ex: 30.000"
+                 value="{{ c.cash_balance_brl|int if c.cash_balance_brl else '' }}">
+          <div class="hint">Conta corrente + aplicações. Pode ser negativo.</div>
+        </div>
+        <div class="wz-fld">
+          <label>Relacionamentos bancários</label>
+          <input class="wz-inp" type="number" name="banks_count"
+                 min="0" step="1" placeholder="ex: 2"
+                 value="{{ bp.banks_count if bp and bp.banks_count else '' }}">
+          <div class="hint">Quantos bancos a empresa opera.</div>
+        </div>
+        <div class="wz-fld">
+          <label>Crédito desejado (R$)</label>
+          <input class="wz-inp" type="number" name="desired_credit_brl"
+                 min="0" step="1000" placeholder="ex: 200.000"
+                 value="{{ bp.desired_credit_brl|int if bp and bp.desired_credit_brl else '' }}">
+          <div class="hint">Quanto precisa captar agora.</div>
+        </div>
+      </div>
+
+      <div class="wz-consistency" id="wz-consist">
+        <i class="bi bi-exclamation-triangle"></i> <span id="wz-consist-msg"></span>
+      </div>
+
+      <div class="wz-nav">
+        <button type="button" class="btn btn-outline-secondary" onclick="wzBack(2)">
+          <i class="bi bi-arrow-left me-1"></i> Voltar
+        </button>
+        <button type="button" class="btn btn-primary px-4" onclick="wzNext(2)">
+          Próximo <i class="bi bi-arrow-right ms-1"></i>
+        </button>
+      </div>
+    </div>
+
+    {# ══════════════════════════════════════════════════════
+       ETAPA 3 — Balanço Patrimonial
+    ══════════════════════════════════════════════════════ #}
+    <div class="wz-step d-none" id="step-3">
+      <div class="wz-eye"><i class="bi bi-bank"></i> Etapa 3 de 5 · Balanço</div>
+      <h2 class="wz-title">Composição patrimonial</h2>
+      <p class="wz-sub">
+        Preencha o que souber. O sistema calcula ativo total, passivo e patrimônio líquido automaticamente.
+        <span class="badge text-bg-light border ms-1">Opcional mas recomendado</span>
+      </p>
+
+      {# ── Ativo Circulante ── #}
+      <div class="wz-bal-section">Ativo Circulante</div>
+      <div class="wz-grid4">
+        <div class="wz-fld">
+          <label>Caixa e aplicações</label>
+          <input class="wz-inp" type="number" name="cash_and_investments_brl" id="b-cash-inv"
+                 step="0.01" min="0" placeholder="0"
+                 value="{{ bp.cash_and_investments_brl|int if bp and bp.cash_and_investments_brl else '' }}">
+        </div>
+        <div class="wz-fld">
+          <label>Contas a receber (até 360d)</label>
+          <input class="wz-inp" type="number" name="receivables_brl" id="b-recv"
+                 step="0.01" min="0" placeholder="0"
+                 value="{{ bp.receivables_brl|int if bp and bp.receivables_brl else '' }}">
+        </div>
+        <div class="wz-fld">
+          <label>Estoques</label>
+          <input class="wz-inp" type="number" name="inventory_brl" id="b-inv"
+                 step="0.01" min="0" placeholder="0"
+                 value="{{ bp.inventory_brl|int if bp and bp.inventory_brl else '' }}">
+        </div>
+        <div class="wz-fld">
+          <label>Outros ativos circ.</label>
+          <input class="wz-inp" type="number" name="other_current_assets_brl" id="b-oca"
+                 step="0.01" min="0" placeholder="0"
+                 value="{{ bp.other_current_assets_brl|int if bp and bp.other_current_assets_brl else '' }}">
+        </div>
+      </div>
+      <div class="wz-bal-total">
+        <span>Total Ativo Circulante</span>
+        <span id="tot-ac">R$ 0</span>
+      </div>
+
+      {# ── Ativo Não Circulante ── #}
+      <div class="wz-bal-section">Ativo Não Circulante</div>
+      <div class="wz-grid2">
+        <div class="wz-fld">
+          <label>Imobilizado</label>
+          <input class="wz-inp" type="number" name="immobilized_brl" id="b-imob"
+                 step="0.01" min="0" placeholder="0"
+                 value="{{ bp.immobilized_brl|int if bp and bp.immobilized_brl else '' }}">
+        </div>
+        <div class="wz-fld">
+          <label>Outros ativos não circ.</label>
+          <input class="wz-inp" type="number" name="other_non_current_assets_brl" id="b-onca"
+                 step="0.01" min="0" placeholder="0"
+                 value="{{ bp.other_non_current_assets_brl|int if bp and bp.other_non_current_assets_brl else '' }}">
+        </div>
+      </div>
+      <div class="wz-bal-total">
+        <span>Total Ativo Não Circulante</span>
+        <span id="tot-anc">R$ 0</span>
+      </div>
+
+      {# ── Passivo Circulante ── #}
+      <div class="wz-bal-section">Passivo Circulante</div>
+      <div class="wz-grid4">
+        <div class="wz-fld">
+          <label>Contas a pagar (até 360d)</label>
+          <input class="wz-inp" type="number" name="payables_360_brl" id="b-pay"
+                 step="0.01" min="0" placeholder="0"
+                 value="{{ bp.payables_360_brl|int if bp and bp.payables_360_brl else '' }}">
+        </div>
+        <div class="wz-fld">
+          <label>Dívida financeira CP</label>
+          <input class="wz-inp" type="number" name="short_term_debt_brl" id="b-std"
+                 step="0.01" min="0" placeholder="0"
+                 value="{{ bp.short_term_debt_brl|int if bp and bp.short_term_debt_brl else '' }}">
+        </div>
+        <div class="wz-fld">
+          <label>Passivos fiscais CP</label>
+          <input class="wz-inp" type="number" name="tax_liabilities_brl" id="b-tax"
+                 step="0.01" min="0" placeholder="0"
+                 value="{{ bp.tax_liabilities_brl|int if bp and bp.tax_liabilities_brl else '' }}">
+        </div>
+        <div class="wz-fld">
+          <label>Passivos trabalhistas CP</label>
+          <input class="wz-inp" type="number" name="labor_liabilities_brl" id="b-lab"
+                 step="0.01" min="0" placeholder="0"
+                 value="{{ bp.labor_liabilities_brl|int if bp and bp.labor_liabilities_brl else '' }}">
+        </div>
+      </div>
+      <div class="wz-grid2 mt-2">
+        <div class="wz-fld">
+          <label>Outros passivos circulantes</label>
+          <input class="wz-inp" type="number" name="other_current_liabilities_brl" id="b-ocl"
+                 step="0.01" min="0" placeholder="0"
+                 value="{{ bp.other_current_liabilities_brl|int if bp and bp.other_current_liabilities_brl else '' }}">
+        </div>
+      </div>
+      <div class="wz-bal-total">
+        <span>Total Passivo Circulante</span>
+        <span id="tot-pc">R$ 0</span>
+      </div>
+
+      {# ── Passivo Não Circulante ── #}
+      <div class="wz-bal-section">Passivo Não Circulante</div>
+      <div class="wz-grid2">
+        <div class="wz-fld">
+          <label>Dívida financeira LP</label>
+          <input class="wz-inp" type="number" name="long_term_debt_brl" id="b-ltd"
+                 step="0.01" min="0" placeholder="0"
+                 value="{{ bp.long_term_debt_brl|int if bp and bp.long_term_debt_brl else '' }}">
+        </div>
+        <div class="wz-fld">
+          <label>Outros passivos não circ.</label>
+          <input class="wz-inp" type="number" name="other_non_current_liabilities_brl" id="b-oncl"
+                 step="0.01" min="0" placeholder="0"
+                 value="{{ bp.other_non_current_liabilities_brl|int if bp and bp.other_non_current_liabilities_brl else '' }}">
+        </div>
+      </div>
+      <div class="wz-bal-total">
+        <span>Total Passivo Não Circulante</span>
+        <span id="tot-pnc">R$ 0</span>
+      </div>
+
+      {# ── Extras ── #}
+      <div class="wz-bal-section">Informações adicionais</div>
+      <div class="wz-grid3">
+        <div class="wz-fld">
+          <label>Garantias disponíveis (R$)</label>
+          <input class="wz-inp" type="number" name="collateral_brl"
+                 step="0.01" min="0" placeholder="0"
+                 value="{{ bp.collateral_brl|int if bp and bp.collateral_brl else '' }}">
+          <div class="hint">Imóveis, equipamentos, recebíveis vinculáveis.</div>
+        </div>
+        <div class="wz-fld">
+          <label>Inadimplência (R$)</label>
+          <input class="wz-inp" type="number" name="delinquency_brl"
+                 step="0.01" min="0" placeholder="0"
+                 value="{{ bp.delinquency_brl|int if bp and bp.delinquency_brl else '' }}">
+          <div class="hint">Clientes em atraso > 30 dias.</div>
+        </div>
+      </div>
+
+      {# Resumo do balanço em tempo real #}
+      <div class="card p-3 mt-3" style="background:var(--mc-bg);">
+        <div class="fw-semibold mb-2 small">Resumo calculado</div>
+        <div class="row g-2 small">
+          <div class="col-6 col-md-3">
+            <div class="muted tiny">Ativo Total</div>
+            <div class="fw-bold" id="rv-ativo">R$ 0</div>
+          </div>
+          <div class="col-6 col-md-3">
+            <div class="muted tiny">Passivo Total</div>
+            <div class="fw-bold" id="rv-passivo">R$ 0</div>
+          </div>
+          <div class="col-6 col-md-3">
+            <div class="muted tiny">Patrimônio Líquido</div>
+            <div class="fw-bold" id="rv-pl">R$ 0</div>
+          </div>
+          <div class="col-6 col-md-3">
+            <div class="muted tiny">Liquidez Corrente</div>
+            <div class="fw-bold" id="rv-lc">—</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="wz-nav">
+        <button type="button" class="btn btn-outline-secondary" onclick="wzBack(3)">
+          <i class="bi bi-arrow-left me-1"></i> Voltar
+        </button>
+        <button type="button" class="btn btn-primary px-4" onclick="wzNext(3)">
+          Próximo <i class="bi bi-arrow-right ms-1"></i>
+        </button>
+      </div>
+    </div>
+
+    {# ══════════════════════════════════════════════════════
+       ETAPA 4 — Processos (checklist)
+    ══════════════════════════════════════════════════════ #}
+    <div class="wz-step d-none" id="step-4">
+      <div class="wz-eye"><i class="bi bi-gear"></i> Etapa 4 de 5 · Processos</div>
+      <h2 class="wz-title">Como está a gestão?</h2>
+      <p class="wz-sub">Marque o que já existe na empresa. Sem julgamento — apenas o que está implementado.</p>
+
+      <div class="wz-chk-grid">
+        {% set sec = namespace(val="") %}
+        {% for q in survey %}
+          {% if q.section != sec.val %}
+            {% set sec.val = q.section %}
+            <div class="wz-chk-sec">{{ q.section }}</div>
+          {% endif %}
+          <label class="wz-chk" id="chk-{{ q.id }}">
+            <input type="checkbox" name="{{ q.id }}" value="1">
+            <span class="wz-chk-box"><i class="bi bi-check-lg"></i></span>
+            <span style="font-size:.88rem;">{{ q.q }}</span>
+          </label>
+        {% endfor %}
+      </div>
+
+      <div class="wz-nav mt-4">
+        <button type="button" class="btn btn-outline-secondary" onclick="wzBack(4)">
+          <i class="bi bi-arrow-left me-1"></i> Voltar
+        </button>
+        <button type="button" class="btn btn-primary px-4" onclick="wzNext(4)">
+          Revisar <i class="bi bi-arrow-right ms-1"></i>
+        </button>
+      </div>
+    </div>
+
+    {# ══════════════════════════════════════════════════════
+       ETAPA 5 — Revisão + NPS
+    ══════════════════════════════════════════════════════ #}
+    <div class="wz-step d-none" id="step-5">
+      <div class="wz-eye"><i class="bi bi-check-circle"></i> Etapa 5 de 5 · Revisão</div>
+      <h2 class="wz-title">Confirme e envie</h2>
+      <p class="wz-sub">Verifique os dados antes de calcular o score.</p>
+
+      <div class="card p-3 mb-4">
+        <div class="fw-semibold mb-3">Resumo do diagnóstico</div>
+        <div class="rv-row"><span class="rv-lbl">Porte</span><span class="rv-val" id="rv-seg">—</span></div>
+        <div class="rv-row"><span class="rv-lbl">Fase</span><span class="rv-val" id="rv-fase">—</span></div>
+        <div class="rv-row"><span class="rv-lbl">Maior dor</span><span class="rv-val" id="rv-dor">—</span></div>
+        <div class="rv-row"><span class="rv-lbl">Faturamento mensal</span><span class="rv-val" id="rv-rev">—</span></div>
+        <div class="rv-row"><span class="rv-lbl">Dívidas</span><span class="rv-val" id="rv-dbt">—</span></div>
+        <div class="rv-row"><span class="rv-lbl">Caixa disponível</span><span class="rv-val" id="rv-csh">—</span></div>
+        <div class="rv-row"><span class="rv-lbl">Ativo Total</span><span class="rv-val" id="rv-at2">—</span></div>
+        <div class="rv-row"><span class="rv-lbl">Patrimônio Líquido</span><span class="rv-val" id="rv-pl2">—</span></div>
+        <div class="rv-row"><span class="rv-lbl">Processos marcados</span><span class="rv-val" id="rv-chks">—</span></div>
+      </div>
+
+      <div class="mb-4">
+        <div class="wz-fld"><label>De 0 a 10, o quanto recomendaria a Maffezzolli Capital?</label></div>
+        <div class="nps-row" id="npsRow">
+          {% for i in range(11) %}
+            <button type="button" class="nps-btn" data-v="{{ i }}" onclick="selNps({{ i }})">{{ i }}</button>
+          {% endfor %}
+        </div>
+        <input type="hidden" name="nps_score" id="npsInp" value="0">
+        <div class="tiny muted mt-1">0 = não recomendaria · 10 = com certeza</div>
+      </div>
+
+      <div class="mb-4">
+        <div class="wz-fld">
+          <label>Observações (opcional)</label>
+          <textarea class="wz-inp" name="notes" rows="3"
+                    placeholder="Contexto relevante para seu consultor..."></textarea>
+        </div>
+      </div>
+
+      <div class="wz-nav">
+        <button type="button" class="btn btn-outline-secondary" onclick="wzBack(5)">
+          <i class="bi bi-arrow-left me-1"></i> Voltar
+        </button>
+        <button type="submit" class="btn btn-primary px-5" id="wzSubmit">
+          <i class="bi bi-send-fill me-2"></i> Calcular meu score
+        </button>
+      </div>
+    </div>
+
+  </form>
+  {% endif %}{# /current_client #}
+</div>
+
+<script>
+(function(){
+  const STEPS = 5;
+  let cur = 1;
+
+  // ── Navegação ──────────────────────────────────────────────────────────
+  function show(n){
+    for(let i=1;i<=STEPS;i++){
+      const el=document.getElementById("step-"+i);
+      if(el) el.classList.toggle("d-none",i!==n);
+      const d=document.getElementById("dot-"+i);
+      if(d){ d.classList.remove("done","active");
+        if(i<n) d.classList.add("done");
+        else if(i===n) d.classList.add("active"); }
+    }
+    cur=n;
+    window.scrollTo({top:0,behavior:"smooth"});
+  }
+
+  window.wzNext=function(s){
+    if(s===2 && !valNums()) return;
+    if(s===5) fillReview();
+    show(s+1);
+  };
+  window.wzBack=function(s){ show(s-1); };
+
+  // ── Opções clicáveis ───────────────────────────────────────────────────
+  document.querySelectorAll(".wz-opt").forEach(lbl=>{
+    const inp=lbl.querySelector("input");
+    if(!inp) return;
+    lbl.addEventListener("click",()=>{
+      if(inp.type==="radio"){
+        document.querySelectorAll(`input[name="${inp.name}"]`).forEach(r=>{
+          r.closest(".wz-opt")?.classList.remove("sel");
+        });
+        lbl.classList.add("sel");
+        inp.checked=true;
+      } else {
+        lbl.classList.toggle("sel");
+        inp.checked=lbl.classList.contains("sel");
+      }
+    });
+  });
+
+  // ── Checklist ──────────────────────────────────────────────────────────
+  document.querySelectorAll(".wz-chk").forEach(lbl=>{
+    const inp=lbl.querySelector("input");
+    if(!inp) return;
+    lbl.addEventListener("click",()=>{
+      inp.checked=!inp.checked;
+      lbl.classList.toggle("on",inp.checked);
+    });
+  });
+
+  // ── NPS ────────────────────────────────────────────────────────────────
+  window.selNps=function(v){
+    document.querySelectorAll(".nps-btn").forEach(b=>b.classList.toggle("on",+b.dataset.v===v));
+    document.getElementById("npsInp").value=v;
+  };
+
+  // ── Validação etapa 2 ──────────────────────────────────────────────────
+  function valNums(){
+    const inp=document.getElementById("f-rev");
+    const err=document.getElementById("err-rev");
+    if(!inp) return true;
+    const v=parseFloat(inp.value||0);
+    if(v<=0){
+      inp.classList.add("bad"); err.style.display="block"; inp.focus(); return false;
+    }
+    inp.classList.remove("bad"); err.style.display="none"; return true;
+  }
+
+  // Consistência em tempo real (etapa 2)
+  function checkConsist(){
+    const rev=parseFloat(document.getElementById("f-rev")?.value||0);
+    const cash=parseFloat(document.getElementById("f-cash")?.value||0);
+    const debt=parseFloat(document.getElementById("f-debt")?.value||0);
+    const box=document.getElementById("wz-consist");
+    const msg=document.getElementById("wz-consist-msg");
+    if(!box||!msg) return;
+    let w="";
+    if(rev>0 && cash>rev*12)
+      w=`Caixa de ${brl(cash)} parece alto para faturamento de ${brl(rev)}/mês. Confirma?`;
+    else if(rev>0 && debt>rev*36)
+      w=`Dívida de ${brl(debt)} é mais de 3 anos de faturamento. Confirma?`;
+    box.style.display=w?"block":"none";
+    msg.textContent=w;
+  }
+  ["f-rev","f-cash","f-debt"].forEach(id=>{
+    document.getElementById(id)?.addEventListener("input",checkConsist);
+  });
+
+  // ── Cálculo do balanço em tempo real (etapa 3) ─────────────────────────
+  function g(id){ return parseFloat(document.getElementById(id)?.value||0)||0; }
+
+  function calcBal(){
+    const ac  = g("b-cash-inv")+g("b-recv")+g("b-inv")+g("b-oca");
+    const anc = g("b-imob")+g("b-onca");
+    const pc  = g("b-pay")+g("b-std")+g("b-tax")+g("b-lab")+g("b-ocl");
+    const pnc = g("b-ltd")+g("b-oncl");
+    const at  = ac+anc;
+    const pt  = pc+pnc;
+    const pl  = at-pt;
+    const lc  = pc>0 ? (ac/pc).toFixed(2) : "—";
+
+    setText("tot-ac",  brl(ac));
+    setText("tot-anc", brl(anc));
+    setText("tot-pc",  brl(pc));
+    setText("tot-pnc", brl(pnc));
+    setText("rv-ativo",   brl(at));
+    setText("rv-passivo", brl(pt));
+    setText("rv-pl",  pl>=0 ? brl(pl) : "-"+brl(Math.abs(pl)));
+    setText("rv-lc",  lc !== "—" ? lc+"×" : "—");
+
+    // colore PL
+    const plEl=document.getElementById("rv-pl");
+    if(plEl) plEl.style.color=pl>=0?"var(--mc-success)":"var(--mc-danger)";
+  }
+
+  ["b-cash-inv","b-recv","b-inv","b-oca","b-imob","b-onca",
+   "b-pay","b-std","b-tax","b-lab","b-ocl","b-ltd","b-oncl"].forEach(id=>{
+    document.getElementById(id)?.addEventListener("input",calcBal);
+  });
+  calcBal(); // inicializa com valores pré-preenchidos
+
+  // ── Preenche revisão (etapa 5) ─────────────────────────────────────────
+  const segL  ={pme:"PME 🏪",middle:"Middle Market 🏢",construtora:"Construtora 🏗️"};
+  const faseL ={crescimento:"Crescendo 🚀",estabilizacao:"Estabilizando ⚖️",
+                reestruturacao:"Reestruturando 🔧",expansao:"Expandindo 🌐"};
+  const dorL  ={fluxo_caixa:"Fluxo de caixa 💸",acesso_credito:"Acesso a crédito 🏦",
+                margem:"Margem apertada 📉",dividas:"Dívidas ⚠️",organizacao:"Desorganização 📋"};
+
+  function fillReview(){
+    const seg  =document.querySelector("input[name=segment]:checked")?.value||"";
+    const fase =document.querySelector("input[name=company_size]:checked")?.value||"";
+    const dor  =document.querySelector("input[name=pain_points]:checked")?.value||"";
+    const rev  =parseFloat(document.getElementById("f-rev")?.value||0);
+    const debt =parseFloat(document.getElementById("f-debt")?.value||0);
+    const cash =parseFloat(document.getElementById("f-cash")?.value||0);
+
+    const ac  =g("b-cash-inv")+g("b-recv")+g("b-inv")+g("b-oca");
+    const anc =g("b-imob")+g("b-onca");
+    const pc  =g("b-pay")+g("b-std")+g("b-tax")+g("b-lab")+g("b-ocl");
+    const pnc =g("b-ltd")+g("b-oncl");
+    const at=ac+anc, pt=pc+pnc, pl=at-pt;
+
+    const chks=document.querySelectorAll(".wz-chk.on").length;
+    const tot =document.querySelectorAll(".wz-chk").length;
+
+    setText("rv-seg",  segL[seg]||seg||"—");
+    setText("rv-fase", faseL[fase]||fase||"—");
+    setText("rv-dor",  dorL[dor]||dor||"—");
+    setText("rv-rev",  rev>0  ? brl(rev)  : "Não informado");
+    setText("rv-dbt",  debt>0 ? brl(debt) : "Não informado");
+    setText("rv-csh",  cash!==0? brl(cash) : "Não informado");
+    setText("rv-at2",  at>0  ? brl(at) : "Não informado");
+    setText("rv-pl2",  at>0  ? (pl>=0?brl(pl):"-"+brl(Math.abs(pl))) : "Não informado");
+    setText("rv-chks", `${chks} de ${tot}`);
+  }
+
+  // ── Helpers ────────────────────────────────────────────────────────────
+  function setText(id,val){
+    const el=document.getElementById(id); if(el) el.textContent=val;
+  }
+  function brl(v){
+    return new Intl.NumberFormat("pt-BR",{
+      style:"currency",currency:"BRL",maximumFractionDigits:0
+    }).format(v||0);
+  }
+
+  // ── Anti double-submit ─────────────────────────────────────────────────
+  document.getElementById("wzForm")?.addEventListener("submit",()=>{
+    const b=document.getElementById("wzSubmit");
+    if(b){b.disabled=true;b.innerHTML='<i class="bi bi-hourglass-split me-2"></i>Calculando…';}
+  });
+
+})();
+</script>
+{% endblock %}
+"""
+
+if hasattr(templates_env.loader, "mapping"):
+    templates_env.loader.mapping = TEMPLATES
+
+# ============================================================================
+# FIM DO PATCH — Sprint 3 revisado (wizard 5 etapas com balanço)
+# ============================================================================
