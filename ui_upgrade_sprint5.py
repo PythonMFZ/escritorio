@@ -479,20 +479,23 @@ if _tpl_dash and _DASH_ANCHOR in _tpl_dash and "SPRINT 5: link carteira" not in 
     )
 
 # ── 4. Injeta link Carteira no navbar do base.html ───────────────────────────
+# Âncora: href="/logout">Sair — existe no base.html original do app
 
 _base_tpl = TEMPLATES.get("base.html", "")
-_CARTEIRA_NAV_BTN = """<a class="nav-icon-btn d-none d-md-inline-flex" href="/carteira"
-               aria-label="Carteira de clientes" title="Carteira de clientes"
-               style="{% if request.url.path == '/carteira' %}border-color:var(--mc-primary);color:var(--mc-primary);{% endif %}">
-              <i class="bi bi-people-fill"></i>
-            </a>"""
-_NAV_ANCHOR = '<div class="bell-wrap">'
+_NAV_ANCHOR = '<a class="btn btn-outline-secondary btn-sm" href="/logout">Sair</a>'
+_CARTEIRA_BTN = (
+    '{% if role in ["admin", "equipe"] %}'
+    '<a class="btn btn-outline-secondary btn-sm me-1" href="/carteira" title="Carteira de clientes">'
+    '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16">'
+    '<path d="M15 14s1 0 1-1-1-4-5-4-5 3-5 4 1 1 1 1zm-7.978-1L7 12.996c.001-.264.167-1.03.76-1.72C8.312 10.629 9.282 10 11 10c1.717 0 2.687.63 3.24 1.276.593.69.758 1.457.76 1.72l-.008.002-.014.002zM11 7a2 2 0 1 0 0-4 2 2 0 0 0 0 4m3-2a3 3 0 1 1-6 0 3 3 0 0 1 6 0M6.936 9.28a6 6 0 0 0-1.23-.247A7 7 0 0 0 5 9c-4 0-5 3-5 4q0 1 1 1h4.216A2.24 2.24 0 0 1 5 13c0-1.01.377-2.042 1.09-2.904.243-.294.526-.569.846-.816M4.92 10A5.5 5.5 0 0 0 4 13H1c0-.26.164-1.03.76-1.724.545-.636 1.492-1.256 3.16-1.275ZM1.5 5.5a3 3 0 1 1 6 0 3 3 0 0 1-6 0m3-2a2 2 0 1 0 0 4 2 2 0 0 0 0-4"/>'
+    '</svg>'
+    '</a>'
+    '{% endif %}'
+    '\n            '
+    + _NAV_ANCHOR
+)
 if _base_tpl and _NAV_ANCHOR in _base_tpl and 'href="/carteira"' not in _base_tpl:
-    TEMPLATES["base.html"] = _base_tpl.replace(
-        _NAV_ANCHOR,
-        _CARTEIRA_NAV_BTN + "\n              " + _NAV_ANCHOR,
-        1,
-    )
+    TEMPLATES["base.html"] = _base_tpl.replace(_NAV_ANCHOR, _CARTEIRA_BTN, 1)
 
 # Atualiza loader
 if hasattr(templates_env.loader, "mapping"):
