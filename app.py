@@ -47343,3 +47343,4 @@ if hasattr(templates_env.loader, "mapping"):
 
 
 exec(open('ui_upgrade_snapshot_detail.py').read())
+exec(open('ui_upgrade_sprint5.py').read())
