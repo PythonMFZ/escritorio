@@ -48133,7 +48133,7 @@ TEMPLATES["perfil_snapshot_detail.html"] = r"""
 
 if hasattr(templates_env.loader, "mapping"):
     templates_env.loader.mapping = TEMPLATES
-
 # ============================================================================
 # FIM DO PATCH — Tela de resultado G4-style
 # ============================================================================
+exec(open('ui_upgrade_snapshot_detail.py').read())
