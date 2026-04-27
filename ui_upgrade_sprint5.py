@@ -478,6 +478,22 @@ if _tpl_dash and _DASH_ANCHOR in _tpl_dash and "SPRINT 5: link carteira" not in 
         1,
     )
 
+# ── 4. Injeta link Carteira no navbar do base.html ───────────────────────────
+
+_base_tpl = TEMPLATES.get("base.html", "")
+_CARTEIRA_NAV_BTN = """<a class="nav-icon-btn d-none d-md-inline-flex" href="/carteira"
+               aria-label="Carteira de clientes" title="Carteira de clientes"
+               style="{% if request.url.path == '/carteira' %}border-color:var(--mc-primary);color:var(--mc-primary);{% endif %}">
+              <i class="bi bi-people-fill"></i>
+            </a>"""
+_NAV_ANCHOR = '<div class="bell-wrap">'
+if _base_tpl and _NAV_ANCHOR in _base_tpl and 'href="/carteira"' not in _base_tpl:
+    TEMPLATES["base.html"] = _base_tpl.replace(
+        _NAV_ANCHOR,
+        _CARTEIRA_NAV_BTN + "\n              " + _NAV_ANCHOR,
+        1,
+    )
+
 # Atualiza loader
 if hasattr(templates_env.loader, "mapping"):
     templates_env.loader.mapping = TEMPLATES
