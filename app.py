@@ -36315,6 +36315,38 @@ TEMPLATES["ferramentas.html"] = r"""
         </div>
       </div>
     </div>
+
+    <div class="col-lg-6">
+      <div class="card p-4 h-100">
+        <div class="d-flex justify-content-between align-items-start gap-3 flex-wrap">
+          <div>
+            <h5 class="mb-1">Viabilidade Imobiliária</h5>
+            <div class="muted">Estude a viabilidade de um empreendimento antes de decidir. VGV, margem, TIR e fluxo de caixa.</div>
+          </div>
+          <span class="badge text-bg-primary">Disponível</span>
+        </div>
+        <div class="row g-3 mt-1 mb-3">
+          <div class="col-md-6">
+            <div class="border rounded p-3 h-100">
+              <div class="muted small">Tipo</div>
+              <div class="fw-semibold">Análise por projeto</div>
+            </div>
+          </div>
+          <div class="col-md-6">
+            <div class="border rounded p-3 h-100">
+              <div class="muted small">Resultado</div>
+              <div class="fw-semibold">Relatório exportável</div>
+            </div>
+          </div>
+        </div>
+        <div class="alert alert-info" style="font-size:.85rem;">
+          Insira as premissas do terreno, produto e custos para obter VGV, margem, TIR e exposição de caixa.
+        </div>
+        <div class="d-flex gap-2 flex-wrap">
+          <a class="btn btn-primary" href="/ferramentas/viabilidade">Abrir Viabilidade</a>
+        </div>
+      </div>
+    </div>
   </div>
 {% endif %}
 {% endblock %}
