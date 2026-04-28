@@ -21,6 +21,7 @@ from sqlmodel import Field as _Field, SQLModel as _SQLModel
 
 class ViabilidadeAnalise(_SQLModel, table=True):
     __tablename__ = "viabilidadeanalise"
+    __table_args__ = {"extend_existing": True}
     id:          _Opt[int]  = _Field(default=None, primary_key=True)
     company_id:  int        = _Field(index=True)
     client_id:   int        = _Field(index=True)
@@ -641,9 +642,17 @@ _SALVAR_SCRIPT = r"""
     const dados = {};
     for (let [k,v] of fd.entries()) dados[k] = v;
 
-    // Coleta resultado do DOM (via data attributes injetados)
+    // Coleta resultado do textarea hidden
     const resEl = document.getElementById('vbResultadoJson');
-    const resultado = resEl ? JSON.parse(resEl.value) : {};
+    const resultadoStr = resEl ? resEl.textContent.trim() : '{}';
+
+    // Valida JSON antes de enviar
+    try { JSON.parse(resultadoStr); } catch(e) {
+      btn.innerHTML = '<i class="bi bi-bookmark-plus me-1"></i> Salvar análise';
+      btn.disabled = false;
+      alert('Erro ao capturar resultado. Recalcule e tente novamente.');
+      return;
+    }
 
     const nome = dados.nome_projeto || prompt('Nome desta análise:', 'Análise sem nome') || 'Análise sem nome';
 
@@ -654,9 +663,12 @@ _SALVAR_SCRIPT = r"""
         body: JSON.stringify({
           nome: nome,
           dados_json: JSON.stringify(dados),
-          resultado_json: resEl ? resEl.value : '{}',
+          resultado_json: resultadoStr,
         }),
       });
+
+      if (!r.ok) { throw new Error('HTTP ' + r.status); }
+
       const d = await r.json();
 
       if (d.ok) {
@@ -710,11 +722,11 @@ _SALVAR_SCRIPT = r"""
 
 # Injeta script no template de viabilidade
 _vb_tmpl = TEMPLATES.get("ferramenta_viabilidade.html", "")
-if _vb_tmpl and "_SALVAR_SCRIPT" not in _vb_tmpl and "salvarAnalise" not in _vb_tmpl:
-    # Injeta campo hidden com resultado JSON + script antes do </form>
+if _vb_tmpl and "salvarAnalise" not in _vb_tmpl:
+    # Usa textarea hidden para evitar problemas com aspas no value
     _vb_tmpl = _vb_tmpl.replace(
         "</form>",
-        """{% if resultado %}<input type="hidden" id="vbResultadoJson" value="{{ resultado|tojson|e }}">{% endif %}\n</form>\n""" + _SALVAR_SCRIPT,
+        "{% if resultado %}<textarea id=\"vbResultadoJson\" style=\"display:none;\">{{ resultado|tojson }}</textarea>{% endif %}\n</form>\n" + _SALVAR_SCRIPT,
         1,
     )
     TEMPLATES["ferramenta_viabilidade.html"] = _vb_tmpl
