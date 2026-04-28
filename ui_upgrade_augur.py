@@ -192,10 +192,8 @@ _AUGUR_WIDGET = r"""
 <div class="card mb-3" id="augurCard" style="border:1px solid var(--mc-border);">
   <div class="card-body p-3">
     <div class="d-flex align-items-center gap-2 mb-3">
-      <div style="width:36px;height:36px;border-radius:10px;background:var(--mc-primary);display:flex;align-items:center;justify-content:center;flex-shrink:0;">
-        <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" fill="white" viewBox="0 0 16 16">
-          <path d="M8 16A8 8 0 1 0 8 0a8 8 0 0 0 0 16m.93-9.412-1 4.705c-.07.34.029.533.304.533.194 0 .487-.07.686-.246l-.088.416c-.287.346-.92.598-1.465.598-.703 0-1.002-.422-.808-1.319l.738-3.468c.064-.293.006-.399-.287-.47l-.451-.081.082-.381 2.29-.287zM8 5.5a1 1 0 1 1 0-2 1 1 0 0 1 0 2"/>
-        </svg>
+      <div style="width:36px;height:36px;border-radius:10px;background:#1a1a1a;display:flex;align-items:center;justify-content:center;flex-shrink:0;overflow:hidden;">
+        <img src="/static/augur_logo_v3.png" alt="Augur" style="width:26px;height:26px;object-fit:contain;">
       </div>
       <div>
         <div class="fw-bold" style="font-size:.95rem;">Augur</div>
