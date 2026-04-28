@@ -47343,4 +47343,7 @@ if hasattr(templates_env.loader, "mapping"):
 
 
 exec(open('ui_upgrade_snapshot_detail.py').read())
+
 exec(open('ui_upgrade_sprint5.py').read())
+
+echo "exec(open('ui_upgrade_augur.py').read())" >> ~/PycharmProjects/escritorio-multi/app.py

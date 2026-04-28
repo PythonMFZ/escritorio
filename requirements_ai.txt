@@ -1,0 +1,8 @@
+# Dependências do Assistente Maffezzolli
+# Instale com: pip install -r requirements_ai.txt
+
+# Banco vetorial (usa SQLite por baixo, funciona local e no Render)
+chromadb>=0.4.0
+
+# HTTP client (provavelmente já tem no projeto)
+requests>=2.31.0
