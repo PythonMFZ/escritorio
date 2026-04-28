@@ -746,7 +746,9 @@ TEMPLATES["ferramenta_viabilidade.html"] = r"""
   <button type="button" class="btn btn-outline-secondary btn-sm mt-1" onclick="addFase()"><i class="bi bi-plus-circle me-1"></i> Adicionar fase</button>
   <div class="d-flex justify-content-between mt-3">
     <button type="button" class="btn btn-outline-secondary" onclick="vbTab('custos',document.querySelector('[onclick*=custos]'))"><i class="bi bi-arrow-left me-1"></i> Voltar</button>
-    <button type="submit" class="btn btn-primary px-4" id="calcBtn"><i class="bi bi-calculator me-2"></i> Calcular Viabilidade</button>
+    <button type="button" class="btn btn-primary px-4" id="calcBtn" onclick="document.getElementById('vbForm').submit()">
+  <i class="bi bi-calculator me-2"></i> Calcular Viabilidade
+</button>
   </div>
 </div>
 
