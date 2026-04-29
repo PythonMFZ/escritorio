@@ -36134,10 +36134,7 @@ FEATURE_GROUPS = [
     {"key": "solucoes", "title": "Soluções Financeiras", "features": ["ofertas", "simulador", "propostas"]},
     {"key": "meu_projeto", "title": "Meu Projeto", "features": ["consultoria", "reunioes", "tarefas"]},
     {"key": "ferramentas_conteudo", "title": "Ferramentas e Conteúdo", "features": ["ferramentas", "educacao"]},
-    {"key": "escritorio_comercial", "title": "Escritório • Comercial", "features": ["crm", "motor_ofertas"]},
-    {"key": "escritorio_credito", "title": "Escritório • Crédito e Estruturação", "features": ["credito"]},
-    {"key": "escritorio_financeiro", "title": "Escritório • Financeiro", "features": ["financeiro_escritorio"]},
-    {"key": "admin", "title": "Admin", "features": ["ui", "gestao", "familias", "servicos_internos", "parceiros"]},
+    {"key": "gestao_interna", "title": "Gestão Interna", "features": ["crm", "motor_ofertas", "credito", "financeiro_escritorio", "ui", "gestao", "familias", "servicos_internos", "parceiros"]},
 ]
 FEATURE_STANDALONE = ["pendencias", "agenda"]
 FEATURE_VISIBLE_ROLES.update({
