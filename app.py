@@ -6032,6 +6032,36 @@ a:hover{ color:#00BFBF; }
                 </div>
               </form>
             </details>
+            <details class="mt-2">
+              <summary class="muted small">Visibilidade do Dashboard</summary>
+              <form method="post" action="/admin/members/{{ row.membership.id }}/visibility" class="mt-2">
+                <div class="d-flex flex-wrap gap-3 mb-2">
+                  {% set vis = get_member_visibility(session, row.membership.id) %}
+                  <label class="form-check form-check-inline">
+                    <input class="form-check-input" type="checkbox" name="ver_score"
+                      {% if vis.ver_score %}checked{% endif %}>
+                    <span class="form-check-label small">📊 Score e Indicadores</span>
+                  </label>
+                  <label class="form-check form-check-inline">
+                    <input class="form-check-input" type="checkbox" name="ver_diagnostico"
+                      {% if vis.ver_diagnostico %}checked{% endif %}>
+                    <span class="form-check-label small">🩺 Diagnóstico</span>
+                  </label>
+                  <label class="form-check form-check-inline">
+                    <input class="form-check-input" type="checkbox" name="ver_dre"
+                      {% if vis.ver_dre %}checked{% endif %}>
+                    <span class="form-check-label small">📈 DRE e Fluxo</span>
+                  </label>
+                  <label class="form-check form-check-inline">
+                    <input class="form-check-input" type="checkbox" name="ver_augur"
+                      {% if vis.ver_augur %}checked{% endif %}>
+                    <span class="form-check-label small">🔮 Augur</span>
+                  </label>
+                </div>
+                <div class="form-text mb-2">Desmarque o que este usuário NÃO deve ver.</div>
+                <button class="btn btn-sm btn-outline-primary">Salvar visibilidade</button>
+              </form>
+            </details>
           </div>
         {% endfor %}
       </div>
@@ -47432,3 +47462,4 @@ exec(open('ui_viabilidade_salvar.py').read())
 exec(open('ui_ferramenta_obras.py').read())
 exec(open('ui_ferramenta_obras_templates.py').read())
 exec(open('ui_reset_senha.py').read())
+exec(open('ui_member_visibility.py').read())
