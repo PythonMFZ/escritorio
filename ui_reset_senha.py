@@ -229,12 +229,12 @@ def _render_esqueci(erro: str = "", sucesso: str = "") -> str:
   <title>Esqueci minha senha — Maffezzolli Capital</title>
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
   <style>
-    body{{background:#f8f9fa;display:flex;align-items:center;justify-content:center;min-height:100vh;}}
-    .card{{border-radius:16px;border:none;box-shadow:0 4px 24px rgba(0,0,0,.08);max-width:440px;width:100%;}}
-    .logo{{background:#E07020;color:#fff;font-weight:800;font-size:1.1rem;padding:1.25rem 1.5rem;border-radius:16px 16px 0 0;}}
-    .btn-primary{{background:#E07020;border-color:#E07020;}}
-    .btn-primary:hover{{background:#c96018;border-color:#c96018;}}
-    .form-control:focus{{border-color:#E07020;box-shadow:0 0 0 .2rem rgba(224,112,32,.25);}}
+    body{background:#f8f9fa;display:flex;align-items:center;justify-content:center;min-height:100vh;}
+    .card{border-radius:16px;border:none;box-shadow:0 4px 24px rgba(0,0,0,.08);max-width:440px;width:100%;}
+    .logo{background:#E07020;color:#fff;font-weight:800;font-size:1.1rem;padding:1.25rem 1.5rem;border-radius:16px 16px 0 0;}
+    .btn-primary{background:#E07020;border-color:#E07020;}
+    .btn-primary:hover{background:#c96018;border-color:#c96018;}
+    .form-control:focus{border-color:#E07020;box-shadow:0 0 0 .2rem rgba(224,112,32,.25);}
   </style>
 </head>
 <body>
@@ -278,12 +278,12 @@ def _render_resetar(token: str, erro: str = "", sucesso: bool = False) -> str:
   <title>Redefinir senha — Maffezzolli Capital</title>
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
   <style>
-    body{{background:#f8f9fa;display:flex;align-items:center;justify-content:center;min-height:100vh;}}
-    .card{{border-radius:16px;border:none;box-shadow:0 4px 24px rgba(0,0,0,.08);max-width:440px;width:100%;}}
-    .logo{{background:#E07020;color:#fff;font-weight:800;font-size:1.1rem;padding:1.25rem 1.5rem;border-radius:16px 16px 0 0;}}
-    .btn-primary{{background:#E07020;border-color:#E07020;}}
-    .btn-primary:hover{{background:#c96018;border-color:#c96018;}}
-    .form-control:focus{{border-color:#E07020;box-shadow:0 0 0 .2rem rgba(224,112,32,.25);}}
+    body{background:#f8f9fa;display:flex;align-items:center;justify-content:center;min-height:100vh;}
+    .card{border-radius:16px;border:none;box-shadow:0 4px 24px rgba(0,0,0,.08);max-width:440px;width:100%;}
+    .logo{background:#E07020;color:#fff;font-weight:800;font-size:1.1rem;padding:1.25rem 1.5rem;border-radius:16px 16px 0 0;}
+    .btn-primary{background:#E07020;border-color:#E07020;}
+    .btn-primary:hover{background:#c96018;border-color:#c96018;}
+    .form-control:focus{border-color:#E07020;box-shadow:0 0 0 .2rem rgba(224,112,32,.25);}
   </style>
 </head>
 <body>
