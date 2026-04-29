@@ -31742,7 +31742,7 @@ TEMPLATES["dashboard.html"] = r"""
 {% extends "base.html" %}
 {% block content %}
 <div class="row g-3">
-  <div class="col-12">
+  <div class="col-12" id="vis-score-block">
     <div class="card p-4">
       <div class="d-flex flex-wrap justify-content-between align-items-start gap-3">
         <div>

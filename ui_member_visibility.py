@@ -71,22 +71,37 @@ async def api_member_visibility(request: Request, session: Session = Depends(get
     return JSONResponse(vis)
 
 
-# Registra helper como global Jinja2 para uso no template members.html
+# Registra helper como global Jinja2
 if hasattr(templates_env, 'globals'):
     templates_env.globals['get_member_visibility'] = get_member_visibility
 
-# Injeta script de visibilidade no dashboard
+# Script de visibilidade com IDs reais do dashboard
 _VIS_SCRIPT = """
 <script>
 (function(){
+  // Só aplica para clientes — admin e equipe sempre veem tudo
   fetch('/api/member/visibility')
-    .then(r=>r.json())
-    .then(v=>{
-      if(!v.ver_augur){const a=document.getElementById('augurCard');if(a)a.style.display='none';}
-      if(!v.ver_score){document.querySelectorAll('[data-vis="score"]').forEach(e=>e.style.display='none');}
-      if(!v.ver_diagnostico){document.querySelectorAll('[data-vis="diagnostico"]').forEach(e=>e.style.display='none');}
-      if(!v.ver_dre){document.querySelectorAll('[data-vis="dre"]').forEach(e=>e.style.display='none');}
-    }).catch(()=>{});
+    .then(r => r.json())
+    .then(v => {
+      function hide(id) {
+        var el = document.getElementById(id);
+        if (el) el.style.display = 'none';
+      }
+      function hideAll(sel) {
+        document.querySelectorAll(sel).forEach(function(el){ el.style.display='none'; });
+      }
+      if (!v.ver_augur) hide('augurCard');
+      if (!v.ver_score) hide('vis-score-block');
+      if (!v.ver_diagnostico) {
+        // Oculta abas e seções de diagnóstico
+        hideAll('[href*="diagnostico"], [href*="perfil/avaliacao"]');
+      }
+      if (!v.ver_dre) {
+        hide('dre-summary');
+        hideAll('[id^="dre-"]');
+      }
+    })
+    .catch(function(){});
 })();
 </script>"""
 
