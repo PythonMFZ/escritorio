@@ -36377,6 +36377,36 @@ TEMPLATES["ferramentas.html"] = r"""
         </div>
       </div>
     </div>
+
+    <div class="col-lg-6">
+      <div class="card p-4 h-100">
+        <div class="d-flex justify-content-between align-items-start gap-3 flex-wrap">
+          <div>
+            <h5 class="mb-1">Gestão de Obras</h5>
+            <div class="muted">Cronograma físico-financeiro. Orçado vs realizado por fase e etapa.</div>
+          </div>
+          <span class="badge text-bg-primary">Disponível</span>
+        </div>
+        <div class="row g-3 mt-1 mb-3">
+          <div class="col-md-6">
+            <div class="border rounded p-3 h-100">
+              <div class="muted small">Controle</div>
+              <div class="fw-semibold">Físico + Financeiro</div>
+            </div>
+          </div>
+          <div class="col-md-6">
+            <div class="border rounded p-3 h-100">
+              <div class="muted small">Versões</div>
+              <div class="fw-semibold">Orçado v1/v2/v3...</div>
+            </div>
+          </div>
+        </div>
+        <div class="alert alert-info" style="font-size:.85rem;">
+          Monte o cronograma físico-financeiro e acompanhe o avanço físico e financeiro da obra.
+        </div>
+        <a class="btn btn-primary" href="/ferramentas/obras">Abrir Gestão de Obras</a>
+      </div>
+    </div>
   </div>
 {% endif %}
 {% endblock %}
