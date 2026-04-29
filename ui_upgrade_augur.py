@@ -263,8 +263,8 @@ _AUGUR_WIDGET_V2 = r"""
         placeholder="Pergunte ao Augur sobre sua situação financeira..."
         style="font-size:.86rem;resize:none;border-radius:10px;"
         onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();augurSend();}"></textarea>
-      <button class="btn btn-primary px-3" onclick="augurSend()" id="augurBtn" style="border-radius:10px;align-self:flex-end;min-width:80px;">
-        <i class="bi bi-send me-1"></i>Enviar
+      <button class="btn btn-primary px-3" onclick="augurSend()" id="augurBtn" style="border-radius:10px;align-self:flex-end;min-width:90px;font-size:.8rem;padding:.45rem .8rem;white-space:nowrap;">
+        <i class="bi bi-send-fill me-1"></i>Enviar
       </button>
     </div>
 
@@ -434,7 +434,7 @@ _AUGUR_WIDGET_V2 = r"""
       _augurRenderMsg('assistant', '⚠️ Erro de conexão. Tente novamente.', null, null, true);
     } finally {
       btn.disabled = false;
-      btn.innerHTML = '<i class="bi bi-send me-1"></i>Enviar';
+      btn.innerHTML = '<i class="bi bi-send-fill me-1"></i>Enviar';
       input.focus();
     }
   };
