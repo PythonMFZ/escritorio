@@ -36182,8 +36182,10 @@ FEATURE_GROUPS = [
     {"key": "solucoes", "title": "Soluções Financeiras", "features": ["ofertas", "simulador", "propostas"]},
     {"key": "meu_projeto", "title": "Meu Projeto", "features": ["consultoria", "reunioes", "tarefas"]},
     {"key": "ferramentas_conteudo", "title": "Ferramentas e Conteúdo", "features": ["ferramentas", "educacao"]},
-    {"key": "gestao_interna", "title": "Gestão Interna", "features": ["crm", "motor_ofertas", "credito", "financeiro_escritorio", "ui", "gestao", "familias", "servicos_internos", "parceiros"]},
+    {"key": "gestao_interna", "title": "Gestão Interna", "features": ["crm", "motor_ofertas", "credito", "financeiro_escritorio", "ui", "gestao", "familias", "servicos_internos", "parceiros", "members", "precificacao"]},
 ]
+FEATURE_KEYS["members"] = {"title": "Membros", "desc": "Gerenciar membros e permissoes.", "href": "/admin/members"}
+FEATURE_KEYS["precificacao"] = {"title": "Precificacao", "desc": "Definir precos e creditos bonus.", "href": "/admin/precificacao"}
 FEATURE_STANDALONE = ["pendencias", "agenda"]
 FEATURE_VISIBLE_ROLES.update({
     "ferramentas": {"cliente", "admin", "equipe"},
