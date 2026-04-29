@@ -42584,14 +42584,7 @@ def _append_feature_once(container: list[str], feature_key: str) -> list[str]:
         container.append(feature_key)
     return container
 
-_feature_group_found = False
-for _group in FEATURE_GROUPS:
-    if _group.get("key") == "cliente":
-        _append_feature_once(_group.setdefault("features", []), "obras_horas")
-        _feature_group_found = True
-        break
-if not _feature_group_found:
-    FEATURE_GROUPS.append({"key": "cliente_tools", "title": "Cliente", "features": ["obras_horas"]})
+# aba Cliente removida - obras_horas ja esta em Ferramentas
 
 _FEATURE_KEYS_VISIBLE_OBRAS = True
 
