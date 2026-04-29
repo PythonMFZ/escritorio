@@ -36186,6 +36186,8 @@ FEATURE_GROUPS = [
 ]
 FEATURE_KEYS["members"] = {"title": "Membros", "desc": "Gerenciar membros e permissoes.", "href": "/admin/members"}
 FEATURE_KEYS["precificacao"] = {"title": "Precificacao", "desc": "Definir precos e creditos bonus.", "href": "/admin/precificacao"}
+FEATURE_VISIBLE_ROLES["members"] = {"admin", "equipe"}
+FEATURE_VISIBLE_ROLES["precificacao"] = {"admin", "equipe"}
 FEATURE_STANDALONE = ["pendencias", "agenda"]
 FEATURE_VISIBLE_ROLES.update({
     "ferramentas": {"cliente", "admin", "equipe"},
