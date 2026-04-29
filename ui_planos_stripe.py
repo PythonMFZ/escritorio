@@ -103,20 +103,7 @@ def _criar_plano_stripe(plano) -> tuple[str, str]:
 
 # ── Patch na rota POST /admin/monetizacao/plano para criar no Stripe ──────────
 
-_orig_monetizacao_plano = None
-for _r in app.routes:
-    if hasattr(_r, 'path') and _r.path == '/admin/monetizacao/plano' and hasattr(_r, 'methods') and 'POST' in (_r.methods or set()):
-        _orig_monetizacao_plano = _r.endpoint
-        break
-
-if _orig_monetizacao_plano:
-    # Remove a rota antiga e recria com criação no Stripe
-    app.routes = [r for r in app.routes if not (
-        hasattr(r, 'path') and r.path == '/admin/monetizacao/plano' and
-        hasattr(r, 'methods') and 'POST' in (r.methods or set())
-    )]
-
-@app.post("/admin/monetizacao/plano")
+@app.post("/admin/monetizacao/plano/criar")
 @require_login
 async def monetizacao_plano_post_v2(request: Request, session: Session = Depends(get_session)):
     ctx = get_tenant_context(request, session)
@@ -365,19 +352,7 @@ async def cancelar_assinatura(request: Request, session: Session = Depends(get_s
 # ── 7. Webhook Stripe: subscription ativo → registra ClientePlano ─────────────
 # Estende o webhook existente para tratar planos recorrentes
 
-_orig_webhook = None
-for _r in app.routes:
-    if hasattr(_r, 'path') and '/stripe/webhook' in (_r.path or '') and hasattr(_r, 'methods') and 'POST' in (_r.methods or set()):
-        _orig_webhook = _r.endpoint
-        break
-
-if _orig_webhook:
-    app.routes = [r for r in app.routes if not (
-        hasattr(r, 'path') and '/stripe/webhook' in (_r.path or '') and
-        hasattr(r, 'methods') and 'POST' in (r.methods or set())
-    )]
-
-@app.post("/stripe/webhook")
+@app.post("/stripe/webhook/v2")
 async def stripe_webhook_v2(request: Request, session: Session = Depends(get_session)):
     import stripe as _stripe
     if _stripe is None or not os.getenv("STRIPE_WEBHOOK_SECRET"):
