@@ -75,43 +75,61 @@ async def api_member_visibility(request: Request, session: Session = Depends(get
 if hasattr(templates_env, 'globals'):
     templates_env.globals['get_member_visibility'] = get_member_visibility
 
-# Script de visibilidade com IDs reais do dashboard
+
+# Injeta guards no dashboard usando allowed_features (server-side)
+# O dashboard já passa allowed_features no contexto
+# Vamos wrappear o bloco do Painel de Saúde com o guard correto
+
+_dash = TEMPLATES.get("dashboard.html", "")
+
+# Guard para o Painel de Saúde (score)
+if _dash and "vis-score-block" not in _dash:
+    _dash = _dash.replace(
+        '<div class="col-12" id="vis-score-block">',
+        '{% if not allowed_features or "perfil" in allowed_features %}<div class="col-12" id="vis-score-block">',
+    )
+    # Fecha o guard — encontra o fechamento do bloco
+    # Usa o bloco do Augur como referência para fechar antes
+    if "augurCard" in _dash:
+        _dash = _dash.replace(
+            '{# ── AUGUR WIDGET',
+            '{% endif %}{# fecha guard perfil #}\n{# ── AUGUR WIDGET',
+        )
+
+# Guard para o Augur
+if _dash and "ver_augur" not in _dash and "augurCard" in _dash:
+    _dash = _dash.replace(
+        '{% if current_client %}\n<div class="card mb-3" id="augurCard"',
+        '{% if current_client and (not allowed_features or "perfil" in allowed_features) %}\n<div class="card mb-3" id="augurCard"',
+    )
+
+TEMPLATES["dashboard.html"] = _dash
+
+# Script JS apenas para ocultar Augur (mais simples e confiável)
 _VIS_SCRIPT = """
 <script>
 (function(){
-  // Só aplica para clientes — admin e equipe sempre veem tudo
   fetch('/api/member/visibility')
-    .then(r => r.json())
-    .then(v => {
-      function hide(id) {
-        var el = document.getElementById(id);
-        if (el) el.style.display = 'none';
+    .then(function(r){return r.json();})
+    .then(function(v){
+      if(!v.ver_augur){
+        var a=document.getElementById('augurCard');
+        if(a)a.style.display='none';
       }
-      function hideAll(sel) {
-        document.querySelectorAll(sel).forEach(function(el){ el.style.display='none'; });
-      }
-      if (!v.ver_augur) hide('augurCard');
-      if (!v.ver_score) hide('vis-score-block');
-      if (!v.ver_diagnostico) {
-        // Oculta abas e seções de diagnóstico
-        hideAll('[href*="diagnostico"], [href*="perfil/avaliacao"]');
-      }
-      if (!v.ver_dre) {
-        hide('dre-summary');
-        hideAll('[id^="dre-"]');
+      if(!v.ver_score){
+        var s=document.getElementById('vis-score-block');
+        if(s)s.style.display='none';
       }
     })
     .catch(function(){});
 })();
 </script>"""
 
-_dash = TEMPLATES.get("dashboard.html", "")
-if _dash and "member/visibility" not in _dash:
-    if "{% endblock %}" in _dash:
-        _dash = _dash.replace("{% endblock %}", _VIS_SCRIPT + "\n{% endblock %}", 1)
-    else:
-        _dash += _VIS_SCRIPT
-    TEMPLATES["dashboard.html"] = _dash
+_dash2 = TEMPLATES.get("dashboard.html", "")
+if _dash2 and "member/visibility" not in _dash2:
+    if "{% endblock %}" in _dash2:
+        _dash2 = _dash2.replace("{% endblock %}", _VIS_SCRIPT + "\n{% endblock %}", 1)
+    TEMPLATES["dashboard.html"] = _dash2
 
 if hasattr(templates_env.loader, "mapping"):
     templates_env.loader.mapping = TEMPLATES

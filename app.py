@@ -14035,6 +14035,7 @@ async def dashboard(request: Request, session: Session = Depends(get_session)) -
             "pending_items_count": pending_items_count,
             "standalone_title": "Acesso rápido",
             "standalone_desc": "Atalhos complementares",
+            "allowed_features": allowed,
         },
     )
 
