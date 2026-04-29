@@ -596,48 +596,5 @@ async def obras_editar_post(obra_id: int, request: Request, session: Session = D
     session.add(obra); session.commit()
     return RedirectResponse(f"/ferramentas/obras/{obra_id}", status_code=303)
 
-
-# ── Injeta card no menu de ferramentas ────────────────────────────────────────
-
-_obras_card = r"""
-    <div class="col-lg-6">
-      <div class="card p-4 h-100">
-        <div class="d-flex justify-content-between align-items-start gap-3 flex-wrap">
-          <div>
-            <h5 class="mb-1">Gestão de Obras</h5>
-            <div class="muted">Cronograma físico-financeiro. Orçado vs realizado por fase e etapa.</div>
-          </div>
-          <span class="badge text-bg-primary">Disponível</span>
-        </div>
-        <div class="row g-3 mt-1 mb-3">
-          <div class="col-md-6">
-            <div class="border rounded p-3 h-100">
-              <div class="muted small">Controle</div>
-              <div class="fw-semibold">Físico + Financeiro</div>
-            </div>
-          </div>
-          <div class="col-md-6">
-            <div class="border rounded p-3 h-100">
-              <div class="muted small">Versões</div>
-              <div class="fw-semibold">Orçado v1/v2/v3...</div>
-            </div>
-          </div>
-        </div>
-        <div class="alert alert-info" style="font-size:.85rem;">
-          Monte o cronograma físico-financeiro antes da obra e atualize o realizado ao longo da execução.
-        </div>
-        <a class="btn btn-primary" href="/ferramentas/obras">Abrir Gestão de Obras</a>
-      </div>
-    </div>"""
-
-_ft = TEMPLATES.get("ferramentas.html", "")
-if _ft and "Gestão de Obras" not in _ft:
-    _ft = _ft.replace(
-        "  </div>\n{% endif %}\n{% endblock %}\n\"\"\"",
-        _obras_card + "\n  </div>\n{% endif %}\n{% endblock %}\n\"\"\"",
-        1,
-    )
-    TEMPLATES["ferramentas.html"] = _ft
-
 if hasattr(templates_env.loader, "mapping"):
     templates_env.loader.mapping = TEMPLATES
