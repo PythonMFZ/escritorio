@@ -6036,7 +6036,7 @@ a:hover{ color:#00BFBF; }
               <summary class="muted small">Visibilidade do Dashboard</summary>
               <form method="post" action="/admin/members/{{ row.membership.id }}/visibility" class="mt-2">
                 <div class="d-flex flex-wrap gap-3 mb-2">
-                  {% set vis = get_member_visibility(session, row.membership.id) %}
+                  {% set vis = row.visibility %}
                   <label class="form-check form-check-inline">
                     <input class="form-check-input" type="checkbox" name="ver_score"
                       {% if vis.ver_score %}checked{% endif %}>
@@ -14847,6 +14847,10 @@ async def members_page(request: Request, session: Session = Depends(get_session)
         row["is_active"] = entity_is_allowed(session, entity_type="membership", entity_id=m.id) if m.id else True
         row["allowed_features"] = sorted(
             get_membership_allowed_features(session, company_id=ctx.company.id, membership=m))
+        try:
+            row["visibility"] = get_member_visibility(session, m.id)
+        except Exception:
+            row["visibility"] = {"ver_score": True, "ver_diagnostico": True, "ver_dre": True, "ver_augur": True}
 
     active_client_id = get_active_client_id(request, session, ctx)
     current_client = get_client_or_none(session, ctx.company.id, active_client_id)
