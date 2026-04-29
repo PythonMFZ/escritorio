@@ -29447,6 +29447,7 @@ ROLE_DEFAULT_FEATURES["cliente"] = {
     "pendencias",
     "agenda",
     "educacao",
+    "ferramentas",
 }
 ROLE_DEFAULT_FEATURES["admin"].add("financeiro_escritorio")
 ROLE_DEFAULT_FEATURES["equipe"].add("financeiro_escritorio")
