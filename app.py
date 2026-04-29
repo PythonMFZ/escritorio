@@ -31468,6 +31468,19 @@ TEMPLATES["base.html"] = r"""
         document.querySelectorAll('[data-bs-toggle="tooltip"]').forEach((el) => new bootstrap.Tooltip(el));
       });
     })();
+
+    <script>
+    (function(){
+      fetch('/api/member/visibility')
+        .then(function(r){return r.json();})
+        .then(function(v){
+          if(!v.ver_augur){var a=document.getElementById('augurCard');if(a)a.style.display='none';}
+          if(!v.ver_score){var s=document.getElementById('vis-score-block');if(s)s.style.display='none';}
+          if(!v.ver_dre){var d=document.getElementById('dre-summary');if(d)d.parentElement.style.display='none';}
+        })
+        .catch(function(){});
+    })();
+    </script>
     </script>
   </body>
 </html>
