@@ -1,42 +1,54 @@
 # ============================================================================
-# PATCH — Augur: rota /api/ai/ask + widget no dashboard
+# PATCH — Augur v2: Histórico de conversa + Multi-turn
 # ============================================================================
-# Cole ao final do app.py ou salve como ui_upgrade_augur.py e adicione:
-#   exec(open('ui_upgrade_augur.py').read())
+# Substitui ui_upgrade_augur.py
+# Salve como ui_upgrade_augur.py (sobrescreve o anterior)
 #
-# PRÉ-REQUISITOS:
-#   1. ai_assistant/ no diretório raiz do projeto
-#   2. ai_assistant/chroma_db/ populado (via setup_ai.py)
-#   3. ANTHROPIC_API_KEY no ambiente (Render + local)
-#
-# O QUE FAZ:
-#   - Rota POST /api/ai/ask  — recebe pergunta, retorna resposta do Augur
-#   - Injeta widget "Augur" no dashboard.html
+# NOVIDADES:
+#   - Tabela AugurMensagem (histórico 15 dias por cliente)
+#   - Multi-turn real: contexto das últimas 10 trocas enviado ao Claude
+#   - Interface de chat com histórico visível
+#   - Feedback 👍/👎 salvo por mensagem
+#   - Rota GET /api/ai/historico
+#   - Rota POST /api/ai/feedback/{msg_id}
 # ============================================================================
 
 import sys as _sys
 import os as _os
+import json as _json_augur
+from datetime import datetime as _dt_augur, timedelta as _td_augur
+from typing import Optional as _OptA
+from sqlmodel import Field as _FA, SQLModel as _SMA
 
-# Garante que o diretório raiz está no path para importar ai_assistant
 _project_root = _os.path.dirname(_os.path.abspath(__file__))
 if _project_root not in _sys.path:
     _sys.path.insert(0, _project_root)
 
 
-# ── Rota POST /api/ai/ask ────────────────────────────────────────────────────
+# ── Modelo ────────────────────────────────────────────────────────────────────
+
+class AugurMensagem(_SMA, table=True):
+    __tablename__  = "augurmensagem"
+    __table_args__ = {"extend_existing": True}
+    id:          _OptA[int] = _FA(default=None, primary_key=True)
+    company_id:  int        = _FA(index=True)
+    client_id:   int        = _FA(index=True)
+    role:        str        = _FA(default="user")      # user | assistant
+    content:     str        = _FA(default="")
+    feedback:    _OptA[int] = _FA(default=None)        # 1=positivo, -1=negativo, None=sem feedback
+    created_at:  str        = _FA(default="")
+
+try:
+    _SMA.metadata.create_all(engine, tables=[AugurMensagem.__table__])
+except Exception:
+    pass
+
+
+# ── Rota POST /api/ai/ask (v2 com histórico) ─────────────────────────────────
 
 @app.post("/api/ai/ask")
 @require_login
-async def augur_ask(request: Request, session: Session = Depends(get_session)):
-    """
-    Recebe pergunta do cliente e retorna resposta do Augur.
-
-    Body JSON:
-    {
-        "question": "Meu caixa está apertado. O que faço?",
-        "client_id": 123  (opcional — usa current_client se omitido)
-    }
-    """
+async def augur_ask_v2(request: Request, session: Session = Depends(get_session)):
     ctx = get_tenant_context(request, session)
     if not ctx:
         return JSONResponse({"error": "Não autenticado."}, status_code=401)
@@ -49,236 +61,355 @@ async def augur_ask(request: Request, session: Session = Depends(get_session)):
     question = (body.get("question") or "").strip()
     if not question:
         return JSONResponse({"error": "Pergunta vazia."}, status_code=400)
+    if len(question) > 1500:
+        return JSONResponse({"error": "Pergunta muito longa (máx. 1500 caracteres)."}, status_code=400)
 
-    if len(question) > 1000:
-        return JSONResponse({"error": "Pergunta muito longa (máx. 1000 caracteres)."}, status_code=400)
-
-    # Busca dados do cliente
     client_id = body.get("client_id") or get_active_client_id(request, session, ctx)
     client    = get_client_or_none(session, ctx.company.id, client_id)
-
-    if not client or not ensure_can_access_client(ctx, client.id):
+    if not client:
         return JSONResponse({"error": "Cliente não encontrado."}, status_code=404)
 
-    # Monta client_data com tudo que o Augur precisa
+    # Monta client_data
     client_data: dict = {
         "name":                client.name,
         "segment":             getattr(client, "segment", None),
         "revenue_monthly_brl": float(client.revenue_monthly_brl or 0),
         "cash_balance_brl":    float(client.cash_balance_brl or 0),
         "debt_total_brl":      float(client.debt_total_brl or 0),
-        "employees_count":     getattr(client, "employees_count", None),
     }
-
-    # Tenta enriquecer com o último snapshot
     try:
         snap = session.exec(
             select(ClientSnapshot)
-            .where(
-                ClientSnapshot.company_id == ctx.company.id,
-                ClientSnapshot.client_id  == client.id,
-            )
-            .order_by(ClientSnapshot.created_at.desc())
-            .limit(1)
+            .where(ClientSnapshot.company_id == ctx.company.id,
+                   ClientSnapshot.client_id  == client.id)
+            .order_by(ClientSnapshot.created_at.desc()).limit(1)
         ).first()
-
         if snap:
             client_data.update({
-                "score_total":    float(snap.score_total or 0),
+                "score_total":     float(snap.score_total or 0),
                 "score_financial": float(snap.score_financial or 0),
-                "score_process":  float(snap.score_process or 0),
+                "score_process":   float(snap.score_process or 0),
             })
     except Exception:
         pass
 
-    # Tenta enriquecer com o business profile (balanço + DRE)
-    try:
-        profile = get_or_create_business_profile(
-            session, company_id=ctx.company.id, client_id=client.id
+    # Busca histórico dos últimos 15 dias (máx 20 mensagens para contexto)
+    cutoff = (_dt_augur.utcnow() - _td_augur(days=15)).isoformat()
+    historico = session.exec(
+        select(AugurMensagem)
+        .where(
+            AugurMensagem.company_id == ctx.company.id,
+            AugurMensagem.client_id  == client.id,
+            AugurMensagem.created_at >= cutoff,
         )
-        if profile:
-            for field in [
-                "cash_and_investments_brl", "receivables_brl", "inventory_brl",
-                "immobilized_brl", "payables_360_brl", "short_term_debt_brl",
-                "long_term_debt_brl", "collateral_brl", "delinquency_brl",
-                "monthly_fixed_cost_brl", "payroll_monthly_brl", "average_ticket_brl",
-            ]:
-                val = getattr(profile, field, None)
-                if val:
-                    client_data[field] = float(val)
+        .order_by(AugurMensagem.id.desc())
+        .limit(20)
+    ).all()
+    historico = list(reversed(historico))  # ordem cronológica
 
-            # Calcula indicadores DRE se tiver dados
-            rev    = client_data.get("revenue_monthly_brl", 0)
-            cmv    = client_data.get("monthly_fixed_cost_brl", 0)
-            payroll = client_data.get("payroll_monthly_brl", 0)
-            opex   = client_data.get("average_ticket_brl", 0)
-            if rev > 0:
-                mb = rev - cmv
-                client_data["cmv"]     = cmv
-                client_data["mb"]      = mb
-                client_data["mb_pct"]  = round((mb / rev) * 100, 1)
-                client_data["payroll"] = payroll
-                client_data["opex"]    = opex
-                client_data["ebitda"]  = mb - payroll - opex
+    # Monta conversation_history para o Claude (últimas 10 trocas = 20 mensagens)
+    conversation_history = [
+        {"role": m.role, "content": m.content}
+        for m in historico[-20:]
+    ]
 
-            # Liquidez e capital de giro
-            ac = (
-                client_data.get("cash_and_investments_brl", 0) +
-                client_data.get("receivables_brl", 0) +
-                client_data.get("inventory_brl", 0)
-            )
-            pc = (
-                client_data.get("payables_360_brl", 0) +
-                client_data.get("short_term_debt_brl", 0)
-            )
-            client_data["ccl"] = ac - pc
-            if pc > 0:
-                client_data["liq_corrente"] = round(ac / pc, 2)
-
-            # Estrutura de capital G4
-            anc = client_data.get("immobilized_brl", 0)
-            pnc = client_data.get("long_term_debt_brl", 0)
-            at  = ac + anc
-            pt  = pc + pnc
-            pl  = at - pt
-            if at > 0:
-                if pl >= anc:
-                    client_data["estrutura_label"] = "Saudável"
-                elif (pl + pnc) >= anc:
-                    client_data["estrutura_label"] = "Alerta"
-                else:
-                    client_data["estrutura_label"] = "Deficiente"
-    except Exception:
-        pass
+    # Salva a pergunta do usuário
+    msg_user = AugurMensagem(
+        company_id=ctx.company.id,
+        client_id=client.id,
+        role="user",
+        content=question,
+        created_at=_dt_augur.utcnow().isoformat(),
+    )
+    session.add(msg_user)
+    session.commit()
+    session.refresh(msg_user)
 
     # Chama o Augur
     try:
         from ai_assistant.assistant import ask as augur_ask_fn
-        result = augur_ask_fn(question=question, client_data=client_data)
+        result = augur_ask_fn(
+            question=question,
+            client_data=client_data,
+            conversation_history=conversation_history,
+        )
     except ImportError:
-        return JSONResponse({
-            "error": "Augur não instalado. Execute setup_ai.py primeiro.",
-            "response": None,
-        }, status_code=503)
+        return JSONResponse({"error": "Augur não instalado.", "response": None}, status_code=503)
     except Exception as e:
         return JSONResponse({"error": str(e), "response": None}, status_code=500)
 
-    # Salva no banco para histórico (opcional — tabela AIFeedback se existir)
-    try:
-        if hasattr(AIFeedback, "__tablename__"):
-            fb = AIFeedback(
-                company_id=ctx.company.id,
-                client_id=client.id,
-                question=question,
-                ai_response=result.get("response", ""),
-            )
-            session.add(fb)
-            session.commit()
-    except Exception:
-        pass
+    # Salva a resposta do assistente
+    msg_assistant = AugurMensagem(
+        company_id=ctx.company.id,
+        client_id=client.id,
+        role="assistant",
+        content=result.get("response", ""),
+        created_at=_dt_augur.utcnow().isoformat(),
+    )
+    session.add(msg_assistant)
+    session.commit()
+    session.refresh(msg_assistant)
 
     return JSONResponse({
-        "response":   result.get("response", ""),
-        "confidence": result.get("confidence", 0),
-        "error":      result.get("error", False),
+        "response":    result.get("response", ""),
+        "confidence":  result.get("confidence", 0),
+        "error":       result.get("error", False),
+        "msg_id":      msg_assistant.id,
     })
 
 
-# ── Widget Augur no dashboard ─────────────────────────────────────────────────
+# ── Rota GET /api/ai/historico ────────────────────────────────────────────────
 
-_AUGUR_WIDGET = r"""
-{# ── AUGUR WIDGET ── #}
+@app.get("/api/ai/historico")
+@require_login
+async def augur_historico(request: Request, session: Session = Depends(get_session)):
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        return JSONResponse({"error": "Não autenticado."}, status_code=401)
+
+    client_id = get_active_client_id(request, session, ctx)
+    client    = get_client_or_none(session, ctx.company.id, client_id)
+    if not client:
+        return JSONResponse({"mensagens": []})
+
+    cutoff = (_dt_augur.utcnow() - _td_augur(days=15)).isoformat()
+    msgs = session.exec(
+        select(AugurMensagem)
+        .where(
+            AugurMensagem.company_id == ctx.company.id,
+            AugurMensagem.client_id  == client.id,
+            AugurMensagem.created_at >= cutoff,
+        )
+        .order_by(AugurMensagem.id.asc())
+    ).all()
+
+    return JSONResponse({
+        "mensagens": [
+            {
+                "id":       m.id,
+                "role":     m.role,
+                "content":  m.content,
+                "feedback": m.feedback,
+                "data":     m.created_at[:10] if m.created_at else "",
+                "hora":     m.created_at[11:16] if len(m.created_at) > 15 else "",
+            }
+            for m in msgs
+        ]
+    })
+
+
+# ── Rota POST /api/ai/feedback/{msg_id} ──────────────────────────────────────
+
+@app.post("/api/ai/feedback/{msg_id}")
+@require_login
+async def augur_feedback(msg_id: int, request: Request, session: Session = Depends(get_session)):
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        return JSONResponse({"ok": False}, status_code=401)
+
+    msg = session.get(AugurMensagem, msg_id)
+    if not msg or msg.company_id != ctx.company.id:
+        return JSONResponse({"ok": False}, status_code=404)
+
+    body = await request.json()
+    msg.feedback = 1 if body.get("positive") else -1
+    session.add(msg)
+    session.commit()
+    return JSONResponse({"ok": True})
+
+
+# ── Widget Augur v2 (chat com histórico) ─────────────────────────────────────
+
+_AUGUR_WIDGET_V2 = r"""
+{# ── AUGUR WIDGET v2 ── #}
 {% if current_client %}
 <div class="card mb-3" id="augurCard" style="border:1px solid var(--mc-border);">
-  <div class="card-body p-3">
-    <div class="d-flex align-items-center gap-2 mb-3">
-      <div style="width:36px;height:36px;border-radius:10px;background:#1a1a1a;display:flex;align-items:center;justify-content:center;flex-shrink:0;overflow:hidden;">
-        <img src="/static/augur_logo_v3.png" alt="Augur" style="width:26px;height:26px;object-fit:contain;">
+  <div class="card-body p-0">
+
+    {# Header #}
+    <div class="d-flex align-items-center gap-2 p-3" style="border-bottom:1px solid var(--mc-border);">
+      <div style="width:34px;height:34px;border-radius:10px;background:#1a1a1a;display:flex;align-items:center;justify-content:center;flex-shrink:0;overflow:hidden;">
+        <img src="/static/augur_logo_v3.png" alt="Augur" style="width:24px;height:24px;object-fit:contain;">
       </div>
-      <div>
-        <div class="fw-bold" style="font-size:.95rem;">Augur</div>
-        <div class="muted" style="font-size:.72rem;">Consultor financeiro inteligente · Maffezzolli Capital</div>
+      <div style="flex:1;">
+        <div class="fw-bold" style="font-size:.92rem;">Augur</div>
+        <div class="muted" style="font-size:.7rem;">Consultor financeiro inteligente · 15 dias de histórico</div>
+      </div>
+      <button class="btn btn-sm btn-outline-secondary" onclick="augurLimparChat()" title="Nova conversa" style="font-size:.75rem;">
+        <i class="bi bi-plus-circle me-1"></i>Nova conversa
+      </button>
+    </div>
+
+    {# Área de chat #}
+    <div id="augurChatArea" style="height:340px;overflow-y:auto;padding:1rem;display:flex;flex-direction:column;gap:.75rem;background:#fafafa;">
+      {# Mensagens carregadas via JS #}
+      <div id="augurLoading" style="text-align:center;color:var(--mc-muted);font-size:.82rem;padding:2rem 0;">
+        <div class="spinner-border spinner-border-sm me-2" role="status"></div>
+        Carregando histórico...
       </div>
     </div>
 
     {# Sugestões rápidas #}
-    <div class="d-flex gap-2 flex-wrap mb-2" id="augurSuggestions">
-      <button class="btn btn-outline-secondary btn-sm" style="font-size:.75rem;" onclick="augurSetQ('Meu caixa está apertado. O que faço?')">💸 Caixa apertado</button>
-      <button class="btn btn-outline-secondary btn-sm" style="font-size:.75rem;" onclick="augurSetQ('Como posso melhorar meu score?')">📈 Melhorar score</button>
-      <button class="btn btn-outline-secondary btn-sm" style="font-size:.75rem;" onclick="augurSetQ('Qual crédito faz sentido para minha situação?')">🏦 Crédito certo</button>
-      <button class="btn btn-outline-secondary btn-sm" style="font-size:.75rem;" onclick="augurSetQ('O que está pesando no meu resultado?')">🔍 Analisar resultado</button>
+    <div id="augurSuggestions" class="d-flex gap-2 flex-wrap px-3 py-2" style="border-top:1px solid var(--mc-border);background:#fff;">
+      <button class="btn btn-outline-secondary btn-sm" style="font-size:.73rem;" onclick="augurSetQ('Meu caixa está apertado. O que faço?')">💸 Caixa apertado</button>
+      <button class="btn btn-outline-secondary btn-sm" style="font-size:.73rem;" onclick="augurSetQ('Como posso melhorar meu score?')">📈 Melhorar score</button>
+      <button class="btn btn-outline-secondary btn-sm" style="font-size:.73rem;" onclick="augurSetQ('Qual crédito faz sentido para minha situação?')">🏦 Crédito certo</button>
+      <button class="btn btn-outline-secondary btn-sm" style="font-size:.73rem;" onclick="augurSetQ('O que está pesando no meu resultado?')">🔍 Analisar resultado</button>
     </div>
 
     {# Input #}
-    <div class="d-flex gap-2">
+    <div class="d-flex gap-2 p-3" style="border-top:1px solid var(--mc-border);background:#fff;">
       <textarea id="augurInput" class="form-control" rows="2"
-        placeholder="Pergunte sobre sua situação financeira..."
-        style="font-size:.88rem;resize:none;border-radius:10px;"
+        placeholder="Pergunte ao Augur sobre sua situação financeira..."
+        style="font-size:.86rem;resize:none;border-radius:10px;"
         onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();augurSend();}"></textarea>
-      <button class="btn btn-primary px-3" onclick="augurSend()" id="augurBtn"
-        style="border-radius:10px;align-self:flex-end;">
-        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16">
-          <path d="M15.964.686a.5.5 0 0 0-.65-.65L.767 5.855H.766l-.452.18a.5.5 0 0 0-.082.887l.41.26.001.002 4.995 3.178 3.178 4.995.002.002.26.41a.5.5 0 0 0 .886-.083zm-1.833 1.89L6.637 10.07l-.215-.338a.5.5 0 0 0-.154-.154l-.338-.215 7.494-7.494 1.178-.471z"/>
-        </svg>
+      <button class="btn btn-primary px-3" onclick="augurSend()" id="augurBtn" style="border-radius:10px;align-self:flex-end;">
+        <i class="bi bi-send"></i>
       </button>
     </div>
 
-    {# Resposta #}
-    <div id="augurResponse" style="display:none;margin-top:1rem;">
-      <div id="augurLoading" style="display:none;color:var(--mc-muted);font-size:.85rem;padding:.5rem 0;">
-        <div class="spinner-border spinner-border-sm me-2" role="status"></div>
-        Augur está analisando seus dados...
-      </div>
-      <div id="augurAnswer" style="display:none;">
-        <div style="background:#f9fafb;border-radius:12px;padding:1rem;font-size:.88rem;line-height:1.6;white-space:pre-wrap;border:1px solid var(--mc-border);" id="augurText"></div>
-        <div class="d-flex justify-content-between align-items-center mt-2">
-          <div style="font-size:.72rem;color:var(--mc-muted);" id="augurMeta"></div>
-          <div class="d-flex gap-2">
-            <button class="btn btn-sm btn-outline-secondary" onclick="augurFeedback(true)" title="Útil">👍</button>
-            <button class="btn btn-sm btn-outline-secondary" onclick="augurFeedback(false)" title="Não útil">👎</button>
-            <button class="btn btn-sm btn-outline-secondary" onclick="augurClear()">Nova pergunta</button>
-          </div>
-        </div>
-      </div>
-      <div id="augurError" style="display:none;color:var(--mc-danger);font-size:.85rem;padding:.5rem 0;"></div>
-    </div>
   </div>
 </div>
 
+<style>
+  .aug-msg { display:flex; gap:.5rem; max-width:100%; }
+  .aug-msg.user { flex-direction:row-reverse; }
+  .aug-bubble {
+    max-width:82%; padding:.6rem .9rem; border-radius:14px;
+    font-size:.84rem; line-height:1.55; white-space:pre-wrap; word-break:break-word;
+  }
+  .aug-bubble.user {
+    background:var(--mc-primary); color:#fff; border-radius:14px 14px 4px 14px;
+  }
+  .aug-bubble.assistant {
+    background:#fff; border:1px solid var(--mc-border); border-radius:14px 14px 14px 4px;
+    color:var(--mc-text);
+  }
+  .aug-avatar {
+    width:28px; height:28px; border-radius:50%; flex-shrink:0;
+    display:flex; align-items:center; justify-content:center; font-size:.7rem; font-weight:700;
+    align-self:flex-end;
+  }
+  .aug-avatar.user { background:var(--mc-primary); color:#fff; }
+  .aug-avatar.assistant { background:#1a1a1a; overflow:hidden; }
+  .aug-meta { font-size:.68rem; color:var(--mc-muted); margin-top:.25rem; }
+  .aug-feedback { display:flex; gap:.3rem; margin-top:.35rem; }
+  .aug-typing { display:flex; gap:4px; align-items:center; padding:.5rem .8rem; }
+  .aug-typing span {
+    width:7px; height:7px; border-radius:50%; background:var(--mc-muted);
+    animation:augBounce 1.2s infinite;
+  }
+  .aug-typing span:nth-child(2) { animation-delay:.2s; }
+  .aug-typing span:nth-child(3) { animation-delay:.4s; }
+  @keyframes augBounce { 0%,60%,100%{transform:translateY(0)} 30%{transform:translateY(-6px)} }
+</style>
+
 <script>
 (function(){
-  window.augurSetQ = function(q) {
-    document.getElementById('augurInput').value = q;
-    document.getElementById('augurInput').focus();
-  };
+  let _augurMsgId = null;
 
-  window.augurClear = function() {
-    document.getElementById('augurInput').value = '';
-    document.getElementById('augurResponse').style.display = 'none';
-    document.getElementById('augurAnswer').style.display = 'none';
-    document.getElementById('augurError').style.display = 'none';
-    document.getElementById('augurSuggestions').style.display = 'flex';
-    document.getElementById('augurInput').focus();
-  };
+  // ── Carrega histórico ao iniciar ──
+  async function augurCarregarHistorico() {
+    try {
+      const r = await fetch('/api/ai/historico');
+      const d = await r.json();
+      const area = document.getElementById('augurChatArea');
+      area.innerHTML = '';
 
+      if (!d.mensagens || d.mensagens.length === 0) {
+        area.innerHTML = '<div style="text-align:center;color:var(--mc-muted);font-size:.82rem;padding:2rem 0;">Nenhuma conversa nos últimos 15 dias.<br>Faça sua primeira pergunta!</div>';
+        return;
+      }
+
+      d.mensagens.forEach(m => _augurRenderMsg(m.role, m.content, m.id, m.hora, false));
+      _augurScrollBottom();
+    } catch(e) {
+      document.getElementById('augurChatArea').innerHTML =
+        '<div style="text-align:center;color:var(--mc-muted);font-size:.82rem;padding:2rem 0;">Erro ao carregar histórico.</div>';
+    }
+  }
+
+  // ── Renderiza uma mensagem no chat ──
+  function _augurRenderMsg(role, content, msgId, hora, animate) {
+    const area = document.getElementById('augurChatArea');
+
+    // Remove placeholder se existir
+    const placeholder = area.querySelector('[data-placeholder]');
+    if (placeholder) placeholder.remove();
+
+    const wrap = document.createElement('div');
+    wrap.className = 'aug-msg ' + role;
+    wrap.id = 'aug-msg-' + (msgId || Date.now());
+
+    const avatarHtml = role === 'user'
+      ? '<div class="aug-avatar user">EU</div>'
+      : '<div class="aug-avatar assistant"><img src="/static/augur_logo_v3.png" style="width:20px;height:20px;object-fit:contain;"></div>';
+
+    const feedbackHtml = role === 'assistant' && msgId ? `
+      <div class="aug-feedback">
+        <button class="btn btn-xs btn-outline-secondary" style="padding:.1rem .4rem;font-size:.7rem;"
+                onclick="augurFeedback(${msgId}, true, this)">👍</button>
+        <button class="btn btn-xs btn-outline-secondary" style="padding:.1rem .4rem;font-size:.7rem;"
+                onclick="augurFeedback(${msgId}, false, this)">👎</button>
+      </div>` : '';
+
+    const horaHtml = hora ? `<div class="aug-meta">${hora}</div>` : '';
+
+    wrap.innerHTML = avatarHtml + `
+      <div>
+        <div class="aug-bubble ${role}">${_escapeHtml(content)}</div>
+        ${horaHtml}
+        ${feedbackHtml}
+      </div>`;
+
+    if (animate) wrap.style.opacity = '0';
+    area.appendChild(wrap);
+    if (animate) setTimeout(() => { wrap.style.transition = 'opacity .3s'; wrap.style.opacity = '1'; }, 10);
+    _augurScrollBottom();
+    return wrap;
+  }
+
+  // ── Typing indicator ──
+  function _augurShowTyping() {
+    const area = document.getElementById('augurChatArea');
+    const el = document.createElement('div');
+    el.className = 'aug-msg assistant';
+    el.id = 'aug-typing';
+    el.innerHTML = '<div class="aug-avatar assistant"><img src="/static/augur_logo_v3.png" style="width:20px;height:20px;object-fit:contain;"></div>' +
+      '<div class="aug-bubble assistant"><div class="aug-typing"><span></span><span></span><span></span></div></div>';
+    area.appendChild(el);
+    _augurScrollBottom();
+  }
+
+  function _augurHideTyping() {
+    const el = document.getElementById('aug-typing');
+    if (el) el.remove();
+  }
+
+  function _augurScrollBottom() {
+    const area = document.getElementById('augurChatArea');
+    area.scrollTop = area.scrollHeight;
+  }
+
+  function _escapeHtml(t) {
+    return t.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  }
+
+  // ── Envia pergunta ──
   window.augurSend = async function() {
     const input = document.getElementById('augurInput');
     const q = (input.value || '').trim();
     if (!q) return;
 
     const btn = document.getElementById('augurBtn');
-    const resp = document.getElementById('augurResponse');
-    const loading = document.getElementById('augurLoading');
-    const answer = document.getElementById('augurAnswer');
-    const error = document.getElementById('augurError');
-    const suggestions = document.getElementById('augurSuggestions');
-
     btn.disabled = true;
-    resp.style.display = 'block';
-    loading.style.display = 'block';
-    answer.style.display = 'none';
-    error.style.display = 'none';
-    suggestions.style.display = 'none';
+    input.value = '';
+    document.getElementById('augurSuggestions').style.display = 'none';
+
+    // Renderiza pergunta do usuário imediatamente
+    const hora = new Date().toTimeString().slice(0,5);
+    _augurRenderMsg('user', q, null, hora, true);
+    _augurShowTyping();
 
     try {
       const r = await fetch('/api/ai/ask', {
@@ -286,59 +417,87 @@ _AUGUR_WIDGET = r"""
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({question: q}),
       });
-      const data = await r.json();
+      const d = await r.json();
+      _augurHideTyping();
 
-      loading.style.display = 'none';
-
-      if (data.error || !data.response) {
-        error.style.display = 'block';
-        error.textContent = data.error || 'Erro ao processar. Tente novamente.';
+      if (d.error || !d.response) {
+        _augurRenderMsg('assistant', '⚠️ ' + (d.error || 'Erro ao processar. Tente novamente.'), null, hora, true);
       } else {
-        answer.style.display = 'block';
-        document.getElementById('augurText').textContent = data.response;
-        const conf = data.confidence ? Math.round(data.confidence * 100) : null;
-        document.getElementById('augurMeta').textContent =
-          conf ? `Confiança: ${conf}% · Augur by Maffezzolli Capital` : 'Augur by Maffezzolli Capital';
+        _augurMsgId = d.msg_id;
+        _augurRenderMsg('assistant', d.response, d.msg_id, hora, true);
       }
     } catch(e) {
-      loading.style.display = 'none';
-      error.style.display = 'block';
-      error.textContent = 'Erro de conexão. Tente novamente.';
+      _augurHideTyping();
+      _augurRenderMsg('assistant', '⚠️ Erro de conexão. Tente novamente.', null, null, true);
     } finally {
       btn.disabled = false;
+      input.focus();
     }
   };
 
-  window.augurFeedback = function(positive) {
-    const btn = positive
-      ? document.querySelector('[onclick="augurFeedback(true)"]')
-      : document.querySelector('[onclick="augurFeedback(false)"]');
-    if (btn) { btn.textContent = positive ? '✅' : '❌'; btn.disabled = true; }
+  // ── Feedback ──
+  window.augurFeedback = async function(msgId, positive, btn) {
+    try {
+      await fetch('/api/ai/feedback/' + msgId, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({positive}),
+      });
+      const wrap = btn.closest('.aug-feedback');
+      if (wrap) wrap.innerHTML = positive
+        ? '<span style="font-size:.75rem;color:#16a34a;">✅ Obrigado pelo feedback!</span>'
+        : '<span style="font-size:.75rem;color:#dc2626;">Vamos melhorar. Obrigado!</span>';
+    } catch(e) {}
   };
+
+  // ── Sugestão rápida ──
+  window.augurSetQ = function(q) {
+    document.getElementById('augurInput').value = q;
+    document.getElementById('augurInput').focus();
+  };
+
+  // ── Nova conversa (limpa visualmente, não apaga o banco) ──
+  window.augurLimparChat = function() {
+    const area = document.getElementById('augurChatArea');
+    area.innerHTML = '<div data-placeholder style="text-align:center;color:var(--mc-muted);font-size:.82rem;padding:2rem 0;">Nova conversa iniciada. Faça sua pergunta!</div>';
+    document.getElementById('augurSuggestions').style.display = 'flex';
+    document.getElementById('augurInput').value = '';
+    document.getElementById('augurInput').focus();
+  };
+
+  // Carrega ao iniciar
+  augurCarregarHistorico();
 })();
 </script>
 {% endif %}
-{# ── /AUGUR WIDGET ── #}
+{# ── /AUGUR WIDGET v2 ── #}
 """
 
-# Injeta o widget no dashboard.html antes da seção de KPIs
+# Injeta widget no dashboard
 _dash = TEMPLATES.get("dashboard.html", "")
 _AUGUR_ANCHOR = "Painel de Saúde Financeira"
 if _dash and _AUGUR_ANCHOR in _dash and "augurCard" not in _dash:
-    # Insere o widget antes do primeiro h2/h3/div que contém "Painel de Saúde"
     _dash = _dash.replace(
         _AUGUR_ANCHOR,
         "AUGUR_WIDGET_PLACEHOLDER\n" + _AUGUR_ANCHOR,
         1,
     )
-    # Substitui o placeholder pelo widget real
-    _dash = _dash.replace("AUGUR_WIDGET_PLACEHOLDER", _AUGUR_WIDGET.strip())
+    _dash = _dash.replace("AUGUR_WIDGET_PLACEHOLDER", _AUGUR_WIDGET_V2.strip())
+    TEMPLATES["dashboard.html"] = _dash
+elif _dash and "augurCard" in _dash:
+    # Atualiza widget existente - substitui pelo v2
+    import re as _re
+    _dash = _re.sub(
+        r'\{#\s*── AUGUR WIDGET.*?── /AUGUR WIDGET.*?#\}',
+        _AUGUR_WIDGET_V2.strip(),
+        _dash,
+        flags=_re.DOTALL
+    )
     TEMPLATES["dashboard.html"] = _dash
 
-# Atualiza loader
 if hasattr(templates_env.loader, "mapping"):
     templates_env.loader.mapping = TEMPLATES
 
 # ============================================================================
-# FIM DO PATCH — Augur
+# FIM DO PATCH — Augur v2
 # ============================================================================
