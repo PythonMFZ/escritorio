@@ -672,6 +672,14 @@ TEMPLATES["monetizacao.html"] = r"""
                 onclick="togglePlano({{ p.id }}, this)">
           {{ 'Desativar' if p.ativo else 'Ativar' }}
         </button>
+        {% if not p.stripe_price_id %}
+        <button class="btn btn-sm btn-outline-primary"
+                onclick="criarNoStripe({{ p.id }}, this)">
+          ⚡ Criar no Stripe
+        </button>
+        {% else %}
+        <span class="badge text-bg-success" style="font-size:.68rem;" title="{{ p.stripe_price_id }}">Stripe ✓</span>
+        {% endif %}
       </div>
     </div>
     {% endfor %}
@@ -719,6 +727,14 @@ async function toggleCampanha(id, btn) {
     badge.className = 'mn-badge ' + (d.ativa ? 'on' : 'off');
     btn.textContent = d.ativa ? 'Desativar' : 'Ativar';
   }
+}
+async function criarNoStripe(id, btn) {
+  if (!confirm('Criar este plano no Stripe agora?')) return;
+  btn.disabled = true; btn.textContent = 'Criando...';
+  const r = await fetch('/admin/monetizacao/plano/' + id + '/sincronizar-stripe', {method:'POST'});
+  const d = await r.json();
+  if (d.ok) { location.reload(); }
+  else { alert('Erro: ' + (d.erro || 'verifique STRIPE_SECRET_KEY')); btn.disabled = false; btn.textContent = '⚡ Criar no Stripe'; }
 }
 async function togglePlano(id, btn) {
   const r = await fetch('/admin/monetizacao/plano/' + id + '/toggle', {method:'POST'});
