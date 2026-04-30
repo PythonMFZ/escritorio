@@ -40,34 +40,11 @@ def _price_cents_from_precificacao(session, company_id: int, product_code: str,
     return int(_math2.ceil(cost_cents * (1.0 + markup / 100.0)))
 
 
-# ── Função auxiliar para sincronizar preços compliance → QueryProduct ─────────
+# ── _sync_compliance_prices — removida (QueryProduct não tem price_cents) ────
+# Os preços de compliance são lidos via _price_cents_from_precificacao() em runtime
 
 def _sync_compliance_prices(session, company_id: int):
-    """Atualiza price_cents dos QueryProducts baseado na ProdutoPreco."""
-    try:
-        qps = session.exec(
-            select(QueryProduct).where(QueryProduct.company_id == company_id)
-        ).all()
-        for qp in qps:
-            preco_pp = None
-            try:
-                pp = session.exec(
-                    select(ProdutoPreco)
-                    .where(ProdutoPreco.company_id == company_id,
-                           ProdutoPreco.codigo == f"compliance_{qp.code}",
-                           ProdutoPreco.ativo == True)
-                ).first()
-                if pp and pp.creditos > 0:
-                    preco_pp = pp.creditos * 100
-            except Exception:
-                pass
-
-            if preco_pp is not None:
-                qp.price_cents = preco_pp
-                session.add(qp)
-        session.commit()
-    except Exception as e:
-        print(f"[planos_stripe] Erro sync compliance: {e}")
+    pass  # mantido para compatibilidade
 
 
 # ── 2. Planos Stripe: criação automática ─────────────────────────────────────
@@ -657,23 +634,19 @@ if "planos" not in FEATURE_KEYS:
     FEATURE_KEYS["minha_assinatura"] = {"title": "Minha Assinatura", "desc": "Gerenciar assinatura e histórico.", "href": "/minha-assinatura"}
     FEATURE_VISIBLE_ROLES["planos"] = {"admin", "equipe", "cliente"}
     FEATURE_VISIBLE_ROLES["minha_assinatura"] = {"admin", "equipe", "cliente"}
+    # Adiciona ao grupo solucoes
     for _g in FEATURE_GROUPS:
         if _g.get("key") == "solucoes":
             for _fk in ["planos", "minha_assinatura"]:
                 if _fk not in _g["features"]:
                     _g["features"].append(_fk)
             break
+    # Adiciona ao ROLE_DEFAULT_FEATURES para todos os roles
+    for _role in ("admin", "equipe", "cliente"):
+        ROLE_DEFAULT_FEATURES.setdefault(_role, set()).add("planos")
+        ROLE_DEFAULT_FEATURES.setdefault(_role, set()).add("minha_assinatura")
 
-# ── Sincroniza preços compliance ao iniciar ───────────────────────────────────
-try:
-    from sqlmodel import Session as _SessSync
-    with _SessSync(engine) as _sess_sync:
-        from sqlmodel import select as _sel_sync
-        _companies = _sess_sync.exec(_sel_sync(Company)).all()
-        for _co in _companies:
-            _sync_compliance_prices(_sess_sync, _co.id)
-except Exception as _e_sync:
-    print(f"[planos_stripe] Sync compliance ao iniciar: {_e_sync}")
+# Sync compliance removido do startup
 
 if hasattr(templates_env.loader, "mapping"):
     templates_env.loader.mapping = TEMPLATES
