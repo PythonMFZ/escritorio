@@ -128,6 +128,94 @@ def _format_client_context(client_data: dict) -> str:
     return "\n".join(lines)
 
 
+def _get_reunioes_cliente(client_name: str, limit: int = 5) -> list:
+    """
+    Busca reuniões recentes do Notion relacionadas ao cliente.
+    Filtra por nome do cliente no título ou conteúdo.
+    Retorna as mais recentes primeiro.
+    """
+    try:
+        notion_token = (
+            os.environ.get("NOTION_TOKEN") or
+            os.environ.get("NOTION_API_KEY") or ""
+        )
+        notion_db_id = os.environ.get("NOTION_MEETINGS_DB_ID", "")
+
+        if not notion_token or not notion_db_id:
+            return []
+
+        headers = {
+            "Authorization": f"Bearer {notion_token}",
+            "Notion-Version": "2022-06-28",
+            "Content-Type": "application/json",
+        }
+
+        # Busca as últimas 30 reuniões ordenadas por data
+        url = f"https://api.notion.com/v1/databases/{notion_db_id}/query"
+        resp = requests.post(url, headers=headers, json={
+            "page_size": 30,
+            "sorts": [{"timestamp": "created_time", "direction": "descending"}],
+        }, timeout=15)
+        resp.raise_for_status()
+        pages = resp.json().get("results", [])
+
+        # Filtra pelo nome do cliente (case-insensitive)
+        client_lower = client_name.lower()
+        reunioes = []
+
+        for page in pages:
+            # Extrai título
+            props = page.get("properties", {})
+            titulo = ""
+            for key in ("Nome da reunião", "Name", "Título", "Title", "nome"):
+                prop = props.get(key, {})
+                title_list = prop.get("title", [])
+                if title_list:
+                    titulo = title_list[0].get("plain_text", "")
+                    break
+
+            data = (page.get("created_time") or "")[:10]
+
+            # Verifica se o título menciona o cliente
+            titulo_lower = titulo.lower()
+            if client_lower not in titulo_lower:
+                # Tenta extrair primeiros blocos para verificar menção ao cliente
+                try:
+                    page_id = page["id"]
+                    blocks_url = f"https://api.notion.com/v1/blocks/{page_id}/children"
+                    br = requests.get(blocks_url, headers=headers,
+                                      params={"page_size": 10}, timeout=10)
+                    br.raise_for_status()
+                    preview = " ".join(
+                        rt.get("plain_text", "")
+                        for block in br.json().get("results", [])
+                        for rt in block.get(block.get("type",""), {}).get("rich_text", [])
+                    ).lower()
+                    if client_lower not in preview:
+                        continue
+                    resumo = preview[:300]
+                except Exception:
+                    continue
+            else:
+                resumo = ""
+
+            reunioes.append({
+                "titulo":  titulo,
+                "data":    data,
+                "resumo":  resumo[:300] if resumo else "",
+                "acoes":   "",
+            })
+
+            if len(reunioes) >= limit:
+                break
+
+        return reunioes
+
+    except Exception as e:
+        print(f"[augur] Erro ao buscar reuniões Notion: {e}")
+        return []
+
+
 def ask(
     question: str,
     client_data: dict,

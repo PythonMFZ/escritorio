@@ -66,9 +66,8 @@ def _enriquecer_client_data(session, company_id: int, client_id: int, client, cl
 
     # 2. Reuniões recentes do Notion (via AugurMensagem de contexto ou direto)
     try:
-        # Tenta buscar do cache de reuniões se existir
-        from ai_assistant.assistant import _get_reunioes_cliente
-        client_data["reunioes_recentes"] = _get_reunioes_cliente(client.name) or []
+        from ai_assistant.assistant import _get_reunioes_cliente as _grc
+        client_data["reunioes_recentes"] = _grc(client.name) or []
     except Exception:
         client_data["reunioes_recentes"] = []
 
@@ -365,9 +364,9 @@ _AUGUR_WIDGET_V3 = r"""
         <input type="file" id="augurFileInput" style="display:none;"
                accept=".pdf,.png,.jpg,.jpeg,.gif,.webp,.csv,.xlsx,.xls"
                onchange="selecionarAnexo(this)">
-        <button class="btn btn-outline-secondary" style="border-radius:10px;padding:.45rem .65rem;"
+        <button class="btn btn-outline-secondary" style="border-radius:10px;padding:.45rem .65rem;font-size:.8rem;white-space:nowrap;"
                 onclick="document.getElementById('augurFileInput').click()" title="Anexar arquivo">
-          <i class="bi bi-paperclip"></i>
+          <i class="bi bi-paperclip me-1"></i><span style="font-size:.78rem;">Anexar</span>
         </button>
       </div>
       <textarea id="augurInput" class="form-control" rows="2"
