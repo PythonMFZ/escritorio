@@ -465,6 +465,31 @@ async def stripe_webhook_v2(request: Request, session: Session = Depends(get_ses
 
 # ── Templates ─────────────────────────────────────────────────────────────────
 
+
+
+# ── Rota POST /admin/monetizacao/plano/{id}/sincronizar-stripe ───────────────
+
+@app.post("/admin/monetizacao/plano/{plano_id}/sincronizar-stripe")
+@require_login
+async def plano_sincronizar_stripe(
+    plano_id: int, request: Request, session: Session = Depends(get_session)
+):
+    ctx = get_tenant_context(request, session)
+    if not ctx or ctx.membership.role not in ("admin", "equipe"):
+        return JSONResponse({"ok": False}, status_code=403)
+
+    plano = session.get(PlanoCredito, plano_id)
+    if not plano or plano.company_id != ctx.company.id:
+        return JSONResponse({"ok": False, "erro": "Plano não encontrado."}, status_code=404)
+
+    _, price_id = _criar_plano_stripe(plano)
+    if price_id:
+        plano.stripe_price_id = price_id
+        session.add(plano)
+        session.commit()
+        return JSONResponse({"ok": True, "stripe_price_id": price_id})
+    return JSONResponse({"ok": False, "erro": "Erro ao criar no Stripe. Verifique STRIPE_SECRET_KEY."})
+
 TEMPLATES["planos.html"] = r"""
 {% extends "base.html" %}
 {% block content %}
@@ -531,7 +556,7 @@ TEMPLATES["planos.html"] = r"""
           </button>
         </form>
       {% else %}
-        <button class="btn btn-outline-secondary w-100 mt-auto" disabled>Em breve</button>
+        <div class="muted small mt-auto text-center" style="font-size:.74rem;">Disponível em breve</div>
       {% endif %}
     {% else %}
       <div class="alert alert-warning" style="font-size:.8rem;">Selecione um cliente para assinar.</div>
@@ -612,7 +637,7 @@ TEMPLATES["minha_assinatura.html"] = r"""
     <div class="hist-row">
       <div>
         <div>{{ h.note or h.kind }}</div>
-        <div class="muted" style="font-size:.72rem;">{{ h.created_at[:16] if h.created_at else '' }}</div>
+        <div class="muted" style="font-size:.72rem;">{{ h.created_at|string|replace("T"," ")|truncate(16,True,"") if h.created_at else "" }}</div>
       </div>
       <div class="{{ 'cr-pos' if h.amount_cents > 0 else 'cr-neg' }}">
         {{ '+' if h.amount_cents > 0 else '' }}{{ "%.0f"|format(h.amount_cents/100) }} cr
