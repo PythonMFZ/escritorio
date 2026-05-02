@@ -27191,6 +27191,17 @@ TEMPLATES.setdefault("consultas.html", r"""
       </div>
     {% endfor %}
   </div>
+
+  <div class="card p-3 mt-3">
+    <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
+      <div>
+        <h5 class="mb-1">&#127959; ConstruRisk</h5>
+        <div class="text-muted" style="font-size:.9rem;">Dossie completo de analise de credito e PLD para compradores PF e PJ. Score, SCR BACEN, cadastral, PEP e parecer de risco com IA.</div>
+      </div>
+      <a class="btn btn-primary" href="/construrisk">Acessar ConstruRisk</a>
+    </div>
+  </div>
+
 </div>
 {% endblock %}
 """)
