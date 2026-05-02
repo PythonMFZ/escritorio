@@ -3674,6 +3674,32 @@ def _render_nfse_lookup_page(*, inv: "ContaAzulInvoice", payload: dict[str, Any]
     </div>
   </div>
 </body>
+<script>
+(function() {
+  function atualizarSino() {
+    fetch('/api/notificacoes/bonus')
+      .then(r => r.json())
+      .then(d => {
+        const n = (d.notificacoes || []).length;
+        const badge = document.getElementById('sinoBadge');
+        const sino  = document.getElementById('sinoNavbar');
+        if (!badge || !sino) return;
+        if (n > 0) {
+          badge.textContent = n;
+          badge.style.display = '';
+          sino.querySelector('i').className = 'bi bi-bell-fill text-warning';
+        } else {
+          badge.style.display = 'none';
+          sino.querySelector('i').className = 'bi bi-bell';
+        }
+      }).catch(() => {});
+  }
+  atualizarSino();
+  setInterval(atualizarSino, 60000);
+  document.addEventListener('hidden.bs.modal', function() { atualizarSino(); });
+})();
+</script>
+</body>
 </html>"""
 
 
