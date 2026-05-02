@@ -36216,11 +36216,13 @@ FEATURE_GROUPS = [
      "features": ["consultas", "creditos", "openfinance", "construrisk"]},
     {"key": "solucoes", "title": "Soluções Financeiras", "features": ["ofertas", "simulador", "propostas"]},
     {"key": "meu_projeto", "title": "Meu Projeto", "features": ["consultoria", "reunioes", "tarefas"]},
-    {"key": "ferramentas_conteudo", "title": "Ferramentas e Conteúdo", "features": ["ferramentas", "educacao", "construrisk"]},
+    {"key": "ferramentas_conteudo", "title": "Ferramentas e Conteúdo", "features": ["ferramentas", "educacao", "construrisk", "gestao_obras"]},
     {"key": "gestao_interna", "title": "Gestão Interna", "features": ["crm", "motor_ofertas", "credito", "financeiro_escritorio", "ui", "gestao", "familias", "servicos_internos", "parceiros", "members", "precificacao"]},
 ]
 FEATURE_KEYS["members"] = {"title": "Membros", "desc": "Gerenciar membros e permissoes.", "href": "/admin/members"}
+FEATURE_KEYS["gestao_obras"] = {"title": "Gestao de Obras", "desc": "Cronograma fisico-financeiro.", "href": "/ferramentas/obras"}
 FEATURE_KEYS["construrisk"] = {"title": "ConstruRisk", "desc": "Dossie de analise de risco PF/PJ.", "href": "/construrisk"}
+FEATURE_VISIBLE_ROLES["gestao_obras"] = {"admin", "equipe", "cliente"}
 FEATURE_VISIBLE_ROLES["construrisk"] = {"admin", "equipe", "cliente"}
 FEATURE_KEYS["construrisk"] = {"title": "ConstruRisk", "desc": "Dossie de analise de risco PF/PJ.", "href": "/construrisk"}
 FEATURE_VISIBLE_ROLES["construrisk"] = {"admin", "equipe", "cliente"}
