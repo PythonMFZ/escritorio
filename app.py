@@ -29468,7 +29468,7 @@ FEATURE_GROUPS = [
     {"key": "minha_empresa", "title": "Minha Empresa", "features": ["empresa", "financeiro", "documentos"]},
     {"key": "diagnostico", "title": "Diagnóstico Financeiro", "features": ["perfil"]},
     {"key": "compliance_risco", "title": "Compliance e Análise de Risco",
-     "features": ["consultas", "creditos", "openfinance"]},
+     "features": ["consultas", "creditos", "openfinance", "construrisk"]},
     {"key": "solucoes", "title": "Soluções Financeiras", "features": ["ofertas", "simulador", "propostas"]},
     {"key": "meu_projeto", "title": "Meu Projeto", "features": ["consultoria", "reunioes", "tarefas"]},
     {"key": "ferramentas_conteudo", "title": "Ferramentas e Conteúdo", "features": ["ferramentas", "educacao"]},
