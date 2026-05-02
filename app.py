@@ -32847,7 +32847,7 @@ _base_tpl = TEMPLATES.get("base.html", "")
 if _base_tpl and 'href="/notificacoes"' not in _base_tpl:
     _base_tpl = _base_tpl.replace(
         '<a class="btn btn-outline-secondary btn-sm" href="/logout">Sair</a>',
-        '<a class="btn btn-outline-secondary btn-sm d-inline-flex align-items-center gap-1 position-relative" href="/notificacoes" aria-label="Notificações"><span>🔔</span>{% if unread_notifications_count %}<span class="badge rounded-pill text-bg-danger">{{ unread_notifications_count }}</span>{% endif %}</a>\n            <a class="btn btn-outline-secondary btn-sm" href="/logout">Sair</a>'
+        '<a class="btn btn-outline-secondary btn-sm d-inline-flex align-items-center gap-1 position-relative" href="/notificacoes" aria-label="Notificações"><span>🔔</span></a>\n            <a class="btn btn-outline-secondary btn-sm" href="/logout">Sair</a>'
     )
     TEMPLATES["base.html"] = _base_tpl
 
