@@ -127,15 +127,59 @@ def _format_client_context(client_data: dict) -> str:
     return "\n".join(lines)
 
 
+def _extrair_texto_bloco(block_id: str, headers: dict, profundidade: int = 0, max_prof: int = 4) -> str:
+    """Extrai texto recursivamente de blocos do Notion até max_prof níveis."""
+    if profundidade > max_prof:
+        return ""
+    try:
+        import requests as _req
+        resp = _req.get(
+            f"https://api.notion.com/v1/blocks/{block_id}/children",
+            headers=headers, params={"page_size": 50}, timeout=10
+        )
+        resp.raise_for_status()
+        textos = []
+        for block in resp.json().get("results", []):
+            btype = block.get("type", "")
+            block_data = block.get(btype, {})
+            rts = block_data.get("rich_text", [])
+            texto = " ".join(rt.get("plain_text","") for rt in rts).strip()
+
+            # Prefixo por tipo
+            if btype in ("heading_1", "heading_2", "heading_3") and texto:
+                textos.append(f"\n## {texto}")
+            elif btype == "to_do" and texto:
+                checked = block_data.get("checked", False)
+                textos.append(f"  {'[x]' if checked else '[ ]'} {texto}")
+            elif btype == "bulleted_list_item" and texto:
+                textos.append(f"  • {texto}")
+            elif btype == "numbered_list_item" and texto:
+                textos.append(f"  {texto}")
+            elif texto:
+                textos.append(texto)
+
+            # Recursão nos filhos
+            if block.get("has_children"):
+                filho_texto = _extrair_texto_bloco(
+                    block["id"], headers, profundidade + 1, max_prof
+                )
+                if filho_texto:
+                    textos.append(filho_texto)
+
+        return "\n".join(t for t in textos if t)
+    except Exception:
+        return ""
+
+
 def _get_reunioes_cliente(client_name: str, limit: int = 5) -> list:
     """
-    Busca reuniões recentes do Notion.
-    Estratégia flexível:
-      1. Prioriza reuniões que mencionam o cliente no título (palavras-chave)
-      2. Inclui reuniões recentes (últimos 7 dias) independente do nome
-      3. Retorna conteúdo parcial para o Augur decidir a relevância
+    Busca reuniões recentes do Notion com extração profunda de conteúdo.
+    Prioriza reuniões que mencionam o cliente; inclui recentes dos últimos 7 dias.
     """
     try:
+        import requests as _req
+        from datetime import datetime as _dt2, timedelta as _td2
+
         notion_token = (
             os.environ.get("NOTION_TOKEN") or
             os.environ.get("NOTION_API_KEY") or ""
@@ -152,23 +196,20 @@ def _get_reunioes_cliente(client_name: str, limit: int = 5) -> list:
         }
 
         url = f"https://api.notion.com/v1/databases/{notion_db_id}/query"
-        resp = requests.post(url, headers=headers, json={
-            "page_size": 50,
+        resp = _req.post(url, headers=headers, json={
+            "page_size": 30,
             "sorts": [{"timestamp": "created_time", "direction": "descending"}],
         }, timeout=15)
         resp.raise_for_status()
         pages = resp.json().get("results", [])
 
-        # Palavras-chave do cliente (divide o nome em partes)
-        # Ex: "Schmitt Buffet" → ["schmitt", "buffet"]
+        # Palavras-chave do cliente
         palavras = [p.strip().lower() for p in client_name.replace("-","").split() if len(p) > 2]
+        hoje = _dt2.utcnow().date()
+        ultima_semana = (hoje - _td2(days=7)).isoformat()
 
-        from datetime import datetime as _dt, timedelta as _td
-        hoje = _dt.utcnow().date()
-        ultima_semana = (hoje - _td(days=7)).isoformat()
-
-        prioritarias = []   # reuniões com menção ao cliente
-        recentes     = []   # reuniões dos últimos 7 dias
+        prioritarias = []
+        recentes     = []
 
         for page in pages:
             props = page.get("properties", {})
@@ -182,40 +223,27 @@ def _get_reunioes_cliente(client_name: str, limit: int = 5) -> list:
 
             data = (page.get("created_time") or "")[:10]
             titulo_lower = titulo.lower()
-
-            # Verifica menção ao cliente no título
             menciona = any(p in titulo_lower for p in palavras)
 
-            # Busca preview do conteúdo (primeiros 15 blocos)
-            resumo = ""
-            try:
-                page_id = page["id"]
-                br = requests.get(
-                    f"https://api.notion.com/v1/blocks/{page_id}/children",
-                    headers=headers, params={"page_size": 15}, timeout=10
-                )
-                br.raise_for_status()
-                blocos_texto = []
-                for block in br.json().get("results", []):
-                    for rt in block.get(block.get("type",""), {}).get("rich_text", []):
-                        t = rt.get("plain_text", "").strip()
-                        if t:
-                            blocos_texto.append(t)
-                resumo = " ".join(blocos_texto)[:400]
-                # Verifica menção no conteúdo também
-                if not menciona:
-                    menciona = any(p in resumo.lower() for p in palavras)
-            except Exception:
-                pass
+            # Extrai conteúdo completo (recursivo)
+            conteudo = _extrair_texto_bloco(page["id"], headers, profundidade=0, max_prof=5)
 
-            item = {"titulo": titulo, "data": data, "resumo": resumo, "acoes": ""}
+            if not menciona:
+                conteudo_lower = conteudo.lower()
+                menciona = any(p in conteudo_lower for p in palavras)
+
+            item = {
+                "titulo":  titulo,
+                "data":    data,
+                "resumo":  conteudo[:1500],  # até 1500 chars de conteúdo real
+                "acoes":   "",
+            }
 
             if menciona:
                 prioritarias.append(item)
             elif data >= ultima_semana:
                 recentes.append(item)
 
-        # Combina: prioritárias primeiro, depois recentes
         resultado = prioritarias[:limit] + recentes[:max(0, limit - len(prioritarias))]
         return resultado[:limit]
 
