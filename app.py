@@ -36202,13 +36202,17 @@ FEATURE_GROUPS = [
     {"key": "minha_empresa", "title": "Minha Empresa", "features": ["empresa", "financeiro", "documentos", "planos", "minha_assinatura"]},
     {"key": "diagnostico", "title": "Diagnóstico Financeiro", "features": ["perfil"]},
     {"key": "compliance_risco", "title": "Compliance e Análise de Risco",
-     "features": ["consultas", "creditos", "openfinance"]},
+     "features": ["consultas", "creditos", "openfinance", "construrisk"]},
     {"key": "solucoes", "title": "Soluções Financeiras", "features": ["ofertas", "simulador", "propostas"]},
     {"key": "meu_projeto", "title": "Meu Projeto", "features": ["consultoria", "reunioes", "tarefas"]},
     {"key": "ferramentas_conteudo", "title": "Ferramentas e Conteúdo", "features": ["ferramentas", "educacao", "construrisk"]},
     {"key": "gestao_interna", "title": "Gestão Interna", "features": ["crm", "motor_ofertas", "credito", "financeiro_escritorio", "ui", "gestao", "familias", "servicos_internos", "parceiros", "members", "precificacao"]},
 ]
 FEATURE_KEYS["members"] = {"title": "Membros", "desc": "Gerenciar membros e permissoes.", "href": "/admin/members"}
+FEATURE_KEYS["construrisk"] = {"title": "ConstruRisk", "desc": "Dossie de analise de risco PF/PJ.", "href": "/construrisk"}
+FEATURE_VISIBLE_ROLES["construrisk"] = {"admin", "equipe", "cliente"}
+FEATURE_KEYS["construrisk"] = {"title": "ConstruRisk", "desc": "Dossie de analise de risco PF/PJ.", "href": "/construrisk"}
+FEATURE_VISIBLE_ROLES["construrisk"] = {"admin", "equipe", "cliente"}
 FEATURE_KEYS["precificacao"] = {"title": "Precificacao", "desc": "Definir precos e creditos bonus.", "href": "/admin/precificacao"}
 FEATURE_VISIBLE_ROLES["members"] = {"admin", "equipe"}
 FEATURE_VISIBLE_ROLES["precificacao"] = {"admin", "equipe"}
