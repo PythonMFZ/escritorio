@@ -66,9 +66,41 @@ def _enriquecer_client_data(session, company_id: int, client_id: int, client, cl
 
     # 2. Reuniões recentes do Notion (via AugurMensagem de contexto ou direto)
     try:
-        from ai_assistant.assistant import _get_reunioes_cliente as _grc
-        client_data["reunioes_recentes"] = _grc(client.name) or []
-    except Exception:
+        # Primeiro tenta reuniões nativas do banco (rápido)
+        from sqlmodel import select as _sel_r
+        _reunioes_nativas = session.exec(
+            _sel_r(Meeting)
+            .where(Meeting.company_id == company_id,
+                   Meeting.client_id  == client_id,
+                   Meeting.notion_status == "notes_ready")
+            .order_by(Meeting.created_at.desc())
+            .limit(5)
+        ).all()
+
+        if _reunioes_nativas:
+            # Usa só as nativas — não busca Notion para não atrasar
+            client_data["reunioes_recentes"] = [
+                {
+                    "titulo": mt.title,
+                    "data":   mt.meeting_date or str(mt.created_at)[:10],
+                    "resumo": mt.summary_text[:600] if mt.summary_text else mt.notes_text[:300],
+                    "acoes":  mt.action_items_text[:200] if mt.action_items_text else "",
+                }
+                for mt in _reunioes_nativas
+                if mt.summary_text or mt.notes_text
+            ]
+        else:
+            # Sem reuniões nativas — tenta Notion com timeout curto
+            from ai_assistant.assistant import _get_reunioes_cliente as _grc
+            import concurrent.futures as _cf_augur
+            with _cf_augur.ThreadPoolExecutor(max_workers=1) as _ex_augur:
+                _fut_augur = _ex_augur.submit(_grc, client.name, 3)
+                try:
+                    client_data["reunioes_recentes"] = _fut_augur.result(timeout=15) or []
+                except _cf_augur.TimeoutError:
+                    client_data["reunioes_recentes"] = []
+    except Exception as _e_notion:
+        print(f"[augur] Erro reunioes: {_e_notion}")
         client_data["reunioes_recentes"] = []
 
     # 3. Viabilidades recentes

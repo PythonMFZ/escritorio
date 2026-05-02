@@ -127,7 +127,7 @@ def _format_client_context(client_data: dict) -> str:
     return "\n".join(lines)
 
 
-def _extrair_texto_bloco(block_id: str, headers: dict, profundidade: int = 0, max_prof: int = 4) -> str:
+def _extrair_texto_bloco(block_id: str, headers: dict, profundidade: int = 0, max_prof: int = 3) -> str:
     """Extrai texto recursivamente de blocos do Notion até max_prof níveis."""
     if profundidade > max_prof:
         return ""
@@ -135,7 +135,7 @@ def _extrair_texto_bloco(block_id: str, headers: dict, profundidade: int = 0, ma
         import requests as _req
         resp = _req.get(
             f"https://api.notion.com/v1/blocks/{block_id}/children",
-            headers=headers, params={"page_size": 50}, timeout=10
+            headers=headers, params={"page_size": 20}, timeout=8
         )
         resp.raise_for_status()
         textos = []
@@ -197,9 +197,9 @@ def _get_reunioes_cliente(client_name: str, limit: int = 5) -> list:
 
         url = f"https://api.notion.com/v1/databases/{notion_db_id}/query"
         resp = _req.post(url, headers=headers, json={
-            "page_size": 30,
+            "page_size": 5,
             "sorts": [{"timestamp": "created_time", "direction": "descending"}],
-        }, timeout=15)
+        }, timeout=10)
         resp.raise_for_status()
         pages = resp.json().get("results", [])
 
@@ -226,7 +226,7 @@ def _get_reunioes_cliente(client_name: str, limit: int = 5) -> list:
             menciona = any(p in titulo_lower for p in palavras)
 
             # Extrai conteúdo completo (recursivo)
-            conteudo = _extrair_texto_bloco(page["id"], headers, profundidade=0, max_prof=5)
+            conteudo = _extrair_texto_bloco(page["id"], headers, profundidade=0, max_prof=3)
 
             if not menciona:
                 conteudo_lower = conteudo.lower()
@@ -235,7 +235,7 @@ def _get_reunioes_cliente(client_name: str, limit: int = 5) -> list:
             item = {
                 "titulo":  titulo,
                 "data":    data,
-                "resumo":  conteudo[:1500],  # até 1500 chars de conteúdo real
+                "resumo":  conteudo[:800],
                 "acoes":   "",
             }
 
@@ -344,7 +344,7 @@ def ask(
                 "system": AUGUR_SYSTEM_PROMPT,
                 "messages": messages,
             },
-            timeout=60,
+            timeout=120,
         )
         resp.raise_for_status()
         return {
