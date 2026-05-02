@@ -30,8 +30,10 @@ from datetime import datetime as _dtCR
 
 _DD_BASE    = "https://api.app.directd.com.br"
 _DD_TOKEN   = lambda: _os_cr.environ.get("DIRECTDATA_TOKEN", "")
-_DD_HEADERS = lambda: {"Content-Type": "application/json"}
-_DD_PARAMS  = lambda extra=None: dict({"TOKEN": _DD_TOKEN()}, **(extra or {}))
+_DD_HEADERS = lambda: {"Token": _DD_TOKEN(), "Content-Type": "application/json"}
+_DD_PARAMS  = lambda extra=None: dict(**(extra or {}))
+_CR_TEMPLATE_PF = lambda: _os_cr.environ.get("CONSTRURISK_TEMPLATE_PF", "DSTMP-31dd6d")
+_CR_TEMPLATE_PJ = lambda: _os_cr.environ.get("CONSTRURISK_TEMPLATE_PJ", "DSTMP-b220f7")
 
 _CR_PRODUCT_PF = "construrisk_pf"
 _CR_PRODUCT_PJ = "construrisk_pj"
@@ -288,6 +290,8 @@ async def construrisk_index(request: Request, session: Session = Depends(get_ses
         "preco_pf":        preco_pf,
         "preco_pj":        preco_pj,
         "saldo":           saldo,
+        "template_pf_id":  _CR_TEMPLATE_PF(),
+        "template_pj_id":  _CR_TEMPLATE_PJ(),
     })
 
 
@@ -566,7 +570,10 @@ TEMPLATES["construrisk.html"] = r"""
       <select id="pfTemplate" class="form-select">
         <option value="">— Selecione —</option>
         {% for t in templates_pf %}
-        <option value="{{ t.id or t.templateID or t.TemplateID }}">{{ t.name or t.templateName or t.Name }}</option>
+        <option value="{{ t.id or t.templateID or t.TemplateID }}"
+          {% if (t.id or t.templateID or t.TemplateID) == template_pf_id %}selected{% endif %}>
+          {{ t.name or t.templateName or t.Name }}
+        </option>
         {% endfor %}
       </select>
     </div>
@@ -597,7 +604,10 @@ TEMPLATES["construrisk.html"] = r"""
       <select id="pjTemplate" class="form-select">
         <option value="">— Selecione —</option>
         {% for t in templates_pj %}
-        <option value="{{ t.id or t.templateID or t.TemplateID }}">{{ t.name or t.templateName or t.Name }}</option>
+        <option value="{{ t.id or t.templateID or t.TemplateID }}"
+          {% if (t.id or t.templateID or t.TemplateID) == template_pj_id %}selected{% endif %}>
+          {{ t.name or t.templateName or t.Name }}
+        </option>
         {% endfor %}
       </select>
     </div>
