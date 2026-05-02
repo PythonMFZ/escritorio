@@ -27491,13 +27491,23 @@ async def stripe_webhook(request: Request, session: Session = Depends(get_sessio
     except Exception:
         return Response(status_code=400)
 
-    if event.get("type") == "checkout.session.completed":
-        obj = (event.get("data") or {}).get("object") or {}
-        meta = obj.get("metadata") or {}
-        company_id = int(meta.get("company_id") or 0)
-        client_id = int(meta.get("client_id") or 0)
-        credits = int(meta.get("credits") or 0)
-        session_id = str(obj.get("id") or "")
+    event_type = event["type"] if hasattr(event, "__getitem__") else getattr(event, "type", "")
+    event_data = event["data"] if hasattr(event, "__getitem__") else getattr(event, "data", None)
+    event_obj = (event_data["object"] if hasattr(event_data, "__getitem__") else getattr(event_data, "object", None)) if event_data else {}
+    event_obj = event_obj or {}
+    if event_type == "checkout.session.completed":
+        obj = event_obj
+        def _safe_get(o, k, default=None):
+            try:
+                if hasattr(o, "__getitem__"): return o[k]
+                return getattr(o, k, default)
+            except Exception: return default
+        meta_obj = _safe_get(obj, "metadata") or {}
+        def _meta(k): return _safe_get(meta_obj, k) or ""
+        company_id = int(_meta("company_id") or 0)
+        client_id = int(_meta("client_id") or 0)
+        credits = int(_meta("credits") or 0)
+        session_id = str(_safe_get(obj, "id") or "")
         if company_id and client_id and credits and session_id:
             already = session.exec(select(CreditLedger).where(
                 CreditLedger.ref_type == "stripe_session",
