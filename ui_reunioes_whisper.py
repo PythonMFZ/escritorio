@@ -38,7 +38,7 @@ except Exception:
     _AUDIO_DIR = _Path("uploads/reunioes")
     _AUDIO_DIR.mkdir(parents=True, exist_ok=True)
 
-_WHISPER_MODEL_NAME = _os2.environ.get("WHISPER_MODEL", "small")
+_WHISPER_MODEL_NAME = _os2.environ.get("WHISPER_MODEL", "tiny")
 _whisper_model_cache = {}  # cache do modelo carregado
 
 
@@ -65,20 +65,19 @@ def _gerar_resumo_ia(transcricao: str, titulo: str) -> dict:
 
     prompt = f"""Você é um assistente especializado em reuniões de consultoria financeira.
 
-Analise a transcrição da reunião "{titulo}" e gere:
+Analise a transcrição da reunião "{titulo}" e gere um relatório estruturado.
 
-1. **RESUMO EXECUTIVO** (3-5 parágrafos): O que foi discutido, contexto da empresa, principais problemas identificados e oportunidades.
-
-2. **DECISÕES TOMADAS**: Liste as decisões confirmadas na reunião.
-
-3. **PRÓXIMAS AÇÕES** (formato lista): Ações específicas com responsável quando mencionado.
-
-4. **PONTOS DE ATENÇÃO**: Riscos, alertas ou pontos que precisam de acompanhamento.
+IMPORTANTE: Responda APENAS com JSON válido, sem texto antes ou depois. Todos os valores devem ser strings simples (não listas nem objetos aninhados).
 
 Transcrição:
 {transcricao[:8000]}
 
-Responda em JSON com as chaves: summary, decisions, action_items, attention_points"""
+Responda exatamente neste formato JSON:
+{{
+  "summary": "Resumo executivo em 3-5 parágrafos sobre o que foi discutido, contexto da empresa e principais pontos.",
+  "action_items": "Lista de próximas ações em texto simples, uma por linha, com responsável quando mencionado.",
+  "notes": "Decisões tomadas e pontos de atenção em texto simples."
+}}"""
 
     try:
         resp = _req_w.post(
@@ -160,7 +159,7 @@ except Exception as e:
             [_sys_w.executable, '-c', script],
             capture_output=True,
             text=True,
-            timeout=600,  # 10 minutos máximo
+            timeout=5400,  # 90 minutos máximo para reuniões longas
         )
 
         resultado = {}
@@ -202,9 +201,14 @@ except Exception as e:
                 _mt = _s.get(Meeting, meeting_id)
                 if _mt:
                     resumo = _gerar_resumo_ia(transcricao, _mt.title)
-                    _mt.summary_text      = resumo.get("summary", "")
-                    _mt.action_items_text = resumo.get("action_items", "")
-                    _mt.notes_text        = resumo.get("notes", "")
+                    # Garante que todos os campos são strings
+                    def _to_str(v):
+                        if isinstance(v, (list, dict)):
+                            return _json_w.dumps(v, ensure_ascii=False, indent=2)
+                        return str(v or "")
+                    _mt.summary_text      = _to_str(resumo.get("summary", ""))
+                    _mt.action_items_text = _to_str(resumo.get("action_items", ""))
+                    _mt.notes_text        = _to_str(resumo.get("notes", ""))
                     _mt.notion_status     = "notes_ready"
                     _mt.last_synced_at    = _dt_w.utcnow()
                     _mt.updated_at        = _dt_w.utcnow()
