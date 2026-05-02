@@ -33710,12 +33710,12 @@ if _base_tpl_delivery4 and 'href="/mensagens"' not in _base_tpl_delivery4:
     if 'href="/notificacoes"' in _base_tpl_delivery4:
         _base_tpl_delivery4 = _base_tpl_delivery4.replace(
             '<a class="btn btn-outline-secondary btn-sm position-relative" href="/notificacoes"',
-            '<a class="btn btn-outline-secondary btn-sm position-relative" href="/mensagens" aria-label="Mensagens">💬{% if unread_messages_count %}<span class="position-absolute top-0 start-100 translate-middle badge rounded-pill text-bg-danger">{{ unread_messages_count }}</span>{% endif %}</a>\n            <a class="btn btn-outline-secondary btn-sm position-relative" href="/notificacoes"'
+            '<a class="btn btn-outline-secondary btn-sm position-relative" href="/mensagens" aria-label="Mensagens">💬</a>\n            <a class="btn btn-outline-secondary btn-sm position-relative" href="/notificacoes"'
         )
     else:
         _base_tpl_delivery4 = _base_tpl_delivery4.replace(
             '<a class="btn btn-outline-secondary btn-sm" href="/logout">Sair</a>',
-            '<a class="btn btn-outline-secondary btn-sm position-relative" href="/mensagens" aria-label="Mensagens">💬{% if unread_messages_count %}<span class="position-absolute top-0 start-100 translate-middle badge rounded-pill text-bg-danger">{{ unread_messages_count }}</span>{% endif %}</a>\n            <a class="btn btn-outline-secondary btn-sm" href="/logout">Sair</a>'
+            '<a class="btn btn-outline-secondary btn-sm position-relative" href="/mensagens" aria-label="Mensagens">💬</a>\n            <a class="btn btn-outline-secondary btn-sm" href="/logout">Sair</a>'
         )
     TEMPLATES["base.html"] = _base_tpl_delivery4
 
@@ -34427,7 +34427,7 @@ if _base_tpl_fix_mensagens and 'href="/mensagens"' not in _base_tpl_fix_mensagen
     _msg_btn = (
         '<a class="btn btn-outline-secondary btn-sm d-inline-flex align-items-center gap-1 position-relative" '
         'href="/mensagens" aria-label="Mensagens"><span>💬</span>'
-        '{% if unread_messages_count %}<span class="badge rounded-pill text-bg-danger">{{ unread_messages_count }}</span>{% endif %}'
+        ''
         '</a>'
     )
     if 'href="/notificacoes"' in _base_tpl_fix_mensagens:
@@ -36217,7 +36217,7 @@ FEATURE_GROUPS = [
     {"key": "solucoes", "title": "Soluções Financeiras", "features": ["ofertas", "simulador", "propostas"]},
     {"key": "meu_projeto", "title": "Meu Projeto", "features": ["consultoria", "reunioes", "tarefas"]},
     {"key": "ferramentas_conteudo", "title": "Ferramentas e Conteúdo", "features": ["ferramentas", "educacao", "construrisk", "gestao_obras"]},
-    {"key": "gestao_interna", "title": "Gestão Interna", "features": ["crm", "motor_ofertas", "credito", "financeiro_escritorio", "ui", "gestao", "familias", "servicos_internos", "parceiros", "members", "precificacao"]},
+    {"key": "gestao_interna", "title": "Gestão Interna", "features": ["crm", "motor_ofertas", "credito", "financeiro_escritorio", "ui", "gestao", "familias", "servicos_internos", "parceiros", "members", "precificacao", "saude"]},
 ]
 FEATURE_KEYS["members"] = {"title": "Membros", "desc": "Gerenciar membros e permissoes.", "href": "/admin/members"}
 FEATURE_KEYS["gestao_obras"] = {"title": "Gestao de Obras", "desc": "Cronograma fisico-financeiro.", "href": "/ferramentas/obras"}
@@ -36229,6 +36229,8 @@ FEATURE_VISIBLE_ROLES["construrisk"] = {"admin", "equipe", "cliente"}
 FEATURE_KEYS["precificacao"] = {"title": "Precificacao", "desc": "Definir precos e creditos bonus.", "href": "/admin/precificacao"}
 FEATURE_VISIBLE_ROLES["members"] = {"admin", "equipe"}
 FEATURE_VISIBLE_ROLES["precificacao"] = {"admin", "equipe"}
+FEATURE_KEYS["saude"] = {"title": "Saude do Sistema", "desc": "Monitor de servicos e custos.", "href": "/admin/saude"}
+FEATURE_VISIBLE_ROLES["saude"] = {"admin"}
 FEATURE_STANDALONE = ["pendencias", "agenda"]
 FEATURE_VISIBLE_ROLES.update({
     "ferramentas": {"cliente", "admin", "equipe"},
@@ -43846,7 +43848,7 @@ _SPRINT1_BELL_HTML = (
         'data-bs-toggle="dropdown" data-bs-auto-close="outside" aria-expanded="false" '
         'aria-label="Alertas inteligentes">'
         + _SPRINT1_SVG["alert"] +
-        '{% if smart_alerts_nav_count %}<span class="badge rounded-pill text-bg-danger">{{ smart_alerts_nav_count }}</span>{% endif %}'
+        ''
         '</button>'
         '<div class="dropdown-menu dropdown-menu-end shadow mc-alert-drop" role="menu">'
         '<div class="d-flex justify-content-between align-items-center px-2 pt-1 pb-2 border-bottom">'
