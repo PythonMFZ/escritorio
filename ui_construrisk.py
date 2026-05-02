@@ -104,16 +104,16 @@ def _dd_process(template_id: str, documents: list) -> tuple[bool, str, str]:
         )
         r.raise_for_status()
         data = r.json()
-        # Tenta extrair o dossieID da resposta
-        dossie_id = (
-            data.get("dossieID") or
-            data.get("id") or
-            data.get("dossierID") or
-            (data.get("data") or {}).get("dossieID") or
-            ""
-        )
-        if not dossie_id and isinstance(data, list) and data:
-            dossie_id = data[0].get("dossieID") or data[0].get("id") or ""
+        # Extrai dossieID — resposta vem em dossierProcesses[0].dossieID
+        dossie_id = ""
+        processos = data.get("dossierProcesses") or []
+        if processos:
+            dossie_id = processos[0].get("dossieID") or processos[0].get("id") or ""
+        if not dossie_id:
+            dossie_id = (
+                data.get("dossieID") or data.get("id") or
+                data.get("dossierID") or ""
+            )
         return bool(dossie_id), str(dossie_id), ""
     except Exception as e:
         return False, "", str(e)
@@ -419,7 +419,10 @@ async def construrisk_status(
 
     # Consulta status na DirectData
     st = _dd_status(d.dossie_id)
-    situation = st.get("situation") or st.get("situationType") or 0
+    # Extrai situação corretamente: dossierStatus.situation.id
+    dossier_status = st.get("dossierStatus") or {}
+    sit_obj = dossier_status.get("situation") or {}
+    situation = sit_obj.get("id") or st.get("situation") or st.get("situationType") or 0
 
     # situation 3 = Concluído, 4 = Concluído com erros
     if situation in (3, 4, "3", "4", "Concluído", "Concluído com erros"):
