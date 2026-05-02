@@ -36245,6 +36245,9 @@ ROLE_DEFAULT_FEATURES["cliente"] = {
     "agenda",
     "educacao",
     "ferramentas",
+    "construrisk",
+    "planos",
+    "minha_assinatura",
 }
 ROLE_DEFAULT_FEATURES["admin"].add("financeiro_escritorio")
 ROLE_DEFAULT_FEATURES["equipe"].add("financeiro_escritorio")
