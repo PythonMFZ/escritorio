@@ -388,7 +388,7 @@ _WHISPER_PANEL = r"""
   <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-2">
     <div>
       <h6 class="mb-0">🎙️ Transcrição de Áudio</h6>
-      <div class="muted small">Faça upload do áudio da reunião para transcrever automaticamente.</div>
+      <div class="muted small">Grave a reunião diretamente ou faça upload de um arquivo.</div>
     </div>
     {% if meeting.notion_status %}
     <div id="whisperStatus" class="badge
@@ -407,20 +407,42 @@ _WHISPER_PANEL = r"""
   </div>
 
   {% if meeting.notion_status not in ['notes_ready', 'transcription_in_progress', 'summary_in_progress'] %}
-  <div class="d-flex gap-2 align-items-center flex-wrap">
+  <div class="d-flex gap-2 align-items-center flex-wrap mb-2">
+
+    {# Botão de gravação nativa #}
+    <button id="btnGravar" class="btn btn-danger btn-sm" onclick="iniciarGravacao()">
+      <i class="bi bi-record-circle me-1"></i>Iniciar Gravação
+    </button>
+    <button id="btnParar" class="btn btn-warning btn-sm" onclick="pararGravacao()" style="display:none;">
+      <i class="bi bi-stop-circle me-1"></i>Parar e Transcrever
+    </button>
+
+    {# Divisor #}
+    <span class="text-muted small">ou</span>
+
+    {# Upload de arquivo #}
     <input type="file" id="audioFileInput" accept=".mp3,.m4a,.wav,.ogg,.webm,.mp4" style="display:none;"
            onchange="uploadAudio(this)">
-    <button class="btn btn-primary btn-sm" onclick="document.getElementById('audioFileInput').click()">
-      <i class="bi bi-upload me-1"></i>Upload de Áudio
+    <button class="btn btn-outline-secondary btn-sm" onclick="document.getElementById('audioFileInput').click()">
+      <i class="bi bi-upload me-1"></i>Upload de arquivo
     </button>
-    <span class="muted small">MP3, M4A, WAV, OGG · Máx. 500MB</span>
+    <span class="muted small">MP3, M4A, WAV · Máx. 500MB</span>
+  </div>
+
+  {# Timer de gravação #}
+  <div id="gravarInfo" style="display:none;" class="alert alert-danger mb-2 py-2" style="font-size:.85rem;">
+    <div class="d-flex align-items-center gap-2">
+      <span class="text-danger" style="font-size:1rem;">●</span>
+      <span>Gravando: <strong id="gravarTimer">00:00</strong></span>
+      <span class="muted small ms-2" id="gravarStatus">Microfone ativo...</span>
+    </div>
   </div>
   {% endif %}
 
-  {% if meeting.notion_status in ['transcription_in_progress', 'summary_in_progress'] %}
+  {% if meeting.notion_status in ['transcription_in_progress', 'summary_in_progress', 'transcription_not_started'] %}
   <div class="alert alert-info mb-0" style="font-size:.85rem;">
     <div class="spinner-border spinner-border-sm me-2" role="status"></div>
-    Processando em background — a página atualiza automaticamente a cada 15 segundos.
+    Processando em background — atualizando automaticamente...
   </div>
   {% endif %}
 
@@ -455,19 +477,96 @@ _WHISPER_PANEL = r"""
 </div>
 
 <script>
+// ── Gravação nativa via MediaRecorder ────────────────────────────────────────
+let _mediaRecorder = null;
+let _audioChunks   = [];
+let _timerInterval = null;
+let _segundos      = 0;
+
+async function iniciarGravacao() {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    _audioChunks = [];
+    _segundos = 0;
+
+    // Tenta webm primeiro, fallback para outros formatos
+    const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+      ? 'audio/webm;codecs=opus'
+      : MediaRecorder.isTypeSupported('audio/webm')
+        ? 'audio/webm'
+        : 'audio/ogg';
+
+    _mediaRecorder = new MediaRecorder(stream, { mimeType });
+    _mediaRecorder.ondataavailable = e => { if (e.data.size > 0) _audioChunks.push(e.data); };
+    _mediaRecorder.onstop = () => enviarGravacao(mimeType);
+    _mediaRecorder.start(1000); // coleta chunks a cada 1s
+
+    // UI
+    document.getElementById('btnGravar').style.display = 'none';
+    document.getElementById('btnParar').style.display  = 'inline-flex';
+    document.getElementById('gravarInfo').style.display = 'block';
+
+    // Timer
+    _timerInterval = setInterval(() => {
+      _segundos++;
+      const m = String(Math.floor(_segundos/60)).padStart(2,'0');
+      const s = String(_segundos%60).padStart(2,'0');
+      document.getElementById('gravarTimer').textContent = m+':'+s;
+    }, 1000);
+
+  } catch(e) {
+    alert('Não foi possível acessar o microfone: ' + e.message + '\n\nVerifique as permissões do navegador.');
+  }
+}
+
+function pararGravacao() {
+  if (_mediaRecorder && _mediaRecorder.state !== 'inactive') {
+    _mediaRecorder.stop();
+    _mediaRecorder.stream.getTracks().forEach(t => t.stop());
+  }
+  clearInterval(_timerInterval);
+  document.getElementById('btnParar').style.display  = 'none';
+  document.getElementById('gravarInfo').style.display = 'none';
+  document.getElementById('gravarStatus').textContent = 'Enviando...';
+}
+
+async function enviarGravacao(mimeType) {
+  const ext = mimeType.includes('ogg') ? 'ogg' : 'webm';
+  const blob = new Blob(_audioChunks, { type: mimeType });
+  const fb   = document.getElementById('uploadFeedback');
+  fb.style.display = 'block';
+  fb.innerHTML = '<div class="alert alert-info"><div class="spinner-border spinner-border-sm me-2"></div>Enviando gravação (' + (blob.size/1024/1024).toFixed(1) + 'MB)...</div>';
+
+  const fd = new FormData();
+  fd.append('audio', blob, 'gravacao.' + ext);
+
+  try {
+    const r = await fetch('/reunioes/{{ meeting.id }}/upload-audio', { method:'POST', body: fd });
+    const d = await r.json();
+    if (d.ok) {
+      fb.innerHTML = '<div class="alert alert-success">✅ ' + d.msg + '</div>';
+      setTimeout(() => location.reload(), 3000);
+    } else {
+      fb.innerHTML = '<div class="alert alert-danger">❌ ' + (d.erro || 'Erro ao enviar.') + '</div>';
+      document.getElementById('btnGravar').style.display = 'inline-flex';
+    }
+  } catch(e) {
+    fb.innerHTML = '<div class="alert alert-danger">❌ Erro de conexão. Tente novamente.</div>';
+    document.getElementById('btnGravar').style.display = 'inline-flex';
+  }
+}
+
+// ── Upload de arquivo ────────────────────────────────────────────────────────
 async function uploadAudio(input) {
   const file = input.files[0];
   if (!file) return;
   const fb = document.getElementById('uploadFeedback');
   fb.style.display = 'block';
   fb.innerHTML = '<div class="alert alert-info"><div class="spinner-border spinner-border-sm me-2"></div>Enviando ' + file.name + ' (' + (file.size/1024/1024).toFixed(1) + 'MB)...</div>';
-
   const fd = new FormData();
   fd.append('audio', file);
-
   const r = await fetch('/reunioes/{{ meeting.id }}/upload-audio', {method:'POST', body: fd});
   const d = await r.json();
-
   if (d.ok) {
     fb.innerHTML = '<div class="alert alert-success">✅ ' + d.msg + '</div>';
     setTimeout(() => location.reload(), 3000);
@@ -492,9 +591,7 @@ async function gerarResumo() {
     const d = await r.json();
     if (d.status === 'notes_ready' || d.status === 'error') {
       location.reload();
-    } else {
-      checkStatus();
-    }
+    } else { checkStatus(); }
   }, 15000);
 })();
 {% endif %}
