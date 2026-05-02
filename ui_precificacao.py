@@ -222,7 +222,7 @@ async function enviarBonus(){
   const mot=document.getElementById('bonusMotivo').value;
   const fb=document.getElementById('bonusFeedback');
   if(!cid||!amt){fb.style.display='block';fb.innerHTML='<div class="alert alert-warning">Selecione um cliente e informe o valor.</div>';return;}
-  const r=await fetch('/admin/creditos-bonus',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({client_id:cid,amount:amt,motivo:mot})});
+  const r=await fetch('/admin/creditos-bonus-notify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({client_id:cid,amount:amt,motivo:mot})});
   const d=await r.json();
   fb.style.display='block';
   fb.innerHTML=d.ok?'<div class="alert alert-success">✅ '+amt+' créditos atribuídos! Saldo: '+d.novo_saldo.toFixed(0)+' cr.</div>':'<div class="alert alert-danger">Erro: '+(d.erro||'tente novamente')+'</div>';
