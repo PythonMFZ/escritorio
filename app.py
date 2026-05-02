@@ -36220,6 +36220,7 @@ FEATURE_STANDALONE = ["pendencias", "agenda"]
 FEATURE_VISIBLE_ROLES.update({
     "ferramentas": {"cliente", "admin", "equipe"},
     "educacao": {"cliente", "admin", "equipe"},
+    "construrisk": {"cliente", "admin", "equipe"},
     "financeiro_escritorio": {"admin", "equipe"},
     "credito": {"admin", "equipe"},
     "crm": {"admin", "equipe"},
