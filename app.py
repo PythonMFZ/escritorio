@@ -36185,13 +36185,13 @@ FEATURE_KEYS["ferramentas"] = {
 }
 
 FEATURE_GROUPS = [
-    {"key": "minha_empresa", "title": "Minha Empresa", "features": ["empresa", "financeiro", "documentos"]},
+    {"key": "minha_empresa", "title": "Minha Empresa", "features": ["empresa", "financeiro", "documentos", "planos", "minha_assinatura"]},
     {"key": "diagnostico", "title": "Diagnóstico Financeiro", "features": ["perfil"]},
     {"key": "compliance_risco", "title": "Compliance e Análise de Risco",
      "features": ["consultas", "creditos", "openfinance"]},
     {"key": "solucoes", "title": "Soluções Financeiras", "features": ["ofertas", "simulador", "propostas"]},
     {"key": "meu_projeto", "title": "Meu Projeto", "features": ["consultoria", "reunioes", "tarefas"]},
-    {"key": "ferramentas_conteudo", "title": "Ferramentas e Conteúdo", "features": ["ferramentas", "educacao"]},
+    {"key": "ferramentas_conteudo", "title": "Ferramentas e Conteúdo", "features": ["ferramentas", "educacao", "construrisk"]},
     {"key": "gestao_interna", "title": "Gestão Interna", "features": ["crm", "motor_ofertas", "credito", "financeiro_escritorio", "ui", "gestao", "familias", "servicos_internos", "parceiros", "members", "precificacao"]},
 ]
 FEATURE_KEYS["members"] = {"title": "Membros", "desc": "Gerenciar membros e permissoes.", "href": "/admin/members"}

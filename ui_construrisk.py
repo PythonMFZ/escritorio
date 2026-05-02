@@ -30,10 +30,8 @@ from datetime import datetime as _dtCR
 
 _DD_BASE    = "https://api.app.directd.com.br"
 _DD_TOKEN   = lambda: _os_cr.environ.get("DIRECTDATA_TOKEN", "")
-_DD_HEADERS = lambda: {
-    "Authorization": f"Bearer {_DD_TOKEN()}",
-    "Content-Type": "application/json",
-}
+_DD_HEADERS = lambda: {"Content-Type": "application/json"}
+_DD_PARAMS  = lambda extra=None: dict({"TOKEN": _DD_TOKEN()}, **(extra or {}))
 
 _CR_PRODUCT_PF = "construrisk_pf"
 _CR_PRODUCT_PJ = "construrisk_pj"
@@ -71,9 +69,7 @@ except Exception:
 def _dd_get_templates(person_type: int = 0) -> list:
     """Lista templates disponíveis (1=PF, 2=PJ, 0=ambos)."""
     try:
-        params = {}
-        if person_type:
-            params["personType"] = person_type
+        params = _DD_PARAMS({"personType": person_type} if person_type else {})
         r = _req_cr.get(
             f"{_DD_BASE}/api/Dossier/Templates",
             headers=_DD_HEADERS(),
@@ -100,6 +96,7 @@ def _dd_process(template_id: str, documents: list) -> tuple[bool, str, str]:
         r = _req_cr.post(
             f"{_DD_BASE}/api/Dossier/Process",
             headers=_DD_HEADERS(),
+            params=_DD_PARAMS(),
             json={"templateID": template_id, "documents": documents},
             timeout=30,
         )
@@ -126,7 +123,7 @@ def _dd_status(dossie_id: str) -> dict:
         r = _req_cr.get(
             f"{_DD_BASE}/api/Dossier/Status",
             headers=_DD_HEADERS(),
-            params={"dossieID": dossie_id},
+            params=_DD_PARAMS({"dossieID": dossie_id}),
             timeout=15,
         )
         r.raise_for_status()
@@ -141,7 +138,7 @@ def _dd_full_details(dossie_id: str) -> dict:
         r = _req_cr.get(
             f"{_DD_BASE}/api/Dossier/Full-Details",
             headers=_DD_HEADERS(),
-            params={"dossieID": dossie_id},
+            params=_DD_PARAMS({"dossieID": dossie_id}),
             timeout=30,
         )
         r.raise_for_status()
@@ -156,7 +153,7 @@ def _dd_generate_pdf(dossie_id: str) -> bytes | None:
         r = _req_cr.post(
             f"{_DD_BASE}/api/Dossier/GeneratePDF",
             headers=_DD_HEADERS(),
-            params={"dossieID": dossie_id},
+            params=_DD_PARAMS({"dossieID": dossie_id}),
             timeout=60,
         )
         r.raise_for_status()
