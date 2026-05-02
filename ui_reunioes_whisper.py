@@ -120,66 +120,119 @@ def _processar_audio_background(
     company_id: int,
 ):
     """
-    Background task: transcreve o áudio com Whisper e gera resumo com Claude.
-    Atualiza o Meeting no banco e deleta o áudio após processamento.
+    Background task: roda o Whisper em subprocess separado para não
+    consumir RAM/CPU do processo principal do Gunicorn.
     """
-    print(f"[whisper] Iniciando transcrição da reunião {meeting_id}...")
+    import subprocess as _sp
+    import sys as _sys_w
+
+    print(f"[whisper] Iniciando transcrição da reunião {meeting_id} em subprocess...")
 
     from sqlmodel import Session as _SessW
     with _SessW(engine) as _sess:
         mt = _sess.get(Meeting, meeting_id)
         if not mt:
-            print(f"[whisper] Reunião {meeting_id} não encontrada.")
             return
 
-        # Status: transcrevendo
         mt.notion_status = "transcription_in_progress"
         mt.updated_at = _dt_w.utcnow()
         _sess.add(mt); _sess.commit()
 
+    # Script Python que roda em processo separado
+    script = f"""
+import sys, os, json
+sys.path.insert(0, '{_os2.path.dirname(_os2.path.abspath(__file__))}')
+os.environ.update(dict(os.environ))
+
+try:
+    import whisper
+    model = whisper.load_model('{_WHISPER_MODEL_NAME}')
+    result = model.transcribe('{audio_path}', language='pt', verbose=False)
+    transcricao = result.get('text', '').strip()
+    print(json.dumps({{'ok': True, 'text': transcricao}}))
+except Exception as e:
+    print(json.dumps({{'ok': False, 'error': str(e)}}))
+"""
+
+    try:
+        # Roda Whisper em processo filho com limite de memória
+        proc = _sp.run(
+            [_sys_w.executable, '-c', script],
+            capture_output=True,
+            text=True,
+            timeout=600,  # 10 minutos máximo
+        )
+
+        resultado = {}
+        for line in proc.stdout.strip().splitlines():
+            line = line.strip()
+            if line.startswith('{'):
+                try:
+                    resultado = __import__('json').loads(line)
+                    break
+                except Exception:
+                    pass
+
+        transcricao = resultado.get('text', '') if resultado.get('ok') else ''
+
+        if proc.returncode != 0 and not transcricao:
+            erro = proc.stderr[:300] if proc.stderr else 'Erro desconhecido'
+            print(f"[whisper] Erro subprocess: {erro}")
+            with _SessW(engine) as _s:
+                _mt = _s.get(Meeting, meeting_id)
+                if _mt:
+                    _mt.notion_status = "error"
+                    _mt.notes_text = f"Erro na transcrição: {erro[:200]}"
+                    _s.add(_mt); _s.commit()
+            return
+
+        print(f"[whisper] Transcrição concluída: {len(transcricao)} chars")
+
+        # Atualiza banco com transcrição
+        with _SessW(engine) as _s:
+            _mt = _s.get(Meeting, meeting_id)
+            if _mt:
+                _mt.transcript_text = transcricao
+                _mt.notion_status = "summary_in_progress"
+                _s.add(_mt); _s.commit()
+
+        # Gera resumo com Claude (no processo principal — leve)
+        if transcricao:
+            with _SessW(engine) as _s:
+                _mt = _s.get(Meeting, meeting_id)
+                if _mt:
+                    resumo = _gerar_resumo_ia(transcricao, _mt.title)
+                    _mt.summary_text      = resumo.get("summary", "")
+                    _mt.action_items_text = resumo.get("action_items", "")
+                    _mt.notes_text        = resumo.get("notes", "")
+                    _mt.notion_status     = "notes_ready"
+                    _mt.last_synced_at    = _dt_w.utcnow()
+                    _mt.updated_at        = _dt_w.utcnow()
+                    _s.add(_mt); _s.commit()
+                    print(f"[whisper] Reunião {meeting_id} processada com sucesso.")
+
+    except _sp.TimeoutExpired:
+        print(f"[whisper] Timeout na transcrição da reunião {meeting_id}")
+        with _SessW(engine) as _s:
+            _mt = _s.get(Meeting, meeting_id)
+            if _mt:
+                _mt.notion_status = "error"
+                _mt.notes_text = "Tempo limite excedido. Tente um arquivo menor."
+                _s.add(_mt); _s.commit()
+    except Exception as e:
+        print(f"[whisper] Erro inesperado: {e}")
+        with _SessW(engine) as _s:
+            _mt = _s.get(Meeting, meeting_id)
+            if _mt:
+                _mt.notion_status = "error"
+                _mt.notes_text = f"Erro: {str(e)[:200]}"
+                _s.add(_mt); _s.commit()
+    finally:
         try:
-            # 1. Transcrição com Whisper
-            model = _get_whisper_model()
-            if not model:
-                mt.notion_status = "error"
-                mt.notes_text = "Erro: openai-whisper não instalado."
-                _sess.add(mt); _sess.commit()
-                return
-
-            print(f"[whisper] Transcrevendo {audio_path}...")
-            result = model.transcribe(audio_path, language="pt", verbose=False)
-            transcricao = result.get("text", "").strip()
-            print(f"[whisper] Transcrição concluída: {len(transcricao)} chars")
-
-            mt.transcript_text = transcricao
-            mt.notion_status = "summary_in_progress"
-            _sess.add(mt); _sess.commit()
-
-            # 2. Resumo com Claude
-            if transcricao:
-                resumo = _gerar_resumo_ia(transcricao, mt.title)
-                mt.summary_text      = resumo.get("summary", "")
-                mt.action_items_text = resumo.get("action_items", "")
-                mt.notes_text        = resumo.get("notes", "")
-
-            mt.notion_status = "notes_ready"
-            mt.last_synced_at = _dt_w.utcnow()
-            mt.updated_at     = _dt_w.utcnow()
-            _sess.add(mt); _sess.commit()
-            print(f"[whisper] Reunião {meeting_id} processada com sucesso.")
-
-        except Exception as e:
-            print(f"[whisper] Erro ao processar reunião {meeting_id}: {e}")
-            mt.notion_status = "error"
-            mt.notes_text = f"Erro no processamento: {str(e)[:200]}"
-            _sess.add(mt); _sess.commit()
-        finally:
-            # 3. Deleta o áudio após processamento
-            try:
-                _Path(audio_path).unlink(missing_ok=True)
-                print(f"[whisper] Áudio deletado: {audio_path}")
-            except Exception:
-                pass
+            _Path(audio_path).unlink(missing_ok=True)
+            print(f"[whisper] Áudio deletado: {audio_path}")
+        except Exception:
+            pass
 
 
 # ── Rota POST /reunioes/{id}/upload-audio ─────────────────────────────────────
