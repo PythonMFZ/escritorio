@@ -26213,7 +26213,21 @@ def _stripe_enabled() -> bool:
     return bool(os.getenv("STRIPE_SECRET_KEY")) and bool(os.getenv("STRIPE_WEBHOOK_SECRET")) and stripe is not None
 
 
-def _price_cents(cost_cents: int, markup_pct: int) -> int:
+def _price_cents(cost_cents: int, markup_pct: int, product_code: str = "", company_id: int = 0) -> int:
+    if product_code and company_id:
+        try:
+            from sqlmodel import Session as _SPC
+            with _SPC(engine) as _spc:
+                _pp = _spc.exec(
+                    select(ProdutoPreco)
+                    .where(ProdutoPreco.company_id == company_id,
+                           ProdutoPreco.codigo == f"compliance_{product_code}",
+                           ProdutoPreco.ativo == True)
+                ).first()
+                if _pp and _pp.creditos > 0:
+                    return _pp.creditos * 100
+        except Exception:
+            pass
     markup = max(50, int(markup_pct or 50))
     return int(math.ceil(cost_cents * (1.0 + markup / 100.0)))
 
