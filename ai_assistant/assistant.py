@@ -94,12 +94,11 @@ def _format_client_context(client_data: dict) -> str:
     reunioes = client_data.get("reunioes_recentes", [])
     if reunioes:
         lines.append("\n=== REUNIÕES RECENTES (NOTION) ===")
-        for r in reunioes[:3]:  # últimas 3
-            lines.append(f"• {r.get('data','')[:10]} — {r.get('titulo','')}")
+        lines.append("Abaixo estão as reuniões mais recentes. Analise quais são relevantes para a pergunta do cliente.")
+        for r in reunioes[:5]:
+            lines.append(f"\n--- Reunião: {r.get('titulo','')} ({r.get('data','')[:10]}) ---")
             if r.get("resumo"):
-                lines.append(f"  Resumo: {r.get('resumo','')[:200]}")
-            if r.get("acoes"):
-                lines.append(f"  Ações: {r.get('acoes','')[:150]}")
+                lines.append(r.get("resumo","")[:500])
 
     # ── Viabilidades recentes ─────────────────────────────────────────────────
     viabilidades = client_data.get("viabilidades_recentes", [])
@@ -130,9 +129,11 @@ def _format_client_context(client_data: dict) -> str:
 
 def _get_reunioes_cliente(client_name: str, limit: int = 5) -> list:
     """
-    Busca reuniões recentes do Notion relacionadas ao cliente.
-    Filtra por nome do cliente no título ou conteúdo.
-    Retorna as mais recentes primeiro.
+    Busca reuniões recentes do Notion.
+    Estratégia flexível:
+      1. Prioriza reuniões que mencionam o cliente no título (palavras-chave)
+      2. Inclui reuniões recentes (últimos 7 dias) independente do nome
+      3. Retorna conteúdo parcial para o Augur decidir a relevância
     """
     try:
         notion_token = (
@@ -150,66 +151,73 @@ def _get_reunioes_cliente(client_name: str, limit: int = 5) -> list:
             "Content-Type": "application/json",
         }
 
-        # Busca as últimas 30 reuniões ordenadas por data
         url = f"https://api.notion.com/v1/databases/{notion_db_id}/query"
         resp = requests.post(url, headers=headers, json={
-            "page_size": 30,
+            "page_size": 50,
             "sorts": [{"timestamp": "created_time", "direction": "descending"}],
         }, timeout=15)
         resp.raise_for_status()
         pages = resp.json().get("results", [])
 
-        # Filtra pelo nome do cliente (case-insensitive)
-        client_lower = client_name.lower()
-        reunioes = []
+        # Palavras-chave do cliente (divide o nome em partes)
+        # Ex: "Schmitt Buffet" → ["schmitt", "buffet"]
+        palavras = [p.strip().lower() for p in client_name.replace("-","").split() if len(p) > 2]
+
+        from datetime import datetime as _dt, timedelta as _td
+        hoje = _dt.utcnow().date()
+        ultima_semana = (hoje - _td(days=7)).isoformat()
+
+        prioritarias = []   # reuniões com menção ao cliente
+        recentes     = []   # reuniões dos últimos 7 dias
 
         for page in pages:
-            # Extrai título
             props = page.get("properties", {})
             titulo = ""
-            for key in ("Nome da reunião", "Name", "Título", "Title", "nome"):
+            for key in ("Nome da reunião", "Name", "Título", "Title", "nome", "título"):
                 prop = props.get(key, {})
-                title_list = prop.get("title", [])
-                if title_list:
-                    titulo = title_list[0].get("plain_text", "")
+                tl = prop.get("title", [])
+                if tl:
+                    titulo = tl[0].get("plain_text", "")
                     break
 
             data = (page.get("created_time") or "")[:10]
-
-            # Verifica se o título menciona o cliente
             titulo_lower = titulo.lower()
-            if client_lower not in titulo_lower:
-                # Tenta extrair primeiros blocos para verificar menção ao cliente
-                try:
-                    page_id = page["id"]
-                    blocks_url = f"https://api.notion.com/v1/blocks/{page_id}/children"
-                    br = requests.get(blocks_url, headers=headers,
-                                      params={"page_size": 10}, timeout=10)
-                    br.raise_for_status()
-                    preview = " ".join(
-                        rt.get("plain_text", "")
-                        for block in br.json().get("results", [])
-                        for rt in block.get(block.get("type",""), {}).get("rich_text", [])
-                    ).lower()
-                    if client_lower not in preview:
-                        continue
-                    resumo = preview[:300]
-                except Exception:
-                    continue
-            else:
-                resumo = ""
 
-            reunioes.append({
-                "titulo":  titulo,
-                "data":    data,
-                "resumo":  resumo[:300] if resumo else "",
-                "acoes":   "",
-            })
+            # Verifica menção ao cliente no título
+            menciona = any(p in titulo_lower for p in palavras)
 
-            if len(reunioes) >= limit:
-                break
+            # Busca preview do conteúdo (primeiros 15 blocos)
+            resumo = ""
+            try:
+                page_id = page["id"]
+                br = requests.get(
+                    f"https://api.notion.com/v1/blocks/{page_id}/children",
+                    headers=headers, params={"page_size": 15}, timeout=10
+                )
+                br.raise_for_status()
+                blocos_texto = []
+                for block in br.json().get("results", []):
+                    for rt in block.get(block.get("type",""), {}).get("rich_text", []):
+                        t = rt.get("plain_text", "").strip()
+                        if t:
+                            blocos_texto.append(t)
+                resumo = " ".join(blocos_texto)[:400]
+                # Verifica menção no conteúdo também
+                if not menciona:
+                    menciona = any(p in resumo.lower() for p in palavras)
+            except Exception:
+                pass
 
-        return reunioes
+            item = {"titulo": titulo, "data": data, "resumo": resumo, "acoes": ""}
+
+            if menciona:
+                prioritarias.append(item)
+            elif data >= ultima_semana:
+                recentes.append(item)
+
+        # Combina: prioritárias primeiro, depois recentes
+        resultado = prioritarias[:limit] + recentes[:max(0, limit - len(prioritarias))]
+        return resultado[:limit]
 
     except Exception as e:
         print(f"[augur] Erro ao buscar reuniões Notion: {e}")
