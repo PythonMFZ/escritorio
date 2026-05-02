@@ -13,3 +13,4 @@ alembic==1.18.4
 reportlab>=4.0
 stripe>=9.0.0
 chromadb
+openai-whisper
