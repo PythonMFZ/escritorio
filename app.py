@@ -15669,6 +15669,23215 @@ async def perfil_snapshot_new_page(request: Request, session: Session = Depends(
     if not ensure_can_access_client(ctx, current_client.id):
         set_flash(request, "Sem permissão.")
         return RedirectResponse("/perfil", status_code=303)
+    return RedirectResponse("/perfil/wizard", status_code=302)
+
+    business_profile = get_or_create_business_profile(session, company_id=ctx.company.id, client_id=current_client.id)
+
+    return render(
+        "perfil_snapshot_new.html",
+        request=request,
+        context={
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "role": ctx.membership.role,
+            "current_client": current_client,
+            "business_profile": business_profile,
+            "survey": PROFILE_SURVEY_V2,
+            "product_families": list_product_families(session),
+            "selected_interest_codes": _json_list(business_profile.interests_json) if business_profile else [],
+        },
+    )
+
+
+@app.post("/perfil/avaliacao/nova")
+@require_login
+async def perfil_snapshot_new_action(
+        request: Request,
+        session: Session = Depends(get_session),
+        revenue_monthly_brl: float = Form(0.0),
+        debt_total_brl: float = Form(0.0),
+        cash_balance_brl: float = Form(0.0),
+        employees_count: int = Form(0),
+        nps_score: int = Form(0),
+        notes: str = Form(""),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+
+    current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
+    if not current_client:
+        set_flash(request, "Nenhum cliente selecionado/vinculado.")
+        return RedirectResponse("/perfil", status_code=303)
+
+    if not ensure_can_access_client(ctx, current_client.id):
+        set_flash(request, "Sem permissão.")
+        return RedirectResponse("/perfil", status_code=303)
+
+    form = await request.form()
+    answers: dict[str, Any] = {}
+    for q in PROFILE_SURVEY_V2:
+        key = q["id"]
+        answers[key] = _parse_bool(form.get(key))
+
+    proc = score_process_from_answers(answers)
+    fin = score_financial_simple(revenue_monthly_brl, debt_total_brl, cash_balance_brl)
+    tot = score_total(proc, fin, nps_score)
+
+    snap = ClientSnapshot(
+        company_id=ctx.company.id,
+        client_id=current_client.id,
+        created_by_user_id=ctx.user.id,
+        revenue_monthly_brl=max(0.0, float(revenue_monthly_brl)),
+        debt_total_brl=max(0.0, float(debt_total_brl)),
+        cash_balance_brl=max(0.0, float(cash_balance_brl)),
+        employees_count=max(0, int(employees_count)),
+        nps_score=max(0, min(10, int(nps_score))),
+        notes=(notes or "").strip(),
+        answers_json=json.dumps(answers, ensure_ascii=False),
+        score_process=proc,
+        score_financial=fin,
+        score_total=tot,
+    )
+    session.add(snap)
+
+    # Atualiza os indicadores atuais do cliente (mantém a tela antiga consistente)
+    current_client.revenue_monthly_brl = snap.revenue_monthly_brl
+    current_client.debt_total_brl = snap.debt_total_brl
+    current_client.cash_balance_brl = snap.cash_balance_brl
+    current_client.employees_count = snap.employees_count
+    current_client.updated_at = utcnow()
+    session.add(current_client)
+
+    profile = get_or_create_business_profile(session, company_id=ctx.company.id, client_id=current_client.id)
+    form2 = await request.form()
+    interests = form2.getlist("interests") if hasattr(form2, "getlist") else []
+    profile.segment = (form2.get("segment") or profile.segment or "").strip()
+    profile.subsegment = (form2.get("subsegment") or profile.subsegment or "").strip()
+    profile.cnae = (form2.get("cnae") or profile.cnae or "").strip()
+    profile.tax_regime = (form2.get("tax_regime") or profile.tax_regime or "").strip()
+    profile.company_size = (form2.get("company_size") or profile.company_size or "").strip()
+    try:
+        profile.founded_year = max(0, int(form2.get("founded_year") or profile.founded_year or 0))
+    except Exception:
+        pass
+    profile.business_model = (form2.get("business_model") or profile.business_model or "").strip()
+    profile.sales_channel = (form2.get("sales_channel") or profile.sales_channel or "").strip()
+    profile.main_bank = (form2.get("main_bank") or profile.main_bank or "").strip()
+    try:
+        profile.banks_count = max(0, int(form2.get("banks_count") or profile.banks_count or 0))
+    except Exception:
+        pass
+    profile.annual_revenue_brl = max(float(form2.get("annual_revenue_brl") or profile.annual_revenue_brl or 0.0), 0.0)
+    profile.monthly_fixed_cost_brl = max(
+        float(form2.get("monthly_fixed_cost_brl") or profile.monthly_fixed_cost_brl or 0.0), 0.0)
+    profile.payroll_monthly_brl = max(float(form2.get("payroll_monthly_brl") or profile.payroll_monthly_brl or 0.0),
+                                      0.0)
+    profile.average_ticket_brl = max(float(form2.get("average_ticket_brl") or profile.average_ticket_brl or 0.0), 0.0)
+    profile.inventory_brl = max(float(form2.get("inventory_brl") or profile.inventory_brl or 0.0), 0.0)
+    profile.receivables_brl = max(float(form2.get("receivables_brl") or profile.receivables_brl or 0.0), 0.0)
+    profile.cash_and_investments_brl = float(
+        form2.get("cash_and_investments_brl") or profile.cash_and_investments_brl or cash_balance_brl or 0.0)
+    profile.other_current_assets_brl = max(
+        float(form2.get("other_current_assets_brl") or profile.other_current_assets_brl or 0.0), 0.0)
+    profile.immobilized_brl = max(float(form2.get("immobilized_brl") or profile.immobilized_brl or 0.0), 0.0)
+    profile.other_non_current_assets_brl = max(
+        float(form2.get("other_non_current_assets_brl") or profile.other_non_current_assets_brl or 0.0), 0.0)
+    profile.payables_360_brl = max(float(form2.get("payables_360_brl") or profile.payables_360_brl or 0.0), 0.0)
+    profile.short_term_debt_brl = max(float(form2.get("short_term_debt_brl") or profile.short_term_debt_brl or 0.0),
+                                      0.0)
+    profile.tax_liabilities_brl = max(float(form2.get("tax_liabilities_brl") or profile.tax_liabilities_brl or 0.0),
+                                      0.0)
+    profile.labor_liabilities_brl = max(
+        float(form2.get("labor_liabilities_brl") or profile.labor_liabilities_brl or 0.0), 0.0)
+    profile.other_current_liabilities_brl = max(
+        float(form2.get("other_current_liabilities_brl") or profile.other_current_liabilities_brl or 0.0), 0.0)
+    profile.long_term_debt_brl = max(float(form2.get("long_term_debt_brl") or profile.long_term_debt_brl or 0.0), 0.0)
+    profile.other_non_current_liabilities_brl = max(
+        float(form2.get("other_non_current_liabilities_brl") or profile.other_non_current_liabilities_brl or 0.0), 0.0)
+    profile.current_assets_brl = max(profile.cash_and_investments_brl,
+                                     0.0) + profile.receivables_brl + profile.inventory_brl + profile.other_current_assets_brl
+    profile.non_current_assets_brl = profile.immobilized_brl + profile.other_non_current_assets_brl
+    profile.current_liabilities_brl = profile.payables_360_brl + profile.short_term_debt_brl + profile.tax_liabilities_brl + profile.labor_liabilities_brl + profile.other_current_liabilities_brl
+    profile.non_current_liabilities_brl = profile.long_term_debt_brl + profile.other_non_current_liabilities_brl
+    profile.equity_brl = (profile.current_assets_brl + profile.non_current_assets_brl) - (
+                profile.current_liabilities_brl + profile.non_current_liabilities_brl)
+    profile.collateral_brl = max(float(form2.get("collateral_brl") or profile.collateral_brl or 0.0), 0.0)
+    profile.delinquency_brl = max(float(form2.get("delinquency_brl") or profile.delinquency_brl or 0.0), 0.0)
+    profile.desired_credit_brl = max(float(form2.get("desired_credit_brl") or profile.desired_credit_brl or 0.0), 0.0)
+    profile.urgency_level = (form2.get("urgency_level") or profile.urgency_level or "").strip()
+    profile.strategic_goal = (form2.get("strategic_goal") or profile.strategic_goal or "").strip()
+    profile.pain_points = (form2.get("pain_points") or profile.pain_points or "").strip()
+    profile.interests_json = _json_dump_list(list(interests or []))
+    profile.has_erp = _parse_bool(form2.get("has_erp"))
+    profile.has_budget = _parse_bool(form2.get("has_budget"))
+    profile.has_board = _parse_bool(form2.get("has_board"))
+    profile.has_audited_fs = _parse_bool(form2.get("has_audited_fs"))
+    profile.updated_at = utcnow()
+    session.add(profile)
+    session.commit()
+
+    try:
+        matches = compute_offer_engine(
+            session=session,
+            company_id=ctx.company.id,
+            client=current_client,
+            profile=profile,
+            latest_snapshot=snap,
+        )
+        persist_offer_matches(session, company_id=ctx.company.id, client_id=current_client.id, matches=matches)
+    except Exception:
+        set_flash(request, "Avaliação salva, mas o motor de ofertas não pôde ser atualizado agora.")
+
+    try:
+        analyze_client_health_job(session, company_id=ctx.company.id, client_id=current_client.id)
+    except Exception:
+        pass
+
+    try:
+        _notify_staff_about_client_activity(
+            session,
+            ctx=ctx,
+            client_id=current_client.id,
+            kind="atividade_cliente",
+            title="Cliente registrou uma nova avaliação",
+            message=(current_client.name or "Cliente")[:160],
+            href="/perfil",
+        )
+    except Exception:
+        pass
+
+    if not getattr(request, "session", {}).get("flash"):
+        set_flash(request, "Avaliação registrada.")
+    return RedirectResponse("/perfil", status_code=303)
+
+
+@app.get("/perfil/avaliacao/{snapshot_id}", response_class=HTMLResponse)
+@require_login
+async def perfil_snapshot_detail(request: Request, session: Session = Depends(get_session),
+                                 snapshot_id: int = 0) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+
+    snap = session.get(ClientSnapshot, int(snapshot_id))
+    if not snap or snap.company_id != ctx.company.id:
+        return render(
+            "error.html",
+            request=request,
+            context={"current_user": ctx.user, "current_company": ctx.company, "role": ctx.membership.role,
+                     "current_client": None, "message": "Avaliação não encontrada."},
+            status_code=404,
+        )
+
+    if not ensure_can_access_client(ctx, snap.client_id):
+        return render(
+            "error.html",
+            request=request,
+            context={"current_user": ctx.user, "current_company": ctx.company, "role": ctx.membership.role,
+                     "current_client": None, "message": "Sem permissão."},
+            status_code=403,
+        )
+
+    client = session.get(Client, snap.client_id)
+    answers = {}
+    try:
+        answers = json.loads(snap.answers_json or "{}")
+    except Exception:
+        answers = {}
+
+    current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
+
+    return render(
+        "perfil_snapshot_detail.html",
+        request=request,
+        context={
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "role": ctx.membership.role,
+            "current_client": current_client,
+            "client": client,
+            "snap": snap,
+            "survey": PROFILE_SURVEY_V1,
+            "answers": answers,
+        },
+    )
+
+
+# ----------------------------
+# Pendências
+# ----------------------------
+
+
+@app.get("/pendencias", response_class=HTMLResponse)
+@require_login
+async def pending_list(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+
+    current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
+
+    q = select(PendingItem).where(PendingItem.company_id == ctx.company.id).order_by(PendingItem.created_at.desc())
+    if ctx.membership.role == "cliente":
+        items = session.exec(q.where(PendingItem.client_id == (ctx.membership.client_id or -1))).all()
+    else:
+        if current_client:
+            q = q.where(PendingItem.client_id == current_client.id)
+        items = session.exec(q).all()
+
+    out = []
+    for it in items:
+        c = session.get(Client, it.client_id)
+        out.append(
+            {
+                "id": it.id,
+                "title": it.title,
+                "status": it.status,
+                "due_date": it.due_date,
+                "created_at": it.created_at,
+                "client_name": c.name if c else "—",
+            }
+        )
+
+    return render(
+        "pending_list.html",
+        request=request,
+        context={
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "role": ctx.membership.role,
+            "current_client": current_client,
+            "items": out,
+        },
+    )
+
+
+@app.get("/pendencias/cliente/novo", response_class=HTMLResponse)
+@require_role({"admin", "equipe"})
+async def pending_new_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
+    clients = session.exec(select(Client).where(Client.company_id == ctx.company.id).order_by(Client.created_at)).all()
+    current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
+    return render(
+        "pending_new.html",
+        request=request,
+        context={
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "role": ctx.membership.role,
+            "current_client": current_client,
+            "clients": clients,
+        },
+    )
+
+
+@app.post("/pendencias/cliente/novo")
+@require_role({"admin", "equipe"})
+async def pending_new_action(
+        request: Request,
+        session: Session = Depends(get_session),
+        client_id: int = Form(...),
+        title: str = Form(...),
+        description: str = Form(""),
+        status: str = Form("aberto"),
+        due_date: str = Form(""),
+        file: UploadFile | None = File(default=None),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
+    client = get_client_or_none(session, ctx.company.id, int(client_id))
+    if not client:
+        set_flash(request, "Cliente inválido.")
+        return RedirectResponse("/pendencias/novo", status_code=303)
+
+    status = status.strip().lower()
+    if status not in PENDING_STATUSES:
+        status = "aberto"
+
+    item = PendingItem(
+        company_id=ctx.company.id,
+        client_id=client.id,
+        created_by_user_id=ctx.user.id,
+        title=title.strip(),
+        description=description.strip(),
+        status=status,
+        due_date=_normalize_date_input(due_date),
+        updated_at=utcnow(),
+    )
+    session.add(item)
+    session.commit()
+    session.refresh(item)
+
+    if file and file.filename:
+        try:
+            stored, mime, size = await save_upload(file)
+        except ValueError:
+            set_flash(request, "Arquivo muito grande.")
+            return RedirectResponse("/pendencias/novo", status_code=303)
+
+        session.add(
+            Attachment(
+                company_id=ctx.company.id,
+                client_id=client.id,
+                uploaded_by_user_id=ctx.user.id,
+                pending_item_id=item.id,
+                original_filename=file.filename,
+                stored_filename=stored,
+                mime_type=mime,
+                size_bytes=size,
+            )
+        )
+        session.commit()
+
+    set_flash(request, "Pendência criada.")
+    return RedirectResponse("/pendencias", status_code=303)
+
+
+@app.get("/pendencias/{item_id}", response_class=HTMLResponse)
+@require_login
+async def pending_detail(request: Request, session: Session = Depends(get_session), item_id: int = 0) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+
+    item = session.get(PendingItem, int(item_id))
+    if not item or item.company_id != ctx.company.id:
+        return render("error.html", request=request, context={"message": "Pendência não encontrada."}, status_code=404)
+
+    if not ensure_can_access_client(ctx, item.client_id):
+        return render("error.html", request=request, context={"message": "Sem permissão."}, status_code=403)
+
+    client = session.get(Client, item.client_id)
+    attachments = session.exec(
+        select(Attachment).where(Attachment.pending_item_id == item.id).order_by(Attachment.created_at.desc())
+    ).all()
+
+    msgs = session.exec(
+        select(PendingMessage).where(PendingMessage.pending_item_id == item.id).order_by(
+            PendingMessage.created_at.desc())
+    ).all()
+    messages = []
+    for m in msgs:
+        u = session.get(User, m.author_user_id)
+        messages.append({"author_name": u.name if u else "Usuário", "message": m.message, "created_at": m.created_at})
+
+    current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
+    return render(
+        "pending_detail.html",
+        request=request,
+        context={
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "role": ctx.membership.role,
+            "current_client": current_client,
+            "item": item,
+            "client": client,
+            "attachments": attachments,
+            "messages": messages,
+        },
+    )
+
+
+@app.post("/pendencias/{item_id}/status")
+@require_role({"admin", "equipe"})
+async def pending_update_status(
+        request: Request,
+        session: Session = Depends(get_session),
+        item_id: int = 0,
+        status: str = Form(...),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
+    item = session.get(PendingItem, int(item_id))
+    if not item or item.company_id != ctx.company.id:
+        set_flash(request, "Pendência não encontrada.")
+        return RedirectResponse("/pendencias", status_code=303)
+
+    status = status.strip().lower()
+    if status not in PENDING_STATUSES:
+        set_flash(request, "Status inválido.")
+        return RedirectResponse(f"/pendencias/{item.id}", status_code=303)
+
+    item.status = status
+    item.updated_at = utcnow()
+    session.add(item)
+    session.commit()
+    set_flash(request, "Status atualizado.")
+    return RedirectResponse(f"/pendencias/{item.id}", status_code=303)
+
+
+@app.post("/pendencias/{item_id}/anexar")
+@require_role({"admin", "equipe"})
+async def pending_attach_admin(
+        request: Request,
+        session: Session = Depends(get_session),
+        item_id: int = 0,
+        message: str = Form(""),
+        file: UploadFile = File(...),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
+    item = session.get(PendingItem, int(item_id))
+    if not item or item.company_id != ctx.company.id:
+        set_flash(request, "Pendência não encontrada.")
+        return RedirectResponse("/pendencias", status_code=303)
+
+    try:
+        stored, mime, size = await save_upload(file)
+    except ValueError:
+        set_flash(request, "Arquivo muito grande.")
+        return RedirectResponse(f"/pendencias/{item.id}", status_code=303)
+
+    session.add(
+        Attachment(
+            company_id=ctx.company.id,
+            client_id=item.client_id,
+            uploaded_by_user_id=ctx.user.id,
+            pending_item_id=item.id,
+            original_filename=file.filename or "arquivo",
+            stored_filename=stored,
+            mime_type=mime,
+            size_bytes=size,
+        )
+    )
+    if message.strip():
+        session.add(PendingMessage(pending_item_id=item.id, author_user_id=ctx.user.id, message=message.strip()))
+
+    item.updated_at = utcnow()
+    session.add(item)
+    session.commit()
+
+    set_flash(request, "Enviado.")
+    return RedirectResponse(f"/pendencias/{item.id}", status_code=303)
+
+
+@app.post("/pendencias/{item_id}/cliente-upload")
+@require_role({"cliente"})
+async def pending_attach_client(
+        request: Request,
+        session: Session = Depends(get_session),
+        item_id: int = 0,
+        message: str = Form(""),
+        mark_done: str = Form(""),
+        file: UploadFile | None = File(default=None),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
+    item = session.get(PendingItem, int(item_id))
+    if not item or item.company_id != ctx.company.id:
+        set_flash(request, "Pendência não encontrada.")
+        return RedirectResponse("/pendencias", status_code=303)
+
+    if (ctx.membership.client_id or -1) != item.client_id:
+        set_flash(request, "Sem permissão.")
+        return RedirectResponse("/pendencias", status_code=303)
+
+    if file and file.filename:
+        try:
+            stored, mime, size = await save_upload(file)
+        except ValueError:
+            set_flash(request, "Arquivo muito grande.")
+            return RedirectResponse(f"/pendencias/{item.id}", status_code=303)
+
+        session.add(
+            Attachment(
+                company_id=ctx.company.id,
+                client_id=item.client_id,
+                uploaded_by_user_id=ctx.user.id,
+                pending_item_id=item.id,
+                original_filename=file.filename,
+                stored_filename=stored,
+                mime_type=mime,
+                size_bytes=size,
+            )
+        )
+
+    if message.strip():
+        session.add(PendingMessage(pending_item_id=item.id, author_user_id=ctx.user.id, message=message.strip()))
+
+    if mark_done == "1":
+        item.status = "concluido"
+    else:
+        if item.status == "aguardando_cliente":
+            item.status = "cliente_enviou"
+
+    item.updated_at = utcnow()
+    session.add(item)
+    session.commit()
+
+    try:
+        _notify_staff_about_client_activity(
+            session,
+            ctx=ctx,
+            client_id=item.client_id,
+            kind="pendencia",
+            title="Cliente atualizou uma pendência",
+            message=(item.title or "Pendência")[:160],
+            href=f"/pendencias/{item.id}",
+        )
+    except Exception:
+        pass
+
+    set_flash(request, "Enviado.")
+    return RedirectResponse(f"/pendencias/{item.id}", status_code=303)
+
+
+# ----------------------------
+# Documentos
+# ----------------------------
+
+
+@app.get("/documentos", response_class=HTMLResponse)
+@require_login
+async def docs_list(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+
+    current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
+
+    q = select(Document).where(Document.company_id == ctx.company.id).order_by(Document.created_at.desc())
+    if ctx.membership.role == "cliente":
+        docs = session.exec(q.where(Document.client_id == (ctx.membership.client_id or -1))).all()
+    else:
+        if current_client:
+            q = q.where(Document.client_id == current_client.id)
+        docs = session.exec(q).all()
+
+    out = []
+    for d in docs:
+        c = session.get(Client, d.client_id)
+        out.append(
+            {"id": d.id, "title": d.title, "status": d.status, "created_at": d.created_at,
+             "client_name": c.name if c else "—"}
+        )
+
+    return render(
+        "docs_list.html",
+        request=request,
+        context={
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "role": ctx.membership.role,
+            "current_client": current_client,
+            "items": out,
+        },
+    )
+
+
+@app.get("/documentos/novo", response_class=HTMLResponse)
+@require_role({"admin", "equipe"})
+async def docs_new_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
+    clients = session.exec(select(Client).where(Client.company_id == ctx.company.id).order_by(Client.created_at)).all()
+    current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
+    return render(
+        "docs_new.html",
+        request=request,
+        context={
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "role": ctx.membership.role,
+            "current_client": current_client,
+            "clients": clients,
+        },
+    )
+
+
+@app.post("/documentos/novo")
+@require_role({"admin", "equipe"})
+async def docs_new_action(
+        request: Request,
+        session: Session = Depends(get_session),
+        client_id: int = Form(...),
+        title: str = Form(...),
+        content: str = Form(...),
+        status: str = Form("rascunho"),
+        file: UploadFile | None = File(default=None),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
+    client = get_client_or_none(session, ctx.company.id, int(client_id))
+    if not client:
+        set_flash(request, "Cliente inválido.")
+        return RedirectResponse("/documentos/novo", status_code=303)
+
+    status = status.strip().lower()
+    if status not in DOC_STATUSES:
+        status = "rascunho"
+
+    doc = Document(
+        company_id=ctx.company.id,
+        client_id=client.id,
+        created_by_user_id=ctx.user.id,
+        title=title.strip(),
+        content=content.strip(),
+        status=status,
+        updated_at=utcnow(),
+    )
+    session.add(doc)
+    session.commit()
+    session.refresh(doc)
+
+    if file and file.filename:
+        try:
+            stored, mime, size = await save_upload(file)
+        except ValueError:
+            set_flash(request, "Arquivo muito grande.")
+            return RedirectResponse("/documentos/novo", status_code=303)
+
+        session.add(
+            Attachment(
+                company_id=ctx.company.id,
+                client_id=client.id,
+                uploaded_by_user_id=ctx.user.id,
+                document_id=doc.id,
+                original_filename=file.filename,
+                stored_filename=stored,
+                mime_type=mime,
+                size_bytes=size,
+            )
+        )
+        session.commit()
+
+    try:
+        if doc.status != "rascunho":
+            notify_client_members(
+                session,
+                company_id=ctx.company.id,
+                client_id=client.id,
+                kind="documento",
+                title="Novo documento disponível",
+                message=doc.title,
+                href=f"/documentos/{doc.id}",
+                created_by_user_id=ctx.user.id,
+            )
+    except Exception:
+        pass
+
+    set_flash(request, "Documento criado.")
+    return RedirectResponse("/documentos", status_code=303)
+
+
+@app.get("/documentos/{doc_id}", response_class=HTMLResponse)
+@require_login
+async def docs_detail(request: Request, session: Session = Depends(get_session), doc_id: int = 0) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+
+    doc = session.get(Document, int(doc_id))
+    if not doc or doc.company_id != ctx.company.id:
+        return render("error.html", request=request, context={"message": "Documento não encontrado."}, status_code=404)
+
+    if not ensure_can_access_client(ctx, doc.client_id):
+        return render("error.html", request=request, context={"message": "Sem permissão."}, status_code=403)
+
+    client = session.get(Client, doc.client_id)
+    attachments = session.exec(
+        select(Attachment).where(Attachment.document_id == doc.id).order_by(Attachment.created_at.desc())
+    ).all()
+
+    msgs = session.exec(
+        select(DocumentMessage).where(DocumentMessage.document_id == doc.id).order_by(DocumentMessage.created_at.desc())
+    ).all()
+    messages = []
+    for m in msgs:
+        u = session.get(User, m.author_user_id)
+        messages.append({"author_name": u.name if u else "Usuário", "message": m.message, "created_at": m.created_at})
+
+    current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
+
+    return render(
+        "docs_detail.html",
+        request=request,
+        context={
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "role": ctx.membership.role,
+            "current_client": current_client,
+            "doc": doc,
+            "client": client,
+            "attachments": attachments,
+            "messages": messages,
+        },
+    )
+
+
+@app.post("/documentos/{doc_id}/status")
+@require_role({"admin", "equipe"})
+async def docs_update_status(
+        request: Request, session: Session = Depends(get_session), doc_id: int = 0, status: str = Form(...)
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
+    doc = session.get(Document, int(doc_id))
+    if not doc or doc.company_id != ctx.company.id:
+        set_flash(request, "Documento não encontrado.")
+        return RedirectResponse("/documentos", status_code=303)
+
+    status = status.strip().lower()
+    if status not in DOC_STATUSES:
+        set_flash(request, "Status inválido.")
+        return RedirectResponse(f"/documentos/{doc.id}", status_code=303)
+
+    doc.status = status
+    doc.updated_at = utcnow()
+    session.add(doc)
+    session.commit()
+
+    set_flash(request, "Status atualizado.")
+    return RedirectResponse(f"/documentos/{doc.id}", status_code=303)
+
+
+@app.post("/documentos/{doc_id}/anexar")
+@require_role({"admin", "equipe"})
+async def docs_attach_admin(
+        request: Request,
+        session: Session = Depends(get_session),
+        doc_id: int = 0,
+        message: str = Form(""),
+        file: UploadFile = File(...),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
+    doc = session.get(Document, int(doc_id))
+    if not doc or doc.company_id != ctx.company.id:
+        set_flash(request, "Documento não encontrado.")
+        return RedirectResponse("/documentos", status_code=303)
+
+    try:
+        stored, mime, size = await save_upload(file)
+    except ValueError:
+        set_flash(request, "Arquivo muito grande.")
+        return RedirectResponse(f"/documentos/{doc.id}", status_code=303)
+
+    session.add(
+        Attachment(
+            company_id=ctx.company.id,
+            client_id=doc.client_id,
+            uploaded_by_user_id=ctx.user.id,
+            document_id=doc.id,
+            original_filename=file.filename or "arquivo",
+            stored_filename=stored,
+            mime_type=mime,
+            size_bytes=size,
+        )
+    )
+    if message.strip():
+        session.add(DocumentMessage(document_id=doc.id, author_user_id=ctx.user.id, message=message.strip()))
+
+    doc.updated_at = utcnow()
+    session.add(doc)
+    session.commit()
+
+    set_flash(request, "Enviado.")
+    return RedirectResponse(f"/documentos/{doc.id}", status_code=303)
+
+
+@app.post("/documentos/{doc_id}/cliente-upload")
+@require_role({"cliente"})
+async def docs_attach_client(
+        request: Request,
+        session: Session = Depends(get_session),
+        doc_id: int = 0,
+        message: str = Form(""),
+        file: UploadFile = File(...),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
+    doc = session.get(Document, int(doc_id))
+    if not doc or doc.company_id != ctx.company.id:
+        set_flash(request, "Documento não encontrado.")
+        return RedirectResponse("/documentos", status_code=303)
+
+    if (ctx.membership.client_id or -1) != doc.client_id:
+        set_flash(request, "Sem permissão.")
+        return RedirectResponse("/documentos", status_code=303)
+
+    try:
+        stored, mime, size = await save_upload(file)
+    except ValueError:
+        set_flash(request, "Arquivo muito grande.")
+        return RedirectResponse(f"/documentos/{doc.id}", status_code=303)
+
+    session.add(
+        Attachment(
+            company_id=ctx.company.id,
+            client_id=doc.client_id,
+            uploaded_by_user_id=ctx.user.id,
+            document_id=doc.id,
+            original_filename=file.filename or "arquivo",
+            stored_filename=stored,
+            mime_type=mime,
+            size_bytes=size,
+        )
+    )
+    if message.strip():
+        session.add(DocumentMessage(document_id=doc.id, author_user_id=ctx.user.id, message=message.strip()))
+
+    if doc.status == "aguardando_cliente":
+        doc.status = "cliente_enviou"
+
+    doc.updated_at = utcnow()
+    session.add(doc)
+    session.commit()
+
+    try:
+        _notify_staff_about_client_activity(
+            session,
+            ctx=ctx,
+            client_id=doc.client_id,
+            kind="documento",
+            title="Cliente atualizou um documento",
+            message=(doc.title or "Documento")[:160],
+            href=f"/documentos/{doc.id}",
+        )
+    except Exception:
+        pass
+
+    set_flash(request, "Enviado.")
+    return RedirectResponse(f"/documentos/{doc.id}", status_code=303)
+
+
+# ----------------------------
+# Propostas / Solicitações
+# ----------------------------
+
+
+def _proposal_allowed_statuses(kind: str) -> list[str]:
+    if kind == "solicitacao":
+        return ["aberta", "em_analise", "respondida", "encerrada"]
+    return ["rascunho", "enviada", "aprovada", "rejeitada"]
+
+
+@app.get("/propostas", response_class=HTMLResponse)
+@require_login
+async def props_list(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+
+    current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
+
+    q = select(Proposal).where(Proposal.company_id == ctx.company.id).order_by(Proposal.created_at.desc())
+    if ctx.membership.role == "cliente":
+        items = session.exec(q.where(Proposal.client_id == (ctx.membership.client_id or -1))).all()
+    else:
+        if current_client:
+            q = q.where(Proposal.client_id == current_client.id)
+        items = session.exec(q).all()
+
+    out = []
+    for p in items:
+        c = session.get(Client, p.client_id)
+        out.append(
+            {
+                "id": p.id,
+                "kind": p.kind,
+                "title": p.title,
+                "status": p.status,
+                "value_brl": p.value_brl,
+                "created_at": p.created_at,
+                "client_name": c.name if c else "—",
+            }
+        )
+
+    return render(
+        "props_list.html",
+        request=request,
+        context={
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "role": ctx.membership.role,
+            "current_client": current_client,
+            "items": out,
+        },
+    )
+
+
+@app.get("/propostas/nova", response_class=HTMLResponse)
+@require_role({"admin", "equipe"})
+async def props_new_staff_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
+    clients = session.exec(select(Client).where(Client.company_id == ctx.company.id).order_by(Client.created_at)).all()
+    current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
+    return render(
+        "props_new_staff.html",
+        request=request,
+        context={
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "role": ctx.membership.role,
+            "current_client": current_client,
+            "clients": clients,
+        },
+    )
+
+
+@app.post("/propostas/nova")
+@require_role({"admin", "equipe"})
+async def props_new_staff_action(
+        request: Request,
+        session: Session = Depends(get_session),
+        client_id: int = Form(...),
+        title: str = Form(...),
+        description: str = Form(""),
+        service_name: str = Form(""),
+        value_brl: float = Form(0.0),
+        status: str = Form("rascunho"),
+        file: UploadFile | None = File(default=None),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
+    client = get_client_or_none(session, ctx.company.id, int(client_id))
+    if not client:
+        set_flash(request, "Cliente inválido.")
+        return RedirectResponse("/propostas/nova", status_code=303)
+
+    status = status.strip().lower()
+    if status not in _proposal_allowed_statuses("proposta"):
+        status = "rascunho"
+
+    service_name = sanitize_service_name(service_name)
+    if not service_name:
+        set_flash(request, "Selecione um serviço/produto.")
+        return RedirectResponse("/propostas/nova", status_code=303)
+
+    prop = Proposal(
+        company_id=ctx.company.id,
+        client_id=client.id,
+        created_by_user_id=ctx.user.id,
+        kind="proposta",
+        title=title.strip(),
+        description=description.strip(),
+        service_name=service_name,
+        value_brl=max(0.0, float(value_brl)),
+        status=status,
+        updated_at=utcnow(),
+    )
+    session.add(prop)
+    session.commit()
+    session.refresh(prop)
+
+    if file and file.filename:
+        try:
+            stored, mime, size = await save_upload(file)
+        except ValueError:
+            set_flash(request, "Arquivo muito grande.")
+            return RedirectResponse("/propostas/nova", status_code=303)
+
+        session.add(
+            Attachment(
+                company_id=ctx.company.id,
+                client_id=client.id,
+                uploaded_by_user_id=ctx.user.id,
+                proposal_id=prop.id,
+                original_filename=file.filename,
+                stored_filename=stored,
+                mime_type=mime,
+                size_bytes=size,
+            )
+        )
+        session.commit()
+
+    set_flash(request, "Proposta criada.")
+    return RedirectResponse("/propostas", status_code=303)
+
+
+@app.get("/propostas/solicitacao", response_class=HTMLResponse)
+@require_role({"cliente"})
+async def props_new_client_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
+    current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
+    return render(
+        "props_new_client.html",
+        request=request,
+        context={
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "role": ctx.membership.role,
+            "current_client": current_client,
+        },
+    )
+
+
+@app.post("/propostas/solicitacao")
+@require_role({"cliente"})
+async def props_new_client_action(
+        request: Request,
+        session: Session = Depends(get_session),
+        title: str = Form(...),
+        service_name: str = Form(""),
+        description: str = Form(...),
+        file: UploadFile | None = File(default=None),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
+    client_id = ctx.membership.client_id
+    if not client_id:
+        set_flash(request, "Seu usuário não está vinculado a um cliente.")
+        return RedirectResponse("/propostas", status_code=303)
+
+    service_name = sanitize_service_name(service_name)
+    if not service_name:
+        set_flash(request, "Selecione um serviço/produto.")
+        return RedirectResponse("/propostas/solicitacao", status_code=303)
+
+    prop = Proposal(
+        company_id=ctx.company.id,
+        client_id=client_id,
+        created_by_user_id=ctx.user.id,
+        kind="solicitacao",
+        title=title.strip(),
+        description=description.strip(),
+        service_name=service_name,
+        value_brl=0.0,
+        status="aberta",
+        updated_at=utcnow(),
+    )
+    session.add(prop)
+    session.commit()
+    session.refresh(prop)
+
+    if file and file.filename:
+        try:
+            stored, mime, size = await save_upload(file)
+        except ValueError:
+            set_flash(request, "Arquivo muito grande.")
+            return RedirectResponse("/propostas/solicitacao", status_code=303)
+
+        session.add(
+            Attachment(
+                company_id=ctx.company.id,
+                client_id=client_id,
+                uploaded_by_user_id=ctx.user.id,
+                proposal_id=prop.id,
+                original_filename=file.filename,
+                stored_filename=stored,
+                mime_type=mime,
+                size_bytes=size,
+            )
+        )
+
+    session.add(ProposalMessage(proposal_id=prop.id, author_user_id=ctx.user.id, message="Solicitação criada."))
+    session.commit()
+
+    set_flash(request, "Solicitação enviada.")
+    return RedirectResponse(f"/propostas/{prop.id}", status_code=303)
+
+
+@app.get("/propostas/{prop_id}", response_class=HTMLResponse)
+@require_login
+async def props_detail(request: Request, session: Session = Depends(get_session), prop_id: int = 0) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+
+    prop = session.get(Proposal, int(prop_id))
+    if not prop or prop.company_id != ctx.company.id:
+        return render("error.html", request=request, context={"message": "Item não encontrado."}, status_code=404)
+
+    if not ensure_can_access_client(ctx, prop.client_id):
+        return render("error.html", request=request, context={"message": "Sem permissão."}, status_code=403)
+
+    client = session.get(Client, prop.client_id)
+    attachments = session.exec(
+        select(Attachment).where(Attachment.proposal_id == prop.id).order_by(Attachment.created_at.desc())
+    ).all()
+
+    msgs = session.exec(
+        select(ProposalMessage).where(ProposalMessage.proposal_id == prop.id).order_by(
+            ProposalMessage.created_at.desc())
+    ).all()
+    messages = []
+    for m in msgs:
+        u = session.get(User, m.author_user_id)
+        messages.append({"author_name": u.name if u else "Usuário", "message": m.message, "created_at": m.created_at})
+
+    current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
+
+    return render(
+        "props_detail.html",
+        request=request,
+        context={
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "role": ctx.membership.role,
+            "current_client": current_client,
+            "prop": prop,
+            "client": client,
+            "attachments": attachments,
+            "messages": messages,
+            "allowed_statuses": _proposal_allowed_statuses(prop.kind),
+        },
+    )
+
+
+@app.post("/propostas/{prop_id}/atualizar")
+@require_role({"admin", "equipe"})
+async def props_update_staff(
+        request: Request,
+        session: Session = Depends(get_session),
+        prop_id: int = 0,
+        kind: str = Form(...),
+        status: str = Form(...),
+        service_name: str = Form(""),
+        value_brl: float = Form(0.0),
+        message: str = Form(""),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
+    prop = session.get(Proposal, int(prop_id))
+    if not prop or prop.company_id != ctx.company.id:
+        set_flash(request, "Item não encontrado.")
+        return RedirectResponse("/propostas", status_code=303)
+
+    kind = kind.strip().lower()
+    if kind not in PROPOSAL_KINDS:
+        kind = prop.kind
+
+    status = status.strip().lower()
+    if status not in _proposal_allowed_statuses(kind):
+        set_flash(request, "Status inválido.")
+        return RedirectResponse(f"/propostas/{prop.id}", status_code=303)
+
+    prop.kind = kind
+    prop.status = status
+    prop.service_name = sanitize_service_name(service_name)
+    prop.value_brl = max(0.0, float(value_brl))
+    prop.updated_at = utcnow()
+    session.add(prop)
+
+    if message.strip():
+        session.add(ProposalMessage(proposal_id=prop.id, author_user_id=ctx.user.id, message=message.strip()))
+
+    session.commit()
+    set_flash(request, "Atualizado.")
+    return RedirectResponse(f"/propostas/{prop.id}", status_code=303)
+
+
+@app.post("/propostas/{prop_id}/excluir")
+@require_role({"admin", "equipe"})
+async def props_delete_staff(request: Request, session: Session = Depends(get_session), prop_id: int = 0) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
+    prop = session.get(Proposal, int(prop_id))
+    if not prop or prop.company_id != ctx.company.id:
+        set_flash(request, "Proposta não encontrada.")
+        return RedirectResponse("/propostas", status_code=303)
+
+    atts = session.exec(select(Attachment).where(Attachment.proposal_id == prop.id)).all()
+    if atts:
+        set_flash(request, "Remova os anexos antes de excluir a proposta.")
+        return RedirectResponse(f"/propostas/{prop.id}", status_code=303)
+
+    msgs = session.exec(select(ProposalMessage).where(ProposalMessage.proposal_id == prop.id)).all()
+    for m in msgs:
+        session.delete(m)
+
+    session.delete(prop)
+    session.commit()
+    set_flash(request, "Proposta excluída.")
+    return RedirectResponse("/propostas", status_code=303)
+
+
+@app.post("/propostas/{prop_id}/anexar")
+@require_role({"admin", "equipe"})
+async def props_attach_staff(
+        request: Request,
+        session: Session = Depends(get_session),
+        prop_id: int = 0,
+        file: UploadFile = File(...),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
+    prop = session.get(Proposal, int(prop_id))
+    if not prop or prop.company_id != ctx.company.id:
+        set_flash(request, "Item não encontrado.")
+        return RedirectResponse("/propostas", status_code=303)
+
+    try:
+        stored, mime, size = await save_upload(file)
+    except ValueError:
+        set_flash(request, "Arquivo muito grande.")
+        return RedirectResponse(f"/propostas/{prop.id}", status_code=303)
+
+    session.add(
+        Attachment(
+            company_id=ctx.company.id,
+            client_id=prop.client_id,
+            uploaded_by_user_id=ctx.user.id,
+            proposal_id=prop.id,
+            original_filename=file.filename or "arquivo",
+            stored_filename=stored,
+            mime_type=mime,
+            size_bytes=size,
+        )
+    )
+    session.commit()
+    set_flash(request, "Anexo enviado.")
+    return RedirectResponse(f"/propostas/{prop.id}", status_code=303)
+
+
+@app.post("/propostas/{prop_id}/cliente-upload")
+@require_role({"cliente"})
+async def props_client_upload(
+        request: Request,
+        session: Session = Depends(get_session),
+        prop_id: int = 0,
+        message: str = Form(""),
+        file: UploadFile | None = File(default=None),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
+    prop = session.get(Proposal, int(prop_id))
+    if not prop or prop.company_id != ctx.company.id:
+        set_flash(request, "Item não encontrado.")
+        return RedirectResponse("/propostas", status_code=303)
+
+    if (ctx.membership.client_id or -1) != prop.client_id:
+        set_flash(request, "Sem permissão.")
+        return RedirectResponse("/propostas", status_code=303)
+
+    if file and file.filename:
+        try:
+            stored, mime, size = await save_upload(file)
+        except ValueError:
+            set_flash(request, "Arquivo muito grande.")
+            return RedirectResponse(f"/propostas/{prop.id}", status_code=303)
+
+        session.add(
+            Attachment(
+                company_id=ctx.company.id,
+                client_id=prop.client_id,
+                uploaded_by_user_id=ctx.user.id,
+                proposal_id=prop.id,
+                original_filename=file.filename,
+                stored_filename=stored,
+                mime_type=mime,
+                size_bytes=size,
+            )
+        )
+
+    if message.strip():
+        session.add(ProposalMessage(proposal_id=prop.id, author_user_id=ctx.user.id, message=message.strip()))
+
+    prop.updated_at = utcnow()
+    session.add(prop)
+    session.commit()
+    set_flash(request, "Enviado.")
+    return RedirectResponse(f"/propostas/{prop.id}", status_code=303)
+
+
+# ----------------------------
+# Integrações: Conta Azul
+# ----------------------------
+
+@app.get("/integrations/contaazul", response_class=HTMLResponse)
+@require_role({"admin", "equipe"})
+async def contaazul_settings(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    configured = _contaazul_configured()
+    connected = False
+    last_sync = None
+    if ensure_contaazul_tables():
+        auth = _contaazul_get_auth(session, ctx.company.id)
+        connected = bool(auth and auth.refresh_token)
+        last_sync = auth.last_sync_at if auth else None
+
+    return render(
+        "contaazul_settings.html",
+        request=request,
+        context={
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "role": ctx.membership.role,
+            "current_client": get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx)),
+            "configured": configured,
+            "connected": connected,
+            "last_sync": last_sync,
+            "redirect_uri": _contaazul_redirect_uri(request),
+        },
+    )
+
+
+@app.get("/integrations/contaazul/diag")
+@require_role({"admin", "equipe"})
+async def contaazul_diag(request: Request, session: Session = Depends(get_session)) -> JSONResponse:
+    """Diagnóstico rápido da integração Conta Azul (sem tocar em dados financeiros)."""
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    table_ok = bool(ensure_contaazul_tables())
+    configured = bool(_contaazul_configured())
+    redirect_uri = _contaazul_redirect_uri(request)
+
+    auth = _contaazul_get_auth(session, ctx.company.id) if table_ok else None
+
+    # Ping simples (opcional) para verificar reachability do auth server
+    ping = {"ok": False, "status": None}
+    try:
+        async with httpx.AsyncClient(timeout=min(6.0, CONTA_AZUL_HTTP_TIMEOUT_S), follow_redirects=True) as client:
+            r = await client.get(CONTA_AZUL_AUTH_URL)
+        ping = {"ok": r.status_code < 500, "status": int(r.status_code)}
+    except Exception as e:
+        ping = {"ok": False, "status": None, "error": str(e)}
+
+    return JSONResponse(
+        {
+            "configured": configured,
+            "client_id_set": bool(CONTA_AZUL_CLIENT_ID),
+            "client_secret_set": bool(CONTA_AZUL_CLIENT_SECRET),
+            "redirect_uri": redirect_uri,
+            "auth_url": CONTA_AZUL_AUTH_URL,
+            "token_url": CONTA_AZUL_TOKEN_URL,
+            "api_base": CONTA_AZUL_API_BASE,
+            "tables_ok": table_ok,
+            "connected": bool(auth and auth.refresh_token),
+            "token_expires_at": ((_as_aware_utc(auth.expires_at).isoformat()) if auth and auth.expires_at else None),
+            "ping_auth": ping,
+        }
+    )
+
+
+@app.get("/integrations/contaazul/connect")
+@require_role({"admin", "equipe"})
+async def contaazul_connect(request: Request, session: Session = Depends(get_session)) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    if not ensure_contaazul_tables():
+        set_flash(request, "Banco sem migração para Conta Azul (crie as tabelas no Postgres).")
+        return RedirectResponse("/integrations/contaazul", status_code=303)
+
+    if not _contaazul_configured():
+        set_flash(request, "Configure CONTA_AZUL_CLIENT_ID e CONTA_AZUL_CLIENT_SECRET no Render.")
+        return RedirectResponse("/integrations/contaazul", status_code=303)
+
+    state = secrets.token_urlsafe(16)
+    request.session["contaazul_oauth_state"] = state
+
+    redirect_uri = _contaazul_redirect_uri(request)
+    params = {
+        "response_type": "code",
+        "client_id": CONTA_AZUL_CLIENT_ID,
+        "redirect_uri": redirect_uri,
+        "state": state,
+        "scope": CONTA_AZUL_SCOPE,
+    }
+    url = httpx.URL(CONTA_AZUL_AUTH_URL).copy_merge_params(params)
+    _ca_log(f"redirecting to auth url redirect_uri={redirect_uri} scope={CONTA_AZUL_SCOPE}")
+    return RedirectResponse(str(url), status_code=302)
+
+
+@app.get("/integrations/contaazul/callback")
+@require_role({"admin", "equipe"})
+async def contaazul_callback(request: Request, session: Session = Depends(get_session)) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    code = (request.query_params.get("code") or "").strip()
+    state = (request.query_params.get("state") or "").strip()
+    expected = (request.session.get("contaazul_oauth_state") or "").strip()
+    request.session.pop("contaazul_oauth_state", None)
+
+    if not code or not expected or state != expected:
+        set_flash(request, "Callback inválido (state/code).")
+        return RedirectResponse("/integrations/contaazul", status_code=303)
+
+    redirect_uri = _contaazul_redirect_uri(request)
+    headers = {"Authorization": f"Basic {_contaazul_basic_auth_value()}",
+               "Content-Type": "application/x-www-form-urlencoded"}
+    data = {"code": code, "grant_type": "authorization_code", "redirect_uri": redirect_uri}
+
+    try:
+        async with httpx.AsyncClient(timeout=CONTA_AZUL_HTTP_TIMEOUT_S, follow_redirects=True) as client:
+            resp = await client.post(CONTA_AZUL_TOKEN_URL, headers=headers, data=data)
+        if resp.status_code >= 400:
+            _ca_log(f"token exchange failed status={resp.status_code} body={_ca_trunc(resp.text)}")
+            set_flash(request, f"Falha ao conectar Conta Azul (HTTP {resp.status_code}): {_ca_trunc(resp.text, 180)}")
+            return RedirectResponse("/integrations/contaazul", status_code=303)
+        payload = resp.json()
+    except Exception as e:
+        _ca_log(f"token exchange exception: {e}")
+        set_flash(request, f"Falha ao conectar Conta Azul: {e}")
+        return RedirectResponse("/integrations/contaazul", status_code=303)
+
+    auth = _contaazul_get_auth(session, ctx.company.id) or ContaAzulAuth(company_id=ctx.company.id)
+    auth.access_token = str(payload.get("access_token") or "")
+    auth.refresh_token = str(payload.get("refresh_token") or "")
+    auth.token_type = str(payload.get("token_type") or "Bearer")
+    exp = int(payload.get("expires_in") or 3600)
+    auth.expires_at = utcnow() + timedelta(seconds=max(60, exp))
+    auth.updated_at = utcnow()
+    session.add(auth)
+    session.commit()
+
+    set_flash(request, "Conta Azul conectada.")
+    return RedirectResponse("/integrations/contaazul", status_code=303)
+
+
+@app.post("/integrations/contaazul/disconnect")
+@require_role({"admin", "equipe"})
+async def contaazul_disconnect(request: Request, session: Session = Depends(get_session)) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+    auth = _contaazul_get_auth(session, ctx.company.id)
+    if auth:
+        session.delete(auth)
+        session.commit()
+    set_flash(request, "Conta Azul desconectada.")
+    return RedirectResponse("/integrations/contaazul", status_code=303)
+
+
+@app.post("/financeiro/contaazul/sync")
+@require_role({"admin", "equipe"})
+async def contaazul_sync_now(request: Request, background_tasks: BackgroundTasks,
+                             session: Session = Depends(get_session)) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    if not ensure_contaazul_tables():
+        set_flash(request, "Banco sem migração para Conta Azul (crie as tabelas no Postgres).")
+        return RedirectResponse("/financeiro", status_code=303)
+
+    if not _contaazul_configured():
+        set_flash(request, "Configure CONTA_AZUL_CLIENT_ID e CONTA_AZUL_CLIENT_SECRET no Render.")
+        return RedirectResponse("/financeiro", status_code=303)
+
+    auth = _contaazul_get_auth(session, ctx.company.id)
+    if not auth or not auth.refresh_token:
+        set_flash(request, "Conecte a Conta Azul antes de sincronizar.")
+        return RedirectResponse("/integrations/contaazul", status_code=303)
+
+    current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
+    if not current_client:
+        set_flash(request, "Selecione um cliente antes de sincronizar.")
+        return RedirectResponse("/financeiro", status_code=303)
+
+    # Pré-checagem: se não houver doc/e-mail e não houver vínculo salvo, o sync sempre retornará vazio.
+    pid_saved = _contaazul_get_mapped_person_id(session, company_id=ctx.company.id, client_id=current_client.id)
+    doc = _digits_only(current_client.cnpj)
+    email = (current_client.finance_email or current_client.email or "").strip()
+    if not pid_saved and not doc and not email:
+        set_flash(request,
+                  "Este cliente não tem CNPJ/CPF nem e-mail no cadastro. Preencha isso ou cole o UUID (person_id) manualmente antes de sincronizar.")
+        return RedirectResponse("/financeiro", status_code=303)
+
+    background_tasks.add_task(contaazul_sync_client_job, ctx.company.id, current_client.id)
+    set_flash(request, "Sincronização Conta Azul iniciada. Recarregue em instantes.")
+
+    return RedirectResponse("/financeiro", status_code=303)
+
+
+@app.post("/financeiro/contaazul/auto_vincular")
+@require_role({"admin", "equipe"})
+async def contaazul_auto_vincular(request: Request, session: Session = Depends(get_session)) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    if not ensure_contaazul_tables():
+        set_flash(request, "Banco sem migração para Conta Azul (crie as tabelas no Postgres).")
+        return RedirectResponse("/financeiro", status_code=303)
+
+    if not _contaazul_configured():
+        set_flash(request, "Configure CONTA_AZUL_CLIENT_ID e CONTA_AZUL_CLIENT_SECRET no Render.")
+        return RedirectResponse("/financeiro", status_code=303)
+
+    auth = _contaazul_get_auth(session, ctx.company.id)
+    if not auth or not auth.refresh_token:
+        set_flash(request, "Conecte a Conta Azul antes de vincular.")
+        return RedirectResponse("/integrations/contaazul", status_code=303)
+
+    current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
+    if not current_client:
+        set_flash(request, "Selecione um cliente antes de vincular.")
+        return RedirectResponse("/financeiro", status_code=303)
+
+    person_id = _contaazul_find_person_id(session, company_id=ctx.company.id, client=current_client)
+    if not person_id:
+        set_flash(request, "Não encontrei este cliente na Conta Azul por CNPJ/CPF ou e-mail. Cole o UUID manualmente.")
+        return RedirectResponse("/financeiro", status_code=303)
+
+    _contaazul_upsert_person_map(session, company_id=ctx.company.id, client=current_client, person_id=person_id)
+    set_flash(request, f"Vínculo atualizado. person_id={person_id}")
+    return RedirectResponse("/financeiro", status_code=303)
+
+
+@app.post("/financeiro/contaazul/vincular")
+@require_role({"admin", "equipe"})
+async def contaazul_vincular_manual(
+        request: Request,
+        session: Session = Depends(get_session),
+        person_id: str = Form(""),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    pid = (person_id or "").strip()
+    if not pid or not re.fullmatch(r"[0-9a-fA-F-]{32,36}", pid):
+        set_flash(request, "UUID inválido. Cole o ID (UUID) do cliente (Pessoa) no Conta Azul.")
+        return RedirectResponse("/financeiro", status_code=303)
+
+    if not ensure_contaazul_tables():
+        set_flash(request, "Banco sem migração para Conta Azul (crie as tabelas no Postgres).")
+        return RedirectResponse("/financeiro", status_code=303)
+
+    current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
+    if not current_client:
+        set_flash(request, "Selecione um cliente antes de vincular.")
+        return RedirectResponse("/financeiro", status_code=303)
+
+    _contaazul_upsert_person_map(session, company_id=ctx.company.id, client=current_client, person_id=pid)
+    set_flash(request, f"Vínculo salvo. person_id={pid}")
+    return RedirectResponse("/financeiro", status_code=303)
+
+
+# ----------------------------
+# Financeiro (Notas/Boletos)
+# ----------------------------
+
+
+@app.get("/financeiro/contaazul/test", response_class=JSONResponse)
+@require_role({"admin", "equipe"})
+async def contaazul_test_mapping(request: Request, session: Session = Depends(get_session)) -> JSONResponse:
+    """Diagnóstico rápido do mapeamento e filtros do Conta Azul para o cliente selecionado.
+
+    Este endpoint nunca deve "estourar" 500 sem corpo; ele retorna JSON com o erro.
+    """
+    try:
+        ctx = get_tenant_context(request, session)
+        if not ctx:
+            return JSONResponse({"ok": False, "error": "no_context"}, status_code=401)
+
+        if not ensure_contaazul_tables():
+            return JSONResponse({"ok": False, "error": "contaazul_tables_missing"}, status_code=500)
+
+        if not _contaazul_configured():
+            return JSONResponse({"ok": False, "error": "contaazul_not_configured"}, status_code=400)
+
+        auth = _contaazul_get_auth(session, ctx.company.id)
+        if not auth or not auth.refresh_token:
+            return JSONResponse({"ok": False, "error": "contaazul_not_connected"}, status_code=400)
+
+        current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
+        if not current_client:
+            return JSONResponse({"ok": False, "error": "no_selected_client"}, status_code=400)
+
+        doc = _digits_only(current_client.cnpj)
+        email = (current_client.finance_email or current_client.email or "").strip()
+        mapped = _contaazul_get_mapped_person_id(session, company_id=ctx.company.id, client_id=current_client.id)
+        found = mapped or _contaazul_find_person_id(session, company_id=ctx.company.id, client=current_client)
+
+        today = utcnow().date()
+        d = (request.query_params.get("d") or "").strip()
+        if d:
+            try:
+                dd = datetime.strptime(d, "%Y-%m-%d").date()
+                w_start = dd.isoformat()
+                w_end = dd.isoformat()
+            except Exception:
+                w_start = (today - timedelta(days=14)).isoformat()
+                w_end = today.isoformat()
+        else:
+            w_start = (today - timedelta(days=14)).isoformat()
+            w_end = today.isoformat()
+
+        out: dict[str, Any] = {
+            "ok": True,
+            "client": {"id": current_client.id, "name": current_client.name, "doc": doc, "email": email},
+            "person_id": {"mapped": mapped, "found": found},
+            "range_nfse": {"de": w_start, "ate": w_end},
+            "counts": {},
+            "samples": {},
+        }
+
+        # NFS-e com person_id
+        if found:
+            try:
+                payload = _contaazul_get_json(
+                    session,
+                    ctx.company.id,
+                    "/v1/notas-fiscais-servico",
+                    params=[
+                        ("pagina", 1),
+                        ("tamanho_pagina", 10),
+                        ("data_competencia_de", w_start),
+                        ("data_competencia_ate", w_end),
+                        ("id_cliente", found),
+                    ],
+                )
+                itens = (payload.get("itens") or []) if isinstance(payload, dict) else []
+                out["counts"]["nfse_by_person"] = len(itens)
+                out["samples"]["nfse_by_person"] = itens[:1]
+            except Exception as e:
+                out["counts"]["nfse_by_person_error"] = str(e)[:500]
+
+        # NFS-e sem filtro (só pra validar se existem notas no período)
+        try:
+            payload = _contaazul_get_json(
+                session,
+                ctx.company.id,
+                "/v1/notas-fiscais-servico",
+                params=[
+                    ("pagina", 1),
+                    ("tamanho_pagina", 10),
+                    ("data_competencia_de", w_start),
+                    ("data_competencia_ate", w_end),
+                ],
+            )
+            itens = (payload.get("itens") or []) if isinstance(payload, dict) else []
+            out["counts"]["nfse_any"] = len(itens)
+            out["samples"]["nfse_any"] = itens[:1]
+        except Exception as e:
+            out["counts"]["nfse_any_error"] = str(e)[:500]
+
+        # NFS-e filtrada por documento (varre páginas) — vínculo por CNPJ
+        if doc:
+            try:
+                page = 1
+                count_total = 0
+                first_match: dict[str, Any] | None = None
+                while page <= 10:
+                    payload = _contaazul_get_json(
+                        session,
+                        ctx.company.id,
+                        "/v1/notas-fiscais-servico",
+                        params=[
+                            ("pagina", page),
+                            ("tamanho_pagina", 100),
+                            ("data_competencia_de", w_start),
+                            ("data_competencia_ate", w_end),
+                        ],
+                    )
+                    itens = (payload.get("itens") or []) if isinstance(payload, dict) else []
+                    if not itens:
+                        break
+                    for it in itens:
+                        if not isinstance(it, dict):
+                            continue
+                        if _digits_only(str(it.get("documento_cliente") or "")) == doc:
+                            count_total += 1
+                            if first_match is None:
+                                first_match = it
+                    if len(itens) < 100:
+                        break
+                    page += 1
+                out["counts"]["nfse_doc_matches"] = count_total
+                out["samples"]["nfse_doc_matches"] = [first_match] if first_match else []
+            except Exception as e:
+                out["counts"]["nfse_doc_matches_error"] = str(e)[:500]
+
+        # NF-e por documento
+        if doc:
+            try:
+                payload = _contaazul_get_json(
+                    session,
+                    ctx.company.id,
+                    "/v1/notas-fiscais",
+                    params={"data_inicial": w_start, "data_final": w_end, "pagina": 1, "tamanho_pagina": 10,
+                            "documento_tomador": doc},
+                )
+                itens = (payload.get("itens") or []) if isinstance(payload, dict) else []
+                out["counts"]["nfe_by_doc"] = len(itens)
+                out["samples"]["nfe_by_doc"] = itens[:1]
+            except Exception as e:
+                out["counts"]["nfe_by_doc_error"] = str(e)[:500]
+
+        return JSONResponse(out)
+    except Exception as e:
+        _ca_log(f"test endpoint failed: {e}")
+        return JSONResponse({"ok": False, "error": str(e)[:500]}, status_code=500)
+
+
+# ---------------------------
+# Conta Azul: downloads
+# ---------------------------
+
+async def _contaazul_get_bytes(
+        session: Session,
+        company_id: int,
+        path: str,
+        *,
+        params: Any = None,
+        accept: str | None = None,
+        timeout_s: float = 60.0,
+) -> tuple[bytes, str]:
+    """Fetch raw bytes from Conta Azul API (PDF/XML).
+
+    Uses the same bearer + refresh logic used by JSON calls, but returns bytes and content-type.
+    """
+    base = CONTA_AZUL_API_BASE.rstrip("/")
+    url = base + path
+    headers = _contaazul_bearer_headers(session, company_id)
+    if accept:
+        headers["Accept"] = accept
+
+    async with httpx.AsyncClient(timeout=timeout_s, follow_redirects=True) as client:
+        resp = await client.get(url, headers=headers, params=params)
+        if resp.status_code == 401:
+            auth = _contaazul_get_auth(session, company_id)
+            if auth:
+                _contaazul_refresh(session, auth)
+            headers = _contaazul_bearer_headers(session, company_id)
+            if accept:
+                headers["Accept"] = accept
+            resp = await client.get(url, headers=headers, params=params)
+
+    if resp.status_code >= 400:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Conta Azul API error: GET {path} HTTP {resp.status_code}",
+        )
+    ctype = (resp.headers.get("content-type") or "application/octet-stream").split(";")[0].strip()
+    return resp.content, ctype
+
+
+def _pdf_fatura_bytes(*, company_name: str, client_name: str, receivable: ContaAzulReceivable) -> bytes:
+    """Gera um PDF simples (fatura) localmente.
+
+    Observação: a API aberta do Conta Azul não expõe um endpoint documentado para baixar o PDF do boleto.
+    Este PDF é um comprovante/fatura com os dados + link de pagamento (quando existir).
+    """
+    from io import BytesIO
+    from reportlab.lib.pagesizes import A4
+    from reportlab.pdfgen import canvas
+
+    buf = BytesIO()
+    c = canvas.Canvas(buf, pagesize=A4)
+    w, h = A4
+
+    y = h - 60
+    c.setFont("Helvetica-Bold", 14)
+    c.drawString(40, y, "Fatura / Cobrança")
+    y -= 22
+
+    c.setFont("Helvetica", 10)
+    c.drawString(40, y, f"Empresa: {company_name}")
+    y -= 14
+    c.drawString(40, y, f"Cliente: {client_name}")
+    y -= 14
+    c.drawString(40, y, f"Descrição: {receivable.description or '—'}")
+    y -= 14
+    c.drawString(40, y, f"Vencimento: {receivable.due_date or '—'}   Status: {receivable.status or '—'}")
+    y -= 14
+    c.drawString(40, y, f"Valor em aberto: R$ {receivable.amount_open:.2f}   Pago: R$ {receivable.amount_paid:.2f}")
+    y -= 14
+    if receivable.invoice_number:
+        c.drawString(40, y, f"Referência: {receivable.invoice_type} #{receivable.invoice_number}")
+        y -= 14
+
+    if receivable.payment_url:
+        y -= 6
+        c.setFont("Helvetica-Bold", 10)
+        c.drawString(40, y, "Link de pagamento:")
+        y -= 12
+        c.setFont("Helvetica", 9)
+        # quebra simples em linhas
+        url = receivable.payment_url.strip()
+        chunk = 90
+        for i in range(0, len(url), chunk):
+            c.drawString(40, y, url[i: i + chunk])
+            y -= 11
+
+    c.showPage()
+    c.save()
+    return buf.getvalue()
+
+
+@app.get("/financeiro/contaazul/invoice/{invoice_id}/xml")
+@require_login
+async def contaazul_invoice_xml(
+        invoice_id: int, request: Request, session: Session = Depends(get_session)
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+
+    company_id = int(ctx.company.id)
+    role = str(getattr(ctx.membership, "role", "") or "")
+    client_id_ctx = int(ctx.membership.client_id) if getattr(ctx.membership, "client_id", None) is not None else None
+
+    inv = session.get(ContaAzulInvoice, invoice_id)
+    if not inv or inv.company_id != company_id:
+        raise HTTPException(status_code=404, detail="Nota não encontrada.")
+
+    if role == "cliente" and client_id_ctx is not None and inv.client_id != client_id_ctx:
+        raise HTTPException(status_code=403, detail="Sem permissão.")
+
+    if (inv.invoice_type or "").upper() != "NFE":
+        raise HTTPException(status_code=400, detail="Esta nota não é NF-e.")
+
+    chave = str(inv.external_id or "").strip()
+    if not chave:
+        raise HTTPException(status_code=400, detail="Chave de acesso ausente.")
+
+    try:
+        content, ctype = await _contaazul_get_bytes(
+            session,
+            company_id,
+            f"/v1/notas-fiscais/{chave}",
+            accept="application/xml",
+        )
+    except Exception as e:
+        logger.exception(
+            "contaazul_invoice_xml_failed",
+            extra={
+                "invoice_id": invoice_id,
+                "company_id": company_id,
+                "external_id": chave,
+                "number": getattr(inv, "number", None),
+                "error": str(e),
+            },
+        )
+        raise HTTPException(status_code=500, detail="Falha ao gerar NF XML.")
+
+    filename = f"nfe_{(inv.number or chave)}.xml"
+    return Response(
+        content=content,
+        media_type=ctype or "application/xml",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@app.get("/financeiro/contaazul/invoice/{invoice_id}/pdf")
+@require_login
+async def contaazul_invoice_pdf(
+        invoice_id: int, request: Request, session: Session = Depends(get_session)
+) -> Response:
+    """
+    Para NFSE, tenta abrir o documento real da prefeitura / DANFSE quando o payload trouxer
+    link direto ou chave de acesso suficiente. Se não houver, mostra uma página orientando
+    a consulta oficial com os dados já extraídos da nota.
+    """
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+
+    company_id = int(ctx.company.id)
+    role = str(getattr(ctx.membership, "role", "") or "")
+    client_id_ctx = int(ctx.membership.client_id) if getattr(ctx.membership, "client_id", None) is not None else None
+
+    inv = session.get(ContaAzulInvoice, invoice_id)
+    if not inv or inv.company_id != company_id:
+        raise HTTPException(status_code=404, detail="Nota não encontrada.")
+
+    if role == "cliente" and client_id_ctx is not None and inv.client_id != client_id_ctx:
+        raise HTTPException(status_code=403, detail="Sem permissão.")
+
+    if (inv.invoice_type or "").upper() != "NFSE":
+        raise HTTPException(status_code=400, detail="Esta nota não é NFS-e.")
+
+    try:
+        payload = json.loads(inv.raw_json or "{}")
+        if not isinstance(payload, dict):
+            payload = {}
+    except Exception:
+        payload = {}
+
+    public_url = _build_nfse_public_document_url(payload)
+    if public_url:
+        return RedirectResponse(public_url, status_code=302)
+
+    _ca_log(
+        "nfse real pdf indisponivel "
+        f"invoice_id={invoice_id} company_id={company_id} "
+        f"external_id={getattr(inv, 'external_id', None)} number={getattr(inv, 'number', None)}"
+    )
+    return HTMLResponse(_render_nfse_lookup_page(inv=inv, payload=payload), status_code=200)
+
+
+@app.get("/financeiro/contaazul/invoice/{invoice_id}/sale-pdf")
+@require_login
+async def contaazul_invoice_sale_pdf(
+        invoice_id: int, request: Request, session: Session = Depends(get_session)
+) -> Response:
+    """
+    PDF do documento de venda/fatura associado à NFS-e.
+    """
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+
+    company_id = int(ctx.company.id)
+    role = str(getattr(ctx.membership, "role", "") or "")
+    client_id_ctx = int(ctx.membership.client_id) if getattr(ctx.membership, "client_id", None) is not None else None
+
+    inv = session.get(ContaAzulInvoice, invoice_id)
+    if not inv or inv.company_id != company_id:
+        raise HTTPException(status_code=404, detail="Nota não encontrada.")
+
+    if role == "cliente" and client_id_ctx is not None and inv.client_id != client_id_ctx:
+        raise HTTPException(status_code=403, detail="Sem permissão.")
+
+    if (inv.invoice_type or "").upper() != "NFSE":
+        raise HTTPException(status_code=400, detail="Este documento não é uma NFS-e.")
+
+    try:
+        payload = json.loads(inv.raw_json or "{}")
+        if not isinstance(payload, dict):
+            payload = {}
+    except Exception:
+        payload = {}
+
+    sale_id = _extract_sale_id_from_nfse_payload(payload)
+    if not sale_id:
+        logger.error(
+            "contaazul_invoice_sale_pdf_missing_sale_id",
+            extra={
+                "invoice_id": invoice_id,
+                "company_id": company_id,
+                "external_id": getattr(inv, "external_id", None),
+                "number": getattr(inv, "number", None),
+                "raw_json_len": len(inv.raw_json or ""),
+            },
+        )
+        raise HTTPException(status_code=404, detail="Sem id_venda para gerar o documento de venda/fatura.")
+
+    try:
+        content, ctype = await _contaazul_get_bytes(
+            session,
+            company_id,
+            f"/v1/venda/{sale_id}/imprimir",
+            accept="application/pdf",
+        )
+    except Exception as e:
+        logger.exception(
+            "contaazul_invoice_sale_pdf_failed",
+            extra={
+                "invoice_id": invoice_id,
+                "company_id": company_id,
+                "sale_id": sale_id,
+                "external_id": getattr(inv, "external_id", None),
+                "number": getattr(inv, "number", None),
+                "error": str(e),
+            },
+        )
+        raise HTTPException(status_code=500, detail="Falha ao gerar PDF da venda/fatura.")
+
+    filename = f'venda_{(inv.number or inv.external_id or sale_id)}.pdf'
+    return Response(
+        content=content,
+        media_type=ctype or "application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@app.get("/financeiro/contaazul/receivable/{rid}/boleto")
+@require_login
+async def contaazul_receivable_boleto(
+        rid: int, request: Request, session: Session = Depends(get_session)
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+
+    company_id = int(ctx.company.id)
+    role = str(getattr(ctx.membership, "role", "") or "")
+    client_id_ctx = int(ctx.membership.client_id) if getattr(ctx.membership, "client_id", None) is not None else None
+
+    r = session.get(ContaAzulReceivable, rid)
+    if not r or r.company_id != company_id:
+        raise HTTPException(status_code=404, detail="Cobrança não encontrada.")
+
+    if role == "cliente" and client_id_ctx is not None and r.client_id != client_id_ctx:
+        raise HTTPException(status_code=403, detail="Sem permissão.")
+
+    payment_url = str(getattr(r, "payment_url", "") or "").strip()
+    if not payment_url:
+        raise HTTPException(status_code=404, detail="Boleto indisponível.")
+
+    return RedirectResponse(payment_url, status_code=302)
+
+
+@app.get("/financeiro/contaazul/receivable/{rid}/fatura.pdf")
+@require_login
+async def contaazul_receivable_fatura_pdf(
+        rid: int, request: Request, session: Session = Depends(get_session)
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+
+    company_id = int(ctx.company.id)
+    role = str(getattr(ctx.membership, "role", "") or "")
+    client_id_ctx = int(ctx.membership.client_id) if getattr(ctx.membership, "client_id", None) is not None else None
+
+    r = session.get(ContaAzulReceivable, rid)
+    if not r or r.company_id != company_id:
+        raise HTTPException(status_code=404, detail="Cobrança não encontrada.")
+
+    if role == "cliente" and client_id_ctx is not None and r.client_id != client_id_ctx:
+        raise HTTPException(status_code=403, detail="Sem permissão.")
+
+    company = session.get(Company, company_id)
+    client = session.get(Client, r.client_id) if getattr(r, "client_id", None) else None
+
+    try:
+        pdf = _pdf_fatura_bytes(
+            company_name=(company.name if company else "Empresa"),
+            client_name=(client.name if client else "Cliente"),
+            receivable=r,
+        )
+    except Exception as e:
+        logger.exception(
+            "contaazul_receivable_fatura_pdf_failed",
+            extra={
+                "rid": rid,
+                "company_id": company_id,
+                "client_id": getattr(r, "client_id", None),
+                "installment_id": getattr(r, "installment_id", None),
+                "error": str(e),
+            },
+        )
+        raise HTTPException(status_code=500, detail="Falha ao gerar fatura PDF.")
+
+    filename_base = str(getattr(r, "installment_id", "") or f"receivable_{rid}").strip()
+    filename = f"fatura_{filename_base}.pdf"
+
+    return Response(
+        content=pdf,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+def _office_date_key(value: str) -> tuple[int, int, int]:
+    s = (value or "").strip()
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", s):
+        return (9999, 12, 31)
+    try:
+        y, m, d = s.split("-")
+        return (int(y), int(m), int(d))
+    except Exception:
+        return (9999, 12, 31)
+
+
+def _office_is_open(entry: OfficeFinancialEntry) -> bool:
+    status = str(entry.status or "").strip().lower()
+    if entry.entry_kind == "receber":
+        return status not in {"recebido", "cancelado"}
+    return status not in {"pago", "cancelado"}
+
+
+def _office_catalog(session: Session, company_id: int) -> dict[str, list[Any]]:
+    seed_office_finance_defaults(session, company_id)
+    return {
+        "clients": session.exec(select(Client).where(Client.company_id == company_id).order_by(Client.name)).all(),
+        "suppliers": session.exec(select(OfficeSupplier).where(OfficeSupplier.company_id == company_id,
+                                                               OfficeSupplier.is_active == True).order_by(
+            OfficeSupplier.name)).all(),
+        "cost_centers": session.exec(select(OfficeCostCenter).where(OfficeCostCenter.company_id == company_id,
+                                                                    OfficeCostCenter.is_active == True).order_by(
+            OfficeCostCenter.code, OfficeCostCenter.name)).all(),
+        "categories": session.exec(select(OfficeCategory).where(OfficeCategory.company_id == company_id,
+                                                                OfficeCategory.is_active == True).order_by(
+            OfficeCategory.category_kind, OfficeCategory.name)).all(),
+        "revenue_types": session.exec(select(OfficeRevenueType).where(OfficeRevenueType.company_id == company_id,
+                                                                      OfficeRevenueType.is_active == True).order_by(
+            OfficeRevenueType.name)).all(),
+        "bank_accounts": session.exec(select(OfficeBankAccount).where(OfficeBankAccount.company_id == company_id,
+                                                                      OfficeBankAccount.is_active == True).order_by(
+            OfficeBankAccount.name)).all(),
+        "services": session.exec(select(InternalService).where(InternalService.company_id == company_id,
+                                                               InternalService.is_active == True).order_by(
+            InternalService.area, InternalService.name)).all(),
+    }
+
+
+def _office_finance_rows(session: Session, company_id: int, *, q: str = "", entry_kind: str = "", status: str = "",
+                         month: str = "", client_id: str = "") -> tuple[
+    list[dict[str, Any]], dict[str, Any], list[Client]]:
+    clients = session.exec(select(Client).where(Client.company_id == company_id).order_by(Client.name)).all()
+    entries = session.exec(
+        select(OfficeFinancialEntry)
+        .where(OfficeFinancialEntry.company_id == company_id)
+        .order_by(OfficeFinancialEntry.created_at.desc())
+    ).all()
+
+    client_by_id = {int(x.id): x for x in clients if x.id}
+    supplier_by_id = {int(x.id): x for x in
+                      session.exec(select(OfficeSupplier).where(OfficeSupplier.company_id == company_id)).all() if x.id}
+    cost_center_by_id = {int(x.id): x for x in
+                         session.exec(select(OfficeCostCenter).where(OfficeCostCenter.company_id == company_id)).all()
+                         if x.id}
+    category_by_id = {int(x.id): x for x in
+                      session.exec(select(OfficeCategory).where(OfficeCategory.company_id == company_id)).all() if x.id}
+
+    q_norm = (q or "").strip().lower()
+    rows: list[dict[str, Any]] = []
+    today_key = _office_date_key(datetime.now().strftime("%Y-%m-%d"))
+    horizon_key = _office_date_key((datetime.now() + timedelta(days=30)).strftime("%Y-%m-%d"))
+
+    open_receivables = 0.0
+    open_payables = 0.0
+    projected_30d = 0.0
+
+    for entry in entries:
+        if entry.entry_kind == "receber" and _office_is_open(entry):
+            open_receivables += float(entry.amount_expected_brl or 0.0)
+        if entry.entry_kind == "pagar" and _office_is_open(entry):
+            open_payables += float(entry.amount_expected_brl or 0.0)
+
+        due_key = _office_date_key(entry.due_date)
+        if today_key <= due_key <= horizon_key and _office_is_open(entry):
+            signal = 1.0 if entry.entry_kind == "receber" else -1.0
+            projected_30d += signal * float(entry.amount_expected_brl or 0.0)
+
+        counterparty = ""
+        if entry.entry_kind == "receber" and entry.client_id:
+            counterparty = getattr(client_by_id.get(int(entry.client_id)), "name", "") or ""
+        elif entry.entry_kind == "pagar" and entry.supplier_id:
+            counterparty = getattr(supplier_by_id.get(int(entry.supplier_id)), "name", "") or ""
+
+        hay = " ".join([
+            str(entry.description or ""),
+            str(entry.document_number or ""),
+            counterparty,
+            getattr(category_by_id.get(int(entry.category_id or 0)), "name", "") or "",
+        ]).lower()
+
+        if q_norm and q_norm not in hay:
+            continue
+        if entry_kind and entry.entry_kind != entry_kind:
+            continue
+        if status and entry.status != status:
+            continue
+        if month and not str(entry.due_date or "").startswith(month):
+            continue
+        if client_id and str(entry.client_id or "") != str(client_id):
+            continue
+
+        rows.append({
+            "id": entry.id,
+            "entry_kind": entry.entry_kind,
+            "status": entry.status,
+            "description": entry.description,
+            "document_number": entry.document_number,
+            "competence_date": entry.competence_date,
+            "due_date": entry.due_date,
+            "amount_expected_brl": float(entry.amount_expected_brl or 0.0),
+            "amount_realized_brl": float(entry.amount_realized_brl or 0.0),
+            "counterparty_name": counterparty,
+            "category_name": getattr(category_by_id.get(int(entry.category_id or 0)), "name", "") or "",
+            "cost_center_name": getattr(cost_center_by_id.get(int(entry.cost_center_id or 0)), "name", "") or "",
+        })
+
+    rows.sort(key=lambda item: (_office_date_key(item["due_date"]), item["description"].lower()))
+    summary = {
+        "open_receivables": round(open_receivables, 2),
+        "open_payables": round(open_payables, 2),
+        "projected_30d": round(projected_30d, 2),
+        "filtered_count": len(rows),
+    }
+    return rows, summary, clients
+
+
+def _office_selected_month(month: str) -> str:
+    s = (month or "").strip()
+    if re.fullmatch(r"\d{4}-\d{2}", s):
+        return s
+    return datetime.now().strftime("%Y-%m")
+
+
+def _office_entry_competence_month(entry: OfficeFinancialEntry) -> str:
+    for value in (entry.competence_date, entry.due_date, entry.settlement_date):
+        s = str(value or "").strip()
+        if re.fullmatch(r"\d{4}-\d{2}-\d{2}", s):
+            return s[:7]
+    return ""
+
+
+def _office_date_in_month(value: str, month: str) -> bool:
+    s = str(value or "").strip()
+    return bool(month and re.fullmatch(r"\d{4}-\d{2}-\d{2}", s) and s.startswith(month))
+
+
+def _office_entry_realized_amount(entry: OfficeFinancialEntry) -> float:
+    status = str(entry.status or "").strip().lower()
+    realized = float(entry.amount_realized_brl or 0.0)
+    expected = float(entry.amount_expected_brl or 0.0)
+    if realized:
+        return realized
+    if entry.entry_kind == "receber" and status == "recebido":
+        return expected
+    if entry.entry_kind == "pagar" and status == "pago":
+        return expected
+    return 0.0
+
+
+def _office_filter_entries(
+        session: Session,
+        company_id: int,
+        *,
+        month: str = "",
+        client_id: str = "",
+        cost_center_id: str = "",
+        internal_service_id: str = "",
+        family_code: str = "",
+        bank_account_id: str = "",
+) -> tuple[list[OfficeFinancialEntry], dict[str, Any]]:
+    entries = session.exec(
+        select(OfficeFinancialEntry)
+        .where(OfficeFinancialEntry.company_id == company_id)
+        .order_by(OfficeFinancialEntry.due_date, OfficeFinancialEntry.created_at)
+    ).all()
+    catalog = _office_catalog(session, company_id)
+    selected_month = _office_selected_month(month)
+
+    filtered: list[OfficeFinancialEntry] = []
+    for entry in entries:
+        if selected_month and _office_entry_competence_month(entry) != selected_month:
+            continue
+        if client_id and str(entry.client_id or "") != str(client_id):
+            continue
+        if cost_center_id and str(entry.cost_center_id or "") != str(cost_center_id):
+            continue
+        if internal_service_id and str(entry.internal_service_id or "") != str(internal_service_id):
+            continue
+        if family_code and str(entry.product_family_code or "").strip() != str(family_code).strip():
+            continue
+        if bank_account_id and str(entry.bank_account_id or "") != str(bank_account_id):
+            continue
+        filtered.append(entry)
+
+    family_codes = sorted(
+        {str(x.product_family_code or "").strip() for x in entries if str(x.product_family_code or "").strip()})
+    families = session.exec(
+        select(ProductFamily)
+        .where(ProductFamily.code.in_(family_codes))
+        .order_by(ProductFamily.area, ProductFamily.sort_order, ProductFamily.label)
+    ).all() if family_codes else []
+
+    lookups = {
+        "clients": catalog["clients"],
+        "cost_centers": catalog["cost_centers"],
+        "services": catalog["services"],
+        "bank_accounts": catalog["bank_accounts"],
+        "families": families,
+        "categories_by_id": {int(x.id): x for x in
+                             session.exec(select(OfficeCategory).where(OfficeCategory.company_id == company_id)).all()
+                             if x.id},
+        "clients_by_id": {int(x.id): x for x in catalog["clients"] if x.id},
+        "services_by_id": {int(x.id): x for x in catalog["services"] if x.id},
+        "bank_accounts_by_id": {int(x.id): x for x in catalog["bank_accounts"] if x.id},
+    }
+    return filtered, lookups
+
+
+def _office_dre_report(
+        session: Session,
+        company_id: int,
+        *,
+        month: str = "",
+        client_id: str = "",
+        cost_center_id: str = "",
+        internal_service_id: str = "",
+        family_code: str = "",
+) -> tuple[list[dict[str, Any]], dict[str, Any], dict[str, Any]]:
+    entries, lookups = _office_filter_entries(
+        session,
+        company_id,
+        month=month,
+        client_id=client_id,
+        cost_center_id=cost_center_id,
+        internal_service_id=internal_service_id,
+        family_code=family_code,
+    )
+    categories_by_id = lookups["categories_by_id"]
+
+    base_groups = [
+        "Receita Bruta",
+        "Deduções/Impostos",
+        "Outras Receitas",
+        "Custos Diretos",
+        "Despesas Operacionais",
+        "Resultado Financeiro",
+        "Outras Despesas",
+    ]
+    group_totals: dict[str, dict[str, float]] = {g: {"expected": 0.0, "realized": 0.0} for g in base_groups}
+
+    def _group_for(entry: OfficeFinancialEntry) -> str:
+        cat = categories_by_id.get(int(entry.category_id or 0))
+        group = str(getattr(cat, "dre_group", "") or "").strip()
+        if group:
+            return group
+        return "Receita Bruta" if entry.entry_kind == "receber" else "Despesas Operacionais"
+
+    for entry in entries:
+        if str(entry.status or "").strip().lower() == "cancelado":
+            continue
+        group = _group_for(entry)
+        if group not in group_totals:
+            group_totals[group] = {"expected": 0.0, "realized": 0.0}
+        expected = float(entry.amount_expected_brl or 0.0)
+        realized = _office_entry_realized_amount(entry)
+        signal = 1.0 if entry.entry_kind == "receber" else -1.0
+        group_totals[group]["expected"] += signal * expected
+        group_totals[group]["realized"] += signal * realized
+
+    receita_bruta_e = group_totals.get("Receita Bruta", {}).get("expected", 0.0)
+    receita_bruta_r = group_totals.get("Receita Bruta", {}).get("realized", 0.0)
+    deducoes_e = group_totals.get("Deduções/Impostos", {}).get("expected", 0.0)
+    deducoes_r = group_totals.get("Deduções/Impostos", {}).get("realized", 0.0)
+    outras_receitas_e = group_totals.get("Outras Receitas", {}).get("expected", 0.0)
+    outras_receitas_r = group_totals.get("Outras Receitas", {}).get("realized", 0.0)
+    custos_e = group_totals.get("Custos Diretos", {}).get("expected", 0.0)
+    custos_r = group_totals.get("Custos Diretos", {}).get("realized", 0.0)
+    despesas_op_e = group_totals.get("Despesas Operacionais", {}).get("expected", 0.0)
+    despesas_op_r = group_totals.get("Despesas Operacionais", {}).get("realized", 0.0)
+    resultado_fin_e = group_totals.get("Resultado Financeiro", {}).get("expected", 0.0)
+    resultado_fin_r = group_totals.get("Resultado Financeiro", {}).get("realized", 0.0)
+    outras_despesas_e = group_totals.get("Outras Despesas", {}).get("expected", 0.0)
+    outras_despesas_r = group_totals.get("Outras Despesas", {}).get("realized", 0.0)
+
+    receita_liquida_e = receita_bruta_e + deducoes_e
+    receita_liquida_r = receita_bruta_r + deducoes_r
+    margem_bruta_e = receita_liquida_e + custos_e
+    margem_bruta_r = receita_liquida_r + custos_r
+    ebitda_e = margem_bruta_e + despesas_op_e
+    ebitda_r = margem_bruta_r + despesas_op_r
+    resultado_periodo_e = ebitda_e + resultado_fin_e + outras_receitas_e + outras_despesas_e
+    resultado_periodo_r = ebitda_r + resultado_fin_r + outras_receitas_r + outras_despesas_r
+
+    ordered_groups = [g for g in base_groups if g in group_totals] + [g for g in group_totals.keys() if
+                                                                      g not in base_groups]
+    rows: list[dict[str, Any]] = []
+    for group in ordered_groups:
+        rows.append({
+            "label": group,
+            "expected": round(group_totals[group]["expected"], 2),
+            "realized": round(group_totals[group]["realized"], 2),
+            "kind": "group",
+        })
+        if group == "Deduções/Impostos":
+            rows.append({"label": "Receita líquida", "expected": round(receita_liquida_e, 2),
+                         "realized": round(receita_liquida_r, 2), "kind": "result"})
+        if group == "Custos Diretos":
+            rows.append(
+                {"label": "Margem bruta", "expected": round(margem_bruta_e, 2), "realized": round(margem_bruta_r, 2),
+                 "kind": "result"})
+        if group == "Despesas Operacionais":
+            rows.append(
+                {"label": "EBITDA", "expected": round(ebitda_e, 2), "realized": round(ebitda_r, 2), "kind": "result"})
+    rows.append({"label": "Resultado do período", "expected": round(resultado_periodo_e, 2),
+                 "realized": round(resultado_periodo_r, 2), "kind": "result"})
+
+    summary = {
+        "entry_count": len(entries),
+        "net_revenue_expected": round(receita_liquida_e, 2),
+        "net_revenue_realized": round(receita_liquida_r, 2),
+        "ebitda_expected": round(ebitda_e, 2),
+        "ebitda_realized": round(ebitda_r, 2),
+        "net_result_expected": round(resultado_periodo_e, 2),
+        "net_result_realized": round(resultado_periodo_r, 2),
+    }
+    return rows, summary, lookups
+
+
+def _office_cashflow_report(
+        session: Session,
+        company_id: int,
+        *,
+        month: str = "",
+        client_id: str = "",
+        cost_center_id: str = "",
+        internal_service_id: str = "",
+        family_code: str = "",
+        bank_account_id: str = "",
+) -> tuple[list[dict[str, Any]], dict[str, Any], dict[str, Any]]:
+    entries, lookups = _office_filter_entries(
+        session,
+        company_id,
+        month=month,
+        client_id=client_id,
+        cost_center_id=cost_center_id,
+        internal_service_id=internal_service_id,
+        family_code=family_code,
+        bank_account_id=bank_account_id,
+    )
+    selected_month = _office_selected_month(month)
+    today_key = _office_date_key(datetime.now().strftime("%Y-%m-%d"))
+
+    bank_accounts = lookups["bank_accounts"]
+    if bank_account_id:
+        initial_balance = sum(
+            float(x.initial_balance_brl or 0.0) for x in bank_accounts if str(x.id or "") == str(bank_account_id))
+    else:
+        initial_balance = sum(float(x.initial_balance_brl or 0.0) for x in bank_accounts)
+
+    buckets: dict[str, dict[str, Any]] = {}
+    projected_inflows = projected_outflows = 0.0
+    realized_inflows = realized_outflows = 0.0
+    overdue_open = 0.0
+
+    services_by_id = lookups["services_by_id"]
+
+    def _bucket(date_str: str) -> dict[str, Any]:
+        label = date_str if re.fullmatch(r"\d{4}-\d{2}-\d{2}", str(date_str or "").strip()) else "Sem data"
+        if label not in buckets:
+            buckets[label] = {
+                "date": label,
+                "date_label": label if label != "Sem data" else "Sem data",
+                "projected_in": 0.0,
+                "projected_out": 0.0,
+                "realized_in": 0.0,
+                "realized_out": 0.0,
+                "details": [],
+            }
+        return buckets[label]
+
+    for entry in entries:
+        status = str(entry.status or "").strip().lower()
+        expected = float(entry.amount_expected_brl or 0.0)
+        realized = _office_entry_realized_amount(entry)
+        due = str(entry.due_date or "").strip()
+        settlement = str(entry.settlement_date or "").strip()
+
+        if _office_is_open(entry) and due and _office_date_key(due) < today_key:
+            signal = 1.0 if entry.entry_kind == "receber" else -1.0
+            overdue_open += signal * expected
+
+        if due and _office_date_in_month(due, selected_month) and status != "cancelado":
+            row = _bucket(due)
+            if entry.entry_kind == "receber":
+                row["projected_in"] += expected
+                projected_inflows += expected
+            else:
+                row["projected_out"] += expected
+                projected_outflows += expected
+            detail = str(entry.description or "").strip()
+            svc = services_by_id.get(int(entry.internal_service_id or 0))
+            if svc:
+                detail = f"{detail} ({svc.name})"
+            if detail:
+                row["details"].append(detail)
+
+        if settlement and _office_date_in_month(settlement, selected_month) and realized:
+            row = _bucket(settlement)
+            if entry.entry_kind == "receber":
+                row["realized_in"] += realized
+                realized_inflows += realized
+            else:
+                row["realized_out"] += realized
+                realized_outflows += realized
+
+    ordered_keys = sorted(buckets.keys(), key=lambda s: (s == "Sem data", _office_date_key(s)))
+    running_projected = float(initial_balance)
+    running_realized = float(initial_balance)
+    rows: list[dict[str, Any]] = []
+    for key in ordered_keys:
+        row = buckets[key]
+        running_projected += float(row["projected_in"]) - float(row["projected_out"])
+        running_realized += float(row["realized_in"]) - float(row["realized_out"])
+        row["running_projected"] = round(running_projected, 2)
+        row["running_realized"] = round(running_realized, 2)
+        row["projected_in"] = round(float(row["projected_in"]), 2)
+        row["projected_out"] = round(float(row["projected_out"]), 2)
+        row["realized_in"] = round(float(row["realized_in"]), 2)
+        row["realized_out"] = round(float(row["realized_out"]), 2)
+        row["details"] = row["details"][:3]
+        rows.append(row)
+
+    summary = {
+        "initial_balance": round(initial_balance, 2),
+        "projected_inflows": round(projected_inflows, 2),
+        "projected_outflows": round(projected_outflows, 2),
+        "projected_ending_balance": round(initial_balance + projected_inflows - projected_outflows, 2),
+        "realized_inflows": round(realized_inflows, 2),
+        "realized_outflows": round(realized_outflows, 2),
+        "realized_ending_balance": round(initial_balance + realized_inflows - realized_outflows, 2),
+        "overdue_open": round(overdue_open, 2),
+    }
+    return rows, summary, lookups
+
+
+def _office_entry_form_data(entry: Optional[OfficeFinancialEntry] = None) -> dict[str, str]:
+    if not entry:
+        return {
+            "entry_kind": "receber",
+            "status": "aberto",
+            "amount_expected_brl": "",
+            "amount_realized_brl": "",
+            "description": "",
+            "document_number": "",
+            "client_id": "",
+            "supplier_id": "",
+            "cost_center_id": "",
+            "category_id": "",
+            "revenue_type_id": "",
+            "internal_service_id": "",
+            "competence_date": "",
+            "due_date": "",
+            "settlement_date": "",
+            "bank_account_id": "",
+            "notes": "",
+        }
+    return {
+        "entry_kind": str(entry.entry_kind or "receber"),
+        "status": str(entry.status or "aberto"),
+        "amount_expected_brl": _format_number_br(entry.amount_expected_brl or 0.0, 2),
+        "amount_realized_brl": _format_number_br(entry.amount_realized_brl or 0.0, 2) if float(
+            entry.amount_realized_brl or 0.0) else "",
+        "description": str(entry.description or ""),
+        "document_number": str(entry.document_number or ""),
+        "client_id": str(entry.client_id or ""),
+        "supplier_id": str(entry.supplier_id or ""),
+        "cost_center_id": str(entry.cost_center_id or ""),
+        "category_id": str(entry.category_id or ""),
+        "revenue_type_id": str(entry.revenue_type_id or ""),
+        "internal_service_id": str(entry.internal_service_id or ""),
+        "competence_date": str(entry.competence_date or ""),
+        "due_date": str(entry.due_date or ""),
+        "settlement_date": str(entry.settlement_date or ""),
+        "bank_account_id": str(entry.bank_account_id or ""),
+        "notes": str(entry.notes or ""),
+    }
+
+
+def _office_entry_apply_form(*, entry: OfficeFinancialEntry, company_id: int, current_user_id: int,
+                             form: dict[str, Any], session: Session) -> tuple[bool, str]:
+    entry_kind = str(form.get("entry_kind") or "receber").strip().lower()
+    if entry_kind not in OFFICE_ENTRY_KINDS:
+        return False, "Tipo de lançamento inválido."
+
+    status = str(form.get("status") or "aberto").strip().lower()
+    if status not in OFFICE_ENTRY_STATUSES:
+        return False, "Status inválido."
+
+    description = str(form.get("description") or "").strip()
+    if not description:
+        return False, "Informe a descrição."
+
+    amount_expected = _parse_brl_amount(form.get("amount_expected_brl"))
+    amount_realized = _parse_brl_amount(form.get("amount_realized_brl")) if str(
+        form.get("amount_realized_brl") or "").strip() else 0.0
+
+    client_id = _safe_int(form.get("client_id"))
+    supplier_id = _safe_int(form.get("supplier_id"))
+    cost_center_id = _safe_int(form.get("cost_center_id"))
+    category_id = _safe_int(form.get("category_id"))
+    revenue_type_id = _safe_int(form.get("revenue_type_id"))
+    internal_service_id = _safe_int(form.get("internal_service_id"))
+    bank_account_id = _safe_int(form.get("bank_account_id"))
+
+    if entry_kind == "receber":
+        if not client_id:
+            return False, "Selecione o cliente da receita."
+        if supplier_id:
+            supplier_id = None
+    else:
+        client_id = None
+        if not supplier_id:
+            return False, "Selecione o fornecedor da despesa."
+        revenue_type_id = None
+        internal_service_id = None
+
+    if client_id:
+        client = session.get(Client, int(client_id))
+        if not client or client.company_id != company_id:
+            return False, "Cliente inválido."
+
+    if supplier_id:
+        supplier = session.get(OfficeSupplier, int(supplier_id))
+        if not supplier or supplier.company_id != company_id:
+            return False, "Fornecedor inválido."
+
+    if cost_center_id:
+        cc = session.get(OfficeCostCenter, int(cost_center_id))
+        if not cc or cc.company_id != company_id:
+            return False, "Centro de custo inválido."
+
+    category: Optional[OfficeCategory] = None
+    if category_id:
+        category = session.get(OfficeCategory, int(category_id))
+        if not category or category.company_id != company_id:
+            return False, "Categoria inválida."
+        if category.category_kind != ("receita" if entry_kind == "receber" else "despesa"):
+            return False, "A categoria escolhida não combina com o tipo de lançamento."
+
+    if revenue_type_id:
+        rt = session.get(OfficeRevenueType, int(revenue_type_id))
+        if not rt or rt.company_id != company_id:
+            return False, "Tipo de receita inválido."
+
+    family_code = ""
+    if internal_service_id:
+        svc = session.get(InternalService, int(internal_service_id))
+        if not svc or svc.company_id != company_id:
+            return False, "Produto/serviço inválido."
+        family_code = str(svc.family_code or svc.family_slug or "").strip()
+
+    if bank_account_id:
+        ba = session.get(OfficeBankAccount, int(bank_account_id))
+        if not ba or ba.company_id != company_id:
+            return False, "Conta bancária inválida."
+
+    entry.company_id = company_id
+    entry.updated_by_user_id = current_user_id
+    if not entry.id:
+        entry.created_by_user_id = current_user_id
+    entry.entry_kind = entry_kind
+    entry.status = status
+    entry.description = description
+    entry.document_number = str(form.get("document_number") or "").strip()
+    entry.client_id = client_id
+    entry.supplier_id = supplier_id
+    entry.cost_center_id = cost_center_id
+    entry.category_id = category_id
+    entry.revenue_type_id = revenue_type_id
+    entry.internal_service_id = internal_service_id
+    entry.bank_account_id = bank_account_id
+    entry.competence_date = str(form.get("competence_date") or "").strip()
+    entry.due_date = str(form.get("due_date") or "").strip()
+    entry.settlement_date = str(form.get("settlement_date") or "").strip()
+    entry.amount_expected_brl = float(amount_expected or 0.0)
+    entry.amount_realized_brl = float(amount_realized or 0.0)
+    entry.product_family_code = family_code
+    entry.notes = str(form.get("notes") or "").strip()
+    entry.updated_at = utcnow()
+    return True, ""
+
+
+@app.get("/admin/financeiro", response_class=HTMLResponse)
+@require_role({"admin", "equipe"})
+async def office_finance_dashboard(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    if not ensure_office_finance_tables():
+        return render("error.html", request=request,
+                      context={"message": "Não foi possível inicializar o Financeiro Interno."}, status_code=500)
+
+    seed_office_finance_defaults(session, ctx.company.id)
+
+    filters = {
+        "q": (request.query_params.get("q") or "").strip(),
+        "entry_kind": (request.query_params.get("entry_kind") or "").strip().lower(),
+        "status": (request.query_params.get("status") or "").strip().lower(),
+        "month": (request.query_params.get("month") or "").strip(),
+        "client_id": (request.query_params.get("client_id") or "").strip(),
+    }
+    rows, summary, clients = _office_finance_rows(session, ctx.company.id, **filters)
+
+    current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
+    return render(
+        "office_finance_dashboard.html",
+        request=request,
+        context={
+            "title": "Financeiro Interno",
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "current_client": current_client,
+            "role": ctx.membership.role,
+            "rows": rows,
+            "summary": summary,
+            "statuses": OFFICE_ENTRY_STATUSES,
+            "filters": filters,
+            "clients": clients,
+        },
+    )
+
+
+@app.get("/admin/financeiro/cadastros", response_class=HTMLResponse)
+@require_role({"admin", "equipe"})
+async def office_finance_registry_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    if not ensure_office_finance_tables():
+        return render("error.html", request=request,
+                      context={"message": "Não foi possível inicializar o Financeiro Interno."}, status_code=500)
+
+    catalog = _office_catalog(session, ctx.company.id)
+    current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
+    return render(
+        "office_finance_registry.html",
+        request=request,
+        context={
+            "title": "Cadastros do Financeiro",
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "current_client": current_client,
+            "role": ctx.membership.role,
+            **catalog,
+        },
+    )
+
+
+@app.post("/admin/financeiro/cadastros/fornecedores")
+@require_role({"admin", "equipe"})
+async def office_finance_supplier_create(
+        request: Request,
+        session: Session = Depends(get_session),
+        name: str = Form(""),
+        document: str = Form(""),
+        email: str = Form(""),
+        phone: str = Form(""),
+        notes: str = Form(""),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+    if not ensure_office_finance_tables():
+        set_flash(request, "Financeiro Interno não está configurado.")
+        return RedirectResponse("/admin/financeiro/cadastros", status_code=303)
+
+    if not name.strip():
+        set_flash(request, "Informe o nome do fornecedor.")
+        return RedirectResponse("/admin/financeiro/cadastros", status_code=303)
+
+    exists = session.exec(select(OfficeSupplier).where(OfficeSupplier.company_id == ctx.company.id,
+                                                       OfficeSupplier.name == name.strip())).first()
+    if exists:
+        set_flash(request, "Fornecedor já cadastrado.")
+        return RedirectResponse("/admin/financeiro/cadastros", status_code=303)
+
+    session.add(
+        OfficeSupplier(company_id=ctx.company.id, name=name.strip(), document=document.strip(), email=email.strip(),
+                       phone=phone.strip(), notes=notes.strip()))
+    session.commit()
+    set_flash(request, "Fornecedor cadastrado.")
+    return RedirectResponse("/admin/financeiro/cadastros", status_code=303)
+
+
+@app.post("/admin/financeiro/cadastros/centros-custo")
+@require_role({"admin", "equipe"})
+async def office_finance_cost_center_create(
+        request: Request,
+        session: Session = Depends(get_session),
+        code: str = Form(""),
+        name: str = Form(""),
+        notes: str = Form(""),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+    if not code.strip() or not name.strip():
+        set_flash(request, "Informe código e nome do centro de custo.")
+        return RedirectResponse("/admin/financeiro/cadastros", status_code=303)
+
+    code_norm = code.strip().upper()
+    exists = session.exec(select(OfficeCostCenter).where(OfficeCostCenter.company_id == ctx.company.id,
+                                                         OfficeCostCenter.code == code_norm)).first()
+    if exists:
+        set_flash(request, "Centro de custo já cadastrado.")
+        return RedirectResponse("/admin/financeiro/cadastros", status_code=303)
+
+    session.add(OfficeCostCenter(company_id=ctx.company.id, code=code_norm, name=name.strip(), notes=notes.strip()))
+    session.commit()
+    set_flash(request, "Centro de custo cadastrado.")
+    return RedirectResponse("/admin/financeiro/cadastros", status_code=303)
+
+
+@app.post("/admin/financeiro/cadastros/categorias")
+@require_role({"admin", "equipe"})
+async def office_finance_category_create(
+        request: Request,
+        session: Session = Depends(get_session),
+        name: str = Form(""),
+        category_kind: str = Form("despesa"),
+        dre_group: str = Form(""),
+        notes: str = Form(""),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    kind = category_kind.strip().lower()
+    if not name.strip() or kind not in OFFICE_CATEGORY_KINDS:
+        set_flash(request, "Informe uma categoria válida.")
+        return RedirectResponse("/admin/financeiro/cadastros", status_code=303)
+
+    exists = session.exec(
+        select(OfficeCategory).where(
+            OfficeCategory.company_id == ctx.company.id,
+            OfficeCategory.name == name.strip(),
+            OfficeCategory.category_kind == kind,
+        )
+    ).first()
+    if exists:
+        set_flash(request, "Categoria já cadastrada.")
+        return RedirectResponse("/admin/financeiro/cadastros", status_code=303)
+
+    session.add(
+        OfficeCategory(company_id=ctx.company.id, name=name.strip(), category_kind=kind, dre_group=dre_group.strip(),
+                       notes=notes.strip()))
+    session.commit()
+    set_flash(request, "Categoria cadastrada.")
+    return RedirectResponse("/admin/financeiro/cadastros", status_code=303)
+
+
+@app.post("/admin/financeiro/cadastros/tipos-receita")
+@require_role({"admin", "equipe"})
+async def office_finance_revenue_type_create(
+        request: Request,
+        session: Session = Depends(get_session),
+        name: str = Form(""),
+        description: str = Form(""),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    if not name.strip():
+        set_flash(request, "Informe o tipo de receita.")
+        return RedirectResponse("/admin/financeiro/cadastros", status_code=303)
+
+    exists = session.exec(select(OfficeRevenueType).where(OfficeRevenueType.company_id == ctx.company.id,
+                                                          OfficeRevenueType.name == name.strip())).first()
+    if exists:
+        set_flash(request, "Tipo de receita já cadastrado.")
+        return RedirectResponse("/admin/financeiro/cadastros", status_code=303)
+
+    session.add(OfficeRevenueType(company_id=ctx.company.id, name=name.strip(), description=description.strip()))
+    session.commit()
+    set_flash(request, "Tipo de receita cadastrado.")
+    return RedirectResponse("/admin/financeiro/cadastros", status_code=303)
+
+
+@app.post("/admin/financeiro/cadastros/contas")
+@require_role({"admin", "equipe"})
+async def office_finance_bank_account_create(
+        request: Request,
+        session: Session = Depends(get_session),
+        name: str = Form(""),
+        bank_name: str = Form(""),
+        branch_number: str = Form(""),
+        account_number: str = Form(""),
+        initial_balance_brl: str = Form(""),
+        notes: str = Form(""),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    if not name.strip():
+        set_flash(request, "Informe o nome da conta.")
+        return RedirectResponse("/admin/financeiro/cadastros", status_code=303)
+
+    exists = session.exec(select(OfficeBankAccount).where(OfficeBankAccount.company_id == ctx.company.id,
+                                                          OfficeBankAccount.name == name.strip())).first()
+    if exists:
+        set_flash(request, "Conta já cadastrada.")
+        return RedirectResponse("/admin/financeiro/cadastros", status_code=303)
+
+    session.add(
+        OfficeBankAccount(
+            company_id=ctx.company.id,
+            name=name.strip(),
+            bank_name=bank_name.strip(),
+            branch_number=branch_number.strip(),
+            account_number=account_number.strip(),
+            initial_balance_brl=_parse_brl_amount(initial_balance_brl),
+            notes=notes.strip(),
+        )
+    )
+    session.commit()
+    set_flash(request, "Conta bancária cadastrada.")
+    return RedirectResponse("/admin/financeiro/cadastros", status_code=303)
+
+
+@app.get("/admin/financeiro/novo", response_class=HTMLResponse)
+@require_role({"admin", "equipe"})
+async def office_finance_new_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+    if not ensure_office_finance_tables():
+        return render("error.html", request=request,
+                      context={"message": "Não foi possível inicializar o Financeiro Interno."}, status_code=500)
+
+    catalog = _office_catalog(session, ctx.company.id)
+    current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
+    return render(
+        "office_finance_form.html",
+        request=request,
+        context={
+            "title": "Novo lançamento",
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "current_client": current_client,
+            "role": ctx.membership.role,
+            "entry": None,
+            "form": _office_entry_form_data(),
+            "statuses": OFFICE_ENTRY_STATUSES,
+            **catalog,
+        },
+    )
+
+
+@app.post("/admin/financeiro/novo")
+@require_role({"admin", "equipe"})
+async def office_finance_new_action(request: Request, session: Session = Depends(get_session)) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    form = await request.form()
+    entry = OfficeFinancialEntry(company_id=ctx.company.id, created_by_user_id=ctx.user.id, description="")
+    ok, msg = _office_entry_apply_form(entry=entry, company_id=ctx.company.id, current_user_id=ctx.user.id,
+                                       form=dict(form), session=session)
+    if not ok:
+        set_flash(request, msg)
+        return RedirectResponse("/admin/financeiro/novo", status_code=303)
+
+    session.add(entry)
+    session.commit()
+    set_flash(request, "Lançamento criado.")
+    return RedirectResponse("/admin/financeiro", status_code=303)
+
+
+@app.get("/admin/financeiro/{entry_id}/editar", response_class=HTMLResponse)
+@require_role({"admin", "equipe"})
+async def office_finance_edit_page(request: Request, session: Session = Depends(get_session),
+                                   entry_id: int = 0) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    entry = session.get(OfficeFinancialEntry, int(entry_id))
+    if not entry or entry.company_id != ctx.company.id:
+        return render("error.html", request=request, context={"message": "Lançamento não encontrado."}, status_code=404)
+
+    catalog = _office_catalog(session, ctx.company.id)
+    current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
+    return render(
+        "office_finance_form.html",
+        request=request,
+        context={
+            "title": "Editar lançamento",
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "current_client": current_client,
+            "role": ctx.membership.role,
+            "entry": entry,
+            "form": _office_entry_form_data(entry),
+            "statuses": OFFICE_ENTRY_STATUSES,
+            **catalog,
+        },
+    )
+
+
+@app.post("/admin/financeiro/{entry_id}/editar")
+@require_role({"admin", "equipe"})
+async def office_finance_edit_action(request: Request, session: Session = Depends(get_session),
+                                     entry_id: int = 0) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    entry = session.get(OfficeFinancialEntry, int(entry_id))
+    if not entry or entry.company_id != ctx.company.id:
+        set_flash(request, "Lançamento não encontrado.")
+        return RedirectResponse("/admin/financeiro", status_code=303)
+
+    form = await request.form()
+    ok, msg = _office_entry_apply_form(entry=entry, company_id=ctx.company.id, current_user_id=ctx.user.id,
+                                       form=dict(form), session=session)
+    if not ok:
+        set_flash(request, msg)
+        return RedirectResponse(f"/admin/financeiro/{entry.id}/editar", status_code=303)
+
+    session.add(entry)
+    session.commit()
+    set_flash(request, "Lançamento atualizado.")
+    return RedirectResponse("/admin/financeiro", status_code=303)
+
+
+@app.get("/admin/financeiro/dre", response_class=HTMLResponse)
+@require_role({"admin", "equipe"})
+async def office_finance_dre_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+    if not ensure_office_finance_tables():
+        return render("error.html", request=request,
+                      context={"message": "Não foi possível inicializar o Financeiro Interno."}, status_code=500)
+
+    filters = {
+        "month": _office_selected_month((request.query_params.get("month") or "").strip()),
+        "client_id": (request.query_params.get("client_id") or "").strip(),
+        "cost_center_id": (request.query_params.get("cost_center_id") or "").strip(),
+        "internal_service_id": (request.query_params.get("internal_service_id") or "").strip(),
+        "family_code": (request.query_params.get("family_code") or "").strip(),
+    }
+    rows, summary, lookups = _office_dre_report(session, ctx.company.id, **filters)
+    current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
+    return render(
+        "office_finance_dre.html",
+        request=request,
+        context={
+            "title": "DRE Gerencial",
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "current_client": current_client,
+            "role": ctx.membership.role,
+            "filters": filters,
+            "rows": rows,
+            "summary": summary,
+            "clients": lookups["clients"],
+            "cost_centers": lookups["cost_centers"],
+            "services": lookups["services"],
+            "families": lookups["families"],
+        },
+    )
+
+
+@app.get("/admin/financeiro/fluxo-caixa", response_class=HTMLResponse)
+@require_role({"admin", "equipe"})
+async def office_finance_cashflow_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+    if not ensure_office_finance_tables():
+        return render("error.html", request=request,
+                      context={"message": "Não foi possível inicializar o Financeiro Interno."}, status_code=500)
+
+    filters = {
+        "month": _office_selected_month((request.query_params.get("month") or "").strip()),
+        "client_id": (request.query_params.get("client_id") or "").strip(),
+        "cost_center_id": (request.query_params.get("cost_center_id") or "").strip(),
+        "internal_service_id": (request.query_params.get("internal_service_id") or "").strip(),
+        "family_code": (request.query_params.get("family_code") or "").strip(),
+        "bank_account_id": (request.query_params.get("bank_account_id") or "").strip(),
+    }
+    rows, summary, lookups = _office_cashflow_report(session, ctx.company.id, **filters)
+    current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
+    return render(
+        "office_finance_cashflow.html",
+        request=request,
+        context={
+            "title": "Fluxo de Caixa",
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "current_client": current_client,
+            "role": ctx.membership.role,
+            "filters": filters,
+            "rows": rows,
+            "summary": summary,
+            "clients": lookups["clients"],
+            "cost_centers": lookups["cost_centers"],
+            "services": lookups["services"],
+            "families": lookups["families"],
+            "bank_accounts": lookups["bank_accounts"],
+        },
+    )
+
+
+@app.get("/financeiro", response_class=HTMLResponse)
+@require_login
+async def fin_list(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+
+    role = ctx.membership.role
+
+    current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
+    if role == "cliente":
+        current_client = session.get(Client, ctx.membership.client_id) if ctx.membership.client_id else None
+
+    # ----------------------------
+    # Cobranças manuais
+    # ----------------------------
+    q = select(FinanceInvoice).where(FinanceInvoice.company_id == ctx.company.id)
+
+    if current_client:
+        q = q.where(FinanceInvoice.client_id == current_client.id)
+    elif role == "cliente":
+        # Cliente sem vínculo → não deve ver nada
+        q = q.where(FinanceInvoice.client_id == -1)
+
+    q = q.order_by(FinanceInvoice.created_at.desc()).limit(200)
+    invs = session.exec(q).all()
+
+    client_name_by_id: dict[int, str] = {}
+    if role in ["admin", "equipe"] and invs:
+        ids = sorted({int(i.client_id) for i in invs})
+        if ids:
+            for c in session.exec(select(Client).where(Client.id.in_(ids))).all():
+                client_name_by_id[int(c.id)] = c.name
+
+    items: list[dict[str, Any]] = []
+    for inv in invs:
+        created_at = inv.created_at.strftime("%Y-%m-%d %H:%M") if isinstance(inv.created_at, datetime) else str(
+            inv.created_at)
+        items.append(
+            {
+                "id": inv.id,
+                "title": inv.title,
+                "status": inv.status,
+                "amount_brl": float(inv.amount_brl or 0.0),
+                "due_date": (inv.due_date or "").strip(),
+                "created_at": created_at,
+                "client_name": client_name_by_id.get(int(inv.client_id), ""),
+            }
+        )
+
+    # ----------------------------
+    # Conta Azul
+    # ----------------------------
+    ca_configured = _contaazul_configured()
+    ca_connected = False
+    ca_last_sync = ""
+    ca_person_id = ""
+    ca_client_doc = _digits_only(current_client.cnpj) if current_client else ""
+    ca_client_email = ((current_client.finance_email or current_client.email or "").strip() if current_client else "")
+
+    ca_invoices: list[ContaAzulInvoice] = []
+    ca_receivables: list[ContaAzulReceivable] = []
+
+    if ca_configured and ensure_contaazul_tables():
+        auth = _contaazul_get_auth(session, ctx.company.id)
+        ca_connected = bool(auth and auth.refresh_token)
+        if auth and auth.last_sync_at:
+            ca_last_sync = _as_aware_utc(auth.last_sync_at).strftime("%Y-%m-%d %H:%M")
+
+        if current_client:
+            ca_person_id = _contaazul_get_mapped_person_id(session, company_id=ctx.company.id,
+                                                           client_id=current_client.id)
+
+            ca_invoices = session.exec(
+                select(ContaAzulInvoice)
+                .where(ContaAzulInvoice.company_id == ctx.company.id, ContaAzulInvoice.client_id == current_client.id)
+                .order_by(ContaAzulInvoice.issue_date.desc())
+                .limit(200)
+            ).all()
+
+            ca_receivables = session.exec(
+                select(ContaAzulReceivable)
+                .where(ContaAzulReceivable.company_id == ctx.company.id,
+                       ContaAzulReceivable.client_id == current_client.id)
+                .order_by(ContaAzulReceivable.due_date.asc())
+                .limit(200)
+            ).all()
+
+    return render(
+        "fin_list.html",
+        request=request,
+        context={
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "role": role,
+            "current_client": current_client,
+            "items": items,
+            "ca_configured": ca_configured,
+            "ca_connected": ca_connected,
+            "ca_last_sync": ca_last_sync,
+            "ca_person_id": ca_person_id,
+            "ca_client_doc": ca_client_doc,
+            "ca_client_email": ca_client_email,
+            "ca_invoices": ca_invoices,
+            "ca_receivables": ca_receivables,
+        },
+    )
+
+
+@app.get("/financeiro/contaazul/debug", response_class=HTMLResponse)
+@require_role({"admin", "equipe"})
+async def contaazul_debug_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
+    """Página HTML simples para depurar NFS-e/NF-e sem depender do JSON na UI."""
+    try:
+        ctx = get_tenant_context(request, session)
+        if not ctx:
+            return RedirectResponse("/login", status_code=303)
+
+        if not ensure_contaazul_tables():
+            return HTMLResponse("<h3>Conta Azul</h3><p>Banco sem tabelas da integração.</p>", status_code=500)
+
+        if not _contaazul_configured():
+            return HTMLResponse("<h3>Conta Azul</h3><p>Faltam env vars CONTA_AZUL_CLIENT_ID/SECRET.</p>",
+                                status_code=400)
+
+        auth = _contaazul_get_auth(session, ctx.company.id)
+        if not auth or not auth.refresh_token:
+            return HTMLResponse("<h3>Conta Azul</h3><p>Integração não conectada (sem refresh_token).</p>",
+                                status_code=400)
+
+        current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
+        if not current_client:
+            return HTMLResponse("<h3>Conta Azul</h3><p>Selecione um cliente (Trocar cliente) e volte aqui.</p>",
+                                status_code=400)
+
+        doc = _digits_only(current_client.cnpj)
+        d = (request.query_params.get("d") or "").strip() or utcnow().date().isoformat()
+
+        # Chamada "crua" (sem filtro por cliente) para verificar se o Conta Azul está retornando NFS-e no dia.
+        payload_any = _contaazul_get_json(
+            session,
+            ctx.company.id,
+            "/v1/notas-fiscais-servico",
+            params=[("pagina", 1), ("tamanho_pagina", 100), ("data_competencia_de", d), ("data_competencia_ate", d)],
+        )
+        itens_any = (payload_any.get("itens") or []) if isinstance(payload_any, dict) else []
+        matches = []
+        if doc:
+            for it in itens_any:
+                if isinstance(it, dict) and _digits_only(str(it.get("documento_cliente") or "")) == doc:
+                    matches.append(it)
+
+        out = {
+            "date": d,
+            "client": {"id": current_client.id, "name": current_client.name, "doc": doc},
+            "nfse_any_count": len(itens_any),
+            "nfse_doc_matches_count": len(matches),
+            "nfse_doc_first": matches[:1],
+            "nfse_any_first": itens_any[:1],
+        }
+
+        pre = html.escape(json.dumps(out, ensure_ascii=False, indent=2))
+        form = f"""
+            <h2>Conta Azul • Debug NFS-e</h2>
+            <p><b>Cliente:</b> {html.escape(current_client.name)} • <b>CNPJ:</b> {html.escape(doc or '—')}</p>
+            <form method="get">
+              <label>Data competência (YYYY-MM-DD):</label>
+              <input name="d" value="{html.escape(d)}" style="padding:6px; width:180px;" />
+              <button style="padding:6px 10px;">Testar</button>
+              <a href="/financeiro" style="margin-left:10px;">Voltar</a>
+            </form>
+            <pre style="margin-top:16px; padding:12px; background:#0b1220; color:#e5e7eb; border-radius:10px; overflow:auto;">{pre}</pre>
+        """
+        return HTMLResponse(form)
+    except Exception as e:
+        _ca_log(f"debug page failed: {e}")
+        return HTMLResponse(f"<h3>Erro</h3><pre>{html.escape(str(e))}</pre>", status_code=500)
+
+    current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
+
+    q = select(FinanceInvoice).where(FinanceInvoice.company_id == ctx.company.id).order_by(
+        FinanceInvoice.created_at.desc())
+    if ctx.membership.role == "cliente":
+        invoices = session.exec(q.where(FinanceInvoice.client_id == (ctx.membership.client_id or -1))).all()
+        target_client_id = int(ctx.membership.client_id or 0)
+    else:
+        if current_client:
+            q = q.where(FinanceInvoice.client_id == current_client.id)
+        invoices = session.exec(q).all()
+        target_client_id = int(current_client.id if current_client else 0)
+
+    out = []
+    for it in invoices:
+        c = session.get(Client, it.client_id)
+        out.append(
+            {
+                "id": it.id,
+                "title": it.title,
+                "amount_brl": it.amount_brl,
+                "due_date": it.due_date,
+                "status": it.status,
+                "created_at": it.created_at,
+                "client_name": c.name if c else "—",
+            }
+        )
+
+    ca_connected = False
+    ca_last_sync = None
+    ca_receivables = []
+    ca_invoices = []
+    if ensure_contaazul_tables():
+        auth = _contaazul_get_auth(session, ctx.company.id)
+        ca_connected = bool(auth and auth.refresh_token)
+        ca_last_sync = auth.last_sync_at if auth else None
+
+        if ca_connected and target_client_id:
+            recs = session.exec(
+                select(ContaAzulReceivable)
+                .where(ContaAzulReceivable.company_id == ctx.company.id,
+                       ContaAzulReceivable.client_id == target_client_id)
+                .order_by(ContaAzulReceivable.due_date.desc())
+                .limit(200)
+            ).all()
+            for r in recs:
+                ca_receivables.append(
+                    {
+                        "installment_id": r.installment_id,
+                        "description": r.description or "—",
+                        "due_date": r.due_date,
+                        "status": r.status,
+                        "amount_total": r.amount_total,
+                        "amount_open": r.amount_open,
+                        "payment_method": r.payment_method,
+                        "invoice_type": r.invoice_type,
+                        "invoice_number": r.invoice_number,
+                        "boleto_status": r.boleto_status,
+                        "payment_url": r.payment_url,
+                        "updated_at": r.updated_at,
+                    }
+                )
+
+            invs = session.exec(
+                select(ContaAzulInvoice)
+                .where(ContaAzulInvoice.company_id == ctx.company.id, ContaAzulInvoice.client_id == target_client_id)
+                .order_by(ContaAzulInvoice.issue_date.desc())
+                .limit(200)
+            ).all()
+            for inv in invs:
+                ca_invoices.append(
+                    {
+                        "invoice_type": inv.invoice_type,
+                        "external_id": inv.external_id,
+                        "number": inv.number,
+                        "issue_date": inv.issue_date,
+                        "status": inv.status,
+                        "amount": inv.amount,
+                        "updated_at": inv.updated_at,
+                    }
+                )
+
+    ca_person_id = ""
+    ca_client_doc = ""
+    ca_client_email = ""
+    if ensure_contaazul_tables() and target_client_id:
+        tc = session.get(Client, int(target_client_id))
+        if tc and tc.company_id == ctx.company.id:
+            ca_client_doc = _digits_only(tc.cnpj)
+            ca_client_email = (tc.finance_email or tc.email or "").strip()
+            ca_person_id = _contaazul_get_mapped_person_id(session, company_id=ctx.company.id, client_id=tc.id)
+
+    return render(
+        "fin_list.html",
+        request=request,
+        context={
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "role": ctx.membership.role,
+            "current_client": current_client,
+            "items": out,
+            "ca_configured": _contaazul_configured(),
+            "ca_connected": ca_connected,
+            "ca_last_sync": ca_last_sync,
+            "ca_receivables": ca_receivables,
+            "ca_invoices": ca_invoices,
+            "ca_person_id": ca_person_id,
+            "ca_client_doc": ca_client_doc,
+            "ca_client_email": ca_client_email,
+        },
+    )
+
+
+@app.get("/financeiro/novo", response_class=HTMLResponse)
+@require_role({"admin", "equipe"})
+async def fin_new_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
+    clients = session.exec(select(Client).where(Client.company_id == ctx.company.id).order_by(Client.created_at)).all()
+    current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
+    return render(
+        "fin_new.html",
+        request=request,
+        context={
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "role": ctx.membership.role,
+            "current_client": current_client,
+            "clients": clients,
+        },
+    )
+
+
+@app.post("/financeiro/novo")
+@require_role({"admin", "equipe"})
+async def fin_new_action(
+        request: Request,
+        session: Session = Depends(get_session),
+        client_id: int = Form(...),
+        title: str = Form(...),
+        amount_brl: float = Form(...),
+        due_date: str = Form(""),
+        status: str = Form("emitido"),
+        notes: str = Form(""),
+        file: UploadFile = File(...),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
+    client = get_client_or_none(session, ctx.company.id, int(client_id))
+    if not client:
+        set_flash(request, "Cliente inválido.")
+        return RedirectResponse("/financeiro/novo", status_code=303)
+
+    status = status.strip().lower()
+    if status not in FIN_STATUSES:
+        status = "emitido"
+
+    inv = FinanceInvoice(
+        company_id=ctx.company.id,
+        client_id=client.id,
+        created_by_user_id=ctx.user.id,
+        title=title.strip(),
+        amount_brl=max(0.0, float(amount_brl)),
+        due_date=_normalize_date_input(due_date),
+        status=status,
+        notes=notes.strip(),
+        updated_at=utcnow(),
+    )
+    session.add(inv)
+    session.commit()
+    session.refresh(inv)
+
+    try:
+        stored, mime, size = await save_upload(file)
+    except ValueError:
+        set_flash(request, "Arquivo muito grande.")
+        return RedirectResponse("/financeiro/novo", status_code=303)
+
+    session.add(
+        Attachment(
+            company_id=ctx.company.id,
+            client_id=client.id,
+            uploaded_by_user_id=ctx.user.id,
+            finance_invoice_id=inv.id,
+            original_filename=file.filename or "arquivo",
+            stored_filename=stored,
+            mime_type=mime,
+            size_bytes=size,
+        )
+    )
+    session.commit()
+
+    set_flash(request, "Cobrança criada.")
+    return RedirectResponse("/financeiro", status_code=303)
+
+
+@app.get("/financeiro/{inv_id}", response_class=HTMLResponse)
+@require_login
+async def fin_detail(request: Request, session: Session = Depends(get_session), inv_id: int = 0) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+
+    inv = session.get(FinanceInvoice, int(inv_id))
+    if not inv or inv.company_id != ctx.company.id:
+        return render("error.html", request=request, context={"message": "Cobrança não encontrada."}, status_code=404)
+
+    if not ensure_can_access_client(ctx, inv.client_id):
+        return render("error.html", request=request, context={"message": "Sem permissão."}, status_code=403)
+
+    client = session.get(Client, inv.client_id)
+    attachments = session.exec(
+        select(Attachment).where(Attachment.finance_invoice_id == inv.id).order_by(Attachment.created_at.desc())
+    ).all()
+
+    current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
+
+    return render(
+        "fin_detail.html",
+        request=request,
+        context={
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "role": ctx.membership.role,
+            "current_client": current_client,
+            "inv": inv,
+            "client": client,
+            "attachments": attachments,
+        },
+    )
+
+
+@app.post("/financeiro/{inv_id}/anexar")
+@require_role({"admin", "equipe"})
+async def fin_attach(
+        request: Request,
+        session: Session = Depends(get_session),
+        inv_id: int = 0,
+        file: UploadFile = File(...),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
+    inv = session.get(FinanceInvoice, int(inv_id))
+    if not inv or inv.company_id != ctx.company.id:
+        set_flash(request, "Cobrança não encontrada.")
+        return RedirectResponse("/financeiro", status_code=303)
+
+    try:
+        stored, mime, size = await save_upload(file)
+    except ValueError:
+        set_flash(request, "Arquivo muito grande.")
+        return RedirectResponse(f"/financeiro/{inv.id}", status_code=303)
+
+    session.add(
+        Attachment(
+            company_id=ctx.company.id,
+            client_id=inv.client_id,
+            uploaded_by_user_id=ctx.user.id,
+            finance_invoice_id=inv.id,
+            original_filename=file.filename or "arquivo",
+            stored_filename=stored,
+            mime_type=mime,
+            size_bytes=size,
+        )
+    )
+    inv.updated_at = utcnow()
+    session.add(inv)
+    session.commit()
+
+    set_flash(request, "Anexo enviado.")
+    return RedirectResponse(f"/financeiro/{inv.id}", status_code=303)
+
+
+# ----------------------------
+# Download (protected)
+# ----------------------------
+
+
+@app.get("/download/{attachment_id}")
+@require_login
+async def download_attachment(request: Request, session: Session = Depends(get_session),
+                              attachment_id: int = 0) -> Response:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+
+    att = session.get(Attachment, int(attachment_id))
+    if not att or att.company_id != ctx.company.id:
+        return render("error.html", request=request, context={"message": "Arquivo não encontrado."}, status_code=404)
+
+    if not ensure_can_access_client(ctx, att.client_id):
+        return render("error.html", request=request, context={"message": "Sem permissão."}, status_code=403)
+
+    path = UPLOAD_DIR / att.stored_filename
+    if not path.exists():
+        return render("error.html", request=request, context={"message": "Arquivo não está mais no servidor."},
+                      status_code=404)
+
+    return FileResponse(path=str(path), media_type=att.mime_type, filename=att.original_filename)
+
+
+# ----------------------------
+# Extras: Agenda + Attachments + Edit/Delete + Client create
+# ----------------------------
+
+def _delete_attachment_file(att: Attachment) -> None:
+    path = UPLOAD_DIR / att.stored_filename
+    try:
+        if path.exists():
+            path.unlink()
+    except Exception:
+        pass
+
+
+@app.get("/agenda", response_class=HTMLResponse)
+@require_login
+async def agenda_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+
+    active_client_id = get_active_client_id(request, session, ctx)
+    current_client = get_client_or_none(session, ctx.company.id, active_client_id)
+
+    return render(
+        "agenda.html",
+        request=request,
+        context={
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "role": ctx.membership.role,
+            "current_client": current_client,
+        },
+    )
+
+
+# ----------------------------
+# Tarefas (Kanban)
+# ----------------------------
+
+def _task_can_view(ctx: TenantContext, task: Task) -> bool:
+    if task.company_id != ctx.company.id:
+        return False
+    if ctx.membership.role in ["admin", "equipe"]:
+        return True
+    # cliente
+    return bool(ctx.membership.client_id) and task.client_id == ctx.membership.client_id and task.visible_to_client
+
+
+def _task_assignee_label(session: Session, user_id: Optional[int]) -> str:
+    if not user_id:
+        return ""
+    u = session.get(User, int(user_id))
+    return u.name if u else ""
+
+
+def _task_work_minutes(session_obj: TaskWorkSession) -> int:
+    try:
+        started_at = session_obj.started_at
+        ended_at = session_obj.ended_at
+        if started_at and ended_at:
+            return max(0, int((ended_at - started_at).total_seconds() // 60))
+        if started_at:
+            return max(0, int((utcnow() - started_at).total_seconds() // 60))
+        return max(0, int(session_obj.duration_minutes or 0))
+    except Exception:
+        try:
+            return max(0, int(session_obj.duration_minutes or 0))
+        except Exception:
+            return 0
+
+
+def _human_minutes_label(total_minutes: int) -> str:
+    try:
+        minutes = max(0, int(round(float(total_minutes or 0))))
+    except Exception:
+        minutes = 0
+    hours, rem = divmod(minutes, 60)
+    if hours <= 0:
+        return f"{rem} min"
+    if rem <= 0:
+        return f"{hours}h"
+    return f"{hours}h {rem:02d}min"
+
+
+def _human_hours_label(total_hours: Any) -> str:
+    try:
+        minutes = int(round(float(total_hours or 0.0) * 60.0))
+    except Exception:
+        minutes = 0
+    return _human_minutes_label(minutes)
+
+
+def _task_work_hours_label(total_minutes: int) -> str:
+    return _human_minutes_label(total_minutes)
+
+
+def _task_work_active_for_user(session: Session, *, company_id: int, user_id: int) -> Optional[TaskWorkSession]:
+    return session.exec(
+        select(TaskWorkSession)
+        .where(
+            TaskWorkSession.company_id == int(company_id),
+            TaskWorkSession.user_id == int(user_id),
+            TaskWorkSession.ended_at.is_(None),
+        )
+        .order_by(TaskWorkSession.started_at.desc())
+    ).first()
+
+
+def _task_work_active_for_task_user(session: Session, *, task_id: int, user_id: int) -> Optional[TaskWorkSession]:
+    return session.exec(
+        select(TaskWorkSession)
+        .where(
+            TaskWorkSession.task_id == int(task_id),
+            TaskWorkSession.user_id == int(user_id),
+            TaskWorkSession.ended_at.is_(None),
+        )
+        .order_by(TaskWorkSession.started_at.desc())
+    ).first()
+
+
+def _task_work_sessions_for_task(session: Session, *, task_id: int) -> list[TaskWorkSession]:
+    return session.exec(
+        select(TaskWorkSession)
+        .where(TaskWorkSession.task_id == int(task_id))
+        .order_by(TaskWorkSession.started_at.desc())
+    ).all()
+
+
+def _task_work_total_minutes_for_task(session: Session, *, task_id: int) -> int:
+    total = 0
+    for ws in _task_work_sessions_for_task(session, task_id=task_id):
+        total += _task_work_minutes(ws)
+    return total
+
+
+def _task_work_total_minutes_for_client(session: Session, *, company_id: int, client_id: int) -> int:
+    total = 0
+    rows = session.exec(
+        select(TaskWorkSession)
+        .where(
+            TaskWorkSession.company_id == int(company_id),
+            TaskWorkSession.client_id == int(client_id),
+        )
+        .order_by(TaskWorkSession.started_at.desc())
+    ).all()
+    for ws in rows:
+        total += _task_work_minutes(ws)
+    return total
+
+
+def _task_work_row(session: Session, ws: TaskWorkSession) -> dict[str, Any]:
+    user = session.get(User, ws.user_id)
+    minutes = _task_work_minutes(ws)
+    return {
+        "id": ws.id,
+        "user_name": user.name if user else "—",
+        "started_at": _format_dt_br(ws.started_at),
+        "ended_at": _format_dt_br(ws.ended_at) if ws.ended_at else "Em andamento",
+        "minutes": minutes,
+        "hours_label": _task_work_hours_label(minutes),
+        "note": str(ws.note or "").strip(),
+        "is_active": ws.ended_at is None,
+    }
+
+
+def _safe_relative_next(next_path: str, fallback: str) -> str:
+    s = str(next_path or "").strip()
+    if not s:
+        return fallback
+    if not s.startswith("/"):
+        return fallback
+    if s.startswith("//"):
+        return fallback
+    return s
+
+
+def _task_work_report_user_name(session: Session, user_id: int) -> str:
+    user = session.get(User, int(user_id))
+    return user.name if user else "—"
+
+
+def _task_work_report_client_name(session: Session, client_id: int) -> str:
+    client = session.get(Client, int(client_id))
+    return client.name if client else "—"
+
+
+def _task_work_report_task_title(session: Session, task_id: int) -> str:
+    task = session.get(Task, int(task_id))
+    return task.title if task else f"Tarefa #{task_id}"
+
+
+@app.get("/tarefas", response_class=HTMLResponse)
+@require_login
+async def tasks_list(
+        request: Request,
+        session: Session = Depends(get_session),
+        client_id: int = 0,  # 0=todos (staff)
+        assignee_user_id: int = 0,  # 0=todos, -1=sem responsável (staff)
+        status: str = "",  # "", nao_iniciada, em_andamento, concluida
+        priority: str = "",  # "", baixa, media, alta
+        due: str = "",  # "", atrasadas, hoje, 7dias, sem_prazo
+        mine: int = 0,  # 1=apenas minhas (staff)
+) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+
+    active_client_id = get_active_client_id(request, session, ctx)
+    current_client = get_client_or_none(session, ctx.company.id, active_client_id)
+
+    if not ensure_task_work_session_table():
+        set_flash(request, "Apontamento de horas não está configurado no banco.")
+        return RedirectResponse("/", status_code=303)
+
+    q = select(Task).where(Task.company_id == ctx.company.id)
+
+    clients: list[Client] = []
+    assignees: list[dict[str, Any]] = []
+    filter_client_id = 0
+    filter_assignee_user_id = 0
+    filter_status = ""
+    filter_priority = ""
+    filter_due = ""
+    filter_mine = 0
+
+    if ctx.membership.role == "cliente":
+        q = q.where(
+            Task.client_id == (ctx.membership.client_id or -1),
+            Task.visible_to_client.is_(True),
+        ).order_by(Task.updated_at.desc())
+    else:
+        clients = session.exec(
+            select(Client).where(Client.company_id == ctx.company.id).order_by(Client.created_at)
+        ).all()
+
+        memberships = session.exec(select(Membership).where(Membership.company_id == ctx.company.id)).all()
+        for m in memberships:
+            u = session.get(User, m.user_id)
+            if not u:
+                continue
+            if m.role in {"admin", "equipe"}:
+                assignees.append({"id": u.id, "name": u.name, "role": m.role})
+
+        if mine == 1:
+            filter_mine = 1
+            filter_assignee_user_id = ctx.user.id
+            q = q.where(Task.assignee_user_id == ctx.user.id)
+        else:
+            if assignee_user_id == -1:
+                filter_assignee_user_id = -1
+                q = q.where(Task.assignee_user_id.is_(None))
+            elif assignee_user_id and assignee_user_id > 0:
+                filter_assignee_user_id = int(assignee_user_id)
+                q = q.where(Task.assignee_user_id == int(assignee_user_id))
+
+        if client_id and client_id > 0:
+            fc = get_client_or_none(session, ctx.company.id, int(client_id))
+            if not fc:
+                set_flash(request, "Cliente inválido para filtro.")
+                return RedirectResponse("/tarefas", status_code=303)
+            filter_client_id = fc.id
+            q = q.where(Task.client_id == fc.id)
+
+        status = (status or "").strip().lower()
+        if status in TASK_STATUS:
+            filter_status = status
+            q = q.where(Task.status == status)
+
+        priority = (priority or "").strip().lower()
+        if priority in TASK_PRIORITY:
+            filter_priority = priority
+            q = q.where(Task.priority == priority)
+
+        due = (due or "").strip().lower()
+        today = _to_brasilia_dt(utcnow()).date()
+        today_s = today.isoformat()
+        end_s = (today + timedelta(days=7)).isoformat()
+
+        if due in {"atrasadas", "hoje", "7dias", "sem_prazo"}:
+            filter_due = due
+            if due == "sem_prazo":
+                q = q.where((Task.due_date == "") | (Task.due_date.is_(None)))
+            elif due == "hoje":
+                q = q.where(Task.due_date == today_s)
+            elif due == "7dias":
+                q = q.where(Task.due_date >= today_s, Task.due_date <= end_s)
+            elif due == "atrasadas":
+                q = q.where(Task.due_date != "", Task.due_date < today_s, Task.status != "concluida")
+
+        q = q.order_by(Task.updated_at.desc())
+
+    tasks = session.exec(q).all()
+
+    current_list_path = str(request.url.path)
+    if request.url.query:
+        current_list_path = f"{current_list_path}?{request.url.query}"
+
+    active_for_user = None
+    if ctx.membership.role in ["admin", "equipe"]:
+        active_for_user = _task_work_active_for_user(session, company_id=ctx.company.id, user_id=ctx.user.id)
+
+    view = []
+    today = _to_brasilia_dt(utcnow()).date()
+    total_filtered_minutes = 0
+    active_filtered_count = 0
+    for t in tasks:
+        due_state = ""
+        due_label = ""
+        try:
+            if t.due_date:
+                due_dt = date.fromisoformat(str(t.due_date))
+                days_left = (due_dt - today).days
+                if t.status != "concluida" and days_left < 0:
+                    due_state = "danger"
+                    due_label = "atrasada"
+                elif t.status != "concluida" and days_left <= 3:
+                    due_state = "warning"
+                    due_label = "prazo próximo"
+        except Exception:
+            due_state = ""
+            due_label = ""
+
+        tracked_minutes = _task_work_total_minutes_for_task(session, task_id=t.id)
+        active_session = session.exec(
+            select(TaskWorkSession)
+            .where(TaskWorkSession.task_id == t.id, TaskWorkSession.ended_at.is_(None))
+            .order_by(TaskWorkSession.started_at.desc())
+        ).first()
+        total_filtered_minutes += tracked_minutes
+        if active_session:
+            active_filtered_count += 1
+
+        is_active_for_me = bool(active_for_user and active_for_user.task_id == t.id)
+        view.append(
+            {
+                "id": t.id,
+                "title": t.title,
+                "status": t.status,
+                "priority": t.priority,
+                "due_date": _format_date_br(t.due_date),
+                "visible_to_client": t.visible_to_client,
+                "assignee_name": _task_assignee_label(session, t.assignee_user_id),
+                "client_name": (session.get(Client, t.client_id).name if session.get(Client, t.client_id) else ""),
+                "due_state": due_state,
+                "due_label": due_label,
+                "tracked_hours_label": _task_work_hours_label(tracked_minutes),
+                "has_active_session": bool(active_session),
+                "is_active_for_me": is_active_for_me,
+                "can_start_work": ctx.membership.role in ["admin",
+                                                          "equipe"] and t.status != "concluida" and not is_active_for_me,
+            }
+        )
+
+    by_status = {"nao_iniciada": [], "em_andamento": [], "concluida": []}
+    for t in view:
+        by_status.setdefault(t["status"], by_status["nao_iniciada"]).append(t)
+
+    columns = [
+        {"key": "nao_iniciada", "label": "Não iniciada", "tasks": by_status.get("nao_iniciada", []),
+         "count": len(by_status.get("nao_iniciada", []))},
+        {"key": "em_andamento", "label": "Em andamento", "tasks": by_status.get("em_andamento", []),
+         "count": len(by_status.get("em_andamento", []))},
+        {"key": "concluida", "label": "Concluída", "tasks": by_status.get("concluida", []),
+         "count": len(by_status.get("concluida", []))},
+    ]
+
+    return render(
+        "tasks_list.html",
+        request=request,
+        context={
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "role": ctx.membership.role,
+            "current_client": current_client,
+            "clients": clients,
+            "assignees": assignees,
+            "filter_client_id": filter_client_id,
+            "filter_assignee_user_id": filter_assignee_user_id,
+            "filter_status": filter_status,
+            "filter_priority": filter_priority,
+            "filter_due": filter_due,
+            "filter_mine": filter_mine,
+            "columns": columns,
+            "filtered_total_tasks": len(view),
+            "filtered_active_count": active_filtered_count,
+            "filtered_total_hours_label": _task_work_hours_label(total_filtered_minutes),
+            "current_list_path": current_list_path,
+        },
+    )
+
+
+@app.get("/tarefas/relatorio-horas", response_class=HTMLResponse)
+@require_role({"admin", "equipe"})
+async def tasks_time_report(
+        request: Request,
+        session: Session = Depends(get_session),
+        client_id: int = 0,
+        user_id: int = 0,
+        date_from: str = "",
+        date_to: str = "",
+        include_open: int = 1,
+) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    if not ensure_task_work_session_table():
+        set_flash(request, "Apontamento de horas não está configurado no banco.")
+        return RedirectResponse("/tarefas", status_code=303)
+
+    active_client_id = get_active_client_id(request, session, ctx)
+    current_client = get_client_or_none(session, ctx.company.id, active_client_id)
+
+    clients = session.exec(
+        select(Client).where(Client.company_id == ctx.company.id).order_by(Client.created_at)
+    ).all()
+
+    assignees: list[dict[str, Any]] = []
+    memberships = session.exec(select(Membership).where(Membership.company_id == ctx.company.id)).all()
+    for m in memberships:
+        u = session.get(User, m.user_id)
+        if not u:
+            continue
+        if m.role in {"admin", "equipe"}:
+            assignees.append({"id": u.id, "name": u.name, "role": m.role})
+
+    today = _to_brasilia_dt(utcnow()).date()
+    filter_date_from = _normalize_date_input(date_from) or (today - timedelta(days=30)).isoformat()
+    filter_date_to = _normalize_date_input(date_to) or today.isoformat()
+    filter_client_id = int(client_id or 0)
+    filter_user_id = int(user_id or 0)
+    include_open = 1 if int(include_open or 0) == 1 else 0
+
+    rows = session.exec(
+        select(TaskWorkSession)
+        .where(TaskWorkSession.company_id == ctx.company.id)
+        .order_by(TaskWorkSession.started_at.desc())
+    ).all()
+
+    session_rows = []
+    by_client: dict[int, dict[str, Any]] = {}
+    by_user: dict[int, dict[str, Any]] = {}
+    total_minutes = 0
+
+    from_date = date.fromisoformat(filter_date_from)
+    to_date = date.fromisoformat(filter_date_to)
+
+    for ws in rows:
+        try:
+            local_date = _to_brasilia_dt(ws.started_at).date()
+        except Exception:
+            local_date = today
+
+        if local_date < from_date or local_date > to_date:
+            continue
+        if filter_client_id > 0 and ws.client_id != filter_client_id:
+            continue
+        if filter_user_id > 0 and ws.user_id != filter_user_id:
+            continue
+        if include_open == 0 and ws.ended_at is None:
+            continue
+
+        minutes = _task_work_minutes(ws)
+        total_minutes += minutes
+
+        client_name = _task_work_report_client_name(session, ws.client_id)
+        user_name = _task_work_report_user_name(session, ws.user_id)
+        task_title = _task_work_report_task_title(session, ws.task_id)
+
+        session_rows.append(
+            {
+                "id": ws.id,
+                "client_name": client_name,
+                "task_id": ws.task_id,
+                "task_title": task_title,
+                "user_name": user_name,
+                "started_at": _format_dt_br(ws.started_at),
+                "ended_at": _format_dt_br(ws.ended_at) if ws.ended_at else "Em andamento",
+                "time_label": _task_work_hours_label(minutes),
+                "note": str(ws.note or "").strip(),
+            }
+        )
+
+        c_row = by_client.setdefault(ws.client_id, {"name": client_name, "minutes": 0, "sessions": 0})
+        c_row["minutes"] += minutes
+        c_row["sessions"] += 1
+
+        u_row = by_user.setdefault(ws.user_id, {"name": user_name, "minutes": 0, "sessions": 0})
+        u_row["minutes"] += minutes
+        u_row["sessions"] += 1
+
+    client_rows = sorted(
+        [
+            {"name": row["name"], "sessions": row["sessions"], "minutes": row["minutes"],
+             "time_label": _task_work_hours_label(row["minutes"])}
+            for row in by_client.values()
+        ],
+        key=lambda x: (-x["minutes"], x["name"].lower()),
+    )
+    user_rows = sorted(
+        [
+            {"name": row["name"], "sessions": row["sessions"], "minutes": row["minutes"],
+             "time_label": _task_work_hours_label(row["minutes"])}
+            for row in by_user.values()
+        ],
+        key=lambda x: (-x["minutes"], x["name"].lower()),
+    )
+
+    return render(
+        "task_time_report.html",
+        request=request,
+        context={
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "role": ctx.membership.role,
+            "current_client": current_client,
+            "clients": clients,
+            "assignees": assignees,
+            "filter_client_id": filter_client_id,
+            "filter_user_id": filter_user_id,
+            "filter_date_from": _format_date_br(filter_date_from),
+            "filter_date_to": _format_date_br(filter_date_to),
+            "include_open": include_open,
+            "total_sessions": len(session_rows),
+            "total_minutes_label": _task_work_hours_label(total_minutes),
+            "client_rows": client_rows,
+            "user_rows": user_rows,
+            "session_rows": session_rows,
+        },
+    )
+
+
+@app.get("/tarefas/nova", response_class=HTMLResponse)
+@require_role({"admin", "equipe"})
+async def tasks_new_page(
+        request: Request,
+        session: Session = Depends(get_session),
+        client_id: int = 0,  # <-- ADICIONE ISTO (vem da querystring ?client_id=)
+) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
+    clients = session.exec(select(Client).where(Client.company_id == ctx.company.id).order_by(Client.created_at)).all()
+
+    # staff assignees (admin/equipe) + current user always
+    memberships = session.exec(select(Membership).where(Membership.company_id == ctx.company.id)).all()
+    assignees = []
+    for m in memberships:
+        u = session.get(User, m.user_id)
+        if not u:
+            continue
+        assignees.append({"id": u.id, "name": u.name, "role": m.role})
+
+    active_client_id = get_active_client_id(request, session, ctx)
+    current_client = get_client_or_none(session, ctx.company.id, active_client_id)
+
+    prefill_client = current_client
+    if client_id and client_id > 0:
+        fc = get_client_or_none(session, ctx.company.id, int(client_id))
+        if fc:
+            prefill_client = fc
+
+    return render(
+        "tasks_new.html",
+        request=request,
+        context={
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "role": ctx.membership.role,
+            "current_client": current_client,
+            "prefill_client": prefill_client,
+            "clients": clients,
+            "assignees": assignees,
+        },
+    )
+
+
+@app.post("/tarefas/nova")
+@require_role({"admin", "equipe"})
+async def tasks_new_action(
+        request: Request,
+        session: Session = Depends(get_session),
+        client_id: int = Form(...),
+        assignee_user_id: str = Form(""),
+        title: str = Form(...),
+        description: str = Form(""),
+        status: str = Form("nao_iniciada"),
+        priority: str = Form("media"),
+        due_date: str = Form(""),
+        visible_to_client: str = Form(""),
+        client_action: str = Form(""),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
+    client = get_client_or_none(session, ctx.company.id, int(client_id))
+    if not client:
+        set_flash(request, "Cliente inválido.")
+        return RedirectResponse("/tarefas/nova", status_code=303)
+
+    status = status.strip().lower()
+    if status not in TASK_STATUS:
+        status = "nao_iniciada"
+
+    priority = priority.strip().lower()
+    if priority not in TASK_PRIORITY:
+        priority = "media"
+
+    assignee = int(assignee_user_id) if assignee_user_id.strip().isdigit() else None
+
+    task = Task(
+        company_id=ctx.company.id,
+        client_id=client.id,
+        created_by_user_id=ctx.user.id,
+        assignee_user_id=assignee,
+        title=title.strip(),
+        description=description.strip(),
+        status=status,
+        priority=priority,
+        due_date=_normalize_date_input(due_date),
+        visible_to_client=(visible_to_client == "1"),
+        client_action=(client_action == "1"),
+        created_at=utcnow(),
+        updated_at=utcnow(),
+    )
+    session.add(task)
+    session.commit()
+    session.refresh(task)
+
+    try:
+        if task.visible_to_client or task.client_action:
+            notify_client_members(
+                session,
+                company_id=ctx.company.id,
+                client_id=client.id,
+                kind="tarefa",
+                title="Nova tarefa disponível",
+                message=task.title,
+                href=f"/tarefas/{task.id}",
+                created_by_user_id=ctx.user.id,
+            )
+    except Exception:
+        pass
+
+    set_flash(request, "Tarefa criada.")
+    return RedirectResponse(f"/tarefas/{task.id}", status_code=303)
+
+
+@app.get("/tarefas/{task_id}", response_class=HTMLResponse)
+@require_login
+async def tasks_detail(request: Request, session: Session = Depends(get_session), task_id: int = 0) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+
+    task = session.get(Task, int(task_id))
+    if not task or not _task_can_view(ctx, task):
+        return render(
+            "error.html",
+            request=request,
+            context={"message": "Tarefa não encontrada ou sem permissão."},
+            status_code=404,
+        )
+
+    if not ensure_task_work_session_table():
+        return render(
+            "error.html",
+            request=request,
+            context={"message": "Apontamento de horas não está configurado no banco."},
+            status_code=500,
+        )
+
+    active_client_id = get_active_client_id(request, session, ctx)
+    current_client = get_client_or_none(session, ctx.company.id, active_client_id)
+
+    comments = session.exec(
+        select(TaskComment)
+        .where(TaskComment.task_id == task.id)
+        .order_by(TaskComment.created_at.asc())
+    ).all()
+    out_comments = []
+    for c in comments:
+        u = session.get(User, c.author_user_id)
+        out_comments.append(
+            {
+                "author_name": u.name if u else "—",
+                "message": c.message,
+                "created_at": c.created_at.strftime("%Y-%m-%d %H:%M"),
+            }
+        )
+
+    attachments = session.exec(
+        select(Attachment)
+        .where(Attachment.task_id == task.id)
+        .order_by(Attachment.created_at.asc())
+    ).all()
+    out_attachments = []
+    for a in attachments:
+        out_attachments.append(
+            {
+                "id": a.id,
+                "original_filename": a.original_filename,
+                "created_at": a.created_at.strftime("%Y-%m-%d %H:%M"),
+            }
+        )
+
+    assignee_name = _task_assignee_label(session, task.assignee_user_id)
+    task_minutes_total = _task_work_total_minutes_for_task(session, task_id=task.id)
+    client_minutes_total = _task_work_total_minutes_for_client(session, company_id=ctx.company.id,
+                                                               client_id=task.client_id)
+    active_work_session = _task_work_active_for_task_user(session, task_id=task.id,
+                                                          user_id=ctx.user.id) if ctx.membership.role in ["admin",
+                                                                                                          "equipe"] else None
+    work_sessions = [_task_work_row(session, ws) for ws in _task_work_sessions_for_task(session, task_id=task.id)]
+
+    return render(
+        "tasks_detail.html",
+        request=request,
+        context={
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "role": ctx.membership.role,
+            "current_client": current_client,
+            "task": task,
+            "assignee_name": assignee_name,
+            "comments": out_comments,
+            "attachments": out_attachments,
+            "task_total_minutes": task_minutes_total,
+            "task_total_hours_label": _task_work_hours_label(task_minutes_total),
+            "client_total_minutes": client_minutes_total,
+            "client_total_hours_label": _task_work_hours_label(client_minutes_total),
+            "active_work_session": active_work_session,
+            "active_work_started_at": _format_dt_br(active_work_session.started_at) if active_work_session else "",
+            "work_sessions": work_sessions,
+        },
+    )
+
+
+@app.post("/tarefas/{task_id}/comentario")
+@require_login
+async def tasks_add_comment(
+        request: Request,
+        session: Session = Depends(get_session),
+        task_id: int = 0,
+        message: str = Form(...),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+
+    task = session.get(Task, int(task_id))
+    if not task or not _task_can_view(ctx, task):
+        set_flash(request, "Sem permissão.")
+        return RedirectResponse("/tarefas", status_code=303)
+
+    msg = message.strip()
+    if not msg:
+        return RedirectResponse(f"/tarefas/{task.id}", status_code=303)
+
+    session.add(TaskComment(task_id=task.id, author_user_id=ctx.user.id, message=msg))
+    session.commit()
+
+    return RedirectResponse(f"/tarefas/{task.id}", status_code=303)
+
+
+@app.post("/tarefas/{task_id}/anexar")
+@require_login
+async def tasks_attach_file(
+        request: Request,
+        session: Session = Depends(get_session),
+        task_id: int = 0,
+        file: UploadFile = File(...),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+
+    task = session.get(Task, int(task_id))
+    if not task or not _task_can_view(ctx, task):
+        set_flash(request, "Tarefa não encontrada ou sem permissão.")
+        return RedirectResponse("/tarefas", status_code=303)
+
+    # Cliente só anexa se a tarefa for visível a ele
+    if ctx.membership.role == "cliente" and not task.visible_to_client:
+        set_flash(request, "Sem permissão.")
+        return RedirectResponse("/tarefas", status_code=303)
+
+    if not file or not file.filename:
+        set_flash(request, "Selecione um arquivo.")
+        return RedirectResponse(f"/tarefas/{task.id}", status_code=303)
+
+    try:
+        stored, mime, size = await save_upload(file)
+    except ValueError:
+        set_flash(request, "Arquivo muito grande.")
+        return RedirectResponse(f"/tarefas/{task.id}", status_code=303)
+
+    session.add(
+        Attachment(
+            company_id=ctx.company.id,
+            client_id=task.client_id,
+            uploaded_by_user_id=ctx.user.id,
+            task_id=task.id,
+            original_filename=file.filename or "arquivo",
+            stored_filename=stored,
+            mime_type=mime,
+            size_bytes=size,
+        )
+    )
+    session.commit()
+
+    set_flash(request, "Anexo enviado.")
+    return RedirectResponse(f"/tarefas/{task.id}", status_code=303)
+
+
+@app.post("/tarefas/{task_id}/iniciar")
+@require_role({"admin", "equipe"})
+async def tasks_start_work(
+        request: Request,
+        session: Session = Depends(get_session),
+        task_id: int = 0,
+        note: str = Form(""),
+        next: str = Form(""),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    if not ensure_task_work_session_table():
+        set_flash(request, "Apontamento de horas não está configurado no banco.")
+        return RedirectResponse(_safe_relative_next(next, f"/tarefas/{task_id}"), status_code=303)
+
+    task = session.get(Task, int(task_id))
+    if not task or task.company_id != ctx.company.id:
+        set_flash(request, "Tarefa não encontrada.")
+        return RedirectResponse("/tarefas", status_code=303)
+
+    if task.status == "concluida":
+        set_flash(request, "Reabra a tarefa antes de iniciar um apontamento.")
+        return RedirectResponse(_safe_relative_next(next, f"/tarefas/{task.id}"), status_code=303)
+
+    active = _task_work_active_for_user(session, company_id=ctx.company.id, user_id=ctx.user.id)
+    if active and active.task_id == task.id:
+        set_flash(request, "Você já está apontando tempo nesta tarefa.")
+        return RedirectResponse(_safe_relative_next(next, f"/tarefas/{task.id}"), status_code=303)
+
+    if active and active.task_id != task.id:
+        active.ended_at = utcnow()
+        active.duration_minutes = _task_work_minutes(active)
+        active.updated_at = utcnow()
+        session.add(active)
+
+    started = utcnow()
+    session.add(
+        TaskWorkSession(
+            company_id=ctx.company.id,
+            client_id=task.client_id,
+            task_id=task.id,
+            user_id=ctx.user.id,
+            started_at=started,
+            ended_at=None,
+            duration_minutes=0,
+            note=str(note or "").strip(),
+            created_at=started,
+            updated_at=started,
+        )
+    )
+    if task.status == "nao_iniciada":
+        task.status = "em_andamento"
+    task.updated_at = utcnow()
+    session.add(task)
+    session.commit()
+
+    if active and active.task_id != task.id:
+        set_flash(request, "Sessão anterior encerrada e novo apontamento iniciado.")
+    else:
+        set_flash(request, "Apontamento iniciado.")
+    return RedirectResponse(_safe_relative_next(next, f"/tarefas/{task.id}"), status_code=303)
+
+
+@app.post("/tarefas/{task_id}/parar")
+@require_role({"admin", "equipe"})
+async def tasks_stop_work(
+        request: Request,
+        session: Session = Depends(get_session),
+        task_id: int = 0,
+        next: str = Form(""),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    if not ensure_task_work_session_table():
+        set_flash(request, "Apontamento de horas não está configurado no banco.")
+        return RedirectResponse(_safe_relative_next(next, f"/tarefas/{task_id}"), status_code=303)
+
+    task = session.get(Task, int(task_id))
+    if not task or task.company_id != ctx.company.id:
+        set_flash(request, "Tarefa não encontrada.")
+        return RedirectResponse("/tarefas", status_code=303)
+
+    active = _task_work_active_for_task_user(session, task_id=task.id, user_id=ctx.user.id)
+    if not active:
+        set_flash(request, "Nenhum apontamento ativo nesta tarefa.")
+        return RedirectResponse(_safe_relative_next(next, f"/tarefas/{task.id}"), status_code=303)
+
+    active.ended_at = utcnow()
+    active.duration_minutes = _task_work_minutes(active)
+    active.updated_at = utcnow()
+    task.updated_at = utcnow()
+    session.add(active)
+    session.add(task)
+    session.commit()
+
+    set_flash(request, "Apontamento encerrado.")
+    return RedirectResponse(_safe_relative_next(next, f"/tarefas/{task.id}"), status_code=303)
+
+
+@app.post("/tarefas/{task_id}/toggle")
+@require_role({"cliente"})
+async def tasks_toggle_client(request: Request, session: Session = Depends(get_session), task_id: int = 0) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
+    task = session.get(Task, int(task_id))
+    if not task or not _task_can_view(ctx, task):
+        set_flash(request, "Sem permissão.")
+        return RedirectResponse("/tarefas", status_code=303)
+
+    if not task.client_action:
+        set_flash(request, "Você não pode concluir esta tarefa.")
+        return RedirectResponse(f"/tarefas/{task.id}", status_code=303)
+
+    task.status = "nao_iniciada" if task.status == "concluida" else "concluida"
+    task.updated_at = utcnow()
+    session.add(task)
+    session.commit()
+
+    return RedirectResponse(f"/tarefas/{task.id}", status_code=303)
+
+
+@app.post("/tarefas/{task_id}/status")
+@require_role({"admin", "equipe"})
+async def tasks_set_status(request: Request, session: Session = Depends(get_session), task_id: int = 0,
+                           status: str = Form(...)) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
+    task = session.get(Task, int(task_id))
+    if not task or task.company_id != ctx.company.id:
+        set_flash(request, "Tarefa não encontrada.")
+        return RedirectResponse("/tarefas", status_code=303)
+
+    status = status.strip().lower()
+    if status not in TASK_STATUS:
+        status = "nao_iniciada"
+
+    task.status = status
+    task.updated_at = utcnow()
+    session.add(task)
+    session.commit()
+
+    return RedirectResponse(f"/tarefas/{task.id}", status_code=303)
+
+
+@app.get("/tarefas/{task_id}/editar", response_class=HTMLResponse)
+@require_role({"admin", "equipe"})
+async def tasks_edit_page(request: Request, session: Session = Depends(get_session), task_id: int = 0) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
+    task = session.get(Task, int(task_id))
+    if not task or task.company_id != ctx.company.id:
+        return render("error.html", request=request, context={"message": "Tarefa não encontrada."}, status_code=404)
+
+    clients = session.exec(select(Client).where(Client.company_id == ctx.company.id).order_by(Client.created_at)).all()
+    memberships = session.exec(select(Membership).where(Membership.company_id == ctx.company.id)).all()
+    assignees = []
+    for m in memberships:
+        u = session.get(User, m.user_id)
+        if not u:
+            continue
+        assignees.append({"id": u.id, "name": u.name, "role": m.role})
+
+    active_client_id = get_active_client_id(request, session, ctx)
+    current_client = get_client_or_none(session, ctx.company.id, active_client_id)
+
+    return render(
+        "tasks_edit.html",
+        request=request,
+        context={
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "role": ctx.membership.role,
+            "current_client": current_client,
+            "task": task,
+            "clients": clients,
+            "assignees": assignees,
+        },
+    )
+
+
+@app.post("/tarefas/{task_id}/editar")
+@require_role({"admin", "equipe"})
+async def tasks_edit_action(
+        request: Request,
+        session: Session = Depends(get_session),
+        task_id: int = 0,
+        client_id: int = Form(...),
+        assignee_user_id: str = Form(""),
+        title: str = Form(...),
+        description: str = Form(""),
+        status: str = Form("nao_iniciada"),
+        priority: str = Form("media"),
+        due_date: str = Form(""),
+        visible_to_client: str = Form(""),
+        client_action: str = Form(""),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
+    task = session.get(Task, int(task_id))
+    if not task or task.company_id != ctx.company.id:
+        set_flash(request, "Tarefa não encontrada.")
+        return RedirectResponse("/tarefas", status_code=303)
+
+    client = get_client_or_none(session, ctx.company.id, int(client_id))
+    if not client:
+        set_flash(request, "Cliente inválido.")
+        return RedirectResponse(f"/tarefas/{task.id}/editar", status_code=303)
+
+    status = status.strip().lower()
+    if status not in TASK_STATUS:
+        status = "nao_iniciada"
+
+    priority = priority.strip().lower()
+    if priority not in TASK_PRIORITY:
+        priority = "media"
+
+    assignee = int(assignee_user_id) if assignee_user_id.strip().isdigit() else None
+
+    task.client_id = client.id
+    task.assignee_user_id = assignee
+    task.title = title.strip()
+    task.description = description.strip()
+    task.status = status
+    task.priority = priority
+    task.due_date = due_date.strip()
+    task.visible_to_client = (visible_to_client == "1")
+    task.client_action = (client_action == "1")
+    task.updated_at = utcnow()
+
+    session.add(task)
+    session.commit()
+
+    set_flash(request, "Tarefa atualizada.")
+    return RedirectResponse(f"/tarefas/{task.id}", status_code=303)
+
+
+@app.post("/tarefas/{task_id}/excluir")
+@require_role({"admin", "equipe"})
+async def tasks_delete_action(
+        request: Request,
+        session: Session = Depends(get_session),
+        task_id: int = 0,
+        confirm: str = Form(""),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
+    task = session.get(Task, int(task_id))
+    if not task or task.company_id != ctx.company.id:
+        set_flash(request, "Tarefa não encontrada.")
+        return RedirectResponse("/tarefas", status_code=303)
+
+    if confirm.strip().upper() != "EXCLUIR":
+        set_flash(request, "Confirmação inválida. Digite EXCLUIR.")
+        return RedirectResponse(f"/tarefas/{task.id}", status_code=303)
+
+    # Segurança: não excluir se ainda houver anexos
+    has_att = session.exec(select(Attachment.id).where(Attachment.task_id == task.id)).first()
+    if has_att:
+        set_flash(request, "Remova os anexos antes de excluir a tarefa.")
+        return RedirectResponse(f"/tarefas/{task.id}", status_code=303)
+
+    if ensure_task_work_session_table():
+        session.exec(delete(TaskWorkSession).where(TaskWorkSession.task_id == task.id))
+
+    session.exec(delete(TaskComment).where(TaskComment.task_id == task.id))
+    session.exec(delete(Task).where(Task.id == task.id))
+    session.commit()
+
+    set_flash(request, "Tarefa excluída.")
+    return RedirectResponse("/tarefas", status_code=303)
+
+
+@app.post("/attachments/{attachment_id}/delete")
+@require_role({"admin", "equipe"})
+async def delete_attachment(
+        request: Request,
+        session: Session = Depends(get_session),
+        attachment_id: int = 0,
+        next: str = Form("/"),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
+    att = session.get(Attachment, int(attachment_id))
+    if not att or att.company_id != ctx.company.id:
+        set_flash(request, "Anexo não encontrado.")
+        return RedirectResponse(next, status_code=303)
+
+    _delete_attachment_file(att)
+    session.delete(att)
+    session.commit()
+
+    set_flash(request, "Anexo excluído.")
+    return RedirectResponse(next, status_code=303)
+
+
+@app.get("/pendencias/cliente/nova", response_class=HTMLResponse)
+@require_role({"cliente"})
+async def pending_new_client_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
+    active_client_id = get_active_client_id(request, session, ctx)
+    current_client = get_client_or_none(session, ctx.company.id, active_client_id)
+
+    return render(
+        "pending_new_client.html",
+        request=request,
+        context={
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "role": ctx.membership.role,
+            "current_client": current_client,
+        },
+    )
+
+
+@app.post("/pendencias/cliente/nova")
+@require_role({"cliente"})
+async def pending_new_client_action(
+        request: Request,
+        session: Session = Depends(get_session),
+        title: str = Form(...),
+        description: str = Form(""),
+        due_date: str = Form(""),
+        file: UploadFile | None = File(default=None),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
+    client_id = ctx.membership.client_id or 0
+    client = get_client_or_none(session, ctx.company.id, client_id)
+    if not client:
+        set_flash(request, "Seu usuário não está vinculado a um cliente.")
+        return RedirectResponse("/pendencias", status_code=303)
+
+    item = PendingItem(
+        company_id=ctx.company.id,
+        client_id=client.id,
+        created_by_user_id=ctx.user.id,
+        title=title.strip(),
+        description=description.strip(),
+        status="cliente_enviou",
+        due_date=_normalize_date_input(due_date),
+        created_at=utcnow(),
+        updated_at=utcnow(),
+    )
+    session.add(item)
+    session.commit()
+    session.refresh(item)
+
+    if description.strip():
+        session.add(PendingMessage(pending_item_id=item.id, author_user_id=ctx.user.id, message=description.strip()))
+        session.commit()
+
+    if file and file.filename:
+        try:
+            stored, mime, size = await save_upload(file)
+        except ValueError:
+            set_flash(request, "Arquivo muito grande.")
+            return RedirectResponse(f"/pendencias/{item.id}", status_code=303)
+
+        session.add(
+            Attachment(
+                company_id=ctx.company.id,
+                client_id=item.client_id,
+                uploaded_by_user_id=ctx.user.id,
+                pending_item_id=item.id,
+                original_filename=file.filename or "arquivo",
+                stored_filename=stored,
+                mime_type=mime,
+                size_bytes=size,
+            )
+        )
+        session.commit()
+
+    try:
+        _notify_staff_about_client_activity(
+            session,
+            ctx=ctx,
+            client_id=item.client_id,
+            kind="pendencia",
+            title="Cliente criou uma nova pendência",
+            message=(item.title or "Pendência")[:160],
+            href=f"/pendencias/{item.id}",
+        )
+    except Exception:
+        pass
+
+    set_flash(request, "Pendência criada.")
+    return RedirectResponse(f"/pendencias/{item.id}", status_code=303)
+
+
+@app.get("/documentos/cliente/enviar", response_class=HTMLResponse)
+@require_role({"cliente"})
+async def docs_send_client_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
+    active_client_id = get_active_client_id(request, session, ctx)
+    current_client = get_client_or_none(session, ctx.company.id, active_client_id)
+
+    return render(
+        "docs_send_client.html",
+        request=request,
+        context={
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "role": ctx.membership.role,
+            "current_client": current_client,
+        },
+    )
+
+
+@app.post("/documentos/cliente/enviar")
+@require_role({"cliente"})
+async def docs_send_client_action(
+        request: Request,
+        session: Session = Depends(get_session),
+        title: str = Form(...),
+        message: str = Form(""),
+        file: UploadFile = File(...),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
+    client_id = ctx.membership.client_id or 0
+    client = get_client_or_none(session, ctx.company.id, client_id)
+    if not client:
+        set_flash(request, "Seu usuário não está vinculado a um cliente.")
+        return RedirectResponse("/documentos", status_code=303)
+
+    content = message.strip() or "Enviado pelo cliente."
+    doc = Document(
+        company_id=ctx.company.id,
+        client_id=client.id,
+        created_by_user_id=ctx.user.id,
+        title=title.strip(),
+        content=content,
+        status="cliente_enviou",
+        created_at=utcnow(),
+        updated_at=utcnow(),
+    )
+    session.add(doc)
+    session.commit()
+    session.refresh(doc)
+
+    if message.strip():
+        session.add(DocumentMessage(document_id=doc.id, author_user_id=ctx.user.id, message=message.strip()))
+        session.commit()
+
+    try:
+        stored, mime, size = await save_upload(file)
+    except ValueError:
+        set_flash(request, "Arquivo muito grande.")
+        return RedirectResponse(f"/documentos/{doc.id}", status_code=303)
+
+    session.add(
+        Attachment(
+            company_id=ctx.company.id,
+            client_id=doc.client_id,
+            uploaded_by_user_id=ctx.user.id,
+            document_id=doc.id,
+            original_filename=file.filename or "arquivo",
+            stored_filename=stored,
+            mime_type=mime,
+            size_bytes=size,
+        )
+    )
+    session.commit()
+
+    try:
+        _notify_staff_about_client_activity(
+            session,
+            ctx=ctx,
+            client_id=doc.client_id,
+            kind="documento",
+            title="Cliente enviou um novo documento",
+            message=(doc.title or "Documento")[:160],
+            href=f"/documentos/{doc.id}",
+        )
+    except Exception:
+        pass
+
+    set_flash(request, "Documento enviado.")
+    return RedirectResponse(f"/documentos/{doc.id}", status_code=303)
+
+
+@app.get("/documentos/{doc_id}/editar", response_class=HTMLResponse)
+@require_role({"admin", "equipe"})
+async def docs_edit_page(request: Request, session: Session = Depends(get_session), doc_id: int = 0) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
+    doc = session.get(Document, int(doc_id))
+    if not doc or doc.company_id != ctx.company.id:
+        return render("error.html", request=request, context={"message": "Documento não encontrado."}, status_code=404)
+
+    active_client_id = get_active_client_id(request, session, ctx)
+    current_client = get_client_or_none(session, ctx.company.id, active_client_id)
+
+    return render(
+        "docs_edit.html",
+        request=request,
+        context={
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "role": ctx.membership.role,
+            "current_client": current_client,
+            "doc": doc,
+        },
+    )
+
+
+@app.post("/documentos/{doc_id}/editar")
+@require_role({"admin", "equipe"})
+async def docs_edit_action(
+        request: Request,
+        session: Session = Depends(get_session),
+        doc_id: int = 0,
+        title: str = Form(...),
+        content: str = Form(...),
+        status: str = Form("rascunho"),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
+    doc = session.get(Document, int(doc_id))
+    if not doc or doc.company_id != ctx.company.id:
+        set_flash(request, "Documento não encontrado.")
+        return RedirectResponse("/documentos", status_code=303)
+
+    doc.title = title.strip()
+    doc.content = content.strip()
+    doc.status = status.strip().lower()
+    doc.updated_at = utcnow()
+    session.add(doc)
+    session.commit()
+
+    set_flash(request, "Documento atualizado.")
+    return RedirectResponse(f"/documentos/{doc.id}", status_code=303)
+
+
+@app.post("/documentos/{doc_id}/excluir")
+@require_role({"admin", "equipe"})
+async def docs_delete_action(request: Request, session: Session = Depends(get_session), doc_id: int = 0) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
+    doc = session.get(Document, int(doc_id))
+    if not doc or doc.company_id != ctx.company.id:
+        set_flash(request, "Documento não encontrado.")
+        return RedirectResponse("/documentos", status_code=303)
+
+    atts = session.exec(select(Attachment).where(Attachment.document_id == doc.id)).all()
+    if atts:
+        set_flash(request, "Remova os anexos antes de excluir o documento.")
+        return RedirectResponse(f"/documentos/{doc.id}", status_code=303)
+
+    msgs = session.exec(select(DocumentMessage).where(DocumentMessage.document_id == doc.id)).all()
+    for m in msgs:
+        session.delete(m)
+
+    session.delete(doc)
+    session.commit()
+
+    set_flash(request, "Documento excluído.")
+    return RedirectResponse("/documentos", status_code=303)
+
+
+@app.get("/pendencias/{item_id}/editar", response_class=HTMLResponse)
+@require_role({"admin", "equipe"})
+async def pending_edit_page(request: Request, session: Session = Depends(get_session),
+                            item_id: int = 0) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
+    item = session.get(PendingItem, int(item_id))
+    if not item or item.company_id != ctx.company.id:
+        return render("error.html", request=request, context={"message": "Pendência não encontrada."}, status_code=404)
+
+    active_client_id = get_active_client_id(request, session, ctx)
+    current_client = get_client_or_none(session, ctx.company.id, active_client_id)
+
+    return render(
+        "pending_edit.html",
+        request=request,
+        context={
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "role": ctx.membership.role,
+            "current_client": current_client,
+            "item": item,
+        },
+    )
+
+
+@app.post("/pendencias/{item_id}/editar")
+@require_role({"admin", "equipe"})
+async def pending_edit_action(
+        request: Request,
+        session: Session = Depends(get_session),
+        item_id: int = 0,
+        title: str = Form(...),
+        description: str = Form(""),
+        due_date: str = Form(""),
+        status: str = Form("aberto"),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
+    item = session.get(PendingItem, int(item_id))
+    if not item or item.company_id != ctx.company.id:
+        set_flash(request, "Pendência não encontrada.")
+        return RedirectResponse("/pendencias", status_code=303)
+
+    item.title = title.strip()
+    item.description = description.strip()
+    item.due_date = due_date.strip()
+    item.status = status.strip().lower()
+    item.updated_at = utcnow()
+    session.add(item)
+    session.commit()
+
+    set_flash(request, "Pendência atualizada.")
+    return RedirectResponse(f"/pendencias/{item.id}", status_code=303)
+
+
+@app.post("/pendencias/{item_id}/excluir")
+@require_role({"admin", "equipe"})
+async def pending_delete_action(request: Request, session: Session = Depends(get_session),
+                                item_id: int = 0) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
+    item = session.get(PendingItem, int(item_id))
+    if not item or item.company_id != ctx.company.id:
+        set_flash(request, "Pendência não encontrada.")
+        return RedirectResponse("/pendencias", status_code=303)
+
+    atts = session.exec(select(Attachment).where(Attachment.pending_item_id == item.id)).all()
+    if atts:
+        set_flash(request, "Remova os anexos antes de excluir a pendência.")
+        return RedirectResponse(f"/pendencias/{item.id}", status_code=303)
+
+    msgs = session.exec(select(PendingMessage).where(PendingMessage.pending_item_id == item.id)).all()
+    for m in msgs:
+        session.delete(m)
+
+    session.delete(item)
+    session.commit()
+
+    set_flash(request, "Pendência excluída.")
+    return RedirectResponse("/pendencias", status_code=303)
+
+
+@app.get("/financeiro/{inv_id}/editar", response_class=HTMLResponse)
+@require_role({"admin", "equipe"})
+async def fin_edit_page(request: Request, session: Session = Depends(get_session), inv_id: int = 0) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
+    inv = session.get(FinanceInvoice, int(inv_id))
+    if not inv or inv.company_id != ctx.company.id:
+        return render("error.html", request=request, context={"message": "Lançamento não encontrado."}, status_code=404)
+
+    active_client_id = get_active_client_id(request, session, ctx)
+    current_client = get_client_or_none(session, ctx.company.id, active_client_id)
+
+    return render(
+        "fin_edit.html",
+        request=request,
+        context={
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "role": ctx.membership.role,
+            "current_client": current_client,
+            "inv": inv,
+        },
+    )
+
+
+@app.post("/financeiro/{inv_id}/editar")
+@require_role({"admin", "equipe"})
+async def fin_edit_action(
+        request: Request,
+        session: Session = Depends(get_session),
+        inv_id: int = 0,
+        title: str = Form(...),
+        status: str = Form("emitido"),
+        amount_brl: float = Form(0.0),
+        due_date: str = Form(""),
+        notes: str = Form(""),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
+    inv = session.get(FinanceInvoice, int(inv_id))
+    if not inv or inv.company_id != ctx.company.id:
+        set_flash(request, "Lançamento não encontrado.")
+        return RedirectResponse("/financeiro", status_code=303)
+
+    inv.title = title.strip()
+    inv.status = status.strip().lower()
+    inv.amount_brl = max(0.0, float(amount_brl))
+    inv.due_date = due_date.strip()
+    inv.notes = notes.strip()
+    inv.updated_at = utcnow()
+    session.add(inv)
+    session.commit()
+
+    set_flash(request, "Financeiro atualizado.")
+    return RedirectResponse(f"/financeiro/{inv.id}", status_code=303)
+
+
+@app.post("/financeiro/{inv_id}/excluir")
+@require_role({"admin", "equipe"})
+async def fin_delete_action(request: Request, session: Session = Depends(get_session), inv_id: int = 0) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
+    inv = session.get(FinanceInvoice, int(inv_id))
+    if not inv or inv.company_id != ctx.company.id:
+        set_flash(request, "Lançamento não encontrado.")
+        return RedirectResponse("/financeiro", status_code=303)
+
+    atts = session.exec(select(Attachment).where(Attachment.finance_invoice_id == inv.id)).all()
+    if atts:
+        set_flash(request, "Remova os anexos antes de excluir o lançamento.")
+        return RedirectResponse(f"/financeiro/{inv.id}", status_code=303)
+
+    session.delete(inv)
+    session.commit()
+
+    set_flash(request, "Lançamento excluído.")
+    return RedirectResponse("/financeiro", status_code=303)
+
+
+# ----------------------------
+# CRM routes (Negócios)
+# ----------------------------
+
+def _crm_stage_label(stage_key: str) -> str:
+    for s in CRM_STAGES:
+        if s["key"] == stage_key:
+            return s["label"]
+    return stage_key or "—"
+
+
+def _crm_stage_key_or_default(stage_key: str) -> str:
+    k = (stage_key or "").strip().lower()
+    return k if k in CRM_STAGE_KEYS else "qualificacao"
+
+
+def _owner_users_for_company(session: Session, company_id: int) -> list[dict[str, Any]]:
+    members = session.exec(select(Membership).where(Membership.company_id == company_id)).all()
+    out = []
+    seen = set()
+    for m in members:
+        if m.user_id in seen:
+            continue
+        u = session.get(User, m.user_id)
+        if u:
+            out.append({"id": u.id, "name": u.name})
+            seen.add(u.id)
+    out.sort(key=lambda x: x["name"].lower())
+    return out
+
+
+@app.get("/crm")
+@require_role({"admin", "equipe"})
+async def crm_alias() -> Response:
+    return RedirectResponse("/negocios", status_code=303)
+
+
+@app.get("/negocios", response_class=HTMLResponse)
+@require_role({"admin", "equipe"})
+async def crm_list(
+        request: Request,
+        session: Session = Depends(get_session),
+        client_id: int = 0,
+        owner_user_id: int = 0,
+        stage: str = "",
+) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
+    clients = session.exec(select(Client).where(Client.company_id == ctx.company.id).order_by(Client.created_at)).all()
+    owners = _owner_users_for_company(session, ctx.company.id)
+
+    q = select(BusinessDeal).where(BusinessDeal.company_id == ctx.company.id).order_by(BusinessDeal.updated_at.desc())
+
+    filter_client_id = int(client_id or 0)
+    if filter_client_id > 0:
+        c = get_client_or_none(session, ctx.company.id, filter_client_id)
+        if not c:
+            set_flash(request, "Cliente inválido para filtro.")
+            return RedirectResponse("/negocios", status_code=303)
+        q = q.where(BusinessDeal.client_id == c.id)
+
+    filter_owner_user_id = int(owner_user_id or 0)
+    if filter_owner_user_id == -1:
+        q = q.where(BusinessDeal.owner_user_id.is_(None))
+    elif filter_owner_user_id > 0:
+        q = q.where(BusinessDeal.owner_user_id == filter_owner_user_id)
+
+    filter_stage = (stage or "").strip().lower()
+    if filter_stage:
+        if filter_stage not in CRM_STAGE_KEYS:
+            set_flash(request, "Etapa inválida para filtro.")
+            return RedirectResponse("/negocios", status_code=303)
+        q = q.where(BusinessDeal.stage == filter_stage)
+
+    deals = session.exec(q).all()
+
+    client_name_by_id = {c.id: c.name for c in clients}
+    owner_name_by_id = {o["id"]: o["name"] for o in owners}
+
+    by_stage: dict[str, list[dict[str, Any]]] = {s["key"]: [] for s in CRM_STAGES}
+    for d in deals:
+        by_stage.setdefault(d.stage, [])
+        by_stage[d.stage].append(
+            {
+                "id": d.id,
+                "title": d.title,
+                "client_name": client_name_by_id.get(d.client_id, "—"),
+                "owner_name": owner_name_by_id.get(d.owner_user_id or 0, ""),
+                "service_name": d.service_name,
+                "next_step_date": d.next_step_date,
+                "value_estimate_brl": d.value_estimate_brl,
+            }
+        )
+
+    columns = []
+    for s in CRM_STAGES:
+        lst = by_stage.get(s["key"], [])
+        columns.append({"key": s["key"], "label": s["label"], "deals": lst, "count": len(lst)})
+
+    active_client_id = get_active_client_id(request, session, ctx)
+    current_client = get_client_or_none(session, ctx.company.id, active_client_id)
+
+    return render(
+        "crm_list.html",
+        request=request,
+        context={
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "role": ctx.membership.role,
+            "current_client": current_client,
+            "clients": clients,
+            "owners": owners,
+            "stages": CRM_STAGES,
+            "columns": columns,
+            "filter_client_id": filter_client_id,
+            "filter_owner_user_id": filter_owner_user_id,
+            "filter_stage": filter_stage,
+        },
+    )
+
+
+@app.get("/negocios/novo", response_class=HTMLResponse)
+@require_role({"admin", "equipe"})
+async def crm_new_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
+    clients = session.exec(select(Client).where(Client.company_id == ctx.company.id).order_by(Client.created_at)).all()
+    owners = _owner_users_for_company(session, ctx.company.id)
+
+    # Permite abrir a tela mesmo sem clientes cadastrados (para criar Lead no CRM).
+
+    active_client_id = get_active_client_id(request, session, ctx)
+    current_client = get_client_or_none(session, ctx.company.id, active_client_id)
+
+    return render(
+        "crm_new.html",
+        request=request,
+        context={
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "role": ctx.membership.role,
+            "current_client": current_client,
+            "clients": clients,
+            "owners": owners,
+            "stages": CRM_STAGES,
+        },
+    )
+
+
+@app.post("/negocios/novo")
+@require_role({"admin", "equipe"})
+async def crm_new_action(
+        request: Request,
+        session: Session = Depends(get_session),
+
+        client_id: int = Form(0),
+        new_client_name: str = Form(""),
+        new_client_cnpj: str = Form(""),
+        new_client_email: str = Form(""),
+        new_client_phone: str = Form(""),
+        new_client_notes: str = Form(""),
+
+        owner_user_id: int = Form(0),
+        title: str = Form(...),
+        service_name: str = Form(""),
+        stage: str = Form("qualificacao"),
+        demand: str = Form(""),
+        notes: str = Form(""),
+        value_estimate_brl: float = Form(0.0),
+        probability_pct: int = Form(0),
+        source: str = Form(""),
+        next_step: str = Form(""),
+        next_step_date: str = Form(""),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
+    new_client_name = (new_client_name or "").strip()
+    new_client_email = (new_client_email or "").strip()
+    new_client_phone = (new_client_phone or "").strip()
+    new_client_notes = (new_client_notes or "").strip()
+    new_client_cnpj_norm = re.sub(r"\D+", "", (new_client_cnpj or "")).strip()
+
+    if new_client_name:
+        lead_notes = f"[LEAD CRM] {new_client_notes}".strip()
+        client = Client(
+            company_id=ctx.company.id,
+            name=new_client_name,
+            cnpj=new_client_cnpj_norm,
+            email=new_client_email,
+            phone=new_client_phone,
+            notes=lead_notes,
+            updated_at=utcnow(),
+        )
+        session.add(client)
+        session.commit()
+        session.refresh(client)
+    else:
+        if int(client_id or 0) <= 0:
+            set_flash(request, "Selecione um cliente existente OU crie um lead.")
+            return RedirectResponse("/negocios/novo", status_code=303)
+
+        client = get_client_or_none(session, ctx.company.id, int(client_id))
+        if not client:
+            set_flash(request, "Cliente inválido.")
+            return RedirectResponse("/negocios/novo", status_code=303)
+
+    service_name = sanitize_service_name(service_name)
+    if not service_name:
+        set_flash(request, "Selecione um serviço/produto.")
+        return RedirectResponse("/negocios/novo", status_code=303)
+
+    stage = _crm_stage_key_or_default(stage)
+
+    ouid = int(owner_user_id or 0)
+    owner = None
+    if ouid > 0:
+        owner = session.get(User, ouid)
+        if not owner:
+            set_flash(request, "Responsável inválido.")
+            return RedirectResponse("/negocios/novo", status_code=303)
+
+    prob = max(0, min(100, int(probability_pct or 0)))
+
+    deal = BusinessDeal(
+        company_id=ctx.company.id,
+        client_id=client.id,
+        created_by_user_id=ctx.user.id,
+        owner_user_id=(owner.id if owner else None),
+        title=title.strip(),
+        demand=demand.strip(),
+        notes=notes.strip(),
+        stage=stage,
+        service_name=service_name,
+        value_estimate_brl=max(0.0, float(value_estimate_brl)),
+        probability_pct=prob,
+        next_step=next_step.strip(),
+        next_step_date=_normalize_date_input(next_step_date),
+        source=source.strip(),
+        updated_at=utcnow(),
+    )
+    session.add(deal)
+    session.commit()
+    session.refresh(deal)
+
+    session.add(BusinessDealNote(deal_id=deal.id, author_user_id=ctx.user.id, message="Negócio criado."))
+    session.commit()
+
+    set_flash(request, "Negócio criado.")
+    return RedirectResponse(f"/negocios/{deal.id}", status_code=303)
+
+
+@app.get("/negocios/{deal_id}", response_class=HTMLResponse)
+@require_role({"admin", "equipe"})
+async def crm_detail(request: Request, session: Session = Depends(get_session), deal_id: int = 0) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
+    deal = session.get(BusinessDeal, int(deal_id))
+    if not deal or deal.company_id != ctx.company.id:
+        return render("error.html", request=request, context={"message": "Negócio não encontrado."}, status_code=404)
+
+    client = session.get(Client, deal.client_id)
+    owner = session.get(User, deal.owner_user_id) if deal.owner_user_id else None
+
+    notes = session.exec(
+        select(BusinessDealNote).where(BusinessDealNote.deal_id == deal.id).order_by(BusinessDealNote.created_at.desc())
+    ).all()
+
+    note_view = []
+    for n in notes:
+        au = session.get(User, n.author_user_id)
+        note_view.append(
+            {"id": n.id, "message": n.message, "created_at": n.created_at, "author_name": au.name if au else "—"})
+
+    active_client_id = get_active_client_id(request, session, ctx)
+    current_client = get_client_or_none(session, ctx.company.id, active_client_id)
+
+    return render(
+        "crm_detail.html",
+        request=request,
+        context={
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "role": ctx.membership.role,
+            "current_client": current_client,
+            "deal": deal,
+            "client": client,
+            "owner_name": owner.name if owner else "",
+            "stage_label": _crm_stage_label(deal.stage),
+            "stages": CRM_STAGES,
+            "notes": note_view,
+        },
+    )
+
+
+@app.get("/negocios/{deal_id}/editar", response_class=HTMLResponse)
+@require_role({"admin", "equipe"})
+async def crm_edit_page(request: Request, session: Session = Depends(get_session), deal_id: int = 0) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
+    deal = session.get(BusinessDeal, int(deal_id))
+    if not deal or deal.company_id != ctx.company.id:
+        return render("error.html", request=request, context={"message": "Negócio não encontrado."}, status_code=404)
+
+    clients = session.exec(select(Client).where(Client.company_id == ctx.company.id).order_by(Client.created_at)).all()
+    owners = _owner_users_for_company(session, ctx.company.id)
+
+    active_client_id = get_active_client_id(request, session, ctx)
+    current_client = get_client_or_none(session, ctx.company.id, active_client_id)
+
+    return render(
+        "crm_edit.html",
+        request=request,
+        context={
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "role": ctx.membership.role,
+            "current_client": current_client,
+            "deal": deal,
+            "clients": clients,
+            "owners": owners,
+            "stages": CRM_STAGES,
+        },
+    )
+
+
+@app.post("/negocios/{deal_id}/editar")
+@require_role({"admin", "equipe"})
+async def crm_edit_action(
+        request: Request,
+        session: Session = Depends(get_session),
+        deal_id: int = 0,
+        client_id: int = Form(...),
+        owner_user_id: int = Form(0),
+        title: str = Form(...),
+        service_name: str = Form(""),
+        stage: str = Form("qualificacao"),
+        demand: str = Form(""),
+        notes: str = Form(""),
+        value_estimate_brl: float = Form(0.0),
+        probability_pct: int = Form(0),
+        source: str = Form(""),
+        next_step: str = Form(""),
+        next_step_date: str = Form(""),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
+    deal = session.get(BusinessDeal, int(deal_id))
+    if not deal or deal.company_id != ctx.company.id:
+        set_flash(request, "Negócio não encontrado.")
+        return RedirectResponse("/negocios", status_code=303)
+
+    client = get_client_or_none(session, ctx.company.id, int(client_id))
+    if not client:
+        set_flash(request, "Cliente inválido.")
+        return RedirectResponse(f"/negocios/{deal.id}/editar", status_code=303)
+
+    service_name = sanitize_service_name(service_name)
+    if not service_name:
+        set_flash(request, "Selecione um serviço/produto.")
+        return RedirectResponse(f"/negocios/{deal.id}/editar", status_code=303)
+
+    stage = _crm_stage_key_or_default(stage)
+
+    ouid = int(owner_user_id or 0)
+    owner_id = None
+    if ouid > 0:
+        ou = session.get(User, ouid)
+        if not ou:
+            set_flash(request, "Responsável inválido.")
+            return RedirectResponse(f"/negocios/{deal.id}/editar", status_code=303)
+        owner_id = ou.id
+
+    deal.client_id = client.id
+    deal.owner_user_id = owner_id
+    deal.title = title.strip()
+    deal.service_name = service_name
+    deal.stage = stage
+    deal.demand = demand.strip()
+    deal.notes = notes.strip()
+    deal.value_estimate_brl = max(0.0, float(value_estimate_brl))
+    deal.probability_pct = max(0, min(100, int(probability_pct or 0)))
+    deal.source = source.strip()
+    deal.next_step = next_step.strip()
+    deal.next_step_date = _normalize_date_input(next_step_date)
+    deal.updated_at = utcnow()
+    session.add(deal)
+    session.commit()
+
+    session.add(BusinessDealNote(deal_id=deal.id, author_user_id=ctx.user.id, message="Negócio atualizado."))
+    session.commit()
+
+    set_flash(request, "Negócio atualizado.")
+    return RedirectResponse(f"/negocios/{deal.id}", status_code=303)
+
+
+@app.post("/negocios/{deal_id}/stage")
+@require_role({"admin", "equipe"})
+async def crm_update_stage(
+        request: Request,
+        session: Session = Depends(get_session),
+        deal_id: int = 0,
+        stage: str = Form(""),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
+    deal = session.get(BusinessDeal, int(deal_id))
+    if not deal or deal.company_id != ctx.company.id:
+        set_flash(request, "Negócio não encontrado.")
+        return RedirectResponse("/negocios", status_code=303)
+
+    deal.stage = _crm_stage_key_or_default(stage)
+    deal.updated_at = utcnow()
+    session.add(deal)
+    session.commit()
+
+    session.add(BusinessDealNote(deal_id=deal.id, author_user_id=ctx.user.id,
+                                 message=f"Etapa alterada para: {_crm_stage_label(deal.stage)}."))
+    session.commit()
+
+    return RedirectResponse(f"/negocios/{deal.id}", status_code=303)
+
+
+@app.post("/negocios/{deal_id}/next")
+@require_role({"admin", "equipe"})
+async def crm_update_next(
+        request: Request,
+        session: Session = Depends(get_session),
+        deal_id: int = 0,
+        next_step: str = Form(""),
+        next_step_date: str = Form(""),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
+    deal = session.get(BusinessDeal, int(deal_id))
+    if not deal or deal.company_id != ctx.company.id:
+        set_flash(request, "Negócio não encontrado.")
+        return RedirectResponse("/negocios", status_code=303)
+
+    deal.next_step = (next_step or "").strip()
+    deal.next_step_date = (next_step_date or "").strip()
+    deal.updated_at = utcnow()
+    session.add(deal)
+    session.commit()
+
+    session.add(BusinessDealNote(deal_id=deal.id, author_user_id=ctx.user.id, message="Próximo passo atualizado."))
+    session.commit()
+
+    return RedirectResponse(f"/negocios/{deal.id}", status_code=303)
+
+
+@app.post("/negocios/{deal_id}/nota")
+@require_role({"admin", "equipe"})
+async def crm_add_note(
+        request: Request,
+        session: Session = Depends(get_session),
+        deal_id: int = 0,
+        message: str = Form(...),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
+    deal = session.get(BusinessDeal, int(deal_id))
+    if not deal or deal.company_id != ctx.company.id:
+        set_flash(request, "Negócio não encontrado.")
+        return RedirectResponse("/negocios", status_code=303)
+
+    msg = (message or "").strip()
+    if not msg:
+        return RedirectResponse(f"/negocios/{deal.id}", status_code=303)
+
+    session.add(BusinessDealNote(deal_id=deal.id, author_user_id=ctx.user.id, message=msg))
+    deal.updated_at = utcnow()
+    session.add(deal)
+    session.commit()
+
+    return RedirectResponse(f"/negocios/{deal.id}", status_code=303)
+
+
+@app.post("/negocios/{deal_id}/criar-proposta")
+@require_role({"admin", "equipe"})
+async def crm_create_proposal(request: Request, session: Session = Depends(get_session), deal_id: int = 0) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
+    deal = session.get(BusinessDeal, int(deal_id))
+    if not deal or deal.company_id != ctx.company.id:
+        set_flash(request, "Negócio não encontrado.")
+        return RedirectResponse("/negocios", status_code=303)
+
+    if deal.proposal_id:
+        return RedirectResponse(f"/propostas/{deal.proposal_id}", status_code=303)
+
+    prop = Proposal(
+        company_id=ctx.company.id,
+        client_id=deal.client_id,
+        created_by_user_id=ctx.user.id,
+        kind="proposta",
+        title=deal.title,
+        description=deal.demand or deal.notes,
+        service_name=deal.service_name,
+        value_brl=max(0.0, float(deal.value_estimate_brl)),
+        status="rascunho",
+        created_at=utcnow(),
+        updated_at=utcnow(),
+    )
+    session.add(prop)
+    session.commit()
+    session.refresh(prop)
+
+    deal.proposal_id = prop.id
+    deal.updated_at = utcnow()
+    session.add(deal)
+    session.add(BusinessDealNote(deal_id=deal.id, author_user_id=ctx.user.id, message=f"Proposta criada (#{prop.id})."))
+    session.commit()
+
+    set_flash(request, "Proposta criada.")
+    return RedirectResponse(f"/propostas/{prop.id}", status_code=303)
+
+
+@app.post("/negocios/{deal_id}/criar-projeto")
+@require_role({"admin", "equipe"})
+async def crm_create_project(request: Request, session: Session = Depends(get_session), deal_id: int = 0) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
+    deal = session.get(BusinessDeal, int(deal_id))
+    if not deal or deal.company_id != ctx.company.id:
+        set_flash(request, "Negócio não encontrado.")
+        return RedirectResponse("/negocios", status_code=303)
+
+    if deal.consulting_project_id:
+        return RedirectResponse(f"/consultoria/{deal.consulting_project_id}", status_code=303)
+
+    proj = ConsultingProject(
+        company_id=ctx.company.id,
+        client_id=deal.client_id,
+        created_by_user_id=ctx.user.id,
+        name=deal.title,
+        description=deal.demand or deal.notes,
+        status="ativo",
+        start_date="",
+        due_date="",
+        updated_at=utcnow(),
+    )
+    session.add(proj)
+    session.commit()
+    session.refresh(proj)
+
+    deal.consulting_project_id = proj.id
+    deal.updated_at = utcnow()
+    session.add(deal)
+    session.add(BusinessDealNote(deal_id=deal.id, author_user_id=ctx.user.id, message=f"Projeto criado (#{proj.id})."))
+    session.commit()
+
+    set_flash(request, "Projeto criado.")
+    return RedirectResponse(f"/consultoria/{proj.id}", status_code=303)
+
+
+@app.post("/negocios/{deal_id}/excluir")
+@require_role({"admin", "equipe"})
+async def crm_delete(request: Request, session: Session = Depends(get_session), deal_id: int = 0,
+                     confirm: str = Form("")) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
+    deal = session.get(BusinessDeal, int(deal_id))
+    if not deal or deal.company_id != ctx.company.id:
+        set_flash(request, "Negócio não encontrado.")
+        return RedirectResponse("/negocios", status_code=303)
+
+    if (confirm or "").strip().upper() != "EXCLUIR":
+        set_flash(request, "Confirmação inválida. Digite EXCLUIR.")
+        return RedirectResponse(f"/negocios/{deal.id}", status_code=303)
+
+    session.exec(delete(BusinessDealNote).where(BusinessDealNote.deal_id == deal.id))
+    session.exec(delete(BusinessDeal).where(BusinessDeal.id == deal.id))
+    session.commit()
+
+    set_flash(request, "Negócio excluído.")
+    return RedirectResponse("/negocios", status_code=303)
+
+
+# ----------------------------
+# Aliases (se você tinha URLs antigas)
+# ----------------------------
+
+@app.get("/documents")
+async def _alias_docs() -> Response:
+    return RedirectResponse("/documentos", status_code=307)
+
+
+@app.get("/proposals")
+async def _alias_props() -> Response:
+    return RedirectResponse("/propostas", status_code=307)
+
+
+@app.get("/finance")
+async def _alias_fin() -> Response:
+    return RedirectResponse("/financeiro", status_code=307)
+
+
+# =========================
+# Meetings routes
+# =========================
+
+@app.get("/reunioes", response_class=HTMLResponse)
+@require_login
+async def meetings_list(
+        request: Request,
+        session: Session = Depends(get_session),
+        client_id: int = 0,
+) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+
+    active_client_id = get_active_client_id(request, session, ctx)
+    current_client = get_client_or_none(session, ctx.company.id, active_client_id)
+
+    q = select(Meeting).where(Meeting.company_id == ctx.company.id).order_by(Meeting.created_at.desc())
+
+    clients: list[Client] = []
+    filter_client_id = 0
+
+    if ctx.membership.role == "cliente":
+        q = q.where(Meeting.client_id == (ctx.membership.client_id or -1))
+    else:
+        clients = session.exec(
+            select(Client).where(Client.company_id == ctx.company.id).order_by(Client.created_at)
+        ).all()
+        if client_id and client_id > 0:
+            fc = get_client_or_none(session, ctx.company.id, int(client_id))
+            if not fc:
+                set_flash(request, "Cliente inválido.")
+                return RedirectResponse("/reunioes", status_code=303)
+            filter_client_id = fc.id
+            q = q.where(Meeting.client_id == fc.id)
+
+    meetings = session.exec(q).all()
+    out = []
+    total_hours_filtered = 0.0
+    meetings_in_progress = 0
+
+    for m in meetings:
+        c = session.get(Client, m.client_id)
+        meta = _meeting_meta(m)
+        total_hours = _meeting_hours_total(meta)
+        in_progress = bool(meta.get("checked_in_at")) and not bool(meta.get("checked_out_at"))
+        total_hours_filtered += total_hours
+        if in_progress:
+            meetings_in_progress += 1
+
+        out.append(
+            {
+                "id": m.id,
+                "title": m.title,
+                "meeting_date": m.meeting_date,
+                "notion_status": m.notion_status,
+                "last_synced_at": m.last_synced_at,
+                "client_name": c.name if c else "—",
+                "total_hours": total_hours,
+                "in_progress": in_progress,
+                "has_client_notes": bool(meta.get("client_annotation_text")),
+            }
+        )
+
+    return render(
+        "meetings_list.html",
+        request=request,
+        context={
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "role": ctx.membership.role,
+            "current_client": current_client,
+            "clients": clients,
+            "filter_client_id": filter_client_id,
+            "meetings": out,
+            "meetings_total_hours": round(total_hours_filtered, 2),
+            "meetings_in_progress": meetings_in_progress,
+        },
+    )
+
+
+@app.get("/reunioes/nova", response_class=HTMLResponse)
+@require_role({"admin", "equipe"})
+async def meetings_new_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
+    clients = session.exec(select(Client).where(Client.company_id == ctx.company.id).order_by(Client.created_at)).all()
+    active_client_id = get_active_client_id(request, session, ctx)
+    current_client = get_client_or_none(session, ctx.company.id, active_client_id)
+
+    return render(
+        "meetings_new.html",
+        request=request,
+        context={
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "role": ctx.membership.role,
+            "current_client": current_client,
+            "clients": clients,
+            "notion_enabled": bool(NOTION_TOKEN),
+        },
+    )
+
+
+@app.post("/reunioes/nova")
+@require_role({"admin", "equipe"})
+async def meetings_new_action(
+        request: Request,
+        session: Session = Depends(get_session),
+        client_id: int = Form(...),
+        meeting_date: str = Form(""),
+        notion_page: str = Form(""),
+        title: str = Form(""),
+        sync_now: str = Form(""),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
+    client = get_client_or_none(session, ctx.company.id, int(client_id))
+    if not client:
+        set_flash(request, "Cliente inválido.")
+        return RedirectResponse("/reunioes/nova", status_code=303)
+
+    notion_ref = (notion_page or "").strip()
+    page_id = _normalize_uuid(notion_ref) if notion_ref else ""
+
+    if notion_ref and not page_id:
+        set_flash(request, "Link/ID do Notion inválido.")
+        return RedirectResponse("/reunioes/nova", status_code=303)
+
+    mt = Meeting(
+        company_id=ctx.company.id,
+        client_id=client.id,
+        created_by_user_id=ctx.user.id,
+        title=title.strip(),
+        meeting_date=_normalize_date_input(meeting_date),
+        notion_page_id=page_id,
+        notion_url=notion_ref,
+        updated_at=utcnow(),
+    )
+    session.add(mt)
+    session.commit()
+    session.refresh(mt)
+
+    if sync_now == "1" and page_id:
+        try:
+            data = await notion_sync_meeting_from_page(page_id)
+            mt.title = mt.title or data.get("title", "") or "Reunião"
+            mt.notion_meeting_block_id = data.get("meeting_block_id", "") or ""
+            mt.notion_status = data.get("status", "") or ""
+            mt.summary_text = data.get("summary_text", "") or ""
+            mt.notes_text = data.get("notes_text", "") or ""
+            mt.transcript_text = data.get("transcript_text", "") or ""
+            mt.action_items_text = data.get("action_items_text", "") or ""
+            mt.raw_json = json.dumps(data.get("raw", {}), ensure_ascii=False)
+            mt.last_synced_at = utcnow()
+            mt.updated_at = utcnow()
+            session.add(mt)
+            session.commit()
+            set_flash(request, "Reunião criada e sincronizada.")
+        except Exception as e:
+            set_flash(request, f"Reunião criada, mas falhou ao sincronizar: {e}")
+
+    return RedirectResponse(f"/reunioes/{mt.id}", status_code=303)
+
+
+@app.get("/reunioes/{meeting_id}", response_class=HTMLResponse)
+@require_login
+async def meetings_detail(request: Request, session: Session = Depends(get_session),
+                          meeting_id: int = 0) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+
+    mt = session.get(Meeting, int(meeting_id))
+    if not mt or mt.company_id != ctx.company.id:
+        return render("error.html", request=request, context={"message": "Reunião não encontrada."}, status_code=404)
+
+    if not ensure_can_access_client(ctx, mt.client_id):
+        return render("error.html", request=request, context={"message": "Sem permissão."}, status_code=403)
+
+    client = session.get(Client, mt.client_id)
+
+    assignees = []
+    if ctx.membership.role in {"admin", "equipe"}:
+        memberships = session.exec(select(Membership).where(Membership.company_id == ctx.company.id)).all()
+        for m in memberships:
+            u = session.get(User, m.user_id)
+            if u:
+                assignees.append({"id": u.id, "name": u.name, "role": m.role})
+
+    active_client_id = get_active_client_id(request, session, ctx)
+    current_client = get_client_or_none(session, ctx.company.id, active_client_id)
+    client_meeting_hours_total = _meeting_client_hours_total(session, ctx.company.id, mt.client_id)
+
+    return render(
+        "meetings_detail.html",
+        request=request,
+        context={
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "role": ctx.membership.role,
+            "current_client": current_client,
+            "meeting": mt,
+            "client": client,
+            "assignees": assignees,
+            "client_meeting_hours_total": client_meeting_hours_total,
+        },
+    )
+
+
+@app.post("/reunioes/{meeting_id}/sync")
+@require_role({"admin", "equipe"})
+async def meetings_sync(
+        request: Request,
+        session: Session = Depends(get_session),
+        meeting_id: int = 0,
+        notion_page: str = Form(""),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
+    mt = session.get(Meeting, int(meeting_id))
+    if not mt or mt.company_id != ctx.company.id:
+        set_flash(request, "Reunião não encontrada.")
+        return RedirectResponse("/reunioes", status_code=303)
+
+    notion_ref = (notion_page or "").strip()
+    if notion_ref:
+        page_id = _normalize_uuid(notion_ref)
+        if not page_id:
+            set_flash(request, "Link/ID do Notion inválido.")
+            return RedirectResponse(f"/reunioes/{mt.id}", status_code=303)
+        mt.notion_page_id = page_id
+        mt.notion_url = notion_ref
+        mt.updated_at = utcnow()
+        session.add(mt)
+        session.commit()
+
+    notion_source = (mt.notion_page_id or "").strip() or (mt.notion_url or "").strip()
+    if not notion_source:
+        set_flash(request, "Informe primeiro o link ou ID do Notion para importar.")
+        return RedirectResponse(f"/reunioes/{mt.id}", status_code=303)
+
+    try:
+        data = await notion_sync_meeting_from_page(notion_source)
+        mt.title = mt.title or data.get("title", "") or "Reunião"
+        mt.notion_meeting_block_id = data.get("meeting_block_id", "") or ""
+        mt.notion_status = data.get("status", "") or ""
+        mt.summary_text = data.get("summary_text", "") or ""
+        mt.notes_text = data.get("notes_text", "") or ""
+        mt.transcript_text = data.get("transcript_text", "") or ""
+        mt.action_items_text = data.get("action_items_text", "") or ""
+
+        current_raw = {}
+        try:
+            current_raw = json.loads(mt.raw_json or "{}")
+            if not isinstance(current_raw, dict):
+                current_raw = {}
+        except Exception:
+            current_raw = {}
+
+        incoming_raw = data.get("raw", {}) or {}
+        if not isinstance(incoming_raw, dict):
+            incoming_raw = {}
+
+        app_meta = current_raw.get("_app_meta", {})
+        merged_raw = dict(incoming_raw)
+        if isinstance(app_meta, dict) and app_meta:
+            merged_raw["_app_meta"] = app_meta
+
+        mt.raw_json = json.dumps(merged_raw, ensure_ascii=False)
+        mt.last_synced_at = utcnow()
+        mt.updated_at = utcnow()
+        session.add(mt)
+        session.commit()
+        set_flash(request, "Sincronização concluída.")
+    except Exception as e:
+        set_flash(request, f"Falha ao sincronizar: {e}")
+
+    return RedirectResponse(f"/reunioes/{mt.id}", status_code=303)
+
+
+@app.post("/reunioes/{meeting_id}/gerar_tarefas")
+@require_role({"admin", "equipe"})
+async def meetings_generate_tasks(
+        request: Request,
+        session: Session = Depends(get_session),
+        meeting_id: int = 0,
+        assignee_user_id: int = Form(0),
+        visible_to_client: int = Form(0),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
+    mt = session.get(Meeting, int(meeting_id))
+    if not mt or mt.company_id != ctx.company.id:
+        set_flash(request, "Reunião não encontrada.")
+        return RedirectResponse("/reunioes", status_code=303)
+
+    lines = [ln.strip() for ln in (mt.action_items_text or "").splitlines() if ln.strip()]
+    # remove heading markers/bullets
+    cleaned: list[str] = []
+    for ln in lines:
+        ln = re.sub(r"^(\-|\d+\.|☐|☑)\s*", "", ln).strip()
+        if ln:
+            cleaned.append(ln)
+
+    if not cleaned:
+        set_flash(request, "Sem Action Items para gerar tarefas.")
+        return RedirectResponse(f"/reunioes/{mt.id}", status_code=303)
+
+    assignee = int(assignee_user_id) if assignee_user_id else 0
+    vis = bool(int(visible_to_client)) if visible_to_client is not None else False
+
+    created = 0
+    for title in cleaned[:30]:
+        t = Task(
+            company_id=ctx.company.id,
+            client_id=mt.client_id,
+            created_by_user_id=ctx.user.id,
+            assignee_user_id=assignee if assignee > 0 else None,
+            title=title,
+            description=f"Gerado da reunião #{mt.id}",
+            status="nao_iniciada",
+            priority="media",
+            due_date="",
+            visible_to_client=vis,
+            client_action=vis,  # se visível, cliente pode marcar (ajuste se quiser)
+            updated_at=utcnow(),
+        )
+        session.add(t)
+        created += 1
+
+    session.commit()
+    set_flash(request, f"{created} tarefa(s) criada(s).")
+    return RedirectResponse("/tarefas", status_code=303)
+
+
+# ----------------------------
+# Educação (Sprint 1)
+# ----------------------------
+
+class EducationCourse(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+
+    company_id: int = Field(index=True, foreign_key="company.id")
+    created_by_user_id: int = Field(index=True, foreign_key="user.id")
+
+    title: str
+    category: str = ""  # ex: "Onboarding", "Caixa", "Precificação"
+    description: str = ""
+    is_active: bool = Field(default=True, index=True)
+
+    created_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime = Field(default_factory=utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("company_id", "title", name="uq_education_course_company_title"),
+    )
+
+
+class EducationCourseAccess(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+
+    company_id: int = Field(index=True, foreign_key="company.id")
+    course_id: int = Field(index=True, foreign_key="educationcourse.id")
+    client_id: int = Field(index=True, foreign_key="client.id")
+
+    created_at: datetime = Field(default_factory=utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("course_id", "client_id", name="uq_education_course_client"),
+    )
+
+
+class EducationModule(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+
+    course_id: int = Field(index=True, foreign_key="educationcourse.id")
+    title: str
+    order: int = Field(default=1, index=True)
+    description: str = ""
+
+    created_at: datetime = Field(default_factory=utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("course_id", "order", name="uq_education_module_order"),
+    )
+
+
+class EducationLesson(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+
+    module_id: int = Field(index=True, foreign_key="educationmodule.id")
+    title: str
+    order: int = Field(default=1, index=True)
+
+    video_url: str = ""
+    description: str = ""
+
+    created_at: datetime = Field(default_factory=utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("module_id", "order", name="uq_education_lesson_order"),
+    )
+
+
+class EducationLessonProgress(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+
+    company_id: int = Field(index=True, foreign_key="company.id")
+    client_id: int = Field(index=True, foreign_key="client.id")
+    lesson_id: int = Field(index=True, foreign_key="educationlesson.id")
+    user_id: int = Field(index=True, foreign_key="user.id")
+
+    completed: bool = Field(default=True, index=True)
+    completed_at: datetime = Field(default_factory=utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("lesson_id", "user_id", name="uq_education_lesson_user"),
+    )
+
+
+def _youtube_embed_url(url: str) -> str:
+    u = (url or "").strip()
+    if not u:
+        return ""
+    m = re.search(r"(?:youtube\.com/watch\?v=|youtu\.be/)([A-Za-z0-9_-]{6,})", u)
+    if not m:
+        return ""
+    vid = m.group(1)
+    return f"https://www.youtube-nocookie.com/embed/{vid}"
+
+
+def _education_course_can_access(ctx: TenantContext, session: Session, course: EducationCourse) -> bool:
+    if ctx.membership.role in {"admin", "equipe"}:
+        return True
+    if ctx.membership.role != "cliente":
+        return False
+    cid = ctx.membership.client_id or 0
+    if not cid:
+        return False
+    access = session.exec(
+        select(EducationCourseAccess).where(
+            EducationCourseAccess.company_id == ctx.company.id,
+            EducationCourseAccess.course_id == course.id,
+            EducationCourseAccess.client_id == cid,
+        )
+    ).first()
+    return bool(access)
+
+
+def _education_course_assigned_clients(session: Session, course: EducationCourse) -> list[Client]:
+    accesses = session.exec(
+        select(EducationCourseAccess).where(EducationCourseAccess.course_id == course.id)
+    ).all()
+    client_ids = [a.client_id for a in accesses]
+    if not client_ids:
+        return []
+    return session.exec(select(Client).where(Client.id.in_(client_ids))).all()
+
+
+def _education_course_progress_pct(session: Session, company_id: int, client_id: int, user_id: int,
+                                   course_id: int) -> int:
+    module_ids = session.exec(
+        select(EducationModule.id).where(EducationModule.course_id == course_id)
+    ).all()
+    if not module_ids:
+        return 0
+    lesson_ids = session.exec(
+        select(EducationLesson.id).where(EducationLesson.module_id.in_(module_ids))
+    ).all()
+    if not lesson_ids:
+        return 0
+    total = len(lesson_ids)
+    done = session.exec(
+        select(func.count(EducationLessonProgress.id)).where(
+            EducationLessonProgress.company_id == company_id,
+            EducationLessonProgress.client_id == client_id,
+            EducationLessonProgress.user_id == user_id,
+            EducationLessonProgress.lesson_id.in_(lesson_ids),
+        )
+    ).one()
+    done_n = int(done or 0)
+    return int(round((done_n / total) * 100))
+
+
+TEMPLATES.update({
+    "edu_courses.html": r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <div class="d-flex justify-content-between align-items-center">
+    <div>
+      <h4 class="mb-0">Educação</h4>
+      <div class="muted">Cursos, vídeos e materiais por cliente/necessidade.</div>
+    </div>
+    {% if role in ["admin","equipe"] %}
+      <a class="btn btn-primary" href="/educacao/cursos/novo">Novo curso</a>
+    {% endif %}
+  </div>
+
+  <hr class="my-3"/>
+
+  {% if role in ["admin","equipe"] %}
+    <form method="get" action="/educacao" class="row g-2 align-items-end mb-3">
+      <div class="col-md-6">
+        <label class="form-label">Filtro por cliente (opcional)</label>
+        <select class="form-select" name="client_id" onchange="this.form.submit()">
+          <option value="0" {% if filter_client_id==0 %}selected{% endif %}>Todos</option>
+          {% for c in clients %}
+            <option value="{{ c.id }}" {% if filter_client_id==c.id %}selected{% endif %}>{{ c.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-md-6">
+        {% if filter_client_id %}
+          <a class="btn btn-outline-secondary" href="/educacao">Limpar</a>
+        {% endif %}
+      </div>
+    </form>
+  {% endif %}
+
+  {% if courses %}
+    <div class="list-group">
+      {% for c in courses %}
+        <a class="list-group-item list-group-item-action" href="/educacao/cursos/{{ c.id }}">
+          <div class="d-flex justify-content-between">
+            <div class="fw-semibold">{{ c.title }}</div>
+            <span class="badge text-bg-light border">{{ c.category or "curso" }}</span>
+          </div>
+          <div class="muted small mt-1">
+            {% if c.assigned_count is not none %}Clientes: {{ c.assigned_count }} • {% endif %}
+            {% if c.progress_pct is not none %}Progresso: {{ c.progress_pct }}% • {% endif %}
+            {% if not c.is_active %}Inativo{% else %}Ativo{% endif %}
+          </div>
+        </a>
+      {% endfor %}
+    </div>
+  {% else %}
+    <div class="muted">Nenhum curso disponível.</div>
+  {% endif %}
+</div>
+{% endblock %}
+""",
+
+    "edu_course_new.html": r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <div class="d-flex justify-content-between align-items-center">
+    <div>
+      <h4 class="mb-0">Novo Curso</h4>
+      <div class="muted">Crie um curso e libere para clientes específicos.</div>
+    </div>
+    <a class="btn btn-outline-secondary" href="/educacao">Voltar</a>
+  </div>
+
+  <hr class="my-3"/>
+
+  <form method="post" action="/educacao/cursos/novo">
+    <div class="row g-3">
+      <div class="col-md-8">
+        <label class="form-label">Título</label>
+        <input class="form-control" name="title" required />
+      </div>
+      <div class="col-md-4">
+        <label class="form-label">Categoria</label>
+        <input class="form-control" name="category" placeholder="Onboarding, Caixa..." />
+      </div>
+      <div class="col-12">
+        <label class="form-label">Descrição</label>
+        <textarea class="form-control" name="description" rows="4"></textarea>
+      </div>
+      <div class="col-12">
+        <div class="form-check">
+          <input class="form-check-input" type="checkbox" name="is_active" value="1" checked id="active">
+          <label class="form-check-label" for="active">Curso ativo</label>
+        </div>
+      </div>
+    </div>
+
+    <hr class="my-4"/>
+    <h5>Liberar para clientes</h5>
+    <div class="muted mb-2">Marque os clientes que poderão acessar este curso.</div>
+    <div class="row g-2">
+      {% for c in clients %}
+        <div class="col-md-6">
+          <div class="form-check">
+            <input class="form-check-input" type="checkbox" name="client_ids" value="{{ c.id }}" id="c{{ c.id }}">
+            <label class="form-check-label" for="c{{ c.id }}">{{ c.name }}</label>
+          </div>
+        </div>
+      {% endfor %}
+    </div>
+
+    <div class="mt-4 d-flex gap-2">
+      <button class="btn btn-primary" type="submit">Criar</button>
+      <a class="btn btn-outline-secondary" href="/educacao">Cancelar</a>
+    </div>
+  </form>
+
+  <hr class="my-4"/>
+  <div class="alert alert-info mb-0">
+    <b>Vídeos do YouTube:</b> para tocar dentro do app, o vídeo precisa estar <b>Público</b> ou <b>Não listado</b>.
+    Vídeos <b>Privados</b> normalmente não embutem; nesse caso, o app abrirá o link em nova aba.
+  </div>
+</div>
+{% endblock %}
+""",
+
+    "edu_course_detail.html": r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <div class="d-flex justify-content-between align-items-start">
+    <div>
+      <h4 class="mb-1">{{ course.title }}</h4>
+      <div class="muted">
+        Categoria: <b>{{ course.category or "—" }}</b> •
+        Status: <b>{% if course.is_active %}ativo{% else %}inativo{% endif %}</b>
+        {% if progress_pct is not none %} • Progresso: <b>{{ progress_pct }}%</b>{% endif %}
+      </div>
+    </div>
+    <div class="d-flex gap-2">
+      <a class="btn btn-outline-secondary" href="/educacao">Voltar</a>
+      {% if role in ["admin","equipe"] %}
+        <a class="btn btn-outline-primary" href="/educacao/cursos/{{ course.id }}/editar">Editar</a>
+      {% endif %}
+    </div>
+  </div>
+
+  {% if course.description %}
+    <hr class="my-3"/>
+    <pre>{{ course.description }}</pre>
+  {% endif %}
+
+  {% if role in ["admin","equipe"] %}
+    <hr class="my-3"/>
+    <div class="muted mb-2"><b>Clientes liberados:</b> {{ assigned_names or "—" }}</div>
+
+    <form method="post" action="/educacao/cursos/{{ course.id }}/modulos" class="card p-3">
+      <div class="fw-semibold mb-2">Adicionar módulo</div>
+      <div class="row g-2">
+        <div class="col-md-8">
+          <input class="form-control" name="title" required placeholder="Ex: Módulo 1 - Caixa" />
+        </div>
+        <div class="col-md-4">
+          <button class="btn btn-primary w-100" type="submit">Adicionar</button>
+        </div>
+        <div class="col-12">
+          <input class="form-control" name="description" placeholder="Descrição (opcional)" />
+        </div>
+      </div>
+    </form>
+  {% endif %}
+
+  <hr class="my-3"/>
+  <h5 class="mb-2">Módulos</h5>
+
+  {% if modules %}
+    <div class="list-group">
+      {% for m in modules %}
+        <a class="list-group-item list-group-item-action" href="/educacao/modulos/{{ m.id }}">
+          <div class="fw-semibold">{{ m.order }}. {{ m.title }}</div>
+          <div class="muted small">{{ m.description }}</div>
+        </a>
+      {% endfor %}
+    </div>
+  {% else %}
+    <div class="muted">Sem módulos ainda.</div>
+  {% endif %}
+
+  {% if role in ["admin","equipe"] %}
+    <hr class="my-4"/>
+    <form method="post" action="/educacao/cursos/{{ course.id }}/excluir"
+          onsubmit="return confirm('Excluir curso? Remova módulos/aulas antes.');">
+      <button class="btn btn-outline-danger" type="submit">Excluir curso</button>
+    </form>
+  {% endif %}
+</div>
+{% endblock %}
+""",
+
+    "edu_course_edit.html": r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <div class="d-flex justify-content-between align-items-start">
+    <div>
+      <h4 class="mb-1">Editar Curso</h4>
+      <div class="muted">{{ course.title }}</div>
+    </div>
+    <a class="btn btn-outline-secondary" href="/educacao/cursos/{{ course.id }}">Voltar</a>
+  </div>
+
+  <hr class="my-3"/>
+
+  <form method="post" action="/educacao/cursos/{{ course.id }}/editar">
+    <div class="row g-3">
+      <div class="col-md-8">
+        <label class="form-label">Título</label>
+        <input class="form-control" name="title" value="{{ course.title }}" required />
+      </div>
+      <div class="col-md-4">
+        <label class="form-label">Categoria</label>
+        <input class="form-control" name="category" value="{{ course.category }}" />
+      </div>
+      <div class="col-12">
+        <label class="form-label">Descrição</label>
+        <textarea class="form-control" name="description" rows="4">{{ course.description }}</textarea>
+      </div>
+      <div class="col-12">
+        <div class="form-check">
+          <input class="form-check-input" type="checkbox" name="is_active" value="1" id="active" {% if course.is_active %}checked{% endif %}>
+          <label class="form-check-label" for="active">Curso ativo</label>
+        </div>
+      </div>
+    </div>
+
+    <hr class="my-4"/>
+    <h5>Clientes liberados</h5>
+    <div class="row g-2">
+      {% for c in clients %}
+        <div class="col-md-6">
+          <div class="form-check">
+            <input class="form-check-input" type="checkbox" name="client_ids" value="{{ c.id }}" id="c{{ c.id }}"
+                   {% if c.id in assigned_ids %}checked{% endif %}>
+            <label class="form-check-label" for="c{{ c.id }}">{{ c.name }}</label>
+          </div>
+        </div>
+      {% endfor %}
+    </div>
+
+    <div class="mt-4 d-flex gap-2">
+      <button class="btn btn-primary" type="submit">Salvar</button>
+      <a class="btn btn-outline-secondary" href="/educacao/cursos/{{ course.id }}">Cancelar</a>
+    </div>
+  </form>
+</div>
+{% endblock %}
+""",
+
+    "edu_module_detail.html": r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <div class="d-flex justify-content-between align-items-start">
+    <div>
+      <h4 class="mb-1">{{ module.title }}</h4>
+      <div class="muted">Curso: <a href="/educacao/cursos/{{ course.id }}">{{ course.title }}</a></div>
+    </div>
+    <a class="btn btn-outline-secondary" href="/educacao/cursos/{{ course.id }}">Voltar</a>
+  </div>
+
+  {% if module.description %}
+    <hr class="my-3"/>
+    <pre>{{ module.description }}</pre>
+  {% endif %}
+
+  {% if role in ["admin","equipe"] %}
+    <hr class="my-3"/>
+    <form method="post" action="/educacao/modulos/{{ module.id }}/aulas" class="card p-3">
+      <div class="fw-semibold mb-2">Adicionar aula</div>
+      <div class="row g-2">
+        <div class="col-md-6">
+          <input class="form-control" name="title" required placeholder="Título da aula" />
+        </div>
+        <div class="col-md-6">
+          <input class="form-control" name="video_url" placeholder="URL do vídeo (YouTube / outro)" />
+        </div>
+        <div class="col-12">
+          <textarea class="form-control" name="description" rows="3" placeholder="Descrição (opcional)"></textarea>
+        </div>
+        <div class="col-12">
+          <button class="btn btn-primary" type="submit">Adicionar</button>
+        </div>
+      </div>
+    </form>
+  {% endif %}
+
+  <hr class="my-3"/>
+  <h5 class="mb-2">Aulas</h5>
+  {% if lessons %}
+    <div class="list-group">
+      {% for l in lessons %}
+        <a class="list-group-item list-group-item-action" href="/educacao/aulas/{{ l.id }}">
+          <div class="fw-semibold">{{ l.order }}. {{ l.title }}</div>
+          <div class="muted small">{% if l.video_url %}Vídeo configurado{% else %}Sem vídeo{% endif %}</div>
+        </a>
+      {% endfor %}
+    </div>
+  {% else %}
+    <div class="muted">Sem aulas ainda.</div>
+  {% endif %}
+
+  {% if role in ["admin","equipe"] %}
+    <hr class="my-4"/>
+    <form method="post" action="/educacao/modulos/{{ module.id }}/editar" class="card p-3 mb-3">
+      <div class="fw-semibold mb-2">Editar módulo</div>
+      <div class="row g-2">
+        <div class="col-md-8">
+          <input class="form-control" name="title" value="{{ module.title }}" required />
+        </div>
+        <div class="col-md-4">
+          <button class="btn btn-primary w-100" type="submit">Salvar</button>
+        </div>
+        <div class="col-12">
+          <input class="form-control" name="description" value="{{ module.description }}" />
+        </div>
+      </div>
+    </form>
+
+    <form method="post" action="/educacao/modulos/{{ module.id }}/excluir"
+          onsubmit="return confirm('Excluir módulo? Remova aulas antes.');">
+      <button class="btn btn-outline-danger" type="submit">Excluir módulo</button>
+    </form>
+  {% endif %}
+</div>
+{% endblock %}
+""",
+
+    "edu_lesson_detail.html": r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <div class="d-flex justify-content-between align-items-start">
+    <div>
+      <h4 class="mb-1">{{ lesson.title }}</h4>
+      <div class="muted">
+        Curso: <a href="/educacao/cursos/{{ course.id }}">{{ course.title }}</a>
+        • Módulo: <a href="/educacao/modulos/{{ module.id }}">{{ module.title }}</a>
+        {% if progress_done %} • <span class="badge text-bg-light border">Concluída</span>{% endif %}
+      </div>
+    </div>
+    <a class="btn btn-outline-secondary" href="/educacao/modulos/{{ module.id }}">Voltar</a>
+  </div>
+
+  <hr class="my-3"/>
+
+  {% if embed_url %}
+    <div class="ratio ratio-16x9 mb-3">
+      <iframe src="{{ embed_url }}" title="Video" loading="lazy" referrerpolicy="origin-when-cross-origin" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowfullscreen></iframe>
+    </div>
+    <a class="btn btn-outline-primary btn-sm" href="{{ lesson.video_url }}" target="_blank" rel="noopener">Abrir no YouTube</a>
+  {% elif lesson.video_url %}
+    <div class="alert alert-warning">
+      Este vídeo não pôde ser embutido. Se estiver <b>Privado</b>, o YouTube não permite player embutido.
+      Use o botão abaixo para abrir.
+    </div>
+    <a class="btn btn-outline-primary" href="{{ lesson.video_url }}" target="_blank" rel="noopener">Abrir vídeo</a>
+  {% else %}
+    <div class="muted">Sem vídeo configurado.</div>
+  {% endif %}
+
+  {% if lesson.description %}
+    <hr class="my-3"/>
+    <pre>{{ lesson.description }}</pre>
+  {% endif %}
+
+  <hr class="my-3"/>
+  <h5>Materiais</h5>
+  {% if attachments %}
+    <ul class="mb-2">
+      {% for a in attachments %}
+        <li class="d-flex justify-content-between align-items-center">
+          <a href="/download/{{ a.id }}">{{ a.original_filename }}</a>
+          {% if role in ["admin","equipe"] %}
+            <form method="post" action="/attachments/{{ a.id }}/delete" class="ms-2">
+              <input type="hidden" name="next" value="/educacao/aulas/{{ lesson.id }}">
+              <button class="btn btn-outline-danger btn-sm" type="submit">Excluir</button>
+            </form>
+          {% endif %}
+        </li>
+      {% endfor %}
+    </ul>
+  {% else %}
+    <div class="muted mb-2">Sem materiais.</div>
+  {% endif %}
+
+  {% if role in ["admin","equipe"] %}
+    <form method="post" action="/educacao/aulas/{{ lesson.id }}/anexar" enctype="multipart/form-data" class="mt-2">
+      <div class="row g-2">
+        <div class="col-md-8">
+          <input class="form-control" type="file" name="file" required />
+        </div>
+        <div class="col-md-4">
+          <button class="btn btn-primary w-100" type="submit">Anexar</button>
+        </div>
+      </div>
+    </form>
+  {% endif %}
+
+  <hr class="my-3"/>
+  <form method="post" action="/educacao/aulas/{{ lesson.id }}/concluir">
+    <button class="btn btn-primary" type="submit">{% if progress_done %}Marcar como não concluída{% else %}Marcar como concluída{% endif %}</button>
+  </form>
+
+  {% if role in ["admin","equipe"] %}
+    <hr class="my-4"/>
+    <form method="post" action="/educacao/aulas/{{ lesson.id }}/editar" class="card p-3 mb-3">
+      <div class="fw-semibold mb-2">Editar aula</div>
+      <div class="row g-2">
+        <div class="col-md-6">
+          <input class="form-control" name="title" value="{{ lesson.title }}" required />
+        </div>
+        <div class="col-md-6">
+          <input class="form-control" name="video_url" value="{{ lesson.video_url }}" />
+        </div>
+        <div class="col-12">
+          <textarea class="form-control" name="description" rows="3">{{ lesson.description }}</textarea>
+        </div>
+        <div class="col-12">
+          <button class="btn btn-primary" type="submit">Salvar</button>
+        </div>
+      </div>
+    </form>
+
+    <form method="post" action="/educacao/aulas/{{ lesson.id }}/excluir"
+          onsubmit="return confirm('Excluir aula? Remova materiais antes.');">
+      <button class="btn btn-outline-danger" type="submit">Excluir aula</button>
+    </form>
+  {% endif %}
+</div>
+{% endblock %}
+""",
+})
+
+
+@app.get("/educacao", response_class=HTMLResponse)
+@require_login
+async def edu_courses(request: Request, session: Session = Depends(get_session), client_id: int = 0) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+
+    active_client_id = get_active_client_id(request, session, ctx)
+    current_client = get_client_or_none(session, ctx.company.id, active_client_id)
+
+    courses_q = select(EducationCourse).where(EducationCourse.company_id == ctx.company.id).order_by(
+        EducationCourse.updated_at.desc())
+
+    clients: list[Client] = []
+    filter_client_id = 0
+    if ctx.membership.role == "cliente":
+        cid = ctx.membership.client_id or 0
+        access_course_ids = session.exec(
+            select(EducationCourseAccess.course_id).where(
+                EducationCourseAccess.company_id == ctx.company.id,
+                EducationCourseAccess.client_id == cid,
+            )
+        ).all()
+        if access_course_ids:
+            courses_q = courses_q.where(EducationCourse.id.in_(access_course_ids))
+        else:
+            courses_q = courses_q.where(EducationCourse.id == -1)
+    else:
+        clients = session.exec(
+            select(Client).where(Client.company_id == ctx.company.id).order_by(Client.created_at)).all()
+        if client_id and client_id > 0:
+            fc = get_client_or_none(session, ctx.company.id, int(client_id))
+            if fc:
+                filter_client_id = fc.id
+                access_course_ids = session.exec(
+                    select(EducationCourseAccess.course_id).where(
+                        EducationCourseAccess.company_id == ctx.company.id,
+                        EducationCourseAccess.client_id == fc.id,
+                    )
+                ).all()
+                if access_course_ids:
+                    courses_q = courses_q.where(EducationCourse.id.in_(access_course_ids))
+                else:
+                    courses_q = courses_q.where(EducationCourse.id == -1)
+
+    courses = session.exec(courses_q).all()
+
+    out = []
+    for c in courses:
+        assigned_count = None
+        progress_pct = None
+        if ctx.membership.role in {"admin", "equipe"}:
+            assigned_count = int(session.exec(
+                select(func.count(EducationCourseAccess.id)).where(EducationCourseAccess.course_id == c.id)).one() or 0)
+        if ctx.membership.role == "cliente":
+            progress_pct = _education_course_progress_pct(session, ctx.company.id, ctx.membership.client_id or 0,
+                                                          ctx.user.id, c.id)
+        out.append({"id": c.id, "title": c.title, "category": c.category, "is_active": c.is_active,
+                    "assigned_count": assigned_count, "progress_pct": progress_pct})
+
+    return render(
+        "edu_courses.html",
+        request=request,
+        context={
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "role": ctx.membership.role,
+            "current_client": current_client,
+            "courses": out,
+            "clients": clients,
+            "filter_client_id": filter_client_id,
+        },
+    )
+
+
+@app.get("/educacao/cursos/novo", response_class=HTMLResponse)
+@require_role({"admin", "equipe"})
+async def edu_course_new_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
+    clients = session.exec(select(Client).where(Client.company_id == ctx.company.id).order_by(Client.created_at)).all()
+    current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
+    return render("edu_course_new.html", request=request,
+                  context={"current_user": ctx.user, "current_company": ctx.company, "role": ctx.membership.role,
+                           "current_client": current_client, "clients": clients})
+
+
+@app.post("/educacao/cursos/novo")
+@require_role({"admin", "equipe"})
+async def edu_course_new_action(
+        request: Request,
+        session: Session = Depends(get_session),
+        title: str = Form(...),
+        category: str = Form(""),
+        description: str = Form(""),
+        is_active: str = Form(""),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
+    form = await request.form()
+    client_ids = [int(x) for x in form.getlist("client_ids") if str(x).isdigit()]
+
+    course = EducationCourse(company_id=ctx.company.id, created_by_user_id=ctx.user.id, title=title.strip(),
+                             category=category.strip(), description=description.strip(), is_active=(is_active == "1"),
+                             updated_at=utcnow())
+    session.add(course)
+    session.commit()
+    session.refresh(course)
+
+    for cid in client_ids:
+        if get_client_or_none(session, ctx.company.id, cid):
+            session.add(EducationCourseAccess(company_id=ctx.company.id, course_id=course.id, client_id=cid))
+    session.commit()
+
+    set_flash(request, "Curso criado.")
+    return RedirectResponse(f"/educacao/cursos/{course.id}", status_code=303)
+
+
+@app.get("/educacao/cursos/{course_id}", response_class=HTMLResponse)
+@require_login
+async def edu_course_detail(request: Request, session: Session = Depends(get_session),
+                            course_id: int = 0) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+
+    course = session.get(EducationCourse, int(course_id))
+    if not course or course.company_id != ctx.company.id:
+        return render("error.html", request=request, context={"message": "Curso não encontrado."}, status_code=404)
+
+    if not _education_course_can_access(ctx, session, course):
+        return render("error.html", request=request, context={"message": "Sem permissão."}, status_code=403)
+
+    modules = session.exec(select(EducationModule).where(EducationModule.course_id == course.id).order_by(
+        EducationModule.order.asc())).all()
+    assigned = _education_course_assigned_clients(session, course)
+    assigned_names = ", ".join(sorted({c.name for c in assigned})) if assigned else ""
+    progress_pct = None
+    if ctx.membership.role == "cliente":
+        progress_pct = _education_course_progress_pct(session, ctx.company.id, ctx.membership.client_id or 0,
+                                                      ctx.user.id, course.id)
+
+    current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
+
+    return render("edu_course_detail.html", request=request,
+                  context={"current_user": ctx.user, "current_company": ctx.company, "role": ctx.membership.role,
+                           "current_client": current_client, "course": course, "modules": modules,
+                           "assigned_names": assigned_names, "progress_pct": progress_pct})
+
+
+@app.post("/educacao/cursos/{course_id}/modulos")
+@require_role({"admin", "equipe"})
+async def edu_course_add_module(request: Request, session: Session = Depends(get_session), course_id: int = 0,
+                                title: str = Form(...), description: str = Form("")) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
+    course = session.get(EducationCourse, int(course_id))
+    if not course or course.company_id != ctx.company.id:
+        set_flash(request, "Curso inválido.")
+        return RedirectResponse("/educacao", status_code=303)
+
+    max_order = session.exec(
+        select(func.max(EducationModule.order)).where(EducationModule.course_id == course.id)).one()
+    order = int(max_order or 0) + 1
+    mod = EducationModule(course_id=course.id, title=title.strip(), order=order, description=description.strip())
+    session.add(mod)
+    session.commit()
+
+    set_flash(request, "Módulo adicionado.")
+    return RedirectResponse(f"/educacao/cursos/{course.id}", status_code=303)
+
+
+@app.get("/educacao/cursos/{course_id}/editar", response_class=HTMLResponse)
+@require_role({"admin", "equipe"})
+async def edu_course_edit_page(request: Request, session: Session = Depends(get_session),
+                               course_id: int = 0) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
+    course = session.get(EducationCourse, int(course_id))
+    if not course or course.company_id != ctx.company.id:
+        return render("error.html", request=request, context={"message": "Curso não encontrado."}, status_code=404)
+
+    clients = session.exec(select(Client).where(Client.company_id == ctx.company.id).order_by(Client.created_at)).all()
+    assigned = session.exec(select(EducationCourseAccess).where(EducationCourseAccess.course_id == course.id)).all()
+    assigned_ids = {a.client_id for a in assigned}
+    current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
+
+    return render("edu_course_edit.html", request=request,
+                  context={"current_user": ctx.user, "current_company": ctx.company, "role": ctx.membership.role,
+                           "current_client": current_client, "course": course, "clients": clients,
+                           "assigned_ids": assigned_ids})
+
+
+@app.post("/educacao/cursos/{course_id}/editar")
+@require_role({"admin", "equipe"})
+async def edu_course_edit_action(request: Request, session: Session = Depends(get_session), course_id: int = 0,
+                                 title: str = Form(...), category: str = Form(""), description: str = Form(""),
+                                 is_active: str = Form("")) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
+    course = session.get(EducationCourse, int(course_id))
+    if not course or course.company_id != ctx.company.id:
+        set_flash(request, "Curso não encontrado.")
+        return RedirectResponse("/educacao", status_code=303)
+
+    form = await request.form()
+    client_ids = {int(x) for x in form.getlist("client_ids") if str(x).isdigit()}
+
+    course.title = title.strip()
+    course.category = category.strip()
+    course.description = description.strip()
+    course.is_active = (is_active == "1")
+    course.updated_at = utcnow()
+    session.add(course)
+
+    existing = session.exec(select(EducationCourseAccess).where(EducationCourseAccess.course_id == course.id)).all()
+    existing_ids = {a.client_id for a in existing}
+    for a in existing:
+        if a.client_id not in client_ids:
+            session.delete(a)
+    for cid in client_ids - existing_ids:
+        if get_client_or_none(session, ctx.company.id, cid):
+            session.add(EducationCourseAccess(company_id=ctx.company.id, course_id=course.id, client_id=cid))
+
+    session.commit()
+    set_flash(request, "Curso atualizado.")
+    return RedirectResponse(f"/educacao/cursos/{course.id}", status_code=303)
+
+
+@app.post("/educacao/cursos/{course_id}/excluir")
+@require_role({"admin", "equipe"})
+async def edu_course_delete(request: Request, session: Session = Depends(get_session), course_id: int = 0) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
+    course = session.get(EducationCourse, int(course_id))
+    if not course or course.company_id != ctx.company.id:
+        set_flash(request, "Curso não encontrado.")
+        return RedirectResponse("/educacao", status_code=303)
+
+    mods = session.exec(select(EducationModule).where(EducationModule.course_id == course.id)).all()
+    if mods:
+        set_flash(request, "Remova módulos/aulas antes de excluir o curso.")
+        return RedirectResponse(f"/educacao/cursos/{course.id}", status_code=303)
+
+    accesses = session.exec(select(EducationCourseAccess).where(EducationCourseAccess.course_id == course.id)).all()
+    for a in accesses:
+        session.delete(a)
+
+    session.delete(course)
+    session.commit()
+    set_flash(request, "Curso excluído.")
+    return RedirectResponse("/educacao", status_code=303)
+
+
+@app.get("/educacao/modulos/{module_id}", response_class=HTMLResponse)
+@require_login
+async def edu_module_detail(request: Request, session: Session = Depends(get_session),
+                            module_id: int = 0) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+
+    module = session.get(EducationModule, int(module_id))
+    if not module:
+        return render("error.html", request=request, context={"message": "Módulo não encontrado."}, status_code=404)
+
+    course = session.exec(select(EducationCourse).where(EducationCourse.id == module.course_id)).first()
+    if not course or course.company_id != ctx.company.id:
+        return render("error.html", request=request, context={"message": "Curso inválido."}, status_code=403)
+
+    if not _education_course_can_access(ctx, session, course):
+        return render("error.html", request=request, context={"message": "Sem permissão."}, status_code=403)
+
+    lessons = session.exec(select(EducationLesson).where(EducationLesson.module_id == module.id).order_by(
+        EducationLesson.order.asc())).all()
+    current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
+
+    return render("edu_module_detail.html", request=request,
+                  context={"current_user": ctx.user, "current_company": ctx.company, "role": ctx.membership.role,
+                           "current_client": current_client, "module": module, "course": course, "lessons": lessons})
+
+
+@app.post("/educacao/modulos/{module_id}/aulas")
+@require_role({"admin", "equipe"})
+async def edu_module_add_lesson(request: Request, session: Session = Depends(get_session), module_id: int = 0,
+                                title: str = Form(...), video_url: str = Form(""),
+                                description: str = Form("")) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
+    module = session.get(EducationModule, int(module_id))
+    if not module:
+        set_flash(request, "Módulo inválido.")
+        return RedirectResponse("/educacao", status_code=303)
+
+    course = session.exec(select(EducationCourse).where(EducationCourse.id == module.course_id)).first()
+    if not course or course.company_id != ctx.company.id:
+        set_flash(request, "Curso inválido.")
+        return RedirectResponse("/educacao", status_code=303)
+
+    max_order = session.exec(
+        select(func.max(EducationLesson.order)).where(EducationLesson.module_id == module.id)).one()
+    order = int(max_order or 0) + 1
+
+    lesson = EducationLesson(module_id=module.id, title=title.strip(), order=order, video_url=video_url.strip(),
+                             description=description.strip())
+    session.add(lesson)
+    session.commit()
+
+    set_flash(request, "Aula adicionada.")
+    return RedirectResponse(f"/educacao/modulos/{module.id}", status_code=303)
+
+
+@app.post("/educacao/modulos/{module_id}/editar")
+@require_role({"admin", "equipe"})
+async def edu_module_edit(request: Request, session: Session = Depends(get_session), module_id: int = 0,
+                          title: str = Form(...), description: str = Form("")) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
+    module = session.get(EducationModule, int(module_id))
+    if not module:
+        set_flash(request, "Módulo não encontrado.")
+        return RedirectResponse("/educacao", status_code=303)
+
+    module.title = title.strip()
+    module.description = description.strip()
+    session.add(module)
+    session.commit()
+
+    set_flash(request, "Módulo atualizado.")
+    return RedirectResponse(f"/educacao/modulos/{module.id}", status_code=303)
+
+
+@app.post("/educacao/modulos/{module_id}/excluir")
+@require_role({"admin", "equipe"})
+async def edu_module_delete(request: Request, session: Session = Depends(get_session), module_id: int = 0) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
+    module = session.get(EducationModule, int(module_id))
+    if not module:
+        set_flash(request, "Módulo não encontrado.")
+        return RedirectResponse("/educacao", status_code=303)
+
+    lessons = session.exec(select(EducationLesson).where(EducationLesson.module_id == module.id)).all()
+    if lessons:
+        set_flash(request, "Remova aulas antes de excluir o módulo.")
+        return RedirectResponse(f"/educacao/modulos/{module.id}", status_code=303)
+
+    course = session.exec(select(EducationCourse).where(EducationCourse.id == module.course_id)).first()
+    session.delete(module)
+    session.commit()
+
+    set_flash(request, "Módulo excluído.")
+    return RedirectResponse(f"/educacao/cursos/{course.id if course else ''}", status_code=303)
+
+
+@app.get("/educacao/aulas/{lesson_id}", response_class=HTMLResponse)
+@require_login
+async def edu_lesson_detail(request: Request, session: Session = Depends(get_session),
+                            lesson_id: int = 0) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+
+    lesson = session.get(EducationLesson, int(lesson_id))
+    if not lesson:
+        return render("error.html", request=request, context={"message": "Aula não encontrada."}, status_code=404)
+
+    module = session.get(EducationModule, lesson.module_id)
+    course = session.exec(
+        select(EducationCourse).where(EducationCourse.id == module.course_id)).first() if module else None
+    if not module or not course or course.company_id != ctx.company.id:
+        return render("error.html", request=request, context={"message": "Curso inválido."}, status_code=403)
+
+    if not _education_course_can_access(ctx, session, course):
+        return render("error.html", request=request, context={"message": "Sem permissão."}, status_code=403)
+
+    embed_url = _youtube_embed_url(lesson.video_url)
+
+    attachments_client_id = 0
+    if ctx.membership.role == "cliente":
+        attachments_client_id = ctx.membership.client_id or 0
+    else:
+        attachments_client_id = get_active_client_id(request, session, ctx) or 0
+
+    att_where = [Attachment.company_id == ctx.company.id, Attachment.education_lesson_id == lesson.id]
+    if attachments_client_id:
+        att_where.append(Attachment.client_id == attachments_client_id)
+
+    attachments = session.exec(
+        select(Attachment).where(*att_where).order_by(Attachment.created_at.desc())
+    ).all()
+
+    progress = session.exec(
+        select(EducationLessonProgress).where(
+            EducationLessonProgress.lesson_id == lesson.id,
+            EducationLessonProgress.user_id == ctx.user.id,
+        )
+    ).first()
+    progress_done = bool(progress)
+
+    current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
+
+    return render("edu_lesson_detail.html", request=request,
+                  context={"current_user": ctx.user, "current_company": ctx.company, "role": ctx.membership.role,
+                           "current_client": current_client, "course": course, "module": module, "lesson": lesson,
+                           "embed_url": embed_url, "attachments": attachments, "progress_done": progress_done})
+
+
+@app.post("/educacao/aulas/{lesson_id}/concluir")
+@require_login
+async def edu_lesson_toggle_complete(request: Request, session: Session = Depends(get_session),
+                                     lesson_id: int = 0) -> Response:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+
+    lesson = session.get(EducationLesson, int(lesson_id))
+    if not lesson:
+        set_flash(request, "Aula não encontrada.")
+        return RedirectResponse("/educacao", status_code=303)
+
+    module = session.get(EducationModule, lesson.module_id)
+    course = session.exec(
+        select(EducationCourse).where(EducationCourse.id == module.course_id)).first() if module else None
+    if not module or not course or course.company_id != ctx.company.id:
+        set_flash(request, "Curso inválido.")
+        return RedirectResponse("/educacao", status_code=303)
+
+    if not _education_course_can_access(ctx, session, course):
+        set_flash(request, "Sem permissão.")
+        return RedirectResponse("/educacao", status_code=303)
+
+    client_id = (ctx.membership.client_id or 0) if ctx.membership.role == "cliente" else (
+            get_active_client_id(request, session, ctx) or 0)
+    if not client_id:
+        set_flash(request, "Selecione um cliente.")
+        return RedirectResponse(f"/educacao/aulas/{lesson.id}", status_code=303)
+
+    existing = session.exec(select(EducationLessonProgress).where(EducationLessonProgress.lesson_id == lesson.id,
+                                                                  EducationLessonProgress.user_id == ctx.user.id)).first()
+    if existing:
+        session.delete(existing)
+        session.commit()
+        set_flash(request, "Marcada como não concluída.")
+    else:
+        session.add(EducationLessonProgress(company_id=ctx.company.id, client_id=client_id, lesson_id=lesson.id,
+                                            user_id=ctx.user.id, completed=True, completed_at=utcnow()))
+        session.commit()
+        set_flash(request, "Aula concluída.")
+
+    return RedirectResponse(f"/educacao/aulas/{lesson.id}", status_code=303)
+
+
+@app.post("/educacao/aulas/{lesson_id}/anexar")
+@require_role({"admin", "equipe"})
+async def edu_lesson_attach(request: Request, session: Session = Depends(get_session), lesson_id: int = 0,
+                            file: UploadFile = File(...)) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
+    lesson = session.get(EducationLesson, int(lesson_id))
+    if not lesson:
+        set_flash(request, "Aula não encontrada.")
+        return RedirectResponse("/educacao", status_code=303)
+
+    try:
+        stored, mime, size = await save_upload(file)
+    except ValueError:
+        set_flash(request, "Arquivo muito grande.")
+        return RedirectResponse(f"/educacao/aulas/{lesson.id}", status_code=303)
+
+    active_client_id = get_active_client_id(request, session, ctx) or 0
+    if not active_client_id:
+        # choose first assigned client if any
+        module = session.get(EducationModule, lesson.module_id)
+        course = session.exec(
+            select(EducationCourse).where(EducationCourse.id == module.course_id)).first() if module else None
+        if course:
+            assigned = _education_course_assigned_clients(session, course)
+            active_client_id = assigned[0].id if assigned else 0
+
+    if not active_client_id:
+        set_flash(request, "Selecione um cliente para anexar material.")
+        return RedirectResponse(f"/educacao/aulas/{lesson.id}", status_code=303)
+
+    session.add(Attachment(company_id=ctx.company.id, client_id=active_client_id, uploaded_by_user_id=ctx.user.id,
+                           education_lesson_id=lesson.id, original_filename=file.filename or "arquivo",
+                           stored_filename=stored, mime_type=mime, size_bytes=size))
+    session.commit()
+
+    set_flash(request, "Material anexado.")
+    return RedirectResponse(f"/educacao/aulas/{lesson.id}", status_code=303)
+
+
+@app.post("/educacao/aulas/{lesson_id}/editar")
+@require_role({"admin", "equipe"})
+async def edu_lesson_edit(request: Request, session: Session = Depends(get_session), lesson_id: int = 0,
+                          title: str = Form(...), video_url: str = Form(""), description: str = Form("")) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
+    lesson = session.get(EducationLesson, int(lesson_id))
+    if not lesson:
+        set_flash(request, "Aula não encontrada.")
+        return RedirectResponse("/educacao", status_code=303)
+
+    lesson.title = title.strip()
+    lesson.video_url = video_url.strip()
+    lesson.description = description.strip()
+    session.add(lesson)
+    session.commit()
+
+    set_flash(request, "Aula atualizada.")
+    return RedirectResponse(f"/educacao/aulas/{lesson.id}", status_code=303)
+
+
+@app.post("/educacao/aulas/{lesson_id}/excluir")
+@require_role({"admin", "equipe"})
+async def edu_lesson_delete(request: Request, session: Session = Depends(get_session), lesson_id: int = 0) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
+    lesson = session.get(EducationLesson, int(lesson_id))
+    if not lesson:
+        set_flash(request, "Aula não encontrada.")
+        return RedirectResponse("/educacao", status_code=303)
+
+    atts = session.exec(select(Attachment).where(Attachment.education_lesson_id == lesson.id)).all()
+    if atts:
+        set_flash(request, "Remova materiais antes de excluir a aula.")
+        return RedirectResponse(f"/educacao/aulas/{lesson.id}", status_code=303)
+
+    module = session.get(EducationModule, lesson.module_id)
+    session.delete(lesson)
+    session.commit()
+
+    set_flash(request, "Aula excluída.")
+    return RedirectResponse(f"/educacao/modulos/{module.id if module else ''}", status_code=303)
+
+
+# ----------------------------
+# Crédito (SCR Direct Data)
+# ----------------------------
+
+
+def _digits_only(value: str) -> str:
+    return re.sub(r"\D+", "", value or "").strip()
+
+
+def _parse_brl_amount(value: Any) -> float:
+    """
+    Converte strings de valor (ex.: "1.234,56", "1234.56", "R$ 1.234", "1.234.567") para float.
+
+    Regras:
+      - Se tiver '.' e ',' -> '.' é milhar, ',' é decimal.
+      - Se tiver só ',' -> ',' é decimal, '.' (se existir) é milhar.
+      - Se tiver só '.' e MAIS DE UM '.' -> assume milhar (remove todos os '.').
+      - Caso contrário tenta float direto após limpar caracteres.
+    """
+    if value is None:
+        return 0.0
+    if isinstance(value, (int, float)):
+        try:
+            return float(value)
+        except Exception:
+            return 0.0
+
+    s = str(value).strip()
+    if not s:
+        return 0.0
+
+    s = s.replace("R$", "").replace(" ", "")
+    # Se tiver ambos '.' e ',', assume '.' milhar e ',' decimal
+    if "," in s and "." in s:
+        s = s.replace(".", "").replace(",", ".")
+    else:
+        # Se só tiver ',', assume decimal
+        if "," in s:
+            s = s.replace(".", "").replace(",", ".")
+        else:
+            # Só '.' (ou nenhum): se houver mais de um '.', assume milhar e remove todos
+            if s.count(".") > 1:
+                s = s.replace(".", "")
+
+    # Remove qualquer coisa que não seja número/ponto/sinal
+    s = re.sub(r"[^0-9.\-]+", "", s)
+    if not s or s == "-" or s == ".":
+        return 0.0
+
+    try:
+        return float(s)
+    except Exception:
+        # Último fallback: remove todos os pontos e tenta novamente
+        try:
+            return float(s.replace(".", ""))
+        except Exception:
+            return 0.0
+
+
+def _calc_potential(report: CreditReport) -> tuple[float, str]:
+    score = 0.0
+
+    total = report.carteira_total_brl
+    vencido = report.carteira_vencido_brl
+    preju = report.carteira_prejuizo_brl
+    inst = report.quantidade_instituicoes
+
+    if total >= 1_000_000:
+        score += 35
+    elif total >= 500_000:
+        score += 25
+    elif total >= 200_000:
+        score += 15
+    elif total >= 50_000:
+        score += 8
+
+    if inst >= 8:
+        score += 18
+    elif inst >= 5:
+        score += 12
+    elif inst >= 3:
+        score += 7
+
+    if vencido >= 100_000:
+        score += 25
+    elif vencido >= 20_000:
+        score += 15
+    elif vencido > 0:
+        score += 8
+
+    if preju > 0:
+        score += 8
+
+    # Clamps
+    score = max(0.0, min(100.0, round(score, 1)))
+
+    if score >= 70:
+        label = "alto"
+    elif score >= 40:
+        label = "medio"
+    else:
+        label = "baixo"
+
+    return score, label
+
+
+async def _directdata_scr_poll_request(*, consulta_uid: str) -> tuple[int, dict[str, Any] | None, str]:
+    """Obtém o retorno de uma consulta assíncrona já iniciada na Direct Data.
+
+    Quando usamos `async=habilitar`, a primeira chamada pode retornar somente `metaDados`
+    com `consultaUid`. Para evitar nova cobrança, este poll busca o resultado final usando
+    o endpoint de histórico (ObterRetornoConsultaAsync).
+    """
+    if not DIRECTDATA_TOKEN:
+        return 0, None, "DIRECTDATA_TOKEN não configurado."
+    uid = (consulta_uid or "").strip()
+    if not uid:
+        return 0, None, "consultaUid ausente."
+
+    params: dict[str, Any] = {"TOKEN": DIRECTDATA_TOKEN, "consultaUid": uid}
+    timeout = httpx.Timeout(DIRECTDATA_TIMEOUT_S, connect=min(5.0, float(DIRECTDATA_TIMEOUT_S)))
+    try:
+        async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+            resp = await client.get(DIRECTDATA_ASYNC_RESULT_URL, params=params)
+    except Exception as e:
+        return 0, None, f"Falha ao consultar Direct Data (poll): {e}"
+
+    try:
+        data = resp.json()
+    except Exception:
+        data = None
+
+    msg = ""
+    if isinstance(data, dict):
+        meta = data.get("metaDados") or {}
+        msg = str(meta.get("mensagem") or meta.get("resultado") or "")[:500]
+
+    return int(resp.status_code or 0), data if isinstance(data, dict) else None, msg
+
+
+def _directdata_meta_is_processing(meta: dict[str, Any]) -> bool:
+    """Heurística: identifica respostas ainda em processamento via metaDados."""
+    txt = f"{meta.get('mensagem', '')} {meta.get('resultado', '')}".lower()
+    if not txt.strip():
+        return False
+    return any(k in txt for k in ("process", "aguard", "fila", "assíncr", "assincr", "gerando"))
+
+
+async def _directdata_scr_request(*, document_type: str, document_value: str, consulta_uid: str = "",
+                                  url_override: str | None = None) -> tuple[
+    int, dict[str, Any] | None, str]:
+    """Consulta Direct Data (SCR) via HTTP (assíncrono).
+
+    Usamos AsyncClient para não travar o worker (Render).
+    """
+    if consulta_uid:
+        return await _directdata_scr_poll_request(consulta_uid=consulta_uid)
+
+    if not DIRECTDATA_TOKEN:
+        return 0, None, "DIRECTDATA_TOKEN não configurado."
+    doc = _digits_only(document_value)
+    if not doc:
+        return 0, None, "Documento inválido."
+
+    params: dict[str, Any] = {"TOKEN": DIRECTDATA_TOKEN}
+    if document_type == "cpf":
+        params["CPF"] = doc
+    else:
+        params["CNPJ"] = doc
+
+    if DIRECTDATA_ASYNC:
+        params["async"] = "habilitar"
+
+    timeout = httpx.Timeout(DIRECTDATA_TIMEOUT_S, connect=min(5.0, float(DIRECTDATA_TIMEOUT_S)))
+    try:
+        async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+            target_url = url_override or DIRECTDATA_SCR_URL
+            resp = await client.get(target_url, params=params)
+    except Exception as e:
+        return 0, None, f"Falha ao consultar Direct Data: {e}"
+
+    try:
+        data = resp.json()
+    except Exception:
+        data = None
+
+    msg = ""
+    if isinstance(data, dict):
+        meta = data.get("metaDados") or {}
+        msg = str(meta.get("mensagem") or meta.get("resultado") or "")[:500]
+
+    return resp.status_code, data if isinstance(data, dict) else None, msg
+
+
+def _apply_directdata_response_to_report(report: "CreditReport", *, code: int, data: dict[str, Any] | None,
+                                         msg: str) -> None:
+    """Atualiza o CreditReport com a resposta Direct Data (sem commit)."""
+    report.http_status = int(code or 0)
+    report.message = (msg or "")[:500]
+
+    if not data:
+        report.status = "error"
+        report.message = report.message or "Sem resposta JSON."
+        report.updated_at = utcnow()
+        return
+
+    meta = data.get("metaDados") or {}
+    ret = data.get("retorno") or {}
+
+    report.consulta_uid = str(meta.get("consultaUid") or report.consulta_uid)
+    try:
+        report.resultado_id = int(meta.get("resultadoId") or report.resultado_id)
+    except Exception:
+        pass
+
+    report.raw_json = json.dumps(data, ensure_ascii=False, indent=2)
+
+    processing_hint = False
+    if isinstance(meta, dict):
+        processing_hint = _directdata_meta_is_processing(meta)
+
+    if code == 200 and not processing_hint:
+        report.status = "done"
+    elif code in (201, 202) or processing_hint:
+        report.status = "processing"
+    else:
+        report.status = "error"
+
+    if isinstance(ret, dict) and ret:
+        report.score = str(ret.get("score") or report.score)
+        report.faixa_risco = str(ret.get("faixaRisco") or report.faixa_risco)
+        report.obrigacao_assumida = str(ret.get("obrigacaoAssumida") or report.obrigacao_assumida)
+        report.obrigacao_resumida = str(ret.get("obrigacaoResumida") or report.obrigacao_resumida)
+
+        try:
+            report.quantidade_instituicoes = int(ret.get("quantidadeInstituicoes") or report.quantidade_instituicoes)
+        except Exception:
+            pass
+        try:
+            report.quantidade_operacoes = int(ret.get("quantidadeOperacoes") or report.quantidade_operacoes)
+        except Exception:
+            pass
+
+        report.risco_total_brl = _parse_brl_amount(ret.get("riscoTotal"))
+
+        carteira = ret.get("carteiraCredito") or {}
+        if isinstance(carteira, dict):
+            report.carteira_total_brl = _parse_brl_amount(carteira.get("total"))
+            report.carteira_vencer_brl = _parse_brl_amount(carteira.get("vencer"))
+            report.carteira_vencido_brl = _parse_brl_amount(carteira.get("vencido"))
+            report.carteira_prejuizo_brl = _parse_brl_amount(carteira.get("prejuizo"))
+
+        pscore, plabel = _calc_potential(report)
+        report.potential_score = pscore
+        report.potential_label = plabel
+
+    report.updated_at = utcnow()
+
+
+async def _credit_run_scr_and_update(report_id: int) -> None:
+    """Roda a consulta SCR e persiste o resultado sem travar a requisição."""
+    try:
+        with Session(engine) as s:
+            report = s.get(CreditReport, int(report_id))
+            if not report:
+                return
+            consulta_uid = report.consulta_uid if report.status == "processing" else ""
+            code, data, msg = await _directdata_scr_request(document_type=report.document_type,
+                                                            document_value=report.document_value,
+                                                            consulta_uid=consulta_uid)
+            _apply_directdata_response_to_report(report, code=int(code or 0), data=data, msg=msg)
+            s.add(report)
+            s.commit()
+    except Exception as e:
+        print(f"[credit] background update failed report_id={report_id}: {e}")
+
+
+def _get_client_for_credit(ctx: TenantContext, request: Request, session: Session) -> Client | None:
+    if ctx.membership.role == "cliente":
+        if not ctx.membership.client_id:
+            return None
+        return get_client_or_none(session, ctx.company.id, int(ctx.membership.client_id))
+    active_client_id = get_active_client_id(request, session, ctx)
+    if not active_client_id:
+        return None
+    return get_client_or_none(session, ctx.company.id, int(active_client_id))
+
+
+def _get_latest_consent(session: Session, *, company_id: int, client_id: int) -> CreditConsent | None:
+    try:
+        return session.exec(
+            select(CreditConsent)
+            .where(
+                CreditConsent.company_id == company_id,
+                CreditConsent.client_id == client_id,
+                CreditConsent.kind == CREDIT_CONSENT_KIND_SCR,
+            )
+            .order_by(CreditConsent.created_at.desc())
+        ).first()
+    except Exception as e:
+        # Tabela ausente / permissão / migração pendente: não derruba o fluxo público.
+        try:
+            print(f"[consent] failed to query latest consent: {e}")
+        except Exception:
+            pass
+        return None
+
+
+def _as_aware_utc(dt: Optional[datetime]) -> Optional[datetime]:
+    """Garante datetime timezone-aware em UTC.
+
+    Muitos bancos/ORMs podem retornar datetimes "naive" (sem tzinfo). Para evitar
+    TypeError ao comparar com utcnow() (aware), assumimos UTC quando tzinfo=None.
+    """
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    try:
+        return dt.astimezone(timezone.utc)
+    except Exception:
+        return dt
+
+
+def _refresh_consent_status(consent: CreditConsent) -> None:
+    """Atualiza status apenas quando fizer sentido (não promove 'pendente' para 'valida').
+
+    Regras:
+    - pendente: vira expirada se passou do expires_at; caso contrário permanece pendente.
+    - valida: vira expirada se passou do expires_at.
+    - revogada: permanece revogada.
+    - expirada: permanece expirada.
+    """
+    now = utcnow()
+    status = (consent.status or "").strip().lower() or "pendente"
+
+    if status == "revogada":
+        consent.status = "revogada"
+        return
+
+    expires_at = _as_aware_utc(consent.expires_at)
+    if expires_at and now > expires_at:
+        consent.status = "expirada"
+        return
+
+    if status in ("valida",):
+        consent.status = "valida"
+        return
+
+    # Default: não aceito ainda
+    consent.status = "pendente"
+
+
+def _coerce_credit_report_nullable_fields(r: "CreditReport") -> None:
+    """Normaliza campos potencialmente nulos/strings para evitar 500 na UI.
+
+    Na prática, podem existir registros antigos com campos numéricos salvos como string
+    (ex.: '1.234,56'). Este helper garante que o template não quebre.
+    """
+
+    def _safe_int(v: Any, default: int = 0) -> int:
+        if v is None:
+            return default
+        if isinstance(v, bool):
+            return int(v)
+        if isinstance(v, int):
+            return v
+        try:
+            return int(v)
+        except Exception:
+            try:
+                s = str(v).strip()
+                if not s:
+                    return default
+                s = re.sub(r"[^0-9\-]+", "", s)
+                if not s or s == "-":
+                    return default
+                return int(s)
+            except Exception:
+                return default
+
+    # Inteiros
+    r.quantidade_instituicoes = _safe_int(getattr(r, "quantidade_instituicoes", 0), 0)
+    r.quantidade_operacoes = _safe_int(getattr(r, "quantidade_operacoes", 0), 0)
+    r.http_status = _safe_int(getattr(r, "http_status", 0), 0)
+    r.resultado_id = _safe_int(getattr(r, "resultado_id", 0), 0)
+
+    # Floats (aceita strings BR)
+    r.risco_total_brl = _parse_brl_amount(getattr(r, "risco_total_brl", 0.0))
+    r.carteira_total_brl = _parse_brl_amount(getattr(r, "carteira_total_brl", 0.0))
+    r.carteira_vencer_brl = _parse_brl_amount(getattr(r, "carteira_vencer_brl", 0.0))
+    r.carteira_vencido_brl = _parse_brl_amount(getattr(r, "carteira_vencido_brl", 0.0))
+    r.carteira_prejuizo_brl = _parse_brl_amount(getattr(r, "carteira_prejuizo_brl", 0.0))
+    r.potential_score = _parse_brl_amount(getattr(r, "potential_score", 0.0))
+
+    # Strings
+    r.score = (getattr(r, "score", "") or "")
+    r.faixa_risco = (getattr(r, "faixa_risco", "") or "")
+    r.obrigacao_assumida = (getattr(r, "obrigacao_assumida", "") or "")
+    r.obrigacao_resumida = (getattr(r, "obrigacao_resumida", "") or "")
+    r.message = (getattr(r, "message", "") or "")
+    r.status = (getattr(r, "status", "") or "processing")
+    r.potential_label = (getattr(r, "potential_label", "") or "baixo")
+
+
+@app.get("/credito", response_class=HTMLResponse)
+@require_login
+async def credit_home(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+
+    current_client = _get_client_for_credit(ctx, request, session)
+
+    consent = None
+    consent_file = None
+    reports: list[CreditReport] = []
+
+    if current_client and ensure_can_access_client(ctx, current_client.id):
+        try:
+            consent = _get_latest_consent(session, company_id=ctx.company.id, client_id=current_client.id)
+            if consent:
+                prev_status = consent.status
+                _refresh_consent_status(consent)
+                # Só persiste se mudar status (evita commits desnecessários a cada page load)
+                if consent.status != prev_status:
+                    consent.updated_at = utcnow()
+                    session.add(consent)
+                    session.commit()
+                consent_file = session.exec(
+                    select(Attachment)
+                    .where(
+                        Attachment.company_id == ctx.company.id,
+                        Attachment.client_id == current_client.id,
+                        Attachment.credit_consent_id == consent.id,
+                    )
+                    .order_by(Attachment.created_at.desc())
+                ).first()
+
+            reports = session.exec(
+                select(CreditReport)
+                .where(CreditReport.company_id == ctx.company.id, CreditReport.client_id == current_client.id)
+                .order_by(CreditReport.created_at.desc())
+                .limit(30)
+            ).all()
+        except Exception as e:
+            # Evita 500 silencioso no Render: mostra mensagem amigável e mantém log
+            print(f"[credit] erro ao carregar tela /credito: {type(e).__name__}: {e}")
+            return render(
+                "error.html",
+                request=request,
+                context={
+                    "current_user": ctx.user,
+                    "current_company": ctx.company,
+                    "role": ctx.membership.role,
+                    "current_client": current_client,
+                    "message": f"Erro no módulo de crédito: {type(e).__name__}: {e}",
+                },
+                status_code=500,
+            )
+    else:
+        if ctx.membership.role != "cliente":
+            set_flash(request, "Selecione um cliente para acessar Crédito.")
+
+    consent_link_url = str(request.session.get("consent_link_url") or "")
+    base = _public_base_url(request)
+    # Se o link em sessão está com host antigo (ex.: domínio errado), recalcula.
+    if consent_link_url and not consent_link_url.startswith(base + "/consent/aceite/"):
+        consent_link_url = ""
+    if (not consent_link_url) and consent and consent.status == "pendente":
+        meta = _unpack_consent_link_note(consent.notes)
+        if meta and meta.get("token"):
+            try:
+                _verify_consent_token(str(meta["token"]))
+                consent_link_url = f"{_public_base_url(request)}/consent/aceite/{str(meta['token'])}"
+            except Exception:
+                consent_link_url = ""
+
+    for r in reports:
+        _coerce_credit_report_nullable_fields(r)
+
+    return render(
+        "credit_list.html",
+        request=request,
+        context={
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "role": ctx.membership.role,
+            "current_client": current_client,
+            "consent": consent,
+            "consent_file": consent_file,
+            "consent_link_url": consent_link_url,
+            "reports": reports,
+        },
+    )
+
+
+@app.post("/credito/consent")
+@require_login
+async def credit_upload_consent(
+        request: Request,
+        session: Session = Depends(get_session),
+        signed_by_name: str = Form(...),
+        signed_by_document: str = Form(""),
+        signed_at: str = Form(""),
+        notes: str = Form(""),
+        file: UploadFile = File(...),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+
+    current_client = _get_client_for_credit(ctx, request, session)
+    if not current_client or not ensure_can_access_client(ctx, current_client.id):
+        set_flash(request, "Cliente inválido.")
+        return RedirectResponse("/credito", status_code=303)
+
+    signed_at_dt = utcnow()
+    if signed_at.strip():
+        try:
+            signed_at_dt = datetime.fromisoformat(signed_at.strip()).replace(tzinfo=timezone.utc)
+        except Exception:
+            pass
+
+    expires_at = signed_at_dt + timedelta(days=CREDIT_CONSENT_MAX_DAYS)
+
+    consent = CreditConsent(
+        company_id=ctx.company.id,
+        client_id=current_client.id,
+        created_by_user_id=ctx.user.id,
+        kind=CREDIT_CONSENT_KIND_SCR,
+        status="valida",
+        signed_by_name=signed_by_name.strip(),
+        signed_by_document=_digits_only(signed_by_document),
+        signed_at=signed_at_dt,
+        expires_at=expires_at,
+        notes=notes.strip(),
+        created_at=utcnow(),
+        updated_at=utcnow(),
+    )
+    session.add(consent)
+    session.commit()
+    session.refresh(consent)
+
+    try:
+        stored, mime, size = await save_upload(file)
+    except ValueError:
+        set_flash(request, "Arquivo muito grande.")
+        return RedirectResponse("/credito", status_code=303)
+
+    att = Attachment(
+        company_id=ctx.company.id,
+        client_id=current_client.id,
+        uploaded_by_user_id=ctx.user.id,
+        credit_consent_id=consent.id,
+        original_filename=file.filename or "autorizacao",
+        stored_filename=stored,
+        mime_type=mime,
+        size_bytes=size,
+    )
+    session.add(att)
+    session.commit()
+
+    set_flash(request, "Autorização enviada.")
+    return RedirectResponse("/credito", status_code=303)
+
+
+@app.post("/credito/consent_link")
+@require_role({"admin", "equipe"})
+async def credit_generate_consent_link(
+        request: Request,
+        session: Session = Depends(get_session),
+) -> Response:
+    """Gera (ou reutiliza) um link público de aceite eletrônico (sem OTP)."""
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
+    current_client = _get_client_for_credit(ctx, request, session)
+    if not current_client:
+        set_flash(request, "Selecione um cliente.")
+        return RedirectResponse("/credito", status_code=303)
+
+    try:
+        latest = _get_latest_consent(session, company_id=ctx.company.id, client_id=current_client.id)
+    except OperationalError:
+        ensure_credit_consent_table()
+        latest = None
+    if latest:
+        _refresh_consent_status(latest)
+        if latest.status == "pendente":
+            meta = _unpack_consent_link_note(latest.notes)
+            if meta and meta.get("token"):
+                try:
+                    _verify_consent_token(str(meta["token"]))
+                    token = str(meta["token"])
+                    url = f"{_public_base_url(request)}/consent/aceite/{token}"
+                    request.session["consent_link_url"] = url
+                    set_flash(request, f"Link de aceite: {url}")
+                    return RedirectResponse("/credito", status_code=303)
+                except Exception:
+                    pass
+
+    now = utcnow()
+    exp_dt = now + timedelta(hours=int(CREDIT_CONSENT_LINK_TTL_HOURS))
+    payload = {
+        "company_id": ctx.company.id,
+        "client_id": current_client.id,
+        "created_by_user_id": ctx.user.id,
+        "kind": CREDIT_CONSENT_KIND_SCR,
+        "iat": int(now.timestamp()),
+        "exp": int(exp_dt.timestamp()),
+        "nonce": secrets.token_urlsafe(12),
+        "term_version": CREDIT_CONSENT_TERM_VERSION,
+    }
+    token = _sign_consent_token(payload)
+
+    consent = CreditConsent(
+        company_id=ctx.company.id,
+        client_id=current_client.id,
+        created_by_user_id=ctx.user.id,
+        kind=CREDIT_CONSENT_KIND_SCR,
+        status="pendente",
+        signed_by_name="",
+        signed_by_document="",
+        signed_at=now,
+        expires_at=exp_dt,
+        notes=_pack_consent_link_note(token=token, created_by_user_id=ctx.user.id, expires_at=exp_dt),
+        created_at=now,
+        updated_at=now,
+    )
+    try:
+        session.add(consent)
+        session.commit()
+    except OperationalError as e:
+        ensure_credit_consent_table()
+        try:
+            session.add(consent)
+            session.commit()
+        except OperationalError:
+            set_flash(request,
+                      "Erro ao gravar autorização (tabela não criada no banco). Verifique migrations/permissões do DB.")
+            return RedirectResponse("/credito", status_code=303)
+
+    url = f"{_public_base_url(request)}/consent/aceite/{token}"
+    request.session["consent_link_url"] = url
+    set_flash(request, f"Link de aceite: {url}")
+    return RedirectResponse("/credito", status_code=303)
+
+
+@app.get("/consent/aceite/{token}", response_class=HTMLResponse)
+async def consent_accept_page(
+        request: Request,
+        session: Session = Depends(get_session),
+        token: str = "",
+) -> HTMLResponse:
+    """Página pública para aceite eletrônico (sem login)."""
+    try:
+        payload = _verify_consent_token(token)
+    except Exception as e:
+        return render(
+            "error.html",
+            request=request,
+            context={
+                "current_user": None,
+                "current_company": None,
+                "role": "public",
+                "message": f"Link inválido/expirado: {e}",
+            },
+            status_code=400,
+        )
+
+    company = session.get(Company, int(payload.get("company_id") or 0))
+    client = session.get(Client, int(payload.get("client_id") or 0))
+    if not company or not client:
+        return render(
+            "error.html",
+            request=request,
+            context={
+                "current_user": None,
+                "current_company": None,
+                "role": "public",
+                "message": "Link inválido: cliente/empresa não encontrados.",
+            },
+            status_code=404,
+        )
+
+    if not ensure_credit_consent_table():
+        return render(
+            "error.html",
+            request=request,
+            context={
+                "current_user": None,
+                "current_company": company,
+                "role": "public",
+                "message": "Sistema de aceite ainda não está configurado (tabela ausente). Avise a empresa responsável.",
+            },
+            status_code=500,
+        )
+
+    latest = _get_latest_consent(session, company_id=company.id, client_id=client.id)
+    if latest:
+        _refresh_consent_status(latest)
+        if latest.status == "valida":
+            return render(
+                "success.html",
+                request=request,
+                context={
+                    "current_user": None,
+                    "current_company": company,
+                    "role": "public",
+                    "message": "Autorização já registrada. Obrigado!",
+                },
+            )
+
+    terms_html = templates_env.from_string(CREDIT_CONSENT_TERMS_HTML).render(term_version=CREDIT_CONSENT_TERM_VERSION)
+
+    return render(
+        "consent_accept.html",
+        request=request,
+        context={
+            "current_user": None,
+            "current_company": company,
+            "role": "public",
+            "company": company,
+            "client": client,
+            "terms_html": terms_html,
+            "term_version": CREDIT_CONSENT_TERM_VERSION,
+        },
+    )
+
+
+@app.post("/consent/aceite/{token}")
+async def consent_accept_submit(
+        request: Request,
+        session: Session = Depends(get_session),
+        token: str = "",
+        agree: str = Form(""),
+        signed_by_name: str = Form(""),
+        doc_last4: str = Form(""),
+) -> Response:
+    """Registra o aceite eletrônico como um CreditConsent válido."""
+    try:
+        payload = _verify_consent_token(token)
+    except Exception as e:
+        set_flash(request, f"Link inválido/expirado: {e}")
+        return RedirectResponse(f"/consent/aceite/{token}", status_code=303)
+
+    if not str(agree).strip():
+        set_flash(request, "É necessário marcar o aceite.")
+        return RedirectResponse(f"/consent/aceite/{token}", status_code=303)
+
+    company_id = int(payload.get("company_id") or 0)
+    client_id = int(payload.get("client_id") or 0)
+    created_by_user_id = int(payload.get("created_by_user_id") or 0)
+
+    company = session.get(Company, company_id)
+    client = session.get(Client, client_id)
+    if not company or not client:
+        set_flash(request, "Link inválido: cliente/empresa não encontrados.")
+        return RedirectResponse(f"/consent/aceite/{token}", status_code=303)
+
+    dl4 = _digits_only(doc_last4)[-4:]
+    if dl4:
+        doc = _digits_only(client.cnpj or "")
+        if doc and not doc.endswith(dl4):
+            set_flash(request, "Os 4 últimos dígitos não conferem.")
+            return RedirectResponse(f"/consent/aceite/{token}", status_code=303)
+
+    now = utcnow()
+    expires_at = now + timedelta(days=CREDIT_CONSENT_MAX_DAYS)
+
+    evidence = {
+        "method": "clickwrap",
+        "term_version": CREDIT_CONSENT_TERM_VERSION,
+        "term_sha256": _terms_sha256(),
+        "token_iat": int(payload.get("iat") or 0),
+        "token_exp": int(payload.get("exp") or 0),
+        "ip": _request_ip(request),
+        "user_agent": request.headers.get("user-agent") or "",
+        "accepted_at_utc": now.isoformat(),
+    }
+
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (tabela ausente).")
+        return RedirectResponse(f"/consent/aceite/{token}", status_code=303)
+
+    latest = _get_latest_consent(session, company_id=company_id, client_id=client_id)
+    if latest:
+        _refresh_consent_status(latest)
+        if latest.status == "pendente":
+            latest.status = "valida"
+            latest.signed_by_name = (signed_by_name or client.name or "").strip()
+            latest.signed_by_document = _digits_only(client.cnpj or "")
+            latest.signed_at = now
+            latest.expires_at = expires_at
+            latest.updated_at = now
+            latest.notes = "[aceite-eletronico]\n" + json.dumps(evidence, ensure_ascii=False)
+            session.add(latest)
+            session.commit()
+        elif latest.status != "valida":
+            consent = CreditConsent(
+                company_id=company_id,
+                client_id=client_id,
+                created_by_user_id=created_by_user_id or 0,
+                kind=CREDIT_CONSENT_KIND_SCR,
+                status="valida",
+                signed_by_name=(signed_by_name or client.name or "").strip(),
+                signed_by_document=_digits_only(client.cnpj or ""),
+                signed_at=now,
+                expires_at=expires_at,
+                notes="[aceite-eletronico]\n" + json.dumps(evidence, ensure_ascii=False),
+                created_at=now,
+                updated_at=now,
+            )
+            session.add(consent)
+            session.commit()
+    else:
+        consent = CreditConsent(
+            company_id=company_id,
+            client_id=client_id,
+            created_by_user_id=created_by_user_id or 0,
+            kind=CREDIT_CONSENT_KIND_SCR,
+            status="valida",
+            signed_by_name=(signed_by_name or client.name or "").strip(),
+            signed_by_document=_digits_only(client.cnpj or ""),
+            signed_at=now,
+            expires_at=expires_at,
+            notes="[aceite-eletronico]\n" + json.dumps(evidence, ensure_ascii=False),
+            created_at=now,
+            updated_at=now,
+        )
+        session.add(consent)
+        session.commit()
+
+    return render(
+        "success.html",
+        request=request,
+        context={
+            "current_user": None,
+            "current_company": company,
+            "role": "public",
+            "message": "Autorização registrada com sucesso. Você já pode fechar esta página.",
+        },
+    )
+
+
+@app.post("/credito/consultar")
+@require_role({"admin", "equipe"})
+async def credit_consult(
+        request: Request,
+        background_tasks: BackgroundTasks,
+        session: Session = Depends(get_session),
+        document_type: str = Form("cnpj"),
+        document_value: str = Form(""),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
+    current_client = _get_client_for_credit(ctx, request, session)
+    if not current_client:
+        set_flash(request, "Selecione um cliente.")
+        return RedirectResponse("/credito", status_code=303)
+
+    consent = _get_latest_consent(session, company_id=ctx.company.id, client_id=current_client.id)
+    if not consent:
+        set_flash(request, "Envie uma autorização (PDF) ou gere um link de aceite eletrônico antes de consultar.")
+        return RedirectResponse("/credito", status_code=303)
+    _refresh_consent_status(consent)
+    if consent.status != "valida":
+        set_flash(request, "Autorização expirada/revogada. Envie uma nova.")
+        return RedirectResponse("/credito", status_code=303)
+
+    doc_val = document_value.strip() or (current_client.cnpj if document_type == "cnpj" else "")
+    doc_val = _digits_only(doc_val)
+
+    report = CreditReport(
+        company_id=ctx.company.id,
+        client_id=current_client.id,
+        created_by_user_id=ctx.user.id,
+        provider="directdata",
+        document_type=("cpf" if document_type == "cpf" else "cnpj"),
+        document_value=doc_val,
+        async_enabled=DIRECTDATA_ASYNC,
+        status="processing",
+        created_at=utcnow(),
+        updated_at=utcnow(),
+    )
+    session.add(report)
+    session.commit()
+    session.refresh(report)
+    # Dispara em background para não travar o request (Render).
+    background_tasks.add_task(_credit_run_scr_and_update, report.id)
+
+    set_flash(request, "Consulta iniciada. Aguarde e clique em Atualizar em instantes.")
+    return RedirectResponse(f"/credito/{report.id}", status_code=303)
+
+
+@app.get("/credito/{report_id}", response_class=HTMLResponse)
+@require_login
+async def credit_report_detail(request: Request, session: Session = Depends(get_session),
+                               report_id: int = 0) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+
+    report = session.get(CreditReport, int(report_id))
+    if not report or report.company_id != ctx.company.id:
+        set_flash(request, "Relatório não encontrado.")
+        return RedirectResponse("/credito", status_code=303)
+
+    if not ensure_can_access_client(ctx, report.client_id):
+        set_flash(request, "Sem permissão.")
+        return RedirectResponse("/credito", status_code=303)
+    _coerce_credit_report_nullable_fields(report)
+
+    _coerce_credit_report_nullable_fields(report)
+
+    return render(
+        "credit_report_detail.html",
+        request=request,
+        context={
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "role": ctx.membership.role,
+            "current_client": get_client_or_none(session, ctx.company.id, report.client_id),
+            "report": report,
+        },
+    )
+
+
+@app.post("/credito/{report_id}/atualizar")
+@require_role({"admin", "equipe"})
+async def credit_report_refresh(request: Request, background_tasks: BackgroundTasks,
+                                session: Session = Depends(get_session), report_id: int = 0) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
+    report = session.get(CreditReport, int(report_id))
+    if not report or report.company_id != ctx.company.id:
+        set_flash(request, "Relatório não encontrado.")
+        return RedirectResponse("/credito", status_code=303)
+
+    now = utcnow()
+    force = (request.query_params.get("force") or "").strip() == "1"
+
+    # Por padrão, "Atualizar" só consulta o status (poll) e NÃO inicia nova cobrança.
+    if report.status != "processing" and not force:
+        set_flash(request, "Relatório já finalizado. Para nova consulta, use 'Consultar' novamente.")
+        return RedirectResponse(f"/credito/{report.id}", status_code=303)
+
+    # Evita storm de cliques / refresh em sequência (reduz consumo)
+    try:
+        if (now - _as_aware_utc(report.updated_at)).total_seconds() < DIRECTDATA_POLL_MIN_INTERVAL_S:
+            set_flash(request, "Aguarde alguns segundos antes de atualizar novamente.")
+            return RedirectResponse(f"/credito/{report.id}", status_code=303)
+    except Exception:
+        pass
+
+    if force:
+        # Reconsulta do zero (pode gerar nova cobrança)
+        report.status = "processing"
+        report.consulta_uid = ""
+        report.resultado_id = 0
+        report.http_status = 0
+        report.message = ""
+        report.raw_json = ""
+        report.updated_at = now
+        session.add(report)
+        session.commit()
+        background_tasks.add_task(_credit_run_scr_and_update, report.id)
+        set_flash(request, "Reconsulta iniciada (nova chamada). Recarregue em instantes.")
+        return RedirectResponse(f"/credito/{report.id}", status_code=303)
+
+    # Se ainda não temos consultaUid, não dispare uma nova chamada (evita cobrar de novo)
+    if not (report.consulta_uid or "").strip():
+        report.updated_at = now
+        session.add(report)
+        session.commit()
+        set_flash(request, "Consulta ainda iniciando (sem consultaUid). Aguarde alguns segundos e atualize novamente.")
+        return RedirectResponse(f"/credito/{report.id}", status_code=303)
+
+    report.updated_at = now
+    session.add(report)
+    session.commit()
+
+    background_tasks.add_task(_credit_run_scr_and_update, report.id)
+    set_flash(request, "Verificando processamento (sem nova cobrança). Recarregue em instantes.")
+    return RedirectResponse(f"/credito/{report.id}", status_code=303)
+
+
+@app.post("/credito/{report_id}/criar_negocio")
+@require_role({"admin", "equipe"})
+async def credit_report_create_deal(request: Request, session: Session = Depends(get_session),
+                                    report_id: int = 0) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
+    report = session.get(CreditReport, int(report_id))
+    if not report or report.company_id != ctx.company.id:
+        set_flash(request, "Relatório não encontrado.")
+        return RedirectResponse("/credito", status_code=303)
+
+    _coerce_credit_report_nullable_fields(report)
+
+    if report.status != "done":
+        set_flash(request, "Finalize a consulta antes de criar negócio.")
+        return RedirectResponse(f"/credito/{report.id}", status_code=303)
+
+    client = get_client_or_none(session, ctx.company.id, report.client_id)
+    if not client:
+        set_flash(request, "Cliente inválido.")
+        return RedirectResponse(f"/credito/{report.id}", status_code=303)
+
+    title = f"Reperfilamento de crédito — {client.name}"
+    demand = "Avaliar SCR e oportunidades de reperfilamento/melhoria de custo de dívida."
+    notes = (
+        f"[SCR] Total: R$ {report.carteira_total_brl:.2f} | Vencido: R$ {report.carteira_vencido_brl:.2f} | "
+        f"Instituições: {report.quantidade_instituicoes} | Score: {report.score} | Potencial: {report.potential_label}"
+    )
+
+    deal = BusinessDeal(
+        company_id=ctx.company.id,
+        client_id=client.id,
+        created_by_user_id=ctx.user.id,
+        owner_user_id=ctx.user.id,
+        title=title,
+        demand=demand,
+        notes=notes,
+        stage="qualificacao",
+        service_name="BaaS - Analise de Crédito",
+        value_estimate_brl=max(0.0, report.carteira_total_brl * 0.01),
+        probability_pct=30 if report.potential_label == "alto" else 15,
+        next_step="Agendar call e solicitar contratos/CCBs.",
+        next_step_date="",
+        source="SCR/Direct Data",
+        created_at=utcnow(),
+        updated_at=utcnow(),
+    )
+    session.add(deal)
+    session.commit()
+    session.refresh(deal)
+
+    set_flash(request, "Negócio criado no CRM.")
+    return RedirectResponse(f"/negocios/{deal.id}", status_code=303)
+
+
+@app.post("/credito/{report_id}/gerar_tarefas")
+@require_role({"admin", "equipe"})
+async def credit_report_generate_tasks(request: Request, session: Session = Depends(get_session),
+                                       report_id: int = 0) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
+    report = session.get(CreditReport, int(report_id))
+    if not report or report.company_id != ctx.company.id:
+        set_flash(request, "Relatório não encontrado.")
+        return RedirectResponse("/credito", status_code=303)
+
+    _coerce_credit_report_nullable_fields(report)
+
+    if report.status != "done":
+        set_flash(request, "Finalize a consulta antes de gerar tarefas.")
+        return RedirectResponse(f"/credito/{report.id}", status_code=303)
+
+    client = get_client_or_none(session, ctx.company.id, report.client_id)
+    if not client:
+        set_flash(request, "Cliente inválido.")
+        return RedirectResponse(f"/credito/{report.id}", status_code=303)
+
+    defaults = [
+        ("Solicitar contratos/CCBs das operações", "Pedir ao cliente os contratos/CCBs e condições atuais."),
+        ("Agendar reunião de diagnóstico", "Reunião para entender estrutura de dívida e objetivos."),
+        ("Montar mapa de dívidas (saldo/taxa/prazo/garantias)", "Consolidar dados para simulações."),
+        ("Simular alternativas de reperfilamento", "Comparar cenários e preparar proposta."),
+    ]
+
+    created = 0
+    for title, desc in defaults:
+        t = Task(
+            company_id=ctx.company.id,
+            client_id=client.id,
+            created_by_user_id=ctx.user.id,
+            assignee_user_id=ctx.user.id,
+            title=title,
+            description=desc,
+            status="nao_iniciada",
+            priority="media",
+            due_date="",
+            visible_to_client=(title.startswith("Solicitar") or title.startswith("Agendar")),
+            client_action=(title.startswith("Solicitar")),
+            created_at=utcnow(),
+            updated_at=utcnow(),
+        )
+        session.add(t)
+        created += 1
+
+    session.commit()
+    set_flash(request, f"{created} tarefas criadas.")
+    return RedirectResponse("/tarefas", status_code=303)
+
+
+# ==============================
+# SIMULADOR DE EMPRÉSTIMOS + PDF
+# ==============================
+from dataclasses import dataclass
+from datetime import date, datetime
+from decimal import Decimal, ROUND_HALF_UP
+from enum import Enum
+import calendar
+import io
+from typing import Any, Optional, TypedDict
+
+from fastapi import Form
+from fastapi.responses import StreamingResponse
+
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.units import mm
+from reportlab.pdfgen import canvas as rl_canvas
+from reportlab.lib.utils import ImageReader
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+from reportlab.lib import colors
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.enums import TA_LEFT, TA_RIGHT
+
+
+class LoanAmortization(str, Enum):
+    PRICE = "price"  # parcela fixa (Sistema Francês)
+    SAC = "sac"  # amortização constante
+    AMERICANO = "americano"  # juros + balloon
+
+
+class LoanRateBase(str, Enum):
+    AM = "am"  # ao mês
+    AA = "aa"  # ao ano
+
+
+def _to_decimal(v: str) -> Decimal:
+    """Compat alias for older simulator code."""
+    return _dec(v)
+
+
+def _dec(x: Any) -> Decimal:
+    if x is None:
+        return Decimal("0")
+    if isinstance(x, Decimal):
+        return x
+    s = str(x).strip()
+    if not s:
+        return Decimal("0")
+    s = s.replace("%", "").replace("R$", "").replace(" ", "")
+    s = s.replace(".", "").replace(",", ".")
+    if not s or s in {"-", "."}:
+        return Decimal("0")
+    try:
+        return Decimal(s)
+    except Exception:
+        return Decimal("0")
+
+
+def _d2(x: Decimal) -> Decimal:
+    return x.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+
+def _normalize_pct_to_rate(pct_str: str) -> Decimal:
+    """
+    Entrada esperada em %:
+      - "1,79" => 0.0179
+      - "12"   => 0.12
+    """
+    pct = _dec(pct_str)
+    return pct / Decimal("100")
+
+
+def _annual_to_monthly_rate(rate_aa: Decimal) -> Decimal:
+    # (1+i_a)^(1/12)-1
+    return Decimal(str((1.0 + float(rate_aa)) ** (1.0 / 12.0) - 1.0))
+
+
+def _month_add(dt: date, months: int) -> date:
+    y = dt.year + (dt.month - 1 + months) // 12
+    m = (dt.month - 1 + months) % 12 + 1
+    last = calendar.monthrange(y, m)[1]
+    d = min(dt.day, last)
+    return date(y, m, d)
+
+
+def _brl(x: Decimal) -> str:
+    s = f"{x:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    return f"R$ {s}"
+
+
+@dataclass(frozen=True)
+class LoanInput:
+    loan_type: str
+    amortization: LoanAmortization
+    rate: Decimal
+    rate_base: LoanRateBase
+    term_months: int
+
+    principal: Decimal
+    collateral_value: Decimal
+    ltv_pct: Decimal
+
+    start_date: date
+    grace_months: int
+    io_months: int
+
+    fee_amount: Decimal
+    monthly_insurance: Decimal
+    monthly_admin_fee: Decimal
+
+    borrower_name: str
+    notes: str
+
+
+@dataclass(frozen=True)
+class LoanRow:
+    n: int
+    due_date: date
+    payment: Decimal
+    interest: Decimal
+    amort: Decimal
+    fees: Decimal
+    insurance: Decimal
+    balance: Decimal
+
+
+@dataclass(frozen=True)
+class LoanSimResult:
+    inp: LoanInput
+    schedule: list[LoanRow]
+    monthly_rate: Decimal
+    total_payment: Decimal
+    total_interest: Decimal
+    total_amort: Decimal
+    total_fees: Decimal
+    total_insurance: Decimal
+    first_payment: Decimal
+
+
+def build_loan_input(
+        *,
+        loan_type: str,
+        amortization: str,
+        rate_pct: str,
+        rate_base: str,
+        term_months: int,
+        principal: str,
+        collateral_value: str,
+        ltv_pct: str,
+        start_date: date,
+        grace_months: int,
+        io_months: int,
+        fee_amount: str,
+        monthly_insurance: str,
+        monthly_admin_fee: str,
+        borrower_name: str,
+        notes: str,
+) -> LoanInput:
+    amort = LoanAmortization(amortization)
+    rb = LoanRateBase(rate_base)
+
+    principal_d = _d2(_dec(principal))
+    collateral_d = _d2(_dec(collateral_value))
+    ltv_d = _d2(_dec(ltv_pct))
+
+    if principal_d <= 0 and collateral_d > 0 and ltv_d > 0:
+        principal_d = _d2(collateral_d * (ltv_d / Decimal("100")))
+
+    if ltv_d <= 0 and principal_d > 0 and collateral_d > 0:
+        ltv_d = _d2((principal_d / collateral_d) * Decimal("100"))
+
+    if term_months <= 0:
+        raise ValueError("Prazo inválido.")
+    if principal_d <= 0:
+        raise ValueError("Informe valor do empréstimo (ou valor do bem + LTV).")
+
+    return LoanInput(
+        loan_type=(loan_type or "").strip() or "Empréstimo",
+        amortization=amort,
+        rate=_normalize_pct_to_rate(rate_pct),
+        rate_base=rb,
+        term_months=int(term_months),
+        principal=principal_d,
+        collateral_value=collateral_d,
+        ltv_pct=ltv_d,
+        start_date=start_date,
+        grace_months=max(0, int(grace_months or 0)),
+        io_months=max(0, int(io_months or 0)),
+        fee_amount=_d2(_dec(fee_amount)),
+        monthly_insurance=_d2(_dec(monthly_insurance)),
+        monthly_admin_fee=_d2(_dec(monthly_admin_fee)),
+        borrower_name=(borrower_name or "").strip(),
+        notes=(notes or "").strip(),
+    )
+
+
+# --- Adapter: compatibilidade com /simulador/proposta ---
+class LoanSimInputs:
+    """Compat layer: rotas antigas chamam LoanSimInputs.from_form(...)."""
+
+    @classmethod
+    def from_form(cls, **form) -> "LoanInput":
+        # build_loan_input espera taxa em percentual (string), ex: "1,79" -> 1.79%
+        return build_loan_input(
+            loan_type=form.get("loan_type", "Empréstimo"),
+            amortization=form.get("amortization", "price"),
+            rate_pct=str(form.get("rate", "1,79") or "1,79"),
+            rate_base=form.get("rate_base", "am"),
+            term_months=int(form.get("term_months", 24) or 24),
+            principal=str(form.get("principal", "") or ""),
+            collateral_value=str(form.get("collateral_value", "") or ""),
+            ltv_pct=str(form.get("ltv_pct", "") or ""),
+            start_date=date.today(),
+            grace_months=int(form.get("grace_months", 0) or 0),
+            io_months=int(form.get("io_months", 0) or 0),
+            fee_amount=str(form.get("fee_amount", "0") or "0"),
+            monthly_insurance=str(form.get("monthly_insurance", "0") or "0"),
+            monthly_admin_fee=str(form.get("monthly_admin_fee", "0") or "0"),
+            borrower_name=str(form.get("borrower_name", "") or ""),
+            notes=str(form.get("notes", "") or ""),
+        )
+
+
+def simulate_loan(inp: LoanInput) -> LoanSimResult:
+    if inp.rate_base == LoanRateBase.AM:
+        i = inp.rate
+    else:
+        i = _annual_to_monthly_rate(inp.rate)
+
+    i = Decimal(str(float(i)))
+    principal = inp.principal
+    bal = principal
+
+    grace = inp.grace_months
+    io_only = inp.io_months
+    amort_months = max(1, inp.term_months - grace - io_only)
+
+    price_pmt = Decimal("0")
+    if inp.amortization == LoanAmortization.PRICE:
+        if i == 0:
+            price_pmt = _d2(principal / Decimal(amort_months))
+        else:
+            denom = Decimal("1") - Decimal(str((1.0 + float(i)) ** (-amort_months)))
+            price_pmt = _d2(principal * i / denom)
+
+    sac_amort = Decimal("0")
+    if inp.amortization == LoanAmortization.SAC:
+        sac_amort = _d2(principal / Decimal(amort_months))
+
+    schedule: list[LoanRow] = []
+    total_interest = Decimal("0")
+    total_payment = Decimal("0")
+    total_amort = Decimal("0")
+    total_fees = Decimal("0")
+    total_ins = Decimal("0")
+
+    for n in range(1, inp.term_months + 1):
+        due = _month_add(inp.start_date, n)
+        fees = inp.monthly_admin_fee
+        ins = inp.monthly_insurance
+
+        if n <= grace + io_only:
+            interest = _d2(bal * i)
+            amort = Decimal("0")
+            base_pmt = _d2(interest)
+        else:
+            if inp.amortization == LoanAmortization.AMERICANO:
+                interest = _d2(bal * i)
+                amort = _d2(bal) if n == inp.term_months else Decimal("0")
+                base_pmt = _d2(interest + amort)
+            elif inp.amortization == LoanAmortization.SAC:
+                interest = _d2(bal * i)
+                amort = sac_amort if sac_amort <= bal else _d2(bal)
+                base_pmt = _d2(interest + amort)
+            else:
+                interest = _d2(bal * i)
+                amort = _d2(price_pmt - interest)
+                if amort > bal:
+                    amort = _d2(bal)
+                if amort < 0:
+                    amort = Decimal("0")
+                base_pmt = _d2(interest + amort)
+
+        bal = _d2(bal - amort)
+        if bal < 0:
+            bal = Decimal("0")
+
+        payment = _d2(base_pmt + fees + ins)
+
+        schedule.append(
+            LoanRow(
+                n=n,
+                due_date=due,
+                payment=payment,
+                interest=interest,
+                amort=amort,
+                fees=fees,
+                insurance=ins,
+                balance=bal,
+            )
+        )
+
+        total_interest += interest
+        total_amort += amort
+        total_fees += fees
+        total_ins += ins
+        total_payment += payment
+
+    total_fees += inp.fee_amount
+    total_payment += inp.fee_amount
+
+    first_payment = schedule[0].payment if schedule else Decimal("0")
+
+    return LoanSimResult(
+        inp=inp,
+        schedule=schedule,
+        monthly_rate=_d2(i),
+        total_payment=_d2(total_payment),
+        total_interest=_d2(total_interest),
+        total_amort=_d2(total_amort),
+        total_fees=_d2(total_fees),
+        total_insurance=_d2(total_ins),
+        first_payment=_d2(first_payment),
+    )
+
+
+def render_loan_pdf(res: LoanSimResult) -> bytes:
+    buf = io.BytesIO()
+    c = rl_canvas.Canvas(buf, pagesize=A4)
+    w, h = A4
+
+    # Logo
+    logo_path = (STATIC_DIR / "logo.png") if "STATIC_DIR" in globals() else None
+    if logo_path and logo_path.exists():
+        try:
+            img = ImageReader(str(logo_path))
+            c.drawImage(img, 20 * mm, h - 32 * mm, width=45 * mm, height=16 * mm, mask="auto")
+        except Exception:
+            pass
+
+    c.setFont("Helvetica-Bold", 14)
+    c.drawString(70 * mm, h - 24 * mm, "Simulação de Empréstimo")
+    c.setFont("Helvetica", 9)
+    c.drawRightString(w - 20 * mm, h - 24 * mm, datetime.now().strftime("%d/%m/%Y %H:%M"))
+
+    y = h - 38 * mm
+
+    def kv(key: str, val: str) -> None:
+        nonlocal y
+        c.setFont("Helvetica-Bold", 9)
+        c.drawString(20 * mm, y, key)
+        c.setFont("Helvetica", 9)
+        c.drawString(58 * mm, y, val)
+        y -= 5 * mm
+
+    inp = res.inp
+    kv("Cliente:", inp.borrower_name or "-")
+    kv("Tipo:", inp.loan_type)
+    kv("Amortização:", inp.amortization.value.upper())
+    kv("Prazo:", f"{inp.term_months} meses")
+    kv("Taxa:", f"{(inp.rate * Decimal("100")):.2f} {'a.m.' if inp.rate_base == LoanRateBase.AM else 'a.a.'}")
+    kv("Taxa mensal (calc):", f"{(res.monthly_rate * Decimal("100")):.2f} a.m.")
+    kv("Valor empréstimo:", _brl(inp.principal))
+    if inp.collateral_value > 0:
+        kv("Valor do bem:", _brl(inp.collateral_value))
+        kv("LTV:", f"{inp.ltv_pct:.2f}%")
+    kv("Carência (juros):", f"{inp.grace_months} meses")
+    kv("Juros-only extra:", f"{inp.io_months} meses")
+    kv("Parcela inicial:", _brl(res.first_payment))
+    y -= 2 * mm
+
+    c.setFont("Helvetica-Bold", 10)
+    c.drawString(20 * mm, y, "Totais")
+    y -= 6 * mm
+    kv("Total pago:", _brl(res.total_payment))
+    kv("Total juros:", _brl(res.total_interest))
+    kv("Total amortização:", _brl(res.total_amort))
+    kv("Tarifas/Taxas:", _brl(res.total_fees))
+    kv("Seguros:", _brl(res.total_insurance))
+
+    # Disclaimer obrigatório
+    y -= 2 * mm
+    c.setFont("Helvetica-Bold", 9)
+    c.drawString(20 * mm, y, "Aviso:")
+    y -= 5 * mm
+    c.setFont("Helvetica", 8)
+    disclaimer = (
+        "Esta é apenas uma SIMULAÇÃO e não constitui proposta de crédito. "
+        "A concessão está sujeita à análise de crédito, políticas internas, "
+        "condições de mercado e aprovação final."
+    )
+    # wrap lines
+    max_w = w - 40 * mm
+    words = disclaimer.split()
+    line = ""
+    lines = []
+    for wd in words:
+        test = (line + " " + wd).strip()
+        if c.stringWidth(test, "Helvetica", 8) <= max_w:
+            line = test
+        else:
+            lines.append(line)
+            line = wd
+    if line:
+        lines.append(line)
+    for ln in lines:
+        c.drawString(20 * mm, y, ln)
+        y -= 4.2 * mm
+
+    if inp.notes:
+        y -= 2 * mm
+        c.setFont("Helvetica-Bold", 9)
+        c.drawString(20 * mm, y, "Observações:")
+        y -= 5 * mm
+        c.setFont("Helvetica", 8)
+        # simple wrap
+        words = inp.notes.split()
+        line = ""
+        for wd in words:
+            test = (line + " " + wd).strip()
+            if c.stringWidth(test, "Helvetica", 8) <= max_w:
+                line = test
+            else:
+                c.drawString(20 * mm, y, line)
+                y -= 4.2 * mm
+                line = wd
+        if line:
+            c.drawString(20 * mm, y, line)
+
+    # Table pages
+    c.showPage()
+
+    def table_header(title: str) -> float:
+        # logo on every page
+        if logo_path and logo_path.exists():
+            try:
+                img = ImageReader(str(logo_path))
+                c.drawImage(img, 20 * mm, h - 28 * mm, width=40 * mm, height=14 * mm, mask="auto")
+            except Exception:
+                pass
+        c.setFont("Helvetica-Bold", 12)
+        c.drawString(65 * mm, h - 22 * mm, title)
+        c.setFont("Helvetica", 8)
+        c.drawRightString(w - 20 * mm, h - 22 * mm, datetime.now().strftime("%d/%m/%Y %H:%M"))
+        y0 = h - 34 * mm
+        c.setFont("Helvetica-Bold", 8)
+        cols = [("#", 20 * mm), ("Venc.", 30 * mm), ("Parcela", 55 * mm), ("Juros", 85 * mm), ("Amort.", 110 * mm),
+                ("Encargos", 135 * mm), ("Saldo", 165 * mm)]
+        for name, x in cols:
+            c.drawString(x, y0, name)
+        c.line(20 * mm, y0 - 2 * mm, w - 20 * mm, y0 - 2 * mm)
+        return y0 - 7 * mm
+
+    y = table_header("Cronograma de Pagamentos")
+    c.setFont("Helvetica", 8)
+    rows_per_page = 34
+
+    for idx, row in enumerate(res.schedule, start=1):
+        if (idx - 1) % rows_per_page == 0 and idx != 1:
+            # footer disclaimer on page
+            c.setFont("Helvetica-Oblique", 7)
+            c.drawString(20 * mm, 12 * mm,
+                         "Simulação – não constitui proposta de crédito. Sujeito à análise e aprovação.")
+            c.showPage()
+            y = table_header("Cronograma (cont.)")
+            c.setFont("Helvetica", 8)
+
+        encargos = _d2(row.fees + row.insurance)
+        c.drawString(20 * mm, y, str(row.n))
+        c.drawString(30 * mm, y, row.due_date.strftime("%d/%m/%Y"))
+        c.drawRightString(77 * mm, y, _brl(row.payment))
+        c.drawRightString(107 * mm, y, _brl(row.interest))
+        c.drawRightString(132 * mm, y, _brl(row.amort))
+        c.drawRightString(157 * mm, y, _brl(encargos))
+        c.drawRightString(w - 20 * mm, y, _brl(row.balance))
+        y -= 5 * mm
+
+    c.setFont("Helvetica-Oblique", 7)
+    c.drawString(20 * mm, 12 * mm, "Simulação – não constitui proposta de crédito. Sujeito à análise e aprovação.")
+    c.save()
+    return buf.getvalue()
+
+
+SIMULADOR_TEMPLATE = r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="container" style="max-width: 980px;">
+  <h3 class="mt-3">Simulador de Empréstimo</h3>
+  <form method="post" action="/simulador/pdf" class="card p-3 mt-3">
+    <div class="row g-2">
+      <div class="col-md-6">
+        <label class="form-label">Cliente (nome)</label>
+        <input class="form-control" name="borrower_name" placeholder="Nome do cliente">
+      </div>
+
+      <div class="col-md-6">
+        <label class="form-label">Cliente (opcional)</label>
+        <select class="form-select" name="client_id" id="sim_client_id">
+          <option value="">-- (sem cliente) --</option>
+          {% for c in clients %}
+            <option value="{{ c.id }}">{{ c.name }}</option>
+          {% endfor %}
+        </select>
+        <div class="form-text">Selecione para habilitar “Gerar Proposta” (gera também um card no CRM).</div>
+      </div>
+      <div class="col-md-6">
+        <label class="form-label">Tipo de empréstimo</label>
+        <input class="form-control" name="loan_type" placeholder="Ex.: Crédito com garantia, Consignado, Capital de giro">
+      </div>
+
+      <div class="col-md-4">
+        <label class="form-label">Amortização</label>
+        <select class="form-select" name="amortization">
+          <option value="price">PRICE (parcela fixa)</option>
+          <option value="sac">SAC (amortização constante)</option>
+          <option value="americano">Americano (juros + quitação final)</option>
+        </select>
+      </div>
+
+      <div class="col-md-4">
+        <label class="form-label">Taxa (%)</label>
+        <input class="form-control" name="rate_pct" placeholder="Ex.: 1,79" value="1,79">
+        <div class="form-text">Informe em percentual. Ex: "1,79" = 1,79%</div>
+      </div>
+
+      <div class="col-md-4">
+        <label class="form-label">Base</label>
+        <select class="form-select" name="rate_base">
+          <option value="am">ao mês</option>
+          <option value="aa">ao ano</option>
+        </select>
+      </div>
+
+      <div class="col-md-4">
+        <label class="form-label">Prazo (meses)</label>
+        <input class="form-control" name="term_months" value="24">
+      </div>
+
+      <div class="col-md-4">
+        <label class="form-label">Carência (meses – juros only)</label>
+        <input class="form-control" name="grace_months" value="0">
+      </div>
+
+      <div class="col-md-4">
+        <label class="form-label">Juros-only extra (meses)</label>
+        <input class="form-control" name="io_months" value="0">
+      </div>
+
+      <div class="col-md-4">
+        <label class="form-label">Valor do empréstimo (R$)</label>
+        <input class="form-control" name="principal" placeholder="Ex.: 100000">
+        <div class="form-text">Se preencher valor do bem + LTV, pode deixar em branco.</div>
+      </div>
+
+      <div class="col-md-4">
+        <label class="form-label">Valor do bem (garantia) (R$)</label>
+        <input class="form-control" name="collateral_value" placeholder="Ex.: 200000">
+      </div>
+
+      <div class="col-md-4">
+        <label class="form-label">LTV (%)</label>
+        <input class="form-control" name="ltv_pct" placeholder="Ex.: 50">
+      </div>
+
+      <div class="col-md-4">
+        <label class="form-label">Tarifa de abertura (R$)</label>
+        <input class="form-control" name="fee_amount" value="0">
+      </div>
+
+      <div class="col-md-4">
+        <label class="form-label">Seguro mensal (R$)</label>
+        <input class="form-control" name="monthly_insurance" value="0">
+      </div>
+
+      <div class="col-md-4">
+        <label class="form-label">Taxa admin mensal (R$)</label>
+        <input class="form-control" name="monthly_admin_fee" value="0">
+      </div>
+
+      <div class="col-12">
+        <label class="form-label">Observações</label>
+        <textarea class="form-control" name="notes" rows="3" placeholder="Condições, garantias, CET, etc."></textarea>
+      </div>
+
+      <div class="col-12 d-flex gap-2 mt-2">
+        <button class="btn btn-primary" type="submit">Gerar PDF</button>
+
+        <button class="btn btn-success"
+                type="submit"
+                formaction="/simulador/proposta"
+                formtarget="_blank"
+                rel="noopener"
+                id="btn_proposta"
+                disabled>
+          Gerar Proposta
+        </button>
+        <button class="btn btn-outline-secondary" type="submit" formaction="/simulador/json">Gerar JSON</button>
+      </div>
+    </div>
+  </form>
+
+  <p class="text-muted mt-3" style="font-size: 0.9rem;">
+    * Esta é apenas uma simulação e não constitui proposta de crédito. Sujeito à análise e aprovação.
+  </p>
+</div>
+<script>
+(function(){
+  const sel = document.getElementById("sim_client_id");
+  const btn = document.getElementById("btn_proposta");
+  if (!sel || !btn) return;
+
+  const toggle = () => {
+    btn.disabled = !sel.value;
+  };
+
+  sel.addEventListener("change", toggle);
+  toggle();
+})();
+</script>
+{% endblock %}
+"""
+
+
+@app.get("/simulador", response_class=HTMLResponse)
+@require_login
+async def simulador_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
+    if "simulador.html" not in TEMPLATES:
+        TEMPLATES["simulador.html"] = SIMULADOR_TEMPLATE
+
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+
+    current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
+    if ctx.membership.role == "cliente":
+        clients = [current_client] if current_client else []
+        selected_client_id = current_client.id if current_client else 0
+        borrower_name = current_client.name if current_client else ""
+        client_locked = True
+    else:
+        clients = session.exec(select(Client).where(Client.company_id == ctx.company.id).order_by(Client.name)).all()
+        selected_client_id = current_client.id if current_client else 0
+        borrower_name = current_client.name if current_client else ""
+        client_locked = False
+
+    return render(
+        "simulador.html",
+        request=request,
+        context={
+            "title": "Simulador",
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "role": ctx.membership.role,
+            "current_client": current_client,
+            "clients": clients,
+            "selected_client_id": selected_client_id,
+            "borrower_name": borrower_name,
+            "client_locked": client_locked,
+        },
+    )
+
+
+@app.post("/simulador/json", response_class=JSONResponse)
+@require_login
+async def simulador_json(
+        request: Request,
+        loan_type: str = Form("Empréstimo"),
+        amortization: str = Form("price"),
+        rate_pct: str = Form("1,79"),
+        rate_base: str = Form("am"),
+        term_months: int = Form(24),
+        principal: str = Form(""),
+        collateral_value: str = Form(""),
+        ltv_pct: str = Form(""),
+        grace_months: int = Form(0),
+        io_months: int = Form(0),
+        fee_amount: str = Form("0"),
+        monthly_insurance: str = Form("0"),
+        monthly_admin_fee: str = Form("0"),
+        borrower_name: str = Form(""),
+        notes: str = Form(""),
+        session: Session = Depends(get_session),
+) -> JSONResponse:
+    ctx = get_tenant_context(request, session)
+    current_client = None
+    if ctx:
+        current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
+    inp = build_loan_input(
+        loan_type=loan_type,
+        amortization=amortization,
+        rate_pct=rate_pct,
+        rate_base=rate_base,
+        term_months=term_months,
+        principal=principal,
+        collateral_value=collateral_value,
+        ltv_pct=ltv_pct,
+        start_date=date.today(),
+        grace_months=grace_months,
+        io_months=io_months,
+        fee_amount=fee_amount,
+        monthly_insurance=monthly_insurance,
+        monthly_admin_fee=monthly_admin_fee,
+        borrower_name=borrower_name,
+        notes=notes,
+    )
+    res = simulate_loan(inp)
+    try:
+        if ctx and current_client:
+            _notify_staff_about_client_activity(
+                session,
+                ctx=ctx,
+                client_id=current_client.id,
+                kind="simulacao",
+                title="Cliente executou uma simulação",
+                message=f"{inp.loan_type} • {format_brl(float(inp.principal))}",
+                href="/simulador",
+            )
+    except Exception:
+        pass
+    return JSONResponse({
+        "inputs": {
+            "loan_type": inp.loan_type,
+            "amortization": inp.amortization.value,
+            "rate": float(inp.rate),
+            "rate_base": inp.rate_base.value,
+            "term_months": inp.term_months,
+            "principal": float(inp.principal),
+            "collateral_value": float(inp.collateral_value),
+            "ltv_pct": float(inp.ltv_pct),
+            "grace_months": inp.grace_months,
+            "io_months": inp.io_months,
+            "fee_amount": float(inp.fee_amount),
+            "monthly_insurance": float(inp.monthly_insurance),
+            "monthly_admin_fee": float(inp.monthly_admin_fee),
+            "borrower_name": inp.borrower_name,
+            "notes": inp.notes,
+        },
+        "totals": {
+            "monthly_rate": float(res.monthly_rate),
+            "first_payment": float(res.first_payment),
+            "total_payment": float(res.total_payment),
+            "total_interest": float(res.total_interest),
+            "total_amort": float(res.total_amort),
+            "total_fees": float(res.total_fees),
+            "total_insurance": float(res.total_insurance),
+        },
+        "schedule": [
+            {
+                "n": r.n,
+                "due_date": r.due_date.isoformat(),
+                "payment": float(r.payment),
+                "interest": float(r.interest),
+                "amort": float(r.amort),
+                "fees": float(r.fees),
+                "insurance": float(r.insurance),
+                "balance": float(r.balance),
+            }
+            for r in res.schedule
+        ]
+    })
+
+
+@app.post("/simulador/pdf")
+@require_login
+async def simulador_pdf(
+        request: Request,
+        loan_type: str = Form("Empréstimo"),
+        amortization: str = Form("price"),
+        rate_pct: str = Form("1,79"),
+        rate_base: str = Form("am"),
+        term_months: int = Form(24),
+        principal: str = Form(""),
+        collateral_value: str = Form(""),
+        ltv_pct: str = Form(""),
+        grace_months: int = Form(0),
+        io_months: int = Form(0),
+        fee_amount: str = Form("0"),
+        monthly_insurance: str = Form("0"),
+        monthly_admin_fee: str = Form("0"),
+        borrower_name: str = Form(""),
+        notes: str = Form(""),
+        session: Session = Depends(get_session),
+):
+    ctx = get_tenant_context(request, session)
+    current_client = None
+    if ctx:
+        current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
+
+    inp = build_loan_input(
+        loan_type=loan_type,
+        amortization=amortization,
+        rate_pct=rate_pct,
+        rate_base=rate_base,
+        term_months=term_months,
+        principal=principal,
+        collateral_value=collateral_value,
+        ltv_pct=ltv_pct,
+        start_date=date.today(),
+        grace_months=grace_months,
+        io_months=io_months,
+        fee_amount=fee_amount,
+        monthly_insurance=monthly_insurance,
+        monthly_admin_fee=monthly_admin_fee,
+        borrower_name=borrower_name,
+        notes=notes,
+    )
+    res = simulate_loan(inp)
+    try:
+        if ctx and current_client:
+            _notify_staff_about_client_activity(
+                session,
+                ctx=ctx,
+                client_id=current_client.id,
+                kind="simulacao",
+                title="Cliente gerou PDF de simulação",
+                message=f"{inp.loan_type} • {format_brl(float(inp.principal))}",
+                href="/simulador",
+            )
+    except Exception:
+        pass
+    pdf_bytes = render_loan_pdf(res)
+    headers = {"Content-Disposition": 'inline; filename="simulacao_emprestimo_maffezzolli.pdf"'}
+    return StreamingResponse(io.BytesIO(pdf_bytes), media_type="application/pdf", headers=headers)
+
+
+# ----------------------------
+# UI Banner + News (v1)
+# ----------------------------
+
+import xml.etree.ElementTree as ET
+from email.utils import parsedate_to_datetime
+
+_UI_CACHE: dict[tuple[int, str], tuple[float, Any]] = {}
+_UI_CACHE_TTL_BANNER_SEC = 60
+_UI_CACHE_TTL_NEWS_SEC = 600
+
+BANNERS_DIR = STATIC_DIR / "banners"
+BANNERS_DIR.mkdir(parents=True, exist_ok=True)
+
+_DEFAULT_NEWS_FEEDS = [
+    {"name": "UOL Economia", "url": "http://www3.uol.com.br/xml/midiaindoor/economia.xml", "sort_order": 0},
+    {"name": "Money Times", "url": "https://www.moneytimes.com.br/feed/", "sort_order": 10},
+    {"name": "BM&C News", "url": "https://bmcnews.com.br/feed/", "sort_order": 20},
+    {"name": "InfoMoney", "url": "https://www.infomoney.com.br/feed/", "sort_order": 30},
+]
+
+
+def _ui_cache_get(company_id: int, key: str) -> Any:
+    now = datetime.now(timezone.utc).timestamp()
+    k = (company_id, key)
+    item = _UI_CACHE.get(k)
+    if not item:
+        return None
+    ts, data = item
+    ttl = _UI_CACHE_TTL_BANNER_SEC if key == "banner" else _UI_CACHE_TTL_NEWS_SEC
+    if (now - ts) > ttl:
+        _UI_CACHE.pop(k, None)
+        return None
+    return data
+
+
+def _ui_cache_set(company_id: int, key: str, data: Any) -> None:
+    now = datetime.now(timezone.utc).timestamp()
+    _UI_CACHE[(company_id, key)] = (now, data)
+
+
+def _ui_cache_bust(company_id: int) -> None:
+    for k in list(_UI_CACHE.keys()):
+        if k[0] == company_id:
+            _UI_CACHE.pop(k, None)
+
+
+def _ui_safe_int(v: Any, default: int = 0) -> int:
+    try:
+        return int(str(v).strip())
+    except Exception:
+        return default
+
+
+def _ui_parse_date(s: str) -> Optional[datetime]:
+    s = (s or "").strip()
+    if not s:
+        return None
+    try:
+        dt = parsedate_to_datetime(s)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc)
+    except Exception:
+        return None
+
+
+def _ui_parse_rss_atom(xml_bytes: bytes) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    if not xml_bytes:
+        return items
+
+    try:
+        root = ET.fromstring(xml_bytes)
+    except Exception:
+        return items
+
+    channel = root.find("channel")
+    if channel is not None:
+        source = (channel.findtext("title") or "").strip()
+        for it in channel.findall("item"):
+            title = (it.findtext("title") or "").strip()
+            link = (it.findtext("link") or "").strip()
+            pub = _ui_parse_date(it.findtext("pubDate") or "")
+            if title and link:
+                items.append({"title": title, "url": link, "published_dt": pub, "source": source})
+        return items
+
+    ns = {"atom": "http://www.w3.org/2005/Atom"}
+    entries = root.findall("entry") or root.findall("atom:entry", ns)
+    source = (root.findtext("title") or root.findtext("atom:title", default="", namespaces=ns) or "").strip()
+    for e in entries:
+        title = (e.findtext("title") or e.findtext("atom:title", default="", namespaces=ns) or "").strip()
+        link_el = e.find("link") or e.find("atom:link", ns)
+        link = (link_el.attrib.get("href") if link_el is not None else "") or ""
+        pub = _ui_parse_date(
+            (e.findtext("updated") or e.findtext("atom:updated", default="", namespaces=ns) or "").strip())
+        if title and link:
+            items.append({"title": title, "url": link.strip(), "published_dt": pub, "source": source})
+    return items
+
+
+async def _ui_fetch_bytes(url: str) -> bytes:
+    url = (url or "").strip()
+    if not url:
+        return b""
+    headers = {"User-Agent": "MaffezzolliCapitalApp/1.0 (+rss)"}
+    try:
+        async with httpx.AsyncClient(timeout=12, headers=headers, follow_redirects=True) as client:
+            r = await client.get(url)
+            if 200 <= r.status_code < 300:
+                return r.content or b""
+    except Exception:
+        return b""
+    return b""
+
+
+async def _ui_load_news(company_id: int, session: Session, limit: int = 10) -> list[dict[str, Any]]:
+    cached = _ui_cache_get(company_id, "news")
+    if cached is not None:
+        return cached
+
+    ensure_ui_tables()
+
+    try:
+        feeds = session.exec(
+            select(UiNewsFeed)
+            .where(UiNewsFeed.company_id == company_id, UiNewsFeed.is_active == True)
+            .order_by(UiNewsFeed.sort_order, UiNewsFeed.id)
+        ).all()
+    except Exception:
+        _ui_cache_set(company_id, "news", [])
+        return []
+
+    if not feeds:
+        try:
+            for f in _DEFAULT_NEWS_FEEDS:
+                session.add(
+                    UiNewsFeed(
+                        company_id=company_id,
+                        name=f["name"],
+                        url=f["url"],
+                        sort_order=f["sort_order"],
+                        is_active=True,
+                    )
+                )
+            session.commit()
+            feeds = session.exec(
+                select(UiNewsFeed)
+                .where(UiNewsFeed.company_id == company_id, UiNewsFeed.is_active == True)
+                .order_by(UiNewsFeed.sort_order, UiNewsFeed.id)
+            ).all()
+        except Exception:
+            _ui_cache_set(company_id, "news", [])
+            return []
+
+    all_items: list[dict[str, Any]] = []
+    for f in feeds:
+        xml = await _ui_fetch_bytes(f.url)
+        parsed = _ui_parse_rss_atom(xml)
+        for it in parsed[:25]:
+            it["source"] = it.get("source") or f.name
+            all_items.append(it)
+
+    dedup: dict[str, dict[str, Any]] = {}
+    for it in all_items:
+        u = it.get("url") or ""
+        if u and u not in dedup:
+            dedup[u] = it
+
+    items2 = list(dedup.values())
+    items2.sort(
+        key=lambda x: x.get("published_dt") or datetime(1970, 1, 1, tzinfo=timezone.utc),
+        reverse=True,
+    )
+    items2 = items2[: max(1, min(limit, 30))]
+
+    out = []
+    sao_paulo_tz = timezone(timedelta(hours=-3))
+    for it in items2:
+        dt = it.get("published_dt")
+        out.append(
+            {
+                "title": it.get("title") or "",
+                "url": it.get("url") or "",
+                "source": it.get("source") or "",
+                "published": dt.astimezone(sao_paulo_tz).strftime("%d/%m %H:%M") if isinstance(dt, datetime) else "",
+            }
+        )
+
+    _ui_cache_set(company_id, "news", out)
+    return out
+
+
+def _ui_load_banner(company_id: int, session: Session) -> list[dict[str, Any]]:
+    cached = _ui_cache_get(company_id, "banner")
+    if cached is not None:
+        return cached
+
+    ensure_ui_tables()
+
+    try:
+        slides = session.exec(
+            select(UiBannerSlide)
+            .where(UiBannerSlide.company_id == company_id, UiBannerSlide.is_active == True)
+            .order_by(UiBannerSlide.sort_order, UiBannerSlide.id)
+        ).all()
+    except Exception:
+        _ui_cache_set(company_id, "banner", [])
+        return []
+
+    out = [{"title": s.title, "image_url": s.image_url, "link_path": s.link_path} for s in slides]
+    _ui_cache_set(company_id, "banner", out)
+    return out
+
+
+@app.post("/simulador/proposta")
+@require_login
+async def simulador_criar_proposta(
+        request: Request,
+        session: Session = Depends(get_session),
+        # client selection
+        client_id: str = Form(""),
+        # simulation params (same as simulador/pdf)
+        loan_type: str = Form("Empréstimo"),
+        amortization: str = Form("price"),
+        rate: str = Form("1,79"),
+        rate_base: str = Form("am"),
+        term_months: int = Form(24),
+        principal: str = Form(""),
+        collateral_value: str = Form(""),
+        ltv_pct: str = Form(""),
+        grace_months: int = Form(0),
+        io_months: int = Form(0),
+        fee_amount: str = Form("0"),
+        monthly_insurance: str = Form("0"),
+        monthly_admin_fee: str = Form("0"),
+        borrower_name: str = Form(""),
+        notes: str = Form(""),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    # valida client_id
+    cid = (client_id or "").strip()
+    if not cid:
+        set_flash(request, "Selecione um cliente para gerar proposta.")
+        return RedirectResponse("/simulador", status_code=303)
+
+    try:
+        cid_int = int(cid)
+    except Exception:
+        set_flash(request, "Cliente inválido.")
+        return RedirectResponse("/simulador", status_code=303)
+
+    client = session.get(Client, cid_int)
+    if not client or client.company_id != ctx.company.id:
+        set_flash(request, "Cliente não encontrado.")
+        return RedirectResponse("/simulador", status_code=303)
+
+    # Portal: cliente só pode gerar proposta para si mesmo
+    if ctx.membership.role == "cliente" and (ctx.membership.client_id or 0) != client.id:
+        raise HTTPException(status_code=403, detail="Sem permissão para este cliente.")
+
+    # Constrói inputs + simula (para preencher descrição/valor)
+    raw_form = await request.form()
+    chosen_rate = (
+            str(raw_form.get("rate_pct") or "").strip()
+            or str(raw_form.get("rate") or "").strip()
+            or str(rate or "").strip()
+            or "1,79"
+    )
+    inp = LoanSimInputs.from_form(
+        loan_type=loan_type,
+        amortization=amortization,
+        rate=chosen_rate,
+        rate_pct=chosen_rate,
+        rate_base=rate_base,
+        term_months=term_months,
+        principal=principal,
+        collateral_value=collateral_value,
+        ltv_pct=ltv_pct,
+        grace_months=grace_months,
+        io_months=io_months,
+        fee_amount=fee_amount,
+        monthly_insurance=monthly_insurance,
+        monthly_admin_fee=monthly_admin_fee,
+        borrower_name=borrower_name,
+        notes=notes,
+    )
+    sim = simulate_loan(inp)
+
+    # Cria proposta (SEM depender do CRM)
+    title = f"Proposta - {client.name} - {inp.loan_type}"
+    desc = (
+        f"Simulação de crédito ({inp.amortization.value.upper()}):\n"
+        f"Valor: {float(inp.principal):.2f} | Prazo: {inp.term_months} meses | "
+        f"Taxa base: {inp.rate_base.value} | Taxa: {float(inp.rate) * 100:.2f}%\n"
+        f"LTV: {float(inp.ltv_pct):.2f}% | Carência: {inp.grace_months}m | IO-only: {inp.io_months}m\n"
+    )
+    if inp.notes:
+        desc += "\nObservações:\n" + inp.notes.strip()
+
+    prop = Proposal(
+        company_id=ctx.company.id,
+        client_id=client.id,
+        created_by_user_id=ctx.user.id,
+        kind="proposta",
+        title=title,
+        description=desc,
+        service_name=inp.loan_type,
+        value_brl=max(0.0, float(inp.principal)),
+        status="rascunho",
+        created_at=utcnow(),
+        updated_at=utcnow(),
+    )
+    session.add(prop)
+    session.commit()
+    session.refresh(prop)
+
+    # Regra: tudo que nasce em Propostas (via simulador) cria também um card no CRM.
+    deal = BusinessDeal(
+        company_id=ctx.company.id,
+        client_id=client.id,
+        created_by_user_id=ctx.user.id,
+        owner_user_id=ctx.user.id,
+        title=f"Simulação/Proposta: {inp.loan_type}",
+        demand="Crédito",
+        notes=desc,
+        stage="qualificacao",
+        service_name=inp.loan_type,
+        value_estimate_brl=max(0.0, float(inp.principal)),
+        probability_pct=30,
+        source="simulador",
+        proposal_id=prop.id,
+        created_at=utcnow(),
+        updated_at=utcnow(),
+    )
+    session.add(deal)
+    session.commit()
+    session.refresh(deal)
+    session.add(BusinessDealNote(deal_id=deal.id, author_user_id=ctx.user.id,
+                                 message=f"Proposta criada (#{prop.id}) via Simulador."))
+    session.commit()
+
+    set_flash(request, "Proposta criada e card gerado no CRM.")
+    return RedirectResponse(f"/propostas/{prop.id}", status_code=303)
+
+
+@app.get("/api/ui/banner", response_class=JSONResponse)
+@require_login
+async def api_ui_banner(request: Request, session: Session = Depends(get_session)) -> JSONResponse:
+    ctx = get_tenant_context(request, session)
+    return JSONResponse(_ui_load_banner(ctx.company.id, session))
+
+
+@app.get("/api/ui/news", response_class=JSONResponse)
+@require_login
+async def api_ui_news(request: Request, limit: int = 10, session: Session = Depends(get_session)) -> JSONResponse:
+    ctx = get_tenant_context(request, session)
+    items = await _ui_load_news(ctx.company.id, session, limit=limit)
+    return JSONResponse(items)
+
+
+@app.get("/admin/ui", response_class=HTMLResponse)
+@require_role({"admin"})
+async def admin_ui_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    company_id = ctx.company.id
+    active_client_id = get_active_client_id(request, session, ctx)
+    current_client = get_client_or_none(session, company_id, active_client_id)
+
+    ensure_ui_tables()
+    try:
+        slides = session.exec(
+            select(UiBannerSlide)
+            .where(UiBannerSlide.company_id == company_id)
+            .order_by(UiBannerSlide.sort_order, UiBannerSlide.id)
+        ).all()
+        feeds = session.exec(
+            select(UiNewsFeed)
+            .where(UiNewsFeed.company_id == company_id)
+            .order_by(UiNewsFeed.sort_order, UiNewsFeed.id)
+        ).all()
+    except Exception:
+        request.session["flash"] = {"kind": "danger",
+                                    "msg": "Não foi possível carregar/salvar UI (tabelas ausentes ou banco sem permissão)."}
+        slides = []
+        feeds = []
+    return render("admin_ui.html", request=request, context={
+        "title": "Configurações de UI",
+        "slides": slides,
+        "feeds": feeds,
+        "current_user": ctx.user,
+        "current_company": ctx.company,
+        "role": ctx.membership.role,
+        "current_client": current_client,
+    })
+
+
+@app.post("/admin/ui/banner/add")
+@require_role({"admin"})
+async def admin_ui_banner_add(
+        request: Request,
+        title: str = Form(""),
+        link_path: str = Form("/"),
+        image_url: str = Form(""),
+        sort_order: int = Form(0),
+        is_active: Optional[str] = Form(None),
+        image_file: Optional[UploadFile] = File(None),
+        session: Session = Depends(get_session),
+):
+    ctx = get_tenant_context(request, session)
+    company_id = ctx.company.id
+
+    img = (image_url or "").strip()
+    if (not img) and image_file and image_file.filename:
+        content = await image_file.read()
+        if len(content) > 3 * 1024 * 1024:
+            raise HTTPException(status_code=400, detail="Imagem muito grande (max 3MB).")
+        ext = (Path(image_file.filename).suffix or ".png").lower()
+        fname = f"{uuid.uuid4().hex}{ext}"
+        fpath = BANNERS_DIR / fname
+        fpath.write_bytes(content)
+        img = f"/static/banners/{fname}"
+
+    if not img:
+        raise HTTPException(status_code=400, detail="Informe a URL da imagem ou envie um arquivo.")
+
+    slide = UiBannerSlide(
+        company_id=company_id,
+        title=(title or "").strip(),
+        image_url=img,
+        link_path=(link_path or "/").strip() or "/",
+        sort_order=_ui_safe_int(sort_order, 0),
+        is_active=bool(is_active),
+    )
+    session.add(slide)
+    session.commit()
+    _ui_cache_bust(company_id)
+    request.session["flash"] = "Slide adicionado."
+    return RedirectResponse("/admin/ui", status_code=303)
+
+
+@app.post("/admin/ui/banner/{slide_id}/toggle")
+@require_role({"admin"})
+async def admin_ui_banner_toggle(slide_id: int, request: Request, session: Session = Depends(get_session)):
+    ctx = get_tenant_context(request, session)
+    company_id = ctx.company.id
+    s = session.get(UiBannerSlide, slide_id)
+    if not s or s.company_id != company_id:
+        raise HTTPException(status_code=404, detail="Slide não encontrado.")
+    s.is_active = not s.is_active
+    session.add(s)
+    session.commit()
+    _ui_cache_bust(company_id)
+    return RedirectResponse("/admin/ui", status_code=303)
+
+
+@app.post("/admin/ui/banner/{slide_id}/delete")
+@require_role({"admin"})
+async def admin_ui_banner_delete(slide_id: int, request: Request, session: Session = Depends(get_session)):
+    ctx = get_tenant_context(request, session)
+    company_id = ctx.company.id
+    s = session.get(UiBannerSlide, slide_id)
+    if not s or s.company_id != company_id:
+        raise HTTPException(status_code=404, detail="Slide não encontrado.")
+    session.delete(s)
+    session.commit()
+    _ui_cache_bust(company_id)
+    return RedirectResponse("/admin/ui", status_code=303)
+
+
+@app.post("/admin/ui/feed/add")
+@require_role({"admin"})
+async def admin_ui_feed_add(
+        request: Request,
+        name: str = Form(...),
+        url: str = Form(...),
+        sort_order: int = Form(0),
+        is_active: Optional[str] = Form(None),
+        session: Session = Depends(get_session),
+):
+    ctx = get_tenant_context(request, session)
+    company_id = ctx.company.id
+    feed = UiNewsFeed(
+        company_id=company_id,
+        name=(name or "").strip(),
+        url=(url or "").strip(),
+        sort_order=_ui_safe_int(sort_order, 0),
+        is_active=bool(is_active),
+    )
+    session.add(feed)
+    session.commit()
+    _ui_cache_bust(company_id)
+    request.session["flash"] = "Feed adicionado."
+    return RedirectResponse("/admin/ui", status_code=303)
+
+
+@app.post("/admin/ui/feed/{feed_id}/toggle")
+@require_role({"admin"})
+async def admin_ui_feed_toggle(feed_id: int, request: Request, session: Session = Depends(get_session)):
+    ctx = get_tenant_context(request, session)
+    company_id = ctx.company.id
+    f = session.get(UiNewsFeed, feed_id)
+    if not f or f.company_id != company_id:
+        raise HTTPException(status_code=404, detail="Feed não encontrado.")
+    f.is_active = not f.is_active
+    session.add(f)
+    session.commit()
+    _ui_cache_bust(company_id)
+    return RedirectResponse("/admin/ui", status_code=303)
+
+
+@app.post("/admin/ui/feed/{feed_id}/delete")
+@require_role({"admin"})
+async def admin_ui_feed_delete(feed_id: int, request: Request, session: Session = Depends(get_session)):
+    ctx = get_tenant_context(request, session)
+    company_id = ctx.company.id
+    f = session.get(UiNewsFeed, feed_id)
+    if not f or f.company_id != company_id:
+        raise HTTPException(status_code=404, detail="Feed não encontrado.")
+    session.delete(f)
+    session.commit()
+    _ui_cache_bust(company_id)
+    return RedirectResponse("/admin/ui", status_code=303)
+
+
+TEMPLATES.update({
+    "admin_registry.html": r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="container" style="max-width: 1200px;">
+  <div class="d-flex align-items-center justify-content-between mt-3">
+    <h3>Admin - Gestão</h3>
+    <div class="d-flex gap-2">
+      <a class="btn btn-sm btn-outline-secondary" href="/admin/members">Membros</a>
+      <a class="btn btn-sm btn-outline-secondary" href="/admin/ui">UI (Banner/Notícias)</a>
+    </div>
+  </div>
+
+  <p class="text-muted" style="font-size: .95rem;">
+    Aqui você pode <b>inativar</b> ou <b>excluir</b> (soft delete) empresas, clientes e membros.
+  </p>
+
+  <ul class="nav nav-tabs mt-3" role="tablist">
+    <li class="nav-item" role="presentation">
+      <button class="nav-link active" data-bs-toggle="tab" data-bs-target="#tab-companies" type="button" role="tab">Empresas</button>
+    </li>
+    <li class="nav-item" role="presentation">
+      <button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-clients" type="button" role="tab">Clientes</button>
+    </li>
+    <li class="nav-item" role="presentation">
+      <button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-members" type="button" role="tab">Membros</button>
+    </li>
+  </ul>
+
+  <div class="tab-content border border-top-0 p-3 bg-white">
+    <div class="tab-pane fade show active" id="tab-companies" role="tabpanel">
+      {% if not is_superadmin %}
+        <div class="alert alert-info">Mostrando apenas sua empresa (superadmin pode ver todas).</div>
+      {% endif %}
+      <div class="table-responsive">
+        <table class="table table-sm align-middle">
+          <thead><tr><th>ID</th><th>Nome</th><th>Criada</th><th>Status</th><th style="width: 260px;">Ações</th></tr></thead>
+          <tbody>
+          {% for c in companies %}
+            <tr>
+              <td>{{ c.id }}</td>
+              <td>{{ c.name }}</td>
+              <td>{{ c.created_at.strftime("%d/%m/%Y") if c.created_at else "" }}</td>
+              <td>
+                {% set st = company_states.get(c.id) %}
+                {% if st and st.is_deleted %}<span class="badge bg-danger">Excluída</span>
+                {% elif st and not st.is_active %}<span class="badge bg-warning text-dark">Inativa</span>
+                {% else %}<span class="badge bg-success">Ativa</span>{% endif %}
+              </td>
+              <td class="d-flex gap-2">
+                <form method="post" action="/admin/entity/company/{{ c.id }}/toggle">
+                  <button class="btn btn-sm btn-outline-primary" type="submit">Ativar/Inativar</button>
+                </form>
+                <form method="post" action="/admin/entity/company/{{ c.id }}/delete" onsubmit="return confirm('Excluir empresa (soft)?');">
+                  <button class="btn btn-sm btn-outline-danger" type="submit">Excluir</button>
+                </form>
+                {% if is_superadmin %}
+                <form method="post" action="/admin/entity/company/{{ c.id }}/hard_delete" onsubmit="return confirm('Excluir DEFINITIVO? Pode falhar se houver dependências.');">
+                  <button class="btn btn-sm btn-danger" type="submit">Excluir definitivo</button>
+                </form>
+                {% endif %}
+              </td>
+            </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="tab-pane fade" id="tab-clients" role="tabpanel">
+      <div class="table-responsive">
+        <table class="table table-sm align-middle">
+          <thead><tr><th>ID</th><th>Empresa</th><th>Nome</th><th>CNPJ</th><th>Email</th><th>Status</th><th style="width: 240px;">Ações</th></tr></thead>
+          <tbody>
+          {% for cl in clients %}
+            <tr>
+              <td>{{ cl.id }}</td>
+              <td>{{ company_by_id.get(cl.company_id, '-') }}</td>
+              <td>{{ cl.name }}</td>
+              <td>{{ cl.cnpj }}</td>
+              <td>{{ cl.email }}</td>
+              <td>
+                {% set st = client_states.get(cl.id) %}
+                {% if st and st.is_deleted %}<span class="badge bg-danger">Excluído</span>
+                {% elif st and not st.is_active %}<span class="badge bg-warning text-dark">Inativo</span>
+                {% else %}<span class="badge bg-success">Ativo</span>{% endif %}
+              </td>
+              <td class="d-flex gap-2">
+                <form method="post" action="/admin/entity/client/{{ cl.id }}/toggle">
+                  <button class="btn btn-sm btn-outline-primary" type="submit">Ativar/Inativar</button>
+                </form>
+                <form method="post" action="/admin/entity/client/{{ cl.id }}/delete" onsubmit="return confirm('Excluir cliente (soft)?');">
+                  <button class="btn btn-sm btn-outline-danger" type="submit">Excluir</button>
+                </form>
+                {% if is_superadmin %}
+                <form method="post" action="/admin/entity/client/{{ cl.id }}/hard_delete" onsubmit="return confirm('Excluir DEFINITIVO? Pode falhar se houver dependências.');">
+                  <button class="btn btn-sm btn-danger" type="submit">Excluir definitivo</button>
+                </form>
+                {% endif %}
+              </td>
+            </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="tab-pane fade" id="tab-members" role="tabpanel">
+      <div class="table-responsive">
+        <table class="table table-sm align-middle">
+          <thead><tr><th>ID</th><th>Empresa</th><th>Usuário</th><th>Email</th><th>Role</th><th>Cliente</th><th>Status</th><th style="width: 220px;">Ações</th></tr></thead>
+          <tbody>
+          {% for m in members %}
+            <tr>
+              <td>{{ m.id }}</td>
+              <td>{{ company_by_id.get(m.company_id, '-') }}</td>
+              <td>{{ user_by_id.get(m.user_id, {}).get("name", "-") }}</td>
+              <td>{{ user_by_id.get(m.user_id, {}).get("email", "-") }}</td>
+              <td>{{ m.role }}</td>
+              <td>{{ client_by_id.get(m.client_id, "-") }}</td>
+              <td>
+                {% set st = membership_states.get(m.id) %}
+                {% if st and st.is_deleted %}<span class="badge bg-danger">Excluído</span>
+                {% elif st and not st.is_active %}<span class="badge bg-warning text-dark">Inativo</span>
+                {% else %}<span class="badge bg-success">Ativo</span>{% endif %}
+              </td>
+              <td class="d-flex gap-2">
+                <form method="post" action="/admin/entity/membership/{{ m.id }}/toggle">
+                  <button class="btn btn-sm btn-outline-primary" type="submit">Ativar/Inativar</button>
+                </form>
+                <form method="post" action="/admin/entity/membership/{{ m.id }}/delete" onsubmit="return confirm('Excluir membro (soft)?');">
+                  <button class="btn btn-sm btn-outline-danger" type="submit">Excluir</button>
+                </form>
+              </td>
+            </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      <div class="alert alert-secondary mt-2" style="font-size:.9rem;">
+        Inativar/excluir membro bloqueia acesso (require_role não permite entrar).
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+""",
+})
+
+
+@app.get("/admin/gestao", response_class=HTMLResponse)
+@require_role({"admin"})
+async def admin_gestao(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+
+    superadmin = is_superadmin(ctx.user)
+
+    if superadmin:
+        companies = session.exec(select(Company).order_by(Company.created_at)).all()
+        clients = session.exec(select(Client).order_by(Client.created_at)).all()
+        members = session.exec(select(Membership).order_by(Membership.created_at)).all()
+    else:
+        companies = [ctx.company]
+        clients = session.exec(
+            select(Client).where(Client.company_id == ctx.company.id).order_by(Client.created_at)).all()
+        members = session.exec(
+            select(Membership).where(Membership.company_id == ctx.company.id).order_by(Membership.created_at)).all()
+
+    company_ids = [c.id for c in companies if c.id]
+    client_ids = [c.id for c in clients if c.id]
+    member_ids = [m.id for m in members if m.id]
+    user_ids = sorted({m.user_id for m in members if m.user_id})
+
+    def fetch_states(entity_type: str, ids: list[int]) -> dict[int, AdminEntityState]:
+        if not ids:
+            return {}
+        rows = session.exec(
+            select(AdminEntityState).where(
+                AdminEntityState.entity_type == entity_type,
+                AdminEntityState.entity_id.in_(ids),
+            )
+        ).all()
+        return {r.entity_id: r for r in rows}
+
+    company_states = fetch_states("company", company_ids)
+    client_states = fetch_states("client", client_ids)
+    membership_states = fetch_states("membership", member_ids)
+    user_states = fetch_states("user", user_ids)
+
+    users = session.exec(select(User).where(User.id.in_(user_ids))).all() if user_ids else []
+    user_by_id = {u.id: {"name": u.name, "email": u.email, "state": user_states.get(u.id)} for u in users if u.id}
+
+    client_by_id = {c.id: c.name for c in clients if c.id}
+    company_by_id = {c.id: c.name for c in companies if c.id}
+
+    return render(
+        "admin_registry.html",
+        request=request,
+        context={
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "role": ctx.membership.role,
+            "current_client": None,
+            "companies": companies,
+            "clients": clients,
+            "members": members,
+            "company_states": company_states,
+            "client_states": client_states,
+            "membership_states": membership_states,
+            "user_by_id": user_by_id,
+            "client_by_id": client_by_id,
+            "company_by_id": company_by_id,
+            "is_superadmin": superadmin,
+        },
+    )
+
+
+def _admin_check_scope(ctx: TenantContext, session: Session, entity_type: str, entity_id: int) -> Optional[str]:
+    if is_superadmin(ctx.user):
+        return None
+    if entity_type == "company":
+        return "Apenas superadmin pode alterar empresa."
+    if entity_type == "client":
+        obj = session.get(Client, entity_id)
+        if not obj or obj.company_id != ctx.company.id:
+            return "Cliente fora do escopo."
+        return None
+    if entity_type == "membership":
+        obj = session.get(Membership, entity_id)
+        if not obj or obj.company_id != ctx.company.id:
+            return "Membro fora do escopo."
+        return None
+    if entity_type == "user":
+        return "Apenas superadmin pode alterar usuários."
+    return "Tipo inválido."
+
+
+def _derive_company_id_for_state(session: Session, entity_type: str, entity_id: int, fallback_company_id: int) -> \
+Optional[int]:
+    if entity_type == "company":
+        return int(entity_id)
+    if entity_type == "client":
+        cl = session.get(Client, entity_id)
+        return cl.company_id if cl else fallback_company_id
+    if entity_type == "membership":
+        m = session.get(Membership, entity_id)
+        return m.company_id if m else fallback_company_id
+    return None
+
+
+@app.post("/admin/entity/{entity_type}/{entity_id}/toggle")
+@require_role({"admin"})
+async def admin_entity_toggle(request: Request, entity_type: str, entity_id: int,
+                              session: Session = Depends(get_session)):
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+
+    et = (entity_type or "").strip().lower()
+    if et not in {"company", "client", "membership", "user"}:
+        request.session["flash"] = {"kind": "danger", "message": "Tipo inválido."}
+        return RedirectResponse("/admin/gestao", status_code=303)
+
+    err = _admin_check_scope(ctx, session, et, int(entity_id))
+    if err:
+        request.session["flash"] = {"kind": "danger", "message": err}
+        return RedirectResponse("/admin/gestao", status_code=303)
+
+    current = _get_state(session, entity_type=et, entity_id=int(entity_id))
+    new_active = True if (not current) else (not bool(current.is_active))
+    set_entity_state(
+        session,
+        entity_type=et,
+        entity_id=int(entity_id),
+        company_id=_derive_company_id_for_state(session, et, int(entity_id), ctx.company.id),
+        is_active=new_active,
+        is_deleted=False,
+        updated_by_user_id=ctx.user.id,
+    )
+    request.session["flash"] = {"kind": "success", "message": f"{et} atualizado."}
+    return RedirectResponse("/admin/gestao", status_code=303)
+
+
+@app.post("/admin/entity/{entity_type}/{entity_id}/delete")
+@require_role({"admin"})
+async def admin_entity_delete(request: Request, entity_type: str, entity_id: int,
+                              session: Session = Depends(get_session)):
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+
+    et = (entity_type or "").strip().lower()
+    if et not in {"company", "client", "membership", "user"}:
+        request.session["flash"] = {"kind": "danger", "message": "Tipo inválido."}
+        return RedirectResponse("/admin/gestao", status_code=303)
+
+    err = _admin_check_scope(ctx, session, et, int(entity_id))
+    if err:
+        request.session["flash"] = {"kind": "danger", "message": err}
+        return RedirectResponse("/admin/gestao", status_code=303)
+
+    set_entity_state(
+        session,
+        entity_type=et,
+        entity_id=int(entity_id),
+        company_id=_derive_company_id_for_state(session, et, int(entity_id), ctx.company.id),
+        is_deleted=True,
+        updated_by_user_id=ctx.user.id,
+    )
+    request.session["flash"] = {"kind": "success", "message": f"{et} excluído (soft)."}
+    return RedirectResponse("/admin/gestao", status_code=303)
+
+
+@app.post("/admin/entity/{entity_type}/{entity_id}/hard_delete")
+@require_role({"admin"})
+async def admin_entity_hard_delete(request: Request, entity_type: str, entity_id: int,
+                                   session: Session = Depends(get_session)):
+    ctx = get_tenant_context(request, session)
+    if not ctx or not is_superadmin(ctx.user):
+        request.session["flash"] = {"kind": "danger", "message": "Apenas superadmin."}
+        return RedirectResponse("/admin/gestao", status_code=303)
+
+    et = (entity_type or "").strip().lower()
+    try:
+        if et == "client":
+            obj = session.get(Client, entity_id)
+            if obj:
+                session.delete(obj)
+                session.commit()
+        elif et == "company":
+            obj = session.get(Company, entity_id)
+            if obj:
+                session.delete(obj)
+                session.commit()
+        else:
+            request.session["flash"] = {"kind": "warning",
+                                        "message": "Hard delete disponível apenas para company/client."}
+            return RedirectResponse("/admin/gestao", status_code=303)
+    except Exception as e:
+        request.session["flash"] = {"kind": "danger", "message": f"Falha hard delete: {e}"}
+        return RedirectResponse("/admin/gestao", status_code=303)
+
+    request.session["flash"] = {"kind": "success", "message": f"{et} excluído definitivamente."}
+    return RedirectResponse("/admin/gestao", status_code=303)
+
+
+# === CREDIT_WALLET_MODULE_V1 ===
+# Créditos (1 crédito = R$1,00) + Consultas (catálogo) + Stripe Checkout (opcional)
+import math
+
+try:
+    import stripe  # type: ignore
+except Exception:
+    stripe = None
+
+
+class CreditWallet(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    company_id: int = Field(index=True, foreign_key="company.id")
+    client_id: int = Field(index=True, foreign_key="client.id", unique=True)
+    balance_cents: int = Field(default=0, index=True)
+    updated_at: datetime = Field(default_factory=utcnow)
+
+
+class CreditLedger(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    company_id: int = Field(index=True, foreign_key="company.id")
+    client_id: int = Field(index=True, foreign_key="client.id")
+
+    kind: str = Field(index=True)  # TOPUP_CONFIRMED / CONSULT_CAPTURED / ADJUSTMENT
+    amount_cents: int  # + / -
+    ref_type: str = Field(default="", index=True)  # stripe_session / query_run
+    ref_id: str = Field(default="", index=True)
+    note: str = ""
+    created_at: datetime = Field(default_factory=utcnow)
+
+
+class QueryProduct(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    company_id: int = Field(index=True, foreign_key="company.id")
+    code: str = Field(index=True)  # directdata.scr_analitico
+    label: str
+    category: str = Field(default="credito", index=True)
+    provider: str = Field(default="directdata", index=True)
+    provider_cost_cents: int = 0
+    markup_pct: int = 50  # mínimo 50
+    enabled: bool = Field(default=True, index=True)
+    created_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime = Field(default_factory=utcnow)
+
+
+class QueryRun(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    company_id: int = Field(index=True, foreign_key="company.id")
+    client_id: int = Field(index=True, foreign_key="client.id")
+    created_by_user_id: int = Field(index=True, foreign_key="user.id")
+
+    product_code: str = Field(index=True)
+    subject_doc: str = Field(default="", index=True)
+    status: str = Field(default="PENDING", index=True)  # PENDING/READY/FAILED
+
+    price_cents: int = 0
+    provider_cost_cents: int = 0
+
+    provider_uid: str = Field(default="", index=True)
+    result_json: str = ""
+    error: str = ""
+
+    created_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime = Field(default_factory=utcnow)
+
+
+def ensure_credit_wallet_tables() -> None:
+    try:
+        SQLModel.metadata.create_all(
+            engine,
+            tables=[
+                CreditWallet.__table__,
+                CreditLedger.__table__,
+                QueryProduct.__table__,
+                QueryRun.__table__,
+            ],
+            checkfirst=True,
+        )
+    except Exception:
+        return
+
+
+@app.on_event("startup")
+def _startup_credit_wallet_tables() -> None:
+    ensure_credit_wallet_tables()
+
+
+def _stripe_enabled() -> bool:
+    return bool(os.getenv("STRIPE_SECRET_KEY")) and bool(os.getenv("STRIPE_WEBHOOK_SECRET")) and stripe is not None
+
+
+def _price_cents(cost_cents: int, markup_pct: int, product_code: str = "", company_id: int = 0) -> int:
+    if product_code and company_id:
+        try:
+            from sqlmodel import Session as _SPC
+            with _SPC(engine) as _spc:
+                _pp = _spc.exec(
+                    select(ProdutoPreco)
+                    .where(ProdutoPreco.company_id == company_id,
+                           ProdutoPreco.codigo == f"compliance_{product_code}",
+                           ProdutoPreco.ativo == True)
+                ).first()
+                if _pp and _pp.creditos > 0:
+                    return _pp.creditos * 100
+        except Exception:
+            pass
+    markup = max(50, int(markup_pct or 50))
+    return int(math.ceil(cost_cents * (1.0 + markup / 100.0)))
+
+
+def _get_or_create_wallet(session: Session, *, company_id: int, client_id: int) -> CreditWallet:
+    w = session.exec(
+        select(CreditWallet).where(CreditWallet.company_id == company_id, CreditWallet.client_id == client_id)
+    ).first()
+    if w:
+        return w
+    w = CreditWallet(company_id=company_id, client_id=client_id, balance_cents=0, updated_at=utcnow())
+    session.add(w)
+    session.commit()
+    session.refresh(w)
+    return w
+
+
+def _wallet_add_ledger(
+        session: Session,
+        *,
+        company_id: int,
+        client_id: int,
+        kind: str,
+        amount_cents: int,
+        ref_type: str = "",
+        ref_id: str = "",
+        note: str = "",
+) -> None:
+    session.add(
+        CreditLedger(
+            company_id=company_id,
+            client_id=client_id,
+            kind=kind,
+            amount_cents=int(amount_cents),
+            ref_type=ref_type,
+            ref_id=ref_id,
+            note=note,
+            created_at=utcnow(),
+        )
+    )
+    session.commit()
+
+
+def _wallet_credit(session: Session, *, company_id: int, client_id: int, amount_cents: int,
+                   stripe_session_id: str) -> None:
+    w = _get_or_create_wallet(session, company_id=company_id, client_id=client_id)
+    w.balance_cents += int(amount_cents)
+    w.updated_at = utcnow()
+    session.add(w)
+    session.commit()
+    _wallet_add_ledger(
+        session,
+        company_id=company_id,
+        client_id=client_id,
+        kind="TOPUP_CONFIRMED",
+        amount_cents=int(amount_cents),
+        ref_type="stripe_session",
+        ref_id=stripe_session_id,
+        note=f"Recarga Stripe (+{amount_cents / 100:.2f} créditos)",
+    )
+
+
+def _wallet_debit_or_402(session: Session, *, company_id: int, client_id: int, amount_cents: int, run_id: int,
+                         note: str) -> None:
+    w = _get_or_create_wallet(session, company_id=company_id, client_id=client_id)
+    if w.balance_cents < int(amount_cents):
+        raise HTTPException(status_code=402, detail="Saldo insuficiente de créditos.")
+    w.balance_cents -= int(amount_cents)
+    w.updated_at = utcnow()
+    session.add(w)
+    session.commit()
+    _wallet_add_ledger(
+        session,
+        company_id=company_id,
+        client_id=client_id,
+        kind="CONSULT_CAPTURED",
+        amount_cents=-int(amount_cents),
+        ref_type="query_run",
+        ref_id=str(run_id),
+        note=note,
+    )
+
+
+def _wallet_refund(session: Session, *, company_id: int, client_id: int, amount_cents: int, run_id: int,
+                   note: str) -> None:
+    """Estorna créditos quando a consulta falha após débito."""
+    w = _get_or_create_wallet(session, company_id=company_id, client_id=client_id)
+    w.balance_cents += int(amount_cents)
+    w.updated_at = utcnow()
+    session.add(w)
+    session.commit()
+    _wallet_add_ledger(
+        session,
+        company_id=company_id,
+        client_id=client_id,
+        kind="CONSULT_RELEASED",
+        amount_cents=int(amount_cents),
+        ref_type="query_run",
+        ref_id=str(run_id),
+        note=note,
+    )
+
+
+def _seed_credit_products(session: Session, company_id: int) -> None:
+    if session.exec(select(QueryProduct).where(QueryProduct.company_id == company_id)).first():
+        return
+    defaults = [
+        ("directdata.scr_analitico", "SCR Analítico", 390),
+        ("directdata.scr_detalhada", "SCR Detalhada", 490),
+        ("directdata.score_quod", "Score (QUOD)", 198),
+    ]
+    for code, label, cost in defaults:
+        session.add(
+            QueryProduct(
+                company_id=company_id,
+                code=code,
+                label=label,
+                category="credito",
+                provider="directdata",
+                provider_cost_cents=int(cost),
+                markup_pct=50,
+                enabled=True,
+                created_at=utcnow(),
+                updated_at=utcnow(),
+            )
+        )
+    session.commit()
+
+
+def _disable_unwanted_products(session: Session, company_id: int) -> None:
+    """
+    Desativa produtos que não devem aparecer no cardápio público de Consultas.
+
+    - Idempotente: pode ser chamado em toda visita ao /consultas.
+    - Mantém o produto no Admin (/admin/consultas), mas evita aparecer/rodar no menu do cliente.
+    """
+    try:
+        p = session.exec(
+            select(QueryProduct).where(
+                QueryProduct.company_id == company_id,
+                QueryProduct.code == "directdata.cadastral_pf",
+            )
+        ).first()
+        if p and p.enabled:
+            p.enabled = False
+            p.updated_at = utcnow()
+            session.add(p)
+            session.commit()
+    except Exception:
+        return
+
+
+def _directdata_url_for(path: str, fallback: str = "") -> str:
+    """
+    Resolve URL de uma consulta Direct Data.
+    Prioridade: env específica -> DIRECTDATA_BASE_URL + path -> fallback.
+    """
+    base = (os.getenv("DIRECTDATA_BASE_URL") or "").rstrip("/")
+    if base and path.startswith("/"):
+        return f"{base}{path}"
+    if base:
+        return f"{base}/{path.lstrip('/')}"
+    return fallback
+
+
+def _dd_is_processing(data: dict) -> bool:
+    md = (data or {}).get("metaDados") or {}
+    resultado = (md.get("resultado") or "").lower()
+    return (data.get("retorno") is None) or ("process" in resultado)
+
+
+async def _directdata_generic_request(*, url: str, params: dict[str, str], timeout_s: int = 30) -> tuple[
+    int, dict[str, Any] | None, str]:
+    """
+    Request GET genérico para Direct Data.
+    - Inclui TOKEN via query param.
+    - Suporta async/poll quando retorno traz metaDados.consultaUid e/ou resultado 'Em Processamento'.
+    """
+    token = os.getenv("DIRECTDATA_TOKEN") or ""
+    if not token:
+        return 0, None, "DIRECTDATA_TOKEN não configurado."
+    if not url:
+        return 0, None, "URL Direct Data não configurada."
+
+    q = {"TOKEN": token, **{k: v for k, v in (params or {}).items() if v is not None}}
+    try:
+        async with httpx.AsyncClient(timeout=timeout_s) as client:
+            r = await client.get(url, params=q)
+        if r.status_code != 200:
+            return r.status_code, None, f"HTTP {r.status_code}"
+        data = r.json()
+        if not isinstance(data, dict):
+            return r.status_code, None, "Resposta inválida (não é JSON objeto)."
+
+        md = (data.get("metaDados") or {})
+        uid = md.get("consultaUid")
+        if uid and (_dd_is_processing(data) or (str(md.get("resultado") or "").lower().find("process") != -1)):
+            ok, final_data, msg = await _directdata_wait_result(str(uid), timeout_s=60)
+            if ok and final_data is not None:
+                return 200, final_data, "OK"
+            return 200, data, msg or "Em Processamento"
+        return 200, data, "OK"
+    except Exception as e:
+        return 0, None, str(e)
+
+
+async def _directdata_call_real(*, product_code: str, doc_digits: str) -> tuple[int, dict[str, Any] | None, str]:
+    """Chama Direct Data para produtos do catálogo (SCR + Score)."""
+    doc = _digits_only(doc_digits)
+    if not doc:
+        return 0, None, "Documento inválido."
+
+    doc_type = "cpf" if len(doc) == 11 else "cnpj"
+
+    # SCR Resumido
+    if product_code in {"directdata.scr_resumido", "directdata.scr_analitico"}:
+        url = os.getenv("DIRECTDATA_SCR_RESUMIDO_URL") or _directdata_url_for("/api/SCRBacen")
+        if not url:
+            return 0, None, "DIRECTDATA_SCR_RESUMIDO_URL/DIRECTDATA_BASE_URL não configurado."
+        # Usa mesmo formato do SCR
+        return await _directdata_scr_request(document_type=doc_type, document_value=doc, url_override=url)
+
+    # SCR Detalhada
+    if product_code == "directdata.scr_detalhada":
+        url = os.getenv("DIRECTDATA_SCR_URL") or _directdata_url_for("/api/SCRBacenDetalhada")
+        if not url:
+            return 0, None, "DIRECTDATA_SCR_URL/DIRECTDATA_BASE_URL não configurado."
+        return await _directdata_scr_request(document_type=doc_type, document_value=doc, url_override=url)
+
+    # Score
+    if product_code in {"directdata.score", "directdata.score_quod"}:
+        url = os.getenv("DIRECTDATA_SCORE_URL") or _directdata_url_for("/api/Score")
+        if not url:
+            return 0, None, "DIRECTDATA_SCORE_URL/DIRECTDATA_BASE_URL não configurado."
+        # Direct Data Score: normalmente aceita CPF/CNPJ no mesmo padrão (CPF/CNPJ)
+        key = "CPF" if doc_type == "cpf" else "CNPJ"
+        return await _directdata_generic_request(url=url, params={key: doc})
+
+    return 0, None, f"Produto não mapeado para Direct Data: {product_code}"
+
+
+async def _directdata_wait_result(consulta_uid: str, *, timeout_s: int = 60) -> tuple[bool, dict | None, str]:
+    """
+    Poll Direct Data async result endpoint until retorno != None or timeout.
+    Uses env DIRECTDATA_ASYNC_RESULT_URL and DIRECTDATA_POLL_MIN_INTERVAL_S.
+    """
+    url = os.getenv("DIRECTDATA_ASYNC_RESULT_URL") or ""
+    token = os.getenv("DIRECTDATA_TOKEN") or ""
+    if not url or not token:
+        return False, None, "Direct Data async result URL/token não configurado."
+
+    interval = int(os.getenv("DIRECTDATA_POLL_MIN_INTERVAL_S") or 6)
+    start = utcnow()
+    deadline = start.timestamp() + float(timeout_s)
+
+    last_msg = ""
+    while utcnow().timestamp() < deadline:
+        try:
+            # Direct Data uses TOKEN query param; attempt both consultaUid and ConsultaUid
+            params = {"TOKEN": token, "consultaUid": consulta_uid}
+            async with httpx.AsyncClient(timeout=20) as client:
+                r = await client.get(url, params=params)
+                if r.status_code != 200:
+                    last_msg = f"HTTP {r.status_code}"
+                else:
+                    data = r.json()
+                    if isinstance(data, dict) and not _dd_is_processing(data):
+                        return True, data, "OK"
+                    last_msg = ((data or {}).get("metaDados") or {}).get("resultado") or "Em Processamento"
+        except Exception as e:
+            last_msg = str(e)
+
+        await asyncio.sleep(max(2, interval))
+
+    return False, None, f"Timeout aguardando processamento ({last_msg})"
+
+
+def _pdf_draw_wrapped(c: canvas.Canvas, text: str, x: float, y: float, max_width: float, line_h: float,
+                      max_lines: int = 999) -> float:
+    styles = getSampleStyleSheet()
+    # simple wrapping without heavy platypus table
+    words = (text or "").split()
+    line = ""
+    lines = []
+    for w in words:
+        test = (line + " " + w).strip()
+        if c.stringWidth(test, "Helvetica", 9) <= max_width:
+            line = test
+        else:
+            lines.append(line)
+            line = w
+    if line:
+        lines.append(line)
+    for ln in lines[:max_lines]:
+        c.drawString(x, y, ln)
+        y -= line_h
+    return y
+
+
+def _mask_doc(doc: str) -> str:
+    """Mascara CPF/CNPJ para exibição em relatórios."""
+    d = re.sub(r"\D+", "", doc or "")
+    if len(d) == 11:
+        return f"{d[:3]}.***.***-{d[-2:]}"
+    if len(d) == 14:
+        return f"{d[:2]}.***.***/****-{d[-2:]}"
+    return d
+
+
+def _as_str(v: object) -> str:
+    if v is None:
+        return "-"
+    s = str(v).strip()
+    return s if s else "-"
+
+
+def _money(v: object) -> str:
+    if v is None:
+        return "-"
+    s = str(v).strip()
+    return s if s else "-"
+
+
+def _num(v: object) -> str:
+    if v is None:
+        return "-"
+    return str(v)
+
+
+def _draw_logo_on_canvas(c: canvas.Canvas, logo_path: str) -> None:
+    try:
+        if logo_path and os.path.exists(logo_path):
+            c.drawImage(ImageReader(logo_path), 18 * mm, (A4[1] - 18 * mm), width=38 * mm, height=12 * mm, mask="auto")
+    except Exception:
+        pass
+
+
+def _build_scr_pdf(
+        *,
+        company_name: str,
+        client_name: str,
+        product_label: str,
+        product_code: str,
+        subject_doc: str,
+        data: dict,
+) -> bytes:
+    """
+    Relatório PDF tratado (sem "print de JSON").
+
+    - Traz resumo executivo e tabelas (SCR Detalhada/Analítica).
+    - Mantém disclaimer de consulta.
+    - Não exibe JSON cru ao cliente.
+    """
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(
+        buf,
+        pagesize=A4,
+        leftMargin=18 * mm,
+        rightMargin=18 * mm,
+        topMargin=16 * mm,
+        bottomMargin=16 * mm,
+        title="Relatório de Consulta",
+        author=company_name,
+    )
+
+    styles = getSampleStyleSheet()
+    h1 = ParagraphStyle("h1", parent=styles["Heading1"], fontName="Helvetica-Bold", fontSize=14, spaceAfter=6)
+    h2 = ParagraphStyle("h2", parent=styles["Heading2"], fontName="Helvetica-Bold", fontSize=11, spaceBefore=10,
+                        spaceAfter=6)
+    p = ParagraphStyle("p", parent=styles["BodyText"], fontName="Helvetica", fontSize=9, leading=12)
+    small = ParagraphStyle("small", parent=styles["BodyText"], fontName="Helvetica-Oblique", fontSize=8, leading=10)
+
+    story: list = []
+
+    logo_path = os.path.join(STATIC_DIR, "logo.png") if "STATIC_DIR" in globals() else "static/logo.png"
+
+    story.append(Paragraph("Relatório de Consulta (Direct Data)", h1))
+    story.append(Spacer(1, 4))
+
+    story.append(Paragraph(f"<b>Empresa:</b> {company_name}", p))
+    story.append(Paragraph(f"<b>Cliente:</b> {client_name}", p))
+    story.append(Paragraph(f"<b>Consulta:</b> {product_label} <font size=8 color='#666'>({product_code})</font>", p))
+    story.append(Paragraph(f"<b>Documento:</b> {_mask_doc(subject_doc)}", p))
+    story.append(Spacer(1, 6))
+
+    disclaimer = (
+        "Este relatório é gerado automaticamente a partir de bases de terceiros (Direct Data) "
+        "e constitui apenas uma consulta/levantamento de informações. "
+        "Não é uma proposta de crédito, não representa aprovação e está sujeito à análise interna, "
+        "políticas e validações adicionais."
+    )
+    story.append(Paragraph(disclaimer, small))
+    story.append(Spacer(1, 10))
+
+    md = (data or {}).get("metaDados") or {}
+    retorno = (data or {}).get("retorno") or {}
+
+    story.append(Paragraph("Resumo da execução", h2))
+    exec_rows = [
+        ["Consulta", _as_str(md.get("consultaNome"))],
+        ["UID", _as_str(md.get("consultaUid"))],
+        ["Resultado", _as_str(md.get("resultado"))],
+        ["Data", _as_str(md.get("data"))],
+        ["Tempo (ms)", _num(md.get("tempoExecucaoMs"))],
+    ]
+    t = Table(exec_rows, colWidths=[35 * mm, 140 * mm])
+    t.setStyle(
+        TableStyle(
+            [
+                ("FONT", (0, 0), (-1, -1), "Helvetica", 9),
+                ("FONT", (0, 0), (0, -1), "Helvetica-Bold", 9),
+                ("ROWBACKGROUNDS", (0, 0), (-1, -1), [colors.whitesmoke, colors.white]),
+                ("INNERGRID", (0, 0), (-1, -1), 0.25, colors.lightgrey),
+                ("BOX", (0, 0), (-1, -1), 0.25, colors.lightgrey),
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 6),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+                ("TOPPADDING", (0, 0), (-1, -1), 4),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+            ]
+        )
+    )
+    story.append(t)
+
+    if not retorno:
+        story.append(Spacer(1, 10))
+        story.append(Paragraph("A consulta ainda não retornou dados.", p))
+        doc.build(story, onFirstPage=lambda c, d: _draw_logo_on_canvas(c, logo_path))
+        return buf.getvalue()
+
+    story.append(Paragraph("Resumo executivo (SCR)", h2))
+    score = _as_str(retorno.get("score"))
+    faixa = _as_str(retorno.get("faixaRisco"))
+    risco_total = _money(retorno.get("riscoTotal"))
+    qtd_inst = _num(retorno.get("quantidadeInstituicoes"))
+    qtd_ops = _num(retorno.get("quantidadeOperacoes"))
+    rel_ini = _as_str(retorno.get("dataInicioRelacionamento"))
+
+    exec2_rows = [
+        ["Score", score],
+        ["Faixa de risco", faixa],
+        ["Risco total", risco_total],
+        ["Instituições / Operações", f"{qtd_inst} / {qtd_ops}"],
+        ["Início relacionamento", rel_ini],
+    ]
+    t2 = Table(exec2_rows, colWidths=[55 * mm, 120 * mm])
+    t2.setStyle(
+        TableStyle(
+            [
+                ("FONT", (0, 0), (-1, -1), "Helvetica", 9),
+                ("FONT", (0, 0), (0, -1), "Helvetica-Bold", 9),
+                ("INNERGRID", (0, 0), (-1, -1), 0.25, colors.lightgrey),
+                ("BOX", (0, 0), (-1, -1), 0.25, colors.lightgrey),
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 6),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+                ("TOPPADDING", (0, 0), (-1, -1), 4),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+            ]
+        )
+    )
+    story.append(t2)
+
+    carteira = retorno.get("carteiraCredito") or {}
+    story.append(Paragraph("Carteira de crédito", h2))
+    cart_rows = [
+        ["Total", _money(carteira.get("total"))],
+        ["A vencer", _money(carteira.get("vencer"))],
+        ["Vencido", _money(carteira.get("vencido"))],
+        ["Limite", _money(carteira.get("limite"))],
+        ["Prejuízo", _money(carteira.get("prejuizo"))],
+    ]
+    t3 = Table(cart_rows, colWidths=[55 * mm, 120 * mm])
+    t3.setStyle(
+        TableStyle(
+            [
+                ("FONT", (0, 0), (-1, -1), "Helvetica", 9),
+                ("FONT", (0, 0), (0, -1), "Helvetica-Bold", 9),
+                ("ROWBACKGROUNDS", (0, 0), (-1, -1), [colors.white, colors.whitesmoke]),
+                ("INNERGRID", (0, 0), (-1, -1), 0.25, colors.lightgrey),
+                ("BOX", (0, 0), (-1, -1), 0.25, colors.lightgrey),
+                ("LEFTPADDING", (0, 0), (-1, -1), 6),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+                ("TOPPADDING", (0, 0), (-1, -1), 4),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+            ]
+        )
+    )
+    story.append(t3)
+
+    modalidades = retorno.get("modalidades") or []
+    story.append(Paragraph("Modalidades (resumo)", h2))
+    mod_rows = [["Código", "Modalidade", "A vencer", "Vencido", "Cambial"]]
+    for m in modalidades:
+        av = (m.get("aVencer") or {}).get("total")
+        vc = (m.get("vencido") or {}).get("total")
+        mod_rows.append(
+            [
+                _as_str(m.get("codigoModalidade")),
+                _as_str(m.get("descricaoModalidade")),
+                _money(av),
+                _money(vc),
+                _as_str(m.get("variacaoCambial")),
+            ]
+        )
+    t4 = Table(mod_rows, colWidths=[20 * mm, 85 * mm, 30 * mm, 30 * mm, 20 * mm])
+    t4.setStyle(
+        TableStyle(
+            [
+                ("FONT", (0, 0), (-1, 0), "Helvetica-Bold", 9),
+                ("FONT", (0, 1), (-1, -1), "Helvetica", 8.5),
+                ("BACKGROUND", (0, 0), (-1, 0), colors.whitesmoke),
+                ("INNERGRID", (0, 0), (-1, -1), 0.25, colors.lightgrey),
+                ("BOX", (0, 0), (-1, -1), 0.25, colors.lightgrey),
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 5),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 5),
+                ("TOPPADDING", (0, 0), (-1, -1), 3),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+            ]
+        )
+    )
+    story.append(t4)
+
+    story.append(Paragraph("Notas e interpretação", h2))
+    for line in [
+        "• O score e a faixa de risco são indicadores auxiliares; a decisão final depende de análise interna.",
+        "• Valores “a vencer” e “vencido” ajudam a identificar comportamento de pagamento e concentração de risco.",
+        "• Recomenda-se validar com documentos e informações fornecidas pelo cliente e políticas internas.",
+    ]:
+        story.append(Paragraph(line, p))
+
+    doc.build(story, onFirstPage=lambda c, d: _draw_logo_on_canvas(c, logo_path))
+    return buf.getvalue()
+
+
+# === /CONSULTAS_PDF_REPORT_V1 ===
+
+def _extract_score_fields(data: Any) -> dict[str, str]:
+    """Extrai campos do Score (QUOD) do retorno da Direct Data.
+
+    A resposta mais comum segue a documentação oficial:
+    retorno.pessoaFisica|pessoaJuridica.{score, faixaScore, capacidadePagamento, perfil, ...}
+    """
+    root: dict[str, Any] = data if isinstance(data, dict) else {}
+
+    def _get_ci(obj: Any, key: str) -> Any:
+        if not isinstance(obj, dict):
+            return None
+        if key in obj:
+            return obj.get(key)
+        lk = key.lower()
+        for k, v in obj.items():
+            if isinstance(k, str) and k.lower() == lk:
+                return v
+        return None
+
+    def _as_text(v: Any) -> str:
+        if v is None:
+            return "-"
+        if isinstance(v, (int, float)):
+            return str(v)
+        s = str(v).strip()
+        return s if s else "-"
+
+    def _pick(obj: Any, *keys: str) -> str:
+        if not isinstance(obj, dict):
+            return "-"
+        for k in keys:
+            v = _get_ci(obj, k)
+            if v is None:
+                continue
+            if isinstance(v, dict):
+                vv = _get_ci(v, "valor") or _get_ci(v, "value")
+                if vv is not None:
+                    return _as_text(vv)
+            if isinstance(v, list):
+                if v:
+                    return _as_text(v[0])
+                continue
+            txt = _as_text(v)
+            if txt != "-":
+                return txt
+        return "-"
+
+    md = _get_ci(root, "metaDados")
+    md = md if isinstance(md, dict) else {}
+    retorno = _get_ci(root, "retorno")
+    if isinstance(retorno, list) and retorno:
+        retorno = retorno[0] if isinstance(retorno[0], dict) else {}
+    retorno = retorno if isinstance(retorno, dict) else {}
+
+    pf = _get_ci(retorno, "pessoaFisica")
+    pj = _get_ci(retorno, "pessoaJuridica")
+    pf = pf if isinstance(pf, dict) else {}
+    pj = pj if isinstance(pj, dict) else {}
+
+    # Escolhe o bloco mais informativo (PF/PJ)
+    entity: dict[str, Any] = pf if _pick(pf, "score", "pontuacao", "nota") != "-" else pj
+    if entity is None:
+        entity = {}
+
+    score = _pick(entity, "score", "pontuacao", "pontuacaoScore", "scoreValor", "valorScore", "nota")
+    faixa = _pick(entity, "faixaScore", "faixaRisco", "faixa", "rating", "classificacao", "faixaScore")
+    capacidade = _pick(entity, "capacidadePagamento", "capacidadeDePagamento")
+    perfil = _pick(entity, "perfil")
+    observacao = _pick(retorno, "observacao")
+
+    motivos = _get_ci(entity, "motivos")
+    if isinstance(motivos, list):
+        motivos_txt = "\n".join([f"• {str(x).strip()}" for x in motivos if str(x).strip()]) or "-"
+    else:
+        motivos_txt = _as_text(motivos)
+
+    # Indicadores de negócio (quando PJ)
+    indicadores = _get_ci(entity, "indicadoresNegocio") or _get_ci(entity, "indicadores")
+    indicadores_txt = "-"
+    if isinstance(indicadores, list) and indicadores:
+        lines: list[str] = []
+        for it in indicadores[:10]:
+            if not isinstance(it, dict):
+                continue
+            ind = _pick(it, "indicador", "titulo", "nome")
+            risco = _pick(it, "risco")
+            status = _pick(it, "status")
+            obs = _pick(it, "observacao")
+            parts = [x for x in
+                     [ind, f"risco={risco}" if risco != "-" else "-", f"status={status}" if status != "-" else "-", obs]
+                     if x and x != "-"]
+            if parts:
+                lines.append(" - ".join(parts))
+        indicadores_txt = "\n".join([f"• {l}" for l in lines]) if lines else "-"
+
+    # Campos que podem existir em variações/versões de APIs
+    pd = _pick(root, "probabilidadeInadimplencia", "probDefault", "inadimplencia", "pd", "prob_inadimplencia")
+    modelo = _pick(root, "modelo", "versaoModelo", "modeloScore", "nomeModelo")
+    fonte = _pick(root, "fonte", "bureau", "origem", "provider")
+
+    return {
+        "score": score,
+        "faixa": faixa,
+        "prob_default": pd,
+        "modelo": modelo,
+        "fonte": fonte,
+        "uid": _pick(md, "consultaUid"),
+        "consulta_nome": _pick(md, "consultaNome"),
+        "resultado": _pick(md, "resultado"),
+        "data_exec": _pick(md, "data"),
+        "tempo_ms": _pick(md, "tempoExecucaoMs"),
+        "capacidade_pagamento": capacidade,
+        "perfil": perfil,
+        "observacao": observacao,
+        "motivos": motivos_txt,
+        "indicadores": indicadores_txt,
+    }
+
+
+def _build_score_pdf(
+        *,
+        company_name: str,
+        client_name: str,
+        product_label: str,
+        product_code: str,
+        subject_doc: str,
+        data: dict,
+) -> bytes:
+    """PDF específico para Score (não usa layout SCR)."""
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(
+        buf,
+        pagesize=A4,
+        leftMargin=18 * mm,
+        rightMargin=18 * mm,
+        topMargin=16 * mm,
+        bottomMargin=16 * mm,
+        title="Relatório de Score",
+        author=company_name,
+    )
+
+    styles = getSampleStyleSheet()
+    h1 = ParagraphStyle("h1", parent=styles["Heading1"], fontName="Helvetica-Bold", fontSize=14, spaceAfter=6)
+    h2 = ParagraphStyle("h2", parent=styles["Heading2"], fontName="Helvetica-Bold", fontSize=11, spaceBefore=10,
+                        spaceAfter=6)
+    p = ParagraphStyle("p", parent=styles["BodyText"], fontName="Helvetica", fontSize=9, leading=12)
+    small = ParagraphStyle("small", parent=styles["BodyText"], fontName="Helvetica-Oblique", fontSize=8, leading=10)
+
+    story: list = []
+    logo_path = os.path.join(STATIC_DIR, "logo.png") if "STATIC_DIR" in globals() else "static/logo.png"
+
+    fields = _extract_score_fields(data)
+
+    story.append(Paragraph("Relatório de Consulta (Direct Data)", h1))
+    story.append(Paragraph(f"Empresa: {html.escape(company_name)}", p))
+    story.append(Paragraph(f"Cliente: {html.escape(client_name)}", p))
+    story.append(Paragraph(f"Consulta: {html.escape(product_label)} ({html.escape(product_code)})", p))
+    story.append(Paragraph(f"Documento: {_mask_doc(subject_doc)}", p))
+    story.append(Spacer(1, 8))
+
+    story.append(
+        Paragraph(
+            "Este relatório é gerado automaticamente a partir de bases de terceiros (Direct Data) e constitui apenas "
+            "uma consulta/levantamento de informações. Não é uma proposta de crédito, não representa aprovação e está "
+            "sujeito à análise interna, políticas e validações adicionais.",
+            small,
+        )
+    )
+
+    story.append(Spacer(1, 10))
+    story.append(Paragraph("Resumo da execução", h2))
+
+    exec_rows = [
+        ["Consulta", fields["consulta_nome"] if fields["consulta_nome"] != "-" else product_label],
+        ["UID", fields["uid"]],
+        ["Resultado", fields["resultado"]],
+        ["Data", fields["data_exec"]],
+        ["Tempo (ms)", fields["tempo_ms"]],
+    ]
+    t_exec = Table(exec_rows, colWidths=[35 * mm, 140 * mm])
+    t_exec.setStyle(
+        TableStyle(
+            [
+                ("FONT", (0, 0), (-1, -1), "Helvetica", 9),
+                ("FONT", (0, 0), (0, -1), "Helvetica-Bold", 9),
+                ("INNERGRID", (0, 0), (-1, -1), 0.25, colors.lightgrey),
+                ("BOX", (0, 0), (-1, -1), 0.25, colors.lightgrey),
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 6),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+                ("TOPPADDING", (0, 0), (-1, -1), 4),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+            ]
+        )
+    )
+    story.append(t_exec)
+
+    story.append(Spacer(1, 10))
+    story.append(Paragraph("Resumo executivo (Score)", h2))
+
+    score_rows = [
+        ["Score", fields["score"]],
+        ["Faixa de risco", fields["faixa"]],
+        ["Prob. inadimplência (PD)", fields["prob_default"]],
+        ["Modelo", fields["modelo"]],
+        ["Fonte", fields["fonte"]],
+    ]
+    t_score = Table(score_rows, colWidths=[55 * mm, 120 * mm])
+    t_score.setStyle(
+        TableStyle(
+            [
+                ("FONT", (0, 0), (-1, -1), "Helvetica", 9),
+                ("FONT", (0, 0), (0, -1), "Helvetica-Bold", 9),
+                ("BACKGROUND", (0, 0), (-1, 0), colors.whitesmoke),
+                ("INNERGRID", (0, 0), (-1, -1), 0.25, colors.lightgrey),
+                ("BOX", (0, 0), (-1, -1), 0.25, colors.lightgrey),
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 6),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+                ("TOPPADDING", (0, 0), (-1, -1), 4),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+            ]
+        )
+    )
+    story.append(t_score)
+
+    # Detalhes (quando retornados pela Direct Data)
+    details_rows: list[list[str]] = []
+    if fields.get("capacidade_pagamento", "-") != "-":
+        details_rows.append(["Capacidade de pagamento", fields["capacidade_pagamento"]])
+    if fields.get("perfil", "-") != "-":
+        details_rows.append(["Perfil", fields["perfil"]])
+    if fields.get("observacao", "-") != "-":
+        details_rows.append(["Observação", fields["observacao"]])
+
+    if details_rows:
+        story.append(Spacer(1, 10))
+        story.append(Paragraph("Detalhes retornados", h2))
+        t_det = Table(details_rows, colWidths=[55 * mm, 120 * mm])
+        t_det.setStyle(
+            TableStyle(
+                [
+                    ("FONT", (0, 0), (-1, -1), "Helvetica", 9),
+                    ("FONT", (0, 0), (0, -1), "Helvetica-Bold", 9),
+                    ("BACKGROUND", (0, 0), (-1, 0), colors.whitesmoke),
+                    ("INNERGRID", (0, 0), (-1, -1), 0.25, colors.lightgrey),
+                    ("BOX", (0, 0), (-1, -1), 0.25, colors.lightgrey),
+                    ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                    ("LEFTPADDING", (0, 0), (-1, -1), 6),
+                    ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+                    ("TOPPADDING", (0, 0), (-1, -1), 4),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+                ]
+            )
+        )
+        story.append(t_det)
+
+    if fields.get("motivos", "-") != "-" and fields.get("motivos"):
+        story.append(Spacer(1, 10))
+        story.append(Paragraph("Motivos", h2))
+        story.append(Paragraph(html.escape(fields["motivos"]).replace("\n", "<br/>"), p))
+
+    if fields.get("indicadores", "-") != "-" and fields.get("indicadores"):
+        story.append(Spacer(1, 10))
+        story.append(Paragraph("Indicadores de negócio", h2))
+        story.append(Paragraph(html.escape(fields["indicadores"]).replace("\n", "<br/>"), p))
+
+    story.append(Spacer(1, 10))
+    story.append(Paragraph("Notas e interpretação", h2))
+    for line in [
+        "• O score e a faixa de risco são indicadores auxiliares; a decisão final depende de análise interna.",
+        "• Recomenda-se validar com documentos e informações fornecidas pelo cliente e políticas internas.",
+    ]:
+        story.append(Paragraph(line, p))
+
+    doc.build(story, onFirstPage=lambda c, d: _draw_logo_on_canvas(c, logo_path))
+    return buf.getvalue()
+
+
+def build_consulta_pdf(
+        *,
+        company_name: str,
+        client_name: str,
+        product_label: str,
+        product_code: str,
+        subject_doc: str,
+        data: dict,
+) -> bytes:
+    """Wrapper: escolhe layout correto (Score vs SCR)."""
+    if "score" in (product_code or ""):
+        return _build_score_pdf(
+            company_name=company_name,
+            client_name=client_name,
+            product_label=product_label,
+            product_code=product_code,
+            subject_doc=subject_doc,
+            data=data,
+        )
+    return _build_scr_pdf(
+        company_name=company_name,
+        client_name=client_name,
+        product_label=product_label,
+        product_code=product_code,
+        subject_doc=subject_doc,
+        data=data,
+    )
+
+    return 0, None, f"Produto não mapeado para Direct Data: {product_code}"
+
+
+TEMPLATES.setdefault("creditos.html", r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="container" style="max-width: 1100px;">
+  <div class="d-flex align-items-center justify-content-between mt-3">
+    <h3>Créditos</h3>
+    <a class="btn btn-outline-secondary btn-sm" href="/consultas">Ir para Consultas</a>
+  </div>
+
+  {% if request.query_params.get("success") %}
+    <div class="alert alert-success mt-2">Pagamento confirmado. Créditos adicionados.</div>
+  {% endif %}
+  {% if request.query_params.get("canceled") %}
+    <div class="alert alert-warning mt-2">Pagamento cancelado.</div>
+  {% endif %}
+
+  <div class="card p-3 mt-3">
+    <div class="row g-2">
+      <div class="col-md-4">
+        <div class="text-muted">Saldo</div>
+        <div style="font-size: 1.8rem;"><strong>{{ wallet_balance }}</strong> créditos</div>
+      </div>
+      <div class="col-md-8">
+        <div class="text-muted">Recarregar (Stripe)</div>
+        <form method="post" action="/creditos/checkout" class="d-flex gap-2 flex-wrap">
+          <select class="form-select" name="pack" style="max-width: 220px;">
+            <option value="50">50 créditos (R$ 50)</option>
+            <option value="100">100 créditos (R$ 100)</option>
+            <option value="250">250 créditos (R$ 250)</option>
+            <option value="500">500 créditos (R$ 500)</option>
+          </select>
+          <button class="btn btn-primary" type="submit" {% if not stripe_enabled %}disabled{% endif %}>
+            Comprar créditos
+          </button>
+          {% if not stripe_enabled %}
+            <span class="text-muted" style="font-size: .9rem;">Stripe não configurado.</span>
+          {% endif %}
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <div class="card p-3 mt-3">
+    <h5 class="mb-2">Extrato</h5>
+    <div class="table-responsive">
+      <table class="table table-sm">
+        <thead>
+          <tr>
+            <th>Data</th>
+            <th>Tipo</th>
+            <th class="text-end">Valor</th>
+            <th>Ref</th>
+            <th>Obs</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for e in ledger %}
+          <tr>
+            <td>{{ e.created_at.strftime("%d/%m/%Y %H:%M") }}</td>
+            <td>{{ e.kind }}</td>
+            <td class="text-end">{{ "%.2f"|format(e.amount_cents/100) }}</td>
+            <td>{{ e.ref_type }} {{ e.ref_id }}</td>
+            <td>{{ e.note }}</td>
+          </tr>
+          {% endfor %}
+          {% if not ledger %}
+          <tr><td colspan="5" class="text-muted">Sem movimentações.</td></tr>
+          {% endif %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}
+""")
+
+TEMPLATES.setdefault("consultas.html", r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="container" style="max-width: 1100px;">
+  <div class="d-flex align-items-center justify-content-between mt-3">
+    <h3>Consultas</h3>
+    <div class="d-flex gap-2">
+      <a class="btn btn-outline-secondary btn-sm" href="/creditos">Créditos</a>
+      {% if role in ["admin","equipe"] %}
+        <a class="btn btn-outline-primary btn-sm" href="/admin/consultas">Admin Consultas</a>
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="alert alert-info mt-2">
+    Saldo atual: <strong>{{ wallet_balance }}</strong> créditos.
+  </div>
+
+  <div class="row g-3 mt-1">
+    {% for p in products %}
+      <div class="col-md-6">
+        <div class="card p-3 h-100">
+          <div class="d-flex justify-content-between align-items-start">
+            <div>
+              <div style="font-size:1.1rem;"><strong>{{ p.label }}</strong></div>
+              <div class="text-muted" style="font-size:.9rem;">Código: {{ p.code }}</div>
+            </div>
+            <div class="text-end">
+              <div class="text-muted" style="font-size:.85rem;">Preço</div>
+              <div style="font-size:1.2rem;"><strong>{{ "%.2f"|format(p.price_cents/100) }}</strong> créditos</div>
+            </div>
+          </div>
+          <div class="mt-3">
+            <a class="btn btn-primary" href="/consultas/{{ p.code }}">Fazer consulta</a>
+          </div>
+        </div>
+      </div>
+    {% endfor %}
+  </div>
+
+  <div class="card p-3 mt-3">
+    <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
+      <div>
+        <h5 class="mb-1">&#127959; ConstruRisk</h5>
+        <div class="text-muted" style="font-size:.9rem;">Dossie completo de analise de credito e PLD para compradores PF e PJ. Score, SCR BACEN, cadastral, PEP e parecer de risco com IA.</div>
+      </div>
+      <a class="btn btn-primary" href="/construrisk">Acessar ConstruRisk</a>
+    </div>
+  </div>
+
+</div>
+{% endblock %}
+""")
+
+TEMPLATES.setdefault("consulta_run.html", r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="container" style="max-width: 900px;">
+  <div class="d-flex align-items-center justify-content-between mt-3">
+    <h3>{{ product.label }}</h3>
+    <a class="btn btn-outline-secondary btn-sm" href="/consultas">Voltar</a>
+  </div>
+
+  <div class="card p-3 mt-3">
+    <div class="text-muted">Saldo: <strong>{{ wallet_balance }}</strong> créditos</div>
+    <div class="text-muted">Preço desta consulta: <strong>{{ "%.2f"|format(product.price_cents/100) }}</strong> créditos</div>
+
+    <form method="post" action="/consultas/{{ product.code }}/run" class="mt-3">
+      <div class="row g-2">
+        <div class="col-md-6">
+          <label class="form-label">CPF/CNPJ</label>
+          <input class="form-control" name="doc" placeholder="Digite CPF/CNPJ" value="{{ doc_value|default('') }}" required>
+          {% if product_is_scr %}
+            <div class="form-text">
+              Para SCR, é obrigatório o aceite do titular do CPF/CNPJ antes da consulta.
+            </div>
+          {% endif %}
+        </div>
+
+        {% if product_is_scr %}
+          <div class="col-md-6">
+            <label class="form-label">Aceite SCR (e-mail)</label>
+
+            {% if doc_value %}
+              {% if scr_consent_status == "valida" %}
+                <div class="alert alert-success py-2 mb-0">
+                  <div class="d-flex align-items-center justify-content-between">
+                    <div>
+                      <strong>Aceite válido</strong>
+                      {% if scr_consent_expires_at %}
+                        <span class="muted small">até {{ scr_consent_expires_at.strftime("%d/%m/%Y") }}</span>
+                      {% endif %}
+                    </div>
+                    <span class="badge bg-success">OK</span>
+                  </div>
+                </div>
+              {% elif scr_consent_status == "pendente" %}
+                <div class="alert alert-warning py-2 mb-0">
+                  <div class="d-flex align-items-center justify-content-between">
+                    <div><strong>Aguardando aceite</strong></div>
+                    <span class="badge bg-warning text-dark">Pendente</span>
+                  </div>
+                  <div class="muted small mt-1">Envie o link ao titular e aguarde confirmar.</div>
+                </div>
+              {% else %}
+                <div class="alert alert-warning py-2 mb-0">
+                  <div class="d-flex align-items-center justify-content-between">
+                    <div><strong>Aceite não registrado</strong></div>
+                    <span class="badge bg-secondary">Necessário</span>
+                  </div>
+                  <div class="muted small mt-1">Gere e envie o link de aceite por e-mail.</div>
+                </div>
+              {% endif %}
+            {% else %}
+              <div class="alert alert-light py-2 mb-0">
+                <div class="muted small">Digite um CPF/CNPJ acima para solicitar o aceite.</div>
+              </div>
+            {% endif %}
+          </div>
+
+          {% if doc_value and scr_consent_status != "valida" %}
+            <div class="col-12">
+              <div class="card p-3 bg-light border">
+                <div class="fw-semibold">Enviar e-mail de aceite</div>
+                <div class="row g-2 mt-1">
+                  <input type="hidden" name="code" value="{{ product.code }}">
+                                    <div class="col-md-6">
+                    <input class="form-control" name="email" placeholder="E-mail do titular">
+                    <div class="form-text">Este e-mail receberá o link público de aceite.</div>
+                  </div>
+                  <div class="col-md-6 d-flex align-items-start gap-2">
+                    <button class="btn btn-outline-primary" type="submit" formaction="/consultas/consent_link" formmethod="post">Enviar link</button>
+                    {% if consulta_consent_link_url %}
+                      <button class="btn btn-outline-secondary" type="button"
+                              onclick="navigator.clipboard.writeText('{{ consulta_consent_link_url }}');">
+                        Copiar link
+                      </button>
+                    {% endif %}
+                  </div>
+
+                  {% if consulta_consent_link_url %}
+                    <div class="col-12">
+                      <label class="form-label small muted mb-1">Link (manual)</label>
+                      <input class="form-control form-control-sm mono" readonly value="{{ consulta_consent_link_url }}">
+                    </div>
+                  {% endif %}
+                </div>
+              </div>
+            </div>
+          {% endif %}
+        {% endif %}
+
+        <div class="col-12">
+          {% set disable_run = (product_is_scr and doc_value and scr_consent_status != "valida") %}
+          <button class="btn btn-primary" type="submit" {% if disable_run %}disabled{% endif %}>Executar</button>
+          <a class="btn btn-outline-secondary" href="/creditos">Recarregar</a>
+          <a class="btn btn-outline-secondary" href="/consultas/historico">Histórico</a>
+          {% if disable_run %}
+            <div class="muted small mt-2">A consulta SCR será liberada automaticamente após o aceite.</div>
+          {% endif %}
+        </div>
+      </div>
+    </form>
+  </div>
+
+  {% if run %}
+  <div class="card p-3 mt-3">
+    <div class="d-flex justify-content-between align-items-start flex-wrap gap-2">
+      <div>
+        <div class="text-muted">Status</div>
+        <div><strong>{{ run.status }}</strong></div>
+
+        {% if run.status == "PENDING" %}
+          <div class="text-muted" style="font-size:.9rem;">Consulta em processamento. Você pode atualizar o resultado.</div>
+          <div class="mt-2">
+            <a class="btn btn-sm btn-outline-primary" href="/consultas/run/{{ run.id }}">Atualizar resultado</a>
+          </div>
+        {% endif %}
+
+        {% if run.status == "READY" %}
+          <div class="mt-2 d-flex gap-2 flex-wrap">
+            <a class="btn btn-sm btn-primary" href="/consultas/run/{{ run.id }}/pdf" target="_blank" rel="noopener">Baixar PDF</a>
+          </div>
+        {% endif %}
+      </div>
+
+      <div class="text-end">
+        <div class="text-muted">Documento</div>
+        <div><strong>{{ run.subject_doc|default("") }}</strong></div>
+      </div>
+    </div>
+
+    <hr>
+
+    {% if run.status == "READY" %}
+      <div class="alert alert-success mb-0">Consulta finalizada. Use o botão <strong>Baixar PDF</strong> para gerar o relatório.</div>
+    {% elif run.status == "PENDING" %}
+      <div class="alert alert-warning mb-0">Em processamento (Direct Data). Aguarde alguns segundos e clique em <strong>Atualizar resultado</strong>.</div>
+    {% else %}
+      <div class="alert alert-danger mb-0">{{ run.error }}</div>
+    {% endif %}
+  </div>
+  {% endif %}
+</div>
+{% endblock %}
+""")
+
+TEMPLATES.setdefault("consultas_historico.html", r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="container" style="max-width: 1100px;">
+  <div class="d-flex align-items-center justify-content-between mt-3">
+    <h3>Histórico de Consultas</h3>
+    <a class="btn btn-outline-secondary btn-sm" href="/consultas">Voltar</a>
+  </div>
+
+  <div class="card p-3 mt-3">
+    <div class="table-responsive">
+      <table class="table table-sm align-middle">
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Data</th>
+            <th>Consulta</th>
+            <th>Doc</th>
+            <th>Status</th>
+            <th class="text-end">Preço</th>
+            <th class="text-end"></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in runs %}
+          <tr>
+            <td>{{ r.id }}</td>
+            <td>{{ r.created_at.strftime("%d/%m/%Y %H:%M") }}</td>
+            <td>{{ r.label }}</td>
+            <td>{{ r.doc_masked }}</td>
+            <td><strong>{{ r.status }}</strong></td>
+            <td class="text-end">{{ "%.2f"|format(r.price_cents/100) }}</td>
+            <td class="text-end">
+              <a class="btn btn-sm btn-outline-primary" href="/consultas/run/{{ r.id }}">Abrir</a>
+              {% if r.status == "READY" %}
+                <a class="btn btn-sm btn-primary" href="/consultas/run/{{ r.id }}/pdf" target="_blank" rel="noopener">PDF</a>
+              {% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+          {% if not runs %}
+            <tr><td colspan="7" class="text-muted">Sem consultas.</td></tr>
+          {% endif %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}
+""")
+
+
+@app.get("/creditos", response_class=HTMLResponse)
+@require_login
+async def creditos_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+
+    active_client_id = get_active_client_id(request, session, ctx)
+    if not active_client_id and getattr(ctx.membership, "client_id", None):
+        active_client_id = int(ctx.membership.client_id)
+
+    if not active_client_id:
+        set_flash(request, "Selecione um cliente (no topo) para ver créditos.")
+        return RedirectResponse("/", status_code=303)
+
+    client = get_client_or_none(session, ctx.company.id, int(active_client_id))
+    if not client:
+        set_flash(request, "Cliente inválido.")
+        return RedirectResponse("/", status_code=303)
+
+    w = _get_or_create_wallet(session, company_id=ctx.company.id, client_id=client.id)
+    ledger = session.exec(
+        select(CreditLedger)
+        .where(CreditLedger.company_id == ctx.company.id, CreditLedger.client_id == client.id)
+        .order_by(CreditLedger.id.desc())
+        .limit(50)
+    ).all()
+
+    return render("creditos.html", request=request, context={
+        "title": "Créditos",
+        "wallet_balance": f"{w.balance_cents / 100:.2f}",
+        "ledger": ledger,
+        "stripe_enabled": _stripe_enabled(),
+    })
+
+
+@app.post("/creditos/checkout")
+@require_login
+async def creditos_checkout(request: Request, session: Session = Depends(get_session),
+                            pack: str = Form("50")) -> Response:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+
+    if not _stripe_enabled():
+        set_flash(request, "Stripe não configurado.")
+        return RedirectResponse("/creditos", status_code=303)
+
+    active_client_id = get_active_client_id(request, session, ctx)
+    if not active_client_id and getattr(ctx.membership, "client_id", None):
+        active_client_id = int(ctx.membership.client_id)
+    if not active_client_id:
+        set_flash(request, "Selecione um cliente para recarregar.")
+        return RedirectResponse("/creditos", status_code=303)
+
+    client = get_client_or_none(session, ctx.company.id, int(active_client_id))
+    if not client:
+        set_flash(request, "Cliente inválido.")
+        return RedirectResponse("/creditos", status_code=303)
+
+    packs = {"50": 5000, "100": 10000, "250": 25000, "500": 50000}
+    amount_cents = packs.get(str(pack), 5000)
+    credits = int(amount_cents / 100)
+
+    stripe.api_key = os.environ["STRIPE_SECRET_KEY"]
+    success_url = os.getenv("STRIPE_SUCCESS_URL", str(request.base_url).rstrip("/") + "/creditos?success=1")
+    cancel_url = os.getenv("STRIPE_CANCEL_URL", str(request.base_url).rstrip("/") + "/creditos?canceled=1")
+
+    checkout = stripe.checkout.Session.create(
+        mode="payment",
+        success_url=success_url,
+        cancel_url=cancel_url,
+        line_items=[{
+            "price_data": {
+                "currency": "brl",
+                "product_data": {"name": f"{credits} créditos"},
+                "unit_amount": int(amount_cents),
+            },
+            "quantity": 1,
+        }],
+        metadata={
+            "company_id": str(ctx.company.id),
+            "client_id": str(client.id),
+            "credits": str(credits),
+        },
+    )
+    return RedirectResponse(checkout.url, status_code=303)
+
+
+@app.post("/stripe/webhook")
+async def stripe_webhook(request: Request, session: Session = Depends(get_session)) -> Response:
+    if stripe is None or not os.getenv("STRIPE_WEBHOOK_SECRET"):
+        return Response(status_code=400)
+
+    payload = await request.body()
+    sig = request.headers.get("stripe-signature", "")
+    stripe.api_key = os.getenv("STRIPE_SECRET_KEY", "")
+
+    try:
+        event = stripe.Webhook.construct_event(payload, sig, os.environ["STRIPE_WEBHOOK_SECRET"])
+    except Exception:
+        return Response(status_code=400)
+
+    event_type = event["type"] if hasattr(event, "__getitem__") else getattr(event, "type", "")
+    event_data = event["data"] if hasattr(event, "__getitem__") else getattr(event, "data", None)
+    event_obj = (event_data["object"] if hasattr(event_data, "__getitem__") else getattr(event_data, "object", None)) if event_data else {}
+    event_obj = event_obj or {}
+    if event_type == "checkout.session.completed":
+        obj = event_obj
+        def _safe_get(o, k, default=None):
+            try:
+                if hasattr(o, "__getitem__"): return o[k]
+                return getattr(o, k, default)
+            except Exception: return default
+        meta_obj = _safe_get(obj, "metadata") or {}
+        def _meta(k): return _safe_get(meta_obj, k) or ""
+        company_id = int(_meta("company_id") or 0)
+        client_id = int(_meta("client_id") or 0)
+        credits = int(_meta("credits") or 0)
+        session_id = str(_safe_get(obj, "id") or "")
+        if company_id and client_id and credits and session_id:
+            already = session.exec(select(CreditLedger).where(
+                CreditLedger.ref_type == "stripe_session",
+                CreditLedger.ref_id == session_id,
+                CreditLedger.kind == "TOPUP_CONFIRMED",
+            )).first()
+            if not already:
+                _wallet_credit(session, company_id=company_id, client_id=client_id, amount_cents=credits * 100,
+                               stripe_session_id=session_id)
+
+    return Response(status_code=200)
+
+
+# ----------------------------
+# Consultas: Aceite SCR por CPF/CNPJ (link + e-mail)
+# ----------------------------
+
+def _build_consulta_consent_url(request: Request, *, token: str) -> str:
+    return f"{_public_base_url(request)}/consultas/consent/aceite/{token}"
+
+
+@app.post("/consultas/consent_link")
+@require_login
+async def consultas_generate_consent_link(
+        request: Request,
+        session: Session = Depends(get_session),
+        code: str = Form(...),
+        doc: str = Form(""),
+        email: str = Form(""),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    active_client_id = get_active_client_id(request, session, ctx)
+    if not active_client_id and getattr(ctx.membership, "client_id", None):
+        active_client_id = int(ctx.membership.client_id)
+    if not active_client_id:
+        set_flash(request, "Selecione um cliente.")
+        return RedirectResponse("/consultas", status_code=303)
+
+    norm_doc = _digits_only(doc or "")
+    if not norm_doc:
+        set_flash(request, "Informe um CPF/CNPJ válido para solicitar o aceite.")
+        return RedirectResponse(f"/consultas/{code}", status_code=303)
+
+    if not _is_scr_consulta_product(code):
+        set_flash(request, "Este produto não exige aceite SCR.")
+        return RedirectResponse(f"/consultas/{code}?doc={norm_doc}", status_code=303)
+
+    if not ensure_consulta_scr_consent_table():
+        set_flash(request, "Sistema de aceite SCR não está configurado (migração pendente no banco).")
+        return RedirectResponse(f"/consultas/{code}?doc={norm_doc}", status_code=303)
+
+    # Reutiliza link pendente, se existir
+    latest = _get_latest_consulta_scr_consent(session, company_id=ctx.company.id, subject_doc=norm_doc)
+    link_url = ""
+    if latest:
+        _refresh_consulta_scr_consent_status(latest)
+        if latest.status == "valida":
+            set_flash(request, "Aceite já está válido para este CPF/CNPJ.")
+            return RedirectResponse(f"/consultas/{code}?doc={norm_doc}", status_code=303)
+        if latest.status == "pendente":
+            meta = _unpack_consent_link_note(latest.notes)
+            if meta and meta.get("token"):
+                try:
+                    _verify_consent_token(str(meta["token"]))
+                    link_url = _build_consulta_consent_url(request, token=str(meta["token"]))
+                except Exception:
+                    link_url = ""
+
+    now = utcnow()
+    exp_dt = now + timedelta(hours=int(CREDIT_CONSENT_LINK_TTL_HOURS))
+
+    if not link_url:
+        nonce = secrets.token_urlsafe(12)
+        payload = {
+            "scope": "consultas_scr",
+            "company_id": int(ctx.company.id),
+            "requested_by_client_id": int(active_client_id),
+            "created_by_user_id": int(ctx.user.id),
+            "subject_doc": norm_doc,
+            "iat": int(now.timestamp()),
+            "exp": int(exp_dt.timestamp()),
+            "nonce": nonce,
+            "term_version": CREDIT_CONSENT_TERM_VERSION,
+        }
+        token = _sign_consent_token(payload)
+
+        consent = ConsultaScrConsent(
+            company_id=ctx.company.id,
+            requested_by_client_id=int(active_client_id),
+            created_by_user_id=ctx.user.id,
+            subject_doc=norm_doc,
+            invited_email=(email or "").strip().lower(),
+            status="pendente",
+            token_nonce=nonce,
+            signed_by_name="",
+            signed_at=None,
+            expires_at=exp_dt,
+            accepted_at=None,
+            notes=_pack_consent_link_note(token=token, created_by_user_id=ctx.user.id, expires_at=exp_dt),
+            created_at=now,
+            updated_at=now,
+        )
+        session.add(consent)
+        try:
+            session.commit()
+        except OperationalError:
+            ensure_consulta_scr_consent_table()
+            session.add(consent)
+            session.commit()
+
+        link_url = _build_consulta_consent_url(request, token=token)
+
+    # tenta enviar e-mail (se configurado)
+    to_email = (email or "").strip().lower()
+    if to_email and "@" in to_email:
+        try:
+            subj = f"Aceite para consulta ao SCR (Bacen) - {ctx.company.name}"
+            html_body = f"""
+            <p>Olá,</p>
+            <p>Para liberar a consulta ao <b>SCR (Bacen)</b> do CPF/CNPJ <b>{_mask_doc(norm_doc)}</b>,
+            pedimos que você registre seu aceite no link abaixo:</p>
+            <p><a href="{link_url}">{link_url}</a></p>
+            <p>Se você não reconhece esta solicitação, ignore este e-mail.</p>
+            """
+            text_body = f"Para liberar a consulta ao SCR do documento {_mask_doc(norm_doc)}, acesse:\n{link_url}\n"
+            _smtp_send_email(to_email=to_email, subject=subj, html_body=html_body, text_body=text_body)
+            set_flash(request, f"E-mail de aceite enviado para {to_email}.")
+        except Exception as e:
+            set_flash(request, f"Não foi possível enviar e-mail (SMTP). Copie o link manualmente. Erro: {e}")
+    else:
+        set_flash(request, "E-mail inválido. Copie o link manualmente.")
+
+    request.session["consulta_consent_link_url"] = link_url
+    return RedirectResponse(f"/consultas/{code}?doc={norm_doc}", status_code=303)
+
+
+@app.get("/consultas/consent/aceite/{token}", response_class=HTMLResponse)
+async def consultas_consent_accept_page(
+        request: Request,
+        token: str,
+        session: Session = Depends(get_session),
+) -> HTMLResponse:
+    try:
+        payload = _verify_consent_token(token)
+    except Exception as e:
+        return render("error.html", request=request,
+                      context={"current_user": None, "current_company": None, "role": "public",
+                               "message": f"Link inválido/expirado: {e}"}, status_code=400)
+
+    if str(payload.get("scope") or "") != "consultas_scr":
+        return render("error.html", request=request,
+                      context={"current_user": None, "current_company": None, "role": "public",
+                               "message": "Link inválido para este fluxo."}, status_code=400)
+
+    company_id = int(payload.get("company_id") or 0)
+    subject_doc = _digits_only(str(payload.get("subject_doc") or ""))
+    nonce = str(payload.get("nonce") or "")
+
+    company = session.get(Company, company_id) if company_id else None
+    if not company or not subject_doc:
+        return render("error.html", request=request,
+                      context={"current_user": None, "current_company": None, "role": "public",
+                               "message": "Link inválido: empresa/documento não encontrados."}, status_code=404)
+
+    if not ensure_consulta_scr_consent_table():
+        return render("error.html", request=request,
+                      context={"current_user": None, "current_company": company, "role": "public",
+                               "message": "Sistema de aceite ainda não está configurado (tabela ausente)."},
+                      status_code=500)
+
+    consent = session.exec(
+        select(ConsultaScrConsent)
+        .where(
+            ConsultaScrConsent.company_id == company_id,
+            ConsultaScrConsent.subject_doc == subject_doc,
+            ConsultaScrConsent.token_nonce == nonce,
+        )
+        .order_by(ConsultaScrConsent.created_at.desc())
+    ).first()
+
+    if not consent:
+        return render("error.html", request=request,
+                      context={"current_user": None, "current_company": company, "role": "public",
+                               "message": "Solicitação de aceite não encontrada."}, status_code=404)
+
+    _refresh_consulta_scr_consent_status(consent)
+    if consent.status == "valida":
+        return render("success.html", request=request,
+                      context={"current_user": None, "current_company": company, "role": "public",
+                               "message": "Autorização já registrada. Obrigado!"})
+
+    terms_html = templates_env.from_string(CREDIT_CONSENT_TERMS_HTML).render(term_version=CREDIT_CONSENT_TERM_VERSION)
+
+    return render(
+        "consulta_consent_accept.html",
+        request=request,
+        context={
+            "current_user": None,
+            "current_company": company,
+            "role": "public",
+            "company": company,
+            "doc_masked": _mask_doc(subject_doc),
+            "terms_html": terms_html,
+            "token": token,
+            "error": "",
+            "form": {"name": ""},
+        },
+    )
+
+
+@app.post("/consultas/consent/aceite/{token}")
+async def consultas_consent_accept_submit(
+        request: Request,
+        token: str,
+        session: Session = Depends(get_session),
+        agree: str = Form(""),
+        signed_by_name: str = Form(""),
+        doc_last4: str = Form(""),
+) -> Response:
+    def render_form(company: Company, subject_doc: str, msg: str) -> HTMLResponse:
+        terms_html = templates_env.from_string(CREDIT_CONSENT_TERMS_HTML).render(
+            term_version=CREDIT_CONSENT_TERM_VERSION)
+        return render(
+            "consulta_consent_accept.html",
+            request=request,
+            context={
+                "current_user": None,
+                "current_company": company,
+                "role": "public",
+                "company": company,
+                "doc_masked": _mask_doc(subject_doc),
+                "terms_html": terms_html,
+                "token": token,
+                "error": msg,
+                "form": {"name": signed_by_name or ""},
+            },
+            status_code=400,
+        )
+
+    try:
+        payload = _verify_consent_token(token)
+    except Exception as e:
+        return render("error.html", request=request,
+                      context={"current_user": None, "current_company": None, "role": "public",
+                               "message": f"Link inválido/expirado: {e}"}, status_code=400)
+
+    if str(payload.get("scope") or "") != "consultas_scr":
+        return render("error.html", request=request,
+                      context={"current_user": None, "current_company": None, "role": "public",
+                               "message": "Link inválido para este fluxo."}, status_code=400)
+
+    company_id = int(payload.get("company_id") or 0)
+    subject_doc = _digits_only(str(payload.get("subject_doc") or ""))
+    nonce = str(payload.get("nonce") or "")
+
+    company = session.get(Company, company_id) if company_id else None
+    if not company or not subject_doc:
+        return render("error.html", request=request,
+                      context={"current_user": None, "current_company": None, "role": "public",
+                               "message": "Link inválido: empresa/documento não encontrados."}, status_code=404)
+
+    if not str(agree).strip():
+        return render_form(company, subject_doc, "É necessário marcar o aceite.")
+
+    dl4 = _digits_only(doc_last4)[-4:]
+    if dl4 and not subject_doc.endswith(dl4):
+        return render_form(company, subject_doc, "Os 4 últimos dígitos não conferem.")
+
+    if not ensure_consulta_scr_consent_table():
+        return render("error.html", request=request,
+                      context={"current_user": None, "current_company": company, "role": "public",
+                               "message": "Sistema de aceite não está configurado (tabela ausente)."}, status_code=500)
+
+    consent = session.exec(
+        select(ConsultaScrConsent)
+        .where(
+            ConsultaScrConsent.company_id == company_id,
+            ConsultaScrConsent.subject_doc == subject_doc,
+            ConsultaScrConsent.token_nonce == nonce,
+        )
+        .order_by(ConsultaScrConsent.created_at.desc())
+    ).first()
+    if not consent:
+        return render("error.html", request=request,
+                      context={"current_user": None, "current_company": company, "role": "public",
+                               "message": "Solicitação de aceite não encontrada."}, status_code=404)
+
+    now = utcnow()
+    expires_at = now + timedelta(days=int(CREDIT_CONSENT_MAX_DAYS))
+
+    evidence = {
+        "method": "clickwrap",
+        "scope": "consultas_scr",
+        "term_version": CREDIT_CONSENT_TERM_VERSION,
+        "term_sha256": _terms_sha256(),
+        "token_iat": int(payload.get("iat") or 0),
+        "token_exp": int(payload.get("exp") or 0),
+        "ip": _request_ip(request),
+        "user_agent": request.headers.get("user-agent") or "",
+        "accepted_at_utc": now.isoformat(),
+        "subject_doc_masked": _mask_doc(subject_doc),
+    }
+
+    consent.status = "valida"
+    consent.signed_by_name = (signed_by_name or "").strip() or "Titular"
+    consent.signed_at = now
+    consent.expires_at = expires_at
+    consent.accepted_at = now
+    consent.updated_at = now
+    consent.notes = "[aceite-eletronico]\n" + json.dumps(evidence, ensure_ascii=False)
+    session.add(consent)
+    session.commit()
+
+    return render(
+        "success.html",
+        request=request,
+        context={
+            "current_user": None,
+            "current_company": company,
+            "role": "public",
+            "message": "Autorização registrada com sucesso. Você já pode fechar esta página.",
+        },
+    )
+
+
+@app.get("/consultas", response_class=HTMLResponse)
+@require_login
+async def consultas_home(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+
+    active_client_id = get_active_client_id(request, session, ctx)
+    if not active_client_id and getattr(ctx.membership, "client_id", None):
+        active_client_id = int(ctx.membership.client_id)
+
+    if not active_client_id:
+        set_flash(request, "Selecione um cliente para usar consultas.")
+        return RedirectResponse("/", status_code=303)
+
+    client = get_client_or_none(session, ctx.company.id, int(active_client_id))
+    if not client:
+        set_flash(request, "Cliente inválido.")
+        return RedirectResponse("/", status_code=303)
+
+    _seed_credit_products(session, ctx.company.id)
+
+    _disable_unwanted_products(session, ctx.company.id)
+
+    products = session.exec(select(QueryProduct).where(
+        QueryProduct.company_id == ctx.company.id,
+        QueryProduct.enabled == True,  # noqa
+        QueryProduct.code != "directdata.cadastral_pf",
+    ).order_by(QueryProduct.label)).all()
+
+    enriched = [{
+        "code": p.code,
+        "label": p.label,
+        "price_cents": _price_cents(p.provider_cost_cents, p.markup_pct),
+    } for p in products]
+
+    w = _get_or_create_wallet(session, company_id=ctx.company.id, client_id=client.id)
+    return render("consultas.html", request=request, context={
+        "title": "Consultas",
+        "wallet_balance": f"{w.balance_cents / 100:.2f}",
+        "products": enriched,
+    })
+
+
+@app.get("/consultas/historico", response_class=HTMLResponse)
+@app.get("/consultas/historico/", response_class=HTMLResponse)
+@require_login
+async def consultas_historico(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    active_client_id = get_active_client_id(request, session, ctx)
+    member_client_id = getattr(ctx.membership, "client_id", None)
+
+    runs = []
+    info_msg = ""
+
+    try:
+        if ctx.membership.role == "cliente":
+            if not member_client_id:
+                info_msg = "Seu usuário não está vinculado a um cliente."
+                runs = []
+            else:
+                cid = int(member_client_id)
+                runs = session.exec(
+                    select(QueryRun)
+                    .where(QueryRun.company_id == ctx.company.id, QueryRun.client_id == cid)
+                    .order_by(QueryRun.id.desc())
+                    .limit(500)
+                ).all()
+        else:
+            if active_client_id:
+                cid = int(active_client_id)
+                runs = session.exec(
+                    select(QueryRun)
+                    .where(QueryRun.company_id == ctx.company.id, QueryRun.client_id == cid)
+                    .order_by(QueryRun.id.desc())
+                    .limit(500)
+                ).all()
+            else:
+                runs = session.exec(
+                    select(QueryRun)
+                    .where(QueryRun.company_id == ctx.company.id)
+                    .order_by(QueryRun.id.desc())
+                    .limit(500)
+                ).all()
+                info_msg = "Exibindo consultas da empresa (nenhum cliente selecionado)."
+    except Exception as e:
+        info_msg = f"Erro ao carregar histórico: {e}"
+        runs = []
+
+    products = {p.code: p.label for p in
+                session.exec(select(QueryProduct).where(QueryProduct.company_id == ctx.company.id)).all()}
+    view = []
+    for r in runs:
+        view.append({
+            "id": r.id,
+            "created_at": r.created_at,
+            "label": products.get(r.product_code, r.product_code),
+            "doc_masked": _mask_doc(r.subject_doc),
+            "status": r.status,
+            "price_cents": r.price_cents,
+        })
+
+    return render("consultas_historico.html", request=request,
+                  context={"title": "Histórico de Consultas", "runs": view, "info_msg": info_msg})
+
+
+@app.get("/consultas/{code}", response_class=HTMLResponse)
+@require_login
+async def consultas_product(request: Request, session: Session = Depends(get_session), code: str = "") -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+
+    active_client_id = get_active_client_id(request, session, ctx)
+    if not active_client_id and getattr(ctx.membership, "client_id", None):
+        active_client_id = int(ctx.membership.client_id)
+    if not active_client_id:
+        return RedirectResponse("/", status_code=303)
+
+    client = get_client_or_none(session, ctx.company.id, int(active_client_id))
+    if not client:
+        return RedirectResponse("/", status_code=303)
+
+    p = session.exec(select(QueryProduct).where(
+        QueryProduct.company_id == ctx.company.id,
+        QueryProduct.code == code,
+        QueryProduct.enabled == True,  # noqa
+        QueryProduct.code != "directdata.cadastral_pf",
+    )).first()
+    if not p:
+        raise HTTPException(status_code=404, detail="Consulta não encontrada.")
+
+    doc_value = _digits_only(str(request.query_params.get("doc") or ""))
+    product_is_scr = _is_scr_consulta_product(p.code)
+
+    scr_consent_status = ""
+    scr_consent_expires_at = None
+    consent_link_url = ""
+
+    if product_is_scr and doc_value and ensure_consulta_scr_consent_table():
+        try:
+            cst = _get_latest_consulta_scr_consent(session, company_id=ctx.company.id, subject_doc=doc_value)
+            if cst:
+                prev = cst.status
+                _refresh_consulta_scr_consent_status(cst)
+                if cst.status != prev:
+                    cst.updated_at = utcnow()
+                    session.add(cst)
+                    session.commit()
+                scr_consent_status = cst.status
+                if cst.status == "valida":
+                    scr_consent_expires_at = cst.expires_at
+                elif cst.status == "pendente":
+                    meta = _unpack_consent_link_note(cst.notes)
+                    if meta and meta.get("token"):
+                        try:
+                            _verify_consent_token(str(meta["token"]))
+                            consent_link_url = _build_consulta_consent_url(request, token=str(meta["token"]))
+                        except Exception:
+                            consent_link_url = ""
+        except Exception:
+            pass
+
+    # fallback: mostra o último link gerado (se houver)
+    if not consent_link_url:
+        consent_link_url = str(request.session.get("consulta_consent_link_url") or "")
+
+    w = _get_or_create_wallet(session, company_id=ctx.company.id, client_id=client.id)
+    pv = {"code": p.code, "label": p.label, "price_cents": _price_cents(p.provider_cost_cents, p.markup_pct)}
+    return render("consulta_run.html", request=request, context={
+        "title": p.label,
+        "product": pv,
+        "wallet_balance": f"{w.balance_cents / 100:.2f}",
+        "run": None,
+        "doc_value": doc_value,
+        "product_is_scr": bool(product_is_scr),
+        "scr_consent_status": scr_consent_status,
+        "scr_consent_expires_at": scr_consent_expires_at,
+        "consulta_consent_link_url": consent_link_url,
+    })
+
+
+@app.post("/consultas/{code}/run", response_class=HTMLResponse)
+@require_login
+async def consultas_run(request: Request, session: Session = Depends(get_session), code: str = "",
+                        doc: str = Form("")) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+
+    active_client_id = get_active_client_id(request, session, ctx)
+    if not active_client_id and getattr(ctx.membership, "client_id", None):
+        active_client_id = int(ctx.membership.client_id)
+    if not active_client_id:
+        return RedirectResponse("/", status_code=303)
+
+    client = get_client_or_none(session, ctx.company.id, int(active_client_id))
+    if not client:
+        return RedirectResponse("/", status_code=303)
+
+    p = session.exec(select(QueryProduct).where(
+        QueryProduct.company_id == ctx.company.id,
+        QueryProduct.code == code,
+        QueryProduct.enabled == True,  # noqa
+        QueryProduct.code != "directdata.cadastral_pf",
+    )).first()
+    if not p:
+        raise HTTPException(status_code=404, detail="Consulta não encontrada.")
+
+    norm_doc = re.sub(r"\D+", "", doc or "")
+    if not norm_doc:
+        set_flash(request, "Documento inválido.")
+        return RedirectResponse(f"/consultas/{code}", status_code=303)
+
+    # SCR exige aceite do titular do CPF/CNPJ consultado (link + e-mail)
+    if _is_scr_consulta_product(p.code):
+        if not ensure_consulta_scr_consent_table():
+            set_flash(request, "Sistema de aceite SCR não está configurado (migração pendente no banco).")
+            return RedirectResponse(f"/consultas/{code}?doc={norm_doc}", status_code=303)
+        if not _has_valid_consulta_scr_consent(session, company_id=ctx.company.id, subject_doc=norm_doc):
+            set_flash(request, "Antes de consultar SCR, envie o e-mail de aceite e aguarde o titular confirmar.")
+            return RedirectResponse(f"/consultas/{code}?doc={norm_doc}", status_code=303)
+
+    price = _price_cents(p.provider_cost_cents, p.markup_pct)
+
+    run = QueryRun(
+        company_id=ctx.company.id,
+        client_id=client.id,
+        created_by_user_id=ctx.user.id,
+        product_code=p.code,
+        subject_doc=norm_doc,
+        status="PENDING",
+        price_cents=price,
+        provider_cost_cents=p.provider_cost_cents,
+        created_at=utcnow(),
+        updated_at=utcnow(),
+    )
+    session.add(run)
+    session.commit()
+    session.refresh(run)
+
+    _wallet_debit_or_402(
+        session,
+        company_id=ctx.company.id,
+        client_id=client.id,
+        amount_cents=price,
+        run_id=run.id,
+        note=f"Consulta: {p.label} ({p.code}) doc={norm_doc}",
+    )
+
+    try:
+        status, data, msg = await _directdata_call_real(product_code=p.code, doc_digits=norm_doc)
+        if not status or data is None:
+            raise RuntimeError(msg or f"Falha Direct Data status={status}")
+
+        # Se veio "Em Processamento", aguarda e atualiza com resultado final
+        md = (data.get("metaDados") or {})
+        run.provider_uid = md.get("consultaUid") or run.provider_uid
+
+        if (_dd_is_processing(data) or (
+                (data.get("metaDados") or {}).get("resultado", "").lower().find("process") != -1)) and run.provider_uid:
+            ok, final_data, _ = await _directdata_wait_result(run.provider_uid, timeout_s=60)
+            if ok and final_data is not None:
+                data = final_data
+            else:
+                # mantém pendente; usuário pode atualizar depois
+                run.status = "PENDING"
+                run.result_json = json.dumps(data, ensure_ascii=False, indent=2)
+                run.updated_at = utcnow()
+                session.add(run)
+                session.commit()
+                # render pendente
+                w = _get_or_create_wallet(session, company_id=ctx.company.id, client_id=client.id)
+                product_view = {"code": p.code, "label": p.label, "category": p.category,
+                                "price_cents": int(run.price_cents)}
+                return render("consulta_run.html", request=request, context={
+                    "title": p.label,
+                    "product": product_view,
+                    "wallet_balance": f"{w.balance_cents / 100:.2f}",
+                    "run": run,
+
+                    "doc_value": norm_doc,
+                    "product_is_scr": bool(_is_scr_consulta_product(p.code)),
+                    "scr_consent_status": ("valida" if _is_scr_consulta_product(p.code) else ""),
+                    "scr_consent_expires_at": None,
+                    "consulta_consent_link_url": str(request.session.get("consulta_consent_link_url") or ""),
+                    "client": client,
+                })
+
+        # pronto
+        run.result_json = json.dumps(data, ensure_ascii=False, indent=2)
+        run.status = "READY"
+        run.updated_at = utcnow()
+        session.add(run)
+        session.commit()
+    except Exception as e:
+        _wallet_refund(session, company_id=ctx.company.id, client_id=client.id, amount_cents=run.price_cents,
+                       run_id=run.id, note=f"Estorno por falha Direct Data: {p.code}")
+        run.status = "FAILED"
+        run.error = str(e)
+        run.updated_at = utcnow()
+        session.add(run)
+        session.commit()
+
+    w = _get_or_create_wallet(session, company_id=ctx.company.id, client_id=client.id)
+    pv = {"code": p.code, "label": p.label, "price_cents": price}
+    return render("consulta_run.html", request=request, context={
+        "title": p.label,
+        "product": pv,
+        "wallet_balance": f"{w.balance_cents / 100:.2f}",
+        "run": run,
+
+        "doc_value": norm_doc,
+        "product_is_scr": bool(_is_scr_consulta_product(p.code)),
+        "scr_consent_status": ("valida" if _is_scr_consulta_product(p.code) else ""),
+        "scr_consent_expires_at": None,
+        "consulta_consent_link_url": str(request.session.get("consulta_consent_link_url") or ""),
+    })
+
+
+@app.get("/consultas/run/{run_id}", response_class=HTMLResponse)
+@require_login
+async def consultas_run_view(request: Request, session: Session = Depends(get_session),
+                             run_id: int = 0) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+    run = session.get(QueryRun, int(run_id))
+    if not run or run.company_id != ctx.company.id:
+        raise HTTPException(status_code=404, detail="Consulta não encontrada.")
+
+    client = session.get(Client, int(run.client_id))
+    if not client or client.company_id != ctx.company.id:
+        raise HTTPException(status_code=404, detail="Cliente inválido.")
+
+    # Atualiza se pendente e tem provider_uid
+    if run.status == "PENDING" and run.provider_uid:
+        ok, final_data, msg = await _directdata_wait_result(run.provider_uid, timeout_s=30)
+        if ok and final_data is not None:
+            run.result_json = json.dumps(final_data, ensure_ascii=False, indent=2)
+            run.status = "READY"
+            run.updated_at = utcnow()
+            session.add(run)
+            session.commit()
+        else:
+            # mantém pendente; não estorna aqui
+            pass
+
+    # recuperar product
+    p = session.exec(select(QueryProduct).where(QueryProduct.company_id == ctx.company.id,
+                                                QueryProduct.code == run.product_code)).first()
+    label = p.label if p else run.product_code
+    price_cents = run.price_cents
+
+    w = _get_or_create_wallet(session, company_id=ctx.company.id, client_id=client.id)
+    product_view = {"code": run.product_code, "label": label, "category": (p.category if p else "credito"),
+                    "price_cents": int(run.price_cents)}
+    return render("consulta_run.html", request=request, context={
+        "title": label,
+        "product": product_view,
+        "wallet_balance": f"{w.balance_cents / 100:.2f}",
+        "run": run,
+        "client": client,
+    })
+
+
+@app.get("/consultas/run/{run_id}/pdf")
+@require_login
+async def consultas_run_pdf(request: Request, session: Session = Depends(get_session), run_id: int = 0) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+    run = session.get(QueryRun, int(run_id))
+    if not run or run.company_id != ctx.company.id:
+        raise HTTPException(status_code=404, detail="Consulta não encontrada.")
+
+    client = session.get(Client, int(run.client_id))
+    if not client or client.company_id != ctx.company.id:
+        raise HTTPException(status_code=404, detail="Cliente inválido.")
+
+    if run.status != "READY":
+        raise HTTPException(status_code=409, detail="Consulta ainda não finalizada.")
+
+    p = session.exec(select(QueryProduct).where(QueryProduct.company_id == ctx.company.id,
+                                                QueryProduct.code == run.product_code)).first()
+    label = p.label if p else run.product_code
+
+    data = {}
+    try:
+        data = json.loads(run.result_json or "{}")
+    except Exception:
+        data = {}
+
+    pdf_bytes = build_consulta_pdf(
+        company_name=ctx.company.name,
+        client_name=client.name,
+        product_label=label,
+        product_code=run.product_code,
+        subject_doc=run.subject_doc,
+        data=data,
+    )
+    filename = f"relatorio_{run.product_code}_{run.id}.pdf".replace("/", "_")
+    return StreamingResponse(io.BytesIO(pdf_bytes), media_type="application/pdf", headers={
+        "Content-Disposition": f'attachment; filename="{filename}"'
+    })
+
+
+@app.get("/admin/consultas", response_class=HTMLResponse)
+@require_role({"admin", "equipe"})
+async def admin_consultas(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+
+    _seed_credit_products(session, ctx.company.id)
+    products = session.exec(
+        select(QueryProduct).where(QueryProduct.company_id == ctx.company.id).order_by(QueryProduct.label)).all()
+    enriched = [{
+        "code": p.code,
+        "label": p.label,
+        "provider_cost_cents": p.provider_cost_cents,
+        "markup_pct": p.markup_pct,
+        "enabled": p.enabled,
+        "price_cents": _price_cents(p.provider_cost_cents, p.markup_pct),
+    } for p in products]
+
+    return render("admin_consultas.html", request=request, context={"title": "Admin Consultas", "products": enriched})
+
+
+@app.post("/admin/consultas/save")
+@require_role({"admin"})
+async def admin_consultas_save(
+        request: Request,
+        session: Session = Depends(get_session),
+        code: str = Form(...),
+        label: str = Form(...),
+        provider_cost: str = Form("0"),
+        markup_pct: int = Form(50),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+
+    cost_cents = int(_dec(provider_cost) * Decimal("100"))
+    markup = max(50, int(markup_pct or 50))
+
+    p = session.exec(
+        select(QueryProduct).where(QueryProduct.company_id == ctx.company.id, QueryProduct.code == code)).first()
+    if p:
+        p.label = label
+        p.provider_cost_cents = cost_cents
+        p.markup_pct = markup
+        p.updated_at = utcnow()
+        session.add(p)
+    else:
+        session.add(
+            QueryProduct(
+                company_id=ctx.company.id,
+                code=code,
+                label=label,
+                category="credito",
+                provider="directdata",
+                provider_cost_cents=cost_cents,
+                markup_pct=markup,
+                enabled=True,
+                created_at=utcnow(),
+                updated_at=utcnow(),
+            )
+        )
+    session.commit()
+    set_flash(request, "Produto salvo.")
+    return RedirectResponse("/admin/consultas", status_code=303)
+
+
+@app.post("/admin/consultas/toggle")
+@require_role({"admin"})
+async def admin_consultas_toggle(request: Request, session: Session = Depends(get_session),
+                                 code: str = Form(...)) -> Response:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+
+    p = session.exec(
+        select(QueryProduct).where(QueryProduct.company_id == ctx.company.id, QueryProduct.code == code)).first()
+    if not p:
+        return RedirectResponse("/admin/consultas", status_code=303)
+
+    p.enabled = not bool(p.enabled)
+    p.updated_at = utcnow()
+    session.add(p)
+    session.commit()
+    return RedirectResponse("/admin/consultas", status_code=303)
+
+
+@app.get("/openfinance", response_class=HTMLResponse)
+@require_login
+async def openfinance_home(request: Request, doc: str = "", email: str = "",
+                           session: Session = Depends(get_session)) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+
+    client = _openfinance_require_client(request, session, ctx)
+    if not client:
+        set_flash(request, "Selecione um cliente para usar Open Finance.")
+        return RedirectResponse("/", status_code=303)
+
+    doc_digits = _digits(doc)
+    email_default = (email or "").strip() or (client.finance_email or client.email or "").strip()
+
+    provider = (os.getenv("OPENFINANCE_PROVIDER_DEFAULT") or "klavi").strip().lower()
+    if provider == "klavi":
+        from urllib.parse import urlencode
+        q: dict[str, str] = {}
+        if doc:
+            q["doc"] = doc
+        if email:
+            q["email"] = email
+        qs = ("?" + urlencode(q)) if q else ""
+        return RedirectResponse(f"/openfinance/klavi{qs}", status_code=303)
+
+    conn = None
+    loans: list[PluggyLoan] = []
+    offers = session.exec(select(PluggyOffer).where(PluggyOffer.company_id == ctx.company.id).order_by(
+        PluggyOffer.created_at.desc())).all()
+    opp_rows = []
+    invite_link = ""
+    self_connect_link = ""
+
+    try:
+        if (request.session.get("of_invite_doc") or "") == doc_digits:
+            exp_ts = int(request.session.get("of_invite_exp") or 0)
+            if not exp_ts or utcnow().timestamp() <= exp_ts:
+                invite_link = str(request.session.get("of_invite_link") or "")
+    except Exception:
+        pass
+
+    if doc_digits:
+        conn = session.exec(
+            select(PluggyConnection).where(
+                PluggyConnection.company_id == ctx.company.id,
+                PluggyConnection.subject_doc == doc_digits,
+            )
+        ).first()
+        loans = session.exec(
+            select(PluggyLoan).where(
+                PluggyLoan.company_id == ctx.company.id,
+                PluggyLoan.subject_doc == doc_digits,
+            ).order_by(PluggyLoan.fetched_at.desc())
+        ).all()
+
+        # oportunidades + label oferta
+        opps = session.exec(
+            select(PluggyOpportunity).where(
+                PluggyOpportunity.company_id == ctx.company.id,
+                PluggyOpportunity.subject_doc == doc_digits,
+            ).order_by(PluggyOpportunity.total_savings_brl.desc())
+        ).all()
+        offer_by_id = {int(o.id or 0): o for o in offers}
+        for o in opps:
+            off = offer_by_id.get(int(o.offer_id or 0))
+            opp_rows.append(
+                {
+                    "pluggy_loan_id": o.pluggy_loan_id,
+                    "offer_label": off.label if off else f"Oferta #{o.offer_id}",
+                    "old_payment_brl": o.old_payment_brl,
+                    "new_payment_brl": o.new_payment_brl,
+                    "monthly_savings_brl": o.monthly_savings_brl,
+                    "total_savings_brl": o.total_savings_brl,
+                }
+            )
+
+        # link auto para cliente (se o próprio cliente estiver logado)
+        payload = {"t": "pluggy_invite", "company_id": ctx.company.id, "doc": doc_digits,
+                   "exp": int((utcnow() + timedelta(hours=24)).timestamp())}
+        token = _sign_consent_token(payload)
+        self_connect_link = f"/openfinance/connect/{token}"
+
+    return render(
+        "openfinance.html",
+        request=request,
+        context={
+            "title": "Open Finance",
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "role": ctx.membership.role,
+            "current_client": client,
+            "doc": doc_digits,
+            "email_default": email_default,
+            "conn": conn,
+            "loans": loans,
+            "offers": offers,
+            "opportunities": opp_rows,
+            "invite_link": invite_link,
+            "self_connect_link": self_connect_link,
+        },
+    )
+
+
+@app.post("/openfinance/invite")
+@require_role({"admin", "equipe"})
+async def openfinance_invite(
+        request: Request,
+        doc: str = Form(...),
+        email: str = Form(...),
+        session: Session = Depends(get_session),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+
+    client = _openfinance_require_client(request, session, ctx)
+    if not client:
+        set_flash(request, "Selecione um cliente.")
+        return RedirectResponse("/", status_code=303)
+
+    doc_digits = _digits(doc)
+    if len(doc_digits) not in (11, 14):
+        set_flash(request, "Documento inválido (use CPF ou CNPJ).")
+        return RedirectResponse(f"/openfinance?doc={doc_digits}", status_code=303)
+
+    invited_email = (email or "").strip().lower()
+    if "@" not in invited_email:
+        set_flash(request, "E-mail inválido.")
+        return RedirectResponse(f"/openfinance?doc={doc_digits}", status_code=303)
+
+    expires_at = utcnow() + timedelta(hours=24)
+    inv = PluggyConnectInvite(
+        company_id=ctx.company.id,
+        requested_by_client_id=int(client.id or 0),
+        created_by_user_id=int(ctx.user.id or 0),
+        subject_doc=doc_digits,
+        invited_email=invited_email,
+        status="pendente",
+        expires_at=expires_at,
+        updated_at=utcnow(),
+    )
+    session.add(inv)
+    session.commit()
+    session.refresh(inv)
+
+    payload = {"t": "pluggy_invite", "invite_id": int(inv.id or 0), "company_id": ctx.company.id, "doc": doc_digits,
+               "exp": int(expires_at.timestamp())}
+    token = _sign_consent_token(payload)
+    link = f"{_public_base_url(request)}/openfinance/connect/{token}"
+
+    try:
+        request.session["of_invite_doc"] = doc_digits
+        request.session["of_invite_link"] = link
+        request.session["of_invite_exp"] = int(expires_at.timestamp())
+    except Exception:
+        pass
+
+    html_body = f"""
+      <div style="font-family:Arial,sans-serif; line-height:1.4">
+        <h2>Autorização Open Finance (Pluggy)</h2>
+        <p>Para analisarmos seus contratos e buscar melhores ofertas de crédito, conecte sua instituição via link abaixo:</p>
+        <p><a href="{html.escape(link)}">{html.escape(link)}</a></p>
+        <p style="color:#666; font-size:12px">Este link expira em 24 horas.</p>
+      </div>
+    """
+
+    try:
+        _smtp_send_email(to_email=invited_email, subject="Conexão Open Finance (Pluggy) — autorização",
+                         html_body=html_body)
+        set_flash(request, f"E-mail de conexão enviado para {invited_email}.")
+    except Exception as e:
+        set_flash(request, f"Não foi possível enviar e-mail (SMTP). Copie o link manualmente. Erro: {e}")
+
+    return RedirectResponse(f"/openfinance?doc={doc_digits}&email={invited_email}", status_code=303)
+
+
+@app.get("/openfinance/klavi", response_class=HTMLResponse)
+@require_login
+async def openfinance_klavi_home(request: Request, doc: str = "", email: str = "",
+                                 session: Session = Depends(get_session)) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+
+    client = _openfinance_require_client(request, session, ctx)
+    if not client:
+        set_flash(request, "Selecione um cliente para usar Open Finance.")
+        return RedirectResponse("/", status_code=303)
+
+    if not _klavi_is_configured():
+        set_flash(request, "Klavi não configurado (KLAVI_ACCESS_KEY/KLAVI_SECRET_KEY).")
+        return RedirectResponse("/openfinance", status_code=303)
+
+    doc_digits = _digits(doc)
+    email_default = (email or "").strip() or (client.finance_email or client.email or "").strip()
+    phone_default = (getattr(client, "phone", "") or "").strip()
+
+    flow = None
+    reports: list[KlaviReport] = []
+    if doc_digits:
+        flow = session.exec(
+            select(KlaviFlow).where(KlaviFlow.company_id == ctx.company.id, KlaviFlow.subject_doc == doc_digits)
+        ).first()
+        reports = session.exec(
+            select(KlaviReport)
+            .where(KlaviReport.company_id == ctx.company.id, KlaviReport.subject_doc == doc_digits)
+            .order_by(KlaviReport.received_at.desc())
+            .limit(10)
+        ).all()
+
+    return render(
+        "openfinance_klavi.html",
+        request=request,
+        context={
+            "title": "Open Finance (Klavi)",
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "role": ctx.membership.role,
+            "current_client": client,
+            "doc": doc_digits,
+            "email_default": email_default,
+            "phone_default": phone_default,
+            "flow": flow,
+            "reports": reports,
+        },
+    )
+
+
+@app.post("/openfinance/klavi/start")
+@require_login
+async def openfinance_klavi_start(
+        request: Request,
+        doc_input: str = Form(...),
+        email: str = Form(...),
+        phone: str = Form(...),
+        session: Session = Depends(get_session),
+) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+
+    client = _openfinance_require_client(request, session, ctx)
+    if not client:
+        set_flash(request, "Selecione um cliente para usar Open Finance.")
+        return RedirectResponse("/", status_code=303)
+
+    doc_digits = _digits(doc_input)
+    if len(doc_digits) not in (11, 14):
+        set_flash(request, "Documento inválido (use CPF ou CNPJ).")
+        return RedirectResponse("/openfinance/klavi", status_code=303)
+
+    email_v = (email or "").strip()
+    phone_v = (phone or "").strip()
+    if "@" not in email_v:
+        set_flash(request, "E-mail inválido.")
+        return RedirectResponse(f"/openfinance/klavi?doc={doc_digits}", status_code=303)
+    base = _public_base_url(request)
+    access_token = await _klavi_get_access_token()
+
+    # Create Link (requires Authorization bearer access token)
+    link_payload: dict[str, Any] = {
+        "email": email_v,
+        "redirecturl": f"{base}/openfinance/klavi/retorno?doc={doc_digits}",
+        "productscallbackurl": {"all": f"{base}/webhooks/klavi/products"},
+        "externalinfo": {"company_id": int(ctx.company.id or 0), "doc": doc_digits, "client_id": int(client.id or 0)},
+    }
+
+    if (phone_v or "").strip():
+        try:
+            phone_norm = _klavi_normalize_phone(phone_v)
+            if phone_norm:
+                link_payload["phone"] = phone_norm
+        except ValueError:
+            set_flash(request, "Klavi: telefone inválido. Use DDD+numero (ex: 11999999999). Prosseguindo sem telefone.")
+
+    if len(doc_digits) == 11:
+        link_payload["personaltaxid"] = doc_digits
+    else:
+        link_payload["businesstaxid"] = doc_digits
+
+    # Klavi compatibility: some endpoints validate camelCase fields.
+    link_payload.setdefault("redirectUrl", link_payload.get("redirecturl"))
+    link_payload.setdefault("redirectURL", link_payload.get("redirecturl"))
+    link_payload.setdefault("productsCallbackUrl", link_payload.get("productscallbackurl"))
+    link_payload.setdefault("externalInfo", link_payload.get("externalinfo"))
+    if "personaltaxid" in link_payload:
+        link_payload.setdefault("personalTaxId", link_payload["personaltaxid"])
+    if "businesstaxid" in link_payload:
+        link_payload.setdefault("businessTaxId", link_payload["businesstaxid"])
+
+    try:
+        link_data = await _klavi_post_json(path="/data/v1/links", bearer=access_token, payload=link_payload)
+    except httpx.HTTPStatusError as e:
+        body = (e.response.text or "").strip()
+        set_flash(request, f"Klavi: erro ao criar Link (HTTP {e.response.status_code}). {body[:300]}")
+        return RedirectResponse(f"/openfinance/klavi?doc={doc_digits}&email={email_v}", status_code=303)
+    except Exception as e:
+        set_flash(request, f"Klavi: erro ao criar Link. {type(e).__name__}: {str(e)[:300]}")
+        return RedirectResponse(f"/openfinance/klavi?doc={doc_digits}&email={email_v}", status_code=303)
+
+    link_id = str(link_data.get("linkid") or link_data.get("linkId") or "").strip()
+    link_token = str(link_data.get("linktoken") or link_data.get("linkToken") or "").strip()
+    exp_in = int(link_data.get("expirein") or link_data.get("expireIn") or 1800)
+
+    if not link_id or not link_token:
+        raise HTTPException(status_code=502, detail="Klavi: linkId/linkToken ausente.")
+
+    expires_at = utcnow() + timedelta(seconds=max(60, exp_in))
+
+    flow = session.exec(
+        select(KlaviFlow).where(KlaviFlow.company_id == ctx.company.id, KlaviFlow.subject_doc == doc_digits)).first()
+    if not flow:
+        flow = KlaviFlow(company_id=ctx.company.id, subject_doc=doc_digits, created_at=utcnow())
+    flow.email = email_v
+    flow.phone = phone_v
+    flow.link_id = link_id
+    flow.link_token = link_token
+    flow.link_expires_at = expires_at
+    flow.consent_status = "link_created"
+    flow.last_error = ""
+    flow.updated_at = utcnow()
+    session.add(flow)
+    session.commit()
+
+    # Institutions list uses linkToken
+    institutions = await _klavi_get_json(path="/data/v1/links/institutions", bearer=link_token)
+    if not isinstance(institutions, list):
+        institutions = []
+
+    return render(
+        "openfinance_klavi_institutions.html",
+        request=request,
+        context={
+            "title": "Open Finance (Klavi) — Instituições",
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "role": ctx.membership.role,
+            "current_client": client,
+            "doc": doc_digits,
+            "institutions": institutions,
+        },
+    )
+
+
+@app.post("/openfinance/klavi/consent")
+@require_login
+async def openfinance_klavi_consent(
+        request: Request,
+        doc: str = Form(...),
+        institution_code: str = Form(...),
+        institution_name: str = Form(""),
+        session: Session = Depends(get_session),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+
+    client = _openfinance_require_client(request, session, ctx)
+    if not client:
+        set_flash(request, "Selecione um cliente para usar Open Finance.")
+        return RedirectResponse("/", status_code=303)
+
+    doc_digits = _digits(doc)
+    flow = session.exec(
+        select(KlaviFlow).where(KlaviFlow.company_id == ctx.company.id, KlaviFlow.subject_doc == doc_digits)).first()
+    if not flow or not flow.link_token:
+        set_flash(request, "Fluxo Klavi não iniciado. Refaça o passo 1.")
+        return RedirectResponse(f"/openfinance/klavi?doc={doc_digits}", status_code=303)
+
+    exp_at = _as_aware_utc(getattr(flow, 'link_expires_at', None)) or utcnow()
+    if utcnow() > exp_at:
+        set_flash(request, "LinkToken expirou. Refaça o passo 1.")
+        return RedirectResponse(f"/openfinance/klavi?doc={doc_digits}", status_code=303)
+
+    base = _public_base_url(request)
+    consent_payload: dict[str, Any] = {
+        "externaltrackid": f"mc:{int(ctx.company.id or 0)}:{doc_digits}:{int(utcnow().timestamp())}",
+        "institutioncode": str(institution_code or "").strip(),
+        "validityperiod": 12,
+        "redirecturl": f"{base}/openfinance/klavi/retorno?doc={doc_digits}",
+        "email": (flow.email or "").strip(),
+    }
+
+    if (flow.phone or "").strip():
+        try:
+            phone_norm = _klavi_normalize_phone(flow.phone or "")
+            if phone_norm:
+                consent_payload["phone"] = phone_norm
+        except ValueError:
+            set_flash(request, "Klavi: telefone inválido. Prosseguindo sem telefone.")
+
+    if len(doc_digits) == 11:
+        consent_payload["personaltaxid"] = doc_digits
+    else:
+        consent_payload["businesstaxid"] = doc_digits
+
+    # Klavi compatibility: some endpoints validate camelCase fields.
+    consent_payload.setdefault("externalTrackId", consent_payload.get("externaltrackid"))
+    consent_payload.setdefault("institutionCode", consent_payload.get("institutioncode"))
+    consent_payload.setdefault("validityPeriod", consent_payload.get("validityperiod"))
+    consent_payload.setdefault("redirectUrl", consent_payload.get("redirecturl"))
+    consent_payload.setdefault("redirectURL", consent_payload.get("redirecturl"))
+    if "personaltaxid" in consent_payload:
+        consent_payload.setdefault("personalTaxId", consent_payload["personaltaxid"])
+    if "businesstaxid" in consent_payload:
+        consent_payload.setdefault("businessTaxId", consent_payload["businesstaxid"])
+
+    try:
+        consent_data = await _klavi_post_json(path="/data/v1/consents", bearer=flow.link_token, payload=consent_payload)
+    except httpx.HTTPStatusError as e:
+        body = (e.response.text or "").strip()
+        set_flash(request, f"Klavi: erro ao criar Consent (HTTP {e.response.status_code}). {body[:300]}")
+        flow.last_error = body[:900]
+        flow.consent_status = "consent_error"
+        flow.updated_at = utcnow()
+        session.add(flow)
+        session.commit()
+        return RedirectResponse(f"/openfinance/klavi?doc={doc_digits}", status_code=303)
+    except Exception as e:
+        set_flash(request, f"Klavi: erro ao criar Consent. {type(e).__name__}: {str(e)[:300]}")
+        flow.last_error = f"{type(e).__name__}: {str(e)[:900]}"
+        flow.consent_status = "consent_error"
+        flow.updated_at = utcnow()
+        session.add(flow)
+        session.commit()
+        return RedirectResponse(f"/openfinance/klavi?doc={doc_digits}", status_code=303)
+
+    consent_id = str(consent_data.get("consentid") or consent_data.get("consentId") or "").strip()
+    consent_redirect_url = str(
+        consent_data.get("consentredirecturl") or consent_data.get("consentRedirectUrl") or "").strip()
+
+    if not consent_id or not consent_redirect_url:
+        raise HTTPException(status_code=502, detail="Klavi: consentId/consentRedirectUrl ausente.")
+
+    flow.institution_code = str(institution_code or "").strip()
+    flow.institution_name = (institution_name or "").strip()
+    flow.consent_id = consent_id
+    flow.consent_status = "consent_created"
+    flow.updated_at = utcnow()
+    session.add(flow)
+    session.commit()
+
+    return RedirectResponse(consent_redirect_url, status_code=302)
+
+
+@app.get("/openfinance/klavi/retorno", response_class=HTMLResponse)
+async def openfinance_klavi_return(
+        request: Request,
+        doc: str = "",
+        error: str = "",
+        error_description: str = "",
+        session: Session = Depends(get_session),
+) -> HTMLResponse:
+    # Retorno do LGDP/Instituição (não exige login; pode ser usado pelo titular)
+    doc_digits = _digits(doc)
+    message = "Se a autorização foi concluída, solicite o relatório de contratos (Loans)."
+
+    return render(
+        "openfinance_klavi_return.html",
+        request=request,
+        context={
+            "title": "Open Finance (Klavi) — Retorno",
+            "current_user": None,
+            "current_company": None,
+            "role": "",
+            "current_client": None,
+            "doc": doc_digits,
+            "message": message,
+            "error": error_description or error,
+        },
+    )
+
+
+@app.post("/openfinance/klavi/request")
+@require_login
+async def openfinance_klavi_request_report(
+        request: Request,
+        doc: str = Form(...),
+        session: Session = Depends(get_session),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+
+    client = _openfinance_require_client(request, session, ctx)
+    if not client:
+        set_flash(request, "Selecione um cliente para usar Open Finance.")
+        return RedirectResponse("/", status_code=303)
+
+    doc_digits = _digits(doc)
+    flow = session.exec(
+        select(KlaviFlow).where(KlaviFlow.company_id == ctx.company.id, KlaviFlow.subject_doc == doc_digits)).first()
+    if not flow or not flow.consent_id:
+        set_flash(request, "Consentimento não encontrado. Faça a autorização primeiro.")
+        return RedirectResponse(f"/openfinance/klavi?doc={doc_digits}", status_code=303)
+
+    try:
+        req_id = await klavi_request_loans_report(doc_digits=doc_digits, flow=flow)
+        flow.last_request_id = req_id
+        flow.consent_status = "report_requested"
+        flow.updated_at = utcnow()
+        session.add(flow)
+        session.commit()
+        set_flash(request, f"Relatório solicitado (requestId={req_id}). Aguarde o webhook.")
+    except Exception as e:
+        flow.last_error = str(e)
+        flow.updated_at = utcnow()
+        session.add(flow)
+        session.commit()
+        set_flash(request, f"Falha ao solicitar relatório: {e}")
+
+    return RedirectResponse(f"/openfinance/klavi?doc={doc_digits}", status_code=303)
+
+
+@app.post("/openfinance/sync")
+@require_login
+async def openfinance_sync(request: Request, doc: str = Form(...), session: Session = Depends(get_session)) -> Response:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+    doc_digits = _digits(doc)
+
+    conn = session.exec(select(PluggyConnection).where(PluggyConnection.company_id == ctx.company.id,
+                                                       PluggyConnection.subject_doc == doc_digits)).first()
+    if not conn or not conn.pluggy_item_id:
+        set_flash(request, "Sem conexão Pluggy para este documento.")
+        return RedirectResponse(f"/openfinance?doc={doc_digits}", status_code=303)
+
+    try:
+        await pluggy_sync_loans(session=session, company_id=ctx.company.id, subject_doc=doc_digits,
+                                item_id=conn.pluggy_item_id)
+        set_flash(request, "Sincronização concluída.")
+    except Exception as e:
+        set_flash(request, f"Falha ao sincronizar: {e}")
+
+    return RedirectResponse(f"/openfinance?doc={doc_digits}", status_code=303)
+
+
+@app.post("/openfinance/offers/add")
+@require_role({"admin", "equipe"})
+async def openfinance_add_offer(
+        request: Request,
+        label: str = Form(...),
+        cet_aa_pct: str = Form(...),
+        product_type: str = Form(""),
+        term_min: str = Form("0"),
+        term_max: str = Form("0"),
+        session: Session = Depends(get_session),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+
+    try:
+        cet = float(str(cet_aa_pct).replace(",", "."))
+    except Exception:
+        cet = 0.0
+
+    o = PluggyOffer(
+        company_id=ctx.company.id,
+        label=(label or "").strip(),
+        product_type=(product_type or "").strip(),
+        cet_aa=_to_float_rate(cet),
+        term_min_months=int(term_min or 0) if str(term_min or "").strip().isdigit() else 0,
+        term_max_months=int(term_max or 0) if str(term_max or "").strip().isdigit() else 0,
+        updated_at=utcnow(),
+    )
+    session.add(o)
+    session.commit()
+
+    set_flash(request, "Oferta adicionada.")
+    return RedirectResponse("/openfinance", status_code=303)
+
+
+@app.post("/openfinance/opportunities/generate")
+@require_login
+async def openfinance_generate_opportunities(request: Request, doc: str = Form(...),
+                                             session: Session = Depends(get_session)) -> Response:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+
+    doc_digits = _digits(doc)
+    try:
+        n = _compute_opportunities_for_doc(session=session, company_id=ctx.company.id, subject_doc=doc_digits)
+        set_flash(request, f"Oportunidades geradas/atualizadas: {n}.")
+    except Exception as e:
+        set_flash(request, f"Falha ao gerar oportunidades: {e}")
+
+    return RedirectResponse(f"/openfinance?doc={doc_digits}", status_code=303)
+
+
+@app.get("/openfinance/connect/{token}", response_class=HTMLResponse)
+async def openfinance_connect_page(token: str, request: Request,
+                                   session: Session = Depends(get_session)) -> HTMLResponse:
+    try:
+        payload = _verify_consent_token(token)
+        if payload.get("t") != "pluggy_invite":
+            raise ValueError("tipo inválido")
+        company_id = int(payload.get("company_id") or 0)
+        doc_digits = _digits(str(payload.get("doc") or ""))
+        invite_id = int(payload.get("invite_id") or 0)
+    except Exception as e:
+        return render("error.html", request=request,
+                      context={"current_user": None, "current_company": None, "role": "", "current_client": None,
+                               "message": f"Link inválido: {e}"})
+
+    invited_email = ""
+    inv = None
+    if invite_id:
+        inv = session.get(PluggyConnectInvite, invite_id)
+        if not inv or int(inv.company_id or 0) != company_id:
+            return render("error.html", request=request,
+                          context={"current_user": None, "current_company": None, "role": "", "current_client": None,
+                                   "message": "Convite não encontrado."})
+        if inv.status in ("revogada", "expirada"):
+            return render("error.html", request=request,
+                          context={"current_user": None, "current_company": None, "role": "", "current_client": None,
+                                   "message": f"Convite {inv.status}."})
+        if inv.expires_at and utcnow() > inv.expires_at:
+            inv.status = "expirada"
+            inv.updated_at = utcnow()
+            session.add(inv)
+            session.commit()
+            return render("error.html", request=request,
+                          context={"current_user": None, "current_company": None, "role": "", "current_client": None,
+                                   "message": "Convite expirado."})
+        invited_email = inv.invited_email
+
+    return render(
+        "openfinance_connect.html",
+        request=request,
+        context={
+            "title": "Conectar Open Finance",
+            "current_user": None,
+            "current_company": None,
+            "role": "",
+            "current_client": None,
+            "token": token,
+            "doc_masked": _mask_doc(doc_digits),
+            "invited_email": invited_email or "(não informado)",
+            "pluggy_js_url": PLUGGY_CONNECT_JS_URL,
+            "error": "",
+        },
+    )
+
+
+@app.post("/api/pluggy/connect_token")
+async def pluggy_api_connect_token(request: Request, payload: dict[str, Any],
+                                   session: Session = Depends(get_session)) -> JSONResponse:
+    token = str(payload.get("token") or "").strip()
+    signed_by_name = str(payload.get("signed_by_name") or "").strip()
+    doc_last4 = str(payload.get("doc_last4") or "").strip()
+
+    try:
+        pl = _verify_consent_token(token)
+        if pl.get("t") != "pluggy_invite":
+            raise ValueError("tipo inválido")
+        company_id = int(pl.get("company_id") or 0)
+        doc_digits = _digits(str(pl.get("doc") or ""))
+        invite_id = int(pl.get("invite_id") or 0)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Token inválido: {e}")
+
+    if not signed_by_name:
+        raise HTTPException(status_code=400, detail="Informe o nome.")
+
+    if doc_last4 and doc_digits and doc_last4 != doc_digits[-4:]:
+        raise HTTPException(status_code=400, detail="Os 4 últimos dígitos não conferem.")
+
+    # valida convite (se existir)
+    if invite_id:
+        inv = session.get(PluggyConnectInvite, invite_id)
+        if not inv or int(inv.company_id or 0) != company_id or inv.subject_doc != doc_digits:
+            raise HTTPException(status_code=400, detail="Convite inválido.")
+        if inv.expires_at and utcnow() > inv.expires_at:
+            inv.status = "expirada"
+            inv.updated_at = utcnow()
+            session.add(inv)
+            session.commit()
+            raise HTTPException(status_code=400, detail="Convite expirado.")
+        inv.signed_by_name = signed_by_name
+        inv.accepted_at = utcnow()
+        inv.status = "conectando"
+        inv.updated_at = utcnow()
+        session.add(inv)
+        session.commit()
+
+    existing = session.exec(
+        select(PluggyConnection).where(PluggyConnection.company_id == company_id,
+                                       PluggyConnection.subject_doc == doc_digits)
+    ).first()
+    update_item_id = existing.pluggy_item_id if (existing and existing.pluggy_item_id) else None
+
+    try:
+        access_token = await _pluggy_create_connect_token(request=request, company_id=company_id,
+                                                          subject_doc=doc_digits, update_item_id=update_item_id)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Falha ao gerar connect token: {e}")
+
+    return JSONResponse(
+        {
+            "accessToken": access_token,
+            "includeSandbox": PLUGGY_INCLUDE_SANDBOX,
+            "updateItem": update_item_id or None,
+        }
+    )
+
+
+@app.post("/api/pluggy/item_success")
+async def pluggy_api_item_success(request: Request, payload: dict[str, Any],
+                                  session: Session = Depends(get_session)) -> JSONResponse:
+    token = str(payload.get("token") or "").strip()
+    item_data = payload.get("itemData") or {}
+    try:
+        pl = _verify_consent_token(token)
+        if pl.get("t") != "pluggy_invite":
+            raise ValueError("tipo inválido")
+        company_id = int(pl.get("company_id") or 0)
+        doc_digits = _digits(str(pl.get("doc") or ""))
+        invite_id = int(pl.get("invite_id") or 0)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Token inválido: {e}")
+
+    # extrai itemId
+    item_id = ""
+    connector_id = None
+    try:
+        if isinstance(item_data, dict):
+            item_id = str(item_data.get("id") or item_data.get("itemId") or "").strip()
+            if not item_id and isinstance(item_data.get("item"), dict):
+                item_id = str(item_data["item"].get("id") or "").strip()
+            connector_id = item_data.get("connectorId") or (item_data.get("connector") or {}).get("id") if isinstance(
+                item_data.get("connector"), dict) else None
+    except Exception:
+        item_id = ""
+
+    if not item_id:
+        raise HTTPException(status_code=400, detail="ItemID ausente no retorno do Pluggy Connect.")
+
+    # upsert connection
+    conn = session.exec(select(PluggyConnection).where(PluggyConnection.company_id == company_id,
+                                                       PluggyConnection.subject_doc == doc_digits)).first()
+    if not conn:
+        conn = PluggyConnection(company_id=company_id, subject_doc=doc_digits)
+
+    conn.client_user_id = _pluggy_client_user_id(company_id=company_id, subject_doc=doc_digits)
+    conn.pluggy_item_id = item_id
+    try:
+        conn.connector_id = int(connector_id) if connector_id is not None else conn.connector_id
+    except Exception:
+        pass
+    conn.status = "connected"
+    conn.last_event = "connect_success"
+    conn.last_error = ""
+    conn.updated_at = utcnow()
+    try:
+        conn.raw_item_json = json.dumps(item_data, ensure_ascii=False)
+    except Exception:
+        conn.raw_item_json = ""
+
+    session.add(conn)
+
+    # marca convite como válido (se existir)
+    if invite_id:
+        inv = session.get(PluggyConnectInvite, invite_id)
+        if inv:
+            inv.status = "valida"
+            inv.updated_at = utcnow()
+            session.add(inv)
+
+    session.commit()
+
+    # tenta sincronizar loans já
+    try:
+        await pluggy_sync_loans(session=session, company_id=company_id, subject_doc=doc_digits, item_id=item_id)
+    except Exception as e:
+        # não falha o fluxo do usuário; apenas grava erro para diagnosticar
+        conn.last_error = f"Conectou, mas falhou ao sincronizar loans: {e}"
+        conn.updated_at = utcnow()
+        session.add(conn)
+        session.commit()
+
+    return JSONResponse({"ok": True, "itemId": item_id})
+
+
+@app.api_route("/webhooks/pluggy", methods=["POST", "GET", "HEAD"])
+@app.api_route("/api/webhooks/pluggy", methods=["POST", "GET", "HEAD"])
+async def pluggy_webhook(request: Request, k: str = "", session: Session = Depends(get_session)) -> JSONResponse:
+    if request.method != "POST":
+        return JSONResponse({"ok": True})
+
+    req_ip = _get_request_ip(request)
+    if PLUGGY_WEBHOOK_KEY and (k or "") != PLUGGY_WEBHOOK_KEY:
+        if req_ip not in PLUGGY_WEBHOOK_TRUSTED_IPS:
+            raise HTTPException(status_code=401, detail="unauthorized")
+
+    body = await request.json()
+    event = str(body.get("event") or "").strip()
+    item_id = str(body.get("itemId") or "").strip()
+    client_user_id = str(body.get("clientUserId") or "").strip()
+
+    if not item_id:
+        return JSONResponse({"ok": True})
+
+    # tenta derivar company+doc do clientUserId (mc:company:doc)
+    company_id = 0
+    doc_digits = ""
+    if client_user_id.startswith("mc:"):
+        parts = client_user_id.split(":")
+        if len(parts) >= 3:
+            try:
+                company_id = int(parts[1])
+            except Exception:
+                company_id = 0
+            doc_digits = _digits(parts[2])
+
+    if not company_id or not doc_digits:
+        # fallback: procura pelo itemId
+        conn = session.exec(select(PluggyConnection).where(PluggyConnection.pluggy_item_id == item_id)).first()
+        if conn:
+            company_id = int(conn.company_id or 0)
+            doc_digits = conn.subject_doc
+
+    if not company_id or not doc_digits:
+        return JSONResponse({"ok": True})
+
+    conn = session.exec(select(PluggyConnection).where(PluggyConnection.company_id == company_id,
+                                                       PluggyConnection.subject_doc == doc_digits)).first()
+    if conn:
+        conn.last_event = event
+        if event in ("item/updated", "item/created", "item/login_succeeded"):
+            conn.status = "updating"
+        if event == "item/error":
+            conn.status = "error"
+            err = body.get("error") or {}
+            if isinstance(err, dict):
+                conn.last_error = f"{err.get('code')}: {err.get('message')}"
+        conn.updated_at = utcnow()
+        session.add(conn)
+        session.commit()
+
+    if event in ("item/created", "item/updated"):
+        try:
+            _pluggy_schedule_sync_loans(company_id=company_id, subject_doc=doc_digits, item_id=item_id)
+        except Exception as e:
+            if conn:
+                conn.last_error = f"Webhook schedule falhou: {e}"
+                conn.updated_at = utcnow()
+                session.add(conn)
+                session.commit()
+
+    return JSONResponse({"ok": True})
+
+
+def _klavi_extract_meta(payload: Any) -> tuple[int, str, str]:
+    """Retorna (company_id, doc_digits, link_id) best-effort."""
+    company_id = 0
+    doc_digits = ""
+    link_id = ""
+
+    if isinstance(payload, dict):
+        ext = payload.get("externalInfo") or payload.get("externalInfo") or {}
+        if isinstance(ext, dict):
+            try:
+                company_id = int(ext.get("company_id") or ext.get("companyId") or 0)
+            except Exception:
+                company_id = 0
+            doc_digits = _digits(str(ext.get("doc") or ""))
+        link_id = str(payload.get("linkid") or payload.get("linkId") or "").strip()
+
+        for k in ("personalTaxId", "personalTaxId", "businessTaxId", "businessTaxId", "taxid", "taxId"):
+            if not doc_digits:
+                doc_digits = _digits(str(payload.get(k) or ""))
+
+    if not doc_digits:
+        for d in _deep_iter_dicts(payload):
+            for k in ("personalTaxId", "personalTaxId", "businessTaxId", "businessTaxId", "taxid", "taxId"):
+                if k in d:
+                    doc_digits = _digits(str(d.get(k) or ""))
+                    if doc_digits:
+                        break
+            if doc_digits:
+                break
+
+    return company_id, doc_digits, link_id
+
+
+def _klavi_process_products_webhook(payload: Any) -> None:
+    try:
+        with Session(engine) as session:
+            company_id, doc_digits, link_id = _klavi_extract_meta(payload)
+
+            flow = None
+            if doc_digits:
+                flow = session.exec(select(KlaviFlow).where(KlaviFlow.subject_doc == doc_digits).order_by(
+                    KlaviFlow.updated_at.desc())).first()
+                if flow and not company_id:
+                    company_id = int(flow.company_id or 0)
+                if flow and not link_id:
+                    link_id = flow.link_id
+
+            if not company_id:
+                return
+
+            product = "loans"
+            if isinstance(payload, dict):
+                product = str(payload.get("product") or payload.get("productName") or payload.get("report") or "loans")
+
+            request_id = ""
+            if isinstance(payload, dict):
+                request_id = str(payload.get("requestid") or payload.get("requestId") or "").strip()
+
+            rep = KlaviReport(
+                company_id=company_id,
+                subject_doc=doc_digits,
+                product=product,
+                request_id=request_id,
+                received_at=utcnow(),
+                raw_json=json.dumps(payload, ensure_ascii=False, default=str),
+            )
+            session.add(rep)
+
+            # Importar contratos para PluggyLoan (normalizado)
+            if doc_digits:
+                for contract in _klavi_extract_contract_dicts(payload):
+                    loan = _klavi_contract_to_loan(company_id=company_id, subject_doc=doc_digits,
+                                                   link_id=link_id or "unknown", contract=contract, raw_payload=payload)
+                    existing = session.exec(
+                        select(PluggyLoan).where(PluggyLoan.company_id == company_id,
+                                                 PluggyLoan.pluggy_loan_id == loan.pluggy_loan_id)
+                    ).first()
+                    if existing:
+                        for k in (
+                                "subject_doc",
+                                "pluggy_item_id",
+                                "pluggy_loan_id",
+                                "contract_number",
+                                "ipoc_code",
+                                "lender_name",
+                                "product_type",
+                                "amortization_type",
+                                "principal_brl",
+                                "outstanding_brl",
+                                "installment_brl",
+                                "term_total_months",
+                                "term_remaining_months",
+                                "cet_aa",
+                                "interest_aa",
+                                "fetched_at",
+                                "raw_json",
+                        ):
+                            setattr(existing, k, getattr(loan, k))
+                        session.add(existing)
+                    else:
+                        session.add(loan)
+
+            if flow:
+                flow.consent_status = "report_received"
+                flow.updated_at = utcnow()
+                session.add(flow)
+
+            session.commit()
+    except Exception as e:
+        try:
+            print(f"[klavi] products webhook failed: {e}")
+        except Exception:
+            pass
+
+
+def _klavi_process_events_webhook(payload: Any) -> None:
+    try:
+        with Session(engine) as session:
+            company_id, doc_digits, _ = _klavi_extract_meta(payload)
+            if not doc_digits:
+                return
+            flow = session.exec(select(KlaviFlow).where(KlaviFlow.subject_doc == doc_digits).order_by(
+                KlaviFlow.updated_at.desc())).first()
+            if not flow:
+                return
+            if company_id and int(flow.company_id or 0) != int(company_id):
+                # ignora evento de outro tenant
+                return
+
+            if isinstance(payload, dict):
+                status = str(payload.get("status") or payload.get("event") or payload.get("type") or "").strip().lower()
+                if status:
+                    flow.consent_status = status
+                err = payload.get("error") or payload.get("message") or ""
+                if err and "error" in status:
+                    flow.last_error = str(err)
+            flow.updated_at = utcnow()
+            session.add(flow)
+            session.commit()
+    except Exception as e:
+        try:
+            print(f"[klavi] events webhook failed: {e}")
+        except Exception:
+            pass
+
+
+@app.api_route("/webhooks/klavi/products", methods=["POST", "GET", "HEAD"])
+@app.api_route("/api/webhooks/klavi/products", methods=["POST", "GET", "HEAD"])
+async def klavi_products_webhook(request: Request) -> JSONResponse:
+    if request.method != "POST":
+        return JSONResponse({"ok": True})
+    body = await request.json()
+    _klavi_process_products_webhook(body)
+    return JSONResponse({"ok": True})
+
+
+@app.api_route("/webhooks/klavi/events", methods=["POST", "GET", "HEAD"])
+@app.api_route("/api/webhooks/klavi/events", methods=["POST", "GET", "HEAD"])
+async def klavi_events_webhook(request: Request) -> JSONResponse:
+    if request.method != "POST":
+        return JSONResponse({"ok": True})
+    body = await request.json()
+    _klavi_process_events_webhook(body)
+    return JSONResponse({"ok": True})
+
+
+@app.on_event("startup")
+def _startup() -> None:
+    init_db()
+    ensure_ui_tables()
+    ensure_feature_access_tables()
+    ensure_credit_consent_table()
+    ensure_pluggy_tables()
+    UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+
+
+# ----------------------------
+# Auth routes
+# ----------------------------
+
+
+@app.get("/login", response_class=HTMLResponse)
+async def login_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
+    if get_current_user(request, session):
+        return RedirectResponse("/", status_code=303)
+    return render("login.html", request=request, context={"current_user": None})
+
+
+# ----------------------------
+# Navegação, validação e visualização comercial
+# ----------------------------
+
+COMPANY_SIZE_OPTIONS = ["MEI", "ME", "EPP", "Médio porte", "Grande porte"]
+COMPANY_SEGMENT_OPTIONS = [
+    "Comércio",
+    "Indústria",
+    "Serviços",
+    "Agronegócio",
+    "Construção",
+    "Tecnologia",
+    "Saúde",
+    "Logística/Transporte",
+    "Imobiliário",
+    "Financeiro",
+    "Educação",
+    "Outro",
+]
+SEGMENT_SUBSEGMENT_OPTIONS: dict[str, list[str]] = {
+    "Comércio": ["Varejo", "Atacado", "Distribuição", "E-commerce", "Outro"],
+    "Indústria": ["Alimentos", "Metalurgia", "Têxtil", "Química", "Outro"],
+    "Serviços": ["BPO", "Consultoria", "Agência", "Serviços recorrentes", "Outro"],
+    "Agronegócio": ["Produção", "Insumos", "Comercialização", "Outro"],
+    "Construção": ["Incorporação", "Engenharia", "Materiais", "Outro"],
+    "Tecnologia": ["SaaS", "Software sob demanda", "Marketplace", "Outro"],
+    "Saúde": ["Clínica", "Hospitalar", "Laboratorial", "Outro"],
+    "Logística/Transporte": ["Transportadora", "Armazenagem", "Last mile", "Outro"],
+    "Imobiliário": ["Incorporação", "Administração", "Loteamentos", "Outro"],
+    "Financeiro": ["Correspondente", "Assessoria", "Fintech", "Outro"],
+    "Educação": ["Escola", "Curso livre", "Edtech", "Outro"],
+    "Outro": ["Outro"],
+}
+TAX_REGIME_OPTIONS = ["Simples Nacional", "Lucro Presumido", "Lucro Real", "MEI", "Outro"]
+BUSINESS_MODEL_OPTIONS = ["B2B", "B2C", "B2B2C", "Assinatura", "Projeto/serviço", "Marketplace", "Indústria própria",
+                          "Distribuição", "Outro"]
+SALES_CHANNEL_OPTIONS = ["Presencial", "Online", "Híbrido", "Comercial externo", "Marketplace", "Franquia", "Outro"]
+URGENCY_LEVEL_OPTIONS = ["Baixa", "Média", "Alta", "Imediata"]
+UF_OPTIONS = ["AC", "AL", "AM", "AP", "BA", "CE", "DF", "ES", "GO", "MA", "MG", "MS", "MT", "PA", "PB", "PE", "PI",
+              "PR", "RJ", "RN", "RO", "RR", "RS", "SC", "SE", "SP", "TO"]
+
+FEATURE_KEYS.update({
+    "empresa": {"title": "Empresa", "desc": "Dados mestre, classificação e estrutura da empresa.", "href": "/empresa"},
+    "perfil": {"title": "Diagnóstico Financeiro", "desc": "Balanço, indicadores, scores e evolução.",
+               "href": "/perfil"},
+    "financeiro": {"title": "Cobranças e Notas Fiscais", "desc": "Boletos, notas fiscais e honorários.",
+                   "href": "/financeiro"},
+    "documentos": {"title": "Documentos", "desc": "Contratos e arquivos importantes da empresa.",
+                   "href": "/documentos"},
+    "consultas": {"title": "Consultas de Risco", "desc": "Consultas e evidências para análise de risco.",
+                  "href": "/consultas"},
+    "creditos": {"title": "Créditos de Consulta", "desc": "Saldo e recargas para consultas.", "href": "/creditos"},
+    "openfinance": {"title": "Open Finance", "desc": "Contratos e dados via Open Finance.", "href": "/openfinance"},
+    "ofertas": {"title": "Oportunidades Liberadas", "desc": "Soluções aprovadas pela equipe para sua empresa.",
+                "href": "/ofertas"},
+    "motor_ofertas": {"title": "Motor de Ofertas", "desc": "Análise interna e fila de revisão comercial.",
+                      "href": "/motor-ofertas"},
+    "credito": {"title": "Mesa de Crédito", "desc": "SCR, estruturação e análise interna de crédito.",
+                "href": "/credito"},
+    "crm": {"title": "CRM", "desc": "Negócios e funil comercial do escritório.", "href": "/negocios"},
+})
+FEATURE_GROUPS = [
+    {"key": "minha_empresa", "title": "Minha Empresa", "features": ["empresa", "financeiro", "documentos"]},
+    {"key": "diagnostico", "title": "Diagnóstico Financeiro", "features": ["perfil"]},
+    {"key": "compliance_risco", "title": "Compliance e Análise de Risco",
+     "features": ["consultas", "creditos", "openfinance", "construrisk"]},
+    {"key": "solucoes", "title": "Soluções Financeiras", "features": ["ofertas", "simulador", "propostas"]},
+    {"key": "meu_projeto", "title": "Meu Projeto", "features": ["consultoria", "reunioes", "tarefas"]},
+    {"key": "ferramentas_conteudo", "title": "Ferramentas e Conteúdo", "features": ["ferramentas", "educacao"]},
+    {"key": "gestao_interna", "title": "Gestão Interna", "features": ["crm", "motor_ofertas", "credito", "financeiro_escritorio", "ui", "gestao", "familias", "servicos_internos", "parceiros"]},
+]
+FEATURE_STANDALONE = ["pendencias", "agenda", "educacao"]
+FEATURE_VISIBLE_ROLES.update({
+    "credito": {"admin", "equipe"},
+    "crm": {"admin", "equipe"},
+    "motor_ofertas": {"admin", "equipe"},
+    "financeiro_escritorio": {"admin", "equipe"},
+    "familias": {"admin"},
+    "servicos_internos": {"admin"},
+    "parceiros": {"admin"},
+})
+ROLE_DEFAULT_FEATURES["admin"] = set(FEATURE_KEYS.keys())
+ROLE_DEFAULT_FEATURES["equipe"] = set(FEATURE_KEYS.keys()) - {"ui", "gestao", "familias", "servicos_internos",
+                                                              "parceiros"}
+ROLE_DEFAULT_FEATURES["cliente"] = {
+    "empresa",
+    "perfil",
+    "financeiro",
+    "documentos",
+    "consultas",
+    "creditos",
+    "openfinance",
+    "ofertas",
+    "simulador",
+    "propostas",
+    "consultoria",
+    "reunioes",
+    "tarefas",
+    "pendencias",
+    "agenda",
+    "educacao",
+    "ferramentas",
+}
+ROLE_DEFAULT_FEATURES["admin"].add("financeiro_escritorio")
+ROLE_DEFAULT_FEATURES["equipe"].add("financeiro_escritorio")
+
+
+def _clean_text(value: Any, max_len: int = 255) -> str:
+    raw = html.escape(str(value or "").strip())
+    return raw[:max_len]
+
+
+def _safe_money(value: Any) -> float:
+    try:
+        out = float(value or 0.0)
+    except Exception:
+        out = 0.0
+    if out < 0:
+        return 0.0
+    if out > 1_000_000_000_000:
+        return 1_000_000_000_000.0
+    return round(out, 2)
+
+
+def _safe_signed_money(value: Any) -> float:
+    try:
+        out = float(value or 0.0)
+    except Exception:
+        out = 0.0
+    if out > 1_000_000_000_000:
+        out = 1_000_000_000_000.0
+    if out < -1_000_000_000_000:
+        out = -1_000_000_000_000.0
+    return round(out, 2)
+
+
+def _financial_breakdown(profile: Optional[ClientBusinessProfile], client: Optional[Client] = None) -> dict[str, float]:
+    profile = profile or ClientBusinessProfile(company_id=0, client_id=0)
+    cash_signed = _safe_signed_money(getattr(profile, "cash_and_investments_brl", None))
+    if cash_signed == 0.0 and client is not None:
+        cash_signed = _safe_signed_money(getattr(client, "cash_balance_brl", 0.0))
+
+    receivables = _safe_money(getattr(profile, "receivables_brl", 0.0))
+    inventory = _safe_money(getattr(profile, "inventory_brl", 0.0))
+    other_current_assets = _safe_money(getattr(profile, "other_current_assets_brl", 0.0))
+    immobilized = _safe_money(getattr(profile, "immobilized_brl", 0.0))
+    other_non_current_assets = _safe_money(getattr(profile, "other_non_current_assets_brl", 0.0))
+
+    payables_360 = _safe_money(getattr(profile, "payables_360_brl", 0.0))
+    short_term_debt = _safe_money(getattr(profile, "short_term_debt_brl", 0.0))
+    tax_liabilities = _safe_money(getattr(profile, "tax_liabilities_brl", 0.0))
+    labor_liabilities = _safe_money(getattr(profile, "labor_liabilities_brl", 0.0))
+    other_current_liabilities = _safe_money(getattr(profile, "other_current_liabilities_brl", 0.0))
+    long_term_debt = _safe_money(getattr(profile, "long_term_debt_brl", 0.0))
+    other_non_current_liabilities = _safe_money(getattr(profile, "other_non_current_liabilities_brl", 0.0))
+
+    overdraft = round(abs(min(0.0, cash_signed)), 2)
+    cash_asset = round(max(0.0, cash_signed), 2)
+
+    current_assets = round(cash_asset + receivables + inventory + other_current_assets, 2)
+    non_current_assets = round(immobilized + other_non_current_assets, 2)
+    current_liabilities = round(
+        payables_360 + short_term_debt + tax_liabilities + labor_liabilities + other_current_liabilities + overdraft, 2)
+    non_current_liabilities = round(long_term_debt + other_non_current_liabilities, 2)
+
+    total_assets = round(current_assets + non_current_assets, 2)
+    total_liabilities = round(current_liabilities + non_current_liabilities, 2)
+    equity = round(total_assets - total_liabilities, 2)
+
+    operating_current_assets = round(receivables + inventory + other_current_assets, 2)
+    operating_current_liabilities = round(
+        payables_360 + tax_liabilities + labor_liabilities + other_current_liabilities, 2)
+    working_capital = round(current_assets - current_liabilities, 2)
+    working_capital_need = round(operating_current_assets - operating_current_liabilities, 2)
+    treasury_balance = round(working_capital - working_capital_need, 2)
+    debt_total = round(short_term_debt + long_term_debt + overdraft, 2)
+    net_debt = round(debt_total - cash_asset, 2)
+
+    return {
+        "cash_signed": cash_signed,
+        "cash_asset": cash_asset,
+        "overdraft": overdraft,
+        "receivables": receivables,
+        "inventory": inventory,
+        "other_current_assets": other_current_assets,
+        "immobilized": immobilized,
+        "other_non_current_assets": other_non_current_assets,
+        "payables_360": payables_360,
+        "short_term_debt": short_term_debt,
+        "tax_liabilities": tax_liabilities,
+        "labor_liabilities": labor_liabilities,
+        "other_current_liabilities": other_current_liabilities,
+        "long_term_debt": long_term_debt,
+        "other_non_current_liabilities": other_non_current_liabilities,
+        "current_assets": current_assets,
+        "non_current_assets": non_current_assets,
+        "current_liabilities": current_liabilities,
+        "non_current_liabilities": non_current_liabilities,
+        "total_assets": total_assets,
+        "total_liabilities": total_liabilities,
+        "equity": equity,
+        "operating_current_assets": operating_current_assets,
+        "operating_current_liabilities": operating_current_liabilities,
+        "working_capital": working_capital,
+        "working_capital_need": working_capital_need,
+        "treasury_balance": treasury_balance,
+        "debt_total": debt_total,
+        "net_debt": net_debt,
+    }
+
+
+def _safe_int(value: Any) -> int:
+    try:
+        out = int(float(value or 0))
+    except Exception:
+        out = 0
+    return max(0, min(out, 1_000_000))
+
+
+def _safe_year(value: Any) -> int:
+    year = _safe_int(value)
+    now_year = datetime.now().year
+    if year < 1900 or year > now_year:
+        return 0
+    return year
+
+
+def _normalize_document(value: str) -> str:
+    digits = re.sub(r"\D+", "", str(value or ""))
+    return digits[:18]
+
+
+def _normalize_email(value: str) -> str:
+    raw = str(value or "").strip().lower()
+    if not raw or "@" not in raw or " " in raw:
+        return ""
+    return raw[:160]
+
+
+def _normalize_phone(value: str) -> str:
+    digits = re.sub(r"\D+", "", str(value or ""))
+    return digits[:20]
+
+
+def _normalize_zip_code(value: str) -> str:
+    digits = re.sub(r"\D+", "", str(value or ""))
+    return digits[:8]
+
+
+def _coerce_choice(value: str, allowed: list[str]) -> str:
+    raw = str(value or "").strip()
+    allowed_map = {item.lower(): item for item in allowed}
+    return allowed_map.get(raw.lower(), "") if raw else ""
+
+
+def _coerce_interest_codes(values: list[str]) -> list[str]:
+    families = {str(item["code"]).strip() for item in PRODUCT_FAMILY_SEED}
+    return sorted({str(v).strip() for v in values if str(v).strip() in families})
+
+
+def _is_openfinance_enabled() -> bool:
+    provider = (os.getenv("OPENFINANCE_PROVIDER_DEFAULT") or "klavi").strip().lower()
+    if provider == "pluggy":
+        return bool(PLUGGY_CLIENT_ID and PLUGGY_CLIENT_SECRET)
+    return bool(KLAVI_ACCESS_KEY and KLAVI_SECRET_KEY)
+
+
+def _safe_ratio(num: float, den: float) -> Optional[float]:
+    if den <= 0:
+        return None
+    return round(num / den, 4)
+
+
+def build_client_dashboard_analysis(*, client: Client, profile: ClientBusinessProfile,
+                                    latest_snapshot: Optional[ClientSnapshot]) -> dict[str, Any]:
+    breakdown = _financial_breakdown(profile, client)
+    revenue_monthly = max(_safe_money(getattr(client, "revenue_monthly_brl", 0.0)),
+                          _safe_money(getattr(profile, "annual_revenue_brl", 0.0)) / 12.0)
+    debt_total = breakdown["debt_total"] or _safe_money(getattr(client, "debt_total_brl", 0.0))
+    cash_balance = breakdown["cash_signed"] if breakdown["cash_signed"] or getattr(profile, "cash_and_investments_brl",
+                                                                                   0.0) else _safe_signed_money(
+        getattr(client, "cash_balance_brl", 0.0))
+    current_assets = breakdown["current_assets"] or _safe_money(getattr(profile, "current_assets_brl", 0.0))
+    non_current_assets = breakdown["non_current_assets"] or _safe_money(getattr(profile, "non_current_assets_brl", 0.0))
+    current_liabilities = breakdown["current_liabilities"] or _safe_money(
+        getattr(profile, "current_liabilities_brl", 0.0))
+    non_current_liabilities = breakdown["non_current_liabilities"] or _safe_money(
+        getattr(profile, "non_current_liabilities_brl", 0.0))
+    total_assets = round(current_assets + non_current_assets, 2)
+    total_liabilities = round(current_liabilities + non_current_liabilities, 2)
+    equity = round(total_assets - total_liabilities, 2)
+
+    working_capital = round(current_assets - current_liabilities, 2)
+    current_ratio = _safe_ratio(current_assets, current_liabilities)
+    debt_to_equity = _safe_ratio(total_liabilities, equity) if equity != 0 else None
+    debt_ratio = debt_total / max(revenue_monthly, 1.0) if revenue_monthly > 0 else 0.0
+
+    score_financial = float(getattr(latest_snapshot, "score_financial", 0.0) or 0.0)
+    if score_financial <= 0:
+        score_financial = score_financial_simple(revenue_monthly, max(debt_total, 0.0), max(cash_balance, 0.0))
+
+    score_process = float(getattr(latest_snapshot, "score_process", 0.0) or 0.0)
+    if score_process <= 0:
+        score_process = 35.0
+        if getattr(profile, "has_erp", False):
+            score_process += 15.0
+        if getattr(profile, "has_budget", False):
+            score_process += 15.0
+        if getattr(profile, "has_board", False):
+            score_process += 10.0
+        if getattr(profile, "has_audited_fs", False):
+            score_process += 10.0
+        score_process = min(100.0, score_process)
+
+    liquidity_bonus = 0.0
+    if current_ratio:
+        if current_ratio >= 1.4:
+            liquidity_bonus = 12.0
+        elif current_ratio >= 1.0:
+            liquidity_bonus = 6.0
+        elif current_ratio < 0.8:
+            liquidity_bonus = -8.0
+
+    treasury_bonus = 8.0 if breakdown["treasury_balance"] >= 0 else -6.0
+    ccl_bonus = 8.0 if working_capital >= 0 else -8.0
+
+    patrimonial_score = max(0.0, min(100.0, round(
+        50.0 + liquidity_bonus + treasury_bonus + ccl_bonus + min(max(equity, 0.0) / max(revenue_monthly, 1.0),
+                                                                  1.0) * 12.0, 1)))
+    score_total_calc = float(getattr(latest_snapshot, "score_total", 0.0) or 0.0)
+    if score_total_calc <= 0:
+        score_total_calc = round(
+            _clamp_0_100((score_process * 0.35) + (score_financial * 0.35) + (patrimonial_score * 0.30)), 1)
+
+    score_banking = 42.0
+    if revenue_monthly > 0:
+        score_banking += 10.0
+    if current_ratio:
+        if current_ratio >= 1.4:
+            score_banking += 14.0
+        elif current_ratio >= 1.0:
+            score_banking += 8.0
+        elif current_ratio < 0.8:
+            score_banking -= 10.0
+    if debt_ratio <= 1.0:
+        score_banking += 12.0
+    elif debt_ratio <= 2.0:
+        score_banking += 5.0
+    else:
+        score_banking -= 8.0
+    if getattr(profile, "collateral_brl", 0.0) > 0:
+        score_banking += 10.0
+    if getattr(profile, "delinquency_brl", 0.0) > 0:
+        score_banking -= 8.0
+    if breakdown["working_capital_need"] > 0 and breakdown["treasury_balance"] < 0:
+        score_banking -= 6.0
+    score_banking += min(score_financial * 0.18, 18.0)
+    score_banking = max(0.0, min(100.0, round(score_banking, 1)))
+
+    compliance_score = min(
+        100.0,
+        round(
+            (score_process * 0.65)
+            + (10.0 if getattr(profile, "has_audited_fs", False) else 0.0)
+            + (8.0 if getattr(profile, "has_budget", False) else 0.0),
+            1,
+        ),
+    )
+
+    def _score_band(value: float) -> tuple[str, str]:
+        if value < 40:
+            return ("Atenção", "mc-bar-low")
+        if value < 70:
+            return ("Em desenvolvimento", "mc-bar-mid")
+        return ("Bom nível", "mc-bar-high")
+
+    score_card = []
+    for label, value, hint, tooltip in [
+        (
+                "Score Bancário",
+                score_banking,
+                "Potencial estimado de crédito",
+                "Indica o potencial da empresa para acesso a crédito com base no perfil financeiro, endividamento, garantias e relacionamento bancário.",
+        ),
+        (
+                "Score Financeiro",
+                round(score_financial, 1),
+                "Saúde financeira e capacidade de pagamento",
+                "Mostra a saúde financeira da empresa considerando caixa, dívidas, liquidez e estrutura patrimonial.",
+        ),
+        (
+                "Score de Estrutura",
+                round(score_process, 1),
+                "Processos, controles e governança",
+                "Avalia o nível de organização da empresa, como controles, processos, indicadores, orçamento e gestão financeira.",
+        ),
+        (
+                "Score Geral",
+                round(score_total_calc, 1),
+                "Síntese consolidada do perfil",
+                "É a visão consolidada dos demais scores, usada para apoiar a análise de oportunidades e prioridades.",
+        ),
+    ]:
+        band_label, css_class = _score_band(float(value))
+        score_card.append(
+            {
+                "label": label,
+                "value": round(float(value), 1),
+                "hint": hint,
+                "tooltip": tooltip,
+                "band_label": band_label,
+                "css_class": css_class,
+            }
+        )
+
+    bars = [
+        {
+            "label": item["label"],
+            "value": item["value"],
+            "class": item["css_class"],
+            "tooltip": item["tooltip"],
+            "band_label": item["band_label"],
+        }
+        for item in score_card
+    ]
+    return {
+        "revenue_monthly": revenue_monthly,
+        "debt_total": debt_total,
+        "cash_balance": cash_balance,
+        "receivables": breakdown["receivables"],
+        "inventory": breakdown["inventory"],
+        "other_current_assets": breakdown["other_current_assets"],
+        "immobilized": breakdown["immobilized"],
+        "other_non_current_assets": breakdown["other_non_current_assets"],
+        "payables_360": breakdown["payables_360"],
+        "short_term_debt": breakdown["short_term_debt"],
+        "tax_liabilities": breakdown["tax_liabilities"],
+        "labor_liabilities": breakdown["labor_liabilities"],
+        "other_current_liabilities": breakdown["other_current_liabilities"],
+        "long_term_debt": breakdown["long_term_debt"],
+        "other_non_current_liabilities": breakdown["other_non_current_liabilities"],
+        "current_assets": current_assets,
+        "non_current_assets": non_current_assets,
+        "current_liabilities": current_liabilities,
+        "non_current_liabilities": non_current_liabilities,
+        "total_assets": total_assets,
+        "total_liabilities": total_liabilities,
+        "equity": equity,
+        "working_capital": working_capital,
+        "working_capital_need": breakdown["working_capital_need"],
+        "treasury_balance": breakdown["treasury_balance"],
+        "operating_current_assets": breakdown["operating_current_assets"],
+        "operating_current_liabilities": breakdown["operating_current_liabilities"],
+        "overdraft": breakdown["overdraft"],
+        "net_debt": breakdown["net_debt"],
+        "current_ratio": current_ratio,
+        "debt_to_equity": debt_to_equity,
+        "patrimonial_score": patrimonial_score,
+        "score_card": score_card,
+        "bars": bars,
+        "compliance_score": compliance_score,
+        "status_label": "Alta" if score_banking >= 75 else "Média" if score_banking >= 50 else "Baixa",
+    }
+
+
+def _dashboard_score_value(analysis: Optional[dict[str, Any]], label: str, default: float = 0.0) -> float:
+    if not analysis:
+        return float(default)
+    for item in list(analysis.get("score_card") or []):
+        try:
+            if str(item.get("label") or "") == label:
+                return float(item.get("value") or 0.0)
+        except Exception:
+            continue
+    return float(default)
+
+
+def _score_tone_meta(score: float) -> dict[str, str]:
+    value = max(0.0, min(100.0, float(score or 0.0)))
+    if value >= 70:
+        return {
+            "tone": "success",
+            "label": "Saudável",
+            "message": "Sua empresa está em um bom nível de saúde financeira e organização.",
+            "color": "#198754",
+        }
+    if value >= 45:
+        return {
+            "tone": "warning",
+            "label": "Pontos de atenção",
+            "message": "Sua empresa tem espaço para evoluir antes de capturar mais crédito com conforto.",
+            "color": "#f0ad4e",
+        }
+    return {
+        "tone": "danger",
+        "label": "Em risco",
+        "message": "Sua empresa precisa priorizar organização, caixa e estrutura antes de buscar crédito tradicional.",
+        "color": "#dc3545",
+    }
+
+
+def _dashboard_gauge(score: float) -> dict[str, Any]:
+    meta = _score_tone_meta(score)
+    value = max(0.0, min(100.0, float(score or 0.0)))
+    return {
+        "value": round(value, 1),
+        "label": meta["label"],
+        "message": meta["message"],
+        "tone": meta["tone"],
+        "color": meta["color"],
+        "angle": round(value * 3.6, 1),
+    }
+
+
+def _dashboard_score_insights(analysis: Optional[dict[str, Any]]) -> list[dict[str, str]]:
+    if not analysis:
+        return []
+    geral = _dashboard_score_value(analysis, "Score Geral")
+    bancario = _dashboard_score_value(analysis, "Score Bancário")
+    financeiro = _dashboard_score_value(analysis, "Score Financeiro")
+    estrutura = _dashboard_score_value(analysis, "Score de Estrutura")
+    current_ratio = float(analysis.get("current_ratio") or 0.0)
+    working_capital = float(analysis.get("working_capital") or 0.0)
+    debt_to_equity = analysis.get("debt_to_equity")
+    insights: list[dict[str, str]] = []
+
+    insights.append({
+        "title": "Saúde geral",
+        "text": (
+            "Sua empresa tem perfil executivo consistente para avançar em crédito e oportunidades."
+            if geral >= 70 else
+            "Sua empresa já tem base para avançar, mas ainda há ajustes importantes para ganhar tração."
+            if geral >= 45 else
+            "Sua empresa precisa organizar caixa, estrutura e governança antes de priorizar expansão financeira."
+        ),
+    })
+    insights.append({
+        "title": "Potencial bancário",
+        "text": (
+            "O potencial de crédito está forte e tende a responder melhor a linhas competitivas."
+            if bancario >= 75 else
+            "Há acesso a crédito possível, mas com necessidade de reforçar garantias, estrutura ou liquidez."
+            if bancario >= 50 else
+            "O motor indica baixa atratividade para crédito tradicional neste momento."
+        ),
+    })
+
+    if working_capital < 0:
+        financial_text = f"O capital de giro está negativo em {_fmt_brl(working_capital)}, pressionando a operação do dia a dia."
+    elif current_ratio and current_ratio < 1:
+        financial_text = f"A liquidez corrente está em {_format_number_br(current_ratio, 2)}, abaixo do nível confortável para curto prazo."
+    elif debt_to_equity is not None and float(debt_to_equity or 0.0) > 1.5:
+        financial_text = f"O endividamento sobre patrimônio está em {_format_number_br(debt_to_equity, 2)}x e exige disciplina financeira."
+    else:
+        financial_text = (
+            "O caixa e a liquidez estão em patamar mais saudável para sustentar o crescimento."
+            if financeiro >= 60 else
+            "A saúde financeira ainda pede ajustes para reduzir pressão de caixa e endividamento."
+        )
+    insights.append({"title": "Leitura financeira", "text": financial_text})
+
+    insights.append({
+        "title": "Estrutura de gestão",
+        "text": (
+            "Os processos e controles já sustentam uma operação mais madura."
+            if estrutura >= 70 else
+            "Ainda existem oportunidades claras para evoluir orçamento, indicadores e rotina de gestão."
+            if estrutura >= 45 else
+            "A empresa ainda precisa fortalecer controles, indicadores e ritos de gestão financeira."
+        ),
+    })
+    return insights
+
+
+def _dashboard_critical_points(analysis: Optional[dict[str, Any]]) -> list[dict[str, str]]:
+    if not analysis:
+        return []
+    points: list[dict[str, str]] = []
+    working_capital = float(analysis.get("working_capital") or 0.0)
+    current_ratio = float(analysis.get("current_ratio") or 0.0)
+    debt_to_equity = analysis.get("debt_to_equity")
+    equity = float(analysis.get("equity") or 0.0)
+    cash_balance = float(analysis.get("cash_balance") or 0.0)
+
+    if working_capital < 0:
+        points.append({
+            "title": "Capital de giro líquido",
+            "value": _fmt_brl(working_capital),
+            "tone": "danger",
+            "text": "Sua empresa está financiando a operação com passivos de curto prazo.",
+        })
+    if current_ratio and current_ratio < 1:
+        points.append({
+            "title": "Liquidez corrente",
+            "value": _format_number_br(current_ratio, 2),
+            "tone": "danger",
+            "text": "Há menos ativo circulante do que obrigação de curto prazo.",
+        })
+    if debt_to_equity is not None and float(debt_to_equity or 0.0) > 1.5:
+        points.append({
+            "title": "Endividamento / patrimônio",
+            "value": f"{_format_number_br(debt_to_equity, 2)}x",
+            "tone": "warning",
+            "text": "O passivo está elevado em relação ao patrimônio líquido.",
+        })
+    if equity <= 0:
+        points.append({
+            "title": "Patrimônio líquido",
+            "value": _fmt_brl(equity),
+            "tone": "danger",
+            "text": "O patrimônio está pressionado e reduz a capacidade de absorver perdas.",
+        })
+    if cash_balance < 0:
+        points.append({
+            "title": "Disponibilidades líquidas",
+            "value": _fmt_brl(cash_balance),
+            "tone": "warning",
+            "text": "O caixa líquido está negativo e exige gestão diária de tesouraria.",
+        })
+    if not points:
+        points.append({
+            "title": "Sem alerta crítico relevante",
+            "value": "Operação estável",
+            "tone": "success",
+            "text": "Os principais indicadores não apontam ruptura imediata de caixa ou estrutura.",
+        })
+    return points[:4]
+
+
+def _dashboard_next_steps(analysis: Optional[dict[str, Any]]) -> list[dict[str, str]]:
+    if not analysis:
+        return [
+            {"title": "Atualizar diagnóstico", "text": "Complete os dados financeiros para liberar a leitura executiva.", "href": "/perfil"},
+            {"title": "Explorar ofertas", "text": "Veja oportunidades já revisadas pela equipe.", "href": "/ofertas"},
+        ]
+    geral = _dashboard_score_value(analysis, "Score Geral")
+    if geral >= 70:
+        return [
+            {"title": "Explorar ofertas de crédito", "text": "Priorize linhas e oportunidades já aderentes ao perfil atual.", "href": "/ofertas"},
+            {"title": "Simular condições", "text": "Use o simulador para avaliar cenários de captação.", "href": "/simulador"},
+            {"title": "Atualizar diagnóstico", "text": "Mantenha a leitura do painel sempre atualizada.", "href": "/perfil/avaliacao/nova"},
+        ]
+    if geral >= 45:
+        return [
+            {"title": "Ver oportunidades", "text": "Há espaço para crédito e estruturação financeira combinadas.", "href": "/ofertas"},
+            {"title": "Refinar diagnóstico", "text": "Ajuste os números e fortaleça a leitura financeira.", "href": "/perfil"},
+            {"title": "Simular alternativas", "text": "Compare cenários antes de tomar uma decisão.", "href": "/simulador"},
+        ]
+    return [
+        {"title": "Falar com um especialista", "text": "O melhor próximo passo é reorganizar caixa e estrutura.", "href": "/consultoria"},
+        {"title": "Atualizar diagnóstico", "text": "Revise os dados para entender onde está a maior pressão.", "href": "/perfil"},
+        {"title": "Ver oportunidades liberadas", "text": "Consulte apenas oportunidades coerentes com o estágio atual.", "href": "/ofertas"},
+    ]
+
+
+def _offer_stage_payload(analysis: Optional[dict[str, Any]], matches_count: int) -> dict[str, str]:
+    score = _dashboard_score_value(analysis, "Score Geral")
+    if score >= 70:
+        return {
+            "tone": "success",
+            "title": "Sua empresa está mais saudável para explorar crédito.",
+            "subtitle": f"Há {matches_count} oportunidade(s) alinhada(s) ao perfil atual. Priorize linhas e simulações.",
+            "badge": "Foco em crédito",
+            "cta_href": "/simulador",
+            "cta_label": "Simular crédito",
+        }
+    if score >= 45:
+        return {
+            "tone": "warning",
+            "title": "Há oportunidades, mas com pontos de atenção.",
+            "subtitle": "O ideal é combinar avanço comercial com ajustes de estrutura e tesouraria.",
+            "badge": "Crédito + estrutura",
+            "cta_href": "/perfil",
+            "cta_label": "Revisar diagnóstico",
+        }
+    return {
+        "tone": "danger",
+        "title": "O foco agora é reorganizar a casa antes de ampliar crédito.",
+        "subtitle": "As melhores decisões neste estágio tendem a passar por consultoria, caixa e reestruturação.",
+        "badge": "Prioridade consultiva",
+        "cta_href": "/consultoria",
+        "cta_label": "Falar com especialista",
+    }
+
+
+def _offer_reason_for_display(match_row: Any, analysis: Optional[dict[str, Any]]) -> str:
+    getv = (lambda k, d="": match_row.get(k, d)) if isinstance(match_row, dict) else (lambda k, d="": getattr(match_row, k, d))
+    family = str(getv("family_code", "") or "").strip().lower()
+    reason_summary = str(getv("reason_summary", "") or "").strip()
+    working_capital = float((analysis or {}).get("working_capital") or 0.0)
+    current_ratio = float((analysis or {}).get("current_ratio") or 0.0)
+    receivables = float((analysis or {}).get("receivables") or 0.0)
+    debt_to_equity = (analysis or {}).get("debt_to_equity")
+
+    if family == "capital_giro" and working_capital < 0:
+        return f"Recomendado porque o capital de giro está em {_fmt_brl(working_capital)}, indicando necessidade de caixa para operação."
+    if family == "antecipacao_recebiveis" and receivables > 0:
+        return f"Recomendado porque a empresa possui {_fmt_brl(receivables)} em recebíveis que podem apoiar liquidez."
+    if family in {"turnaround", "estrategia_financeira"} and current_ratio and current_ratio < 1:
+        return f"Recomendado porque a liquidez corrente está em {_format_number_br(current_ratio, 2)}, abaixo do nível confortável."
+    if family in {"turnaround", "plano_rj"} and debt_to_equity is not None and float(debt_to_equity or 0.0) > 1.5:
+        return f"Recomendado porque o endividamento está em {_format_number_br(debt_to_equity, 2)}x do patrimônio, pedindo reestruturação."
+    if family == "home_equity":
+        return "Recomendado porque operações com garantia tendem a melhorar prazo e custo quando a estrutura da empresa já comporta crédito."
+    if family == "auto_equity":
+        return "Recomendado para reforçar caixa com garantia real e menor pressão de curto prazo."
+    return reason_summary or "Oportunidade coerente com o perfil financeiro e operacional identificado no diagnóstico."
+
+
+def sync_offer_reviews(session: Session, *, company_id: int, client_id: int) -> None:
+    ensure_offer_engine_tables()
+    ensure_offer_engine_columns()
+    matches = session.exec(
+        select(OfferMatch)
+        .where(OfferMatch.company_id == company_id, OfferMatch.client_id == client_id)
+        .order_by(OfferMatch.created_at.desc())
+    ).all()
+    match_ids = [int(m.id) for m in matches if m.id]
+    if not match_ids:
+        return
+    existing = session.exec(
+        select(OfferVisibilityReview).where(
+            OfferVisibilityReview.company_id == company_id,
+            OfferVisibilityReview.client_id == client_id,
+        )
+    ).all()
+    existing_by_offer = {int(r.offer_match_id): r for r in existing if r.offer_match_id}
+    changed = False
+    for match in matches:
+        if not match.id:
+            continue
+        if int(match.id) not in existing_by_offer:
+            session.add(
+                OfferVisibilityReview(
+                    company_id=company_id,
+                    client_id=client_id,
+                    offer_match_id=int(match.id),
+                    status="pendente",
+                    is_visible_to_client=False,
+                )
+            )
+            changed = True
+    for row in existing:
+        if int(row.offer_match_id or 0) not in match_ids:
+            session.delete(row)
+            changed = True
+    if changed:
+        session.commit()
+
+
+def list_offer_matches_for_role(
+        *,
+        session: Session,
+        company_id: int,
+        client_id: int,
+        role: str,
+        limit: int = 0,
+        only_client_visible: bool = False,
+) -> list[dict[str, Any]]:
+    q = (
+        select(OfferMatch, OfferVisibilityReview)
+        .join(OfferVisibilityReview, OfferVisibilityReview.offer_match_id == OfferMatch.id, isouter=True)
+        .where(OfferMatch.company_id == company_id, OfferMatch.client_id == client_id)
+        .order_by(OfferMatch.score_fit.desc(), OfferMatch.created_at.desc())
+    )
+    rows = session.exec(q).all()
+    out: list[dict[str, Any]] = []
+    for match, review in rows:
+        status = getattr(review, "status", "pendente") if review else "pendente"
+        visible = bool(getattr(review, "is_visible_to_client", False)) if review else False
+        if role == "cliente" and (only_client_visible or True):
+            if not (status == "aprovada_cliente" and visible):
+                continue
+        item = {
+            "id": match.id,
+            "source_kind": match.source_kind,
+            "family_code": match.family_code,
+            "area": match.area,
+            "product_name": match.product_name,
+            "partner_name": match.partner_name,
+            "priority_level": match.priority_level,
+            "score_fit": match.score_fit,
+            "reason_summary": match.reason_summary,
+            "partner_options_count": match.partner_options_count,
+            "review_status": status,
+            "is_visible_to_client": visible,
+            "review_notes": getattr(review, "review_notes", "") if review else "",
+            "client_summary": getattr(review, "client_summary", "") if review else "",
+        }
+        out.append(item)
+        if limit and len(out) >= limit:
+            break
+    return out
+
+
+def compute_offer_engine(*, session: Session, company_id: int, client: Client, profile: ClientBusinessProfile,
+                         latest_snapshot: Optional[ClientSnapshot]) -> list[dict[str, Any]]:
+    score_total_snap = float(latest_snapshot.score_total) if latest_snapshot else 0.0
+    score_fin_snap = float(latest_snapshot.score_financial) if latest_snapshot else 0.0
+    score_proc_snap = float(latest_snapshot.score_process) if latest_snapshot else 0.0
+    revenue_monthly = max(float(client.revenue_monthly_brl or 0.0), float(profile.annual_revenue_brl or 0.0) / 12.0)
+    debt_total = max(float(client.debt_total_brl or 0.0), 0.0)
+    cash_balance = max(float(client.cash_balance_brl or 0.0), 0.0)
+    current_assets = max(float(getattr(profile, "current_assets_brl", 0.0) or 0.0),
+                         cash_balance + float(profile.receivables_brl or 0.0) + float(profile.inventory_brl or 0.0))
+    current_liabilities = max(float(getattr(profile, "current_liabilities_brl", 0.0) or 0.0), 0.0)
+    equity = max(float(getattr(profile, "equity_brl", 0.0) or 0.0), 0.0)
+    debt_ratio = debt_total / max(revenue_monthly, 1.0)
+    current_ratio = current_assets / max(current_liabilities, 1.0) if current_liabilities > 0 else 0.0
+    txt = " ".join(
+        [profile.strategic_goal or "", profile.pain_points or "", " ".join(_json_list(profile.interests_json)),
+         latest_snapshot.notes if latest_snapshot else ""]).lower()
+
+    scores = {item["code"]: 0.0 for item in PRODUCT_FAMILY_SEED}
+    if revenue_monthly > 0:
+        scores["capital_giro"] += 20
+        if cash_balance < revenue_monthly * 0.5:
+            scores["capital_giro"] += 14
+        if profile.receivables_brl > 0:
+            scores["antecipacao_recebiveis"] += 22
+        if profile.collateral_brl > 0:
+            scores["home_equity"] += 24
+            scores["auto_equity"] += 12
+        if current_ratio and current_ratio < 1:
+            scores["turnaround"] += 22
+            scores["estrategia_financeira"] += 18
+        if current_liabilities > 0 and current_assets < current_liabilities:
+            scores["capital_giro"] += 10
+            scores["conta_garantida"] += 10
+        if "cart" in txt:
+            scores["antecipacao_cartoes"] += 18
+        if "consorcio" in txt:
+            scores["consorcio"] += 16
+        if "cambio" in txt:
+            scores["cambio"] += 18
+        if "import" in txt or "export" in txt or "comercio exterior" in txt:
+            scores["trade_finance"] += 22
+        if "veicul" in txt or "frota" in txt:
+            scores["financiamento_veiculos"] += 16
+        scores["analise_credito"] += 12
+
+    if score_total_snap < 65 or score_proc_snap < 60 or current_ratio and current_ratio < 1:
+        scores["turnaround"] += 24
+        scores["estrategia_financeira"] += 18
+    if equity <= 0 and (current_assets or current_liabilities):
+        scores["turnaround"] += 22
+        scores["plano_rj"] += 14
+    if debt_ratio > 2.0:
+        scores["credito_corporativo_estruturado"] += 18
+        scores["turnaround"] += 12
+    if "valuation" in txt or "valor da empresa" in txt:
+        scores["valuation"] += 30
+    if "equity" in txt or "investidor" in txt or "captacao" in txt:
+        scores["rodada_seed"] += 26
+        scores["equity_roadshow"] += 22
+    if revenue_monthly >= 300000:
+        scores["debenture"] += 16
+        scores["cri_cra"] += 14
+    if "vender empresa" in txt:
+        scores["ma_sell_side"] += 24
+    if "comprar empresa" in txt or "aquisicao" in txt:
+        scores["ma_buy_side"] += 18
+    if "rj" in txt or "recuperacao judicial" in txt:
+        scores["plano_rj"] += 35
+        scores["credito_rj"] += 34
+        scores["dip_financing"] += 24
+    if "tributario" in txt or "precatorio" in txt:
+        scores["credito_tributario"] += 30
+    if "distress" in txt or "estressad" in txt:
+        scores["distressed_ma"] += 24
+
+    for interest in _json_list(profile.interests_json):
+        if interest in scores:
+            scores[interest] += 24
+
+    services = session.exec(select(InternalService).where(InternalService.company_id == company_id,
+                                                          InternalService.is_active == True).order_by(
+        InternalService.priority_weight.desc())).all()
+    partner_products = session.exec(select(PartnerProduct).where(PartnerProduct.company_id == company_id,
+                                                                 PartnerProduct.is_active == True).order_by(
+        PartnerProduct.name.asc())).all()
+    families = {f.code: f for f in list_product_families(session)}
+    partners = {pp.id: session.get(Partner, pp.partner_id) for pp in partner_products}
+
+    def eligible(pp: PartnerProduct) -> bool:
+        desired = float(profile.desired_credit_brl or 0.0)
+        if pp.revenue_min_brl and revenue_monthly < pp.revenue_min_brl:
+            return False
+        if pp.revenue_max_brl and revenue_monthly > pp.revenue_max_brl > 0:
+            return False
+        if desired and pp.ticket_min_brl and desired < pp.ticket_min_brl:
+            return False
+        if desired and pp.ticket_max_brl and desired > pp.ticket_max_brl > 0:
+            return False
+        if pp.score_total_min and score_total_snap < pp.score_total_min:
+            return False
+        if pp.score_financial_min and score_fin_snap < pp.score_financial_min:
+            return False
+        if pp.max_debt_ratio and debt_ratio > pp.max_debt_ratio:
+            return False
+        if pp.requires_collateral and float(profile.collateral_brl or 0.0) <= 0:
+            return False
+        states = _json_list(pp.allowed_states_json)
+        if states and (client.state or "").upper() not in {s.upper() for s in states}:
+            return False
+        segs = _json_list(pp.allowed_segments_json)
+        if segs and (profile.segment or "").lower() not in {s.lower() for s in segs}:
+            return False
+        return True
+
+    out = []
+    for svc in services:
+        base = scores.get(svc.family_code, 0.0)
+        if base <= 0:
+            continue
+        svc_family = (svc.family_code or getattr(svc, 'family_slug', '') or '').strip()
+        elig = [pp for pp in partner_products if
+                ((pp.family_code or getattr(pp, 'family_slug', '') or '').strip() == svc_family) and eligible(pp)]
+        score_fit = round(min(100.0, base + max(0, svc.priority_weight - 50) * 0.4 + min(len(elig) * 2, 8)), 2)
+        priority = "alta" if score_fit >= 75 else "media" if score_fit >= 55 else "baixa"
+        fam = families.get(svc_family or svc.family_code)
+        out.append({
+            "source_kind": "internal",
+            "family_code": svc_family or svc.family_code,
+            "area": svc.area,
+            "product_name": svc.name,
+            "partner_name": "",
+            "priority_level": priority,
+            "score_fit": score_fit,
+            "reason_summary": f"Oferta interna recomendada em {fam.label if fam else svc_family}. Parceiros elegíveis nesta família: {len(elig)}.",
+            "partner_options_count": len(elig),
+        })
+
+    for pp in partner_products:
+        fam_code = (pp.family_code or getattr(pp, 'family_slug', '') or '').strip()
+        base = scores.get(fam_code, 0.0)
+        if base <= 0 or not eligible(pp):
+            continue
+        partner = partners.get(pp.id)
+        bonus = 6 if pp.requires_collateral and float(profile.collateral_brl or 0.0) > 0 else 0
+        score_fit = round(min(100.0, base + bonus + min(pp.rate_default_pct and 4 or 0, 4)), 2)
+        priority = "alta" if score_fit >= 78 else "media" if score_fit >= 58 else "baixa"
+        out.append({
+            "source_kind": "partner",
+            "family_code": fam_code,
+            "area": pp.area,
+            "product_name": pp.name,
+            "partner_name": partner.name if partner else "",
+            "priority_level": priority,
+            "score_fit": score_fit,
+            "reason_summary": "Produto de parceiro aderente ao perfil, ticket e regras cadastradas.",
+            "partner_options_count": 1,
+        })
+
+    out.sort(key=lambda x: ({"alta": 3, "media": 2, "baixa": 1}.get(x["priority_level"], 0), float(x["score_fit"])),
+             reverse=True)
+    return out[:24]
+
+
+def persist_offer_matches(session: Session, *, company_id: int, client_id: int, matches: list[dict[str, Any]]) -> None:
+    old = session.exec(
+        select(OfferMatch).where(OfferMatch.company_id == company_id, OfferMatch.client_id == client_id)).all()
+    old_ids = [int(row.id) for row in old if row.id]
+    if old_ids:
+        for review in session.exec(
+                select(OfferVisibilityReview).where(OfferVisibilityReview.offer_match_id.in_(old_ids))).all():
+            session.delete(review)
+    for row in old:
+        session.delete(row)
+    session.commit()
+
+    client = session.get(Client, client_id)
+    subject_doc = _digits(getattr(client, "cnpj", "") or "") if client else ""
+    if not subject_doc and client:
+        subject_doc = _digits(getattr(client, "email", "") or "") or ""
+
+    for item in matches:
+        _insert_offer_match_compat(
+            session,
+            company_id=company_id,
+            client_id=client_id,
+            subject_doc=subject_doc,
+            item=item,
+        )
+    session.commit()
+    sync_offer_reviews(session, company_id=company_id, client_id=client_id)
+
+
+@app.post("/motor-ofertas/review/{offer_id}")
+@require_role({"admin", "equipe"})
+async def motor_ofertas_review_save(
+        request: Request,
+        offer_id: int,
+        session: Session = Depends(get_session),
+        action: str = Form("interna"),
+        review_notes: str = Form(""),
+        client_summary: str = Form(""),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+    match = session.get(OfferMatch, offer_id)
+    if not match or match.company_id != ctx.company.id:
+        set_flash(request, "Oferta não encontrada.")
+        return RedirectResponse("/motor-ofertas", status_code=303)
+
+    review = session.exec(select(OfferVisibilityReview).where(OfferVisibilityReview.offer_match_id == offer_id)).first()
+    if not review:
+        review = OfferVisibilityReview(company_id=match.company_id, client_id=match.client_id, offer_match_id=offer_id)
+
+    normalized_action = action if action in {"pendente", "aprovada_cliente", "interna", "rejeitada"} else "interna"
+    review.status = normalized_action
+    review.is_visible_to_client = normalized_action == "aprovada_cliente"
+    review.review_notes = _clean_text(review_notes, 4000)
+    review.client_summary = _clean_text(client_summary, 2000)
+    review.reviewed_by_user_id = ctx.user.id
+    review.reviewed_at = utcnow()
+    review.updated_at = utcnow()
+    session.add(review)
+    session.commit()
+    try:
+        if review.status == "aprovada_cliente" and review.is_visible_to_client:
+            notify_client_members(
+                session,
+                company_id=match.company_id,
+                client_id=match.client_id,
+                kind="oferta",
+                title="Nova oportunidade liberada",
+                message=(review.client_summary or match.product_name or "Há uma nova oportunidade disponível.")[:240],
+                href="/ofertas",
+                created_by_user_id=ctx.user.id,
+            )
+    except Exception:
+        pass
+    set_flash(request, "Revisão da oferta atualizada.")
+    return RedirectResponse("/motor-ofertas", status_code=303)
+
+
+@app.get("/open-finance")
+@require_login
+async def openfinance_alias() -> Response:
+    return RedirectResponse("/openfinance", status_code=307)
+
+
+TEMPLATES["empresa.html"] = r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <div class="d-flex flex-wrap justify-content-between align-items-start gap-3">
+    <div>
+      <h4 class="mb-1">Minha Empresa</h4>
+      <div class="muted">Dados mestre, classificação e estrutura operacional para alimentar o motor de ofertas e a equipe.</div>
+    </div>
+    <div class="d-flex gap-2">
+      <a class="btn btn-outline-secondary" href="/perfil">Ir para diagnóstico</a>
+      <a class="btn btn-outline-secondary" href="/">Voltar</a>
+    </div>
+  </div>
+  <hr class="my-3"/>
+
+  {% if not current_client %}
+    <div class="alert alert-warning">
+      Nenhum cliente selecionado/vinculado.
+      {% if role in ["admin","equipe"] %}Use “Trocar cliente”.{% else %}Peça ao escritório para vincular seu acesso.{% endif %}
+    </div>
+  {% else %}
+    <form method="post" action="/empresa">
+      <div class="row g-3">
+        <div class="col-12"><div class="fw-semibold">1. Cadastro básico</div></div>
+        <div class="col-md-8">
+          <label class="form-label">Razão social</label>
+          <input class="form-control" name="name" value="{{ current_client.name }}" required />
+        </div>
+        <div class="col-md-4">
+          <label class="form-label">CNPJ</label>
+          <input class="form-control mono" name="cnpj" value="{{ current_client.cnpj }}" />
+        </div>
+        <div class="col-md-4">
+          <label class="form-label">E-mail</label>
+          <input class="form-control" name="email" type="email" value="{{ current_client.email }}" />
+        </div>
+        <div class="col-md-4">
+          <label class="form-label">Telefone</label>
+          <input class="form-control" name="phone" value="{{ current_client.phone }}" />
+        </div>
+        <div class="col-md-4">
+          <label class="form-label">E-mail do financeiro</label>
+          <input class="form-control" name="finance_email" type="email" value="{{ current_client.finance_email }}" />
+        </div>
+        <div class="col-md-6">
+          <label class="form-label">Endereço</label>
+          <input class="form-control" name="address" value="{{ current_client.address }}" />
+        </div>
+        <div class="col-md-3">
+          <label class="form-label">Cidade</label>
+          <input class="form-control" name="city" value="{{ current_client.city }}" />
+        </div>
+        <div class="col-md-1">
+          <label class="form-label">UF</label>
+          <select class="form-select" name="state">
+            <option value="">Selecione</option>
+            {% for uf in uf_options %}
+              <option value="{{ uf }}" {% if current_client.state == uf %}selected{% endif %}>{{ uf }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="col-md-2">
+          <label class="form-label">CEP</label>
+          <input class="form-control mono" name="zip_code" value="{{ current_client.zip_code }}" />
+        </div>
+
+        <div class="col-12 mt-2"><div class="fw-semibold">2. Classificação da empresa</div></div>
+        <div class="col-md-3">
+          <label class="form-label">Porte</label>
+          <select class="form-select" name="company_size">
+            <option value="">Selecione</option>
+            {% for item in company_size_options %}
+              <option value="{{ item }}" {% if business_profile and business_profile.company_size == item %}selected{% endif %}>{{ item }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="col-md-3">
+          <label class="form-label">Segmento</label>
+          <select class="form-select" name="segment" id="segment-select">
+            <option value="">Selecione</option>
+            {% for item in segment_options %}
+              <option value="{{ item }}" {% if business_profile and business_profile.segment == item %}selected{% endif %}>{{ item }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="col-md-3">
+          <label class="form-label">Subsegmento</label>
+          {% set current_sub = business_profile.subsegment if business_profile else '' %}
+          <select class="form-select" name="subsegment" id="subsegment-select" data-current="{{ current_sub }}">
+            <option value="">Selecione</option>
+            {% for item in subsegment_options %}
+              <option value="{{ item }}" {% if current_sub == item %}selected{% endif %}>{{ item }}</option>
+            {% endfor %}
+            {% if current_sub and current_sub not in subsegment_options %}
+              <option value="{{ current_sub }}" selected>{{ current_sub }}</option>
+            {% endif %}
+          </select>
+        </div>
+        <div class="col-md-3">
+          <label class="form-label">Regime tributário</label>
+          <select class="form-select" name="tax_regime">
+            <option value="">Selecione</option>
+            {% for item in tax_regime_options %}
+              <option value="{{ item }}" {% if business_profile and business_profile.tax_regime == item %}selected{% endif %}>{{ item }}</option>
+            {% endfor %}
+          </select>
+        </div>
+
+        <div class="col-md-3">
+          <label class="form-label">CNAE</label>
+          <input class="form-control" name="cnae" value="{{ business_profile.cnae if business_profile else '' }}" />
+        </div>
+        <div class="col-md-3">
+          <label class="form-label">Ano de fundação</label>
+          <input class="form-control" name="founded_year" type="number" min="1900" max="2100" value="{{ business_profile.founded_year if business_profile else 0 }}" />
+        </div>
+        <div class="col-md-3">
+          <label class="form-label">Modelo de negócio</label>
+          <select class="form-select" name="business_model">
+            <option value="">Selecione</option>
+            {% for item in business_model_options %}
+              <option value="{{ item }}" {% if business_profile and business_profile.business_model == item %}selected{% endif %}>{{ item }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="col-md-3">
+          <label class="form-label">Canal de vendas</label>
+          <select class="form-select" name="sales_channel">
+            <option value="">Selecione</option>
+            {% for item in sales_channel_options %}
+              <option value="{{ item }}" {% if business_profile and business_profile.sales_channel == item %}selected{% endif %}>{{ item }}</option>
+            {% endfor %}
+          </select>
+        </div>
+
+                <div class="col-12">
+          <div class="alert alert-info border-0 mb-0">
+            <i class="bi bi-info-circle me-2"></i>
+            Os dados financeiros detalhados (receitas, custos, balanço) e governança são preenchidos no
+            <a href="/perfil/wizard" class="alert-link fw-bold">Diagnóstico Financeiro →</a>
+          </div>
+        </div>
+
+        <div class="col-12">
+          <label class="form-label">Observações</label>
+          <textarea class="form-control" name="notes" rows="3"></textarea>
+        </div>
+        <div class="col-12">
+          <label class="form-label">Anexo (PDF/arquivo)</label>
+          <input class="form-control" type="file" name="file" required />
+        </div>
+      </div>
+      <div class="mt-4 d-flex gap-2">
+        <button class="btn btn-primary">Salvar</button>
+        <a class="btn btn-outline-secondary" href="/financeiro">Cancelar</a>
+      </div>
+    </form>
+  {% endif %}
+</div>
+{% endblock %}
+""",
+    "fin_detail.html": r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <div class="d-flex justify-content-between">
+    <div>
+      <h4 class="mb-1">{{ inv.title }}</h4>
+      <div class="muted">
+        Status: <b>{{ inv.status }}</b> • Valor: <b>R$ {{ "%.2f"|format(inv.amount_brl) }}</b>
+        {% if inv.due_date %} • Venc: <b>{{ inv.due_date }}</b>{% endif %}
+        {% if role in ["admin","equipe"] %} • Cliente: <b>{{ client.name }}</b>{% endif %}
+      </div>
+    </div>
+    <div class="d-flex gap-2">
+      <a class="btn btn-outline-secondary" href="/financeiro">Voltar</a>
+      {% if role in ["admin","equipe"] %}
+        <a class="btn btn-outline-primary" href="/financeiro/{{ inv.id }}/editar">Editar</a>
+        <form method="post" action="/financeiro/{{ inv.id }}/excluir" onsubmit="return confirm('Excluir lançamento? Remova anexos antes.');">
+          <button class="btn btn-outline-danger" type="submit">Excluir</button>
+        </form>
+      {% endif %}
+    </div>
+  </div>
+
+  <hr class="my-3"/>
+  <pre>{{ inv.notes }}</pre>
+
+  <hr class="my-3"/>
+  <h6>Anexos (download)</h6>
+  {% if attachments %}
+    <ul>
+      {% for a in attachments %}
+        <li class="d-flex justify-content-between align-items-center">
+          <a href="/download/{{ a.id }}">{{ a.original_filename }}</a>
+          {% if role in ["admin","equipe"] %}
+            <form method="post" action="/attachments/{{ a.id }}/delete" class="ms-2">
+              <input type="hidden" name="next" value="/financeiro/{{ inv.id }}">
+              <button class="btn btn-outline-danger btn-sm" type="submit">Excluir</button>
+            </form>
+          {% endif %}
+        </li>
+      {% endfor %}
+    </ul>
+  {% else %}
+    <div class="muted">Sem anexos.</div>
+  {% endif %}
+
+  {% if role in ["admin","equipe"] %}
+    <hr class="my-3"/>
+    <form method="post" action="/financeiro/{{ inv.id }}/anexar" enctype="multipart/form-data">
+      <div class="mb-2">
+        <label class="form-label">Anexar novo arquivo</label>
+        <input class="form-control" type="file" name="file" required />
+      </div>
+      <button class="btn btn-primary">Enviar</button>
+    </form>
+  {% endif %}
+</div>
+{% endblock %}
+""",
+}
+
+TEMPLATES.update({
+    "contaazul_settings.html": r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <div class="d-flex justify-content-between align-items-start">
+    <div>
+      <h4 class="mb-1">Integração: Conta Azul</h4>
+      <div class="muted">Sincroniza notas e cobranças (boletos) para aparecerem no Financeiro.</div>
+    </div>
+    <a class="btn btn-outline-secondary" href="/financeiro">Voltar</a>
+  </div>
+
+  <hr class="my-3"/>
+
+  {% if not configured %}
+    <div class="alert alert-warning">
+      Configure as variáveis no Render: <code>CONTA_AZUL_CLIENT_ID</code> e <code>CONTA_AZUL_CLIENT_SECRET</code>.
+    </div>
+  {% endif %}
+
+  <div class="mb-2">
+    <div class="muted small">Redirect URI (cadastre no Portal do Desenvolvedor Conta Azul):</div>
+    <div class="mono">{{ redirect_uri }}</div>
+  </div>
+
+  {% if connected %}
+    <div class="alert alert-success">Conectado{% if last_sync %} • Última sync: {{ last_sync }}{% endif %}</div>
+    <form method="post" action="/integrations/contaazul/disconnect" onsubmit="return confirm('Desconectar Conta Azul?');">
+      <button class="btn btn-outline-danger">Desconectar</button>
+    </form>
+  {% else %}
+    <div class="alert alert-info">Ainda não conectado.</div>
+    <a class="btn btn-primary" href="/integrations/contaazul/connect">Conectar Conta Azul</a>
+  {% endif %}
+</div>
+{% endblock %}
+""",
+    "fin_list.html": r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <div class="d-flex justify-content-between align-items-center">
+    <div>
+      <h4 class="mb-0">Financeiro</h4>
+      <div class="muted">Notas/Boletos de honorários (manual) + sincronizado do Conta Azul.</div>
+    </div>
+    <div class="d-flex gap-2">
+      {% if role in ["admin","equipe"] %}
+        <a class="btn btn-outline-secondary" href="/integrations/contaazul">Conta Azul</a>
+        {% if ca_connected %}
+          <form method="post" action="/financeiro/contaazul/sync">
+            <button class="btn btn-outline-primary" type="submit">Sincronizar</button>
+          </form>
+        {% endif %}
+        <a class="btn btn-primary" href="/financeiro/novo">Nova cobrança</a>
+      {% endif %}
+    </div>
+  </div>
+
+  {% if ca_configured and role in ["admin","equipe"] and not ca_connected %}
+    <div class="alert alert-warning mt-3">
+      Conta Azul não conectado. Vá em <a href="/integrations/contaazul">Integrações / Conta Azul</a>.
+    </div>
+  {% endif %}
+
+  {% if ca_last_sync %}
+    <div class="muted small mt-2">Conta Azul: última sync em {{ ca_last_sync }}</div>
+  {% endif %}
+
+  <hr class="my-3"/>
+  <h6 class="mb-2">Cobranças (manual)</h6>
+  {% if items %}
+    <div class="list-group">
+      {% for it in items %}
+        <a class="list-group-item list-group-item-action" href="/financeiro/{{ it.id }}">
+          <div class="d-flex justify-content-between">
+            <div class="fw-semibold">{{ it.title }}</div>
+            <span class="badge text-bg-light border">{{ it.status }}</span>
+          </div>
+          <div class="muted small">
+            {% if role in ["admin","equipe"] %}Cliente: {{ it.client_name }} • {% endif %}
+            Valor: R$ {{ "%.2f"|format(it.amount_brl) }} •
+            {% if it.due_date %}Venc: {{ it.due_date }} • {% endif %}
+            {{ it.created_at }}
+          </div>
+        </a>
+      {% endfor %}
+    </div>
+  {% else %}
+    <div class="muted">Sem cobranças manuais.</div>
+  {% endif %}
+
+  <hr class="my-4"/>
+  <h6 class="mb-2">Conta Azul: Boletos / Contas a receber</h6>
+  {% if ca_receivables %}
+    <div class="list-group">
+      {% for r in ca_receivables %}
+        <div class="list-group-item">
+          <div class="d-flex justify-content-between">
+            <div class="fw-semibold">{{ r.description }}</div>
+            <span class="badge text-bg-light border">{{ r.status }}</span>
+          </div>
+          <div class="muted small mt-1">
+            Valor: R$ {{ "%.2f"|format(r.amount_total or 0) }} • Aberto: R$ {{ "%.2f"|format(r.amount_open or 0) }}
+            {% if r.due_date %} • Venc: {{ r.due_date }}{% endif %}
+            {% if r.invoice_type or r.invoice_number %} • {{ r.invoice_type }} {{ r.invoice_number }}{% endif %}
+            {% if r.boleto_status %} • Boleto: {{ r.boleto_status }}{% endif %}
+          </div>
+          <div class="d-flex flex-wrap gap-2 mt-2">
+            {% if r.payment_url %}
+              <a class="btn btn-sm btn-outline-primary"
+                 href="/financeiro/contaazul/receivable/{{ r.id }}/boleto"
+                 target="_blank" rel="noopener">Boleto</a>
+            {% else %}
+              <span class="badge text-bg-light border">Sem boleto</span>
+            {% endif %}
+            <a class="btn btn-sm btn-outline-secondary"
+               href="/financeiro/contaazul/receivable/{{ r.id }}/fatura.pdf"
+               target="_blank" rel="noopener">Resumo cobrança</a>
+          </div>
+        </div>
+      {% endfor %}
+    </div>
+  {% else %}
+    <div class="muted">Sem itens sincronizados.</div>
+  {% endif %}
+
+  <hr class="my-4"/>
+  <h6 class="mb-2">Conta Azul: Notas fiscais</h6>
+  {% if ca_invoices %}
+    <div class="list-group">
+      {% for n in ca_invoices %}
+        <div class="list-group-item">
+          <div class="d-flex justify-content-between">
+            <div class="fw-semibold">{{ n.invoice_type }} {{ n.number }}</div>
+            <span class="badge text-bg-light border">{{ n.status }}</span>
+          </div>
+          <div class="muted small mt-1">
+            {% if n.issue_date %}Emissão/Competência: {{ n.issue_date }} • {% endif %}
+            {% if n.amount %}Valor: R$ {{ "%.2f"|format(n.amount) }} • {% endif %}
+            ID: {{ n.external_id }}
+          </div>
+          <div class="d-flex flex-wrap gap-2 mt-2">
+            {% if (n.invoice_type or "").upper() == "NFSE" %}
+              <a class="btn btn-sm btn-outline-secondary"
+                 href="/financeiro/contaazul/invoice/{{ n.id }}/pdf"
+                 target="_blank" rel="noopener">NFS-e PDF</a>
+              <a class="btn btn-sm btn-outline-secondary"
+                 href="/financeiro/contaazul/invoice/{{ n.id }}/sale-pdf"
+                 target="_blank" rel="noopener">Venda / Fatura</a>
+            {% endif %}
+            {% if (n.invoice_type or "").upper() == "NFE" %}
+              <a class="btn btn-sm btn-outline-secondary"
+                 href="/financeiro/contaazul/invoice/{{ n.id }}/xml"
+                 target="_blank" rel="noopener">NF XML</a>
+            {% endif %}
+          </div>
+        </div>
+      {% endfor %}
+    </div>
+  {% else %}
+    <div class="muted">Sem notas sincronizadas.</div>
+  {% endif %}
+</div>
+{% endblock %}
+""",
+})
+
+TEMPLATES.update({
+    "consult_list.html": r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <div class="d-flex justify-content-between align-items-center">
+    <div>
+      <h4 class="mb-0">Consultoria</h4>
+      <div class="muted">Projetos → Etapas → Sub-etapas → % concluído</div>
+    </div>
+    {% if role in ["admin","equipe"] %}
+      <a class="btn btn-primary" href="/consultoria/novo">Novo projeto</a>
+    {% endif %}
+  </div>
+
+  <hr class="my-3"/>
+
+  {% if projects %}
+    <div class="list-group">
+      {% for p in projects %}
+        <a class="list-group-item list-group-item-action" href="/consultoria/{{ p.id }}">
+          <div class="d-flex justify-content-between">
+            <div class="fw-semibold">{{ p.name }}</div>
+            <span class="badge text-bg-light border">{{ p.status }}</span>
+          </div>
+
+          <div class="muted small mt-1">
+            {% if role in ["admin","equipe"] %}Cliente: {{ p.client_name }} • {% endif %}
+            {% if p.due_date %}Prazo: {{ p.due_date }} • {% endif %}
+            Progresso: {{ p.progress_pct }}%
+          </div>
+
+          <div class="progress mt-2" style="height: 8px;">
+            <div class="progress-bar" role="progressbar" style="width: {{ p.progress_pct }}%;"></div>
+          </div>
+        </a>
+      {% endfor %}
+    </div>
+  {% else %}
+    <div class="muted">Sem projetos ainda.</div>
+  {% endif %}
+</div>
+{% endblock %}
+""",
+
+    "consult_new.html": r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <h4>Novo Projeto de Consultoria</h4>
+  <div class="muted">Direcione para um cliente e defina prazos.</div>
+
+  {% if not clients %}
+    <div class="alert alert-warning mt-3">Nenhum cliente cadastrado. Vá em “Membros” e crie um cliente.</div>
+    <a class="btn btn-outline-secondary" href="/consultoria">Voltar</a>
+  {% else %}
+    <form method="post" action="/consultoria/novo" class="mt-3">
+      <div class="row g-3">
+        <div class="col-12">
+          <label class="form-label">Cliente</label>
+          <select class="form-select" name="client_id" required>
+            {% for c in clients %}
+              <option value="{{ c.id }}" {% if current_client and c.id==current_client.id %}selected{% endif %}>{{ c.name }}</option>
+            {% endfor %}
+          </select>
+        </div>
+
+        <div class="col-md-8">
+          <label class="form-label">Nome do projeto</label>
+          <input class="form-control" name="name" required placeholder="Ex: Reestruturação Financeira 2026" />
+        </div>
+
+        <div class="col-md-4">
+          <label class="form-label">Status</label>
+          <select class="form-select" name="status">
+            <option value="ativo">ativo</option>
+            <option value="pausado">pausado</option>
+            <option value="concluido">concluido</option>
+          </select>
+        </div>
+
+        <div class="col-md-6">
+          <label class="form-label">Início (DD/MM/AAAA)</label>
+          <input class="form-control mono" name="start_date" placeholder="2026-03-10" />
+        </div>
+
+        <div class="col-md-6">
+          <label class="form-label">Prazo final (DD/MM/AAAA)</label>
+          <input class="form-control mono" name="due_date" placeholder="2026-06-30" />
+        </div>
+
+        <div class="col-12">
+          <label class="form-label">Descrição</label>
+          <textarea class="form-control" name="description" rows="4"></textarea>
+        </div>
+      </div>
+
+      <div class="mt-4 d-flex gap-2">
+        <button class="btn btn-primary">Criar</button>
+        <a class="btn btn-outline-secondary" href="/consultoria">Cancelar</a>
+      </div>
+    </form>
+  {% endif %}
+</div>
+{% endblock %}
+""",
+
+    "consult_detail.html": r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <div class="d-flex justify-content-between align-items-start">
+    <div>
+      <h4 class="mb-1">{{ project.name }}</h4>
+      <div class="muted">
+        Status: <b>{{ project.status }}</b>
+        {% if project.due_date %} • Prazo final: <b>{{ project.due_date }}</b>{% endif %}
+        {% if role in ["admin","equipe"] %} • Cliente: <b>{{ client.name }}</b>{% endif %}
+      </div>
+
+      <div class="mt-2">
+        <div class="muted small">Progresso: <b>{{ progress_pct }}%</b></div>
+        <div class="progress" style="height: 10px;">
+          <div class="progress-bar" role="progressbar" style="width: {{ progress_pct }}%;"></div>
+        </div>
+      </div>
+    </div>
+
+    <a class="btn btn-outline-secondary" href="/consultoria">Voltar</a>
+  </div>
+
+  {% if project.description %}
+    <hr class="my-3"/>
+    <pre>{{ project.description }}</pre>
+  {% endif %}
+
+  <hr class="my-3"/>
+  <h5 class="mb-3">Etapas</h5>
+
+  {% if stages %}
+    <div class="accordion" id="stagesAcc">
+      {% for s in stages %}
+        <div class="accordion-item">
+          <h2 class="accordion-header" id="h{{ s.id }}">
+            <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#c{{ s.id }}">
+              {{ s.order }}. {{ s.name }}
+              {% if s.due_date %}<span class="ms-2 muted small">• prazo: {{ s.due_date }}</span>{% endif %}
+            </button>
+          </h2>
+          <div id="c{{ s.id }}" class="accordion-collapse collapse" data-bs-parent="#stagesAcc">
+            <div class="accordion-body">
+
+
+              {% if role in ["admin","equipe"] %}
+                <div class="d-flex justify-content-end gap-2 mb-3">
+                  <a class="btn btn-outline-secondary btn-sm" href="/consultoria/stages/{{ s.id }}/editar">Editar etapa</a>
+                  <form method="post" action="/consultoria/stages/{{ s.id }}/excluir" onsubmit="return confirm('Excluir esta etapa e suas sub-etapas?');">
+                    <button class="btn btn-outline-danger btn-sm">Excluir etapa</button>
+                  </form>
+                </div>
+              {% endif %}
+
+              {% if s.steps %}
+                <div class="list-group mb-3">
+                  {% for st in s.steps %}
+                    <div class="list-group-item">
+                      <div class="d-flex justify-content-between align-items-start">
+                        <div>
+                          <div class="fw-semibold">
+                            {% if st.done %}✅{% else %}⬜{% endif %}
+                            {{ st.title }}
+                            {% if st.client_action %}<span class="badge text-bg-light border ms-2">cliente</span>{% endif %}
+                          </div>
+                          {% if st.description %}<div class="muted small mt-1">{{ st.description }}</div>{% endif %}
+                          <div class="muted small">
+                            {% if st.due_date %}Prazo: {{ st.due_date }} • {% endif %}
+                            Peso: {{ st.weight }}
+                          </div>
+                        </div>
+
+                        <div class="d-flex gap-2">
+                          {% if role in ["admin","equipe"] or (role=="cliente" and st.client_action) %}
+                            <form method="post" action="/consultoria/steps/{{ st.id }}/toggle">
+                              <button class="btn btn-outline-primary btn-sm">{% if st.done %}Desmarcar{% else %}Concluir{% endif %}</button>
+                            </form>
+                          {% endif %}
+
+                          {% if role in ["admin","equipe"] %}
+                            <a class="btn btn-outline-secondary btn-sm" href="/consultoria/steps/{{ st.id }}/editar">Editar</a>
+                            <form method="post" action="/consultoria/steps/{{ st.id }}/excluir" onsubmit="return confirm('Excluir esta sub-etapa?');">
+                              <button class="btn btn-outline-danger btn-sm">Excluir</button>
+                            </form>
+                          {% endif %}
+                        </div>
+                      </div>
+                    </div>
+                  {% endfor %}
+                </div>
+              {% else %}
+                <div class="muted mb-3">Sem sub-etapas.</div>
+              {% endif %}
+
+              {% if role in ["admin","equipe"] %}
+                <form method="post" action="/consultoria/stages/{{ s.id }}/steps" class="card p-3">
+                  <div class="fw-semibold mb-2">Adicionar sub-etapa</div>
+                  <div class="row g-2">
+                    <div class="col-md-6">
+                      <input class="form-control" name="title" required placeholder="Título" />
+                    </div>
+                    <div class="col-md-6">
+                      <input class="form-control mono" name="due_date" placeholder="Prazo DD/MM/AAAA" />
+                    </div>
+                    <div class="col-12">
+                      <input class="form-control" name="description" placeholder="Descrição (opcional)" />
+                    </div>
+                    <div class="col-md-4">
+                      <input class="form-control" name="weight" type="number" step="0.1" min="0.1" value="1.0" />
+                      <div class="form-text">Peso para cálculo do %.</div>
+                    </div>
+                    <div class="col-md-4">
+                      <div class="form-check mt-2">
+                        <input class="form-check-input" type="checkbox" name="client_action" value="1" id="ca{{ s.id }}">
+                        <label class="form-check-label" for="ca{{ s.id }}">Ação do cliente</label>
+                      </div>
+                    </div>
+                    <div class="col-md-4">
+                      <button class="btn btn-primary w-100">Adicionar</button>
+                    </div>
+                  </div>
+                </form>
+              {% endif %}
+
+            </div>
+          </div>
+        </div>
+      {% endfor %}
+    </div>
+  {% else %}
+    <div class="muted">Sem etapas ainda.</div>
+  {% endif %}
+
+  {% if role in ["admin","equipe"] %}
+    <hr class="my-3"/>
+    <form method="post" action="/consultoria/{{ project.id }}/stages" class="card p-3">
+      <div class="fw-semibold mb-2">Adicionar etapa</div>
+      <div class="row g-2">
+        <div class="col-md-8">
+          <input class="form-control" name="name" required placeholder="Nome da etapa" />
+        </div>
+        <div class="col-md-4">
+          <input class="form-control mono" name="due_date" placeholder="Prazo DD/MM/AAAA" />
+        </div>
+        <div class="col-12">
+          <button class="btn btn-primary">Adicionar etapa</button>
+        </div>
+      </div>
+    </form>
+  {% endif %}
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+{% endblock %}
+""",
+})
+
+TEMPLATES.update({
+    "agenda.html": r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <div class="d-flex justify-content-between align-items-center">
+    <div>
+      <h4 class="mb-0">Agenda</h4>
+      <div class="muted">Agendamentos (Outlook Bookings)</div>
+    </div>
+    <a class="btn btn-outline-primary" href="{{ bookings_url }}" target="_blank" rel="noopener">Abrir em nova aba</a>
+  </div>
+  <hr class="my-3"/>
+  <div class="ratio ratio-16x9">
+    <iframe src="{{ bookings_url }}" title="Agenda" loading="lazy" referrerpolicy="no-referrer"></iframe>
+  </div>
+  <div class="muted small mt-3">Se o iframe não carregar, clique em “Abrir em nova aba”.</div>
+</div>
+{% endblock %}
+""",
+
+    "pending_new_client.html": r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <h4>Nova Pendência (Cliente)</h4>
+  <div class="muted">Crie um pedido/pendência e envie anexos ao escritório.</div>
+  <form method="post" action="/pendencias/cliente/nova" enctype="multipart/form-data" class="mt-3">
+    <div class="row g-3">
+      <div class="col-12">
+        <label class="form-label">Título</label>
+        <input class="form-control" name="title" required />
+      </div>
+      <div class="col-12">
+        <label class="form-label">Descrição</label>
+        <textarea class="form-control" name="description" rows="4"></textarea>
+      </div>
+      <div class="col-md-6">
+        <label class="form-label">Prazo (opcional)</label>
+        <input class="form-control mono" name="due_date" placeholder="2026-03-31" />
+      </div>
+      <div class="col-12">
+        <label class="form-label">Anexar arquivo (opcional)</label>
+        <input class="form-control" type="file" name="file" />
+      </div>
+    </div>
+    <div class="mt-4 d-flex gap-2">
+      <button class="btn btn-primary" type="submit">Criar</button>
+      <a class="btn btn-outline-secondary" href="/pendencias">Cancelar</a>
+    </div>
+  </form>
+</div>
+{% endblock %}
+""",
+
+    "docs_send_client.html": r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <h4>Enviar Documento (Cliente)</h4>
+  <div class="muted">Envie um documento ao escritório e acompanhe o status.</div>
+  <form method="post" action="/documentos/cliente/enviar" enctype="multipart/form-data" class="mt-3">
+    <div class="row g-3">
+      <div class="col-12">
+        <label class="form-label">Título</label>
+        <input class="form-control" name="title" required />
+      </div>
+      <div class="col-12">
+        <label class="form-label">Mensagem (opcional)</label>
+        <textarea class="form-control" name="message" rows="3"></textarea>
+      </div>
+      <div class="col-12">
+        <label class="form-label">Arquivo</label>
+        <input class="form-control" type="file" name="file" required />
+      </div>
+    </div>
+    <div class="mt-4 d-flex gap-2">
+      <button class="btn btn-primary" type="submit">Enviar</button>
+      <a class="btn btn-outline-secondary" href="/documentos">Cancelar</a>
+    </div>
+  </form>
+</div>
+{% endblock %}
+""",
+
+    "docs_edit.html": r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <div class="d-flex justify-content-between align-items-center">
+    <div>
+      <h4 class="mb-0">Editar Documento</h4>
+      <div class="muted">{{ doc.title }}</div>
+    </div>
+    <a class="btn btn-outline-secondary" href="/documentos/{{ doc.id }}">Voltar</a>
+  </div>
+  <hr class="my-3"/>
+  <form method="post" action="/documentos/{{ doc.id }}/editar">
+    <div class="row g-3">
+      <div class="col-md-8">
+        <label class="form-label">Título</label>
+        <input class="form-control" name="title" value="{{ doc.title }}" required />
+      </div>
+      <div class="col-md-4">
+        <label class="form-label">Status</label>
+        <select class="form-select" name="status">
+          <option value="rascunho" {% if doc.status=="rascunho" %}selected{% endif %}>rascunho</option>
+          <option value="aguardando_cliente" {% if doc.status=="aguardando_cliente" %}selected{% endif %}>aguardando_cliente</option>
+          <option value="cliente_enviou" {% if doc.status=="cliente_enviou" %}selected{% endif %}>cliente_enviou</option>
+          <option value="concluido" {% if doc.status=="concluido" %}selected{% endif %}>concluido</option>
+        </select>
+      </div>
+      <div class="col-12">
+        <label class="form-label">Conteúdo</label>
+        <textarea class="form-control" name="content" rows="6" required>{{ doc.content }}</textarea>
+      </div>
+    </div>
+    <div class="mt-4 d-flex gap-2">
+      <button class="btn btn-primary" type="submit">Salvar</button>
+      <a class="btn btn-outline-secondary" href="/documentos/{{ doc.id }}">Cancelar</a>
+    </div>
+  </form>
+  <hr class="my-4"/>
+  <form method="post" action="/documentos/{{ doc.id }}/excluir" onsubmit="return confirm('Excluir documento? Remova anexos antes.');">
+    <button class="btn btn-outline-danger" type="submit">Excluir documento</button>
+  </form>
+</div>
+{% endblock %}
+""",
+
+    "pending_edit.html": r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <div class="d-flex justify-content-between align-items-center">
+    <div>
+      <h4 class="mb-0">Editar Pendência</h4>
+      <div class="muted">{{ item.title }}</div>
+    </div>
+    <a class="btn btn-outline-secondary" href="/pendencias/{{ item.id }}">Voltar</a>
+  </div>
+  <hr class="my-3"/>
+  <form method="post" action="/pendencias/{{ item.id }}/editar">
+    <div class="row g-3">
+      <div class="col-md-8">
+        <label class="form-label">Título</label>
+        <input class="form-control" name="title" value="{{ item.title }}" required />
+      </div>
+      <div class="col-md-4">
+        <label class="form-label">Status</label>
+        <select class="form-select" name="status">
+          <option value="aberto" {% if item.status=="aberto" %}selected{% endif %}>aberto</option>
+          <option value="aguardando_cliente" {% if item.status=="aguardando_cliente" %}selected{% endif %}>aguardando_cliente</option>
+          <option value="cliente_enviou" {% if item.status=="cliente_enviou" %}selected{% endif %}>cliente_enviou</option>
+          <option value="concluido" {% if item.status=="concluido" %}selected{% endif %}>concluido</option>
+        </select>
+      </div>
+      <div class="col-md-6">
+        <label class="form-label">Prazo (DD/MM/AAAA)</label>
+        <input class="form-control mono" name="due_date" value="{{ item.due_date }}" />
+      </div>
+      <div class="col-12">
+        <label class="form-label">Descrição</label>
+        <textarea class="form-control" name="description" rows="5">{{ item.description }}</textarea>
+      </div>
+    </div>
+    <div class="mt-4 d-flex gap-2">
+      <button class="btn btn-primary" type="submit">Salvar</button>
+      <a class="btn btn-outline-secondary" href="/pendencias/{{ item.id }}">Cancelar</a>
+    </div>
+  </form>
+  <hr class="my-4"/>
+  <form method="post" action="/pendencias/{{ item.id }}/excluir" onsubmit="return confirm('Excluir pendência? Remova anexos antes.');">
+    <button class="btn btn-outline-danger" type="submit">Excluir pendência</button>
+  </form>
+</div>
+{% endblock %}
+""",
+
+    "fin_edit.html": r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <div class="d-flex justify-content-between align-items-center">
+    <div>
+      <h4 class="mb-0">Editar Financeiro</h4>
+      <div class="muted">{{ inv.title }}</div>
+    </div>
+    <a class="btn btn-outline-secondary" href="/financeiro/{{ inv.id }}">Voltar</a>
+  </div>
+  <hr class="my-3"/>
+  <form method="post" action="/financeiro/{{ inv.id }}/editar">
+    <div class="row g-3">
+      <div class="col-md-8">
+        <label class="form-label">Título</label>
+        <input class="form-control" name="title" value="{{ inv.title }}" required />
+      </div>
+      <div class="col-md-4">
+        <label class="form-label">Status</label>
+        <select class="form-select" name="status">
+          <option value="emitido" {% if inv.status=="emitido" %}selected{% endif %}>emitido</option>
+          <option value="pago" {% if inv.status=="pago" %}selected{% endif %}>pago</option>
+          <option value="atrasado" {% if inv.status=="atrasado" %}selected{% endif %}>atrasado</option>
+          <option value="cancelado" {% if inv.status=="cancelado" %}selected{% endif %}>cancelado</option>
+        </select>
+      </div>
+      <div class="col-md-4">
+        <label class="form-label">Valor (R$)</label>
+        <input class="form-control" name="amount_brl" type="number" step="0.01" min="0" value="{{ inv.amount_brl }}" />
+      </div>
+      <div class="col-md-4">
+        <label class="form-label">Vencimento (DD/MM/AAAA)</label>
+        <input class="form-control mono" name="due_date" value="{{ inv.due_date }}" />
+      </div>
+      <div class="col-12">
+        <label class="form-label">Notas</label>
+        <textarea class="form-control" name="notes" rows="4">{{ inv.notes }}</textarea>
+      </div>
+    </div>
+    <div class="mt-4 d-flex gap-2">
+      <button class="btn btn-primary" type="submit">Salvar</button>
+      <a class="btn btn-outline-secondary" href="/financeiro/{{ inv.id }}">Cancelar</a>
+    </div>
+  </form>
+  <hr class="my-4"/>
+  <form method="post" action="/financeiro/{{ inv.id }}/excluir" onsubmit="return confirm('Excluir lançamento? Remova anexos antes.');">
+    <button class="btn btn-outline-danger" type="submit">Excluir lançamento</button>
+  </form>
+</div>
+{% endblock %}
+""",
+})
+
+TEMPLATES.update({
+    "tasks_list.html": r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
+    <div>
+      <h4 class="mb-0">Tarefas</h4>
+      <div class="muted">Kanban por status • filtros • prazos • prioridade</div>
+    </div>
+    <div class="d-flex gap-2 flex-wrap">
+      {% if role in ["admin","equipe"] %}
+        <a class="btn btn-outline-secondary" href="/tarefas/relatorio-horas">Relatório de horas</a>
+        <a class="btn btn-primary" href="/tarefas/nova{% if filter_client_id %}?client_id={{ filter_client_id }}{% endif %}">Nova tarefa</a>
+      {% endif %}
+    </div>
+  </div>
+
+  <hr class="my-3"/>
+
+  {% if role in ["admin","equipe"] %}
+    <form method="get" action="/tarefas" class="row g-2 align-items-end mb-3">
+      <div class="col-md-3">
+        <label class="form-label">Cliente</label>
+        <select class="form-select" name="client_id">
+          <option value="0" {% if filter_client_id==0 %}selected{% endif %}>Todos</option>
+          {% for c in clients %}
+            <option value="{{ c.id }}" {% if filter_client_id==c.id %}selected{% endif %}>{{ c.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <div class="col-md-3">
+        <label class="form-label">Responsável</label>
+        <select class="form-select" name="assignee_user_id">
+          <option value="0" {% if filter_assignee_user_id==0 %}selected{% endif %}>Todos</option>
+          <option value="-1" {% if filter_assignee_user_id==-1 %}selected{% endif %}>Sem responsável</option>
+          {% for u in assignees %}
+            <option value="{{ u.id }}" {% if filter_assignee_user_id==u.id %}selected{% endif %}>{{ u.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <div class="col-md-2">
+        <label class="form-label">Status</label>
+        <select class="form-select" name="status">
+          <option value="" {% if not filter_status %}selected{% endif %}>Todos</option>
+          <option value="nao_iniciada" {% if filter_status=="nao_iniciada" %}selected{% endif %}>nao_iniciada</option>
+          <option value="em_andamento" {% if filter_status=="em_andamento" %}selected{% endif %}>em_andamento</option>
+          <option value="concluida" {% if filter_status=="concluida" %}selected{% endif %}>concluida</option>
+        </select>
+      </div>
+
+      <div class="col-md-2">
+        <label class="form-label">Prioridade</label>
+        <select class="form-select" name="priority">
+          <option value="" {% if not filter_priority %}selected{% endif %}>Todas</option>
+          <option value="baixa" {% if filter_priority=="baixa" %}selected{% endif %}>baixa</option>
+          <option value="media" {% if filter_priority=="media" %}selected{% endif %}>media</option>
+          <option value="alta" {% if filter_priority=="alta" %}selected{% endif %}>alta</option>
+        </select>
+      </div>
+
+      <div class="col-md-2">
+        <label class="form-label">Prazo</label>
+        <select class="form-select" name="due">
+          <option value="" {% if not filter_due %}selected{% endif %}>Todos</option>
+          <option value="atrasadas" {% if filter_due=="atrasadas" %}selected{% endif %}>atrasadas</option>
+          <option value="hoje" {% if filter_due=="hoje" %}selected{% endif %}>hoje</option>
+          <option value="7dias" {% if filter_due=="7dias" %}selected{% endif %}>7 dias</option>
+          <option value="sem_prazo" {% if filter_due=="sem_prazo" %}selected{% endif %}>sem prazo</option>
+        </select>
+      </div>
+
+      <div class="col-12 d-flex gap-2 align-items-center mt-1 flex-wrap">
+        <div class="form-check">
+          <input class="form-check-input" type="checkbox" name="mine" value="1" id="mine" {% if filter_mine==1 %}checked{% endif %}>
+          <label class="form-check-label" for="mine">Minhas</label>
+        </div>
+        <button class="btn btn-outline-primary" type="submit">Aplicar</button>
+        <a class="btn btn-outline-secondary" href="/tarefas">Limpar</a>
+      </div>
+    </form>
+
+    <div class="row g-3 mb-3">
+      <div class="col-12 col-md-4">
+        <div class="card p-3 h-100">
+          <div class="muted small">Tarefas filtradas</div>
+          <div class="fw-semibold fs-4">{{ filtered_total_tasks }}</div>
+        </div>
+      </div>
+      <div class="col-12 col-md-4">
+        <div class="card p-3 h-100">
+          <div class="muted small">Com apontamento ativo</div>
+          <div class="fw-semibold fs-4">{{ filtered_active_count }}</div>
+        </div>
+      </div>
+      <div class="col-12 col-md-4">
+        <div class="card p-3 h-100">
+          <div class="muted small">Tempo total filtrado</div>
+          <div class="fw-semibold fs-4">{{ filtered_total_hours_label }}</div>
+        </div>
+      </div>
+    </div>
+  {% endif %}
+
+  <div class="row g-3">
+    {% for col in columns %}
+      <div class="col-12 col-lg-4">
+        <div class="card p-3 h-100">
+          <div class="fw-semibold mb-2">{{ col.label }} <span class="muted">({{ col.count }})</span></div>
+          {% if col.tasks %}
+            <div class="vstack gap-2">
+              {% for t in col.tasks %}
+                <div class="card p-3">
+                  <div class="d-flex justify-content-between align-items-start gap-2">
+                    <div class="fw-semibold">{{ t.title }}</div>
+                    <span class="badge text-bg-light border">{{ t.priority }}</span>
+                  </div>
+                  <div class="muted small mt-1">
+                    {% if role in ["admin","equipe"] and filter_client_id==0 and t.client_name %}
+                      Cliente: {{ t.client_name }} •
+                    {% endif %}
+                    {% if t.due_date %}Prazo: {{ t.due_date }} • {% endif %}
+                    {% if t.assignee_name %}Resp: {{ t.assignee_name }}{% endif %}
+                  </div>
+                  <div class="mt-2 d-flex gap-2 flex-wrap">
+                    {% if t.visible_to_client %}
+                      <span class="badge text-bg-light border">visível ao cliente</span>
+                    {% endif %}
+                    {% if t.has_active_session %}
+                      <span class="badge text-bg-light border">apontamento ativo</span>
+                    {% endif %}
+                    <span class="badge text-bg-light border">{{ t.tracked_hours_label }}</span>
+                  </div>
+
+                  <div class="mt-3 d-flex gap-2 flex-wrap align-items-center">
+                    <a class="btn btn-outline-secondary btn-sm" href="/tarefas/{{ t.id }}">Abrir</a>
+                    {% if role in ["admin","equipe"] %}
+                      {% if t.is_active_for_me %}
+                        <form method="post" action="/tarefas/{{ t.id }}/parar" class="d-inline">
+                          <input type="hidden" name="next" value="{{ current_list_path }}"/>
+                          <button class="btn btn-outline-warning btn-sm" type="submit">Parar</button>
+                        </form>
+                      {% elif t.can_start_work %}
+                        <form method="post" action="/tarefas/{{ t.id }}/iniciar" class="d-inline">
+                          <input type="hidden" name="next" value="{{ current_list_path }}"/>
+                          <button class="btn btn-outline-success btn-sm" type="submit">Iniciar</button>
+                        </form>
+                      {% endif %}
+                    {% endif %}
+                  </div>
+                </div>
+              {% endfor %}
+            </div>
+          {% else %}
+            <div class="muted small">Sem tarefas.</div>
+          {% endif %}
+        </div>
+      </div>
+    {% endfor %}
+  </div>
+</div>
+{% endblock %}
+""",
+
+    "tasks_new.html": r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <h4>Nova tarefa</h4>
+  <div class="muted">Crie uma tarefa para um cliente, defina prazo, prioridade e visibilidade.</div>
+
+  {% if not clients %}
+    <div class="alert alert-warning mt-3">Nenhum cliente cadastrado.</div>
+    <a class="btn btn-outline-secondary" href="/tarefas">Voltar</a>
+  {% else %}
+    <form method="post" action="/tarefas/nova" class="mt-3">
+      <div class="row g-3">
+        <div class="col-md-6">
+          <label class="form-label">Cliente</label>
+          <select class="form-select" name="client_id" required>
+            {% for c in clients %}
+              <option value="{{ c.id }}" {% if prefill_client and c.id==prefill_client.id %}selected{% endif %}>{{ c.name }}</option>
+            {% endfor %}
+          </select>
+        </div>
+
+        <div class="col-md-6">
+          <label class="form-label">Responsável (opcional)</label>
+          <select class="form-select" name="assignee_user_id">
+            <option value="">—</option>
+            {% for u in assignees %}
+              <option value="{{ u.id }}">{{ u.name }} ({{ u.role }})</option>
+            {% endfor %}
+          </select>
+        </div>
+
+        <div class="col-12">
+          <label class="form-label">Título</label>
+          <input class="form-control" name="title" required />
+        </div>
+
+        <div class="col-12">
+          <label class="form-label">Descrição</label>
+          <textarea class="form-control" name="description" rows="4"></textarea>
+        </div>
+
+        <div class="col-md-4">
+          <label class="form-label">Status</label>
+          <select class="form-select" name="status">
+            <option value="nao_iniciada">nao_iniciada</option>
+            <option value="em_andamento">em_andamento</option>
+            <option value="concluida">concluida</option>
+          </select>
+        </div>
+
+        <div class="col-md-4">
+          <label class="form-label">Prioridade</label>
+          <select class="form-select" name="priority">
+            <option value="baixa">baixa</option>
+            <option value="media" selected>media</option>
+            <option value="alta">alta</option>
+          </select>
+        </div>
+
+        <div class="col-md-4">
+          <label class="form-label">Prazo (DD/MM/AAAA)</label>
+          <input class="form-control mono" name="due_date" />
+        </div>
+
+        <div class="col-md-6">
+          <div class="form-check mt-4">
+            <input class="form-check-input" type="checkbox" name="visible_to_client" value="1" id="vis">
+            <label class="form-check-label" for="vis">Visível ao cliente</label>
+          </div>
+        </div>
+
+        <div class="col-md-6">
+          <div class="form-check mt-4">
+            <input class="form-check-input" type="checkbox" name="client_action" value="1" id="ca">
+            <label class="form-check-label" for="ca">Cliente pode concluir</label>
+          </div>
+        </div>
+      </div>
+
+      <div class="mt-4 d-flex gap-2">
+        <button class="btn btn-primary" type="submit">Criar</button>
+        <a class="btn btn-outline-secondary" href="/tarefas">Cancelar</a>
+      </div>
+    </form>
+  {% endif %}
+</div>
+{% endblock %}
+""",
+
+    "task_time_report.html": r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
+    <div>
+      <h4 class="mb-0">Relatório de horas</h4>
+      <div class="muted">Apontamentos por cliente, usuário e período</div>
+    </div>
+    <a class="btn btn-outline-secondary" href="/tarefas">Voltar para tarefas</a>
+  </div>
+
+  <hr class="my-3"/>
+
+  <form method="get" action="/tarefas/relatorio-horas" class="row g-2 align-items-end mb-3">
+    <div class="col-md-3">
+      <label class="form-label">Cliente</label>
+      <select class="form-select" name="client_id">
+        <option value="0" {% if filter_client_id==0 %}selected{% endif %}>Todos</option>
+        {% for c in clients %}
+          <option value="{{ c.id }}" {% if filter_client_id==c.id %}selected{% endif %}>{{ c.name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+
+    <div class="col-md-3">
+      <label class="form-label">Usuário</label>
+      <select class="form-select" name="user_id">
+        <option value="0" {% if filter_user_id==0 %}selected{% endif %}>Todos</option>
+        {% for u in assignees %}
+          <option value="{{ u.id }}" {% if filter_user_id==u.id %}selected{% endif %}>{{ u.name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+
+    <div class="col-md-2">
+      <label class="form-label">Data inicial</label>
+      <input class="form-control" type="text" name="date_from" value="{{ filter_date_from }}" placeholder="DD/MM/AAAA"/>
+    </div>
+
+    <div class="col-md-2">
+      <label class="form-label">Data final</label>
+      <input class="form-control" type="text" name="date_to" value="{{ filter_date_to }}" placeholder="DD/MM/AAAA"/>
+    </div>
+
+    <div class="col-md-2">
+      <label class="form-label">Sessões</label>
+      <select class="form-select" name="include_open">
+        <option value="1" {% if include_open==1 %}selected{% endif %}>Todas</option>
+        <option value="0" {% if include_open==0 %}selected{% endif %}>Encerradas</option>
+      </select>
+    </div>
+
+    <div class="col-12 d-flex gap-2 flex-wrap">
+      <button class="btn btn-outline-primary" type="submit">Aplicar</button>
+      <a class="btn btn-outline-secondary" href="/tarefas/relatorio-horas">Limpar</a>
+    </div>
+  </form>
+
+  <div class="row g-3 mb-3">
+    <div class="col-12 col-md-3">
+      <div class="card p-3 h-100">
+        <div class="muted small">Sessões</div>
+        <div class="fw-semibold fs-4">{{ total_sessions }}</div>
+      </div>
+    </div>
+    <div class="col-12 col-md-3">
+      <div class="card p-3 h-100">
+        <div class="muted small">Tempo total</div>
+        <div class="fw-semibold fs-4">{{ total_minutes_label }}</div>
+      </div>
+    </div>
+    <div class="col-12 col-md-3">
+      <div class="card p-3 h-100">
+        <div class="muted small">Clientes</div>
+        <div class="fw-semibold fs-4">{{ client_rows|length }}</div>
+      </div>
+    </div>
+    <div class="col-12 col-md-3">
+      <div class="card p-3 h-100">
+        <div class="muted small">Usuários</div>
+        <div class="fw-semibold fs-4">{{ user_rows|length }}</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="row g-3">
+    <div class="col-12 col-lg-6">
+      <div class="card p-3 h-100">
+        <div class="fw-semibold mb-2">Por cliente</div>
+        {% if client_rows %}
+          <div class="table-responsive">
+            <table class="table align-middle">
+              <thead>
+                <tr>
+                  <th>Cliente</th>
+                  <th>Sessões</th>
+                  <th>Tempo</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for row in client_rows %}
+                  <tr>
+                    <td>{{ row.name }}</td>
+                    <td>{{ row.sessions }}</td>
+                    <td>{{ row.time_label }}</td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        {% else %}
+          <div class="muted">Sem dados no período.</div>
+        {% endif %}
+      </div>
+    </div>
+
+    <div class="col-12 col-lg-6">
+      <div class="card p-3 h-100">
+        <div class="fw-semibold mb-2">Por usuário</div>
+        {% if user_rows %}
+          <div class="table-responsive">
+            <table class="table align-middle">
+              <thead>
+                <tr>
+                  <th>Usuário</th>
+                  <th>Sessões</th>
+                  <th>Tempo</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for row in user_rows %}
+                  <tr>
+                    <td>{{ row.name }}</td>
+                    <td>{{ row.sessions }}</td>
+                    <td>{{ row.time_label }}</td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        {% else %}
+          <div class="muted">Sem dados no período.</div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+  <hr class="my-3"/>
+
+  <div class="card p-3">
+    <div class="fw-semibold mb-2">Sessões</div>
+    {% if session_rows %}
+      <div class="table-responsive">
+        <table class="table align-middle">
+          <thead>
+            <tr>
+              <th>Cliente</th>
+              <th>Tarefa</th>
+              <th>Usuário</th>
+              <th>Início</th>
+              <th>Fim</th>
+              <th>Tempo</th>
+              <th>Observação</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for row in session_rows %}
+              <tr>
+                <td>{{ row.client_name }}</td>
+                <td><a href="/tarefas/{{ row.task_id }}">{{ row.task_title }}</a></td>
+                <td>{{ row.user_name }}</td>
+                <td>{{ row.started_at }}</td>
+                <td>{{ row.ended_at }}</td>
+                <td>{{ row.time_label }}</td>
+                <td>{{ row.note or "—" }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <div class="muted">Nenhuma sessão encontrada.</div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}
+""",
+    "tasks_detail.html": r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <div class="d-flex justify-content-between align-items-start">
+    <div>
+      <h4 class="mb-1">{{ task.title }}</h4>
+      <div class="muted">
+        Status: <b>{{ task.status }}</b> • Prioridade: <b>{{ task.priority }}</b>
+        {% if task.due_date %} • Prazo: <b>{{ task.due_date }}</b>{% endif %}
+        {% if assignee_name %} • Resp: <b>{{ assignee_name }}</b>{% endif %}
+      </div>
+      {% if task.visible_to_client %}<div class="mt-2"><span class="badge text-bg-light border">visível ao cliente</span></div>{% endif %}
+    </div>
+    <div class="d-flex gap-2">
+      <a class="btn btn-outline-secondary" href="/tarefas">Voltar</a>
+      {% if role in ["admin","equipe"] %}
+        <a class="btn btn-outline-primary" href="/tarefas/{{ task.id }}/editar">Editar</a>
+        <a class="btn btn-outline-danger" href="#excluir-tarefa">Excluir</a>
+      {% endif %}
+    </div>
+  </div>
+
+  {% if task.description %}
+    <hr class="my-3"/>
+    <pre>{{ task.description }}</pre>
+  {% endif %}
+
+  <hr class="my-3"/>
+  <div class="d-flex gap-2 flex-wrap">
+    {% if role in ["admin","equipe"] %}
+      <form method="post" action="/tarefas/{{ task.id }}/status">
+        <input type="hidden" name="status" value="nao_iniciada"/>
+        <button class="btn btn-outline-secondary btn-sm" type="submit">Não iniciada</button>
+      </form>
+      <form method="post" action="/tarefas/{{ task.id }}/status">
+        <input type="hidden" name="status" value="em_andamento"/>
+        <button class="btn btn-outline-secondary btn-sm" type="submit">Em andamento</button>
+      </form>
+      <form method="post" action="/tarefas/{{ task.id }}/status">
+        <input type="hidden" name="status" value="concluida"/>
+        <button class="btn btn-outline-secondary btn-sm" type="submit">Concluída</button>
+      </form>
+    {% endif %}
+
+    {% if role=="cliente" and task.client_action %}
+      <form method="post" action="/tarefas/{{ task.id }}/toggle">
+        <button class="btn btn-outline-primary btn-sm" type="submit">
+          {% if task.status=="concluida" %}Desmarcar conclusão{% else %}Marcar como concluída{% endif %}
+        </button>
+      </form>
+    {% endif %}
+  </div>
+
+  {% if role in ["admin","equipe"] %}
+    <hr class="my-3"/>
+    <form method="post" action="/tarefas/{{ task.id }}/excluir" class="card p-3 border-danger-subtle" id="excluir-tarefa">
+      <div class="fw-semibold text-danger">Excluir tarefa</div>
+      <div class="muted small">Para excluir, digite <b>EXCLUIR</b> e confirme.</div>
+      <div class="row g-2 align-items-end mt-2">
+        <div class="col-md-6">
+          <input class="form-control" name="confirm" placeholder="EXCLUIR" required />
+        </div>
+        <div class="col-md-3">
+          <button class="btn btn-outline-danger w-100" type="submit">Excluir</button>
+        </div>
+      </div>
+    </form>
+  {% endif %}
+
+  <hr class="my-3"/>
+  <h5>Apontamento de tempo</h5>
+
+  <div class="row g-3 mb-3">
+    <div class="col-12 col-md-4">
+      <div class="card p-3 h-100">
+        <div class="muted small">Tempo desta tarefa</div>
+        <div class="fw-semibold fs-4">{{ task_total_hours_label }}</div>
+      </div>
+    </div>
+    <div class="col-12 col-md-4">
+      <div class="card p-3 h-100">
+        <div class="muted small">Tempo do cliente</div>
+        <div class="fw-semibold fs-4">{{ client_total_hours_label }}</div>
+      </div>
+    </div>
+    <div class="col-12 col-md-4">
+      <div class="card p-3 h-100">
+        <div class="muted small">Status do meu apontamento</div>
+        <div class="fw-semibold fs-6">
+          {% if active_work_session %}
+            Em andamento desde {{ active_work_started_at }}
+          {% else %}
+            Nenhum apontamento ativo
+          {% endif %}
+        </div>
+      </div>
+    </div>
+  </div>
+
+  {% if role in ["admin","equipe"] %}
+    <div class="d-flex gap-2 flex-wrap mb-3">
+      {% if active_work_session %}
+        <form method="post" action="/tarefas/{{ task.id }}/parar">
+          <input type="hidden" name="next" value="/tarefas/{{ task.id }}"/>
+          <button class="btn btn-outline-warning" type="submit">Parar trabalho</button>
+        </form>
+      {% else %}
+        <form method="post" action="/tarefas/{{ task.id }}/iniciar">
+          <input type="hidden" name="next" value="/tarefas/{{ task.id }}"/>
+          <button class="btn btn-outline-success" type="submit">Iniciar trabalho</button>
+        </form>
+      {% endif %}
+    </div>
+  {% endif %}
+
+  {% if work_sessions %}
+    <div class="card p-3 mb-3">
+      <div class="fw-semibold mb-2">Histórico de apontamentos</div>
+      <div class="table-responsive">
+        <table class="table align-middle">
+          <thead>
+            <tr>
+              <th>Usuário</th>
+              <th>Início</th>
+              <th>Fim</th>
+              <th>Tempo</th>
+              <th>Observação</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for s in work_sessions %}
+              <tr>
+                <td>{{ s.user_name }}</td>
+                <td>{{ s.started_at }}</td>
+                <td>{{ s.ended_at }}</td>
+                <td>{{ s.hours_label }}</td>
+                <td>{{ s.note or "—" }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  {% else %}
+    <div class="muted mb-3">Nenhum apontamento nesta tarefa.</div>
+  {% endif %}
+
+  <hr class="my-3"/>
+  <h5>Comentários</h5>
+
+  {% if comments %}
+    <div class="list-group mb-3">
+      {% for c in comments %}
+        <div class="list-group-item">
+          <div class="d-flex justify-content-between">
+            <div class="fw-semibold">{{ c.author_name }}</div>
+            <div class="muted small">{{ c.created_at }}</div>
+          </div>
+          <div class="mt-1">{{ c.message }}</div>
+        </div>
+      {% endfor %}
+    </div>
+  {% else %}
+    <div class="muted mb-3">Sem comentários.</div>
+  {% endif %}
+
+  <form method="post" action="/tarefas/{{ task.id }}/comentario" class="card p-3">
+    <label class="form-label fw-semibold">Adicionar comentário</label>
+    <textarea class="form-control" name="message" rows="3" required></textarea>
+    <div class="mt-2">
+      <button class="btn btn-primary" type="submit">Enviar</button>
+    </div>
+  </form>
+</div>
+{% endblock %}
+""",
+
+    "tasks_edit.html": r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <div class="d-flex justify-content-between align-items-start">
+    <div>
+      <h4 class="mb-1">Editar tarefa</h4>
+      <div class="muted">{{ task.title }}</div>
+    </div>
+    <a class="btn btn-outline-secondary" href="/tarefas/{{ task.id }}">Voltar</a>
+  </div>
+
+  <hr class="my-3"/>
+
+  <form method="post" action="/tarefas/{{ task.id }}/editar">
+    <div class="row g-3">
+      <div class="col-md-6">
+        <label class="form-label">Cliente</label>
+        <select class="form-select" name="client_id" required>
+          {% for c in clients %}
+            <option value="{{ c.id }}" {% if c.id==task.client_id %}selected{% endif %}>{{ c.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <div class="col-md-6">
+        <label class="form-label">Responsável (opcional)</label>
+        <select class="form-select" name="assignee_user_id">
+          <option value="">—</option>
+          {% for u in assignees %}
+            <option value="{{ u.id }}" {% if task.assignee_user_id==u.id %}selected{% endif %}>{{ u.name }} ({{ u.role }})</option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <div class="col-12">
+        <label class="form-label">Título</label>
+        <input class="form-control" name="title" value="{{ task.title }}" required />
+      </div>
+
+      <div class="col-12">
+        <label class="form-label">Descrição</label>
+        <textarea class="form-control" name="description" rows="4">{{ task.description }}</textarea>
+      </div>
+
+      <div class="col-md-4">
+        <label class="form-label">Status</label>
+        <select class="form-select" name="status">
+          <option value="nao_iniciada" {% if task.status=="nao_iniciada" %}selected{% endif %}>nao_iniciada</option>
+          <option value="em_andamento" {% if task.status=="em_andamento" %}selected{% endif %}>em_andamento</option>
+          <option value="concluida" {% if task.status=="concluida" %}selected{% endif %}>concluida</option>
+        </select>
+      </div>
+
+      <div class="col-md-4">
+        <label class="form-label">Prioridade</label>
+        <select class="form-select" name="priority">
+          <option value="baixa" {% if task.priority=="baixa" %}selected{% endif %}>baixa</option>
+          <option value="media" {% if task.priority=="media" %}selected{% endif %}>media</option>
+          <option value="alta" {% if task.priority=="alta" %}selected{% endif %}>alta</option>
+        </select>
+      </div>
+
+      <div class="col-md-4">
+        <label class="form-label">Prazo (DD/MM/AAAA)</label>
+        <input class="form-control mono" name="due_date" value="{{ task.due_date }}" />
+      </div>
+
+      <div class="col-md-6">
+        <div class="form-check mt-4">
+          <input class="form-check-input" type="checkbox" name="visible_to_client" value="1" id="vis" {% if task.visible_to_client %}checked{% endif %}>
+          <label class="form-check-label" for="vis">Visível ao cliente</label>
+        </div>
+      </div>
+
+      <div class="col-md-6">
+        <div class="form-check mt-4">
+          <input class="form-check-input" type="checkbox" name="client_action" value="1" id="ca" {% if task.client_action %}checked{% endif %}>
+          <label class="form-check-label" for="ca">Cliente pode concluir</label>
+        </div>
+      </div>
+    </div>
+
+    <div class="mt-4 d-flex gap-2">
+      <button class="btn btn-primary" type="submit">Salvar</button>
+      <a class="btn btn-outline-secondary" href="/tarefas/{{ task.id }}">Cancelar</a>
+    </div>
+  </form>
+</div>
+{% endblock %}
+""",
+})
+
+# ----------------------------
+# Perfil: templates (override + novos)
+# ----------------------------
+TEMPLATES.update({
+    "perfil.html": r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="row g-3">
+  <div class="col-lg-5">
+    <div class="card p-4">
+      <h4 class="mb-1">Meu Perfil</h4>
+      <div class="muted mb-3">Dados do usuário</div>
+      <div><span class="muted">Nome:</span> <b>{{ current_user.name }}</b></div>
+      <div><span class="muted">E-mail:</span> <span class="mono">{{ current_user.email }}</span></div>
+      <div><span class="muted">Role:</span> <b>{{ role }}</b></div>
+    </div>
+
+    {% if current_client %}
+      <div class="card p-4 mt-3">
+        <div class="d-flex justify-content-between align-items-start">
+          <div>
+            <h5 class="mb-1">Evolução</h5>
+            <div class="muted">Score 0–100 (processos + financeiro + NPS)</div>
+          </div>
+          <a class="btn btn-primary btn-sm" href="/perfil/avaliacao/nova">Nova avaliação</a>
+        </div>
+
+        {% if latest_score is not none %}
+          <div class="mt-3">
+            <div class="d-flex justify-content-between">
+              <div class="fw-semibold">Score atual</div>
+              <div class="fw-semibold">{{ "%.1f"|format(latest_score) }}</div>
+            </div>
+            {% if delta is not none %}
+              <div class="muted small">Variação vs. anterior: <b>{{ delta }}</b></div>
+            {% else %}
+              <div class="muted small">Ainda sem comparação (precisa de 2 avaliações).</div>
+            {% endif %}
+          </div>
+        {% else %}
+          <div class="alert alert-info mt-3">Nenhuma avaliação registrada ainda.</div>
+        {% endif %}
+      </div>
+    {% endif %}
+  </div>
+
+  <div class="col-lg-7">
+    <div class="card p-4">
+      <h4 class="mb-1">Indicadores do Cliente</h4>
+      <div class="muted mb-3">Faturamento, endividamento, caixa etc.</div>
+
+      {% if not current_client %}
+        <div class="alert alert-warning">Nenhum cliente selecionado/vinculado.</div>
+      {% else %}
+        <div class="mb-2"><span class="muted">Cliente:</span> <b>{{ current_client.name }}</b></div>
+
+        <form method="post" action="/perfil">
+          <div class="row g-3">
+            <div class="col-md-6">
+              <label class="form-label">Faturamento mensal (R$)</label>
+              <input class="form-control" name="revenue_monthly_brl" type="number" step="0.01" min="0"
+                     value="{{ current_client.revenue_monthly_brl }}" />
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">Endividamento total (R$)</label>
+              <input class="form-control" name="debt_total_brl" type="number" step="0.01" min="0"
+                     value="{{ current_client.debt_total_brl }}" />
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">Saldo em caixa (R$)</label>
+              <input class="form-control" name="cash_balance_brl" type="number" step="0.01" min="0"
+                     value="{{ current_client.cash_balance_brl }}" />
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">Funcionários</label>
+              <input class="form-control" name="employees_count" type="number" min="0"
+                     value="{{ current_client.employees_count }}" />
+            </div>
+          </div>
+          <div class="mt-4">
+            <button class="btn btn-primary">Salvar</button>
+            <a class="btn btn-outline-secondary" href="/empresa">Editar dados da empresa</a>
+            <a class="btn btn-outline-primary" href="/perfil/avaliacao/nova">Nova avaliação</a>
+          </div>
+        </form>
+
+        <hr class="my-4"/>
+        <h6 class="mb-2">Histórico de avaliações</h6>
+
+        {% if snapshots %}
+          <div class="table-responsive">
+            <table class="table table-sm align-middle">
+              <thead>
+                <tr>
+                  <th>Data</th>
+                  <th>Total</th>
+                  <th>Processos</th>
+                  <th>Financeiro</th>
+                  <th>NPS</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for s in snapshots %}
+                  <tr>
+                    <td class="mono">{{ s.created_at }}</td>
+                    <td><b>{{ "%.1f"|format(s.score_total) }}</b></td>
+                    <td>{{ "%.1f"|format(s.score_process) }}</td>
+                    <td>{{ "%.1f"|format(s.score_financial) }}</td>
+                    <td>{{ s.nps_score }}</td>
+                    <td><a class="btn btn-outline-secondary btn-sm" href="/perfil/avaliacao/{{ s.id }}">Ver</a></td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        {% else %}
+          <div class="muted">Sem avaliações ainda.</div>
+        {% endif %}
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endblock %}
+""",
+
+    "perfil_snapshot_new.html": r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <div class="d-flex justify-content-between align-items-center">
+    <div>
+      <h4 class="mb-0">Nova Avaliação do Cliente</h4>
+      <div class="muted">Registro detalhado do momento atual + score de evolução</div>
+    </div>
+    <a class="btn btn-outline-secondary" href="/perfil">Voltar</a>
+  </div>
+
+  <hr class="my-3"/>
+
+  {% if not current_client %}
+    <div class="alert alert-warning">Nenhum cliente selecionado.</div>
+  {% else %}
+    <div class="mb-2"><span class="muted">Cliente:</span> <b>{{ current_client.name }}</b></div>
+
+    <form method="post" action="/perfil/avaliacao/nova">
+      <h5 class="mt-3">Indicadores do momento</h5>
+      <div class="row g-3">
+        <div class="col-md-4">
+          <label class="form-label">Faturamento mensal (R$)</label>
+          <input class="form-control" name="revenue_monthly_brl" type="number" step="0.01" min="0" value="{{ current_client.revenue_monthly_brl }}" />
+        </div>
+        <div class="col-md-4">
+          <label class="form-label">Endividamento total (R$)</label>
+          <input class="form-control" name="debt_total_brl" type="number" step="0.01" min="0" value="{{ current_client.debt_total_brl }}" />
+        </div>
+        <div class="col-md-4">
+          <label class="form-label">Disponibilidades líquidas (R$)</label>
+          <input class="form-control" name="cash_balance_brl" type="number" step="0.01" value="{{ current_client.cash_balance_brl }}" />
+          <div class="form-text">Pode ficar negativo quando houver pressão imediata de caixa.</div>
+        </div>
+        <div class="col-md-4">
+          <label class="form-label">Funcionários</label>
+          <input class="form-control" name="employees_count" type="number" min="0" value="{{ current_client.employees_count }}" />
+        </div>
+        <div class="col-md-4">
+          <label class="form-label">NPS (0 a 10)</label>
+          <input class="form-control" name="nps_score" type="number" min="0" max="10" value="0" />
+          <div class="form-text">0 = nada provável recomendar / 10 = muito provável.</div>
+        </div>
+        <div class="col-md-4">
+          <label class="form-label">Contas bancárias / relacionamentos</label>
+          <input class="form-control" name="banks_count" type="number" min="0" value="{{ business_profile.banks_count if business_profile else 0 }}" />
+        </div>
+      </div>
+
+      <hr class="my-4"/>
+      <h5>Composição patrimonial detalhada</h5>
+      <div class="muted mb-3">Preencha os componentes. O sistema calcula automaticamente ativo total, passivo total e patrimônio líquido.</div>
+
+      <div class="row g-3">
+        <div class="col-12 mt-2"><div class="fw-semibold">Ativo circulante</div></div>
+        <div class="col-md-3">
+          <label class="form-label">Caixa e aplicações</label>
+          <input class="form-control" name="cash_and_investments_brl" type="number" step="0.01" value="{{ business_profile.cash_and_investments_brl if business_profile else current_client.cash_balance_brl }}" />
+        </div>
+        <div class="col-md-3">
+          <label class="form-label">Contas a receber até 360 dias</label>
+          <input class="form-control" name="receivables_brl" type="number" step="0.01" min="0" value="{{ business_profile.receivables_brl if business_profile else 0 }}" />
+        </div>
+        <div class="col-md-3">
+          <label class="form-label">Estoques</label>
+          <input class="form-control" name="inventory_brl" type="number" step="0.01" min="0" value="{{ business_profile.inventory_brl if business_profile else 0 }}" />
+        </div>
+        <div class="col-md-3">
+          <label class="form-label">Outros ativos circulantes</label>
+          <input class="form-control" name="other_current_assets_brl" type="number" step="0.01" min="0" value="{{ business_profile.other_current_assets_brl if business_profile else 0 }}" />
+        </div>
+
+        <div class="col-12 mt-2"><div class="fw-semibold">Ativo não circulante</div></div>
+        <div class="col-md-6">
+          <label class="form-label">Imobilizado</label>
+          <input class="form-control" name="immobilized_brl" type="number" step="0.01" min="0" value="{{ business_profile.immobilized_brl if business_profile else 0 }}" />
+        </div>
+        <div class="col-md-6">
+          <label class="form-label">Outros ativos não circulantes</label>
+          <input class="form-control" name="other_non_current_assets_brl" type="number" step="0.01" min="0" value="{{ business_profile.other_non_current_assets_brl if business_profile else 0 }}" />
+        </div>
+
+        <div class="col-12 mt-2"><div class="fw-semibold">Passivo circulante</div></div>
+        <div class="col-md-3">
+          <label class="form-label">Contas a pagar até 360 dias</label>
+          <input class="form-control" name="payables_360_brl" type="number" step="0.01" min="0" value="{{ business_profile.payables_360_brl if business_profile else 0 }}" />
+        </div>
+        <div class="col-md-3">
+          <label class="form-label">Dívida financeira CP</label>
+          <input class="form-control" name="short_term_debt_brl" type="number" step="0.01" min="0" value="{{ business_profile.short_term_debt_brl if business_profile else 0 }}" />
+        </div>
+        <div class="col-md-3">
+          <label class="form-label">Passivos fiscais CP</label>
+          <input class="form-control" name="tax_liabilities_brl" type="number" step="0.01" min="0" value="{{ business_profile.tax_liabilities_brl if business_profile else 0 }}" />
+        </div>
+        <div class="col-md-3">
+          <label class="form-label">Passivos trabalhistas CP</label>
+          <input class="form-control" name="labor_liabilities_brl" type="number" step="0.01" min="0" value="{{ business_profile.labor_liabilities_brl if business_profile else 0 }}" />
+        </div>
+        <div class="col-md-6">
+          <label class="form-label">Outros passivos circulantes</label>
+          <input class="form-control" name="other_current_liabilities_brl" type="number" step="0.01" min="0" value="{{ business_profile.other_current_liabilities_brl if business_profile else 0 }}" />
+        </div>
+
+        <div class="col-12 mt-2"><div class="fw-semibold">Passivo não circulante</div></div>
+        <div class="col-md-6">
+          <label class="form-label">Dívida financeira LP</label>
+          <input class="form-control" name="long_term_debt_brl" type="number" step="0.01" min="0" value="{{ business_profile.long_term_debt_brl if business_profile else 0 }}" />
+        </div>
+        <div class="col-md-6">
+          <label class="form-label">Outros passivos não circulantes</label>
+          <input class="form-control" name="other_non_current_liabilities_brl" type="number" step="0.01" min="0" value="{{ business_profile.other_non_current_liabilities_brl if business_profile else 0 }}" />
+        </div>
+
+        <div class="col-md-4">
+          <label class="form-label">Garantias disponíveis (R$)</label>
+          <input class="form-control" name="collateral_brl" type="number" step="0.01" min="0" value="{{ business_profile.collateral_brl if business_profile else 0 }}" />
+        </div>
+        <div class="col-md-4">
+          <label class="form-label">Inadimplência (R$)</label>
+          <input class="form-control" name="delinquency_brl" type="number" step="0.01" min="0" value="{{ business_profile.delinquency_brl if business_profile else 0 }}" />
+        </div>
+        <div class="col-md-4">
+          <label class="form-label">Crédito desejado (R$)</label>
+          <input class="form-control" name="desired_credit_brl" type="number" step="0.01" min="0" value="{{ business_profile.desired_credit_brl if business_profile else 0 }}" />
+        </div>
+      </div>
+
+      <hr class="my-4"/>
+      <h5>Processos (checklist)</h5>
+      <div class="muted mb-2">Marque o que já está implementado hoje.</div>
+
+      <div class="row g-2">
+        {% for q in survey %}
+          <div class="col-12">
+            <div class="form-check">
+              <input class="form-check-input" type="checkbox" name="{{ q.id }}" value="1" id="{{ q.id }}">
+              <label class="form-check-label" for="{{ q.id }}">{{ q.q }}</label>
+            </div>
+          </div>
+        {% endfor %}
+      </div>
+
+      <div class="col-12 mt-4">
+        <label class="form-label">Observações (opcional)</label>
+        <textarea class="form-control" name="notes" rows="3" placeholder="Contexto, mudanças recentes, dor principal..."></textarea>
+      </div>
+
+      <div class="mt-4 d-flex gap-2">
+        <button class="btn btn-primary" type="submit">Salvar avaliação</button>
+        <a class="btn btn-outline-secondary" href="/perfil">Cancelar</a>
+      </div>
+    </form>
+  {% endif %}
+</div>
+{% endblock %}
+""",
+
+    "perfil_snapshot_detail.html""perfil_snapshot_detail.html": r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <div class="d-flex justify-content-between align-items-start">
+    <div>
+      <h4 class="mb-1">Avaliação</h4>
+      <div class="muted">Cliente: <b>{{ client.name }}</b> • <span class="mono">{{ snap.created_at }}</span></div>
+    </div>
+    <a class="btn btn-outline-secondary" href="/perfil">Voltar</a>
+  </div>
+
+  <hr class="my-3"/>
+
+  <div class="row g-3">
+    <div class="col-md-4">
+      <div class="card p-3">
+        <div class="muted small">Score total</div>
+        <div class="fs-4 fw-bold">{{ "%.1f"|format(snap.score_total) }}</div>
+      </div>
+    </div>
+    <div class="col-md-4">
+      <div class="card p-3">
+        <div class="muted small">Processos</div>
+        <div class="fs-4 fw-bold">{{ "%.1f"|format(snap.score_process) }}</div>
+      </div>
+    </div>
+    <div class="col-md-4">
+      <div class="card p-3">
+        <div class="muted small">Financeiro</div>
+        <div class="fs-4 fw-bold">{{ "%.1f"|format(snap.score_financial) }}</div>
+      </div>
+    </div>
+  </div>
+
+  <hr class="my-3"/>
+
+  <h6>Números</h6>
+  <div class="row g-2">
+    <div class="col-md-3"><span class="muted">Faturamento:</span> R$ {{ "%.2f"|format(snap.revenue_monthly_brl) }}</div>
+    <div class="col-md-3"><span class="muted">Dívida:</span> R$ {{ "%.2f"|format(snap.debt_total_brl) }}</div>
+    <div class="col-md-3"><span class="muted">Caixa:</span> R$ {{ "%.2f"|format(snap.cash_balance_brl) }}</div>
+    <div class="col-md-3"><span class="muted">Funcionários:</span> {{ snap.employees_count }}</div>
+    <div class="col-md-3"><span class="muted">NPS:</span> {{ snap.nps_score }}</div>
+  </div>
+
+  {% if snap.notes %}
+    <hr class="my-3"/>
+    <h6>Observações</h6>
+    <pre>{{ snap.notes }}</pre>
+  {% endif %}
+
+  <hr class="my-3"/>
+  <h6>Checklist</h6>
+  <ul class="mb-0">
+    {% for q in survey %}
+      <li>
+        {% if answers.get(q.id) %}✅{% else %}⬜{% endif %}
+        {{ q.q }}
+      </li>
+    {% endfor %}
+  </ul>
+</div>
+{% endblock %}
+""",
+})
+
+TEMPLATES.update({
+    "crm_list.html": r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <div class="d-flex justify-content-between align-items-center">
+    <div>
+      <h4 class="mb-0">CRM (Negócios)</h4>
+      <div class="muted">Funil comercial</div>
+    </div>
+    {% if role in ["admin","equipe"] %}
+      <a class="btn btn-primary" href="/negocios/novo">Novo negócio</a>
+    {% endif %}
+  </div>
+
+  <hr class="my-3"/>
+
+  <form method="get" action="/negocios" class="row g-2 align-items-end mb-3">
+    <div class="col-md-4">
+      <label class="form-label">Cliente</label>
+      <select class="form-select" name="client_id">
+        <option value="0" {% if filter_client_id==0 %}selected{% endif %}>Todos</option>
+        {% for c in clients %}
+          <option value="{{ c.id }}" {% if filter_client_id==c.id %}selected{% endif %}>{{ c.name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-md-4">
+      <label class="form-label">Responsável</label>
+      <select class="form-select" name="owner_user_id">
+        <option value="0" {% if filter_owner_user_id==0 %}selected{% endif %}>Todos</option>
+        <option value="-1" {% if filter_owner_user_id==-1 %}selected{% endif %}>Sem responsável</option>
+        {% for u in owners %}
+          <option value="{{ u.id }}" {% if filter_owner_user_id==u.id %}selected{% endif %}>{{ u.name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-md-4">
+      <label class="form-label">Etapa</label>
+      <select class="form-select" name="stage">
+        <option value="" {% if not filter_stage %}selected{% endif %}>Todas</option>
+        {% for s in stages %}
+          <option value="{{ s.key }}" {% if filter_stage==s.key %}selected{% endif %}>{{ s.label }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-12 d-flex gap-2">
+      <button class="btn btn-outline-primary" type="submit">Filtrar</button>
+      <a class="btn btn-outline-secondary" href="/negocios">Limpar</a>
+    </div>
+  </form>
+
+  <div class="row g-3">
+    {% for col in columns %}
+      <div class="col-lg-4">
+        <div class="card p-3">
+          <div class="d-flex justify-content-between align-items-center">
+            <div class="fw-semibold">{{ col.label }}</div>
+            <span class="badge text-bg-light border">{{ col.count }}</span>
+          </div>
+          <hr class="my-2"/>
+          {% if col.deals %}
+            <div class="d-flex flex-column gap-2">
+              {% for d in col.deals %}
+                <a class="card p-3" href="/negocios/{{ d.id }}" style="border:1px solid rgba(0,0,0,.08); border-radius:14px;">
+                  <div class="fw-semibold">{{ d.title }}</div>
+                  <div class="muted small">{{ d.client_name }}{% if d.service_name %} • {{ d.service_name }}{% endif %}</div>
+                  <div class="muted small">
+                    {% if d.next_step_date %}Próx: {{ d.next_step_date }} • {% endif %}
+                    {% if d.owner_name %}Resp: {{ d.owner_name }}{% endif %}
+                  </div>
+                  {% if d.value_estimate_brl and d.value_estimate_brl>0 %}
+                    <div class="muted small">R$ {{ "%.2f"|format(d.value_estimate_brl) }}</div>
+                  {% endif %}
+                </a>
+              {% endfor %}
+            </div>
+          {% else %}
+            <div class="muted small">Sem negócios.</div>
+          {% endif %}
+        </div>
+      </div>
+    {% endfor %}
+  </div>
+</div>
+{% endblock %}
+""",
+
+    "crm_new.html": r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <h4>Novo Negócio</h4>
+  <div class="muted">Cadastre a oportunidade e acompanhe no funil.</div>
+
+  <form method="post" action="/negocios/novo" class="mt-3">
+    <div class="row g-3">
+      <div class="col-md-6">
+        <label class="form-label">Cliente (existente)</label>
+        <select class="form-select" name="client_id">
+          <option value="0">Selecionar (opcional)</option>
+          {% for c in clients %}
+            <option value="{{ c.id }}">{{ c.name }}</option>
+          {% endfor %}
+        </select>
+
+        <details class="mt-3">
+          <summary class="small">+ Criar cliente rápido (Lead)</summary>
+          <div class="row g-2 mt-2">
+            <div class="col-12">
+              <label class="form-label">Nome da empresa (Lead)</label>
+              <input class="form-control" name="new_client_name" placeholder="Ex: Empresa ABC Ltda" />
+              <div class="form-text">Se preencher aqui, o sistema cria o lead automaticamente.</div>
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">CNPJ (opcional)</label>
+              <input class="form-control" name="new_client_cnpj" placeholder="00.000.000/0000-00" />
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">E-mail (opcional)</label>
+              <input class="form-control" name="new_client_email" type="email" placeholder="contato@empresa.com" />
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">Telefone (opcional)</label>
+              <input class="form-control" name="new_client_phone" placeholder="(xx) xxxxx-xxxx" />
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">Observações (opcional)</label>
+              <input class="form-control" name="new_client_notes" placeholder="Origem do lead, contexto..." />
+            </div>
+          </div>
+        </details>
+      </div>
+      <div class="col-md-6">
+        <label class="form-label">Responsável</label>
+        <select class="form-select" name="owner_user_id">
+          <option value="0">Sem responsável</option>
+          {% for u in owners %}
+            <option value="{{ u.id }}">{{ u.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <div class="col-12">
+        <label class="form-label">Título</label>
+        <input class="form-control" name="title" required placeholder="Ex: Captação / Valuation / Turnaround..." />
+      </div>
+
+      <div class="col-md-6">
+        <label class="form-label">Serviço/Produto</label>
+        <select class="form-select" name="service_name" required>
+          <option value="">Selecione...</option>
+          {% for s in service_catalog %}
+            <option value="{{ s.name }}">{{ s.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <div class="col-md-6">
+        <label class="form-label">Etapa</label>
+        <select class="form-select" name="stage">
+          {% for s in stages %}
+            <option value="{{ s.key }}">{{ s.label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <div class="col-12">
+        <label class="form-label">Demanda inicial</label>
+        <textarea class="form-control" name="demand" rows="3"></textarea>
+      </div>
+
+      <div class="col-md-4">
+        <label class="form-label">Valor estimado (R$)</label>
+        <input class="form-control" type="number" step="0.01" min="0" name="value_estimate_brl" value="0" />
+      </div>
+      <div class="col-md-4">
+        <label class="form-label">Probabilidade (%)</label>
+        <input class="form-control" type="number" min="0" max="100" name="probability_pct" value="0" />
+      </div>
+      <div class="col-md-4">
+        <label class="form-label">Origem</label>
+        <input class="form-control" name="source" placeholder="Indicação, inbound, etc." />
+      </div>
+
+      <div class="col-md-8">
+        <label class="form-label">Próximo passo</label>
+        <input class="form-control" name="next_step" />
+      </div>
+      <div class="col-md-4">
+        <label class="form-label">Data do próximo passo</label>
+        <input class="form-control mono" name="next_step_date" placeholder="DD/MM/AAAA" />
+      </div>
+
+      <div class="col-12">
+        <label class="form-label">Notas internas</label>
+        <textarea class="form-control" name="notes" rows="3"></textarea>
+      </div>
+    </div>
+
+    <div class="mt-4 d-flex gap-2">
+      <button class="btn btn-primary" type="submit">Criar</button>
+      <a class="btn btn-outline-secondary" href="/negocios">Cancelar</a>
+    </div>
+  </form>
+</div>
+{% endblock %}
+""",
+
+    "crm_detail.html": r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <div class="d-flex justify-content-between align-items-start">
+    <div>
+      <h4 class="mb-1">{{ deal.title }}</h4>
+      <div class="muted">
+        Cliente: <b>{{ client.name }}</b>
+        {% if deal.service_name %} • Serviço: <b>{{ deal.service_name }}</b>{% endif %}
+      </div>
+      <div class="muted small mt-1">
+        Etapa: <b>{{ stage_label }}</b>
+        {% if owner_name %} • Responsável: <b>{{ owner_name }}</b>{% endif %}
+        {% if deal.next_step_date %} • Próx: <b>{{ deal.next_step_date }}</b>{% endif %}
+      </div>
+      {% if deal.value_estimate_brl and deal.value_estimate_brl>0 %}
+        <div class="muted small mt-1">Valor estimado: <b>R$ {{ "%.2f"|format(deal.value_estimate_brl) }}</b> • Prob.: <b>{{ deal.probability_pct }}%</b></div>
+      {% endif %}
+    </div>
+    <div class="d-flex gap-2">
+      <a class="btn btn-outline-secondary" href="/negocios">Voltar</a>
+      <a class="btn btn-outline-primary" href="/negocios/{{ deal.id }}/editar">Editar</a>
+    </div>
+  </div>
+
+  <hr class="my-3"/>
+
+  <div class="row g-3">
+    <div class="col-md-8">
+      <h6 class="mb-2">Demanda</h6>
+      <pre>{{ deal.demand or "—" }}</pre>
+
+      <h6 class="mt-4 mb-2">Notas internas</h6>
+      <pre>{{ deal.notes or "—" }}</pre>
+
+      <hr class="my-3"/>
+
+      <h6 class="mb-2">Timeline</h6>
+      {% if notes %}
+        <div class="list-group">
+          {% for n in notes %}
+            <div class="list-group-item">
+              <div class="small muted">{{ n.created_at }} • {{ n.author_name }}</div>
+              <div>{{ n.message }}</div>
+            </div>
+          {% endfor %}
+        </div>
+      {% else %}
+        <div class="muted">Sem notas.</div>
+      {% endif %}
+
+      <form method="post" action="/negocios/{{ deal.id }}/nota" class="mt-3">
+        <label class="form-label">Adicionar nota</label>
+        <textarea class="form-control" name="message" rows="3" required></textarea>
+        <button class="btn btn-primary mt-2" type="submit">Adicionar</button>
+      </form>
+    </div>
+
+    <div class="col-md-4">
+      <div class="card p-3">
+        <div class="fw-semibold mb-2">Ações</div>
+
+        <form method="post" action="/negocios/{{ deal.id }}/stage" class="mb-3">
+          <label class="form-label">Mover etapa</label>
+          <select class="form-select" name="stage">
+            {% for s in stages %}
+              <option value="{{ s.key }}" {% if deal.stage==s.key %}selected{% endif %}>{{ s.label }}</option>
+            {% endfor %}
+          </select>
+          <button class="btn btn-outline-primary w-100 mt-2">Atualizar</button>
+        </form>
+
+        <form method="post" action="/negocios/{{ deal.id }}/next" class="mb-3">
+          <label class="form-label">Próximo passo</label>
+          <input class="form-control mb-2" name="next_step" value="{{ deal.next_step }}" />
+          <input class="form-control mono" name="next_step_date" value="{{ deal.next_step_date }}" placeholder="DD/MM/AAAA" />
+          <button class="btn btn-outline-primary w-100 mt-2">Salvar</button>
+        </form>
+
+        {% if deal.proposal_id %}
+          <a class="btn btn-outline-secondary w-100 mb-2" href="/propostas/{{ deal.proposal_id }}">Abrir proposta</a>
+        {% else %}
+          <form method="post" action="/negocios/{{ deal.id }}/criar-proposta" class="mb-2">
+            <button class="btn btn-outline-secondary w-100">Criar proposta</button>
+          </form>
+        {% endif %}
+
+        {% if deal.consulting_project_id %}
+          <a class="btn btn-outline-secondary w-100 mb-2" href="/consultoria/{{ deal.consulting_project_id }}">Abrir projeto</a>
+        {% else %}
+          <form method="post" action="/negocios/{{ deal.id }}/criar-projeto" class="mb-2">
+            <button class="btn btn-outline-secondary w-100">Criar projeto (consultoria)</button>
+          </form>
+        {% endif %}
+
+        <hr class="my-2"/>
+
+        <form method="post" action="/negocios/{{ deal.id }}/excluir" onsubmit="return confirm('Excluir negócio?');">
+          <label class="form-label">Para excluir, digite EXCLUIR</label>
+          <input class="form-control" name="confirm" placeholder="EXCLUIR" />
+          <button class="btn btn-outline-danger w-100 mt-2" type="submit">Excluir</button>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+""",
+
+    "crm_edit.html": r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <div class="d-flex justify-content-between align-items-start">
+    <div>
+      <h4 class="mb-1">Editar Negócio</h4>
+      <div class="muted">{{ deal.title }}</div>
+    </div>
+    <a class="btn btn-outline-secondary" href="/negocios/{{ deal.id }}">Voltar</a>
+  </div>
+
+  <hr class="my-3"/>
+
+  <form method="post" action="/negocios/{{ deal.id }}/editar">
+    <div class="row g-3">
+      <div class="col-md-6">
+        <label class="form-label">Cliente</label>
+        <select class="form-select" name="client_id" required>
+          {% for c in clients %}
+            <option value="{{ c.id }}" {% if c.id==deal.client_id %}selected{% endif %}>{{ c.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-md-6">
+        <label class="form-label">Responsável</label>
+        <select class="form-select" name="owner_user_id">
+          <option value="0" {% if not deal.owner_user_id %}selected{% endif %}>Sem responsável</option>
+          {% for u in owners %}
+            <option value="{{ u.id }}" {% if deal.owner_user_id==u.id %}selected{% endif %}>{{ u.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <div class="col-12">
+        <label class="form-label">Título</label>
+        <input class="form-control" name="title" value="{{ deal.title }}" required />
+      </div>
+
+      <div class="col-md-6">
+        <label class="form-label">Serviço/Produto</label>
+        <select class="form-select" name="service_name" required>
+          <option value="">Selecione...</option>
+          {% for s in service_catalog %}
+            <option value="{{ s.name }}" {% if deal.service_name==s.name %}selected{% endif %}>{{ s.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <div class="col-md-6">
+        <label class="form-label">Etapa</label>
+        <select class="form-select" name="stage">
+          {% for s in stages %}
+            <option value="{{ s.key }}" {% if deal.stage==s.key %}selected{% endif %}>{{ s.label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <div class="col-12">
+        <label class="form-label">Demanda</label>
+        <textarea class="form-control" name="demand" rows="3">{{ deal.demand }}</textarea>
+      </div>
+
+      <div class="col-md-4">
+        <label class="form-label">Valor estimado (R$)</label>
+        <input class="form-control" type="number" step="0.01" min="0" name="value_estimate_brl" value="{{ deal.value_estimate_brl }}" />
+      </div>
+      <div class="col-md-4">
+        <label class="form-label">Probabilidade (%)</label>
+        <input class="form-control" type="number" min="0" max="100" name="probability_pct" value="{{ deal.probability_pct }}" />
+      </div>
+      <div class="col-md-4">
+        <label class="form-label">Origem</label>
+        <input class="form-control" name="source" value="{{ deal.source }}" />
+      </div>
+
+      <div class="col-md-8">
+        <label class="form-label">Próximo passo</label>
+        <input class="form-control" name="next_step" value="{{ deal.next_step }}" />
+      </div>
+      <div class="col-md-4">
+        <label class="form-label">Data do próximo passo</label>
+        <input class="form-control mono" name="next_step_date" value="{{ deal.next_step_date }}" placeholder="DD/MM/AAAA" />
+      </div>
+
+      <div class="col-12">
+        <label class="form-label">Notas internas</label>
+        <textarea class="form-control" name="notes" rows="3">{{ deal.notes }}</textarea>
+      </div>
+    </div>
+
+    <div class="mt-4 d-flex gap-2">
+      <button class="btn btn-primary" type="submit">Salvar</button>
+      <a class="btn btn-outline-secondary" href="/negocios/{{ deal.id }}">Cancelar</a>
+    </div>
+  </form>
+</div>
+{% endblock %}
+""",
+})
+
+# Extra templates: Meetings
+TEMPLATES.update({
+    "meetings_list.html": r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <div class="d-flex justify-content-between align-items-center flex-wrap gap-3">
+    <div>
+      <h4 class="mb-0">Reuniões</h4>
+      <div class="muted">Sincronização com Notion AI Meeting Notes</div>
+    </div>
+    {% if role in ["admin","equipe"] %}
+      <a class="btn btn-primary" href="/reunioes/nova">Nova reunião</a>
+    {% endif %}
+  </div>
+
+  <hr class="my-3"/>
+
+  {% if role in ["admin","equipe"] %}
+  <form method="get" action="/reunioes" class="row g-2 align-items-end mb-3">
+    <div class="col-md-6">
+      <label class="form-label">Cliente (filtro)</label>
+      <select class="form-select" name="client_id" onchange="this.form.submit()">
+        <option value="0" {% if filter_client_id==0 %}selected{% endif %}>Todos</option>
+        {% for c in clients %}
+          <option value="{{ c.id }}" {% if filter_client_id==c.id %}selected{% endif %}>{{ c.name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-md-6 d-flex gap-2">
+      {% if filter_client_id %}
+        <a class="btn btn-outline-secondary" href="/reunioes">Limpar filtro</a>
+      {% endif %}
+    </div>
+  </form>
+  {% endif %}
+
+  <div class="row g-3 mb-3">
+    <div class="col-md-4">
+      <div class="card p-3 h-100">
+        <div class="muted small">Reuniões listadas</div>
+        <div class="fw-semibold">{{ meetings|length }}</div>
+      </div>
+    </div>
+    <div class="col-md-4">
+      <div class="card p-3 h-100">
+        <div class="muted small">Em andamento</div>
+        <div class="fw-semibold">{{ meetings_in_progress }}</div>
+      </div>
+    </div>
+    <div class="col-md-4">
+      <div class="card p-3 h-100">
+        <div class="muted small">Tempo total</div>
+        <div class="fw-semibold">{{ human_duration_hours(meetings_total_hours) }}</div>
+      </div>
+    </div>
+  </div>
+
+  {% if meetings %}
+    <div class="list-group">
+      {% for m in meetings %}
+        <a class="list-group-item list-group-item-action" href="/reunioes/{{ m.id }}">
+          <div class="d-flex justify-content-between align-items-start gap-2">
+            <div>
+              <div class="fw-semibold">{{ m.title or "Reunião" }}</div>
+              <div class="muted small mt-1">
+                {% if role in ["admin","equipe"] %}Cliente: {{ m.client_name }} • {% endif %}
+                {% if m.meeting_date %}Data: {{ m.meeting_date|brdate }} • {% endif %}
+                {% if m.last_synced_at %}Sync: {{ m.last_synced_at|brdatetime }}{% endif %}
+              </div>
+              <div class="small mt-2 d-flex flex-wrap gap-2">
+                <span class="badge text-bg-light border">{{ m.notion_status or "—" }}</span>
+                <span class="badge text-bg-light border">{{ human_duration_hours(m.total_hours or 0) }}</span>
+                {% if m.in_progress %}
+                  <span class="badge text-bg-success">Em andamento</span>
+                {% endif %}
+                {% if m.has_client_notes %}
+                  <span class="badge text-bg-info">Anotação cliente</span>
+                {% endif %}
+              </div>
+            </div>
+          </div>
+        </a>
+      {% endfor %}
+    </div>
+  {% else %}
+    <div class="muted">Nenhuma reunião cadastrada.</div>
+  {% endif %}
+</div>
+{% endblock %}
+""",
+
+    "meetings_new.html": r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <div class="d-flex justify-content-between align-items-center">
+    <div>
+      <h4 class="mb-0">Nova Reunião</h4>
+      <div class="muted">Você pode criar a reunião sem Notion e vincular o link (ou ID) depois, quando quiser sincronizar.</div>
+    </div>
+    <a class="btn btn-outline-secondary" href="/reunioes">Voltar</a>
+  </div>
+
+  <hr class="my-3"/>
+
+  {% if not notion_enabled %}
+    <div class="alert alert-warning">
+      NOTION_TOKEN não configurado. Configure no Render/ambiente para usar sync.
+    </div>
+  {% endif %}
+
+  <form method="post" action="/reunioes/nova">
+    <div class="row g-3">
+      <div class="col-md-6">
+        <label class="form-label">Cliente</label>
+        <select class="form-select" name="client_id" required>
+          {% for c in clients %}
+            <option value="{{ c.id }}" {% if current_client and c.id==current_client.id %}selected{% endif %}>{{ c.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <div class="col-md-6">
+        <label class="form-label">Data (DD/MM/AAAA)</label>
+        <input class="form-control mono" name="meeting_date" placeholder="12/03/2026" />
+      </div>
+
+      <div class="col-12">
+        <label class="form-label">Link ou ID da página do Notion (opcional)</label>
+        <input class="form-control" name="notion_page" placeholder="https://www.notion.so/... ou 32-hex" />
+        <div class="form-text">Você pode criar a reunião sem esse vínculo e colar o link depois, na própria reunião. Se informar agora, a integração precisa ter acesso à página (Compartilhar → Conexões → sua integração).</div>
+      </div>
+
+      <div class="col-12">
+        <label class="form-label">Título (opcional)</label>
+        <input class="form-control" name="title" placeholder="Ex: Reunião de alinhamento" />
+      </div>
+
+      <div class="col-12 form-check">
+        <input class="form-check-input" type="checkbox" value="1" id="sync_now" name="sync_now" checked>
+        <label class="form-check-label" for="sync_now">Sincronizar agora</label>
+      </div>
+    </div>
+
+    <div class="mt-4 d-flex gap-2">
+      <button class="btn btn-primary" type="submit">Criar</button>
+      <a class="btn btn-outline-secondary" href="/reunioes">Cancelar</a>
+    </div>
+  </form>
+</div>
+{% endblock %}
+""",
+
+    "meetings_detail.html": r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <div class="d-flex justify-content-between align-items-start">
+    <div>
+      <h4 class="mb-1">{{ meeting.title or "Reunião" }}</h4>
+      <div class="muted">
+        {% if role in ["admin","equipe"] %}Cliente: <b>{{ client.name }}</b> • {% endif %}
+        {% if meeting.meeting_date %}Data: <b>{{ meeting.meeting_date }}</b> • {% endif %}
+        Status Notion: <b>{{ meeting.notion_status or "—" }}</b>
+      </div>
+      {% if meeting.notion_url %}
+        <div class="small mt-1"><a href="{{ meeting.notion_url }}" target="_blank" rel="noopener">Abrir no Notion</a></div>
+      {% endif %}
+      {% if meeting.last_synced_at %}
+        <div class="muted small mt-1">Última sincronização: {{ meeting.last_synced_at }}</div>
+      {% endif %}
+    </div>
+
+    <div class="d-flex gap-2">
+      <a class="btn btn-outline-secondary" href="/reunioes">Voltar</a>
+      {% if role in ["admin","equipe"] %}
+        <form method="post" action="/reunioes/{{ meeting.id }}/sync">
+          <button class="btn btn-outline-primary" type="submit">Sincronizar</button>
+        </form>
+      {% endif %}
+    </div>
+  </div>
+
+  {% if role in ["admin","equipe"] and meeting.action_items_text %}
+    <hr class="my-3"/>
+    <form method="post" action="/reunioes/{{ meeting.id }}/gerar_tarefas" class="card p-3">
+      <div class="fw-semibold mb-2">Gerar tarefas a partir de Action Items</div>
+      <div class="row g-2">
+        <div class="col-md-6">
+          <label class="form-label">Responsável (opcional)</label>
+          <select class="form-select" name="assignee_user_id">
+            <option value="0">Sem responsável</option>
+            {% for a in assignees %}
+              <option value="{{ a.id }}">{{ a.name }} ({{ a.role }})</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="col-md-6">
+          <label class="form-label">Visibilidade</label>
+          <select class="form-select" name="visible_to_client">
+            <option value="0">Interno</option>
+            <option value="1">Visível ao cliente</option>
+          </select>
+        </div>
+        <div class="col-12">
+          <button class="btn btn-primary" type="submit">Gerar tarefas</button>
+        </div>
+      </div>
+    </form>
+  {% endif %}
+
+  <hr class="my-3"/>
+
+  <div class="accordion" id="accM">
+    <div class="accordion-item">
+      <h2 class="accordion-header" id="hSum">
+        <button class="accordion-button" type="button" data-bs-toggle="collapse" data-bs-target="#cSum">Resumo</button>
+      </h2>
+      <div id="cSum" class="accordion-collapse collapse show" data-bs-parent="#accM">
+        <div class="accordion-body"><pre>{{ meeting.summary_text or "—" }}</pre></div>
+      </div>
+    </div>
+
+    <div class="accordion-item">
+      <h2 class="accordion-header" id="hAct">
+        <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#cAct">Action Items</button>
+      </h2>
+      <div id="cAct" class="accordion-collapse collapse" data-bs-parent="#accM">
+        <div class="accordion-body"><pre>{{ meeting.action_items_text or "—" }}</pre></div>
+      </div>
+    </div>
+
+    <div class="accordion-item">
+      <h2 class="accordion-header" id="hNotes">
+        <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#cNotes">Notas</button>
+      </h2>
+      <div id="cNotes" class="accordion-collapse collapse" data-bs-parent="#accM">
+        <div class="accordion-body"><pre>{{ meeting.notes_text or "—" }}</pre></div>
+      </div>
+    </div>
+
+    <div class="accordion-item">
+      <h2 class="accordion-header" id="hTr">
+        <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#cTr">Transcrição</button>
+      </h2>
+      <div id="cTr" class="accordion-collapse collapse" data-bs-parent="#accM">
+        <div class="accordion-body"><pre>{{ meeting.transcript_text or "—" }}</pre></div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+{% endblock %}
+""",
+})
+
+TEMPLATES.update({
+    "credit_list.html": r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <div class="d-flex justify-content-between align-items-center">
+    <div>
+      <h4 class="mb-0">Crédito (SCR)</h4>
+      <div class="muted">Consulta SCR Detalhada (Direct Data) + autorização LGPD</div>
+    </div>
+  </div>
+
+  <hr class="my-3"/>
+
+  {% if not current_client %}
+    <div class="alert alert-warning mb-0">
+      Selecione um cliente para usar o módulo de crédito.
+    </div>
+  {% else %}
+    <div class="mb-3">
+      <span class="muted">Cliente:</span> <b>{{ current_client.name }}</b>
+      {% if current_client.cnpj %}<span class="muted ms-2">CNPJ:</span> <span class="mono">{{ current_client.cnpj }}</span>{% endif %}
+    </div>
+
+    <div class="card p-3 mb-4">
+      <div class="fw-semibold mb-1">Autorização (LGPD)</div>
+      <div class="muted mb-2">Anexe o termo/autorização do cliente antes de consultar o SCR.</div>
+<div class="mt-2">
+  <div class="d-flex flex-wrap gap-2 align-items-center">
+    {% if role in ["admin","equipe"] %}
+      <form method="post" action="/credito/consent_link">
+        <button class="btn btn-outline-primary btn-sm">Gerar link de aceite (sem OTP)</button>
+      </form>
+    {% endif %}
+    {% if consent_link_url %}
+      <div class="small">
+        <div class="muted">Link de aceite:</div>
+        <div class="d-flex gap-2 align-items-center">
+          <input class="form-control form-control-sm mono" style="min-width: 320px;" readonly value="{{ consent_link_url }}"/>
+          <button class="btn btn-outline-secondary btn-sm" type="button" onclick="navigator.clipboard.writeText('{{ consent_link_url }}')">Copiar</button>
+        </div>
+      </div>
+    {% endif %}
+  </div>
+</div>
+
+
+      {% if consent and consent.status == "valida" %}
+        <div class="small">
+          <div><span class="muted">Assinado por:</span> {{ consent.signed_by_name or "—" }}</div>
+          <div><span class="muted">Data:</span> {{ consent.signed_at }}</div>
+          <div><span class="muted">Válido até:</span> {{ consent.expires_at }}</div>
+        </div>
+        {% if consent_file %}
+          <div class="mt-2">
+            <a class="btn btn-outline-primary btn-sm" href="/download/{{ consent_file.id }}">Baixar autorização</a>
+          </div>
+        {% endif %}
+      {% elif consent and consent.status == "pendente" %}
+        <div class="alert alert-info mb-0">Aguardando aceite eletrônico do cliente. Você pode reenviar o link acima.</div>
+      {% else %}
+        <form method="post" action="/credito/consent" enctype="multipart/form-data" class="mt-2">
+          <div class="row g-2">
+            <div class="col-md-6">
+              <label class="form-label">Nome do signatário</label>
+              <input class="form-control" name="signed_by_name" required />
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">Documento do signatário (CPF/CNPJ)</label>
+              <input class="form-control mono" name="signed_by_document" />
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">Data da assinatura</label>
+              <input class="form-control mono" name="signed_at" placeholder="DD/MM/AAAA" />
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">Arquivo (PDF/Imagem)</label>
+              <input class="form-control" type="file" name="file" required />
+            </div>
+            <div class="col-12">
+              <label class="form-label">Observações</label>
+              <input class="form-control" name="notes" placeholder="Origem, contexto, etc." />
+            </div>
+          </div>
+          <div class="mt-3">
+            <button class="btn btn-primary">Enviar autorização</button>
+          </div>
+        </form>
+      {% endif %}
+    </div>
+
+    {% if role in ["admin","equipe"] %}
+      <div class="card p-3 mb-4">
+        <div class="fw-semibold mb-2">Consulta SCR</div>
+
+        {% if not consent or consent.status != "valida" %}
+          <div class="alert alert-warning mb-0">Envie uma autorização válida (PDF) ou obtenha o aceite eletrônico para habilitar a consulta.</div>
+        {% else %}
+          <form method="post" action="/credito/consultar" class="row g-2 align-items-end">
+            <div class="col-md-3">
+              <label class="form-label">Tipo</label>
+              <select class="form-select" name="document_type">
+                <option value="cnpj" selected>CNPJ</option>
+                <option value="cpf">CPF</option>
+              </select>
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">Documento (sem formatação)</label>
+              <input class="form-control mono" name="document_value" value="{{ current_client.cnpj }}" placeholder="CNPJ/CPF" />
+            </div>
+            <div class="col-md-3">
+              <button class="btn btn-primary w-100">Consultar</button>
+            </div>
+          </form>
+          <div class="muted small mt-2">A consulta usa modo assíncrono (poll) para evitar timeouts.</div>
+        {% endif %}
+      </div>
+    {% endif %}
+
+    <div class="fw-semibold mb-2">Histórico</div>
+    {% if reports|length == 0 %}
+      <div class="muted">Nenhuma consulta ainda.</div>
+    {% else %}
+      <div class="table-responsive">
+        <table class="table align-middle">
+          <thead>
+            <tr>
+              <th>Data</th>
+              <th>Status</th>
+              <th>Potencial</th>
+              <th>Total (R$)</th>
+              <th>Vencido (R$)</th>
+              <th>Inst.</th>
+              <th>Score</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+          {% for r in reports %}
+            <tr>
+              <td class="small mono">{{ r.created_at }}</td>
+              <td><span class="badge text-bg-secondary">{{ r.status }}</span></td>
+              <td><span class="badge text-bg-{% if r.potential_label=='alto' %}danger{% elif r.potential_label=='medio' %}warning{% else %}success{% endif %}">{{ r.potential_label }}</span></td>
+              <td class="mono">{{ '%.2f'|format(r.carteira_total_brl) }}</td>
+              <td class="mono">{{ '%.2f'|format(r.carteira_vencido_brl) }}</td>
+              <td class="mono">{{ r.quantidade_instituicoes }}</td>
+              <td>{{ r.score }}</td>
+              <td class="text-end">
+                <a class="btn btn-outline-primary btn-sm" href="/credito/{{ r.id }}">Abrir</a>
+                {% if role in ["admin","equipe"] and r.status == "processing" %}
+                  <form method="post" action="/credito/{{ r.id }}/atualizar" class="d-inline">
+                    <button class="btn btn-outline-secondary btn-sm">Atualizar</button>
+                  </form>
+                {% endif %}
+              </td>
+            </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% endif %}
+
+  {% endif %}
+</div>
+{% endblock %}
+""",
+    "credit_report_detail.html": r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <div class="d-flex justify-content-between align-items-start">
+    <div>
+      <h4 class="mb-1">Relatório SCR</h4>
+      <div class="muted">Consulta #{{ report.id }} • {{ report.provider }}</div>
+    </div>
+    <a class="btn btn-outline-secondary" href="/credito">Voltar</a>
+  </div>
+
+  <hr class="my-3"/>
+
+  <div class="row g-3">
+    <div class="col-md-3">
+      <div class="muted small">Status</div>
+      <div><span class="badge text-bg-secondary">{{ report.status }}</span></div>
+    </div>
+    <div class="col-md-3">
+      <div class="muted small">Potencial</div>
+      <div><span class="badge text-bg-{% if report.potential_label=='alto' %}danger{% elif report.potential_label=='medio' %}warning{% else %}success{% endif %}">{{ report.potential_label }}</span> <span class="muted">({{ report.potential_score }})</span></div>
+    </div>
+    <div class="col-md-3">
+      <div class="muted small">Score / Risco</div>
+      <div>{{ report.score }} • {{ report.faixa_risco }}</div>
+    </div>
+    <div class="col-md-3">
+      <div class="muted small">Instituições / Operações</div>
+      <div>{{ report.quantidade_instituicoes }} / {{ report.quantidade_operacoes }}</div>
+    </div>
+
+    <div class="col-md-3">
+      <div class="muted small">Carteira total (R$)</div>
+      <div class="mono">{{ '%.2f'|format(report.carteira_total_brl) }}</div>
+    </div>
+    <div class="col-md-3">
+      <div class="muted small">A vencer (R$)</div>
+      <div class="mono">{{ '%.2f'|format(report.carteira_vencer_brl) }}</div>
+    </div>
+    <div class="col-md-3">
+      <div class="muted small">Vencido (R$)</div>
+      <div class="mono">{{ '%.2f'|format(report.carteira_vencido_brl) }}</div>
+    </div>
+    <div class="col-md-3">
+      <div class="muted small">Prejuízo (R$)</div>
+      <div class="mono">{{ '%.2f'|format(report.carteira_prejuizo_brl) }}</div>
+    </div>
+
+    {% if report.message %}
+    <div class="col-12">
+      <div class="alert alert-info mb-0">{{ report.message }}</div>
+    </div>
+    {% endif %}
+  </div>
+
+  {% if role in ["admin","equipe"] %}
+    <div class="mt-4 d-flex gap-2 flex-wrap">
+      {% if report.status == "processing" %}
+        <form method="post" action="/credito/{{ report.id }}/atualizar">
+          <button class="btn btn-outline-secondary">Atualizar</button>
+        </form>
+      {% endif %}
+      {% if report.status == "done" %}
+        <form method="post" action="/credito/{{ report.id }}/criar_negocio">
+          <button class="btn btn-primary">Criar negócio no CRM</button>
+        </form>
+        <form method="post" action="/credito/{{ report.id }}/gerar_tarefas">
+          <button class="btn btn-outline-primary">Gerar tarefas</button>
+        </form>
+      {% endif %}
+    </div>
+  {% endif %}
+
+  {% if report.raw_json %}
+    <hr class="my-4"/>
+    <details>
+      <summary class="small">Ver JSON completo</summary>
+      <pre class="mt-2" style="max-height: 420px; overflow:auto;"><code>{{ report.raw_json }}</code></pre>
+    </details>
+  {% endif %}
+</div>
+{% endblock %}
+""",
+})
+
+TEMPLATES.update({
+    "consent_accept.html": r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <h4 class="mb-1">Autorização (LGPD / SCR)</h4>
+  <div class="muted">Aceite eletrônico para consulta de crédito (SCR) e tratamento de dados.</div>
+
+  <hr class="my-3"/>
+
+  <div class="mb-3">
+    <div><span class="muted">Empresa:</span> <b>{{ company.name }}</b></div>
+    <div><span class="muted">Cliente:</span> <b>{{ client.name }}</b></div>
+    {% if client.cnpj %}<div><span class="muted">Documento:</span> <span class="mono">{{ client.cnpj }}</span></div>{% endif %}
+  </div>
+
+  <div class="border rounded p-3 bg-light">
+    {{ terms_html|safe }}
+  </div>
+
+  <form method="post" class="mt-3">
+    <div class="form-check">
+      <input class="form-check-input" type="checkbox" value="1" id="agree" name="agree" required>
+      <label class="form-check-label" for="agree">
+        Li e concordo com o termo acima e autorizo a consulta.
+      </label>
+    </div>
+
+    <div class="row g-2 mt-2">
+      <div class="col-md-6">
+        <label class="form-label">Confirme seu nome (opcional)</label>
+        <input class="form-control" name="signed_by_name" value="{{ client.name }}" />
+      </div>
+      <div class="col-md-6">
+        <label class="form-label">Confirme os 4 últimos dígitos do documento (opcional)</label>
+        <input class="form-control mono" name="doc_last4" maxlength="4" placeholder="0000" />
+      </div>
+    </div>
+
+    <div class="mt-3 d-flex gap-2">
+      <button class="btn btn-primary">Aceitar</button>
+    </div>
+
+    <div class="muted small mt-3">
+      Ao aceitar, registraremos evidências do aceite (data/hora, IP, navegador) e manteremos a autorização pelo prazo aplicável.
+    </div>
+  </form>
+</div>
+{% endblock %}
+""",
+
+    "invite_signup.html": r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="container py-4">
+  <div class="card p-4">
+    <h4 class="mb-1">Criar acesso do cliente</h4>
+    <div class="muted mb-3">
+      Você foi convidado(a) para acessar a plataforma.
+      <div class="small mt-1">Empresa: <b>{{ company.name }}</b> • Cliente: <b>{{ client.name }}</b></div>
+    </div>
+
+    {% if error %}
+      <div class="alert alert-danger">{{ error }}</div>
+    {% endif %}
+
+    <form method="post" action="/convite/{{ token }}">
+      <div class="row g-2">
+        <div class="col-md-6">
+          <label class="form-label">Seu nome</label>
+          <input class="form-control" name="name" value="{{ form.name or '' }}" required/>
+        </div>
+        <div class="col-md-6">
+          <label class="form-label">E-mail</label>
+          <input class="form-control" name="email" type="email" value="{{ form.email or invited_email or '' }}" required/>
+        </div>
+
+        <div class="col-md-6">
+          <label class="form-label">Senha</label>
+          <input class="form-control" name="password" type="password" minlength="8" required/>
+          <div class="muted small mt-1">Mínimo 8 caracteres.</div>
+        </div>
+        <div class="col-md-6">
+          <label class="form-label">Confirmar senha</label>
+          <input class="form-control" name="password2" type="password" minlength="8" required/>
+        </div>
+
+        {% if require_last4 %}
+          <div class="col-md-6">
+            <label class="form-label">Últimos 4 dígitos do CNPJ/CPF</label>
+            <input class="form-control" name="doc_last4" inputmode="numeric" maxlength="4" placeholder="0000" required/>
+            <div class="muted small mt-1">Usamos isso para reduzir fraudes (sem OTP).</div>
+          </div>
+        {% endif %}
+
+        <div class="col-12 mt-2">
+          <div class="form-check">
+            <input class="form-check-input" type="checkbox" name="accept" id="accept" required/>
+            <label class="form-check-label" for="accept">
+              Li e aceito os termos de uso e a política de privacidade.
+            </label>
+          </div>
+        </div>
+        <div class="col-12 mt-3">
+          <hr class="my-3"/>
+          <h6 class="mb-2">Autorização para consulta ao SCR (Bacen)</h6>
+          <div class="muted small mb-2">
+            Para concluir o cadastro, precisamos do seu aceite eletrônico para consulta de crédito e tratamento de dados conforme termo abaixo.
+          </div>
+
+          <div class="border rounded p-3 bg-light" style="max-height: 260px; overflow: auto;">
+            {{ consent_terms_html|safe }}
+          </div>
+
+          <div class="form-check mt-2">
+            <input class="form-check-input" type="checkbox" name="scr_accept" id="scr_accept" required/>
+            <label class="form-check-label" for="scr_accept">
+              Li o termo acima e autorizo a consulta ao SCR (Bacen) e o tratamento de dados para análise de crédito.
+            </label>
+          </div>
+
+          <div class="muted small mt-2">
+            Registraremos evidências do aceite (data/hora, IP e navegador) para fins de auditoria.
+          </div>
+        </div>
+      </div>
+
+      <button class="btn btn-primary mt-3">Criar acesso</button>
+    </form>
+
+    <div class="muted small mt-3">
+      Se este convite não foi solicitado por você, feche esta página.
+    </div>
+  </div>
+</div>
+{% endblock %}
+""",
+
+    "success.html": r"""{% extends "base.html" %}
+{% block content %}
+<div class="container py-4">
+  <div class="card p-4">
+    <div class="d-flex align-items-center gap-2 mb-2">
+      <span class="badge bg-success">OK</span>
+      <div class="fw-semibold">Confirmação</div>
+    </div>
+    <div class="muted">{{ message or "Operação concluída." }}</div>
+    <div class="muted small mt-3">Você pode fechar esta página.</div>
+  </div>
+</div>
+{% endblock %}
+""",
+})
+
+TEMPLATES.update({
+    "office_finance_dashboard.html": r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <div class="d-flex justify-content-between align-items-start flex-wrap gap-2">
+    <div>
+      <h4 class="mb-0">Financeiro Interno do Escritório</h4>
+      <div class="muted">Contas a pagar, contas a receber e cadastros internos do escritório.</div>
+    </div>
+    <div class="d-flex gap-2 flex-wrap">
+      <a class="btn btn-outline-secondary" href="/admin/financeiro/cadastros">Cadastros</a>
+      <a class="btn btn-outline-primary" href="/admin/financeiro/dre">DRE</a>
+      <a class="btn btn-outline-primary" href="/admin/financeiro/fluxo-caixa">Fluxo de caixa</a>
+      <a class="btn btn-primary" href="/admin/financeiro/novo">Novo lançamento</a>
+    </div>
+  </div>
+
+  <form class="row g-2 mt-2" method="get" action="/admin/financeiro">
+    <div class="col-md-3">
+      <input class="form-control" name="q" value="{{ filters.q }}" placeholder="Buscar descrição, documento, cliente..." />
+    </div>
+    <div class="col-md-2">
+      <select class="form-select" name="entry_kind">
+        <option value="">Tipo</option>
+        <option value="receber" {% if filters.entry_kind == "receber" %}selected{% endif %}>Receber</option>
+        <option value="pagar" {% if filters.entry_kind == "pagar" %}selected{% endif %}>Pagar</option>
+      </select>
+    </div>
+    <div class="col-md-2">
+      <select class="form-select" name="status">
+        <option value="">Status</option>
+        {% for st in statuses %}
+          <option value="{{ st }}" {% if filters.status == st %}selected{% endif %}>{{ st|capitalize }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-md-2">
+      <input class="form-control" type="month" name="month" value="{{ filters.month }}" />
+    </div>
+    <div class="col-md-2">
+      <select class="form-select" name="client_id">
+        <option value="">Todos os clientes</option>
+        {% for c in clients %}
+          <option value="{{ c.id }}" {% if filters.client_id == (c.id|string) %}selected{% endif %}>{{ c.name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-md-1 d-grid">
+      <button class="btn btn-outline-primary">Filtrar</button>
+    </div>
+  </form>
+
+  <div class="row g-3 mt-2">
+    <div class="col-md-3"><div class="border rounded p-3 h-100"><div class="muted small">Receber em aberto</div><div class="fw-semibold">{{ summary.open_receivables|brl }}</div></div></div>
+    <div class="col-md-3"><div class="border rounded p-3 h-100"><div class="muted small">Pagar em aberto</div><div class="fw-semibold">{{ summary.open_payables|brl }}</div></div></div>
+    <div class="col-md-3"><div class="border rounded p-3 h-100"><div class="muted small">Saldo projetado 30 dias</div><div class="fw-semibold">{{ summary.projected_30d|brl }}</div></div></div>
+    <div class="col-md-3"><div class="border rounded p-3 h-100"><div class="muted small">Lançamentos filtrados</div><div class="fw-semibold">{{ summary.filtered_count }}</div></div></div>
+  </div>
+
+  <div class="alert alert-light border mt-3 mb-0">
+    <div class="fw-semibold mb-1">Financeiro interno</div>
+    <div class="small muted">Base operacional implantada com DRE gerencial e fluxo de caixa previsto/realizado. Use os filtros e os botões acima para navegar entre lançamentos, DRE e fluxo.</div>
+  </div>
+</div>
+
+<div class="card p-4 mt-3">
+  <div class="d-flex justify-content-between align-items-center">
+    <h5 class="mb-0">Lançamentos</h5>
+    <div class="muted small">{{ rows|length }} item(ns)</div>
+  </div>
+  {% if rows %}
+    <div class="table-responsive mt-3">
+      <table class="table align-middle">
+        <thead>
+          <tr>
+            <th>Tipo</th>
+            <th>Descrição</th>
+            <th>Cliente / Fornecedor</th>
+            <th>Categoria</th>
+            <th>Centro de custo</th>
+            <th>Vencimento</th>
+            <th>Status</th>
+            <th class="text-end">Previsto</th>
+            <th class="text-end">Realizado</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in rows %}
+            <tr>
+              <td><span class="badge {% if row.entry_kind == 'receber' %}text-bg-success{% else %}text-bg-secondary{% endif %}">{{ row.entry_kind }}</span></td>
+              <td>
+                <div class="fw-semibold">{{ row.description }}</div>
+                <div class="muted small">
+                  {% if row.document_number %}Doc: {{ row.document_number }} • {% endif %}
+                  Competência: {{ row.competence_date or "—" }}
+                </div>
+              </td>
+              <td>{{ row.counterparty_name or "—" }}</td>
+              <td>{{ row.category_name or "—" }}</td>
+              <td>{{ row.cost_center_name or "—" }}</td>
+              <td>{{ row.due_date or "—" }}</td>
+              <td><span class="badge text-bg-light border">{{ row.status }}</span></td>
+              <td class="text-end">{{ row.amount_expected_brl|brl }}</td>
+              <td class="text-end">{{ row.amount_realized_brl|brl }}</td>
+              <td class="text-end"><a class="btn btn-sm btn-outline-primary" href="/admin/financeiro/{{ row.id }}/editar">Editar</a></td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <div class="muted mt-3">Nenhum lançamento encontrado para os filtros informados.</div>
+  {% endif %}
+</div>
+{% endblock %}
+""",
+    "office_finance_form.html": r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
+    <div>
+      <h4 class="mb-0">{{ "Editar lançamento" if entry else "Novo lançamento" }}</h4>
+      <div class="muted">Use receber para receitas do escritório e pagar para despesas operacionais.</div>
+    </div>
+    <a class="btn btn-outline-secondary" href="/admin/financeiro">Voltar</a>
+  </div>
+
+  <form method="post" class="row g-3 mt-2">
+    <div class="col-md-3">
+      <label class="form-label">Tipo</label>
+      <select class="form-select" name="entry_kind" id="entry_kind" required>
+        <option value="receber" {% if form.entry_kind == "receber" %}selected{% endif %}>Receber</option>
+        <option value="pagar" {% if form.entry_kind == "pagar" %}selected{% endif %}>Pagar</option>
+      </select>
+    </div>
+    <div class="col-md-3">
+      <label class="form-label">Status</label>
+      <select class="form-select" name="status" required>
+        {% for st in statuses %}
+          <option value="{{ st }}" {% if form.status == st %}selected{% endif %}>{{ st|capitalize }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-md-3">
+      <label class="form-label">Valor previsto (R$)</label>
+      <input class="form-control" type="text" name="amount_expected_brl" value="{{ form.amount_expected_brl }}" required />
+    </div>
+    <div class="col-md-3">
+      <label class="form-label">Valor realizado (R$)</label>
+      <input class="form-control" type="text" name="amount_realized_brl" value="{{ form.amount_realized_brl }}" />
+    </div>
+
+    <div class="col-md-8">
+      <label class="form-label">Descrição</label>
+      <input class="form-control" name="description" value="{{ form.description }}" required />
+    </div>
+    <div class="col-md-4">
+      <label class="form-label">Documento</label>
+      <input class="form-control" name="document_number" value="{{ form.document_number }}" />
+    </div>
+
+    <div class="col-md-4 receivable-only">
+      <label class="form-label">Cliente</label>
+      <select class="form-select" name="client_id">
+        <option value="">Selecione</option>
+        {% for c in clients %}
+          <option value="{{ c.id }}" {% if form.client_id == (c.id|string) %}selected{% endif %}>{{ c.name }}</option>
+        {% endfor %}
+      </select>
+      <div class="small muted mt-1">Receita do escritório vinculada ao cliente.</div>
+    </div>
+    <div class="col-md-4 payable-only">
+      <label class="form-label">Fornecedor</label>
+      <select class="form-select" name="supplier_id">
+        <option value="">Selecione</option>
+        {% for s in suppliers %}
+          <option value="{{ s.id }}" {% if form.supplier_id == (s.id|string) %}selected{% endif %}>{{ s.name }}</option>
+        {% endfor %}
+      </select>
+      <div class="small muted mt-1">Use para contas a pagar.</div>
+    </div>
+    <div class="col-md-4">
+      <label class="form-label">Centro de custo</label>
+      <select class="form-select" name="cost_center_id">
+        <option value="">Selecione</option>
+        {% for item in cost_centers %}
+          <option value="{{ item.id }}" {% if form.cost_center_id == (item.id|string) %}selected{% endif %}>{{ item.code }} • {{ item.name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+
+    <div class="col-md-4">
+      <label class="form-label">Categoria</label>
+      <select class="form-select" name="category_id">
+        <option value="">Selecione</option>
+        {% for item in categories %}
+          <option value="{{ item.id }}" data-kind="{{ item.category_kind }}" {% if form.category_id == (item.id|string) %}selected{% endif %}>{{ item.name }} ({{ item.category_kind }})</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-md-4 receivable-only">
+      <label class="form-label">Tipo de receita</label>
+      <select class="form-select" name="revenue_type_id">
+        <option value="">Selecione</option>
+        {% for item in revenue_types %}
+          <option value="{{ item.id }}" {% if form.revenue_type_id == (item.id|string) %}selected{% endif %}>{{ item.name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-md-4 receivable-only">
+      <label class="form-label">Produto / serviço</label>
+      <select class="form-select" name="internal_service_id">
+        <option value="">Selecione</option>
+        {% for item in services %}
+          <option value="{{ item.id }}" data-family="{{ item.family_code }}" {% if form.internal_service_id == (item.id|string) %}selected{% endif %}>{{ item.name }}</option>
+        {% endfor %}
+      </select>
+      <div class="small muted mt-1">Ajuda a consolidar a receita por produto/família.</div>
+    </div>
+
+    <div class="col-md-3">
+      <label class="form-label">Competência</label>
+      <input class="form-control" type="date" name="competence_date" value="{{ form.competence_date }}" />
+    </div>
+    <div class="col-md-3">
+      <label class="form-label">Vencimento</label>
+      <input class="form-control" type="date" name="due_date" value="{{ form.due_date }}" />
+    </div>
+    <div class="col-md-3">
+      <label class="form-label">Pagamento / recebimento</label>
+      <input class="form-control" type="date" name="settlement_date" value="{{ form.settlement_date }}" />
+    </div>
+    <div class="col-md-3">
+      <label class="form-label">Conta bancária</label>
+      <select class="form-select" name="bank_account_id">
+        <option value="">Selecione</option>
+        {% for item in bank_accounts %}
+          <option value="{{ item.id }}" {% if form.bank_account_id == (item.id|string) %}selected{% endif %}>{{ item.name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+
+    <div class="col-12">
+      <label class="form-label">Observações</label>
+      <textarea class="form-control" name="notes" rows="4">{{ form.notes }}</textarea>
+    </div>
+
+    <div class="col-12 d-flex gap-2">
+      <button class="btn btn-primary">Salvar</button>
+      <a class="btn btn-outline-secondary" href="/admin/financeiro">Cancelar</a>
+    </div>
+  </form>
+</div>
+
+<script>
+(function() {
+  const kind = document.getElementById("entry_kind");
+  function refreshKind() {
+    const isReceivable = (kind && kind.value === "receber");
+    document.querySelectorAll(".receivable-only").forEach(el => {
+      el.style.display = isReceivable ? "" : "none";
+    });
+    document.querySelectorAll(".payable-only").forEach(el => {
+      el.style.display = isReceivable ? "none" : "";
+    });
+  }
+  if (kind) {
+    kind.addEventListener("change", refreshKind);
+    refreshKind();
+  }
+})();
+</script>
+{% endblock %}
+""",
+    "office_finance_registry.html": r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
+    <div>
+      <h4 class="mb-0">Cadastros do Financeiro Interno</h4>
+      <div class="muted">Base para contas a pagar, contas a receber e relatórios gerenciais.</div>
+    </div>
+    <a class="btn btn-outline-secondary" href="/admin/financeiro">Voltar ao financeiro</a>
+  </div>
+</div>
+
+<div class="row g-3 mt-1">
+  <div class="col-lg-6">
+    <div class="card p-4 h-100">
+      <h5>Fornecedores</h5>
+      <form method="post" action="/admin/financeiro/cadastros/fornecedores" class="row g-2 mt-1">
+        <div class="col-md-6"><input class="form-control" name="name" placeholder="Nome" required /></div>
+        <div class="col-md-6"><input class="form-control" name="document" placeholder="CNPJ/CPF" /></div>
+        <div class="col-md-6"><input class="form-control" name="email" placeholder="E-mail" /></div>
+        <div class="col-md-6"><input class="form-control" name="phone" placeholder="Telefone" /></div>
+        <div class="col-12"><textarea class="form-control" name="notes" rows="2" placeholder="Observações"></textarea></div>
+        <div class="col-12"><button class="btn btn-primary">Salvar fornecedor</button></div>
+      </form>
+      <hr />
+      <div class="small muted mb-2">{{ suppliers|length }} cadastrado(s)</div>
+      <div class="list-group">
+        {% for item in suppliers %}
+          <div class="list-group-item">
+            <div class="fw-semibold">{{ item.name }}</div>
+            <div class="muted small">{{ item.document or "Sem documento" }}{% if item.email %} • {{ item.email }}{% endif %}</div>
+          </div>
+        {% else %}
+          <div class="muted">Nenhum fornecedor cadastrado.</div>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+
+  <div class="col-lg-6">
+    <div class="card p-4 h-100">
+      <h5>Centros de custo</h5>
+      <form method="post" action="/admin/financeiro/cadastros/centros-custo" class="row g-2 mt-1">
+        <div class="col-md-4"><input class="form-control" name="code" placeholder="Código" required /></div>
+        <div class="col-md-8"><input class="form-control" name="name" placeholder="Nome" required /></div>
+        <div class="col-12"><textarea class="form-control" name="notes" rows="2" placeholder="Observações"></textarea></div>
+        <div class="col-12"><button class="btn btn-primary">Salvar centro</button></div>
+      </form>
+      <hr />
+      <div class="small muted mb-2">{{ cost_centers|length }} cadastrado(s)</div>
+      <div class="list-group">
+        {% for item in cost_centers %}
+          <div class="list-group-item">
+            <div class="fw-semibold">{{ item.code }} • {{ item.name }}</div>
+            <div class="muted small">{{ item.notes or "Sem observações" }}</div>
+          </div>
+        {% else %}
+          <div class="muted">Nenhum centro de custo cadastrado.</div>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+
+  <div class="col-lg-6">
+    <div class="card p-4 h-100">
+      <h5>Categorias</h5>
+      <form method="post" action="/admin/financeiro/cadastros/categorias" class="row g-2 mt-1">
+        <div class="col-md-6"><input class="form-control" name="name" placeholder="Nome" required /></div>
+        <div class="col-md-3">
+          <select class="form-select" name="category_kind">
+            <option value="receita">Receita</option>
+            <option value="despesa">Despesa</option>
+          </select>
+        </div>
+        <div class="col-md-3"><input class="form-control" name="dre_group" placeholder="Grupo DRE" /></div>
+        <div class="col-12"><textarea class="form-control" name="notes" rows="2" placeholder="Observações"></textarea></div>
+        <div class="col-12"><button class="btn btn-primary">Salvar categoria</button></div>
+      </form>
+      <hr />
+      <div class="small muted mb-2">{{ categories|length }} cadastrada(s)</div>
+      <div class="list-group">
+        {% for item in categories %}
+          <div class="list-group-item">
+            <div class="fw-semibold">{{ item.name }}</div>
+            <div class="muted small">{{ item.category_kind }} • {{ item.dre_group or "Sem grupo DRE" }}</div>
+          </div>
+        {% else %}
+          <div class="muted">Nenhuma categoria cadastrada.</div>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+
+  <div class="col-lg-6">
+    <div class="card p-4 h-100">
+      <h5>Tipos de receita</h5>
+      <form method="post" action="/admin/financeiro/cadastros/tipos-receita" class="row g-2 mt-1">
+        <div class="col-md-6"><input class="form-control" name="name" placeholder="Nome" required /></div>
+        <div class="col-md-6"><input class="form-control" name="description" placeholder="Descrição" /></div>
+        <div class="col-12"><button class="btn btn-primary">Salvar tipo de receita</button></div>
+      </form>
+      <hr />
+      <div class="small muted mb-2">{{ revenue_types|length }} cadastrado(s)</div>
+      <div class="list-group">
+        {% for item in revenue_types %}
+          <div class="list-group-item">
+            <div class="fw-semibold">{{ item.name }}</div>
+            <div class="muted small">{{ item.description or "Sem descrição" }}</div>
+          </div>
+        {% else %}
+          <div class="muted">Nenhum tipo de receita cadastrado.</div>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+
+  <div class="col-12">
+    <div class="card p-4">
+      <h5>Contas bancárias / caixa</h5>
+      <form method="post" action="/admin/financeiro/cadastros/contas" class="row g-2 mt-1">
+        <div class="col-md-3"><input class="form-control" name="name" placeholder="Nome da conta" required /></div>
+        <div class="col-md-3"><input class="form-control" name="bank_name" placeholder="Banco" /></div>
+        <div class="col-md-2"><input class="form-control" name="branch_number" placeholder="Agência" /></div>
+        <div class="col-md-2"><input class="form-control" name="account_number" placeholder="Conta" /></div>
+        <div class="col-md-2"><input class="form-control" name="initial_balance_brl" placeholder="Saldo inicial" /></div>
+        <div class="col-12"><textarea class="form-control" name="notes" rows="2" placeholder="Observações"></textarea></div>
+        <div class="col-12"><button class="btn btn-primary">Salvar conta</button></div>
+      </form>
+      <hr />
+      <div class="list-group">
+        {% for item in bank_accounts %}
+          <div class="list-group-item">
+            <div class="fw-semibold">{{ item.name }}</div>
+            <div class="muted small">{{ item.bank_name or "Banco não informado" }}{% if item.account_number %} • Conta {{ item.account_number }}{% endif %} • Saldo inicial {{ item.initial_balance_brl|brl }}</div>
+          </div>
+        {% else %}
+          <div class="muted">Nenhuma conta bancária cadastrada.</div>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+""",
+})
+
+TEMPLATES.update({
+    "office_finance_dre.html": r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <div class="d-flex justify-content-between align-items-start flex-wrap gap-2">
+    <div>
+      <h4 class="mb-0">DRE Gerencial</h4>
+      <div class="muted">Visão gerencial por competência com base nos lançamentos do Financeiro Interno.</div>
+    </div>
+    <div class="d-flex gap-2 flex-wrap">
+      <a class="btn btn-outline-secondary" href="/admin/financeiro">Voltar</a>
+      <a class="btn btn-outline-primary" href="/admin/financeiro/fluxo-caixa?month={{ filters.month }}{% if filters.client_id %}&client_id={{ filters.client_id }}{% endif %}{% if filters.cost_center_id %}&cost_center_id={{ filters.cost_center_id }}{% endif %}{% if filters.internal_service_id %}&internal_service_id={{ filters.internal_service_id }}{% endif %}{% if filters.family_code %}&family_code={{ filters.family_code }}{% endif %}">Ir para fluxo</a>
+    </div>
+  </div>
+
+  <form class="row g-2 mt-2" method="get" action="/admin/financeiro/dre">
+    <div class="col-md-2">
+      <label class="form-label">Mês</label>
+      <input class="form-control" type="month" name="month" value="{{ filters.month }}" />
+    </div>
+    <div class="col-md-3">
+      <label class="form-label">Cliente</label>
+      <select class="form-select" name="client_id">
+        <option value="">Todos</option>
+        {% for c in clients %}
+          <option value="{{ c.id }}" {% if filters.client_id == (c.id|string) %}selected{% endif %}>{{ c.name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-md-2">
+      <label class="form-label">Centro de custo</label>
+      <select class="form-select" name="cost_center_id">
+        <option value="">Todos</option>
+        {% for cc in cost_centers %}
+          <option value="{{ cc.id }}" {% if filters.cost_center_id == (cc.id|string) %}selected{% endif %}>{{ cc.code }} - {{ cc.name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-md-3">
+      <label class="form-label">Produto / serviço</label>
+      <select class="form-select" name="internal_service_id">
+        <option value="">Todos</option>
+        {% for svc in services %}
+          <option value="{{ svc.id }}" {% if filters.internal_service_id == (svc.id|string) %}selected{% endif %}>{{ svc.name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-md-2">
+      <label class="form-label">Família</label>
+      <select class="form-select" name="family_code">
+        <option value="">Todas</option>
+        {% for family in families %}
+          <option value="{{ family.code }}" {% if filters.family_code == family.code %}selected{% endif %}>{{ family.label }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-12 d-flex gap-2">
+      <button class="btn btn-outline-primary">Filtrar</button>
+      <a class="btn btn-outline-secondary" href="/admin/financeiro/dre">Limpar</a>
+    </div>
+  </form>
+
+  <div class="row g-3 mt-2">
+    <div class="col-md-3"><div class="border rounded p-3 h-100"><div class="muted small">Receita líquida</div><div class="fw-semibold">{{ summary.net_revenue_realized|brl }}</div><div class="small muted">Realizado</div></div></div>
+    <div class="col-md-3"><div class="border rounded p-3 h-100"><div class="muted small">EBITDA</div><div class="fw-semibold">{{ summary.ebitda_realized|brl }}</div><div class="small muted">Realizado</div></div></div>
+    <div class="col-md-3"><div class="border rounded p-3 h-100"><div class="muted small">Resultado do período</div><div class="fw-semibold">{{ summary.net_result_realized|brl }}</div><div class="small muted">Realizado</div></div></div>
+    <div class="col-md-3"><div class="border rounded p-3 h-100"><div class="muted small">Lançamentos considerados</div><div class="fw-semibold">{{ summary.entry_count }}</div><div class="small muted">No filtro atual</div></div></div>
+  </div>
+</div>
+
+<div class="card p-4 mt-3">
+  <div class="d-flex justify-content-between align-items-center">
+    <h5 class="mb-0">Demonstração do resultado</h5>
+    <div class="muted small">Competência {{ filters.month or "todos os períodos" }}</div>
+  </div>
+  <div class="table-responsive mt-3">
+    <table class="table align-middle">
+      <thead>
+        <tr>
+          <th>Grupo</th>
+          <th class="text-end">Previsto</th>
+          <th class="text-end">Realizado</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in rows %}
+          <tr class="{% if row.kind == 'result' %}table-light{% endif %}">
+            <td>
+              <div class="{% if row.kind == 'result' %}fw-semibold{% endif %}">{{ row.label }}</div>
+            </td>
+            <td class="text-end {% if row.kind == 'result' %}fw-semibold{% endif %}">{{ row.expected|brl }}</td>
+            <td class="text-end {% if row.kind == 'result' %}fw-semibold{% endif %}">{{ row.realized|brl }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}
+""",
+    "office_finance_cashflow.html": r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <div class="d-flex justify-content-between align-items-start flex-wrap gap-2">
+    <div>
+      <h4 class="mb-0">Fluxo de Caixa</h4>
+      <div class="muted">Previsto e realizado por data, calculado a partir dos lançamentos do Financeiro Interno.</div>
+    </div>
+    <div class="d-flex gap-2 flex-wrap">
+      <a class="btn btn-outline-secondary" href="/admin/financeiro">Voltar</a>
+      <a class="btn btn-outline-primary" href="/admin/financeiro/dre?month={{ filters.month }}{% if filters.client_id %}&client_id={{ filters.client_id }}{% endif %}{% if filters.cost_center_id %}&cost_center_id={{ filters.cost_center_id }}{% endif %}{% if filters.internal_service_id %}&internal_service_id={{ filters.internal_service_id }}{% endif %}{% if filters.family_code %}&family_code={{ filters.family_code }}{% endif %}">Ir para DRE</a>
+    </div>
+  </div>
+
+  <form class="row g-2 mt-2" method="get" action="/admin/financeiro/fluxo-caixa">
+    <div class="col-md-2">
+      <label class="form-label">Mês</label>
+      <input class="form-control" type="month" name="month" value="{{ filters.month }}" />
+    </div>
+    <div class="col-md-2">
+      <label class="form-label">Cliente</label>
+      <select class="form-select" name="client_id">
+        <option value="">Todos</option>
+        {% for c in clients %}
+          <option value="{{ c.id }}" {% if filters.client_id == (c.id|string) %}selected{% endif %}>{{ c.name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-md-2">
+      <label class="form-label">Centro de custo</label>
+      <select class="form-select" name="cost_center_id">
+        <option value="">Todos</option>
+        {% for cc in cost_centers %}
+          <option value="{{ cc.id }}" {% if filters.cost_center_id == (cc.id|string) %}selected{% endif %}>{{ cc.code }} - {{ cc.name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-md-2">
+      <label class="form-label">Produto / serviço</label>
+      <select class="form-select" name="internal_service_id">
+        <option value="">Todos</option>
+        {% for svc in services %}
+          <option value="{{ svc.id }}" {% if filters.internal_service_id == (svc.id|string) %}selected{% endif %}>{{ svc.name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-md-2">
+      <label class="form-label">Família</label>
+      <select class="form-select" name="family_code">
+        <option value="">Todas</option>
+        {% for family in families %}
+          <option value="{{ family.code }}" {% if filters.family_code == family.code %}selected{% endif %}>{{ family.label }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-md-2">
+      <label class="form-label">Conta bancária</label>
+      <select class="form-select" name="bank_account_id">
+        <option value="">Todas</option>
+        {% for acc in bank_accounts %}
+          <option value="{{ acc.id }}" {% if filters.bank_account_id == (acc.id|string) %}selected{% endif %}>{{ acc.name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-12 d-flex gap-2">
+      <button class="btn btn-outline-primary">Filtrar</button>
+      <a class="btn btn-outline-secondary" href="/admin/financeiro/fluxo-caixa">Limpar</a>
+    </div>
+  </form>
+
+  <div class="row g-3 mt-2">
+    <div class="col-md-3"><div class="border rounded p-3 h-100"><div class="muted small">Saldo inicial</div><div class="fw-semibold">{{ summary.initial_balance|brl }}</div></div></div>
+    <div class="col-md-3"><div class="border rounded p-3 h-100"><div class="muted small">Entradas previstas</div><div class="fw-semibold">{{ summary.projected_inflows|brl }}</div></div></div>
+    <div class="col-md-3"><div class="border rounded p-3 h-100"><div class="muted small">Saídas previstas</div><div class="fw-semibold">{{ summary.projected_outflows|brl }}</div></div></div>
+    <div class="col-md-3"><div class="border rounded p-3 h-100"><div class="muted small">Fechamento projetado</div><div class="fw-semibold">{{ summary.projected_ending_balance|brl }}</div></div></div>
+    <div class="col-md-3"><div class="border rounded p-3 h-100"><div class="muted small">Entradas realizadas</div><div class="fw-semibold">{{ summary.realized_inflows|brl }}</div></div></div>
+    <div class="col-md-3"><div class="border rounded p-3 h-100"><div class="muted small">Saídas realizadas</div><div class="fw-semibold">{{ summary.realized_outflows|brl }}</div></div></div>
+    <div class="col-md-3"><div class="border rounded p-3 h-100"><div class="muted small">Fechamento realizado</div><div class="fw-semibold">{{ summary.realized_ending_balance|brl }}</div></div></div>
+    <div class="col-md-3"><div class="border rounded p-3 h-100"><div class="muted small">Em atraso em aberto</div><div class="fw-semibold">{{ summary.overdue_open|brl }}</div></div></div>
+  </div>
+</div>
+
+<div class="card p-4 mt-3">
+  <div class="d-flex justify-content-between align-items-center">
+    <h5 class="mb-0">Movimentação do período</h5>
+    <div class="muted small">{{ rows|length }} dia(s) com movimento</div>
+  </div>
+  {% if rows %}
+    <div class="table-responsive mt-3">
+      <table class="table align-middle">
+        <thead>
+          <tr>
+            <th>Data</th>
+            <th class="text-end">Entradas previstas</th>
+            <th class="text-end">Saídas previstas</th>
+            <th class="text-end">Saldo projetado</th>
+            <th class="text-end">Entradas realizadas</th>
+            <th class="text-end">Saídas realizadas</th>
+            <th class="text-end">Saldo realizado</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in rows %}
+            <tr>
+              <td>
+                <div class="fw-semibold">{{ row.date_label }}</div>
+                {% if row.details %}
+                  <div class="small muted">{{ row.details|join(" • ") }}</div>
+                {% endif %}
+              </td>
+              <td class="text-end">{{ row.projected_in|brl }}</td>
+              <td class="text-end">{{ row.projected_out|brl }}</td>
+              <td class="text-end fw-semibold">{{ row.running_projected|brl }}</td>
+              <td class="text-end">{{ row.realized_in|brl }}</td>
+              <td class="text-end">{{ row.realized_out|brl }}</td>
+              <td class="text-end fw-semibold">{{ row.running_realized|brl }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <div class="muted mt-3">Nenhum movimento encontrado para os filtros informados.</div>
+  {% endif %}
+</div>
+{% endblock %}
+""",
+})
+templates_env = Environment(loader=DictLoader(TEMPLATES), autoescape=True)
+
+
+def _format_brl(value: Any) -> str:
+    try:
+        number = float(value or 0.0)
+    except Exception:
+        number = 0.0
+    sign = "-" if number < 0 else ""
+    raw = f"{abs(number):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    return f"{sign}R$ {raw}"
+
+
+def _fmt_brl(value: Any) -> str:
+    return _format_brl(value)
+
+
+def _format_number_br(value: Any, decimals: int = 2) -> str:
+    try:
+        number = float(value or 0.0)
+    except Exception:
+        number = 0.0
+    sign = "-" if number < 0 else ""
+    raw = f"{abs(number):,.{int(decimals)}f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    return f"{sign}{raw}"
+
+
+templates_env.filters["brl"] = _format_brl
+templates_env.filters["brnum"] = _format_number_br
+
+# ----------------------------
+# Templates (Oferta Engine / Perfil ampliado)
+# ----------------------------
+
+TEMPLATES["admin_familias.html"] = r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <h4 class="mb-1">Familias de Produto</h4>
+  <div class="muted mb-3">Familias canonicas pre-estabelecidas para evitar erro de escrita e garantir relacionamento consistente.</div>
+  <div class="table-responsive"><table class="table"><thead><tr><th>Area</th><th>Codigo</th><th>Rotulo</th><th>Descricao</th></tr></thead><tbody>{% for fam in families %}<tr><td>{{ fam.area }}</td><td><span class="mono">{{ fam.code }}</span></td><td><b>{{ fam.label }}</b></td><td>{{ fam.description }}</td></tr>{% endfor %}</tbody></table></div>
+</div>
+{% endblock %}
+"""
+
+TEMPLATES["motor_ofertas.html"] = r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4 mb-3">
+  <div class="d-flex justify-content-between align-items-center">
+    <div><h4 class="mb-1">Motor de Ofertas</h4><div class="muted">Ranking calibrado por familia, perfil empresarial, snapshot e elegibilidade dos parceiros.</div></div>
+    <form method="post" action="/motor-ofertas/gerar"><button class="btn btn-primary">Gerar motor</button></form>
+  </div>
+</div>
+{% if not current_client %}
+  <div class="alert alert-warning">Nenhum cliente selecionado.</div>
+{% else %}
+<div class="card p-4">
+  <div class="mb-3"><span class="muted">Cliente:</span> <b>{{ current_client.name }}</b></div>
+  {% if matches %}
+  <div class="table-responsive"><table class="table"><thead><tr><th>Tipo</th><th>Area</th><th>Familia</th><th>Produto</th><th>Parceiro</th><th>Prioridade</th><th>Score</th><th>Opcoes</th></tr></thead><tbody>{% for m in matches %}<tr><td>{{ m.source_kind }}</td><td>{{ m.area }}</td><td><span class="mono">{{ m.family_code }}</span></td><td><b>{{ m.product_name }}</b><br><small class="muted">{{ m.reason_summary }}</small></td><td>{{ m.partner_name or "Interno" }}</td><td>{{ m.priority_level }}</td><td>{{ "%.1f"|format(m.score_fit) }}</td><td>{{ m.partner_options_count }}</td></tr>{% endfor %}</tbody></table></div>
+  {% else %}<div class="muted">Nenhuma sugestao gerada ainda.</div>{% endif %}
+</div>
+{% endif %}
+{% endblock %}
+"""
+
+TEMPLATES["ofertas.html"] = r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <h4 class="mb-1">Minhas Ofertas</h4>
+  <div class="muted mb-3">Ofertas aderentes ao perfil da sua empresa.</div>
+  {% if not current_client %}
+    <div class="alert alert-warning">Nenhum cliente selecionado.</div>
+  {% else %}
+    {% if matches %}
+      <div class="row g-3">{% for m in matches %}<div class="col-lg-6"><div class="border rounded p-3 h-100"><div class="d-flex justify-content-between"><b>{{ m.product_name }}</b><span class="badge text-bg-light">{{ m.priority_level }}</span></div><div class="muted small">{{ m.partner_name or "Maffezzolli Capital" }}</div><div class="small mt-2"><span class="mono">{{ m.family_code }}</span> | Score {{ "%.1f"|format(m.score_fit) }}</div><div class="mt-2">{{ m.reason_summary }}</div>{% if m.partner_options_count %}<div class="mt-2 small muted">{{ m.partner_options_count }} parceiro(s) elegivel(eis) nessa familia.</div>{% endif %}<div class="mt-3 d-flex gap-2"><a class="btn btn-sm btn-outline-primary" href="/simulador">Simular</a><a class="btn btn-sm btn-outline-secondary" href="/propostas">Solicitar proposta</a></div></div></div>{% endfor %}</div>
+    {% else %}<div class="muted">Ainda nao ha ofertas geradas para sua empresa.</div>{% endif %}
+  {% endif %}
+</div>
+{% endblock %}
+"""
+
+# ----------------------------
+# Templates (Perfil, Motor e Catálogo)
+# ----------------------------
+
+TEMPLATES["motor_ofertas.html"] = r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4 mb-3">
+  <div class="d-flex flex-wrap justify-content-between align-items-start gap-3">
+    <div>
+      <h4 class="mb-1">Motor de Ofertas</h4>
+      <div class="muted">O motor cruza perfil empresarial, histórico de avaliações, score e elegibilidade por família de produto e parceiro.</div>
+    </div>
+    <form method="post" action="/motor-ofertas/gerar">
+      <button class="btn btn-primary">Gerar motor</button>
+    </form>
+  </div>
+</div>
+
+{% if not current_client %}
+  <div class="alert alert-warning">Nenhum cliente selecionado.</div>
+{% else %}
+  <div class="row g-3 mb-3">
+    <div class="col-md-3"><div class="card p-3 h-100"><div class="muted small">Cliente</div><div class="fw-semibold">{{ current_client.name }}</div></div></div>
+    <div class="col-md-3"><div class="card p-3 h-100"><div class="muted small">Sugestões</div><div class="fw-semibold">{{ matches|length }}</div></div></div>
+    <div class="col-md-3"><div class="card p-3 h-100"><div class="muted small">Prioridade alta</div><div class="fw-semibold">{{ matches|selectattr("priority_level", "equalto", "alta")|list|length }}</div></div></div>
+    <div class="col-md-3"><div class="card p-3 h-100"><div class="muted small">Parceiros elegíveis</div><div class="fw-semibold">{{ matches|selectattr("source_kind", "equalto", "partner")|list|length }}</div></div></div>
+  </div>
+
+  {% if matches %}
+    <div class="row g-3">
+      {% for m in matches %}
+      <div class="col-lg-6">
+        <div class="card p-4 h-100">
+          <div class="d-flex justify-content-between align-items-start">
+            <div>
+              <div class="fw-semibold">{{ m.product_name }}</div>
+              <div class="small muted">{{ m.partner_name or "Maffezzolli Capital" }}</div>
+            </div>
+            <span class="badge text-bg-light border">{{ m.priority_level }}</span>
+          </div>
+          <div class="small mt-2"><span class="mono">{{ m.family_code }}</span> • score {{ "%.1f"|format(m.score_fit) }}</div>
+          <div class="mt-2">{{ m.reason_summary }}</div>
+          {% if m.partner_options_count %}
+            <div class="mt-2 small muted">{{ m.partner_options_count }} parceiro(s) elegível(eis) nessa família.</div>
+          {% endif %}
+          <div class="mt-3 d-flex gap-2">
+            <a class="btn btn-sm btn-outline-primary" href="/simulador">Simular</a>
+            <a class="btn btn-sm btn-outline-secondary" href="/propostas">Gerar proposta</a>
+          </div>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+  {% else %}
+    <div class="card p-4">
+      <div class="fw-semibold mb-2">Ainda não há recomendações</div>
+      <div class="muted">Complete o perfil empresarial, faça uma avaliação em <b>/perfil/avaliacao/nova</b>, cadastre parceiros/produtos e gere o motor novamente.</div>
+      <div class="mt-3 d-flex gap-2">
+        <a class="btn btn-outline-secondary" href="/empresa">Completar perfil</a>
+        <a class="btn btn-outline-secondary" href="/admin/parceiros">Cadastrar parceiros</a>
+      </div>
+    </div>
+  {% endif %}
+{% endif %}
+{% endblock %}
+"""
+
+TEMPLATES["ofertas.html"] = r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <div class="d-flex justify-content-between align-items-start">
+    <div>
+      <h4 class="mb-1">Minhas Ofertas</h4>
+      <div class="muted">Ofertas aderentes ao perfil da sua empresa, organizadas por família e parceiro.</div>
+    </div>
+    <a class="btn btn-outline-secondary" href="/motor-ofertas">Ver motor</a>
+  </div>
+  <hr class="my-3"/>
+  {% if not current_client %}
+    <div class="alert alert-warning">Nenhum cliente selecionado.</div>
+  {% elif matches %}
+    <div class="row g-3">
+      {% for m in matches %}
+      <div class="col-lg-6">
+        <div class="border rounded p-3 h-100">
+          <div class="d-flex justify-content-between align-items-start gap-2">
+            <div>
+              <div class="fw-semibold">{{ m.product_name }}</div>
+              <div class="small muted">{{ m.partner_name or "Maffezzolli Capital" }}</div>
+            </div>
+            <span class="badge text-bg-light border">{{ m.priority_level }}</span>
+          </div>
+          <div class="small mt-2"><span class="mono">{{ m.family_code }}</span> • score {{ "%.1f"|format(m.score_fit) }}</div>
+          <div class="mt-2">{{ m.reason_summary }}</div>
+          {% if m.partner_options_count %}
+            <div class="small muted mt-2">{{ m.partner_options_count }} parceiro(s) elegível(eis) nessa família.</div>
+          {% endif %}
+          <div class="mt-3 d-flex gap-2">
+            <a class="btn btn-sm btn-outline-primary" href="/simulador">Simular</a>
+            <a class="btn btn-sm btn-outline-secondary" href="/propostas">Solicitar proposta</a>
+          </div>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+  {% else %}
+    <div class="muted">Ainda não há ofertas geradas para sua empresa.</div>
+  {% endif %}
+</div>
+{% endblock %}
+"""
+
+TEMPLATES["admin_servicos_internos.html"] = r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4 mb-3">
+  <div class="d-flex flex-wrap justify-content-between align-items-start gap-3">
+    <div>
+      <h4 class="mb-1">Produtos internos</h4>
+      <div class="muted">Catálogo próprio da Maffezzolli Capital, vinculado às famílias canônicas do motor.</div>
+    </div>
+    <div class="d-flex gap-2">
+      <a class="btn btn-outline-secondary" href="/admin/familias">Ver famílias</a>
+      <a class="btn btn-outline-secondary" href="/motor-ofertas">Abrir motor</a>
+    </div>
+  </div>
+</div>
+
+<div class="row g-3">
+  <div class="col-lg-5">
+    <div class="card p-4">
+      <h5 class="mb-3">Cadastrar produto interno</h5>
+      <form method="post" action="/admin/servicos-internos/add">
+        <div class="mb-3">
+          <label class="form-label">Área</label>
+          <select class="form-select" name="area">
+            <option value="advisory">Advisory</option>
+            <option value="ib">IB</option>
+            <option value="baas">BaaS</option>
+            <option value="special_sits">Special Sits</option>
+          </select>
+        </div>
+        <div class="mb-3">
+          <label class="form-label">Família</label>
+          <select class="form-select" name="family_code" required>
+            {% for fam in families %}
+              <option value="{{ fam.code }}">{{ fam.label }} ({{ fam.area }})</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="mb-3">
+          <label class="form-label">Nome do produto</label>
+          <input class="form-control" name="name" required />
+        </div>
+        <div class="mb-3">
+          <label class="form-label">Descrição</label>
+          <textarea class="form-control" name="description" rows="3"></textarea>
+        </div>
+        <div class="mb-3">
+          <label class="form-label">Peso/prioridade</label>
+          <input class="form-control" type="number" min="0" name="priority_weight" value="50" />
+        </div>
+        <div class="mb-3">
+          <label class="form-label">Notas</label>
+          <textarea class="form-control" name="notes" rows="2"></textarea>
+        </div>
+        <button class="btn btn-primary">Salvar produto interno</button>
+      </form>
+    </div>
+  </div>
+
+  <div class="col-lg-7">
+    <div class="card p-4">
+      <h5 class="mb-3">Catálogo atual</h5>
+      {% if services %}
+        <div class="table-responsive">
+          <table class="table align-middle">
+            <thead><tr><th>Área</th><th>Família</th><th>Produto</th><th>Peso</th></tr></thead>
+            <tbody>
+            {% for s in services %}
+              <tr>
+                <td>{{ s.area }}</td>
+                <td><span class="mono">{{ s.family_code or s.family_slug }}</span></td>
+                <td><b>{{ s.name }}</b><br><small class="muted">{{ s.description }}</small></td>
+                <td>{{ s.priority_weight }}</td>
+              </tr>
+            {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      {% else %}
+        <div class="muted">Nenhum produto interno cadastrado.</div>
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endblock %}
+"""
+
+TEMPLATES["admin_parceiros.html"] = r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4 mb-3">
+  <div class="d-flex flex-wrap justify-content-between align-items-start gap-3">
+    <div>
+      <h4 class="mb-1">Parceiros e produtos</h4>
+      <div class="muted">Cadastre parceiros, vincule seus produtos às famílias canônicas e use isso no motor de ofertas e no simulador.</div>
+    </div>
+    <a class="btn btn-outline-secondary" href="/admin/familias">Ver famílias</a>
+  </div>
+</div>
+
+<div class="row g-3">
+  <div class="col-lg-4">
+    <div class="card p-4 mb-3">
+      <h5 class="mb-3">Novo parceiro</h5>
+      <form method="post" action="/admin/parceiros/add">
+        <div class="mb-3"><label class="form-label">Nome</label><input class="form-control" name="name" required /></div>
+        <div class="mb-3"><label class="form-label">Tipo</label><input class="form-control" name="partner_type" value="financeiro" /></div>
+        <div class="mb-3"><label class="form-label">Contato</label><input class="form-control" name="contact_name" /></div>
+        <div class="mb-3"><label class="form-label">E-mail</label><input class="form-control" type="email" name="contact_email" /></div>
+        <div class="mb-3"><label class="form-label">Notas</label><textarea class="form-control" name="notes" rows="2"></textarea></div>
+        <button class="btn btn-primary">Salvar parceiro</button>
+      </form>
+    </div>
+
+    <div class="card p-4">
+      <h5 class="mb-3">Nova campanha</h5>
+      <form method="post" action="/admin/parceiros/campaigns/add">
+        <div class="mb-3">
+          <label class="form-label">Produto do parceiro</label>
+          <select class="form-select" name="partner_product_id">
+            {% for p in products %}
+              <option value="{{ p.id }}">{{ partner_map[p.partner_id].name if p.partner_id in partner_map else 'Parceiro' }} — {{ p.name }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="mb-3"><label class="form-label">Título</label><input class="form-control" name="title" required /></div>
+        <div class="row g-2">
+          <div class="col-md-6"><label class="form-label">Início</label><input class="form-control" type="date" name="starts_at" /></div>
+          <div class="col-md-6"><label class="form-label">Fim</label><input class="form-control" type="date" name="ends_at" /></div>
+        </div>
+        <div class="mb-3 mt-3"><label class="form-label">Bônus (%)</label><input class="form-control" type="number" step="0.01" name="bonus_pct" value="0" /></div>
+        <div class="mb-3"><label class="form-label">Resumo da regra</label><textarea class="form-control" name="rule_summary" rows="2"></textarea></div>
+        <button class="btn btn-outline-primary">Salvar campanha</button>
+      </form>
+    </div>
+  </div>
+
+  <div class="col-lg-8">
+    <div class="card p-4 mb-3">
+      <h5 class="mb-3">Novo produto de parceiro</h5>
+      <form method="post" action="/admin/parceiros/products/add">
+        <div class="row g-3">
+          <div class="col-md-6">
+            <label class="form-label">Parceiro</label>
+            <select class="form-select" name="partner_id" required>
+              {% for p in partners %}
+                <option value="{{ p.id }}">{{ p.name }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="col-md-3">
+            <label class="form-label">Área</label>
+            <select class="form-select" name="area">
+              <option value="advisory">Advisory</option>
+              <option value="ib">IB</option>
+              <option value="baas">BaaS</option>
+              <option value="special_sits">Special Sits</option>
+            </select>
+          </div>
+          <div class="col-md-3">
+            <label class="form-label">Público</label>
+            <select class="form-select" name="pf_pj">
+              <option value="PJ">PJ</option>
+              <option value="PF">PF</option>
+              <option value="PF/PJ">PF/PJ</option>
+            </select>
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">Família</label>
+            <select class="form-select" name="family_code" required>
+              {% for fam in families %}
+                <option value="{{ fam.code }}">{{ fam.label }} ({{ fam.area }})</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">Nome do produto</label>
+            <input class="form-control" name="name" required />
+          </div>
+          <div class="col-md-3"><label class="form-label">Ticket min. (R$)</label><input class="form-control" type="number" step="0.01" name="ticket_min_brl" value="0" /></div>
+          <div class="col-md-3"><label class="form-label">Ticket max. (R$)</label><input class="form-control" type="number" step="0.01" name="ticket_max_brl" value="0" /></div>
+          <div class="col-md-3"><label class="form-label">Receita min. mensal (R$)</label><input class="form-control" type="number" step="0.01" name="revenue_min_brl" value="0" /></div>
+          <div class="col-md-3"><label class="form-label">Receita max. mensal (R$)</label><input class="form-control" type="number" step="0.01" name="revenue_max_brl" value="0" /></div>
+          <div class="col-md-3"><label class="form-label">Score total min.</label><input class="form-control" type="number" step="0.01" name="score_total_min" value="0" /></div>
+          <div class="col-md-3"><label class="form-label">Score financeiro min.</label><input class="form-control" type="number" step="0.01" name="score_financial_min" value="0" /></div>
+          <div class="col-md-3"><label class="form-label">Debt ratio max.</label><input class="form-control" type="number" step="0.01" name="max_debt_ratio" value="0" /></div>
+          <div class="col-md-3"><label class="form-label">Exige garantia?</label><div class="form-check mt-2"><input class="form-check-input" type="checkbox" name="requires_collateral"></div></div>
+          <div class="col-md-3"><label class="form-label">Taxa padrão (%)</label><input class="form-control" type="number" step="0.01" name="rate_default_pct" value="0" /></div>
+          <div class="col-md-3"><label class="form-label">CET padrão (%)</label><input class="form-control" type="number" step="0.01" name="cet_default_pct" value="0" /></div>
+          <div class="col-md-2"><label class="form-label">Prazo min.</label><input class="form-control" type="number" name="term_min_months" value="0" /></div>
+          <div class="col-md-2"><label class="form-label">Prazo max.</label><input class="form-control" type="number" name="term_max_months" value="0" /></div>
+          <div class="col-md-2"><label class="form-label">Carência max.</label><input class="form-control" type="number" name="grace_max_months" value="0" /></div>
+          <div class="col-md-3"><label class="form-label">Amortização</label><input class="form-control" name="amortization_default" value="PRICE" /></div>
+          <div class="col-md-3"><label class="form-label">LTV max. (%)</label><input class="form-control" type="number" step="0.01" name="ltv_max_pct" value="0" /></div>
+          <div class="col-md-4"><label class="form-label">UFs permitidas (CSV)</label><input class="form-control" name="allowed_states_csv" /></div>
+          <div class="col-md-4"><label class="form-label">Segmentos permitidos (CSV)</label><input class="form-control" name="allowed_segments_csv" /></div>
+          <div class="col-md-4"><label class="form-label">Comissão</label><input class="form-control" name="commission_text" /></div>
+          <div class="col-md-4"><label class="form-label">Payout</label><input class="form-control" name="payout_term" /></div>
+          <div class="col-md-8"><label class="form-label">Notas</label><input class="form-control" name="notes" /></div>
+        </div>
+        <button class="btn btn-primary mt-3">Salvar produto do parceiro</button>
+      </form>
+    </div>
+
+    <div class="card p-4 mb-3">
+      <h5 class="mb-3">Parceiros cadastrados</h5>
+      {% if partners %}
+      <div class="table-responsive">
+        <table class="table align-middle">
+          <thead><tr><th>Nome</th><th>Tipo</th><th>Contato</th><th>E-mail</th></tr></thead>
+          <tbody>
+            {% for p in partners %}
+            <tr><td><b>{{ p.name }}</b></td><td>{{ p.partner_type }}</td><td>{{ p.contact_name or "-" }}</td><td>{{ p.contact_email or "-" }}</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% else %}<div class="muted">Nenhum parceiro cadastrado.</div>{% endif %}
+    </div>
+
+    <div class="card p-4 mb-3">
+      <h5 class="mb-3">Produtos dos parceiros</h5>
+      {% if products %}
+      <div class="table-responsive">
+        <table class="table align-middle">
+          <thead><tr><th>Parceiro</th><th>Produto</th><th>Família</th><th>Regras</th></tr></thead>
+          <tbody>
+            {% for p in products %}
+            <tr>
+              <td>{{ partner_map[p.partner_id].name if p.partner_id in partner_map else p.partner_id }}</td>
+              <td><b>{{ p.name }}</b><br><small class="muted">{{ p.pf_pj }}</small></td>
+              <td><span class="mono">{{ p.family_code or p.family_slug }}</span></td>
+              <td class="small muted">Receita min. {{ "%.0f"|format(p.revenue_min_brl or 0) }} • Ticket {{ "%.0f"|format(p.ticket_min_brl or 0) }}–{{ "%.0f"|format(p.ticket_max_brl or 0) }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% else %}<div class="muted">Nenhum produto de parceiro cadastrado.</div>{% endif %}
+    </div>
+
+    <div class="card p-4">
+      <h5 class="mb-3">Campanhas</h5>
+      {% if campaigns %}
+      <div class="table-responsive">
+        <table class="table align-middle">
+          <thead><tr><th>Título</th><th>Produto</th><th>Bônus</th><th>Vigência</th></tr></thead>
+          <tbody>
+          {% for c in campaigns %}
+            <tr>
+              <td><b>{{ c.title }}</b><br><small class="muted">{{ c.rule_summary }}</small></td>
+              <td>{% for p in products %}{% if p.id == c.partner_product_id %}{{ p.name }}{% endif %}{% endfor %}</td>
+              <td>{{ "%.2f"|format(c.bonus_pct or 0) }}%</td>
+              <td>{{ c.starts_at }}<br>{{ c.ends_at }}</td>
+            </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% else %}<div class="muted">Nenhuma campanha cadastrada.</div>{% endif %}
+    </div>
+  </div>
+</div>
+{% endblock %}
+"""
+
+# ----------------------------
+# Templates (Open Finance)
+# ----------------------------
+
+TEMPLATES.setdefault("openfinance.html", r"""{% extends "base.html" %}
+{% block content %}
+<div class="d-flex align-items-center justify-content-between mb-3">
+  <div>
+    <div class="h4 mb-0">🌐 Open Finance — Contratos</div>
+    <div class="muted">Conecte a conta do titular e importe contratos (Loans) para comparar ofertas.</div>
+  </div>
+  <a class="btn btn-outline-secondary" href="/">Voltar</a>
+</div>
+
+
+<div class="alert alert-info d-flex justify-content-between align-items-center">
+  <div><strong>Klavi:</strong> se o Pluggy estiver instável, use a conexão via Klavi (Sandbox/Produção).</div>
+  <a class="btn btn-outline-primary btn-sm" href="/openfinance/klavi?doc={{ doc or '' }}&email={{ email_default or '' }}">Abrir Klavi</a>
+</div>
+
+<div class="card p-3 mb-3">
+  <form method="get" action="/openfinance" class="row g-2 align-items-end">
+    <div class="col-md-4">
+      <label class="form-label">CPF/CNPJ</label>
+      <input class="form-control mono" name="doc" value="{{ doc or '' }}" placeholder="Somente números ou com máscara" required>
+    </div>
+    <div class="col-md-4">
+      <label class="form-label">E-mail do titular (para enviar link)</label>
+      <input class="form-control" name="email" value="{{ email_default or '' }}" placeholder="email@exemplo.com">
+      <div class="form-text">Opcional se o próprio titular estiver logado.</div>
+    </div>
+    <div class="col-md-4 d-flex gap-2">
+      <button class="btn btn-primary w-100" type="submit">Abrir</button>
+      {% if doc %}
+        <button class="btn btn-outline-primary" type="submit" formmethod="post" formaction="/openfinance/sync">Sincronizar</button>
+      {% endif %}
+    </div>
+  </form>
+</div>
+
+{% if doc %}
+  <div class="row g-3">
+    <div class="col-12 col-lg-5">
+      <div class="card p-3">
+        <div class="fw-semibold mb-1">Status da conexão</div>
+        {% if conn %}
+          <div class="muted small">Item:</div>
+          <div class="mono">{{ conn.pluggy_item_id }}</div>
+          <div class="muted small mt-2">Status:</div>
+          <div><span class="badge text-bg-light border">{{ conn.status }}</span></div>
+          <div class="muted small mt-2">Última sincronização:</div>
+          <div>{{ conn.last_synced_at or "-" }}</div>
+          {% if conn.last_error %}
+            <div class="alert alert-warning mt-3 mb-0">{{ conn.last_error }}</div>
+          {% endif %}
+        {% else %}
+          <div class="muted">Nenhuma conexão ainda para este documento.</div>
+        {% endif %}
+
+        <hr>
+
+        {% if role in ["admin","equipe"] %}
+          <div class="fw-semibold">Enviar link de conexão ao titular</div>
+          <form method="post" action="/openfinance/invite" class="row g-2 mt-1">
+            <input type="hidden" name="doc" value="{{ doc }}">
+            <div class="col-12">
+              <label class="form-label">E-mail</label>
+              <input class="form-control" name="email" value="{{ email_default or '' }}" required>
+            </div>
+            <div class="col-12 d-flex gap-2">
+              <button class="btn btn-primary" type="submit">Enviar link</button>
+              {% if invite_link %}
+                <button class="btn btn-outline-secondary" type="button" onclick="navigator.clipboard.writeText('{{ invite_link }}'); alert('Link copiado!');">Copiar link</button>
+              {% endif %}
+            </div>
+          </form>
+          {% if invite_link %}
+            <div class="mt-2 small muted">Link: <span class="mono">{{ invite_link }}</span></div>
+          {% endif %}
+        {% else %}
+          <div class="fw-semibold">Conectar agora</div>
+          {% if self_connect_link %}
+            <a class="btn btn-primary mt-2" href="{{ self_connect_link }}">Abrir Pluggy Connect</a>
+          {% else %}
+            <div class="muted small">Peça para o administrador/equipe gerar um link.</div>
+          {% endif %}
+        {% endif %}
+      </div>
+
+      <div class="card p-3 mt-3">
+        <div class="fw-semibold mb-2">Catálogo de ofertas</div>
+        {% if role in ["admin","equipe"] %}
+          <form method="post" action="/openfinance/offers/add" class="row g-2">
+            <div class="col-12">
+              <label class="form-label">Nome da oferta</label>
+              <input class="form-control" name="label" placeholder="Ex.: Refinanciamento Banco X" required>
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">CET a.a. (%)</label>
+              <input class="form-control" name="cet_aa_pct" inputmode="decimal" placeholder="Ex.: 28.5" required>
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">Tipo (opcional)</label>
+              <input class="form-control" name="product_type" placeholder="Ex.: PERSONAL_LOAN">
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">Prazo mín (meses)</label>
+              <input class="form-control" name="term_min" inputmode="numeric" placeholder="0">
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">Prazo máx (meses)</label>
+              <input class="form-control" name="term_max" inputmode="numeric" placeholder="0">
+            </div>
+            <div class="col-12">
+              <button class="btn btn-outline-primary w-100" type="submit">Adicionar oferta</button>
+            </div>
+          </form>
+        {% endif %}
+
+        <div class="mt-2">
+          {% if offers %}
+            <ul class="list-group">
+              {% for o in offers %}
+                <li class="list-group-item d-flex justify-content-between align-items-center">
+                  <div>
+                    <div class="fw-semibold">{{ o.label }}</div>
+                    <div class="muted small">CET a.a.: {{ (o.cet_aa * 100) | round(2) }}% {% if o.product_type %}• {{ o.product_type }}{% endif %}</div>
+                  </div>
+                  <span class="badge text-bg-light border">{% if o.is_active %}ativa{% else %}inativa{% endif %}</span>
+                </li>
+              {% endfor %}
+            </ul>
+          {% else %}
+            <div class="muted small">Nenhuma oferta cadastrada ainda.</div>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+
+    <div class="col-12 col-lg-7">
+      <div class="card p-3">
+        <div class="d-flex justify-content-between align-items-center">
+          <div class="fw-semibold">Contratos (Loans)</div>
+          <form method="post" action="/openfinance/opportunities/generate">
+            <input type="hidden" name="doc" value="{{ doc }}">
+            <button class="btn btn-outline-success btn-sm" type="submit">Gerar oportunidades</button>
+          </form>
+        </div>
+
+        {% if loans %}
+          <div class="table-responsive mt-2">
+            <table class="table table-sm align-middle">
+              <thead>
+                <tr>
+                  <th>Contrato</th>
+                  <th>CET a.a.</th>
+                  <th>Saldo</th>
+                  <th>Parcela</th>
+                  <th>Prazo (rem/total)</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for l in loans %}
+                  <tr>
+                    <td class="mono">{{ l.contract_number or l.pluggy_loan_id }}</td>
+                    <td>{{ (l.cet_aa * 100) | round(2) }}%</td>
+                    <td>R$ {{ l.outstanding_brl | round(2) }}</td>
+                    <td>R$ {{ l.installment_brl | round(2) }}</td>
+                    <td>{{ l.term_remaining_months }}/{{ l.term_total_months }}</td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        {% else %}
+          <div class="muted small mt-2">Sem contratos importados ainda. Conecte e sincronize.</div>
+        {% endif %}
+      </div>
+
+      <div class="card p-3 mt-3">
+        <div class="fw-semibold mb-2">Oportunidades (comparação)</div>
+        {% if opportunities %}
+          <div class="table-responsive">
+            <table class="table table-sm align-middle">
+              <thead>
+                <tr>
+                  <th>Contrato</th>
+                  <th>Oferta</th>
+                  <th>Parcela atual</th>
+                  <th>Nova parcela</th>
+                  <th>Economia/mês</th>
+                  <th>Economia total</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for o in opportunities %}
+                  <tr>
+                    <td class="mono">{{ o.pluggy_loan_id }}</td>
+                    <td>{{ o.offer_label }}</td>
+                    <td>R$ {{ o.old_payment_brl | round(2) }}</td>
+                    <td>R$ {{ o.new_payment_brl | round(2) }}</td>
+                    <td>R$ {{ o.monthly_savings_brl | round(2) }}</td>
+                    <td>R$ {{ o.total_savings_brl | round(2) }}</td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+          <div class="muted small">Cálculo aproximado (PRICE/SAC médio) usando CET anual informado.</div>
+        {% else %}
+          <div class="muted small">Sem oportunidades ainda (adicione ofertas e clique em “Gerar oportunidades”).</div>
+        {% endif %}
+      </div>
+    </div>
+
+    <div class="col-lg-6">
+      <div class="card p-4 h-100">
+        <div class="d-flex justify-content-between align-items-start gap-3 flex-wrap">
+          <div>
+            <h5 class="mb-1">Gestão de Obras</h5>
+            <div class="muted">Cronograma físico-financeiro. Orçado vs realizado por fase e etapa.</div>
+          </div>
+          <span class="badge text-bg-primary">Disponível</span>
+        </div>
+        <div class="row g-3 mt-1 mb-3">
+          <div class="col-md-6">
+            <div class="border rounded p-3 h-100">
+              <div class="muted small">Controle</div>
+              <div class="fw-semibold">Físico + Financeiro</div>
+            </div>
+          </div>
+          <div class="col-md-6">
+            <div class="border rounded p-3 h-100">
+              <div class="muted small">Versões</div>
+              <div class="fw-semibold">Orçado v1/v2/v3...</div>
+            </div>
+          </div>
+        </div>
+        <div class="alert alert-info" style="font-size:.85rem;">
+          Monte o cronograma físico-financeiro antes da obra e atualize o realizado ao longo da execução.
+        </div>
+        <a class="btn btn-primary" href="/ferramentas/obras">Abrir Gestão de Obras</a>
+      </div>
+    </div>
+  </div>
+{% endif %}
+{% endblock %}
+""")
+
+TEMPLATES.setdefault("openfinance_klavi.html", r"""{% extends "base.html" %}
+{% block content %}
+<div class="d-flex align-items-center justify-content-between mb-3">
+  <div>
+    <div class="h4 mb-0">🌐 Open Finance (Klavi) — Contratos</div>
+    <div class="muted">Fluxo Link → Consent → Report (pf loans) via Klavi. Use sandbox para testes.</div>
+  </div>
+  <div class="d-flex gap-2">
+    <a class="btn btn-outline-secondary" href="/openfinance?doc={{ doc or '' }}">Voltar</a>
+  </div>
+</div>
+
+<div class="card p-3 mb-3">
+  <form method="post" action="/openfinance/klavi/start" class="row g-2 align-items-end">
+    <input type="hidden" name="doc" value="{{ doc or '' }}"/>
+    <div class="col-md-4">
+      <label class="form-label">CPF/CNPJ</label>
+      <input class="form-control mono" name="doc_input" value="{{ doc or '' }}" required>
+    </div>
+    <div class="col-md-4">
+      <label class="form-label">E-mail do titular</label>
+      <input class="form-control" name="email" value="{{ email_default or '' }}" placeholder="email@exemplo.com" required>
+    </div>
+    <div class="col-md-4">
+      <label class="form-label">Telefone do titular</label>
+      <input class="form-control" name="phone" value="{{ phone_default or '' }}" placeholder="+55DD9XXXXYYYY" required>
+    </div>
+    <div class="col-12 d-flex gap-2 mt-2">
+      <button class="btn btn-primary">Iniciar (criar Link + listar instituições)</button>
+      <a class="btn btn-outline-secondary" href="/openfinance?doc={{ doc or '' }}">Ver contratos/importados</a>
+    </div>
+    <div class="form-text">A Klavi usa Link/Consent do Open Finance. Após autorizar, solicitaremos o relatório <strong>pf loans</strong>.</div>
+  </form>
+</div>
+
+{% if flow %}
+<div class="card p-3 mb-3">
+  <div class="d-flex justify-content-between align-items-center">
+    <div>
+      <div><strong>Status:</strong> {{ flow.consent_status or "—" }}</div>
+      <div class="muted mono">link_id={{ flow.link_id }} | consent_id={{ flow.consent_id }}</div>
+      {% if flow.institution_name %}
+        <div class="muted">Instituição: {{ flow.institution_name }} ({{ flow.institution_code }})</div>
+      {% endif %}
+      {% if flow.last_error %}
+        <div class="text-danger mt-2"><strong>Erro:</strong> {{ flow.last_error }}</div>
+      {% endif %}
+    </div>
+
+    <div class="d-flex gap-2">
+      {% if flow.consent_id %}
+        <form method="post" action="/openfinance/klavi/request">
+          <input type="hidden" name="doc" value="{{ doc or '' }}"/>
+          <button class="btn btn-outline-primary">Solicitar relatório (Loans)</button>
+        </form>
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endif %}
+
+{% if reports %}
+<div class="card p-3">
+  <h6 class="mb-3">Últimos relatórios recebidos</h6>
+  <div class="table-responsive">
+    <table class="table table-sm align-middle">
+      <thead><tr><th>Quando</th><th>Produto</th><th>Request</th></tr></thead>
+      <tbody>
+        {% for r in reports %}
+          <tr>
+            <td class="mono">{{ r.received_at }}</td>
+            <td>{{ r.product }}</td>
+            <td class="mono">{{ r.request_id }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <div class="form-text">Quando o relatório <code>loans</code> chegar, os contratos aparecerão em <a href="/openfinance?doc={{ doc or '' }}">Open Finance</a>.</div>
+</div>
+{% endif %}
+{% endblock %}
+""")
+
+TEMPLATES.setdefault("openfinance_klavi_institutions.html", r"""{% extends "base.html" %}
+{% block content %}
+<div class="d-flex align-items-center justify-content-between mb-3">
+  <div>
+    <div class="h4 mb-0">Escolha a instituição (Klavi)</div>
+    <div class="muted">Documento: <span class="mono">{{ doc }}</span></div>
+  </div>
+  <a class="btn btn-outline-secondary" href="/openfinance/klavi?doc={{ doc }}">Voltar</a>
+</div>
+
+<div class="card p-3">
+  <div class="mb-2 form-text">Selecione a instituição para autorizar no Open Finance. Itens com “outage” podem falhar.</div>
+
+  <div class="list-group">
+    {% for it in institutions %}
+      <div class="list-group-item">
+        <div class="d-flex justify-content-between align-items-center gap-2">
+          <div class="d-flex align-items-center gap-3">
+            {% if it.avatar %}
+              <img src="{{ it.avatar }}" alt="logo" style="width:28px;height:28px;border-radius:6px;object-fit:contain;background:#fff;border:1px solid #eee">
+            {% endif %}
+            <div>
+              <div><strong>{{ it.name }}</strong> <span class="muted mono">({{ it.institutionCode }})</span></div>
+              <div class="muted" style="font-size:12px">
+                {% if it.isOutage %}<span class="text-warning">outage</span>{% else %}ok{% endif %}
+                {% if it.availableResources %} • recursos: {{ it.availableResources|join(", ") }}{% endif %}
+              </div>
+            </div>
+          </div>
+
+          <form method="post" action="/openfinance/klavi/consent">
+            <input type="hidden" name="doc" value="{{ doc }}"/>
+            <input type="hidden" name="institution_code" value="{{ it.institutionCode }}"/>
+            <input type="hidden" name="institution_name" value="{{ it.name }}"/>
+            <button class="btn btn-primary btn-sm">Autorizar</button>
+          </form>
+        </div>
+      </div>
+    {% endfor %}
+  </div>
+</div>
+{% endblock %}
+""")
+
+TEMPLATES.setdefault("openfinance_klavi_return.html", r"""{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+  <div class="d-flex justify-content-between align-items-start">
+    <div>
+      <h4 class="mb-1">Autorização recebida</h4>
+      <div class="muted mono">{{ doc }}</div>
+      {% if message %}
+        <div class="mt-2">{{ message }}</div>
+      {% endif %}
+      {% if error %}
+        <div class="text-danger mt-2"><strong>Erro:</strong> {{ error }}</div>
+      {% endif %}
+    </div>
+    <a class="btn btn-outline-secondary" href="/openfinance/klavi?doc={{ doc }}">Voltar</a>
+  </div>
+
+  <hr class="my-3"/>
+
+  <form method="post" action="/openfinance/klavi/request" class="d-flex gap-2">
+    <input type="hidden" name="doc" value="{{ doc }}"/>
+    <button class="btn btn-primary">Solicitar relatório (Loans)</button>
+    <a class="btn btn-outline-secondary" href="/openfinance?doc={{ doc }}">Ver contratos/importados</a>
+  </form>
+
+  <div class="form-text mt-2">Após solicitar, aguarde o webhook de produto chegar. A página “Open Finance” mostrará os contratos importados.</div>
+</div>
+{% endblock %}
+""")
+
+TEMPLATES.setdefault("openfinance_connect.html", r"""{% extends "base.html" %}
+{% block content %}
+<div class="container py-4" style="max-width: 920px;">
+  <div class="d-flex justify-content-between align-items-start">
+    <div>
+      <div class="h4 mb-0">🌐 Conectar Open Finance</div>
+      <div class="muted">Conecte sua instituição para importar seus contratos (Loans).</div>
+    </div>
+    <a class="btn btn-outline-secondary" href="/">Fechar</a>
+  </div>
+
+  <div class="card p-3 mt-3">
+    <div class="row g-3">
+      <div class="col-md-6">
+        <div class="muted small">Documento</div>
+        <div class="mono fw-semibold">{{ doc_masked }}</div>
+      </div>
+      <div class="col-md-6">
+        <div class="muted small">E-mail</div>
+        <div class="fw-semibold">{{ invited_email }}</div>
+      </div>
+    </div>
+
+    {% if error %}
+      <div class="alert alert-danger mt-3 mb-0">{{ error }}</div>
+    {% endif %}
+
+    <hr>
+
+    <div class="row g-2">
+      <div class="col-md-8">
+        <label class="form-label">Seu nome (para registro)</label>
+        <input class="form-control" id="signed_by_name" placeholder="Nome completo" required>
+      </div>
+      <div class="col-md-4">
+        <label class="form-label">4 últimos dígitos</label>
+        <input class="form-control mono" id="doc_last4" maxlength="4" inputmode="numeric" placeholder="XXXX">
+      </div>
+      <div class="col-12">
+        <div class="form-check mt-1">
+          <input class="form-check-input" type="checkbox" value="1" id="chk">
+          <label class="form-check-label" for="chk">
+            Confirmo que sou o titular e autorizo a conexão para análise de melhores ofertas de crédito.
+          </label>
+        </div>
+      </div>
+      <div class="col-12 d-flex gap-2">
+        <button class="btn btn-primary" id="btnConnect" type="button">Conectar instituição</button>
+        <span class="muted small align-self-center" id="status"></span>
+      </div>
+    </div>
+  </div>
+
+  <div class="mt-3 muted small">
+    Após concluir a conexão, você pode fechar esta página.
+  </div>
+</div>
+
+<script src="{{ pluggy_js_url }}"></script>
+<script>
+(function(){
+  const token = {{ token|tojson }};
+  const statusEl = document.getElementById("status");
+  const btn = document.getElementById("btnConnect");
+
+  function setStatus(msg){ statusEl.textContent = msg || ""; }
+
+  async function postJSON(url, payload){
+    const r = await fetch(url, {
+      method: "POST",
+      headers: {"Content-Type":"application/json", "Accept":"application/json"},
+      body: JSON.stringify(payload || {})
+    });
+    const t = await r.text();
+    let j = {};
+    try { j = JSON.parse(t); } catch(e) {}
+    if(!r.ok){
+      const err = (j && (j.detail || j.error)) ? (j.detail || j.error) : t;
+      throw new Error(err || ("HTTP "+r.status));
+    }
+    return j;
+  }
+
+  btn.addEventListener("click", async function(){
+    try{
+      const name = (document.getElementById("signed_by_name").value || "").trim();
+      const last4 = (document.getElementById("doc_last4").value || "").trim();
+      const chk = document.getElementById("chk").checked;
+
+      if(!name){ alert("Informe seu nome."); return; }
+      if(!chk){ alert("Marque a autorização para continuar."); return; }
+
+      btn.disabled = true;
+      setStatus("Gerando token de conexão...");
+
+      const tk = await postJSON("/api/pluggy/connect_token", { token, signed_by_name: name, doc_last4: last4 });
+      const accessToken = tk.accessToken;
+
+      setStatus("Abrindo Pluggy Connect...");
+
+      const pc = new PluggyConnect({
+        connectToken: accessToken,
+        includeSandbox: !!tk.includeSandbox,
+        onSuccess: async (itemData) => {
+          try{
+            setStatus("Salvando conexão e importando contratos...");
+            await postJSON("/api/pluggy/item_success", { token, itemData });
+            setStatus("Concluído! Você pode fechar esta página.");
+          }catch(e){
+            console.error(e);
+            setStatus("Conectou, mas falhou ao registrar no sistema: " + (e.message || e));
+          }
+        },
+        onError: (error) => {
+          console.error(error);
+          setStatus("Erro no Pluggy Connect: " + (error && (error.message || JSON.stringify(error))) );
+          btn.disabled = false;
+        }
+      });
+
+      pc.init();
+    }catch(e){
+      console.error(e);
+      alert(e.message || String(e));
+      btn.disabled = false;
+      setStatus("");
+    }
+  });
+})();
+</script>
+{% endblock %}
+""")
+
+
+# ----------------------------
+# Routes (Open Finance)
+# ----------------------------
+
+def _mask_doc(doc_digits: str) -> str:
+    d = _digits(doc_digits)
+    if len(d) == 11:
+        return f"{d[0:3]}.{d[3:6]}.{d[6:9]}-{d[9:11]}"
+    if len(d) == 14:
+        return f"{d[0:2]}.{d[2:5]}.{d[5:8]}/{d[8:12]}-{d[12:14]}"
+    return d
+
+
+def _openfinance_require_client(request: Request, session: Session, ctx: TenantContext) -> Optional[Client]:
+    active_client_id = get_active_client_id(request, session, ctx)
+    if not active_client_id and getattr(ctx.membership, "client_id", None):
+        active_client_id = int(ctx.membership.client_id)
+    if not active_client_id:
+        return None
+    return get_client_or_none(session, ctx.company.id, int(active_client_id))
+
+
+def ensure_feature_access_tables() -> None:
+    try:
+        SQLModel.metadata.create_all(
+            engine,
+            tables=[MembershipFeatureAccess.__table__, ClientFeatureAccess.__table__],
+            checkfirst=True,
+        )
+    except Exception:
+        pass
+
+
+def _parse_json_list(raw: str) -> list[str]:
+    raw = (raw or "").strip()
+    if not raw:
+        return []
+    try:
+        v = json.loads(raw)
+        if isinstance(v, list):
+            return [str(x) for x in v]
+    except Exception:
+        pass
+    return []
+
+
+def get_membership_allowed_features(session: Session, *, company_id: int, membership: Membership) -> set[str]:
+    base = set(ROLE_DEFAULT_FEATURES.get(membership.role, set()))
+    if not membership.id:
+        return base
+
+    try:
+        row = session.exec(
+            select(MembershipFeatureAccess).where(
+                MembershipFeatureAccess.company_id == company_id,
+                MembershipFeatureAccess.membership_id == membership.id,
+            )
+        ).first()
+    except Exception:
+        try:
+            ensure_feature_access_tables()
+        except Exception:
+            pass
+        return base
+
+    if row:
+        lst = _parse_json_list(row.features_json)
+        if lst:
+            return set(lst)
+    return base
+
+
+CLIENT_FEATURE_DISABLE_PREFIX = "__disabled__:"
+
+def get_client_allowed_features(session: Session, *, company_id: int, client_id: int) -> Optional[set[str]]:
+    try:
+        row = session.exec(
+            select(ClientFeatureAccess).where(
+                ClientFeatureAccess.company_id == company_id,
+                ClientFeatureAccess.client_id == client_id,
+            )
+        ).first()
+    except Exception:
+        try:
+            ensure_feature_access_tables()
+        except Exception:
+            pass
+        return None
+
+    if not row:
+        base = set(ROLE_DEFAULT_FEATURES.get("cliente", set()))
+        base.add("obras_horas")
+        return base
+
+    raw_values = set(_parse_json_list(row.features_json))
+    allowed = {x for x in raw_values if x in FEATURE_KEYS}
+    disabled = {
+        x[len(CLIENT_FEATURE_DISABLE_PREFIX):]
+        for x in raw_values
+        if isinstance(x, str) and x.startswith(CLIENT_FEATURE_DISABLE_PREFIX)
+    }
+
+    if "obras_horas" not in disabled:
+        allowed.add("obras_horas")
+    else:
+        allowed.discard("obras_horas")
+
+    return allowed
+
+
+def effective_allowed_features(session: Session, *, ctx: TenantContext, current_client: Optional[Client]) -> set[str]:
+    try:
+        allowed = get_membership_allowed_features(session, company_id=ctx.company.id, membership=ctx.membership)
+
+        if ctx.membership.role == "cliente" and current_client and current_client.id:
+            client_allowed = get_client_allowed_features(session, company_id=ctx.company.id,
+                                                         client_id=current_client.id)
+            if client_allowed is not None:
+                allowed = allowed.intersection(client_allowed)
+
+        return {k for k in allowed if k in FEATURE_KEYS}
+    except Exception:
+        base = set(ROLE_DEFAULT_FEATURES.get(ctx.membership.role, set()))
+        return {k for k in base if k in FEATURE_KEYS}
+
+
+def resolve_feature_key(path: str) -> Optional[str]:
+    if path.startswith("/static/") or path.startswith("/login") or path.startswith("/logout"):
+        return None
+    if path.startswith("/api/"):
+        return None
+    if path in {"/", "/health"}:
+        return None
+
+    mapping = [
+        ("/admin/ui", "ui"),
+        ("/admin/financeiro", "financeiro_escritorio"),
+        ("/admin/gestao", "gestao"),
+        ("/admin/members", "gestao"),
+        ("/admin/clients", "gestao"),
+        ("/negocios", "crm"),
+        ("/credito", "credito"),
+        ("/empresa", "empresa"),
+        ("/perfil", "perfil"),
+        ("/financeiro", "financeiro"),
+        ("/documentos", "documentos"),
+        ("/consultoria", "consultoria"),
+        ("/reunioes", "reunioes"),
+        ("/tarefas", "tarefas"),
+        ("/simulador", "simulador"),
+        ("/propostas", "propostas"),
+        ("/pendencias", "pendencias"),
+        ("/agenda", "agenda"),
+        ("/educacao", "educacao"),
+    ]
+    for prefix, key in mapping:
+        if path == prefix or path.startswith(prefix + "/"):
+            return key
+    return None
+
+
+def _is_staff(role: str) -> bool:
+    return role in {"admin", "equipe"}
+
+
+def _safe_int(value: Any) -> Optional[int]:
+    try:
+        return int(value)
+    except Exception:
+        return None
+
+
+def _get_selected_client_for_staff(request: Request, session: Session, company_id: int) -> Optional[int]:
+    cid = _safe_int(request.session.get("selected_client_id"))
+    if cid:
+        c = session.get(Client, cid)
+        if c and c.company_id == company_id and entity_is_allowed(session, entity_type="client", entity_id=c.id):
+            return cid
+
+    clients = session.exec(
+        select(Client).where(Client.company_id == company_id).order_by(Client.created_at)
+    ).all()
+    first_client = next(
+        (c for c in clients if c.id and entity_is_allowed(session, entity_type="client", entity_id=c.id)), None)
+    if not first_client:
+        return None
+
+    request.session["selected_client_id"] = first_client.id
+    return first_client.id
+
+
+def get_active_client_id(request: Request, session: Session, ctx: TenantContext) -> Optional[int]:
+    if ctx.membership.role == "cliente":
+        return ctx.membership.client_id
+    return _get_selected_client_for_staff(request, session, ctx.company.id)
+
+
+def get_client_or_none(session: Session, company_id: int, client_id: Optional[int]) -> Optional[Client]:
+    if not client_id:
+        return None
+    c = session.get(Client, int(client_id))
+    if not c or c.company_id != company_id:
+        return None
+    return c
+
+
+def ensure_can_access_client(ctx: TenantContext, client_id: int) -> bool:
+    if _is_staff(ctx.membership.role):
+        return True
+    return ctx.membership.client_id == client_id
+
+
+# ----------------------------
+# Uploads
+# ----------------------------
+
+_FILENAME_RE = re.compile(r"[^A-Za-z0-9._-]+")
+
+
+def safe_filename(name: str) -> str:
+    name = name.strip().replace(" ", "_")
+    name = _FILENAME_RE.sub("_", name)
+    return name[:180] if len(name) > 180 else name
+
+
+async def save_upload(upload: UploadFile) -> tuple[str, str, int]:
+    original = upload.filename or "arquivo"
+    stored = f"{uuid.uuid4().hex}_{safe_filename(original)}"
+    path = UPLOAD_DIR / stored
+
+    size = 0
+    with path.open("wb") as f:
+        while True:
+            chunk = await upload.read(1024 * 1024)
+            if not chunk:
+                break
+            size += len(chunk)
+            if size > _MAX_UPLOAD_BYTES:
+                try:
+                    f.close()
+                finally:
+                    if path.exists():
+                        path.unlink(missing_ok=True)
+                raise ValueError("Arquivo excede o limite de tamanho.")
+            f.write(chunk)
+
+    mime = upload.content_type or "application/octet-stream"
+    return stored, mime, size
+
+
+# ----------------------------
+# Templates
+# ----------------------------
+
+
+# =========================
+# Meetings (Notion AI Meeting Notes sync)
+# =========================
+
+class Meeting(SQLModel, table=True):
+    """Meeting record linked to a client; can be synced from a Notion AI Meeting Notes page."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+
+    company_id: int = Field(index=True, foreign_key="company.id")
+    client_id: int = Field(index=True, foreign_key="client.id")
+    created_by_user_id: int = Field(index=True, foreign_key="user.id")
+
+    title: str = ""
+    meeting_date: str = ""  # DD/MM/AAAA (simple)
+    source: str = Field(default="notion", index=True)
+
+    notion_page_id: str = Field(default="", index=True)  # normalized UUID (with hyphens)
+    notion_url: str = ""
+    notion_meeting_block_id: str = Field(default="", index=True)
+    notion_status: str = Field(default="", index=True)
+
+    summary_text: str = ""
+    notes_text: str = ""
+    transcript_text: str = ""
+    action_items_text: str = ""
+
+    raw_json: str = Field(default="{}")
+    last_synced_at: Optional[datetime] = None
+
+    created_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime = Field(default_factory=utcnow)
+
+
+class MeetingMessage(SQLModel, table=True):
+    """Thread messages about a meeting (internal + client)."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+
+    meeting_id: int = Field(index=True, foreign_key="meeting.id")
+    author_user_id: int = Field(index=True, foreign_key="user.id")
+
+    message: str
+    created_at: datetime = Field(default_factory=utcnow)
+
+
+_MEETING_NOTION_STATUSES = {
+    "transcription_not_started",
+    "transcription_paused",
+    "transcription_in_progress",
+    "summary_in_progress",
+    "notes_ready",
+}
+
+
+def _normalize_uuid(raw: str) -> str:
+    s = (raw or "").strip()
+    # Extract 32 hex chars if URL-like
+    m = re.search(r"([0-9a-fA-F]{32})", s)
+    if m:
+        s = m.group(1)
+    s = s.replace("-", "").lower()
+    if len(s) != 32 or not re.fullmatch(r"[0-9a-f]{32}", s):
+        return ""
+    return f"{s[0:8]}-{s[8:12]}-{s[12:16]}-{s[16:20]}-{s[20:32]}"
+
+
+def _notion_headers() -> dict[str, str]:
+    if not NOTION_TOKEN:
+        raise RuntimeError("NOTION_TOKEN não está configurado.")
+    return {
+        "Authorization": f"Bearer {NOTION_TOKEN}",
+        "Notion-Version": NOTION_VERSION,
+    }
+
+
+async def _notion_get_json(path: str, *, params: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+    url = f"{NOTION_API_BASE}{path}"
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        r = await client.get(url, headers=_notion_headers(), params=params or {})
+        r.raise_for_status()
+        data = r.json()
+        return data if isinstance(data, dict) else {}
+
+
+async def _notion_list_block_children_all(block_id: str) -> list[dict[str, Any]]:
+    results: list[dict[str, Any]] = []
+    cursor: Optional[str] = None
+    while True:
+        params = {"page_size": 100}
+        if cursor:
+            params["start_cursor"] = cursor
+        data = await _notion_get_json(f"/blocks/{block_id}/children", params=params)
+        chunk = data.get("results") or []
+        if isinstance(chunk, list):
+            results.extend([x for x in chunk if isinstance(x, dict)])
+        if not data.get("has_more"):
+            break
+        cursor = data.get("next_cursor")
+        if not cursor:
+            break
+    return results
+
+
+def _rt_plain(rich_text: Any) -> str:
+    if not isinstance(rich_text, list):
+        return ""
+    parts: list[str] = []
+    for rt in rich_text:
+        if not isinstance(rt, dict):
+            continue
+        pt = rt.get("plain_text")
+        if isinstance(pt, str):
+            parts.append(pt)
+        else:
+            t = rt.get("text", {})
+            if isinstance(t, dict) and isinstance(t.get("content"), str):
+                parts.append(t["content"])
+    return "".join(parts).strip()
+
+
+async def _notion_blocks_to_lines(block_id: str, *, depth: int = 0, max_depth: int = 4) -> list[str]:
+    if depth > max_depth:
+        return []
+    blocks = await _notion_list_block_children_all(block_id)
+    out: list[str] = []
+    for b in blocks:
+        btype = b.get("type")
+        if not isinstance(btype, str):
+            continue
+        data = b.get(btype, {}) if isinstance(b.get(btype), dict) else {}
+
+        line = ""
+        if btype in {"paragraph", "quote", "callout"}:
+            line = _rt_plain(data.get("rich_text") or data.get("text"))
+            if btype == "quote" and line:
+                line = f"> {line}"
+            if btype == "callout" and line:
+                line = f"💬 {line}"
+        elif btype in {"heading_1", "heading_2", "heading_3"}:
+            h = _rt_plain(data.get("rich_text") or data.get("text"))
+            if h:
+                prefix = "#" if btype == "heading_1" else "##" if btype == "heading_2" else "###"
+                line = f"{prefix} {h}"
+        elif btype in {"bulleted_list_item", "numbered_list_item"}:
+            t = _rt_plain(data.get("rich_text") or data.get("text"))
+            if t:
+                bullet = "-" if btype == "bulleted_list_item" else "1."
+                line = f"{bullet} {t}"
+        elif btype == "to_do":
+            t = _rt_plain(data.get("rich_text") or data.get("text"))
+            checked = bool(data.get("checked"))
+            box = "☑" if checked else "☐"
+            if t:
+                line = f"{box} {t}"
+        elif btype == "toggle":
+            t = _rt_plain(data.get("rich_text") or data.get("text"))
+            if t:
+                line = f"▸ {t}"
+        elif btype == "code":
+            t = _rt_plain(data.get("rich_text") or data.get("text"))
+            lang = data.get("language") if isinstance(data.get("language"), str) else ""
+            if t:
+                line = f"```{lang}\n{t}\n```"
+        else:
+            # Fallback for other blocks that have rich_text
+            if isinstance(data, dict):
+                t = _rt_plain(data.get("rich_text") or data.get("text"))
+                if t:
+                    line = t
+
+        if line:
+            out.append(("  " * depth) + line)
+
+        if b.get("has_children") and isinstance(b.get("id"), str):
+            child_lines = await _notion_blocks_to_lines(b["id"], depth=depth + 1, max_depth=max_depth)
+            out.extend(child_lines)
+
+    return [x for x in out if isinstance(x, str) and x.strip()]
+
+
+def _extract_action_items_from_lines(lines: list[str]) -> str:
+    if not lines:
+        return ""
+    actions: list[str] = []
+    in_actions = False
+    for ln in lines:
+        low = ln.lower()
+        if low.startswith("#") and ("action" in low or "ação" in low or "acoes" in low or "ações" in low):
+            in_actions = True
+            continue
+        if low.startswith("#") and in_actions:
+            # next heading ends action section
+            in_actions = False
+        if in_actions:
+            if ln.strip().startswith(("-", "☐", "☑", "1.")):
+                actions.append(ln.strip())
+        else:
+            # also accept to-do items anywhere
+            if ln.strip().startswith(("☐", "☑")):
+                actions.append(ln.strip())
+    return "\n".join(actions).strip()
+
+
+async def _notion_find_meeting_notes_block(page_id: str) -> Optional[dict[str, Any]]:
+    # BFS up to a small depth: page children -> nested children
+    queue = [(page_id, 0)]
+    seen: set[str] = set()
+    while queue:
+        bid, depth = queue.pop(0)
+        if bid in seen:
+            continue
+        seen.add(bid)
+        blocks = await _notion_list_block_children_all(bid)
+        for b in blocks:
+            btype = b.get("type")
+            if btype in {"meeting_notes", "transcription"}:
+                return b
+        if depth < 3:
+            for b in blocks:
+                if b.get("has_children") and isinstance(b.get("id"), str):
+                    queue.append((b["id"], depth + 1))
+    return None
+
+
+async def notion_sync_meeting_from_page(page_id_or_url: str) -> dict[str, Any]:
+    page_id = _normalize_uuid(page_id_or_url)
+    if not page_id:
+        raise ValueError("Não foi possível extrair o ID da página do Notion.")
+    meeting_block = await _notion_find_meeting_notes_block(page_id)
+    if not meeting_block:
+        raise ValueError("Não encontrei um bloco de AI Meeting Notes nessa página (meeting_notes/transcription).")
+
+    block_id = meeting_block.get("id", "")
+    prop = meeting_block.get("meeting_notes") or meeting_block.get("transcription") or {}
+    title = _rt_plain(prop.get("title")) if isinstance(prop, dict) else ""
+    status = prop.get("status") if isinstance(prop, dict) and isinstance(prop.get("status"), str) else ""
+    children = prop.get("children") if isinstance(prop, dict) else {}
+    if not isinstance(children, dict):
+        children = {}
+
+    summary_block_id = children.get("summary_block_id") if isinstance(children.get("summary_block_id"), str) else ""
+    notes_block_id = children.get("notes_block_id") if isinstance(children.get("notes_block_id"), str) else ""
+    transcript_block_id = children.get("transcript_block_id") if isinstance(children.get("transcript_block_id"),
+                                                                            str) else ""
+
+    summary_lines = await _notion_blocks_to_lines(summary_block_id) if summary_block_id else []
+    notes_lines = await _notion_blocks_to_lines(notes_block_id) if notes_block_id else []
+    transcript_lines = await _notion_blocks_to_lines(transcript_block_id) if transcript_block_id else []
+
+    action_items = _extract_action_items_from_lines(summary_lines + notes_lines)
+
+    return {
+        "page_id": page_id,
+        "meeting_block_id": block_id,
+        "title": title,
+        "status": status,
+        "summary_text": "\n".join(summary_lines).strip(),
+        "notes_text": "\n".join(notes_lines).strip(),
+        "transcript_text": "\n".join(transcript_lines).strip(),
+        "action_items_text": action_items,
+        "raw": meeting_block,
+    }
+
+
+TEMPLATES.setdefault("consulta_consent_accept.html", r"""{% extends "base.html" %}
+{% block content %}
+<div class="container py-4" style="max-width: 900px;">
+  <div class="card p-4">
+    <div class="d-flex align-items-center justify-content-between">
+      <div>
+        <div class="fw-semibold">Aceite para consulta ao SCR (Bacen)</div>
+        <div class="muted small">{{ company.name }}</div>
+      </div>
+      <span class="badge bg-secondary">Público</span>
+    </div>
+
+    <hr class="my-3"/>
+
+    <div class="mb-2">
+      <div class="muted small">Documento (CPF/CNPJ) consultado:</div>
+      <div class="fw-semibold mono">{{ doc_masked }}</div>
+    </div>
+
+    <div class="border rounded p-3 bg-light" style="max-height: 260px; overflow:auto;">
+      {{ terms_html|safe }}
+    </div>
+
+    {% if error %}
+      <div class="alert alert-danger mt-3 mb-0">{{ error }}</div>
+    {% endif %}
+
+    <form method="post" action="/consultas/consent/aceite/{{ token }}" class="mt-3">
+      <div class="row g-2">
+        <div class="col-md-8">
+          <label class="form-label">Seu nome</label>
+          <input class="form-control" name="signed_by_name" value="{{ form.name }}" required>
+        </div>
+        <div class="col-md-4">
+          <label class="form-label">4 últimos dígitos</label>
+          <input class="form-control" name="doc_last4" placeholder="XXXX" maxlength="4" inputmode="numeric">
+          <div class="form-text">Para confirmar que você é o titular do documento.</div>
+        </div>
+        <div class="col-12">
+          <div class="form-check mt-1">
+            <input class="form-check-input" type="checkbox" name="agree" id="agree" required>
+            <label class="form-check-label" for="agree">Li o termo e autorizo a consulta ao SCR.</label>
+          </div>
+          <div class="muted small mt-2">
+            Registraremos evidências do aceite (data/hora, IP e navegador) para auditoria.
+          </div>
+        </div>
+        <div class="col-12">
+          <button class="btn btn-primary" type="submit">Confirmar aceite</button>
+        </div>
+      </div>
+    </form>
+
+    <div class="muted small mt-3">Você pode fechar esta página após confirmar.</div>
+  </div>
+</div>
+{% endblock %}
+""")
+
+TEMPLATES.update({"admin_ui.html": r"""{% extends "base.html" %}
+{% block content %}
+<div class="d-flex align-items-center justify-content-between">
+  <div>
+    <h4 class="mb-0">Configurações de UI</h4>
+    <div class="muted small">Banner do topo e feeds de notícias.</div>
+  </div>
+</div>
+
+<div class="row g-3 mt-2">
+
+  <div class="col-12">
+    <div class="card p-3">
+      <div class="fw-semibold mb-2">Banner (carrossel)</div>
+
+      <form method="post" action="/admin/ui/banner/add" enctype="multipart/form-data" class="row g-2">
+        <div class="col-md-3">
+          <label class="form-label small muted">Título</label>
+          <input class="form-control" name="title" placeholder="Ex.: Simule seu crédito">
+        </div>
+        <div class="col-md-3">
+          <label class="form-label small muted">Link interno</label>
+          <input class="form-control" name="link_path" placeholder="/simulador" value="/simulador">
+        </div>
+        <div class="col-md-3">
+          <label class="form-label small muted">Imagem (URL)</label>
+          <input class="form-control" name="image_url" placeholder="https://...">
+          <div class="form-text">Ou envie um arquivo.</div>
+        </div>
+        <div class="col-md-3">
+          <label class="form-label small muted">Upload</label>
+          <input class="form-control" type="file" name="image_file" accept="image/*">
+        </div>
+        <div class="col-md-2">
+          <label class="form-label small muted">Ordem</label>
+          <input class="form-control" name="sort_order" value="0">
+        </div>
+        <div class="col-md-2 d-flex align-items-end">
+          <div class="form-check">
+            <input class="form-check-input" type="checkbox" name="is_active" checked>
+            <label class="form-check-label small">Ativo</label>
+          </div>
+        </div>
+        <div class="col-md-8 d-flex align-items-end gap-2">
+          <button class="btn btn-primary" type="submit">Adicionar</button>
+          <a class="btn btn-outline-secondary" href="/">Voltar</a>
+        </div>
+      </form>
+
+      <hr class="my-3"/>
+
+      {% if slides %}
+        <div class="table-responsive">
+          <table class="table table-sm align-middle">
+            <thead>
+              <tr class="muted small">
+                <th>#</th><th>Preview</th><th>Título</th><th>Link</th><th>Ordem</th><th>Status</th><th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for s in slides %}
+              <tr>
+                <td class="mono">{{ s.id }}</td>
+                <td style="width:140px;">
+                  <img src="{{ s.image_url }}" style="height:44px; width:120px; object-fit:cover; border-radius:10px;" />
+                </td>
+                <td>{{ s.title }}</td>
+                <td class="mono">{{ s.link_path }}</td>
+                <td>{{ s.sort_order }}</td>
+                <td>
+                  {% if s.is_active %}
+                    <span class="badge text-bg-success">Ativo</span>
+                  {% else %}
+                    <span class="badge text-bg-secondary">Inativo</span>
+                  {% endif %}
+                </td>
+                <td class="text-end">
+                  <form method="post" action="/admin/ui/banner/{{ s.id }}/toggle" style="display:inline;">
+                    <button class="btn btn-sm btn-outline-primary" type="submit">Alternar</button>
+                  </form>
+                  <form method="post" action="/admin/ui/banner/{{ s.id }}/delete" style="display:inline;" onsubmit="return confirm('Remover slide?');">
+                    <button class="btn btn-sm btn-outline-danger" type="submit">Excluir</button>
+                  </form>
+                </td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      {% else %}
+        <div class="muted small">Nenhum slide cadastrado.</div>
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="col-12">
+    <div class="card p-3">
+      <div class="fw-semibold mb-2">Feeds de notícias</div>
+
+      <form method="post" action="/admin/ui/feed/add" class="row g-2">
+        <div class="col-md-3">
+          <label class="form-label small muted">Nome</label>
+          <input class="form-control" name="name" placeholder="Ex.: Money Times" required>
+        </div>
+        <div class="col-md-7">
+          <label class="form-label small muted">URL do RSS/Atom</label>
+          <input class="form-control" name="url" placeholder="https://..." required>
+        </div>
+        <div class="col-md-2">
+          <label class="form-label small muted">Ordem</label>
+          <input class="form-control" name="sort_order" value="0">
+        </div>
+        <div class="col-md-2 d-flex align-items-end">
+          <div class="form-check">
+            <input class="form-check-input" type="checkbox" name="is_active" checked>
+            <label class="form-check-label small">Ativo</label>
+          </div>
+        </div>
+        <div class="col-md-10 d-flex align-items-end">
+          <button class="btn btn-primary" type="submit">Adicionar feed</button>
+        </div>
+      </form>
+
+      <hr class="my-3"/>
+
+      {% if feeds %}
+        <div class="table-responsive">
+          <table class="table table-sm align-middle">
+            <thead>
+              <tr class="muted small">
+                <th>#</th><th>Nome</th><th>URL</th><th>Ordem</th><th>Status</th><th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for f in feeds %}
+              <tr>
+                <td class="mono">{{ f.id }}</td>
+                <td>{{ f.name }}</td>
+                <td class="mono">{{ f.url }}</td>
+                <td>{{ f.sort_order }}</td>
+                <td>
+                  {% if f.is_active %}
+                    <span class="badge text-bg-success">Ativo</span>
+                  {% else %}
+                    <span class="badge text-bg-secondary">Inativo</span>
+                  {% endif %}
+                </td>
+                <td class="text-end">
+                  <form method="post" action="/admin/ui/feed/{{ f.id }}/toggle" style="display:inline;">
+                    <button class="btn btn-sm btn-outline-primary" type="submit">Alternar</button>
+                  </form>
+                  <form method="post" action="/admin/ui/feed/{{ f.id }}/delete" style="display:inline;" onsubmit="return confirm('Remover feed?');">
+                    <button class="btn btn-sm btn-outline-danger" type="submit">Excluir</button>
+                  </form>
+                </td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      {% else %}
+        <div class="muted small">Nenhum feed cadastrado.</div>
+      {% endif %}
+      <div class="muted small mt-2">
+        Dica: use feeds RSS/Atom oficiais sempre que possível.
+      </div>
+    </div>
+  </div>
+
+</div>
+{% endblock %}""", })
+
+
+def render(
+        template_name: str,
+        *,
+        request: Request,
+        context: Optional[dict[str, Any]] = None,
+        status_code: int = 200,
+) -> HTMLResponse:
+    ctx = context or {}
+    ctx["request"] = request
+    ctx.setdefault("title", "App Escritório")
+    ctx.setdefault("flash", request.session.pop("flash", None) if hasattr(request, "session") else None)
+    ctx.setdefault("allow_company_signup", ALLOW_COMPANY_SIGNUP)
+    ctx.setdefault("service_catalog", SERVICE_CATALOG)
+    ctx.setdefault("bookings_url", BOOKINGS_URL)
+    ctx.setdefault("format_dt_br", _format_dt_br)
+
+    # Inject tenant context defaults for templates that expect them.
+    try:
+        with Session(engine) as _db:
+            _t = get_tenant_context(request, _db)
+            if _t:
+                ctx.setdefault("current_user", _t.user)
+                ctx.setdefault("current_company", _t.company)
+                active_client_id = get_active_client_id(request, _db, _t)
+                ctx.setdefault("current_client", get_client_or_none(_db, _t.company.id, active_client_id))
+                ctx.setdefault("role", _t.membership.role)
+    except Exception:
+        pass
+    return HTMLResponse(templates_env.get_template(template_name).render(**ctx), status_code=status_code)
+
+
+# ----------------------------
+# App
+# ----------------------------
+
+app = FastAPI()
+
+
+def _pluggy_schedule_sync_loans(*, company_id: int, subject_doc: str, item_id: str) -> None:
+    async def _runner() -> None:
+        with Session(engine) as s:
+            await pluggy_sync_loans(session=s, company_id=company_id, subject_doc=subject_doc, item_id=item_id)
+
+    asyncio.create_task(_runner())
+
+
+@app.get("/__routes", include_in_schema=False)
+async def __routes() -> list[str]:
+    return sorted({getattr(r, "path", "") for r in app.router.routes})
+
+
+@app.get("/__build", include_in_schema=False)
+async def __build() -> dict:
+    return {"build": "stable_debug_v2"}
+
+
+https_only = os.getenv("SESSION_HTTPS_ONLY", "0") == "1"
+# NOTE: SessionMiddleware must wrap feature_access_middleware, installed later.
+
+STATIC_DIR = Path(__file__).with_name("static").resolve()
+STATIC_DIR.mkdir(parents=True, exist_ok=True)
+
+app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+
+def _public_page_html(*, title: str, heading: str, subtitle: str, body_html: str) -> str:
+    updated_at = datetime.now().strftime("%d/%m/%Y")
+    return f"""<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{html.escape(title)}</title>
+  <style>
+    body {{
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+      background: #f6f7fb;
+      color: #1f2937;
+    }}
+    .page-wrap {{
+      max-width: 920px;
+      margin: 40px auto;
+      padding: 0 16px;
+    }}
+    .top-links {{
+      margin-bottom: 14px;
+      font-size: 14px;
+    }}
+    .top-links a {{
+      margin-right: 14px;
+      color: #1d4ed8;
+      text-decoration: none;
+    }}
+    .card-public {{
+      background: #fff;
+      border: 1px solid #e5e7eb;
+      border-radius: 18px;
+      box-shadow: 0 8px 30px rgba(0,0,0,.04);
+      overflow: hidden;
+    }}
+    .header-public {{
+      padding: 24px 28px;
+      border-bottom: 1px solid #e5e7eb;
+      background: linear-gradient(180deg, #ffffff 0%, #fafafa 100%);
+    }}
+    .body-public {{
+      padding: 28px;
+    }}
+    .footer-public {{
+      padding: 18px 28px;
+      border-top: 1px solid #e5e7eb;
+      background: #fafafa;
+      font-size: 14px;
+      color: #6b7280;
+    }}
+    h1 {{
+      font-size: 1.8rem;
+      margin: 0;
+    }}
+    h2 {{
+      font-size: 1.1rem;
+      margin-top: 1.75rem;
+    }}
+    p, li {{
+      line-height: 1.65;
+    }}
+    .muted {{
+      color: #6b7280;
+      margin-top: 8px;
+    }}
+    a {{
+      color: #1d4ed8;
+    }}
+  </style>
+</head>
+<body>
+  <div class="page-wrap">
+    <div class="top-links">
+      <a href="/politica-de-privacidade">Política de Privacidade</a>
+      <a href="/termos-de-servico">Termos de Serviço</a>
+      <a href="/exclusao-de-dados">Exclusão de Dados</a>
+    </div>
+    <div class="card-public">
+      <div class="header-public">
+        <h1>{html.escape(heading)}</h1>
+        <div class="muted">{html.escape(subtitle)}</div>
+      </div>
+      <div class="body-public">
+        {body_html}
+      </div>
+      <div class="footer-public">
+        Maffezzolli Capital • Última atualização: {html.escape(updated_at)}
+      </div>
+    </div>
+  </div>
+</body>
+</html>"""
+
+
+@app.get("/politica-de-privacidade", response_class=HTMLResponse)
+async def politica_privacidade_public() -> HTMLResponse:
+    body_html = """
+    <p>
+      A Maffezzolli Capital valoriza a privacidade e a proteção dos dados pessoais de clientes,
+      leads, parceiros e usuários da plataforma.
+    </p>
+
+    <h2>1. Dados coletados</h2>
+    <p>
+      Podemos coletar nome, telefone, e-mail, empresa, mensagens trocadas via WhatsApp,
+      dados cadastrais, informações comerciais e operacionais, além de registros necessários
+      para atendimento, suporte, relacionamento e execução dos serviços.
+    </p>
+
+    <h2>2. Finalidade do uso dos dados</h2>
+    <p>Os dados podem ser utilizados para:</p>
+    <ul>
+      <li>atendimento ao cliente e resposta a solicitações;</li>
+      <li>gestão de relacionamento comercial e operacional;</li>
+      <li>envio de comunicações relacionadas aos serviços;</li>
+      <li>registro do histórico de interações e conversas;</li>
+      <li>cumprimento de obrigações legais, regulatórias e contratuais;</li>
+      <li>segurança, prevenção a fraude e melhoria dos processos internos.</li>
+    </ul>
+
+    <h2>3. Compartilhamento</h2>
+    <p>
+      Os dados poderão ser tratados por fornecedores de tecnologia e infraestrutura
+      necessários ao funcionamento da operação, incluindo hospedagem, banco de dados,
+      integrações, envio de mensagens e ferramentas operacionais, sempre no limite do necessário.
+    </p>
+
+    <h2>4. WhatsApp e serviços de terceiros</h2>
+    <p>
+      Ao interagir com a Maffezzolli Capital por canais como WhatsApp, algumas informações
+      poderão ser processadas por provedores terceiros, conforme as políticas dessas plataformas.
+    </p>
+
+    <h2>5. Segurança</h2>
+    <p>
+      Adotamos medidas técnicas e administrativas razoáveis para proteger os dados contra
+      acesso não autorizado, destruição, perda, alteração, comunicação ou difusão indevida.
+    </p>
+
+    <h2>6. Retenção</h2>
+    <p>
+      Os dados são armazenados pelo período necessário para cumprir as finalidades desta política,
+      obrigações legais, regulatórias, contratuais e exercício regular de direitos.
+    </p>
+
+    <h2>7. Direitos do titular</h2>
+    <p>
+      O titular poderá solicitar acesso, correção, atualização ou exclusão de seus dados,
+      quando aplicável, por meio do canal de contato informado nesta página.
+    </p>
+
+    <h2>8. Exclusão de dados</h2>
+    <p>
+      Para solicitar exclusão de dados, consulte:
+      <a href="/exclusao-de-dados">/exclusao-de-dados</a>.
+    </p>
+
+    <h2>9. Contato</h2>
+    <p>
+      Solicitações relacionadas à privacidade e proteção de dados podem ser enviadas para:
+      <br>
+      <strong>rafael@maffezzollicapital.com.br</strong>
+    </p>
+
+    <h2>10. Atualizações</h2>
+    <p>
+      Esta política poderá ser alterada periodicamente para refletir mudanças operacionais,
+      legais, regulatórias ou técnicas.
+    </p>
+    """
+    return HTMLResponse(
+        _public_page_html(
+            title="Política de Privacidade - Maffezzolli Capital",
+            heading="Política de Privacidade",
+            subtitle="Informações sobre coleta, uso, proteção e direitos relacionados aos dados pessoais.",
+            body_html=body_html,
+        )
+    )
+
+
+@app.get("/termos-de-servico", response_class=HTMLResponse)
+async def termos_de_servico_public() -> HTMLResponse:
+    body_html = """
+    <p>
+      Ao utilizar os canais, a plataforma e os serviços da Maffezzolli Capital,
+      o usuário concorda com estes Termos de Serviço.
+    </p>
+
+    <h2>1. Objeto</h2>
+    <p>
+      Os serviços possuem finalidade comercial, operacional, administrativa,
+      de atendimento ao cliente e relacionamento com usuários e parceiros.
+    </p>
+
+    <h2>2. Uso adequado</h2>
+    <p>
+      O usuário concorda em utilizar a plataforma e os canais de atendimento de forma lícita,
+      sem envio de conteúdo abusivo, fraudulento, ilícito ou que viole direitos de terceiros.
+    </p>
+
+    <h2>3. Disponibilidade</h2>
+    <p>
+      Os serviços poderão passar por manutenção, atualização, interrupções temporárias
+      ou evolução funcional, sem garantia de disponibilidade ininterrupta.
+    </p>
+
+    <h2>4. Comunicações</h2>
+    <p>
+      O usuário reconhece que poderá receber comunicações operacionais e respostas
+      por meios digitais, inclusive WhatsApp e e-mail, quando houver interação prévia
+      ou outra base legal aplicável.
+    </p>
+
+    <h2>5. Limitação de responsabilidade</h2>
+    <p>
+      A Maffezzolli Capital emprega esforços razoáveis para manter os serviços operacionais,
+      mas não garante funcionamento ininterrupto, ausência total de falhas
+      ou adequação a finalidades específicas de terceiros.
+    </p>
+
+    <h2>6. Privacidade</h2>
+    <p>
+      O tratamento de dados pessoais segue a
+      <a href="/politica-de-privacidade">Política de Privacidade</a>.
+    </p>
+
+    <h2>7. Alterações</h2>
+    <p>
+      Estes termos poderão ser atualizados a qualquer momento, com vigência a partir
+      da publicação da versão mais recente nesta página.
+    </p>
+
+    <h2>8. Contato</h2>
+    <p>
+      Dúvidas sobre estes termos podem ser enviadas para:
+      <br>
+      <strong>rafael@maffezzollicapital.com.br</strong>
+    </p>
+    """
+    return HTMLResponse(
+        _public_page_html(
+            title="Termos de Serviço - Maffezzolli Capital",
+            heading="Termos de Serviço",
+            subtitle="Condições gerais de uso dos canais, sistema e serviços da Maffezzolli Capital.",
+            body_html=body_html,
+        )
+    )
+
+
+@app.get("/exclusao-de-dados", response_class=HTMLResponse)
+async def exclusao_de_dados_public() -> HTMLResponse:
+    body_html = """
+    <p>
+      Se você deseja solicitar a exclusão dos seus dados pessoais tratados pela
+      Maffezzolli Capital, envie uma solicitação para:
+    </p>
+
+    <p><strong>rafael@maffezzollicapital.com.br</strong></p>
+
+    <h2>Informações que devem constar no pedido</h2>
+    <ul>
+      <li>nome completo;</li>
+      <li>telefone;</li>
+      <li>e-mail;</li>
+      <li>dados que ajudem a localizar o cadastro;</li>
+      <li>descrição objetiva da solicitação.</li>
+    </ul>
+
+    <h2>Prazo e análise</h2>
+    <p>
+      Após o recebimento, a solicitação será analisada e respondida em prazo razoável,
+      observadas as obrigações legais, regulatórias, contratuais e de retenção aplicáveis.
+    </p>
+
+    <h2>Hipóteses de retenção parcial</h2>
+    <p>Alguns dados poderão ser mantidos quando necessários para:</p>
+    <ul>
+      <li>cumprimento de obrigação legal ou regulatória;</li>
+      <li>exercício regular de direitos;</li>
+      <li>prevenção a fraude e segurança;</li>
+      <li>manutenção de registros mínimos obrigatórios.</li>
+    </ul>
+    """
+    return HTMLResponse(
+        _public_page_html(
+            title="Exclusão de Dados - Maffezzolli Capital",
+            heading="Exclusão de Dados do Usuário",
+            subtitle="Canal público para solicitação de exclusão de dados pessoais.",
+            body_html=body_html,
+        )
+    )
+
+
+@app.middleware("http")
+async def feature_access_middleware(request: Request, call_next: Callable[..., Any]) -> Response:
+    path = request.url.path
+    if (
+            path.startswith("/__")
+            or path.startswith("/health")
+            or path.startswith("/healthz")
+            or path.startswith("/static")
+            or path.startswith("/api/ui/")
+            or path.startswith("/stripe/webhook")
+    ):
+        return await call_next(request)
+
+    key = resolve_feature_key(request.url.path)
+    if key is None:
+        return await call_next(request)
+
+    if session_user_id(request) is None:
+        return await call_next(request)
+
+    session = Session(engine)
+    try:
+        ctx = get_tenant_context(request, session)
+        if not ctx:
+            return await call_next(request)
+
+        active_client_id = get_active_client_id(request, session, ctx)
+        current_client = get_client_or_none(session, ctx.company.id, active_client_id)
+
+        try:
+            allowed = effective_allowed_features(session, ctx=ctx, current_client=current_client)
+        except Exception:
+            allowed = set(ROLE_DEFAULT_FEATURES.get(ctx.membership.role, set()))
+
+        roles = FEATURE_VISIBLE_ROLES.get(key)
+        if roles and ctx.membership.role not in roles:
+            return render(
+                "error.html",
+                request=request,
+                context={
+                    "current_user": ctx.user,
+                    "current_company": ctx.company,
+                    "role": ctx.membership.role,
+                    "current_client": current_client,
+                    "message": "Você não tem permissão para acessar esta área.",
+                },
+                status_code=403,
+            )
+
+        if key not in allowed:
+            return render(
+                "error.html",
+                request=request,
+                context={
+                    "current_user": ctx.user,
+                    "current_company": ctx.company,
+                    "role": ctx.membership.role,
+                    "current_client": current_client,
+                    "message": "Acesso não habilitado para este usuário/cliente.",
+                },
+                status_code=403,
+            )
+
+        return await call_next(request)
+    finally:
+        session.close()
+
+
+# Install SessionMiddleware last so request.session is available inside BaseHTTPMiddleware.
+app.add_middleware(SessionMiddleware, secret_key=APP_SECRET_KEY, https_only=https_only, same_site="lax")
+
+
+@app.on_event("startup")
+def _startup() -> None:
+    init_db()
+    ensure_ui_tables()
+    ensure_feature_access_tables()
+    ensure_credit_consent_table()
+    ensure_office_finance_tables()
+    ensure_offer_engine_tables()
+    ensure_offer_engine_columns()
+    ensure_smart_alert_table()
+    ensure_task_work_session_table()
+    with Session(engine) as _s:
+        try:
+            seed_product_families(_s)
+            ids = [x[0] for x in _s.exec(select(Company.id)).all()]
+            for _cid in ids:
+                seed_internal_services(_s, int(_cid))
+                seed_office_finance_defaults(_s, int(_cid))
+        except Exception:
+            pass
+    UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+
+
+@app.get("/login", response_class=HTMLResponse)
+async def login_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
+    if get_current_user(request, session):
+        return RedirectResponse("/", status_code=303)
+    return render("login.html", request=request, context={"current_user": None})
+
+
+@app.get("/consultoria", response_class=HTMLResponse)
+@require_login
+async def consultoria_list(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+
+    active_client_id = get_active_client_id(request, session, ctx)
+    current_client = get_client_or_none(session, ctx.company.id, active_client_id)
+
+    q = select(ConsultingProject).where(ConsultingProject.company_id == ctx.company.id).order_by(
+        ConsultingProject.created_at.desc())
+
+    if ctx.membership.role == "cliente":
+        q = q.where(ConsultingProject.client_id == (ctx.membership.client_id or -1))
+    else:
+        if current_client:
+            q = q.where(ConsultingProject.client_id == current_client.id)
+
+    projects = session.exec(q).all()
+
+    out = []
+    for p in projects:
+        c = session.get(Client, p.client_id)
+        progress = compute_project_progress(session, p.id)
+        out.append(
+            {
+                "id": p.id,
+                "name": p.name,
+                "status": p.status,
+                "due_date": p.due_date,
+                "client_name": c.name if c else "—",
+                "progress_pct": int(round(progress * 100)),
+            }
+        )
+
+    return render(
+        "consult_list.html",
+        request=request,
+        context={
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "role": ctx.membership.role,
+            "current_client": current_client,
+            "projects": out,
+        },
+    )
+
+
+@app.get("/consultoria/novo", response_class=HTMLResponse)
+@require_role({"admin", "equipe"})
+async def consultoria_new_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    # Garante tabelas em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
+    if not ensure_client_invite_table():
+        set_flash(request, "Sistema de convites não está configurado (migração pendente no banco).")
+        return RedirectResponse("/client/switch", status_code=303)
+
+    clients = session.exec(select(Client).where(Client.company_id == ctx.company.id).order_by(Client.created_at)).all()
+    active_client_id = get_active_client_id(request, session, ctx)
+    current_client = get_client_or_none(session, ctx.company.id, active_client_id)
+
+    return render(
+        "consult_new.html",
+        request=request,
+        context={
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "role": ctx.membership.role,
+            "current_client": current_client,
+            "clients": clients,
+        },
+    )
+
+
+@app.get("/consultoria/{project_id}/editar", response_class=HTMLResponse)
+@require_role({"admin", "equipe"})
+async def consultoria_edit_project_page(request: Request, session: Session = Depends(get_session),
+                                        project_id: int = 0) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
+    project = session.get(ConsultingProject, int(project_id))
+    if not project or project.company_id != ctx.company.id:
+        return render("error.html", request=request, context={"message": "Projeto não encontrado."}, status_code=404)
+
+    client = session.get(Client, project.client_id)
+    active_client_id = get_active_client_id(request, session, ctx)
+    current_client = get_client_or_none(session, ctx.company.id, active_client_id)
+
+    return render(
+        "consult_edit_project.html",
+        request=request,
+        context={"current_user": ctx.user, "current_company": ctx.company, "role": ctx.membership.role,
+                 "current_client": current_client, "project": project, "client": client},
+    )
+
+
+@app.post("/consultoria/{project_id}/editar")
+@require_role({"admin", "equipe"})
+async def consultoria_edit_project_action(
+        request: Request,
+        session: Session = Depends(get_session),
+        project_id: int = 0,
+        name: str = Form(...),
+        status: str = Form("ativo"),
+        start_date: str = Form(""),
+        due_date: str = Form(""),
+        description: str = Form(""),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
+    project = session.get(ConsultingProject, int(project_id))
+    if not project or project.company_id != ctx.company.id:
+        set_flash(request, "Projeto não encontrado.")
+        return RedirectResponse("/consultoria", status_code=303)
+
+    status = status.strip().lower()
+    if status not in {"ativo", "pausado", "concluido"}:
+        status = "ativo"
+
+    project.name = name.strip()
+    project.status = status
+    project.start_date = _normalize_date_input(start_date)
+    project.due_date = _normalize_date_input(due_date)
+    project.description = description.strip()
+    project.updated_at = utcnow()
+
+    session.add(project)
+    session.commit()
+
+    set_flash(request, "Projeto atualizado.")
+    return RedirectResponse(f"/consultoria/{project.id}", status_code=303)
+
+
+@app.post("/consultoria/{project_id}/excluir")
+@require_role({"admin", "equipe"})
+async def consultoria_delete_project(request: Request, session: Session = Depends(get_session),
+                                     project_id: int = 0) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
+    project = session.get(ConsultingProject, int(project_id))
+    if not project or project.company_id != ctx.company.id:
+        set_flash(request, "Projeto não encontrado.")
+        return RedirectResponse("/consultoria", status_code=303)
+
+    stages = session.exec(select(ConsultingStage).where(ConsultingStage.project_id == project.id)).all()
+    stage_ids = [s.id for s in stages]
+    if stage_ids:
+        steps = session.exec(select(ConsultingStep).where(ConsultingStep.stage_id.in_(stage_ids))).all()
+        for st in steps:
+            session.delete(st)
+    for s in stages:
+        session.delete(s)
+
+    session.delete(project)
+    session.commit()
+
+    set_flash(request, "Projeto excluído.")
+    return RedirectResponse("/consultoria", status_code=303)
+
+
+@app.get("/consultoria/stages/{stage_id}/editar", response_class=HTMLResponse)
+@require_role({"admin", "equipe"})
+async def consultoria_edit_stage_page(request: Request, session: Session = Depends(get_session),
+                                      stage_id: int = 0) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
+    stage = session.get(ConsultingStage, int(stage_id))
+    if not stage:
+        return render("error.html", request=request, context={"message": "Etapa não encontrada."}, status_code=404)
+
+    project = session.get(ConsultingProject, stage.project_id)
+    if not project or project.company_id != ctx.company.id:
+        return render("error.html", request=request, context={"message": "Projeto inválido."}, status_code=403)
+
+    active_client_id = get_active_client_id(request, session, ctx)
+    current_client = get_client_or_none(session, ctx.company.id, active_client_id)
+
+    return render(
+        "consult_edit_stage.html",
+        request=request,
+        context={"current_user": ctx.user, "current_company": ctx.company, "role": ctx.membership.role,
+                 "current_client": current_client, "stage": stage, "project": project},
+    )
+
+
+@app.post("/consultoria/stages/{stage_id}/editar")
+@require_role({"admin", "equipe"})
+async def consultoria_edit_stage_action(
+        request: Request,
+        session: Session = Depends(get_session),
+        stage_id: int = 0,
+        name: str = Form(...),
+        due_date: str = Form(""),
+        order: int = Form(1),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
+    stage = session.get(ConsultingStage, int(stage_id))
+    if not stage:
+        set_flash(request, "Etapa não encontrada.")
+        return RedirectResponse("/consultoria", status_code=303)
+
+    project = session.get(ConsultingProject, stage.project_id)
+    if not project or project.company_id != ctx.company.id:
+        set_flash(request, "Projeto inválido.")
+        return RedirectResponse("/consultoria", status_code=303)
+
+    try:
+        stage.name = (name or "").strip()
+        stage.due_date = _normalize_date_input(due_date)
+        try:
+            stage.order = max(1, int(order))
+        except Exception:
+            stage.order = max(1, int(stage.order or 1))
+        session.add(stage)
+        session.commit()
+        set_flash(request, "Etapa atualizada.")
+    except Exception as e:
+        session.rollback()
+        set_flash(request, f"Não foi possível atualizar a etapa: {e}")
+    return RedirectResponse(f"/consultoria/{project.id}", status_code=303)
+
+
+@app.post("/consultoria/stages/{stage_id}/excluir")
+@require_role({"admin", "equipe"})
+async def consultoria_delete_stage(request: Request, session: Session = Depends(get_session),
+                                   stage_id: int = 0) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
+    stage = session.get(ConsultingStage, int(stage_id))
+    if not stage:
+        set_flash(request, "Etapa não encontrada.")
+        return RedirectResponse("/consultoria", status_code=303)
+
+    project = session.get(ConsultingProject, stage.project_id)
+    if not project or project.company_id != ctx.company.id:
+        set_flash(request, "Projeto inválido.")
+        return RedirectResponse("/consultoria", status_code=303)
+
+    try:
+        steps = session.exec(select(ConsultingStep).where(ConsultingStep.stage_id == stage.id)).all()
+        for st in steps:
+            session.delete(st)
+        session.delete(stage)
+        session.commit()
+        set_flash(request, "Etapa excluída.")
+    except Exception as e:
+        session.rollback()
+        set_flash(request, f"Não foi possível excluir a etapa: {e}")
+    return RedirectResponse(f"/consultoria/{project.id}", status_code=303)
+
+
+@app.get("/consultoria/steps/{step_id}/editar", response_class=HTMLResponse)
+@require_role({"admin", "equipe"})
+async def consultoria_edit_step_page(request: Request, session: Session = Depends(get_session),
+                                     step_id: int = 0) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
+    step = session.get(ConsultingStep, int(step_id))
+    if not step:
+        return render("error.html", request=request, context={"message": "Sub-etapa não encontrada."}, status_code=404)
+
+    stage = session.get(ConsultingStage, step.stage_id)
+    project = session.get(ConsultingProject, stage.project_id) if stage else None
+    if not project or project.company_id != ctx.company.id:
+        return render("error.html", request=request, context={"message": "Projeto inválido."}, status_code=403)
+
+    active_client_id = get_active_client_id(request, session, ctx)
+    current_client = get_client_or_none(session, ctx.company.id, active_client_id)
+
+    return render(
+        "consult_edit_step.html",
+        request=request,
+        context={"current_user": ctx.user, "current_company": ctx.company, "role": ctx.membership.role,
+                 "current_client": current_client, "step": step, "project": project},
+    )
+
+
+@app.post("/consultoria/steps/{step_id}/editar")
+@require_role({"admin", "equipe"})
+async def consultoria_edit_step_action(
+        request: Request,
+        session: Session = Depends(get_session),
+        step_id: int = 0,
+        title: str = Form(...),
+        description: str = Form(""),
+        due_date: str = Form(""),
+        weight: float = Form(1.0),
+        client_action: str = Form(""),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
+    step = session.get(ConsultingStep, int(step_id))
+    if not step:
+        set_flash(request, "Sub-etapa não encontrada.")
+        return RedirectResponse("/consultoria", status_code=303)
+
+    stage = session.get(ConsultingStage, step.stage_id)
+    project = session.get(ConsultingProject, stage.project_id) if stage else None
+    if not project or project.company_id != ctx.company.id:
+        set_flash(request, "Projeto inválido.")
+        return RedirectResponse("/consultoria", status_code=303)
+
+    try:
+        step.title = (title or "").strip()
+        step.description = (description or "").strip()
+        step.due_date = _normalize_date_input(due_date)
+        try:
+            step.weight = max(0.1, float(weight))
+        except Exception:
+            step.weight = max(0.1, float(step.weight or 1.0))
+        step.client_action = (client_action == "1")
+        step.updated_at = utcnow()
+        session.add(step)
+        session.commit()
+        set_flash(request, "Sub-etapa atualizada.")
+    except Exception as e:
+        session.rollback()
+        set_flash(request, f"Não foi possível atualizar a sub-etapa: {e}")
+    return RedirectResponse(f"/consultoria/{project.id}", status_code=303)
+
+
+@app.post("/consultoria/steps/{step_id}/excluir")
+@require_role({"admin", "equipe"})
+async def consultoria_delete_step(request: Request, session: Session = Depends(get_session),
+                                  step_id: int = 0) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
+    step = session.get(ConsultingStep, int(step_id))
+    if not step:
+        set_flash(request, "Sub-etapa não encontrada.")
+        return RedirectResponse("/consultoria", status_code=303)
+
+    stage = session.get(ConsultingStage, step.stage_id)
+    project = session.get(ConsultingProject, stage.project_id) if stage else None
+    if not project or project.company_id != ctx.company.id:
+        set_flash(request, "Projeto inválido.")
+        return RedirectResponse("/consultoria", status_code=303)
+
+    try:
+        session.delete(step)
+        session.commit()
+        set_flash(request, "Sub-etapa excluída.")
+    except Exception as e:
+        session.rollback()
+        set_flash(request, f"Não foi possível excluir a sub-etapa: {e}")
+    return RedirectResponse(f"/consultoria/{project.id}", status_code=303)
+
+
+@app.post("/consultoria/novo")
+@require_role({"admin", "equipe"})
+async def consultoria_new_action(
+        request: Request,
+        session: Session = Depends(get_session),
+        client_id: int = Form(...),
+        name: str = Form(...),
+        description: str = Form(""),
+        status: str = Form("ativo"),
+        start_date: str = Form(""),
+        due_date: str = Form(""),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
+    client = get_client_or_none(session, ctx.company.id, int(client_id))
+    if not client:
+        set_flash(request, "Cliente inválido.")
+        return RedirectResponse("/consultoria/novo", status_code=303)
+
+    status = status.strip().lower()
+    if status not in CONSULT_PROJECT_STATUS:
+        status = "ativo"
+
+    proj = ConsultingProject(
+        company_id=ctx.company.id,
+        client_id=client.id,
+        created_by_user_id=ctx.user.id,
+        name=name.strip(),
+        description=description.strip(),
+        status=status,
+        start_date=_normalize_date_input(start_date),
+        due_date=_normalize_date_input(due_date),
+        updated_at=utcnow(),
+    )
+    session.add(proj)
+    session.commit()
+    session.refresh(proj)
+
+    set_flash(request, "Projeto criado.")
+    return RedirectResponse(f"/consultoria/{proj.id}", status_code=303)
+
+
+@app.get("/consultoria/{project_id}", response_class=HTMLResponse)
+@require_login
+async def consultoria_detail(request: Request, session: Session = Depends(get_session),
+                             project_id: int = 0) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+
+    project = session.get(ConsultingProject, int(project_id))
+    if not project or project.company_id != ctx.company.id:
+        return render("error.html", request=request, context={"message": "Projeto não encontrado."}, status_code=404)
+
+    if not ensure_can_access_client(ctx, project.client_id):
+        return render("error.html", request=request, context={"message": "Sem permissão."}, status_code=403)
+
+    client = session.get(Client, project.client_id)
+    stages = session.exec(
+        select(ConsultingStage).where(ConsultingStage.project_id == project.id).order_by(ConsultingStage.order.asc())
+    ).all()
+
+    stage_ids = [s.id for s in stages]
+    steps = []
+    if stage_ids:
+        steps = session.exec(
+            select(ConsultingStep).where(ConsultingStep.stage_id.in_(stage_ids)).order_by(ConsultingStep.id.asc())
+        ).all()
+
+    steps_by_stage: dict[int, list[ConsultingStep]] = {}
+    for st in steps:
+        steps_by_stage.setdefault(st.stage_id, []).append(st)
+
+    stage_view = []
+    for s in stages:
+        stage_view.append({"id": s.id, "name": s.name, "order": s.order, "due_date": s.due_date,
+                           "steps": steps_by_stage.get(s.id, [])})
+
+    progress_pct = int(round(compute_project_progress(session, project.id) * 100))
+
+    active_client_id = get_active_client_id(request, session, ctx)
+    current_client = get_client_or_none(session, ctx.company.id, active_client_id)
+
+    return render(
+        "consult_detail.html",
+        request=request,
+        context={
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "role": ctx.membership.role,
+            "current_client": current_client,
+            "project": project,
+            "client": client,
+            "stages": stage_view,
+            "progress_pct": progress_pct,
+        },
+    )
+
+
+@app.post("/consultoria/{project_id}/stages")
+@require_role({"admin", "equipe"})
+async def consultoria_add_stage(
+        request: Request,
+        session: Session = Depends(get_session),
+        project_id: int = 0,
+        name: str = Form(...),
+        due_date: str = Form(""),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
+    project = session.get(ConsultingProject, int(project_id))
+    if not project or project.company_id != ctx.company.id:
+        set_flash(request, "Projeto não encontrado.")
+        return RedirectResponse("/consultoria", status_code=303)
+
+    stage = ConsultingStage(
+        project_id=project.id,
+        name=name.strip(),
+        order=_next_stage_order(session, project.id),
+        due_date=_normalize_date_input(due_date),
+    )
+    session.add(stage)
+    session.commit()
+
+    set_flash(request, "Etapa adicionada.")
+    return RedirectResponse(f"/consultoria/{project.id}", status_code=303)
+
+
+@app.post("/consultoria/stages/{stage_id}/steps")
+@require_role({"admin", "equipe"})
+async def consultoria_add_step(
+        request: Request,
+        session: Session = Depends(get_session),
+        stage_id: int = 0,
+        title: str = Form(...),
+        description: str = Form(""),
+        due_date: str = Form(""),
+        weight: float = Form(1.0),
+        client_action: str = Form(""),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
+    stage = session.get(ConsultingStage, int(stage_id))
+    if not stage:
+        set_flash(request, "Etapa não encontrada.")
+        return RedirectResponse("/consultoria", status_code=303)
+
+    project = session.exec(select(ConsultingProject).where(ConsultingProject.id == stage.project_id)).first()
+    if not project or project.company_id != ctx.company.id:
+        set_flash(request, "Projeto inválido.")
+        return RedirectResponse("/consultoria", status_code=303)
+
+    step = ConsultingStep(
+        stage_id=stage.id,
+        title=title.strip(),
+        description=description.strip(),
+        due_date=_normalize_date_input(due_date),
+        weight=max(0.1, float(weight)),
+        client_action=(client_action == "1"),
+        updated_at=utcnow(),
+    )
+    session.add(step)
+    session.commit()
+
+    set_flash(request, "Sub-etapa adicionada.")
+    return RedirectResponse(f"/consultoria/{project.id}", status_code=303)
+
+
+@app.post("/consultoria/steps/{step_id}/toggle")
+@require_login
+async def consultoria_toggle_step(
+        request: Request,
+        session: Session = Depends(get_session),
+        step_id: int = 0,
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+
+    step = session.get(ConsultingStep, int(step_id))
+    if not step:
+        set_flash(request, "Sub-etapa não encontrada.")
+        return RedirectResponse("/consultoria", status_code=303)
+
+    stage = session.get(ConsultingStage, step.stage_id)
+    if not stage:
+        set_flash(request, "Etapa não encontrada.")
+        return RedirectResponse("/consultoria", status_code=303)
+
+    project = session.get(ConsultingProject, stage.project_id)
+    if not project or project.company_id != ctx.company.id:
+        set_flash(request, "Projeto inválido.")
+        return RedirectResponse("/consultoria", status_code=303)
+
+    if not ensure_can_access_client(ctx, project.client_id):
+        set_flash(request, "Sem permissão.")
+        return RedirectResponse("/consultoria", status_code=303)
+
+    # Cliente só pode mexer se for item marcado como "client_action"
+    if ctx.membership.role == "cliente" and not step.client_action:
+        set_flash(request, "Você não pode concluir este item.")
+        return RedirectResponse(f"/consultoria/{project.id}", status_code=303)
+
+    step.done = not step.done
+    step.done_at = utcnow() if step.done else None
+    step.updated_at = utcnow()
+
+    session.add(step)
+    session.commit()
+
+    return RedirectResponse(f"/consultoria/{project.id}", status_code=303)
+
+
+@app.post("/login")
+async def login_action(
+        request: Request,
+        session: Session = Depends(get_session),
+        email: str = Form(...),
+        password: str = Form(...),
+) -> Response:
+    user = session.exec(select(User).where(User.email == email.strip().lower())).first()
+    if not user or not verify_password(password, user.password_hash):
+        set_flash(request, "E-mail ou senha inválidos.")
+        return RedirectResponse("/login", status_code=303)
+
+    request.session["user_id"] = user.id
+    request.session.pop("company_id", None)
+    request.session.pop("selected_client_id", None)
+
+    _ = ensure_company_in_session(request, session, user)
+    set_flash(request, "Bem-vindo(a)!")
+    return RedirectResponse("/", status_code=303)
+
+
+@app.get("/signup", response_class=HTMLResponse)
+async def signup_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
+    if get_current_user(request, session):
+        return RedirectResponse("/", status_code=303)
+    return render("signup.html", request=request, context={"current_user": None})
+
+
+@app.post("/signup")
+async def signup_action(
+        request: Request,
+        session: Session = Depends(get_session),
+        name: str = Form(...),
+        company_name: str = Form(...),
+        email: str = Form(...),
+        password: str = Form(...),
+        goal: str = Form(...),
+        revenue: str = Form(...),
+        employees: int = Form(...),
+        pain: str = Form(...),
+        notes: str = Form(""),
+) -> Response:
+    if len(password) < 8:
+        set_flash(request, "Senha muito curta (mínimo 8).")
+        return RedirectResponse("/signup", status_code=303)
+
+    user = User(name=name.strip(), email=email.strip().lower(), password_hash=hash_password(password))
+    session.add(user)
+    try:
+        session.commit()
+    except IntegrityError:
+        session.rollback()
+        set_flash(request, "Este e-mail já está cadastrado.")
+        return RedirectResponse("/signup", status_code=303)
+    session.refresh(user)
+
+    company = Company(name=company_name.strip())
+    session.add(company)
+    session.commit()
+    session.refresh(company)
+
+    session.add(Membership(user_id=user.id, company_id=company.id, role="admin"))
+    session.commit()
+
+    diagnostic = {
+        "goal": goal,
+        "revenue": revenue,
+        "employees": employees,
+        "pain": pain.strip(),
+        "notes": notes.strip(),
+        "submitted_at": utcnow().isoformat(),
+    }
+    session.add(
+        OnboardingDiagnostic(
+            user_id=user.id,
+            company_id=company.id,
+            answers_json=json.dumps(diagnostic, ensure_ascii=False),
+        )
+    )
+    session.commit()
+
+    await sync_to_notion_negocios(user=user, company=company, diagnostic=diagnostic)
+
+    request.session["user_id"] = user.id
+    request.session["company_id"] = company.id
+    request.session.pop("selected_client_id", None)
+
+    set_flash(request, "Escritório criado. Você é ADMIN.")
+    return RedirectResponse("/", status_code=303)
+
+
+@app.get("/logout")
+async def logout(request: Request) -> Response:
+    request.session.clear()
+    return RedirectResponse("/login", status_code=303)
+
+
+# ----------------------------
+# Health
+# ----------------------------
+
+@app.get("/healthz")
+async def healthz() -> dict[str, str]:
+    return {"status": "ok"}
+
+
+# ----------------------------
+# Dashboard
+# ----------------------------
+
+
+@app.get("/", response_class=HTMLResponse)
+@require_login
+async def dashboard(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+
+    active_client_id = get_active_client_id(request, session, ctx)
+    current_client = get_client_or_none(session, ctx.company.id, active_client_id)
+
+    allowed = effective_allowed_features(session, ctx=ctx, current_client=current_client)
+
+    def _is_visible(feature_key: str) -> bool:
+        roles = FEATURE_VISIBLE_ROLES.get(feature_key)
+        if roles and ctx.membership.role not in roles:
+            return False
+        if feature_key == "openfinance" and not _is_openfinance_enabled():
+            return False
+        return feature_key in allowed
+
+    tabs = []
+    for g in FEATURE_GROUPS:
+        feats = [fk for fk in g["features"] if _is_visible(fk)]
+        if not feats:
+            continue
+        tabs.append(
+            {
+                "key": g["key"],
+                "title": g["title"],
+                "items": [dict(FEATURE_KEYS[fk], key=fk) for fk in feats],
+            }
+        )
+
+    standalone = [dict(FEATURE_KEYS[fk], key=fk) for fk in FEATURE_STANDALONE if _is_visible(fk)]
+
+    dashboard_scores = None
+    dashboard_gauge = None
+    dashboard_insights: list[dict[str, str]] = []
+    dashboard_critical_points: list[dict[str, str]] = []
+    dashboard_next_steps: list[dict[str, str]] = []
+    smart_alerts: list[SmartAlert] = []
+    smart_alerts_unread_count = 0
+    approved_offers_count = 0
+    pending_items_count = 0
+    if current_client and ensure_can_access_client(ctx, current_client.id):
+        business_profile = get_or_create_business_profile(session, company_id=ctx.company.id, client_id=current_client.id)
+        latest_snapshot = session.exec(
+            select(ClientSnapshot)
+            .where(ClientSnapshot.company_id == ctx.company.id, ClientSnapshot.client_id == current_client.id)
+            .order_by(ClientSnapshot.created_at.desc())
+            .limit(1)
+        ).first()
+        dashboard_scores = build_client_dashboard_analysis(
+            client=current_client,
+            profile=business_profile,
+            latest_snapshot=latest_snapshot,
+        )
+        dashboard_gauge = _dashboard_gauge(_dashboard_score_value(dashboard_scores, "Score Geral"))
+        dashboard_insights = _dashboard_score_insights(dashboard_scores)
+        dashboard_critical_points = _dashboard_critical_points(dashboard_scores)
+        dashboard_next_steps = _dashboard_next_steps(dashboard_scores)
+        try:
+            approved_offers_count = session.exec(
+                select(func.count())
+                .select_from(OfferVisibilityReview)
+                .where(
+                    OfferVisibilityReview.company_id == ctx.company.id,
+                    OfferVisibilityReview.client_id == current_client.id,
+                    OfferVisibilityReview.status == "aprovada_cliente",
+                    OfferVisibilityReview.is_visible_to_client == True,
+                )
+            ).one() or 0
+        except Exception:
+            approved_offers_count = 0
+        try:
+            pending_items_count = session.exec(
+                select(func.count())
+                .select_from(PendingItem)
+                .where(PendingItem.company_id == ctx.company.id, PendingItem.client_id == current_client.id)
+            ).one() or 0
+        except Exception:
+            pending_items_count = 0
+
+        try:
+            analyze_client_health_job(session, company_id=ctx.company.id, client_id=current_client.id)
+        except Exception:
+            pass
+
+        try:
+            smart_alerts = get_unread_smart_alerts(
+                session,
+                company_id=ctx.company.id,
+                client_id=current_client.id,
+                limit=5,
+            )
+            smart_alerts_unread_count = len(smart_alerts)
+        except Exception:
+            smart_alerts = []
+            smart_alerts_unread_count = 0
+
+    return render(
+        "dashboard.html",
+        request=request,
+        context={
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "role": ctx.membership.role,
+            "current_client": current_client,
+            "tabs": tabs,
+            "standalone": standalone,
+            "dashboard_scores": dashboard_scores,
+            "dashboard_gauge": dashboard_gauge,
+            "dashboard_insights": dashboard_insights,
+            "dashboard_critical_points": dashboard_critical_points,
+            "dashboard_next_steps": dashboard_next_steps,
+            "smart_alerts": smart_alerts,
+            "smart_alerts_unread_count": smart_alerts_unread_count,
+            "approved_offers_count": approved_offers_count,
+            "pending_items_count": pending_items_count,
+            "standalone_title": "Acesso rápido",
+            "standalone_desc": "Atalhos complementares",
+            "allowed_features": allowed,
+        },
+    )
+
+
+@app.post("/alerts/{alert_id}/read")
+@require_login
+async def smart_alert_mark_read(request: Request, alert_id: int, session: Session = Depends(get_session)) -> Response:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+
+    alert = session.get(SmartAlert, int(alert_id or 0))
+    if not alert or alert.company_id != ctx.company.id:
+        set_flash(request, "Alerta não encontrado.")
+        return RedirectResponse("/", status_code=303)
+
+    if not ensure_can_access_client(ctx, alert.client_id):
+        set_flash(request, "Sem permissão para este alerta.")
+        return RedirectResponse("/", status_code=303)
+
+    alert.is_read = True
+    session.add(alert)
+    session.commit()
+    back_to = (request.headers.get("referer") or "/").strip() or "/"
+    return RedirectResponse(back_to, status_code=303)
+
+
+
+
+# ----------------------------
+# Catálogo / Motor de Ofertas
+# ----------------------------
+
+@app.get("/admin/familias", response_class=HTMLResponse)
+@require_role({"admin"})
+async def admin_familias_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+    ensure_offer_engine_tables()
+    ensure_offer_engine_columns()
+    seed_product_families(session)
+    families = list_product_families(session)
+    return render("admin_familias.html", request=request,
+                  context={"current_user": ctx.user, "current_company": ctx.company, "role": ctx.membership.role,
+                           "families": families})
+
+
+@app.get("/admin/servicos-internos", response_class=HTMLResponse)
+@require_role({"admin"})
+async def admin_servicos_internos_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+    ensure_offer_engine_tables()
+    ensure_offer_engine_columns()
+    seed_product_families(session)
+    seed_internal_services(session, ctx.company.id)
+    services = session.exec(
+        select(InternalService).where(InternalService.company_id == ctx.company.id).order_by(InternalService.area.asc(),
+                                                                                             InternalService.priority_weight.desc(),
+                                                                                             InternalService.name.asc())).all()
+    families = list_product_families(session)
+    return render("admin_servicos_internos.html", request=request,
+                  context={"current_user": ctx.user, "current_company": ctx.company, "role": ctx.membership.role,
+                           "services": services, "families": families})
+
+
+@app.post("/admin/servicos-internos/add")
+@require_role({"admin"})
+async def admin_servicos_internos_add(request: Request, session: Session = Depends(get_session), area: str = Form(...),
+                                      family_code: str = Form(...), name: str = Form(...), description: str = Form(""),
+                                      priority_weight: int = Form(50), notes: str = Form("")) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+    fc = (family_code or "").strip()
+    _upsert_internal_service_compat(
+        session,
+        company_id=ctx.company.id,
+        area=(area or "").strip(),
+        family=fc,
+        name=(name or "").strip(),
+        description=(description or "").strip(),
+        priority_weight=max(0, int(priority_weight or 50)),
+        notes=(notes or "").strip(),
+        is_active=True,
+    )
+    set_flash(request, "Produto interno salvo.")
+    return RedirectResponse("/admin/servicos-internos", status_code=303)
+
+
+@app.get("/admin/parceiros", response_class=HTMLResponse)
+@require_role({"admin"})
+async def admin_parceiros_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+    ensure_offer_engine_tables()
+    ensure_offer_engine_columns()
+    seed_product_families(session)
+    partners = session.exec(
+        select(Partner).where(Partner.company_id == ctx.company.id).order_by(Partner.name.asc())).all()
+    products = session.exec(select(PartnerProduct).where(PartnerProduct.company_id == ctx.company.id).order_by(
+        PartnerProduct.partner_id.asc(), PartnerProduct.name.asc())).all()
+    campaigns = session.exec(select(PartnerCampaign).where(PartnerCampaign.company_id == ctx.company.id).order_by(
+        PartnerCampaign.starts_at.desc())).all()
+    partner_map = {p.id: p for p in partners}
+    families = list_product_families(session)
+    return render("admin_parceiros.html", request=request,
+                  context={"current_user": ctx.user, "current_company": ctx.company, "role": ctx.membership.role,
+                           "partners": partners, "products": products, "campaigns": campaigns,
+                           "partner_map": partner_map, "families": families})
+
+
+@app.post("/admin/parceiros/add")
+@require_role({"admin"})
+async def admin_parceiros_add(request: Request, session: Session = Depends(get_session), name: str = Form(...),
+                              partner_type: str = Form("financeiro"), contact_name: str = Form(""),
+                              contact_email: str = Form(""), notes: str = Form("")) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+    try:
+        _upsert_partner_compat(
+            session,
+            company_id=ctx.company.id,
+            name=(name or "").strip(),
+            partner_type=(partner_type or "financeiro").strip(),
+            contact_name=(contact_name or "").strip(),
+            contact_email=(contact_email or "").strip(),
+            notes=(notes or "").strip(),
+            is_active=True,
+        )
+        session.commit()
+        set_flash(request, "Parceiro salvo.")
+    except IntegrityError:
+        session.rollback()
+        set_flash(request, "Já existe parceiro com esse nome.")
+    return RedirectResponse("/admin/parceiros", status_code=303)
+
+
+@app.post("/admin/parceiros/products/add")
+@require_role({"admin"})
+async def admin_partner_product_add(request: Request, session: Session = Depends(get_session),
+                                    partner_id: int = Form(...), area: str = Form(...), family_code: str = Form(...),
+                                    name: str = Form(...), pf_pj: str = Form("PJ"), ticket_min_brl: float = Form(0.0),
+                                    ticket_max_brl: float = Form(0.0), revenue_min_brl: float = Form(0.0),
+                                    revenue_max_brl: float = Form(0.0), score_total_min: float = Form(0.0),
+                                    score_financial_min: float = Form(0.0), max_debt_ratio: float = Form(0.0),
+                                    requires_collateral: Optional[str] = Form(None), allowed_states_csv: str = Form(""),
+                                    allowed_segments_csv: str = Form(""), rate_default_pct: float = Form(0.0),
+                                    cet_default_pct: float = Form(0.0), term_min_months: int = Form(0),
+                                    term_max_months: int = Form(0), grace_max_months: int = Form(0),
+                                    amortization_default: str = Form("PRICE"), tariff_default_brl: float = Form(0.0),
+                                    insurance_default_brl: float = Form(0.0), admin_fee_default_brl: float = Form(0.0),
+                                    ltv_max_pct: float = Form(0.0), commission_text: str = Form(""),
+                                    payout_term: str = Form(""), notes: str = Form("")) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+    _upsert_partner_product_compat(
+        session,
+        company_id=ctx.company.id,
+        partner_id=int(partner_id),
+        area=(area or "").strip(),
+        family=(family_code or "").strip(),
+        name=(name or "").strip(),
+        pf_pj=(pf_pj or "PJ").strip(),
+        ticket_min_brl=max(0.0, float(ticket_min_brl or 0.0)),
+        ticket_max_brl=max(0.0, float(ticket_max_brl or 0.0)),
+        revenue_min_brl=max(0.0, float(revenue_min_brl or 0.0)),
+        revenue_max_brl=max(0.0, float(revenue_max_brl or 0.0)),
+        score_total_min=max(0.0, float(score_total_min or 0.0)),
+        score_financial_min=max(0.0, float(score_financial_min or 0.0)),
+        max_debt_ratio=max(0.0, float(max_debt_ratio or 0.0)),
+        requires_collateral=_parse_bool(requires_collateral),
+        allowed_states_json=_json_dump_list(
+            [x.strip().upper() for x in (allowed_states_csv or "").split(",") if x.strip()]),
+        allowed_segments_json=_json_dump_list(
+            [x.strip() for x in (allowed_segments_csv or "").split(",") if x.strip()]),
+        rate_default_pct=max(0.0, float(rate_default_pct or 0.0)),
+        cet_default_pct=max(0.0, float(cet_default_pct or 0.0)),
+        term_min_months=max(0, int(term_min_months or 0)),
+        term_max_months=max(0, int(term_max_months or 0)),
+        grace_max_months=max(0, int(grace_max_months or 0)),
+        amortization_default=(amortization_default or "PRICE").strip(),
+        tariff_default_brl=max(0.0, float(tariff_default_brl or 0.0)),
+        insurance_default_brl=max(0.0, float(insurance_default_brl or 0.0)),
+        admin_fee_default_brl=max(0.0, float(admin_fee_default_brl or 0.0)),
+        ltv_max_pct=max(0.0, float(ltv_max_pct or 0.0)),
+        commission_text=(commission_text or "").strip(),
+        payout_term=(payout_term or "").strip(),
+        notes=(notes or "").strip(),
+        is_active=True,
+    )
+    set_flash(request, "Produto do parceiro salvo.")
+    return RedirectResponse("/admin/parceiros", status_code=303)
+
+
+@app.post("/admin/parceiros/campaigns/add")
+@require_role({"admin"})
+async def admin_partner_campaign_add(request: Request, session: Session = Depends(get_session),
+                                     partner_product_id: int = Form(...), title: str = Form(...),
+                                     starts_at: str = Form(""), ends_at: str = Form(""), bonus_pct: float = Form(0.0),
+                                     rule_summary: str = Form("")) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    def _parse_dt(v: str, fallback_days: int) -> datetime:
+        raw = (v or "").strip()
+        if not raw:
+            return utcnow() + timedelta(days=fallback_days)
+        try:
+            return datetime.fromisoformat(raw).replace(tzinfo=timezone.utc)
+        except Exception:
+            try:
+                return datetime.fromisoformat(raw + "T00:00:00").replace(tzinfo=timezone.utc)
+            except Exception:
+                return utcnow() + timedelta(days=fallback_days)
+
+    row = PartnerCampaign(company_id=ctx.company.id, partner_product_id=int(partner_product_id),
+                          title=(title or "").strip(), starts_at=_parse_dt(starts_at, -1),
+                          ends_at=_parse_dt(ends_at, 30), bonus_pct=max(0.0, float(bonus_pct or 0.0)),
+                          rule_summary=(rule_summary or "").strip(), is_active=True)
+    session.add(row)
+    session.commit()
+    set_flash(request, "Campanha salva.")
+    return RedirectResponse("/admin/parceiros", status_code=303)
+
+
+@app.get("/motor-ofertas", response_class=HTMLResponse)
+@require_role({"admin", "equipe"})
+async def motor_ofertas_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+    current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
+    matches: list[dict[str, Any]] = []
+    if current_client and ensure_can_access_client(ctx, current_client.id):
+        sync_offer_reviews(session, company_id=ctx.company.id, client_id=current_client.id)
+        matches = list_offer_matches_for_role(
+            session=session,
+            company_id=ctx.company.id,
+            client_id=current_client.id,
+            role=ctx.membership.role,
+        )
+    return render("motor_ofertas.html", request=request,
+                  context={"current_user": ctx.user, "current_company": ctx.company, "role": ctx.membership.role,
+                           "current_client": current_client, "matches": matches})
+
+
+@app.post("/motor-ofertas/gerar")
+@require_role({"admin", "equipe"})
+async def motor_ofertas_generate(request: Request, session: Session = Depends(get_session)) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+    current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
+    if not current_client:
+        set_flash(request, "Selecione um cliente para gerar o motor.")
+        return RedirectResponse("/motor-ofertas", status_code=303)
+    profile = get_or_create_business_profile(session, company_id=ctx.company.id, client_id=current_client.id)
+    latest_snapshot = session.exec(select(ClientSnapshot).where(ClientSnapshot.company_id == ctx.company.id,
+                                                                ClientSnapshot.client_id == current_client.id).order_by(
+        ClientSnapshot.created_at.desc()).limit(1)).first()
+    seed_product_families(session)
+    seed_internal_services(session, ctx.company.id)
+    matches = compute_offer_engine(session=session, company_id=ctx.company.id, client=current_client, profile=profile,
+                                   latest_snapshot=latest_snapshot)
+    persist_offer_matches(session, company_id=ctx.company.id, client_id=current_client.id, matches=matches)
+    set_flash(request, f"Motor de ofertas gerado: {len(matches)} sugestao(oes).")
+    return RedirectResponse("/motor-ofertas", status_code=303)
+
+
+@app.get("/ofertas", response_class=HTMLResponse)
+@require_login
+async def ofertas_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+    current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
+    matches: list[dict[str, Any]] = []
+    offer_stage = _offer_stage_payload(None, 0)
+    financial_analysis = None
+    if current_client and ensure_can_access_client(ctx, current_client.id):
+        sync_offer_reviews(session, company_id=ctx.company.id, client_id=current_client.id)
+        business_profile = get_or_create_business_profile(session, company_id=ctx.company.id, client_id=current_client.id)
+        latest_snapshot = session.exec(
+            select(ClientSnapshot)
+            .where(ClientSnapshot.company_id == ctx.company.id, ClientSnapshot.client_id == current_client.id)
+            .order_by(ClientSnapshot.created_at.desc())
+            .limit(1)
+        ).first()
+        financial_analysis = build_client_dashboard_analysis(
+            client=current_client,
+            profile=business_profile,
+            latest_snapshot=latest_snapshot,
+        )
+        raw_matches = list_offer_matches_for_role(
+            session=session,
+            company_id=ctx.company.id,
+            client_id=current_client.id,
+            role=ctx.membership.role,
+            only_client_visible=(ctx.membership.role == "cliente"),
+        )
+        offer_stage = _offer_stage_payload(financial_analysis, len(raw_matches))
+        for row in raw_matches:
+            getv = (lambda k, d="": row.get(k, d)) if isinstance(row, dict) else (lambda k, d="": getattr(row, k, d))
+            matches.append(
+                {
+                    "product_name": getv("product_name"),
+                    "partner_name": getv("partner_name"),
+                    "priority_level": getv("priority_level"),
+                    "family_code": getv("family_code"),
+                    "score_fit": float(getv("score_fit", 0.0) or 0.0),
+                    "client_summary": getv("client_summary"),
+                    "reason_summary": getv("reason_summary"),
+                    "partner_options_count": int(getv("partner_options_count", 0) or 0),
+                    "display_reason": _offer_reason_for_display(row, financial_analysis),
+                }
+            )
+    return render(
+        "ofertas.html",
+        request=request,
+        context={
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "role": ctx.membership.role,
+            "current_client": current_client,
+            "matches": matches,
+            "offer_stage": offer_stage,
+            "financial_analysis": financial_analysis,
+        },
+    )
+
+
+# ----------------------------
+# Staff: trocar cliente
+# ----------------------------
+
+
+@app.get("/client/switch", response_class=HTMLResponse)
+@require_role({"admin", "equipe"})
+async def client_switch_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    # Garante tabela de convites em ambientes sem Alembic
+    if not ensure_client_invite_table():
+        set_flash(request, "Sistema de convites não está configurado (migração pendente no banco).")
+        return RedirectResponse("/", status_code=303)
+
+    clients = session.exec(select(Client).where(Client.company_id == ctx.company.id).order_by(Client.created_at)).all()
+    active_client_id = get_active_client_id(request, session, ctx)
+    current_client = get_client_or_none(session, ctx.company.id, active_client_id)
+
+    invite_link_url = (request.session.get("last_invite_url") or "").strip()
+
+    recent_invites: list[dict[str, Any]] = []
+    if current_client:
+        invs = session.exec(
+            select(ClientInvite)
+            .where(
+                (ClientInvite.company_id == ctx.company.id)
+                & (ClientInvite.client_id == current_client.id)
+            )
+            .order_by(ClientInvite.created_at.desc())
+            .limit(5)
+        ).all()
+        for inv in invs:
+            note = _unpack_invite_link_note(inv.notes)
+            tok = (note or {}).get("token") if isinstance(note, dict) else None
+            link_url = _build_invite_url(request, token=str(tok)) if tok else ""
+            recent_invites.append(
+                {
+                    "id": inv.id,
+                    "created_at": inv.created_at.isoformat(),
+                    "expires_at": inv.expires_at.isoformat(),
+                    "status": inv.status,
+                    "invited_email": inv.invited_email,
+                    "link_url": link_url,
+                }
+            )
+
+    return render(
+        "client_switch.html",
+        request=request,
+        context={
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "role": ctx.membership.role,
+            "current_client": current_client,
+            "clients": clients,
+            "invite_link_url": invite_link_url,
+            "recent_invites": recent_invites,
+        },
+    )
+
+
+@app.post("/client/switch")
+@require_role({"admin", "equipe"})
+async def client_switch_action(
+        request: Request,
+        session: Session = Depends(get_session),
+        client_id: int = Form(...),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
+    client = get_client_or_none(session, ctx.company.id, int(client_id))
+    if not client:
+        set_flash(request, "Cliente inválido.")
+        return RedirectResponse("/client/switch", status_code=303)
+
+    request.session["selected_client_id"] = client.id
+    set_flash(request, f"Cliente selecionado: {client.name}")
+    return RedirectResponse("/", status_code=303)
+
+
+# ----------------------------
+# Convites: clientes criarem acesso (sem OTP)
+# ----------------------------
+
+
+def _invite_is_expired(inv: ClientInvite) -> bool:
+    try:
+        exp_at = _as_aware_utc(inv.expires_at)
+        return bool(exp_at and utcnow() > exp_at)
+    except Exception:
+        return False
+
+
+def _expire_invite_if_needed(session: Session, inv: ClientInvite) -> None:
+    if inv.status == "pendente" and _invite_is_expired(inv):
+        inv.status = "expirado"
+        inv.updated_at = utcnow()
+        session.add(inv)
+        session.commit()
+
+
+@app.post("/client/invite")
+@require_role({"admin", "equipe"})
+async def client_invite_create(
+        request: Request,
+        session: Session = Depends(get_session),
+        client_id: int = Form(...),
+        invited_email: str = Form(""),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    if not ensure_client_invite_table():
+        set_flash(request, "Sistema de convites não está configurado (migração pendente no banco).")
+        return RedirectResponse("/client/switch", status_code=303)
+
+    client = get_client_or_none(session, ctx.company.id, int(client_id))
+    if not client:
+        set_flash(request, "Cliente inválido.")
+        return RedirectResponse("/client/switch", status_code=303)
+
+    expires_at = utcnow() + timedelta(hours=CLIENT_INVITE_TTL_HOURS)
+    email = invited_email.strip().lower()
+
+    inv = ClientInvite(
+        company_id=ctx.company.id,
+        client_id=client.id,
+        created_by_user_id=ctx.user.id,
+        invited_email=email,
+        status="pendente",
+        expires_at=expires_at,
+        created_at=utcnow(),
+        updated_at=utcnow(),
+    )
+    session.add(inv)
+    session.commit()
+    session.refresh(inv)
+
+    payload = {
+        "invite_id": inv.id,
+        "nonce": inv.token_nonce,
+        "iat": int(utcnow().timestamp()),
+        "exp": int(expires_at.timestamp()),
+    }
+    token = _sign_invite_token(payload)
+    inv.notes = _pack_invite_link_note(token=token, created_by_user_id=ctx.user.id, expires_at=expires_at)
+    inv.updated_at = utcnow()
+    session.add(inv)
+    session.commit()
+
+    url = _build_invite_url(request, token=token)
+    request.session["last_invite_url"] = url
+
+    set_flash(request, f"Link de convite: {url}")
+    return RedirectResponse("/client/switch", status_code=303)
+
+
+def _digits_last4(value: str) -> str:
+    s = _digits_only(value)
+    return s[-4:] if len(s) >= 4 else ""
+
+
+@app.get("/convite/{token}", response_class=HTMLResponse)
+async def invite_signup_page(
+        request: Request,
+        token: str,
+        session: Session = Depends(get_session),
+) -> HTMLResponse:
+    if not ensure_client_invite_table():
+        return render(
+            "success.html",
+            request=request,
+            context={"current_user": None, "message": "Cadastro indisponível (migração pendente no banco)."},
+            status_code=503,
+        )
+
+    try:
+        payload = _verify_invite_token(token)
+        invite_id = int(payload.get("invite_id") or 0)
+        nonce = str(payload.get("nonce") or "")
+    except Exception:
+        return render(
+            "success.html",
+            request=request,
+            context={"current_user": None, "message": "Convite inválido ou expirado."},
+            status_code=400,
+        )
+
+    inv = session.get(ClientInvite, invite_id) if invite_id else None
+    if not inv or inv.token_nonce != nonce:
+        return render(
+            "success.html",
+            request=request,
+            context={"current_user": None, "message": "Convite inválido."},
+            status_code=400,
+        )
+
+    _expire_invite_if_needed(session, inv)
+    if inv.status != "pendente":
+        msg = "Convite já utilizado." if inv.status == "aceito" else "Convite expirado."
+        return render("success.html", request=request, context={"current_user": None, "message": msg})
+
+    company = session.get(Company, inv.company_id)
+    client = session.get(Client, inv.client_id)
+    if not company or not client:
+        return render(
+            "success.html",
+            request=request,
+            context={"current_user": None, "message": "Convite inválido (cadastros não encontrados)."},
+            status_code=400,
+        )
+
+    require_last4 = bool(CLIENT_INVITE_REQUIRE_LAST4 and _digits_last4(client.cnpj))
+
+    consent_terms_html = templates_env.from_string(CREDIT_CONSENT_TERMS_HTML).render(
+        term_version=CREDIT_CONSENT_TERM_VERSION)
+
+    return render(
+        "invite_signup.html",
+        request=request,
+        context={
+            "current_user": None,
+            "company": company,
+            "client": client,
+            "consent_terms_html": consent_terms_html,
+            "consent_term_version": CREDIT_CONSENT_TERM_VERSION,
+            "token": token,
+            "invited_email": inv.invited_email,
+            "require_last4": bool(require_last4),
+            "error": "",
+            "form": {"name": "", "email": inv.invited_email},
+        },
+    )
+
+
+@app.post("/convite/{token}")
+async def invite_signup_action(
+        request: Request,
+        token: str,
+        session: Session = Depends(get_session),
+        name: str = Form(...),
+        email: str = Form(...),
+        password: str = Form(...),
+        password2: str = Form(...),
+        doc_last4: str = Form(""),
+        accept: Optional[str] = Form(None),
+        scr_accept: Optional[str] = Form(None),
+) -> Response:
+    if not ensure_client_invite_table():
+        return render(
+            "success.html",
+            request=request,
+            context={"current_user": None, "message": "Cadastro indisponível (migração pendente no banco)."},
+            status_code=503,
+        )
+
+    def render_form(company: Company, client: Client, inv: ClientInvite, msg: str) -> HTMLResponse:
+        require_last4 = bool(CLIENT_INVITE_REQUIRE_LAST4 and _digits_last4(client.cnpj))
+        consent_terms_html = templates_env.from_string(CREDIT_CONSENT_TERMS_HTML).render(
+            term_version=CREDIT_CONSENT_TERM_VERSION)
+        return render(
+            "invite_signup.html",
+            request=request,
+            context={
+                "current_user": None,
+                "company": company,
+                "client": client,
+                "consent_terms_html": consent_terms_html,
+                "consent_term_version": CREDIT_CONSENT_TERM_VERSION,
+                "token": token,
+                "invited_email": inv.invited_email,
+                "require_last4": bool(require_last4),
+                "error": msg,
+                "form": {"name": name, "email": email},
+            },
+            status_code=400,
+        )
+
+    try:
+        payload = _verify_invite_token(token)
+        invite_id = int(payload.get("invite_id") or 0)
+        nonce = str(payload.get("nonce") or "")
+    except Exception:
+        return render(
+            "success.html",
+            request=request,
+            context={"current_user": None, "message": "Convite inválido ou expirado."},
+            status_code=400,
+        )
+
+    inv = session.get(ClientInvite, invite_id) if invite_id else None
+    if not inv or inv.token_nonce != nonce:
+        return render(
+            "success.html",
+            request=request,
+            context={"current_user": None, "message": "Convite inválido."},
+            status_code=400,
+        )
+
+    _expire_invite_if_needed(session, inv)
+    if inv.status != "pendente":
+        msg = "Convite já utilizado." if inv.status == "aceito" else "Convite expirado."
+        return render("success.html", request=request, context={"current_user": None, "message": msg})
+
+    company = session.get(Company, inv.company_id)
+    client = session.get(Client, inv.client_id)
+    if not company or not client:
+        return render(
+            "success.html",
+            request=request,
+            context={"current_user": None, "message": "Convite inválido (cadastros não encontrados)."},
+            status_code=400,
+        )
+
+    if not accept:
+        return render_form(company, client, inv, "Você precisa aceitar os termos para continuar.")
+
+    if not scr_accept:
+        return render_form(company, client, inv,
+                           "Você precisa autorizar a consulta ao SCR (Bacen) para concluir o cadastro.")
+
+    if password != password2:
+        return render_form(company, client, inv, "As senhas não conferem.")
+
+    if len(password) < 8:
+        return render_form(company, client, inv, "Senha muito curta (mínimo 8).")
+
+    if inv.invited_email and email.strip().lower() != inv.invited_email.strip().lower():
+        return render_form(company, client, inv, "Este convite é válido apenas para o e-mail convidado.")
+
+    require_last4 = bool(CLIENT_INVITE_REQUIRE_LAST4 and _digits_last4(client.cnpj))
+    if require_last4:
+        expected = _digits_last4(client.cnpj)
+        provided = _digits_only(doc_last4)[-4:]
+        if not provided or provided != expected:
+            return render_form(company, client, inv, "Últimos 4 dígitos do documento não conferem.")
+
+    em = email.strip().lower()
+    nm = name.strip()
+    if not nm or not em:
+        return render_form(company, client, inv, "Nome e e-mail são obrigatórios.")
+
+    user = session.exec(select(User).where(User.email == em)).first()
+    if user:
+        if not verify_password(password, user.password_hash):
+            return render_form(company, client, inv,
+                               "E-mail já cadastrado. Informe a senha correta para associar este convite.")
+    else:
+        user = User(name=nm, email=em, password_hash=hash_password(password))
+        session.add(user)
+        try:
+            session.commit()
+        except IntegrityError:
+            session.rollback()
+            return render_form(company, client, inv, "Este e-mail já está cadastrado.")
+        session.refresh(user)
+
+    membership = get_membership(session, user.id, company.id)
+    if membership:
+        membership.role = "cliente"
+        membership.client_id = client.id
+    else:
+        membership = Membership(user_id=user.id, company_id=company.id, role="cliente", client_id=client.id)
+        session.add(membership)
+
+    inv.status = "aceito"
+    inv.accepted_user_id = user.id
+
+    # Registra a autorização SCR/Bacen junto do cadastro (clickwrap, sem OTP)
+    if not ensure_credit_consent_table():
+        session.rollback()
+        return render_form(company, client, inv, "Sistema de aceite indisponível (migração pendente no banco).")
+
+    now = utcnow()
+    expires_at_consent = now + timedelta(days=int(CREDIT_CONSENT_MAX_DAYS))
+
+    evidence = {
+        "method": "invite-clickwrap",
+        "term_version": CREDIT_CONSENT_TERM_VERSION,
+        "term_sha256": _terms_sha256(),
+        "ip": _request_ip(request),
+        "user_agent": request.headers.get("user-agent") or "",
+        "accepted_at_utc": now.isoformat(),
+        "invite_id": int(inv.id or 0),
+        "accepted_user_id": int(user.id or 0),
+        "invited_email": (inv.invited_email or "").strip().lower(),
+    }
+
+    latest = _get_latest_consent(session, company_id=company.id, client_id=client.id)
+    if latest:
+        _refresh_consent_status(latest)
+        if latest.status != "valida":
+            latest.kind = CREDIT_CONSENT_KIND_SCR
+            latest.status = "valida"
+            latest.signed_by_name = nm
+            latest.signed_by_document = _digits_only(client.cnpj or "")
+            latest.signed_at = now
+            latest.expires_at = expires_at_consent
+            latest.updated_at = now
+            latest.notes = "[aceite-eletronico]\n" + json.dumps(evidence, ensure_ascii=False)
+            session.add(latest)
+    else:
+        consent = CreditConsent(
+            company_id=company.id,
+            client_id=client.id,
+            created_by_user_id=int(inv.created_by_user_id or user.id or 0),
+            kind=CREDIT_CONSENT_KIND_SCR,
+            status="valida",
+            signed_by_name=nm,
+            signed_by_document=_digits_only(client.cnpj or ""),
+            signed_at=now,
+            expires_at=expires_at_consent,
+            notes="[aceite-eletronico]\n" + json.dumps(evidence, ensure_ascii=False),
+            created_at=now,
+            updated_at=now,
+        )
+        session.add(consent)
+
+    inv.accepted_at = now
+    inv.updated_at = now
+    session.add(inv)
+
+    try:
+        session.commit()
+    except Exception:
+        session.rollback()
+        return render_form(company, client, inv, "Erro ao concluir cadastro. Tente novamente.")
+
+    request.session["user_id"] = user.id
+    request.session["company_id"] = company.id
+    request.session["selected_client_id"] = client.id
+    set_flash(request, "Cadastro concluído. Bem-vindo(a)!")
+    return RedirectResponse("/", status_code=303)
+
+
+# ----------------------------
+# Admin: Members
+# ----------------------------
+
+
+@app.get("/admin/members", response_class=HTMLResponse)
+@require_role({"admin", "equipe"})
+async def members_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
+    mems = session.exec(select(Membership).where(Membership.company_id == ctx.company.id)).all()
+    rows = []
+    for m in mems:
+        u = session.get(User, m.user_id)
+        if not u:
+            continue
+        client_name = None
+        if m.client_id:
+            c = session.get(Client, m.client_id)
+            if c and c.company_id == ctx.company.id:
+                client_name = c.name
+        rows.append({"membership": m, "user": u, "client_name": client_name})
+
+    rows.sort(key=lambda x: (x["membership"].role, x["user"].name.lower()))
+
+    clients = session.exec(select(Client).where(Client.company_id == ctx.company.id).order_by(Client.created_at)).all()
+
+    for row in rows:
+        m = row["membership"]
+        row["is_active"] = entity_is_allowed(session, entity_type="membership", entity_id=m.id) if m.id else True
+        row["allowed_features"] = sorted(
+            get_membership_allowed_features(session, company_id=ctx.company.id, membership=m))
+        try:
+            row["visibility"] = get_member_visibility(session, m.id)
+        except Exception:
+            row["visibility"] = {"ver_score": True, "ver_diagnostico": True, "ver_dre": True, "ver_augur": True}
+
+    active_client_id = get_active_client_id(request, session, ctx)
+    current_client = get_client_or_none(session, ctx.company.id, active_client_id)
+
+    return render(
+        "members.html",
+        request=request,
+        context={
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "role": ctx.membership.role,
+            "current_client": current_client,
+            "rows": rows,
+            "clients": clients,
+            "feature_groups": FEATURE_GROUPS,
+            "feature_standalone": FEATURE_STANDALONE,
+            "feature_keys": FEATURE_KEYS,
+
+        },
+    )
+
+
+@app.post("/admin/members")
+@require_role({"admin", "equipe"})
+async def members_add_action(
+        request: Request,
+        session: Session = Depends(get_session),
+        name: str = Form(...),
+        email: str = Form(...),
+        password: str = Form(...),
+        role: str = Form(...),
+        client_id: str = Form(""),
+        client_name: str = Form(""),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    # Garante tabela em ambientes sem Alembic
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
+    role = role.strip().lower()
+    if role not in {"admin", "equipe", "cliente"}:
+        set_flash(request, "Role inválida.")
+        return RedirectResponse("/admin/members", status_code=303)
+
+    if len(password) < 8:
+        set_flash(request, "Senha muito curta (mínimo 8).")
+        return RedirectResponse("/admin/members", status_code=303)
+
+    email_norm = email.strip().lower()
+    user = session.exec(select(User).where(User.email == email_norm)).first()
+
+    if not user:
+        user = User(name=name.strip(), email=email_norm, password_hash=hash_password(password))
+        session.add(user)
+        try:
+            session.commit()
+        except IntegrityError:
+            session.rollback()
+            set_flash(request, "Não foi possível criar usuário (e-mail pode já existir).")
+            return RedirectResponse("/admin/members", status_code=303)
+        session.refresh(user)
+
+    membership = Membership(user_id=user.id, company_id=ctx.company.id, role=role)
+
+    if role == "cliente":
+        cid = _safe_int(client_id)
+        if cid:
+            c = session.get(Client, cid)
+            if not c or c.company_id != ctx.company.id:
+                set_flash(request, "Cliente inválido.")
+                return RedirectResponse("/admin/members", status_code=303)
+            membership.client_id = c.id
+            request.session["selected_client_id"] = c.id
+        else:
+            cn = client_name.strip()
+            if cn:
+                existing = session.exec(
+                    select(Client).where(Client.company_id == ctx.company.id, func.lower(Client.name) == cn.lower())
+                ).first()
+                if existing:
+                    membership.client_id = existing.id
+                    request.session["selected_client_id"] = existing.id
+                else:
+                    client = Client(company_id=ctx.company.id, name=cn)
+                    session.add(client)
+                    session.commit()
+                    session.refresh(client)
+                    membership.client_id = client.id
+                    request.session["selected_client_id"] = client.id
+
+    session.add(membership)
+    try:
+        session.commit()
+    except IntegrityError:
+        session.rollback()
+        set_flash(request, "Este usuário já está vinculado a este escritório.")
+        return RedirectResponse("/admin/members", status_code=303)
+
+    set_flash(request, f"Membro adicionado: {email_norm} ({role}).")
+    return RedirectResponse("/admin/members", status_code=303)
+
+
+@app.post("/admin/members/{membership_id}/features")
+@require_role({"admin", "equipe"})
+async def member_features_update(
+        request: Request,
+        membership_id: int,
+        session: Session = Depends(get_session),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    m = session.get(Membership, membership_id)
+    if not m or m.company_id != ctx.company.id:
+        set_flash(request, "Membro não encontrado.")
+        return RedirectResponse("/admin/members", status_code=303)
+
+    form = await request.form()
+    features = [str(x) for x in form.getlist("features") if str(x) in FEATURE_KEYS]
+
+    row = session.exec(
+        select(MembershipFeatureAccess).where(
+            MembershipFeatureAccess.company_id == ctx.company.id,
+            MembershipFeatureAccess.membership_id == membership_id,
+        )
+    ).first()
+    if not row:
+        row = MembershipFeatureAccess(company_id=ctx.company.id, membership_id=membership_id)
+
+    row.features_json = json.dumps(sorted(set(features)))
+    row.updated_at = utcnow()
+    session.add(row)
+    session.commit()
+
+    set_flash(request, "Permissões atualizadas.")
+    return RedirectResponse("/admin/members", status_code=303)
+
+
+@app.post("/admin/members/{membership_id}/link-client")
+@require_role({"admin", "equipe"})
+async def member_link_client(
+        request: Request,
+        membership_id: int,
+        session: Session = Depends(get_session),
+        client_id: str = Form(""),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    m = session.get(Membership, membership_id)
+    if not m or m.company_id != ctx.company.id:
+        set_flash(request, "Membro não encontrado.")
+        return RedirectResponse("/admin/members", status_code=303)
+
+    if m.role != "cliente":
+        set_flash(request, "Apenas membros role=cliente podem ser vinculados a um cliente.")
+        return RedirectResponse("/admin/members", status_code=303)
+
+    cid = _safe_int(client_id)
+    if cid:
+        c = session.get(Client, cid)
+        if not c or c.company_id != ctx.company.id:
+            set_flash(request, "Cliente inválido.")
+            return RedirectResponse("/admin/members", status_code=303)
+        m.client_id = c.id
+        request.session["selected_client_id"] = c.id
+    else:
+        m.client_id = None
+
+    session.add(m)
+    session.commit()
+    set_flash(request, "Vínculo atualizado.")
+    return RedirectResponse("/admin/members", status_code=303)
+
+
+@app.get("/admin/clients/{client_id}/access", response_class=HTMLResponse)
+@require_role({"admin", "equipe"})
+async def client_access_page(
+        request: Request,
+        client_id: int,
+        session: Session = Depends(get_session),
+) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    c = session.get(Client, client_id)
+    if not c or c.company_id != ctx.company.id:
+        return render(
+            "error.html",
+            request=request,
+            context={
+                "current_user": ctx.user,
+                "current_company": ctx.company,
+                "role": ctx.membership.role,
+                "current_client": None,
+                "message": "Cliente não encontrado.",
+            },
+            status_code=404,
+        )
+
+    allowed = get_client_allowed_features(
+        session,
+        company_id=ctx.company.id,
+        client_id=client_id,
+    ) or set(ROLE_DEFAULT_FEATURES["cliente"])
+
+    mems = session.exec(
+        select(Membership).where(Membership.company_id == ctx.company.id, Membership.client_id == client_id)
+    ).all()
+    users = []
+    for m in mems:
+        u = session.get(User, m.user_id)
+        if u:
+            users.append({"user": u, "membership": m})
+
+    finance_tool_admin = _tool_admin_payload(
+        session,
+        company_id=ctx.company.id,
+        client_id=client_id,
+        tool_code=CLIENT_TOOL_FINANCE_CODE,
+    )
+
+    return render(
+        "client_access.html",
+        request=request,
+        context={
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "role": ctx.membership.role,
+            "current_client": c,
+            "client": c,
+            "allowed": sorted(allowed),
+            "feature_groups": FEATURE_GROUPS,
+            "feature_standalone": FEATURE_STANDALONE,
+            "feature_keys": FEATURE_KEYS,
+            "linked_users": users,
+            "finance_tool_admin": finance_tool_admin,
+        },
+    )
+
+
+@app.post("/admin/clients/{client_id}/access")
+@require_role({"admin", "equipe"})
+async def client_access_save(
+        request: Request,
+        client_id: int,
+        session: Session = Depends(get_session),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    c = session.get(Client, client_id)
+    if not c or c.company_id != ctx.company.id:
+        set_flash(request, "Cliente não encontrado.")
+        return RedirectResponse("/admin/gestao", status_code=303)
+
+    form = await request.form()
+    features = [str(x) for x in form.getlist("features") if str(x) in FEATURE_KEYS]
+
+    stored_features = set(features)
+    if "obras_horas" not in stored_features:
+        stored_features.add(f"{CLIENT_FEATURE_DISABLE_PREFIX}obras_horas")
+    else:
+        stored_features.discard(f"{CLIENT_FEATURE_DISABLE_PREFIX}obras_horas")
+
+    row = session.exec(
+        select(ClientFeatureAccess).where(
+            ClientFeatureAccess.company_id == ctx.company.id,
+            ClientFeatureAccess.client_id == client_id,
+        )
+    ).first()
+    if not row:
+        row = ClientFeatureAccess(company_id=ctx.company.id, client_id=client_id)
+
+    row.features_json = json.dumps(sorted(stored_features))
+    row.updated_at = utcnow()
+    session.add(row)
+    session.commit()
+
+    # Configuração manual da ferramenta Financeiro Gerencial
+    if CLIENT_TOOL_FINANCE_CODE in features:
+        sub = _get_or_create_client_tool_subscription(
+            session,
+            company_id=ctx.company.id,
+            client_id=client_id,
+            tool_code=CLIENT_TOOL_FINANCE_CODE,
+        )
+        pricing_mode = (str(form.get("tool_finance_pricing_mode") or "trial").strip().lower() or "trial")
+        trial_days = max(0, int(str(form.get("tool_finance_trial_days") or "30") or 30))
+        monthly_credits = max(0, int(str(form.get("tool_finance_monthly_credits") or str(
+            CLIENT_TOOL_FINANCE_MONTHLY_CREDITS)) or CLIENT_TOOL_FINANCE_MONTHLY_CREDITS))
+        release_enabled = str(form.get("tool_finance_release_enabled") or "") == "1"
+        start_trial_now = str(form.get("tool_finance_start_trial_now") or "") == "1"
+
+        sub.is_active = bool(release_enabled)
+        sub.monthly_price_credits = monthly_credits
+        sub.updated_at = utcnow()
+
+        now = utcnow()
+        if not release_enabled:
+            sub.status = "blocked"
+            sub.trial_started_at = None
+            sub.trial_ends_at = None
+            sub.next_billing_at = None
+        elif pricing_mode == "free":
+            sub.status = "active"
+            sub.trial_started_at = None
+            sub.trial_ends_at = None
+            sub.next_billing_at = None
+            sub.monthly_price_credits = 0
+        elif start_trial_now and trial_days > 0:
+            sub.status = "trial"
+            sub.trial_started_at = now
+            sub.trial_ends_at = now + timedelta(days=trial_days)
+            sub.next_billing_at = sub.trial_ends_at
+        else:
+            if sub.status == "trial" and sub.trial_started_at and sub.trial_ends_at:
+                pass
+            else:
+                sub.status = "blocked" if pricing_mode == "trial" else "active"
+                if pricing_mode == "trial":
+                    sub.trial_started_at = None
+                    sub.trial_ends_at = None
+                    sub.next_billing_at = None
+
+        session.add(sub)
+        session.commit()
+
+    set_flash(request, "Permissões do cliente atualizadas.")
+    return RedirectResponse(f"/admin/clients/{client_id}/access", status_code=303)
+
+
+# ----------------------------
+# Empresa / Perfil# ----------------------------
+# Empresa / Perfil
+# ----------------------------
+
+
+@app.get("/empresa", response_class=HTMLResponse)
+@require_login
+async def empresa_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+
+    current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
+    business_profile = None
+    if current_client and ensure_can_access_client(ctx, current_client.id):
+        business_profile = get_or_create_business_profile(session, company_id=ctx.company.id,
+                                                          client_id=current_client.id)
+
+    return render(
+        "empresa.html",
+        request=request,
+        context={
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "role": ctx.membership.role,
+            "current_client": current_client,
+            "business_profile": business_profile,
+            "product_families": list_product_families(session),
+            "selected_interest_codes": _json_list(business_profile.interests_json) if business_profile else [],
+            "company_size_options": COMPANY_SIZE_OPTIONS,
+            "segment_options": COMPANY_SEGMENT_OPTIONS,
+            "subsegment_options": SEGMENT_SUBSEGMENT_OPTIONS.get(
+                (business_profile.segment if business_profile else "") or "", []),
+            "segment_subsegments_json": json.dumps(SEGMENT_SUBSEGMENT_OPTIONS, ensure_ascii=False),
+            "tax_regime_options": TAX_REGIME_OPTIONS,
+            "business_model_options": BUSINESS_MODEL_OPTIONS,
+            "sales_channel_options": SALES_CHANNEL_OPTIONS,
+            "urgency_level_options": URGENCY_LEVEL_OPTIONS,
+            "uf_options": UF_OPTIONS,
+        },
+    )
+
+
+@app.post("/empresa")
+@require_login
+async def empresa_save(
+        request: Request,
+        session: Session = Depends(get_session),
+        name: str = Form(...),
+        cnpj: str = Form(""),
+        email: str = Form(""),
+        phone: str = Form(""),
+        finance_email: str = Form(""),
+        address: str = Form(""),
+        city: str = Form(""),
+        state: str = Form(""),
+        zip_code: str = Form(""),
+        notes: str = Form(""),
+        segment: str = Form(""),
+        subsegment: str = Form(""),
+        cnae: str = Form(""),
+        tax_regime: str = Form(""),
+        company_size: str = Form(""),
+        founded_year: int = Form(0),
+        business_model: str = Form(""),
+        sales_channel: str = Form(""),
+        main_bank: str = Form(""),
+        banks_count: int = Form(0),
+        annual_revenue_brl: float = Form(0.0),
+        monthly_fixed_cost_brl: float = Form(0.0),
+        payroll_monthly_brl: float = Form(0.0),
+        average_ticket_brl: float = Form(0.0),
+        inventory_brl: float = Form(0.0),
+        receivables_brl: float = Form(0.0),
+        collateral_brl: float = Form(0.0),
+        delinquency_brl: float = Form(0.0),
+        desired_credit_brl: float = Form(0.0),
+        urgency_level: str = Form(""),
+        strategic_goal: str = Form(""),
+        pain_points: str = Form(""),
+        has_erp: Optional[str] = Form(None),
+        has_budget: Optional[str] = Form(None),
+        has_board: Optional[str] = Form(None),
+        has_audited_fs: Optional[str] = Form(None),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+
+    current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
+    if not current_client:
+        set_flash(request, "Nenhum cliente selecionado/vinculado.")
+        return RedirectResponse("/empresa", status_code=303)
+
+    if not ensure_can_access_client(ctx, current_client.id):
+        set_flash(request, "Sem permissão.")
+        return RedirectResponse("/empresa", status_code=303)
+
+    form = await request.form()
+    interests = form.getlist("interests") if hasattr(form, "getlist") else []
+    if not interests:
+        one = form.get("interests")
+        interests = [str(one).strip()] if one else []
+
+    current_client.name = _clean_text(name, 160) or current_client.name
+    current_client.cnpj = _normalize_document(cnpj)
+    current_client.email = _normalize_email(email)
+    current_client.phone = _normalize_phone(phone)
+    current_client.finance_email = _normalize_email(finance_email)
+    current_client.address = _clean_text(address, 200)
+    current_client.city = _clean_text(city, 120)
+    current_client.state = _coerce_choice(state, UF_OPTIONS)
+    current_client.zip_code = _normalize_zip_code(zip_code)
+    current_client.notes = _clean_text(notes, 2000)
+    current_client.updated_at = utcnow()
+
+    session.add(current_client)
+    profile = get_or_create_business_profile(session, company_id=ctx.company.id, client_id=current_client.id)
+    profile.segment = _coerce_choice(segment, COMPANY_SEGMENT_OPTIONS)
+    valid_subsegments = SEGMENT_SUBSEGMENT_OPTIONS.get(profile.segment, [])
+    profile.subsegment = _coerce_choice(subsegment, valid_subsegments)
+    profile.cnae = _clean_text(cnae, 32)
+    profile.tax_regime = _coerce_choice(tax_regime, TAX_REGIME_OPTIONS)
+    profile.company_size = _coerce_choice(company_size, COMPANY_SIZE_OPTIONS)
+    profile.founded_year = _safe_year(founded_year)
+    profile.business_model = _coerce_choice(business_model, BUSINESS_MODEL_OPTIONS)
+    profile.sales_channel = _coerce_choice(sales_channel, SALES_CHANNEL_OPTIONS)
+    profile.main_bank = _clean_text(main_bank, 120)
+    profile.banks_count = _safe_int(banks_count)
+    profile.banking_relationships_count = profile.banks_count
+    profile.annual_revenue_brl = _safe_money(annual_revenue_brl)
+    profile.monthly_fixed_cost_brl = _safe_money(monthly_fixed_cost_brl)
+    profile.payroll_monthly_brl = _safe_money(payroll_monthly_brl)
+    if hasattr(profile, "monthly_payroll_brl"):
+        profile.monthly_payroll_brl = profile.payroll_monthly_brl
+    profile.average_ticket_brl = _safe_money(average_ticket_brl)
+    if "inventory_brl" in form:
+        profile.inventory_brl = _safe_money(form.get("inventory_brl"))
+    if "receivables_brl" in form:
+        profile.receivables_brl = _safe_money(form.get("receivables_brl"))
+    if hasattr(profile, "monthly_receivables_brl"):
+        profile.monthly_receivables_brl = profile.receivables_brl
+    profile.collateral_brl = _safe_money(collateral_brl)
+    if hasattr(profile, "collateral_available_brl"):
+        profile.collateral_available_brl = profile.collateral_brl
+    profile.delinquency_brl = _safe_money(delinquency_brl)
+    profile.desired_credit_brl = _safe_money(desired_credit_brl)
+    if hasattr(profile, "desired_credit_amount_brl"):
+        profile.desired_credit_amount_brl = profile.desired_credit_brl
+    profile.urgency_level = _coerce_choice(urgency_level, URGENCY_LEVEL_OPTIONS)
+    profile.strategic_goal = _clean_text(strategic_goal, 1000)
+    profile.pain_points = _clean_text(pain_points, 2000)
+    profile.interests_json = _json_dump_list(_coerce_interest_codes(interests))
+    profile.has_erp = _parse_bool(has_erp)
+    profile.has_budget = _parse_bool(has_budget)
+    profile.has_board = _parse_bool(has_board)
+    profile.has_audited_fs = _parse_bool(has_audited_fs)
+    profile.updated_at = utcnow()
+    session.add(profile)
+    session.commit()
+    _sync_business_profile_legacy_columns(session, profile)
+
+    try:
+        _notify_staff_about_client_activity(
+            session,
+            ctx=ctx,
+            client_id=current_client.id,
+            kind="atividade_cliente",
+            title="Cliente atualizou dados da empresa",
+            message=(current_client.name or "Cliente")[:160],
+            href="/empresa",
+        )
+    except Exception:
+        pass
+
+    set_flash(request, "Dados da empresa atualizados.")
+    return RedirectResponse("/empresa", status_code=303)
+
+    if not ensure_can_access_client(ctx, current_client.id):
+        set_flash(request, "Sem permissão.")
+        return RedirectResponse("/empresa", status_code=303)
+
+    form = await request.form()
+    interests = form.getlist("interests") if hasattr(form, "getlist") else []
+    if not interests:
+        one = form.get("interests")
+        interests = [str(one).strip()] if one else []
+
+    current_client.name = name.strip()
+    current_client.cnpj = cnpj.strip()
+    current_client.email = email.strip()
+    current_client.phone = phone.strip()
+    current_client.finance_email = finance_email.strip()
+    current_client.address = address.strip()
+    current_client.city = city.strip()
+    current_client.state = state.strip()
+    current_client.zip_code = zip_code.strip()
+    current_client.notes = notes.strip()
+    current_client.updated_at = utcnow()
+
+    session.add(current_client)
+    profile = get_or_create_business_profile(session, company_id=ctx.company.id, client_id=current_client.id)
+    profile.segment = (segment or "").strip()
+    profile.subsegment = (subsegment or "").strip()
+    profile.cnae = (cnae or "").strip()
+    profile.tax_regime = (tax_regime or "").strip()
+    profile.company_size = (company_size or "").strip()
+    profile.founded_year = max(0, int(founded_year or 0))
+    profile.business_model = (business_model or "").strip()
+    profile.sales_channel = (sales_channel or "").strip()
+    profile.main_bank = (main_bank or "").strip()
+    profile.banks_count = max(0, int(banks_count or 0))
+    profile.banking_relationships_count = profile.banks_count
+    profile.annual_revenue_brl = max(0.0, float(annual_revenue_brl or 0.0))
+    profile.monthly_fixed_cost_brl = max(0.0, float(monthly_fixed_cost_brl or 0.0))
+    profile.payroll_monthly_brl = max(0.0, float(payroll_monthly_brl or 0.0))
+    if hasattr(profile, "monthly_payroll_brl"):
+        profile.monthly_payroll_brl = profile.payroll_monthly_brl
+    profile.average_ticket_brl = max(0.0, float(average_ticket_brl or 0.0))
+    profile.inventory_brl = max(0.0, float(inventory_brl or 0.0))
+    profile.receivables_brl = max(0.0, float(receivables_brl or 0.0))
+    if hasattr(profile, "monthly_receivables_brl"):
+        profile.monthly_receivables_brl = profile.receivables_brl
+    profile.collateral_brl = max(0.0, float(collateral_brl or 0.0))
+    if hasattr(profile, "collateral_available_brl"):
+        profile.collateral_available_brl = profile.collateral_brl
+    profile.delinquency_brl = max(0.0, float(delinquency_brl or 0.0))
+    profile.desired_credit_brl = max(0.0, float(desired_credit_brl or 0.0))
+    if hasattr(profile, "desired_credit_amount_brl"):
+        profile.desired_credit_amount_brl = profile.desired_credit_brl
+    profile.urgency_level = (urgency_level or "").strip()
+    profile.strategic_goal = (strategic_goal or "").strip()
+    profile.pain_points = (pain_points or "").strip()
+    profile.interests_json = _json_dump_list(list(interests or []))
+    profile.has_erp = _parse_bool(has_erp)
+    profile.has_budget = _parse_bool(has_budget)
+    profile.has_board = _parse_bool(has_board)
+    profile.has_audited_fs = _parse_bool(has_audited_fs)
+    profile.updated_at = utcnow()
+    session.add(profile)
+    session.commit()
+    _sync_business_profile_legacy_columns(session, profile)
+
+    set_flash(request, "Dados da empresa atualizados.")
+    return RedirectResponse("/empresa", status_code=303)
+
+
+@app.get("/perfil", response_class=HTMLResponse)
+@require_login
+async def perfil_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+
+    current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
+
+    snapshots: list[ClientSnapshot] = []
+    latest_score: Optional[float] = None
+    delta: Optional[float] = None
+
+    if current_client and ensure_can_access_client(ctx, current_client.id):
+        snaps = session.exec(
+            select(ClientSnapshot)
+            .where(ClientSnapshot.company_id == ctx.company.id, ClientSnapshot.client_id == current_client.id)
+            .order_by(ClientSnapshot.created_at.desc())
+            .limit(12)
+        ).all()
+        snapshots = list(snaps)
+        if snapshots:
+            latest_score = float(snapshots[0].score_total)
+        if len(snapshots) >= 2:
+            delta = round(float(snapshots[0].score_total) - float(snapshots[1].score_total), 2)
+
+    business_profile = None
+    offer_matches: list[dict[str, Any]] = []
+    financial_analysis = None
+    financial_gauge = None
+    financial_insights: list[dict[str, str]] = []
+    financial_critical_points: list[dict[str, str]] = []
+    financial_next_steps: list[dict[str, str]] = []
+    if current_client and ensure_can_access_client(ctx, current_client.id):
+        business_profile = get_or_create_business_profile(session, company_id=ctx.company.id, client_id=current_client.id)
+        financial_analysis = build_client_dashboard_analysis(
+            client=current_client,
+            profile=business_profile,
+            latest_snapshot=snapshots[0] if snapshots else None,
+        )
+        financial_gauge = _dashboard_gauge(_dashboard_score_value(financial_analysis, "Score Geral"))
+        financial_insights = _dashboard_score_insights(financial_analysis)
+        financial_critical_points = _dashboard_critical_points(financial_analysis)
+        financial_next_steps = _dashboard_next_steps(financial_analysis)
+        offer_matches = list_offer_matches_for_role(
+            session=session,
+            company_id=ctx.company.id,
+            client_id=current_client.id,
+            role=ctx.membership.role,
+            limit=8,
+        )
+
+    return render(
+        "perfil.html",
+        request=request,
+        context={
+            "current_user": ctx.user,
+            "current_company": ctx.company,
+            "role": ctx.membership.role,
+            "current_client": current_client,
+            "snapshots": snapshots,
+            "latest_score": latest_score,
+            "delta": delta,
+            "business_profile": business_profile,
+            "offer_matches": offer_matches,
+            "business_profile_interests": _json_list(business_profile.interests_json) if business_profile else [],
+            "financial_analysis": financial_analysis,
+            "financial_gauge": financial_gauge,
+            "financial_insights": financial_insights,
+            "financial_critical_points": financial_critical_points,
+            "financial_next_steps": financial_next_steps,
+        },
+    )
+
+
+@app.post("/perfil")
+@require_login
+async def perfil_save(
+        request: Request,
+        session: Session = Depends(get_session),
+        revenue_monthly_brl: float = Form(0.0),
+        debt_total_brl: float = Form(0.0),
+        cash_balance_brl: float = Form(0.0),
+        employees_count: int = Form(0),
+        receivables_brl: float = Form(0.0),
+        inventory_brl: float = Form(0.0),
+        other_current_assets_brl: float = Form(0.0),
+        immobilized_brl: float = Form(0.0),
+        other_non_current_assets_brl: float = Form(0.0),
+        payables_360_brl: float = Form(0.0),
+        short_term_debt_brl: float = Form(0.0),
+        tax_liabilities_brl: float = Form(0.0),
+        labor_liabilities_brl: float = Form(0.0),
+        other_current_liabilities_brl: float = Form(0.0),
+        long_term_debt_brl: float = Form(0.0),
+        other_non_current_liabilities_brl: float = Form(0.0),
+        current_assets_brl: float = Form(0.0),
+        non_current_assets_brl: float = Form(0.0),
+        current_liabilities_brl: float = Form(0.0),
+        non_current_liabilities_brl: float = Form(0.0),
+        equity_brl: float = Form(0.0),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+
+    current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
+    if not current_client:
+        set_flash(request, "Nenhum cliente selecionado/vinculado.")
+        return RedirectResponse("/perfil", status_code=303)
+
+    if not ensure_can_access_client(ctx, current_client.id):
+        set_flash(request, "Sem permissão.")
+        return RedirectResponse("/perfil", status_code=303)
+
+    current_client.revenue_monthly_brl = _safe_money(revenue_monthly_brl)
+    current_client.employees_count = _safe_int(employees_count)
+    current_client.updated_at = utcnow()
+
+    profile = get_or_create_business_profile(session, company_id=ctx.company.id, client_id=current_client.id)
+
+    detail_values = {
+        "cash_balance_brl": _safe_signed_money(cash_balance_brl),
+        "receivables_brl": _safe_money(receivables_brl),
+        "inventory_brl": _safe_money(inventory_brl),
+        "other_current_assets_brl": _safe_money(other_current_assets_brl),
+        "immobilized_brl": _safe_money(immobilized_brl),
+        "other_non_current_assets_brl": _safe_money(other_non_current_assets_brl),
+        "payables_360_brl": _safe_money(payables_360_brl),
+        "short_term_debt_brl": _safe_money(short_term_debt_brl),
+        "tax_liabilities_brl": _safe_money(tax_liabilities_brl),
+        "labor_liabilities_brl": _safe_money(labor_liabilities_brl),
+        "other_current_liabilities_brl": _safe_money(other_current_liabilities_brl),
+        "long_term_debt_brl": _safe_money(long_term_debt_brl),
+        "other_non_current_liabilities_brl": _safe_money(other_non_current_liabilities_brl),
+    }
+    detail_provided = any(abs(v) > 0 for v in detail_values.values())
+    aggregate_provided = any(_safe_money(v) > 0 for v in
+                             [current_assets_brl, non_current_assets_brl, current_liabilities_brl,
+                              non_current_liabilities_brl])
+
+    if detail_provided:
+        profile.cash_and_investments_brl = detail_values["cash_balance_brl"]
+        profile.receivables_brl = detail_values["receivables_brl"]
+        profile.inventory_brl = detail_values["inventory_brl"]
+        profile.other_current_assets_brl = detail_values["other_current_assets_brl"]
+        profile.immobilized_brl = detail_values["immobilized_brl"]
+        profile.other_non_current_assets_brl = detail_values["other_non_current_assets_brl"]
+        profile.payables_360_brl = detail_values["payables_360_brl"]
+        profile.short_term_debt_brl = detail_values["short_term_debt_brl"]
+        profile.tax_liabilities_brl = detail_values["tax_liabilities_brl"]
+        profile.labor_liabilities_brl = detail_values["labor_liabilities_brl"]
+        profile.other_current_liabilities_brl = detail_values["other_current_liabilities_brl"]
+        profile.long_term_debt_brl = detail_values["long_term_debt_brl"]
+        profile.other_non_current_liabilities_brl = detail_values["other_non_current_liabilities_brl"]
+
+        breakdown = _financial_breakdown(profile, current_client)
+        profile.current_assets_brl = breakdown["current_assets"]
+        profile.non_current_assets_brl = breakdown["non_current_assets"]
+        profile.current_liabilities_brl = breakdown["current_liabilities"]
+        profile.non_current_liabilities_brl = breakdown["non_current_liabilities"]
+        profile.equity_brl = breakdown["equity"]
+
+        current_client.cash_balance_brl = breakdown["cash_signed"]
+        current_client.debt_total_brl = breakdown["debt_total"]
+    else:
+        current_client.cash_balance_brl = _safe_signed_money(cash_balance_brl)
+        current_client.debt_total_brl = _safe_money(debt_total_brl)
+        profile.current_assets_brl = _safe_money(current_assets_brl)
+        profile.non_current_assets_brl = _safe_money(non_current_assets_brl)
+        profile.current_liabilities_brl = _safe_money(current_liabilities_brl)
+        profile.non_current_liabilities_brl = _safe_money(non_current_liabilities_brl)
+        assets_total = profile.current_assets_brl + profile.non_current_assets_brl
+        liabilities_total = profile.current_liabilities_brl + profile.non_current_liabilities_brl
+        profile.equity_brl = round(assets_total - liabilities_total, 2)
+
+    profile.updated_at = utcnow()
+
+    session.add(current_client)
+    session.add(profile)
+    session.commit()
+    _sync_business_profile_legacy_columns(session, profile)
+
+    latest_snapshot = session.exec(
+        select(ClientSnapshot)
+        .where(ClientSnapshot.company_id == ctx.company.id, ClientSnapshot.client_id == current_client.id)
+        .order_by(ClientSnapshot.created_at.desc())
+        .limit(1)
+    ).first()
+    matches = compute_offer_engine(session=session, company_id=ctx.company.id, client=current_client, profile=profile,
+                                   latest_snapshot=latest_snapshot)
+    persist_offer_matches(session, company_id=ctx.company.id, client_id=current_client.id, matches=matches)
+
+    try:
+        _notify_staff_about_client_activity(
+            session,
+            ctx=ctx,
+            client_id=current_client.id,
+            kind="atividade_cliente",
+            title="Cliente atualizou o diagnóstico financeiro",
+            message=(current_client.name or "Cliente")[:160],
+            href="/perfil",
+        )
+    except Exception:
+        pass
+
+    set_flash(request, "Diagnóstico financeiro atualizado.")
+    return RedirectResponse("/perfil", status_code=303)
+
+
+# ----------------------------
+# Perfil: Avaliação / Snapshot
+# ----------------------------
+
+@app.get("/perfil/avaliacao/nova", response_class=HTMLResponse)
+@require_login
+async def perfil_snapshot_new_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+
+    current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
+    if not current_client:
+        set_flash(request, "Nenhum cliente selecionado/vinculado.")
+        return RedirectResponse("/perfil", status_code=303)
+
+    if not ensure_can_access_client(ctx, current_client.id):
+        set_flash(request, "Sem permissão.")
+        return RedirectResponse("/perfil", status_code=303)
 
     business_profile = get_or_create_business_profile(session, company_id=ctx.company.id, client_id=current_client.id)
 
