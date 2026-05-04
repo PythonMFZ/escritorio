@@ -3644,6 +3644,7 @@ def _render_nfse_lookup_page(*, inv: "ContaAzulInvoice", payload: dict[str, Any]
     .note {{ background: #fff7ed; border: 1px solid #fed7aa; color: #9a3412; padding: 12px 14px; border-radius: 12px; margin-top: 16px; }}
     .note.subtle {{ background: #eff6ff; border-color: #bfdbfe; color: #1d4ed8; }}
   </style>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css">
 </head>
 <body>
   <div class="wrap">
@@ -47541,3 +47542,4 @@ exec(open('ui_fix_consultas_preco.py').read())
 exec(open('ui_construrisk.py').read())
 exec(open('ui_sistema_saude.py').read())
 exec(open('ui_wizard_diagnostico.py').read())
+exec(open('ui_obras_evm.py').read())
