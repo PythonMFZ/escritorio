@@ -256,6 +256,7 @@ TEMPLATES["ferramenta_obras_cronograma.html"] = r"""
     <button onclick="abrirNovaFase()" class="btn btn-outline-secondary btn-sm"><i class="bi bi-plus me-1"></i> Fase</button>
     <a href="/ferramentas/obras/{{ obra.id }}/editar" class="btn btn-outline-secondary btn-sm"><i class="bi bi-pencil me-1"></i> Editar</a>
     <button onclick="window.print()" class="btn btn-outline-secondary btn-sm"><i class="bi bi-printer me-1"></i> PDF</button>
+    <a href="/ferramentas/obras/{{ obra.id }}/evm" class="btn btn-outline-primary btn-sm"><i class="bi bi-graph-up me-1"></i> EVM</a>
   </div>
 </div>
 
@@ -333,13 +334,13 @@ TEMPLATES["ferramenta_obras_cronograma.html"] = r"""
             onclick="event.stopPropagation();abrirNovaEtapa({{ fase.id }},'{{ fase.nome }}')">
       + Etapa
     </button>
-    <button class="btn btn-xs btn-outline-secondary no-print" style="padding:.1rem .4rem;font-size:.7rem;"
+    <button class="btn btn-outline-secondary btn-sm no-print"
             onclick="event.stopPropagation();editarFase({{ fase.id }},'{{ fase.nome }}',{{ fase.orcado_rs }})">
-      <i class="bi bi-pencil"></i>
+      <i class="bi bi-pencil me-1"></i>Editar
     </button>
-    <button class="btn btn-xs btn-outline-danger no-print" style="padding:.1rem .4rem;font-size:.7rem;"
+    <button class="btn btn-outline-danger btn-sm no-print"
             onclick="event.stopPropagation();apagarFase({{ fase.id }},'{{ fase.nome }}')">
-      <i class="bi bi-trash"></i>
+      <i class="bi bi-trash me-1"></i>Apagar
     </button>
   </div>
 </div>
