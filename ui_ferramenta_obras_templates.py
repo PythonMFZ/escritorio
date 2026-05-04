@@ -64,9 +64,9 @@ TEMPLATES["ferramenta_obras_lista.html"] = r"""
       </div>
       <div class="d-flex gap-2">
         <a href="/ferramentas/obras/{{ o.id }}" class="btn btn-sm btn-primary">Abrir</a>
-        <a href="/ferramentas/obras/{{ o.id }}/editar" class="btn btn-sm btn-outline-secondary"><i class="bi bi-pencil"></i></a>
+        <a href="/ferramentas/obras/{{ o.id }}/editar" class="btn btn-sm btn-outline-secondary">✏️</a>
         <a href="/ferramentas/obras/{{ o.id }}/apagar" class="btn btn-sm btn-outline-danger"
-           onclick="return confirm('Apagar esta obra e todo seu histórico?')"><i class="bi bi-trash"></i></a>
+           onclick="return confirm('Apagar esta obra e todo seu histórico?')">🗑</a>
       </div>
     </div>
 
@@ -361,7 +361,7 @@ TEMPLATES["ferramenta_obras_cronograma.html"] = r"""
     </button>
     <button class="btn btn-xs btn-outline-danger no-print" style="padding:.1rem .4rem;font-size:.7rem;"
             onclick="event.stopPropagation();apagarFase({{ fase.id }},'{{ fase.nome }}')">
-      <i class="bi bi-trash"></i>
+      🗑
     </button>
   </div>
 </div>
@@ -399,17 +399,23 @@ TEMPLATES["ferramenta_obras_cronograma.html"] = r"""
     </div>
     <div>{{ e.a_incorrer|brl }}</div>
     <div class="d-flex gap-1 no-print">
-      <button class="btn btn-sm btn-primary" onclick="abrirApontamento({{ e.id }},'{{ e.descricao }}',{{ e.orcado_rs }},{{ e.fisico_pct }},{{ e.financeiro_rs }})"
-              title="Apontar">
-        <i class="bi bi-pencil-square"></i>
+      <button class="btn btn-outline-secondary" style="padding:.4rem .7rem;font-size:.85rem;"
+              onclick="editarEtapa({{ e.id }},'{{ e.descricao }}','{{ e.insumo }}',{{ e.orcado_rs }},'{{ e.data_inicio }}','{{ e.data_fim }}')"
+              title="Editar etapa">
+        ✏️
+      </button>
+      <button class="btn btn-primary" style="padding:.4rem .7rem;font-size:.85rem;"
+              onclick="abrirApontamento({{ e.id }},'{{ e.descricao }}',{{ e.orcado_rs }},{{ e.fisico_pct }},{{ e.financeiro_rs }})"
+              title="Apontar progresso">
+        📝
       </button>
       {% if e.historico %}
       <button class="btn btn-sm btn-outline-secondary" onclick="verHistorico({{ e.id }})" title="Histórico">
-        <i class="bi bi-clock-history"></i>
+        🕐
       </button>
       {% endif %}
       <button class="btn btn-sm btn-outline-danger" onclick="apagarEtapa({{ e.id }},'{{ e.descricao }}')" title="Apagar">
-        <i class="bi bi-trash"></i>
+        🗑
       </button>
     </div>
   </div>
