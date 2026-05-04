@@ -256,6 +256,7 @@ TEMPLATES["ferramenta_obras_cronograma.html"] = r"""
     <button onclick="abrirNovaFase()" class="btn btn-outline-secondary btn-sm"><i class="bi bi-plus me-1"></i> Fase</button>
     <a href="/ferramentas/obras/{{ obra.id }}/editar" class="btn btn-outline-secondary btn-sm"><i class="bi bi-pencil me-1"></i> Editar</a>
     <button onclick="window.print()" class="btn btn-outline-secondary btn-sm"><i class="bi bi-printer me-1"></i> PDF</button>
+    <a href="/ferramentas/obras/{{ obra.id }}/evm" class="btn btn-outline-primary btn-sm"><i class="bi bi-graph-up me-1"></i> EVM</a>
   </div>
 </div>
 
