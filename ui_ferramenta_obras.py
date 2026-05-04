@@ -222,22 +222,48 @@ def _calcular_obra(session, obra: Obra) -> dict:
 
         fisico_total += fase_fisico_med
 
-    fisico_geral = fisico_total / len(fases) if fases else 0
     orcado_total_obra = obra.orcamento_total or orcado_total
 
-    esperado_geral = orcado_total_obra * (fisico_geral / 100) if fisico_geral > 0 else 0
-    desvio_geral   = realizado_rs - esperado_geral
+    # ── EVM correto ───────────────────────────────────────────────────────────
+    # EV = soma(fisico_pct/100 × orcado) — valor agregado real
+    # AC = soma(financeiro_rs) — custo real gasto
+    # IDC = EV / AC  (>1 = abaixo do orçado, <1 = acima)
+    # Fisico geral = EV / orcado_total (ponderado pelo orçamento, não média simples)
 
-    # Índice de Desempenho de Custo (IDC = esperado / realizado)
-    idc = esperado_geral / realizado_rs if realizado_rs > 0 else 1.0
+    ev_total = sum(
+        e["orcado_rs"] * (e["fisico_pct"] / 100)
+        for fase in fases_data
+        for e in fase["etapas"]
+    )
 
-    # Projeção de custo final
-    projecao_final = orcado_total_obra / idc if idc > 0 else orcado_total_obra
+    # Fisico geral ponderado pelo orçamento
+    fisico_geral = (ev_total / orcado_total * 100) if orcado_total > 0 else 0
+
+    # IDC = EV / AC
+    idc = round(ev_total / realizado_rs, 3) if realizado_rs > 0 else 1.0
+
+    # Desvio = AC - EV (positivo = acima do orçado, negativo = abaixo)
+    desvio_geral = realizado_rs - ev_total
+
+    # EAC = BAC / IDC (projeção de custo final)
+    projecao_final = round(orcado_total_obra / idc, 2) if idc > 0 else orcado_total_obra
+
+    # Recalcula fisico por fase também ponderado
+    for fase_d in fases_data:
+        fase_orcado = fase_d["orcado_rs"]
+        if fase_orcado > 0:
+            fase_ev = sum(e["orcado_rs"] * (e["fisico_pct"] / 100) for e in fase_d["etapas"])
+            fase_d["fisico_pct"] = round(fase_ev / fase_orcado * 100, 1)
+        fase_d["desvio_rs"] = round(
+            sum(e["financeiro_rs"] - e["orcado_rs"] * (e["fisico_pct"] / 100)
+                for e in fase_d["etapas"]), 2
+        )
 
     return {
         "fases":          fases_data,
         "orcado_total":   round(orcado_total_obra, 2),
         "realizado_rs":   round(realizado_rs, 2),
+        "ev_total":       round(ev_total, 2),
         "a_incorrer":     round(orcado_total_obra - realizado_rs, 2),
         "fisico_geral":   round(fisico_geral, 1),
         "desvio_geral":   round(desvio_geral, 2),

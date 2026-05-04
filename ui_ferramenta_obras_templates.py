@@ -256,47 +256,71 @@ TEMPLATES["ferramenta_obras_cronograma.html"] = r"""
     <button onclick="abrirNovaFase()" class="btn btn-outline-secondary btn-sm"><i class="bi bi-plus me-1"></i> Fase</button>
     <a href="/ferramentas/obras/{{ obra.id }}/editar" class="btn btn-outline-secondary btn-sm"><i class="bi bi-pencil me-1"></i> Editar</a>
     <button onclick="window.print()" class="btn btn-outline-secondary btn-sm"><i class="bi bi-printer me-1"></i> PDF</button>
-    <a href="/ferramentas/obras/{{ obra.id }}/evm" class="btn btn-outline-primary btn-sm"><i class="bi bi-graph-up me-1"></i> EVM</a>
   </div>
 </div>
 
 {# KPIs #}
+<style>
+.cr-kpi-info{display:inline-block;width:14px;height:14px;border-radius:50%;background:#e5e7eb;color:#6b7280;font-size:.62rem;font-weight:700;text-align:center;line-height:14px;cursor:help;margin-left:.3rem;vertical-align:middle;}
+</style>
 <div class="cr-kpi-grid">
   <div class="cr-kpi">
-    <div class="cr-kpi-l">Orçamento Total</div>
+    <div class="cr-kpi-l">BAC — Orçamento Total
+      <span class="cr-kpi-info" title="Budget at Completion: valor total orçado para a obra completa.">i</span>
+    </div>
     <div class="cr-kpi-v">{{ calc.orcado_total|brl }}</div>
     <div class="cr-kpi-f">{{ calc.n_etapas }} etapas · {{ calc.n_fases }} fases</div>
   </div>
   <div class="cr-kpi">
-    <div class="cr-kpi-l">Realizado</div>
-    <div class="cr-kpi-v" style="color:#3b82f6;">{{ calc.realizado_rs|brl }}</div>
+    <div class="cr-kpi-l">EV — Valor Agregado
+      <span class="cr-kpi-info" title="Earned Value: quanto da obra está concluído em R$. Calculado como: Σ(% físico × orçado de cada etapa). Representa o valor real gerado.">i</span>
+    </div>
+    <div class="cr-kpi-v" style="color:#16a34a;">{{ calc.ev_total|brl if calc.ev_total is defined else calc.realizado_rs|brl }}</div>
+    <div class="cr-kpi-f">{{ calc.fisico_geral }}% do orçamento concluído</div>
+  </div>
+  <div class="cr-kpi">
+    <div class="cr-kpi-l">AC — Custo Real
+      <span class="cr-kpi-info" title="Actual Cost: quanto foi efetivamente gasto até hoje, independente do avanço físico.">i</span>
+    </div>
+    <div class="cr-kpi-v" style="color:#f59e0b;">{{ calc.realizado_rs|brl }}</div>
     <div class="cr-kpi-f">{{ ((calc.realizado_rs/calc.orcado_total*100)|round(1)) if calc.orcado_total > 0 else 0 }}% do orçado</div>
   </div>
   <div class="cr-kpi">
-    <div class="cr-kpi-l">A Incorrer</div>
-    <div class="cr-kpi-v">{{ calc.a_incorrer|brl }}</div>
-    <div class="cr-kpi-f">Saldo orçado</div>
-  </div>
-  <div class="cr-kpi">
-    <div class="cr-kpi-l">Desvio de Custo</div>
-    <div class="cr-kpi-v {{ 'desvio-pos' if calc.desvio_geral > 0 else ('desvio-neg' if calc.desvio_geral < 0 else 'desvio-zero') }}">
-      {{ calc.desvio_geral|brl }}
+    <div class="cr-kpi-l">CV — Desvio de Custo
+      <span class="cr-kpi-info" title="Cost Variance = EV - AC. Negativo significa que gastou mais do que o valor gerado (acima do orçado). Positivo significa eficiência de custo.">i</span>
     </div>
-    <div class="cr-kpi-f">{{ 'Acima do esperado' if calc.desvio_geral > 0 else ('Abaixo do esperado' if calc.desvio_geral < 0 else 'No esperado') }}</div>
+    <div class="cr-kpi-v {{ 'idc-ok' if calc.desvio_geral <= 0 else 'idc-bad' }}">
+      {{ ('+' if calc.desvio_geral > 0 else '') }}{{ calc.desvio_geral|brl }}
+    </div>
+    <div class="cr-kpi-f">{{ 'Acima do orçado ⚠️' if calc.desvio_geral > 0 else ('Dentro do orçado ✅' if calc.desvio_geral < 0 else 'No orçado') }}</div>
   </div>
   <div class="cr-kpi">
-    <div class="cr-kpi-l">IDC</div>
-    <div class="cr-kpi-v {{ 'idc-ok' if calc.idc >= 0.95 else ('idc-warn' if calc.idc >= 0.8 else 'idc-bad') }}">
+    <div class="cr-kpi-l">IDC
+      <span class="cr-kpi-info" title="Índice de Desempenho de Custo = EV / AC. IDC = 1,0: exatamente no orçado. IDC > 1,0: abaixo do orçado (eficiente). IDC < 1,0: acima do orçado (estouro).">i</span>
+    </div>
+    <div class="cr-kpi-v {{ 'idc-ok' if calc.idc >= 0.95 else ('idc-warn' if calc.idc >= 0.80 else 'idc-bad') }}">
       {{ "%.3f"|format(calc.idc) }}
     </div>
-    <div class="cr-kpi-f">{{ '≥ 1 = dentro do orçado' if calc.idc >= 1 else '< 1 = acima do orçado' }}</div>
+    <div class="cr-kpi-f">
+      {% if calc.idc >= 1.05 %}✅ Abaixo do orçado
+      {% elif calc.idc >= 0.95 %}✅ No orçado
+      {% elif calc.idc >= 0.80 %}⚠️ Atenção
+      {% else %}🔴 Estouro de custo{% endif %}
+    </div>
   </div>
   <div class="cr-kpi">
-    <div class="cr-kpi-l">Projeção Final</div>
+    <div class="cr-kpi-l">EAC — Projeção Final
+      <span class="cr-kpi-info" title="Estimate at Completion = BAC / IDC. Projeção do custo total da obra se o desempenho atual continuar. Se IDC < 1, a obra vai custar mais que o orçado.">i</span>
+    </div>
     <div class="cr-kpi-v" style="color:{{ '#dc2626' if calc.projecao_final > calc.orcado_total else '#16a34a' }};">
       {{ calc.projecao_final|brl }}
     </div>
-    <div class="cr-kpi-f">Se o IDC atual continuar</div>
+    <div class="cr-kpi-f">
+      {% set delta = calc.projecao_final - calc.orcado_total %}
+      {% if delta > 0 %}⚠️ +{{ delta|brl }} sobre orçado
+      {% elif delta < 0 %}✅ {{ delta|brl }} abaixo do orçado
+      {% else %}No orçado{% endif %}
+    </div>
   </div>
 </div>
 
@@ -334,13 +358,9 @@ TEMPLATES["ferramenta_obras_cronograma.html"] = r"""
             onclick="event.stopPropagation();abrirNovaEtapa({{ fase.id }},'{{ fase.nome }}')">
       + Etapa
     </button>
-    <button class="btn btn-outline-secondary btn-sm no-print"
-            onclick="event.stopPropagation();editarFase({{ fase.id }},'{{ fase.nome }}',{{ fase.orcado_rs }})">
-      <i class="bi bi-pencil me-1"></i>Editar
-    </button>
-    <button class="btn btn-outline-danger btn-sm no-print"
+    <button class="btn btn-xs btn-outline-danger no-print" style="padding:.1rem .4rem;font-size:.7rem;"
             onclick="event.stopPropagation();apagarFase({{ fase.id }},'{{ fase.nome }}')">
-      <i class="bi bi-trash me-1"></i>Apagar
+      <i class="bi bi-trash"></i>
     </button>
   </div>
 </div>
@@ -378,11 +398,6 @@ TEMPLATES["ferramenta_obras_cronograma.html"] = r"""
     </div>
     <div>{{ e.a_incorrer|brl }}</div>
     <div class="d-flex gap-1 no-print">
-      <button class="btn btn-sm btn-outline-secondary"
-              onclick="editarEtapa({{ e.id }},'{{ e.descricao }}','{{ e.insumo }}',{{ e.orcado_rs }},'{{ e.data_inicio }}','{{ e.data_fim }}')"
-              title="Editar etapa">
-        <i class="bi bi-pencil"></i>
-      </button>
       <button class="btn btn-sm btn-primary" onclick="abrirApontamento({{ e.id }},'{{ e.descricao }}',{{ e.orcado_rs }},{{ e.fisico_pct }},{{ e.financeiro_rs }})"
               title="Apontar">
         <i class="bi bi-pencil-square"></i>
@@ -632,111 +647,6 @@ async function apagarFase(id, nome) {
   if (d.ok) location.reload();
 }
 </script>
-
-{# ── Modal Editar Fase ── #}
-<div class="modal fade" id="modalEditarFase" tabindex="-1">
-  <div class="modal-dialog modal-dialog-centered">
-    <div class="modal-content">
-      <div class="modal-header"><h5 class="modal-title">Editar Fase</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
-      <div class="modal-body">
-        <input type="hidden" id="ef_id">
-        <div class="mb-3"><label class="form-label fw-semibold">Nome da fase</label>
-          <input type="text" class="form-control" id="ef_nome"></div>
-        <div class="mb-3"><label class="form-label fw-semibold">Orçado (R$)</label>
-          <input type="number" class="form-control" id="ef_orcado" step="0.01" min="0"></div>
-        <div class="mb-3"><label class="form-label fw-semibold">Ordem</label>
-          <input type="number" class="form-control" id="ef_ordem" min="0"></div>
-      </div>
-      <div class="modal-footer">
-        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
-        <button type="button" class="btn btn-primary" onclick="salvarFase()">Salvar</button>
-      </div>
-    </div>
-  </div>
-</div>
-
-{# ── Modal Editar Etapa ── #}
-<div class="modal fade" id="modalEditarEtapa" tabindex="-1">
-  <div class="modal-dialog modal-dialog-centered modal-lg">
-    <div class="modal-content">
-      <div class="modal-header"><h5 class="modal-title">Editar Etapa</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
-      <div class="modal-body">
-        <input type="hidden" id="ee_id">
-        <div class="row g-3">
-          <div class="col-md-8"><label class="form-label fw-semibold">Descrição</label>
-            <input type="text" class="form-control" id="ee_descricao"></div>
-          <div class="col-md-4"><label class="form-label fw-semibold">Insumo</label>
-            <select class="form-select" id="ee_insumo">
-              <option value="">— Selecione —</option>
-              <option value="Concreto">Concreto</option>
-              <option value="Aço">Aço</option>
-              <option value="Empreitada">Empreitada</option>
-              <option value="INSS">INSS</option>
-              <option value="Diversos">Diversos</option>
-            </select></div>
-          <div class="col-md-4"><label class="form-label fw-semibold">Orçado (R$)</label>
-            <input type="number" class="form-control" id="ee_orcado" step="0.01" min="0"></div>
-          <div class="col-md-4"><label class="form-label fw-semibold">Data início</label>
-            <input type="text" class="form-control" id="ee_inicio" placeholder="DD/MM/AAAA"></div>
-          <div class="col-md-4"><label class="form-label fw-semibold">Data fim</label>
-            <input type="text" class="form-control" id="ee_fim" placeholder="DD/MM/AAAA"></div>
-        </div>
-      </div>
-      <div class="modal-footer">
-        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
-        <button type="button" class="btn btn-primary" onclick="salvarEtapa()">Salvar</button>
-      </div>
-    </div>
-  </div>
-</div>
-
-<script>
-function editarFase(id, nome, orcado) {
-  document.getElementById('ef_id').value = id;
-  document.getElementById('ef_nome').value = nome;
-  document.getElementById('ef_orcado').value = orcado;
-  document.getElementById('ef_ordem').value = 0;
-  new bootstrap.Modal(document.getElementById('modalEditarFase')).show();
-}
-
-async function salvarFase() {
-  const id = document.getElementById('ef_id').value;
-  const fd = new FormData();
-  fd.append('nome', document.getElementById('ef_nome').value);
-  fd.append('orcado_rs', document.getElementById('ef_orcado').value);
-  fd.append('ordem', document.getElementById('ef_ordem').value);
-  const r = await fetch('/ferramentas/obras/fase/' + id + '/editar', {method:'POST', body:fd});
-  const d = await r.json();
-  if (d.ok) { location.reload(); }
-  else { alert('Erro ao salvar fase.'); }
-}
-
-function editarEtapa(id, descricao, insumo, orcado, inicio, fim) {
-  document.getElementById('ee_id').value = id;
-  document.getElementById('ee_descricao').value = descricao;
-  document.getElementById('ee_insumo').value = insumo;
-  document.getElementById('ee_orcado').value = orcado;
-  document.getElementById('ee_inicio').value = inicio;
-  document.getElementById('ee_fim').value = fim;
-  new bootstrap.Modal(document.getElementById('modalEditarEtapa')).show();
-}
-
-async function salvarEtapa() {
-  const id = document.getElementById('ee_id').value;
-  const fd = new FormData();
-  fd.append('descricao', document.getElementById('ee_descricao').value);
-  fd.append('insumo', document.getElementById('ee_insumo').value);
-  fd.append('orcado_rs', document.getElementById('ee_orcado').value);
-  fd.append('data_inicio', document.getElementById('ee_inicio').value);
-  fd.append('data_fim', document.getElementById('ee_fim').value);
-  fd.append('ordem', 0);
-  const r = await fetch('/ferramentas/obras/etapa/' + id + '/editar-completo', {method:'POST', body:fd});
-  const d = await r.json();
-  if (d.ok) { location.reload(); }
-  else { alert('Erro ao salvar etapa.'); }
-}
-</script>
-
 {% endblock %}
 """
 
