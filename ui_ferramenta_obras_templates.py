@@ -333,6 +333,10 @@ TEMPLATES["ferramenta_obras_cronograma.html"] = r"""
             onclick="event.stopPropagation();abrirNovaEtapa({{ fase.id }},'{{ fase.nome }}')">
       + Etapa
     </button>
+    <button class="btn btn-xs btn-outline-secondary no-print" style="padding:.1rem .4rem;font-size:.7rem;"
+            onclick="event.stopPropagation();editarFase({{ fase.id }},'{{ fase.nome }}',{{ fase.orcado_rs }})">
+      <i class="bi bi-pencil"></i>
+    </button>
     <button class="btn btn-xs btn-outline-danger no-print" style="padding:.1rem .4rem;font-size:.7rem;"
             onclick="event.stopPropagation();apagarFase({{ fase.id }},'{{ fase.nome }}')">
       <i class="bi bi-trash"></i>
@@ -373,6 +377,11 @@ TEMPLATES["ferramenta_obras_cronograma.html"] = r"""
     </div>
     <div>{{ e.a_incorrer|brl }}</div>
     <div class="d-flex gap-1 no-print">
+      <button class="btn btn-sm btn-outline-secondary"
+              onclick="editarEtapa({{ e.id }},'{{ e.descricao }}','{{ e.insumo }}',{{ e.orcado_rs }},'{{ e.data_inicio }}','{{ e.data_fim }}')"
+              title="Editar etapa">
+        <i class="bi bi-pencil"></i>
+      </button>
       <button class="btn btn-sm btn-primary" onclick="abrirApontamento({{ e.id }},'{{ e.descricao }}',{{ e.orcado_rs }},{{ e.fisico_pct }},{{ e.financeiro_rs }})"
               title="Apontar">
         <i class="bi bi-pencil-square"></i>
@@ -622,6 +631,111 @@ async function apagarFase(id, nome) {
   if (d.ok) location.reload();
 }
 </script>
+
+{# ── Modal Editar Fase ── #}
+<div class="modal fade" id="modalEditarFase" tabindex="-1">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header"><h5 class="modal-title">Editar Fase</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+      <div class="modal-body">
+        <input type="hidden" id="ef_id">
+        <div class="mb-3"><label class="form-label fw-semibold">Nome da fase</label>
+          <input type="text" class="form-control" id="ef_nome"></div>
+        <div class="mb-3"><label class="form-label fw-semibold">Orçado (R$)</label>
+          <input type="number" class="form-control" id="ef_orcado" step="0.01" min="0"></div>
+        <div class="mb-3"><label class="form-label fw-semibold">Ordem</label>
+          <input type="number" class="form-control" id="ef_ordem" min="0"></div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
+        <button type="button" class="btn btn-primary" onclick="salvarFase()">Salvar</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+{# ── Modal Editar Etapa ── #}
+<div class="modal fade" id="modalEditarEtapa" tabindex="-1">
+  <div class="modal-dialog modal-dialog-centered modal-lg">
+    <div class="modal-content">
+      <div class="modal-header"><h5 class="modal-title">Editar Etapa</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+      <div class="modal-body">
+        <input type="hidden" id="ee_id">
+        <div class="row g-3">
+          <div class="col-md-8"><label class="form-label fw-semibold">Descrição</label>
+            <input type="text" class="form-control" id="ee_descricao"></div>
+          <div class="col-md-4"><label class="form-label fw-semibold">Insumo</label>
+            <select class="form-select" id="ee_insumo">
+              <option value="">— Selecione —</option>
+              <option value="Concreto">Concreto</option>
+              <option value="Aço">Aço</option>
+              <option value="Empreitada">Empreitada</option>
+              <option value="INSS">INSS</option>
+              <option value="Diversos">Diversos</option>
+            </select></div>
+          <div class="col-md-4"><label class="form-label fw-semibold">Orçado (R$)</label>
+            <input type="number" class="form-control" id="ee_orcado" step="0.01" min="0"></div>
+          <div class="col-md-4"><label class="form-label fw-semibold">Data início</label>
+            <input type="text" class="form-control" id="ee_inicio" placeholder="DD/MM/AAAA"></div>
+          <div class="col-md-4"><label class="form-label fw-semibold">Data fim</label>
+            <input type="text" class="form-control" id="ee_fim" placeholder="DD/MM/AAAA"></div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
+        <button type="button" class="btn btn-primary" onclick="salvarEtapa()">Salvar</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+function editarFase(id, nome, orcado) {
+  document.getElementById('ef_id').value = id;
+  document.getElementById('ef_nome').value = nome;
+  document.getElementById('ef_orcado').value = orcado;
+  document.getElementById('ef_ordem').value = 0;
+  new bootstrap.Modal(document.getElementById('modalEditarFase')).show();
+}
+
+async function salvarFase() {
+  const id = document.getElementById('ef_id').value;
+  const fd = new FormData();
+  fd.append('nome', document.getElementById('ef_nome').value);
+  fd.append('orcado_rs', document.getElementById('ef_orcado').value);
+  fd.append('ordem', document.getElementById('ef_ordem').value);
+  const r = await fetch('/ferramentas/obras/fase/' + id + '/editar', {method:'POST', body:fd});
+  const d = await r.json();
+  if (d.ok) { location.reload(); }
+  else { alert('Erro ao salvar fase.'); }
+}
+
+function editarEtapa(id, descricao, insumo, orcado, inicio, fim) {
+  document.getElementById('ee_id').value = id;
+  document.getElementById('ee_descricao').value = descricao;
+  document.getElementById('ee_insumo').value = insumo;
+  document.getElementById('ee_orcado').value = orcado;
+  document.getElementById('ee_inicio').value = inicio;
+  document.getElementById('ee_fim').value = fim;
+  new bootstrap.Modal(document.getElementById('modalEditarEtapa')).show();
+}
+
+async function salvarEtapa() {
+  const id = document.getElementById('ee_id').value;
+  const fd = new FormData();
+  fd.append('descricao', document.getElementById('ee_descricao').value);
+  fd.append('insumo', document.getElementById('ee_insumo').value);
+  fd.append('orcado_rs', document.getElementById('ee_orcado').value);
+  fd.append('data_inicio', document.getElementById('ee_inicio').value);
+  fd.append('data_fim', document.getElementById('ee_fim').value);
+  fd.append('ordem', 0);
+  const r = await fetch('/ferramentas/obras/etapa/' + id + '/editar-completo', {method:'POST', body:fd});
+  const d = await r.json();
+  if (d.ok) { location.reload(); }
+  else { alert('Erro ao salvar etapa.'); }
+}
+</script>
+
 {% endblock %}
 """
 

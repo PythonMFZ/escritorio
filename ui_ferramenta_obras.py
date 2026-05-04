@@ -530,6 +530,54 @@ async def obras_fase_apagar(fase_id: int, request: Request, session: Session = D
     return JSONResponse({"ok": True})
 
 
+
+# ── Rota: editar fase ─────────────────────────────────────────────────────────
+
+@app.post("/ferramentas/obras/fase/{fase_id}/editar")
+@require_login
+async def obras_fase_editar(fase_id: int, request: Request, session: Session = Depends(get_session)):
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        return JSONResponse({"ok": False}, status_code=401)
+    fase = session.get(ObraFase, fase_id)
+    if not fase:
+        return JSONResponse({"ok": False}, status_code=404)
+    obra = _get_obra_or_404(session, fase.obra_id, ctx.company.id)
+    if not obra:
+        return JSONResponse({"ok": False}, status_code=403)
+    form = await request.form()
+    fase.nome      = (form.get("nome") or fase.nome).strip()
+    fase.ordem     = int(form.get("ordem") or fase.ordem or 0)
+    fase.orcado_rs = float(str(form.get("orcado_rs") or fase.orcado_rs or 0).replace(",","."))
+    session.add(fase); session.commit()
+    return JSONResponse({"ok": True, "nome": fase.nome, "ordem": fase.ordem, "orcado_rs": fase.orcado_rs})
+
+
+# ── Rota: editar etapa completa ───────────────────────────────────────────────
+
+@app.post("/ferramentas/obras/etapa/{etapa_id}/editar-completo")
+@require_login
+async def obras_etapa_editar_completo(etapa_id: int, request: Request, session: Session = Depends(get_session)):
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        return JSONResponse({"ok": False}, status_code=401)
+    etapa = session.get(ObraEtapa, etapa_id)
+    if not etapa:
+        return JSONResponse({"ok": False}, status_code=404)
+    obra = _get_obra_or_404(session, etapa.obra_id, ctx.company.id)
+    if not obra:
+        return JSONResponse({"ok": False}, status_code=403)
+    form = await request.form()
+    etapa.descricao   = (form.get("descricao") or etapa.descricao or "").strip()
+    etapa.insumo      = (form.get("insumo") or etapa.insumo or "").strip()
+    etapa.orcado_rs   = float(str(form.get("orcado_rs") or etapa.orcado_rs or 0).replace(",","."))
+    etapa.data_inicio = (form.get("data_inicio") or etapa.data_inicio or "").strip()
+    etapa.data_fim    = (form.get("data_fim") or etapa.data_fim or "").strip()
+    etapa.ordem       = int(form.get("ordem") or etapa.ordem or 0)
+    session.add(etapa); session.commit()
+    return JSONResponse({"ok": True})
+
+
 # ── Rota: apagar obra ─────────────────────────────────────────────────────────
 
 @app.get("/ferramentas/obras/{obra_id}/apagar")
@@ -595,6 +643,49 @@ async def obras_editar_post(obra_id: int, request: Request, session: Session = D
     obra.obs             = form.get("obs", obra.obs)
     session.add(obra); session.commit()
     return RedirectResponse(f"/ferramentas/obras/{obra_id}", status_code=303)
+
+
+# ── Injeta card no menu de ferramentas ────────────────────────────────────────
+
+_obras_card = r"""
+    <div class="col-lg-6">
+      <div class="card p-4 h-100">
+        <div class="d-flex justify-content-between align-items-start gap-3 flex-wrap">
+          <div>
+            <h5 class="mb-1">Gestão de Obras</h5>
+            <div class="muted">Cronograma físico-financeiro. Orçado vs realizado por fase e etapa.</div>
+          </div>
+          <span class="badge text-bg-primary">Disponível</span>
+        </div>
+        <div class="row g-3 mt-1 mb-3">
+          <div class="col-md-6">
+            <div class="border rounded p-3 h-100">
+              <div class="muted small">Controle</div>
+              <div class="fw-semibold">Físico + Financeiro</div>
+            </div>
+          </div>
+          <div class="col-md-6">
+            <div class="border rounded p-3 h-100">
+              <div class="muted small">Versões</div>
+              <div class="fw-semibold">Orçado v1/v2/v3...</div>
+            </div>
+          </div>
+        </div>
+        <div class="alert alert-info" style="font-size:.85rem;">
+          Monte o cronograma físico-financeiro antes da obra e atualize o realizado ao longo da execução.
+        </div>
+        <a class="btn btn-primary" href="/ferramentas/obras">Abrir Gestão de Obras</a>
+      </div>
+    </div>"""
+
+_ft = TEMPLATES.get("ferramentas.html", "")
+if _ft and "Gestão de Obras" not in _ft:
+    _ft = _ft.replace(
+        "  </div>\n{% endif %}\n{% endblock %}\n\"\"\"",
+        _obras_card + "\n  </div>\n{% endif %}\n{% endblock %}\n\"\"\"",
+        1,
+    )
+    TEMPLATES["ferramentas.html"] = _ft
 
 if hasattr(templates_env.loader, "mapping"):
     templates_env.loader.mapping = TEMPLATES
