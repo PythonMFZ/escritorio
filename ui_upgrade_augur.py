@@ -180,6 +180,37 @@ async def augur_ask_v3(request: Request, session: Session = Depends(get_session)
     if not client:
         return JSONResponse({"error": "Cliente não encontrado."}, status_code=404)
 
+    # ── Verifica créditos para uso do Augur ──────────────────────────────────
+    try:
+        _preco_augur = _get_preco(session, ctx.company.id, "augur_mensal", default=0)
+        if _preco_augur > 0:
+            _wallet_augur = session.exec(
+                select(CreditWallet)
+                .where(CreditWallet.company_id == ctx.company.id,
+                       CreditWallet.client_id  == client.id)
+            ).first()
+            _saldo_augur = (_wallet_augur.balance_cents / 100) if _wallet_augur else 0.0
+            if _saldo_augur < _preco_augur:
+                return JSONResponse({
+                    "error": f"Saldo insuficiente para usar o Augur. Necessário: {_preco_augur} créditos. Disponível: {_saldo_augur:.0f}.",
+                    "precisa_creditos": True,
+                }, status_code=402)
+            # Debita créditos
+            if _wallet_augur:
+                _wallet_augur.balance_cents -= int(_preco_augur * 100)
+                _wallet_augur.updated_at = utcnow()
+                session.add(_wallet_augur)
+                session.add(CreditLedger(
+                    company_id=ctx.company.id, client_id=client.id,
+                    kind="CONSULT_CAPTURED",
+                    amount_cents=-int(_preco_augur * 100),
+                    ref_type="augur", ref_id="",
+                    note=f"Augur — pergunta debitada",
+                ))
+                session.commit()
+    except Exception as _e_augur:
+        print(f"[augur] Erro verificacao creditos: {_e_augur}")
+
     # Monta client_data base
     client_data: dict = {
         "name":                client.name,
@@ -579,7 +610,9 @@ _AUGUR_WIDGET_V3 = r"""
       });
       const d = await r.json();
       _augurHideTyping();
-      if (d.error || !d.response) {
+      if (d.precisa_creditos) {
+        _augurRenderMsg('assistant', '💳 Saldo insuficiente para usar o Augur. Adquira créditos em /planos para continuar.', null, hora, true);
+      } else if (d.error || !d.response) {
         _augurRenderMsg('assistant', '⚠️ ' + (d.error || 'Erro ao processar. Tente novamente.'), null, hora, true);
       } else {
         _augurRenderMsg('assistant', d.response, d.msg_id, hora, true);
