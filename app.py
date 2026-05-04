@@ -30594,7 +30594,7 @@ TEMPLATES["empresa.html"] = r"""
           </select>
         </div>
 
-                <div class="col-12">
+        <div class="col-12">
           <div class="alert alert-info border-0 mb-0">
             <i class="bi bi-info-circle me-2"></i>
             Os dados financeiros detalhados (receitas, custos, balanço) e governança são preenchidos no
