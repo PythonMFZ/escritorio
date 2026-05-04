@@ -15669,6 +15669,7 @@ async def perfil_snapshot_new_page(request: Request, session: Session = Depends(
     if not ensure_can_access_client(ctx, current_client.id):
         set_flash(request, "Sem permissão.")
         return RedirectResponse("/perfil", status_code=303)
+    return RedirectResponse("/perfil/wizard", status_code=302)
 
     business_profile = get_or_create_business_profile(session, company_id=ctx.company.id, client_id=current_client.id)
 
