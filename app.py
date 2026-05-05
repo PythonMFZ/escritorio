@@ -31506,7 +31506,7 @@ TEMPLATES["base.html"] = r"""
         document.querySelectorAll('[data-bs-toggle="tooltip"]').forEach((el) => new bootstrap.Tooltip(el));
       });
     })();
-
+    </script>
     <script>
     (function(){
       fetch('/api/member/visibility')
