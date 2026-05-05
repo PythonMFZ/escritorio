@@ -26223,14 +26223,14 @@ def _price_cents(cost_cents: int, markup_pct: int, product_code: str = "", compa
                 _pp = _spc.exec(
                     select(ProdutoPreco)
                     .where(ProdutoPreco.company_id == company_id,
-                           ProdutoPreco.codigo == f"compliance_{product_code}",
+                           ProdutoPreco.codigo.in_([product_code, f"compliance_{product_code}"]),
                            ProdutoPreco.ativo == True)
                 ).first()
                 if _pp and _pp.creditos > 0:
                     return _pp.creditos * 100
         except Exception:
             pass
-    markup = max(50, int(markup_pct or 50))
+    markup = max(0, int(markup_pct or 0))
     return int(math.ceil(cost_cents * (1.0 + markup / 100.0)))
 
 
@@ -28311,7 +28311,7 @@ async def admin_consultas_save(
         return RedirectResponse("/login", status_code=303)
 
     cost_cents = int(_dec(provider_cost) * Decimal("100"))
-    markup = max(50, int(markup_pct or 50))
+    markup = max(0, int(markup_pct or 0))
 
     p = session.exec(
         select(QueryProduct).where(QueryProduct.company_id == ctx.company.id, QueryProduct.code == code)).first()
@@ -47556,3 +47556,4 @@ exec(open('ui_fix_news_role_pdf.py').read())
 exec(open('ui_fix_construrisk_template.py').read())
 exec(open('ui_fix_cr_remove_pdf_btn.py').read())
 exec(open('ui_fix_news_v3.py').read())
+exec(open('ui_augur_sessoes_base.py').read())
