@@ -14072,7 +14072,7 @@ async def smart_alert_mark_read(request: Request, alert_id: int, session: Sessio
 # ----------------------------
 
 @app.get("/admin/familias", response_class=HTMLResponse)
-@require_role({"admin"})
+@require_role({"admin", "equipe"})
 async def admin_familias_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
@@ -14086,7 +14086,7 @@ async def admin_familias_page(request: Request, session: Session = Depends(get_s
 
 
 @app.get("/admin/servicos-internos", response_class=HTMLResponse)
-@require_role({"admin"})
+@require_role({"admin", "equipe"})
 async def admin_servicos_internos_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
@@ -14105,7 +14105,7 @@ async def admin_servicos_internos_page(request: Request, session: Session = Depe
 
 
 @app.post("/admin/servicos-internos/add")
-@require_role({"admin"})
+@require_role({"admin", "equipe"})
 async def admin_servicos_internos_add(request: Request, session: Session = Depends(get_session), area: str = Form(...),
                                       family_code: str = Form(...), name: str = Form(...), description: str = Form(""),
                                       priority_weight: int = Form(50), notes: str = Form("")) -> Response:
@@ -14128,7 +14128,7 @@ async def admin_servicos_internos_add(request: Request, session: Session = Depen
 
 
 @app.get("/admin/parceiros", response_class=HTMLResponse)
-@require_role({"admin"})
+@require_role({"admin", "equipe"})
 async def admin_parceiros_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
@@ -14150,7 +14150,7 @@ async def admin_parceiros_page(request: Request, session: Session = Depends(get_
 
 
 @app.post("/admin/parceiros/add")
-@require_role({"admin"})
+@require_role({"admin", "equipe"})
 async def admin_parceiros_add(request: Request, session: Session = Depends(get_session), name: str = Form(...),
                               partner_type: str = Form("financeiro"), contact_name: str = Form(""),
                               contact_email: str = Form(""), notes: str = Form("")) -> Response:
@@ -14176,7 +14176,7 @@ async def admin_parceiros_add(request: Request, session: Session = Depends(get_s
 
 
 @app.post("/admin/parceiros/products/add")
-@require_role({"admin"})
+@require_role({"admin", "equipe"})
 async def admin_partner_product_add(request: Request, session: Session = Depends(get_session),
                                     partner_id: int = Form(...), area: str = Form(...), family_code: str = Form(...),
                                     name: str = Form(...), pf_pj: str = Form("PJ"), ticket_min_brl: float = Form(0.0),
@@ -14233,7 +14233,7 @@ async def admin_partner_product_add(request: Request, session: Session = Depends
 
 
 @app.post("/admin/parceiros/campaigns/add")
-@require_role({"admin"})
+@require_role({"admin", "equipe"})
 async def admin_partner_campaign_add(request: Request, session: Session = Depends(get_session),
                                      partner_product_id: int = Form(...), title: str = Form(...),
                                      starts_at: str = Form(""), ends_at: str = Form(""), bonus_pct: float = Form(0.0),
