@@ -527,17 +527,17 @@ _AUGUR_WIDGET_V4 = r"""
     </div>
 
     {# Layout: chat + sidebar sessões #}
-    <div style="display:flex;height:380px;">
+    <div style="display:flex;height:460px;">
 
       {# Sidebar sessões #}
-      <div id="augurSidebar" style="width:180px;border-right:1px solid var(--mc-border);overflow-y:auto;padding:.5rem;background:#fafafa;flex-shrink:0;">
-        <div style="font-size:.7rem;font-weight:600;color:var(--mc-muted);padding:.25rem .5rem;margin-bottom:.25rem;">CONVERSAS</div>
+      <div id="augurSidebar" style="width:220px;border-right:1px solid var(--mc-border);overflow-y:auto;padding:.5rem;background:#f8f9fa;flex-shrink:0;">
+        <div style="font-size:.7rem;font-weight:600;color:var(--mc-muted);padding:.25rem .5rem;margin-bottom:.25rem;letter-spacing:.05em;">CONVERSAS</div>
         <div id="augurSessaoLista"></div>
       </div>
 
       {# Área de chat #}
-      <div style="flex:1;display:flex;flex-direction:column;min-width:0;">
-        <div id="augurChatArea" style="flex:1;overflow-y:auto;padding:1rem;display:flex;flex-direction:column;gap:.75rem;background:#fafafa;">
+      <div style="flex:1;display:flex;flex-direction:column;min-width:0;max-width:calc(100% - 220px);">
+        <div id="augurChatArea" style="flex:1;overflow-y:auto;padding:1rem 1.25rem;display:flex;flex-direction:column;gap:.75rem;background:#fafafa;">
           <div id="augurLoading" style="text-align:center;color:var(--mc-muted);font-size:.82rem;padding:2rem 0;">
             <div class="spinner-border spinner-border-sm me-2" role="status"></div>
             Carregando...
