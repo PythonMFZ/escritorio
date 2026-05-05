@@ -27896,7 +27896,7 @@ async def consultas_home(request: Request, session: Session = Depends(get_sessio
     enriched = [{
         "code": p.code,
         "label": p.label,
-        "price_cents": _price_cents(p.provider_cost_cents, p.markup_pct),
+        "price_cents": _price_cents(p.provider_cost_cents, p.markup_pct, product_code=p.code, company_id=ctx.company.id),
     } for p in products]
 
     w = _get_or_create_wallet(session, company_id=ctx.company.id, client_id=client.id)
@@ -28034,7 +28034,7 @@ async def consultas_product(request: Request, session: Session = Depends(get_ses
         consent_link_url = str(request.session.get("consulta_consent_link_url") or "")
 
     w = _get_or_create_wallet(session, company_id=ctx.company.id, client_id=client.id)
-    pv = {"code": p.code, "label": p.label, "price_cents": _price_cents(p.provider_cost_cents, p.markup_pct)}
+    pv = {"code": p.code, "label": p.label, "price_cents": _price_cents(p.provider_cost_cents, p.markup_pct, product_code=p.code, company_id=ctx.company.id)}
     return render("consulta_run.html", request=request, context={
         "title": p.label,
         "product": pv,
@@ -28090,7 +28090,7 @@ async def consultas_run(request: Request, session: Session = Depends(get_session
             set_flash(request, "Antes de consultar SCR, envie o e-mail de aceite e aguarde o titular confirmar.")
             return RedirectResponse(f"/consultas/{code}?doc={norm_doc}", status_code=303)
 
-    price = _price_cents(p.provider_cost_cents, p.markup_pct)
+    price = _price_cents(p.provider_cost_cents, p.markup_pct, product_code=p.code, company_id=ctx.company.id)
 
     run = QueryRun(
         company_id=ctx.company.id,
@@ -28289,7 +28289,7 @@ async def admin_consultas(request: Request, session: Session = Depends(get_sessi
         "provider_cost_cents": p.provider_cost_cents,
         "markup_pct": p.markup_pct,
         "enabled": p.enabled,
-        "price_cents": _price_cents(p.provider_cost_cents, p.markup_pct),
+        "price_cents": _price_cents(p.provider_cost_cents, p.markup_pct, product_code=p.code, company_id=ctx.company.id),
     } for p in products]
 
     return render("admin_consultas.html", request=request, context={"title": "Admin Consultas", "products": enriched})
