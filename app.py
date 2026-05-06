@@ -31512,7 +31512,7 @@ TEMPLATES["base.html"] = r"""
       fetch('/api/member/visibility')
         .then(function(r){return r.json();})
         .then(function(v){
-          if(!v.ver_augur){var a=document.getElementById('augurCard');if(a)a.style.display='none';}
+          // ver_augur: sempre visivel
           if(!v.ver_score){var s=document.getElementById('vis-score-block');if(s)s.style.display='none';}
           if(!v.ver_dre){var d=document.getElementById('dre-summary');if(d)d.parentElement.style.display='none';}
         })
