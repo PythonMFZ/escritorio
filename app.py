@@ -31512,7 +31512,7 @@ TEMPLATES["base.html"] = r"""
       fetch('/api/member/visibility')
         .then(function(r){return r.json();})
         .then(function(v){
-          // ver_augur: sempre visivel
+          if(!v.ver_augur){var a=document.getElementById('augurCard');if(a)a.style.display='none';}
           if(!v.ver_score){var s=document.getElementById('vis-score-block');if(s)s.style.display='none';}
           if(!v.ver_dre){var d=document.getElementById('dre-summary');if(d)d.parentElement.style.display='none';}
         })
@@ -47556,10 +47556,7 @@ exec(open('ui_fix_news_role_pdf.py').read())
 exec(open('ui_fix_construrisk_template.py').read())
 exec(open('ui_fix_cr_remove_pdf_btn.py').read())
 exec(open('ui_fix_news_v3.py').read())
+
 exec(open('ui_augur_sessoes_base.py').read())
 exec(open('ui_fix_augur_sessoes_js.py').read())
 exec(open('ui_cadastro_convite.py').read())
-exec(open('ui_fix_augur_layout.py').read())
-exec(open('ui_fix_augur_restaura.py').read())
-exec(open('ui_fix_augur_visibility.py').read())
-exec(open('ui_dashboard_rebuild.py').read())
