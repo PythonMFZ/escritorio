@@ -1,29 +1,43 @@
-# No seu Mac, dentro do diretório do projeto:
-git pull origin main
-
-cat > ui_fixes_batch3.py << 'PYEOF'
 # ============================================================================
 # PATCH — Batch de fixes (batch3)
+#
+# 1. Obras: editarEtapa JS (funcao faltando) + info "i" com popover on click
+# 2. Navbar: remove sininho extra apos botao Sair
+# 3. Augur: reload sessoes apos envio + base de conhecimento sem refresh
 # ============================================================================
 
 import re as _re_b3
 
-# 1a. OBRAS — editarEtapa JS + salvarEtapa com edit mode
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 1a. OBRAS — adiciona editarEtapa e modifica salvarEtapa para edit mode
+# ─────────────────────────────────────────────────────────────────────────────
+
 def _b3_patch_obras_editar() -> None:
     tpl = TEMPLATES.get("ferramenta_obras_cronograma.html", "")
-    if not tpl or "editarEtapa" in tpl:
-        print("[fixes_batch3] Obras editarEtapa: já existe ou template não encontrado")
+    if not tpl:
+        print("[fixes_batch3] Obras cronograma: template nao encontrado")
         return
+    if "editarEtapa" in tpl:
+        print("[fixes_batch3] Obras editarEtapa: ja existe")
+        return
+
     changed = False
+
+    # (a) Declara _etapaEditId junto com _aptEtapaId
     _OLD_VAR = "let _aptEtapaId = null;\n"
+    _NEW_VAR = "let _aptEtapaId = null;\nlet _etapaEditId = null;\n"
     if _OLD_VAR in tpl:
-        tpl = tpl.replace(_OLD_VAR, "let _aptEtapaId = null;\nlet _etapaEditId = null;\n", 1)
+        tpl = tpl.replace(_OLD_VAR, _NEW_VAR, 1)
         changed = True
+
+    # (b) Adiciona editarEtapa antes de abrirNovaEtapa
     _OLD_NOVA = "// ── Nova etapa ──\nfunction abrirNovaEtapa(faseId, faseNome) {\n  _etapaFaseId = faseId;"
     _NEW_NOVA = (
-        "// ── Editar etapa ──\n"
+        "// -- Editar etapa --\n"
         "function editarEtapa(id, descricao, insumo, orcado, inicio, fim) {\n"
-        "  _etapaEditId = id;\n  _etapaFaseId = null;\n"
+        "  _etapaEditId = id;\n"
+        "  _etapaFaseId = null;\n"
         "  const _h6 = document.querySelector('#modalEtapa h6');\n"
         "  const _btn = document.querySelector('#modalEtapa .btn-primary');\n"
         "  if (_h6) _h6.textContent = '✏️ Editar Etapa';\n"
@@ -34,8 +48,10 @@ def _b3_patch_obras_editar() -> None:
         "  document.getElementById('etapaOrcado').value = orcado;\n"
         "  document.getElementById('etapaIni').value = inicio;\n"
         "  document.getElementById('etapaFim').value = fim;\n"
-        "  abrirModal('modalEtapa');\n}\n\n"
-        "// ── Nova etapa ──\nfunction abrirNovaEtapa(faseId, faseNome) {\n"
+        "  abrirModal('modalEtapa');\n"
+        "}\n\n"
+        "// -- Nova etapa --\n"
+        "function abrirNovaEtapa(faseId, faseNome) {\n"
         "  _etapaEditId = null;\n"
         "  const _h6ne = document.querySelector('#modalEtapa h6');\n"
         "  const _bne = document.querySelector('#modalEtapa .btn-primary');\n"
@@ -47,6 +63,8 @@ def _b3_patch_obras_editar() -> None:
         tpl = tpl.replace(_OLD_NOVA, _NEW_NOVA, 1)
         changed = True
         print("[fixes_batch3] Obras: editarEtapa adicionada")
+
+    # (c) Modifica salvarEtapa para lidar com edit mode
     _OLD_SAVE = (
         "async function salvarEtapa() {\n"
         "  const r = await fetch('/ferramentas/obras/' + OBRA_ID + '/etapa/nova', {"
@@ -60,39 +78,51 @@ def _b3_patch_obras_editar() -> None:
         "      orcado_rs: document.getElementById('etapaOrcado').value || '0',\n"
         "      data_inicio: document.getElementById('etapaIni').value,\n"
         "      data_fim: document.getElementById('etapaFim').value,\n"
-        "      ordem: '0',\n    });\n"
+        "      ordem: '0',\n"
+        "    });\n"
         "    const _r = await fetch('/ferramentas/obras/etapa/' + _etapaEditId + '/editar-completo', {\n"
         "      method: 'POST',\n"
         "      headers: {'Content-Type': 'application/x-www-form-urlencoded'},\n"
-        "      body: _body,\n    });\n"
+        "      body: _body,\n"
+        "    });\n"
         "    const _d = await _r.json();\n"
         "    _etapaEditId = null;\n"
         "    if (_d.ok) { fecharModal(); location.reload(); }\n"
         "    else { alert('Erro ao salvar edição.'); }\n"
-        "    return;\n  }\n"
+        "    return;\n"
+        "  }\n"
         "  const r = await fetch('/ferramentas/obras/' + OBRA_ID + '/etapa/nova', {"
     )
     if _OLD_SAVE in tpl:
         tpl = tpl.replace(_OLD_SAVE, _NEW_SAVE, 1)
         changed = True
-        print("[fixes_batch3] Obras: salvarEtapa com edit mode")
+        print("[fixes_batch3] Obras: salvarEtapa atualizada para edit mode")
+
     if changed:
         TEMPLATES["ferramenta_obras_cronograma.html"] = tpl
+    else:
+        print("[fixes_batch3] Obras editar: nenhuma alteracao (strings nao encontradas)")
+
 
 _b3_patch_obras_editar()
 
-# 1b. OBRAS — info "i" popover on click
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 1b. OBRAS — info "i" com popover on click
+# ─────────────────────────────────────────────────────────────────────────────
+
 def _b3_patch_obras_info_popover() -> None:
     tpl = TEMPLATES.get("ferramenta_obras_cronograma.html", "")
     if not tpl or "_kpiInfoPopover" in tpl:
         return
-    _OLD = (
+
+    _OLD_STYLE = (
         ".cr-kpi-info{display:inline-block;width:14px;height:14px;border-radius:50%;"
         "background:#e5e7eb;color:#6b7280;font-size:.62rem;font-weight:700;"
         "text-align:center;line-height:14px;cursor:help;margin-left:.3rem;vertical-align:middle;}\n"
         "</style>"
     )
-    _NEW = (
+    _NEW_STYLE = (
         ".cr-kpi-info{display:inline-block;width:14px;height:14px;border-radius:50%;"
         "background:#e5e7eb;color:#6b7280;font-size:.62rem;font-weight:700;"
         "text-align:center;line-height:14px;cursor:pointer;margin-left:.3rem;vertical-align:middle;}\n"
@@ -101,7 +131,8 @@ def _b3_patch_obras_info_popover() -> None:
         "max-width:280px;box-shadow:0 4px 16px rgba(0,0,0,.25);pointer-events:none;display:none;}\n"
         "</style>\n"
         "<div id='_kpiInfoPopover'></div>\n"
-        "<script>\n(function(){\n"
+        "<script>\n"
+        "(function(){\n"
         "  const pop = document.getElementById('_kpiInfoPopover');\n"
         "  document.querySelectorAll('.cr-kpi-info').forEach(function(el){\n"
         "    el.addEventListener('click', function(e){\n"
@@ -114,59 +145,94 @@ def _b3_patch_obras_info_popover() -> None:
         "      if (left + 288 > window.innerWidth) left = window.innerWidth - 296;\n"
         "      pop.style.left = left + 'px';\n"
         "      pop.style.top = top + 'px';\n"
-        "    });\n  });\n"
+        "    });\n"
+        "  });\n"
         "  document.addEventListener('click', function(){ pop.style.display='none'; });\n"
-        "})();\n</script>"
+        "})();\n"
+        "</script>"
     )
-    if _OLD in tpl:
-        tpl = tpl.replace(_OLD, _NEW, 1)
+    if _OLD_STYLE in tpl:
+        tpl = tpl.replace(_OLD_STYLE, _NEW_STYLE, 1)
         TEMPLATES["ferramenta_obras_cronograma.html"] = tpl
-        print("[fixes_batch3] Obras: info 'i' popover adicionado")
+        print("[fixes_batch3] Obras: info 'i' popover on click adicionado")
+    else:
+        print("[fixes_batch3] Obras info popover: string nao encontrada")
+
 
 _b3_patch_obras_info_popover()
 
-# 2. NAVBAR — remove sininho extra
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 2. NAVBAR — remove sininho extra apos botao Sair
+# ─────────────────────────────────────────────────────────────────────────────
+
 def _b3_fix_sininho() -> None:
     tpl = TEMPLATES.get("base.html", "")
     if not tpl:
         return
+
+    tpl2 = tpl
+
+    # Remove bloco condicional completo com endif
     tpl2 = _re_b3.sub(
-        r'\n?\s*\{#\s*── Sininho de alertas ──\s*#\}.*?\{%[-\s]*endif[-\s]*%\}',
-        '', tpl, count=1, flags=_re_b3.DOTALL)
+        r'\n?\s*\{#\s*── Sininho de alertas ──\s*#\}.*?\{%-?\s*endif\s*-?%\}',
+        '',
+        tpl2,
+        count=1,
+        flags=_re_b3.DOTALL,
+    )
+
+    # Remove versao emoji (batch1 replacement)
     tpl2 = _re_b3.sub(
-        r'\n?\s*\{#\s*── Sininho de alertas ──\s*#\}\s*\n\s*<a [^>]*>[\s\n]*🔔[\s\n]*</a>',
-        '', tpl2, count=1)
+        r'\n?\s*\{#\s*── Sininho de alertas ──\s*#\}\s*\n\s*<a [^>]*href="[^"]*alertas[^"]*"[^>]*>[\s\S]*?</a>',
+        '',
+        tpl2,
+        count=1,
+    )
+
     if tpl2 != tpl:
         TEMPLATES["base.html"] = tpl2
         print("[fixes_batch3] Sininho extra removido do navbar")
     else:
-        print("[fixes_batch3] Sininho: nenhuma ocorrência encontrada")
+        print("[fixes_batch3] Sininho: nenhuma ocorrencia encontrada (ja ok)")
+
 
 _b3_fix_sininho()
 
-# 3. AUGUR — reforce sessões e base de conhecimento após DOMContentLoaded
-def _b3_patch_augur_sessoes() -> None:
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 3. AUGUR — garante augurCarregarSessoes e baseCarregar apos montar widget
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _b3_patch_augur_reload() -> None:
     tpl = TEMPLATES.get("base.html", "")
     if not tpl or "_b3AugurReforce" in tpl:
         return
+
     _SCRIPT = (
-        "\n<!-- _b3AugurReforce -->\n<script>\n"
+        "\n<!-- _b3AugurReforce -->\n"
+        "<script>\n"
         "document.addEventListener('DOMContentLoaded', function() {\n"
         "  setTimeout(function() {\n"
-        "    if (typeof window.augurCarregarSessoes === 'function') window.augurCarregarSessoes();\n"
-        "    if (typeof window.baseCarregar === 'function') window.baseCarregar();\n"
-        "  }, 500);\n"
-        "});\n</script>\n"
+        "    if (typeof window.augurCarregarSessoes === 'function') {\n"
+        "      window.augurCarregarSessoes();\n"
+        "    }\n"
+        "    if (typeof window.baseCarregar === 'function') {\n"
+        "      window.baseCarregar();\n"
+        "    }\n"
+        "  }, 600);\n"
+        "});\n"
+        "</script>\n"
     )
+
     if "</body>" in tpl:
         tpl = tpl.replace("</body>", _SCRIPT + "</body>", 1)
         TEMPLATES["base.html"] = tpl
-        print("[fixes_batch3] Augur: reforce sessoes/base injetado")
+        print("[fixes_batch3] Augur: reforce de sessoes injetado no base.html")
+    else:
+        print("[fixes_batch3] Augur: </body> nao encontrado no base.html")
 
-_b3_patch_augur_sessoes()
+
+_b3_patch_augur_reload()
 
 print("[fixes_batch3] Todos os fixes do batch3 aplicados.")
-PYEOF
-
-# Adiciona exec ao app.py se não existir
-
