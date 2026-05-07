@@ -40,8 +40,8 @@ def _b3_patch_obras_editar() -> None:
         "  _etapaFaseId = null;\n"
         "  const _h6 = document.querySelector('#modalEtapa h6');\n"
         "  const _btn = document.querySelector('#modalEtapa .btn-primary');\n"
-        "  if (_h6) _h6.textContent = '✏️ Editar Etapa';\n"
-        "  if (_btn) _btn.textContent = 'Salvar Edição';\n"
+        "  if (_h6) _h6.textContent = '\u270f\ufe0f Editar Etapa';\n"
+        "  if (_btn) _btn.textContent = 'Salvar Edi\u00e7\u00e3o';\n"
         "  document.getElementById('etapaFaseNome').textContent = 'Editando etapa';\n"
         "  document.getElementById('etapaDesc').value = descricao;\n"
         "  document.getElementById('etapaInsumo').value = insumo;\n"
@@ -55,7 +55,7 @@ def _b3_patch_obras_editar() -> None:
         "  _etapaEditId = null;\n"
         "  const _h6ne = document.querySelector('#modalEtapa h6');\n"
         "  const _bne = document.querySelector('#modalEtapa .btn-primary');\n"
-        "  if (_h6ne) _h6ne.textContent = '➕ Nova Etapa';\n"
+        "  if (_h6ne) _h6ne.textContent = '\u2795 Nova Etapa';\n"
         "  if (_bne) _bne.textContent = 'Criar Etapa';\n"
         "  _etapaFaseId = faseId;"
     )
@@ -88,7 +88,7 @@ def _b3_patch_obras_editar() -> None:
         "    const _d = await _r.json();\n"
         "    _etapaEditId = null;\n"
         "    if (_d.ok) { fecharModal(); location.reload(); }\n"
-        "    else { alert('Erro ao salvar edição.'); }\n"
+        "    else { alert('Erro ao salvar edi\u00e7\u00e3o.'); }\n"
         "    return;\n"
         "  }\n"
         "  const r = await fetch('/ferramentas/obras/' + OBRA_ID + '/etapa/nova', {"
@@ -173,16 +173,32 @@ def _b3_fix_sininho() -> None:
 
     tpl2 = tpl
 
-    # Remove bloco condicional completo com endif
+    # Passo 1: restaura {% else %}/{% endif %} se batch3 anterior os removeu junto com o sininho
+    _sair_pos = tpl2.find('href="/logout">Sair</a>')
+    if _sair_pos != -1:
+        _after = tpl2[_sair_pos:_sair_pos + 400]
+        if not any(t in _after for t in ("{% else %}", "{%- else", "{% else -%}")):
+            m = _re_b3.search(r'(<a [^>]*href="/logout"[^>]*>Sair</a>)([\s]*)(</div>)', tpl2)
+            if m:
+                tpl2 = tpl2.replace(
+                    m.group(0),
+                    m.group(1) + '\n          {% else %}\n'
+                    '            <a class="btn btn-outline-primary btn-sm" href="/login">Entrar</a>\n'
+                    '          {% endif %}\n'
+                    '        ' + m.group(3), 1)
+                print("[fixes_batch3] Sininho: else/endif restaurados apos dano anterior")
+
+    # Passo 2a: remove bloco condicional completo do sininho
+    # lookahead (?=...) garante que paramos no {% endif %} do sininho, nao no externo
     tpl2 = _re_b3.sub(
-        r'\n?\s*\{#\s*── Sininho de alertas ──\s*#\}.*?\{%-?\s*endif\s*-?%\}',
+        r'\n?\s*\{#\s*── Sininho de alertas ──\s*#\}.*?\{%-?\s*endif\s*-?%\}(?=\s*\n\s*\{%-?\s*else)',
         '',
         tpl2,
         count=1,
         flags=_re_b3.DOTALL,
     )
 
-    # Remove versao emoji (batch1 replacement)
+    # Passo 2b: remove versao simplificada pelo batch1 (comentario + ancora sem if/endif proprios)
     tpl2 = _re_b3.sub(
         r'\n?\s*\{#\s*── Sininho de alertas ──\s*#\}\s*\n\s*<a [^>]*href="[^"]*alertas[^"]*"[^>]*>[\s\S]*?</a>',
         '',
