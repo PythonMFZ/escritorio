@@ -47564,5 +47564,7 @@ exec(open('ui_fix_base_excel.py').read())
 exec(open('ui_fixes_batch3.py').read())
 exec(open('ui_fixes_batch4.py').read())
 exec(open('ui_fixes_batch5.py').read())
+exec(open('ui_fixes_batch5.py').read())
 exec(open('ui_fixes_batch6.py').read())
-  
+exec(open('ui_wizard_v2.py').read())
+

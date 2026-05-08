@@ -1,5 +1,4 @@
 # ── Batch 6 v2: layout fix, sessões, Documentos, Base de Conhecimento ────────
-# ── Batch 6 v2: layout fix, sessões, Documentos, Base de Conhecimento ────────
 import re as _re_b6
 
 
@@ -38,6 +37,24 @@ def _b6v2_fix_augur_mensagem() -> None:
 _b6v2_fix_augur_mensagem()
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# 1. Remove rota /api/ai/ask duplicada (v3 bloqueia v4 que tem sessões/BC)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _b6v2_fix_ask_route() -> None:
+    routes = app.routes
+    idx = [i for i, r in enumerate(routes)
+           if getattr(r, "path", None) == "/api/ai/ask"
+           and "POST" in (getattr(r, "methods", None) or set())]
+    if len(idx) > 1:
+        for i in sorted(idx[:-1], reverse=True):
+            routes.pop(i)
+        print(f"[fixes_batch6] ✅ /api/ai/ask: {len(idx)-1} rota(s) antiga(s) removida(s), v4 ativa")
+    else:
+        print(f"[fixes_batch6] /api/ai/ask: {len(idx)} rota(s) (ok)")
+
+
+_b6v2_fix_ask_route()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
