@@ -444,6 +444,31 @@ async def perfil_snapshot_detail_v2(request: Request, session: Session = Depends
     })
 
 
+# ── Rota POST /perfil/avaliacao/{snapshot_id}/excluir ────────────────────────
+
+@app.post("/perfil/avaliacao/{snapshot_id}/excluir")
+@require_login
+async def perfil_snapshot_excluir(request: Request, session: Session = Depends(get_session),
+                                   snapshot_id: int = 0):
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        return RedirectResponse("/login", status_code=303)
+
+    if ctx.membership.role not in ("admin", "equipe"):
+        set_flash(request, "Sem permissão para excluir avaliações.")
+        return RedirectResponse("/perfil", status_code=303)
+
+    snap = session.get(ClientSnapshot, int(snapshot_id))
+    if snap and snap.company_id == ctx.company.id:
+        session.delete(snap)
+        session.commit()
+        set_flash(request, "Avaliação excluída.")
+    else:
+        set_flash(request, "Avaliação não encontrada.")
+
+    return RedirectResponse("/perfil", status_code=303)
+
+
 # ── Template: wizard_diagnostico.html ────────────────────────────────────────
 
 TEMPLATES["wizard_diagnostico.html"] = r"""
@@ -1270,16 +1295,23 @@ TEMPLATES["perfil_snapshot_detail.html"] = r"""
 {% set pnc_total = (e4.get("pnc_forn")|float(0)) + (e4.get("pnc_emp")|float(0)) + (e4.get("pnc_trib")|float(0)) + (e4.get("pnc_trab")|float(0)) + (e4.get("pnc_out")|float(0)) %}
 {% set passivo_total = pc_total + pnc_total %}
 
-{# ── Indicadores de Liquidez ── #}
+{# ── Indicadores de Liquidez (Assaf Neto / Matarazzo) ── #}
+{# Imediata: só Disponibilidades / PC — Assaf Neto, Finanças Corporativas, 3ed #}
 {% set liq_imediata = (caixa / pc_total) if pc_total > 0 else 0 %}
-{% set liq_seca     = ((caixa + ac_cr30 + ac_cr60) / pc_total) if pc_total > 0 else 0 %}
+{# Seca: (AC − Estoques) / PC — exclui o ativo menos líquido #}
+{% set liq_seca     = ((ac_total - ac_est) / pc_total) if pc_total > 0 else 0 %}
+{# Corrente: AC / PC — Matarazzo, Análise de Balanços, 8ed #}
 {% set liq_corrente = (ac_total / pc_total) if pc_total > 0 else 0 %}
+{# Geral: (AC + RLP) / (PC + PNC) — inclui realizável LP #}
 {% set liq_geral    = ((ac_total + anc_total) / (pc_total + pnc_total)) if (pc_total + pnc_total) > 0 else 0 %}
 
-{# Liquidez dinâmica por horizonte #}
-{% set liq_30d = (caixa / pc_venc_30) if pc_venc_30 > 0 else 0 %}
-{% set liq_60d = ((caixa + ac_cr30) / pc_ate_60) if pc_ate_60 > 0 else 0 %}
-{% set liq_90d = ((caixa + ac_cr30 + ac_cr60) / pc_ate_90) if pc_ate_90 > 0 else 0 %}
+{# Liquidez dinâmica — horizonte IGUAL no numerador e denominador (Fleuriet) #}
+{# 30d: o que entra até 30d / o que vence até 30d #}
+{% set liq_30d = ((caixa + ac_cr30) / pc_venc_30) if pc_venc_30 > 0 else 0 %}
+{# 60d: o que entra até 60d / o que vence até 60d #}
+{% set liq_60d = ((caixa + ac_cr30 + ac_cr60) / pc_ate_60) if pc_ate_60 > 0 else 0 %}
+{# 90d: o que entra até 90d / o que vence até 90d #}
+{% set liq_90d = ((caixa + ac_cr30 + ac_cr60 + ac_cr90) / pc_ate_90) if pc_ate_90 > 0 else 0 %}
 
 {# ── Capital de Giro ── #}
 {% set ccl = ac_total - pc_total %}
@@ -1318,7 +1350,15 @@ TEMPLATES["perfil_snapshot_detail.html"] = r"""
       <h4 class="mb-1">Avaliação Financeira</h4>
       <div class="muted small">{{ client.name }} · <span class="mono">{{ snap.created_at }}</span></div>
     </div>
-    <a class="btn btn-outline-secondary btn-sm" href="/perfil">← Voltar</a>
+    <div class="d-flex gap-2">
+      <a class="btn btn-outline-secondary btn-sm" href="/perfil">← Voltar</a>
+      {% if role in ["admin", "equipe"] %}
+      <form method="post" action="/perfil/avaliacao/{{ snap.id }}/excluir"
+            onsubmit="return confirm('Excluir esta avaliação? A ação não pode ser desfeita.')">
+        <button type="submit" class="btn btn-outline-danger btn-sm">🗑 Excluir</button>
+      </form>
+      {% endif %}
+    </div>
   </div>
 
   {# ── Scores ── #}
@@ -1430,10 +1470,10 @@ TEMPLATES["perfil_snapshot_detail.html"] = r"""
 
     {# Liquidez estática #}
     {% for label, val, hint in [
-      ("Imediata", liq_imediata, "Caixa / PC"),
-      ("Seca",     liq_seca,     "(Caixa + CR 60d) / PC"),
+      ("Imediata", liq_imediata, "Disponibilidades / PC"),
+      ("Seca",     liq_seca,     "(AC − Estoques) / PC"),
       ("Corrente", liq_corrente, "AC / PC"),
-      ("Geral",    liq_geral,    "(AC + ANC) / (PC + PNC)"),
+      ("Geral",    liq_geral,    "(AC + RLP) / (PC + PNC)"),
     ] %}
     <div class="col-md-3 col-6">
       <div class="card p-3 text-center">
@@ -1450,9 +1490,9 @@ TEMPLATES["perfil_snapshot_detail.html"] = r"""
     {% if pc_venc_30 > 0 or pc_ate_60 > 0 or pc_ate_90 > 0 %}
     <div class="col-12 mt-1"><div class="muted small fw-semibold">Cobertura de Caixa por Horizonte</div></div>
     {% for label, val, hint in [
-      ("a 30 dias",   liq_30d, "Caixa vs obrigações vencidas + 30d"),
-      ("a 60 dias",   liq_60d, "(Caixa + CR 30d) vs obrigações até 60d"),
-      ("a 90 dias",   liq_90d, "(Caixa + CR 60d) vs obrigações até 90d"),
+      ("a 30 dias",   liq_30d, "(Caixa + CR 30d) / PC vencido + 30d"),
+      ("a 60 dias",   liq_60d, "(Caixa + CR 60d) / PC vencido + 60d"),
+      ("a 90 dias",   liq_90d, "(Caixa + CR 90d) / PC vencido + 90d"),
     ] %}
     <div class="col-md-4">
       <div class="card p-3 text-center">
@@ -1583,6 +1623,58 @@ TEMPLATES["perfil_snapshot_detail.html"] = r"""
       </div>
     </div>
   </div>
+  {% endif %}
+
+  {# ═══════════════════════════════════════════════════════════════════════════
+     GRÁFICO BALANÇO — Ativo vs Passivo + PL
+  ═══════════════════════════════════════════════════════════════════════════ #}
+  {% if ativo_total > 0 or passivo_total > 0 %}
+  <div class="card p-3 mb-3">
+    <h6 class="mb-3">📊 Estrutura Patrimonial</h6>
+    <div style="max-width:480px;margin:0 auto;">
+      <canvas id="balanceChart" height="260"></canvas>
+    </div>
+    <div class="d-flex flex-wrap gap-3 justify-content-center mt-3" style="font-size:.75rem;">
+      <span><span style="display:inline-block;width:12px;height:12px;background:#22c55e;border-radius:2px;margin-right:4px;"></span>AC — Ativo Circulante</span>
+      <span><span style="display:inline-block;width:12px;height:12px;background:#166534;border-radius:2px;margin-right:4px;"></span>ANC — Ativo Não-circ.</span>
+      <span><span style="display:inline-block;width:12px;height:12px;background:#f97316;border-radius:2px;margin-right:4px;"></span>PC — Passivo Circulante</span>
+      <span><span style="display:inline-block;width:12px;height:12px;background:#92400e;border-radius:2px;margin-right:4px;"></span>PNC — Passivo Não-circ.</span>
+      <span><span style="display:inline-block;width:12px;height:12px;background:#3b82f6;border-radius:2px;margin-right:4px;"></span>PL — Patrimônio Líquido</span>
+    </div>
+  </div>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
+  <script>
+  (function(){
+    var ac  = {{ ac_total|round(2) }};
+    var anc = {{ anc_total|round(2) }};
+    var pc  = {{ pc_total|round(2) }};
+    var pnc = {{ pnc_total|round(2) }};
+    var pl  = {{ pl|round(2) }};
+    var fmt = function(v){ return 'R$ ' + (v/1e6).toFixed(2).replace('.',',') + ' Mi'; };
+    new Chart(document.getElementById('balanceChart'), {
+      type: 'bar',
+      data: {
+        labels: ['ATIVO', 'PASSIVO + PL'],
+        datasets: [
+          { label:'AC',  data:[ac,  0  ], backgroundColor:'#22c55e' },
+          { label:'ANC', data:[anc, 0  ], backgroundColor:'#166534' },
+          { label:'PC',  data:[0,   pc ], backgroundColor:'#f97316' },
+          { label:'PNC', data:[0,   pnc], backgroundColor:'#92400e' },
+          { label:'PL',  data:[0,   pl ], backgroundColor:'#3b82f6' },
+        ]
+      },
+      options: {
+        responsive:true, plugins:{ legend:{display:false},
+          tooltip:{ callbacks:{ label: function(c){ return c.dataset.label+': '+fmt(c.raw); } } }
+        },
+        scales:{
+          x:{ stacked:true },
+          y:{ stacked:true, ticks:{ callback:function(v){ return 'R$ '+(v/1e6).toFixed(1)+'Mi'; } } }
+        }
+      }
+    });
+  })();
+  </script>
   {% endif %}
 
   {# ═══════════════════════════════════════════════════════════════════════════
