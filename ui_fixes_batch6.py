@@ -1,43 +1,25 @@
 # ── Batch 6 v2: layout fix, sessões, Documentos, Base de Conhecimento ────────
-# ── Batch 6 v2: layout fix, sessões, Documentos, Base de Conhecimento ────────
 import re as _re_b6
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 0. Estende AugurMensagem com session_id e user_id (colunas existem no DB
-#    via ALTER TABLE em ui_augur_sessoes_base.py, mas faltavam no modelo Python)
+# 1. Remove rota /api/ai/ask duplicada (v3 bloqueia v4 que tem sessões/BC)
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _b6v2_fix_augur_mensagem() -> None:
-    try:
-        if "session_id" in AugurMensagem.model_fields and "user_id" in AugurMensagem.model_fields:
-            print("[fixes_batch6] AugurMensagem: session_id e user_id ja presentes")
-            return
-
-        from typing import Optional as _OB6
-        from sqlmodel import SQLModel as _SMB6, Field as _FB6
-
-        class AugurMensagem(_SMB6, table=True):
-            __tablename__  = "augurmensagem"
-            __table_args__ = {"extend_existing": True}
-            id:          _OB6[int] = _FB6(default=None, primary_key=True)
-            company_id:  int       = _FB6(index=True)
-            client_id:   int       = _FB6(index=True)
-            role:        str       = _FB6(default="user")
-            content:     str       = _FB6(default="")
-            feedback:    _OB6[int] = _FB6(default=None)
-            created_at:  str       = _FB6(default="")
-            user_id:     int       = _FB6(default=0, index=True)
-            session_id:  int       = _FB6(default=0, index=True)
-
-        print("[fixes_batch6] ✅ AugurMensagem redefinida com session_id e user_id")
-    except Exception as _e_am:
-        print(f"[fixes_batch6] AugurMensagem patch erro: {_e_am}")
+def _b6v2_fix_ask_route() -> None:
+    routes = app.routes
+    idx = [i for i, r in enumerate(routes)
+           if getattr(r, "path", None) == "/api/ai/ask"
+           and "POST" in (getattr(r, "methods", None) or set())]
+    if len(idx) > 1:
+        for i in sorted(idx[:-1], reverse=True):
+            routes.pop(i)
+        print(f"[fixes_batch6] ✅ /api/ai/ask: {len(idx)-1} rota(s) antiga(s) removida(s), v4 ativa")
+    else:
+        print(f"[fixes_batch6] /api/ai/ask: {len(idx)} rota(s) (ok)")
 
 
-_b6v2_fix_augur_mensagem()
-
-
+_b6v2_fix_ask_route()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
