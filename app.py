@@ -11490,6 +11490,11 @@ TEMPLATES.setdefault("openfinance.html", r"""{% extends "base.html" %}
           {% if invite_link %}
             <div class="mt-2 small muted">Link: <span class="mono">{{ invite_link }}</span></div>
           {% endif %}
+          {% if self_connect_link %}
+            <hr class="my-2">
+            <div class="fw-semibold">Testar conexão agora</div>
+            <a class="btn btn-outline-primary mt-1" href="{{ self_connect_link }}" target="_blank">Abrir Pluggy Connect</a>
+          {% endif %}
         {% else %}
           <div class="fw-semibold">Conectar agora</div>
           {% if self_connect_link %}
