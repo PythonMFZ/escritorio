@@ -4506,7 +4506,7 @@ FEATURE_GROUPS = [
 PLUGGY_API_BASE = (os.getenv("PLUGGY_API_BASE") or "https://api.pluggy.ai").rstrip("/")
 PLUGGY_CLIENT_ID = (os.getenv("PLUGGY_CLIENT_ID") or "").strip()
 PLUGGY_CLIENT_SECRET = (os.getenv("PLUGGY_CLIENT_SECRET") or "").strip()
-PLUGGY_INCLUDE_SANDBOX = os.getenv("PLUGGY_INCLUDE_SANDBOX", "0") == "1"
+PLUGGY_INCLUDE_SANDBOX = os.getenv("PLUGGY_INCLUDE_SANDBOX", "1") == "1"
 PLUGGY_CONNECT_JS_URL = (os.getenv(
     "PLUGGY_CONNECT_JS_URL") or "https://cdn.pluggy.ai/pluggy-connect/v2.8.2/pluggy-connect.js").strip()
 PLUGGY_HTTP_TIMEOUT_S = float(os.getenv("PLUGGY_HTTP_TIMEOUT_S", "20") or "20")
