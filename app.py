@@ -28379,7 +28379,7 @@ async def openfinance_home(request: Request, doc: str = "", email: str = "",
     doc_digits = _digits(doc)
     email_default = (email or "").strip() or (client.finance_email or client.email or "").strip()
 
-    provider = (os.getenv("OPENFINANCE_PROVIDER_DEFAULT") or "klavi").strip().lower()
+    provider = (os.getenv("OPENFINANCE_PROVIDER_DEFAULT") or "pluggy").strip().lower()
     if provider == "klavi":
         from urllib.parse import urlencode
         q: dict[str, str] = {}
@@ -29677,7 +29677,7 @@ def _coerce_interest_codes(values: list[str]) -> list[str]:
 
 
 def _is_openfinance_enabled() -> bool:
-    provider = (os.getenv("OPENFINANCE_PROVIDER_DEFAULT") or "klavi").strip().lower()
+    provider = (os.getenv("OPENFINANCE_PROVIDER_DEFAULT") or "pluggy").strip().lower()
     if provider == "pluggy":
         return bool(PLUGGY_CLIENT_ID and PLUGGY_CLIENT_SECRET)
     return bool(KLAVI_ACCESS_KEY and KLAVI_SECRET_KEY)
