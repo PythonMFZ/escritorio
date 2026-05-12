@@ -1,0 +1,976 @@
+# ============================================================================
+# PATCH — Ferramenta Viabilidade Imobiliária v3
+# ============================================================================
+# Extensão do motor v2 com:
+#   - Módulo de financiamento de obra (SAC / PRICE)
+#   - Indicadores CRI (Certificado de Recebíveis Imobiliários)
+#   - Análise de sensibilidade 5×5 (VGV × Custo)
+#   - Indicadores adicionais: VSO, Payback Descontado, IL, Múltiplo, PE, Spread CDI
+# ============================================================================
+
+import json as _json
+import math as _math
+from datetime import datetime as _dt
+
+
+# ── TIR helper (autônoma para não depender de escopo externo) ─────────────────
+
+def _tir_v3(fluxos: list, max_iter: int = 300) -> float | None:
+    if not fluxos or not any(f > 0 for f in fluxos):
+        return None
+    r = 0.01
+    for _ in range(max_iter):
+        try:
+            npv  = sum(f / (1 + r) ** i for i, f in enumerate(fluxos))
+            dnpv = sum(-i * f / (1 + r) ** (i + 1) for i, f in enumerate(fluxos))
+            if abs(dnpv) < 1e-10:
+                break
+            r_new = r - npv / dnpv
+            if abs(r_new - r) < 1e-9:
+                r = r_new
+                break
+            r = max(-0.99, r_new)
+        except Exception:
+            break
+    return r if -1 < r < 10 else None
+
+
+# ── Motor v3 ──────────────────────────────────────────────────────────────────
+
+def _calcular_v3(dados: dict) -> dict:
+    """Motor v3: chama _calcular_viabilidade_v2 e adiciona financiamento, CRI e sensibilidade."""
+
+    base = _calcular_viabilidade_v2(dados)
+
+    # Dados de referência do base
+    vgv_liquido       = base["vgv_liquido"]
+    custo_total       = base["custo_total"]
+    custo_obra_total  = base["custo_obra_total"]
+    resultado_bruto   = base["resultado_bruto"]
+    tir_anual_base    = base.get("tir_anual") or 0.0
+    vpl_base          = base.get("vpl") or 0.0
+    unidades_total    = base["unidades_total"]
+    unidades_permuta  = base["unidades_permuta"]
+    duracao_obra      = int(dados.get("duracao_obra", 36) or 36)
+    mes_inicio_obra   = int(dados.get("mes_inicio_obra", 12) or 12)
+    duracao_analise   = int(dados.get("duracao_analise", 129) or 129)
+    tma_mensal        = (1.12 ** (1/12)) - 1
+
+    # ── A. MÓDULO DE FINANCIAMENTO ─────────────────────────────────────────
+    usar_fin = dados.get("usar_financiamento", "0") == "1"
+    fin_result = None
+
+    if usar_fin:
+        pct_fin      = float(dados.get("pct_fin", 70) or 70) / 100
+        taxa_am      = float(dados.get("taxa_juros_am", 1.20) or 1.20) / 100
+        tipo_amort   = dados.get("tipo_amortizacao", "SAC")
+        carencia     = int(dados.get("carencia_meses", 6) or 6)
+        haircut_pct  = float(dados.get("haircut_pct", 20) or 20) / 100
+        sub_ratio    = float(dados.get("sub_ratio", 20) or 20) / 100
+        cdi_ref      = float(dados.get("cdi_ref", 13.75) or 13.75)
+
+        n_meses_analise = len(base["fluxo"])
+
+        # Drawdown mensal: financiar pct_fin × custo mensal de obra
+        drawdown_mes = [0.0] * n_meses_analise
+        for i, f in enumerate(base["fluxo"]):
+            if mes_inicio_obra <= f["mes"] < mes_inicio_obra + duracao_obra:
+                drawdown_mes[i] = f["custo_obra"] * pct_fin
+
+        # Saldo devedor crescendo com drawdowns + juros durante obra + carência
+        fim_obra_idx   = mes_inicio_obra + duracao_obra - 1
+        fim_carencia_idx = fim_obra_idx + carencia
+        prazo_amort    = max(duracao_obra + carencia + 12, fim_carencia_idx + 12)
+
+        saldo    = 0.0
+        schedule = []  # lista de dicts por mês
+        saldo_pico = 0.0
+
+        # Fase de acumulação (obra + carência)
+        for i in range(n_meses_analise):
+            mes_abs = base["fluxo"][i]["mes"] if i < len(base["fluxo"]) else i
+            dd   = drawdown_mes[i]
+            juros = saldo * taxa_am
+            saldo = saldo * (1 + taxa_am) + dd
+            if saldo > saldo_pico:
+                saldo_pico = saldo
+            schedule.append({
+                "mes": mes_abs,
+                "drawdown": round(dd, 2),
+                "juros": round(juros, 2),
+                "amortizacao": 0.0,
+                "saldo_devedor": round(saldo, 2),
+                "servico_divida": round(juros, 2),
+            })
+
+        # Fase de amortização
+        saldo_amort = saldo
+        meses_amort = prazo_amort - fim_carencia_idx
+        if meses_amort < 1:
+            meses_amort = 1
+
+        if tipo_amort == "SAC":
+            principal_mensal = saldo_amort / meses_amort if meses_amort > 0 else 0
+            for k in range(meses_amort):
+                idx_mes = fim_carencia_idx + k
+                juros_k = saldo_amort * taxa_am
+                amort_k = min(principal_mensal, saldo_amort)
+                saldo_amort -= amort_k
+                servico = juros_k + amort_k
+                if idx_mes < n_meses_analise:
+                    schedule[idx_mes]["juros"]        = round(juros_k, 2)
+                    schedule[idx_mes]["amortizacao"]  = round(amort_k, 2)
+                    schedule[idx_mes]["saldo_devedor"] = round(max(saldo_amort, 0), 2)
+                    schedule[idx_mes]["servico_divida"] = round(servico, 2)
+                else:
+                    schedule.append({
+                        "mes": idx_mes,
+                        "drawdown": 0.0,
+                        "juros": round(juros_k, 2),
+                        "amortizacao": round(amort_k, 2),
+                        "saldo_devedor": round(max(saldo_amort, 0), 2),
+                        "servico_divida": round(servico, 2),
+                    })
+        else:
+            # PRICE: parcela fixa
+            if taxa_am > 0 and meses_amort > 0:
+                parcela = saldo_amort * taxa_am / (1 - (1 + taxa_am) ** (-meses_amort))
+            else:
+                parcela = saldo_amort / max(meses_amort, 1)
+
+            for k in range(meses_amort):
+                idx_mes = fim_carencia_idx + k
+                juros_k = saldo_amort * taxa_am
+                amort_k = min(parcela - juros_k, saldo_amort)
+                if amort_k < 0:
+                    amort_k = 0
+                saldo_amort -= amort_k
+                servico = juros_k + amort_k
+                if idx_mes < n_meses_analise:
+                    schedule[idx_mes]["juros"]         = round(juros_k, 2)
+                    schedule[idx_mes]["amortizacao"]   = round(amort_k, 2)
+                    schedule[idx_mes]["saldo_devedor"]  = round(max(saldo_amort, 0), 2)
+                    schedule[idx_mes]["servico_divida"] = round(servico, 2)
+                else:
+                    schedule.append({
+                        "mes": idx_mes,
+                        "drawdown": 0.0,
+                        "juros": round(juros_k, 2),
+                        "amortizacao": round(amort_k, 2),
+                        "saldo_devedor": round(max(saldo_amort, 0), 2),
+                        "servico_divida": round(servico, 2),
+                    })
+
+        # Totais de custo financeiro
+        custo_fin_total  = sum(s["juros"] for s in schedule)
+        valor_financiado = saldo_pico
+
+        # TIR alavancada: fluxo do equity (custo - drawdown + amortizacao)
+        fluxo_equity = []
+        for i, f in enumerate(base["fluxo"]):
+            sc  = schedule[i] if i < len(schedule) else {}
+            dd  = sc.get("drawdown", 0)
+            am  = sc.get("amortizacao", 0)
+            jj  = sc.get("juros", 0)
+            # Equity: receita - custo (sem drawdown, pois drawdown cobre parte) - amortização - juros + drawdown recebido
+            saldo_equity = f["saldo_mes"] + dd - am - jj
+            fluxo_equity.append(saldo_equity)
+
+        tir_alav_m = _tir_v3(fluxo_equity[:min(len(fluxo_equity), 120)])
+        tir_alavancada = ((1 + tir_alav_m) ** 12 - 1) * 100 if tir_alav_m is not None else None
+
+        equity_investido = custo_total - valor_financiado
+        roe = resultado_bruto / equity_investido * 100 if equity_investido > 0 else None
+
+        # Exposição com financiamento
+        saldo_acum_fin = 0.0
+        exposicao_fin  = 0.0
+        for i, f in enumerate(base["fluxo"]):
+            sc  = schedule[i] if i < len(schedule) else {}
+            dd  = sc.get("drawdown", 0)
+            am  = sc.get("amortizacao", 0)
+            jj  = sc.get("juros", 0)
+            saldo_acum_fin += f["saldo_mes"] + dd - am - jj
+            if saldo_acum_fin < exposicao_fin:
+                exposicao_fin = saldo_acum_fin
+        exposicao_com_fin = abs(exposicao_fin)
+
+        # DSCR médio
+        dscr_list = []
+        for i, f in enumerate(base["fluxo"]):
+            sc  = schedule[i] if i < len(schedule) else {}
+            serv = sc.get("servico_divida", 0)
+            if serv > 0:
+                dscr_list.append(f["receita"] / serv)
+        dscr_medio = sum(dscr_list) / len(dscr_list) if dscr_list else None
+
+        # ── B. INDICADORES CRI ────────────────────────────────────────────
+        pct_entrada_media = 0.10
+        fases_d = dados.get("fases", [])
+        if fases_d:
+            entradas = [float(f.get("entrada_pct", 10) or 10) / 100 for f in fases_d]
+            pct_entrada_media = sum(entradas) / len(entradas)
+
+        carteira_recebiveis_pico = vgv_liquido * (1 - pct_entrada_media)
+        emissao_cri_bruta = carteira_recebiveis_pico * (1 - haircut_pct)
+        sr_senior  = emissao_cri_bruta * (1 - sub_ratio)
+        sr_sub     = emissao_cri_bruta * sub_ratio
+        ltv_cri    = emissao_cri_bruta / vgv_liquido * 100 if vgv_liquido > 0 else 0
+        cobertura_min = 1 / (1 - haircut_pct) if haircut_pct < 1 else 0
+        spread_cdi_fin = tir_alavancada - cdi_ref if tir_alavancada is not None else None
+
+        fin_result = {
+            "valor_financiado":         round(valor_financiado, 2),
+            "custo_fin_total":          round(custo_fin_total, 2),
+            "tir_alavancada":           round(tir_alavancada, 2) if tir_alavancada is not None else None,
+            "roe":                      round(roe, 2) if roe is not None else None,
+            "exposicao_com_fin":        round(exposicao_com_fin, 2),
+            "dscr_medio":               round(dscr_medio, 2) if dscr_medio is not None else None,
+            "carteira_recebiveis_pico": round(carteira_recebiveis_pico, 2),
+            "emissao_cri_bruta":        round(emissao_cri_bruta, 2),
+            "sr_senior":                round(sr_senior, 2),
+            "sr_sub":                   round(sr_sub, 2),
+            "ltv_cri":                  round(ltv_cri, 2),
+            "cobertura_min":            round(cobertura_min, 4),
+            "spread_cdi":               round(spread_cdi_fin, 2) if spread_cdi_fin is not None else None,
+            "schedule":                 schedule[:24],
+            "tipo_amortizacao":         tipo_amort,
+            "pct_fin":                  round(pct_fin * 100, 1),
+            "taxa_am":                  round(taxa_am * 100, 2),
+            "carencia":                 carencia,
+            "haircut_pct":              round(haircut_pct * 100, 1),
+            "sub_ratio":                round(sub_ratio * 100, 1),
+            "cdi_ref":                  cdi_ref,
+        }
+
+    # ── C. ANÁLISE DE SENSIBILIDADE ────────────────────────────────────────
+    preco_m2_base = float(dados.get("preco_m2_base", 12500) or 12500)
+    cub_base      = float(dados.get("cub_m2", 3019) or 3019)
+    vgv_fatores   = [0.80, 0.90, 1.00, 1.10, 1.20]
+    cst_fatores   = [0.80, 0.90, 1.00, 1.10, 1.20]
+
+    sen_tir     = []
+    sen_margem  = []
+    sen_result  = []
+
+    for vf in vgv_fatores:
+        row_tir    = []
+        row_margem = []
+        row_result = []
+        for cf in cst_fatores:
+            d_sen = dict(dados)
+            d_sen["preco_m2_base"] = preco_m2_base * vf
+            d_sen["cub_m2"]        = cub_base * cf
+            # Ajustar tipologias: preço base multiplicado
+            if dados.get("tipologias"):
+                tips_adj = []
+                for t in dados["tipologias"]:
+                    ta = dict(t)
+                    ta["preco_m2"] = float(t.get("preco_m2", preco_m2_base) or preco_m2_base) * vf
+                    tips_adj.append(ta)
+                d_sen["tipologias"] = tips_adj
+            try:
+                r_sen = _calcular_viabilidade_v2(d_sen)
+                row_tir.append(round(r_sen.get("tir_anual") or 0, 2))
+                row_margem.append(round(r_sen.get("margem_vgv") or 0, 2))
+                row_result.append(round(r_sen.get("resultado_bruto") or 0, 2))
+            except Exception:
+                row_tir.append(None)
+                row_margem.append(None)
+                row_result.append(None)
+        sen_tir.append(row_tir)
+        sen_margem.append(row_margem)
+        sen_result.append(row_result)
+
+    sensibilidade = {
+        "fatores_vgv":  [f"{int(f*100)}%" for f in vgv_fatores],
+        "fatores_custo": [f"{int(f*100)}%" for f in cst_fatores],
+        "tir":     sen_tir,
+        "margem":  sen_margem,
+        "resultado": sen_result,
+    }
+
+    # ── D. INDICADORES ADICIONAIS ───────────────────────────────────────────
+    vso_mensal = (unidades_total - unidades_permuta) / max(duracao_analise, 1)
+
+    # Payback descontado
+    payback_desc = None
+    acum_desc = 0.0
+    for i, f in enumerate(base["fluxo"]):
+        acum_desc += f["saldo_mes"] / ((1 + tma_mensal) ** i)
+        if acum_desc > 0 and payback_desc is None:
+            payback_desc = f["mes"]
+
+    indice_lucratividade = (vpl_base + custo_total) / custo_total if custo_total > 0 else None
+    multiplo_capital     = vgv_liquido / custo_total if custo_total > 0 else None
+    ponto_equilibrio_pct = custo_total / vgv_liquido * 100 if vgv_liquido > 0 else None
+    spread_cdi_base      = tir_anual_base - float(dados.get("cdi_ref", 13.75) or 13.75)
+
+    indicadores_adicionais = {
+        "vso_mensal":           round(vso_mensal, 2),
+        "payback_descontado":   payback_desc,
+        "indice_lucratividade": round(indice_lucratividade, 4) if indice_lucratividade else None,
+        "multiplo_capital":     round(multiplo_capital, 2) if multiplo_capital else None,
+        "ponto_equilibrio_pct": round(ponto_equilibrio_pct, 2) if ponto_equilibrio_pct else None,
+        "spread_cdi":           round(spread_cdi_base, 2),
+    }
+
+    base["financiamento"]          = fin_result
+    base["sensibilidade"]          = sensibilidade
+    base["indicadores_adicionais"] = indicadores_adicionais
+
+    return base
+
+
+# ── Override da rota POST ─────────────────────────────────────────────────────
+
+app.router.routes = [
+    r for r in app.router.routes
+    if not (
+        hasattr(r, "path")
+        and r.path == "/ferramentas/viabilidade/calcular"
+        and "POST" in [m.upper() for m in getattr(r, "methods", [])]
+    )
+]
+
+
+@app.post("/ferramentas/viabilidade/calcular", response_class=HTMLResponse)
+@require_login
+async def ferramenta_viabilidade_post_v3(
+    request: Request, session: Session = Depends(get_session),
+) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+    cc = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
+    form  = await request.form()
+    dados: dict = dict(form)
+
+    # Tipologias
+    tipologias = []
+    i = 0
+    while f"tip_nome_{i}" in dados or f"tip_metragem_{i}" in dados:
+        met = float(dados.get(f"tip_metragem_{i}", 0) or 0)
+        qtd = int(dados.get(f"tip_qtd_{i}", 0) or 0)
+        if met > 0 and qtd > 0:
+            tipologias.append({
+                "nome":        dados.get(f"tip_nome_{i}", ""),
+                "tipo":        dados.get(f"tip_tipo_{i}", "Residencial"),
+                "metragem":    met,
+                "quantidade":  qtd,
+                "preco_m2":    float(dados.get(f"tip_preco_{i}", 0) or 0) or float(dados.get("preco_m2_base", 12500)),
+                "andar_inicio": int(dados.get(f"tip_andar_{i}", 1) or 1),
+                "permuta":     dados.get(f"tip_permuta_{i}") == "1",
+            })
+        i += 1
+    dados["tipologias"] = tipologias
+
+    # Fases de venda
+    fases = []
+    j = 0
+    while f"fase_nome_{j}" in dados:
+        fases.append({
+            "nome":        dados.get(f"fase_nome_{j}", ""),
+            "meta":        float(dados.get(f"fase_meta_{j}", 0) or 0),
+            "reajuste":    float(dados.get(f"fase_reajuste_{j}", 0) or 0),
+            "duracao":     int(dados.get(f"fase_duracao_{j}", 12) or 12),
+            "entrada_pct": float(dados.get(f"fase_entrada_{j}", 10) or 10),
+            "parcelas_pct": float(dados.get(f"fase_parcelas_{j}", 80) or 80),
+            "n_parcelas":  int(dados.get(f"fase_nparcelas_{j}", 24) or 24),
+            "reforco_pct": float(dados.get(f"fase_reforco_{j}", 0) or 0),
+            "n_reforcos":  int(dados.get(f"fase_nreforcos_{j}", 0) or 0),
+        })
+        j += 1
+    if fases:
+        dados["fases"] = fases
+
+    resultado = _calcular_v3(dados)
+    return render("ferramenta_viabilidade.html", request=request, context={
+        "current_user":    ctx.user,
+        "current_company": ctx.company,
+        "role":            ctx.membership.role,
+        "current_client":  cc,
+        "resultado":       resultado,
+        "dados":           dados,
+    })
+
+
+# ── Template override ─────────────────────────────────────────────────────────
+
+TEMPLATES["ferramenta_viabilidade.html"] = r"""
+{% extends "base.html" %}
+{% block content %}
+<style>
+  .vb-hdr{display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:1rem;margin-bottom:1.5rem;}
+  .vb-tabs{display:flex;gap:.2rem;border-bottom:2px solid var(--mc-border);margin-bottom:1.5rem;flex-wrap:wrap;overflow-x:auto;}
+  .vb-tab{padding:.5rem 1rem;border:none;background:none;font-size:.86rem;font-weight:600;color:var(--mc-muted);cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-2px;white-space:nowrap;transition:all .15s;}
+  .vb-tab:hover{color:var(--mc-primary);}
+  .vb-tab.on{color:var(--mc-primary);border-bottom-color:var(--mc-primary);}
+  .vb-sec{display:none;}.vb-sec.on{display:block;}
+  .vb-row{display:grid;grid-template-columns:1fr 1fr;gap:1rem;margin-bottom:1rem;}
+  .vb-row3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:1rem;margin-bottom:1rem;}
+  .vb-row4{display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:.75rem;margin-bottom:1rem;}
+  .vb-lbl{font-size:.74rem;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--mc-muted);margin-bottom:.3rem;}
+  .vb-inp{width:100%;border:1.5px solid var(--mc-border);border-radius:10px;padding:.58rem .85rem;font-size:.88rem;outline:none;transition:border .15s;}
+  .vb-inp:focus{border-color:var(--mc-primary);}
+  .vb-sel{width:100%;border:1.5px solid var(--mc-border);border-radius:10px;padding:.58rem .85rem;font-size:.88rem;outline:none;background:#fff;}
+  .pw{position:relative;}.pw .pre{position:absolute;left:.85rem;top:50%;transform:translateY(-50%);color:var(--mc-muted);font-size:.82rem;pointer-events:none;}
+  .pw .suf{position:absolute;right:.85rem;top:50%;transform:translateY(-50%);color:var(--mc-muted);font-size:.82rem;pointer-events:none;}
+  .pw .vb-inp.pl{padding-left:2.1rem;}.pw .vb-inp.pr{padding-right:2.1rem;}
+  .vb-sep{font-size:.7rem;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--mc-muted);padding:.55rem 0 .3rem;border-top:1px solid var(--mc-border);margin-top:.75rem;}
+  .vb-hint{font-size:.72rem;color:var(--mc-muted);margin-top:.2rem;}
+  /* Tipologias */
+  .tip-hdr{display:grid;grid-template-columns:1.5fr .7fr 1fr 1fr .7fr .5fr .5fr auto;gap:.5rem;font-size:.68rem;font-weight:700;text-transform:uppercase;color:var(--mc-muted);margin-bottom:.4rem;}
+  .tip-row{display:grid;grid-template-columns:1.5fr .7fr 1fr 1fr .7fr .5fr .5fr auto;gap:.5rem;margin-bottom:.5rem;align-items:center;}
+  /* Fases */
+  .fase-card{border:1px solid var(--mc-border);border-radius:12px;padding:1rem;margin-bottom:.75rem;}
+  .fase-hdr{display:flex;justify-content:space-between;align-items:center;margin-bottom:.75rem;}
+  /* KPIs */
+  .kpi-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(155px,1fr));gap:.65rem;margin-bottom:1.25rem;}
+  .kpi{background:#fff;border:1px solid var(--mc-border);border-radius:13px;padding:.9rem 1rem;}
+  .kpi-l{font-size:.68rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--mc-muted);}
+  .kpi-v{font-size:21px;font-weight:700;letter-spacing:-.02em;margin-top:.2rem;}
+  .kpi-f{font-size:.72rem;color:var(--mc-muted);margin-top:.15rem;}
+  /* Breakdown */
+  .bk{border:1px solid var(--mc-border);border-radius:12px;overflow:hidden;margin-bottom:1rem;}
+  .bk-r{display:flex;justify-content:space-between;padding:.48rem 1rem;font-size:.86rem;border-bottom:1px solid var(--mc-border);}
+  .bk-r:last-child{border-bottom:0;}
+  .bk-t{font-weight:700;background:var(--mc-primary-soft);}
+  .bk-l{color:var(--mc-muted);}
+  /* Fluxo de caixa */
+  .fc-table{width:100%;border-collapse:collapse;font-size:.78rem;}
+  .fc-table th{background:var(--mc-primary);color:#fff;padding:.4rem .6rem;text-align:right;position:sticky;top:0;}
+  .fc-table th:first-child{text-align:left;}
+  .fc-table td{padding:.35rem .6rem;text-align:right;border-bottom:1px solid var(--mc-border);}
+  .fc-table td:first-child{text-align:left;font-weight:600;}
+  .fc-table tr:hover td{background:#f9fafb;}
+  .fc-pos{color:#16a34a;}
+  .fc-neg{color:#dc2626;}
+  .fc-wrap{max-height:480px;overflow-y:auto;border:1px solid var(--mc-border);border-radius:12px;}
+  /* Verdict */
+  .verdict{border-radius:14px;padding:1rem 1.2rem;border:1px solid var(--mc-border);background:#fff;margin-bottom:1.25rem;}
+  .v-badge{display:inline-flex;align-items:center;gap:.4rem;font-size:.74rem;font-weight:700;text-transform:uppercase;letter-spacing:.07em;padding:.28rem .7rem;border-radius:999px;margin-bottom:.55rem;}
+  .v-badge.success{background:rgba(22,163,74,.12);color:#166534;}
+  .v-badge.primary{background:rgba(59,130,246,.12);color:#1e40af;}
+  .v-badge.warning{background:rgba(202,138,4,.12);color:#854d0e;}
+  .v-badge.danger{background:rgba(220,38,38,.12);color:#991b1b;}
+  /* Toggle switch */
+  .vb-toggle-wrap{display:flex;align-items:center;gap:.75rem;padding:.75rem 0;margin-bottom:.5rem;}
+  .vb-toggle{position:relative;width:46px;height:25px;flex-shrink:0;}
+  .vb-toggle input{opacity:0;width:0;height:0;}
+  .vb-toggle-slider{position:absolute;cursor:pointer;top:0;left:0;right:0;bottom:0;background:#d1d5db;border-radius:25px;transition:.3s;}
+  .vb-toggle-slider:before{position:absolute;content:"";height:19px;width:19px;left:3px;bottom:3px;background:#fff;border-radius:50%;transition:.3s;}
+  .vb-toggle input:checked + .vb-toggle-slider{background:var(--mc-primary);}
+  .vb-toggle input:checked + .vb-toggle-slider:before{transform:translateX(21px);}
+  #finInputs{transition:opacity .2s;}
+  /* Heatmap sensibilidade */
+  .sen-table{width:100%;border-collapse:collapse;font-size:.8rem;}
+  .sen-table th{background:#1e293b;color:#fff;padding:.45rem .6rem;text-align:center;font-size:.72rem;}
+  .sen-table td{padding:.4rem .6rem;text-align:center;border:1px solid var(--mc-border);font-weight:600;}
+  .sen-green{background:#dcfce7;color:#166534;}
+  .sen-yellow{background:#fef9c3;color:#854d0e;}
+  .sen-red{background:#fee2e2;color:#991b1b;}
+  /* Fin schedule */
+  .fs-table{width:100%;border-collapse:collapse;font-size:.78rem;}
+  .fs-table th{background:#1e293b;color:#fff;padding:.4rem .6rem;text-align:right;}
+  .fs-table th:first-child{text-align:left;}
+  .fs-table td{padding:.35rem .6rem;text-align:right;border-bottom:1px solid var(--mc-border);}
+  .fs-table td:first-child{text-align:left;font-weight:600;}
+  .fs-wrap{max-height:380px;overflow-y:auto;border:1px solid var(--mc-border);border-radius:12px;margin-top:.5rem;}
+  @media(max-width:640px){.vb-row,.vb-row3,.vb-row4{grid-template-columns:1fr;}.tip-hdr,.tip-row{grid-template-columns:1fr 1fr 1fr auto;}.tip-hdr span:nth-child(4),.tip-row>div:nth-child(4),.tip-hdr span:nth-child(5),.tip-row>div:nth-child(5),.tip-hdr span:nth-child(6),.tip-row>div:nth-child(6),.tip-hdr span:nth-child(7),.tip-row>div:nth-child(7){display:none;}}
+  @media print{.vb-tabs,form button,nav,.navbar,aside,#augurCard{display:none!important;}.vb-sec{display:block!important;}.card{page-break-inside:avoid;}}
+</style>
+
+<div class="vb-hdr">
+  <div>
+    <a href="/ferramentas" class="btn btn-outline-secondary btn-sm mb-2"><i class="bi bi-arrow-left"></i> Ferramentas</a>
+    <h4 class="mb-0">Viabilidade Imobiliária</h4>
+    <div class="muted small">Análise completa com fluxo de caixa mensal, TIR e VPL</div>
+  </div>
+  {% if resultado %}
+  <button onclick="window.print()" class="btn btn-outline-secondary btn-sm">
+    <i class="bi bi-printer me-1"></i> Exportar PDF
+  </button>
+  {% endif %}
+</div>
+
+<form method="post" action="/ferramentas/viabilidade/calcular" id="vbForm">
+<div class="vb-tabs">
+  <button type="button" class="vb-tab on" onclick="vbTab('premissas',this)">📋 Premissas</button>
+  <button type="button" class="vb-tab" onclick="vbTab('produto',this)">🏢 Produto &amp; VGV</button>
+  <button type="button" class="vb-tab" onclick="vbTab('custos',this)">🔨 Custos</button>
+  <button type="button" class="vb-tab" onclick="vbTab('comercial',this)">📈 Comercialização</button>
+  <button type="button" class="vb-tab" onclick="vbTab('financiamento',this)">💰 Financiamento</button>
+  {% if resultado %}<button type="button" class="vb-tab" onclick="vbTab('resultado',this)">✅ Resultado</button>{% endif %}
+</div>
+
+{# ── ABA 1: PREMISSAS ── #}
+<div class="vb-sec on card p-4 mb-3" id="tab-premissas">
+  <h5 class="mb-3">Premissas do Projeto</h5>
+  <div class="vb-row">
+    <div><div class="vb-lbl">Nome do Projeto</div><input class="vb-inp" type="text" name="nome_projeto" placeholder="Ex: Residencial Jardins" value="{{ dados.nome_projeto or '' }}"></div>
+    <div><div class="vb-lbl">Área do Terreno (m²)</div><input class="vb-inp" type="number" name="area_terreno" step="0.01" min="0" required placeholder="1.918,80" value="{{ dados.area_terreno or '' }}"></div>
+  </div>
+  <div class="vb-row3">
+    <div><div class="vb-lbl">Índice de Aproveitamento</div><input class="vb-inp" type="number" name="indice_aproveitamento" step="0.01" min="0" placeholder="5.0" value="{{ dados.indice_aproveitamento or '5' }}"></div>
+    <div><div class="vb-lbl">Índice c/ Outorga</div><input class="vb-inp" type="number" name="indice_outorga" step="0.01" min="0" placeholder="6.5" value="{{ dados.indice_outorga or '0' }}"></div>
+    <div><div class="vb-lbl">Taxa de Ocupação (%)</div><input class="vb-inp" type="number" name="taxa_ocupacao" step="1" min="0" max="100" placeholder="85" value="{{ dados.taxa_ocupacao or '85' }}"></div>
+  </div>
+  <div class="vb-row3">
+    <div><div class="vb-lbl">Permeabilidade (%)</div><input class="vb-inp" type="number" name="permeabilidade" step="1" min="0" max="100" placeholder="15" value="{{ dados.permeabilidade or '15' }}"></div>
+    <div><div class="vb-lbl">% Permuta do Terreno</div><input class="vb-inp" type="number" name="pct_permuta" step="0.5" min="0" max="100" placeholder="13.75" value="{{ dados.pct_permuta or '0' }}"><div class="vb-hint">0% = compra total · 100% = permuta total</div></div>
+    <div><div class="vb-lbl">Valor do Terreno (R$)</div><div class="pw"><span class="pre">R$</span><input class="vb-inp pl" type="number" name="valor_terreno" step="1000" min="0" placeholder="0" value="{{ dados.valor_terreno or '0' }}"></div><div class="vb-hint">Se permuta, deixe 0</div></div>
+  </div>
+  <div class="vb-sep">Cronograma</div>
+  <div class="vb-row3">
+    <div><div class="vb-lbl">Mês de Início da Obra</div><input class="vb-inp" type="number" name="mes_inicio_obra" step="1" min="1" placeholder="12" value="{{ dados.mes_inicio_obra or '12' }}"><div class="vb-hint">Relativo ao lançamento (mês 1)</div></div>
+    <div><div class="vb-lbl">Duração da Obra (meses)</div><input class="vb-inp" type="number" name="duracao_obra" step="1" min="6" placeholder="60" value="{{ dados.duracao_obra or '60' }}"></div>
+    <div><div class="vb-lbl">Início das Vendas (mês)</div><input class="vb-inp" type="number" name="mes_inicio_vendas" step="1" min="1" placeholder="3" value="{{ dados.mes_inicio_vendas or '3' }}"><div class="vb-hint">Relativo ao lançamento</div></div>
+  </div>
+  <div class="d-flex justify-content-end mt-3">
+    <button type="button" class="btn btn-primary" onclick="vbTab('produto',document.querySelector('[onclick*=produto]'))">Produto &amp; VGV <i class="bi bi-arrow-right ms-1"></i></button>
+  </div>
+</div>
+
+{# ── ABA 2: PRODUTO ── #}
+<div class="vb-sec card p-4 mb-3" id="tab-produto">
+  <h5 class="mb-3">Produto &amp; VGV</h5>
+  <div class="vb-row">
+    <div><div class="vb-lbl">Preço base (R$/m²)</div><div class="pw"><span class="pre">R$</span><input class="vb-inp pl" type="number" name="preco_m2_base" step="100" min="0" placeholder="12.500" value="{{ dados.preco_m2_base or '12500' }}"></div></div>
+    <div><div class="vb-lbl">Diferencial por andar (%)</div><div class="pw"><span class="suf">%</span><input class="vb-inp pr" type="number" name="diferencial_andar" step="0.1" min="0" max="5" placeholder="0.5" value="{{ dados.diferencial_andar or '0.5' }}"></div><div class="vb-hint">Incremento no preço/m² a cada andar</div></div>
+  </div>
+  <div class="vb-sep">Tipologias</div>
+  <div class="tip-hdr">
+    <span>Nome / Descrição</span><span>Tipo</span><span>Metragem (m²)</span><span>Qtd</span><span>Preço/m²</span><span>Andar ini.</span><span>Permuta</span><span></span>
+  </div>
+  <div id="tipCont">
+    {% set tips = dados.tipologias if dados.tipologias else [] %}
+    {% if not tips %}
+    <div class="tip-row" id="tip-0">
+      <div><input class="vb-inp" type="text" name="tip_nome_0" placeholder="Apart. 101"></div>
+      <div><select class="vb-sel" name="tip_tipo_0"><option>Residencial</option><option>Comercial</option></select></div>
+      <div><input class="vb-inp" type="number" name="tip_metragem_0" step="0.5" min="0" placeholder="102"></div>
+      <div><input class="vb-inp" type="number" name="tip_qtd_0" step="1" min="0" placeholder="1"></div>
+      <div><div class="pw"><span class="pre">R$</span><input class="vb-inp pl" type="number" name="tip_preco_0" step="100" placeholder="12.500"></div></div>
+      <div><input class="vb-inp" type="number" name="tip_andar_0" step="1" min="1" placeholder="1"></div>
+      <div style="display:flex;align-items:center;gap:.3rem;"><input type="checkbox" name="tip_permuta_0" value="1" id="perm0"><label for="perm0" style="font-size:.8rem;">Sim</label></div>
+      <div></div>
+    </div>
+    {% else %}
+    {% for t in tips %}
+    <div class="tip-row" id="tip-{{ loop.index0 }}">
+      <div><input class="vb-inp" type="text" name="tip_nome_{{ loop.index0 }}" value="{{ t.nome or '' }}" placeholder="Nome"></div>
+      <div><select class="vb-sel" name="tip_tipo_{{ loop.index0 }}"><option {% if t.tipo=='Residencial' %}selected{% endif %}>Residencial</option><option {% if t.tipo=='Comercial' %}selected{% endif %}>Comercial</option></select></div>
+      <div><input class="vb-inp" type="number" name="tip_metragem_{{ loop.index0 }}" step="0.5" value="{{ t.metragem }}"></div>
+      <div><input class="vb-inp" type="number" name="tip_qtd_{{ loop.index0 }}" step="1" value="{{ t.quantidade }}"></div>
+      <div><div class="pw"><span class="pre">R$</span><input class="vb-inp pl" type="number" name="tip_preco_{{ loop.index0 }}" step="100" value="{{ t.preco_m2 }}"></div></div>
+      <div><input class="vb-inp" type="number" name="tip_andar_{{ loop.index0 }}" step="1" value="{{ t.andar_inicio }}"></div>
+      <div style="display:flex;align-items:center;gap:.3rem;"><input type="checkbox" name="tip_permuta_{{ loop.index0 }}" value="1" id="perm{{ loop.index0 }}" {% if t.permuta %}checked{% endif %}><label for="perm{{ loop.index0 }}" style="font-size:.8rem;">Sim</label></div>
+      <div><button type="button" class="btn btn-sm btn-outline-danger" onclick="rmTip({{ loop.index0 }})">×</button></div>
+    </div>
+    {% endfor %}
+    {% endif %}
+  </div>
+  <button type="button" class="btn btn-outline-secondary btn-sm mt-2" onclick="addTip()"><i class="bi bi-plus-circle me-1"></i> Adicionar tipologia</button>
+  <div class="d-flex justify-content-between mt-3">
+    <button type="button" class="btn btn-outline-secondary" onclick="vbTab('premissas',document.querySelector('[onclick*=premissas]'))"><i class="bi bi-arrow-left me-1"></i> Voltar</button>
+    <button type="button" class="btn btn-primary" onclick="vbTab('custos',document.querySelector('[onclick*=custos]'))">Custos <i class="bi bi-arrow-right ms-1"></i></button>
+  </div>
+</div>
+
+{# ── ABA 3: CUSTOS ── #}
+<div class="vb-sec card p-4 mb-3" id="tab-custos">
+  <h5 class="mb-3">Custos de Produção</h5>
+  <div class="vb-sep">CUB e Área Equivalente</div>
+  <div class="vb-row3">
+    <div><div class="vb-lbl">CUB de Referência (R$/m²)</div><div class="pw"><span class="pre">R$</span><input class="vb-inp pl" type="number" name="cub_m2" step="10" min="0" placeholder="3.019" value="{{ dados.cub_m2 or '3019' }}"></div><div class="vb-hint">CUB ajustado para o projeto</div></div>
+    <div><div class="vb-lbl">Área de Garagem (m²)</div><input class="vb-inp" type="number" name="area_garagem" step="1" min="0" placeholder="5.583" value="{{ dados.area_garagem or '0' }}"></div>
+    <div><div class="vb-lbl">Coef. Equivalente Garagem</div><input class="vb-inp" type="number" name="coef_garagem" step="0.05" min="0" max="1" placeholder="0.70" value="{{ dados.coef_garagem or '0.7' }}"><div class="vb-hint">Padrão NBR 12.721: 0,50–0,75</div></div>
+  </div>
+  <div class="vb-row">
+    <div><div class="vb-lbl">Área Residual (m²)</div><input class="vb-inp" type="number" name="area_residual" step="1" min="0" placeholder="6.888" value="{{ dados.area_residual or '0' }}"><div class="vb-hint">Área total construída menos garagem e área privativa</div></div>
+    <div><div class="vb-lbl">Eficiência da Planta (%)</div><div class="pw"><span class="suf">%</span><input class="vb-inp pr" type="number" name="eficiencia" step="1" min="10" max="90" placeholder="50" value="{{ dados.eficiencia or '50' }}"></div><div class="vb-hint">Usada se garagem e residual não preenchidos</div></div>
+  </div>
+  <div class="vb-sep">Itens fora do CUB</div>
+  <div class="vb-row3">
+    <div><div class="vb-lbl">Número de Elevadores</div><input class="vb-inp" type="number" name="n_elevadores" step="1" min="0" placeholder="4" value="{{ dados.n_elevadores or '0' }}"></div>
+    <div><div class="vb-lbl">Valor por Elevador (R$)</div><div class="pw"><span class="pre">R$</span><input class="vb-inp pl" type="number" name="vl_elevador" step="10000" min="0" placeholder="380.000" value="{{ dados.vl_elevador or '380000' }}"></div></div>
+    <div><div class="vb-lbl">Recreação / Lazer (R$)</div><div class="pw"><span class="pre">R$</span><input class="vb-inp pl" type="number" name="vl_recreacao" step="10000" min="0" placeholder="780.000" value="{{ dados.vl_recreacao or '0' }}"></div></div>
+  </div>
+  <div class="vb-row">
+    <div><div class="vb-lbl">Outros itens fora CUB (R$)</div><div class="pw"><span class="pre">R$</span><input class="vb-inp pl" type="number" name="vl_outros_cub" step="10000" min="0" placeholder="0" value="{{ dados.vl_outros_cub or '0' }}"></div></div>
+    <div><div class="vb-lbl">Despesas Indiretas (%)</div><div class="pw"><span class="suf">%</span><input class="vb-inp pr" type="number" name="pct_indiretos" step="0.5" min="0" max="30" placeholder="6.5" value="{{ dados.pct_indiretos or '6.5' }}"></div><div class="vb-hint">Gerenciamento, projetos, laudos, seguros</div></div>
+  </div>
+  <div class="vb-sep">Comercialização e Impostos (% sobre VGV líquido)</div>
+  <div class="vb-row4">
+    <div><div class="vb-lbl">Corretagem (%)</div><div class="pw"><span class="suf">%</span><input class="vb-inp pr" type="number" name="pct_corretagem" step="0.1" min="0" placeholder="5.0" value="{{ dados.pct_corretagem or '5.0' }}"></div></div>
+    <div><div class="vb-lbl">Gestão Comercial (%)</div><div class="pw"><span class="suf">%</span><input class="vb-inp pr" type="number" name="pct_gestao_comercial" step="0.1" min="0" placeholder="1.5" value="{{ dados.pct_gestao_comercial or '1.5' }}"></div></div>
+    <div><div class="vb-lbl">Marketing (%)</div><div class="pw"><span class="suf">%</span><input class="vb-inp pr" type="number" name="pct_marketing" step="0.1" min="0" placeholder="0.75" value="{{ dados.pct_marketing or '0.75' }}"></div></div>
+    <div><div class="vb-lbl">Outros comerciais (%)</div><div class="pw"><span class="suf">%</span><input class="vb-inp pr" type="number" name="pct_outros_com" step="0.1" min="0" placeholder="1.2" value="{{ dados.pct_outros_com or '1.2' }}"></div></div>
+  </div>
+  <div class="vb-row">
+    <div><div class="vb-lbl">Impostos sobre Receita (%)</div><div class="pw"><span class="suf">%</span><input class="vb-inp pr" type="number" name="pct_impostos" step="0.5" min="0" placeholder="4.0" value="{{ dados.pct_impostos or '4.0' }}"></div></div>
+    <div></div>
+  </div>
+  <div class="d-flex justify-content-between mt-3">
+    <button type="button" class="btn btn-outline-secondary" onclick="vbTab('produto',document.querySelector('[onclick*=produto]'))"><i class="bi bi-arrow-left me-1"></i> Voltar</button>
+    <button type="button" class="btn btn-primary" onclick="vbTab('comercial',document.querySelector('[onclick*=comercial]'))">Comercialização <i class="bi bi-arrow-right ms-1"></i></button>
+  </div>
+</div>
+
+{# ── ABA 4: COMERCIALIZAÇÃO ── #}
+<div class="vb-sec card p-4 mb-3" id="tab-comercial">
+  <h5 class="mb-3">Fases de Comercialização</h5>
+  <div class="vb-row">
+    <div><div class="vb-lbl">Correção durante obra (% a.m.)</div><div class="pw"><span class="suf">%</span><input class="vb-inp pr" type="number" name="correcao_obra" step="0.01" min="0" placeholder="0.52" value="{{ dados.correcao_obra or '0.52' }}"></div></div>
+    <div><div class="vb-lbl">Correção pós-obra (% a.m.)</div><div class="pw"><span class="suf">%</span><input class="vb-inp pr" type="number" name="correcao_pos_obra" step="0.01" min="0" placeholder="1.04" value="{{ dados.correcao_pos_obra or '1.04' }}"></div></div>
+  </div>
+  <div class="vb-sep">Fases de Venda</div>
+  <div id="faseCont">
+    {% set fases_dados = dados.fases if dados.fases else [
+      {"nome":"Lançamento","meta":15,"reajuste":-15,"duracao":12,"entrada_pct":10,"parcelas_pct":90,"n_parcelas":24,"reforco_pct":0,"n_reforcos":0},
+      {"nome":"Pós-Lançamento","meta":85,"reajuste":5,"duracao":24,"entrada_pct":15,"parcelas_pct":40,"n_parcelas":48,"reforco_pct":25,"n_reforcos":4}
+    ] %}
+    {% for f in fases_dados %}
+    <div class="fase-card" id="fase-{{ loop.index0 }}">
+      <div class="fase-hdr">
+        <input class="vb-inp" type="text" name="fase_nome_{{ loop.index0 }}" value="{{ f.nome }}" placeholder="Nome da fase" style="max-width:200px;">
+        <button type="button" class="btn btn-sm btn-outline-danger" onclick="rmFase({{ loop.index0 }})">Remover fase</button>
+      </div>
+      <div class="vb-row4">
+        <div><div class="vb-lbl">Meta de Vendas (%)</div><div class="pw"><span class="suf">%</span><input class="vb-inp pr" type="number" name="fase_meta_{{ loop.index0 }}" step="1" min="0" max="100" value="{{ f.meta }}"></div></div>
+        <div><div class="vb-lbl">Reajuste de Preço (%)</div><div class="pw"><span class="suf">%</span><input class="vb-inp pr" type="number" name="fase_reajuste_{{ loop.index0 }}" step="1" value="{{ f.reajuste }}"></div><div class="vb-hint">Negativo = desconto</div></div>
+        <div><div class="vb-lbl">Duração (meses)</div><input class="vb-inp" type="number" name="fase_duracao_{{ loop.index0 }}" step="1" min="1" value="{{ f.duracao }}"></div>
+        <div><div class="vb-lbl">Entrada (%)</div><div class="pw"><span class="suf">%</span><input class="vb-inp pr" type="number" name="fase_entrada_{{ loop.index0 }}" step="1" min="0" max="100" value="{{ f.entrada_pct }}"></div></div>
+      </div>
+      <div class="vb-row4">
+        <div><div class="vb-lbl">Parcelas (%)</div><div class="pw"><span class="suf">%</span><input class="vb-inp pr" type="number" name="fase_parcelas_{{ loop.index0 }}" step="1" min="0" max="100" value="{{ f.parcelas_pct }}"></div></div>
+        <div><div class="vb-lbl">Nº de Parcelas</div><input class="vb-inp" type="number" name="fase_nparcelas_{{ loop.index0 }}" step="1" min="1" value="{{ f.n_parcelas }}"></div>
+        <div><div class="vb-lbl">Reforços (%)</div><div class="pw"><span class="suf">%</span><input class="vb-inp pr" type="number" name="fase_reforco_{{ loop.index0 }}" step="1" min="0" max="100" value="{{ f.reforco_pct }}"></div></div>
+        <div><div class="vb-lbl">Nº de Reforços</div><input class="vb-inp" type="number" name="fase_nreforcos_{{ loop.index0 }}" step="1" min="0" value="{{ f.n_reforcos }}"></div>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+  <button type="button" class="btn btn-outline-secondary btn-sm mt-1" onclick="addFase()"><i class="bi bi-plus-circle me-1"></i> Adicionar fase</button>
+  <div class="d-flex justify-content-between mt-3">
+    <button type="button" class="btn btn-outline-secondary" onclick="vbTab('custos',document.querySelector('[onclick*=custos]'))"><i class="bi bi-arrow-left me-1"></i> Voltar</button>
+    <button type="button" class="btn btn-primary" onclick="vbTab('financiamento',document.querySelector('[onclick*=financiamento]'))">Financiamento <i class="bi bi-arrow-right ms-1"></i></button>
+  </div>
+</div>
+
+{# ── ABA 5: FINANCIAMENTO ── #}
+<div class="vb-sec card p-4 mb-3" id="tab-financiamento">
+  <h5 class="mb-3">Simulação de Financiamento de Obra</h5>
+  <div class="vb-toggle-wrap">
+    <label class="vb-toggle">
+      <input type="checkbox" name="usar_financiamento" value="1" id="toggleFin" onchange="toggleFinInputs(this)" {% if dados.usar_financiamento == '1' %}checked{% endif %}>
+      <span class="vb-toggle-slider"></span>
+    </label>
+    <span style="font-weight:600;font-size:.95rem;">Simular financiamento de obra</span>
+    <span class="vb-hint ms-1">(linha de crédito à produção / SFH)</span>
+  </div>
+
+  <div id="finInputs" style="{% if dados.usar_financiamento != '1' %}opacity:.4;pointer-events:none;{% endif %}">
+    <div class="vb-sep">Estrutura do Crédito</div>
+    <div class="vb-row3">
+      <div><div class="vb-lbl">% do Custo Financiado</div><div class="pw"><span class="suf">%</span><input class="vb-inp pr" type="number" name="pct_fin" step="1" min="0" max="100" placeholder="70" value="{{ dados.pct_fin or '70' }}"></div><div class="vb-hint">Parcela do custo de obra coberta pelo crédito</div></div>
+      <div><div class="vb-lbl">Taxa de Juros a.m. (%)</div><div class="pw"><span class="suf">%</span><input class="vb-inp pr" type="number" name="taxa_juros_am" step="0.01" min="0" placeholder="1.20" value="{{ dados.taxa_juros_am or '1.20' }}"></div><div class="vb-hint">Taxa efetiva mensal do financiamento</div></div>
+      <div><div class="vb-lbl">Sistema de Amortização</div><select class="vb-sel" name="tipo_amortizacao"><option value="SAC" {% if dados.tipo_amortizacao == 'SAC' or not dados.tipo_amortizacao %}selected{% endif %}>SAC — amortização constante</option><option value="PRICE" {% if dados.tipo_amortizacao == 'PRICE' %}selected{% endif %}>PRICE — parcela constante</option></select></div>
+    </div>
+    <div class="vb-row">
+      <div><div class="vb-lbl">Carência (meses)</div><input class="vb-inp" type="number" name="carencia_meses" step="1" min="0" placeholder="6" value="{{ dados.carencia_meses or '6' }}"><div class="vb-hint">Meses de juros apenas (sem amortizar) após término da obra</div></div>
+      <div><div class="vb-lbl">TMA de Referência (CDI % a.a.)</div><div class="pw"><span class="suf">%</span><input class="vb-inp pr" type="number" name="cdi_ref" step="0.25" min="0" placeholder="13.75" value="{{ dados.cdi_ref or '13.75' }}"></div><div class="vb-hint">Benchmark para cálculo do spread</div></div>
+    </div>
+
+    <div class="vb-sep">Estrutura CRI (Certificado de Recebíveis Imobiliários)</div>
+    <div class="vb-row">
+      <div><div class="vb-lbl">Haircut CRI (%)</div><div class="pw"><span class="suf">%</span><input class="vb-inp pr" type="number" name="haircut_pct" step="1" min="0" max="80" placeholder="20" value="{{ dados.haircut_pct or '20' }}"></div><div class="vb-hint">Desconto aplicado sobre carteira de recebíveis</div></div>
+      <div><div class="vb-lbl">% Subordinação</div><div class="pw"><span class="suf">%</span><input class="vb-inp pr" type="number" name="sub_ratio" step="1" min="0" max="80" placeholder="20" value="{{ dados.sub_ratio or '20' }}"></div><div class="vb-hint">Cota subordinada para proteção da cota sênior</div></div>
+    </div>
+  </div>
+
+  <div class="d-flex justify-content-between mt-3">
+    <button type="button" class="btn btn-outline-secondary" onclick="vbTab('comercial',document.querySelector('[onclick*=comercial]'))"><i class="bi bi-arrow-left me-1"></i> Voltar</button>
+    <button type="button" class="btn btn-primary px-4" id="calcBtn" onclick="document.getElementById('vbForm').submit()">
+      <i class="bi bi-calculator me-2"></i> Calcular Viabilidade
+    </button>
+  </div>
+</div>
+
+{# ── ABA 6: RESULTADO ── #}
+{% if resultado %}
+{% set r = resultado %}
+{% set st = r.status %}
+{% set ia = r.indicadores_adicionais %}
+{% set fin = r.financiamento %}
+{% set sen = r.sensibilidade %}
+<div class="vb-sec card p-4 mb-3" id="tab-resultado">
+  <div class="d-flex justify-content-between align-items-center mb-3">
+    <h5 class="mb-0">Resultado da Análise</h5>
+    {% if dados.nome_projeto %}<span class="badge text-bg-light border fw-normal">{{ dados.nome_projeto }}</span>{% endif %}
+  </div>
+
+  <div class="verdict mb-3">
+    <div class="v-badge {{ st.color }}">{{ st.icon }} {{ st.label }}</div>
+    <div style="font-size:.9rem;line-height:1.5;">{{ st.desc }}</div>
+  </div>
+
+  {# KPIs principais #}
+  <div class="kpi-grid">
+    <div class="kpi"><div class="kpi-l">VGV Líquido</div><div class="kpi-v" style="color:var(--mc-primary);">{{ r.vgv_liquido|brl }}</div><div class="kpi-f">{{ r.unidades_total }} unidades · {{ r.area_privativa|round|int }} m² priv.</div></div>
+    <div class="kpi"><div class="kpi-l">Custo Total</div><div class="kpi-v">{{ r.custo_total|brl }}</div><div class="kpi-f">{{ r.custo_m2_equiv|round|int }} R$/m² equiv.</div></div>
+    <div class="kpi"><div class="kpi-l">Resultado Bruto</div><div class="kpi-v" style="color:{{ '#16a34a' if r.resultado_bruto >= 0 else '#dc2626' }};">{{ r.resultado_bruto|brl }}</div><div class="kpi-f">{{ r.margem_vgv }}% sobre VGV</div></div>
+    <div class="kpi"><div class="kpi-l">ROI (Margem s/ Custo)</div><div class="kpi-v" style="color:{{ '#16a34a' if r.margem_custo >= 20 else ('#ca8a04' if r.margem_custo >= 10 else '#dc2626') }};">{{ r.margem_custo }}%</div><div class="kpi-f">Retorno sobre o investimento</div></div>
+    {% if r.tir_anual is not none %}<div class="kpi"><div class="kpi-l">TIR Anual (equity puro)</div><div class="kpi-v" style="color:{{ '#16a34a' if r.tir_anual >= 20 else ('#ca8a04' if r.tir_anual >= 15 else '#dc2626') }};">{{ r.tir_anual }}%</div><div class="kpi-f">Taxa interna de retorno</div></div>{% endif %}
+    <div class="kpi"><div class="kpi-l">Exposição Máxima</div><div class="kpi-v" style="color:#dc2626;">{{ r.exposicao_maxima|brl }}</div><div class="kpi-f">Capital necessário no pico</div></div>
+    {% if r.vpl %}<div class="kpi"><div class="kpi-l">VPL (TMA 12% a.a.)</div><div class="kpi-v" style="color:{{ '#16a34a' if r.vpl >= 0 else '#dc2626' }};">{{ r.vpl|brl }}</div><div class="kpi-f">Valor presente líquido</div></div>{% endif %}
+    {% if r.payback_mes %}<div class="kpi"><div class="kpi-l">Payback Simples</div><div class="kpi-v">Mês {{ r.payback_mes }}</div><div class="kpi-f">Retorno do capital</div></div>{% endif %}
+  </div>
+
+  {# KPIs adicionais #}
+  {% if ia %}
+  <h6 class="mb-2" style="margin-top:1rem;">Indicadores Complementares</h6>
+  <div class="kpi-grid">
+    <div class="kpi"><div class="kpi-l">VSO Mensal</div><div class="kpi-v" style="color:var(--mc-primary);">{{ "%.1f"|format(ia.vso_mensal) }}</div><div class="kpi-f">unidades/mês (velocidade de venda)</div></div>
+    {% if ia.payback_descontado %}<div class="kpi"><div class="kpi-l">Payback Descontado</div><div class="kpi-v">Mês {{ ia.payback_descontado }}</div><div class="kpi-f">Com TMA 12% a.a.</div></div>{% endif %}
+    {% if ia.indice_lucratividade %}<div class="kpi"><div class="kpi-l">Índice de Lucratividade</div><div class="kpi-v" style="color:{{ '#16a34a' if ia.indice_lucratividade >= 1 else '#dc2626' }};">{{ "%.2f"|format(ia.indice_lucratividade) }}x</div><div class="kpi-f">PI = VPL/I + 1 (> 1 = viável)</div></div>{% endif %}
+    {% if ia.multiplo_capital %}<div class="kpi"><div class="kpi-l">Múltiplo do Capital</div><div class="kpi-v" style="color:{{ '#16a34a' if ia.multiplo_capital >= 1.2 else '#ca8a04' }};">{{ "%.2f"|format(ia.multiplo_capital) }}x</div><div class="kpi-f">VGV / Custo Total</div></div>{% endif %}
+    {% if ia.ponto_equilibrio_pct %}<div class="kpi"><div class="kpi-l">Ponto de Equilíbrio</div><div class="kpi-v">{{ "%.1f"|format(ia.ponto_equilibrio_pct) }}%</div><div class="kpi-f">% do VGV para cobrir custos</div></div>{% endif %}
+    <div class="kpi"><div class="kpi-l">Spread vs CDI</div><div class="kpi-v" style="color:{{ '#16a34a' if ia.spread_cdi >= 5 else ('#ca8a04' if ia.spread_cdi >= 0 else '#dc2626') }};">{{ "%.2f"|format(ia.spread_cdi) }}%</div><div class="kpi-f">TIR − CDI referência</div></div>
+  </div>
+  {% endif %}
+
+  {# Breakdown de custos #}
+  <div class="row g-3 mb-3">
+    <div class="col-md-6">
+      <h6 class="mb-2">Composição de Custos</h6>
+      <div class="bk">
+        <div class="bk-r"><span class="bk-l">CUB × Área equivalente</span><span>{{ r.custo_cub|brl }}</span></div>
+        {% if r.itens_extra > 0 %}<div class="bk-r"><span class="bk-l">Itens fora do CUB</span><span>{{ r.itens_extra|brl }}</span></div>{% endif %}
+        <div class="bk-r"><span class="bk-l">Despesas indiretas</span><span>{{ r.custo_indiretos|brl }}</span></div>
+        {% if r.valor_terreno > 0 %}<div class="bk-r"><span class="bk-l">Terreno</span><span>{{ r.valor_terreno|brl }}</span></div>{% endif %}
+        <div class="bk-r"><span class="bk-l">Comercialização</span><span>{{ r.custo_comercial|brl }}</span></div>
+        <div class="bk-r"><span class="bk-l">Impostos</span><span>{{ r.custo_impostos|brl }}</span></div>
+        <div class="bk-r bk-t"><span>Custo Total</span><span>{{ r.custo_total|brl }}</span></div>
+      </div>
+    </div>
+    <div class="col-md-6">
+      <h6 class="mb-2">Composição do VGV</h6>
+      <div class="bk">
+        <div class="bk-r"><span class="bk-l">VGV Bruto</span><span>{{ r.vgv_bruto|brl }}</span></div>
+        {% if r.valor_permuta > 0 %}<div class="bk-r"><span class="bk-l">(−) Permuta ({{ r.unidades_permuta }} un.)</span><span style="color:#dc2626;">−{{ r.valor_permuta|brl }}</span></div>{% endif %}
+        <div class="bk-r bk-t"><span>VGV Líquido</span><span>{{ r.vgv_liquido|brl }}</span></div>
+        <div class="bk-r"><span class="bk-l">(−) Custo Total</span><span style="color:#dc2626;">−{{ r.custo_total|brl }}</span></div>
+        <div class="bk-r bk-t" style="color:{{ '#16a34a' if r.resultado_bruto >= 0 else '#dc2626' }};"><span>Resultado</span><span>{{ r.resultado_bruto|brl }}</span></div>
+      </div>
+    </div>
+  </div>
+
+  {# Potencial construtivo #}
+  <h6 class="mb-2">Potencial Construtivo</h6>
+  <div class="row g-2 mb-3">
+    {% for lb, vl, un in [("Área Terreno",r.area_terreno|round(1),"m²"),("Potencial Base",r.potencial_base|round(1),"m²"),("Potencial c/ Outorga",r.potencial_outorga|round(1),"m²"),("Área Equiv. CUB",r.area_equivalente|round(1),"m²"),("Área Privativa",r.area_privativa|round(1),"m²"),("VGV Médio/m²",r.vgv_medio_m2|round(0),"R$/m²")] %}
+    <div class="col-6 col-md-4"><div style="background:#f9fafb;border-radius:10px;padding:.55rem .8rem;"><div style="font-size:.68rem;color:var(--mc-muted);font-weight:600;text-transform:uppercase;">{{ lb }}</div><div style="font-size:.95rem;font-weight:700;">{{ vl }} {{ un }}</div></div></div>
+    {% endfor %}
+  </div>
+
+  {# ── RESULTADO FINANCIADO ── #}
+  {% if fin %}
+  <div style="border:1.5px solid #3b82f6;border-radius:14px;padding:1.25rem;margin-bottom:1.5rem;background:rgba(59,130,246,.04);">
+    <h6 class="mb-3" style="color:#1e40af;"><i class="bi bi-bank2 me-2"></i>Resultado com Financiamento de Obra</h6>
+    <div class="kpi-grid">
+      <div class="kpi"><div class="kpi-l">Valor Financiado</div><div class="kpi-v" style="color:#1e40af;">{{ fin.valor_financiado|brl }}</div><div class="kpi-f">{{ fin.pct_fin }}% do custo de obra (pico)</div></div>
+      <div class="kpi"><div class="kpi-l">Custo do Crédito</div><div class="kpi-v" style="color:#dc2626;">{{ fin.custo_fin_total|brl }}</div><div class="kpi-f">Total de juros pagos</div></div>
+      {% if fin.tir_alavancada is not none %}<div class="kpi"><div class="kpi-l">TIR Alavancada</div><div class="kpi-v" style="color:{{ '#16a34a' if fin.tir_alavancada >= 20 else ('#ca8a04' if fin.tir_alavancada >= 15 else '#dc2626') }};">{{ "%.2f"|format(fin.tir_alavancada) }}%</div><div class="kpi-f">TIR sobre equity investido</div></div>{% endif %}
+      {% if fin.roe is not none %}<div class="kpi"><div class="kpi-l">ROE</div><div class="kpi-v" style="color:{{ '#16a34a' if fin.roe >= 20 else '#ca8a04' }};">{{ "%.2f"|format(fin.roe) }}%</div><div class="kpi-f">Resultado / Equity investido</div></div>{% endif %}
+      <div class="kpi"><div class="kpi-l">Exposição c/ Financ.</div><div class="kpi-v" style="color:#dc2626;">{{ fin.exposicao_com_fin|brl }}</div><div class="kpi-f">Pico de caixa negativo (equity)</div></div>
+      {% if fin.dscr_medio is not none %}<div class="kpi"><div class="kpi-l">DSCR Médio</div><div class="kpi-v" style="color:{{ '#16a34a' if fin.dscr_medio >= 1.2 else '#ca8a04' }};">{{ "%.2f"|format(fin.dscr_medio) }}x</div><div class="kpi-f">Cobertura do serviço da dívida</div></div>{% endif %}
+      {% if fin.spread_cdi is not none %}<div class="kpi"><div class="kpi-l">Spread vs CDI</div><div class="kpi-v" style="color:{{ '#16a34a' if fin.spread_cdi >= 5 else '#ca8a04' }};">{{ "%.2f"|format(fin.spread_cdi) }}%</div><div class="kpi-f">TIR alav. − {{ fin.cdi_ref }}% a.a.</div></div>{% endif %}
+    </div>
+
+    {# Estrutura CRI #}
+    <h6 class="mb-2 mt-3" style="color:#1e40af;">Indicadores CRI</h6>
+    <div class="bk">
+      <div class="bk-r"><span class="bk-l">Carteira de Recebíveis (pico estimado)</span><span>{{ fin.carteira_recebiveis_pico|brl }}</span></div>
+      <div class="bk-r"><span class="bk-l">Emissão CRI Bruta (haircut {{ fin.haircut_pct }}%)</span><span>{{ fin.emissao_cri_bruta|brl }}</span></div>
+      <div class="bk-r"><span class="bk-l">Cota Sênior ({{ 100 - fin.sub_ratio|round|int }}%)</span><span style="color:#1e40af;font-weight:600;">{{ fin.sr_senior|brl }}</span></div>
+      <div class="bk-r"><span class="bk-l">Cota Subordinada ({{ fin.sub_ratio }}%)</span><span style="color:#ca8a04;font-weight:600;">{{ fin.sr_sub|brl }}</span></div>
+      <div class="bk-r"><span class="bk-l">LTV CRI</span><span>{{ "%.1f"|format(fin.ltv_cri) }}%</span></div>
+      <div class="bk-r bk-t"><span>Cobertura Mínima (1/1-haircut)</span><span>{{ "%.2f"|format(fin.cobertura_min) }}x</span></div>
+    </div>
+
+    {# Cronograma de financiamento #}
+    <h6 class="mb-1 mt-3">Cronograma de Financiamento (primeiros 24 meses)</h6>
+    <div class="fs-wrap">
+      <table class="fs-table">
+        <thead>
+          <tr>
+            <th style="text-align:left;">Mês</th>
+            <th>Drawdown</th>
+            <th>Juros</th>
+            <th>Amortização</th>
+            <th>Saldo Devedor</th>
+            <th>Serviço Dívida</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for s in fin.schedule %}
+          {% if s.drawdown != 0 or s.juros != 0 or s.amortizacao != 0 or s.saldo_devedor != 0 %}
+          <tr>
+            <td>{{ s.mes }}</td>
+            <td>{{ s.drawdown|brl }}</td>
+            <td class="fc-neg">{{ s.juros|brl }}</td>
+            <td class="fc-neg">{{ s.amortizacao|brl }}</td>
+            <td style="color:#1e40af;font-weight:600;">{{ s.saldo_devedor|brl }}</td>
+            <td class="fc-neg">{{ s.servico_divida|brl }}</td>
+          </tr>
+          {% endif %}
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  {% endif %}
+
+  {# ── ANÁLISE DE SENSIBILIDADE ── #}
+  {% if sen %}
+  <div style="margin-bottom:1.5rem;">
+    <h6 class="mb-3">Análise de Sensibilidade — TIR Anual (%)</h6>
+    <div style="overflow-x:auto;">
+      <table class="sen-table">
+        <thead>
+          <tr>
+            <th>VGV \ Custo</th>
+            {% for fc in sen.fatores_custo %}<th>Custo {{ fc }}</th>{% endfor %}
+          </tr>
+        </thead>
+        <tbody>
+          {% for i, fv in enumerate(sen.fatores_vgv) %}
+          <tr>
+            <td style="background:#1e293b;color:#fff;font-weight:700;text-align:left;padding:.4rem .6rem;">VGV {{ fv }}</td>
+            {% for j in range(5) %}
+            {% set val = sen.tir[i][j] %}
+            <td class="{% if val is not none and val >= 20 %}sen-green{% elif val is not none and val >= 15 %}sen-yellow{% else %}sen-red{% endif %}">
+              {% if val is not none %}{{ "%.1f"|format(val) }}%{% else %}—{% endif %}
+            </td>
+            {% endfor %}
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    <h6 class="mb-3 mt-4">Análise de Sensibilidade — Margem VGV (%)</h6>
+    <div style="overflow-x:auto;">
+      <table class="sen-table">
+        <thead>
+          <tr>
+            <th>VGV \ Custo</th>
+            {% for fc in sen.fatores_custo %}<th>Custo {{ fc }}</th>{% endfor %}
+          </tr>
+        </thead>
+        <tbody>
+          {% for i, fv in enumerate(sen.fatores_vgv) %}
+          <tr>
+            <td style="background:#1e293b;color:#fff;font-weight:700;text-align:left;padding:.4rem .6rem;">VGV {{ fv }}</td>
+            {% for j in range(5) %}
+            {% set val = sen.margem[i][j] %}
+            <td class="{% if val is not none and val >= 20 %}sen-green{% elif val is not none and val >= 15 %}sen-yellow{% else %}sen-red{% endif %}">
+              {% if val is not none %}{{ "%.1f"|format(val) }}%{% else %}—{% endif %}
+            </td>
+            {% endfor %}
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  {% endif %}
+
+  {# Fluxo de caixa mensal #}
+  <h6 class="mb-2">Fluxo de Caixa Mensal</h6>
+  <div class="fc-wrap">
+    <table class="fc-table">
+      <thead>
+        <tr>
+          <th style="text-align:left;">Mês</th>
+          <th>Receita</th>
+          <th>Comissão</th>
+          <th>Tributos</th>
+          <th>Custo Obra</th>
+          <th>Saldo Mês</th>
+          <th>Saldo Acumulado</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for f in r.fluxo %}
+        {% if f.receita != 0 or f.custo_obra != 0 or f.saldo_mes != 0 %}
+        <tr>
+          <td>{{ f.mes }}</td>
+          <td>{{ f.receita|brl }}</td>
+          <td class="fc-neg">{{ f.comissao|brl }}</td>
+          <td class="fc-neg">{{ f.tributos|brl }}</td>
+          <td class="fc-neg">{{ f.custo_obra|brl }}</td>
+          <td class="{{ 'fc-pos' if f.saldo_mes >= 0 else 'fc-neg' }}">{{ f.saldo_mes|brl }}</td>
+          <td class="{{ 'fc-pos' if f.saldo_acumulado >= 0 else 'fc-neg' }}">{{ f.saldo_acumulado|brl }}</td>
+        </tr>
+        {% endif %}
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <div class="d-flex gap-2 flex-wrap mt-3">
+    <button type="button" class="btn btn-outline-secondary" onclick="vbTab('premissas',document.querySelector('[onclick*=premissas]'))"><i class="bi bi-pencil me-1"></i> Editar premissas</button>
+    <button onclick="window.print()" type="button" class="btn btn-outline-primary"><i class="bi bi-printer me-1"></i> Exportar PDF</button>
+  </div>
+</div>
+{% endif %}
+
+</form>
+
+{% if resultado %}
+<script>document.addEventListener('DOMContentLoaded',function(){vbTab('resultado',document.querySelector('[onclick*="resultado"]'));});</script>
+{% endif %}
+
+<script>
+function vbTab(id,btn){
+  document.querySelectorAll('.vb-sec').forEach(s=>s.classList.remove('on'));
+  document.querySelectorAll('.vb-tab').forEach(b=>b.classList.remove('on'));
+  const s=document.getElementById('tab-'+id);if(s)s.classList.add('on');
+  if(btn)btn.classList.add('on');
+  window.scrollTo({top:0,behavior:'smooth'});
+}
+function toggleFinInputs(el){
+  const box=document.getElementById('finInputs');
+  if(el.checked){box.style.opacity='1';box.style.pointerEvents='auto';}
+  else{box.style.opacity='.4';box.style.pointerEvents='none';}
+}
+let tipN=document.querySelectorAll('[id^="tip-"]').length||1;
+function addTip(){
+  const c=document.getElementById('tipCont'),i=tipN++;
+  const d=document.createElement('div');d.className='tip-row';d.id='tip-'+i;
+  d.innerHTML=`<div><input class="vb-inp" type="text" name="tip_nome_${i}" placeholder="Nome"></div><div><select class="vb-sel" name="tip_tipo_${i}"><option>Residencial</option><option>Comercial</option></select></div><div><input class="vb-inp" type="number" name="tip_metragem_${i}" step="0.5" min="0" placeholder="102"></div><div><input class="vb-inp" type="number" name="tip_qtd_${i}" step="1" min="0" placeholder="1"></div><div><div class="pw"><span class="pre">R$</span><input class="vb-inp pl" type="number" name="tip_preco_${i}" step="100"></div></div><div><input class="vb-inp" type="number" name="tip_andar_${i}" step="1" min="1" placeholder="1"></div><div style="display:flex;align-items:center;gap:.3rem;"><input type="checkbox" name="tip_permuta_${i}" value="1" id="perm${i}"><label for="perm${i}" style="font-size:.8rem;">Sim</label></div><div><button type="button" class="btn btn-sm btn-outline-danger" onclick="rmTip(${i})">x</button></div>`;
+  c.appendChild(d);
+}
+function rmTip(i){const el=document.getElementById('tip-'+i);if(el)el.remove();}
+let faseN=document.querySelectorAll('[id^="fase-"]').length||2;
+function addFase(){
+  const c=document.getElementById('faseCont'),i=faseN++;
+  const d=document.createElement('div');d.className='fase-card';d.id='fase-'+i;
+  d.innerHTML=`<div class="fase-hdr"><input class="vb-inp" type="text" name="fase_nome_${i}" placeholder="Nome da fase" style="max-width:200px;"><button type="button" class="btn btn-sm btn-outline-danger" onclick="rmFase(${i})">Remover fase</button></div><div class="vb-row4"><div><div class="vb-lbl">Meta (%)</div><div class="pw"><span class="suf">%</span><input class="vb-inp pr" type="number" name="fase_meta_${i}" step="1" min="0" max="100" placeholder="15"></div></div><div><div class="vb-lbl">Reajuste (%)</div><div class="pw"><span class="suf">%</span><input class="vb-inp pr" type="number" name="fase_reajuste_${i}" step="1" placeholder="0"></div></div><div><div class="vb-lbl">Duração (meses)</div><input class="vb-inp" type="number" name="fase_duracao_${i}" step="1" min="1" placeholder="12"></div><div><div class="vb-lbl">Entrada (%)</div><div class="pw"><span class="suf">%</span><input class="vb-inp pr" type="number" name="fase_entrada_${i}" step="1" min="0" placeholder="10"></div></div></div><div class="vb-row4"><div><div class="vb-lbl">Parcelas (%)</div><div class="pw"><span class="suf">%</span><input class="vb-inp pr" type="number" name="fase_parcelas_${i}" step="1" min="0" placeholder="80"></div></div><div><div class="vb-lbl">N Parcelas</div><input class="vb-inp" type="number" name="fase_nparcelas_${i}" step="1" min="1" placeholder="24"></div><div><div class="vb-lbl">Reforços (%)</div><div class="pw"><span class="suf">%</span><input class="vb-inp pr" type="number" name="fase_reforco_${i}" step="1" min="0" placeholder="0"></div></div><div><div class="vb-lbl">N Reforços</div><input class="vb-inp" type="number" name="fase_nreforcos_${i}" step="1" min="0" placeholder="0"></div></div>`;
+  c.appendChild(d);
+}
+function rmFase(i){const el=document.getElementById('fase-'+i);if(el)el.remove();}
+document.getElementById('vbForm')?.addEventListener('submit',()=>{
+  const b=document.getElementById('calcBtn');
+  if(b){b.disabled=true;b.innerHTML='<i class="bi bi-hourglass-split me-2"></i>Calculando...';}
+});
+</script>
+{% endblock %}
+"""
+
+if hasattr(templates_env.loader, "mapping"):
+    templates_env.loader.mapping = TEMPLATES
