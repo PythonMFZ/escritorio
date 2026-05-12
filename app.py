@@ -6719,8 +6719,9 @@ a:hover{ color:#00BFBF; }
         <textarea class="form-control" name="message" rows="2"></textarea>
       </div>
       <div class="mb-2">
-        <label class="form-label">Anexar arquivo</label>
-        <input class="form-control" type="file" name="file" required />
+        <label class="form-label">Anexar arquivos</label>
+        <input class="form-control" type="file" name="files" multiple required />
+        <div class="form-text">Selecione um ou mais arquivos de uma vez.</div>
       </div>
       <button class="btn btn-primary">Enviar</button>
     </form>
@@ -6735,8 +6736,9 @@ a:hover{ color:#00BFBF; }
         <textarea class="form-control" name="message" rows="3"></textarea>
       </div>
       <div class="mb-2">
-        <label class="form-label">Anexo (opcional)</label>
-        <input class="form-control" type="file" name="file" />
+        <label class="form-label">Anexos (opcional)</label>
+        <input class="form-control" type="file" name="files" multiple />
+        <div class="form-text">Selecione um ou mais arquivos de uma vez.</div>
       </div>
       <div class="form-check mb-3">
         <input class="form-check-input" type="checkbox" name="mark_done" value="1" id="doneCheck">
@@ -16143,7 +16145,7 @@ async def pending_attach_admin(
         session: Session = Depends(get_session),
         item_id: int = 0,
         message: str = Form(""),
-        file: UploadFile = File(...),
+        files: list[UploadFile] = File(...),
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
@@ -16158,24 +16160,29 @@ async def pending_attach_admin(
         set_flash(request, "Pendência não encontrada.")
         return RedirectResponse("/pendencias", status_code=303)
 
-    try:
-        stored, mime, size = await save_upload(file)
-    except ValueError:
-        set_flash(request, "Arquivo muito grande.")
-        return RedirectResponse(f"/pendencias/{item.id}", status_code=303)
-
-    session.add(
-        Attachment(
-            company_id=ctx.company.id,
-            client_id=item.client_id,
-            uploaded_by_user_id=ctx.user.id,
-            pending_item_id=item.id,
-            original_filename=file.filename or "arquivo",
-            stored_filename=stored,
-            mime_type=mime,
-            size_bytes=size,
+    saved = 0
+    for file in files:
+        if not file.filename:
+            continue
+        try:
+            stored, mime, size = await save_upload(file)
+        except ValueError:
+            set_flash(request, "Um ou mais arquivos são muito grandes.")
+            return RedirectResponse(f"/pendencias/{item.id}", status_code=303)
+        session.add(
+            Attachment(
+                company_id=ctx.company.id,
+                client_id=item.client_id,
+                uploaded_by_user_id=ctx.user.id,
+                pending_item_id=item.id,
+                original_filename=file.filename,
+                stored_filename=stored,
+                mime_type=mime,
+                size_bytes=size,
+            )
         )
-    )
+        saved += 1
+
     if message.strip():
         session.add(PendingMessage(pending_item_id=item.id, author_user_id=ctx.user.id, message=message.strip()))
 
@@ -16183,7 +16190,7 @@ async def pending_attach_admin(
     session.add(item)
     session.commit()
 
-    set_flash(request, "Enviado.")
+    set_flash(request, f"{saved} arquivo(s) enviado(s)." if saved else "Mensagem enviada.")
     return RedirectResponse(f"/pendencias/{item.id}", status_code=303)
 
 
@@ -16195,7 +16202,7 @@ async def pending_attach_client(
         item_id: int = 0,
         message: str = Form(""),
         mark_done: str = Form(""),
-        file: UploadFile | None = File(default=None),
+        files: list[UploadFile] = File(default=[]),
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
@@ -16214,11 +16221,13 @@ async def pending_attach_client(
         set_flash(request, "Sem permissão.")
         return RedirectResponse("/pendencias", status_code=303)
 
-    if file and file.filename:
+    for file in (files or []):
+        if not file or not file.filename:
+            continue
         try:
             stored, mime, size = await save_upload(file)
         except ValueError:
-            set_flash(request, "Arquivo muito grande.")
+            set_flash(request, "Um ou mais arquivos são muito grandes.")
             return RedirectResponse(f"/pendencias/{item.id}", status_code=303)
 
         session.add(
