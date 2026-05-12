@@ -61,109 +61,87 @@ def _calcular_v3(dados: dict) -> dict:
     fin_result = None
 
     if usar_fin:
-        pct_fin      = float(dados.get("pct_fin", 70) or 70) / 100
-        taxa_am      = float(dados.get("taxa_juros_am", 1.20) or 1.20) / 100
-        tipo_amort   = dados.get("tipo_amortizacao", "SAC")
-        carencia     = int(dados.get("carencia_meses", 6) or 6)
-        haircut_pct  = float(dados.get("haircut_pct", 20) or 20) / 100
-        sub_ratio    = float(dados.get("sub_ratio", 20) or 20) / 100
-        cdi_ref      = float(dados.get("cdi_ref", 13.75) or 13.75)
+        pct_fin    = float(dados.get("pct_fin", 70) or 70) / 100
+        taxa_am    = float(dados.get("taxa_juros_am", 1.20) or 1.20) / 100
+        tipo_amort = dados.get("tipo_amortizacao", "SAC")
+        carencia   = int(dados.get("carencia_meses", 6) or 6)
+        haircut_pct = float(dados.get("haircut_pct", 20) or 20) / 100
+        sub_ratio  = float(dados.get("sub_ratio", 20) or 20) / 100
+        cdi_ref    = float(dados.get("cdi_ref", 13.75) or 13.75)
 
-        n_meses_analise = len(base["fluxo"])
-
-        # Drawdown mensal: financiar pct_fin × custo mensal de obra
-        drawdown_mes = [0.0] * n_meses_analise
-        for i, f in enumerate(base["fluxo"]):
+        # Mapa de desembolso por mês absoluto (somente durante a obra)
+        dd_map = {}
+        for f in base["fluxo"]:
             if mes_inicio_obra <= f["mes"] < mes_inicio_obra + duracao_obra:
-                drawdown_mes[i] = f["custo_obra"] * pct_fin
+                dd_map[f["mes"]] = f["custo_obra"] * pct_fin
 
-        # Saldo devedor crescendo com drawdowns + juros durante obra + carência
-        fim_obra_idx   = mes_inicio_obra + duracao_obra - 1
-        fim_carencia_idx = fim_obra_idx + carencia
-        prazo_amort    = max(duracao_obra + carencia + 12, fim_carencia_idx + 12)
+        schedule = []
+        saldo = 0.0
+        juros_total = 0.0
 
-        saldo    = 0.0
-        schedule = []  # lista de dicts por mês
-        saldo_pico = 0.0
+        # Fase 1: Desembolso (durante a obra) — saldo cresce com drawdowns + juros
+        for k in range(duracao_obra):
+            mes_abs = mes_inicio_obra + k
+            dd      = dd_map.get(mes_abs, 0.0)
+            juros   = saldo * taxa_am
+            saldo   = saldo + juros + dd
+            juros_total += juros
+            schedule.append({"mes": mes_abs, "fase": "Desembolso",
+                              "drawdown": round(dd, 2), "juros": round(juros, 2),
+                              "amortizacao": 0.0, "saldo_devedor": round(saldo, 2),
+                              "servico_divida": round(juros, 2)})
 
-        # Fase de acumulação (obra + carência)
-        for i in range(n_meses_analise):
-            mes_abs = base["fluxo"][i]["mes"] if i < len(base["fluxo"]) else i
-            dd   = drawdown_mes[i]
-            juros = saldo * taxa_am
-            saldo = saldo * (1 + taxa_am) + dd
-            if saldo > saldo_pico:
-                saldo_pico = saldo
-            schedule.append({
-                "mes": mes_abs,
-                "drawdown": round(dd, 2),
-                "juros": round(juros, 2),
-                "amortizacao": 0.0,
-                "saldo_devedor": round(saldo, 2),
-                "servico_divida": round(juros, 2),
-            })
+        # Fase 2: Carência — saldo cresce só com juros (sem amortizar)
+        for k in range(carencia):
+            mes_abs = mes_inicio_obra + duracao_obra + k
+            juros   = saldo * taxa_am
+            saldo   = saldo + juros
+            juros_total += juros
+            schedule.append({"mes": mes_abs, "fase": "Carência",
+                              "drawdown": 0.0, "juros": round(juros, 2),
+                              "amortizacao": 0.0, "saldo_devedor": round(saldo, 2),
+                              "servico_divida": round(juros, 2)})
 
-        # Fase de amortização
-        saldo_amort = saldo
-        meses_amort = prazo_amort - fim_carencia_idx
-        if meses_amort < 1:
-            meses_amort = 1
+        saldo_pico = saldo   # máximo real = fim da carência
+
+        # Fase 3: Amortização (SAC ou PRICE) — prazo = mesmo da obra
+        meses_amort = max(duracao_obra, 12)
+        saldo_amort = saldo_pico
 
         if tipo_amort == "SAC":
-            principal_mensal = saldo_amort / meses_amort if meses_amort > 0 else 0
+            amort_unit = saldo_amort / meses_amort
             for k in range(meses_amort):
-                idx_mes = fim_carencia_idx + k
+                mes_abs = mes_inicio_obra + duracao_obra + carencia + k
                 juros_k = saldo_amort * taxa_am
-                amort_k = min(principal_mensal, saldo_amort)
-                saldo_amort -= amort_k
+                amort_k = min(amort_unit, saldo_amort)
+                saldo_amort = max(saldo_amort - amort_k, 0)
                 servico = juros_k + amort_k
-                if idx_mes < n_meses_analise:
-                    schedule[idx_mes]["juros"]        = round(juros_k, 2)
-                    schedule[idx_mes]["amortizacao"]  = round(amort_k, 2)
-                    schedule[idx_mes]["saldo_devedor"] = round(max(saldo_amort, 0), 2)
-                    schedule[idx_mes]["servico_divida"] = round(servico, 2)
-                else:
-                    schedule.append({
-                        "mes": idx_mes,
-                        "drawdown": 0.0,
-                        "juros": round(juros_k, 2),
-                        "amortizacao": round(amort_k, 2),
-                        "saldo_devedor": round(max(saldo_amort, 0), 2),
-                        "servico_divida": round(servico, 2),
-                    })
-        else:
-            # PRICE: parcela fixa
+                juros_total += juros_k
+                schedule.append({"mes": mes_abs, "fase": "Amortização",
+                                  "drawdown": 0.0, "juros": round(juros_k, 2),
+                                  "amortizacao": round(amort_k, 2),
+                                  "saldo_devedor": round(saldo_amort, 2),
+                                  "servico_divida": round(servico, 2)})
+        else:  # PRICE
             if taxa_am > 0 and meses_amort > 0:
                 parcela = saldo_amort * taxa_am / (1 - (1 + taxa_am) ** (-meses_amort))
             else:
                 parcela = saldo_amort / max(meses_amort, 1)
-
             for k in range(meses_amort):
-                idx_mes = fim_carencia_idx + k
+                mes_abs = mes_inicio_obra + duracao_obra + carencia + k
                 juros_k = saldo_amort * taxa_am
-                amort_k = min(parcela - juros_k, saldo_amort)
-                if amort_k < 0:
-                    amort_k = 0
-                saldo_amort -= amort_k
+                amort_k = max(min(parcela - juros_k, saldo_amort), 0)
+                saldo_amort = max(saldo_amort - amort_k, 0)
                 servico = juros_k + amort_k
-                if idx_mes < n_meses_analise:
-                    schedule[idx_mes]["juros"]         = round(juros_k, 2)
-                    schedule[idx_mes]["amortizacao"]   = round(amort_k, 2)
-                    schedule[idx_mes]["saldo_devedor"]  = round(max(saldo_amort, 0), 2)
-                    schedule[idx_mes]["servico_divida"] = round(servico, 2)
-                else:
-                    schedule.append({
-                        "mes": idx_mes,
-                        "drawdown": 0.0,
-                        "juros": round(juros_k, 2),
-                        "amortizacao": round(amort_k, 2),
-                        "saldo_devedor": round(max(saldo_amort, 0), 2),
-                        "servico_divida": round(servico, 2),
-                    })
+                juros_total += juros_k
+                schedule.append({"mes": mes_abs, "fase": "Amortização",
+                                  "drawdown": 0.0, "juros": round(juros_k, 2),
+                                  "amortizacao": round(amort_k, 2),
+                                  "saldo_devedor": round(saldo_amort, 2),
+                                  "servico_divida": round(servico, 2)})
 
-        # Totais de custo financeiro
-        custo_fin_total  = sum(s["juros"] for s in schedule)
-        valor_financiado = saldo_pico
+        custo_fin_total = round(juros_total, 2)
+        valor_financiado = round(saldo_pico, 2)
 
         # TIR alavancada: fluxo do equity (custo - drawdown + amortizacao)
         fluxo_equity = []
