@@ -290,6 +290,8 @@ def _calcular_viabilidade_v2(dados: dict) -> dict:
                     receita_mensal[m_chaves] += chv_total
 
         mes_atual_venda += duracao_f
+        unidades_disponiveis = max(0, unidades_disponiveis - un_fase)
+        vgv_disponivel = max(0.0, vgv_disponivel - vgv_fase)
 
     # ── FLUXO LÍQUIDO ─────────────────────────────────────────────────────
     fluxo = []
