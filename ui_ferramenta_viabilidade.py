@@ -162,10 +162,10 @@ def _calcular_viabilidade_v2(dados: dict) -> dict:
         # Default: 2 fases como na planilha original
         fases = [
             {"nome": "Lançamento",      "meta": 15, "reajuste": -15,
-             "duracao": 12, "entrada_pct": 10, "parcelas_pct": 90, "n_parcelas": 24,
+             "duracao": 12, "entrada_pct": 10, "n_entrada": 1, "parcelas_pct": 90, "n_parcelas": 24,
              "reforco_pct": 0, "n_reforcos": 0, "chaves_pct": 0},
             {"nome": "Pós-Lançamento",  "meta": 85, "reajuste": 5,
-             "duracao": 24, "entrada_pct": 15, "parcelas_pct": 40, "n_parcelas": 48,
+             "duracao": 24, "entrada_pct": 15, "n_entrada": 1, "parcelas_pct": 40, "n_parcelas": 48,
              "reforco_pct": 25, "n_reforcos": 4, "chaves_pct": 20},
         ]
 
@@ -231,6 +231,7 @@ def _calcular_viabilidade_v2(dados: dict) -> dict:
         reajuste_pct = float(fase.get("reajuste", 0)) / 100
         duracao_f    = int(fase.get("duracao", 12))
         ent_pct      = float(fase.get("entrada_pct", 10)) / 100
+        n_ent        = max(1, int(fase.get("n_entrada", 1) or 1))   # parcelas da entrada
         par_pct      = float(fase.get("parcelas_pct", 80)) / 100
         n_par        = int(fase.get("n_parcelas", 24))
         ref_pct      = float(fase.get("reforco_pct", 0)) / 100
@@ -252,31 +253,34 @@ def _calcular_viabilidade_v2(dados: dict) -> dict:
 
             venda_mes = un_por_mes * vgv_un_fase
 
-            # Entrada: recebida no mês da venda
-            ent = venda_mes * ent_pct
-            receita_mensal[m_abs] += ent
-            comissao_mensal[m_abs] += ent * pct_total_com
-            tributo_mensal[m_abs]  += ent * pct_impostos
+            # Fix 1: comissão sobre VENDA TOTAL (não só sobre entrada)
+            comissao_mensal[m_abs] += venda_mes * pct_total_com
 
-            # Parcelas mensais durante n_par meses após a venda
+            # Fix 3: entrada parcelada em n_ent prestações mensais
+            ent_total   = venda_mes * ent_pct
+            ent_parcela = ent_total / n_ent
+            for e_i in range(n_ent):
+                m_e = m_abs + e_i
+                if m_e <= n_meses:
+                    receita_mensal[m_e] += ent_parcela
+
+            # Parcelas mensais durante n_par meses (começam após a entrada)
             parc_total = venda_mes * par_pct
-            parc_mensal = parc_total / max(n_par, 1)
+            parc_mensal_v = parc_total / max(n_par, 1)
             for p in range(n_par):
-                m_p = m_abs + p + 1
+                m_p = m_abs + n_ent + p   # começa após as parcelas de entrada
                 if m_p <= n_meses:
-                    # Correcao monetaria
                     if m_p <= mes_fim_obra:
                         corr = corr_obra
                     else:
                         corr = corr_pos_obra
-                    parc_corr = parc_mensal * ((1 + corr) ** p)
+                    parc_corr = parc_mensal_v * ((1 + corr) ** p)
                     receita_mensal[m_p] += parc_corr
 
-            # Reforços
+            # Reforços: distribuídos ao longo da obra
             if n_ref > 0 and ref_pct > 0:
                 ref_total = venda_mes * ref_pct
                 ref_unit  = ref_total / n_ref
-                # Distribui os reforços igualmente ao longo da obra
                 for r in range(n_ref):
                     m_r = m_abs + int((duracao_obra / max(n_ref, 1)) * (r + 1))
                     if m_r <= n_meses:
@@ -302,7 +306,8 @@ def _calcular_viabilidade_v2(dados: dict) -> dict:
     for m in range(n_meses + 1):
         rec = receita_mensal[m]
         com = comissao_mensal[m]
-        tri = tributo_mensal[m]
+        # Fix 2: impostos sobre toda receita recebida no mês (não só entrada na venda)
+        tri = rec * pct_impostos
         cst = custo_mensal[m]
         saldo_mes = rec - com - tri - cst
         saldo_acum += saldo_mes
@@ -495,6 +500,7 @@ async def ferramenta_viabilidade_post(
             "reajuste": float(dados.get(f"fase_reajuste_{j}", 0) or 0),
             "duracao": int(dados.get(f"fase_duracao_{j}", 12) or 12),
             "entrada_pct": float(dados.get(f"fase_entrada_{j}", 10) or 10),
+            "n_entrada":   int(dados.get(f"fase_nentrada_{j}", 1) or 1),
             "parcelas_pct": float(dados.get(f"fase_parcelas_{j}", 80) or 80),
             "n_parcelas": int(dados.get(f"fase_nparcelas_{j}", 24) or 24),
             "reforco_pct": float(dados.get(f"fase_reforco_{j}", 0) or 0),
@@ -721,8 +727,8 @@ TEMPLATES["ferramenta_viabilidade.html"] = r"""
   <div class="vb-sep">Fases de Venda</div>
   <div id="faseCont">
     {% set fases_dados = dados.fases if dados.fases else [
-      {"nome":"Lançamento","meta":15,"reajuste":-15,"duracao":12,"entrada_pct":10,"parcelas_pct":90,"n_parcelas":24,"reforco_pct":0,"n_reforcos":0},
-      {"nome":"Pós-Lançamento","meta":85,"reajuste":5,"duracao":24,"entrada_pct":15,"parcelas_pct":40,"n_parcelas":48,"reforco_pct":25,"n_reforcos":4}
+      {"nome":"Lançamento","meta":15,"reajuste":-15,"duracao":12,"entrada_pct":10,"n_entrada":1,"parcelas_pct":90,"n_parcelas":24,"reforco_pct":0,"n_reforcos":0},
+      {"nome":"Pós-Lançamento","meta":85,"reajuste":5,"duracao":24,"entrada_pct":15,"n_entrada":1,"parcelas_pct":40,"n_parcelas":48,"reforco_pct":25,"n_reforcos":4}
     ] %}
     {% for f in fases_dados %}
     <div class="fase-card" id="fase-{{ loop.index0 }}">
@@ -735,6 +741,7 @@ TEMPLATES["ferramenta_viabilidade.html"] = r"""
         <div><div class="vb-lbl">Reajuste de Preço (%)</div><div class="pw"><span class="suf">%</span><input class="vb-inp pr" type="number" name="fase_reajuste_{{ loop.index0 }}" step="1" value="{{ f.reajuste }}"></div><div class="vb-hint">Negativo = desconto</div></div>
         <div><div class="vb-lbl">Duração (meses)</div><input class="vb-inp" type="number" name="fase_duracao_{{ loop.index0 }}" step="1" min="1" value="{{ f.duracao }}"></div>
         <div><div class="vb-lbl">Entrada (%)</div><div class="pw"><span class="suf">%</span><input class="vb-inp pr" type="number" name="fase_entrada_{{ loop.index0 }}" step="1" min="0" max="100" value="{{ f.entrada_pct }}"></div></div>
+        <div><div class="vb-lbl">Nº Parcelas Entrada</div><input class="vb-inp" type="number" name="fase_nentrada_{{ loop.index0 }}" step="1" min="1" max="24" value="{{ f.n_entrada|default(1) }}"><div class="vb-hint">1 = à vista</div></div>
       </div>
       <div class="vb-row4">
         <div><div class="vb-lbl">Parcelas (%)</div><div class="pw"><span class="suf">%</span><input class="vb-inp pr" type="number" name="fase_parcelas_{{ loop.index0 }}" step="1" min="0" max="100" value="{{ f.parcelas_pct }}"></div></div>
@@ -881,7 +888,7 @@ let faseN=document.querySelectorAll('[id^="fase-"]').length||2;
 function addFase(){
   const c=document.getElementById('faseCont'),i=faseN++;
   const d=document.createElement('div');d.className='fase-card';d.id='fase-'+i;
-  d.innerHTML=`<div class="fase-hdr"><input class="vb-inp" type="text" name="fase_nome_${i}" placeholder="Nome da fase" style="max-width:200px;"><button type="button" class="btn btn-sm btn-outline-danger" onclick="rmFase(${i})">Remover fase</button></div><div class="vb-row4"><div><div class="vb-lbl">Meta (%)</div><div class="pw"><span class="suf">%</span><input class="vb-inp pr" type="number" name="fase_meta_${i}" step="1" min="0" max="100" placeholder="15"></div></div><div><div class="vb-lbl">Reajuste (%)</div><div class="pw"><span class="suf">%</span><input class="vb-inp pr" type="number" name="fase_reajuste_${i}" step="1" placeholder="0"></div></div><div><div class="vb-lbl">Duração (meses)</div><input class="vb-inp" type="number" name="fase_duracao_${i}" step="1" min="1" placeholder="12"></div><div><div class="vb-lbl">Entrada (%)</div><div class="pw"><span class="suf">%</span><input class="vb-inp pr" type="number" name="fase_entrada_${i}" step="1" min="0" placeholder="10"></div></div></div><div class="vb-row4"><div><div class="vb-lbl">Parcelas (%)</div><div class="pw"><span class="suf">%</span><input class="vb-inp pr" type="number" name="fase_parcelas_${i}" step="1" min="0" placeholder="80"></div></div><div><div class="vb-lbl">Nº Parcelas</div><input class="vb-inp" type="number" name="fase_nparcelas_${i}" step="1" min="1" placeholder="24"></div><div><div class="vb-lbl">Reforços (%)</div><div class="pw"><span class="suf">%</span><input class="vb-inp pr" type="number" name="fase_reforco_${i}" step="1" min="0" placeholder="0"></div></div><div><div class="vb-lbl">Nº Reforços</div><input class="vb-inp" type="number" name="fase_nreforcos_${i}" step="1" min="0" placeholder="0"></div></div>`;
+  d.innerHTML=`<div class="fase-hdr"><input class="vb-inp" type="text" name="fase_nome_${i}" placeholder="Nome da fase" style="max-width:200px;"><button type="button" class="btn btn-sm btn-outline-danger" onclick="rmFase(${i})">Remover fase</button></div><div class="vb-row4"><div><div class="vb-lbl">Meta (%)</div><div class="pw"><span class="suf">%</span><input class="vb-inp pr" type="number" name="fase_meta_${i}" step="1" min="0" max="100" placeholder="15"></div></div><div><div class="vb-lbl">Reajuste (%)</div><div class="pw"><span class="suf">%</span><input class="vb-inp pr" type="number" name="fase_reajuste_${i}" step="1" placeholder="0"></div></div><div><div class="vb-lbl">Duração (meses)</div><input class="vb-inp" type="number" name="fase_duracao_${i}" step="1" min="1" placeholder="12"></div><div><div class="vb-lbl">Entrada (%)</div><div class="pw"><span class="suf">%</span><input class="vb-inp pr" type="number" name="fase_entrada_${i}" step="1" min="0" placeholder="10"></div></div><div><div class="vb-lbl">Nº Parcelas Entrada</div><input class="vb-inp" type="number" name="fase_nentrada_${i}" step="1" min="1" max="24" placeholder="1"><div class="vb-hint">1 = à vista</div></div></div><div class="vb-row4"><div><div class="vb-lbl">Parcelas (%)</div><div class="pw"><span class="suf">%</span><input class="vb-inp pr" type="number" name="fase_parcelas_${i}" step="1" min="0" placeholder="80"></div></div><div><div class="vb-lbl">Nº Parcelas</div><input class="vb-inp" type="number" name="fase_nparcelas_${i}" step="1" min="1" placeholder="24"></div><div><div class="vb-lbl">Reforços (%)</div><div class="pw"><span class="suf">%</span><input class="vb-inp pr" type="number" name="fase_reforco_${i}" step="1" min="0" placeholder="0"></div></div><div><div class="vb-lbl">Nº Reforços</div><input class="vb-inp" type="number" name="fase_nreforcos_${i}" step="1" min="0" placeholder="0"></div></div>`;
   c.appendChild(d);
 }
 function rmFase(i){const el=document.getElementById('fase-'+i);if(el)el.remove();}

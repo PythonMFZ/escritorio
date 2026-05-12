@@ -62,6 +62,7 @@ def _parse_form_viabilidade(form_data: dict) -> dict:
             "reajuste":     float(dados.get(f"fase_reajuste_{j}", 0) or 0),
             "duracao":      int(dados.get(f"fase_duracao_{j}", 12) or 12),
             "entrada_pct":  float(dados.get(f"fase_entrada_{j}", 10) or 10),
+            "n_entrada":    int(dados.get(f"fase_nentrada_{j}", 1) or 1),
             "parcelas_pct": float(dados.get(f"fase_parcelas_{j}", 80) or 80),
             "n_parcelas":   int(dados.get(f"fase_nparcelas_{j}", 24) or 24),
             "reforco_pct":  float(dados.get(f"fase_reforco_{j}", 0) or 0),
