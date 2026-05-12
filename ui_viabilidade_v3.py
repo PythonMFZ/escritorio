@@ -282,12 +282,17 @@ def _calcular_v3(dados: dict) -> dict:
         sen_margem.append(row_margem)
         sen_result.append(row_result)
 
+    lbl_vgv  = [f"{int(f*100)}%" for f in vgv_fatores]
+    lbl_cust = [f"{int(f*100)}%" for f in cst_fatores]
     sensibilidade = {
-        "fatores_vgv":  [f"{int(f*100)}%" for f in vgv_fatores],
-        "fatores_custo": [f"{int(f*100)}%" for f in cst_fatores],
+        "fatores_vgv":   lbl_vgv,
+        "fatores_custo": lbl_cust,
         "tir":     sen_tir,
         "margem":  sen_margem,
         "resultado": sen_result,
+        # Estrutura pré-pronta para Jinja2 (evita enumerate)
+        "rows_tir":    [{"label": lbl_vgv[i], "valores": sen_tir[i]}    for i in range(5)],
+        "rows_margem": [{"label": lbl_vgv[i], "valores": sen_margem[i]} for i in range(5)],
     }
 
     # ── D. INDICADORES ADICIONAIS ───────────────────────────────────────────
@@ -847,11 +852,10 @@ TEMPLATES["ferramenta_viabilidade.html"] = r"""
           </tr>
         </thead>
         <tbody>
-          {% for i, fv in enumerate(sen.fatores_vgv) %}
+          {% for row in sen.rows_tir %}
           <tr>
-            <td style="background:#1e293b;color:#fff;font-weight:700;text-align:left;padding:.4rem .6rem;">VGV {{ fv }}</td>
-            {% for j in range(5) %}
-            {% set val = sen.tir[i][j] %}
+            <td style="background:#1e293b;color:#fff;font-weight:700;text-align:left;padding:.4rem .6rem;">VGV {{ row.label }}</td>
+            {% for val in row.valores %}
             <td class="{% if val is not none and val >= 20 %}sen-green{% elif val is not none and val >= 15 %}sen-yellow{% else %}sen-red{% endif %}">
               {% if val is not none %}{{ "%.1f"|format(val) }}%{% else %}—{% endif %}
             </td>
@@ -872,11 +876,10 @@ TEMPLATES["ferramenta_viabilidade.html"] = r"""
           </tr>
         </thead>
         <tbody>
-          {% for i, fv in enumerate(sen.fatores_vgv) %}
+          {% for row in sen.rows_margem %}
           <tr>
-            <td style="background:#1e293b;color:#fff;font-weight:700;text-align:left;padding:.4rem .6rem;">VGV {{ fv }}</td>
-            {% for j in range(5) %}
-            {% set val = sen.margem[i][j] %}
+            <td style="background:#1e293b;color:#fff;font-weight:700;text-align:left;padding:.4rem .6rem;">VGV {{ row.label }}</td>
+            {% for val in row.valores %}
             <td class="{% if val is not none and val >= 20 %}sen-green{% elif val is not none and val >= 15 %}sen-yellow{% else %}sen-red{% endif %}">
               {% if val is not none %}{{ "%.1f"|format(val) }}%{% else %}—{% endif %}
             </td>
