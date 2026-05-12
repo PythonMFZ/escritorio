@@ -20,7 +20,12 @@ def _fv2(v) -> float:
     try:
         if v is None or v == "":
             return 0.0
-        return float(str(v).replace(".", "").replace(",", ".").replace("R$", "").strip())
+        s = str(v).replace("R$", "").replace(" ", "").strip()
+        if "," in s:
+            # Formato BR: "1.234,56" → remove ponto de milhar, troca vírgula por ponto
+            s = s.replace(".", "").replace(",", ".")
+        # else: já é float Python "1234.56" — usa direto
+        return float(s)
     except Exception:
         return 0.0
 
@@ -1238,6 +1243,14 @@ TEMPLATES["wizard_diagnostico.html"] = r"""
 
 <script>
 document.querySelectorAll('.moeda-input').forEach(function(el) {
+  // Formata valores pré-preenchidos (floats Python "1234.56" → "1.234,56")
+  var raw = parseFloat(el.value);
+  if (!isNaN(raw) && raw > 0) {
+    el.value = raw.toLocaleString('pt-BR', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+  } else {
+    el.value = '';
+  }
+  // Máscara de entrada: centavos → formato BR
   el.addEventListener('input', function() {
     let v = this.value.replace(/\D/g, '');
     if (!v) { this.value = ''; return; }
