@@ -217,6 +217,30 @@ async def viabilidade_historico_v1(
     return _JRS({"estudos": result})
 
 
+# ── Rota: excluir estudo ──────────────────────────────────────────────────────
+
+app.router.routes = [r for r in app.router.routes if not (
+    hasattr(r, "path") and r.path == "/ferramentas/viabilidade/historico/{estudo_id}"
+)]
+
+@app.delete("/ferramentas/viabilidade/historico/{estudo_id}")
+@require_login
+async def viabilidade_excluir_v1(
+    estudo_id: int,
+    request: Request, session: Session = Depends(get_session)
+):
+    from fastapi.responses import JSONResponse as _JRS
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        return _JRS({"ok": False, "erro": "Não autenticado"}, status_code=401)
+    estudo = session.get(EstudoViabilidade, estudo_id)
+    if not estudo or estudo.company_id != ctx.company.id:
+        return _JRS({"ok": False, "erro": "Não encontrado"}, status_code=404)
+    session.delete(estudo)
+    session.commit()
+    return _JRS({"ok": True})
+
+
 # ── Rota: reabrir ─────────────────────────────────────────────────────────────
 
 app.router.routes = [r for r in app.router.routes if not (
@@ -306,7 +330,7 @@ TEMPLATES["viabilidade_share.html"] = """<!DOCTYPE html>
 <style>
 *{box-sizing:border-box;margin:0;padding:0;}
 body{font-family:-apple-system,BlinkMacSystemFont,'Inter','Segoe UI',sans-serif;background:#f8fafc;color:#1e293b;}
-.sp-header{background:linear-gradient(135deg,#0f766e 0%,#0d9488 100%);color:#fff;padding:1.5rem 2rem;}
+.sp-header{background:linear-gradient(135deg,#ea580c 0%,#f97316 100%);color:#fff;padding:1.5rem 2rem;}
 .sp-logo{font-size:.78rem;font-weight:700;text-transform:uppercase;letter-spacing:.12em;opacity:.85;margin-bottom:.35rem;}
 .sp-title{font-size:1.5rem;font-weight:800;letter-spacing:-.02em;}
 .sp-meta{font-size:.78rem;opacity:.72;margin-top:.3rem;}
@@ -316,9 +340,9 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Inter','Segoe UI',sans-serif;
 .sp-ctrl-lbl{font-size:.68rem;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:#94a3b8;}
 .sp-cg{display:flex;gap:.35rem;flex-wrap:wrap;}
 .sp-cb{padding:.42rem 1rem;border:2px solid #e2e8f0;border-radius:999px;background:#fff;font-size:.82rem;font-weight:700;cursor:pointer;transition:all .15s;}
-.sp-cb:hover{border-color:#0d9488;color:#0d9488;}
-.sp-cb.cn-realista{background:#0d9488;color:#fff;border-color:#0d9488;}
-.sp-cb.cn-otimista{background:#16a34a;color:#fff;border-color:#16a34a;}
+.sp-cb:hover{border-color:#f97316;color:#f97316;}
+.sp-cb.cn-realista{background:#f97316;color:#fff;border-color:#f97316;}
+.sp-cb.cn-otimista{background:#22c55e;color:#fff;border-color:#22c55e;}
 .sp-cb.cn-pessimista{background:#dc2626;color:#fff;border-color:#dc2626;}
 .sp-fb{padding:.42rem .9rem;border:2px solid #e2e8f0;border-radius:999px;background:#fff;font-size:.8rem;font-weight:600;cursor:pointer;transition:all .15s;}
 .sp-fb:hover{border-color:#1e40af;color:#1e40af;}
@@ -331,12 +355,12 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Inter','Segoe UI',sans-serif;
 .sp-grid{display:grid;grid-template-columns:1fr 1fr;gap:1.25rem;margin-bottom:1.5rem;}
 @media(max-width:720px){.sp-grid{grid-template-columns:1fr;}}
 .sp-card{background:#fff;border:1px solid #e2e8f0;border-radius:14px;padding:1.25rem;}
-.sp-card h6{font-size:.76rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#0d9488;margin-bottom:.85rem;}
+.sp-card h6{font-size:.76rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#f97316;margin-bottom:.85rem;}
 .dre-t{width:100%;border-collapse:collapse;font-size:.83rem;}
 .dre-t td{padding:.4rem .65rem;border-bottom:1px solid #f1f5f9;}
-.dre-row-subtotal td{background:#f0fdfa;font-weight:700;color:#0d9488;}
-.dre-row-resultado td{background:#0d9488;color:#fff;font-weight:700;}
-.dre-row-pct td{background:#f0fdfa;font-style:italic;color:#0f766e;}
+.dre-row-subtotal td{background:#fff7ed;font-weight:700;color:#f97316;}
+.dre-row-resultado td{background:#f97316;color:#fff;font-weight:700;}
+.dre-row-pct td{background:#fff7ed;font-style:italic;color:#ea580c;}
 .dre-row-receita td{font-weight:600;}
 .dre-row-deducao td{color:#475569;}
 .dre-val{text-align:right;font-variant-numeric:tabular-nums;}
@@ -348,7 +372,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Inter','Segoe UI',sans-serif;
 .fin-val{font-weight:700;}
 .sp-footer{text-align:center;padding:2rem 1rem;font-size:.73rem;color:#94a3b8;border-top:1px solid #e2e8f0;margin-top:1rem;}
 .sp-badge{display:inline-flex;align-items:center;gap:.3rem;padding:.25rem .7rem;border-radius:999px;font-size:.73rem;font-weight:700;margin-bottom:.85rem;}
-.badge-r{background:rgba(13,148,136,.1);color:#0d9488;border:1px solid rgba(13,148,136,.2);}
+.badge-r{background:rgba(249,115,22,.1);color:#f97316;border:1px solid rgba(249,115,22,.2);}
 .badge-o{background:rgba(22,163,74,.1);color:#16a34a;border:1px solid rgba(22,163,74,.2);}
 .badge-p{background:rgba(220,38,38,.1);color:#dc2626;border:1px solid rgba(220,38,38,.2);}
 </style>
@@ -635,16 +659,16 @@ _share_modal = (
     '<div id="shareModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:9999;align-items:center;justify-content:center;">\n'
     '  <div style="background:#fff;border-radius:16px;padding:2rem;max-width:520px;width:90%;box-shadow:0 20px 60px rgba(0,0,0,.3);">\n'
     '    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1.1rem;">\n'
-    '      <h5 style="margin:0;color:#0d9488;"><i class="bi bi-share me-2"></i>Estudo Salvo!</h5>\n'
+    '      <h5 style="margin:0;color:#f97316;"><i class="bi bi-share me-2"></i>Estudo Salvo!</h5>\n'
     '      <button type="button" onclick="document.getElementById(\'shareModal\').style.display=\'none\'" style="background:none;border:none;font-size:1.3rem;cursor:pointer;color:#64748b;">&times;</button>\n'
     '    </div>\n'
     '    <p style="color:#475569;font-size:.88rem;margin-bottom:1rem;">Compartilhe com investidores e parceiros. Eles poderão ver os 3 cenários e o impacto do financiamento — sem editar as premissas.</p>\n'
     '    <div style="display:flex;gap:.5rem;margin-bottom:1rem;">\n'
     '      <input type="text" id="shareUrlInput" readonly style="flex:1;border:1.5px solid #e2e8f0;border-radius:10px;padding:.55rem .85rem;font-size:.83rem;background:#f8fafc;">\n'
-    '      <button type="button" onclick="copyShareUrl()" id="copyBtn" style="background:#0d9488;color:#fff;border:none;border-radius:10px;padding:.55rem 1rem;font-size:.83rem;font-weight:600;cursor:pointer;white-space:nowrap;">'
+    '      <button type="button" onclick="copyShareUrl()" id="copyBtn" style="background:#f97316;color:#fff;border:none;border-radius:10px;padding:.55rem 1rem;font-size:.83rem;font-weight:600;cursor:pointer;white-space:nowrap;">'
     '<i class="bi bi-clipboard me-1"></i>Copiar</button>\n'
     '    </div>\n'
-    '    <a id="shareUrlLink" href="#" target="_blank" style="display:block;text-align:center;font-size:.84rem;color:#0d9488;text-decoration:none;font-weight:600;">\n'
+    '    <a id="shareUrlLink" href="#" target="_blank" style="display:block;text-align:center;font-size:.84rem;color:#f97316;text-decoration:none;font-weight:600;">\n'
     '      <i class="bi bi-box-arrow-up-right me-1"></i>Abrir em nova aba\n'
     '    </a>\n'
     '  </div>\n'
@@ -696,7 +720,7 @@ async function loadHistorico(){
       return;
     }
     el.innerHTML=estudos.map(e=>`
-      <div style="display:flex;align-items:center;justify-content:space-between;padding:.75rem 1rem;border:1px solid #e2e8f0;border-radius:12px;margin-bottom:.5rem;gap:.75rem;flex-wrap:wrap;background:#fff;">
+      <div id="hist-row-${e.id}" style="display:flex;align-items:center;justify-content:space-between;padding:.75rem 1rem;border:1px solid #e2e8f0;border-radius:12px;margin-bottom:.5rem;gap:.75rem;flex-wrap:wrap;background:#fff;">
         <div>
           <div style="font-weight:700;font-size:.93rem;">${e.nome_projeto||'Sem nome'}</div>
           <div style="font-size:.74rem;color:#64748b;margin-top:.2rem;">
@@ -706,15 +730,32 @@ async function loadHistorico(){
           </div>
         </div>
         <div style="display:flex;gap:.5rem;flex-shrink:0;">
-          <a href="${e.share_url}" target="_blank" class="btn btn-sm btn-outline-primary" style="font-size:.8rem;">
+          <a href="${e.share_url}" target="_blank" class="btn btn-sm btn-outline-secondary" style="font-size:.8rem;">
             <i class="bi bi-share me-1"></i>Ver link</a>
-          <a href="${e.open_url}" class="btn btn-sm" style="background:#0d9488;color:#fff;border:none;font-size:.8rem;">
+          <a href="${e.open_url}" class="btn btn-sm" style="background:#f97316;color:#fff;border:none;font-size:.8rem;">
             <i class="bi bi-folder2-open me-1"></i>Abrir</a>
+          <button onclick="excluirEstudo(${e.id})" class="btn btn-sm btn-outline-danger" style="font-size:.8rem;" title="Excluir estudo">
+            <i class="bi bi-trash3"></i></button>
         </div>
       </div>
     `).join('');
   }catch(e){
     el.innerHTML='<div class="text-muted small text-center py-3 text-danger"><i class="bi bi-exclamation-circle me-1"></i>Erro ao carregar histórico.</div>';
+  }
+}
+async function excluirEstudo(id){
+  if(!confirm('Excluir este estudo? Esta ação não pode ser desfeita.'))return;
+  try{
+    const resp=await fetch('/ferramentas/viabilidade/historico/'+id,{method:'DELETE'});
+    const data=await resp.json();
+    if(data.ok){
+      const row=document.getElementById('hist-row-'+id);
+      if(row)row.remove();
+    }else{
+      alert('Erro ao excluir: '+(data.erro||'desconhecido'));
+    }
+  }catch(e){
+    alert('Erro de conexão ao excluir estudo.');
   }
 }
 """

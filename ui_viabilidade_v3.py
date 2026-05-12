@@ -356,16 +356,14 @@ def _calcular_v3(dados: dict) -> dict:
         fin_result["margem_sem_fin"]    = mgm_sem
         fin_result["margem_com_fin"]    = mgm_com
         fin_result["reducao_exposicao"] = round(base["exposicao_maxima"] - fin_result["exposicao_com_fin"], 2)
-        # Atualiza os KPIs principais com financiamento incluído
-        base["resultado_bruto"] = round(res_com, 2)
-        base["margem_vgv"]      = mgm_com
-        base["margem_custo"]    = round(res_com / (base["custo_total"] + custo_fin) * 100, 2) if base["custo_total"] else 0
+        # Mantém KPIs principais sem CCB (consistente com VPL sem Financiamento)
         base["exposicao_maxima"] = fin_result["exposicao_com_fin"]
-        base["status"] = _classificar(mgm_com / 100, (fin_result.get("tir_alavancada") or base.get("tir_anual") or 0) / 100)
-        # Atualiza DRE com custo financeiro
-        base["dre"].insert(-2, {"desc": "(−) Custo Financeiro (CCB)", "valor": -custo_fin, "tipo": "deducao"})
-        base["dre"][-2] = {"desc": "Resultado Operacional", "valor": round(res_com, 2), "tipo": "resultado"}
-        base["dre"][-1] = {"desc": "Lucratividade", "valor": mgm_com, "tipo": "pct"}
+        # DRE: insere CCB após o Resultado Operacional (sem CCB) para mostrar ambos
+        base["dre"] = base["dre"][:-2]  # remove linhas de resultado/lucratividade originais
+        base["dre"].append({"desc": "Resultado Operacional (sem CCB)",    "valor": round(res_sem, 2), "tipo": "subtotal"})
+        base["dre"].append({"desc": "(−) Custo Financeiro (CCB)",         "valor": -custo_fin,        "tipo": "deducao"})
+        base["dre"].append({"desc": "Resultado com Financiamento",        "valor": round(res_com, 2), "tipo": "resultado"})
+        base["dre"].append({"desc": "Lucratividade (com CCB)",            "valor": mgm_com,           "tipo": "pct"})
 
     # ── E. VP DAS RECEITAS E VPL COMPARATIVO ────────────────────────────────────
     _tma_m_calc = (1.12 ** (1 / 12)) - 1
@@ -488,18 +486,18 @@ TEMPLATES["ferramenta_viabilidade.html"] = r"""
 {% block content %}
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
 <style>
-  :root{--teal:#0d9488;--teal-light:rgba(13,148,136,.1);--teal-border:rgba(13,148,136,.3);}
+  :root{--orange:#f97316;--teal-light:rgba(249,115,22,.1);--teal-border:rgba(249,115,22,.3);}
   .vb-hdr{display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:1rem;margin-bottom:1.5rem;}
   .vb-tabs{display:flex;gap:.2rem;border-bottom:2px solid var(--mc-border);margin-bottom:1.5rem;flex-wrap:wrap;overflow-x:auto;}
   .vb-tab{padding:.5rem 1rem;border:none;background:none;font-size:.86rem;font-weight:600;color:var(--mc-muted);cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-2px;white-space:nowrap;transition:all .15s;}
-  .vb-tab:hover{color:var(--teal);}
-  .vb-tab.on{color:var(--teal);border-bottom-color:var(--teal);}
+  .vb-tab:hover{color:var(--orange);}
+  .vb-tab.on{color:var(--orange);border-bottom-color:var(--orange);}
   .vb-sec{display:none;}.vb-sec.on{display:block;}
   /* Result sub-tabs */
   .res-tabs{display:flex;gap:.15rem;border-bottom:2px solid #e2e8f0;margin-bottom:1.25rem;flex-wrap:wrap;overflow-x:auto;}
   .res-tab{padding:.45rem .9rem;border:none;background:none;font-size:.82rem;font-weight:600;color:#64748b;cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-2px;white-space:nowrap;transition:all .15s;}
-  .res-tab:hover{color:var(--teal);}
-  .res-tab.on{color:var(--teal);border-bottom-color:var(--teal);}
+  .res-tab:hover{color:var(--orange);}
+  .res-tab.on{color:var(--orange);border-bottom-color:var(--orange);}
   .res-sec{display:none;}.res-sec.on{display:block;}
   .vb-row{display:grid;grid-template-columns:1fr 1fr;gap:1rem;margin-bottom:1rem;}
   .vb-row3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:1rem;margin-bottom:1rem;}
@@ -529,7 +527,7 @@ TEMPLATES["ferramenta_viabilidade.html"] = r"""
   .kpi-large{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:.75rem;margin-bottom:1.5rem;}
   .kpi-card{background:#fff;border:1px solid var(--mc-border);border-radius:16px;padding:1.1rem 1.25rem;box-shadow:0 2px 6px rgba(0,0,0,.06);display:flex;align-items:flex-start;gap:.85rem;}
   .kpi-icon{width:42px;height:42px;border-radius:12px;display:flex;align-items:center;justify-content:center;font-size:1.2rem;flex-shrink:0;}
-  .kpi-icon.teal{background:rgba(13,148,136,.12);color:#0d9488;}
+  .kpi-icon.orange{background:rgba(249,115,22,.12);color:#f97316;}
   .kpi-icon.green{background:rgba(22,163,74,.12);color:#16a34a;}
   .kpi-icon.red{background:rgba(220,38,38,.12);color:#dc2626;}
   .kpi-icon.blue{background:rgba(59,130,246,.12);color:#2563eb;}
@@ -539,15 +537,15 @@ TEMPLATES["ferramenta_viabilidade.html"] = r"""
   .kpi-card-sub{font-size:.72rem;color:#94a3b8;margin-top:.15rem;}
   /* Cenario badge */
   .cenario-badge{display:inline-flex;align-items:center;gap:.3rem;font-size:.74rem;font-weight:700;padding:.28rem .75rem;border-radius:999px;text-transform:capitalize;}
-  .cenario-realista{background:rgba(13,148,136,.1);color:#0d9488;border:1px solid rgba(13,148,136,.2);}
+  .cenario-realista{background:rgba(249,115,22,.1);color:#f97316;border:1px solid rgba(249,115,22,.2);}
   .cenario-otimista{background:rgba(22,163,74,.1);color:#16a34a;border:1px solid rgba(22,163,74,.2);}
   .cenario-pessimista{background:rgba(239,68,68,.1);color:#dc2626;border:1px solid rgba(239,68,68,.2);}
   /* DRE table */
   .dre-table{width:100%;border-collapse:collapse;font-size:.85rem;}
   .dre-table td{padding:.42rem .75rem;border-bottom:1px solid #f1f5f9;}
-  .dre-row-subtotal td{background:#f0fdfa;font-weight:700;color:#0d9488;border-top:1.5px solid #99f6e4;}
-  .dre-row-resultado td{background:#0d9488;color:#fff;font-weight:700;}
-  .dre-row-pct td{background:#f0fdfa;font-style:italic;color:#0f766e;}
+  .dre-row-subtotal td{background:#fff7ed;font-weight:600;color:#f97316;border-top:1.5px solid rgba(249,115,22,.35);font-style:italic;}
+  .dre-row-resultado td{background:#f97316;color:#fff;font-weight:700;}
+  .dre-row-pct td{background:#fff7ed;font-style:italic;color:#ea580c;font-weight:600;}
   .dre-row-receita td{font-weight:600;}
   .dre-val{text-align:right;font-variant-numeric:tabular-nums;}
   /* Breakdown */
@@ -617,7 +615,7 @@ TEMPLATES["ferramenta_viabilidade.html"] = r"""
   </div>
   <div style="display:flex;gap:.5rem;flex-wrap:wrap;align-items:center;">
     {% if resultado %}
-    <button type="button" class="btn btn-sm" style="background:#0d9488;color:#fff;border:none;" onclick="vbTab('premissas',document.querySelector('[onclick*=premissas]'));setTimeout(()=>document.getElementById('vbForm').submit(),100);">
+    <button type="button" class="btn btn-sm" style="background:#f97316;color:#fff;border:none;" onclick="vbTab('premissas',document.querySelector('[onclick*=premissas]'));setTimeout(()=>document.getElementById('vbForm').submit(),100);">
       <i class="bi bi-arrow-clockwise me-1"></i> Recalcular
     </button>
     <button onclick="window.print()" class="btn btn-outline-secondary btn-sm">
@@ -864,7 +862,7 @@ TEMPLATES["ferramenta_viabilidade.html"] = r"""
   {# 4 Large KPI cards #}
   <div class="kpi-large">
     <div class="kpi-card">
-      <div class="kpi-icon teal"><i class="bi bi-graph-up-arrow"></i></div>
+      <div class="kpi-icon orange"><i class="bi bi-graph-up-arrow"></i></div>
       <div class="kpi-card-body">
         <div class="kpi-card-lbl">Resultado Bruto</div>
         <div class="kpi-card-val" style="color:{{ '#16a34a' if r.resultado_bruto >= 0 else '#dc2626' }};">{{ r.resultado_bruto|brl }}</div>
@@ -872,7 +870,7 @@ TEMPLATES["ferramenta_viabilidade.html"] = r"""
       </div>
     </div>
     <div class="kpi-card">
-      <div class="kpi-icon green"><i class="bi bi-percent"></i></div>
+      <div class="kpi-icon orange"><i class="bi bi-percent"></i></div>
       <div class="kpi-card-body">
         <div class="kpi-card-lbl">Lucratividade</div>
         <div class="kpi-card-val" style="color:{{ '#16a34a' if r.margem_custo >= 20 else ('#ca8a04' if r.margem_custo >= 10 else '#dc2626') }};">{{ r.margem_custo }}%</div>
@@ -917,8 +915,8 @@ TEMPLATES["ferramenta_viabilidade.html"] = r"""
         <div style="font-size:.72rem;color:#64748b;">{{ "%.1f"|format(fin.custo_fin_total / r.vgv_liquido * 100 if r.vgv_liquido else 0) }}% do VGV líquido</div>
       </div>
       <div style="background:#fff;border-radius:10px;padding:.7rem .9rem;border:1px solid #bbf7d0;">
-        <div style="font-size:.68rem;font-weight:700;text-transform:uppercase;color:#16a34a;letter-spacing:.05em;">Redução da exposição</div>
-        <div style="font-size:1.15rem;font-weight:700;color:#16a34a;">{{ fin.reducao_exposicao|brl }}</div>
+        <div style="font-size:.68rem;font-weight:700;text-transform:uppercase;color:#f97316;letter-spacing:.05em;">Redução da exposição</div>
+        <div style="font-size:1.15rem;font-weight:700;color:#f97316;">{{ fin.reducao_exposicao|brl }}</div>
         <div style="font-size:.72rem;color:#64748b;">Capital próprio que o crédito substitui</div>
       </div>
       {% if fin.tir_alavancada %}
@@ -947,14 +945,14 @@ TEMPLATES["ferramenta_viabilidade.html"] = r"""
           <div style="font-size:.7rem;color:#1e40af;font-weight:700;margin-bottom:.3rem;">COM FINANCIAMENTO</div>
           <div style="font-size:.88rem;"><span style="color:#64748b;">Resultado:</span> <strong style="color:{{ '#16a34a' if fin.resultado_com_fin >= 0 else '#dc2626' }};">{{ fin.resultado_com_fin|brl }}</strong></div>
           <div style="font-size:.88rem;"><span style="color:#64748b;">Margem VGV:</span> <strong style="color:{{ '#16a34a' if fin.margem_com_fin >= 15 else ('#ca8a04' if fin.margem_com_fin >= 10 else '#dc2626') }};">{{ fin.margem_com_fin }}%</strong></div>
-          <div style="font-size:.88rem;"><span style="color:#64748b;">Exposição:</span> <strong style="color:#16a34a;">{{ fin.exposicao_com_fin|brl }}</strong></div>
+          <div style="font-size:.88rem;"><span style="color:#64748b;">Exposição:</span> <strong style="color:#f97316;">{{ fin.exposicao_com_fin|brl }}</strong></div>
           <div style="font-size:.88rem;"><span style="color:#64748b;">TIR:</span> <strong style="color:#6366f1;">{% if fin.tir_alavancada %}{{ fin.tir_alavancada }}% a.a.{% else %}—{% endif %}</strong></div>
         </div>
       </div>
     </div>
-    {% if fin.dscr_medio %}<div class="mt-2 small" style="color:#475569;"><i class="bi bi-shield-check me-1" style="color:#16a34a;"></i>DSCR médio: <strong>{{ "%.2f"|format(fin.dscr_medio) }}x</strong> — cobertura do serviço da dívida pelo fluxo de recebimentos</div>{% endif %}
+    {% if fin.dscr_medio %}<div class="mt-2 small" style="color:#475569;"><i class="bi bi-shield-check me-1" style="color:#f97316;"></i>DSCR médio: <strong>{{ "%.2f"|format(fin.dscr_medio) }}x</strong> — cobertura do serviço da dívida pelo fluxo de recebimentos</div>{% endif %}
     <div class="mt-2 small" style="color:#64748b;background:#f8fafc;border-radius:8px;padding:.5rem .75rem;border:1px solid #e2e8f0;">
-      <i class="bi bi-info-circle me-1" style="color:#0d9488;"></i>
+      <i class="bi bi-info-circle me-1" style="color:#f97316;"></i>
       <strong>Nota:</strong> O custo financeiro representa o <em>custo bruto máximo</em> do crédito sem abater receitas de vendas.
       Na prática, incorporadoras utilizam os recebíveis de clientes (parcelas durante a obra) para amortizar a dívida antecipadamente,
       reduzindo significativamente o custo efetivo. Programa total: <strong>{{ fin.prazo_total_programa or "—" }} meses</strong>
@@ -977,7 +975,7 @@ TEMPLATES["ferramenta_viabilidade.html"] = r"""
   <div class="res-sec on" id="restab-indicadores">
     <div class="row g-3">
       <div class="col-md-6">
-        <h6 class="mb-2" style="color:#0d9488;"><i class="bi bi-speedometer2 me-1"></i>Indicadores de Viabilidade</h6>
+        <h6 class="mb-2" style="color:#f97316;"><i class="bi bi-speedometer2 me-1"></i>Indicadores de Viabilidade</h6>
         <div class="bk">
           {% if r.tir_anual is not none %}<div class="bk-r"><span class="bk-l">TIR Anual (equity puro)</span><span style="color:{{ '#16a34a' if r.tir_anual >= 20 else ('#ca8a04' if r.tir_anual >= 15 else '#dc2626') }};font-weight:700;">{{ r.tir_anual }}%</span></div>{% endif %}
           <div class="bk-r"><span class="bk-l">Margem VGV</span><span style="font-weight:600;">{{ r.margem_vgv }}%</span></div>
@@ -994,29 +992,29 @@ TEMPLATES["ferramenta_viabilidade.html"] = r"""
 
         {# VP / VPL comparativo #}
         {% if r.vp_receitas %}
-        <h6 class="mb-2 mt-3" style="color:#0d9488;"><i class="bi bi-currency-dollar me-1"></i>Valor Presente (TMA 12% a.a.)</h6>
+        <h6 class="mb-2 mt-3" style="color:#f97316;"><i class="bi bi-currency-dollar me-1"></i>Valor Presente (TMA 12% a.a.)</h6>
         <div class="bk">
-          <div class="bk-r"><span class="bk-l">VP das Receitas</span><span style="color:#16a34a;font-weight:600;">{{ r.vp_receitas|brl }}</span></div>
+          <div class="bk-r"><span class="bk-l">VP das Receitas</span><span style="color:#f97316;font-weight:600;">{{ r.vp_receitas|brl }}</span></div>
           <div class="bk-r"><span class="bk-l">(−) VP dos Custos</span><span style="color:#475569;">{{ r.vp_custos|brl }}</span></div>
-          <div class="bk-r bk-t"><span>VPL sem Financiamento</span><span style="color:{{ '#16a34a' if r.vpl and r.vpl >= 0 else '#dc2626' }};font-weight:700;">{% if r.vpl %}{{ r.vpl|brl }}{% else %}—{% endif %}</span></div>
+          <div class="bk-r bk-t"><span>VPL Projeto <small style="color:#94a3b8;font-weight:400;">(sem CCB)</small></span><span style="color:{{ '#16a34a' if r.vpl and r.vpl >= 0 else '#dc2626' }};font-weight:700;">{% if r.vpl %}{{ r.vpl|brl }}{% else %}—{% endif %}</span></div>
           {% if fin and fin.vpl_alavancado is not none %}
-          <div class="bk-r" style="background:#eff6ff;border-top:1.5px solid #bfdbfe;"><span class="bk-l" style="color:#1e40af;">VPL com Financiamento</span><span style="color:{{ '#16a34a' if fin.vpl_alavancado >= 0 else '#dc2626' }};font-weight:700;">{{ fin.vpl_alavancado|brl }}</span></div>
-          <div class="bk-r" style="background:#eff6ff;"><span class="bk-l" style="color:#1e40af;">Impacto no VPL (alavancagem)</span><span style="color:{{ '#16a34a' if fin.delta_vpl >= 0 else '#dc2626' }};font-style:italic;">{{ fin.delta_vpl|brl }}</span></div>
+          <div class="bk-r" style="background:#fff3e0;border-top:1.5px solid rgba(249,115,22,.4);"><span class="bk-l" style="color:#c2410c;font-weight:600;">VPL Equity <small style="font-weight:400;">(pós-CCB)</small></span><span style="color:{{ '#16a34a' if fin.vpl_alavancado >= 0 else '#dc2626' }};font-weight:700;">{{ fin.vpl_alavancado|brl }}</span></div>
+          <div class="bk-r" style="background:#fff3e0;"><span class="bk-l" style="color:#c2410c;">Impacto do CCB no VPL</span><span style="color:{{ '#16a34a' if fin.delta_vpl >= 0 else '#dc2626' }};font-style:italic;">{{ fin.delta_vpl|brl }}</span></div>
           {% endif %}
         </div>
         {% endif %}
 
         {# Potencial construtivo #}
-        <h6 class="mb-2 mt-3" style="color:#0d9488;"><i class="bi bi-rulers me-1"></i>Potencial Construtivo</h6>
+        <h6 class="mb-2 mt-3" style="color:#f97316;"><i class="bi bi-rulers me-1"></i>Potencial Construtivo</h6>
         <div class="row g-2">
           {% set pc_items = [("Área Terreno", r.area_terreno|round(1), "m²"), ("Potencial Base", r.potencial_base|round(1), "m²"), ("Potencial c/ Outorga", r.potencial_outorga|round(1), "m²"), ("Área Equiv. CUB", r.area_equivalente|round(1), "m²"), ("Área Privativa", r.area_privativa|round(1), "m²"), ("VGV Médio/m²", r.vgv_medio_m2|round(0), "R$/m²")] %}
           {% for lb, vl, un in pc_items %}
-          <div class="col-6"><div style="background:#f0fdfa;border-radius:10px;padding:.5rem .75rem;border:1px solid #99f6e4;"><div style="font-size:.65rem;color:#0f766e;font-weight:700;text-transform:uppercase;">{{ lb }}</div><div style="font-size:.92rem;font-weight:700;color:#134e4a;">{{ vl }} {{ un }}</div></div></div>
+          <div class="col-6"><div style="background:#fff7ed;border-radius:10px;padding:.5rem .75rem;border:1px solid rgba(249,115,22,.35);"><div style="font-size:.65rem;color:#ea580c;font-weight:700;text-transform:uppercase;">{{ lb }}</div><div style="font-size:.92rem;font-weight:700;color:#1e293b;">{{ vl }} {{ un }}</div></div></div>
           {% endfor %}
         </div>
       </div>
       <div class="col-md-6">
-        <h6 class="mb-2" style="color:#0d9488;"><i class="bi bi-receipt me-1"></i>DRE — Projeção do Resultado</h6>
+        <h6 class="mb-2" style="color:#f97316;"><i class="bi bi-receipt me-1"></i>DRE — Projeção do Resultado</h6>
         {% if r.dre %}
         <table class="dre-table">
           <tbody>
@@ -1088,7 +1086,7 @@ TEMPLATES["ferramenta_viabilidade.html"] = r"""
   {# ── SUB-TAB 3: Custos e Despesas ── #}
   <div class="res-sec" id="restab-custos">
     <div class="kpi-grid" style="margin-bottom:1.25rem;">
-      <div class="kpi"><div class="kpi-l"><i class="bi bi-hammer me-1"></i>Custo de Obra</div><div class="kpi-v" style="color:#0d9488;">{{ r.custo_obra_total|brl }}</div><div class="kpi-f">CUB + itens extras</div></div>
+      <div class="kpi"><div class="kpi-l"><i class="bi bi-hammer me-1"></i>Custo de Obra</div><div class="kpi-v" style="color:#f97316;">{{ r.custo_obra_total|brl }}</div><div class="kpi-f">CUB + itens extras</div></div>
       <div class="kpi"><div class="kpi-l"><i class="bi bi-gear me-1"></i>Indiretos</div><div class="kpi-v">{{ r.custo_indiretos|brl }}</div><div class="kpi-f">Projetos, gerenciamento</div></div>
       <div class="kpi"><div class="kpi-l"><i class="bi bi-geo-alt me-1"></i>Terreno</div><div class="kpi-v">{{ r.valor_terreno|brl }}</div><div class="kpi-f">Custo de aquisição</div></div>
       <div class="kpi"><div class="kpi-l"><i class="bi bi-megaphone me-1"></i>Comercialização</div><div class="kpi-v">{{ r.custo_comercial|brl }}</div><div class="kpi-f">Corretagem + mktg</div></div>
@@ -1096,7 +1094,7 @@ TEMPLATES["ferramenta_viabilidade.html"] = r"""
     </div>
     {% if r.desembolso_anual %}
     <div style="background:#fff;border:1px solid var(--mc-border);border-radius:14px;padding:1.25rem;margin-bottom:1.25rem;">
-      <h6 class="mb-3" style="color:#0d9488;">Desembolso Anual de Obra</h6>
+      <h6 class="mb-3" style="color:#f97316;">Desembolso Anual de Obra</h6>
       <canvas id="chartDesembolso" style="max-height:280px;"></canvas>
     </div>
     {% endif %}
@@ -1160,16 +1158,16 @@ TEMPLATES["ferramenta_viabilidade.html"] = r"""
   {# ── SUB-TAB 4: Vendas e Recebimentos ── #}
   <div class="res-sec" id="restab-vendas">
     <div class="kpi-grid" style="margin-bottom:1.25rem;">
-      <div class="kpi"><div class="kpi-l"><i class="bi bi-cash-stack me-1"></i>VGV Bruto</div><div class="kpi-v" style="color:#0d9488;">{{ r.vgv_bruto|brl }}</div><div class="kpi-f">{{ r.unidades_total }} unidades</div></div>
+      <div class="kpi"><div class="kpi-l"><i class="bi bi-cash-stack me-1"></i>VGV Bruto</div><div class="kpi-v" style="color:#f97316;">{{ r.vgv_bruto|brl }}</div><div class="kpi-f">{{ r.unidades_total }} unidades</div></div>
       <div class="kpi"><div class="kpi-l"><i class="bi bi-currency-dollar me-1"></i>VGV Líquido</div><div class="kpi-v" style="color:#16a34a;">{{ r.vgv_liquido|brl }}</div><div class="kpi-f">Após permuta</div></div>
       <div class="kpi"><div class="kpi-l"><i class="bi bi-arrow-left-right me-1"></i>Permuta</div><div class="kpi-v" style="color:#ca8a04;">{{ r.valor_permuta|brl }}</div><div class="kpi-f">{{ r.unidades_permuta }} unidades permutadas</div></div>
       <div class="kpi"><div class="kpi-l"><i class="bi bi-building me-1"></i>Área Privativa</div><div class="kpi-v">{{ r.area_privativa|round|int }} m²</div><div class="kpi-f">VGV médio {{ r.vgv_medio_m2|round|int }} R$/m²</div></div>
     </div>
     {% if dados and dados.tipologias %}
-    <h6 class="mb-2" style="color:#0d9488;"><i class="bi bi-grid me-1"></i>Tipologias</h6>
+    <h6 class="mb-2" style="color:#f97316;"><i class="bi bi-grid me-1"></i>Tipologias</h6>
     <div style="overflow-x:auto;border:1px solid var(--mc-border);border-radius:12px;margin-bottom:1.25rem;">
       <table style="width:100%;border-collapse:collapse;font-size:.84rem;">
-        <thead><tr style="background:#0d9488;color:#fff;">
+        <thead><tr style="background:#f97316;color:#fff;">
           <th style="padding:.45rem .75rem;text-align:left;">Tipologia</th>
           <th style="padding:.45rem .75rem;text-align:center;">Tipo</th>
           <th style="padding:.45rem .75rem;text-align:right;">Metragem</th>
@@ -1182,11 +1180,11 @@ TEMPLATES["ferramenta_viabilidade.html"] = r"""
           {% for t in dados.tipologias %}
           <tr style="border-bottom:1px solid #f1f5f9;">
             <td style="padding:.4rem .75rem;font-weight:600;">{{ t.nome or '—' }}</td>
-            <td style="padding:.4rem .75rem;text-align:center;"><span style="font-size:.75rem;padding:.15rem .5rem;border-radius:999px;background:#f0fdfa;color:#0d9488;font-weight:600;">{{ t.tipo }}</span></td>
+            <td style="padding:.4rem .75rem;text-align:center;"><span style="font-size:.75rem;padding:.15rem .5rem;border-radius:999px;background:#fff7ed;color:#f97316;font-weight:600;">{{ t.tipo }}</span></td>
             <td style="padding:.4rem .75rem;text-align:right;">{{ t.metragem }} m²</td>
             <td style="padding:.4rem .75rem;text-align:right;">{{ t.quantidade }}</td>
             <td style="padding:.4rem .75rem;text-align:right;">{{ t.preco_m2|brl }}</td>
-            <td style="padding:.4rem .75rem;text-align:right;font-weight:600;color:#0d9488;">{{ (t.metragem * t.quantidade * t.preco_m2)|brl }}</td>
+            <td style="padding:.4rem .75rem;text-align:right;font-weight:600;color:#f97316;">{{ (t.metragem * t.quantidade * t.preco_m2)|brl }}</td>
             <td style="padding:.4rem .75rem;text-align:center;">{% if t.permuta %}<span style="color:#dc2626;font-weight:600;">Sim</span>{% else %}—{% endif %}</td>
           </tr>
           {% endfor %}
@@ -1195,10 +1193,10 @@ TEMPLATES["ferramenta_viabilidade.html"] = r"""
     </div>
     {% endif %}
     {% if dados and dados.fases %}
-    <h6 class="mb-2" style="color:#0d9488;"><i class="bi bi-bar-chart-steps me-1"></i>Fases de Venda</h6>
+    <h6 class="mb-2" style="color:#f97316;"><i class="bi bi-bar-chart-steps me-1"></i>Fases de Venda</h6>
     <div style="overflow-x:auto;border:1px solid var(--mc-border);border-radius:12px;">
       <table style="width:100%;border-collapse:collapse;font-size:.84rem;">
-        <thead><tr style="background:#0d9488;color:#fff;">
+        <thead><tr style="background:#f97316;color:#fff;">
           <th style="padding:.45rem .75rem;text-align:left;">Fase</th>
           <th style="padding:.45rem .75rem;text-align:right;">Meta %</th>
           <th style="padding:.45rem .75rem;text-align:right;">Reajuste %</th>
@@ -1228,7 +1226,7 @@ TEMPLATES["ferramenta_viabilidade.html"] = r"""
   {# ── SUB-TAB 5: Sensibilidade ── #}
   <div class="res-sec" id="restab-sensibilidade">
     {% if sen %}
-    <h6 class="mb-3" style="color:#0d9488;"><i class="bi bi-grid-3x3 me-1"></i>Análise de Sensibilidade — TIR Anual (%)</h6>
+    <h6 class="mb-3" style="color:#f97316;"><i class="bi bi-grid-3x3 me-1"></i>Análise de Sensibilidade — TIR Anual (%)</h6>
     <div style="overflow-x:auto;margin-bottom:1.5rem;">
       <table class="sen-table">
         <thead>
@@ -1251,7 +1249,7 @@ TEMPLATES["ferramenta_viabilidade.html"] = r"""
         </tbody>
       </table>
     </div>
-    <h6 class="mb-3" style="color:#0d9488;"><i class="bi bi-grid-3x3 me-1"></i>Análise de Sensibilidade — Margem VGV (%)</h6>
+    <h6 class="mb-3" style="color:#f97316;"><i class="bi bi-grid-3x3 me-1"></i>Análise de Sensibilidade — Margem VGV (%)</h6>
     <div style="overflow-x:auto;">
       <table class="sen-table">
         <thead>
@@ -1309,7 +1307,7 @@ document.addEventListener('DOMContentLoaded',function(){
     type: 'bar',
     data: {
       labels: {{ resultado.desembolso_anual | map(attribute='ano') | list | tojson }},
-      datasets: [{label:'Desembolso (R$)', data: {{ resultado.desembolso_anual | map(attribute='valor') | list | tojson }}, backgroundColor:'#0d9488'}]
+      datasets: [{label:'Desembolso (R$)', data: {{ resultado.desembolso_anual | map(attribute='valor') | list | tojson }}, backgroundColor:'#f97316'}]
     },
     options: { responsive:true, plugins:{legend:{display:false}}, scales:{y:{ticks:{callback: function(v){return 'R$'+v.toLocaleString('pt-BR');}}}}}
   });
