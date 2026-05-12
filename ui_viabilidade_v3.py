@@ -364,6 +364,29 @@ def _calcular_v3(dados: dict) -> dict:
     base["sensibilidade"]          = sensibilidade
     base["indicadores_adicionais"] = indicadores_adicionais
 
+    # Quando financiamento ativo: armazena resultado SEM e COM para comparação
+    if fin_result:
+        custo_fin = fin_result["custo_fin_total"]
+        res_sem   = base["resultado_bruto"]
+        res_com   = res_sem - custo_fin
+        mgm_sem   = round(res_sem / vgv_liquido * 100, 2) if vgv_liquido else 0
+        mgm_com   = round(res_com / vgv_liquido * 100, 2) if vgv_liquido else 0
+        fin_result["resultado_sem_fin"] = round(res_sem, 2)
+        fin_result["resultado_com_fin"] = round(res_com, 2)
+        fin_result["margem_sem_fin"]    = mgm_sem
+        fin_result["margem_com_fin"]    = mgm_com
+        fin_result["reducao_exposicao"] = round(base["exposicao_maxima"] - fin_result["exposicao_com_fin"], 2)
+        # Atualiza os KPIs principais com financiamento incluído
+        base["resultado_bruto"] = round(res_com, 2)
+        base["margem_vgv"]      = mgm_com
+        base["margem_custo"]    = round(res_com / (base["custo_total"] + custo_fin) * 100, 2) if base["custo_total"] else 0
+        base["exposicao_maxima"] = fin_result["exposicao_com_fin"]
+        base["status"] = _classificar(mgm_com / 100, (fin_result.get("tir_alavancada") or base.get("tir_anual") or 0) / 100)
+        # Atualiza DRE com custo financeiro
+        base["dre"].insert(-2, {"desc": "(−) Custo Financeiro (CCB)", "valor": -custo_fin, "tipo": "deducao"})
+        base["dre"][-2] = {"desc": "Resultado Operacional", "valor": round(res_com, 2), "tipo": "resultado"}
+        base["dre"][-1] = {"desc": "Lucratividade", "valor": mgm_com, "tipo": "pct"}
+
     return base
 
 
@@ -864,6 +887,65 @@ TEMPLATES["ferramenta_viabilidade.html"] = r"""
     </div>
   </div>
 
+  {# ── PAINEL DE FINANCIAMENTO (quando ativo) ── #}
+  {% if fin %}
+  <div style="border:2px solid #1e40af;border-radius:14px;padding:1.1rem 1.25rem;margin-bottom:1.25rem;background:#eff6ff;">
+    <div class="d-flex align-items-center gap-2 mb-3">
+      <i class="bi bi-bank2" style="font-size:1.2rem;color:#1e40af;"></i>
+      <strong style="color:#1e40af;font-size:.95rem;">Financiamento Ativo — {{ fin.tipo_amortizacao }} · {{ fin.pct_fin }}% da obra · {{ fin.taxa_am }}% a.m. · {{ fin.carencia }} meses de carência</strong>
+    </div>
+    {# Linha 1: valor financiado e custo #}
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:.75rem;margin-bottom:.9rem;">
+      <div style="background:#fff;border-radius:10px;padding:.7rem .9rem;border:1px solid #bfdbfe;">
+        <div style="font-size:.68rem;font-weight:700;text-transform:uppercase;color:#1e40af;letter-spacing:.05em;">Crédito captado (pico)</div>
+        <div style="font-size:1.15rem;font-weight:700;color:#1e40af;">{{ fin.valor_financiado|brl }}</div>
+        <div style="font-size:.72rem;color:#64748b;">Saldo devedor máximo durante a obra</div>
+      </div>
+      <div style="background:#fff;border-radius:10px;padding:.7rem .9rem;border:1px solid #fca5a5;">
+        <div style="font-size:.68rem;font-weight:700;text-transform:uppercase;color:#dc2626;letter-spacing:.05em;">Custo financeiro total (juros)</div>
+        <div style="font-size:1.15rem;font-weight:700;color:#dc2626;">{{ fin.custo_fin_total|brl }}</div>
+        <div style="font-size:.72rem;color:#64748b;">{{ "%.1f"|format(fin.custo_fin_total / r.vgv_liquido * 100 if r.vgv_liquido else 0) }}% do VGV líquido</div>
+      </div>
+      <div style="background:#fff;border-radius:10px;padding:.7rem .9rem;border:1px solid #bbf7d0;">
+        <div style="font-size:.68rem;font-weight:700;text-transform:uppercase;color:#16a34a;letter-spacing:.05em;">Redução da exposição</div>
+        <div style="font-size:1.15rem;font-weight:700;color:#16a34a;">{{ fin.reducao_exposicao|brl }}</div>
+        <div style="font-size:.72rem;color:#64748b;">Capital próprio que o crédito substitui</div>
+      </div>
+      {% if fin.tir_alavancada %}
+      <div style="background:#fff;border-radius:10px;padding:.7rem .9rem;border:1px solid #e0e7ff;">
+        <div style="font-size:.68rem;font-weight:700;text-transform:uppercase;color:#6366f1;letter-spacing:.05em;">TIR alavancada</div>
+        <div style="font-size:1.15rem;font-weight:700;color:#6366f1;">{{ fin.tir_alavancada }}% a.a.</div>
+        <div style="font-size:.72rem;color:#64748b;">Retorno sobre o equity investido</div>
+      </div>
+      {% endif %}
+    </div>
+    {# Linha 2: comparação antes/depois #}
+    <div style="background:#fff;border-radius:10px;padding:.75rem 1rem;border:1px solid #bfdbfe;">
+      <div style="font-size:.72rem;font-weight:700;text-transform:uppercase;color:#1e40af;margin-bottom:.6rem;">Impacto do financiamento nos resultados</div>
+      <div style="display:grid;grid-template-columns:1fr auto 1fr;gap:.5rem;align-items:center;">
+        <div>
+          <div style="font-size:.7rem;color:#64748b;font-weight:600;margin-bottom:.3rem;">SEM FINANCIAMENTO</div>
+          <div style="font-size:.88rem;"><span style="color:#64748b;">Resultado:</span> <strong>{{ fin.resultado_sem_fin|brl }}</strong></div>
+          <div style="font-size:.88rem;"><span style="color:#64748b;">Margem VGV:</span> <strong>{{ fin.margem_sem_fin }}%</strong></div>
+          <div style="font-size:.88rem;"><span style="color:#64748b;">Exposição:</span> <strong style="color:#dc2626;">{{ (fin.resultado_sem_fin + fin.reducao_exposicao)|abs|brl }}</strong></div>
+          <div style="font-size:.88rem;"><span style="color:#64748b;">TIR:</span> <strong>{% if r.tir_anual %}{{ r.tir_anual }}% a.a.{% else %}—{% endif %}</strong></div>
+        </div>
+        <div style="text-align:center;padding:0 .5rem;">
+          <i class="bi bi-arrow-right" style="font-size:1.4rem;color:#94a3b8;"></i>
+        </div>
+        <div>
+          <div style="font-size:.7rem;color:#1e40af;font-weight:700;margin-bottom:.3rem;">COM FINANCIAMENTO</div>
+          <div style="font-size:.88rem;"><span style="color:#64748b;">Resultado:</span> <strong style="color:{{ '#16a34a' if fin.resultado_com_fin >= 0 else '#dc2626' }};">{{ fin.resultado_com_fin|brl }}</strong></div>
+          <div style="font-size:.88rem;"><span style="color:#64748b;">Margem VGV:</span> <strong style="color:{{ '#16a34a' if fin.margem_com_fin >= 15 else ('#ca8a04' if fin.margem_com_fin >= 10 else '#dc2626') }};">{{ fin.margem_com_fin }}%</strong></div>
+          <div style="font-size:.88rem;"><span style="color:#64748b;">Exposição:</span> <strong style="color:#16a34a;">{{ fin.exposicao_com_fin|brl }}</strong></div>
+          <div style="font-size:.88rem;"><span style="color:#64748b;">TIR:</span> <strong style="color:#6366f1;">{% if fin.tir_alavancada %}{{ fin.tir_alavancada }}% a.a.{% else %}—{% endif %}</strong></div>
+        </div>
+      </div>
+    </div>
+    {% if fin.dscr_medio %}<div class="mt-2 small" style="color:#475569;"><i class="bi bi-shield-check me-1" style="color:#16a34a;"></i>DSCR médio: <strong>{{ "%.2f"|format(fin.dscr_medio) }}x</strong> — cobertura do serviço da dívida pelo fluxo de recebimentos</div>{% endif %}
+  </div>
+  {% endif %}
+
   {# Result sub-tabs #}
   <div class="res-tabs">
     <button type="button" class="res-tab on" onclick="resTab('indicadores',this)"><i class="bi bi-table me-1"></i>Indicadores / DRE</button>
@@ -996,22 +1078,38 @@ TEMPLATES["ferramenta_viabilidade.html"] = r"""
       <div class="bk-r"><span class="bk-l">Impostos s/ Receita</span><span>{{ r.custo_impostos|brl }}</span></div>
       <div class="bk-r bk-t"><span>Custo Total</span><span>{{ r.custo_total|brl }}</span></div>
     </div>
-    {# Fin schedule if active #}
-    {% if fin %}
-    <h6 class="mb-1 mt-3" style="color:#1e40af;"><i class="bi bi-calendar3 me-1"></i>Cronograma de Financiamento (primeiros 24 meses)</h6>
+    {# Cronograma do financiamento #}
+    {% if fin and fin.schedule %}
+    <h6 class="mb-1 mt-3" style="color:#1e40af;"><i class="bi bi-calendar3 me-1"></i>Cronograma do CCB — como o dinheiro flui</h6>
+    <div class="small text-muted mb-2">
+      🔵 <strong>Desembolso:</strong> banco libera parcelas conforme o avanço da obra &nbsp;|&nbsp;
+      🟡 <strong>Carência:</strong> só paga juros, sem amortizar o principal &nbsp;|&nbsp;
+      🔴 <strong>Amortização:</strong> devolve o principal + juros ({{ fin.tipo_amortizacao }})
+    </div>
     <div class="fs-wrap">
       <table class="fs-table">
         <thead>
-          <tr><th style="text-align:left;">Mês</th><th>Drawdown</th><th>Juros</th><th>Amortização</th><th>Saldo Devedor</th><th>Serviço Dívida</th></tr>
+          <tr>
+            <th style="text-align:left;">Mês</th>
+            <th style="text-align:left;">Fase</th>
+            <th>Desembolso recebido</th>
+            <th>Juros pagos</th>
+            <th>Amortização</th>
+            <th>Saldo devedor</th>
+            <th>Total saída</th>
+          </tr>
         </thead>
         <tbody>
           {% for s in fin.schedule %}
           {% if s.drawdown != 0 or s.juros != 0 or s.amortizacao != 0 or s.saldo_devedor != 0 %}
-          <tr>
+          {% set fase_cls = 'background:#eff6ff;' if s.drawdown > 0 else ('background:#fefce8;' if s.amortizacao == 0 else 'background:#fff1f2;') %}
+          {% set fase_nome = 'Desembolso' if s.drawdown > 0 else ('Carência' if s.amortizacao == 0 else 'Amortização') %}
+          <tr style="{{ fase_cls }}">
             <td>{{ s.mes }}</td>
-            <td>{{ s.drawdown|brl }}</td>
+            <td><span style="font-size:.72rem;font-weight:700;color:{{ '#1e40af' if s.drawdown > 0 else ('#854d0e' if s.amortizacao == 0 else '#dc2626') }};">{{ fase_nome }}</span></td>
+            <td style="color:#16a34a;font-weight:600;">{% if s.drawdown > 0 %}+{{ s.drawdown|brl }}{% else %}—{% endif %}</td>
             <td class="fc-neg">{{ s.juros|brl }}</td>
-            <td class="fc-neg">{{ s.amortizacao|brl }}</td>
+            <td style="color:{{ '#dc2626' if s.amortizacao > 0 else '#94a3b8' }};">{% if s.amortizacao > 0 %}{{ s.amortizacao|brl }}{% else %}—{% endif %}</td>
             <td style="color:#1e40af;font-weight:600;">{{ s.saldo_devedor|brl }}</td>
             <td class="fc-neg">{{ s.servico_divida|brl }}</td>
           </tr>
@@ -1019,6 +1117,10 @@ TEMPLATES["ferramenta_viabilidade.html"] = r"""
           {% endfor %}
         </tbody>
       </table>
+    </div>
+    <div class="small text-muted mt-2">
+      <i class="bi bi-info-circle me-1"></i>Custo total de juros: <strong style="color:#dc2626;">{{ fin.custo_fin_total|brl }}</strong>
+      &nbsp;·&nbsp; Crédito captado máximo: <strong style="color:#1e40af;">{{ fin.valor_financiado|brl }}</strong>
     </div>
     {% endif %}
   </div>
