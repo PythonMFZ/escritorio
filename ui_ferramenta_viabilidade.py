@@ -330,14 +330,48 @@ def _calcular_viabilidade_v2(dados: dict) -> dict:
     margem_vgv    = resultado_bruto / vgv_liquido if vgv_liquido > 0 else 0
     margem_custo  = resultado_bruto / custo_total if custo_total > 0 else 0
 
-    # TIR
+    # TIR / VPL — base VP (nominal)
     fluxo_raw = [f["saldo_mes"] for f in fluxo[:min(len(fluxo), 120)]]
     tir_mensal = _tir(fluxo_raw)
     tir_anual  = ((1 + tir_mensal) ** 12 - 1) if tir_mensal is not None else None
 
-    # VPL
     vpl = sum(f["saldo_mes"] / ((1 + tma_mensal) ** m)
               for m, f in enumerate(fluxo) if m < 120)
+
+    # ── VF: Valor Final com correção monetária (INCC) ─────────────────────
+    # Receitas e custo de obra corrigidos pelo fator acumulado; comissão nominal.
+    vf_fluxo_raw = []
+    vf_total_rec = 0.0
+    vf_total_cst = 0.0
+    vf_total_com = 0.0
+    for f in fluxo[:min(len(fluxo), 120)]:
+        m = f["mes"]
+        if m == 0:
+            cf_m = 1.0
+        elif m <= mes_fim_obra:
+            cf_m = (1 + corr_obra) ** m
+        else:
+            cf_m = (1 + corr_obra) ** mes_fim_obra * (1 + corr_pos_obra) ** (m - mes_fim_obra)
+        vf_rec = f["receita"] * cf_m
+        vf_cst = f["custo_obra"] * cf_m
+        vf_com = f["comissao"]          # comissão fica nominal
+        vf_tri = vf_rec * pct_impostos
+        vf_saldo = vf_rec - vf_com - vf_tri - vf_cst
+        vf_total_rec += vf_rec
+        vf_total_cst += vf_cst
+        vf_total_com += vf_com
+        vf_fluxo_raw.append(vf_saldo)
+
+    vf_custo_com     = vf_total_com
+    vf_custo_imp     = vf_total_rec * pct_impostos
+    vf_resultado     = vf_total_rec - vf_total_cst - vf_custo_com - vf_custo_imp - valor_terreno
+    vf_custo_total   = vf_total_cst + vf_custo_com + vf_custo_imp + valor_terreno
+    vf_margem_vgv    = vf_resultado / vf_total_rec if vf_total_rec > 0 else 0
+    vf_margem_custo  = vf_resultado / vf_custo_total if vf_custo_total > 0 else 0
+
+    tir_vf_m     = _tir(vf_fluxo_raw)
+    tir_vf_anual = ((1 + tir_vf_m) ** 12 - 1) if tir_vf_m is not None else None
+    vpl_vf       = sum(v / (1 + tma_mensal) ** i for i, v in enumerate(vf_fluxo_raw))
 
     # Payback
     payback = None
@@ -396,6 +430,15 @@ def _calcular_viabilidade_v2(dados: dict) -> dict:
         "tir_mensal": round(tir_mensal * 100, 4) if tir_mensal is not None else None,
         "tir_anual": round(tir_anual * 100, 2) if tir_anual is not None else None,
         "vpl": round(vpl, 2),
+        # VF (Valor Final) — corrigido por INCC
+        "vf_vgv": round(vf_total_rec, 2),
+        "vf_custo_obra": round(vf_total_cst, 2),
+        "vf_custo_total": round(vf_custo_total, 2),
+        "vf_resultado": round(vf_resultado, 2),
+        "vf_margem_vgv": round(vf_margem_vgv * 100, 2),
+        "vf_margem_custo": round(vf_margem_custo * 100, 2),
+        "tir_vf_anual": round(tir_vf_anual * 100, 2) if tir_vf_anual is not None else None,
+        "vpl_vf": round(vpl_vf, 2),
         "payback_mes": payback,
         "status": status,
         # Fluxo
