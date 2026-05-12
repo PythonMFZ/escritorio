@@ -444,6 +444,46 @@ async def perfil_snapshot_detail_v2(request: Request, session: Session = Depends
     })
 
 
+# ── Rota POST /perfil/avaliacao/{snapshot_id}/reabrir ───────────────────────
+
+@app.post("/perfil/avaliacao/{snapshot_id}/reabrir")
+@require_login
+async def perfil_snapshot_reabrir(request: Request, session: Session = Depends(get_session),
+                                   snapshot_id: int = 0):
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        return RedirectResponse("/login", status_code=303)
+
+    if ctx.membership.role not in ("admin", "equipe"):
+        set_flash(request, "Sem permissão.")
+        return RedirectResponse("/perfil", status_code=303)
+
+    snap = session.get(ClientSnapshot, int(snapshot_id))
+    if not snap or snap.company_id != ctx.company.id:
+        set_flash(request, "Avaliação não encontrada.")
+        return RedirectResponse("/perfil", status_code=303)
+
+    # Activa o cliente correto na sessão
+    request.session["active_client_id"] = snap.client_id
+
+    # Carrega wizard_dados do snapshot e restaura no rascunho
+    try:
+        answers = _json_wiz2.loads(snap.answers_json or "{}")
+        wizard_dados = answers.get("_wizard_dados") or {}
+    except Exception:
+        wizard_dados = {}
+
+    rascunho = _wiz_get_rascunho(session, ctx.company.id, snap.client_id)
+    rascunho.dados_json  = _json_wiz2.dumps(wizard_dados, ensure_ascii=False)
+    rascunho.etapa_atual = 1
+    rascunho.updated_at  = str(_dtWiz.utcnow())
+    session.add(rascunho)
+    session.commit()
+
+    set_flash(request, "Diagnóstico reaberto para edição. Conclua novamente para salvar.")
+    return RedirectResponse("/perfil/wizard?etapa=1", status_code=303)
+
+
 # ── Rota POST /perfil/avaliacao/{snapshot_id}/excluir ────────────────────────
 
 @app.post("/perfil/avaliacao/{snapshot_id}/excluir")
@@ -1156,11 +1196,11 @@ TEMPLATES["wizard_diagnostico.html"] = r"""
         {% set _ = secoes_vistas.append(q.section) %}
         <div class="wiz-secao">{{ q.section }}</div>
       {% endif %}
-      <div class="wiz-bool" onclick="toggleBool('{{ q.id }}')">
+      <label class="wiz-bool" for="q_{{ q.id }}">
         <input type="checkbox" name="{{ q.id }}" value="1" id="q_{{ q.id }}"
                {% if etapa_dados.get(q.id) %}checked{% endif %}>
-        <label for="q_{{ q.id }}">{{ q.q }}</label>
-      </div>
+        <span>{{ q.q }}</span>
+      </label>
     {% endfor %}
 
     <div class="wiz-secao">Governança Avançada</div>
@@ -1172,11 +1212,11 @@ TEMPLATES["wizard_diagnostico.html"] = r"""
       ("seguro_empresarial", "Possui seguro empresarial (patrimonial, responsabilidade civil)?"),
       ("sucessao_definida", "O plano de sucessão da empresa está definido e documentado?"),
     ] %}
-    <div class="wiz-bool" onclick="toggleBool('{{ k }}')">
+    <label class="wiz-bool" for="q_{{ k }}">
       <input type="checkbox" name="{{ k }}" value="1" id="q_{{ k }}"
              {% if etapa_dados.get(k) %}checked{% endif %}>
-      <label for="q_{{ k }}">{{ label }}</label>
-    </div>
+      <span>{{ label }}</span>
+    </label>
     {% endfor %}
   </div>
   {% endif %}
@@ -1197,10 +1237,6 @@ TEMPLATES["wizard_diagnostico.html"] = r"""
 </form>
 
 <script>
-function toggleBool(id) {
-  const cb = document.getElementById('q_' + id);
-  if (cb) cb.checked = !cb.checked;
-}
 document.querySelectorAll('.moeda-input').forEach(function(el) {
   el.addEventListener('input', function() {
     let v = this.value.replace(/\D/g, '');
@@ -1251,7 +1287,6 @@ TEMPLATES["perfil_snapshot_detail.html"] = r"""
 {% set pemp = (e3.get("parcelas_emprestimos") or 0)|float %}
 {% set desp_fin = pmaq + pimo + pemp %}
 {% set resultado = ebit - desp_fin %}
-{% set pl = (e4.get("patrimonio_liquido") or 0)|float %}
 
 {# ── Ativo Circulante ── #}
 {% set caixa    = (e4.get("caixa_disponivel") or 0)|float %}
@@ -1294,6 +1329,9 @@ TEMPLATES["perfil_snapshot_detail.html"] = r"""
 {# ── Passivo Não-circulante ── #}
 {% set pnc_total = (e4.get("pnc_forn")|float(0)) + (e4.get("pnc_emp")|float(0)) + (e4.get("pnc_trib")|float(0)) + (e4.get("pnc_trab")|float(0)) + (e4.get("pnc_out")|float(0)) %}
 {% set passivo_total = pc_total + pnc_total %}
+{# PL: usa o informado; se vazio/zero calcula como Ativo − Passivo #}
+{% set pl = (e4.get("patrimonio_liquido") or 0)|float %}
+{% set pl = (ativo_total - passivo_total) if pl == 0 else pl %}
 
 {# ── Indicadores de Liquidez (Assaf Neto / Matarazzo) ── #}
 {# Imediata: só Disponibilidades / PC — Assaf Neto, Finanças Corporativas, 3ed #}
@@ -1353,6 +1391,10 @@ TEMPLATES["perfil_snapshot_detail.html"] = r"""
     <div class="d-flex gap-2">
       <a class="btn btn-outline-secondary btn-sm" href="/perfil">← Voltar</a>
       {% if role in ["admin", "equipe"] %}
+      <form method="post" action="/perfil/avaliacao/{{ snap.id }}/reabrir"
+            onsubmit="return confirm('Reabrir este diagnóstico para edição? O rascunho atual será substituído.')">
+        <button type="submit" class="btn btn-outline-primary btn-sm">✏️ Editar</button>
+      </form>
       <form method="post" action="/perfil/avaliacao/{{ snap.id }}/excluir"
             onsubmit="return confirm('Excluir esta avaliação? A ação não pode ser desfeita.')">
         <button type="submit" class="btn btn-outline-danger btn-sm">🗑 Excluir</button>
