@@ -46420,12 +46420,20 @@ _PERFIL_NEW_CARD = """<div class="card p-4 mb-3">
               <div class="muted small mb-2">{{ snapshots|length }} diagnóstico(s) registrado(s).</div>
               <div class="d-flex flex-column gap-1">
                 {% for s in snapshots[:3] %}
-                  <a href="/perfil/avaliacao/{{ s.id }}"
-                     class="d-flex justify-content-between align-items-center small"
-                     style="padding:.35rem .5rem; border-radius:8px; background:var(--mc-bg); text-decoration:none; color:inherit;">
-                    <span class="muted">{{ s.created_at.strftime("%d/%m/%Y") }}</span>
-                    <span class="fw-semibold">Score {{ "%.0f"|format(s.score_total) }}</span>
-                  </a>
+                  <div class="d-flex justify-content-between align-items-center small"
+                       style="padding:.35rem .5rem; border-radius:8px; background:var(--mc-bg);">
+                    <a href="/perfil/avaliacao/{{ s.id }}"
+                       style="text-decoration:none; color:inherit; flex:1;">
+                      <span class="muted">{{ s.created_at.strftime("%d/%m/%Y") }}</span>
+                      <span class="fw-semibold ms-2">Score {{ "%.0f"|format(s.score_total) }}</span>
+                    </a>
+                    <form method="post" action="/perfil/avaliacao/{{ s.id }}/reabrir"
+                          onsubmit="return confirm('Reabrir este diagnóstico para edição?')"
+                          style="margin:0;">
+                      <button type="submit" class="btn btn-outline-primary btn-sm py-0 px-2"
+                              style="font-size:.72rem;">✏️ Editar</button>
+                    </form>
+                  </div>
                 {% endfor %}
               </div>
             {% else %}
