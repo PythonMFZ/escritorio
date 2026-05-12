@@ -320,6 +320,46 @@ def _calcular_v3(dados: dict) -> dict:
         "spread_cdi":           round(spread_cdi_base, 2),
     }
 
+    # DRE (Demonstrativo de Resultado)
+    vgv_bruto = base["vgv_bruto"]
+    dre_rows = [
+        {"desc": "Receita Bruta de Vendas",    "valor": vgv_bruto,                        "tipo": "receita"},
+        {"desc": "(−) Permuta",                "valor": -base["valor_permuta"],            "tipo": "deducao"},
+        {"desc": "VGV Líquido",                "valor": vgv_liquido,                       "tipo": "subtotal"},
+        {"desc": "(−) Impostos s/ Receita",    "valor": -base["custo_impostos"],           "tipo": "deducao"},
+        {"desc": "(−) Custo de Obra",          "valor": -base["custo_obra_total"],         "tipo": "deducao"},
+        {"desc": "(−) Terreno",                "valor": -base["valor_terreno"],            "tipo": "deducao"},
+        {"desc": "(−) Comercialização",        "valor": -base["custo_comercial"],          "tipo": "deducao"},
+        {"desc": "Resultado Operacional",      "valor": resultado_bruto,                   "tipo": "resultado"},
+        {"desc": "Lucratividade",              "valor": round(resultado_bruto/vgv_liquido*100 if vgv_liquido else 0, 2), "tipo": "pct"},
+    ]
+
+    # Chart data — only non-zero months, max 120
+    chart_labels, chart_pag, chart_rec, chart_exp = [], [], [], []
+    for f in base["fluxo"][:120]:
+        if f["receita"] != 0 or f["custo_obra"] != 0 or f["saldo_mes"] != 0:
+            chart_labels.append(f["mes"])
+            chart_pag.append(round(-(f["custo_obra"] + f["comissao"] + f["tributos"]), 2))
+            chart_rec.append(round(f["receita"], 2))
+            chart_exp.append(round(f["saldo_acumulado"], 2))
+
+    # Desembolso anual aggregated
+    from collections import defaultdict as _dd
+    anual = _dd(float)
+    for f in base["fluxo"][:120]:
+        if f["custo_obra"] > 0:
+            ano = (f["mes"] // 12) + 1
+            anual[ano] += f["custo_obra"]
+    desembolso_anual = [{"ano": f"Ano {k}", "valor": round(v,2)} for k,v in sorted(anual.items())]
+
+    base["dre"]                = dre_rows
+    base["chart_labels"]       = chart_labels
+    base["chart_pag"]          = chart_pag
+    base["chart_rec"]          = chart_rec
+    base["chart_exp"]          = chart_exp
+    base["desembolso_anual"]   = desembolso_anual
+    base["cenario"]            = dados.get("cenario", "realista")
+
     base["financiamento"]          = fin_result
     base["sensibilidade"]          = sensibilidade
     base["indicadores_adicionais"] = indicadores_adicionais
@@ -390,6 +430,16 @@ async def ferramenta_viabilidade_post_v3(
     if fases:
         dados["fases"] = fases
 
+    # Cenário multiplier
+    cenario = dados.get("cenario", "realista")
+    mult = {"otimista": 1.15, "realista": 1.00, "pessimista": 0.85}.get(cenario, 1.00)
+    if mult != 1.00:
+        dados["preco_m2_base"] = float(dados.get("preco_m2_base", 12500) or 12500) * mult
+        if dados.get("tipologias"):
+            for t in dados["tipologias"]:
+                t["preco_m2"] = float(t.get("preco_m2", 0) or 0) * mult
+    dados["cenario"] = cenario
+
     resultado = _calcular_v3(dados)
     return render("ferramenta_viabilidade.html", request=request, context={
         "current_user":    ctx.user,
@@ -406,13 +456,21 @@ async def ferramenta_viabilidade_post_v3(
 TEMPLATES["ferramenta_viabilidade.html"] = r"""
 {% extends "base.html" %}
 {% block content %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
 <style>
+  :root{--teal:#0d9488;--teal-light:rgba(13,148,136,.1);--teal-border:rgba(13,148,136,.3);}
   .vb-hdr{display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:1rem;margin-bottom:1.5rem;}
   .vb-tabs{display:flex;gap:.2rem;border-bottom:2px solid var(--mc-border);margin-bottom:1.5rem;flex-wrap:wrap;overflow-x:auto;}
   .vb-tab{padding:.5rem 1rem;border:none;background:none;font-size:.86rem;font-weight:600;color:var(--mc-muted);cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-2px;white-space:nowrap;transition:all .15s;}
-  .vb-tab:hover{color:var(--mc-primary);}
-  .vb-tab.on{color:var(--mc-primary);border-bottom-color:var(--mc-primary);}
+  .vb-tab:hover{color:var(--teal);}
+  .vb-tab.on{color:var(--teal);border-bottom-color:var(--teal);}
   .vb-sec{display:none;}.vb-sec.on{display:block;}
+  /* Result sub-tabs */
+  .res-tabs{display:flex;gap:.15rem;border-bottom:2px solid #e2e8f0;margin-bottom:1.25rem;flex-wrap:wrap;overflow-x:auto;}
+  .res-tab{padding:.45rem .9rem;border:none;background:none;font-size:.82rem;font-weight:600;color:#64748b;cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-2px;white-space:nowrap;transition:all .15s;}
+  .res-tab:hover{color:var(--teal);}
+  .res-tab.on{color:var(--teal);border-bottom-color:var(--teal);}
+  .res-sec{display:none;}.res-sec.on{display:block;}
   .vb-row{display:grid;grid-template-columns:1fr 1fr;gap:1rem;margin-bottom:1rem;}
   .vb-row3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:1rem;margin-bottom:1rem;}
   .vb-row4{display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:.75rem;margin-bottom:1rem;}
@@ -433,10 +491,35 @@ TEMPLATES["ferramenta_viabilidade.html"] = r"""
   .fase-hdr{display:flex;justify-content:space-between;align-items:center;margin-bottom:.75rem;}
   /* KPIs */
   .kpi-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(155px,1fr));gap:.65rem;margin-bottom:1.25rem;}
-  .kpi{background:#fff;border:1px solid var(--mc-border);border-radius:13px;padding:.9rem 1rem;}
+  .kpi{background:#fff;border:1px solid var(--mc-border);border-radius:13px;padding:.9rem 1rem;box-shadow:0 1px 3px rgba(0,0,0,.05);}
   .kpi-l{font-size:.68rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--mc-muted);}
   .kpi-v{font-size:21px;font-weight:700;letter-spacing:-.02em;margin-top:.2rem;}
   .kpi-f{font-size:.72rem;color:var(--mc-muted);margin-top:.15rem;}
+  /* Large KPI cards */
+  .kpi-large{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:.75rem;margin-bottom:1.5rem;}
+  .kpi-card{background:#fff;border:1px solid var(--mc-border);border-radius:16px;padding:1.1rem 1.25rem;box-shadow:0 2px 6px rgba(0,0,0,.06);display:flex;align-items:flex-start;gap:.85rem;}
+  .kpi-icon{width:42px;height:42px;border-radius:12px;display:flex;align-items:center;justify-content:center;font-size:1.2rem;flex-shrink:0;}
+  .kpi-icon.teal{background:rgba(13,148,136,.12);color:#0d9488;}
+  .kpi-icon.green{background:rgba(22,163,74,.12);color:#16a34a;}
+  .kpi-icon.red{background:rgba(220,38,38,.12);color:#dc2626;}
+  .kpi-icon.blue{background:rgba(59,130,246,.12);color:#2563eb;}
+  .kpi-card-body{}
+  .kpi-card-lbl{font-size:.69rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#94a3b8;}
+  .kpi-card-val{font-size:1.35rem;font-weight:700;letter-spacing:-.02em;margin-top:.15rem;line-height:1.2;}
+  .kpi-card-sub{font-size:.72rem;color:#94a3b8;margin-top:.15rem;}
+  /* Cenario badge */
+  .cenario-badge{display:inline-flex;align-items:center;gap:.3rem;font-size:.74rem;font-weight:700;padding:.28rem .75rem;border-radius:999px;text-transform:capitalize;}
+  .cenario-realista{background:rgba(13,148,136,.1);color:#0d9488;border:1px solid rgba(13,148,136,.2);}
+  .cenario-otimista{background:rgba(22,163,74,.1);color:#16a34a;border:1px solid rgba(22,163,74,.2);}
+  .cenario-pessimista{background:rgba(239,68,68,.1);color:#dc2626;border:1px solid rgba(239,68,68,.2);}
+  /* DRE table */
+  .dre-table{width:100%;border-collapse:collapse;font-size:.85rem;}
+  .dre-table td{padding:.42rem .75rem;border-bottom:1px solid #f1f5f9;}
+  .dre-row-subtotal td{background:#f0fdfa;font-weight:700;color:#0d9488;border-top:1.5px solid #99f6e4;}
+  .dre-row-resultado td{background:#0d9488;color:#fff;font-weight:700;}
+  .dre-row-pct td{background:#f0fdfa;font-style:italic;color:#0f766e;}
+  .dre-row-receita td{font-weight:600;}
+  .dre-val{text-align:right;font-variant-numeric:tabular-nums;}
   /* Breakdown */
   .bk{border:1px solid var(--mc-border);border-radius:12px;overflow:hidden;margin-bottom:1rem;}
   .bk-r{display:flex;justify-content:space-between;padding:.48rem 1rem;font-size:.86rem;border-bottom:1px solid var(--mc-border);}
@@ -490,14 +573,28 @@ TEMPLATES["ferramenta_viabilidade.html"] = r"""
 <div class="vb-hdr">
   <div>
     <a href="/ferramentas" class="btn btn-outline-secondary btn-sm mb-2"><i class="bi bi-arrow-left"></i> Ferramentas</a>
-    <h4 class="mb-0">Viabilidade Imobiliária</h4>
-    <div class="muted small">Análise completa com fluxo de caixa mensal, TIR e VPL</div>
+    <div style="display:flex;align-items:center;gap:.75rem;flex-wrap:wrap;">
+      <h4 class="mb-0">{% if dados and dados.nome_projeto %}{{ dados.nome_projeto }}{% else %}Viabilidade Imobiliária{% endif %}</h4>
+      {% if resultado %}
+      {% set _cn = resultado.cenario or 'realista' %}
+      <span class="cenario-badge cenario-{{ _cn }}">
+        {% if _cn == 'otimista' %}<i class="bi bi-arrow-up-right"></i>{% elif _cn == 'pessimista' %}<i class="bi bi-arrow-down-right"></i>{% else %}<i class="bi bi-dash"></i>{% endif %}
+        {{ _cn|capitalize }}
+      </span>
+      {% endif %}
+    </div>
+    <div class="muted small">Análise completa com fluxo de caixa mensal, TIR, VPL e DRE</div>
   </div>
-  {% if resultado %}
-  <button onclick="window.print()" class="btn btn-outline-secondary btn-sm">
-    <i class="bi bi-printer me-1"></i> Exportar PDF
-  </button>
-  {% endif %}
+  <div style="display:flex;gap:.5rem;flex-wrap:wrap;align-items:center;">
+    {% if resultado %}
+    <button type="button" class="btn btn-sm" style="background:#0d9488;color:#fff;border:none;" onclick="vbTab('premissas',document.querySelector('[onclick*=premissas]'));setTimeout(()=>document.getElementById('vbForm').submit(),100);">
+      <i class="bi bi-arrow-clockwise me-1"></i> Recalcular
+    </button>
+    <button onclick="window.print()" class="btn btn-outline-secondary btn-sm">
+      <i class="bi bi-printer me-1"></i> Exportar PDF
+    </button>
+    {% endif %}
+  </div>
 </div>
 
 <form method="post" action="/ferramentas/viabilidade/calcular" id="vbForm">
@@ -526,6 +623,18 @@ TEMPLATES["ferramenta_viabilidade.html"] = r"""
     <div><div class="vb-lbl">Permeabilidade (%)</div><input class="vb-inp" type="number" name="permeabilidade" step="1" min="0" max="100" placeholder="15" value="{{ dados.permeabilidade or '15' }}"></div>
     <div><div class="vb-lbl">% Permuta do Terreno</div><input class="vb-inp" type="number" name="pct_permuta" step="0.5" min="0" max="100" placeholder="13.75" value="{{ dados.pct_permuta or '0' }}"><div class="vb-hint">0% = compra total · 100% = permuta total</div></div>
     <div><div class="vb-lbl">Valor do Terreno (R$)</div><div class="pw"><span class="pre">R$</span><input class="vb-inp pl" type="number" name="valor_terreno" step="1000" min="0" placeholder="0" value="{{ dados.valor_terreno or '0' }}"></div><div class="vb-hint">Se permuta, deixe 0</div></div>
+  </div>
+  <div class="vb-row">
+    <div>
+      <div class="vb-lbl">Cenário de Análise</div>
+      <select class="vb-sel" name="cenario">
+        <option value="realista" {% if not dados or dados.cenario == 'realista' or not dados.cenario %}selected{% endif %}>Realista (base)</option>
+        <option value="otimista" {% if dados and dados.cenario == 'otimista' %}selected{% endif %}>Otimista (+15% VGV)</option>
+        <option value="pessimista" {% if dados and dados.cenario == 'pessimista' %}selected{% endif %}>Pessimista (−15% VGV)</option>
+      </select>
+      <div class="vb-hint">Multiplica o preço/m² por 1,15 ou 0,85</div>
+    </div>
+    <div></div>
   </div>
   <div class="vb-sep">Cronograma</div>
   <div class="vb-row3">
