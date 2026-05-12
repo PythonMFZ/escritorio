@@ -107,6 +107,8 @@ def _compact_result(r: dict) -> dict:
         "chart_pag":        r.get("chart_pag", []),
         "chart_rec":        r.get("chart_rec", []),
         "chart_exp":        r.get("chart_exp", []),
+        "vp_receitas":  r.get("vp_receitas"),
+        "vp_custos":    r.get("vp_custos"),
         "indicadores_adicionais": r.get("indicadores_adicionais"),
         "financiamento": {
             "valor_financiado":  fin.get("valor_financiado"),
@@ -122,6 +124,9 @@ def _compact_result(r: dict) -> dict:
             "tipo_amortizacao":  fin.get("tipo_amortizacao"),
             "pct_fin":           fin.get("pct_fin"),
             "taxa_am":           fin.get("taxa_am"),
+            "vpl_alavancado":    fin.get("vpl_alavancado"),
+            "vpl_sem_fin_calc":  fin.get("vpl_sem_fin_calc"),
+            "delta_vpl":         fin.get("delta_vpl"),
         } if fin else None,
     }
 

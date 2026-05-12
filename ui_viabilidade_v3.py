@@ -104,8 +104,8 @@ def _calcular_v3(dados: dict) -> dict:
 
         saldo_pico = saldo   # máximo real = fim da carência
 
-        # Fase 3: Amortização (SAC ou PRICE) — prazo = mesmo da obra
-        meses_amort = max(duracao_obra, 12)
+        # Fase 3: Amortização (SAC ou PRICE) — prazo configurável (padrão: 24 meses)
+        meses_amort = int(dados.get("prazo_amortizacao", 24) or 24)
         saldo_amort = saldo_pico
 
         if tipo_amort == "SAC":
@@ -219,6 +219,8 @@ def _calcular_v3(dados: dict) -> dict:
             "haircut_pct":              round(haircut_pct * 100, 1),
             "sub_ratio":                round(sub_ratio * 100, 1),
             "cdi_ref":                  cdi_ref,
+            "prazo_amortizacao":        meses_amort,
+            "prazo_total_programa":     duracao_obra + carencia + meses_amort,
         }
 
     # ── C. ANÁLISE DE SENSIBILIDADE ────────────────────────────────────────
@@ -364,6 +366,33 @@ def _calcular_v3(dados: dict) -> dict:
         base["dre"].insert(-2, {"desc": "(−) Custo Financeiro (CCB)", "valor": -custo_fin, "tipo": "deducao"})
         base["dre"][-2] = {"desc": "Resultado Operacional", "valor": round(res_com, 2), "tipo": "resultado"}
         base["dre"][-1] = {"desc": "Lucratividade", "valor": mgm_com, "tipo": "pct"}
+
+    # ── E. VP DAS RECEITAS E VPL COMPARATIVO ────────────────────────────────────
+    _tma_m_calc = (1.12 ** (1 / 12)) - 1
+    _vp_rec_calc = round(sum(
+        f["receita"] / (1 + _tma_m_calc) ** i
+        for i, f in enumerate(base["fluxo"][:120])
+    ), 2)
+    base["vp_receitas"] = _vp_rec_calc
+    base["vp_custos"]   = round(_vp_rec_calc - (base.get("vpl") or 0), 2)
+
+    if fin_result is not None:
+        _fl_eq_calc = []
+        for _i_eq, _f_eq in enumerate(base["fluxo"][:120]):
+            _sc_eq = schedule[_i_eq] if _i_eq < len(schedule) else {}
+            _fl_eq_calc.append(
+                _f_eq["saldo_mes"]
+                + _sc_eq.get("drawdown", 0)
+                - _sc_eq.get("amortizacao", 0)
+                - _sc_eq.get("juros", 0)
+            )
+        _vpl_alav_calc = round(sum(
+            _v / (1 + _tma_m_calc) ** _i
+            for _i, _v in enumerate(_fl_eq_calc)
+        ), 2)
+        fin_result["vpl_alavancado"]   = _vpl_alav_calc
+        fin_result["vpl_sem_fin_calc"] = round(base.get("vpl") or 0, 2)
+        fin_result["delta_vpl"]        = round(_vpl_alav_calc - (base.get("vpl") or 0), 2)
 
     return base
 
@@ -795,7 +824,10 @@ TEMPLATES["ferramenta_viabilidade.html"] = r"""
       <div><div class="vb-lbl">Sistema de Amortização</div><select class="vb-sel" name="tipo_amortizacao"><option value="SAC" {% if dados.tipo_amortizacao == 'SAC' or not dados.tipo_amortizacao %}selected{% endif %}>SAC — amortização constante</option><option value="PRICE" {% if dados.tipo_amortizacao == 'PRICE' %}selected{% endif %}>PRICE — parcela constante</option></select></div>
     </div>
     <div class="vb-row">
-      <div><div class="vb-lbl">Carência (meses)</div><input class="vb-inp" type="number" name="carencia_meses" step="1" min="0" placeholder="6" value="{{ dados.carencia_meses or '6' }}"><div class="vb-hint">Meses de juros apenas (sem amortizar) após término da obra</div></div>
+      <div><div class="vb-lbl">Carência (meses)</div><input class="vb-inp" type="number" name="carencia_meses" id="inputCarencia" step="1" min="0" placeholder="6" value="{{ dados.carencia_meses or '6' }}" oninput="checkCarencia(this)"><div class="vb-hint">Meses de juros apenas (sem amortizar) após término da obra. Padrão: 6</div>
+          {% if dados and dados.carencia_meses and dados.carencia_meses|string|int > 12 %}<div style="background:#fef9c3;border:1px solid #ca8a04;border-radius:8px;padding:.4rem .7rem;font-size:.77rem;color:#854d0e;margin-top:.3rem;">⚠️ Carência de {{ dados.carencia_meses }} meses é muito alta. Padrão para financiamento de obra: 6–12 meses.</div>{% endif %}
+          <div id="carencia-dyn-warn" style="display:none;background:#fef9c3;border:1px solid #ca8a04;border-radius:8px;padding:.4rem .7rem;font-size:.77rem;color:#854d0e;margin-top:.3rem;"></div></div>
+      <div><div class="vb-lbl">Prazo de Amortização (meses)</div><input class="vb-inp" type="number" name="prazo_amortizacao" step="1" min="12" max="120" placeholder="24" value="{{ dados.prazo_amortizacao or '24' }}"><div class="vb-hint">Após carência. Padrão: 24. Típico SFH/SFI: 12–36 meses</div></div>
       <div><div class="vb-lbl">TMA de Referência (CDI % a.a.)</div><div class="pw"><span class="suf">%</span><input class="vb-inp pr" type="number" name="cdi_ref" step="0.25" min="0" placeholder="13.75" value="{{ dados.cdi_ref or '13.75' }}"></div><div class="vb-hint">Benchmark para cálculo do spread</div></div>
     </div>
 
@@ -870,7 +902,7 @@ TEMPLATES["ferramenta_viabilidade.html"] = r"""
   <div style="border:2px solid #1e40af;border-radius:14px;padding:1.1rem 1.25rem;margin-bottom:1.25rem;background:#eff6ff;">
     <div class="d-flex align-items-center gap-2 mb-3">
       <i class="bi bi-bank2" style="font-size:1.2rem;color:#1e40af;"></i>
-      <strong style="color:#1e40af;font-size:.95rem;">Financiamento Ativo — {{ fin.tipo_amortizacao }} · {{ fin.pct_fin }}% da obra · {{ fin.taxa_am }}% a.m. · {{ fin.carencia }} meses de carência</strong>
+      <strong style="color:#1e40af;font-size:.95rem;">Financiamento Ativo — {{ fin.tipo_amortizacao }} · {{ fin.pct_fin }}% da obra · {{ fin.taxa_am }}% a.m. · Carência: {{ fin.carencia }}m · Amort.: {{ fin.prazo_amortizacao or 24 }}m · Programa total: {{ fin.prazo_total_programa or "—" }}m</strong>
     </div>
     {# Linha 1: valor financiado e custo #}
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:.75rem;margin-bottom:.9rem;">
@@ -921,6 +953,14 @@ TEMPLATES["ferramenta_viabilidade.html"] = r"""
       </div>
     </div>
     {% if fin.dscr_medio %}<div class="mt-2 small" style="color:#475569;"><i class="bi bi-shield-check me-1" style="color:#16a34a;"></i>DSCR médio: <strong>{{ "%.2f"|format(fin.dscr_medio) }}x</strong> — cobertura do serviço da dívida pelo fluxo de recebimentos</div>{% endif %}
+    <div class="mt-2 small" style="color:#64748b;background:#f8fafc;border-radius:8px;padding:.5rem .75rem;border:1px solid #e2e8f0;">
+      <i class="bi bi-info-circle me-1" style="color:#0d9488;"></i>
+      <strong>Nota:</strong> O custo financeiro representa o <em>custo bruto máximo</em> do crédito sem abater receitas de vendas.
+      Na prática, incorporadoras utilizam os recebíveis de clientes (parcelas durante a obra) para amortizar a dívida antecipadamente,
+      reduzindo significativamente o custo efetivo. Programa total: <strong>{{ fin.prazo_total_programa or "—" }} meses</strong>
+      (obra {{ fin.carencia and (fin.prazo_total_programa - fin.carencia - fin.prazo_amortizacao) or "?" }}m
+       + carência {{ fin.carencia }}m + amort. {{ fin.prazo_amortizacao or 24 }}m).
+    </div>
   </div>
   {% endif %}
 
@@ -951,6 +991,20 @@ TEMPLATES["ferramenta_viabilidade.html"] = r"""
           <div class="bk-r bk-t"><span>Spread vs CDI</span><span style="color:{{ '#16a34a' if ia.spread_cdi >= 5 else ('#ca8a04' if ia.spread_cdi >= 0 else '#dc2626') }};">{{ "%.2f"|format(ia.spread_cdi) }}%</span></div>
           {% endif %}
         </div>
+
+        {# VP / VPL comparativo #}
+        {% if r.vp_receitas %}
+        <h6 class="mb-2 mt-3" style="color:#0d9488;"><i class="bi bi-currency-dollar me-1"></i>Valor Presente (TMA 12% a.a.)</h6>
+        <div class="bk">
+          <div class="bk-r"><span class="bk-l">VP das Receitas</span><span style="color:#16a34a;font-weight:600;">{{ r.vp_receitas|brl }}</span></div>
+          <div class="bk-r"><span class="bk-l">(−) VP dos Custos</span><span style="color:#475569;">{{ r.vp_custos|brl }}</span></div>
+          <div class="bk-r bk-t"><span>VPL sem Financiamento</span><span style="color:{{ '#16a34a' if r.vpl and r.vpl >= 0 else '#dc2626' }};font-weight:700;">{% if r.vpl %}{{ r.vpl|brl }}{% else %}—{% endif %}</span></div>
+          {% if fin and fin.vpl_alavancado is not none %}
+          <div class="bk-r" style="background:#eff6ff;border-top:1.5px solid #bfdbfe;"><span class="bk-l" style="color:#1e40af;">VPL com Financiamento</span><span style="color:{{ '#16a34a' if fin.vpl_alavancado >= 0 else '#dc2626' }};font-weight:700;">{{ fin.vpl_alavancado|brl }}</span></div>
+          <div class="bk-r" style="background:#eff6ff;"><span class="bk-l" style="color:#1e40af;">Impacto no VPL (alavancagem)</span><span style="color:{{ '#16a34a' if fin.delta_vpl >= 0 else '#dc2626' }};font-style:italic;">{{ fin.delta_vpl|brl }}</span></div>
+          {% endif %}
+        </div>
+        {% endif %}
 
         {# Potencial construtivo #}
         <h6 class="mb-2 mt-3" style="color:#0d9488;"><i class="bi bi-rulers me-1"></i>Potencial Construtivo</h6>
@@ -1282,6 +1336,15 @@ function toggleFinInputs(el){
   const box=document.getElementById('finInputs');
   if(el.checked){box.style.opacity='1';box.style.pointerEvents='auto';}
   else{box.style.opacity='.4';box.style.pointerEvents='none';}
+}
+function checkCarencia(el){
+  const v=parseInt(el.value)||0;
+  const w=document.getElementById('carencia-dyn-warn');
+  if(!w)return;
+  if(v>12){
+    w.textContent='⚠️ Cariência de '+v+' meses é alta. Padrão para financiamento de obra: 6–12 meses. Com '+v+' meses a 1,2%/mês os juros compostos crescem ' + Math.round((Math.pow(1.012,v)-1)*100) + '% sobre o saldo.';
+    w.style.display='';
+  }else{w.style.display='none';}
 }
 let tipN=document.querySelectorAll('[id^="tip-"]').length||1;
 function addTip(){
