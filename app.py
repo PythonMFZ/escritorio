@@ -47591,4 +47591,5 @@ exec(open('ui_fixes_batch5.py').read())
 exec(open('ui_fixes_batch6.py').read())
 exec(open('ui_wizard_v2.py').read())
 exec(open('ui_augur_doc_index.py').read())
+exec(open('ui_viabilidade_v3.py').read())
 
