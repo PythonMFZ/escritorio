@@ -233,7 +233,12 @@ async def viabilidade_historico_v1(
     _cli_id = get_active_client_id(request, session, ctx)
     _q = select(EstudoViabilidade).where(EstudoViabilidade.company_id == ctx.company.id)
     if _cli_id:
-        _q = _q.where(EstudoViabilidade.client_id == _cli_id)
+        # Mostra estudos deste cliente + estudos legados (sem client_id) que ainda não foram associados
+        from sqlalchemy import or_ as _or_ev
+        _q = _q.where(_or_ev(
+            EstudoViabilidade.client_id == _cli_id,
+            EstudoViabilidade.client_id == None,
+        ))
     else:
         _q = _q.where(EstudoViabilidade.client_id == None)
     estudos = session.exec(_q.order_by(EstudoViabilidade.id.desc()).limit(50)).all()
@@ -256,6 +261,7 @@ async def viabilidade_historico_v1(
             "margem_vgv":   round(float(margem), 1),
             "share_url":    f"/viabilidade/share/{e.share_token}",
             "open_url":     f"/ferramentas/viabilidade/abrir/{e.id}",
+            "legado":       e.client_id is None,   # sinaliza que precisa ser re-salvo
         })
     return _JRS({"estudos": result})
 
@@ -950,7 +956,7 @@ async function loadHistorico(){
       return;
     }
     el.innerHTML=estudos.map(e=>`
-      <div id="hist-row-${e.id}" style="display:flex;align-items:center;justify-content:space-between;padding:.75rem 1rem;border:1px solid #e2e8f0;border-radius:12px;margin-bottom:.5rem;gap:.75rem;flex-wrap:wrap;background:#fff;">
+      <div id="hist-row-${e.id}" style="display:flex;align-items:center;justify-content:space-between;padding:.75rem 1rem;border:1px solid ${e.legado?'#fde68a':'#e2e8f0'};border-radius:12px;margin-bottom:.5rem;gap:.75rem;flex-wrap:wrap;background:${e.legado?'#fffbeb':'#fff'};">
         <div>
           <div style="font-weight:700;font-size:.93rem;">${e.nome_projeto||'Sem nome'}</div>
           <div style="font-size:.74rem;color:#64748b;margin-top:.2rem;">
@@ -958,6 +964,7 @@ async function loadHistorico(){
             &nbsp;·&nbsp; Margem VGV (realista):
             <strong style="color:${e.margem_vgv>=20?'#16a34a':e.margem_vgv>=15?'#ca8a04':'#dc2626'}">${e.margem_vgv}%</strong>
           </div>
+          ${e.legado?'<div style="font-size:.72rem;color:#92400e;margin-top:.3rem;"><i class="bi bi-exclamation-triangle me-1"></i>Estudo legado — abra, selecione o cliente correto e salve novamente para associá-lo.</div>':''}
         </div>
         <div style="display:flex;gap:.5rem;flex-shrink:0;">
           <a href="${e.share_url}" target="_blank" class="btn btn-sm btn-outline-secondary" style="font-size:.8rem;">
