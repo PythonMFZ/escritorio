@@ -228,13 +228,11 @@ async def viabilidade_historico_v1(
     _cli_id = get_active_client_id(request, session, ctx)
     _q = select(EstudoViabilidade).where(EstudoViabilidade.company_id == ctx.company.id)
     if _cli_id:
-        # Filtra pelo cliente ativo: mostra apenas estudos deste cliente
-        # (estudos antigos sem client_id também ficam visíveis para compatibilidade)
-        from sqlalchemy import or_ as _or_sql
-        _q = _q.where(_or_sql(
-            EstudoViabilidade.client_id == _cli_id,
-            EstudoViabilidade.client_id == None,
-        ))
+        # Filtro estrito: apenas estudos deste cliente específico
+        _q = _q.where(EstudoViabilidade.client_id == _cli_id)
+    else:
+        # Sem cliente ativo: mostra apenas estudos sem client_id (nível empresa)
+        _q = _q.where(EstudoViabilidade.client_id == None)
     estudos = session.exec(_q.order_by(EstudoViabilidade.id.desc()).limit(50)).all()
     result = []
     for e in estudos:
@@ -299,10 +297,14 @@ async def viabilidade_abrir_v1(
     if not ctx:
         request.session.clear()
         return RedirectResponse("/login", status_code=303)
+    _cli_id_ab = get_active_client_id(request, session, ctx)
     estudo = session.get(EstudoViabilidade, estudo_id)
     if not estudo or estudo.company_id != ctx.company.id:
         return RedirectResponse("/ferramentas/viabilidade", status_code=303)
-    cc = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
+    # Validação de isolamento por cliente
+    if _cli_id_ab and estudo.client_id and estudo.client_id != _cli_id_ab:
+        return RedirectResponse("/ferramentas/viabilidade", status_code=303)
+    cc = get_client_or_none(session, ctx.company.id, _cli_id_ab)
     try:
         dados = _json_s.loads(estudo.dados_input_json)
         dados["cenario"] = "realista"
