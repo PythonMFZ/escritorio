@@ -944,6 +944,8 @@ async function loadHistorico(){
             <i class="bi bi-share me-1"></i>Ver link</a>
           <a href="${e.open_url}" class="btn btn-sm" style="background:#f97316;color:#fff;border:none;font-size:.8rem;">
             <i class="bi bi-folder2-open me-1"></i>Abrir</a>
+          <a href="/ferramentas/mapa-unidades" onclick="ativarEmpStudo(event,${e.id})" class="btn btn-sm btn-outline-primary" style="font-size:.8rem;" title="Criar empreendimento a partir deste estudo">
+            <i class="bi bi-buildings me-1"></i>Mapa</a>
           <button onclick="excluirEstudo(${e.id})" class="btn btn-sm btn-outline-danger" style="font-size:.8rem;" title="Excluir estudo">
             <i class="bi bi-trash3"></i></button>
         </div>
@@ -967,6 +969,15 @@ async function excluirEstudo(id){
   }catch(e){
     alert('Erro de conexão ao excluir estudo.');
   }
+}
+async function ativarEmpStudo(ev, estudoId){
+  ev.preventDefault();
+  if(!confirm('Criar empreendimento no Mapa de Unidades a partir deste estudo?\n\nAs tipologias e unidades serão geradas automaticamente.'))return;
+  const fd=new FormData();
+  fd.append('estudo_id',estudoId);
+  const resp=await fetch('/ferramentas/mapa-unidades/criar',{method:'POST',body:fd});
+  if(resp.redirected){window.location.href=resp.url;}
+  else{window.location.href='/ferramentas/mapa-unidades';}
 }
 """
 _vb_tmpl = _vb_tmpl.replace(
