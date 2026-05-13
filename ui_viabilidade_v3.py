@@ -533,7 +533,7 @@ TEMPLATES["ferramenta_viabilidade.html"] = r"""
   .kpi-icon.blue{background:rgba(59,130,246,.12);color:#2563eb;}
   .kpi-card-body{}
   .kpi-card-lbl{font-size:.69rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#94a3b8;}
-  .kpi-card-val{font-size:1.35rem;font-weight:700;letter-spacing:-.02em;margin-top:.15rem;line-height:1.2;}
+  .kpi-card-val{font-size:1.05rem;font-weight:700;letter-spacing:-.02em;margin-top:.15rem;line-height:1.25;word-break:break-word;}
   .kpi-card-sub{font-size:.72rem;color:#94a3b8;margin-top:.15rem;}
   /* Cenario badge */
   .cenario-badge{display:inline-flex;align-items:center;gap:.3rem;font-size:.74rem;font-weight:700;padding:.28rem .75rem;border-radius:999px;text-transform:capitalize;}
@@ -1018,7 +1018,7 @@ TEMPLATES["ferramenta_viabilidade.html"] = r"""
         </div>
       </div>
       <div class="col-md-6">
-        <h6 class="mb-2" style="color:#f97316;"><i class="bi bi-receipt me-1"></i>DRE — Projeção do Resultado</h6>
+        <h6 class="mb-2" style="color:#f97316;"><i class="bi bi-receipt me-1"></i>DRE VP — Projeção Nominal</h6>
         {% if r.dre %}
         <table class="dre-table">
           <tbody>
@@ -1027,6 +1027,24 @@ TEMPLATES["ferramenta_viabilidade.html"] = r"""
               <td>{{ row.desc }}</td>
               <td class="dre-val">
                 {% if row.tipo == 'pct' %}{{ "%.2f"|format(row.valor) }}%{% else %}{{ row.valor|brl }}{% endif %}
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        {% endif %}
+
+        {% if r.dre_vf %}
+        <h6 class="mb-2 mt-3" style="color:#ea580c;"><i class="bi bi-receipt-cutoff me-1"></i>DRE VF — Valor Final (INCC corrigido)</h6>
+        <table class="dre-table">
+          <tbody>
+            {% for row in r.dre_vf %}
+            <tr class="dre-row-{{ row.tipo }}">
+              <td>{{ row.desc }}</td>
+              <td class="dre-val">
+                {% if row.tipo == 'pct' %}{{ "%.2f"|format(row.valor) }}%
+                {% elif row.tipo == 'subtotal' %}<strong style="color:#f97316;">{{ row.valor|brl }}</strong>
+                {% else %}{{ row.valor|brl }}{% endif %}
               </td>
             </tr>
             {% endfor %}

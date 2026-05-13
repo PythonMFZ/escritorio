@@ -115,6 +115,26 @@ def _compact_result(r: dict) -> dict:
         "chart_exp":        r.get("chart_exp", []),
         "vp_receitas":  r.get("vp_receitas"),
         "vp_custos":    r.get("vp_custos"),
+        "dre_vf":       r.get("dre_vf", []),
+        # Custos e Despesas tab
+        "custo_obra_total":  r.get("custo_obra_total"),
+        "custo_cub":         r.get("custo_cub"),
+        "itens_extra":       r.get("itens_extra"),
+        "custo_indiretos":   r.get("custo_indiretos"),
+        "valor_terreno":     r.get("valor_terreno"),
+        "custo_comercial":   r.get("custo_comercial"),
+        "custo_impostos":    r.get("custo_impostos"),
+        "vf_custo_obra":     r.get("vf_custo_obra"),
+        "vf_custo_total":    r.get("vf_custo_total"),
+        "vf_vgv":            r.get("vf_vgv"),
+        # Produto tab
+        "unidades_total":    r.get("unidades_total"),
+        "unidades_permuta":  r.get("unidades_permuta"),
+        "area_privativa":    r.get("area_privativa"),
+        "vgv_medio_m2":      r.get("vgv_medio_m2"),
+        "valor_permuta":     r.get("valor_permuta"),
+        # Sensibilidade
+        "sensibilidade":     r.get("sensibilidade"),
         "indicadores_adicionais": r.get("indicadores_adicionais"),
         "financiamento": {
             "valor_financiado":  fin.get("valor_financiado"),
@@ -387,6 +407,15 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Inter','Segoe UI',sans-serif;
 .fin-lbl{color:#64748b;}
 .fin-val{font-weight:700;}
 .sp-footer{text-align:center;padding:2rem 1rem;font-size:.73rem;color:#94a3b8;border-top:1px solid #e2e8f0;margin-top:1rem;}
+.sp-rtab{padding:.45rem .9rem;border:none;background:none;font-size:.82rem;font-weight:600;color:#64748b;cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-2px;white-space:nowrap;transition:all .15s;}
+.sp-rtab:hover{color:#f97316;}
+.sp-rtab.on{color:#f97316;border-bottom-color:#f97316;}
+.sp-sec{display:none;}.sp-sec.on{display:block;}
+.sen-t{width:100%;border-collapse:collapse;font-size:.78rem;}
+.sen-t th{background:#1e293b;color:#fff;padding:.4rem .6rem;text-align:center;font-size:.7rem;}
+.sen-t td{padding:.35rem .6rem;text-align:center;border-bottom:1px solid #e2e8f0;}
+.bk-row{display:flex;justify-content:space-between;padding:.42rem .75rem;font-size:.84rem;border-bottom:1px solid #f1f5f9;}
+.bk-lbl{color:#64748b;}
 .sp-badge{display:inline-flex;align-items:center;gap:.3rem;padding:.25rem .7rem;border-radius:999px;font-size:.73rem;font-weight:700;margin-bottom:.85rem;}
 .badge-r{background:rgba(249,115,22,.1);color:#f97316;border:1px solid rgba(249,115,22,.2);}
 .badge-o{background:rgba(22,163,74,.1);color:#16a34a;border:1px solid rgba(22,163,74,.2);}
@@ -447,61 +476,97 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Inter','Segoe UI',sans-serif;
     </div>
   </div>
 
-  <div class="sp-grid">
-    <div class="sp-card">
-      <h6><i class="bi bi-receipt me-1"></i>DRE — Demonstrativo de Resultado</h6>
-      <table class="dre-t"><tbody id="dre-body"></tbody></table>
+  {# ── ABAS ── #}
+  <div style="display:flex;gap:.2rem;border-bottom:2px solid #e2e8f0;margin-bottom:1.25rem;flex-wrap:wrap;overflow-x:auto;">
+    <button class="sp-rtab on" id="sptab-btn-indicadores" onclick="spTab('indicadores',this)"><i class="bi bi-table me-1"></i>Indicadores / DRE</button>
+    <button class="sp-rtab" id="sptab-btn-fluxo"       onclick="spTab('fluxo',this)"><i class="bi bi-activity me-1"></i>Fluxo de Caixa</button>
+    <button class="sp-rtab" id="sptab-btn-custos"      onclick="spTab('custos',this)"><i class="bi bi-hammer me-1"></i>Custos</button>
+    <button class="sp-rtab" id="sptab-btn-comercial"   onclick="spTab('comercial',this)"><i class="bi bi-tags me-1"></i>Comercialização</button>
+    <button class="sp-rtab" id="sptab-btn-sensib"      onclick="spTab('sensib',this)"><i class="bi bi-grid-3x3 me-1"></i>Sensibilidade</button>
+  </div>
+
+  {# ── ABA 1: Indicadores / DRE ── #}
+  <div class="sp-sec on" id="sptab-indicadores">
+    <div class="sp-grid">
+      <div class="sp-card">
+        <h6><i class="bi bi-receipt me-1"></i>DRE VP — Projeção Nominal</h6>
+        <table class="dre-t"><tbody id="dre-body"></tbody></table>
+      </div>
+      <div class="sp-card">
+        <h6 style="color:#ea580c;"><i class="bi bi-receipt-cutoff me-1"></i>DRE VF — Valor Final (INCC)</h6>
+        <table class="dre-t"><tbody id="dre-vf-body"></tbody></table>
+      </div>
     </div>
+
+    {% if tem_fin %}
+    <div class="sp-fin">
+      <h6><i class="bi bi-bank2 me-1"></i>Impacto do Financiamento — Antes vs. Depois</h6>
+      <div class="fin-cmp">
+        <div>
+          <div style="font-size:.68rem;font-weight:700;text-transform:uppercase;color:#64748b;margin-bottom:.5rem;">Sem Financiamento</div>
+          <div class="fin-row"><span class="fin-lbl">Resultado</span><span class="fin-val" id="fin-sem-res">—</span></div>
+          <div class="fin-row"><span class="fin-lbl">Margem VGV</span><span class="fin-val" id="fin-sem-mg">—</span></div>
+          <div class="fin-row"><span class="fin-lbl">TIR</span><span class="fin-val" id="fin-sem-tir">—</span></div>
+          <div class="fin-row"><span class="fin-lbl">Exposição</span><span class="fin-val" id="fin-sem-exp" style="color:#dc2626;">—</span></div>
+        </div>
+        <div style="display:flex;align-items:center;padding:0 .5rem;"><i class="bi bi-arrow-right" style="font-size:1.3rem;color:#94a3b8;"></i></div>
+        <div>
+          <div style="font-size:.68rem;font-weight:700;text-transform:uppercase;color:#1e40af;margin-bottom:.5rem;">Com Financiamento</div>
+          <div class="fin-row"><span class="fin-lbl">Resultado</span><span class="fin-val" id="fin-com-res">—</span></div>
+          <div class="fin-row"><span class="fin-lbl">Margem VGV</span><span class="fin-val" id="fin-com-mg">—</span></div>
+          <div class="fin-row"><span class="fin-lbl">TIR alavancada</span><span class="fin-val" id="fin-com-tir" style="color:#6366f1;">—</span></div>
+          <div class="fin-row"><span class="fin-lbl">Exposição</span><span class="fin-val" id="fin-com-exp" style="color:#16a34a;">—</span></div>
+        </div>
+      </div>
+      <div style="margin-top:.85rem;padding-top:.75rem;border-top:1px solid #bfdbfe;font-size:.78rem;color:#475569;" id="fin-costs-row"></div>
+    </div>
+    {% endif %}
+  </div>
+
+  {# ── ABA 2: Fluxo de Caixa ── #}
+  <div class="sp-sec" id="sptab-fluxo">
     <div class="sp-card">
       <h6><i class="bi bi-activity me-1"></i>Fluxo de Caixa</h6>
-      <canvas id="chartFluxo" style="max-height:340px;"></canvas>
+      <canvas id="chartFluxo" style="max-height:380px;"></canvas>
     </div>
   </div>
 
-  {% if tem_fin %}
-  <div class="sp-fin">
-    <h6><i class="bi bi-bank2 me-1"></i>Impacto do Financiamento — Antes vs. Depois</h6>
-    <div class="fin-cmp">
-      <div>
-        <div style="font-size:.68rem;font-weight:700;text-transform:uppercase;color:#64748b;margin-bottom:.5rem;">Sem Financiamento</div>
-        <div class="fin-row"><span class="fin-lbl">Resultado</span><span class="fin-val" id="fin-sem-res">—</span></div>
-        <div class="fin-row"><span class="fin-lbl">Margem VGV</span><span class="fin-val" id="fin-sem-mg">—</span></div>
-        <div class="fin-row"><span class="fin-lbl">TIR</span><span class="fin-val" id="fin-sem-tir">—</span></div>
-        <div class="fin-row"><span class="fin-lbl">Exposição</span><span class="fin-val" id="fin-sem-exp" style="color:#dc2626;">—</span></div>
+  {# ── ABA 3: Custos e Despesas ── #}
+  <div class="sp-sec" id="sptab-custos">
+    <div class="sp-grid" style="margin-bottom:1.25rem;">
+      <div class="sp-card">
+        <h6><i class="bi bi-hammer me-1"></i>Custos VP (nominal)</h6>
+        <div id="custos-vp-body"></div>
       </div>
-      <div style="display:flex;align-items:center;padding:0 .5rem;"><i class="bi bi-arrow-right" style="font-size:1.3rem;color:#94a3b8;"></i></div>
-      <div>
-        <div style="font-size:.68rem;font-weight:700;text-transform:uppercase;color:#1e40af;margin-bottom:.5rem;">Com Financiamento</div>
-        <div class="fin-row"><span class="fin-lbl">Resultado</span><span class="fin-val" id="fin-com-res">—</span></div>
-        <div class="fin-row"><span class="fin-lbl">Margem VGV</span><span class="fin-val" id="fin-com-mg">—</span></div>
-        <div class="fin-row"><span class="fin-lbl">TIR alavancada</span><span class="fin-val" id="fin-com-tir" style="color:#6366f1;">—</span></div>
-        <div class="fin-row"><span class="fin-lbl">Exposição</span><span class="fin-val" id="fin-com-exp" style="color:#16a34a;">—</span></div>
+      <div class="sp-card">
+        <h6 style="color:#ea580c;"><i class="bi bi-hammer me-1"></i>Custos VF (INCC corrigido)</h6>
+        <div id="custos-vf-body"></div>
       </div>
     </div>
-    <div style="margin-top:.85rem;padding-top:.75rem;border-top:1px solid #bfdbfe;font-size:.78rem;color:#475569;" id="fin-costs-row"></div>
   </div>
-  {% endif %}
 
-  {% if fases %}
-  <div class="sp-card" style="margin-top:1.25rem;">
-    <h6 style="margin-bottom:1rem;"><i class="bi bi-tags me-1"></i>Estrutura de Comercialização</h6>
-    <div style="font-size:.72rem;color:#64748b;margin-bottom:.75rem;">
-      Correção durante obra: <strong>{{ corr_obra }}% a.m.</strong> &nbsp;·&nbsp; Pós-obra: <strong>{{ corr_pos_obra }}% a.m.</strong>
-    </div>
-    <div style="overflow-x:auto;">
-    <table style="width:100%;border-collapse:collapse;font-size:.8rem;">
-      <thead>
-        <tr style="background:#fff7ed;color:#ea580c;font-size:.68rem;font-weight:700;text-transform:uppercase;letter-spacing:.05em;">
-          <th style="padding:.55rem .75rem;text-align:left;border-bottom:2px solid #fed7aa;">Fase</th>
-          <th style="padding:.55rem .75rem;text-align:center;border-bottom:2px solid #fed7aa;">Meta</th>
-          <th style="padding:.55rem .75rem;text-align:center;border-bottom:2px solid #fed7aa;">Duração</th>
-          <th style="padding:.55rem .75rem;text-align:center;border-bottom:2px solid #fed7aa;">Entrada</th>
-          <th style="padding:.55rem .75rem;text-align:center;border-bottom:2px solid #fed7aa;">Parc. Entrada</th>
-          <th style="padding:.55rem .75rem;text-align:center;border-bottom:2px solid #fed7aa;">Parcelas</th>
-          <th style="padding:.55rem .75rem;text-align:center;border-bottom:2px solid #fed7aa;">Nº Parc.</th>
-          <th style="padding:.55rem .75rem;text-align:center;border-bottom:2px solid #fed7aa;">Reforços</th>
-          <th style="padding:.55rem .75rem;text-align:center;border-bottom:2px solid #fed7aa;">Reajuste</th>
-        </tr>
+  {# ── ABA 4: Comercialização ── #}
+  <div class="sp-sec" id="sptab-comercial">
+    {% if fases %}
+    <div class="sp-card">
+      <h6 style="margin-bottom:.75rem;"><i class="bi bi-tags me-1"></i>Estrutura de Comercialização</h6>
+      <div style="font-size:.72rem;color:#64748b;margin-bottom:.75rem;">
+        Correção durante obra: <strong>{{ corr_obra }}% a.m.</strong> &nbsp;·&nbsp; Pós-obra: <strong>{{ corr_pos_obra }}% a.m.</strong>
+      </div>
+      <div style="overflow-x:auto;">
+      <table style="width:100%;border-collapse:collapse;font-size:.8rem;">
+        <thead>
+          <tr style="background:#fff7ed;color:#ea580c;font-size:.68rem;font-weight:700;text-transform:uppercase;letter-spacing:.05em;">
+            <th style="padding:.55rem .75rem;text-align:left;border-bottom:2px solid #fed7aa;">Fase</th>
+            <th style="padding:.55rem .75rem;text-align:center;border-bottom:2px solid #fed7aa;">Meta</th>
+            <th style="padding:.55rem .75rem;text-align:center;border-bottom:2px solid #fed7aa;">Duração</th>
+            <th style="padding:.55rem .75rem;text-align:center;border-bottom:2px solid #fed7aa;">Entrada</th>
+            <th style="padding:.55rem .75rem;text-align:center;border-bottom:2px solid #fed7aa;">Parc. Entrada</th>
+            <th style="padding:.55rem .75rem;text-align:center;border-bottom:2px solid #fed7aa;">Parcelas</th>
+            <th style="padding:.55rem .75rem;text-align:center;border-bottom:2px solid #fed7aa;">Nº Parc.</th>
+            <th style="padding:.55rem .75rem;text-align:center;border-bottom:2px solid #fed7aa;">Reforços</th>
+            <th style="padding:.55rem .75rem;text-align:center;border-bottom:2px solid #fed7aa;">Reajuste</th>
+          </tr>
       </thead>
       <tbody>
         {% for f in fases %}
@@ -518,10 +583,17 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Inter','Segoe UI',sans-serif;
         </tr>
         {% endfor %}
       </tbody>
-    </table>
+      </table>
+      </div>
     </div>
+    {% endif %}
   </div>
-  {% endif %}
+
+  {# ── ABA 5: Sensibilidade ── #}
+  <div class="sp-sec" id="sptab-sensib">
+    <div id="sensib-body"></div>
+  </div>
+
 </div>
 
 <div class="sp-footer">
@@ -565,6 +637,15 @@ function setFin(f) {
   if (bs) bs.classList.toggle('on', !f);
   if (bc) bc.classList.toggle('on', f);
   render();
+}
+
+function spTab(name, btn) {
+  document.querySelectorAll('.sp-sec').forEach(s => s.classList.remove('on'));
+  document.querySelectorAll('.sp-rtab').forEach(b => b.classList.remove('on'));
+  const sec = el('sptab-' + name);
+  if (sec) sec.classList.add('on');
+  if (btn) btn.classList.add('on');
+  if (name === 'fluxo') { const r = CENARIOS[curCenario]; if (r) renderChart(r.chart_labels, r.chart_pag, r.chart_rec, r.chart_exp); }
 }
 
 function renderDRE(dre) {
@@ -648,11 +729,78 @@ function render() {
   if (el('sp-status-bar'))
     el('sp-status-bar').innerHTML = `<span class="sp-badge ${cnBadge}">${st.icon||''} ${st.label||curCenario}</span>`;
 
-  // DRE
+  // DRE VP
   renderDRE(r.dre);
 
-  // Chart
-  renderChart(r.chart_labels, r.chart_pag, r.chart_rec, r.chart_exp);
+  // DRE VF
+  const dvfBody = el('dre-vf-body');
+  if (dvfBody && r.dre_vf && r.dre_vf.length) {
+    dvfBody.innerHTML = '<table class="dre-t"><tbody>' + r.dre_vf.map(row => {
+      let v;
+      if (row.tipo === 'pct') v = parseFloat(row.valor).toFixed(2) + '%';
+      else if (row.tipo === 'subtotal') v = `<strong style="color:#f97316">${brl(row.valor)}</strong>`;
+      else v = brl(row.valor);
+      return `<tr class="dre-row-${row.tipo}"><td>${row.desc}</td><td class="dre-val">${v}</td></tr>`;
+    }).join('') + '</tbody></table>';
+  }
+
+  // Chart (só renderiza se aba ativa)
+  const fluxoSec = el('sptab-fluxo');
+  if (fluxoSec && fluxoSec.classList.contains('on'))
+    renderChart(r.chart_labels, r.chart_pag, r.chart_rec, r.chart_exp);
+  else if (spChart) { /* preserva chart existente */ }
+  else renderChart(r.chart_labels, r.chart_pag, r.chart_rec, r.chart_exp);
+
+  // Custos VP
+  const cvp = el('custos-vp-body');
+  if (cvp) {
+    const rows = [
+      ['CUB × Área equiv.',    r.custo_cub],
+      ['Itens fora CUB',       r.itens_extra],
+      ['Despesas indiretas',   r.custo_indiretos],
+      ['Terreno',              r.valor_terreno],
+      ['Comercialização',      r.custo_comercial],
+      ['Impostos s/ receita',  r.custo_impostos],
+      ['<strong>Custo Total</strong>', r.custo_total],
+    ];
+    cvp.innerHTML = rows.filter(([,v])=>v!=null&&v!==0||true).map(([l,v])=>
+      `<div class="bk-row"><span class="bk-lbl">${l}</span><span>${brl(v)}</span></div>`
+    ).join('');
+  }
+  // Custos VF
+  const cvf = el('custos-vf-body');
+  if (cvf) {
+    const ganho = (r.vf_resultado!=null && r.resultado_bruto!=null) ? r.vf_resultado - r.resultado_bruto : null;
+    const rows = [
+      ['VGV Corrigido (INCC)',         r.vf_vgv],
+      ['Custo de Obra (VF)',            r.vf_custo_obra],
+      ['Custo Total (VF)',              r.vf_custo_total],
+      ['Resultado VF',                  r.vf_resultado],
+      ['Margem VF',                     r.vf_margem_vgv != null ? pct(r.vf_margem_vgv) : null, true],
+      ['<strong style="color:#f97316">↑ Ganho VF vs VP</strong>', ganho],
+    ];
+    cvf.innerHTML = rows.filter(([,v])=>v!=null).map(([l,v,isPct])=>
+      `<div class="bk-row"><span class="bk-lbl">${l}</span><span style="${l.includes('Ganho')?'color:#f97316;font-weight:700':''}"> ${isPct ? v : brl(v)}</span></div>`
+    ).join('');
+  }
+
+  // Sensibilidade
+  const sensib = el('sensib-body');
+  if (sensib && r.sensibilidade) {
+    const s = r.sensibilidade;
+    const hdrs = s.fatores_custo || [];
+    const mkTable = (title, rows, colorFn) => {
+      const thead = `<tr><th style="text-align:left;">VGV \\ Custo</th>${hdrs.map(h=>`<th>${h}</th>`).join('')}</tr>`;
+      const tbody = (rows||[]).map(row=>`<tr><td style="font-weight:700;background:#1e293b;color:#fff;padding:.4rem .6rem;">${row.label}</td>${(row.valores||[]).map(v=>{const c=colorFn(v);return `<td style="background:${c.bg};color:${c.fg};font-weight:600;">${v!=null?v+'%':'—'}</td>`;}).join('')}</tr>`).join('');
+      return `<div class="sp-card" style="margin-bottom:1rem;"><h6>${title}</h6><div style="overflow-x:auto;"><table class="sen-t"><thead>${thead}</thead><tbody>${tbody}</tbody></table></div></div>`;
+    };
+    const tirColor = v => v==null?{bg:'#f1f5f9',fg:'#94a3b8'}:v>=25?{bg:'#dcfce7',fg:'#15803d'}:v>=18?{bg:'#fef9c3',fg:'#854d0e'}:{bg:'#fee2e2',fg:'#dc2626'};
+    const mgColor2 = v => v==null?{bg:'#f1f5f9',fg:'#94a3b8'}:v>=25?{bg:'#dcfce7',fg:'#15803d'}:v>=15?{bg:'#fef9c3',fg:'#854d0e'}:{bg:'#fee2e2',fg:'#dc2626'};
+    sensib.innerHTML = mkTable('<i class="bi bi-bar-chart-line me-1"></i>Sensibilidade — TIR (%)', s.rows_tir, tirColor)
+                     + mkTable('<i class="bi bi-percent me-1"></i>Sensibilidade — Margem VGV (%)', s.rows_margem, mgColor2);
+  } else if (sensib) {
+    sensib.innerHTML = '<div class="sp-card"><p style="color:#94a3b8;font-size:.84rem;">Dados de sensibilidade não disponíveis. Salve e compartilhe novamente.</p></div>';
+  }
 
   // Financing comparison
   if (fin) {
