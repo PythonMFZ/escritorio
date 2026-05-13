@@ -344,9 +344,12 @@ def _calcular_viabilidade_v2(dados: dict) -> dict:
     # Comissão fica nominal.
     # Iteramos sobre TODO o fluxo (sem truncar) para capturar parcelas longas (ex: 140 meses).
     vf_fluxo_raw = []
+    vf_fluxo     = []        # detalhes por mês para tabela/gráfico VF
     vf_total_rec = 0.0
     vf_total_cst = 0.0
     vf_total_com = 0.0
+    vf_saldo_acum      = 0.0
+    exposicao_maxima_vf = 0.0
     for f in fluxo:
         m = f["mes"]
         if m == 0:
@@ -360,11 +363,23 @@ def _calcular_viabilidade_v2(dados: dict) -> dict:
         vf_cst = f["custo_obra"] * cf_m
         vf_com = f["comissao"]          # comissão fica nominal
         vf_tri = vf_rec * pct_impostos
-        vf_saldo = vf_rec - vf_com - vf_tri - vf_cst
+        vf_saldo_mes = vf_rec - vf_com - vf_tri - vf_cst
+        vf_saldo_acum += vf_saldo_mes
+        if vf_saldo_acum < exposicao_maxima_vf:
+            exposicao_maxima_vf = vf_saldo_acum
         vf_total_rec += vf_rec
         vf_total_cst += vf_cst
         vf_total_com += vf_com
-        vf_fluxo_raw.append(vf_saldo)
+        vf_fluxo_raw.append(vf_saldo_mes)
+        vf_fluxo.append({
+            "mes":             m,
+            "receita":         round(vf_rec, 2),
+            "comissao":        round(vf_com, 2),
+            "tributos":        round(vf_tri, 2),
+            "custo_obra":      round(vf_cst, 2),
+            "saldo_mes":       round(vf_saldo_mes, 2),
+            "saldo_acumulado": round(vf_saldo_acum, 2),
+        })
 
     vf_custo_com     = vf_total_com
     vf_custo_imp     = vf_total_rec * pct_impostos
@@ -455,8 +470,10 @@ def _calcular_viabilidade_v2(dados: dict) -> dict:
         ],
         "payback_mes": payback,
         "status": status,
+        "exposicao_maxima_vf": round(abs(exposicao_maxima_vf), 2),
         # Fluxo
         "fluxo": fluxo,
+        "vf_fluxo": vf_fluxo,
         "fluxo_trimestral": fluxo_trimestral,
     }
 

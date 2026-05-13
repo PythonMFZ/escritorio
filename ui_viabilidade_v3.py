@@ -314,7 +314,7 @@ def _calcular_v3(dados: dict) -> dict:
         {"desc": "Lucratividade",              "valor": round(resultado_bruto/vgv_liquido*100 if vgv_liquido else 0, 2), "tipo": "pct"},
     ]
 
-    # Chart data — meses com movimento, fluxo completo
+    # Chart data VP — meses com movimento, fluxo completo
     chart_labels, chart_pag, chart_rec, chart_exp = [], [], [], []
     for f in base["fluxo"]:
         if f["receita"] != 0 or f["custo_obra"] != 0 or f["saldo_mes"] != 0:
@@ -322,6 +322,15 @@ def _calcular_v3(dados: dict) -> dict:
             chart_pag.append(round(-(f["custo_obra"] + f["comissao"] + f["tributos"]), 2))
             chart_rec.append(round(f["receita"], 2))
             chart_exp.append(round(f["saldo_acumulado"], 2))
+
+    # Chart data VF — mesmos eixos, valores corrigidos
+    chart_labels_vf, chart_pag_vf, chart_rec_vf, chart_exp_vf = [], [], [], []
+    for f in base.get("vf_fluxo", []):
+        if f["receita"] != 0 or f["custo_obra"] != 0 or f["saldo_mes"] != 0:
+            chart_labels_vf.append(f["mes"])
+            chart_pag_vf.append(round(-(f["custo_obra"] + f["comissao"] + f["tributos"]), 2))
+            chart_rec_vf.append(round(f["receita"], 2))
+            chart_exp_vf.append(round(f["saldo_acumulado"], 2))
 
     # Desembolso anual aggregated
     from collections import defaultdict as _dd
@@ -337,6 +346,10 @@ def _calcular_v3(dados: dict) -> dict:
     base["chart_pag"]          = chart_pag
     base["chart_rec"]          = chart_rec
     base["chart_exp"]          = chart_exp
+    base["chart_labels_vf"]    = chart_labels_vf
+    base["chart_pag_vf"]       = chart_pag_vf
+    base["chart_rec_vf"]       = chart_rec_vf
+    base["chart_exp_vf"]       = chart_exp_vf
     base["desembolso_anual"]   = desembolso_anual
     base["cenario"]            = dados.get("cenario", "realista")
 
@@ -1069,12 +1082,30 @@ TEMPLATES["ferramenta_viabilidade.html"] = r"""
 
   {# ── SUB-TAB 2: Fluxo de Caixa ── #}
   <div class="res-sec" id="restab-fluxo">
+    {# Toggle VP / VF #}
+    <div style="display:flex;align-items:center;gap:.5rem;margin-bottom:1rem;flex-wrap:wrap;">
+      <span style="font-size:.78rem;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:#64748b;">Visualizar:</span>
+      <div style="display:flex;border:1.5px solid #e2e8f0;border-radius:10px;overflow:hidden;">
+        <button id="btnFluxoVP" onclick="toggleFluxo('vp')"
+          style="padding:.38rem .9rem;font-size:.82rem;font-weight:700;border:none;background:#ea580c;color:#fff;cursor:pointer;transition:all .15s;">
+          VP — Nominal
+        </button>
+        <button id="btnFluxoVF" onclick="toggleFluxo('vf')"
+          style="padding:.38rem .9rem;font-size:.82rem;font-weight:700;border:none;background:#fff;color:#64748b;cursor:pointer;transition:all .15s;">
+          VF — Corrigido
+        </button>
+      </div>
+      <span id="fluxoModeLabel" style="font-size:.75rem;color:#94a3b8;">Valores nominais (sem correção monetária)</span>
+    </div>
+
     <div style="background:#fff;border:1px solid var(--mc-border);border-radius:14px;padding:1.25rem;margin-bottom:1.25rem;">
       <canvas id="chartFluxo" style="max-height:340px;"></canvas>
     </div>
-    <h6 class="mb-2">Fluxo de Caixa Mensal</h6>
+
+    <h6 class="mb-2" id="fluxoTableTitle">Fluxo de Caixa Mensal — VP (Nominal)</h6>
     <div class="fc-wrap">
-      <table class="fc-table">
+      {# Tabela VP #}
+      <table class="fc-table" id="tabelaFluxoVP">
         <thead>
           <tr>
             <th style="text-align:left;">Mês</th>
@@ -1100,6 +1131,37 @@ TEMPLATES["ferramenta_viabilidade.html"] = r"""
           </tr>
           {% endif %}
           {% endfor %}
+        </tbody>
+      </table>
+      {# Tabela VF #}
+      <table class="fc-table" id="tabelaFluxoVF" style="display:none;">
+        <thead>
+          <tr>
+            <th style="text-align:left;">Mês</th>
+            <th>Receita (Corr.)</th>
+            <th>Comissão</th>
+            <th>Tributos (Corr.)</th>
+            <th>Custo Obra (Corr.)</th>
+            <th>Saldo Mês (VF)</th>
+            <th>Saldo Acum. (VF)</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% if r.vf_fluxo %}
+          {% for f in r.vf_fluxo %}
+          {% if f.receita != 0 or f.custo_obra != 0 or f.saldo_mes != 0 %}
+          <tr>
+            <td>{{ f.mes }}</td>
+            <td class="fc-pos">{{ f.receita|brl }}</td>
+            <td class="fc-neg">{{ f.comissao|brl }}</td>
+            <td class="fc-neg">{{ f.tributos|brl }}</td>
+            <td class="fc-neg">{{ f.custo_obra|brl }}</td>
+            <td class="{{ 'fc-pos' if f.saldo_mes >= 0 else 'fc-neg' }}">{{ f.saldo_mes|brl }}</td>
+            <td class="{{ 'fc-pos' if f.saldo_acumulado >= 0 else 'fc-neg' }}">{{ f.saldo_acumulado|brl }}</td>
+          </tr>
+          {% endif %}
+          {% endfor %}
+          {% endif %}
         </tbody>
       </table>
     </div>
@@ -1311,18 +1373,33 @@ TEMPLATES["ferramenta_viabilidade.html"] = r"""
 document.addEventListener('DOMContentLoaded',function(){
   vbTab('resultado',document.querySelector('[onclick*="resultado"]'));
   {% if resultado.chart_labels %}
-  new Chart(document.getElementById('chartFluxo'), {
+  const _fluxoDataVP = {
+    labels: {{ resultado.chart_labels | tojson }},
+    pag:    {{ resultado.chart_pag | tojson }},
+    rec:    {{ resultado.chart_rec | tojson }},
+    exp:    {{ resultado.chart_exp | tojson }},
+  };
+  const _fluxoDataVF = {
+    labels: {{ resultado.chart_labels_vf | default([]) | tojson }},
+    pag:    {{ resultado.chart_pag_vf | default([]) | tojson }},
+    rec:    {{ resultado.chart_rec_vf | default([]) | tojson }},
+    exp:    {{ resultado.chart_exp_vf | default([]) | tojson }},
+  };
+  const _chartFluxo = new Chart(document.getElementById('chartFluxo'), {
     type: 'line',
     data: {
-      labels: {{ resultado.chart_labels | tojson }},
+      labels: _fluxoDataVP.labels,
       datasets: [
-        {label:'Pagamentos', data: {{ resultado.chart_pag | tojson }}, borderColor:'#ef4444', backgroundColor:'rgba(239,68,68,.1)', tension:.3, fill:true},
-        {label:'Recebimentos', data: {{ resultado.chart_rec | tojson }}, borderColor:'#22c55e', backgroundColor:'rgba(34,197,94,.1)', tension:.3, fill:true},
-        {label:'Exposição Acum.', data: {{ resultado.chart_exp | tojson }}, borderColor:'#94a3b8', borderDash:[5,5], tension:.3, fill:false}
+        {label:'Pagamentos',    data: _fluxoDataVP.pag, borderColor:'#ef4444', backgroundColor:'rgba(239,68,68,.1)', tension:.3, fill:true},
+        {label:'Recebimentos',  data: _fluxoDataVP.rec, borderColor:'#22c55e', backgroundColor:'rgba(34,197,94,.1)', tension:.3, fill:true},
+        {label:'Exposição Acum.', data: _fluxoDataVP.exp, borderColor:'#94a3b8', borderDash:[5,5], tension:.3, fill:false}
       ]
     },
     options: { responsive:true, plugins:{legend:{position:'top'}}, scales:{y:{ticks:{callback: function(v){return 'R$'+v.toLocaleString('pt-BR');}}}}}
   });
+  window._chartFluxo = _chartFluxo;
+  window._fluxoDataVP = _fluxoDataVP;
+  window._fluxoDataVF = _fluxoDataVF;
   {% endif %}
   {% if resultado.desembolso_anual %}
   new Chart(document.getElementById('chartDesembolso'), {
@@ -1345,6 +1422,29 @@ function vbTab(id,btn){
   const s=document.getElementById('tab-'+id);if(s)s.classList.add('on');
   if(btn)btn.classList.add('on');
   window.scrollTo({top:0,behavior:'smooth'});
+}
+function toggleFluxo(mode){
+  const isVF = mode === 'vf';
+  const btnVP  = document.getElementById('btnFluxoVP');
+  const btnVF  = document.getElementById('btnFluxoVF');
+  const lbl    = document.getElementById('fluxoModeLabel');
+  const title  = document.getElementById('fluxoTableTitle');
+  const tabVP  = document.getElementById('tabelaFluxoVP');
+  const tabVF  = document.getElementById('tabelaFluxoVF');
+  if(btnVP){btnVP.style.background=isVF?'#fff':'#ea580c';btnVP.style.color=isVF?'#64748b':'#fff';}
+  if(btnVF){btnVF.style.background=isVF?'#ea580c':'#fff';btnVF.style.color=isVF?'#fff':'#64748b';}
+  if(lbl) lbl.textContent=isVF?'Valores corrigidos pelo índice configurado (CUB/INCC pós-obra)':'Valores nominais (sem correção monetária)';
+  if(title) title.textContent=isVF?'Fluxo de Caixa Mensal — VF (Corrigido)':'Fluxo de Caixa Mensal — VP (Nominal)';
+  if(tabVP) tabVP.style.display=isVF?'none':'table';
+  if(tabVF) tabVF.style.display=isVF?'table':'none';
+  if(window._chartFluxo && window._fluxoDataVP && window._fluxoDataVF){
+    const d = isVF ? window._fluxoDataVF : window._fluxoDataVP;
+    window._chartFluxo.data.labels = d.labels;
+    window._chartFluxo.data.datasets[0].data = d.pag;
+    window._chartFluxo.data.datasets[1].data = d.rec;
+    window._chartFluxo.data.datasets[2].data = d.exp;
+    window._chartFluxo.update();
+  }
 }
 function resTab(id,btn){
   document.querySelectorAll('.res-sec').forEach(s=>s.classList.remove('on'));
