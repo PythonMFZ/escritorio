@@ -16,6 +16,7 @@ class EstudoViabilidade(SQLModel, table=True):
     __tablename__ = "estudo_viabilidade"
     id: _Opt_s[int] = Field(default=None, primary_key=True)
     company_id: int = Field(index=True)
+    client_id: _Opt_s[int] = Field(default=None, index=True)   # isolamento por cliente
     nome_projeto: str = Field(default="Sem nome")
     dados_input_json: str = Field(default="{}")           # inputs originais (não escalados)
     resultado_realista_json: str = Field(default="{}")    # compact result para share
@@ -27,6 +28,14 @@ class EstudoViabilidade(SQLModel, table=True):
 
 try:
     EstudoViabilidade.__table__.create(engine, checkfirst=True)
+except Exception:
+    pass
+
+# Migração: adiciona client_id se a coluna não existir
+try:
+    with engine.connect() as _conn_ev:
+        _conn_ev.exec_driver_sql("ALTER TABLE estudo_viabilidade ADD COLUMN client_id INTEGER")
+        _conn_ev.commit()
 except Exception:
     pass
 
@@ -181,9 +190,11 @@ async def viabilidade_salvar_v1(
         r_pess = _calc_cenario_viab(dados, "pessimista")
     except Exception as ex:
         return _JRS({"ok": False, "error": f"Erro no cálculo: {ex}"})
+    _active_client_id = get_active_client_id(request, session, ctx)
     token = str(_uuid_s.uuid4())
     estudo = EstudoViabilidade(
         company_id=ctx.company.id,
+        client_id=_active_client_id,
         nome_projeto=nome_projeto,
         dados_input_json=_json_s.dumps(dados, default=str),
         resultado_realista_json=_json_s.dumps(_compact_result(r_real), default=str),
@@ -214,12 +225,17 @@ async def viabilidade_historico_v1(
     ctx = get_tenant_context(request, session)
     if not ctx:
         return _JRS({"estudos": []})
-    estudos = session.exec(
-        select(EstudoViabilidade)
-        .where(EstudoViabilidade.company_id == ctx.company.id)
-        .order_by(EstudoViabilidade.id.desc())
-        .limit(50)
-    ).all()
+    _cli_id = get_active_client_id(request, session, ctx)
+    _q = select(EstudoViabilidade).where(EstudoViabilidade.company_id == ctx.company.id)
+    if _cli_id:
+        # Filtra pelo cliente ativo: mostra apenas estudos deste cliente
+        # (estudos antigos sem client_id também ficam visíveis para compatibilidade)
+        from sqlalchemy import or_ as _or_sql
+        _q = _q.where(_or_sql(
+            EstudoViabilidade.client_id == _cli_id,
+            EstudoViabilidade.client_id == None,
+        ))
+    estudos = session.exec(_q.order_by(EstudoViabilidade.id.desc()).limit(50)).all()
     result = []
     for e in estudos:
         try:

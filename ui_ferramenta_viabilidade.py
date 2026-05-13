@@ -330,23 +330,24 @@ def _calcular_viabilidade_v2(dados: dict) -> dict:
     margem_vgv    = resultado_bruto / vgv_liquido if vgv_liquido > 0 else 0
     margem_custo  = resultado_bruto / custo_total if custo_total > 0 else 0
 
-    # TIR / VPL — base VP (nominal)
-    fluxo_raw = [f["saldo_mes"] for f in fluxo[:min(len(fluxo), 120)]]
+    # TIR / VPL — base VP (nominal) — usa fluxo completo (sem truncar)
+    fluxo_raw = [f["saldo_mes"] for f in fluxo]
     tir_mensal = _tir(fluxo_raw)
     tir_anual  = ((1 + tir_mensal) ** 12 - 1) if tir_mensal is not None else None
 
     vpl = sum(f["saldo_mes"] / ((1 + tma_mensal) ** m)
-              for m, f in enumerate(fluxo) if m < 120)
+              for m, f in enumerate(fluxo))
 
     # ── VF: Valor Final com correção monetária ────────────────────────────────
     # Durante obra: recebíveis e custo corrigidos por corr_obra (CUB/INCC).
     # Pós-obra: saldo devedor das parcelas atualizado por corr_pos_obra.
     # Comissão fica nominal.
+    # Iteramos sobre TODO o fluxo (sem truncar) para capturar parcelas longas (ex: 140 meses).
     vf_fluxo_raw = []
     vf_total_rec = 0.0
     vf_total_cst = 0.0
     vf_total_com = 0.0
-    for f in fluxo[:min(len(fluxo), 120)]:
+    for f in fluxo:
         m = f["mes"]
         if m == 0:
             cf_m = 1.0
@@ -385,9 +386,9 @@ def _calcular_viabilidade_v2(dados: dict) -> dict:
     # Classificação
     status = _classificar(margem_vgv, tir_anual)
 
-    # Resumo do fluxo para gráfico (trimestral para não pesar)
+    # Resumo do fluxo para gráfico (trimestral, fluxo completo)
     fluxo_trimestral = []
-    for i in range(0, min(len(fluxo), 120), 3):
+    for i in range(0, len(fluxo), 3):
         bloco = fluxo[i:i+3]
         fluxo_trimestral.append({
             "mes": i,
@@ -455,7 +456,7 @@ def _calcular_viabilidade_v2(dados: dict) -> dict:
         "payback_mes": payback,
         "status": status,
         # Fluxo
-        "fluxo": fluxo[:min(len(fluxo), 120)],
+        "fluxo": fluxo,
         "fluxo_trimestral": fluxo_trimestral,
     }
 
