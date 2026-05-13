@@ -154,7 +154,7 @@ def _calcular_v3(dados: dict) -> dict:
             saldo_equity = f["saldo_mes"] + dd - am - jj
             fluxo_equity.append(saldo_equity)
 
-        tir_alav_m = _tir_v3(fluxo_equity[:min(len(fluxo_equity), 120)])
+        tir_alav_m = _tir_v3(fluxo_equity)
         tir_alavancada = ((1 + tir_alav_m) ** 12 - 1) * 100 if tir_alav_m is not None else None
 
         equity_investido = custo_total - valor_financiado
@@ -314,9 +314,9 @@ def _calcular_v3(dados: dict) -> dict:
         {"desc": "Lucratividade",              "valor": round(resultado_bruto/vgv_liquido*100 if vgv_liquido else 0, 2), "tipo": "pct"},
     ]
 
-    # Chart data — only non-zero months, max 120
+    # Chart data — meses com movimento, fluxo completo
     chart_labels, chart_pag, chart_rec, chart_exp = [], [], [], []
-    for f in base["fluxo"][:120]:
+    for f in base["fluxo"]:
         if f["receita"] != 0 or f["custo_obra"] != 0 or f["saldo_mes"] != 0:
             chart_labels.append(f["mes"])
             chart_pag.append(round(-(f["custo_obra"] + f["comissao"] + f["tributos"]), 2))
@@ -326,7 +326,7 @@ def _calcular_v3(dados: dict) -> dict:
     # Desembolso anual aggregated
     from collections import defaultdict as _dd
     anual = _dd(float)
-    for f in base["fluxo"][:120]:
+    for f in base["fluxo"]:
         if f["custo_obra"] > 0:
             ano = (f["mes"] // 12) + 1
             anual[ano] += f["custo_obra"]
@@ -369,14 +369,14 @@ def _calcular_v3(dados: dict) -> dict:
     _tma_m_calc = (1.12 ** (1 / 12)) - 1
     _vp_rec_calc = round(sum(
         f["receita"] / (1 + _tma_m_calc) ** i
-        for i, f in enumerate(base["fluxo"][:120])
+        for i, f in enumerate(base["fluxo"])
     ), 2)
     base["vp_receitas"] = _vp_rec_calc
     base["vp_custos"]   = round(_vp_rec_calc - (base.get("vpl") or 0), 2)
 
     if fin_result is not None:
         _fl_eq_calc = []
-        for _i_eq, _f_eq in enumerate(base["fluxo"][:120]):
+        for _i_eq, _f_eq in enumerate(base["fluxo"]):
             _sc_eq = schedule[_i_eq] if _i_eq < len(schedule) else {}
             _fl_eq_calc.append(
                 _f_eq["saldo_mes"]
