@@ -211,7 +211,7 @@ def _calcular_v3(dados: dict) -> dict:
             "ltv_cri":                  round(ltv_cri, 2),
             "cobertura_min":            round(cobertura_min, 4),
             "spread_cdi":               round(spread_cdi_fin, 2) if spread_cdi_fin is not None else None,
-            "schedule":                 schedule[:24],
+            "schedule":                 schedule,
             "tipo_amortizacao":         tipo_amort,
             "pct_fin":                  round(pct_fin * 100, 1),
             "taxa_am":                  round(taxa_am * 100, 2),
