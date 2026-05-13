@@ -353,7 +353,8 @@ def _calcular_viabilidade_v2(dados: dict) -> dict:
         elif m <= mes_fim_obra:
             cf_m = (1 + corr_obra) ** m
         else:
-            cf_m = (1 + corr_obra) ** mes_fim_obra * (1 + corr_pos_obra) ** (m - mes_fim_obra)
+            # Pós-entrega: índice reinicia do zero na data de entrega (não acumula sobre a obra)
+            cf_m = (1 + corr_pos_obra) ** (m - mes_fim_obra)
         vf_rec = f["receita"] * cf_m
         vf_cst = f["custo_obra"] * cf_m
         vf_com = f["comissao"]          # comissão fica nominal
