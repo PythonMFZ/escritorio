@@ -36486,6 +36486,7 @@ TEMPLATES["ferramentas.html"] = r"""
         </div>
         <div class="d-flex gap-2 flex-wrap">
           <a class="btn btn-primary" href="/ferramentas/viabilidade">Abrir Viabilidade</a>
+          <a class="btn btn-outline-primary" href="/ferramentas/mapa-unidades">Mapa de Unidades</a>
         </div>
       </div>
     </div>
@@ -47593,4 +47594,5 @@ exec(open('ui_wizard_v2.py').read())
 exec(open('ui_augur_doc_index.py').read())
 exec(open('ui_viabilidade_v3.py').read())
 exec(open('ui_viabilidade_share.py').read())
+exec(open('ui_mapa_unidades.py').read())
 
