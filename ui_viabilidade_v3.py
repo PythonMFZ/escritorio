@@ -859,30 +859,31 @@ TEMPLATES["ferramenta_viabilidade.html"] = r"""
     <div style="font-size:.9rem;line-height:1.5;">{{ st.desc }}</div>
   </div>
 
-  {# 4 Large KPI cards #}
+  {# 4 Large KPI cards — valores VF (corrigidos por INCC) #}
+  <div style="font-size:.7rem;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:#94a3b8;margin-bottom:.5rem;">Indicadores VF — Valor Final (corrigido por INCC)</div>
   <div class="kpi-large">
     <div class="kpi-card">
       <div class="kpi-icon orange"><i class="bi bi-graph-up-arrow"></i></div>
       <div class="kpi-card-body">
-        <div class="kpi-card-lbl">Resultado Bruto</div>
-        <div class="kpi-card-val" style="color:{{ '#16a34a' if r.resultado_bruto >= 0 else '#dc2626' }};">{{ r.resultado_bruto|brl }}</div>
-        <div class="kpi-card-sub">{{ r.margem_vgv }}% sobre VGV líquido</div>
+        <div class="kpi-card-lbl">Resultado VF</div>
+        <div class="kpi-card-val" style="color:{{ '#f97316' if r.vf_resultado and r.vf_resultado >= 0 else '#dc2626' }};">{% if r.vf_resultado %}{{ r.vf_resultado|brl }}{% else %}—{% endif %}</div>
+        <div class="kpi-card-sub">{{ r.vf_margem_vgv or '—' }}% sobre VGV corrigido · VP: {{ r.resultado_bruto|brl }} ({{ r.margem_vgv }}%)</div>
       </div>
     </div>
     <div class="kpi-card">
       <div class="kpi-icon orange"><i class="bi bi-percent"></i></div>
       <div class="kpi-card-body">
-        <div class="kpi-card-lbl">Lucratividade</div>
-        <div class="kpi-card-val" style="color:{{ '#16a34a' if r.margem_custo >= 20 else ('#ca8a04' if r.margem_custo >= 10 else '#dc2626') }};">{{ r.margem_custo }}%</div>
-        <div class="kpi-card-sub">Margem sobre custo total</div>
+        <div class="kpi-card-lbl">Lucratividade VF</div>
+        <div class="kpi-card-val" style="color:{{ '#f97316' if r.vf_margem_custo and r.vf_margem_custo >= 20 else ('#ca8a04' if r.vf_margem_custo and r.vf_margem_custo >= 10 else '#dc2626') }};">{{ r.vf_margem_custo or '—' }}%</div>
+        <div class="kpi-card-sub">Margem sobre custo corrigido · VP: {{ r.margem_custo }}%</div>
       </div>
     </div>
     <div class="kpi-card">
       <div class="kpi-icon blue"><i class="bi bi-bar-chart-line"></i></div>
       <div class="kpi-card-body">
-        <div class="kpi-card-lbl">VPL (TMA 12% a.a.)</div>
-        <div class="kpi-card-val" style="color:{{ '#16a34a' if r.vpl and r.vpl >= 0 else '#dc2626' }};">{% if r.vpl %}{{ r.vpl|brl }}{% else %}—{% endif %}</div>
-        <div class="kpi-card-sub">Valor presente líquido</div>
+        <div class="kpi-card-lbl">VPL VF (TMA 12% a.a.)</div>
+        <div class="kpi-card-val" style="color:{{ '#f97316' if r.vpl_vf and r.vpl_vf >= 0 else '#dc2626' }};">{% if r.vpl_vf %}{{ r.vpl_vf|brl }}{% else %}—{% endif %}</div>
+        <div class="kpi-card-sub">Valor presente líquido corrigido · VP: {% if r.vpl %}{{ r.vpl|brl }}{% else %}—{% endif %}</div>
       </div>
     </div>
     <div class="kpi-card">
@@ -977,8 +978,10 @@ TEMPLATES["ferramenta_viabilidade.html"] = r"""
       <div class="col-md-6">
         <h6 class="mb-2" style="color:#f97316;"><i class="bi bi-speedometer2 me-1"></i>Indicadores de Viabilidade</h6>
         <div class="bk">
-          {% if r.tir_anual is not none %}<div class="bk-r"><span class="bk-l">TIR Anual (equity puro)</span><span style="color:{{ '#16a34a' if r.tir_anual >= 20 else ('#ca8a04' if r.tir_anual >= 15 else '#dc2626') }};font-weight:700;">{{ r.tir_anual }}%</span></div>{% endif %}
-          <div class="bk-r"><span class="bk-l">Margem VGV</span><span style="font-weight:600;">{{ r.margem_vgv }}%</span></div>
+          {% if r.tir_vf_anual is not none %}<div class="bk-r" style="background:#fff7ed;"><span class="bk-l" style="color:#ea580c;font-weight:700;">TIR VF (INCC corrigido)</span><span style="color:{{ '#f97316' if r.tir_vf_anual >= 20 else ('#ca8a04' if r.tir_vf_anual >= 15 else '#dc2626') }};font-weight:700;">{{ r.tir_vf_anual }}% a.a.</span></div>{% endif %}
+          {% if r.tir_anual is not none %}<div class="bk-r"><span class="bk-l">TIR VP (nominal)</span><span style="color:{{ '#64748b' }};font-weight:600;">{{ r.tir_anual }}% a.a.</span></div>{% endif %}
+          <div class="bk-r" style="background:#fff7ed;"><span class="bk-l" style="color:#ea580c;font-weight:700;">Margem VF</span><span style="color:#f97316;font-weight:700;">{{ r.vf_margem_vgv or '—' }}%</span></div>
+          <div class="bk-r"><span class="bk-l">Margem VP (nominal)</span><span style="font-weight:600;color:#64748b;">{{ r.margem_vgv }}%</span></div>
           {% if r.payback_mes %}<div class="bk-r"><span class="bk-l">Payback Simples</span><span>Mês {{ r.payback_mes }}</span></div>{% endif %}
           {% if ia %}
           <div class="bk-r"><span class="bk-l">VSO Mensal</span><span>{{ "%.1f"|format(ia.vso_mensal) }} un./mês</span></div>
@@ -996,7 +999,8 @@ TEMPLATES["ferramenta_viabilidade.html"] = r"""
         <div class="bk">
           <div class="bk-r"><span class="bk-l">VP das Receitas</span><span style="color:#f97316;font-weight:600;">{{ r.vp_receitas|brl }}</span></div>
           <div class="bk-r"><span class="bk-l">(−) VP dos Custos</span><span style="color:#475569;">{{ r.vp_custos|brl }}</span></div>
-          <div class="bk-r bk-t"><span>VPL Projeto <small style="color:#94a3b8;font-weight:400;">(sem CCB)</small></span><span style="color:{{ '#16a34a' if r.vpl and r.vpl >= 0 else '#dc2626' }};font-weight:700;">{% if r.vpl %}{{ r.vpl|brl }}{% else %}—{% endif %}</span></div>
+          {% if r.vpl_vf %}<div class="bk-r" style="background:#fff7ed;"><span class="bk-l" style="color:#ea580c;font-weight:700;">VPL VF <small style="font-weight:400;">(INCC corrigido)</small></span><span style="color:{{ '#f97316' if r.vpl_vf >= 0 else '#dc2626' }};font-weight:700;">{{ r.vpl_vf|brl }}</span></div>{% endif %}
+          <div class="bk-r bk-t"><span>VPL VP <small style="color:#94a3b8;font-weight:400;">(nominal, sem CCB)</small></span><span style="color:{{ '#64748b' }};font-weight:600;">{% if r.vpl %}{{ r.vpl|brl }}{% else %}—{% endif %}</span></div>
           {% if fin and fin.vpl_alavancado is not none %}
           <div class="bk-r" style="background:#fff3e0;border-top:1.5px solid rgba(249,115,22,.4);"><span class="bk-l" style="color:#c2410c;font-weight:600;">VPL Equity <small style="font-weight:400;">(pós-CCB)</small></span><span style="color:{{ '#16a34a' if fin.vpl_alavancado >= 0 else '#dc2626' }};font-weight:700;">{{ fin.vpl_alavancado|brl }}</span></div>
           <div class="bk-r" style="background:#fff3e0;"><span class="bk-l" style="color:#c2410c;">Impacto do CCB no VPL</span><span style="color:{{ '#16a34a' if fin.delta_vpl >= 0 else '#dc2626' }};font-style:italic;">{{ fin.delta_vpl|brl }}</span></div>

@@ -98,6 +98,11 @@ def _compact_result(r: dict) -> dict:
         "margem_custo":     r.get("margem_custo"),
         "tir_anual":        r.get("tir_anual"),
         "vpl":              r.get("vpl"),
+        "vf_resultado":     r.get("vf_resultado"),
+        "vf_margem_vgv":    r.get("vf_margem_vgv"),
+        "vf_margem_custo":  r.get("vf_margem_custo"),
+        "tir_vf_anual":     r.get("tir_vf_anual"),
+        "vpl_vf":           r.get("vpl_vf"),
         "exposicao_maxima": r.get("exposicao_maxima"),
         "vgv_bruto":        r.get("vgv_bruto"),
         "vgv_liquido":      r.get("vgv_liquido"),
@@ -309,11 +314,21 @@ async def viabilidade_share_publico(
     except Exception:
         dt_fmt = "—"
     cenarios_json = _json_s.dumps({"realista": r_real, "otimista": r_otim, "pessimista": r_pess}, default=str)
+    try:
+        dados_input = _json_s.loads(estudo.dados_input_json)
+    except Exception:
+        dados_input = {}
+    fases_share = dados_input.get("fases") or []
+    corr_obra_share     = float(dados_input.get("correcao_obra", 0.52) or 0.52)
+    corr_pos_obra_share = float(dados_input.get("correcao_pos_obra", 1.04) or 1.04)
     html = templates_env.from_string(TEMPLATES["viabilidade_share.html"]).render(
         nome_projeto=estudo.nome_projeto,
         data=dt_fmt,
         tem_fin=tem_fin,
         cenarios_json=cenarios_json,
+        fases=fases_share,
+        corr_obra=corr_obra_share,
+        corr_pos_obra=corr_pos_obra_share,
     )
     return HTMLResponse(html)
 
@@ -408,21 +423,22 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Inter','Segoe UI',sans-serif;
 
   <div id="sp-status-bar"></div>
 
+  <div style="font-size:.65rem;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:#94a3b8;margin-bottom:.4rem;">Valor Final — corrigido por INCC / CUB</div>
   <div class="sp-kpis">
     <div class="sp-kpi">
-      <div class="sp-kpi-l"><i class="bi bi-graph-up-arrow me-1"></i>Resultado Bruto</div>
+      <div class="sp-kpi-l"><i class="bi bi-graph-up-arrow me-1"></i>Resultado VF</div>
       <div class="sp-kpi-v" id="kpi-resultado">—</div>
       <div class="sp-kpi-s" id="kpi-resultado-sub"></div>
     </div>
     <div class="sp-kpi">
-      <div class="sp-kpi-l"><i class="bi bi-percent me-1"></i>Margem VGV</div>
+      <div class="sp-kpi-l"><i class="bi bi-percent me-1"></i>Margem VF</div>
       <div class="sp-kpi-v" id="kpi-margem">—</div>
-      <div class="sp-kpi-s">Retorno sobre VGV líquido</div>
+      <div class="sp-kpi-s" id="kpi-margem-sub">Sobre VGV corrigido</div>
     </div>
     <div class="sp-kpi">
-      <div class="sp-kpi-l"><i class="bi bi-bar-chart-line me-1"></i>TIR Anual</div>
+      <div class="sp-kpi-l"><i class="bi bi-bar-chart-line me-1"></i>TIR VF</div>
       <div class="sp-kpi-v" id="kpi-tir">—</div>
-      <div class="sp-kpi-s" id="kpi-tir-sub">Retorno interno do projeto</div>
+      <div class="sp-kpi-s" id="kpi-tir-sub">Retorno (INCC corrigido)</div>
     </div>
     <div class="sp-kpi">
       <div class="sp-kpi-l"><i class="bi bi-arrow-down-circle me-1"></i>Exposição Máxima</div>
@@ -463,6 +479,47 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Inter','Segoe UI',sans-serif;
       </div>
     </div>
     <div style="margin-top:.85rem;padding-top:.75rem;border-top:1px solid #bfdbfe;font-size:.78rem;color:#475569;" id="fin-costs-row"></div>
+  </div>
+  {% endif %}
+
+  {% if fases %}
+  <div class="sp-card" style="margin-top:1.25rem;">
+    <h6 style="margin-bottom:1rem;"><i class="bi bi-tags me-1"></i>Estrutura de Comercialização</h6>
+    <div style="font-size:.72rem;color:#64748b;margin-bottom:.75rem;">
+      Correção durante obra: <strong>{{ corr_obra }}% a.m.</strong> &nbsp;·&nbsp; Pós-obra: <strong>{{ corr_pos_obra }}% a.m.</strong>
+    </div>
+    <div style="overflow-x:auto;">
+    <table style="width:100%;border-collapse:collapse;font-size:.8rem;">
+      <thead>
+        <tr style="background:#fff7ed;color:#ea580c;font-size:.68rem;font-weight:700;text-transform:uppercase;letter-spacing:.05em;">
+          <th style="padding:.55rem .75rem;text-align:left;border-bottom:2px solid #fed7aa;">Fase</th>
+          <th style="padding:.55rem .75rem;text-align:center;border-bottom:2px solid #fed7aa;">Meta</th>
+          <th style="padding:.55rem .75rem;text-align:center;border-bottom:2px solid #fed7aa;">Duração</th>
+          <th style="padding:.55rem .75rem;text-align:center;border-bottom:2px solid #fed7aa;">Entrada</th>
+          <th style="padding:.55rem .75rem;text-align:center;border-bottom:2px solid #fed7aa;">Parc. Entrada</th>
+          <th style="padding:.55rem .75rem;text-align:center;border-bottom:2px solid #fed7aa;">Parcelas</th>
+          <th style="padding:.55rem .75rem;text-align:center;border-bottom:2px solid #fed7aa;">Nº Parc.</th>
+          <th style="padding:.55rem .75rem;text-align:center;border-bottom:2px solid #fed7aa;">Reforços</th>
+          <th style="padding:.55rem .75rem;text-align:center;border-bottom:2px solid #fed7aa;">Reajuste</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for f in fases %}
+        <tr style="border-bottom:1px solid #f1f5f9;{% if loop.index is even %}background:#fafafa;{% endif %}">
+          <td style="padding:.5rem .75rem;font-weight:600;">{{ f.nome or ('Fase ' ~ loop.index) }}</td>
+          <td style="padding:.5rem .75rem;text-align:center;">{{ f.meta }}%</td>
+          <td style="padding:.5rem .75rem;text-align:center;">{{ f.duracao }} m</td>
+          <td style="padding:.5rem .75rem;text-align:center;">{{ f.entrada_pct }}%</td>
+          <td style="padding:.5rem .75rem;text-align:center;">{{ f.n_entrada|default(1) }}x</td>
+          <td style="padding:.5rem .75rem;text-align:center;">{{ f.parcelas_pct }}%</td>
+          <td style="padding:.5rem .75rem;text-align:center;">{{ f.n_parcelas }}</td>
+          <td style="padding:.5rem .75rem;text-align:center;">{% if f.reforco_pct and f.reforco_pct > 0 %}{{ f.reforco_pct }}% × {{ f.n_reforcos }}{% else %}—{% endif %}</td>
+          <td style="padding:.5rem .75rem;text-align:center;color:{% if f.reajuste and f.reajuste > 0 %}#16a34a{% elif f.reajuste and f.reajuste < 0 %}#dc2626{% else %}#64748b{% endif %};font-weight:600;">{% if f.reajuste %}{{ '%+.1f'|format(f.reajuste|float) }}%{% else %}0%{% endif %}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    </div>
   </div>
   {% endif %}
 </div>
@@ -549,34 +606,38 @@ function render() {
   if (!r) return;
   const fin = r.financiamento;
 
+  // KPI VF como primário; VP nominal como fallback/referência
   let resultado, margem, tir, tirSub, exposicao;
   if (fin && curFin) {
     resultado = fin.resultado_com_fin; margem = fin.margem_com_fin;
     tir = fin.tir_alavancada; tirSub = 'TIR alavancada (equity)';
     exposicao = fin.exposicao_com_fin;
-  } else if (fin && !curFin) {
-    resultado = fin.resultado_sem_fin; margem = fin.margem_sem_fin;
-    tir = r.tir_anual; tirSub = 'Retorno interno sem alavancagem';
-    exposicao = (fin.exposicao_com_fin || 0) + (fin.reducao_exposicao || 0);
   } else {
-    resultado = r.resultado_bruto; margem = r.margem_vgv;
-    tir = r.tir_anual; tirSub = 'Retorno interno do projeto';
+    resultado = r.vf_resultado != null ? r.vf_resultado : r.resultado_bruto;
+    margem    = r.vf_margem_vgv != null ? r.vf_margem_vgv : r.margem_vgv;
+    tir       = r.tir_vf_anual != null ? r.tir_vf_anual : r.tir_anual;
+    tirSub    = r.tir_vf_anual != null ? 'TIR VF — corrigido INCC' : 'Retorno interno do projeto';
     exposicao = r.exposicao_maxima;
   }
 
   // KPIs
   if (el('kpi-resultado')) {
     el('kpi-resultado').textContent = brl(resultado);
-    el('kpi-resultado').style.color = (resultado || 0) >= 0 ? '#16a34a' : '#dc2626';
-    if (el('kpi-resultado-sub')) el('kpi-resultado-sub').textContent = pct(margem) + ' sobre VGV líquido';
+    el('kpi-resultado').style.color = (resultado || 0) >= 0 ? '#f97316' : '#dc2626';
+    const vpSub = (r.vf_resultado != null && !curFin)
+      ? ' · VP nominal: ' + brl(r.resultado_bruto)
+      : '';
+    if (el('kpi-resultado-sub')) el('kpi-resultado-sub').textContent = pct(margem) + '% sobre VGV' + vpSub;
   }
   if (el('kpi-margem')) {
     el('kpi-margem').textContent = pct(margem);
-    el('kpi-margem').style.color = mgColor(margem || 0);
+    el('kpi-margem').style.color = (margem || 0) >= 20 ? '#f97316' : (margem || 0) >= 15 ? '#ca8a04' : '#dc2626';
+    if (el('kpi-margem-sub') && r.vf_margem_vgv != null && !curFin)
+      el('kpi-margem-sub').textContent = 'VP nominal: ' + pct(r.margem_vgv);
   }
   if (el('kpi-tir')) {
     el('kpi-tir').textContent = tir ? parseFloat(tir).toFixed(1) + '% a.a.' : '—';
-    el('kpi-tir').style.color = (tir || 0) >= 20 ? '#16a34a' : (tir || 0) >= 15 ? '#ca8a04' : '#dc2626';
+    el('kpi-tir').style.color = (tir || 0) >= 20 ? '#f97316' : (tir || 0) >= 15 ? '#ca8a04' : '#dc2626';
     if (el('kpi-tir-sub')) el('kpi-tir-sub').textContent = tirSub;
   }
   if (el('kpi-exposicao')) el('kpi-exposicao').textContent = brl(exposicao);
