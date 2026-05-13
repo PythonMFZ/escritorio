@@ -439,6 +439,16 @@ def _calcular_viabilidade_v2(dados: dict) -> dict:
         "vf_margem_custo": round(vf_margem_custo * 100, 2),
         "tir_vf_anual": round(tir_vf_anual * 100, 2) if tir_vf_anual is not None else None,
         "vpl_vf": round(vpl_vf, 2),
+        "dre_vf": [
+            {"desc": "VGV Corrigido (INCC)",        "valor": round(vf_total_rec, 2),                          "tipo": "receita"},
+            {"desc": "(−) Impostos s/ Receita VF",  "valor": -round(vf_custo_imp, 2),                         "tipo": "deducao"},
+            {"desc": "(−) Comercialização",         "valor": -round(vf_custo_com, 2),                         "tipo": "deducao"},
+            {"desc": "(−) Custo de Obra (VF)",      "valor": -round(vf_total_cst, 2),                         "tipo": "deducao"},
+            {"desc": "(−) Terreno",                 "valor": -round(valor_terreno, 2),                         "tipo": "deducao"},
+            {"desc": "Resultado VF",                "valor": round(vf_resultado, 2),                           "tipo": "resultado"},
+            {"desc": "Margem VF s/ VGV corrigido",  "valor": round(vf_margem_vgv * 100, 2),                   "tipo": "pct"},
+            {"desc": "↑ Ganho VF vs VP nominal",    "valor": round(vf_resultado - resultado_bruto, 2),         "tipo": "subtotal"},
+        ],
         "payback_mes": payback,
         "status": status,
         # Fluxo
