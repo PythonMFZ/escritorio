@@ -452,7 +452,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Inter','Segoe UI',sans-serif;
 
   <div id="sp-status-bar"></div>
 
-  <div style="font-size:.65rem;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:#94a3b8;margin-bottom:.4rem;">Valor Final — corrigido por INCC / CUB</div>
+  <div style="font-size:.65rem;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:#94a3b8;margin-bottom:.4rem;">Valor Final — corrigido pelo índice configurado / CUB</div>
   <div class="sp-kpis">
     <div class="sp-kpi">
       <div class="sp-kpi-l"><i class="bi bi-graph-up-arrow me-1"></i>Resultado VF</div>
@@ -467,7 +467,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Inter','Segoe UI',sans-serif;
     <div class="sp-kpi">
       <div class="sp-kpi-l"><i class="bi bi-bar-chart-line me-1"></i>TIR VF</div>
       <div class="sp-kpi-v" id="kpi-tir">—</div>
-      <div class="sp-kpi-s" id="kpi-tir-sub">Retorno (INCC corrigido)</div>
+      <div class="sp-kpi-s" id="kpi-tir-sub">Retorno (Corrigido)</div>
     </div>
     <div class="sp-kpi">
       <div class="sp-kpi-l"><i class="bi bi-arrow-down-circle me-1"></i>Exposição Máxima</div>
@@ -493,7 +493,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Inter','Segoe UI',sans-serif;
         <table class="dre-t"><tbody id="dre-body"></tbody></table>
       </div>
       <div class="sp-card">
-        <h6 style="color:#ea580c;"><i class="bi bi-receipt-cutoff me-1"></i>DRE VF — Valor Final (INCC)</h6>
+        <h6 style="color:#ea580c;"><i class="bi bi-receipt-cutoff me-1"></i>DRE VF — Valor Final</h6>
         <table class="dre-t"><tbody id="dre-vf-body"></tbody></table>
       </div>
     </div>
@@ -539,7 +539,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Inter','Segoe UI',sans-serif;
         <div id="custos-vp-body"></div>
       </div>
       <div class="sp-card">
-        <h6 style="color:#ea580c;"><i class="bi bi-hammer me-1"></i>Custos VF (INCC corrigido)</h6>
+        <h6 style="color:#ea580c;"><i class="bi bi-hammer me-1"></i>Custos VF (Corrigido)</h6>
         <div id="custos-vf-body"></div>
       </div>
     </div>
@@ -697,7 +697,7 @@ function render() {
     resultado = r.vf_resultado != null ? r.vf_resultado : r.resultado_bruto;
     margem    = r.vf_margem_vgv != null ? r.vf_margem_vgv : r.margem_vgv;
     tir       = r.tir_vf_anual != null ? r.tir_vf_anual : r.tir_anual;
-    tirSub    = r.tir_vf_anual != null ? 'TIR VF — corrigido INCC' : 'Retorno interno do projeto';
+    tirSub    = r.tir_vf_anual != null ? 'TIR VF — Corrigido' : 'Retorno interno do projeto';
     exposicao = r.exposicao_maxima;
   }
 
@@ -772,7 +772,7 @@ function render() {
   if (cvf) {
     const ganho = (r.vf_resultado!=null && r.resultado_bruto!=null) ? r.vf_resultado - r.resultado_bruto : null;
     const rows = [
-      ['VGV Corrigido (INCC)',         r.vf_vgv],
+      ['VGV Corrigido',         r.vf_vgv],
       ['Custo de Obra (VF)',            r.vf_custo_obra],
       ['Custo Total (VF)',              r.vf_custo_total],
       ['Resultado VF',                  r.vf_resultado],
