@@ -338,8 +338,10 @@ def _calcular_viabilidade_v2(dados: dict) -> dict:
     vpl = sum(f["saldo_mes"] / ((1 + tma_mensal) ** m)
               for m, f in enumerate(fluxo) if m < 120)
 
-    # ── VF: Valor Final com correção monetária (INCC) ─────────────────────
-    # Receitas e custo de obra corrigidos pelo fator acumulado; comissão nominal.
+    # ── VF: Valor Final com correção monetária ────────────────────────────────
+    # Durante obra: recebíveis e custo corrigidos por corr_obra (CUB/INCC).
+    # Pós-obra: saldo devedor das parcelas atualizado por corr_pos_obra.
+    # Comissão fica nominal.
     vf_fluxo_raw = []
     vf_total_rec = 0.0
     vf_total_cst = 0.0
@@ -430,7 +432,7 @@ def _calcular_viabilidade_v2(dados: dict) -> dict:
         "tir_mensal": round(tir_mensal * 100, 4) if tir_mensal is not None else None,
         "tir_anual": round(tir_anual * 100, 2) if tir_anual is not None else None,
         "vpl": round(vpl, 2),
-        # VF (Valor Final) — corrigido por INCC
+        # VF (Valor Final) — corrigido pelo índice configurado
         "vf_vgv": round(vf_total_rec, 2),
         "vf_custo_obra": round(vf_total_cst, 2),
         "vf_custo_total": round(vf_custo_total, 2),
@@ -440,7 +442,7 @@ def _calcular_viabilidade_v2(dados: dict) -> dict:
         "tir_vf_anual": round(tir_vf_anual * 100, 2) if tir_vf_anual is not None else None,
         "vpl_vf": round(vpl_vf, 2),
         "dre_vf": [
-            {"desc": "VGV Corrigido (INCC)",        "valor": round(vf_total_rec, 2),                          "tipo": "receita"},
+            {"desc": "VGV Corrigido",        "valor": round(vf_total_rec, 2),                          "tipo": "receita"},
             {"desc": "(−) Impostos s/ Receita VF",  "valor": -round(vf_custo_imp, 2),                         "tipo": "deducao"},
             {"desc": "(−) Comercialização",         "valor": -round(vf_custo_com, 2),                         "tipo": "deducao"},
             {"desc": "(−) Custo de Obra (VF)",      "valor": -round(vf_total_cst, 2),                         "tipo": "deducao"},

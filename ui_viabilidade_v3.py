@@ -860,7 +860,7 @@ TEMPLATES["ferramenta_viabilidade.html"] = r"""
   </div>
 
   {# 4 Large KPI cards — valores VF (corrigidos por INCC) #}
-  <div style="font-size:.7rem;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:#94a3b8;margin-bottom:.5rem;">Indicadores VF — Valor Final (corrigido por INCC)</div>
+  <div style="font-size:.7rem;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:#94a3b8;margin-bottom:.5rem;">Indicadores VF — Valor Final (corrigido pelo índice configurado)</div>
   <div class="kpi-large">
     <div class="kpi-card">
       <div class="kpi-icon orange"><i class="bi bi-graph-up-arrow"></i></div>
@@ -978,7 +978,7 @@ TEMPLATES["ferramenta_viabilidade.html"] = r"""
       <div class="col-md-6">
         <h6 class="mb-2" style="color:#f97316;"><i class="bi bi-speedometer2 me-1"></i>Indicadores de Viabilidade</h6>
         <div class="bk">
-          {% if r.tir_vf_anual is not none %}<div class="bk-r" style="background:#fff7ed;"><span class="bk-l" style="color:#ea580c;font-weight:700;">TIR VF (INCC corrigido)</span><span style="color:{{ '#f97316' if r.tir_vf_anual >= 20 else ('#ca8a04' if r.tir_vf_anual >= 15 else '#dc2626') }};font-weight:700;">{{ r.tir_vf_anual }}% a.a.</span></div>{% endif %}
+          {% if r.tir_vf_anual is not none %}<div class="bk-r" style="background:#fff7ed;"><span class="bk-l" style="color:#ea580c;font-weight:700;">TIR VF (Corrigido)</span><span style="color:{{ '#f97316' if r.tir_vf_anual >= 20 else ('#ca8a04' if r.tir_vf_anual >= 15 else '#dc2626') }};font-weight:700;">{{ r.tir_vf_anual }}% a.a.</span></div>{% endif %}
           {% if r.tir_anual is not none %}<div class="bk-r"><span class="bk-l">TIR VP (nominal)</span><span style="color:{{ '#64748b' }};font-weight:600;">{{ r.tir_anual }}% a.a.</span></div>{% endif %}
           <div class="bk-r" style="background:#fff7ed;"><span class="bk-l" style="color:#ea580c;font-weight:700;">Margem VF</span><span style="color:#f97316;font-weight:700;">{{ r.vf_margem_vgv or '—' }}%</span></div>
           <div class="bk-r"><span class="bk-l">Margem VP (nominal)</span><span style="font-weight:600;color:#64748b;">{{ r.margem_vgv }}%</span></div>
@@ -999,7 +999,7 @@ TEMPLATES["ferramenta_viabilidade.html"] = r"""
         <div class="bk">
           <div class="bk-r"><span class="bk-l">VP das Receitas</span><span style="color:#f97316;font-weight:600;">{{ r.vp_receitas|brl }}</span></div>
           <div class="bk-r"><span class="bk-l">(−) VP dos Custos</span><span style="color:#475569;">{{ r.vp_custos|brl }}</span></div>
-          {% if r.vpl_vf %}<div class="bk-r" style="background:#fff7ed;"><span class="bk-l" style="color:#ea580c;font-weight:700;">VPL VF <small style="font-weight:400;">(INCC corrigido)</small></span><span style="color:{{ '#f97316' if r.vpl_vf >= 0 else '#dc2626' }};font-weight:700;">{{ r.vpl_vf|brl }}</span></div>{% endif %}
+          {% if r.vpl_vf %}<div class="bk-r" style="background:#fff7ed;"><span class="bk-l" style="color:#ea580c;font-weight:700;">VPL VF <small style="font-weight:400;">(Corrigido)</small></span><span style="color:{{ '#f97316' if r.vpl_vf >= 0 else '#dc2626' }};font-weight:700;">{{ r.vpl_vf|brl }}</span></div>{% endif %}
           <div class="bk-r bk-t"><span>VPL VP <small style="color:#94a3b8;font-weight:400;">(nominal, sem CCB)</small></span><span style="color:{{ '#64748b' }};font-weight:600;">{% if r.vpl %}{{ r.vpl|brl }}{% else %}—{% endif %}</span></div>
           {% if fin and fin.vpl_alavancado is not none %}
           <div class="bk-r" style="background:#fff3e0;border-top:1.5px solid rgba(249,115,22,.4);"><span class="bk-l" style="color:#c2410c;font-weight:600;">VPL Equity <small style="font-weight:400;">(pós-CCB)</small></span><span style="color:{{ '#16a34a' if fin.vpl_alavancado >= 0 else '#dc2626' }};font-weight:700;">{{ fin.vpl_alavancado|brl }}</span></div>
@@ -1035,7 +1035,7 @@ TEMPLATES["ferramenta_viabilidade.html"] = r"""
         {% endif %}
 
         {% if r.dre_vf %}
-        <h6 class="mb-2 mt-3" style="color:#ea580c;"><i class="bi bi-receipt-cutoff me-1"></i>DRE VF — Valor Final (INCC corrigido)</h6>
+        <h6 class="mb-2 mt-3" style="color:#ea580c;"><i class="bi bi-receipt-cutoff me-1"></i>DRE VF — Valor Final (Corrigido)</h6>
         <table class="dre-table">
           <tbody>
             {% for row in r.dre_vf %}
