@@ -22,6 +22,7 @@ class Empreendimento(SQLModel, table=True):
     __tablename__ = "mapa_empreendimento"
     id: _Opt_mu[int] = Field(default=None, primary_key=True)
     company_id: int = Field(index=True)
+    client_id: _Opt_mu[int] = Field(default=None, index=True)   # isolamento por cliente (padrão obras)
     estudo_id: _Opt_mu[int] = Field(default=None, index=True)  # FK EstudoViabilidade
     nome: str = Field(default="")
     dados_viabilidade_json: str = Field(default="{}")  # snapshot das premissas
@@ -61,6 +62,14 @@ for _mu_cls in (Empreendimento, UnidadeEmpreendimento, VendaUnidade):
         _mu_cls.__table__.create(engine, checkfirst=True)
     except Exception:
         pass
+
+# Migração: adiciona client_id se a coluna não existir
+try:
+    with engine.connect() as _conn_mu:
+        _conn_mu.exec_driver_sql("ALTER TABLE mapa_empreendimento ADD COLUMN client_id INTEGER")
+        _conn_mu.commit()
+except Exception:
+    pass
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -176,10 +185,12 @@ async def mapa_unidades_list(
         request.session.clear()
         return RedirectResponse("/login", status_code=303)
     cc = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
+    if not cc:
+        return RedirectResponse("/ferramentas", status_code=303)
 
     empreendimentos = session.exec(
         select(Empreendimento)
-        .where(Empreendimento.company_id == ctx.company.id)
+        .where(Empreendimento.company_id == ctx.company.id, Empreendimento.client_id == cc.id)
         .order_by(Empreendimento.id.desc())
     ).all()
 
@@ -210,6 +221,9 @@ async def mapa_unidades_criar(
     if not ctx:
         request.session.clear()
         return RedirectResponse("/login", status_code=303)
+    cc = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
+    if not cc:
+        return RedirectResponse("/ferramentas", status_code=303)
     form = await request.form()
     estudo_id = int(form.get("estudo_id", 0) or 0)
 
@@ -235,6 +249,7 @@ async def mapa_unidades_criar(
 
     emp = Empreendimento(
         company_id=ctx.company.id,
+        client_id=cc.id,
         estudo_id=estudo_id,
         nome=estudo.nome_projeto,
         dados_viabilidade_json=_json_mu.dumps(snap, default=str),
@@ -264,9 +279,11 @@ async def mapa_unidades_view(
         request.session.clear()
         return RedirectResponse("/login", status_code=303)
     cc = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
+    if not cc:
+        return RedirectResponse("/ferramentas", status_code=303)
 
     emp = session.get(Empreendimento, emp_id)
-    if not emp or emp.company_id != ctx.company.id:
+    if not emp or emp.company_id != ctx.company.id or emp.client_id != cc.id:
         return RedirectResponse("/ferramentas/mapa-unidades", status_code=303)
 
     unidades = session.exec(
@@ -313,9 +330,12 @@ async def mapa_unidades_vender(
     if not ctx:
         request.session.clear()
         return RedirectResponse("/login", status_code=303)
+    cc = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
+    if not cc:
+        return RedirectResponse("/ferramentas", status_code=303)
 
     emp = session.get(Empreendimento, emp_id)
-    if not emp or emp.company_id != ctx.company.id:
+    if not emp or emp.company_id != ctx.company.id or emp.client_id != cc.id:
         return RedirectResponse("/ferramentas/mapa-unidades", status_code=303)
 
     unidade = session.get(UnidadeEmpreendimento, und_id)
@@ -382,9 +402,12 @@ async def mapa_unidades_distrato(
     if not ctx:
         request.session.clear()
         return RedirectResponse("/login", status_code=303)
+    cc = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
+    if not cc:
+        return RedirectResponse("/ferramentas", status_code=303)
 
     emp = session.get(Empreendimento, emp_id)
-    if not emp or emp.company_id != ctx.company.id:
+    if not emp or emp.company_id != ctx.company.id or emp.client_id != cc.id:
         return RedirectResponse("/ferramentas/mapa-unidades", status_code=303)
 
     unidade = session.get(UnidadeEmpreendimento, und_id)
@@ -420,8 +443,9 @@ async def mapa_unidades_reativar(
         request.session.clear()
         return RedirectResponse("/login", status_code=303)
 
+    cc = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
     emp = session.get(Empreendimento, emp_id)
-    if not emp or emp.company_id != ctx.company.id:
+    if not emp or emp.company_id != ctx.company.id or (cc and emp.client_id != cc.id):
         return RedirectResponse("/ferramentas/mapa-unidades", status_code=303)
 
     unidade = session.get(UnidadeEmpreendimento, und_id)
@@ -441,9 +465,10 @@ async def mapa_unidades_excluir(
     ctx = get_tenant_context(request, session)
     if not ctx:
         return {"ok": False, "erro": "Não autenticado"}
+    cc = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
 
     emp = session.get(Empreendimento, emp_id)
-    if not emp or emp.company_id != ctx.company.id:
+    if not emp or emp.company_id != ctx.company.id or (cc and emp.client_id != cc.id):
         return {"ok": False, "erro": "Não encontrado"}
 
     unidades = session.exec(

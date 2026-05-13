@@ -230,15 +230,14 @@ async def viabilidade_historico_v1(
     ctx = get_tenant_context(request, session)
     if not ctx:
         return _JRS({"estudos": []})
-    _cli_id = get_active_client_id(request, session, ctx)
-    _q = select(EstudoViabilidade).where(EstudoViabilidade.company_id == ctx.company.id)
-    if _cli_id:
-        # Filtro estrito: apenas estudos deste cliente específico
-        _q = _q.where(EstudoViabilidade.client_id == _cli_id)
-    else:
-        # Sem cliente ativo: mostra apenas estudos sem client_id (nível empresa)
-        _q = _q.where(EstudoViabilidade.client_id == None)
-    estudos = session.exec(_q.order_by(EstudoViabilidade.id.desc()).limit(50)).all()
+    # Isolamento por empresa: cada company_id vê apenas seus próprios estudos.
+    # client_id armazenado para futura granularidade, mas o historico é nível empresa.
+    estudos = session.exec(
+        select(EstudoViabilidade)
+        .where(EstudoViabilidade.company_id == ctx.company.id)
+        .order_by(EstudoViabilidade.id.desc())
+        .limit(50)
+    ).all()
     result = []
     for e in estudos:
         try:
@@ -302,14 +301,10 @@ async def viabilidade_abrir_v1(
     if not ctx:
         request.session.clear()
         return RedirectResponse("/login", status_code=303)
-    _cli_id_ab = get_active_client_id(request, session, ctx)
     estudo = session.get(EstudoViabilidade, estudo_id)
     if not estudo or estudo.company_id != ctx.company.id:
         return RedirectResponse("/ferramentas/viabilidade", status_code=303)
-    # Validação de isolamento por cliente
-    if _cli_id_ab and estudo.client_id and estudo.client_id != _cli_id_ab:
-        return RedirectResponse("/ferramentas/viabilidade", status_code=303)
-    cc = get_client_or_none(session, ctx.company.id, _cli_id_ab)
+    cc = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
     try:
         dados = _json_s.loads(estudo.dados_input_json)
         dados["cenario"] = "realista"
