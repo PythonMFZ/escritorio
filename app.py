@@ -47596,4 +47596,5 @@ exec(open('ui_viabilidade_v3.py').read())
 exec(open('ui_viabilidade_share.py').read())
 exec(open('ui_mapa_unidades.py').read())
 exec(open('ui_obras_subetapa_gantt.py').read())
+exec(open('ui_fixes_batch7.py').read())
 
