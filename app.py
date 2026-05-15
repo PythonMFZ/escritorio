@@ -15460,9 +15460,16 @@ async def perfil_page(request: Request, session: Session = Depends(get_session))
     delta: Optional[float] = None
 
     if current_client and ensure_can_access_client(ctx, current_client.id):
+        from sqlalchemy import or_ as _or_snap
         snaps = session.exec(
             select(ClientSnapshot)
-            .where(ClientSnapshot.company_id == ctx.company.id, ClientSnapshot.client_id == current_client.id)
+            .where(
+                ClientSnapshot.company_id == ctx.company.id,
+                _or_snap(
+                    ClientSnapshot.client_id == current_client.id,
+                    ClientSnapshot.created_by_user_id == ctx.user.id,
+                ),
+            )
             .order_by(ClientSnapshot.created_at.desc())
             .limit(12)
         ).all()
@@ -15880,7 +15887,44 @@ async def perfil_snapshot_detail(request: Request, session: Session = Depends(ge
             status_code=404,
         )
 
-    if not ensure_can_access_client(ctx, snap.client_id):
+    # Allow staff unconditionally; for "cliente" role: allow if same client_id OR
+    # same user created it OR another user from the same real-world company
+    # (same company on platform sharing the same client_id) created it.
+    def _can_access_snap() -> bool:
+        if _is_staff(ctx.membership.role):
+            return True
+        if ctx.membership.client_id == snap.client_id:
+            return True
+        # Own snapshot regardless of client_id (e.g. client reassigned)
+        if snap.created_by_user_id == ctx.user.id:
+            return True
+        # Cross-user: allow if the accessing user's client_id and the snapshot's
+        # client_id share at least one common member (same person in both clients),
+        # which means: any user_id linked to snap.client_id is ALSO linked to
+        # ctx.membership.client_id — i.e. a colleague from the same empresa.
+        if ctx.membership.client_id:
+            shared = session.exec(
+                select(Membership.user_id)
+                .where(
+                    Membership.company_id == ctx.company.id,
+                    Membership.client_id  == snap.client_id,
+                )
+            ).all()
+            if shared:
+                colleague_ids = set(shared)
+                own_colleagues = session.exec(
+                    select(Membership.user_id)
+                    .where(
+                        Membership.company_id == ctx.company.id,
+                        Membership.client_id  == ctx.membership.client_id,
+                    )
+                ).all()
+                # If both clients have members in common → same real-world empresa
+                if colleague_ids.intersection(set(own_colleagues)):
+                    return True
+        return False
+
+    if not _can_access_snap():
         return render(
             "error.html",
             request=request,
