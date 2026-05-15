@@ -15460,16 +15460,23 @@ async def perfil_page(request: Request, session: Session = Depends(get_session))
     delta: Optional[float] = None
 
     if current_client and ensure_can_access_client(ctx, current_client.id):
-        from sqlalchemy import or_ as _or_snap
-        snaps = session.exec(
-            select(ClientSnapshot)
-            .where(
+        if _is_staff(ctx.membership.role):
+            _snap_filter = (
+                ClientSnapshot.company_id == ctx.company.id,
+                ClientSnapshot.client_id == current_client.id,
+            )
+        else:
+            from sqlalchemy import or_ as _or_snap
+            _snap_filter = (
                 ClientSnapshot.company_id == ctx.company.id,
                 _or_snap(
                     ClientSnapshot.client_id == current_client.id,
                     ClientSnapshot.created_by_user_id == ctx.user.id,
                 ),
             )
+        snaps = session.exec(
+            select(ClientSnapshot)
+            .where(*_snap_filter)
             .order_by(ClientSnapshot.created_at.desc())
             .limit(12)
         ).all()
