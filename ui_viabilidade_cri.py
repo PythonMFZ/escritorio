@@ -280,6 +280,8 @@ def _calcular_cri(dados: dict, base: dict) -> dict:
         "ipca_proj":            ipca_proj,
         "taxa_nom_aa":          round(taxa_nom_aa, 2),
         "taxa_mensal":          round(taxa_mensal * 100, 4),
+        "prazo_obra":           duracao_obra,
+        "prazo_carencia":       carencia_cri,
         "prazo_total_m":        prazo_total_m,
         "prazo_total_a":        round(prazo_total_a, 2),
         "prazo_amort_m":        prazo_amort_m,
@@ -364,8 +366,12 @@ def _calcular_v3_com_cri(dados: dict) -> dict:
     fluxo_com_cri = [f["saldo_mes"] + delta_map.get(f["mes"], 0.0) for f in fluxo_base]
 
     # TIR recomputada com CRI
+    tir_original = base.get("tir_anual")  # preserve before overwrite (used in cri["tir_sem_cri"])
     tir_m_cri  = _tir_v3(fluxo_com_cri)  # type: ignore[name-defined]
     tir_com_cri = round(((1 + tir_m_cri) ** 12 - 1) * 100, 2) if tir_m_cri is not None else None
+    # Update principal TIR so all displays (KPIs, share template) reflect CRI impact
+    if tir_com_cri is not None:
+        base["tir_anual"] = tir_com_cri
 
     # Exposição máxima recomputada com CRI
     saldo_acum = 0.0
@@ -376,7 +382,7 @@ def _calcular_v3_com_cri(dados: dict) -> dict:
             exp_cri = saldo_acum
     exposicao_com_cri = abs(exp_cri)
 
-    # ── Atualizar base["fluxo"] com deltas do CRI para exibição na tabela ────
+    # ── Atualizar base["fluxo"] (VP) com deltas do CRI ──────────────────────────
     saldo_acum_fluxo = 0.0
     for f, saldo_cri in zip(fluxo_base, fluxo_com_cri):
         delta = delta_map.get(f["mes"], 0.0)
@@ -385,6 +391,20 @@ def _calcular_v3_com_cri(dados: dict) -> dict:
             f["saldo_mes"] = round(saldo_cri, 2)
         saldo_acum_fluxo += f["saldo_mes"]
         f["saldo_acumulado"] = round(saldo_acum_fluxo, 2)
+
+    # ── Atualizar base["vf_fluxo"] com os mesmos deltas CRI (nominais) ──────────
+    vf_fluxo = base.get("vf_fluxo", [])
+    if vf_fluxo:
+        # Indexar os deltas por mês para lookup O(1)
+        _delta_by_mes = {f["mes"]: f.get("cri_delta", 0.0) for f in fluxo_base if f.get("cri_delta")}
+        vf_saldo_acum = 0.0
+        for vf in vf_fluxo:
+            cri_d = _delta_by_mes.get(vf["mes"], 0.0)
+            if cri_d:
+                vf["cri_delta"] = cri_d
+                vf["saldo_mes"] = round(vf["saldo_mes"] + cri_d, 2)
+            vf_saldo_acum += vf["saldo_mes"]
+            vf["saldo_acumulado"] = round(vf_saldo_acum, 2)
 
     # ── Custo total do CRI para o incorporador (impacta resultado) ────────────
     # Estruturação: upfront + recorrentes
@@ -409,7 +429,7 @@ def _calcular_v3_com_cri(dados: dict) -> dict:
 
     # ── Enriquecer dict cri com dados de impacto ──────────────────────────────
     cri.update({
-        "tir_sem_cri":           round(base.get("tir_anual") or 0, 2),
+        "tir_sem_cri":           round(tir_original or 0, 2),
         "tir_com_cri":           tir_com_cri,
         "resultado_sem_cri":     resultado_sem_cri,
         "resultado_com_cri":     resultado_com_cri,
@@ -491,7 +511,7 @@ def _patch_cri_template() -> None:
     tpl = TEMPLATES.get("ferramenta_viabilidade.html", "")  # type: ignore[name-defined]
     if not tpl:
         return
-    if "_cri_module_v1" in tpl:
+    if "_cri_module_v2" in tpl:
         return
 
     # ── 1. Adicionar aba "CRI" no nav de input ────────────────────────────
@@ -522,34 +542,135 @@ def _patch_cri_template() -> None:
     OLD_FLUXO_TH = '<th>Saldo Mês</th>\n            <th>Saldo Acumulado</th>'
     NEW_FLUXO_TH = '<th style="color:#93c5fd;">CRI</th>\n            <th>Saldo Mês</th>\n            <th>Saldo Acumulado</th>'
     if OLD_FLUXO_TH in tpl:
-        tpl = tpl.replace(OLD_FLUXO_TH, NEW_FLUXO_TH, 1)
+        tpl = tpl.replace(OLD_FLUXO_TH, NEW_FLUXO_TH, 1)  # só VP (primeira ocorrência)
 
-    # also expose rows that have CRI activity even with zero receita/custo
+    # Expor linhas com atividade CRI mesmo com receita/custo zero — VP table (1ª ocorrência)
     OLD_ROW_FILTER = '{% if f.receita != 0 or f.custo_obra != 0 or f.saldo_mes != 0 %}'
     NEW_ROW_FILTER = '{% if f.receita != 0 or f.custo_obra != 0 or f.saldo_mes != 0 or f.cri_delta|default(0) != 0 %}'
     if OLD_ROW_FILTER in tpl:
-        tpl = tpl.replace(OLD_ROW_FILTER, NEW_ROW_FILTER, 1)
+        tpl = tpl.replace(OLD_ROW_FILTER, NEW_ROW_FILTER, 1)  # VP table first
 
+    _CRI_CELL = (
+        '<td class="{{ \'fc-pos\' if f.cri_delta|default(0) > 0 else (\'fc-neg\' if f.cri_delta|default(0) < 0 else \'\') }}"'
+        ' style="font-size:.75rem;">'
+        '{% if f.cri_delta is defined and f.cri_delta != 0 %}{{ f.cri_delta|brl }}{% else %}—{% endif %}</td>\n'
+        '            '
+    )
     OLD_FLUXO_TD = (
         '<td class="{{ \'fc-pos\' if f.saldo_mes >= 0 else \'fc-neg\' }}">{{ f.saldo_mes|brl }}</td>\n'
         '            <td class="{{ \'fc-pos\' if f.saldo_acumulado >= 0 else \'fc-neg\' }}">{{ f.saldo_acumulado|brl }}</td>'
     )
     NEW_FLUXO_TD = (
-        '<td class="{{ \'fc-pos\' if f.cri_delta|default(0) > 0 else (\'fc-neg\' if f.cri_delta|default(0) < 0 else \'\') }}" style="font-size:.75rem;">'
-        '{% if f.cri_delta is defined and f.cri_delta != 0 %}{{ f.cri_delta|brl }}{% else %}—{% endif %}</td>\n'
-        '            <td class="{{ \'fc-pos\' if f.saldo_mes >= 0 else \'fc-neg\' }}">{{ f.saldo_mes|brl }}</td>\n'
+        _CRI_CELL +
+        '<td class="{{ \'fc-pos\' if f.saldo_mes >= 0 else \'fc-neg\' }}">{{ f.saldo_mes|brl }}</td>\n'
         '            <td class="{{ \'fc-pos\' if f.saldo_acumulado >= 0 else \'fc-neg\' }}">{{ f.saldo_acumulado|brl }}</td>'
     )
     if OLD_FLUXO_TD in tpl:
-        tpl = tpl.replace(OLD_FLUXO_TD, NEW_FLUXO_TD, 1)
+        tpl = tpl.replace(OLD_FLUXO_TD, NEW_FLUXO_TD, 1)  # VP table (1ª ocorrência)
+
+    # ── 6. Adicionar coluna CRI na tabela Fluxo de Caixa VF ──────────────
+    OLD_FLUXO_VF_TH = '<th>Saldo Mês (VF)</th>\n            <th>Saldo Acum. (VF)</th>'
+    NEW_FLUXO_VF_TH = '<th style="color:#93c5fd;">CRI</th>\n            <th>Saldo Mês (VF)</th>\n            <th>Saldo Acum. (VF)</th>'
+    if OLD_FLUXO_VF_TH in tpl:
+        tpl = tpl.replace(OLD_FLUXO_VF_TH, NEW_FLUXO_VF_TH, 1)
+
+    # Expor linhas CRI-only na tabela VF (2ª ocorrência do filtro original, se ainda existir)
+    if OLD_ROW_FILTER in tpl:
+        tpl = tpl.replace(OLD_ROW_FILTER, NEW_ROW_FILTER, 1)  # VF table second
+
+    # Coluna CRI na tabela VF (OLD_FLUXO_TD ainda está intacto na VF, pois VP já foi substituído)
+    if OLD_FLUXO_TD in tpl:
+        tpl = tpl.replace(OLD_FLUXO_TD, NEW_FLUXO_TD, 1)  # VF table
 
     # ── Sentinela ─────────────────────────────────────────────────────────
-    tpl = tpl.replace("</script>\n{% endblock %}", "/* _cri_module_v1 */\n</script>\n{% endblock %}", 1)
+    tpl = tpl.replace("</script>\n{% endblock %}", "/* _cri_module_v2 */\n</script>\n{% endblock %}", 1)
 
     TEMPLATES["ferramenta_viabilidade.html"] = tpl  # type: ignore[name-defined]
     if hasattr(templates_env.loader, "mapping"):  # type: ignore[name-defined]
         templates_env.loader.mapping = TEMPLATES  # type: ignore[name-defined]
-    print("[cri_module] template patched OK")
+
+    # ── 7. Injetar bloco CRI na apresentação pública (share link) ────────
+    _patch_cri_share_template()
+
+    print("[cri_module] template patched OK v2")
+
+
+def _patch_cri_share_template() -> None:
+    """Injeta bloco CRI na apresentação pública (viabilidade_publica.html)."""
+    tpl = TEMPLATES.get("viabilidade_publica.html", "")  # type: ignore[name-defined]
+    if not tpl or "_cri_share_v1" in tpl:
+        return
+
+    # Expor linhas CRI-only na tabela da apresentação pública
+    OLD_SHARE_FILTER = '{% if f.receita != 0 or f.custo_obra != 0 or f.saldo_mes != 0 %}'
+    NEW_SHARE_FILTER = '{% if f.receita != 0 or f.custo_obra != 0 or f.saldo_mes != 0 or f.cri_delta|default(0) != 0 %}'
+    if OLD_SHARE_FILTER in tpl:
+        tpl = tpl.replace(OLD_SHARE_FILTER, NEW_SHARE_FILTER, 1)
+
+    # Adicionar coluna CRI no fluxo de caixa da apresentação pública
+    OLD_SHARE_TH = '<th>Saldo Mês</th><th>Saldo Acumulado</th>'
+    NEW_SHARE_TH = '<th style="color:#93c5fd;">CRI</th><th>Saldo Mês</th><th>Saldo Acumulado</th>'
+    if OLD_SHARE_TH in tpl:
+        tpl = tpl.replace(OLD_SHARE_TH, NEW_SHARE_TH, 1)
+
+    OLD_SHARE_TD = (
+        '<td class="{{ \'fc-pos\' if f.saldo_mes >= 0 else \'fc-neg\' }}">{{ f.saldo_mes|brl }}</td>\n'
+        '            <td class="{{ \'fc-pos\' if f.saldo_acumulado >= 0 else \'fc-neg\' }}">{{ f.saldo_acumulado|brl }}</td>'
+    )
+    NEW_SHARE_TD = (
+        '<td class="{{ \'fc-pos\' if f.cri_delta|default(0) > 0 else (\'fc-neg\' if f.cri_delta|default(0) < 0 else \'\') }}"'
+        ' style="font-size:.75rem;">'
+        '{% if f.cri_delta is defined and f.cri_delta != 0 %}{{ f.cri_delta|brl }}{% else %}—{% endif %}</td>\n'
+        '            <td class="{{ \'fc-pos\' if f.saldo_mes >= 0 else \'fc-neg\' }}">{{ f.saldo_mes|brl }}</td>\n'
+        '            <td class="{{ \'fc-pos\' if f.saldo_acumulado >= 0 else \'fc-neg\' }}">{{ f.saldo_acumulado|brl }}</td>'
+    )
+    if OLD_SHARE_TD in tpl:
+        tpl = tpl.replace(OLD_SHARE_TD, NEW_SHARE_TD, 1)
+
+    # Bloco CRI — inserido após os KPIs, antes do breakdown de custos
+    _CRI_SHARE_BLOCK = r"""
+    {# ── Bloco CRI (quando ativo) ── #}
+    {% if r.cri %}
+    <div style="border:2px solid #2563eb;border-radius:14px;padding:1rem 1.25rem;margin-bottom:1.5rem;background:#eff6ff;">
+      <div style="font-size:.7rem;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:#1e40af;margin-bottom:.75rem;">
+        📊 CRI Maffezzolli Capital — {{ r.cri.regime_label }}
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:.6rem;margin-bottom:.75rem;">
+        <div style="background:#fff;border-radius:10px;padding:.6rem .8rem;border:1px solid #bfdbfe;">
+          <div style="font-size:.65rem;font-weight:700;text-transform:uppercase;color:#1e40af;">Volume emitido</div>
+          <div style="font-size:1rem;font-weight:700;color:#1e40af;">{{ r.cri.volume|brl }}</div>
+        </div>
+        <div style="background:#fff;border-radius:10px;padding:.6rem .8rem;border:1px solid #fca5a5;">
+          <div style="font-size:.65rem;font-weight:700;text-transform:uppercase;color:#dc2626;">CET (custo efetivo)</div>
+          <div style="font-size:1rem;font-weight:700;color:#dc2626;">{{ r.cri.cet_aa }}% a.a.</div>
+        </div>
+        <div style="background:#fff;border-radius:10px;padding:.6rem .8rem;border:1px solid #fca5a5;">
+          <div style="font-size:.65rem;font-weight:700;text-transform:uppercase;color:#dc2626;">Custo total CRI</div>
+          <div style="font-size:1rem;font-weight:700;color:#dc2626;">{{ r.cri.custo_total_cri|brl }}</div>
+        </div>
+        <div style="background:#fff;border-radius:10px;padding:.6rem .8rem;border:1px solid #bbf7d0;">
+          <div style="font-size:.65rem;font-weight:700;text-transform:uppercase;color:#15803d;">TIR com CRI</div>
+          <div style="font-size:1rem;font-weight:700;color:#15803d;">{% if r.cri.tir_com_cri %}{{ r.cri.tir_com_cri }}% a.a.{% else %}—{% endif %}</div>
+        </div>
+      </div>
+      <div style="font-size:.78rem;color:#475569;">
+        Prazo: obra {{ r.cri.prazo_obra }}m + carência {{ r.cri.prazo_carencia }}m · Resgate: {{ r.cri.valor_resgate|brl }} · Redução de exposição: {{ r.cri.reducao_exposicao|brl }}
+      </div>
+    </div>
+    {% endif %}
+"""
+
+    OLD_SHARE_BREAKDOWN = '<div class="row g-3 mb-3">'
+    if OLD_SHARE_BREAKDOWN in tpl:
+        tpl = tpl.replace(OLD_SHARE_BREAKDOWN, _CRI_SHARE_BLOCK + '\n    ' + OLD_SHARE_BREAKDOWN, 1)
+
+    # Sentinela
+    tpl = tpl.replace("</body>", "<!-- _cri_share_v1 -->\n</body>", 1)
+
+    TEMPLATES["viabilidade_publica.html"] = tpl  # type: ignore[name-defined]
+    if hasattr(templates_env.loader, "mapping"):  # type: ignore[name-defined]
+        templates_env.loader.mapping = TEMPLATES  # type: ignore[name-defined]
+    print("[cri_module] share template patched OK")
 
 
 # ── Conteúdo HTML da aba de input CRI ─────────────────────────────────────────
