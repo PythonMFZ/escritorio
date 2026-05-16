@@ -38,8 +38,83 @@ def _calcular_cri(dados: dict, base: dict) -> dict:
 
     prazo_total_m   = duracao_obra + carencia_cri
     prazo_total_a   = prazo_total_m / 12.0
+    prazo_amort_m   = int(dados.get("cri_prazo_amort", 24) or 24)
 
-    valor_resgate   = volume * ((1 + taxa_nom_aa / 100) ** prazo_total_a)
+    # Taxa mensal equivalente à taxa nominal anual
+    taxa_mensal = (1 + taxa_nom_aa / 100) ** (1 / 12) - 1
+
+    # Saldo ao fim do período de capitalização (obra + carência): igual para todos os regimes
+    saldo_pos_carencia = volume * ((1 + taxa_mensal) ** prazo_total_m)
+
+    # ── Schedule de pagamentos conforme regime ────────────────────────────────
+    schedule = []   # cada item: {mes_rel, amortizacao, juros, total, saldo_devedor}
+
+    if regime in ("bullet", "recebiveis"):
+        # Pagamento único no vencimento
+        schedule.append({
+            "mes_rel": prazo_total_m,
+            "amortizacao": round(volume, 2),
+            "juros": round(saldo_pos_carencia - volume, 2),
+            "total": round(saldo_pos_carencia, 2),
+            "saldo_devedor": 0.0,
+        })
+        valor_resgate = round(saldo_pos_carencia, 2)
+
+    elif regime == "sac":
+        amort_unit = saldo_pos_carencia / max(prazo_amort_m, 1)
+        saldo = saldo_pos_carencia
+        total_pago = 0.0
+        for k in range(prazo_amort_m):
+            juros_k  = saldo * taxa_mensal
+            amort_k  = min(amort_unit, saldo)
+            pmt_k    = juros_k + amort_k
+            saldo    = max(saldo - amort_k, 0)
+            schedule.append({
+                "mes_rel": prazo_total_m + k + 1,
+                "amortizacao": round(amort_k, 2),
+                "juros": round(juros_k, 2),
+                "total": round(pmt_k, 2),
+                "saldo_devedor": round(saldo, 2),
+            })
+            total_pago += pmt_k
+        valor_resgate = round(total_pago, 2)
+
+    elif regime == "price":
+        n = max(prazo_amort_m, 1)
+        if taxa_mensal > 0:
+            pmt = saldo_pos_carencia * taxa_mensal / (1 - (1 + taxa_mensal) ** (-n))
+        else:
+            pmt = saldo_pos_carencia / n
+        saldo = saldo_pos_carencia
+        total_pago = 0.0
+        for k in range(n):
+            juros_k  = saldo * taxa_mensal
+            amort_k  = max(min(pmt - juros_k, saldo), 0)
+            saldo    = max(saldo - amort_k, 0)
+            schedule.append({
+                "mes_rel": prazo_total_m + k + 1,
+                "amortizacao": round(amort_k, 2),
+                "juros": round(juros_k, 2),
+                "total": round(pmt, 2),
+                "saldo_devedor": round(saldo, 2),
+            })
+            total_pago += pmt
+        valor_resgate = round(total_pago, 2)
+
+    else:
+        # Fallback: bullet
+        schedule.append({
+            "mes_rel": prazo_total_m,
+            "amortizacao": round(volume, 2),
+            "juros": round(saldo_pos_carencia - volume, 2),
+            "total": round(saldo_pos_carencia, 2),
+            "saldo_devedor": 0.0,
+        })
+        valor_resgate = round(saldo_pos_carencia, 2)
+
+    # ── CET: IRR real do fluxo [+caixa_liquido, -pagamentos] ─────────────────
+    # Monta o vetor mensal (0 nos meses sem pagamento, -total nos meses de pag.)
+    n_total = max(sc["mes_rel"] for sc in schedule) + 1 if schedule else prazo_total_m + 1
 
     fee_estrt_pct   = float(dados.get("cri_fee_estrut", 2.0) or 2.0) / 100
     fee_orig_pct    = float(dados.get("cri_fee_orig",   1.5) or 1.5) / 100
@@ -86,7 +161,20 @@ def _calcular_cri(dados: dict, base: dict) -> dict:
 
     custo_distribuidora = distribuidora_pct * volume
 
-    if caixa_liquido > 0 and prazo_total_a > 0:
+    # CET via IRR do fluxo real de caixa (considera timing exato dos pagamentos)
+    _fluxo_cet = [caixa_liquido] + [0.0] * (n_total - 1)
+    for sc in schedule:
+        idx = sc["mes_rel"]
+        if idx < len(_fluxo_cet):
+            _fluxo_cet[idx] -= sc["total"]
+        else:
+            _fluxo_cet.extend([0.0] * (idx - len(_fluxo_cet) + 1))
+            _fluxo_cet[idx] -= sc["total"]
+
+    _tir_m_cet = _tir_v3(_fluxo_cet)  # type: ignore[name-defined]
+    if _tir_m_cet is not None and caixa_liquido > 0:
+        cet_aa = round(((1 + _tir_m_cet) ** 12 - 1) * 100, 4)
+    elif caixa_liquido > 0 and prazo_total_a > 0:
         cet_aa = ((valor_resgate / caixa_liquido) ** (1 / prazo_total_a) - 1) * 100
     else:
         cet_aa = taxa_nom_aa
@@ -177,16 +265,30 @@ def _calcular_cri(dados: dict, base: dict) -> dict:
         "valor": custo_distribuidora, "quando": "Liquidação", "quem": "maffezzolli_custo"
     }
 
+    _regime_labels = {
+        "bullet": "Bullet (resgate único)",
+        "sac": f"SAC ({prazo_amort_m} meses)",
+        "price": f"Price ({prazo_amort_m} meses)",
+        "recebiveis": "Vinculado a Recebíveis",
+    }
+    prazo_total_real_m = prazo_total_m + (prazo_amort_m if regime in ("sac", "price") else 0)
+
     return {
-        "volume":           round(volume, 2),
-        "indexador":        indexador,
-        "spread":           spread,
-        "ipca_proj":        ipca_proj,
-        "taxa_nom_aa":      round(taxa_nom_aa, 2),
-        "prazo_total_m":    prazo_total_m,
-        "prazo_total_a":    round(prazo_total_a, 2),
-        "regime":           regime,
-        "valor_resgate":    round(valor_resgate, 2),
+        "volume":               round(volume, 2),
+        "indexador":            indexador,
+        "spread":               spread,
+        "ipca_proj":            ipca_proj,
+        "taxa_nom_aa":          round(taxa_nom_aa, 2),
+        "taxa_mensal":          round(taxa_mensal * 100, 4),
+        "prazo_total_m":        prazo_total_m,
+        "prazo_total_a":        round(prazo_total_a, 2),
+        "prazo_amort_m":        prazo_amort_m,
+        "prazo_total_real_m":   prazo_total_real_m,
+        "saldo_pos_carencia":   round(saldo_pos_carencia, 2),
+        "regime":               regime,
+        "regime_label":         _regime_labels.get(regime, regime),
+        "schedule":             schedule,
+        "valor_resgate":        round(valor_resgate, 2),
         "upfront":          round(upfront, 2),
         "recorrentes":      round(recorrentes, 2),
         "custo_total":      round(custo_total_estrut, 2),
@@ -235,9 +337,9 @@ def _calcular_v3_com_cri(dados: dict) -> dict:
     recorrentes   = cri["recorrentes"]
     valor_resgate = cri["valor_resgate"]
 
-    mes_emissao   = mes_inicio_obra
-    prazo_recorr  = duracao_obra + carencia_cri
-    mes_resgate   = mes_inicio_obra + duracao_obra + carencia_cri
+    mes_emissao  = mes_inicio_obra
+    prazo_recorr = duracao_obra + carencia_cri
+    schedule     = cri.get("schedule", [])
 
     # ── Mapa de deltas mensais do CRI sobre o fluxo base ─────────────────────
     delta_map: dict = {}
@@ -252,8 +354,10 @@ def _calcular_v3_com_cri(dados: dict) -> dict:
             m = mes_inicio_obra + k
             delta_map[m] = delta_map.get(m, 0.0) - recorr_mensal
 
-    # Resgate bullet (principal + juros acumulados) ao final do prazo
-    delta_map[mes_resgate] = delta_map.get(mes_resgate, 0.0) - valor_resgate
+    # Pagamentos ao investidor conforme schedule (bullet = 1 pag., SAC/Price = n pags.)
+    for sc in schedule:
+        mes_abs = mes_inicio_obra + sc["mes_rel"]
+        delta_map[mes_abs] = delta_map.get(mes_abs, 0.0) - sc["total"]
 
     # ── Construir fluxo com CRI para TIR e exposição ──────────────────────────
     fluxo_base    = base["fluxo"]
@@ -319,15 +423,17 @@ def _calcular_v3_com_cri(dados: dict) -> dict:
                              "valor": round(fin["resultado_com_fin"], 2), "tipo": "subtotal"})
         base["dre"].append({"desc": "(+) Volume CRI emitido (antecipação de recebíveis)",
                              "valor": volume,                              "tipo": "receita"})
+        _regime_lbl = cri.get("regime_label", "CRI")
         base["dre"].append({"desc": "(−) Custos de Estruturação CRI",
                              "valor": -custo_estrut_cri,                  "tipo": "deducao"})
-        base["dre"].append({"desc": "(−) Resgate CRI — bullet ao vencimento",
+        base["dre"].append({"desc": f"(−) Pagamentos CRI — {_regime_lbl} (total ao investidor)",
                              "valor": -valor_resgate,                     "tipo": "deducao"})
         base["dre"].append({"desc": "Resultado com CCB + CRI",
                              "valor": resultado_com_cri,                  "tipo": "resultado"})
         base["dre"].append({"desc": "Lucratividade (CCB + CRI)",
                              "valor": mgm_com_cri,                        "tipo": "pct"})
     else:
+        _regime_lbl = cri.get("regime_label", "CRI")
         base["dre"] = base["dre"][:-2]
         base["dre"].append({"desc": "Resultado Operacional (sem CRI)",
                              "valor": round(base["resultado_bruto"], 2),  "tipo": "subtotal"})
@@ -335,7 +441,7 @@ def _calcular_v3_com_cri(dados: dict) -> dict:
                              "valor": volume,                              "tipo": "receita"})
         base["dre"].append({"desc": "(−) Custos de Estruturação CRI",
                              "valor": -custo_estrut_cri,                  "tipo": "deducao"})
-        base["dre"].append({"desc": "(−) Resgate CRI — bullet ao vencimento",
+        base["dre"].append({"desc": f"(−) Pagamentos CRI — {_regime_lbl} (total ao investidor)",
                              "valor": -valor_resgate,                     "tipo": "deducao"})
         base["dre"].append({"desc": "Resultado com CRI",
                              "valor": resultado_com_cri,                  "tipo": "resultado"})
@@ -463,12 +569,19 @@ _CRI_INPUT_TAB = r"""
       </div>
       <div>
         <div class="vb-lbl">Regime de Amortização</div>
-        <select class="vb-sel" name="cri_regime">
+        <select class="vb-sel" name="cri_regime" id="criRegime" onchange="criTogglePrazoAmort(this)">
           <option value="bullet"      {% if not dados.cri_regime or dados.cri_regime == 'bullet' %}selected{% endif %}>Bullet (resgate único)</option>
           <option value="sac"         {% if dados.cri_regime == 'sac' %}selected{% endif %}>SAC</option>
           <option value="price"       {% if dados.cri_regime == 'price' %}selected{% endif %}>Price</option>
           <option value="recebiveis"  {% if dados.cri_regime == 'recebiveis' %}selected{% endif %}>Vinculado a recebíveis</option>
         </select>
+      </div>
+    </div>
+    <div id="criPrazoAmortRow" class="vb-row" style="{% if dados.cri_regime not in ('sac','price') %}display:none;{% endif %}">
+      <div>
+        <div class="vb-lbl">Prazo de Amortização (meses após carência)</div>
+        <input class="vb-inp" type="number" name="cri_prazo_amort" step="1" min="1" max="120" placeholder="24" value="{{ dados.cri_prazo_amort or '24' }}">
+        <div class="vb-hint">SAC/Price: parcelas mensais após o período de carência</div>
       </div>
     </div>
     <div class="vb-row">
@@ -850,6 +963,11 @@ function toggleRatingInputs(el){
   const box=document.getElementById('ratingInputs');
   if(el.checked){box.style.opacity='1';box.style.pointerEvents='auto';}
   else{box.style.opacity='.4';box.style.pointerEvents='none';}
+}
+function criTogglePrazoAmort(sel){
+  const row=document.getElementById('criPrazoAmortRow');
+  if(!row)return;
+  row.style.display=(sel.value==='sac'||sel.value==='price')?'':'none';
 }
 function criUpdateLabel(){
   const idx=document.getElementById('criIndexador');
