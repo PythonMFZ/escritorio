@@ -314,31 +314,34 @@ def _calcular_v3_com_cri(dados: dict) -> dict:
     # ── DRE: inserir linhas de custo CRI ─────────────────────────────────────
     if fin:
         # CCB já modificou a DRE; remove as últimas 2 linhas (resultado_com_fin + lucratividade)
-        # e reabre para adicionar CRI por cima
         base["dre"] = base["dre"][:-2]
         base["dre"].append({"desc": "Resultado com CCB (sem CRI)",
                              "valor": round(fin["resultado_com_fin"], 2), "tipo": "subtotal"})
-        base["dre"].append({"desc": "(−) Custo Estruturação CRI",
-                             "valor": -custo_estrut_cri,      "tipo": "deducao"})
-        base["dre"].append({"desc": "(−) Encargo Financeiro CRI (resgate − volume)",
-                             "valor": -custo_financeiro_cri,  "tipo": "deducao"})
+        base["dre"].append({"desc": "(+) Volume CRI emitido (antecipação de recebíveis)",
+                             "valor": volume,             "tipo": "receita"})
+        base["dre"].append({"desc": "(−) Custos de Estruturação CRI",
+                             "valor": -custo_estrut_cri,  "tipo": "deducao"})
+        base["dre"].append({"desc": "(−) Resgate CRI — bullet ao vencimento",
+                             "valor": -valor_resgate,     "tipo": "deducao"})
         base["dre"].append({"desc": "Resultado com CCB + CRI",
-                             "valor": resultado_com_cri,      "tipo": "resultado"})
+                             "valor": resultado_com_cri,  "tipo": "resultado"})
         base["dre"].append({"desc": "Lucratividade (CCB + CRI)",
-                             "valor": mgm_com_cri,            "tipo": "pct"})
+                             "valor": mgm_com_cri,        "tipo": "pct"})
     else:
         # Apenas CRI: remove resultado/lucratividade originais e insere com CRI
         base["dre"] = base["dre"][:-2]
         base["dre"].append({"desc": "Resultado Operacional (sem CRI)",
                              "valor": round(base["resultado_bruto"], 2), "tipo": "subtotal"})
-        base["dre"].append({"desc": "(−) Custo Estruturação CRI",
-                             "valor": -custo_estrut_cri,      "tipo": "deducao"})
-        base["dre"].append({"desc": "(−) Encargo Financeiro CRI (resgate − volume)",
-                             "valor": -custo_financeiro_cri,  "tipo": "deducao"})
+        base["dre"].append({"desc": "(+) Volume CRI emitido (antecipação de recebíveis)",
+                             "valor": volume,             "tipo": "receita"})
+        base["dre"].append({"desc": "(−) Custos de Estruturação CRI",
+                             "valor": -custo_estrut_cri,  "tipo": "deducao"})
+        base["dre"].append({"desc": "(−) Resgate CRI — bullet ao vencimento",
+                             "valor": -valor_resgate,     "tipo": "deducao"})
         base["dre"].append({"desc": "Resultado com CRI",
-                             "valor": resultado_com_cri,      "tipo": "resultado"})
+                             "valor": resultado_com_cri,  "tipo": "resultado"})
         base["dre"].append({"desc": "Lucratividade (com CRI)",
-                             "valor": mgm_com_cri,            "tipo": "pct"})
+                             "valor": mgm_com_cri,        "tipo": "pct"})
 
     base["cri"] = cri
     return base
@@ -622,20 +625,41 @@ _CRI_RESULT_BLOCK = r"""
         <div style="font-size:.88rem;"><span style="color:#64748b;">TIR:</span> <strong style="color:#6366f1;">{% if cri.tir_com_cri %}{{ cri.tir_com_cri }}% a.a.{% else %}—{% endif %}</strong></div>
       </div>
     </div>
-    <div style="display:flex;gap:1rem;flex-wrap:wrap;">
-      <div style="flex:1;min-width:200px;background:#fef2f2;border-radius:6px;padding:.6rem .75rem;text-align:center;">
-        <div style="font-size:.65rem;color:#64748b;text-transform:uppercase;font-weight:600;">Custo Total CRI ao Incorporador</div>
-        <div style="font-size:1rem;font-weight:800;color:#dc2626;">{{ cri.custo_total_cri|brl }}</div>
-        <div style="font-size:.65rem;color:#94a3b8;margin-top:.2rem;">Estruturação {{ cri.custo_estrut_cri|brl }} + Encargo {{ cri.custo_financeiro_cri|brl }}</div>
+    {# Fluxo financeiro do CRI: entrada e saídas explícitas #}
+    <div style="background:#f8fafc;border-radius:8px;padding:.9rem 1rem;margin-bottom:.75rem;">
+      <div style="font-size:.7rem;font-weight:700;text-transform:uppercase;color:#64748b;margin-bottom:.5rem;letter-spacing:.04em;">Fluxo Financeiro CRI (entrada e saídas)</div>
+      <div style="display:flex;justify-content:space-between;padding:.25rem 0;border-bottom:1px solid #e2e8f0;">
+        <span style="font-size:.82rem;color:#15803d;font-weight:600;">(+) Volume CRI emitido</span>
+        <span style="font-size:.85rem;font-weight:700;color:#16a34a;">+{{ cri.volume|brl }}</span>
       </div>
+      <div style="display:flex;justify-content:space-between;padding:.25rem 0;border-bottom:1px solid #e2e8f0;">
+        <span style="font-size:.82rem;color:#64748b;">(−) Custos de estruturação</span>
+        <span style="font-size:.82rem;font-weight:600;color:#dc2626;">−{{ cri.custo_estrut_cri|brl }}</span>
+      </div>
+      <div style="display:flex;justify-content:space-between;padding:.25rem 0;border-bottom:2px solid #cbd5e1;">
+        <span style="font-size:.82rem;color:#64748b;">(−) Resgate bullet ao vencimento</span>
+        <span style="font-size:.82rem;font-weight:600;color:#dc2626;">−{{ cri.valor_resgate|brl }}</span>
+      </div>
+      <div style="display:flex;justify-content:space-between;padding:.3rem 0;">
+        <span style="font-size:.85rem;font-weight:700;color:#1e293b;">Impacto líquido no resultado</span>
+        <span style="font-size:.9rem;font-weight:800;color:{% if cri.resultado_com_cri >= cri.resultado_sem_cri %}#16a34a{% else %}#dc2626{% endif %};">{{ (cri.resultado_com_cri - cri.resultado_sem_cri)|brl }}</span>
+      </div>
+    </div>
+    <div style="display:flex;gap:1rem;flex-wrap:wrap;">
       {% if cri.reducao_exposicao > 0 %}
-      <div style="flex:1;min-width:200px;background:#f0fdf4;border-radius:6px;padding:.6rem .75rem;text-align:center;">
+      <div style="flex:1;min-width:180px;background:#f0fdf4;border-radius:6px;padding:.6rem .75rem;text-align:center;">
         <div style="font-size:.65rem;color:#64748b;text-transform:uppercase;font-weight:600;">Redução de Exposição de Caixa</div>
         <div style="font-size:1rem;font-weight:800;color:#16a34a;">{{ cri.reducao_exposicao|brl }}</div>
-        <div style="font-size:.65rem;color:#94a3b8;margin-top:.2rem;">Antecipação de recebíveis libera caixa no projeto</div>
+        <div style="font-size:.65rem;color:#94a3b8;margin-top:.2rem;">Volume antecipado libera caixa durante a obra</div>
+      </div>
+      {% else %}
+      <div style="flex:1;min-width:180px;background:#fef2f2;border-radius:6px;padding:.6rem .75rem;text-align:center;">
+        <div style="font-size:.65rem;color:#64748b;text-transform:uppercase;font-weight:600;">Variação de Exposição</div>
+        <div style="font-size:1rem;font-weight:800;color:#dc2626;">+{{ (cri.exposicao_com_cri - cri.exposicao_sem_cri)|brl }}</div>
+        <div style="font-size:.65rem;color:#94a3b8;margin-top:.2rem;">Resgate bullet aumenta exposição ao final</div>
       </div>
       {% endif %}
-      <div style="flex:1;min-width:200px;background:#f8fafc;border-radius:6px;padding:.6rem .75rem;text-align:center;">
+      <div style="flex:1;min-width:180px;background:#f8fafc;border-radius:6px;padding:.6rem .75rem;text-align:center;">
         <div style="font-size:.65rem;color:#64748b;text-transform:uppercase;font-weight:600;">DSCR (Cobertura do Serviço)</div>
         <div style="font-size:1rem;font-weight:800;color:{% if cri.dscr >= 1.2 %}#16a34a{% else %}#dc2626{% endif %};">{{ "%.2f"|format(cri.dscr) }}x</div>
         <div style="font-size:.65rem;color:#94a3b8;margin-top:.2rem;">Mínimo recomendado: 1,20x</div>
