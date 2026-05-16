@@ -376,6 +376,16 @@ def _calcular_v3_com_cri(dados: dict) -> dict:
             exp_cri = saldo_acum
     exposicao_com_cri = abs(exp_cri)
 
+    # ── Atualizar base["fluxo"] com deltas do CRI para exibição na tabela ────
+    saldo_acum_fluxo = 0.0
+    for f, saldo_cri in zip(fluxo_base, fluxo_com_cri):
+        delta = delta_map.get(f["mes"], 0.0)
+        if delta != 0.0:
+            f["cri_delta"] = round(delta, 2)
+            f["saldo_mes"] = round(saldo_cri, 2)
+        saldo_acum_fluxo += f["saldo_mes"]
+        f["saldo_acumulado"] = round(saldo_acum_fluxo, 2)
+
     # ── Custo total do CRI para o incorporador (impacta resultado) ────────────
     # Estruturação: upfront + recorrentes
     # Encargo financeiro: resgate − volume (= juros capitalizados)
@@ -507,6 +517,31 @@ def _patch_cri_template() -> None:
 
     # ── 4. Injetar JS no final ────────────────────────────────────────────
     tpl = tpl.replace("</script>\n{% endblock %}", _CRI_JS + "\n</script>\n{% endblock %}", 1)
+
+    # ── 5. Adicionar coluna CRI na tabela Fluxo de Caixa VP ──────────────
+    OLD_FLUXO_TH = '<th>Saldo Mês</th>\n            <th>Saldo Acumulado</th>'
+    NEW_FLUXO_TH = '<th style="color:#93c5fd;">CRI</th>\n            <th>Saldo Mês</th>\n            <th>Saldo Acumulado</th>'
+    if OLD_FLUXO_TH in tpl:
+        tpl = tpl.replace(OLD_FLUXO_TH, NEW_FLUXO_TH, 1)
+
+    # also expose rows that have CRI activity even with zero receita/custo
+    OLD_ROW_FILTER = '{% if f.receita != 0 or f.custo_obra != 0 or f.saldo_mes != 0 %}'
+    NEW_ROW_FILTER = '{% if f.receita != 0 or f.custo_obra != 0 or f.saldo_mes != 0 or f.cri_delta|default(0) != 0 %}'
+    if OLD_ROW_FILTER in tpl:
+        tpl = tpl.replace(OLD_ROW_FILTER, NEW_ROW_FILTER, 1)
+
+    OLD_FLUXO_TD = (
+        '<td class="{{ \'fc-pos\' if f.saldo_mes >= 0 else \'fc-neg\' }}">{{ f.saldo_mes|brl }}</td>\n'
+        '            <td class="{{ \'fc-pos\' if f.saldo_acumulado >= 0 else \'fc-neg\' }}">{{ f.saldo_acumulado|brl }}</td>'
+    )
+    NEW_FLUXO_TD = (
+        '<td class="{{ \'fc-pos\' if f.cri_delta|default(0) > 0 else (\'fc-neg\' if f.cri_delta|default(0) < 0 else \'\') }}" style="font-size:.75rem;">'
+        '{% if f.cri_delta is defined and f.cri_delta != 0 %}{{ f.cri_delta|brl }}{% else %}—{% endif %}</td>\n'
+        '            <td class="{{ \'fc-pos\' if f.saldo_mes >= 0 else \'fc-neg\' }}">{{ f.saldo_mes|brl }}</td>\n'
+        '            <td class="{{ \'fc-pos\' if f.saldo_acumulado >= 0 else \'fc-neg\' }}">{{ f.saldo_acumulado|brl }}</td>'
+    )
+    if OLD_FLUXO_TD in tpl:
+        tpl = tpl.replace(OLD_FLUXO_TD, NEW_FLUXO_TD, 1)
 
     # ── Sentinela ─────────────────────────────────────────────────────────
     tpl = tpl.replace("</script>\n{% endblock %}", "/* _cri_module_v1 */\n</script>\n{% endblock %}", 1)
