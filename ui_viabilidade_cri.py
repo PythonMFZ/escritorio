@@ -511,7 +511,7 @@ def _patch_cri_template() -> None:
     tpl = TEMPLATES.get("ferramenta_viabilidade.html", "")  # type: ignore[name-defined]
     if not tpl:
         return
-    if "_cri_module_v2" in tpl:
+    if "_cri_module_v3" in tpl:
         return
 
     # ── 1. Adicionar aba "CRI" no nav de input ────────────────────────────
@@ -578,12 +578,26 @@ def _patch_cri_template() -> None:
     if OLD_ROW_FILTER in tpl:
         tpl = tpl.replace(OLD_ROW_FILTER, NEW_ROW_FILTER, 1)  # VF table second
 
-    # Coluna CRI na tabela VF (OLD_FLUXO_TD ainda está intacto na VF, pois VP já foi substituído)
-    if OLD_FLUXO_TD in tpl:
-        tpl = tpl.replace(OLD_FLUXO_TD, NEW_FLUXO_TD, 1)  # VF table
+    # VF table TD — usa custo_obra como âncora porque após o patch da VP o padrão
+    # OLD_FLUXO_TD aparece DENTRO de NEW_FLUXO_TD (é sufixo), então replace(...,1)
+    # atingiria a VP novamente. A âncora custo_obra→saldo_mes só existe na VF
+    # (na VP há CRI_CELL entre custo_obra e saldo_mes após o patch).
+    OLD_VF_CUSTO_SALDO = (
+        '<td class="fc-neg">{{ f.custo_obra|brl }}</td>\n'
+        '            <td class="{{ \'fc-pos\' if f.saldo_mes >= 0 else \'fc-neg\' }}">{{ f.saldo_mes|brl }}</td>\n'
+        '            <td class="{{ \'fc-pos\' if f.saldo_acumulado >= 0 else \'fc-neg\' }}">{{ f.saldo_acumulado|brl }}</td>'
+    )
+    NEW_VF_CUSTO_SALDO = (
+        '<td class="fc-neg">{{ f.custo_obra|brl }}</td>\n'
+        '            ' + _CRI_CELL +
+        '<td class="{{ \'fc-pos\' if f.saldo_mes >= 0 else \'fc-neg\' }}">{{ f.saldo_mes|brl }}</td>\n'
+        '            <td class="{{ \'fc-pos\' if f.saldo_acumulado >= 0 else \'fc-neg\' }}">{{ f.saldo_acumulado|brl }}</td>'
+    )
+    if OLD_VF_CUSTO_SALDO in tpl:
+        tpl = tpl.replace(OLD_VF_CUSTO_SALDO, NEW_VF_CUSTO_SALDO, 1)
 
     # ── Sentinela ─────────────────────────────────────────────────────────
-    tpl = tpl.replace("</script>\n{% endblock %}", "/* _cri_module_v2 */\n</script>\n{% endblock %}", 1)
+    tpl = tpl.replace("</script>\n{% endblock %}", "/* _cri_module_v3 */\n</script>\n{% endblock %}", 1)
 
     TEMPLATES["ferramenta_viabilidade.html"] = tpl  # type: ignore[name-defined]
     if hasattr(templates_env.loader, "mapping"):  # type: ignore[name-defined]
