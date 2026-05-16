@@ -313,35 +313,37 @@ def _calcular_v3_com_cri(dados: dict) -> dict:
 
     # ── DRE: inserir linhas de custo CRI ─────────────────────────────────────
     if fin:
-        # CCB já modificou a DRE; remove as últimas 2 linhas (resultado_com_fin + lucratividade)
         base["dre"] = base["dre"][:-2]
         base["dre"].append({"desc": "Resultado com CCB (sem CRI)",
                              "valor": round(fin["resultado_com_fin"], 2), "tipo": "subtotal"})
         base["dre"].append({"desc": "(+) Volume CRI emitido (antecipação de recebíveis)",
-                             "valor": volume,             "tipo": "receita"})
-        base["dre"].append({"desc": "(−) Custos de Estruturação CRI",
-                             "valor": -custo_estrut_cri,  "tipo": "deducao"})
+                             "valor": volume,                              "tipo": "receita"})
         base["dre"].append({"desc": "(−) Resgate CRI — bullet ao vencimento",
-                             "valor": -valor_resgate,     "tipo": "deducao"})
+                             "valor": -valor_resgate,                     "tipo": "deducao"})
+        base["dre"].append({"desc": "→ Encargo líquido CRI (resgate − volume emitido)",
+                             "valor": -(valor_resgate - volume),          "tipo": "subtotal"})
+        base["dre"].append({"desc": "(−) Custos de Estruturação CRI",
+                             "valor": -custo_estrut_cri,                  "tipo": "deducao"})
         base["dre"].append({"desc": "Resultado com CCB + CRI",
-                             "valor": resultado_com_cri,  "tipo": "resultado"})
+                             "valor": resultado_com_cri,                  "tipo": "resultado"})
         base["dre"].append({"desc": "Lucratividade (CCB + CRI)",
-                             "valor": mgm_com_cri,        "tipo": "pct"})
+                             "valor": mgm_com_cri,                        "tipo": "pct"})
     else:
-        # Apenas CRI: remove resultado/lucratividade originais e insere com CRI
         base["dre"] = base["dre"][:-2]
         base["dre"].append({"desc": "Resultado Operacional (sem CRI)",
-                             "valor": round(base["resultado_bruto"], 2), "tipo": "subtotal"})
+                             "valor": round(base["resultado_bruto"], 2),  "tipo": "subtotal"})
         base["dre"].append({"desc": "(+) Volume CRI emitido (antecipação de recebíveis)",
-                             "valor": volume,             "tipo": "receita"})
-        base["dre"].append({"desc": "(−) Custos de Estruturação CRI",
-                             "valor": -custo_estrut_cri,  "tipo": "deducao"})
+                             "valor": volume,                              "tipo": "receita"})
         base["dre"].append({"desc": "(−) Resgate CRI — bullet ao vencimento",
-                             "valor": -valor_resgate,     "tipo": "deducao"})
+                             "valor": -valor_resgate,                     "tipo": "deducao"})
+        base["dre"].append({"desc": "→ Encargo líquido CRI (resgate − volume emitido)",
+                             "valor": -(valor_resgate - volume),          "tipo": "subtotal"})
+        base["dre"].append({"desc": "(−) Custos de Estruturação CRI",
+                             "valor": -custo_estrut_cri,                  "tipo": "deducao"})
         base["dre"].append({"desc": "Resultado com CRI",
-                             "valor": resultado_com_cri,  "tipo": "resultado"})
+                             "valor": resultado_com_cri,                  "tipo": "resultado"})
         base["dre"].append({"desc": "Lucratividade (com CRI)",
-                             "valor": mgm_com_cri,        "tipo": "pct"})
+                             "valor": mgm_com_cri,                        "tipo": "pct"})
 
     base["cri"] = cri
     return base
