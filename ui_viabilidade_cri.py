@@ -97,9 +97,10 @@ def _calcular_cri(dados: dict, base: dict) -> dict:
     receita_bruta = fee_estrt_r + fee_orig_r + fee_monit_r
     resultado_liq = receita_bruta - custo_distribuidora
 
-    custo_total_proj = base.get("custo_total", 1)
-    pct_divida  = min(volume / custo_total_proj, 1.0) if custo_total_proj > 0 else 0
-    pct_equity  = 1 - pct_divida
+    # pct_divida: volume CRI / VGV líquido (alavancagem real sobre a receita do projeto)
+    vgv_ref    = base.get("vgv_liquido") or base.get("custo_total") or 1
+    pct_divida = min(volume / vgv_ref, 1.0) if vgv_ref > 0 else 0
+    pct_equity = 1 - pct_divida
     wacc        = pct_divida * (cet_aa / 100) + pct_equity * (retorno_equity / 100)
     wacc_pct    = wacc * 100
 
@@ -318,12 +319,10 @@ def _calcular_v3_com_cri(dados: dict) -> dict:
                              "valor": round(fin["resultado_com_fin"], 2), "tipo": "subtotal"})
         base["dre"].append({"desc": "(+) Volume CRI emitido (antecipação de recebíveis)",
                              "valor": volume,                              "tipo": "receita"})
-        base["dre"].append({"desc": "(−) Resgate CRI — bullet ao vencimento",
-                             "valor": -valor_resgate,                     "tipo": "deducao"})
-        base["dre"].append({"desc": "→ Encargo líquido CRI (resgate − volume emitido)",
-                             "valor": -(valor_resgate - volume),          "tipo": "subtotal"})
         base["dre"].append({"desc": "(−) Custos de Estruturação CRI",
                              "valor": -custo_estrut_cri,                  "tipo": "deducao"})
+        base["dre"].append({"desc": "(−) Resgate CRI — bullet ao vencimento",
+                             "valor": -valor_resgate,                     "tipo": "deducao"})
         base["dre"].append({"desc": "Resultado com CCB + CRI",
                              "valor": resultado_com_cri,                  "tipo": "resultado"})
         base["dre"].append({"desc": "Lucratividade (CCB + CRI)",
@@ -334,12 +333,10 @@ def _calcular_v3_com_cri(dados: dict) -> dict:
                              "valor": round(base["resultado_bruto"], 2),  "tipo": "subtotal"})
         base["dre"].append({"desc": "(+) Volume CRI emitido (antecipação de recebíveis)",
                              "valor": volume,                              "tipo": "receita"})
-        base["dre"].append({"desc": "(−) Resgate CRI — bullet ao vencimento",
-                             "valor": -valor_resgate,                     "tipo": "deducao"})
-        base["dre"].append({"desc": "→ Encargo líquido CRI (resgate − volume emitido)",
-                             "valor": -(valor_resgate - volume),          "tipo": "subtotal"})
         base["dre"].append({"desc": "(−) Custos de Estruturação CRI",
                              "valor": -custo_estrut_cri,                  "tipo": "deducao"})
+        base["dre"].append({"desc": "(−) Resgate CRI — bullet ao vencimento",
+                             "valor": -valor_resgate,                     "tipo": "deducao"})
         base["dre"].append({"desc": "Resultado com CRI",
                              "valor": resultado_com_cri,                  "tipo": "resultado"})
         base["dre"].append({"desc": "Lucratividade (com CRI)",
