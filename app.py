@@ -47652,4 +47652,5 @@ exec(open('ui_obras_subetapa_gantt.py').read())
 exec(open('ui_fixes_batch7.py').read())
 exec(open('ui_obras_subetapa_apt.py').read())
 exec(open('ui_obras_duplicar_fase.py').read())
+exec(open('ui_obras_duplicar_etapa.py').read())
 
