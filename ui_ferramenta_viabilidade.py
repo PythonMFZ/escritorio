@@ -60,14 +60,16 @@ def _calcular_viabilidade_v2(dados: dict) -> dict:
         tipo        = tip.get("tipo", "Residencial")
         nome        = tip.get("nome", "")
         metragem    = float(tip.get("metragem", 0) or 0)
-        qtd         = int(tip.get("quantidade", 0) or 0)
+        qtd         = int(tip.get("quantidade", 1) or 1)
         andar_ini   = int(tip.get("andar_inicio", 1) or 1)
         preco_base  = float(tip.get("preco_m2", preco_m2_base) or preco_m2_base)
         permuta     = bool(tip.get("permuta", False))
+        dif_proprio = float(tip.get("dif_proprio", 0) or 0) / 100
+        pavimento   = tip.get("pavimento", "")
 
         for u in range(qtd):
             andar = andar_ini + u
-            preco_m2_u = preco_base * (1 + dif_andar * (andar - 1))
+            preco_m2_u = preco_base * (1 + dif_andar * (andar - 1)) * (1 + dif_proprio)
             valor_u = metragem * preco_m2_u
 
             vgv_bruto += valor_u
@@ -89,6 +91,8 @@ def _calcular_viabilidade_v2(dados: dict) -> dict:
                 "preco_m2": round(preco_m2_u, 2),
                 "valor": round(valor_u, 2),
                 "permuta": permuta,
+                "dif_proprio": round(dif_proprio * 100, 2),
+                "pavimento": pavimento,
             })
 
     # Fallback se não cadastrou tipologias
@@ -421,6 +425,7 @@ def _calcular_viabilidade_v2(dados: dict) -> dict:
         "area_permeavel": area_permeavel,
         "area_equivalente": area_equivalente,
         # Produto
+        "unidades": unidades,
         "unidades_total": unidades_total,
         "unidades_permuta": unidades_permuta_n,
         "area_privativa": area_privativa_total,
