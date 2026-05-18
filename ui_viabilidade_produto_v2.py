@@ -63,6 +63,26 @@ async def ferramenta_viabilidade_post_prodv2(
         pavimentos.append({"nome": pav_nome, "andar": pav_andar, "unidades": pav_unidades})
         p += 1
 
+    # Backward compat: se não há pavimentos no form, tenta ler formato antigo tip_nome_*
+    if not tipologias:
+        i = 0
+        while f"tip_nome_{i}" in dados or f"tip_metragem_{i}" in dados:
+            met = float(dados.get(f"tip_metragem_{i}", 0) or 0)
+            qtd = int(dados.get(f"tip_qtd_{i}", 1) or 1)
+            if met > 0:
+                tipologias.append({
+                    "nome":         dados.get(f"tip_nome_{i}", ""),
+                    "tipo":         dados.get(f"tip_tipo_{i}", "Residencial"),
+                    "metragem":     met,
+                    "quantidade":   qtd,
+                    "preco_m2":     float(dados.get(f"tip_preco_{i}", 0) or 0) or preco_m2_base_f,
+                    "andar_inicio": int(dados.get(f"tip_andar_{i}", 1) or 1),
+                    "dif_proprio":  0.0,
+                    "permuta":      dados.get(f"tip_permuta_{i}") == "1",
+                    "pavimento":    "",
+                })
+            i += 1
+
     dados["tipologias"] = tipologias
     dados["pavimentos"] = pavimentos
 
@@ -109,7 +129,7 @@ async def ferramenta_viabilidade_post_prodv2(
 
 def _patch_produto_v2():
     tpl = TEMPLATES.get("ferramenta_viabilidade.html", "")
-    if not tpl or "_prodV2" in tpl:
+    if not tpl or "_prodV3" in tpl:
         return
 
     changed = False
@@ -143,7 +163,7 @@ def _patch_produto_v2():
     _OLD_PROD = (
         '{# ── ABA 2: PRODUTO ── #}\n'
         '<div class="vb-sec card p-4 mb-3" id="tab-produto">\n'
-        '  <h5 class="mb-3">Produto & VGV</h5>\n'
+        '  <h5 class="mb-3">Produto &amp; VGV</h5>\n'
         '  <div class="vb-row">\n'
         '    <div><div class="vb-lbl">Preço base (R$/m²)</div><div class="pw"><span class="pre">R$</span>'
         '<input class="vb-inp pl" type="number" name="preco_m2_base" step="100" min="0" placeholder="12.500" '
@@ -199,7 +219,7 @@ def _patch_produto_v2():
     _NEW_PROD = (
         '{# ── ABA 2: PRODUTO ── #}\n'
         '<div class="vb-sec card p-4 mb-3" id="tab-produto">\n'
-        '  <h5 class="mb-3">Produto & VGV</h5>\n'
+        '  <h5 class="mb-3">Produto &amp; VGV</h5>\n'
         '  <div class="vb-row">\n'
         '    <div><div class="vb-lbl">Preço base (R$/m²)</div><div class="pw"><span class="pre">R$</span>'
         '<input class="vb-inp pl" type="number" name="preco_m2_base" step="100" min="0" placeholder="12.500" '
@@ -486,7 +506,7 @@ def _patch_produto_v2():
         print("[produto_v2] AVISO: patch D (JS) não encontrou string alvo")
 
     # Sentinel
-    tpl = tpl.replace("{% endblock %}", "{# _prodV2 #}\n{% endblock %}", 1)
+    tpl = tpl.replace("{% endblock %}", "{# _prodV3 #}\n{% endblock %}", 1)
 
     if changed:
         TEMPLATES["ferramenta_viabilidade.html"] = tpl
