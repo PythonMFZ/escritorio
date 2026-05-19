@@ -6063,6 +6063,17 @@ a:hover{ color:#00BFBF; }
                 <button class="btn btn-sm btn-outline-primary">Salvar visibilidade</button>
               </form>
             </details>
+
+            <div class="mt-2 text-end">
+              {% if row.membership.user_id != current_user.id %}
+              <form method="post" action="/admin/members/{{ row.membership.id }}/remover"
+                    onsubmit="return confirm('Remover acesso de {{ row.user.name }}?\n\nIsso apaga o vínculo do usuário com sua empresa. Um novo convite poderá ser enviado.');">
+                <button type="submit" class="btn btn-sm btn-outline-danger">
+                  <i class="bi bi-person-x me-1"></i>Remover acesso
+                </button>
+              </form>
+              {% endif %}
+            </div>
           </div>
         {% endfor %}
       </div>
@@ -15038,7 +15049,38 @@ async def member_link_client(
     return RedirectResponse("/admin/members", status_code=303)
 
 
-@app.get("/admin/clients/{client_id}/access", response_class=HTMLResponse)
+@app.post("/admin/members/{membership_id}/remover")
+@require_role({"admin", "equipe"})
+async def member_remover(
+        request: Request,
+        membership_id: int,
+        session: Session = Depends(get_session),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    m = session.get(Membership, membership_id)
+    if not m or m.company_id != ctx.company.id:
+        set_flash(request, "Membro não encontrado.")
+        return RedirectResponse("/admin/members", status_code=303)
+
+    if m.user_id == ctx.user.id:
+        set_flash(request, "Você não pode remover seu próprio acesso.")
+        return RedirectResponse("/admin/members", status_code=303)
+
+    if m.role in {"admin", "equipe"} and not is_superadmin(ctx.user):
+        set_flash(request, "Apenas superadmin pode remover membros admin/equipe.")
+        return RedirectResponse("/admin/members", status_code=303)
+
+    user = session.get(User, m.user_id)
+    nome = user.name if user else f"id={m.user_id}"
+    session.delete(m)
+    session.commit()
+    set_flash(request, f"Acesso de '{nome}' removido. Um novo convite pode ser enviado.")
+    return RedirectResponse("/admin/members", status_code=303)
+
+
+
 @require_role({"admin", "equipe"})
 async def client_access_page(
         request: Request,
