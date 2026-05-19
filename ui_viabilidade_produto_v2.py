@@ -3,6 +3,15 @@
 # Substitui a aba "Produto & VGV" por UI hierárquica: Pavimento → Unidades
 # =============================================================================
 
+# Remove a rota POST registrada por ui_viabilidade_v3.py para que a nossa
+# (com parsing de pavimentos) seja a única ativa no path.
+app.router.routes[:] = [
+    r for r in app.router.routes
+    if not (
+        hasattr(r, "path") and r.path == "/ferramentas/viabilidade/calcular"
+        and hasattr(r, "methods") and r.methods and "POST" in r.methods
+    )
+]
 
 # ── Override: POST route ──────────────────────────────────────────────────────
 
