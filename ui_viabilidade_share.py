@@ -46,6 +46,8 @@ def _parse_form_viabilidade(form_data: dict) -> dict:
     """Parse flat form data into structured dados dict (tipologias, fases)."""
     dados = dict(form_data)
     tipologias = []
+
+    # Formato legado: tip_nome_* / tip_metragem_*
     i = 0
     while f"tip_nome_{i}" in dados or f"tip_metragem_{i}" in dados:
         met = float(dados.get(f"tip_metragem_{i}", 0) or 0)
@@ -61,6 +63,44 @@ def _parse_form_viabilidade(form_data: dict) -> dict:
                 "permuta":      dados.get(f"tip_permuta_{i}") == "1",
             })
         i += 1
+
+    # Formato novo: pav_nome_* / un_met_*  (UI de pavimentos)
+    if not tipologias:
+        pavimentos = []
+        p = 0
+        while f"pav_nome_{p}" in dados or f"pav_andar_{p}" in dados:
+            pav_nome  = dados.get(f"pav_nome_{p}", f"Pavimento {p + 1}")
+            pav_andar = int(dados.get(f"pav_andar_{p}", p + 1) or p + 1)
+            pav_uns = []
+            u = 0
+            while f"un_met_{p}_{u}" in dados:
+                met = float(dados.get(f"un_met_{p}_{u}", 0) or 0)
+                if met > 0:
+                    preco_proprio = float(dados.get(f"un_preco_{p}_{u}", 0) or 0)
+                    dif_prop = float(dados.get(f"un_dif_{p}_{u}", 0) or 0)
+                    permuta  = dados.get(f"un_perm_{p}_{u}") == "1"
+                    nome_un  = dados.get(f"un_nome_{p}_{u}", "")
+                    tipo_un  = dados.get(f"un_tipo_{p}_{u}", "Residencial")
+                    tipologias.append({
+                        "nome":         nome_un,
+                        "tipo":         tipo_un,
+                        "metragem":     met,
+                        "quantidade":   1,
+                        "preco_m2":     preco_proprio or float(dados.get("preco_m2_base", 12500) or 12500),
+                        "andar_inicio": pav_andar,
+                        "dif_proprio":  dif_prop,
+                        "permuta":      permuta,
+                        "pavimento":    pav_nome,
+                    })
+                    pav_uns.append({"nome": nome_un, "tipo": tipo_un, "metragem": met,
+                                    "preco_proprio": preco_proprio or None,
+                                    "dif_proprio": dif_prop, "permuta": permuta})
+                u += 1
+            pavimentos.append({"nome": pav_nome, "andar": pav_andar, "unidades": pav_uns})
+            p += 1
+        if pavimentos:
+            dados["pavimentos"] = pavimentos
+
     dados["tipologias"] = tipologias
     fases = []
     j = 0
@@ -315,6 +355,10 @@ async def viabilidade_abrir_v1(
     cc = get_client_or_none(session, ctx.company.id, _cli_id_ab)
     try:
         dados = _json_s.loads(estudo.dados_input_json)
+        # Re-parseia para reconstituir tipologias a partir das chaves brutas do form
+        # (necessário para estudos salvos antes do fix ou com UI de pavimentos)
+        if not dados.get("tipologias"):
+            dados = _parse_form_viabilidade(dados)
         dados["cenario"] = "realista"
         resultado = _calc_cenario_viab(dados, "realista")
     except Exception:
