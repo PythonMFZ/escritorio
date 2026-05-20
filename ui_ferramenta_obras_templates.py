@@ -340,20 +340,35 @@ TEMPLATES["ferramenta_obras_cronograma.html"] = r"""
 </div>
 
 {# Card resumo orçamento #}
+{% set diff_cub = calc.orcado_soma_etapas - calc.orcamento_obra %}
 <div class="card mb-3" style="border:1.5px solid var(--mc-border);border-radius:14px;overflow:hidden;">
   <div style="background:#f8fafc;border-bottom:1px solid var(--mc-border);padding:.55rem 1.25rem;font-size:.72rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--mc-muted);">
     Resumo Financeiro da Obra
   </div>
   <div class="d-flex flex-wrap">
     <div style="flex:1;min-width:160px;padding:1rem 1.25rem;border-right:1px solid var(--mc-border);">
-      <div style="font-size:.68rem;font-weight:700;text-transform:uppercase;color:var(--mc-muted);letter-spacing:.05em;margin-bottom:.25rem;">Total Orçado</div>
-      <div style="font-size:1.35rem;font-weight:800;color:#0f172a;letter-spacing:-.02em;">{{ calc.orcado_total|brl }}</div>
+      <div style="font-size:.68rem;font-weight:700;text-transform:uppercase;color:var(--mc-muted);letter-spacing:.05em;margin-bottom:.25rem;">Orçado Item a Item</div>
+      <div style="font-size:1.35rem;font-weight:800;color:#0f172a;letter-spacing:-.02em;">{{ calc.orcado_soma_etapas|brl }}</div>
       <div style="font-size:.72rem;color:var(--mc-muted);margin-top:.15rem;">{{ calc.n_etapas }} etapas · {{ calc.n_fases }} fases</div>
+      {% if calc.orcamento_obra > 0 %}
+      <div style="font-size:.72rem;margin-top:.3rem;color:{% if diff_cub > 0 %}#16a34a{% elif diff_cub < 0 %}#dc2626{% else %}#64748b{% endif %};">
+        {% if diff_cub > 0 %}▲ +{{ diff_cub|brl }} acima do CUB
+        {% elif diff_cub < 0 %}▼ {{ diff_cub|brl }} abaixo do CUB
+        {% else %}= igual ao CUB{% endif %}
+      </div>
+      {% endif %}
     </div>
+    {% if calc.orcamento_obra > 0 %}
+    <div style="flex:1;min-width:160px;padding:1rem 1.25rem;border-right:1px solid var(--mc-border);">
+      <div style="font-size:.68rem;font-weight:700;text-transform:uppercase;color:var(--mc-muted);letter-spacing:.05em;margin-bottom:.25rem;">Orçamento CUB / Referência</div>
+      <div style="font-size:1.35rem;font-weight:800;color:#7c3aed;letter-spacing:-.02em;">{{ calc.orcamento_obra|brl }}</div>
+      <div style="font-size:.72rem;color:var(--mc-muted);margin-top:.15rem;">Calculado pelo CUB da obra</div>
+    </div>
+    {% endif %}
     <div style="flex:1;min-width:160px;padding:1rem 1.25rem;border-right:1px solid var(--mc-border);">
       <div style="font-size:.68rem;font-weight:700;text-transform:uppercase;color:var(--mc-muted);letter-spacing:.05em;margin-bottom:.25rem;">Realizado</div>
       <div style="font-size:1.35rem;font-weight:800;color:#3b82f6;letter-spacing:-.02em;">{{ calc.realizado_rs|brl }}</div>
-      <div style="font-size:.72rem;color:var(--mc-muted);margin-top:.15rem;">{{ ((calc.realizado_rs/calc.orcado_total*100)|round(1)) if calc.orcado_total > 0 else 0 }}% do orçado</div>
+      <div style="font-size:.72rem;color:var(--mc-muted);margin-top:.15rem;">{{ ((calc.realizado_rs/calc.orcado_soma_etapas*100)|round(1)) if calc.orcado_soma_etapas > 0 else 0 }}% do orçado</div>
     </div>
     <div style="flex:1;min-width:160px;padding:1rem 1.25rem;">
       <div style="font-size:.68rem;font-weight:700;text-transform:uppercase;color:var(--mc-muted);letter-spacing:.05em;margin-bottom:.25rem;">A Incorrer</div>
@@ -459,8 +474,11 @@ TEMPLATES["ferramenta_obras_cronograma.html"] = r"""
   </div>
   <div style="display:flex;flex-wrap:wrap;gap:.4rem 2rem;flex:1;">
     <div>
-      <span style="font-size:.68rem;font-weight:700;text-transform:uppercase;color:var(--mc-muted);letter-spacing:.05em;margin-right:.4rem;">Orçado</span>
-      <span style="font-size:1rem;font-weight:800;color:#0f172a;">{{ calc.orcado_total|brl }}</span>
+      <span style="font-size:.68rem;font-weight:700;text-transform:uppercase;color:var(--mc-muted);letter-spacing:.05em;margin-right:.4rem;">Orçado (item a item)</span>
+      <span style="font-size:1rem;font-weight:800;color:#0f172a;">{{ calc.orcado_soma_etapas|brl }}</span>
+      {% if calc.orcamento_obra > 0 %}
+      <span style="font-size:.72rem;color:#7c3aed;margin-left:.5rem;">CUB: {{ calc.orcamento_obra|brl }}</span>
+      {% endif %}
     </div>
     <div>
       <span style="font-size:.68rem;font-weight:700;text-transform:uppercase;color:var(--mc-muted);letter-spacing:.05em;margin-right:.4rem;">Realizado</span>
