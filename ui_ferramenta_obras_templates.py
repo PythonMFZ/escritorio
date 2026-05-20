@@ -452,6 +452,34 @@ TEMPLATES["ferramenta_obras_cronograma.html"] = r"""
 </div>
 {% endfor %}
 
+{# Linha de totais das fases #}
+<div style="border:2px solid var(--mc-primary);border-radius:12px;padding:.75rem 1.1rem;margin-top:.5rem;margin-bottom:1rem;background:#fffbf5;display:flex;flex-wrap:wrap;gap:.5rem 2rem;align-items:center;">
+  <div style="font-weight:700;font-size:.82rem;text-transform:uppercase;letter-spacing:.04em;color:var(--mc-primary);flex-shrink:0;">
+    <i class="bi bi-sigma me-1"></i>Total da Obra
+  </div>
+  <div style="display:flex;flex-wrap:wrap;gap:.4rem 2rem;flex:1;">
+    <div>
+      <span style="font-size:.68rem;font-weight:700;text-transform:uppercase;color:var(--mc-muted);letter-spacing:.05em;margin-right:.4rem;">Orçado</span>
+      <span style="font-size:1rem;font-weight:800;color:#0f172a;">{{ calc.orcado_total|brl }}</span>
+    </div>
+    <div>
+      <span style="font-size:.68rem;font-weight:700;text-transform:uppercase;color:var(--mc-muted);letter-spacing:.05em;margin-right:.4rem;">Realizado</span>
+      <span style="font-size:1rem;font-weight:800;color:#3b82f6;">{{ calc.realizado_rs|brl }}</span>
+    </div>
+    <div>
+      <span style="font-size:.68rem;font-weight:700;text-transform:uppercase;color:var(--mc-muted);letter-spacing:.05em;margin-right:.4rem;">A Incorrer</span>
+      <span style="font-size:1rem;font-weight:800;color:{% if calc.a_incorrer < 0 %}#dc2626{% else %}#16a34a{% endif %};">{{ calc.a_incorrer|brl }}</span>
+    </div>
+    {% if calc.desvio_geral != 0 %}
+    <div>
+      <span style="font-size:.68rem;font-weight:700;text-transform:uppercase;color:var(--mc-muted);letter-spacing:.05em;margin-right:.4rem;">Desvio</span>
+      <span style="font-size:1rem;font-weight:800;color:{% if calc.desvio_geral > 0 %}#dc2626{% else %}#16a34a{% endif %};">{{ ('+' if calc.desvio_geral > 0 else '') }}{{ calc.desvio_geral|brl }}</span>
+    </div>
+    {% endif %}
+  </div>
+  <div style="font-size:.75rem;color:var(--mc-muted);">{{ calc.n_fases }} fases · {{ calc.n_etapas }} etapas · {{ calc.fisico_geral }}% físico</div>
+</div>
+
 {# Modais #}
 <div id="modalOverlay" class="modal-overlay" style="display:none;" onclick="fecharModal(event)">
 
