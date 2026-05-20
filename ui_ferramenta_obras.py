@@ -260,17 +260,19 @@ def _calcular_obra(session, obra: Obra) -> dict:
         )
 
     return {
-        "fases":          fases_data,
-        "orcado_total":   round(orcado_total_obra, 2),
-        "realizado_rs":   round(realizado_rs, 2),
-        "ev_total":       round(ev_total, 2),
-        "a_incorrer":     round(orcado_total_obra - realizado_rs, 2),
-        "fisico_geral":   round(fisico_geral, 1),
-        "desvio_geral":   round(desvio_geral, 2),
-        "idc":            round(idc, 3),
-        "projecao_final": round(projecao_final, 2),
-        "n_etapas":       n_etapas,
-        "n_fases":        len(fases),
+        "fases":              fases_data,
+        "orcado_total":       round(orcado_total_obra, 2),
+        "orcado_soma_etapas": round(orcado_total, 2),
+        "orcamento_obra":     round(obra.orcamento_total or 0, 2),
+        "realizado_rs":       round(realizado_rs, 2),
+        "ev_total":           round(ev_total, 2),
+        "a_incorrer":         round(orcado_total_obra - realizado_rs, 2),
+        "fisico_geral":       round(fisico_geral, 1),
+        "desvio_geral":       round(desvio_geral, 2),
+        "idc":                round(idc, 3),
+        "projecao_final":     round(projecao_final, 2),
+        "n_etapas":           n_etapas,
+        "n_fases":            len(fases),
     }
 
 
