@@ -339,6 +339,30 @@ TEMPLATES["ferramenta_obras_cronograma.html"] = r"""
   </div>
 </div>
 
+{# Card resumo orçamento #}
+<div class="card mb-3" style="border:1.5px solid var(--mc-border);border-radius:14px;overflow:hidden;">
+  <div style="background:#f8fafc;border-bottom:1px solid var(--mc-border);padding:.55rem 1.25rem;font-size:.72rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--mc-muted);">
+    Resumo Financeiro da Obra
+  </div>
+  <div class="d-flex flex-wrap">
+    <div style="flex:1;min-width:160px;padding:1rem 1.25rem;border-right:1px solid var(--mc-border);">
+      <div style="font-size:.68rem;font-weight:700;text-transform:uppercase;color:var(--mc-muted);letter-spacing:.05em;margin-bottom:.25rem;">Total Orçado</div>
+      <div style="font-size:1.35rem;font-weight:800;color:#0f172a;letter-spacing:-.02em;">{{ calc.orcado_total|brl }}</div>
+      <div style="font-size:.72rem;color:var(--mc-muted);margin-top:.15rem;">{{ calc.n_etapas }} etapas · {{ calc.n_fases }} fases</div>
+    </div>
+    <div style="flex:1;min-width:160px;padding:1rem 1.25rem;border-right:1px solid var(--mc-border);">
+      <div style="font-size:.68rem;font-weight:700;text-transform:uppercase;color:var(--mc-muted);letter-spacing:.05em;margin-bottom:.25rem;">Realizado</div>
+      <div style="font-size:1.35rem;font-weight:800;color:#3b82f6;letter-spacing:-.02em;">{{ calc.realizado_rs|brl }}</div>
+      <div style="font-size:.72rem;color:var(--mc-muted);margin-top:.15rem;">{{ ((calc.realizado_rs/calc.orcado_total*100)|round(1)) if calc.orcado_total > 0 else 0 }}% do orçado</div>
+    </div>
+    <div style="flex:1;min-width:160px;padding:1rem 1.25rem;">
+      <div style="font-size:.68rem;font-weight:700;text-transform:uppercase;color:var(--mc-muted);letter-spacing:.05em;margin-bottom:.25rem;">A Incorrer</div>
+      <div style="font-size:1.35rem;font-weight:800;letter-spacing:-.02em;color:{% if calc.a_incorrer < 0 %}#dc2626{% else %}#0f172a{% endif %};">{{ calc.a_incorrer|brl }}</div>
+      <div style="font-size:.72rem;color:var(--mc-muted);margin-top:.15rem;">{% if calc.a_incorrer < 0 %}⚠️ Estouro de orçamento{% else %}Saldo restante{% endif %}</div>
+    </div>
+  </div>
+</div>
+
 {# Cronograma por fase #}
 {% for fase in calc.fases %}
 <div class="cr-fase-hdr" onclick="toggleFase({{ fase.id }})">
