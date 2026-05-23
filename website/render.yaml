@@ -1,0 +1,22 @@
+services:
+  - type: web
+    name: maffezzolli-capital-site
+    runtime: static
+    staticPublishPath: .
+    headers:
+      - path: /*
+        name: Cache-Control
+        value: public, max-age=3600
+      - path: /css/*
+        name: Cache-Control
+        value: public, max-age=86400
+      - path: /js/*
+        name: Cache-Control
+        value: public, max-age=86400
+    routes:
+      - type: rewrite
+        source: /o-que-fazemos
+        destination: /o-que-fazemos.html
+      - type: rewrite
+        source: /quem-somos
+        destination: /quem-somos.html
