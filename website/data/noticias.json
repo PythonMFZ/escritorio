@@ -1,0 +1,56 @@
+{
+  "monitor": [
+    {
+      "id": "toky-2026-05",
+      "edicao": "Ed. 01",
+      "data": "2026-05-12",
+      "pais": "Brasil",
+      "tipo": "Recuperação Judicial",
+      "empresa": "Grupo Toky",
+      "marcas": "Tok&Stok · Mobly",
+      "passivo": "R$ 1,1Bi",
+      "manchete": "Dona da Tok&Stok e Mobly pede RJ com R$ 1,1 bilhão em dívidas",
+      "resumo": "Fusão mal-sucedida em ambiente de Selic elevada leva grupo varejista a buscar proteção judicial em SP.",
+      "arquivo": "monitor-insolvencia/post-01-toky.html"
+    },
+    {
+      "id": "botafogo-2026-05",
+      "edicao": "Ed. 01",
+      "data": "2026-05-19",
+      "pais": "Brasil",
+      "tipo": "Recuperação Judicial",
+      "empresa": "SAF Botafogo",
+      "marcas": "Eagle Football Group",
+      "passivo": "R$ 2,5Bi",
+      "manchete": "Botafogo entra em RJ com R$ 2,5 bilhões — primeiro grande caso de SAF no Brasil",
+      "resumo": "Modelo de cash pooling do ex-controlador John Textor é apontado como agravante da crise financeira do clube.",
+      "arquivo": "monitor-insolvencia/post-02-botafogo.html"
+    },
+    {
+      "id": "estrela-2026-05",
+      "edicao": "Ed. 01",
+      "data": "2026-05-20",
+      "pais": "Brasil",
+      "tipo": "Recuperação Judicial",
+      "empresa": "Estrela (ESTR4)",
+      "marcas": "Autorama · Banco Imobiliário · Genius",
+      "passivo": "R$ 109M",
+      "manchete": "Estrela pede sua 3ª recuperação judicial em 20 anos — acordo tributário não bastou",
+      "resumo": "Fabricante de brinquedos clássicos não resistiu à competição do entretenimento digital após 89 anos de operação.",
+      "arquivo": "monitor-insolvencia/post-03-estrela.html"
+    },
+    {
+      "id": "westmarine-2026-05",
+      "edicao": "Ed. 01",
+      "data": "2026-05-17",
+      "pais": "EUA",
+      "tipo": "Chapter 11",
+      "empresa": "West Marine",
+      "marcas": "287 lojas · 34 estados",
+      "passivo": "USD 550M",
+      "manchete": "West Marine afunda com USD 550M em dívida — LBO de 2017 cobra sua conta",
+      "resumo": "Maior varejista náutico dos EUA entra em Chapter 11 pré-negociado com apoio de 96% dos credores.",
+      "arquivo": "monitor-insolvencia/post-04-westmarine.html"
+    }
+  ]
+}

@@ -883,6 +883,138 @@ footer {
   .augur-modulo { grid-template-columns: 1fr; gap: 12px; padding: 36px 28px; }
 }
 
+/* ── Monitor de Insolvência (bloco em todas as páginas) ─────── */
+.monitor-section {
+  padding: 80px 0;
+  border-top: 1px solid var(--border-sub);
+}
+
+.monitor-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  margin-bottom: 48px;
+  gap: 24px;
+}
+
+.monitor-edicao {
+  font-family: var(--ff-mono);
+  font-size: 10px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--gold);
+  margin-bottom: 8px;
+  display: block;
+}
+
+.monitor-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 2px;
+}
+
+.mn-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 28px 24px;
+  background: var(--bg2);
+  border: 1px solid var(--border-sub);
+  transition: border-color 0.2s, background 0.2s;
+  cursor: pointer;
+}
+
+.mn-card:hover {
+  border-color: var(--border);
+  background: #181818;
+}
+
+.mn-card-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.mn-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.mn-tag {
+  font-family: var(--ff-mono);
+  font-size: 9px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--gold);
+  border: 1px solid rgba(224,112,32,0.35);
+  padding: 3px 8px;
+  line-height: 1;
+}
+
+.mn-tag--destaque {
+  background: var(--gold);
+  color: var(--bg);
+  border-color: var(--gold);
+  font-weight: 500;
+}
+
+.mn-data {
+  font-family: var(--ff-mono);
+  font-size: 9px;
+  color: var(--gray);
+  white-space: nowrap;
+  opacity: 0.6;
+}
+
+.mn-empresa {
+  font-family: var(--ff-mono);
+  font-size: 11px;
+  color: var(--gray);
+  letter-spacing: 0.06em;
+}
+
+.mn-manchete {
+  font-family: var(--ff-serif);
+  font-size: 1rem;
+  font-weight: 300;
+  color: var(--cream);
+  line-height: 1.4;
+  flex: 1;
+}
+
+.mn-resumo {
+  font-size: 12px;
+  color: var(--gray);
+  line-height: 1.65;
+  opacity: 0.8;
+}
+
+.mn-rodape {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 4px;
+}
+
+.mn-passivo {
+  font-family: var(--ff-mono);
+  font-size: 12px;
+  color: var(--gold);
+  font-weight: 500;
+}
+
+.mn-cta {
+  font-family: var(--ff-mono);
+  font-size: 10px;
+  color: var(--gray);
+  letter-spacing: 0.06em;
+  transition: color 0.2s;
+}
+
+.mn-card:hover .mn-cta { color: var(--gold); }
+
 /* ── Cases (Home cards) ─────────────────────────────────────── */
 .cases-grid {
   display: grid;
@@ -1115,6 +1247,8 @@ footer {
   .case-full-header { grid-template-columns: 1fr; gap: 32px; }
   .case-numeros { grid-template-columns: repeat(2, 1fr); }
   .case-blocos { grid-template-columns: 1fr; }
+  .monitor-grid { grid-template-columns: repeat(2, 1fr); }
+  .monitor-header { flex-direction: column; align-items: flex-start; }
 }
 
 @media (max-width: 768px) {
@@ -1135,4 +1269,5 @@ footer {
 @media (max-width: 480px) {
   .hero-ctas { flex-direction: column; }
   .btn { width: 100%; justify-content: center; }
+  .monitor-grid { grid-template-columns: 1fr; }
 }
