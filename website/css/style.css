@@ -142,14 +142,14 @@ nav.scrolled {
 }
 
 .nav-logo {
-  font-family: var(--ff-brand);
-  font-weight: 800;
-  font-size: 0.9rem;
-  letter-spacing: 0.22em;
-  text-transform: uppercase;
-  color: var(--cream);
+  display: flex;
+  align-items: center;
 }
-.nav-logo span { color: var(--gold); }
+.nav-logo-img {
+  height: 36px;
+  width: auto;
+  display: block;
+}
 
 .nav-links {
   display: flex;
