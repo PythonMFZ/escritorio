@@ -257,12 +257,17 @@ nav.scrolled {
 /* ── HEADLINE SECTION ───────────────────────────────────────── */
 .hero-text {
   position: relative;
-  padding: 80px 0 100px;
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  padding-top: 72px;
+  overflow: hidden;
 }
 
 .hero-content {
   position: relative;
   z-index: 2;
+  padding: 100px 0 100px;
   max-width: 820px;
 }
 
