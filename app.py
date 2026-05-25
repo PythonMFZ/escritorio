@@ -5742,15 +5742,27 @@ a:hover{ color:#00BFBF; }
   function speak(text, onDone){
     if(!window.speechSynthesis){ if(onDone) onDone(); return; }
     window.speechSynthesis.cancel();
-    var utterance = new SpeechSynthesisUtterance(text);
+    // Clean text: remove markdown, collapse whitespace to avoid long pauses
+    var clean = text
+      .replace(/#{1,6}\s*/g,'').replace(/\*{1,2}([^*]+)\*{1,2}/g,'$1')
+      .replace(/`[^`]*`/g,'').replace(/\n{2,}/g,'. ').replace(/\n/g,' ')
+      .replace(/\s{2,}/g,' ').trim();
+    var utterance = new SpeechSynthesisUtterance(clean);
     utterance.lang = 'pt-BR';
-    utterance.rate = 1.0;
-    utterance.pitch = 1.0;
-    // Prefer a PT-BR voice if available
+    utterance.rate = 1.08;
+    utterance.pitch = 0.78;
     var voices = window.speechSynthesis.getVoices();
-    var ptBr = voices.find(function(v){ return v.lang === 'pt-BR'; })
-             || voices.find(function(v){ return v.lang.startsWith('pt'); });
-    if(ptBr) utterance.voice = ptBr;
+    // Priority: Google pt-BR > any named male > any pt-BR
+    var maleNames = ['google português','daniel','felipe','ricardo','antonio','carlos'];
+    var chosen = voices.find(function(v){
+      return v.lang === 'pt-BR' && v.name.toLowerCase().includes('google');
+    }) || voices.find(function(v){
+      var n = v.name.toLowerCase();
+      return (v.lang === 'pt-BR' || v.lang.startsWith('pt')) &&
+             maleNames.some(function(m){ return n.includes(m); });
+    }) || voices.find(function(v){ return v.lang === 'pt-BR'; })
+      || voices.find(function(v){ return v.lang.startsWith('pt'); });
+    if(chosen) utterance.voice = chosen;
     utterance.onend = onDone;
     utterance.onerror = onDone;
     window.speechSynthesis.speak(utterance);
@@ -32083,14 +32095,25 @@ TEMPLATES["base.html"] = r"""
   function speak(text, onDone){
     if(!window.speechSynthesis){ if(onDone) onDone(); return; }
     window.speechSynthesis.cancel();
-    var utterance = new SpeechSynthesisUtterance(text);
+    var clean = text
+      .replace(/#{1,6}\s*/g,'').replace(/\*{1,2}([^*]+)\*{1,2}/g,'$1')
+      .replace(/`[^`]*`/g,'').replace(/\n{2,}/g,'. ').replace(/\n/g,' ')
+      .replace(/\s{2,}/g,' ').trim();
+    var utterance = new SpeechSynthesisUtterance(clean);
     utterance.lang = 'pt-BR';
-    utterance.rate = 1.0;
-    utterance.pitch = 1.0;
+    utterance.rate = 1.08;
+    utterance.pitch = 0.78;
     var voices = window.speechSynthesis.getVoices();
-    var ptBr = voices.find(function(v){ return v.lang === 'pt-BR'; })
-             || voices.find(function(v){ return v.lang.startsWith('pt'); });
-    if(ptBr) utterance.voice = ptBr;
+    var maleNames = ['google português','daniel','felipe','ricardo','antonio','carlos'];
+    var chosen = voices.find(function(v){
+      return v.lang === 'pt-BR' && v.name.toLowerCase().includes('google');
+    }) || voices.find(function(v){
+      var n = v.name.toLowerCase();
+      return (v.lang === 'pt-BR' || v.lang.startsWith('pt')) &&
+             maleNames.some(function(m){ return n.includes(m); });
+    }) || voices.find(function(v){ return v.lang === 'pt-BR'; })
+      || voices.find(function(v){ return v.lang.startsWith('pt'); });
+    if(chosen) utterance.voice = chosen;
     utterance.onend = onDone;
     utterance.onerror = onDone;
     window.speechSynthesis.speak(utterance);
