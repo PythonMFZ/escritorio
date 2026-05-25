@@ -138,12 +138,13 @@ async def _augur_whatsapp_reply(
 
         # Envia — monta config mínimo com os campos que _try_send_whatsapp_text usa
         class _MinConfig:
+            is_enabled           = True
             meta_phone_number_id = meta_phone_id
 
         ok, err, ext_id = await _try_send_whatsapp_text(
             config=_MinConfig(),
             recipient_id=contact_phone,
-            recipient_kind="individual",
+            recipient_type="individual",
             body=reply,
         )
 
