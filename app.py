@@ -48293,4 +48293,5 @@ exec(open('ui_obras_duplicar_fase.py').read())
 exec(open('ui_obras_duplicar_etapa.py').read())
 exec(open('ui_augur_commands.py').read())
 exec(open('ui_whatsapp_augur.py').read())
+exec(open('ui_cloud_storage.py').read())
 
