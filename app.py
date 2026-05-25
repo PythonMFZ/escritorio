@@ -41780,7 +41780,6 @@ async def whatsapp_webhook_receive(request: Request, session: Session = Depends(
                 thread_id=thread.id,
                 client_id=thread.client_id,
                 message_body=body,
-                config=config,
             ))
 
         processed += 1

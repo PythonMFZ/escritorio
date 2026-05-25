@@ -1,7 +1,5 @@
 # ui_whatsapp_augur.py — Integração Augur ↔ WhatsApp
-# Responde automaticamente clientes cadastrados via WhatsApp
-# Exec'd no namespace do app.py, então tem acesso a engine, Client,
-# ClientSnapshot, WhatsAppThread, WhatsAppThreadMessage, etc.
+# Exec'd no namespace do app.py — tem acesso a engine, modelos e helpers.
 
 import asyncio
 import json as _json_waz
@@ -9,7 +7,6 @@ from sqlmodel import Session as _WazSession, select as _waz_select
 
 
 def _waz_build_client_data(session, company_id: int, client) -> dict:
-    """Monta client_data para o Augur a partir do banco — mesma lógica do augur_ask_v4."""
     client_data = {
         "name":                client.name,
         "segment":             getattr(client, "segment", None),
@@ -22,7 +19,7 @@ def _waz_build_client_data(session, company_id: int, client) -> dict:
             _waz_select(ClientSnapshot)
             .where(
                 ClientSnapshot.company_id == company_id,
-                ClientSnapshot.client_id == client.id,
+                ClientSnapshot.client_id  == client.id,
             )
             .order_by(ClientSnapshot.created_at.desc())
             .limit(1)
@@ -57,18 +54,16 @@ def _waz_build_client_data(session, company_id: int, client) -> dict:
 
 
 def _waz_thread_history(session, thread_id: int, limit: int = 10) -> list:
-    """Últimas mensagens da thread como histórico de conversa para o Augur."""
     msgs = session.exec(
         _waz_select(WhatsAppThreadMessage)
         .where(
-            WhatsAppThreadMessage.thread_id == thread_id,
+            WhatsAppThreadMessage.thread_id  == thread_id,
             WhatsAppThreadMessage.direction.in_(["inbound", "outbound"]),
-            WhatsAppThreadMessage.body != "",
+            WhatsAppThreadMessage.body       != "",
         )
         .order_by(WhatsAppThreadMessage.created_at.desc())
         .limit(limit)
     ).all()
-
     history = []
     for m in reversed(msgs):
         role = "user" if m.direction == "inbound" else "assistant"
@@ -78,34 +73,47 @@ def _waz_thread_history(session, thread_id: int, limit: int = 10) -> list:
 
 async def _augur_whatsapp_reply(
     *,
-    company_id: int,
-    thread_id: int,
-    client_id: int,
+    company_id:   int,
+    thread_id:    int,
+    client_id:    int,
     message_body: str,
-    config,
 ) -> None:
-    """Gera resposta do Augur para mensagem recebida via WhatsApp e envia de volta."""
+    """Gera resposta do Augur e envia de volta pelo WhatsApp."""
     try:
-        # Abre sessão própria (a do request já fechou)
+        # Abre sessão própria — a do request já fechou
         with _WazSession(engine) as db:
             client = db.get(Client, client_id)
             if not client:
+                print(f"[augur_whatsapp] cliente {client_id} não encontrado")
                 return
 
             thread = db.get(WhatsAppThread, thread_id)
             if not thread:
+                print(f"[augur_whatsapp] thread {thread_id} não encontrada")
                 return
 
-            contact_phone = thread.contact_phone
-            client_data   = _waz_build_client_data(db, company_id, client)
-            history       = _waz_thread_history(db, thread_id, limit=10)
+            # Busca config fresca (evita DetachedInstanceError)
+            config = db.exec(
+                _waz_select(WhatsAppChannelConfig)
+                .where(WhatsAppChannelConfig.company_id == company_id)
+            ).first()
+            if not config or not config.is_enabled:
+                print(f"[augur_whatsapp] canal WhatsApp não configurado/ativo para company {company_id}")
+                return
 
-        # Remove a última mensagem do histórico se for a pergunta atual
-        # (já foi salva antes desta função ser chamada)
+            contact_phone  = thread.contact_phone
+            meta_phone_id  = config.meta_phone_number_id
+
+            client_data = _waz_build_client_data(db, company_id, client)
+            history     = _waz_thread_history(db, thread_id, limit=10)
+
+        # Remove última mensagem do histórico se for a pergunta atual
         if history and history[-1]["role"] == "user" and history[-1]["content"] == message_body:
             history = history[:-1]
 
-        # Chama o Augur em thread separada (é síncrono/bloqueante)
+        print(f"[augur_whatsapp] chamando Augur para thread {thread_id} | cliente: {client_id}")
+
+        # Augur é síncrono — roda em thread executor
         from ai_assistant.assistant import ask as _augur_ask
         loop = asyncio.get_event_loop()
         result = await loop.run_in_executor(
@@ -119,21 +127,31 @@ async def _augur_whatsapp_reply(
 
         reply = (result.get("response") or "").strip()
         if not reply or result.get("error"):
+            print(f"[augur_whatsapp] Augur retornou erro ou resposta vazia: {result.get('error_message','')}")
             return
 
-        # Limita ao máximo do WhatsApp (4096 chars)
+        # Trunca no limite do WhatsApp
         if len(reply) > 4000:
             reply = reply[:3990] + "…"
 
-        # Envia pelo WhatsApp
-        ok, _err, ext_id = await _try_send_whatsapp_text(
-            config=config,
+        print(f"[augur_whatsapp] enviando resposta ({len(reply)} chars) para {contact_phone}")
+
+        # Envia — monta config mínimo com os campos que _try_send_whatsapp_text usa
+        class _MinConfig:
+            meta_phone_number_id = meta_phone_id
+
+        ok, err, ext_id = await _try_send_whatsapp_text(
+            config=_MinConfig(),
             recipient_id=contact_phone,
             recipient_kind="individual",
             body=reply,
         )
+
         if not ok:
+            print(f"[augur_whatsapp] falha ao enviar: {err}")
             return
+
+        print(f"[augur_whatsapp] enviado com sucesso — ext_id: {ext_id}")
 
         # Salva como mensagem de saída na thread
         with _WazSession(engine) as db:
@@ -151,4 +169,6 @@ async def _augur_whatsapp_reply(
                 )
 
     except Exception as _e:
-        print(f"[augur_whatsapp] Erro ao gerar resposta: {_e}")
+        print(f"[augur_whatsapp] erro inesperado: {_e}")
+        import traceback
+        traceback.print_exc()
