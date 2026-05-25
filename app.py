@@ -5588,6 +5588,189 @@ a:hover{ color:#00BFBF; }
   });
 })();
 </script>
+<style>
+#augur-voice-btn{position:fixed;bottom:28px;right:28px;z-index:9999;width:56px;height:56px;border-radius:50%;border:none;background:linear-gradient(135deg,#f97316,#ea580c);color:#fff;box-shadow:0 4px 20px rgba(249,115,22,.45);cursor:pointer;display:flex;align-items:center;justify-content:center;transition:transform .15s,box-shadow .15s;outline:none}
+#augur-voice-btn:hover{transform:scale(1.08);box-shadow:0 6px 28px rgba(249,115,22,.6)}
+#augur-voice-btn.listening{animation:avb-pulse 1.2s ease-in-out infinite}
+#augur-voice-btn.speaking{background:linear-gradient(135deg,#0ea5e9,#0284c7);box-shadow:0 4px 20px rgba(14,165,233,.5)}
+@keyframes avb-pulse{0%,100%{box-shadow:0 4px 20px rgba(249,115,22,.45),0 0 0 0 rgba(249,115,22,.4)}50%{box-shadow:0 4px 20px rgba(249,115,22,.45),0 0 0 14px rgba(249,115,22,0)}}
+#augur-voice-panel{position:fixed;bottom:96px;right:20px;z-index:9998;width:min(340px,calc(100vw - 32px));background:#fff;border-radius:16px;box-shadow:0 8px 40px rgba(0,0,0,.18);padding:16px 18px;display:none;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif}
+#augur-voice-panel.open{display:block;animation:avp-in .2s ease}
+@keyframes avp-in{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
+.avp-status{font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:#9ca3af;margin-bottom:6px}
+.avp-text{font-size:14px;color:#111;line-height:1.5;min-height:20px;white-space:pre-wrap}
+.avp-dots span{display:inline-block;width:6px;height:6px;border-radius:50%;background:#f97316;margin:0 2px;animation:avd 1s ease-in-out infinite}
+.avp-dots span:nth-child(2){animation-delay:.15s}.avp-dots span:nth-child(3){animation-delay:.3s}
+@keyframes avd{0%,80%,100%{transform:scale(.6);opacity:.4}40%{transform:scale(1);opacity:1}}
+.avp-close{position:absolute;top:10px;right:12px;background:none;border:none;font-size:16px;color:#9ca3af;cursor:pointer;line-height:1;padding:2px 4px}
+#augur-voice-btn .av-mic-icon, #augur-voice-btn .av-stop-icon{pointer-events:none}
+#augur-voice-btn .av-stop-icon{display:none}
+#augur-voice-btn.listening .av-mic-icon{display:none}
+#augur-voice-btn.listening .av-stop-icon{display:block}
+</style>
+<div id="augur-voice-panel">
+  <button class="avp-close" id="augur-voice-close" aria-label="Fechar">✕</button>
+  <div class="avp-status" id="avp-status">Aguardando...</div>
+  <div class="avp-text" id="avp-text"></div>
+</div>
+<button id="augur-voice-btn" title="Falar com Augur" aria-label="Falar com Augur">
+  <svg class="av-mic-icon" xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path stroke-linecap="round" stroke-linejoin="round" d="M19 10v2a7 7 0 0 1-14 0v-2M12 19v4M8 23h8"/></svg>
+  <svg class="av-stop-icon" xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="currentColor" viewBox="0 0 16 16"><rect width="10" height="10" x="3" y="3" rx="2"/></svg>
+</button>
+<script>
+(function(){
+  var SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  var btn   = document.getElementById('augur-voice-btn');
+  var panel = document.getElementById('augur-voice-panel');
+  var stEl  = document.getElementById('avp-status');
+  var txEl  = document.getElementById('avp-text');
+  var closeBtn = document.getElementById('augur-voice-close');
+
+  if (!SpeechRecognition) {
+    btn.title = 'Voz não suportada neste navegador (use Chrome)';
+    btn.style.opacity = '.45';
+    btn.onclick = function(){ alert('Reconhecimento de voz não disponível.\nUse o Google Chrome ou Microsoft Edge.'); };
+    return;
+  }
+
+  var recog = new SpeechRecognition();
+  recog.lang = 'pt-BR';
+  recog.interimResults = true;
+  recog.maxAlternatives = 1;
+  recog.continuous = false;
+
+  var state = 'idle'; // idle | listening | thinking | speaking
+  var finalText = '';
+  var currentSessionId = null;
+
+  function openPanel(){ panel.classList.add('open'); }
+  function closePanel(){ panel.classList.remove('open'); }
+  function setStatus(s){ stEl.textContent = s; }
+  function setText(t, dots){
+    if(dots){ txEl.innerHTML = '<div class="avp-dots"><span></span><span></span><span></span></div>'; }
+    else { txEl.textContent = t; }
+  }
+
+  function stopListening(){
+    try{ recog.stop(); } catch(e){}
+    btn.classList.remove('listening','speaking');
+    state = 'idle';
+  }
+
+  function startListening(){
+    if(state !== 'idle') { stopListening(); closePanel(); return; }
+    finalText = '';
+    state = 'listening';
+    btn.classList.add('listening');
+    openPanel();
+    setStatus('Ouvindo...');
+    setText('');
+    try { recog.start(); }
+    catch(e) { stopListening(); setStatus('Erro ao acessar microfone.'); }
+  }
+
+  recog.onresult = function(e){
+    var interim = '', final = '';
+    for(var i = e.resultIndex; i < e.results.length; i++){
+      if(e.results[i].isFinal) final += e.results[i][0].transcript;
+      else interim += e.results[i][0].transcript;
+    }
+    if(final) finalText = final;
+    setText(finalText || interim);
+  };
+
+  recog.onerror = function(e){
+    stopListening();
+    if(e.error === 'not-allowed'){
+      setStatus('Microfone bloqueado.');
+      setText('Permita o acesso ao microfone nas configurações do navegador.');
+      openPanel();
+    } else if(e.error !== 'no-speech'){
+      setStatus('Erro: ' + e.error);
+      setText('');
+      openPanel();
+    }
+  };
+
+  recog.onend = function(){
+    if(state !== 'listening') return;
+    var q = finalText.trim();
+    if(!q){ stopListening(); closePanel(); return; }
+    btn.classList.remove('listening');
+    state = 'thinking';
+    setStatus('Pensando...');
+    setText('', true);
+    askAugur(q);
+  };
+
+  function askAugur(question){
+    var body = { question: question };
+    if(currentSessionId) body.session_id = currentSessionId;
+    fetch('/api/ai/ask', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+      body: JSON.stringify(body)
+    })
+    .then(function(r){ return r.json(); })
+    .then(function(data){
+      if(data.error && !data.response){
+        state = 'idle';
+        setStatus('Augur não disponível');
+        setText(data.error || 'Sem resposta.');
+        return;
+      }
+      if(data.session_id) currentSessionId = data.session_id;
+      var reply = (data.response || '').trim();
+      state = 'speaking';
+      btn.classList.add('speaking');
+      setStatus('Augur');
+      setText(reply);
+      speak(reply, function(){
+        btn.classList.remove('speaking');
+        state = 'idle';
+      });
+    })
+    .catch(function(){
+      state = 'idle';
+      btn.classList.remove('listening','speaking');
+      setStatus('Erro de conexão');
+      setText('Não foi possível conectar ao Augur.');
+    });
+  }
+
+  function speak(text, onDone){
+    if(!window.speechSynthesis){ if(onDone) onDone(); return; }
+    window.speechSynthesis.cancel();
+    var utterance = new SpeechSynthesisUtterance(text);
+    utterance.lang = 'pt-BR';
+    utterance.rate = 1.0;
+    utterance.pitch = 1.0;
+    // Prefer a PT-BR voice if available
+    var voices = window.speechSynthesis.getVoices();
+    var ptBr = voices.find(function(v){ return v.lang === 'pt-BR'; })
+             || voices.find(function(v){ return v.lang.startsWith('pt'); });
+    if(ptBr) utterance.voice = ptBr;
+    utterance.onend = onDone;
+    utterance.onerror = onDone;
+    window.speechSynthesis.speak(utterance);
+  }
+
+  // Voices may load async
+  if(window.speechSynthesis && window.speechSynthesis.onvoiceschanged !== undefined){
+    window.speechSynthesis.onvoiceschanged = function(){};
+  }
+
+  btn.addEventListener('click', startListening);
+  closeBtn.addEventListener('click', function(){
+    stopListening();
+    if(window.speechSynthesis) window.speechSynthesis.cancel();
+    closePanel();
+    state = 'idle';
+    btn.classList.remove('listening','speaking');
+  });
+})();
+</script>
   </body>
 </html>
 """,
@@ -31746,6 +31929,187 @@ TEMPLATES["base.html"] = r"""
     })();
     </script>
     </script>
+<style>
+#augur-voice-btn{position:fixed;bottom:28px;right:28px;z-index:9999;width:56px;height:56px;border-radius:50%;border:none;background:linear-gradient(135deg,#f97316,#ea580c);color:#fff;box-shadow:0 4px 20px rgba(249,115,22,.45);cursor:pointer;display:flex;align-items:center;justify-content:center;transition:transform .15s,box-shadow .15s;outline:none}
+#augur-voice-btn:hover{transform:scale(1.08);box-shadow:0 6px 28px rgba(249,115,22,.6)}
+#augur-voice-btn.listening{animation:avb-pulse 1.2s ease-in-out infinite}
+#augur-voice-btn.speaking{background:linear-gradient(135deg,#0ea5e9,#0284c7);box-shadow:0 4px 20px rgba(14,165,233,.5)}
+@keyframes avb-pulse{0%,100%{box-shadow:0 4px 20px rgba(249,115,22,.45),0 0 0 0 rgba(249,115,22,.4)}50%{box-shadow:0 4px 20px rgba(249,115,22,.45),0 0 0 14px rgba(249,115,22,0)}}
+#augur-voice-panel{position:fixed;bottom:96px;right:20px;z-index:9998;width:min(340px,calc(100vw - 32px));background:#fff;border-radius:16px;box-shadow:0 8px 40px rgba(0,0,0,.18);padding:16px 18px;display:none;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif}
+#augur-voice-panel.open{display:block;animation:avp-in .2s ease}
+@keyframes avp-in{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
+.avp-status{font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:#9ca3af;margin-bottom:6px}
+.avp-text{font-size:14px;color:#111;line-height:1.5;min-height:20px;white-space:pre-wrap}
+.avp-dots span{display:inline-block;width:6px;height:6px;border-radius:50%;background:#f97316;margin:0 2px;animation:avd 1s ease-in-out infinite}
+.avp-dots span:nth-child(2){animation-delay:.15s}.avp-dots span:nth-child(3){animation-delay:.3s}
+@keyframes avd{0%,80%,100%{transform:scale(.6);opacity:.4}40%{transform:scale(1);opacity:1}}
+.avp-close{position:absolute;top:10px;right:12px;background:none;border:none;font-size:16px;color:#9ca3af;cursor:pointer;line-height:1;padding:2px 4px}
+#augur-voice-btn .av-mic-icon, #augur-voice-btn .av-stop-icon{pointer-events:none}
+#augur-voice-btn .av-stop-icon{display:none}
+#augur-voice-btn.listening .av-mic-icon{display:none}
+#augur-voice-btn.listening .av-stop-icon{display:block}
+</style>
+<div id="augur-voice-panel">
+  <button class="avp-close" id="augur-voice-close" aria-label="Fechar">✕</button>
+  <div class="avp-status" id="avp-status">Aguardando...</div>
+  <div class="avp-text" id="avp-text"></div>
+</div>
+<button id="augur-voice-btn" title="Falar com Augur" aria-label="Falar com Augur">
+  <svg class="av-mic-icon" xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path stroke-linecap="round" stroke-linejoin="round" d="M19 10v2a7 7 0 0 1-14 0v-2M12 19v4M8 23h8"/></svg>
+  <svg class="av-stop-icon" xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="currentColor" viewBox="0 0 16 16"><rect width="10" height="10" x="3" y="3" rx="2"/></svg>
+</button>
+<script>
+(function(){
+  var SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  var btn   = document.getElementById('augur-voice-btn');
+  var panel = document.getElementById('augur-voice-panel');
+  var stEl  = document.getElementById('avp-status');
+  var txEl  = document.getElementById('avp-text');
+  var closeBtn = document.getElementById('augur-voice-close');
+
+  if (!SpeechRecognition) {
+    btn.title = 'Voz não suportada neste navegador (use Chrome)';
+    btn.style.opacity = '.45';
+    btn.onclick = function(){ alert('Reconhecimento de voz não disponível.\nUse o Google Chrome ou Microsoft Edge.'); };
+    return;
+  }
+
+  var recog = new SpeechRecognition();
+  recog.lang = 'pt-BR';
+  recog.interimResults = true;
+  recog.maxAlternatives = 1;
+  recog.continuous = false;
+
+  var state = 'idle';
+  var finalText = '';
+  var currentSessionId = null;
+
+  function openPanel(){ panel.classList.add('open'); }
+  function closePanel(){ panel.classList.remove('open'); }
+  function setStatus(s){ stEl.textContent = s; }
+  function setText(t, dots){
+    if(dots){ txEl.innerHTML = '<div class="avp-dots"><span></span><span></span><span></span></div>'; }
+    else { txEl.textContent = t; }
+  }
+
+  function stopListening(){
+    try{ recog.stop(); } catch(e){}
+    btn.classList.remove('listening','speaking');
+    state = 'idle';
+  }
+
+  function startListening(){
+    if(state !== 'idle') { stopListening(); closePanel(); return; }
+    finalText = '';
+    state = 'listening';
+    btn.classList.add('listening');
+    openPanel();
+    setStatus('Ouvindo...');
+    setText('');
+    try { recog.start(); }
+    catch(e) { stopListening(); setStatus('Erro ao acessar microfone.'); }
+  }
+
+  recog.onresult = function(e){
+    var interim = '', final = '';
+    for(var i = e.resultIndex; i < e.results.length; i++){
+      if(e.results[i].isFinal) final += e.results[i][0].transcript;
+      else interim += e.results[i][0].transcript;
+    }
+    if(final) finalText = final;
+    setText(finalText || interim);
+  };
+
+  recog.onerror = function(e){
+    stopListening();
+    if(e.error === 'not-allowed'){
+      setStatus('Microfone bloqueado.');
+      setText('Permita o acesso ao microfone nas configurações do navegador.');
+      openPanel();
+    } else if(e.error !== 'no-speech'){
+      setStatus('Erro: ' + e.error);
+      setText('');
+      openPanel();
+    }
+  };
+
+  recog.onend = function(){
+    if(state !== 'listening') return;
+    var q = finalText.trim();
+    if(!q){ stopListening(); closePanel(); return; }
+    btn.classList.remove('listening');
+    state = 'thinking';
+    setStatus('Pensando...');
+    setText('', true);
+    askAugur(q);
+  };
+
+  function askAugur(question){
+    var body = { question: question };
+    if(currentSessionId) body.session_id = currentSessionId;
+    fetch('/api/ai/ask', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+      body: JSON.stringify(body)
+    })
+    .then(function(r){ return r.json(); })
+    .then(function(data){
+      if(data.error && !data.response){
+        state = 'idle';
+        setStatus('Augur indisponível');
+        setText(data.error || 'Sem resposta.');
+        return;
+      }
+      if(data.session_id) currentSessionId = data.session_id;
+      var reply = (data.response || '').trim();
+      state = 'speaking';
+      btn.classList.add('speaking');
+      setStatus('Augur');
+      setText(reply);
+      speak(reply, function(){
+        btn.classList.remove('speaking');
+        state = 'idle';
+      });
+    })
+    .catch(function(){
+      state = 'idle';
+      btn.classList.remove('listening','speaking');
+      setStatus('Erro de conexão');
+      setText('Não foi possível conectar ao Augur.');
+    });
+  }
+
+  function speak(text, onDone){
+    if(!window.speechSynthesis){ if(onDone) onDone(); return; }
+    window.speechSynthesis.cancel();
+    var utterance = new SpeechSynthesisUtterance(text);
+    utterance.lang = 'pt-BR';
+    utterance.rate = 1.0;
+    utterance.pitch = 1.0;
+    var voices = window.speechSynthesis.getVoices();
+    var ptBr = voices.find(function(v){ return v.lang === 'pt-BR'; })
+             || voices.find(function(v){ return v.lang.startsWith('pt'); });
+    if(ptBr) utterance.voice = ptBr;
+    utterance.onend = onDone;
+    utterance.onerror = onDone;
+    window.speechSynthesis.speak(utterance);
+  }
+
+  if(window.speechSynthesis && window.speechSynthesis.onvoiceschanged !== undefined){
+    window.speechSynthesis.onvoiceschanged = function(){};
+  }
+
+  btn.addEventListener('click', startListening);
+  closeBtn.addEventListener('click', function(){
+    stopListening();
+    if(window.speechSynthesis) window.speechSynthesis.cancel();
+    closePanel();
+    state = 'idle';
+    btn.classList.remove('listening','speaking');
+  });
+})();
+</script>
   </body>
 </html>
 """
