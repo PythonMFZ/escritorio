@@ -987,6 +987,7 @@ const clientsById = Object.fromEntries(CLIENTS.map(c => [c.id, c.name]));
 let breadcrumb = [{id: 'root', name: 'Raiz'}];
 let pendingItem = null;
 let isSearchMode = false;
+const _itemStore = {};
 const modal = new bootstrap.Modal(document.getElementById('clientModal'));
 
 function esc(s){ return String(s||'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
@@ -1013,18 +1014,36 @@ function showLoading(msg){
 function showItems(items){
   document.getElementById('items-loading').classList.add('d-none');
   if(!items.length){ document.getElementById('items-empty').classList.remove('d-none'); return; }
+  // Store items by id so onclick can reference safely (avoids JSON-in-HTML-attr bugs)
+  items.forEach(item => { _itemStore[item.id] = item; });
   const list = document.getElementById('items-list');
-  list.innerHTML = items.map(item => `
-    <div class="item-row ${item.type==='folder'?'is-folder':''}"
-         onclick="${item.type==='folder'&&!isSearchMode?`navigateInto('${item.id.replace(/'/g,"\\'")}','${item.name.replace(/\\/g,'\\\\').replace(/'/g,"\\'")}')`:''}"
-         >
+  list.innerHTML = items.map(item => {
+    const isFolder = item.type === 'folder';
+    const canNavigate = isFolder && !isSearchMode;
+    return `<div class="item-row ${isFolder?'is-folder':''}" data-id="${esc(item.id)}">
       <span class="item-icon"><i class="bi bi-${fileIcon(item)}"></i></span>
       <span class="item-name" title="${esc(item.name)}">${esc(item.name)}</span>
-      ${item.type==='folder'&&!isSearchMode?`<span class="text-muted small me-1"><i class="bi bi-chevron-right"></i></span>`:''}
-      <button class="btn btn-sm btn-outline-primary py-0 px-2 flex-shrink-0"
-              onclick="event.stopPropagation();openClientModal(${JSON.stringify(item)})"
+      ${canNavigate?`<span class="text-muted small me-1"><i class="bi bi-chevron-right"></i></span>`:''}
+      <button class="btn btn-sm btn-outline-primary py-0 px-2 flex-shrink-0 btn-add"
+              data-item-id="${esc(item.id)}"
               title="Adicionar à base">+ Adicionar</button>
-    </div>`).join('');
+    </div>`;
+  }).join('');
+  // Folder click → navigate
+  list.querySelectorAll('.item-row.is-folder').forEach(row => {
+    row.addEventListener('click', e => {
+      if(e.target.closest('.btn-add')) return;
+      const item = _itemStore[row.dataset.id];
+      if(item && !isSearchMode) navigateInto(item.id, item.name);
+    });
+  });
+  // Add button click
+  list.querySelectorAll('.btn-add').forEach(btn => {
+    btn.addEventListener('click', e => {
+      e.stopPropagation();
+      openClientModal(_itemStore[btn.dataset.itemId]);
+    });
+  });
   list.classList.remove('d-none');
 }
 
