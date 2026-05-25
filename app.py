@@ -41696,6 +41696,22 @@ async def whatsapp_webhook_receive(request: Request, session: Session = Depends(
                     source_kind="webhook",
                     created_by_user_id=None,
                 )
+            else:
+                # Thread existente sem cliente vinculado — tenta vincular agora
+                if not thread.client_id:
+                    matched_client = _match_client_by_phone(
+                        session,
+                        company_id=company_id,
+                        phone_digits=incoming_phone,
+                    )
+                    if matched_client:
+                        thread.client_id = matched_client.id
+                        if not thread.contact_name:
+                            thread.contact_name = matched_client.name
+                        session.add(thread)
+                        session.commit()
+                        session.refresh(thread)
+                        print(f"[whatsapp] Thread {thread.id} vinculada ao cliente {matched_client.id} ({matched_client.name})")
 
         body = str(event.get("body") or "").strip()
         choice_topic = _whatsapp_menu_choice_to_topic(body)
