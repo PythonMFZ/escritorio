@@ -470,24 +470,42 @@ async def base_conhecimento_upload(
 
 # ── File upload with server-side extraction ───────────────────────────────────
 
-def _bc_extract_excel(file_bytes: bytes) -> str:
-    """Extract text from Excel using openpyxl."""
+def _bc_extract_excel(file_bytes: bytes, fname: str = "") -> str:
+    """Extract text from Excel — tries openpyxl (xlsx) then xlrd (xls)."""
+    import io
+    lines = []
+
+    # .xlsx via openpyxl
+    if not fname.endswith(".xls") or fname.endswith(".xlsx"):
+        try:
+            import openpyxl
+            wb = openpyxl.load_workbook(io.BytesIO(file_bytes), read_only=True, data_only=True)
+            for ws in wb.worksheets:
+                lines.append(f"[Aba: {ws.title}]")
+                for row in ws.iter_rows(values_only=True):
+                    cells = [str(c) if c is not None else "" for c in row]
+                    if any(c.strip() for c in cells):
+                        lines.append("\t".join(cells))
+            if lines:
+                return "\n".join(lines)[:200_000]
+        except Exception as _e:
+            print(f"[bc_upload] openpyxl erro: {_e}")
+
+    # .xls (old binary format) via xlrd
     try:
-        import io, openpyxl
-        wb = openpyxl.load_workbook(io.BytesIO(file_bytes), read_only=True, data_only=True)
-        lines = []
-        for ws in wb.worksheets:
-            lines.append(f"[Aba: {ws.title}]")
-            for row in ws.iter_rows(values_only=True):
-                cells = [str(c) if c is not None else "" for c in row]
+        import xlrd
+        wb = xlrd.open_workbook(file_contents=file_bytes)
+        for ws in wb.sheets():
+            lines.append(f"[Aba: {ws.name}]")
+            for row_idx in range(ws.nrows):
+                cells = [str(ws.cell_value(row_idx, c)) for c in range(ws.ncols)]
                 if any(c.strip() for c in cells):
                     lines.append("\t".join(cells))
         return "\n".join(lines)[:200_000]
-    except ImportError:
-        return ""
     except Exception as _e:
-        print(f"[bc_upload] excel erro: {_e}")
-        return ""
+        print(f"[bc_upload] xlrd erro: {_e}")
+
+    return ""
 
 
 def _bc_extract_claude(file_bytes: bytes, mime_type: str) -> str:
@@ -558,10 +576,10 @@ async def base_conhecimento_upload_file(
 
     # Determine type and extract text
     if fname.endswith((".xlsx", ".xls")) or "spreadsheet" in mime or "excel" in mime:
-        conteudo = _bc_extract_excel(file_bytes)
+        conteudo = _bc_extract_excel(file_bytes, fname)
         tipo = "excel"
         if not conteudo:
-            # Fallback: try Claude if openpyxl not available
+            # Last resort: send to Claude as image/document
             conteudo = _bc_extract_claude(file_bytes, "application/pdf")
     elif fname.endswith(".csv") or mime in ("text/csv", "text/plain"):
         conteudo = file_bytes.decode("utf-8", errors="replace")
