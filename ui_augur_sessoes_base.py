@@ -579,8 +579,16 @@ async def base_conhecimento_upload_file(
         conteudo = _bc_extract_excel(file_bytes, fname)
         tipo = "excel"
         if not conteudo:
-            # Last resort: send to Claude as image/document
             conteudo = _bc_extract_claude(file_bytes, "application/pdf")
+    elif fname.endswith((".doc", ".docx")) or "wordprocessing" in mime or "msword" in mime:
+        try:
+            import docx as _docx_bc
+            import io as _io_bc
+            _doc = _docx_bc.Document(_io_bc.BytesIO(file_bytes))
+            conteudo = "\n".join(p.text for p in _doc.paragraphs if p.text.strip())
+        except Exception:
+            conteudo = _bc_extract_claude(file_bytes, "application/pdf")
+        tipo = "doc"
     elif fname.endswith(".csv") or mime in ("text/csv", "text/plain"):
         conteudo = file_bytes.decode("utf-8", errors="replace")
         tipo = "csv"

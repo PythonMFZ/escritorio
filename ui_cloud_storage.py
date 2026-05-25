@@ -330,14 +330,29 @@ def _cs_sync_connection(session, conn: CloudStorageConnection) -> int:
     indexed = 0
 
     # Build list of (client_id, folder_id) pairs to sync
+    # Build pairs: explicit mapping first, fallback to user's own client + root
     pairs = []
     if client_folders:
         for cid_str, fid in client_folders.items():
             pairs.append((int(cid_str), fid))
     else:
-        # No per-client mapping — sync root folder, no client association
-        print(f"[cs] conexão {conn.id} sem mapeamento de clientes — configure em /integrations")
-        return 0
+        # Fallback: use the creator's own membership client_id + root folder
+        m = session.exec(
+            _sel_cs(Membership).where(
+                Membership.company_id == conn.company_id,
+                Membership.user_id == conn.created_by_user_id,
+            )
+        ).first()
+        if m and m.client_id:
+            pairs.append((m.client_id, conn.folder_id or "root"))
+        else:
+            print(f"[cs] conexão {conn.id} sem cliente associado — sincronizando arquivos sem cliente específico")
+            # Still sync but assign to first client of company as fallback
+            first_client = session.exec(
+                _sel_cs(Client).where(Client.company_id == conn.company_id)
+            ).first()
+            if first_client:
+                pairs.append((first_client.id, conn.folder_id or "root"))
 
     for client_id, folder_id in pairs:
         try:
@@ -479,7 +494,7 @@ def _cs_background_loop():
 # ── Google Drive OAuth ────────────────────────────────────────────────────────
 
 @app.get("/integrations/gdrive/connect")
-@require_role({"admin", "equipe"})
+@require_login
 async def gdrive_connect(request: _Req_cs):
     if not _GDRIVE_CLIENT_ID:
         set_flash(request, "GDRIVE_CLIENT_ID não configurado. Adicione nas variáveis de ambiente do Render.")
@@ -489,7 +504,7 @@ async def gdrive_connect(request: _Req_cs):
 
 
 @app.get("/integrations/gdrive/callback")
-@require_role({"admin", "equipe"})
+@require_login
 async def gdrive_callback(
     request: _Req_cs,
     session=_Dep_cs(get_session),
@@ -534,7 +549,7 @@ async def gdrive_callback(
 # ── OneDrive OAuth ────────────────────────────────────────────────────────────
 
 @app.get("/integrations/onedrive/connect")
-@require_role({"admin", "equipe"})
+@require_login
 async def onedrive_connect(request: _Req_cs):
     if not _ONEDRIVE_CLIENT_ID:
         set_flash(request, "ONEDRIVE_CLIENT_ID não configurado. Adicione nas variáveis de ambiente do Render.")
@@ -544,7 +559,7 @@ async def onedrive_connect(request: _Req_cs):
 
 
 @app.get("/integrations/onedrive/callback")
-@require_role({"admin", "equipe"})
+@require_login
 async def onedrive_callback(
     request: _Req_cs,
     session=_Dep_cs(get_session),
@@ -641,7 +656,7 @@ async def cs_map_client(
 # ── API: sync now ─────────────────────────────────────────────────────────────
 
 @app.post("/api/integrations/{conn_id}/sync")
-@require_role({"admin", "equipe"})
+@require_login
 async def cs_sync_now(conn_id: int, request: _Req_cs, session=_Dep_cs(get_session)):
     ctx = get_tenant_context(request, session)
     if not ctx:
@@ -681,143 +696,98 @@ async def cs_disconnect(conn_id: int, request: _Req_cs, session=_Dep_cs(get_sess
 _CS_PAGE = r"""
 <!doctype html><html lang="pt-BR"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Integrações — Maffezzolli</title>
+<title>Conectar Drive — Maffezzolli</title>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
+<style>
+.drive-btn{display:flex;align-items:center;gap:14px;padding:16px 20px;border:1.5px solid #e5e7eb;border-radius:14px;background:#fff;cursor:pointer;text-decoration:none;color:#111;transition:border-color .15s,box-shadow .15s;width:100%}
+.drive-btn:hover{border-color:#f97316;box-shadow:0 2px 12px rgba(249,115,22,.15);color:#111}
+.drive-btn img{width:36px;height:36px;flex-shrink:0}
+.conn-card{border:1px solid #e5e7eb;border-radius:12px;padding:14px 16px;background:#fff;margin-bottom:10px}
+</style>
 </head><body class="bg-light">
-<div class="container py-4" style="max-width:820px">
+<div class="container py-4" style="max-width:600px">
   <div class="d-flex align-items-center gap-3 mb-4">
     <a href="/" class="btn btn-sm btn-outline-secondary"><i class="bi bi-arrow-left"></i></a>
     <div>
-      <h4 class="mb-0">Integrações de Armazenamento</h4>
-      <p class="text-muted small mb-0">Conecte seus drives para o Augur ler arquivos dos clientes automaticamente.</p>
+      <h5 class="mb-0">Conectar Drive ao Augur</h5>
+      <p class="text-muted small mb-0">O Augur lerá seus arquivos automaticamente a cada 30 minutos.</p>
     </div>
   </div>
 
-  {% if flash %}<div class="alert alert-info alert-dismissible fade show">
+  {% if flash %}<div class="alert alert-info alert-dismissible fade show mb-3">
     <button type="button" class="btn-close" data-bs-dismiss="alert"></button>{{ flash }}</div>{% endif %}
 
   <!-- Connect buttons -->
-  <div class="row g-3 mb-4">
-    <div class="col-md-6">
-      <div class="card h-100">
-        <div class="card-body d-flex flex-column">
-          <div class="d-flex align-items-center gap-2 mb-2">
-            <img src="https://www.gstatic.com/images/branding/product/1x/drive_2020q4_48dp.png" width="32" height="32" alt="">
-            <h6 class="mb-0">Google Drive</h6>
-          </div>
-          <p class="text-muted small flex-grow-1">Lê PDFs, planilhas e imagens das pastas que você autorizar.</p>
-          {% if gdrive_ok %}
-            <span class="badge text-bg-success mb-2"><i class="bi bi-check-circle me-1"></i>Credenciais configuradas</span>
-          {% else %}
-            <span class="badge text-bg-warning mb-2"><i class="bi bi-exclamation-triangle me-1"></i>Configure GDRIVE_CLIENT_ID no Render</span>
-          {% endif %}
-          <a href="/integrations/gdrive/connect" class="btn btn-outline-primary btn-sm {% if not gdrive_ok %}disabled{% endif %}">
-            <i class="bi bi-plus-circle me-1"></i>Conectar conta Google
-          </a>
-        </div>
+  <div class="d-flex flex-column gap-3 mb-4">
+    <a href="/integrations/gdrive/connect" class="drive-btn {% if not gdrive_ok %}opacity-50 pe-none{% endif %}">
+      <img src="https://www.gstatic.com/images/branding/product/1x/drive_2020q4_48dp.png" alt="Google Drive">
+      <div>
+        <div class="fw-semibold">Google Drive</div>
+        <div class="text-muted small">Conectar minha conta Google</div>
       </div>
-    </div>
-    <div class="col-md-6">
-      <div class="card h-100">
-        <div class="card-body d-flex flex-column">
-          <div class="d-flex align-items-center gap-2 mb-2">
-            <img src="https://upload.wikimedia.org/wikipedia/commons/thumb/3/3c/Microsoft_Office_OneDrive_%282019%E2%80%93present%29.svg/2048px-Microsoft_Office_OneDrive_%282019%E2%80%93present%29.svg.png" width="32" height="32" alt="">
-            <h6 class="mb-0">OneDrive</h6>
-          </div>
-          <p class="text-muted small flex-grow-1">Lê arquivos do seu OneDrive pessoal ou corporativo.</p>
-          {% if onedrive_ok %}
-            <span class="badge text-bg-success mb-2"><i class="bi bi-check-circle me-1"></i>Credenciais configuradas</span>
-          {% else %}
-            <span class="badge text-bg-warning mb-2"><i class="bi bi-exclamation-triangle me-1"></i>Configure ONEDRIVE_CLIENT_ID no Render</span>
-          {% endif %}
-          <a href="/integrations/onedrive/connect" class="btn btn-outline-primary btn-sm {% if not onedrive_ok %}disabled{% endif %}">
-            <i class="bi bi-plus-circle me-1"></i>Conectar conta Microsoft
-          </a>
-        </div>
+      <i class="bi bi-chevron-right ms-auto text-muted"></i>
+    </a>
+    <a href="/integrations/onedrive/connect" class="drive-btn {% if not onedrive_ok %}opacity-50 pe-none{% endif %}">
+      <img src="https://upload.wikimedia.org/wikipedia/commons/thumb/3/3c/Microsoft_Office_OneDrive_%282019%E2%80%93present%29.svg/512px-Microsoft_Office_OneDrive_%282019%E2%80%93present%29.svg.png" alt="OneDrive">
+      <div>
+        <div class="fw-semibold">OneDrive</div>
+        <div class="text-muted small">Conectar minha conta Microsoft</div>
       </div>
-    </div>
+      <i class="bi bi-chevron-right ms-auto text-muted"></i>
+    </a>
   </div>
 
   <!-- Active connections -->
-  <h6 class="mb-3">Contas conectadas</h6>
-  {% if not conns %}
-    <div class="text-muted small">Nenhuma conta conectada ainda.</div>
-  {% endif %}
+  {% if conns %}
+  <h6 class="mb-3 text-muted small text-uppercase fw-semibold">Drives conectados</h6>
   {% for conn in conns %}
-  <div class="card mb-3">
-    <div class="card-body">
-      <div class="d-flex justify-content-between align-items-start">
+  <div class="conn-card">
+    <div class="d-flex justify-content-between align-items-center">
+      <div class="d-flex align-items-center gap-2">
+        {% if conn.provider == 'gdrive' %}
+          <img src="https://www.gstatic.com/images/branding/product/1x/drive_2020q4_48dp.png" width="22" height="22">
+        {% else %}
+          <img src="https://upload.wikimedia.org/wikipedia/commons/thumb/3/3c/Microsoft_Office_OneDrive_%282019%E2%80%93present%29.svg/512px-Microsoft_Office_OneDrive_%282019%E2%80%93present%29.svg.png" width="22" height="22">
+        {% endif %}
         <div>
-          <div class="fw-semibold">
-            {% if conn.provider == 'gdrive' %}<i class="bi bi-google text-danger me-1"></i>{% else %}<i class="bi bi-microsoft text-primary me-1"></i>{% endif %}
-            {{ conn.display_name }}
+          <div class="fw-semibold small">{{ conn.display_name }}</div>
+          <div class="text-muted" style="font-size:11px">
+            Sync: {{ conn.last_synced_at[:16].replace('T',' ') if conn.last_synced_at else 'Aguardando primeiro sync' }}
           </div>
-          <div class="text-muted small mt-1">
-            Última sync: {{ conn.last_synced_at[:16] if conn.last_synced_at else 'Nunca' }}
-            &nbsp;·&nbsp; Pasta raiz: {{ conn.folder_name }}
-          </div>
-        </div>
-        <div class="d-flex gap-2">
-          <button class="btn btn-sm btn-outline-success" onclick="syncNow({{ conn.id }}, this)">
-            <i class="bi bi-arrow-clockwise me-1"></i>Sync agora
-          </button>
-          <form method="post" action="/api/integrations/{{ conn.id }}/disconnect"
-                onsubmit="return confirm('Desconectar {{ conn.display_name }}?')">
-            <button class="btn btn-sm btn-outline-danger"><i class="bi bi-x-circle me-1"></i>Desconectar</button>
-          </form>
         </div>
       </div>
-
-      <!-- Client folder mapping -->
-      <hr class="my-3">
-      <div class="fw-semibold small mb-2">Pastas por cliente</div>
-      <div class="text-muted small mb-2">Associe cada cliente a uma pasta do drive. O Augur lerá os arquivos dessa pasta para responder sobre aquele cliente.</div>
-
-      <div id="mapping-{{ conn.id }}" class="row g-2 mb-3">
-        {% for client in clients %}
-        {% set fid = conn_mappings[conn.id|string].get(client.id|string, '') %}
-        <div class="col-12">
-          <div class="d-flex align-items-center gap-2">
-            <span class="small fw-semibold" style="min-width:160px">{{ client.name[:25] }}</span>
-            <select class="form-select form-select-sm" id="sel-{{ conn.id }}-{{ client.id }}"
-                    style="max-width:240px" onchange="saveMapping({{ conn.id }}, {{ client.id }}, this.value, this.options[this.selectedIndex].text)">
-              <option value="">(sem pasta)</option>
-              {% for folder in conn_folders.get(conn.id|string, []) %}
-              <option value="{{ folder.id }}" {% if folder.id == fid %}selected{% endif %}>📁 {{ folder.name }}</option>
-              {% endfor %}
-            </select>
-            {% if fid %}<span class="badge text-bg-success small">✓ mapeado</span>{% endif %}
-          </div>
-        </div>
-        {% endfor %}
+      <div class="d-flex gap-2">
+        <button class="btn btn-sm btn-outline-success" onclick="syncNow({{ conn.id }}, this)" title="Sincronizar agora">
+          <i class="bi bi-arrow-clockwise"></i>
+        </button>
+        <form method="post" action="/api/integrations/{{ conn.id }}/disconnect" style="display:inline"
+              onsubmit="return confirm('Desconectar?')">
+          <button class="btn btn-sm btn-outline-danger" title="Desconectar"><i class="bi bi-x-lg"></i></button>
+        </form>
       </div>
     </div>
   </div>
   {% endfor %}
-</div>
+  {% endif %}
 
+  <p class="text-muted small mt-3">
+    <i class="bi bi-info-circle me-1"></i>
+    Após conectar, o Augur lerá automaticamente os arquivos das suas pastas a cada 30 minutos.
+    Você também pode sincronizar manualmente a qualquer momento.
+  </p>
+</div>
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 <script>
 async function syncNow(connId, btn) {
   btn.disabled = true;
-  btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Sincronizando…';
+  btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
   try {
     const r = await fetch(`/api/integrations/${connId}/sync`, {method:'POST', credentials:'same-origin'});
     const d = await r.json();
-    btn.innerHTML = d.ok ? `<i class="bi bi-check me-1"></i>${d.indexed} arquivo(s)` : '⚠️ Erro';
-    setTimeout(() => { btn.innerHTML='<i class="bi bi-arrow-clockwise me-1"></i>Sync agora'; btn.disabled=false; }, 3000);
-  } catch(e) {
-    btn.innerHTML = '⚠️ Erro'; btn.disabled=false;
-  }
-}
-
-async function saveMapping(connId, clientId, folderId, folderName) {
-  const fd = new FormData();
-  fd.append('client_id', clientId);
-  fd.append('folder_id', folderId);
-  fd.append('folder_name', folderName || '/');
-  await fetch(`/api/integrations/${connId}/map-client`, {method:'POST', credentials:'same-origin', body:fd});
+    btn.innerHTML = d.ok ? '<i class="bi bi-check"></i>' : '<i class="bi bi-exclamation"></i>';
+    setTimeout(() => { btn.innerHTML='<i class="bi bi-arrow-clockwise"></i>'; btn.disabled=false; }, 2500);
+  } catch(e) { btn.innerHTML='<i class="bi bi-exclamation"></i>'; btn.disabled=false; }
 }
 </script>
 </body></html>
@@ -825,7 +795,7 @@ async function saveMapping(connId, clientId, folderId, folderName) {
 
 
 @app.get("/integrations", response_class=_HTML_cs)
-@require_role({"admin", "equipe"})
+@require_login
 async def integrations_page(request: _Req_cs, session=_Dep_cs(get_session)):
     ctx = get_tenant_context(request, session)
     if not ctx:
@@ -840,37 +810,12 @@ async def integrations_page(request: _Req_cs, session=_Dep_cs(get_session)):
         )
     ).all()
 
-    clients = session.exec(
-        _sel_cs(Client).where(Client.company_id == ctx.company.id)
-    ).all()
-
-    # Per-connection: parse mapping + prefetch folder list
-    conn_mappings = {}
-    conn_folders  = {}
-    for conn in conns:
-        try:
-            conn_mappings[str(conn.id)] = _json_cs.loads(conn.client_folders_json or "{}")
-        except Exception:
-            conn_mappings[str(conn.id)] = {}
-        try:
-            token = _cs_get_valid_token(session, conn)
-            if conn.provider == "gdrive":
-                folders = _gdrive_list_folders(token, "root")
-            else:
-                folders = _onedrive_list_folders(token, "root")
-            conn_folders[str(conn.id)] = folders
-        except Exception:
-            conn_folders[str(conn.id)] = []
-
     from jinja2 import Environment as _JEnv
     env = _JEnv()
     tmpl = env.from_string(_CS_PAGE)
     html = tmpl.render(
         flash=flash,
         conns=conns,
-        clients=clients,
-        conn_mappings=conn_mappings,
-        conn_folders=conn_folders,
         gdrive_ok=bool(_GDRIVE_CLIENT_ID),
         onedrive_ok=bool(_ONEDRIVE_CLIENT_ID),
     )
