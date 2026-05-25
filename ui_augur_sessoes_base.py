@@ -578,8 +578,7 @@ async def base_conhecimento_upload_file(
     if fname.endswith((".xlsx", ".xls")) or "spreadsheet" in mime or "excel" in mime:
         conteudo = _bc_extract_excel(file_bytes, fname)
         tipo = "excel"
-        if not conteudo:
-            conteudo = _bc_extract_claude(file_bytes, "application/pdf")
+        # Do NOT fall back to Claude with binary xlsx — it can't parse it
     elif fname.endswith((".doc", ".docx")) or "wordprocessing" in mime or "msword" in mime:
         try:
             import docx as _docx_bc

@@ -5452,6 +5452,9 @@ a:hover{ color:#00BFBF; }
               <a class="btn btn-outline-secondary btn-sm" href="/client/switch">Trocar cliente</a>
             {% endif %}
 
+            {% if role in ["admin","equipe"] %}
+              <a class="btn btn-outline-secondary btn-sm" href="/integrations" title="Conectores Google Drive e OneDrive">☁️ Drives</a>
+            {% endif %}
             <a class="badge text-bg-light border text-decoration-none" href="/minha-conta" title="Minha Conta">👤 {{ current_user.name }} • {{ role }}</a>
             <a class="btn btn-outline-secondary btn-sm" href="/logout">Sair</a>
           {% else %}
@@ -31813,6 +31816,9 @@ TEMPLATES["base.html"] = r"""
             {% if role in ["admin","equipe"] and current_client %}
               <span class="badge text-bg-light border">🧑‍💼 Cliente: {{ current_client.name }}</span>
               <a class="btn btn-outline-secondary btn-sm" href="/client/switch">Trocar cliente</a>
+            {% endif %}
+            {% if role in ["admin","equipe"] %}
+              <a class="btn btn-outline-secondary btn-sm" href="/integrations" title="Conectores Google Drive e OneDrive">☁️ Drives</a>
             {% endif %}
             <a class="badge text-bg-light border text-decoration-none" href="/minha-conta" title="Minha Conta">👤 {{ current_user.name }} • {{ role }}</a>
             <a class="btn btn-outline-secondary btn-sm" href="/logout">Sair</a>
