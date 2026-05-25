@@ -1209,9 +1209,31 @@ async def cs_browser(conn_id: int, request: _Req_cs, session=_Dep_cs(get_session
         set_flash(request, "Conexão não encontrada.")
         return _RR_cs("/integrations", status_code=303)
 
-    clients = session.exec(
-        _sel_cs(Client).where(Client.company_id == ctx.company.id)
-    ).all()
+    role = ctx.membership.role if ctx.membership else "cliente"
+    # Clients can only manage their own connections
+    if role == "cliente" and conn.created_by_user_id != ctx.user.id:
+        set_flash(request, "Acesso não permitido.")
+        return _RR_cs("/integrations", status_code=303)
+
+    # For admin/equipe: all company clients. For cliente: only their own.
+    if role == "cliente":
+        membership = session.exec(
+            _sel_cs(Membership).where(
+                Membership.company_id == ctx.company.id,
+                Membership.user_id == ctx.user.id,
+            )
+        ).first()
+        own_client_id = membership.client_id if membership else None
+        clients = []
+        if own_client_id:
+            own_client = session.get(Client, own_client_id)
+            if own_client:
+                clients = [own_client]
+    else:
+        clients = session.exec(
+            _sel_cs(Client).where(Client.company_id == ctx.company.id)
+        ).all()
+
     clients_by_id = {c.id: c.name for c in clients}
     selections = _cs_parse_selections(conn)
 
@@ -1343,13 +1365,16 @@ async def integrations_page(request: _Req_cs, session=_Dep_cs(get_session)):
         return _RR_cs("/login", status_code=303)
 
     flash = request.session.pop("flash", None)
+    role = ctx.membership.role if ctx.membership else "cliente"
 
-    conns = session.exec(
-        _sel_cs(CloudStorageConnection).where(
-            CloudStorageConnection.company_id == ctx.company.id,
-            CloudStorageConnection.is_active == True,
-        )
-    ).all()
+    q = _sel_cs(CloudStorageConnection).where(
+        CloudStorageConnection.company_id == ctx.company.id,
+        CloudStorageConnection.is_active == True,
+    )
+    # Clients see only their own connections
+    if role == "cliente":
+        q = q.where(CloudStorageConnection.created_by_user_id == ctx.user.id)
+    conns = session.exec(q).all()
 
     sel_counts = {c.id: len(_cs_parse_selections(c)) for c in conns}
 
