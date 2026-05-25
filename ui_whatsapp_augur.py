@@ -115,20 +115,29 @@ async def _augur_whatsapp_reply(
 
         # ── Command layer (task creation etc.) — runs in thread executor ──
         loop = asyncio.get_event_loop()
-        try:
-            with _WazSession(engine) as _cmd_db:
-                cmd_reply = await loop.run_in_executor(
-                    None,
-                    lambda: _augur_try_command(
-                        _cmd_db,
-                        company_id=company_id,
-                        user_id=0,  # WhatsApp user unknown — no user_id
-                        client_id=client_id,
-                        message=message_body,
-                    ),
+        _cp = contact_phone  # capture for lambda
+        _cid = client_id
+        _coid = company_id
+        _mb = message_body
+
+        def _run_command_layer():
+            with _WazSession(engine) as _db:
+                # Resolve real user_id from whatsapp_phone
+                _mu, _ = _match_user_by_whatsapp_phone(_db, company_id=_coid, phone_digits=_cp)
+                _uid = _mu.id if _mu else 0
+                return _augur_try_command(
+                    _db,
+                    company_id=_coid,
+                    user_id=_uid,
+                    client_id=_cid,
+                    message=_mb,
                 )
+
+        try:
+            cmd_reply = await loop.run_in_executor(None, _run_command_layer)
         except Exception as _ce:
             print(f"[augur_whatsapp] command layer erro: {_ce}")
+            import traceback; traceback.print_exc()
             cmd_reply = None
 
         if cmd_reply:

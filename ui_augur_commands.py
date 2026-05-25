@@ -107,6 +107,24 @@ def _augur_try_command(
     if not parsed or not parsed.get("eh_tarefa"):
         return None
 
+    # Resolve a valid creator user_id (FK required on Task)
+    if not user_id or user_id <= 0:
+        fallback = None
+        for role in ("admin", "equipe", "cliente"):
+            fallback = session.exec(
+                _sel_cmd(Membership).where(
+                    Membership.company_id == company_id,
+                    Membership.role == role,
+                )
+            ).first()
+            if fallback:
+                break
+        if not fallback:
+            print(f"[augur_cmd] sem membros em company {company_id} para criar tarefa")
+            return None
+        user_id = fallback.user_id
+        print(f"[augur_cmd] user_id resolvido para {user_id} (fallback admin/equipe)")
+
     # Resolve assignee
     assignee_user = None
     responsavel_nome = (parsed.get("responsavel_nome") or "").strip()
