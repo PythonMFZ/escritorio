@@ -15759,7 +15759,6 @@ _MINHA_CONTA_TMPL = """
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
 </head><body class="bg-light">
-{% include "_navbar.html" ignore missing %}
 <div class="container py-4" style="max-width:540px">
   <h4 class="mb-1">Minha Conta</h4>
   <p class="text-muted small mb-4">Atualize seu nome e o número de WhatsApp para usar o Augur.</p>
