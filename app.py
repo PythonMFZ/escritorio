@@ -15802,7 +15802,7 @@ async def minha_conta_page(request: Request, session: Session = Depends(get_sess
     if not ctx:
         request.session.clear()
         return RedirectResponse("/login", status_code=303)
-    flash = get_flash(request)
+    flash = request.session.pop("flash", None) if hasattr(request, "session") else None
     from jinja2 import Environment
     env = Environment()
     tmpl = env.from_string(_MINHA_CONTA_TMPL)
