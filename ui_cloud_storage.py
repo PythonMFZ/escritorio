@@ -213,7 +213,34 @@ def _gdrive_list_items(token: str, folder_id: str = "root") -> list[dict]:
     r = _httpx_cs.get(
         "https://www.googleapis.com/drive/v3/files",
         params={"q": q, "fields": "files(id,name,mimeType,modifiedTime,md5Checksum)",
-                "pageSize": 200, "orderBy": "folder,name"},
+                "pageSize": 50, "orderBy": "folder,name"},
+        headers={"Authorization": f"Bearer {token}"},
+        timeout=20,
+    )
+    result = []
+    for item in r.json().get("files", []):
+        is_folder = item["mimeType"] == "application/vnd.google-apps.folder"
+        result.append({
+            "id": item["id"],
+            "name": item["name"],
+            "type": "folder" if is_folder else "file",
+            "mimeType": item.get("mimeType", ""),
+            "modifiedTime": item.get("modifiedTime", ""),
+            "md5Checksum": item.get("md5Checksum", ""),
+        })
+    return result
+
+
+def _gdrive_search_items(token: str, query: str) -> list[dict]:
+    """Search Google Drive by name across all folders."""
+    supported = list(_GDRIVE_SUPPORTED_MIME) + ["application/vnd.google-apps.folder"]
+    q = f"name contains '{query.replace(chr(39), '')}' and trashed=false and ("
+    q += " or ".join(f"mimeType='{m}'" for m in supported)
+    q += ")"
+    r = _httpx_cs.get(
+        "https://www.googleapis.com/drive/v3/files",
+        params={"q": q, "fields": "files(id,name,mimeType,modifiedTime,md5Checksum)",
+                "pageSize": 30, "orderBy": "folder,name"},
         headers={"Authorization": f"Bearer {token}"},
         timeout=20,
     )
@@ -265,7 +292,27 @@ def _onedrive_list_items(token: str, folder_id: str = "root") -> list[dict]:
         url = f"https://graph.microsoft.com/v1.0/me/drive/items/{folder_id}/children"
     r = _httpx_cs.get(
         url,
-        params={"$select": "id,name,file,folder,lastModifiedDateTime", "$top": 200, "$orderby": "name"},
+        params={"$select": "id,name,file,folder,lastModifiedDateTime", "$top": 50, "$orderby": "name"},
+        headers={"Authorization": f"Bearer {token}"},
+        timeout=20,
+    )
+    result = []
+    for item in r.json().get("value", []):
+        if "folder" in item:
+            result.append({"id": item["id"], "name": item["name"], "type": "folder",
+                           "mimeType": "", "modifiedTime": item.get("lastModifiedDateTime","")})
+        elif "file" in item and any(item["name"].lower().endswith(ext) for ext in _ONEDRIVE_SUPPORTED_EXT):
+            result.append({"id": item["id"], "name": item["name"], "type": "file",
+                           "mimeType": item.get("file",{}).get("mimeType",""),
+                           "modifiedTime": item.get("lastModifiedDateTime","")})
+    return result
+
+
+def _onedrive_search_items(token: str, query: str) -> list[dict]:
+    """Search OneDrive by name across all folders."""
+    r = _httpx_cs.get(
+        f"https://graph.microsoft.com/v1.0/me/drive/search(q='{query.replace(chr(39), '')}')",
+        params={"$select": "id,name,file,folder,lastModifiedDateTime", "$top": 30},
         headers={"Authorization": f"Bearer {token}"},
         timeout=20,
     )
@@ -670,6 +717,35 @@ async def cs_list_items(
         return _JSON_cs({"items": [], "erro": str(_e)})
 
 
+# ── API: search items ─────────────────────────────────────────────────────────
+
+@app.get("/api/integrations/{conn_id}/search-items")
+@require_login
+async def cs_search_items(
+    conn_id: int,
+    request: _Req_cs,
+    session=_Dep_cs(get_session),
+    q: str = "",
+):
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        return _JSON_cs({"items": [], "erro": "Não autenticado."})
+    conn = session.get(CloudStorageConnection, conn_id)
+    if not conn or conn.company_id != ctx.company.id:
+        return _JSON_cs({"items": [], "erro": "Conexão não encontrada."})
+    if not q or len(q) < 2:
+        return _JSON_cs({"items": []})
+    token = _cs_get_valid_token(session, conn)
+    try:
+        if conn.provider == "gdrive":
+            items = _gdrive_search_items(token, q)
+        else:
+            items = _onedrive_search_items(token, q)
+        return _JSON_cs({"items": items})
+    except Exception as _e:
+        return _JSON_cs({"items": [], "erro": str(_e)})
+
+
 # ── API: add selection ─────────────────────────────────────────────────────────
 
 @app.post("/api/integrations/{conn_id}/add-selection")
@@ -814,19 +890,39 @@ body{background:#f8f9fa}
     <!-- Left: file browser -->
     <div class="col-12 col-lg-7">
       <div class="card p-3">
-        <!-- Breadcrumb -->
-        <nav aria-label="breadcrumb" class="mb-2">
+
+        <!-- Search -->
+        <div class="input-group mb-3">
+          <input type="text" class="form-control" id="search-input"
+                 placeholder="Buscar por nome (ex: Finanças, Clientes...)"
+                 onkeydown="if(event.key==='Enter') doSearch()">
+          <button class="btn btn-primary" onclick="doSearch()" id="search-btn">
+            <i class="bi bi-search"></i> Buscar
+          </button>
+        </div>
+
+        <!-- Breadcrumb (only visible when browsing) -->
+        <nav aria-label="breadcrumb" class="mb-2 d-none" id="breadcrumb-nav">
           <ol class="breadcrumb mb-0" id="breadcrumb">
-            <li class="breadcrumb-item active" data-id="root" data-name="/">Raiz</li>
+            <li class="breadcrumb-item" onclick="navigateTo(0)" style="cursor:pointer;color:#f97316">Raiz</li>
           </ol>
         </nav>
 
-        <div id="items-loading" class="text-center py-4 text-muted">
-          <div class="spinner-border spinner-border-sm"></div> Carregando...
+        <div id="items-hint" class="text-muted small py-4 text-center">
+          <i class="bi bi-search fs-3 d-block mb-2 opacity-50"></i>
+          Digite acima para buscar por nome, ou clique em <b>Raiz</b> para navegar pelas pastas.
+        </div>
+        <div id="items-loading" class="text-center py-4 text-muted d-none">
+          <div class="spinner-border spinner-border-sm"></div> Buscando...
         </div>
         <div id="items-list" class="d-none"></div>
-        <div id="items-empty" class="text-muted small py-3 d-none">Nenhum arquivo compatível aqui.</div>
+        <div id="items-empty" class="text-muted small py-3 d-none text-center">Nenhum resultado encontrado.</div>
         <div id="items-error" class="alert alert-danger d-none"></div>
+        <div class="d-none mt-2" id="browse-root-btn-wrap">
+          <button class="btn btn-sm btn-outline-secondary w-100" onclick="browseRoot()">
+            <i class="bi bi-folder2-open me-1"></i>Navegar pela raiz
+          </button>
+        </div>
       </div>
     </div>
 
@@ -888,9 +984,9 @@ const CONN_ID = {{ conn_id }};
 const CLIENTS = {{ clients_json }};
 const clientsById = Object.fromEntries(CLIENTS.map(c => [c.id, c.name]));
 
-// breadcrumb stack: [{id, name}, ...]
 let breadcrumb = [{id: 'root', name: 'Raiz'}];
 let pendingItem = null;
+let isSearchMode = false;
 const modal = new bootstrap.Modal(document.getElementById('clientModal'));
 
 function esc(s){ return String(s||'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
@@ -905,36 +1001,71 @@ function fileIcon(item){
   return 'file-earmark text-secondary';
 }
 
-async function loadItems(folderId){
+function showLoading(msg){
+  document.getElementById('items-hint').classList.add('d-none');
   document.getElementById('items-loading').classList.remove('d-none');
+  document.getElementById('items-loading').innerHTML = `<div class="spinner-border spinner-border-sm"></div> ${msg||'Carregando...'}`;
   document.getElementById('items-list').classList.add('d-none');
   document.getElementById('items-empty').classList.add('d-none');
   document.getElementById('items-error').classList.add('d-none');
+}
 
+function showItems(items){
+  document.getElementById('items-loading').classList.add('d-none');
+  if(!items.length){ document.getElementById('items-empty').classList.remove('d-none'); return; }
+  const list = document.getElementById('items-list');
+  list.innerHTML = items.map(item => `
+    <div class="item-row ${item.type==='folder'?'is-folder':''}"
+         onclick="${item.type==='folder'&&!isSearchMode?`navigateInto('${item.id.replace(/'/g,"\\'")}','${item.name.replace(/\\/g,'\\\\').replace(/'/g,"\\'")}')`:''}"
+         >
+      <span class="item-icon"><i class="bi bi-${fileIcon(item)}"></i></span>
+      <span class="item-name" title="${esc(item.name)}">${esc(item.name)}</span>
+      ${item.type==='folder'&&!isSearchMode?`<span class="text-muted small me-1"><i class="bi bi-chevron-right"></i></span>`:''}
+      <button class="btn btn-sm btn-outline-primary py-0 px-2 flex-shrink-0"
+              onclick="event.stopPropagation();openClientModal(${JSON.stringify(item)})"
+              title="Adicionar à base">+ Adicionar</button>
+    </div>`).join('');
+  list.classList.remove('d-none');
+}
+
+async function doSearch(){
+  const q = document.getElementById('search-input').value.trim();
+  if(q.length < 2){ alert('Digite pelo menos 2 caracteres para buscar.'); return; }
+  isSearchMode = true;
+  document.getElementById('breadcrumb-nav').classList.add('d-none');
+  document.getElementById('browse-root-btn-wrap').classList.remove('d-none');
+  showLoading('Buscando "'+q+'"...');
+  try{
+    const r = await fetch(`/api/integrations/${CONN_ID}/search-items?q=${encodeURIComponent(q)}`, {credentials:'same-origin'});
+    const d = await r.json();
+    if(d.erro){ document.getElementById('items-loading').classList.add('d-none'); document.getElementById('items-error').textContent=d.erro; document.getElementById('items-error').classList.remove('d-none'); return; }
+    showItems(d.items||[]);
+  }catch(e){
+    document.getElementById('items-loading').classList.add('d-none');
+    document.getElementById('items-error').textContent='Erro: '+e.message;
+    document.getElementById('items-error').classList.remove('d-none');
+  }
+}
+
+async function browseRoot(){
+  isSearchMode = false;
+  breadcrumb = [{id:'root', name:'Raiz'}];
+  renderBreadcrumb();
+  document.getElementById('breadcrumb-nav').classList.remove('d-none');
+  document.getElementById('browse-root-btn-wrap').classList.add('d-none');
+  await loadFolder('root');
+}
+
+async function loadFolder(folderId){
+  showLoading('Carregando pasta...');
   try{
     const r = await fetch(`/api/integrations/${CONN_ID}/items?parent=${encodeURIComponent(folderId)}`, {credentials:'same-origin'});
     const d = await r.json();
-    document.getElementById('items-loading').classList.add('d-none');
-    if(d.erro){ document.getElementById('items-error').textContent=d.erro; document.getElementById('items-error').classList.remove('d-none'); return; }
-    const items = d.items||[];
-    if(!items.length){ document.getElementById('items-empty').classList.remove('d-none'); return; }
-    const list = document.getElementById('items-list');
-    list.innerHTML = items.map(item => `
-      <div class="item-row ${item.type==='folder'?'is-folder':''}"
-           onclick="${item.type==='folder'?`navigateInto('${esc(item.id)}','${esc(item.name.replace(/'/g,"\\'")}')`:''}"
-           >
-        <span class="item-icon"><i class="bi bi-${fileIcon(item)}"></i></span>
-        <span class="item-name" title="${esc(item.name)}">${esc(item.name)}</span>
-        <button class="btn btn-sm btn-outline-primary py-0 px-2 flex-shrink-0"
-                onclick="event.stopPropagation();openClientModal(${JSON.stringify(item)})"
-                title="${item.type==='folder'?'Adicionar pasta':'Adicionar arquivo'}">
-          + Adicionar
-        </button>
-      </div>`).join('');
-    list.classList.remove('d-none');
+    if(d.erro){ document.getElementById('items-loading').classList.add('d-none'); document.getElementById('items-error').textContent=d.erro; document.getElementById('items-error').classList.remove('d-none'); return; }
+    showItems(d.items||[]);
   }catch(e){
     document.getElementById('items-loading').classList.add('d-none');
-    document.getElementById('items-error').textContent='Erro ao carregar: '+e.message;
+    document.getElementById('items-error').textContent='Erro: '+e.message;
     document.getElementById('items-error').classList.remove('d-none');
   }
 }
@@ -942,20 +1073,20 @@ async function loadItems(folderId){
 function navigateInto(folderId, folderName){
   breadcrumb.push({id: folderId, name: folderName});
   renderBreadcrumb();
-  loadItems(folderId);
+  loadFolder(folderId);
 }
 
 function navigateTo(idx){
   breadcrumb = breadcrumb.slice(0, idx+1);
   renderBreadcrumb();
-  loadItems(breadcrumb[breadcrumb.length-1].id);
+  loadFolder(breadcrumb[breadcrumb.length-1].id);
 }
 
 function renderBreadcrumb(){
   const ol = document.getElementById('breadcrumb');
   ol.innerHTML = breadcrumb.map((b,i) => {
     const isLast = i === breadcrumb.length-1;
-    return `<li class="breadcrumb-item ${isLast?'active':''}" ${isLast?'':` onclick="navigateTo(${i})"`}>${esc(b.name)}</li>`;
+    return `<li class="breadcrumb-item ${isLast?'active':''}" ${isLast?'':` onclick="navigateTo(${i})" style="cursor:pointer;color:#f97316"`}>${esc(b.name)}</li>`;
   }).join('');
 }
 
@@ -1041,8 +1172,8 @@ async function syncAndFinish(){
   setTimeout(()=>{ window.location='/integrations'; }, 1500);
 }
 
-// init
-loadItems('root');
+// focus search on load
+document.getElementById('search-input').focus();
 </script>
 </body></html>
 """
