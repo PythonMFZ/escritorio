@@ -113,22 +113,42 @@ async def _augur_whatsapp_reply(
 
         print(f"[augur_whatsapp] chamando Augur para thread {thread_id} | cliente: {client_id}")
 
-        # Augur é síncrono — roda em thread executor
-        from ai_assistant.assistant import ask as _augur_ask
+        # ── Command layer (task creation etc.) — runs in thread executor ──
         loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(
-            None,
-            lambda: _augur_ask(
-                question=message_body,
-                client_data=client_data,
-                conversation_history=history,
-            ),
-        )
+        try:
+            with _WazSession(engine) as _cmd_db:
+                cmd_reply = await loop.run_in_executor(
+                    None,
+                    lambda: _augur_try_command(
+                        _cmd_db,
+                        company_id=company_id,
+                        user_id=0,  # WhatsApp user unknown — no user_id
+                        client_id=client_id,
+                        message=message_body,
+                    ),
+                )
+        except Exception as _ce:
+            print(f"[augur_whatsapp] command layer erro: {_ce}")
+            cmd_reply = None
 
-        reply = (result.get("response") or "").strip()
-        if not reply or result.get("error"):
-            print(f"[augur_whatsapp] Augur retornou erro ou resposta vazia: {result.get('error_message','')}")
-            return
+        if cmd_reply:
+            reply = cmd_reply
+            print(f"[augur_whatsapp] comando executado: {reply[:80]}")
+        else:
+            # Normal Augur call
+            from ai_assistant.assistant import ask as _augur_ask
+            result = await loop.run_in_executor(
+                None,
+                lambda: _augur_ask(
+                    question=message_body,
+                    client_data=client_data,
+                    conversation_history=history,
+                ),
+            )
+            reply = (result.get("response") or "").strip()
+            if not reply or result.get("error"):
+                print(f"[augur_whatsapp] Augur retornou erro ou resposta vazia: {result.get('error_message','')}")
+                return
 
         # Trunca no limite do WhatsApp
         if len(reply) > 4000:
