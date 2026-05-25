@@ -41756,6 +41756,17 @@ async def whatsapp_webhook_receive(request: Request, session: Session = Depends(
             thread=thread,
             preview=preview,
         )
+
+        # Augur auto-reply — apenas clientes cadastrados, mensagens de texto
+        if thread.client_id and not is_group and body:
+            asyncio.create_task(_augur_whatsapp_reply(
+                company_id=company_id,
+                thread_id=thread.id,
+                client_id=thread.client_id,
+                message_body=body,
+                config=config,
+            ))
+
         processed += 1
 
     return JSONResponse(
@@ -47696,4 +47707,5 @@ exec(open('ui_fixes_batch7.py').read())
 exec(open('ui_obras_subetapa_apt.py').read())
 exec(open('ui_obras_duplicar_fase.py').read())
 exec(open('ui_obras_duplicar_etapa.py').read())
+exec(open('ui_whatsapp_augur.py').read())
 
