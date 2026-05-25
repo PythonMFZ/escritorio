@@ -508,6 +508,7 @@ class User(SQLModel, table=True):
     name: str
     email: str = Field(index=True, unique=True)
     password_hash: str
+    whatsapp_phone: str = Field(default="", index=True)
     created_at: datetime = Field(default_factory=utcnow)
 
 
@@ -5451,7 +5452,7 @@ a:hover{ color:#00BFBF; }
               <a class="btn btn-outline-secondary btn-sm" href="/client/switch">Trocar cliente</a>
             {% endif %}
 
-            <span class="badge text-bg-light border">👤 {{ current_user.name }} • {{ role }}</span>
+            <a class="badge text-bg-light border text-decoration-none" href="/minha-conta" title="Minha Conta">👤 {{ current_user.name }} • {{ role }}</a>
             <a class="btn btn-outline-secondary btn-sm" href="/logout">Sair</a>
           {% else %}
             <a class="btn btn-outline-primary btn-sm" href="/login">Entrar</a>
@@ -5975,6 +5976,7 @@ a:hover{ color:#00BFBF; }
                     · Cliente: <b>{{ row.client_name or "—" }}</b>
                   {% endif %}
                   · Status: {% if row.is_active %}<span class="badge text-bg-success">ativo</span>{% else %}<span class="badge text-bg-secondary">inativo</span>{% endif %}
+                  · WhatsApp: <b>{{ row.user.whatsapp_phone or "—" }}</b>
                 </div>
               </div>
 
@@ -6061,6 +6063,16 @@ a:hover{ color:#00BFBF; }
                 </div>
                 <div class="form-text mb-2">Desmarque o que este usuário NÃO deve ver.</div>
                 <button class="btn btn-sm btn-outline-primary">Salvar visibilidade</button>
+              </form>
+            </details>
+
+            <details class="mt-2">
+              <summary class="muted small">WhatsApp do usuário (Augur)</summary>
+              <form method="post" action="/admin/members/{{ row.membership.id }}/set-whatsapp" class="mt-2 d-flex gap-2 align-items-center">
+                <input type="text" class="form-control form-control-sm" name="whatsapp_phone"
+                       value="{{ row.user.whatsapp_phone or '' }}" placeholder="Ex: 47991359091"
+                       inputmode="numeric" style="max-width:200px">
+                <button class="btn btn-sm btn-outline-primary">Salvar</button>
               </form>
             </details>
 
@@ -15049,6 +15061,29 @@ async def member_link_client(
     return RedirectResponse("/admin/members", status_code=303)
 
 
+@app.post("/admin/members/{membership_id}/set-whatsapp")
+@require_role({"admin", "equipe"})
+async def member_set_whatsapp(
+        request: Request,
+        membership_id: int,
+        session: Session = Depends(get_session),
+        whatsapp_phone: str = Form(""),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+    m = session.get(Membership, membership_id)
+    if not m or m.company_id != ctx.company.id:
+        set_flash(request, "Membro não encontrado.")
+        return RedirectResponse("/admin/members", status_code=303)
+    user = session.get(User, m.user_id)
+    if user:
+        user.whatsapp_phone = _only_digits(whatsapp_phone)[:20]
+        session.add(user)
+        session.commit()
+    set_flash(request, "WhatsApp do usuário atualizado.")
+    return RedirectResponse("/admin/members", status_code=303)
+
+
 @app.post("/admin/members/{membership_id}/remover")
 @require_role({"admin", "equipe"})
 async def member_remover(
@@ -15711,6 +15746,91 @@ async def perfil_save(
 
     set_flash(request, "Diagnóstico financeiro atualizado.")
     return RedirectResponse("/perfil", status_code=303)
+
+
+# ----------------------------
+# Minha Conta (user self-service: name + whatsapp_phone)
+# ----------------------------
+
+_MINHA_CONTA_TMPL = """
+<!doctype html><html lang="pt-BR"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Minha Conta</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
+</head><body class="bg-light">
+{% include "_navbar.html" ignore missing %}
+<div class="container py-4" style="max-width:540px">
+  <h4 class="mb-1">Minha Conta</h4>
+  <p class="text-muted small mb-4">Atualize seu nome e o número de WhatsApp para usar o Augur.</p>
+  {% if flash %}<div class="alert alert-success alert-dismissible fade show"><button type="button" class="btn-close" data-bs-dismiss="alert"></button>{{ flash }}</div>{% endif %}
+  <div class="card shadow-sm">
+    <div class="card-body">
+      <form method="post" action="/minha-conta">
+        <div class="mb-3">
+          <label class="form-label fw-semibold">Nome</label>
+          <input type="text" class="form-control" name="name" value="{{ current_user.name }}" required>
+        </div>
+        <div class="mb-3">
+          <label class="form-label fw-semibold">E-mail</label>
+          <input type="email" class="form-control" value="{{ current_user.email }}" disabled>
+          <div class="form-text">O e-mail não pode ser alterado.</div>
+        </div>
+        <div class="mb-4">
+          <label class="form-label fw-semibold">WhatsApp <span class="text-muted fw-normal">(com DDD, só números)</span></label>
+          <input type="text" class="form-control" name="whatsapp_phone" value="{{ current_user.whatsapp_phone or '' }}"
+                 placeholder="Ex: 47991359091" inputmode="numeric">
+          <div class="form-text">Use este número para enviar mensagens ao Augur pelo WhatsApp.</div>
+        </div>
+        <div class="d-flex gap-2">
+          <button type="submit" class="btn btn-primary">Salvar</button>
+          <a href="/" class="btn btn-outline-secondary">Voltar</a>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+</body></html>
+"""
+
+
+@app.get("/minha-conta", response_class=HTMLResponse)
+@require_login
+async def minha_conta_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+    flash = get_flash(request)
+    from jinja2 import Environment
+    env = Environment()
+    tmpl = env.from_string(_MINHA_CONTA_TMPL)
+    html = tmpl.render(current_user=ctx.user, flash=flash)
+    return HTMLResponse(html)
+
+
+@app.post("/minha-conta")
+@require_login
+async def minha_conta_save(
+    request: Request,
+    session: Session = Depends(get_session),
+    name: str = Form(""),
+    whatsapp_phone: str = Form(""),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+    user = session.get(User, ctx.user.id)
+    if user:
+        if name.strip():
+            user.name = name.strip()[:120]
+        user.whatsapp_phone = _only_digits(whatsapp_phone)[:20]
+        session.add(user)
+        session.commit()
+    set_flash(request, "Conta atualizada com sucesso.")
+    return RedirectResponse("/minha-conta", status_code=303)
 
 
 # ----------------------------
@@ -31500,7 +31620,7 @@ TEMPLATES["base.html"] = r"""
               <span class="badge text-bg-light border">🧑‍💼 Cliente: {{ current_client.name }}</span>
               <a class="btn btn-outline-secondary btn-sm" href="/client/switch">Trocar cliente</a>
             {% endif %}
-            <span class="badge text-bg-light border">👤 {{ current_user.name }} • {{ role }}</span>
+            <a class="badge text-bg-light border text-decoration-none" href="/minha-conta" title="Minha Conta">👤 {{ current_user.name }} • {{ role }}</a>
             <a class="btn btn-outline-secondary btn-sm" href="/logout">Sair</a>
           {% else %}
             <a class="btn btn-outline-primary btn-sm" href="/login">Entrar</a>
@@ -39015,6 +39135,24 @@ def ensure_whatsapp_columns() -> None:
         pass
 
 
+def ensure_user_columns() -> None:
+    """Add whatsapp_phone (and future columns) to the user table."""
+    try:
+        backend = engine.url.get_backend_name()
+        with engine.begin() as conn:
+            if backend.startswith("postgres"):
+                conn.exec_driver_sql(
+                    "ALTER TABLE IF EXISTS \"user\" ADD COLUMN IF NOT EXISTS whatsapp_phone TEXT NOT NULL DEFAULT ''"
+                )
+            elif backend.startswith("sqlite"):
+                rows = conn.exec_driver_sql("PRAGMA table_info('user')").fetchall()
+                existing = {str(r[1]) for r in rows}
+                if "whatsapp_phone" not in existing:
+                    conn.exec_driver_sql("ALTER TABLE \"user\" ADD COLUMN whatsapp_phone TEXT NOT NULL DEFAULT ''")
+    except Exception:
+        pass
+
+
 def _default_whatsapp_welcome() -> str:
     return (
         "Olá! Seja bem-vindo à Maffezzolli Capital.\n\n"
@@ -39121,6 +39259,27 @@ def _match_client_by_phone(session: Session, *, company_id: int, phone_digits: s
         if cdigits and (cdigits == digits or digits.endswith(cdigits[-8:]) or cdigits.endswith(digits[-8:])):
             return c
     return None
+
+
+def _match_user_by_whatsapp_phone(
+    session: Session, *, company_id: int, phone_digits: str
+) -> tuple:
+    """Return (User, client_id_or_None) for a user whose whatsapp_phone matches,
+    filtered to users who belong to company_id via Membership."""
+    digits = _only_digits(phone_digits)
+    if not digits:
+        return (None, None)
+    memberships = session.exec(
+        select(Membership).where(Membership.company_id == company_id)
+    ).all()
+    for m in memberships:
+        user = session.get(User, m.user_id)
+        if not user:
+            continue
+        udigits = _only_digits(getattr(user, "whatsapp_phone", "") or "")
+        if udigits and (udigits == digits or digits.endswith(udigits[-8:]) or udigits.endswith(digits[-8:])):
+            return (user, m.client_id)
+    return (None, None)
 
 
 def _whatsapp_thread_display_name(thread: WhatsAppThread) -> str:
@@ -39922,6 +40081,7 @@ def _whatsapp_stats(session: Session, *, company_id: int) -> dict[str, int]:
 
 @app.on_event("startup")
 def _startup_delivery11_whatsapp() -> None:
+    ensure_user_columns()
     ensure_whatsapp_tables()
     ensure_whatsapp_columns()
     with Session(engine) as _s:
@@ -41673,16 +41833,25 @@ async def whatsapp_webhook_receive(request: Request, session: Session = Depends(
                 phone_digits=incoming_phone,
             )
             if not thread:
-                matched_client = _match_client_by_phone(
-                    session,
-                    company_id=company_id,
-                    phone_digits=incoming_phone,
+                # Try user-level match first, then fall back to client phone
+                _mu, _mu_client_id = _match_user_by_whatsapp_phone(
+                    session, company_id=company_id, phone_digits=incoming_phone
                 )
+                if _mu and _mu_client_id:
+                    _resolve_client_id   = _mu_client_id
+                    _resolve_contact_name = str(event.get("profile_name") or "") or _mu.name
+                    print(f"[whatsapp] Novo thread vinculado ao usuário {_mu.id} ({_mu.name}) → cliente {_mu_client_id}")
+                else:
+                    matched_client = _match_client_by_phone(
+                        session, company_id=company_id, phone_digits=incoming_phone
+                    )
+                    _resolve_client_id    = matched_client.id if matched_client else None
+                    _resolve_contact_name = str(event.get("profile_name") or "") or (matched_client.name if matched_client else "")
                 thread = _whatsapp_create_thread(
                     session,
                     company_id=company_id,
-                    client_id=matched_client.id if matched_client else None,
-                    contact_name=str(event.get("profile_name") or "") or (matched_client.name if matched_client else ""),
+                    client_id=_resolve_client_id,
+                    contact_name=_resolve_contact_name,
                     contact_phone=incoming_phone,
                     is_group=False,
                     group_name="",
@@ -41699,19 +41868,29 @@ async def whatsapp_webhook_receive(request: Request, session: Session = Depends(
             else:
                 # Thread existente sem cliente vinculado — tenta vincular agora
                 if not thread.client_id:
-                    matched_client = _match_client_by_phone(
-                        session,
-                        company_id=company_id,
-                        phone_digits=incoming_phone,
+                    _mu, _mu_client_id = _match_user_by_whatsapp_phone(
+                        session, company_id=company_id, phone_digits=incoming_phone
                     )
-                    if matched_client:
-                        thread.client_id = matched_client.id
+                    if _mu and _mu_client_id:
+                        thread.client_id = _mu_client_id
                         if not thread.contact_name:
-                            thread.contact_name = matched_client.name
+                            thread.contact_name = _mu.name
                         session.add(thread)
                         session.commit()
                         session.refresh(thread)
-                        print(f"[whatsapp] Thread {thread.id} vinculada ao cliente {matched_client.id} ({matched_client.name})")
+                        print(f"[whatsapp] Thread {thread.id} vinculada ao usuário {_mu.id} ({_mu.name}) → cliente {_mu_client_id}")
+                    else:
+                        matched_client = _match_client_by_phone(
+                            session, company_id=company_id, phone_digits=incoming_phone
+                        )
+                        if matched_client:
+                            thread.client_id = matched_client.id
+                            if not thread.contact_name:
+                                thread.contact_name = matched_client.name
+                            session.add(thread)
+                            session.commit()
+                            session.refresh(thread)
+                            print(f"[whatsapp] Thread {thread.id} vinculada ao cliente {matched_client.id} ({matched_client.name})")
 
         body = str(event.get("body") or "").strip()
         choice_topic = _whatsapp_menu_choice_to_topic(body)
