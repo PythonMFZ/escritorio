@@ -32101,16 +32101,17 @@ TEMPLATES["base.html"] = r"""
       .replace(/\s{2,}/g,' ').trim();
     var utterance = new SpeechSynthesisUtterance(clean);
     utterance.lang = 'pt-BR';
-    utterance.rate = 1.08;
-    utterance.pitch = 0.78;
+    utterance.rate = 1.06;
+    utterance.pitch = 0.5;
     var voices = window.speechSynthesis.getVoices();
-    var maleNames = ['google português','daniel','felipe','ricardo','antonio','carlos'];
+    // Male voice priority: macOS Eddy/Reed > any named male > Google pt-BR > any pt
+    var maleNames = ['eddy','reed','daniel','felipe','ricardo','antonio','carlos','oskar','luca'];
     var chosen = voices.find(function(v){
-      return v.lang === 'pt-BR' && v.name.toLowerCase().includes('google');
-    }) || voices.find(function(v){
       var n = v.name.toLowerCase();
       return (v.lang === 'pt-BR' || v.lang.startsWith('pt')) &&
              maleNames.some(function(m){ return n.includes(m); });
+    }) || voices.find(function(v){
+      return v.lang === 'pt-BR' && v.name.toLowerCase().includes('google');
     }) || voices.find(function(v){ return v.lang === 'pt-BR'; })
       || voices.find(function(v){ return v.lang.startsWith('pt'); });
     if(chosen) utterance.voice = chosen;
@@ -32119,8 +32120,11 @@ TEMPLATES["base.html"] = r"""
     window.speechSynthesis.speak(utterance);
   }
 
-  if(window.speechSynthesis && window.speechSynthesis.onvoiceschanged !== undefined){
-    window.speechSynthesis.onvoiceschanged = function(){};
+  // Load voices async (required on some browsers)
+  function pickAndSpeak(text, onDone){
+    var loaded = window.speechSynthesis.getVoices();
+    if(loaded.length){ speak(text, onDone); return; }
+    window.speechSynthesis.onvoiceschanged = function(){ speak(text, onDone); };
   }
 
   btn.addEventListener('click', startListening);
