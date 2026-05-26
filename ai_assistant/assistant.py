@@ -286,8 +286,8 @@ def ask(
 
     # ── Monta mensagem do usuário com contexto + anexos ───────────────────────
     user_content = []
+    inline_files = ""  # CSV/Excel como texto inline no bloco da pergunta
 
-    # Anexos (PDF, imagem, CSV)
     if attachments:
         for att in attachments:
             att_type = att.get("type", "")
@@ -314,19 +314,14 @@ def ask(
                     },
                 })
             elif att_type in ("csv", "xlsx"):
-                # Planilhas: envia como texto
-                user_content.append({
-                    "type": "text",
-                    "text": f"[Arquivo: {att_name}]\n{att_data}",
-                })
+                # Planilhas: incorpora no bloco de texto da pergunta, adjacente ao contexto
+                inline_files += f"\n\n=== ARQUIVO ENVIADO PELO CLIENTE: {att_name} ===\n{att_data}\n=== FIM DO ARQUIVO ==="
 
-    # Texto da pergunta com contexto
-    user_content.append({
-        "type": "text",
-        "text": f"{ctx}\n\n=== PERGUNTA ===\n{question}",
-    })
+    # Bloco principal: contexto + arquivos inline + pergunta
+    main_text = f"{ctx}{inline_files}\n\n=== PERGUNTA ===\n{question}"
+    user_content.append({"type": "text", "text": main_text})
 
-    # Se não há anexos, usa formato simples (retrocompatível)
+    # Se não há anexos binários (PDF/imagem), usa formato simples (retrocompatível)
     if len(user_content) == 1:
         messages.append({"role": "user", "content": user_content[0]["text"]})
     else:

@@ -212,7 +212,7 @@ async def augur_ask_v4(request: _Req_av4, session=_Dep_av4(get_session)):
             {
                 "nome":      d.nome,
                 "descricao": d.descricao,
-                "conteudo":  d.conteudo_texto[:8000],
+                "conteudo":  d.conteudo_texto[:15000],
                 "data":      d.created_at[:10] if d.created_at else "",
             }
             for d in docs_base
@@ -235,17 +235,26 @@ async def augur_ask_v4(request: _Req_av4, session=_Dep_av4(get_session)):
 
     # Processa anexos
     attachments = []
-    for att in (body.get("attachments") or []):
+    raw_attachments = body.get("attachments") or []
+    print(f"[augur_ask] anexos recebidos: {len(raw_attachments)}")
+    for att in raw_attachments:
         if not att.get("data"):
+            print(f"[augur_ask] anexo sem data ignorado: type={att.get('type')}")
             continue
         att_type = (att.get("type") or "").lower()
+        att_name = att.get("name", "?")
+        data_len = len(str(att.get("data", "")))
         if att_type == "excel-texto":
-            # Re-wrap as xlsx so augur_ask_fn presents it as a proper file block
             attachments.append({"type": "xlsx", "data": att["data"], "name": att.get("name", "planilha.xlsx")})
+            print(f"[augur_ask] excel-texto → xlsx: {att_name} ({data_len} chars)")
         elif att_type == "csv":
             attachments.append({"type": "csv", "data": att["data"], "name": att.get("name", "dados.csv")})
+            print(f"[augur_ask] csv: {att_name} ({data_len} chars)")
         else:
             attachments.append(att)
+            print(f"[augur_ask] anexo tipo={att_type}: {att_name} ({data_len} chars)")
+    if attachments:
+        print(f"[augur_ask] {len(attachments)} anexo(s) enviado(s) ao Augur")
 
     # Salva pergunta
     msg_user = AugurMensagem(
@@ -851,7 +860,7 @@ try:
                 ctx_str += f"\n\n--- {doc['nome']} ({doc.get('data','')}) ---"
                 if doc.get('descricao'):
                     ctx_str += f"\nDescrição: {doc['descricao']}"
-                ctx_str += f"\n{doc['conteudo'][:1500]}"
+                ctx_str += f"\n{doc['conteudo'][:6000]}"
         return ctx_str
 
     _augur_ast_v4._format_client_context = _format_client_context_v4
