@@ -117,18 +117,56 @@ def _wd_parse_brl(text: str) -> _Opt_wd[float]:
     """Parse a BRL amount from user reply. Returns None if unparseable."""
     t = text.strip().lower()
     t = t.replace("r$", "").replace("reais", "").strip()
+
     # handle negatives
     neg = t.startswith("-")
     t = t.lstrip("-").strip()
-    # remove thousand separators and normalize decimal
-    t = _re_wd.sub(r"[^\d,\.]", "", t)
+
+    # multipliers: "mil", "k", "milhão", "mi", "bilhão"
+    multiplier = 1.0
+    for word, mult in [
+        ("bilhão", 1_000_000_000), ("bilhoes", 1_000_000_000), ("bilhao", 1_000_000_000),
+        ("milhão", 1_000_000), ("milhoes", 1_000_000), ("milhao", 1_000_000),
+        ("mil", 1_000), ("k", 1_000),
+        ("mi", 1_000_000),  # after "mil" to avoid "mil" → "mi" match
+    ]:
+        if word in t:
+            multiplier = mult
+            t = t.replace(word, "").strip()
+            break
+
+    # strip any remaining non-numeric chars except , and .
+    t = _re_wd.sub(r"[^\d,\.]", "", t).strip()
+
+    if not t:
+        return None
+
     if "," in t and "." in t:
-        # 1.234,56 format
-        t = t.replace(".", "").replace(",", ".")
+        # both separators present
+        # determine which is decimal: last one wins
+        if t.rindex(",") > t.rindex("."):
+            # Brazilian: 1.234,56
+            t = t.replace(".", "").replace(",", ".")
+        else:
+            # US: 1,234.56
+            t = t.replace(",", "")
     elif "," in t:
-        t = t.replace(",", ".")
+        parts = t.split(",")
+        if len(parts) == 2 and len(parts[1]) == 3:
+            # "27,000" → thousands separator
+            t = t.replace(",", "")
+        else:
+            # "27,50" → decimal comma
+            t = t.replace(",", ".")
+    elif "." in t:
+        parts = t.split(".")
+        if len(parts) == 2 and len(parts[1]) == 3:
+            # "27.000" → thousands separator, NOT decimal
+            t = t.replace(".", "")
+        # else "27.5" → keep as decimal point
+
     try:
-        val = float(t)
+        val = float(t) * multiplier
         return -val if neg else val
     except ValueError:
         return None
