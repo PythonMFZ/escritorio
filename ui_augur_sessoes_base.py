@@ -471,8 +471,45 @@ async def base_conhecimento_upload(
 # ── File upload with server-side extraction ───────────────────────────────────
 
 def _bc_extract_excel(file_bytes: bytes, fname: str = "") -> str:
-    """Extract text from Excel — tries openpyxl (xlsx) then xlrd (xls)."""
+    """Extract text from Excel — tries openpyxl (xlsx) then xlrd (xls).
+    Skips auxiliary calc sheets; formats dates and numbers for readability.
+    """
     import io
+    from datetime import datetime as _dt_xl, date as _date_xl
+
+    # Sheets whose names start with these prefixes are auxiliary — skip them
+    _SKIP_PREFIXES = ("cálculo", "calculo", "calc", "sheet", "plan")
+
+    def _fmt_cell(v):
+        if v is None:
+            return ""
+        if isinstance(v, (_dt_xl, _date_xl)):
+            try:
+                return v.strftime("%d/%m/%Y")
+            except Exception:
+                return str(v)[:10]
+        if isinstance(v, float):
+            if v != v:  # NaN
+                return ""
+            if abs(v) >= 1:
+                return f"{v:,.2f}"
+            if abs(v) < 0.0001:
+                return ""
+            return f"{v:.4f}"
+        return str(v)
+
+    def _should_skip(title: str) -> bool:
+        t = title.lower().strip()
+        return any(t.startswith(p) for p in _SKIP_PREFIXES)
+
+    def _row_text(row_vals) -> str:
+        cells = [_fmt_cell(c) for c in row_vals]
+        # Skip rows that are entirely empty or all zeros
+        meaningful = [c for c in cells if c and c not in ("0", "0.00", "0,00")]
+        if not meaningful:
+            return ""
+        return "\t".join(cells).rstrip("\t")
+
     lines = []
 
     # .xlsx via openpyxl
@@ -481,11 +518,16 @@ def _bc_extract_excel(file_bytes: bytes, fname: str = "") -> str:
             import openpyxl
             wb = openpyxl.load_workbook(io.BytesIO(file_bytes), read_only=True, data_only=True)
             for ws in wb.worksheets:
-                lines.append(f"[Aba: {ws.title}]")
+                if _should_skip(ws.title):
+                    continue
+                sheet_lines = [f"[Aba: {ws.title}]"]
                 for row in ws.iter_rows(values_only=True):
-                    cells = [str(c) if c is not None else "" for c in row]
-                    if any(c.strip() for c in cells):
-                        lines.append("\t".join(cells))
+                    txt = _row_text(row)
+                    if txt:
+                        sheet_lines.append(txt)
+                if len(sheet_lines) > 1:
+                    lines.extend(sheet_lines)
+            wb.close()
             if lines:
                 return "\n".join(lines)[:200_000]
         except Exception as _e:
@@ -496,11 +538,17 @@ def _bc_extract_excel(file_bytes: bytes, fname: str = "") -> str:
         import xlrd
         wb = xlrd.open_workbook(file_contents=file_bytes)
         for ws in wb.sheets():
-            lines.append(f"[Aba: {ws.name}]")
+            if _should_skip(ws.name):
+                continue
+            sheet_lines = [f"[Aba: {ws.name}]"]
             for row_idx in range(ws.nrows):
                 cells = [str(ws.cell_value(row_idx, c)) for c in range(ws.ncols)]
-                if any(c.strip() for c in cells):
-                    lines.append("\t".join(cells))
+                txt = "\t".join(cells).rstrip()
+                meaningful = [c for c in cells if c.strip() and c.strip() not in ("0", "0.0")]
+                if meaningful:
+                    sheet_lines.append(txt)
+            if len(sheet_lines) > 1:
+                lines.extend(sheet_lines)
         return "\n".join(lines)[:200_000]
     except Exception as _e:
         print(f"[bc_upload] xlrd erro: {_e}")
