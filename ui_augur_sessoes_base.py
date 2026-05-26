@@ -235,9 +235,19 @@ async def augur_ask_v4(request: _Req_av4, session=_Dep_av4(get_session)):
 
     # Processa anexos
     attachments = []
+    text_attachment_ctx = ""
     for att in (body.get("attachments") or []):
-        if att.get("data"):
+        if not att.get("data"):
+            continue
+        att_type = (att.get("type") or "").lower()
+        if att_type in ("csv", "excel-texto", "texto", "txt"):
+            # Text attachment — inject into question context directly
+            aname = att.get("name", "arquivo")
+            text_attachment_ctx += f"\n\n[Conteúdo do arquivo: {aname}]\n{att['data'][:40000]}"
+        else:
             attachments.append(att)
+    if text_attachment_ctx:
+        question = question + text_attachment_ctx
 
     # Salva pergunta
     msg_user = AugurMensagem(
@@ -734,6 +744,52 @@ async def base_conhecimento_upload_file(
     return _JSON_av4({"ok": True, "id": doc.id, "nome": doc.nome, "tipo": tipo, "chars": len(conteudo)})
 
 
+@app.post("/api/augur/extract-file")
+@require_login
+async def augur_extract_file_endpoint(
+    request: _Req_av4,
+    session=_Dep_av4(get_session),
+    arquivo: _Upload_av4 = _File_av4(...),
+):
+    """Extract text from uploaded file for use as chat attachment."""
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        return _JSON_av4({"ok": False, "erro": "Não autenticado."}, status_code=401)
+
+    file_bytes = await arquivo.read()
+    if not file_bytes:
+        return _JSON_av4({"ok": False, "erro": "Arquivo vazio."})
+
+    fname = (arquivo.filename or "").lower()
+    mime  = (arquivo.content_type or "").lower()
+
+    if fname.endswith((".xlsx", ".xls")) or "spreadsheet" in mime or "excel" in mime:
+        content = _bc_extract_excel(file_bytes, fname)
+    elif fname.endswith(".pdf") or mime == "application/pdf":
+        content = _bc_extract_pdf_local(file_bytes)
+        if not content:
+            content = _bc_extract_claude(file_bytes, "application/pdf")
+    elif fname.endswith(".csv") or "csv" in mime:
+        content = file_bytes.decode("utf-8", errors="replace")
+    elif fname.endswith((".doc", ".docx")) or "wordprocessing" in mime or "msword" in mime:
+        try:
+            import docx as _docx_aef, io as _io_aef
+            _doc_aef = _docx_aef.Document(_io_aef.BytesIO(file_bytes))
+            content = "\n".join(p.text for p in _doc_aef.paragraphs if p.text.strip())
+        except Exception:
+            content = ""
+    else:
+        try:
+            content = file_bytes.decode("utf-8", errors="replace")
+        except Exception:
+            content = ""
+
+    if not content:
+        return _JSON_av4({"ok": False, "erro": "Não foi possível extrair o conteúdo do arquivo."})
+
+    return _JSON_av4({"ok": True, "content": content[:50000], "chars": len(content)})
+
+
 @app.get("/api/base-conhecimento")
 @require_login
 async def base_conhecimento_listar(request: _Req_av4, session=_Dep_av4(get_session)):
@@ -1102,11 +1158,34 @@ _AUGUR_WIDGET_V4 = r"""
     let tipo = '';
     if (ext==='pdf') tipo='pdf';
     else if (['png','jpg','jpeg','gif','webp'].includes(ext)) tipo='image/'+(ext==='jpg'?'jpeg':ext);
-    else if (['csv','xlsx','xls'].includes(ext)) {
+    else if (ext==='csv') {
       const txt = await file.text();
       _augurAnexo = {type:'csv', data:txt.slice(0,50000), name:file.name};
       document.getElementById('augurAnexoNome').textContent = '📎 '+file.name;
       document.getElementById('augurAnexoPreview').style.display='block';
+      return;
+    } else if (['xlsx','xls'].includes(ext)) {
+      // Excel is binary — send to server for proper text extraction
+      const previewEl = document.getElementById('augurAnexoPreview');
+      const nomeEl = document.getElementById('augurAnexoNome');
+      nomeEl.textContent = '⏳ Extraindo dados do arquivo…';
+      previewEl.style.display = 'block';
+      try {
+        const fd = new FormData(); fd.append('arquivo', file);
+        const r = await fetch('/api/augur/extract-file', {method:'POST', body:fd});
+        const d = await r.json();
+        if (d.ok && d.content) {
+          _augurAnexo = {type:'excel-texto', data:d.content, name:file.name};
+          nomeEl.textContent = '📎 '+file.name+' ('+d.chars+' chars)';
+        } else {
+          nomeEl.textContent = '❌ '+(d.erro||'Não foi possível extrair o arquivo');
+          setTimeout(() => { previewEl.style.display='none'; }, 3000);
+        }
+      } catch(e) {
+        nomeEl.textContent = '❌ Erro ao processar arquivo';
+        setTimeout(() => { previewEl.style.display='none'; }, 3000);
+      }
+      input.value='';
       return;
     } else { alert('Tipo não suportado.'); return; }
     const reader = new FileReader();

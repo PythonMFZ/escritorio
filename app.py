@@ -48338,7 +48338,7 @@ exec(open('ui_fix_augur_msg_fields.py').read())
 exec(open('ui_fix_augur_sessoes_js.py').read())
 exec(open('ui_cadastro_convite.py').read())
 exec(open('ui_fix_augur_ctx_texto.py').read())
-exec(open('ui_fix_base_excel.py').read())
+# ui_fix_base_excel.py removed — superseded by /api/base-conhecimento/upload-file with server-side extraction
 exec(open('ui_fixes_batch3.py').read())
 exec(open('ui_fixes_batch4.py').read())
 exec(open('ui_fixes_batch5.py').read())
