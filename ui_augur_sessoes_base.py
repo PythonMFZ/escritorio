@@ -574,20 +574,36 @@ def _bc_extract_claude(file_bytes: bytes, mime_type: str) -> str:
             {"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": b64}},
             {"type": "text", "text": prompt},
         ]
+        headers = {
+            "x-api-key": key,
+            "anthropic-version": "2023-06-01",
+            "anthropic-beta": "pdfs-2024-09-25",
+            "content-type": "application/json",
+        }
     else:
         content = [
             {"type": "image", "source": {"type": "base64", "media_type": mime_type, "data": b64}},
             {"type": "text", "text": prompt},
         ]
+        headers = {
+            "x-api-key": key,
+            "anthropic-version": "2023-06-01",
+            "content-type": "application/json",
+        }
     try:
         import httpx as _hx
         r = _hx.post(
             "https://api.anthropic.com/v1/messages",
-            headers={"x-api-key": key, "anthropic-version": "2023-06-01", "content-type": "application/json"},
-            json={"model": "claude-haiku-4-5-20251001", "max_tokens": 2048, "messages": [{"role": "user", "content": content}]},
-            timeout=60,
+            headers=headers,
+            json={"model": "claude-haiku-4-5-20251001", "max_tokens": 4096, "messages": [{"role": "user", "content": content}]},
+            timeout=90,
         )
-        return r.json()["content"][0]["text"].strip()
+        data = r.json()
+        if "content" in data and data["content"]:
+            return data["content"][0]["text"].strip()
+        err = data.get("error", {}).get("message", str(data))
+        print(f"[bc_upload] claude API erro: {err}")
+        return ""
     except Exception as _e:
         print(f"[bc_upload] claude erro: {_e}")
         return ""
