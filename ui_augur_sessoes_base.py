@@ -512,8 +512,8 @@ def _bc_extract_excel(file_bytes: bytes, fname: str = "") -> str:
 
     lines = []
 
-    # .xlsx via openpyxl
-    if not fname.endswith(".xls") or fname.endswith(".xlsx"):
+    # .xlsx via openpyxl — try for any non-.xls file (xlsx, no-ext, unknown)
+    if not fname.endswith(".xls") or fname.endswith(".xlsx") or not fname:
         try:
             import openpyxl
             wb = openpyxl.load_workbook(io.BytesIO(file_bytes), read_only=True, data_only=True)
