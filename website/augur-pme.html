@@ -1,0 +1,878 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Augur — O conselheiro financeiro do dono de empresa</title>
+  <meta name="description" content="Augur analisa sua empresa, identifica onde o dinheiro está sendo perdido e te diz o que fazer — disponível 24h pelo WhatsApp. Diagnóstico gratuito.">
+  <meta property="og:title" content="Augur — O conselheiro financeiro do dono de empresa">
+  <meta property="og:description" content="Diagnóstico financeiro gratuito via WhatsApp. Saiba exatamente onde sua empresa está perdendo dinheiro.">
+  <meta property="og:type" content="website">
+  <link rel="canonical" href="https://augur.maffezzollicapital.com.br">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Syne:wght@700;800&family=Poppins:wght@300;400;500;600&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+    /* ── Reset & Vars ─────────────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html { scroll-behavior: smooth; }
+    :root {
+      --bg:       #0A0A0A;
+      --bg2:      #111111;
+      --bg3:      #161616;
+      --orange:   #E07020;
+      --orange2:  #F08030;
+      --cream:    #FAF7F2;
+      --gray:     #8B8B8B;
+      --gray2:    #555;
+      --green:    #22C55E;
+      --border:   rgba(224,112,32,0.18);
+      --ff-brand: 'Syne', sans-serif;
+      --ff-body:  'Poppins', sans-serif;
+      --ff-mono:  'DM Mono', monospace;
+    }
+    body {
+      background: var(--bg);
+      color: var(--cream);
+      font-family: var(--ff-body);
+      font-weight: 300;
+      line-height: 1.7;
+      overflow-x: hidden;
+    }
+    a { color: inherit; text-decoration: none; }
+    img { max-width: 100%; display: block; }
+
+    /* ── Grid bg ──────────────────────────────────────────────── */
+    .grid-bg { position: relative; }
+    .grid-bg::before {
+      content: '';
+      position: absolute; inset: 0;
+      background-image:
+        linear-gradient(rgba(224,112,32,0.04) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(224,112,32,0.04) 1px, transparent 1px);
+      background-size: 72px 72px;
+      pointer-events: none; z-index: 0;
+    }
+    .grid-bg > * { position: relative; z-index: 1; }
+
+    /* ── Container ────────────────────────────────────────────── */
+    .container { max-width: 1080px; margin: 0 auto; padding: 0 24px; }
+
+    /* ── Nav ──────────────────────────────────────────────────── */
+    nav {
+      position: fixed; top: 0; left: 0; right: 0; z-index: 100;
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 0 32px; height: 64px;
+      background: rgba(10,10,10,0.92);
+      backdrop-filter: blur(12px);
+      border-bottom: 1px solid var(--border);
+    }
+    .nav-brand {
+      font-family: var(--ff-brand);
+      font-size: 1.1rem; font-weight: 800;
+      letter-spacing: .04em;
+    }
+    .nav-brand span { color: var(--orange); }
+    .nav-cta {
+      background: var(--orange); color: #fff;
+      padding: .45rem 1.1rem; border-radius: 6px;
+      font-size: .78rem; font-weight: 500;
+      letter-spacing: .04em;
+      display: flex; align-items: center; gap: 6px;
+      transition: background .2s;
+    }
+    .nav-cta:hover { background: var(--orange2); }
+    .nav-links-desktop { display: flex; gap: 28px; align-items: center; }
+    .nav-links-desktop a {
+      font-size: .78rem; letter-spacing: .06em; text-transform: uppercase;
+      font-family: var(--ff-mono); color: var(--gray);
+      transition: color .2s;
+    }
+    .nav-links-desktop a:hover { color: var(--cream); }
+    @media (max-width: 640px) {
+      .nav-links-desktop { display: none; }
+      nav { padding: 0 20px; }
+    }
+
+    /* ── Hero ─────────────────────────────────────────────────── */
+    .hero {
+      padding: 140px 0 100px;
+      position: relative; overflow: hidden;
+    }
+    .hero-eyebrow {
+      font-family: var(--ff-mono); font-size: .7rem;
+      letter-spacing: .15em; text-transform: uppercase;
+      color: var(--orange); margin-bottom: 20px;
+      display: flex; align-items: center; gap: 10px;
+    }
+    .hero-eyebrow::before {
+      content: ''; display: block;
+      width: 28px; height: 1px; background: var(--orange);
+    }
+    .hero-headline {
+      font-family: var(--ff-brand);
+      font-size: clamp(2.4rem, 5.5vw, 4.2rem);
+      font-weight: 800; line-height: 1.1;
+      letter-spacing: -.02em;
+      margin-bottom: 28px;
+    }
+    .hero-headline em {
+      color: var(--orange); font-style: normal;
+    }
+    .hero-sub {
+      font-size: clamp(.95rem, 1.5vw, 1.15rem);
+      color: var(--gray); max-width: 600px;
+      margin-bottom: 44px; line-height: 1.75;
+    }
+    .hero-ctas { display: flex; gap: 14px; flex-wrap: wrap; }
+    .btn-primary {
+      background: var(--orange); color: #fff;
+      padding: .85rem 1.8rem; border-radius: 8px;
+      font-weight: 500; font-size: .95rem;
+      display: inline-flex; align-items: center; gap: 8px;
+      transition: background .2s, transform .15s;
+    }
+    .btn-primary:hover { background: var(--orange2); transform: translateY(-1px); }
+    .btn-secondary {
+      border: 1px solid var(--border);
+      color: var(--cream); background: transparent;
+      padding: .85rem 1.8rem; border-radius: 8px;
+      font-weight: 400; font-size: .95rem;
+      display: inline-flex; align-items: center; gap: 8px;
+      transition: border-color .2s, background .2s;
+    }
+    .btn-secondary:hover { border-color: var(--orange); background: rgba(224,112,32,0.06); }
+    .hero-trust {
+      margin-top: 48px;
+      display: flex; align-items: center; gap: 14px;
+      font-size: .72rem; font-family: var(--ff-mono);
+      letter-spacing: .08em; color: var(--gray2);
+      text-transform: uppercase;
+    }
+    .hero-trust::before {
+      content: ''; display: block;
+      width: 1px; height: 32px; background: var(--border);
+    }
+    .hero-trust strong { color: var(--gray); }
+    /* Floating score pill */
+    .hero-score {
+      position: absolute; right: 8%; top: 30%;
+      background: var(--bg3); border: 1px solid var(--border);
+      border-radius: 14px; padding: 20px 24px;
+      min-width: 200px; text-align: center;
+    }
+    .hero-score-num {
+      font-family: var(--ff-brand); font-size: 2.8rem;
+      font-weight: 800; color: var(--orange); line-height: 1;
+    }
+    .hero-score-label {
+      font-size: .65rem; font-family: var(--ff-mono);
+      letter-spacing: .1em; text-transform: uppercase;
+      color: var(--gray); margin-top: 6px;
+    }
+    .hero-score-bar {
+      margin-top: 14px; height: 4px; background: var(--bg2);
+      border-radius: 2px; overflow: hidden;
+    }
+    .hero-score-fill {
+      height: 100%; width: 62%; background: var(--orange);
+      border-radius: 2px;
+    }
+    .hero-score-detail {
+      margin-top: 12px; font-size: .7rem; color: var(--gray2);
+      text-align: left;
+    }
+    .hero-score-detail div { margin-top: 5px; }
+    .hero-score-detail span { color: var(--gray); }
+    @media (max-width: 900px) { .hero-score { display: none; } }
+
+    /* ── Dores ────────────────────────────────────────────────── */
+    .dores { padding: 80px 0; background: var(--bg2); }
+    .dores-grid {
+      display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      gap: 1px; background: var(--border); border: 1px solid var(--border);
+      border-radius: 12px; overflow: hidden; margin-top: 48px;
+    }
+    .dor-item {
+      background: var(--bg2); padding: 28px 24px;
+      display: flex; gap: 14px; align-items: flex-start;
+    }
+    .dor-icon { font-size: 1.3rem; flex-shrink: 0; margin-top: 2px; }
+    .dor-text { font-size: .88rem; color: var(--gray); line-height: 1.6; }
+    .dor-text strong { color: var(--cream); display: block; margin-bottom: 4px; font-weight: 500; }
+
+    /* ── Section headers ──────────────────────────────────────── */
+    .section { padding: 96px 0; }
+    .eyebrow {
+      font-family: var(--ff-mono); font-size: .68rem;
+      letter-spacing: .15em; text-transform: uppercase;
+      color: var(--orange); margin-bottom: 16px;
+      display: flex; align-items: center; gap: 10px;
+    }
+    .eyebrow::before {
+      content: ''; width: 24px; height: 1px; background: var(--orange);
+    }
+    .section-title {
+      font-family: var(--ff-brand);
+      font-size: clamp(1.8rem, 3.5vw, 2.8rem);
+      font-weight: 800; line-height: 1.15;
+      letter-spacing: -.02em; margin-bottom: 16px;
+    }
+    .section-title em { color: var(--orange); font-style: normal; }
+    .section-sub {
+      font-size: 1rem; color: var(--gray);
+      max-width: 540px; line-height: 1.75;
+    }
+    .gold-divider {
+      width: 40px; height: 2px; background: var(--orange);
+      margin: 28px 0;
+    }
+
+    /* ── Como funciona ────────────────────────────────────────── */
+    .steps { display: flex; flex-direction: column; gap: 0; margin-top: 56px; }
+    .step {
+      display: grid; grid-template-columns: 64px 1fr;
+      gap: 0 28px; position: relative; padding-bottom: 48px;
+    }
+    .step:last-child { padding-bottom: 0; }
+    .step-num-col { display: flex; flex-direction: column; align-items: center; }
+    .step-num {
+      width: 48px; height: 48px; border-radius: 50%;
+      border: 1px solid var(--orange);
+      display: flex; align-items: center; justify-content: center;
+      font-family: var(--ff-mono); font-size: .75rem;
+      color: var(--orange); flex-shrink: 0;
+    }
+    .step-line {
+      flex: 1; width: 1px; background: var(--border);
+      margin-top: 8px;
+    }
+    .step:last-child .step-line { display: none; }
+    .step-body { padding-top: 10px; }
+    .step-title {
+      font-family: var(--ff-brand); font-size: 1.2rem;
+      font-weight: 700; margin-bottom: 10px;
+    }
+    .step-text { font-size: .88rem; color: var(--gray); line-height: 1.7; max-width: 520px; }
+    .step-tag {
+      display: inline-block; margin-top: 12px;
+      font-family: var(--ff-mono); font-size: .62rem;
+      letter-spacing: .1em; text-transform: uppercase;
+      color: var(--orange); border: 1px solid var(--border);
+      padding: 3px 10px; border-radius: 4px;
+    }
+
+    /* ── O que o Augur entrega ────────────────────────────────── */
+    .entregas-grid {
+      display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+      gap: 24px; margin-top: 56px;
+    }
+    .entrega-card {
+      background: var(--bg3); border: 1px solid var(--border);
+      border-radius: 12px; padding: 28px 24px;
+      transition: border-color .25s;
+    }
+    .entrega-card:hover { border-color: rgba(224,112,32,0.45); }
+    .entrega-icon {
+      width: 40px; height: 40px; border-radius: 10px;
+      background: rgba(224,112,32,0.1);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 1.1rem; margin-bottom: 16px;
+    }
+    .entrega-title {
+      font-family: var(--ff-brand); font-size: 1rem;
+      font-weight: 700; margin-bottom: 10px;
+    }
+    .entrega-text { font-size: .83rem; color: var(--gray); line-height: 1.65; }
+
+    /* ── Números ──────────────────────────────────────────────── */
+    .numeros { background: var(--bg2); padding: 80px 0; }
+    .numeros-grid {
+      display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 1px; background: var(--border); border: 1px solid var(--border);
+      border-radius: 12px; overflow: hidden; margin-top: 48px;
+    }
+    .numero-item { background: var(--bg2); padding: 32px 28px; }
+    .numero-num {
+      font-family: var(--ff-brand); font-size: 2.2rem;
+      font-weight: 800; color: var(--orange); line-height: 1;
+      margin-bottom: 8px;
+    }
+    .numero-label { font-size: .78rem; color: var(--gray); line-height: 1.5; }
+
+    /* ── Planos ───────────────────────────────────────────────── */
+    .planos-grid {
+      display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+      gap: 24px; margin-top: 56px; align-items: start;
+    }
+    .plano-card {
+      background: var(--bg3); border: 1px solid var(--border);
+      border-radius: 14px; padding: 36px 28px;
+      position: relative;
+    }
+    .plano-card.destaque {
+      border-color: var(--orange);
+      background: linear-gradient(160deg, #1a1108 0%, var(--bg3) 60%);
+    }
+    .plano-tag {
+      position: absolute; top: -12px; left: 24px;
+      background: var(--orange); color: #fff;
+      font-size: .62rem; font-family: var(--ff-mono);
+      letter-spacing: .1em; text-transform: uppercase;
+      padding: 3px 12px; border-radius: 20px;
+    }
+    .plano-nome {
+      font-family: var(--ff-brand); font-size: 1.1rem;
+      font-weight: 700; margin-bottom: 8px;
+    }
+    .plano-desc { font-size: .83rem; color: var(--gray); margin-bottom: 24px; line-height: 1.6; }
+    .plano-preco {
+      font-family: var(--ff-brand); font-size: 2.4rem;
+      font-weight: 800; line-height: 1; margin-bottom: 4px;
+    }
+    .plano-preco sup { font-size: 1rem; margin-right: 2px; }
+    .plano-periodo { font-size: .72rem; color: var(--gray); font-family: var(--ff-mono); margin-bottom: 28px; }
+    .plano-items { list-style: none; margin-bottom: 32px; }
+    .plano-items li {
+      font-size: .83rem; color: var(--gray); padding: 7px 0;
+      border-bottom: 1px solid rgba(255,255,255,0.04);
+      display: flex; gap: 10px; align-items: flex-start;
+    }
+    .plano-items li::before {
+      content: '→'; color: var(--orange); flex-shrink: 0;
+      margin-top: 1px;
+    }
+    .plano-cta {
+      display: block; text-align: center;
+      padding: .8rem; border-radius: 8px;
+      font-size: .88rem; font-weight: 500;
+      transition: all .2s;
+    }
+    .plano-cta-primary {
+      background: var(--orange); color: #fff;
+    }
+    .plano-cta-primary:hover { background: var(--orange2); }
+    .plano-cta-secondary {
+      border: 1px solid var(--border); color: var(--cream);
+    }
+    .plano-cta-secondary:hover { border-color: var(--orange); background: rgba(224,112,32,0.06); }
+
+    /* ── Diagnóstico gratuito CTA ─────────────────────────────── */
+    .diagnostico-cta {
+      background: linear-gradient(135deg, #120d04 0%, #0a0a0a 50%);
+      border: 1px solid var(--border); border-radius: 16px;
+      padding: 64px 48px; text-align: center; margin-top: 80px;
+      position: relative; overflow: hidden;
+    }
+    .diagnostico-cta::before {
+      content: '';
+      position: absolute; top: -60px; left: 50%; transform: translateX(-50%);
+      width: 300px; height: 300px;
+      background: radial-gradient(circle, rgba(224,112,32,0.12) 0%, transparent 70%);
+      pointer-events: none;
+    }
+    .diagnostico-cta h2 {
+      font-family: var(--ff-brand); font-size: clamp(1.8rem, 3.5vw, 2.6rem);
+      font-weight: 800; line-height: 1.15; margin-bottom: 16px;
+    }
+    .diagnostico-cta p { font-size: 1rem; color: var(--gray); max-width: 480px; margin: 0 auto 32px; }
+    .diagnostico-steps {
+      display: flex; justify-content: center; gap: 48px;
+      margin: 36px 0 40px; flex-wrap: wrap;
+    }
+    .diag-step { text-align: center; }
+    .diag-step-num {
+      width: 36px; height: 36px; border-radius: 50%;
+      background: rgba(224,112,32,0.15); border: 1px solid var(--orange);
+      display: flex; align-items: center; justify-content: center;
+      font-family: var(--ff-mono); font-size: .75rem; color: var(--orange);
+      margin: 0 auto 10px;
+    }
+    .diag-step-label { font-size: .78rem; color: var(--gray); max-width: 110px; line-height: 1.4; }
+
+    /* ── FAQ ──────────────────────────────────────────────────── */
+    .faq { padding: 80px 0; }
+    .faq-list { max-width: 700px; margin: 48px 0 0; }
+    .faq-item {
+      border-bottom: 1px solid var(--border);
+      padding: 20px 0;
+    }
+    .faq-q {
+      font-weight: 500; font-size: .95rem; cursor: pointer;
+      display: flex; justify-content: space-between; align-items: center;
+      user-select: none;
+    }
+    .faq-q::after { content: '+'; color: var(--orange); font-size: 1.2rem; }
+    .faq-q.open::after { content: '−'; }
+    .faq-a {
+      font-size: .85rem; color: var(--gray); line-height: 1.7;
+      max-height: 0; overflow: hidden; transition: max-height .3s ease, padding .3s;
+    }
+    .faq-a.open { max-height: 200px; padding-top: 12px; }
+
+    /* ── Footer ───────────────────────────────────────────────── */
+    footer {
+      background: var(--bg2); border-top: 1px solid var(--border);
+      padding: 48px 0 32px;
+    }
+    .footer-inner {
+      display: flex; justify-content: space-between; align-items: flex-start;
+      gap: 32px; flex-wrap: wrap;
+    }
+    .footer-brand {
+      font-family: var(--ff-brand); font-size: .95rem;
+      font-weight: 800; letter-spacing: .04em; margin-bottom: 8px;
+    }
+    .footer-brand span { color: var(--orange); }
+    .footer-powered {
+      font-size: .68rem; font-family: var(--ff-mono);
+      letter-spacing: .1em; text-transform: uppercase;
+      color: var(--gray2); margin-top: 4px;
+    }
+    .footer-powered a { color: var(--gray); transition: color .2s; }
+    .footer-powered a:hover { color: var(--orange); }
+    .footer-links { display: flex; gap: 24px; flex-wrap: wrap; margin-top: 8px; }
+    .footer-links a {
+      font-size: .68rem; font-family: var(--ff-mono);
+      letter-spacing: .1em; text-transform: uppercase;
+      color: var(--gray2); transition: color .2s;
+    }
+    .footer-links a:hover { color: var(--cream); }
+    .footer-legal {
+      margin-top: 32px; padding-top: 24px; border-top: 1px solid var(--border);
+      font-size: .65rem; color: var(--gray2); font-family: var(--ff-mono);
+      letter-spacing: .06em;
+    }
+
+    /* ── Animate ──────────────────────────────────────────────── */
+    .fade-up { opacity: 0; transform: translateY(24px); transition: opacity .6s ease, transform .6s ease; }
+    .fade-up.visible { opacity: 1; transform: translateY(0); }
+    .d1 { transition-delay: .1s; }
+    .d2 { transition-delay: .2s; }
+    .d3 { transition-delay: .3s; }
+    .d4 { transition-delay: .4s; }
+
+    /* ── WA float ─────────────────────────────────────────────── */
+    .wa-float {
+      position: fixed; bottom: 28px; right: 28px; z-index: 200;
+      background: #25D366; color: #fff;
+      width: 54px; height: 54px; border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      box-shadow: 0 4px 20px rgba(37,211,102,.35);
+      transition: transform .2s;
+    }
+    .wa-float:hover { transform: scale(1.1); }
+
+    @media (max-width: 640px) {
+      .hero { padding: 120px 0 72px; }
+      .diagnostico-cta { padding: 40px 24px; }
+      .diagnostico-steps { gap: 28px; }
+      .plano-card { padding: 28px 20px; }
+    }
+  </style>
+</head>
+<body>
+
+<!-- ── NAV ──────────────────────────────────────────────────────── -->
+<nav>
+  <div class="nav-brand">AUGUR<span>.</span></div>
+  <div class="nav-links-desktop">
+    <a href="#como-funciona">Como funciona</a>
+    <a href="#planos">Planos</a>
+    <a href="https://maffezzollicapital.com.br" target="_blank" rel="noopener">Maffezzolli Capital</a>
+  </div>
+  <a href="https://wa.me/5547991359091?text=Quero%20fazer%20o%20diagn%C3%B3stico%20gratuito%20da%20minha%20empresa" target="_blank" rel="noopener" class="nav-cta">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z"/></svg>
+    Diagnóstico Gratuito
+  </a>
+</nav>
+
+<!-- ── HERO ─────────────────────────────────────────────────────── -->
+<section class="hero grid-bg">
+  <div class="container">
+    <div class="hero-eyebrow fade-up">Consultoria financeira inteligente · PME</div>
+    <h1 class="hero-headline fade-up d1">
+      Seu dinheiro está<br>
+      sumindo. <em>Vamos<br>descobrir por quê.</em>
+    </h1>
+    <p class="hero-sub fade-up d2">
+      O Augur analisa a saúde financeira da sua empresa, identifica os pontos de sangramento e te diz exatamente o que fazer — antes que vire crise.
+    </p>
+    <div class="hero-ctas fade-up d3">
+      <a href="https://wa.me/5547991359091?text=Quero%20fazer%20o%20diagn%C3%B3stico%20gratuito%20da%20minha%20empresa" target="_blank" rel="noopener" class="btn-primary">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z"/></svg>
+        Diagnóstico gratuito agora
+      </a>
+      <a href="#como-funciona" class="btn-secondary">Como funciona →</a>
+    </div>
+    <div class="hero-trust fade-up d4">
+      <strong>Powered by Maffezzolli Capital</strong> &nbsp;·&nbsp; Boutique financeira do Sul do Brasil
+    </div>
+  </div>
+
+  <!-- Score pill decorativo -->
+  <div class="hero-score fade-up d2">
+    <div class="hero-score-label">AUGUR SCORE</div>
+    <div class="hero-score-num">62</div>
+    <div class="hero-score-bar"><div class="hero-score-fill"></div></div>
+    <div class="hero-score-detail">
+      <div>Caixa → <span style="color:#E07020">Atenção</span></div>
+      <div>Capital de giro → <span style="color:#ef4444">Risco</span></div>
+      <div>Recebíveis → <span style="color:#22c55e">Saudável</span></div>
+    </div>
+  </div>
+</section>
+
+<!-- ── DORES ─────────────────────────────────────────────────────── -->
+<section class="dores">
+  <div class="container">
+    <div class="eyebrow fade-up">Você reconhece isso?</div>
+    <h2 class="section-title fade-up d1">O que tira o sono do dono de empresa</h2>
+    <div class="dores-grid">
+      <div class="dor-item fade-up d1">
+        <div class="dor-icon">💸</div>
+        <div class="dor-text">
+          <strong>Fatura bem, mas não sobra dinheiro</strong>
+          Receita cresce, mas o caixa continua no limite. Algo está drenando o resultado — e você não sabe o quê.
+        </div>
+      </div>
+      <div class="dor-item fade-up d2">
+        <div class="dor-icon">📊</div>
+        <div class="dor-text">
+          <strong>Planilhas que não respondem perguntas</strong>
+          Você tem os números, mas não tem a interpretação. O que esse dado significa para a sua decisão de amanhã?
+        </div>
+      </div>
+      <div class="dor-item fade-up d3">
+        <div class="dor-icon">⏰</div>
+        <div class="dor-text">
+          <strong>Contador fala, mas não aconselha</strong>
+          O balanço chega, o DAS é pago. Mas ninguém te diz se você vai ter caixa na semana que vem.
+        </div>
+      </div>
+      <div class="dor-item fade-up d1">
+        <div class="dor-icon">🏦</div>
+        <div class="dor-text">
+          <strong>Banco exige garantias que você não tem</strong>
+          Precisa de capital de giro, mas o crédito disponível é caro demais ou inviável. E ninguém explica por quê.
+        </div>
+      </div>
+      <div class="dor-item fade-up d2">
+        <div class="dor-icon">📉</div>
+        <div class="dor-text">
+          <strong>Decisão baseada em intuição</strong>
+          Contratar mais, investir no estoque, prorrogar o fornecedor — tudo no feeling. Certo até o dia que não for.
+        </div>
+      </div>
+      <div class="dor-item fade-up d3">
+        <div class="dor-icon">🔁</div>
+        <div class="dor-text">
+          <strong>O problema volta todo mês</strong>
+          Apaga um incêndio, aparece outro. Nunca há tempo para parar e entender o que está causando o ciclo.
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ── COMO FUNCIONA ─────────────────────────────────────────────── -->
+<section class="section grid-bg" id="como-funciona">
+  <div class="container">
+    <div class="eyebrow fade-up">Simples e direto</div>
+    <h2 class="section-title fade-up d1">Como o Augur <em>funciona</em></h2>
+    <div class="gold-divider fade-up d1"></div>
+    <p class="section-sub fade-up d2">Nenhum app para instalar. Nenhum dado para digitar manualmente. Começa pelo WhatsApp — termina com um plano de ação.</p>
+
+    <div class="steps">
+      <div class="step">
+        <div class="step-num-col">
+          <div class="step-num">01</div>
+          <div class="step-line"></div>
+        </div>
+        <div class="step-body fade-up d1">
+          <div class="step-title">Diagnóstico via WhatsApp em 10 minutos</div>
+          <p class="step-text">Você responde 15 perguntas sobre sua empresa diretamente no WhatsApp — faturamento, caixa, dívidas, recebíveis. Sem formulário, sem plataforma, sem complicação. O Augur processa e já entrega um relatório de saúde financeira na mesma conversa.</p>
+          <span class="step-tag">Gratuito · Sem cadastro</span>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num-col">
+          <div class="step-num">02</div>
+          <div class="step-line"></div>
+        </div>
+        <div class="step-body fade-up d2">
+          <div class="step-title">Score Augur + indicadores interpretados</div>
+          <p class="step-text">Você recebe o Score Augur da sua empresa (0 a 100), os indicadores de liquidez, capital de giro e comprometimento de caixa — com linguagem de dono de empresa, não de contador. E uma lista das 3 ações mais urgentes.</p>
+          <span class="step-tag">Resultado em segundos</span>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num-col">
+          <div class="step-num">03</div>
+          <div class="step-line"></div>
+        </div>
+        <div class="step-body fade-up d3">
+          <div class="step-title">Acompanhamento contínuo ou consultoria humana</div>
+          <p class="step-text">Continue com o Augur no plano mensal — ele monitora, alerta e responde dúvidas financeiras 24h pelo chat. Ou, se o momento exigir, um consultor da Maffezzolli Capital entra em campo com o contexto completo já preparado.</p>
+          <span class="step-tag">Você escolhe o nível de suporte</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ── O QUE VOCÊ RECEBE ──────────────────────────────────────────── -->
+<section class="section" style="padding-top: 0;">
+  <div class="container">
+    <div class="eyebrow fade-up">Funcionalidades</div>
+    <h2 class="section-title fade-up d1">O que o Augur <em>entrega</em></h2>
+    <div class="gold-divider fade-up d1"></div>
+
+    <div class="entregas-grid">
+      <div class="entrega-card fade-up d1">
+        <div class="entrega-icon">🎯</div>
+        <div class="entrega-title">Score de Saúde Financeira</div>
+        <p class="entrega-text">Nota de 0 a 100 com detalhamento por dimensão — liquidez, capital de giro, endividamento e operacional. Atualizado a cada diagnóstico.</p>
+      </div>
+      <div class="entrega-card fade-up d2">
+        <div class="entrega-icon">💬</div>
+        <div class="entrega-title">Consultor disponível 24h</div>
+        <p class="entrega-text">Faça perguntas financeiras a qualquer hora pelo chat: "tenho caixa para contratar mais 2 funcionários?", "devo antecipar recebíveis agora?". Resposta baseada nos dados reais da sua empresa.</p>
+      </div>
+      <div class="entrega-card fade-up d3">
+        <div class="entrega-icon">📎</div>
+        <div class="entrega-title">Análise de documentos</div>
+        <p class="entrega-text">Envie extratos, planilhas, contratos ou DREs. O Augur lê, interpreta e conecta com o contexto da sua empresa — sem que você precise explicar nada.</p>
+      </div>
+      <div class="entrega-card fade-up d1">
+        <div class="entrega-icon">🚨</div>
+        <div class="entrega-title">Alertas de risco antes da crise</div>
+        <p class="entrega-text">Quando os indicadores pioram, você recebe alertas proativos com o que está acontecendo e o que fazer. Não após o problema — antes.</p>
+      </div>
+      <div class="entrega-card fade-up d2">
+        <div class="entrega-icon">📈</div>
+        <div class="entrega-title">Viabilidade de decisões</div>
+        <p class="entrega-text">Quer abrir uma unidade nova? Comprar equipamento? Dar desconto em boleto? O Augur modela o impacto financeiro antes que você decida.</p>
+      </div>
+      <div class="entrega-card fade-up d3">
+        <div class="entrega-icon">🤝</div>
+        <div class="entrega-title">Escalonamento para consultoria humana</div>
+        <p class="entrega-text">Quando o cenário exige mais, um consultor sênior da Maffezzolli Capital entra com todo o histórico e contexto da sua empresa já preparado.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ── NÚMEROS ────────────────────────────────────────────────────── -->
+<section class="numeros">
+  <div class="container">
+    <div class="eyebrow fade-up">Resultados</div>
+    <h2 class="section-title fade-up d1">O que clientes <em>encontraram</em></h2>
+    <div class="numeros-grid">
+      <div class="numero-item fade-up d1">
+        <div class="numero-num">72h</div>
+        <div class="numero-label">Do diagnóstico ao primeiro insight acionável</div>
+      </div>
+      <div class="numero-item fade-up d2">
+        <div class="numero-num">R$ 180k</div>
+        <div class="numero-label">Capital de giro identificado parado em recebíveis em caso real de varejo</div>
+      </div>
+      <div class="numero-item fade-up d3">
+        <div class="numero-num">–23%</div>
+        <div class="numero-label">Redução de custo financeiro após reestruturação de prazo com fornecedores</div>
+      </div>
+      <div class="numero-item fade-up d4">
+        <div class="numero-num">24h</div>
+        <div class="numero-label">Disponibilidade do consultor financeiro — incluindo finais de semana</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ── PLANOS ─────────────────────────────────────────────────────── -->
+<section class="section grid-bg" id="planos">
+  <div class="container">
+    <div class="eyebrow fade-up">Planos</div>
+    <h2 class="section-title fade-up d1">Escolha o nível <em>certo para você</em></h2>
+    <div class="gold-divider fade-up d1"></div>
+    <p class="section-sub fade-up d2">Comece gratuitamente. Evolua conforme a empresa cresce.</p>
+
+    <div class="planos-grid">
+
+      <div class="plano-card fade-up d1">
+        <div class="plano-nome">Diagnóstico Gratuito</div>
+        <div class="plano-desc">Para quem quer entender onde está antes de qualquer compromisso.</div>
+        <div class="plano-preco">R$ 0</div>
+        <div class="plano-periodo">Grátis · Uma vez · Via WhatsApp</div>
+        <ul class="plano-items">
+          <li>Diagnóstico completo via WhatsApp (15 perguntas)</li>
+          <li>Score Augur com detalhamento por dimensão</li>
+          <li>Indicadores de liquidez, caixa e endividamento</li>
+          <li>3 ações prioritárias identificadas pela IA</li>
+          <li>Relatório entregue na mesma conversa</li>
+        </ul>
+        <a href="https://wa.me/5547991359091?text=Quero%20fazer%20o%20diagn%C3%B3stico%20gratuito%20da%20minha%20empresa" target="_blank" rel="noopener" class="plano-cta plano-cta-secondary">
+          Fazer diagnóstico grátis →
+        </a>
+      </div>
+
+      <div class="plano-card destaque fade-up d2">
+        <div class="plano-tag">Mais escolhido</div>
+        <div class="plano-nome">Augur Mensal</div>
+        <div class="plano-desc">Para o dono que quer um conselheiro financeiro sempre disponível.</div>
+        <div class="plano-preco"><sup>R$</sup>299</div>
+        <div class="plano-periodo">por mês · cancele quando quiser</div>
+        <ul class="plano-items">
+          <li>Tudo do Diagnóstico Gratuito</li>
+          <li>Chat ilimitado com o Augur — 24h, 7 dias</li>
+          <li>Análise de documentos (extratos, planilhas, contratos)</li>
+          <li>Alertas proativos de risco financeiro</li>
+          <li>Reavaliação mensal automática do Score</li>
+          <li>Modelagem de decisões financeiras</li>
+          <li>Histórico e evolução dos indicadores</li>
+        </ul>
+        <a href="https://app.maffezzollicapital.com.br" target="_blank" rel="noopener" class="plano-cta plano-cta-primary">
+          Começar agora →
+        </a>
+      </div>
+
+      <div class="plano-card fade-up d3">
+        <div class="plano-nome">Consultoria Híbrida</div>
+        <div class="plano-desc">Para empresas que precisam de um consultor humano além da IA.</div>
+        <div class="plano-preco">sob consulta</div>
+        <div class="plano-periodo">R$ 1.500 a R$ 2.500/mês · contrato mínimo 3 meses</div>
+        <ul class="plano-items">
+          <li>Tudo do Augur Mensal</li>
+          <li>Consultor sênior dedicado da Maffezzolli Capital</li>
+          <li>Reuniões mensais de revisão estratégica</li>
+          <li>Estruturação de crédito e captação</li>
+          <li>Suporte em momentos de crise ou evento corporativo</li>
+          <li>Acesso à rede de credores e investidores do Sul</li>
+        </ul>
+        <a href="https://wa.me/5547991359091?text=Tenho%20interesse%20na%20consultoria%20h%C3%ADbrida%20com%20o%20Augur" target="_blank" rel="noopener" class="plano-cta plano-cta-secondary">
+          Falar com consultor →
+        </a>
+      </div>
+
+    </div>
+
+    <!-- CTA diagnóstico -->
+    <div class="diagnostico-cta fade-up">
+      <h2>Comece pelo diagnóstico.<br><em>É gratuito e leva 10 minutos.</em></h2>
+      <p>Você sai da conversa sabendo onde sua empresa está e o que precisa fazer. Sem compromisso.</p>
+      <div class="diagnostico-steps">
+        <div class="diag-step">
+          <div class="diag-step-num">1</div>
+          <div class="diag-step-label">Abre o WhatsApp e manda "Diagnóstico"</div>
+        </div>
+        <div class="diag-step">
+          <div class="diag-step-num">2</div>
+          <div class="diag-step-label">Responde 15 perguntas sobre a empresa</div>
+        </div>
+        <div class="diag-step">
+          <div class="diag-step-num">3</div>
+          <div class="diag-step-label">Recebe seu Score e plano de ação</div>
+        </div>
+      </div>
+      <a href="https://wa.me/5547991359091?text=Diagn%C3%B3stico" target="_blank" rel="noopener" class="btn-primary" style="display:inline-flex;margin:0 auto;">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z"/></svg>
+        Iniciar diagnóstico gratuito
+      </a>
+    </div>
+  </div>
+</section>
+
+<!-- ── FAQ ───────────────────────────────────────────────────────── -->
+<section class="faq">
+  <div class="container">
+    <div class="eyebrow fade-up">Dúvidas frequentes</div>
+    <h2 class="section-title fade-up d1">Perguntas que a gente <em>mais recebe</em></h2>
+
+    <div class="faq-list">
+      <div class="faq-item fade-up">
+        <div class="faq-q">O diagnóstico é realmente gratuito?</div>
+        <div class="faq-a">Sim. Você faz o diagnóstico completo via WhatsApp sem cadastro e sem cartão. Recebe o Score e o plano de ação na mesma conversa. Não tem pegadinha.</div>
+      </div>
+      <div class="faq-item fade-up">
+        <div class="faq-q">Meus dados ficam seguros?</div>
+        <div class="faq-a">Seus dados ficam restritos à sua conta e não são compartilhados com terceiros, bancos ou parceiros comerciais. O Augur é desenvolvido pela Maffezzolli Capital com privacidade total — não usamos dados de clientes para treinar modelos públicos.</div>
+      </div>
+      <div class="faq-item fade-up">
+        <div class="faq-q">Preciso saber de finanças para usar?</div>
+        <div class="faq-a">Não. O Augur foi desenhado para o dono de empresa, não para o CFO. Se você sabe seu faturamento e tem noção das suas dívidas, já é suficiente para começar. O sistema traduz tudo em linguagem prática.</div>
+      </div>
+      <div class="faq-item fade-up">
+        <div class="faq-q">Qual o tamanho de empresa ideal?</div>
+        <div class="faq-a">O Augur atende empresas com faturamento a partir de R$ 500k anuais. O diagnóstico gratuito funciona para qualquer tamanho. A consultoria híbrida é mais indicada para empresas acima de R$ 3M anuais.</div>
+      </div>
+      <div class="faq-item fade-up">
+        <div class="faq-q">Posso cancelar o plano mensal quando quiser?</div>
+        <div class="faq-a">Sim. Não há fidelidade no plano de R$ 299/mês. Você cancela a qualquer momento pelo próprio sistema sem burocracia.</div>
+      </div>
+      <div class="faq-item fade-up">
+        <div class="faq-q">O Augur substitui meu contador?</div>
+        <div class="faq-a">Não substitui — complementa. O contador cuida da conformidade fiscal e legal. O Augur cuida da estratégia financeira do dia a dia: capital de giro, decisões de investimento, alertas de risco e planejamento de caixa.</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ── FOOTER ────────────────────────────────────────────────────── -->
+<footer>
+  <div class="container">
+    <div class="footer-inner">
+      <div>
+        <div class="footer-brand">AUGUR<span>.</span></div>
+        <div class="footer-powered">
+          Powered by <a href="https://maffezzollicapital.com.br" target="_blank" rel="noopener">Maffezzolli Capital</a>
+          &nbsp;·&nbsp; Boutique Financeira Independente · Sul do Brasil
+        </div>
+        <div class="footer-links" style="margin-top:16px;">
+          <a href="https://maffezzollicapital.com.br">Site principal</a>
+          <a href="https://app.maffezzollicapital.com.br">Plataforma</a>
+          <a href="https://wa.me/5547991359091">WhatsApp</a>
+          <a href="mailto:contato@maffezzollicapital.com.br">Contato</a>
+        </div>
+      </div>
+      <div style="text-align:right;">
+        <a href="https://wa.me/5547991359091?text=Diagn%C3%B3stico" target="_blank" rel="noopener" class="btn-primary" style="display:inline-flex;">
+          Diagnóstico gratuito →
+        </a>
+      </div>
+    </div>
+    <div class="footer-legal">
+      © 2025 Maffezzolli Capital · Assessoria Financeira LTDA &nbsp;·&nbsp;
+      Avenida Lauro Müller · Brusque – SC &nbsp;·&nbsp;
+      O Augur não oferece serviços regulados pela CVM ou Banco Central. Não é consultoria de investimentos.
+    </div>
+  </div>
+</footer>
+
+<!-- ── WA Float ──────────────────────────────────────────────────── -->
+<a href="https://wa.me/5547991359091?text=Diagn%C3%B3stico" target="_blank" rel="noopener" class="wa-float" title="Diagnóstico gratuito pelo WhatsApp">
+  <svg width="26" height="26" viewBox="0 0 24 24" fill="currentColor"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z"/></svg>
+</a>
+
+<!-- ── Scripts ───────────────────────────────────────────────────── -->
+<script>
+  // Scroll animations
+  const obs = new IntersectionObserver((entries) => {
+    entries.forEach(e => { if (e.isIntersecting) { e.target.classList.add('visible'); obs.unobserve(e.target); } });
+  }, { threshold: 0.1 });
+  document.querySelectorAll('.fade-up').forEach(el => obs.observe(el));
+
+  // FAQ accordion
+  document.querySelectorAll('.faq-q').forEach(q => {
+    q.addEventListener('click', () => {
+      const a = q.nextElementSibling;
+      const isOpen = a.classList.contains('open');
+      document.querySelectorAll('.faq-a.open').forEach(el => { el.classList.remove('open'); el.previousElementSibling.classList.remove('open'); });
+      if (!isOpen) { a.classList.add('open'); q.classList.add('open'); }
+    });
+  });
+</script>
+
+</body>
+</html>
