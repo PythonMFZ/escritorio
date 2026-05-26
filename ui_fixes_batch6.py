@@ -264,9 +264,20 @@ _WIDGET_B6V2 = r"""{% if current_client %}
         const t=await file.text();
         _augurAnexos.push({type:'csv',data:t.slice(0,50000),name:file.name});
       } else if(ext==='xlsx'||ext==='xls'){
-        alert('⚠️ Excel binário pode não ser lido corretamente. Recomenda-se salvar como CSV antes de enviar.\n\nVamos tentar mesmo assim...');
-        const t=await file.text();
-        _augurAnexos.push({type:'csv',data:t.slice(0,50000),name:file.name+'(excel-texto)'});
+        // Upload to server for proper text extraction (xlsx is binary)
+        const previewEl=document.getElementById('augurAnexoPreview'), nomeEl=document.getElementById('augurAnexoNome');
+        nomeEl.textContent='⏳ Extraindo dados de '+file.name+'…';
+        previewEl.style.display='block';
+        try {
+          const fd=new FormData(); fd.append('arquivo',file);
+          const r=await fetch('/api/augur/extract-file',{method:'POST',body:fd});
+          const d=await r.json();
+          if(d.ok&&d.content){
+            _augurAnexos.push({type:'excel-texto',data:d.content,name:file.name});
+          } else {
+            alert('Não foi possível extrair o arquivo Excel: '+(d.erro||'Erro')+'\n\nTente salvar como CSV antes de enviar.');
+          }
+        } catch(e){ alert('Erro ao processar arquivo Excel.'); }
       } else if(ext==='pdf'){
         const b=await new Promise(r=>{const rd=new FileReader();rd.onload=e=>r(e.target.result.split(',')[1]);rd.readAsDataURL(file)});
         _augurAnexos.push({type:'pdf',data:b,name:file.name});
@@ -363,27 +374,20 @@ _WIDGET_B6V2 = r"""{% if current_client %}
       return;
     }
     fb.style.display='block';
-    fb.innerHTML='<div class="alert alert-info py-1 mb-0">Processando...</div>';
+    fb.innerHTML='<div class="alert alert-info py-1 mb-0">⏳ Processando arquivo no servidor… aguarde.</div>';
     try {
-      let conteudo='', tipo=arquivo.name.split('.').pop().toLowerCase();
-      if(['csv','txt'].includes(tipo)){
-        conteudo = await arquivo.text();
-      } else if(tipo==='pdf'){
-        conteudo = await new Promise(res=>{const rd=new FileReader();rd.onload=e=>res(e.target.result.split(',')[1]);rd.readAsDataURL(arquivo)});
-        tipo='pdf_base64';
-      } else {
-        conteudo = await new Promise(res=>{const rd=new FileReader();rd.onload=e=>res(e.target.result.split(',')[1]);rd.readAsDataURL(arquivo)});
-        tipo='imagem_base64';
-      }
-      const r = await fetch('/api/base-conhecimento/upload',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({nome,descricao,tipo,conteudo})});
-      const d = await r.json();
+      // Always use server-side extraction via FormData (handles xlsx, pdf, images, csv)
+      const fd=new FormData();
+      fd.append('nome',nome); fd.append('descricao',descricao); fd.append('arquivo',arquivo);
+      const r=await fetch('/api/base-conhecimento/upload-file',{method:'POST',credentials:'same-origin',body:fd});
+      const d=await r.json();
       if(d.ok){
-        fb.innerHTML='<div class="alert alert-success py-1 mb-0">✅ Documento salvo!</div>';
+        fb.innerHTML='<div class="alert alert-success py-1 mb-0">✅ Documento salvo! ('+d.chars+' caracteres extraídos)</div>';
         document.getElementById('baseNome').value='';
         document.getElementById('baseDescricao').value='';
         document.getElementById('baseArquivo').value='';
         baseCarregar();
-        setTimeout(()=>{baseToggleForm();fb.style.display='none';},1500);
+        setTimeout(()=>{baseToggleForm();fb.style.display='none';},2000);
       } else {
         fb.innerHTML='<div class="alert alert-danger py-1 mb-0">'+(d.erro||'Erro ao salvar.')+'</div>';
       }
