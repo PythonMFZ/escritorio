@@ -93,6 +93,17 @@ def _augur_try_command(
     if not message.strip():
         return None
 
+    # Only attempt task creation if message explicitly contains task-related keywords.
+    # This prevents every normal conversation message from triggering a Claude API call.
+    _TASK_KEYWORDS = {
+        "crie", "criar", "cria", "adicione", "adicionar", "adiciona",
+        "anote", "anotar", "anota", "registre", "registrar", "registra",
+        "tarefa", "lembrete", "agende", "agendar", "agenda",
+    }
+    msg_lower = message.lower()
+    if not any(kw in msg_lower for kw in _TASK_KEYWORDS):
+        return None
+
     # Collect company member names for context
     memberships = session.exec(
         _sel_cmd(Membership).where(Membership.company_id == company_id)
