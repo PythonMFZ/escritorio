@@ -547,7 +547,7 @@ def _b6_fix_base_conhecimento() -> None:
                     ctx += f"\n\n--- {doc.get('nome','Documento')} ({doc.get('data','')}) ---"
                     if doc.get('descricao'):
                         ctx += f"\nDescrição: {doc['descricao']}"
-                    ctx += f"\n{doc.get('conteudo','')[:2500]}"
+                    ctx += f"\n{doc.get('conteudo','')[:6000]}"
             return ctx
 
         _fmt_b6._b6kb = True
