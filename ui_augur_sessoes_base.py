@@ -235,19 +235,17 @@ async def augur_ask_v4(request: _Req_av4, session=_Dep_av4(get_session)):
 
     # Processa anexos
     attachments = []
-    text_attachment_ctx = ""
     for att in (body.get("attachments") or []):
         if not att.get("data"):
             continue
         att_type = (att.get("type") or "").lower()
-        if att_type in ("csv", "excel-texto", "texto", "txt"):
-            # Text attachment — inject into question context directly
-            aname = att.get("name", "arquivo")
-            text_attachment_ctx += f"\n\n[Conteúdo do arquivo: {aname}]\n{att['data'][:40000]}"
+        if att_type == "excel-texto":
+            # Re-wrap as xlsx so augur_ask_fn presents it as a proper file block
+            attachments.append({"type": "xlsx", "data": att["data"], "name": att.get("name", "planilha.xlsx")})
+        elif att_type == "csv":
+            attachments.append({"type": "csv", "data": att["data"], "name": att.get("name", "dados.csv")})
         else:
             attachments.append(att)
-    if text_attachment_ctx:
-        question = question + text_attachment_ctx
 
     # Salva pergunta
     msg_user = AugurMensagem(
