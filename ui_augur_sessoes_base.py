@@ -258,6 +258,42 @@ async def augur_ask_v4(request: _Req_av4, session=_Dep_av4(get_session)):
     session.add(sessao)
     session.commit()
 
+    # ── Command layer: detect task/action commands before calling Augur ──────
+    try:
+        cmd_reply = _augur_try_command(
+            session,
+            company_id=ctx.company.id,
+            user_id=ctx.user.id,
+            client_id=client.id,
+            message=question,
+        )
+    except Exception:
+        cmd_reply = None
+
+    if cmd_reply:
+        # Command executed — save and return without calling Augur
+        msg_assistant = AugurMensagem(
+            company_id=ctx.company.id,
+            client_id=client.id,
+            user_id=ctx.user.id,
+            session_id=sessao.id,
+            role="assistant",
+            content=cmd_reply,
+            created_at=_dt_av4.utcnow().isoformat(),
+        )
+        session.add(msg_assistant)
+        session.commit()
+        session.refresh(msg_assistant)
+        return _JSON_av4({
+            "response":    cmd_reply,
+            "confidence":  1.0,
+            "error":       False,
+            "msg_id":      msg_assistant.id,
+            "session_id":  sessao.id,
+            "session_titulo": sessao.titulo,
+            "command_executed": True,
+        })
+
     # Chama Augur
     try:
         from ai_assistant.assistant import ask as augur_ask_fn
@@ -430,6 +466,231 @@ async def base_conhecimento_upload(
     session.refresh(doc)
 
     return _JSON_av4({"ok": True, "id": doc.id, "nome": doc.nome})
+
+
+# ── File upload with server-side extraction ───────────────────────────────────
+
+def _bc_extract_excel(file_bytes: bytes, fname: str = "") -> str:
+    """Extract text from Excel — tries openpyxl (xlsx) then xlrd (xls).
+    Skips auxiliary calc sheets; formats dates and numbers for readability.
+    """
+    import io
+    from datetime import datetime as _dt_xl, date as _date_xl
+
+    # Sheets whose names start with these prefixes are auxiliary — skip them
+    _SKIP_PREFIXES = ("cálculo", "calculo", "calc", "sheet", "plan")
+
+    def _fmt_cell(v):
+        if v is None:
+            return ""
+        if isinstance(v, (_dt_xl, _date_xl)):
+            try:
+                return v.strftime("%d/%m/%Y")
+            except Exception:
+                return str(v)[:10]
+        if isinstance(v, float):
+            if v != v:  # NaN
+                return ""
+            if abs(v) >= 1:
+                return f"{v:,.2f}"
+            if abs(v) < 0.0001:
+                return ""
+            return f"{v:.4f}"
+        return str(v)
+
+    def _should_skip(title: str) -> bool:
+        t = title.lower().strip()
+        return any(t.startswith(p) for p in _SKIP_PREFIXES)
+
+    def _row_text(row_vals) -> str:
+        cells = [_fmt_cell(c) for c in row_vals]
+        # Skip rows that are entirely empty or all zeros
+        meaningful = [c for c in cells if c and c not in ("0", "0.00", "0,00")]
+        if not meaningful:
+            return ""
+        return "\t".join(cells).rstrip("\t")
+
+    lines = []
+
+    # .xlsx via openpyxl
+    if not fname.endswith(".xls") or fname.endswith(".xlsx"):
+        try:
+            import openpyxl
+            wb = openpyxl.load_workbook(io.BytesIO(file_bytes), read_only=True, data_only=True)
+            for ws in wb.worksheets:
+                if _should_skip(ws.title):
+                    continue
+                sheet_lines = [f"[Aba: {ws.title}]"]
+                for row in ws.iter_rows(values_only=True):
+                    txt = _row_text(row)
+                    if txt:
+                        sheet_lines.append(txt)
+                if len(sheet_lines) > 1:
+                    lines.extend(sheet_lines)
+            wb.close()
+            if lines:
+                return "\n".join(lines)[:200_000]
+        except Exception as _e:
+            print(f"[bc_upload] openpyxl erro: {_e}")
+
+    # .xls (old binary format) via xlrd
+    try:
+        import xlrd
+        wb = xlrd.open_workbook(file_contents=file_bytes)
+        for ws in wb.sheets():
+            if _should_skip(ws.name):
+                continue
+            sheet_lines = [f"[Aba: {ws.name}]"]
+            for row_idx in range(ws.nrows):
+                cells = [str(ws.cell_value(row_idx, c)) for c in range(ws.ncols)]
+                txt = "\t".join(cells).rstrip()
+                meaningful = [c for c in cells if c.strip() and c.strip() not in ("0", "0.0")]
+                if meaningful:
+                    sheet_lines.append(txt)
+            if len(sheet_lines) > 1:
+                lines.extend(sheet_lines)
+        return "\n".join(lines)[:200_000]
+    except Exception as _e:
+        print(f"[bc_upload] xlrd erro: {_e}")
+
+    return ""
+
+
+def _bc_extract_claude(file_bytes: bytes, mime_type: str) -> str:
+    """Extract text from PDF or image via Claude Haiku vision."""
+    import base64 as _b64
+    key = _os_av4.getenv("ANTHROPIC_API_KEY", "")
+    if not key or len(file_bytes) > 15 * 1024 * 1024:
+        return ""
+    b64 = _b64.standard_b64encode(file_bytes).decode()
+    prompt = (
+        "Você é um assistente especializado em documentos financeiros e empresariais. "
+        "Extraia todas as informações relevantes deste documento em texto estruturado. "
+        "Inclua: valores, datas, partes envolvidas, obrigações, condições, vencimentos e indicadores. "
+        "Seja completo. Responda em português."
+    )
+    if mime_type == "application/pdf":
+        content = [
+            {"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": b64}},
+            {"type": "text", "text": prompt},
+        ]
+        headers = {
+            "x-api-key": key,
+            "anthropic-version": "2023-06-01",
+            "anthropic-beta": "pdfs-2024-09-25",
+            "content-type": "application/json",
+        }
+    else:
+        content = [
+            {"type": "image", "source": {"type": "base64", "media_type": mime_type, "data": b64}},
+            {"type": "text", "text": prompt},
+        ]
+        headers = {
+            "x-api-key": key,
+            "anthropic-version": "2023-06-01",
+            "content-type": "application/json",
+        }
+    try:
+        import httpx as _hx
+        r = _hx.post(
+            "https://api.anthropic.com/v1/messages",
+            headers=headers,
+            json={"model": "claude-haiku-4-5-20251001", "max_tokens": 4096, "messages": [{"role": "user", "content": content}]},
+            timeout=90,
+        )
+        data = r.json()
+        if "content" in data and data["content"]:
+            return data["content"][0]["text"].strip()
+        err = data.get("error", {}).get("message", str(data))
+        print(f"[bc_upload] claude API erro: {err}")
+        return ""
+    except Exception as _e:
+        print(f"[bc_upload] claude erro: {_e}")
+        return ""
+
+
+@app.post("/api/base-conhecimento/upload-file")
+@require_login
+async def base_conhecimento_upload_file(
+    request: _Req_av4,
+    session=_Dep_av4(get_session),
+    nome: str = _Form_av4(""),
+    descricao: str = _Form_av4(""),
+    arquivo: _Upload_av4 = _File_av4(...),
+):
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        return _JSON_av4({"ok": False, "erro": "Não autenticado."}, status_code=401)
+
+    client_id = get_active_client_id(request, session, ctx)
+    client    = get_client_or_none(session, ctx.company.id, client_id)
+    if not client:
+        return _JSON_av4({"ok": False, "erro": "Nenhum cliente selecionado."})
+
+    nome = (nome or "").strip()[:200]
+    if not nome:
+        return _JSON_av4({"ok": False, "erro": "Nome é obrigatório."})
+
+    file_bytes = await arquivo.read()
+    if not file_bytes:
+        return _JSON_av4({"ok": False, "erro": "Arquivo vazio."})
+
+    fname = (arquivo.filename or "").lower()
+    mime  = (arquivo.content_type or "").lower()
+
+    # Determine type and extract text
+    if fname.endswith((".xlsx", ".xls")) or "spreadsheet" in mime or "excel" in mime:
+        conteudo = _bc_extract_excel(file_bytes, fname)
+        tipo = "excel"
+        # Do NOT fall back to Claude with binary xlsx — it can't parse it
+    elif fname.endswith((".doc", ".docx")) or "wordprocessing" in mime or "msword" in mime:
+        try:
+            import docx as _docx_bc
+            import io as _io_bc
+            _doc = _docx_bc.Document(_io_bc.BytesIO(file_bytes))
+            conteudo = "\n".join(p.text for p in _doc.paragraphs if p.text.strip())
+        except Exception:
+            conteudo = _bc_extract_claude(file_bytes, "application/pdf")
+        tipo = "doc"
+    elif fname.endswith(".csv") or mime in ("text/csv", "text/plain"):
+        conteudo = file_bytes.decode("utf-8", errors="replace")
+        tipo = "csv"
+    elif fname.endswith(".txt"):
+        conteudo = file_bytes.decode("utf-8", errors="replace")
+        tipo = "txt"
+    elif fname.endswith(".pdf") or mime == "application/pdf":
+        conteudo = _bc_extract_claude(file_bytes, "application/pdf")
+        tipo = "pdf"
+    elif any(fname.endswith(ext) for ext in (".jpg", ".jpeg", ".png", ".gif", ".webp")) or mime.startswith("image/"):
+        img_mime = mime if mime.startswith("image/") else "image/jpeg"
+        conteudo = _bc_extract_claude(file_bytes, img_mime)
+        tipo = "imagem"
+    else:
+        # Try plain text decode
+        try:
+            conteudo = file_bytes.decode("utf-8", errors="replace")
+            tipo = "texto"
+        except Exception:
+            return _JSON_av4({"ok": False, "erro": "Formato de arquivo não suportado."})
+
+    if not conteudo:
+        return _JSON_av4({"ok": False, "erro": "Não foi possível extrair o conteúdo do arquivo. Verifique se o arquivo não está corrompido ou protegido."})
+
+    doc = BaseConhecimento(
+        company_id=ctx.company.id,
+        client_id=client.id,
+        user_id=ctx.user.id,
+        nome=nome,
+        descricao=(descricao or "").strip()[:500],
+        tipo=tipo,
+        conteudo_texto=conteudo[:200_000],
+        created_at=_dt_av4.utcnow().isoformat(),
+    )
+    session.add(doc)
+    session.commit()
+    session.refresh(doc)
+
+    return _JSON_av4({"ok": True, "id": doc.id, "nome": doc.nome, "tipo": tipo, "chars": len(conteudo)})
 
 
 @app.get("/api/base-conhecimento")
@@ -931,47 +1192,28 @@ _AUGUR_WIDGET_V4 = r"""
     }
 
     fb.style.display='block';
-    fb.innerHTML='<div class="alert alert-info py-1 mb-0">Processando...</div>';
+    fb.innerHTML='<div class="alert alert-info py-1 mb-0">⏳ Processando arquivo no servidor… aguarde.</div>';
 
     try {
-      let conteudo = '';
-      let tipo = arquivo.name.split('.').pop().toLowerCase();
+      const fd = new FormData();
+      fd.append('nome', nome);
+      fd.append('descricao', descricao);
+      fd.append('arquivo', arquivo);
 
-      if (['csv','txt'].includes(tipo)) {
-        conteudo = await arquivo.text();
-      } else if (['xlsx','xls'].includes(tipo)) {
-        conteudo = await arquivo.text();
-        tipo = 'excel';
-      } else if (tipo === 'pdf') {
-        const reader = new FileReader();
-        conteudo = await new Promise(res => {
-          reader.onload = e => res(e.target.result.split(',')[1]);
-          reader.readAsDataURL(arquivo);
-        });
-        tipo = 'pdf_base64';
-      } else {
-        const reader = new FileReader();
-        conteudo = await new Promise(res => {
-          reader.onload = e => res(e.target.result.split(',')[1]);
-          reader.readAsDataURL(arquivo);
-        });
-        tipo = 'imagem_base64';
-      }
-
-      const r = await fetch('/api/base-conhecimento/upload', {
+      const r = await fetch('/api/base-conhecimento/upload-file', {
         method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({nome, descricao, tipo, conteudo}),
+        credentials: 'same-origin',
+        body: fd,
       });
       const d = await r.json();
 
       if (d.ok) {
-        fb.innerHTML='<div class="alert alert-success py-1 mb-0">✅ Documento salvo!</div>';
+        fb.innerHTML=`<div class="alert alert-success py-1 mb-0">✅ Documento salvo! (${d.chars || 0} caracteres extraídos)</div>`;
         document.getElementById('baseNome').value='';
         document.getElementById('baseDescricao').value='';
         document.getElementById('baseArquivo').value='';
         baseCarregar();
-        setTimeout(() => { baseToggleForm(); fb.style.display='none'; }, 1500);
+        setTimeout(() => { baseToggleForm(); fb.style.display='none'; }, 2000);
       } else {
         fb.innerHTML=`<div class="alert alert-danger py-1 mb-0">${d.erro || 'Erro ao salvar.'}</div>`;
       }

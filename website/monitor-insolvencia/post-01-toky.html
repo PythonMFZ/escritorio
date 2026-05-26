@@ -1,0 +1,481 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Monitor de Insolvência · Ed. 01 · Grupo Toky</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Syne:wght@700;800&family=Poppins:wght@300;400;500;600;700;800&family=DM+Mono:wght@400;500&display=swap');
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: #1a1a1a;
+    display: flex;
+    justify-content: center;
+    align-items: flex-start;
+    min-height: 100vh;
+    padding: 40px 20px;
+    font-family: 'Poppins', sans-serif;
+  }
+
+  /* ── Card principal (dimensão LinkedIn portrait: 1080×1350) ── */
+  .card {
+    width: 1080px;
+    background: #0D0D0D;
+    position: relative;
+    overflow: hidden;
+  }
+
+  /* Linha laranja topo */
+  .card-topbar {
+    width: 100%;
+    height: 5px;
+    background: #E07020;
+  }
+
+  /* ── HEADER ── */
+  .card-header {
+    padding: 48px 64px 36px;
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    border-bottom: 1px solid rgba(224,112,32,0.15);
+  }
+
+  .header-serie {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .serie-label {
+    font-family: 'DM Mono', monospace;
+    font-size: 11px;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: #E07020;
+  }
+
+  .serie-title {
+    font-family: 'Syne', sans-serif;
+    font-size: 22px;
+    font-weight: 800;
+    color: #FAF7F2;
+    letter-spacing: -0.01em;
+  }
+
+  .header-meta {
+    text-align: right;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .meta-edicao {
+    font-family: 'DM Mono', monospace;
+    font-size: 11px;
+    color: rgba(224,112,32,0.7);
+    letter-spacing: 0.12em;
+  }
+
+  .meta-data {
+    font-family: 'DM Mono', monospace;
+    font-size: 11px;
+    color: #666;
+    letter-spacing: 0.08em;
+  }
+
+  /* ── DESTAQUE (tag país/tipo) ── */
+  .case-origin {
+    padding: 28px 64px 0;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .tag-brasil {
+    font-family: 'DM Mono', monospace;
+    font-size: 10px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: #0D0D0D;
+    background: #E07020;
+    padding: 4px 12px;
+    font-weight: 500;
+  }
+
+  .tag-tipo {
+    font-family: 'DM Mono', monospace;
+    font-size: 10px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: #E07020;
+    border: 1px solid rgba(224,112,32,0.4);
+    padding: 4px 12px;
+  }
+
+  /* ── TÍTULO DO CASE ── */
+  .card-headline {
+    padding: 32px 64px 28px;
+  }
+
+  .headline-text {
+    font-family: 'Poppins', sans-serif;
+    font-size: 40px;
+    font-weight: 700;
+    color: #FAF7F2;
+    line-height: 1.15;
+    letter-spacing: -0.01em;
+  }
+
+  .headline-text em {
+    color: #E07020;
+    font-style: normal;
+  }
+
+  .headline-sub {
+    margin-top: 14px;
+    font-size: 15px;
+    font-weight: 300;
+    color: #8B8B8B;
+    line-height: 1.6;
+    max-width: 780px;
+  }
+
+  /* ── LOGOS DAS EMPRESAS ── */
+  .card-logos {
+    padding: 0 64px 32px;
+    display: flex;
+    align-items: center;
+    gap: 20px;
+  }
+
+  .logo-box {
+    border: 1px solid rgba(224,112,32,0.2);
+    padding: 14px 28px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 140px;
+  }
+
+  .logo-box span {
+    font-family: 'Syne', sans-serif;
+    font-size: 16px;
+    font-weight: 700;
+    color: #FAF7F2;
+    letter-spacing: 0.02em;
+  }
+
+  .logo-box.mobly span { color: #E07020; }
+
+  .logo-plus {
+    font-family: 'DM Mono', monospace;
+    font-size: 20px;
+    color: rgba(224,112,32,0.4);
+  }
+
+  /* ── CONTEXTO / TEXTO ── */
+  .card-body {
+    padding: 0 64px 40px;
+    border-top: 1px solid rgba(224,112,32,0.08);
+    padding-top: 36px;
+  }
+
+  .body-text {
+    font-size: 15px;
+    font-weight: 300;
+    color: #C8C4BE;
+    line-height: 1.8;
+    margin-bottom: 16px;
+  }
+
+  .body-text strong {
+    color: #FAF7F2;
+    font-weight: 500;
+  }
+
+  .body-text em {
+    color: #E07020;
+    font-style: normal;
+  }
+
+  /* ── ANÁLISE (destaque interno) ── */
+  .card-analise {
+    margin: 8px 64px 36px;
+    padding: 24px 28px;
+    border-left: 3px solid #E07020;
+    background: rgba(224,112,32,0.05);
+  }
+
+  .analise-label {
+    font-family: 'DM Mono', monospace;
+    font-size: 9px;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    color: #E07020;
+    margin-bottom: 10px;
+  }
+
+  .analise-text {
+    font-size: 14px;
+    font-weight: 300;
+    color: #C8C4BE;
+    line-height: 1.75;
+  }
+
+  .analise-text strong {
+    color: #FAF7F2;
+    font-weight: 500;
+  }
+
+  /* ── CARDS DE DADOS ── */
+  .card-numeros {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    border-top: 1px solid rgba(224,112,32,0.15);
+  }
+
+  .num-item {
+    padding: 36px 40px;
+    border-right: 1px solid rgba(224,112,32,0.1);
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    position: relative;
+  }
+
+  .num-item:last-child { border-right: none; }
+
+  .num-icon {
+    width: 36px;
+    height: 36px;
+    border: 1px solid rgba(224,112,32,0.3);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: 'DM Mono', monospace;
+    font-size: 16px;
+    color: #E07020;
+    margin-bottom: 4px;
+  }
+
+  .num-valor {
+    font-family: 'Syne', sans-serif;
+    font-size: 26px;
+    font-weight: 800;
+    color: #FAF7F2;
+    line-height: 1.1;
+    letter-spacing: -0.01em;
+  }
+
+  .num-label {
+    font-family: 'DM Mono', monospace;
+    font-size: 10px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: #666;
+    line-height: 1.5;
+  }
+
+  /* ── FOOTER ── */
+  .card-footer {
+    padding: 24px 64px;
+    border-top: 1px solid rgba(224,112,32,0.1);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+
+  .footer-fonte {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+  }
+
+  .fonte-label {
+    font-family: 'DM Mono', monospace;
+    font-size: 9px;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: #444;
+  }
+
+  .fonte-text {
+    font-family: 'DM Mono', monospace;
+    font-size: 10px;
+    color: #666;
+  }
+
+  .footer-brand {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 2px;
+  }
+
+  .brand-name {
+    font-family: 'Syne', sans-serif;
+    font-size: 14px;
+    font-weight: 800;
+    color: #E07020;
+    letter-spacing: 0.02em;
+  }
+
+  .brand-sub {
+    font-family: 'DM Mono', monospace;
+    font-size: 9px;
+    color: #444;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+  }
+
+  /* Barra laranja fundo */
+  .card-bottombar {
+    width: 100%;
+    height: 3px;
+    background: linear-gradient(to right, #E07020, rgba(224,112,32,0.2));
+  }
+
+  /* ── CONTROLES DE PREVIEW (fora do card) ── */
+  .preview-controls {
+    margin-top: 32px;
+    text-align: center;
+    color: #888;
+    font-family: 'Poppins', sans-serif;
+    font-size: 13px;
+  }
+
+  .preview-controls p { margin-bottom: 8px; }
+
+  .preview-controls kbd {
+    background: #222;
+    border: 1px solid #444;
+    padding: 2px 8px;
+    border-radius: 3px;
+    color: #ccc;
+    font-size: 12px;
+  }
+</style>
+</head>
+<body>
+
+<div style="display: flex; flex-direction: column; align-items: center;">
+
+<!-- ══════════════════════════════════════════════════
+     CARD DO POST — 1080px de largura
+     Para exportar: print > Salvar como PDF (sem margens)
+     ou screenshot com zoom 100% no browser
+════════════════════════════════════════════════════ -->
+<div class="card">
+
+  <div class="card-topbar"></div>
+
+  <!-- Header -->
+  <div class="card-header">
+    <div class="header-serie">
+      <span class="serie-label">Maffezzolli Capital · Reestruturação &amp; Insolvência</span>
+      <span class="serie-title">Monitor de Insolvência</span>
+    </div>
+    <div class="header-meta">
+      <span class="meta-edicao">Edição 01 · Brasil</span>
+      <span class="meta-data">09 — 23 Mai 2026</span>
+    </div>
+  </div>
+
+  <!-- Tags -->
+  <div class="case-origin">
+    <span class="tag-brasil">Brasil</span>
+    <span class="tag-tipo">Recuperação Judicial</span>
+    <span class="tag-tipo">Varejo · B3</span>
+  </div>
+
+  <!-- Headline -->
+  <div class="card-headline">
+    <div class="headline-text">
+      Dona da Tok&amp;Stok e Mobly<br>
+      pede RJ com <em>R$ 1,1 bilhão</em><br>
+      em dívidas
+    </div>
+    <div class="headline-sub">
+      O Grupo Toky protocolou pedido de recuperação judicial em 12 de maio no Foro Central de SP —
+      resultado de uma fusão que não gerou as sinergias esperadas em um ambiente de juros reais elevados.
+    </div>
+  </div>
+
+  <!-- Logos -->
+  <div class="card-logos">
+    <div class="logo-box">
+      <span>Tok&amp;Stok</span>
+    </div>
+    <span class="logo-plus">+</span>
+    <div class="logo-box mobly">
+      <span>Mobly</span>
+    </div>
+    <span style="font-family:'DM Mono',monospace; font-size:11px; color:#555; margin-left:8px;">= Grupo Toky (TOKY3)</span>
+  </div>
+
+  <!-- Corpo -->
+  <div class="card-body">
+    <p class="body-text">
+      A fusão entre Tok&amp;Stok e Mobly, concluída em 2023 sob a marca Toky, tinha como premissa ganhos de escala no varejo de móveis e decoração. Na prática, a integração não reduziu a alavancagem: a <strong>dívida líquida saiu de R$ 592M para R$ 401M</strong> — queda insuficiente diante de uma Selic que permaneceu em dois dígitos durante todo o ciclo.
+    </p>
+    <p class="body-text">
+      No 1T26, a companhia registrou <strong>prejuízo de R$ 55,2 milhões</strong>. O conselho deliberou de forma urgente em 11/05 e o protocolo seguiu no dia seguinte, sob sigilo de justiça. O objetivo declarado: reestruturar a dívida e preservar as operações e empregos dos dois varejistas.
+    </p>
+  </div>
+
+  <!-- Análise -->
+  <div class="card-analise">
+    <div class="analise-label">Análise Maffezzolli</div>
+    <p class="analise-text">
+      Caso clássico de <strong>alavancagem pós-M&A em ambiente de juros altos</strong>. A tese de fusão dependia de queda acelerada do custo de capital — que não veio. Com Selic acima de 14% por mais de 24 meses, o serviço da dívida consumiu o caixa gerado pelas operações antes de qualquer sinergia se materializar. O setor de móveis é intensivo em crédito ao consumidor: quando o crédito ao varejo aperta, a receita cai junto com a capacidade de pagamento.
+    </p>
+  </div>
+
+  <!-- Cards de números -->
+  <div class="card-numeros">
+    <div class="num-item">
+      <div class="num-icon">R$</div>
+      <div class="num-valor">R$ 1,1Bi</div>
+      <div class="num-label">Passivo Total<br>do Grupo</div>
+    </div>
+    <div class="num-item">
+      <div class="num-icon">–</div>
+      <div class="num-valor">R$ 55,2M</div>
+      <div class="num-label">Prejuízo Líquido<br>1T26</div>
+    </div>
+    <div class="num-item">
+      <div class="num-icon">→</div>
+      <div class="num-valor">SP · Sigilo</div>
+      <div class="num-label">Foro Central São Paulo<br>Processo sob sigilo</div>
+    </div>
+  </div>
+
+  <!-- Footer -->
+  <div class="card-footer">
+    <div class="footer-fonte">
+      <span class="fonte-label">Fontes</span>
+      <span class="fonte-text">Bloomberg Línea · Capital Aberto · E-Commerce Brasil · 12/05/2026</span>
+    </div>
+    <div class="footer-brand">
+      <span class="brand-name">MAFFEZZOLLI.CAPITAL</span>
+      <span class="brand-sub">Reestruturação · Mercado de Capitais</span>
+    </div>
+  </div>
+
+  <div class="card-bottombar"></div>
+
+</div>
+<!-- fim .card -->
+
+<div class="preview-controls">
+  <p>Para exportar: zoom 100% no browser → <kbd>Cmd+Shift+4</kbd> (Mac) ou <kbd>Win+Shift+S</kbd> (Windows) para screenshot da área</p>
+  <p style="margin-top:4px; color:#555;">Largura do card: 1080px · Formato LinkedIn portrait</p>
+</div>
+
+</div>
+
+</body>
+</html>

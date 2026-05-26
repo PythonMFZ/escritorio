@@ -14,3 +14,6 @@ reportlab>=4.0
 stripe>=9.0.0
 chromadb
 openai-whisper
+openpyxl>=3.1.0
+xlrd>=2.0.1
+python-docx>=1.1.0

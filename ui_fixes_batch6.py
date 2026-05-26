@@ -307,10 +307,9 @@ _WIDGET_B6V2 = r"""{% if current_client %}
           <input type="text" id="baseDescricao" class="form-control form-control-sm" placeholder="Ex: Planilha de entradas e saídas">
         </div>
         <div class="col-12">
-          <label class="form-label small fw-semibold">Arquivo (CSV recomendado; PDF, imagem também aceitos)</label>
+          <label class="form-label small fw-semibold">Arquivo (PDF, Excel, Word, CSV, imagem)</label>
           <input type="file" id="baseArquivo" class="form-control form-control-sm"
-                 accept=".pdf,.csv,.txt,.png,.jpg,.jpeg">
-          <div class="form-text text-warning">⚠️ Arquivos Excel (.xlsx/.xls) não são suportados aqui. Exporte como CSV primeiro.</div>
+                 accept=".pdf,.xlsx,.xls,.doc,.docx,.csv,.txt,.png,.jpg,.jpeg,.webp">
         </div>
         <div class="col-12 d-flex gap-2">
           <button class="btn btn-primary btn-sm" onclick="baseSalvar()">Salvar</button>

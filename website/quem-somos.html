@@ -6,18 +6,20 @@
   <title>Quem Somos · Maffezzolli Capital</title>
   <meta name="description" content="Conheça a equipe da Maffezzolli Capital — boutique financeira independente com atuação em reestruturação, IB e mercado de capitais no Sul do Brasil.">
   <link rel="canonical" href="https://maffezzollicapital.com.br/quem-somos.html">
-  <link rel="stylesheet" href="css/style.css">
+  <link rel="stylesheet" href="css/style.css?v=2">
 </head>
 <body>
 
 <!-- ── NAV ──────────────────────────────────────────────────── -->
 <nav>
-  <a href="/" class="nav-logo">MAFFEZZOLLI<span>.</span>CAPITAL</a>
+  <a href="/" class="nav-logo"><img src="img/logo.png" alt="Maffezzolli Capital" class="nav-logo-img"></a>
   <div class="nav-links">
     <a href="index.html">Home</a>
     <a href="o-que-fazemos.html">O que fazemos</a>
     <a href="quem-somos.html" class="active">Quem somos</a>
-    <a href="https://app.maffezzollicapital.com.br" target="_blank" rel="noopener">Nossa Plataforma</a>
+    <a href="augur.html">Nossa Tecnologia</a>
+    <a href="cases.html">Cases</a>
+    <a href="https://app.maffezzollicapital.com.br" target="_blank" rel="noopener">Plataforma</a>
     <a href="https://wa.me/5547991359091" target="_blank" rel="noopener" class="nav-cta">Falar pelo WhatsApp</a>
   </div>
   <button class="hamburger" aria-label="Menu">
@@ -29,7 +31,9 @@
   <a href="index.html">Home</a>
   <a href="o-que-fazemos.html">O que fazemos</a>
   <a href="quem-somos.html">Quem somos</a>
-  <a href="https://app.maffezzollicapital.com.br" target="_blank" rel="noopener">Nossa Plataforma</a>
+  <a href="augur.html">Nossa Tecnologia</a>
+  <a href="cases.html">Cases</a>
+  <a href="https://app.maffezzollicapital.com.br" target="_blank" rel="noopener">Plataforma</a>
   <a href="https://wa.me/5547991359091" target="_blank" rel="noopener" class="nav-cta">Falar pelo WhatsApp</a>
 </div>
 
@@ -37,7 +41,7 @@
 <section class="page-hero grid-bg">
   <div class="vline"></div>
   <div class="skyline-wrap">
-    <svg viewBox="0 0 1440 220" xmlns="http://www.w3.org/2000/svg" fill="#C9A84C" preserveAspectRatio="xMidYMax meet">
+    <svg viewBox="0 0 1440 220" xmlns="http://www.w3.org/2000/svg" fill="#E07020" preserveAspectRatio="xMidYMax meet">
       <rect x="0"    y="110" width="28"  height="110"/>
       <rect x="36"   y="80"  width="48"  height="140"/>
       <rect x="132"  y="50"  width="60"  height="170"/>
@@ -104,6 +108,9 @@
       <div class="equipe-grid">
 
         <div class="membro-card fade-up d1">
+          <div class="membro-foto">
+            <img src="img/rafael-maffezzolli.jpg" alt="Rafael Maffezzolli">
+          </div>
           <div class="membro-name">Rafael Maffezzolli</div>
           <div class="membro-cargo">Sócio-Fundador · Diretor Executivo</div>
           <p class="membro-bio">
@@ -115,6 +122,9 @@
         </div>
 
         <div class="membro-card fade-up d2">
+          <div class="membro-foto">
+            <img src="img/caroline-maffezzolli.jpg" alt="Caroline Maffezzolli">
+          </div>
           <div class="membro-name">Caroline Maffezzolli</div>
           <div class="membro-cargo">Head de Crédito · Sócia</div>
           <p class="membro-bio">
@@ -144,6 +154,23 @@
     </a>
   </div>
 </section>
+
+<!-- ── MONITOR DE INSOLVÊNCIA ─────────────────────────────────── -->
+<section class="monitor-section">
+  <div class="container">
+    <div class="monitor-header">
+      <div>
+        <span class="monitor-edicao">Maffezzolli Capital · Quinzenal</span>
+        <h2 class="display fade-up">Monitor de Insolvência</h2>
+      </div>
+      <a href="cases.html" class="btn btn-outline">Ver todos os cases</a>
+    </div>
+    <div class="monitor-grid" id="monitor-cards">
+      <!-- populado por js/monitor.js -->
+    </div>
+  </div>
+</section>
+<script src="js/monitor.js"></script>
 
 <!-- ── FOOTER ────────────────────────────────────────────────── -->
 <footer>

@@ -20,3 +20,12 @@ services:
       - type: rewrite
         source: /quem-somos
         destination: /quem-somos.html
+      - type: rewrite
+        source: /nossa-tecnologia
+        destination: /augur.html
+      - type: rewrite
+        source: /augur
+        destination: /augur.html
+      - type: rewrite
+        source: /cases
+        destination: /cases.html
