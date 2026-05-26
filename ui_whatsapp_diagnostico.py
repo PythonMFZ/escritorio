@@ -774,9 +774,13 @@ def _wad_complete_session(db, session: WaDiagSession, answers: dict,
     return summary + analysis
 
 
-# ── Startup ───────────────────────────────────────────────────────────────────
+# ── Startup — move table creation to FastAPI startup event (safe for prod) ────
 
-try:
-    _ensure_wad_tables()
-except Exception as _e_wad:
-    print(f"[wad] tabela erro: {_e_wad}")
+@app.on_event("startup")
+def _wad_startup():
+    try:
+        _ensure_wad_tables()
+        print("[wad] tabela wa_diag_session OK")
+    except Exception as _e_wad:
+        print(f"[wad] tabela erro (não fatal): {_e_wad}")
+

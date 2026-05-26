@@ -227,20 +227,18 @@ function wdiUpload() {
 </script>
 """
 
-# Inject the bar+modal just after the form tag (before etapa badges)
-_wiz_tpl = TEMPLATES.get("wizard_diagnostico.html", "")
-if _wiz_tpl and "wdi-bar" not in _wiz_tpl:
-    # Insert after the form open tag and hidden etapa input
-    _wiz_tpl = _wiz_tpl.replace(
-        '<input type="hidden" name="etapa" value="{{ etapa }}">',
-        '<input type="hidden" name="etapa" value="{{ etapa }}">\n'
-        '{% if etapa in [2,3,4] %}\n' + _WDI_BTN_HTML + '\n{% endif %}',
-        1,
-    )
-    TEMPLATES["wizard_diagnostico.html"] = _wiz_tpl
-
 try:
+    _wiz_tpl = TEMPLATES.get("wizard_diagnostico.html", "")
+    if _wiz_tpl and "wdi-bar" not in _wiz_tpl:
+        _wiz_tpl = _wiz_tpl.replace(
+            '<input type="hidden" name="etapa" value="{{ etapa }}">',
+            '<input type="hidden" name="etapa" value="{{ etapa }}">\n'
+            '{% if etapa in [2,3,4] %}\n' + _WDI_BTN_HTML + '\n{% endif %}',
+            1,
+        )
+        TEMPLATES["wizard_diagnostico.html"] = _wiz_tpl
     if hasattr(templates_env.loader, "mapping"):
         templates_env.loader.mapping = TEMPLATES
-except Exception:
-    pass
+    print("[wdi] template wizard atualizado com botão de upload de documento")
+except Exception as _e_wdi:
+    print(f"[wdi] erro ao atualizar template (não fatal): {_e_wdi}")
