@@ -477,8 +477,10 @@ def _bc_extract_excel(file_bytes: bytes, fname: str = "") -> str:
     import io
     from datetime import datetime as _dt_xl, date as _date_xl
 
-    # Sheets whose names start with these prefixes are auxiliary — skip them
-    _SKIP_PREFIXES = ("cálculo", "calculo", "calc", "sheet", "plan")
+    # Only skip sheets that are clearly auxiliary calculation helpers.
+    # "plan" and "sheet" are the DEFAULT names in Portuguese/English Excel —
+    # removing them so "Planilha1", "Plan1", "Sheet1" are NOT skipped.
+    _SKIP_PREFIXES = ("cálculos", "calculos", "cálculo auxiliar", "calculo auxiliar")
 
     def _fmt_cell(v):
         if v is None:
