@@ -42344,14 +42344,78 @@ async def whatsapp_webhook_receive(request: Request, session: Session = Depends(
             preview=preview,
         )
 
-        # Augur auto-reply — apenas clientes cadastrados, mensagens de texto
-        if thread.client_id and not is_group and body:
-            asyncio.create_task(_augur_whatsapp_reply(
-                company_id=company_id,
-                thread_id=thread.id,
-                client_id=thread.client_id,
-                message_body=body,
-            ))
+        # Diagnostic flow + Augur auto-reply — apenas clientes cadastrados
+        if thread.client_id and not is_group:
+            _wad_reply: Optional[str] = None
+
+            # Document → extract financial fields
+            if media_id and media_kind == "document" and not is_group:
+                try:
+                    _wad_fname = str(event.get("attachment_name") or "").strip()
+                    _wad_mime  = str(event.get("attachment_mime_type") or "").strip()
+                    _wad_reply = _wad_handle_document(
+                        session,
+                        company_id=company_id,
+                        client_id=int(thread.client_id),
+                        phone=incoming_phone,
+                        media_id=media_id,
+                        filename=_wad_fname,
+                        mime_type=_wad_mime,
+                    )
+                except Exception as _wad_exc:
+                    print(f"[webhook] wad_handle_document erro: {_wad_exc}")
+
+            # Text → diagnostic Q&A state machine
+            if not _wad_reply and body and not body.startswith("[mensagem "):
+                try:
+                    _wad_reply = _wad_handle_message(
+                        session,
+                        company_id=company_id,
+                        client_id=int(thread.client_id),
+                        phone=incoming_phone,
+                        message_text=body,
+                    )
+                except Exception as _wad_exc2:
+                    print(f"[webhook] wad_handle_message erro: {_wad_exc2}")
+
+            if _wad_reply:
+                # Send diagnostic reply directly (sync-safe wrapper)
+                async def _send_diag_reply(_reply=_wad_reply, _tid=thread.id, _coid=company_id, _cid=thread.client_id, _phone=incoming_phone, _cfg=config):
+                    try:
+                        class _MinCfg:
+                            is_enabled           = True
+                            meta_phone_number_id = _cfg.meta_phone_number_id
+                        ok, err, ext_id = await _try_send_whatsapp_text(
+                            config=_MinCfg(),
+                            recipient_id=_phone,
+                            recipient_type="individual",
+                            body=_reply[:4000],
+                        )
+                        if ok:
+                            with _WazSession(engine) as _db2:
+                                _th2 = _db2.get(WhatsAppThread, _tid)
+                                if _th2:
+                                    _whatsapp_add_message(
+                                        _db2,
+                                        thread=_th2,
+                                        direction="outbound",
+                                        body=_reply[:4000],
+                                        sender_name="Augur",
+                                        created_by_user_id=None,
+                                        delivery_status="sent",
+                                        external_message_id=ext_id or "",
+                                    )
+                    except Exception as _se:
+                        print(f"[webhook] send_diag_reply erro: {_se}")
+                asyncio.create_task(_send_diag_reply())
+            elif body:
+                # Normal Augur auto-reply
+                asyncio.create_task(_augur_whatsapp_reply(
+                    company_id=company_id,
+                    thread_id=thread.id,
+                    client_id=thread.client_id,
+                    message_body=body,
+                ))
 
         processed += 1
 
@@ -48295,5 +48359,6 @@ exec(open('ui_obras_duplicar_fase.py').read())
 exec(open('ui_obras_duplicar_etapa.py').read())
 exec(open('ui_augur_commands.py').read())
 exec(open('ui_whatsapp_augur.py').read())
+exec(open('ui_whatsapp_diagnostico.py').read())
 exec(open('ui_cloud_storage.py').read())
 
