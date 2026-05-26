@@ -110,6 +110,19 @@ _WA_DIAG_TRIGGERS = {
     "quero fazer avaliação", "quero fazer avaliacao",
 }
 
+_WD_INDICATORS_TRIGGERS = {
+    "indicadores", "meus indicadores", "meus números", "meus numeros",
+    "como estou", "minha situação", "minha situacao", "ver indicadores",
+    "situação financeira", "situacao financeira", "meus dados", "ver dados",
+}
+
+_WD_SCHEDULE_TRIGGERS = {
+    "agendar avaliação", "agendar avaliacao", "nova avaliação em 30 dias",
+    "agendar nova avaliação", "agendar nova avaliacao", "agendar reavaliação",
+    "agendar reavaliacao", "reavaliação em 30 dias", "reavaliacao em 30 dias",
+    "marcar avaliação", "marcar avaliacao", "agendar nova avaliação em 30 dias",
+}
+
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -191,6 +204,173 @@ def _wd_get_session(db, company_id: int, phone: str) -> _Opt_wd[WaDiagSession]:
             WaDiagSession.is_complete == False,
         )
     ).first()
+
+
+def _wd_compute_indicators(answers: dict) -> dict:
+    """Compute key financial indicators from diagnostic answers."""
+    monthly = float(answers.get("monthly_revenue") or 0)
+    cash    = float(answers.get("cash_and_investments_brl") or 0)
+    recv    = sum(float(answers.get(k) or 0) for k in ["recv_30","recv_60","recv_90","recv_1ano","recv_lp"])
+    inv     = float(answers.get("inventory_brl") or 0)
+    payables= float(answers.get("payables_360_brl") or 0)
+    labor   = float(answers.get("labor_liabilities_brl") or 0)
+    tax     = float(answers.get("tax_liabilities_brl") or 0)
+    short_d = float(answers.get("short_term_debt_brl") or 0)
+    long_d  = float(answers.get("long_term_debt_brl") or 0)
+
+    current_assets      = cash + recv + inv
+    current_liabilities = payables + labor + tax + short_d
+    total_debt          = short_d + long_d
+    annual              = monthly * 12
+
+    ind = {
+        "monthly_revenue": monthly,
+        "current_assets": current_assets,
+        "current_liabilities": current_liabilities,
+        "total_debt": total_debt,
+        "ncg": recv - payables,
+    }
+    if current_liabilities > 0:
+        ind["liq_corrente"] = current_assets / current_liabilities
+    if monthly > 0:
+        ind["dias_caixa"] = (cash / monthly) * 30
+        if total_debt > 0:
+            ind["comprometimento_pct"] = (total_debt / annual) * 100
+    return ind
+
+
+def _wd_analysis_message(ind: dict) -> str:
+    """Format a financial indicators analysis for WhatsApp."""
+    lines = ["\n\n📊 *Análise dos seus indicadores:*\n"]
+    alerts = []
+
+    lc = ind.get("liq_corrente")
+    if lc is not None:
+        if lc >= 1.5:
+            icon, status = "✅", "Saudável"
+        elif lc >= 1.0:
+            icon, status = "⚠️", "Adequada"
+            alerts.append("Liquidez próxima do mínimo recomendado (1,0) — monitore de perto")
+        else:
+            icon, status = "🔴", "Crítica"
+            alerts.append("Liquidez abaixo de 1,0 — seus passivos circulantes superam os ativos de curto prazo")
+        lines.append(f"💧 Liquidez corrente: {lc:.2f} — {icon} {status}")
+
+    dc = ind.get("dias_caixa")
+    if dc is not None:
+        if dc >= 30:
+            icon = "✅"
+        elif dc >= 15:
+            icon = "⚠️"
+            alerts.append(f"Caixa cobre apenas {dc:.0f} dias — recomendável ter ao menos 30 dias de reserva")
+        else:
+            icon = "🔴"
+            alerts.append(f"Caixa cobre apenas {dc:.0f} dias — risco de caixa crítico")
+        lines.append(f"⏱️ Reserva de caixa: {dc:.0f} dias de operação {icon}")
+
+    comp = ind.get("comprometimento_pct")
+    if comp is not None:
+        if comp <= 15:
+            icon, status = "✅", "Baixo"
+        elif comp <= 30:
+            icon, status = "⚠️", "Moderado"
+            alerts.append(f"Dívidas comprometem {comp:.0f}% da receita anual — acompanhe")
+        else:
+            icon, status = "🔴", "Elevado"
+            alerts.append(f"Dívidas comprometem {comp:.0f}% da receita anual — acima do recomendado (30%)")
+        lines.append(f"💳 Comprometimento com dívidas: {comp:.0f}% da receita {icon} {status}")
+
+    ncg = ind.get("ncg")
+    if ncg is not None and ind.get("monthly_revenue", 0) > 0:
+        if ncg > 0:
+            icon = "⚠️"
+            alerts.append(f"Necessidade de capital de giro de {_wd_fmt_brl(ncg)} — recebíveis superam fornecedores")
+        else:
+            icon = "✅"
+        lines.append(f"🔄 Capital de giro: {_wd_fmt_brl(abs(ncg))} {'necessário' if ncg > 0 else 'disponível'} {icon}")
+
+    if alerts:
+        lines.append("\n⚠️ *Pontos de atenção:*")
+        for a in alerts:
+            lines.append(f"• {a}")
+    else:
+        lines.append("\n✅ *Indicadores dentro do esperado — boa saúde financeira!*")
+
+    lines.append(
+        "\n_Responda *criar tarefa* para eu registrar um plano de ação, "
+        "ou *agendar avaliação* para marcarmos uma nova avaliação em 30 dias._"
+    )
+    return "\n".join(lines)
+
+
+def _wd_indicators_from_db(db, company_id: int, client_id: int) -> str:
+    """Load profile from DB and return indicator analysis."""
+    from sqlmodel import select as _sel3
+    profile = db.exec(
+        _sel3(ClientBusinessProfile).where(
+            ClientBusinessProfile.company_id == company_id,
+            ClientBusinessProfile.client_id  == client_id,
+        )
+    ).first()
+    if not profile:
+        return (
+            "Ainda não tenho dados financeiros registrados para você. "
+            "Digite *diagnóstico* para iniciarmos o preenchimento."
+        )
+    monthly = float(getattr(profile, "annual_revenue_brl", 0) or 0) / 12
+    answers = {
+        "monthly_revenue":          monthly,
+        "cash_and_investments_brl": float(getattr(profile, "cash_and_investments_brl", 0) or 0),
+        "recv_30":                  float(getattr(profile, "receivables_brl", 0) or 0),
+        "inventory_brl":            float(getattr(profile, "inventory_brl", 0) or 0),
+        "payables_360_brl":         float(getattr(profile, "payables_360_brl", 0) or 0),
+        "labor_liabilities_brl":    float(getattr(profile, "labor_liabilities_brl", 0) or 0),
+        "tax_liabilities_brl":      float(getattr(profile, "tax_liabilities_brl", 0) or 0),
+        "short_term_debt_brl":      float(getattr(profile, "short_term_debt_brl", 0) or 0),
+        "long_term_debt_brl":       float(getattr(profile, "long_term_debt_brl", 0) or 0),
+    }
+    ind = _wd_compute_indicators(answers)
+    return "📊 *Seus indicadores atuais:*" + _wd_analysis_message(ind)
+
+
+def _wd_schedule_revaluation(db, company_id: int, client_id: int, created_by_user_id=None) -> str:
+    """Create a task to schedule a new financial evaluation in 30 days."""
+    from datetime import timedelta as _td_wd
+    due = (_dt_wd.utcnow() + _td_wd(days=30)).strftime("%d/%m/%Y")
+    try:
+        task = Task(
+            company_id=company_id,
+            client_id=client_id,
+            created_by_user_id=created_by_user_id or _wd_resolve_user_id(db, company_id),
+            title="Reavaliação financeira — diagnóstico WhatsApp",
+            description="Realizar nova avaliação financeira pelo WhatsApp ou portal.",
+            status="nao_iniciada",
+            priority="media",
+            due_date=due,
+            visible_to_client=True,
+            client_action=False,
+        )
+        db.add(task)
+        db.commit()
+        return f"📅 Tarefa criada! Uma nova avaliação foi agendada para *{due}*. Você receberá um lembrete. Até lá! 👋"
+    except Exception as _e:
+        print(f"[wad] schedule_revaluation erro: {_e}")
+        return f"⚠️ Não consegui criar a tarefa agora. Pediu ao seu consultor para agendar para {due}."
+
+
+def _wd_resolve_user_id(db, company_id: int) -> int:
+    """Get any valid user_id for task creation (admin fallback)."""
+    from sqlmodel import select as _sel4
+    for role in ("admin", "equipe", "cliente"):
+        m = db.exec(
+            _sel4(Membership).where(
+                Membership.company_id == company_id,
+                Membership.role == role,
+            )
+        ).first()
+        if m:
+            return m.user_id
+    return 0
 
 
 def _wd_save_profile(db, company_id: int, client_id: int, answers: dict):
@@ -541,7 +721,16 @@ def _wad_handle_message(db, company_id: int, client_id: int, phone: str,
         progress = f"({session.question_idx}/{_WA_DIAG_TOTAL})"
         return f"✓ Anotado: {_wd_fmt_brl(val)}\n\n{progress} {q}\n\n_(Digite o valor ou *pular*)_"
 
-    # No active session — check if this is a trigger
+    # No active session — check for indicators / schedule triggers
+    t_lower_full = text.lower().strip()
+
+    if any(trig in t_lower_full for trig in _WD_INDICATORS_TRIGGERS):
+        return _wd_indicators_from_db(db, company_id, client_id)
+
+    if any(trig in t_lower_full for trig in _WD_SCHEDULE_TRIGGERS):
+        return _wd_schedule_revaluation(db, company_id, client_id)
+
+    # No active session — check if this is a diagnostic trigger
     if _wd_is_trigger(text):
         # Create new session
         new_sess = WaDiagSession(
@@ -571,14 +760,18 @@ def _wad_handle_message(db, company_id: int, client_id: int, phone: str,
 
 def _wad_complete_session(db, session: WaDiagSession, answers: dict,
                            company_id: int, client_id: int) -> str:
-    """Finalize session, save profile, return summary."""
+    """Finalize session, save profile, return summary + indicators analysis."""
     session.is_complete = True
     session.updated_at = _dt_wd.utcnow().isoformat()
     db.add(session)
     db.commit()
 
     _wd_save_profile(db, company_id, client_id, answers)
-    return _wd_summary(answers)
+
+    summary = _wd_summary(answers)
+    ind = _wd_compute_indicators(answers)
+    analysis = _wd_analysis_message(ind)
+    return summary + analysis
 
 
 # ── Startup ───────────────────────────────────────────────────────────────────

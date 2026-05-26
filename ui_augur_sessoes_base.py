@@ -556,6 +556,40 @@ def _bc_extract_excel(file_bytes: bytes, fname: str = "") -> str:
     return ""
 
 
+def _bc_extract_pdf_local(file_bytes: bytes) -> str:
+    """Try to extract text from PDF locally without calling the API."""
+    import io as _io_pdf
+    # Try pypdf first (fast, pure Python)
+    try:
+        import pypdf
+        reader = pypdf.PdfReader(_io_pdf.BytesIO(file_bytes))
+        parts = []
+        for page in reader.pages:
+            t = page.extract_text()
+            if t and t.strip():
+                parts.append(t.strip())
+        text = "\n".join(parts).strip()
+        if len(text) > 200:  # meaningful content
+            return text[:200_000]
+    except Exception:
+        pass
+    # Try pdfplumber as fallback
+    try:
+        import pdfplumber
+        with pdfplumber.open(_io_pdf.BytesIO(file_bytes)) as pdf:
+            parts = []
+            for page in pdf.pages:
+                t = page.extract_text()
+                if t and t.strip():
+                    parts.append(t.strip())
+            text = "\n".join(parts).strip()
+            if len(text) > 200:
+                return text[:200_000]
+    except Exception:
+        pass
+    return ""
+
+
 def _bc_extract_claude(file_bytes: bytes, mime_type: str) -> str:
     """Extract text from PDF or image via Claude Haiku vision."""
     import base64 as _b64
@@ -570,14 +604,19 @@ def _bc_extract_claude(file_bytes: bytes, mime_type: str) -> str:
         "Seja completo. Responda em português."
     )
     if mime_type == "application/pdf":
+        # First try local text extraction (fast, no API cost)
+        local_text = _bc_extract_pdf_local(file_bytes)
+        if local_text:
+            return local_text
         content = [
             {"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": b64}},
             {"type": "text", "text": prompt},
         ]
+        # Note: anthropic-beta pdfs-2024-09-25 was for claude-3.5 only.
+        # claude-haiku-4-5 and newer have PDF support built-in (no beta header needed).
         headers = {
             "x-api-key": key,
             "anthropic-version": "2023-06-01",
-            "anthropic-beta": "pdfs-2024-09-25",
             "content-type": "application/json",
         }
     else:
