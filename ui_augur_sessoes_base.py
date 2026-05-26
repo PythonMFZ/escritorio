@@ -212,7 +212,7 @@ async def augur_ask_v4(request: _Req_av4, session=_Dep_av4(get_session)):
             {
                 "nome":      d.nome,
                 "descricao": d.descricao,
-                "conteudo":  d.conteudo_texto[:2000],
+                "conteudo":  d.conteudo_texto[:8000],
                 "data":      d.created_at[:10] if d.created_at else "",
             }
             for d in docs_base
