@@ -134,6 +134,7 @@ _WIDGET_B6V2 = r"""{% if current_client %}
 (function(){
   let _sessaoAtual = null;
   let _augurAnexos = [];
+  let _augurExtraindo = false; // true enquanto extração de arquivo está em progresso
 
   function _sb(show){ const s=document.getElementById('augurSidebar'); if(s) s.style.display=show?'block':'none'; }
 
@@ -203,6 +204,11 @@ _WIDGET_B6V2 = r"""{% if current_client %}
   }
 
   window.augurSend = async function() {
+    if(_augurExtraindo){
+      const nomeEl=document.getElementById('augurAnexoNome');
+      if(nomeEl) nomeEl.textContent='⏳ Aguarde a extração terminar…';
+      return;
+    }
     const input = document.getElementById('augurInput');
     const q = (input.value||'').trim();
     if (!q && _augurAnexos.length===0) return;
@@ -266,7 +272,10 @@ _WIDGET_B6V2 = r"""{% if current_client %}
       } else if(ext==='xlsx'||ext==='xls'){
         // Upload to server for proper text extraction (xlsx is binary)
         const previewEl=document.getElementById('augurAnexoPreview'), nomeEl=document.getElementById('augurAnexoNome');
-        nomeEl.textContent='⏳ Extraindo dados de '+file.name+'…';
+        const btn=document.getElementById('augurBtn');
+        _augurExtraindo=true;
+        if(btn){btn.disabled=true;btn.textContent='⏳';}
+        nomeEl.textContent='⏳ Extraindo '+file.name+'…';
         previewEl.style.display='block';
         try {
           const fd=new FormData(); fd.append('arquivo',file);
@@ -275,9 +284,16 @@ _WIDGET_B6V2 = r"""{% if current_client %}
           if(d.ok&&d.content){
             _augurAnexos.push({type:'excel-texto',data:d.content,name:file.name});
           } else {
-            alert('Não foi possível extrair o arquivo Excel: '+(d.erro||'Erro')+'\n\nTente salvar como CSV antes de enviar.');
+            nomeEl.textContent='❌ Falha na extração: '+(d.erro||'Erro');
+            setTimeout(()=>{previewEl.style.display='none';},3000);
           }
-        } catch(e){ alert('Erro ao processar arquivo Excel.'); }
+        } catch(e){
+          nomeEl.textContent='❌ Erro ao processar arquivo';
+          setTimeout(()=>{previewEl.style.display='none';},3000);
+        } finally {
+          _augurExtraindo=false;
+          if(btn){btn.disabled=false;btn.textContent='Enviar';}
+        }
       } else if(ext==='pdf'){
         const b=await new Promise(r=>{const rd=new FileReader();rd.onload=e=>r(e.target.result.split(',')[1]);rd.readAsDataURL(file)});
         _augurAnexos.push({type:'pdf',data:b,name:file.name});
