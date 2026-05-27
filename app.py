@@ -42167,6 +42167,50 @@ def _whatsapp_apply_meta_status_event(
     session.commit()
     return True
 
+
+async def _whatsapp_prospect_welcome(
+    company_id: int,
+    thread_id: int,
+    phone: str,
+    config_phone_number_id: str,
+) -> None:
+    """Envia boas-vindas para número desconhecido e direciona para o trial."""
+    _MSG = (
+        "Olá! 👋 Aqui é o *Augur*, assistente financeiro da Maffezzolli Capital.\n\n"
+        "Para receber seu *Diagnóstico Financeiro Gratuito* — que identifica exatamente onde sua empresa está perdendo dinheiro — acesse o link abaixo:\n\n"
+        "🔗 https://app.maffezzollicapital.com.br/cadastro\n\n"
+        "Leva cerca de 10 minutos e você sai com o *Score de Saúde Financeira* e um plano de ação.\n\n"
+        "Prefere falar com um consultor? 👉 https://wa.me/5547991359091"
+    )
+    try:
+        class _MinCfg:
+            is_enabled           = True
+            meta_phone_number_id = config_phone_number_id
+
+        ok, err, ext_id = await _try_send_whatsapp_text(
+            config=_MinCfg(),
+            recipient_id=phone,
+            recipient_type="individual",
+            body=_MSG,
+        )
+        if ok:
+            with _WazSession(engine) as _db:
+                _th = _db.get(WhatsAppThread, thread_id)
+                if _th:
+                    _whatsapp_add_message(
+                        _db,
+                        thread=_th,
+                        direction="outbound",
+                        body=_MSG,
+                        sender_name="Augur",
+                        created_by_user_id=None,
+                        delivery_status="sent",
+                        external_message_id=ext_id or "",
+                    )
+    except Exception as _pe:
+        print(f"[webhook] prospect_welcome erro: {_pe}")
+
+
 @app.post("/api/whatsapp/webhook")
 async def whatsapp_webhook_receive(request: Request, session: Session = Depends(get_session)) -> JSONResponse:
     try:
@@ -42447,6 +42491,22 @@ async def whatsapp_webhook_receive(request: Request, session: Session = Depends(
                     thread_id=thread.id,
                     client_id=thread.client_id,
                     message_body=body,
+                ))
+
+        # Número desconhecido (prospect) — envia boas-vindas uma única vez
+        elif not thread.client_id and not is_group and body:
+            _outbound_count = session.exec(
+                select(func.count(WhatsAppThreadMessage.id)).where(
+                    WhatsAppThreadMessage.thread_id == thread.id,
+                    WhatsAppThreadMessage.direction == "outbound",
+                )
+            ).one()
+            if (_outbound_count or 0) == 0:
+                asyncio.create_task(_whatsapp_prospect_welcome(
+                    company_id=company_id,
+                    thread_id=thread.id,
+                    phone=incoming_phone,
+                    config_phone_number_id=config.meta_phone_number_id,
                 ))
 
         processed += 1
