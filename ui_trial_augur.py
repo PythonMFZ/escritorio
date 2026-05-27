@@ -1,21 +1,28 @@
 # ============================================================================
-# Augur PME — Trial / Freemium
+# Augur PME — Trial / Freemium   (v2)
 # ============================================================================
 # Fluxo:
-#   1. /cadastro            → formulário (nome, empresa, CNPJ, WhatsApp)
-#   2. POST /api/trial/cadastro → cria TrialLead, retorna access_token
-#   3. /trial?token=UUID    → página standalone do Augur (sem login)
-#   4. POST /api/trial/ask  → chat com limite de mensagens
-#   5. GET  /api/trial/status → créditos restantes
+#   1. /cadastro               → formulário (nome, email, empresa, CNPJ, WhatsApp)
+#   2. POST /api/trial/cadastro → cria TrialLead + card no CRM, retorna token
+#   3. /trial?token=UUID        → Augur standalone, 5 msgs grátis
+#   4. POST /api/trial/ask      → chat com limite + CTA progressivo
+#   5. GET  /api/trial/status   → créditos restantes
+#   6. GET  /api/trial/checkout → Stripe subscription checkout (R$299/mês)
 # ============================================================================
 
 import uuid as _uuid_tr
-import re  as _re_tr
+import re   as _re_tr
+import os   as _os_tr
 from datetime import datetime as _dt_tr, timedelta as _td_tr
 from typing   import Optional as _Opt_tr
 from sqlmodel import Field as _F_tr, SQLModel as _SM_tr, select as _sel_tr, Session as _Sess_tr
-from fastapi  import Request as _Req_tr, Form as _Form_tr
-from fastapi.responses import JSONResponse as _JSON_tr, HTMLResponse as _HTML_tr
+from fastapi  import Request as _Req_tr
+from fastapi.responses import JSONResponse as _JSON_tr, HTMLResponse as _HTML_tr, RedirectResponse as _RR_tr
+
+_TRIAL_MSGS_FREE  = 5   # mensagens gratuitas
+_TRIAL_CTA_AT     = 3   # mostra banner a partir desta mensagem
+_STRIPE_PRICE_PME = "price_1TSj9eDqHWO7wr"   # R$299/mês Augur PME
+_ADMIN_EMAIL      = "maffezzolli.eng@gmail.com"
 
 
 # ── Modelo ────────────────────────────────────────────────────────────────────
@@ -25,15 +32,17 @@ class TrialLead(_SM_tr, table=True):
     __table_args__ = {"extend_existing": True}
     id:             _Opt_tr[int] = _F_tr(default=None, primary_key=True)
     nome:           str          = _F_tr(default="")
+    email:          str          = _F_tr(default="", index=True)
     empresa:        str          = _F_tr(default="")
     cnpj:           str          = _F_tr(default="", index=True)
     whatsapp:       str          = _F_tr(default="", index=True)
     access_token:   str          = _F_tr(default="", index=True)
     messages_used:  int          = _F_tr(default=0)
-    messages_limit: int          = _F_tr(default=50)
+    messages_limit: int          = _F_tr(default=_TRIAL_MSGS_FREE)
+    crm_deal_id:    _Opt_tr[int] = _F_tr(default=None)  # BusinessDeal.id
     created_at:     str          = _F_tr(default="")
     expires_at:     str          = _F_tr(default="")
-    converted:      bool         = _F_tr(default=False)  # virou cliente pago
+    converted:      bool         = _F_tr(default=False)
 
 
 try:
@@ -58,7 +67,6 @@ def _expira() -> str:
     return (_dt_tr.now() + _td_tr(days=30)).strftime("%Y-%m-%d %H:%M:%S")
 
 def _trial_valido(lead: TrialLead) -> tuple[bool, str]:
-    """Retorna (ok, motivo_se_nao_ok)."""
     if lead.messages_used >= lead.messages_limit:
         return False, "credits"
     try:
@@ -68,6 +76,65 @@ def _trial_valido(lead: TrialLead) -> tuple[bool, str]:
     except Exception:
         pass
     return True, ""
+
+
+def _criar_crm_lead(session, lead: TrialLead) -> _Opt_tr[int]:
+    """Cria um BusinessDeal no CRM para rastrear o lead. Retorna deal_id ou None."""
+    try:
+        # Encontra admin e sua empresa
+        admin_user = session.exec(_sel_tr(User).where(User.email == _ADMIN_EMAIL)).first()
+        if not admin_user:
+            return None
+        membership = session.exec(
+            _sel_tr(Membership).where(
+                Membership.user_id == admin_user.id,
+                Membership.role.in_(["admin", "owner"]),
+            )
+        ).first()
+        if not membership:
+            return None
+        company_id = membership.company_id
+
+        # Encontra ou cria cliente-placeholder "Leads Augur PME"
+        placeholder = session.exec(
+            _sel_tr(Client).where(
+                Client.company_id == company_id,
+                Client.name == "Leads Augur PME",
+            )
+        ).first()
+        if not placeholder:
+            placeholder = Client(
+                company_id=company_id,
+                name="Leads Augur PME",
+                cnpj="00000000000000",
+                notes="Cliente placeholder para leads do trial Augur PME",
+            )
+            session.add(placeholder)
+            session.flush()
+
+        deal = BusinessDeal(
+            company_id         = company_id,
+            client_id          = placeholder.id,
+            created_by_user_id = admin_user.id,
+            owner_user_id      = admin_user.id,
+            title              = f"[Trial PME] {lead.empresa}",
+            demand             = (
+                f"Nome: {lead.nome}\n"
+                f"Empresa: {lead.empresa}\n"
+                f"CNPJ: {lead.cnpj}\n"
+                f"WhatsApp: {lead.whatsapp}\n"
+                f"E-mail: {lead.email}"
+            ),
+            stage   = "qualificacao",
+            source  = "augur_trial",
+            notes   = f"Trial iniciado em {_agora()}. Limite: {lead.messages_limit} msgs.",
+        )
+        session.add(deal)
+        session.flush()
+        return deal.id
+    except Exception as _e_crm:
+        print(f"[trial_crm] Erro ao criar deal: {_e_crm}")
+        return None
 
 
 # ── Página de cadastro ────────────────────────────────────────────────────────
@@ -83,7 +150,6 @@ _CADASTRO_HTML = """<!DOCTYPE html>
   <style>
     *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
     :root{--bg:#0A0A0A;--card:#141414;--border:#2a2a2a;--gold:#C9963A;--gold2:#E0A84B;--text:#F5F0E8;--muted:#888;}
-    html{scroll-behavior:smooth}
     body{background:var(--bg);color:var(--text);font-family:'Poppins',sans-serif;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:2rem 1rem;}
     .card{background:var(--card);border:1px solid var(--border);border-radius:20px;padding:2.5rem 2rem;width:100%;max-width:480px;}
     .logo{text-align:center;margin-bottom:2rem;}
@@ -112,7 +178,7 @@ _CADASTRO_HTML = """<!DOCTYPE html>
     <div class="logo-sub">by Maffezzolli Capital</div>
   </div>
   <div style="text-align:center;margin-bottom:1.5rem;">
-    <div class="badge">🎁 30 dias grátis · 50 mensagens incluídas</div>
+    <div class="badge">🎁 5 diagnósticos gratuitos · sem cartão</div>
   </div>
   <h1>Diagnóstico gratuito da sua empresa</h1>
   <p class="sub">Preencha os dados abaixo e acesse o Augur imediatamente.<br>Sem cartão de crédito. Sem compromisso.</p>
@@ -121,6 +187,10 @@ _CADASTRO_HTML = """<!DOCTYPE html>
     <div class="field">
       <label>Seu nome</label>
       <input type="text" id="nome" placeholder="João Silva" required autocomplete="name">
+    </div>
+    <div class="field">
+      <label>E-mail</label>
+      <input type="email" id="email" placeholder="joao@empresa.com.br" required autocomplete="email">
     </div>
     <div class="field">
       <label>Nome da empresa</label>
@@ -165,6 +235,7 @@ async function enviar(e){
   btn.style.display='none'; spin.style.display='block';
   const payload={
     nome:document.getElementById('nome').value.trim(),
+    email:document.getElementById('email').value.trim(),
     empresa:document.getElementById('empresa').value.trim(),
     cnpj:document.getElementById('cnpj').value,
     whatsapp:document.getElementById('whatsapp').value,
@@ -201,10 +272,6 @@ async def trial_cadastro_page():
 
 @app.get("/trial/demo")
 async def trial_demo(request: _Req_tr):
-    """Acesso direto ao trial para admin testar sem precisar de cadastro."""
-    from fastapi.responses import RedirectResponse as _RR_demo
-
-    # Exige que o usuário esteja logado na plataforma
     if not request.session.get("user_id"):
         return _HTML_tr("<script>location.href='/login'</script>")
 
@@ -212,6 +279,7 @@ async def trial_demo(request: _Req_tr):
     with _Sess_tr(engine) as _s:
         _s.add(TrialLead(
             nome           = request.session.get("user_name", "Admin"),
+            email          = _ADMIN_EMAIL,
             empresa        = "Demo Interno",
             cnpj           = "DEMO" + token[:8],
             whatsapp       = "00000000000",
@@ -223,7 +291,7 @@ async def trial_demo(request: _Req_tr):
         ))
         _s.commit()
 
-    return _RR_demo(f"/trial?token={token}", status_code=303)
+    return _RR_tr(f"/trial?token={token}", status_code=303)
 
 
 # ── API: criar trial ──────────────────────────────────────────────────────────
@@ -236,6 +304,7 @@ async def trial_cadastro(request: _Req_tr):
         return _JSON_tr({"ok": False, "erro": "Dados inválidos."})
 
     nome     = (body.get("nome") or "").strip()
+    email    = (body.get("email") or "").strip().lower()
     empresa  = (body.get("empresa") or "").strip()
     cnpj_raw = _limpar_cnpj(body.get("cnpj") or "")
     wpp_raw  = _limpar_whatsapp(body.get("whatsapp") or "")
@@ -244,7 +313,6 @@ async def trial_cadastro(request: _Req_tr):
         return _JSON_tr({"ok": False, "erro": "Preencha todos os campos corretamente."})
 
     with _Sess_tr(engine) as session:
-        # Bloqueia CNPJ duplicado (mesmo CNPJ = mesma empresa)
         existente = session.exec(
             _sel_tr(TrialLead).where(TrialLead.cnpj == cnpj_raw)
         ).first()
@@ -253,19 +321,28 @@ async def trial_cadastro(request: _Req_tr):
 
         token = str(_uuid_tr.uuid4())
         lead  = TrialLead(
-            nome=nome,
-            empresa=empresa,
-            cnpj=cnpj_raw,
-            whatsapp=wpp_raw,
-            access_token=token,
-            messages_used=0,
-            messages_limit=50,
-            created_at=_agora(),
-            expires_at=_expira(),
+            nome           = nome,
+            email          = email,
+            empresa        = empresa,
+            cnpj           = cnpj_raw,
+            whatsapp       = wpp_raw,
+            access_token   = token,
+            messages_used  = 0,
+            messages_limit = _TRIAL_MSGS_FREE,
+            created_at     = _agora(),
+            expires_at     = _expira(),
         )
         session.add(lead)
+        session.flush()
+
+        # Cria card no CRM automaticamente
+        deal_id = _criar_crm_lead(session, lead)
+        if deal_id:
+            lead.crm_deal_id = deal_id
+            session.add(lead)
+
         session.commit()
-        print(f"[trial] Novo lead: {empresa} / {cnpj_raw} / wpp={wpp_raw[-4:]}")
+        print(f"[trial] Novo lead: {empresa} / {cnpj_raw} / wpp={wpp_raw[-4:]} / crm_deal={deal_id}")
 
     return _JSON_tr({"ok": True, "token": token})
 
@@ -284,18 +361,22 @@ _TRIAL_HTML = """<!DOCTYPE html>
     *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
     :root{--bg:#F7F8FA;--card:#fff;--border:#E5E7EB;--gold:#C9963A;--primary:#1a1a2e;--text:#1a1a2e;--muted:#6B7280;}
     body{background:var(--bg);color:var(--text);font-family:'Poppins',sans-serif;min-height:100vh;display:flex;flex-direction:column;}
-    /* Nav */
     nav{background:#0A0A0A;padding:.75rem 1.5rem;display:flex;align-items:center;justify-content:space-between;flex-shrink:0;}
     .nav-brand{font-family:'Syne',sans-serif;font-weight:800;font-size:1.2rem;color:#C9963A;}
     .nav-info{font-size:.72rem;color:#888;}
-    /* Credit bar */
     .credit-bar{background:#fff;border-bottom:1px solid var(--border);padding:.6rem 1.5rem;display:flex;align-items:center;gap:1rem;flex-shrink:0;}
     .credit-label{font-size:.75rem;color:var(--muted);font-weight:500;}
     .credit-track{flex:1;max-width:200px;height:6px;background:#E5E7EB;border-radius:999px;overflow:hidden;}
     .credit-fill{height:100%;background:#C9963A;border-radius:999px;transition:width .4s;}
     .credit-count{font-size:.75rem;font-weight:600;color:var(--text);}
     .trial-badge{font-size:.68rem;background:rgba(201,150,58,.1);color:#C9963A;border:1px solid rgba(201,150,58,.3);border-radius:999px;padding:.15rem .6rem;font-weight:600;}
-    /* Chat */
+    /* CTA banner */
+    .cta-banner{display:none;background:linear-gradient(135deg,#1a1a2e,#0A0A0A);color:#fff;padding:.9rem 1.5rem;border-bottom:1px solid #2a2a2a;flex-shrink:0;}
+    .cta-banner.show{display:flex;align-items:center;justify-content:space-between;gap:1rem;flex-wrap:wrap;}
+    .cta-banner-text{font-size:.8rem;line-height:1.4;}
+    .cta-banner-text strong{color:#C9963A;}
+    .cta-banner-btn{background:#C9963A;color:#0A0A0A;border:none;border-radius:8px;padding:.45rem 1.1rem;font-weight:700;font-size:.78rem;cursor:pointer;white-space:nowrap;font-family:'Syne',sans-serif;}
+    .cta-banner-btn:hover{background:#E0A84B;}
     .chat-wrap{flex:1;display:flex;flex-direction:column;max-width:760px;width:100%;margin:0 auto;padding:1rem;gap:.75rem;overflow-y:auto;}
     .msg{display:flex;gap:.5rem;max-width:100%;}
     .msg.user{flex-direction:row-reverse;}
@@ -311,26 +392,29 @@ _TRIAL_HTML = """<!DOCTYPE html>
     .typing-wrap span{width:7px;height:7px;border-radius:50%;background:var(--muted);animation:bounce 1.2s infinite;}
     .typing-wrap span:nth-child(2){animation-delay:.2s;}.typing-wrap span:nth-child(3){animation-delay:.4s;}
     @keyframes bounce{0%,60%,100%{transform:translateY(0)}30%{transform:translateY(-6px)}}
-    /* Input */
     .input-area{background:#fff;border-top:1px solid var(--border);padding:.75rem 1rem;display:flex;gap:.6rem;align-items:flex-end;flex-shrink:0;}
     .input-area textarea{flex:1;border:1px solid var(--border);border-radius:10px;padding:.6rem .9rem;font-size:.87rem;font-family:'Poppins',sans-serif;resize:none;outline:none;max-height:120px;}
     .input-area textarea:focus{border-color:#C9963A;}
     .send-btn{background:#0A0A0A;color:#fff;border:none;border-radius:10px;padding:.6rem 1.1rem;font-size:.82rem;font-weight:600;cursor:pointer;align-self:flex-end;min-width:80px;}
     .send-btn:disabled{opacity:.5;cursor:not-allowed;}
-    /* Suggestions */
     .sugg{display:flex;gap:.5rem;flex-wrap:wrap;padding:.5rem 1rem;background:#fff;border-top:1px solid var(--border);}
     .sugg button{background:#F7F8FA;border:1px solid var(--border);border-radius:999px;padding:.3rem .8rem;font-size:.73rem;cursor:pointer;font-family:'Poppins',sans-serif;color:var(--text);}
     .sugg button:hover{border-color:#C9963A;color:#C9963A;}
-    /* Paywall overlay */
-    .paywall{display:none;position:fixed;inset:0;background:rgba(10,10,10,.85);z-index:100;align-items:center;justify-content:center;padding:1rem;}
+    /* Paywall */
+    .paywall{display:none;position:fixed;inset:0;background:rgba(10,10,10,.9);z-index:100;align-items:center;justify-content:center;padding:1rem;}
     .paywall.show{display:flex;}
     .paywall-card{background:#fff;border-radius:20px;padding:2.5rem 2rem;max-width:440px;width:100%;text-align:center;}
     .paywall-icon{font-size:2.5rem;margin-bottom:1rem;}
     .paywall h2{font-family:'Syne',sans-serif;font-size:1.3rem;margin-bottom:.75rem;}
-    .paywall p{font-size:.85rem;color:var(--muted);line-height:1.6;margin-bottom:1.5rem;}
+    .paywall p{font-size:.85rem;color:var(--muted);line-height:1.6;margin-bottom:.5rem;}
+    .paywall-price{font-family:'Syne',sans-serif;font-size:1.6rem;font-weight:800;color:#1a1a2e;margin:.75rem 0 1.5rem;}
+    .paywall-price span{font-size:.9rem;font-weight:400;color:var(--muted);}
     .paywall-btns{display:flex;flex-direction:column;gap:.75rem;}
-    .paywall .btn-gold{background:#C9963A;color:#fff;border:none;border-radius:12px;padding:.9rem;font-weight:700;font-size:.95rem;cursor:pointer;font-family:'Syne',sans-serif;}
-    .paywall .btn-outline{background:transparent;color:#1a1a2e;border:1px solid #E5E7EB;border-radius:12px;padding:.9rem;font-weight:600;font-size:.9rem;cursor:pointer;}
+    .paywall .btn-gold{background:#C9963A;color:#fff;border:none;border-radius:12px;padding:.9rem;font-weight:700;font-size:.95rem;cursor:pointer;font-family:'Syne',sans-serif;text-decoration:none;display:block;}
+    .paywall .btn-gold:hover{background:#E0A84B;}
+    .paywall .btn-outline{background:transparent;color:#1a1a2e;border:1px solid #E5E7EB;border-radius:12px;padding:.9rem;font-weight:600;font-size:.9rem;cursor:pointer;display:block;text-decoration:none;}
+    .paywall-features{text-align:left;margin:.75rem 0 1.5rem;font-size:.8rem;color:var(--muted);list-style:none;display:grid;grid-template-columns:1fr 1fr;gap:.4rem;}
+    .paywall-features li::before{content:'✓ ';color:#C9963A;font-weight:700;}
   </style>
 </head>
 <body>
@@ -341,10 +425,19 @@ _TRIAL_HTML = """<!DOCTYPE html>
 </nav>
 
 <div class="credit-bar">
-  <span class="credit-label">Créditos</span>
+  <span class="credit-label">Diagnósticos gratuitos</span>
   <div class="credit-track"><div class="credit-fill" id="creditFill" style="width:100%"></div></div>
-  <span class="credit-count" id="creditCount">50 / 50</span>
-  <span class="trial-badge">30 dias grátis</span>
+  <span class="credit-count" id="creditCount">5 / 5</span>
+  <span class="trial-badge">Trial gratuito</span>
+</div>
+
+<!-- Banner CTA progressivo -->
+<div class="cta-banner" id="ctaBanner">
+  <div class="cta-banner-text">
+    <strong>Está gostando do Augur?</strong> Você tem <strong id="ctaRestantes">X</strong> mensagens restantes no trial.
+    Assine e tenha acesso ilimitado ao diagnóstico financeiro da sua empresa.
+  </div>
+  <button class="cta-banner-btn" onclick="abrirStripeCheckout()">Assinar R$299/mês →</button>
 </div>
 
 <div class="chat-wrap" id="chatArea">
@@ -373,14 +466,28 @@ Para começar: **qual é o principal desafio financeiro da sua empresa hoje?** P
   <button class="send-btn" id="sendBtn" onclick="enviar()">Enviar</button>
 </div>
 
+<!-- Paywall -->
 <div class="paywall" id="paywall">
   <div class="paywall-card">
     <div class="paywall-icon">🔐</div>
-    <h2>Você usou seu diagnóstico gratuito</h2>
-    <p>Gostou do Augur? Com a assinatura você tem acesso ilimitado, histórico de conversas, base de conhecimento e muito mais.</p>
+    <h2 id="paywallTitle">Você usou seu diagnóstico gratuito</h2>
+    <p id="paywallDesc">Gostou do Augur? Com a assinatura você tem acesso ilimitado, histórico completo e alertas financeiros automáticos.</p>
+    <div class="paywall-price">R$299<span>/mês</span></div>
+    <ul class="paywall-features">
+      <li>Augur ilimitado</li>
+      <li>Histórico completo</li>
+      <li>Alertas automáticos</li>
+      <li>Suporte dedicado</li>
+      <li>Relatórios PDF</li>
+      <li>Score financeiro</li>
+    </ul>
     <div class="paywall-btns">
-      <button class="btn-gold" onclick="window.open('https://wa.me/5547991359091?text=Quero+assinar+o+Augur','_blank')">Falar com consultor para assinar</button>
-      <button class="btn-outline" onclick="window.open('https://maffezzollicapital.com.br/augur-pme','_blank')">Ver planos e preços</button>
+      <a id="stripeBtn" href="#" class="btn-gold" onclick="abrirStripeCheckout();return false;">
+        Assinar agora — R$299/mês
+      </a>
+      <a href="https://wa.me/5547991359091?text=Quero+assinar+o+Augur+PME" target="_blank" class="btn-outline">
+        Falar com um consultor
+      </a>
     </div>
   </div>
 </div>
@@ -390,11 +497,10 @@ Para começar: **qual é o principal desafio financeiro da sua empresa hoje?** P
   const TOKEN = new URLSearchParams(location.search).get('token') || '';
   if(!TOKEN){ location.href='/cadastro'; return; }
 
-  let limitTotal = 50;
-  let limitUsed = 0;
-  let _history = [];  // [{role, content}] para contexto da conversa
+  let limitTotal = __LIMIT__;
+  let limitUsed  = 0;
+  let _history   = [];
 
-  // Carrega status inicial
   fetch('/api/trial/status?token='+TOKEN)
     .then(r=>r.json())
     .then(d=>{
@@ -403,6 +509,7 @@ Para começar: **qual é o principal desafio financeiro da sua empresa hoje?** P
       limitUsed  = d.used;
       atualizarCreditos();
       if(!d.pode_usar) mostrarPaywall(d.motivo);
+      else if(d.used >= __CTA_AT__) mostrarCtaBanner(d.limit - d.used);
     })
     .catch(()=>{ location.href='/cadastro'; });
 
@@ -411,33 +518,50 @@ Para começar: **qual é o principal desafio financeiro da sua empresa hoje?** P
     const pct = limitTotal > 0 ? (restantes / limitTotal * 100) : 0;
     document.getElementById('creditFill').style.width = pct+'%';
     document.getElementById('creditCount').textContent = restantes+' / '+limitTotal;
-    if(pct < 20) document.getElementById('creditFill').style.background = '#f59e0b';
-    if(pct < 10) document.getElementById('creditFill').style.background = '#ef4444';
+    if(pct <= 40) document.getElementById('creditFill').style.background = '#f59e0b';
+    if(pct <= 20) document.getElementById('creditFill').style.background = '#ef4444';
+  }
+
+  function mostrarCtaBanner(restantes){
+    const banner = document.getElementById('ctaBanner');
+    document.getElementById('ctaRestantes').textContent = restantes;
+    banner.classList.add('show');
   }
 
   function mostrarPaywall(motivo){
     const pw = document.getElementById('paywall');
     if(motivo === 'expired'){
-      pw.querySelector('h2').textContent = 'Seu período gratuito encerrou';
-      pw.querySelector('p').textContent = 'Seus 30 dias de teste chegaram ao fim. Assine para continuar usando o Augur sem limites.';
+      document.getElementById('paywallTitle').textContent = 'Seu período gratuito encerrou';
+      document.getElementById('paywallDesc').textContent  = 'Seus 30 dias de teste chegaram ao fim. Assine para continuar usando o Augur sem limites.';
     }
     pw.classList.add('show');
     document.getElementById('sendBtn').disabled = true;
     document.getElementById('inp').disabled = true;
   }
 
+  window.abrirStripeCheckout = function(){
+    const btn = document.getElementById('stripeBtn');
+    btn.textContent = 'Aguarde...';
+    fetch('/api/trial/checkout?token='+TOKEN)
+      .then(r=>r.json())
+      .then(d=>{
+        if(d.url) window.location.href = d.url;
+        else { btn.textContent='Erro — tente novamente'; }
+      })
+      .catch(()=>{ btn.textContent='Erro — tente novamente'; });
+  };
+
   function _esc(t){ return String(t).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 
   function addMsg(role, text, animate){
     const area = document.getElementById('chatArea');
-    const ph = area.querySelector('[data-ph]'); if(ph) ph.remove();
     const wrap = document.createElement('div');
     wrap.className = 'msg '+role;
     const hora = new Date().toTimeString().slice(0,5);
     const av = role==='user'
       ? '<div class="av user">EU</div>'
       : '<div class="av assistant"><img src="/static/augur_logo_v3.png" alt="Augur"></div>';
-    wrap.innerHTML = av+'<div><div class="bubble '+role+'">'+_esc(text)+'</div><div class="meta">'+hora+'</div></div>';
+    wrap.innerHTML = av+'<div><div class="bubble '+role+'" style="white-space:pre-wrap">'+_esc(text)+'</div><div class="meta">'+hora+'</div></div>';
     if(animate){ wrap.style.opacity='0'; area.appendChild(wrap); setTimeout(()=>{wrap.style.transition='opacity .3s';wrap.style.opacity='1';},10); }
     else area.appendChild(wrap);
     area.scrollTop = area.scrollHeight;
@@ -458,7 +582,6 @@ Para começar: **qual é o principal desafio financeiro da sua empresa hoje?** P
     const inp = document.getElementById('inp');
     const q = (inp.value||'').trim();
     if(!q) return;
-
     if(limitUsed >= limitTotal){ mostrarPaywall('credits'); return; }
 
     const btn = document.getElementById('sendBtn');
@@ -479,17 +602,23 @@ Para começar: **qual é o principal desafio financeiro da sua empresa hoje?** P
       hideTyping();
 
       if(d.paywall){
-        addMsg('assistant','Você atingiu o limite do seu plano gratuito. Assine para continuar!', true);
-        setTimeout(()=>mostrarPaywall(d.motivo||'credits'), 1500);
+        addMsg('assistant','Você atingiu o limite do seu diagnóstico gratuito. Veja como continuar abaixo!', true);
+        setTimeout(()=>mostrarPaywall(d.motivo||'credits'), 1200);
         return;
       }
-
       if(d.error){ addMsg('assistant','⚠️ '+(d.error||'Erro.'), true); return; }
 
       _history.push({role:'assistant', content:d.response});
       addMsg('assistant', d.response, true);
       limitUsed = d.used || (limitUsed+1);
       atualizarCreditos();
+
+      // Mostra banner CTA quando chega em __CTA_AT__ mensagens usadas
+      if(limitUsed >= __CTA_AT__ && !document.getElementById('ctaBanner').classList.contains('show')){
+        mostrarCtaBanner(Math.max(0, limitTotal - limitUsed));
+      } else if(document.getElementById('ctaBanner').classList.contains('show')){
+        document.getElementById('ctaRestantes').textContent = Math.max(0, limitTotal - limitUsed);
+      }
 
       if(!d.pode_usar) setTimeout(()=>mostrarPaywall('credits'), 1200);
 
@@ -504,6 +633,9 @@ Para começar: **qual é o principal desafio financeiro da sua empresa hoje?** P
 </script>
 </body>
 </html>"""
+
+# Substitui placeholders de configuração no HTML
+_TRIAL_HTML = _TRIAL_HTML.replace("__LIMIT__", str(_TRIAL_MSGS_FREE)).replace("__CTA_AT__", str(_TRIAL_CTA_AT))
 
 
 @app.get("/trial")
@@ -537,6 +669,69 @@ async def trial_status(token: str = ""):
             "empresa": lead.empresa,
             "expires_at": lead.expires_at,
         })
+
+
+# ── API: Stripe checkout (subscription R$299/mês) ─────────────────────────────
+
+@app.get("/api/trial/checkout")
+async def trial_checkout(request: _Req_tr, token: str = ""):
+    if not token:
+        return _JSON_tr({"error": "Token inválido."})
+
+    with _Sess_tr(engine) as session:
+        lead = session.exec(_sel_tr(TrialLead).where(TrialLead.access_token == token)).first()
+        if not lead:
+            return _JSON_tr({"error": "Acesso inválido."})
+
+    try:
+        import stripe as _stripe_tr  # type: ignore
+        _stripe_tr.api_key = _os_tr.environ.get("STRIPE_SECRET_KEY", "")
+        if not _stripe_tr.api_key:
+            raise ValueError("STRIPE_SECRET_KEY não configurado")
+
+        base = str(request.base_url).rstrip("/")
+        checkout = _stripe_tr.checkout.Session.create(
+            mode="subscription",
+            success_url=base + f"/trial/assinado?token={token}",
+            cancel_url=base + f"/trial?token={token}",
+            customer_email=lead.email or None,
+            line_items=[{"price": _STRIPE_PRICE_PME, "quantity": 1}],
+            metadata={
+                "trial_token": token,
+                "lead_id": str(lead.id),
+                "tipo": "augur_pme",
+            },
+        )
+        return _JSON_tr({"url": checkout.url})
+    except Exception as _e_stripe:
+        print(f"[trial_checkout] Stripe erro: {_e_stripe}")
+        return _JSON_tr({"error": "Erro ao criar checkout. Tente novamente."})
+
+
+# ── Página de sucesso pós-assinatura ─────────────────────────────────────────
+
+@app.get("/trial/assinado")
+async def trial_assinado(token: str = ""):
+    _html = f"""<!DOCTYPE html><html lang="pt-BR"><head><meta charset="UTF-8">
+<title>Obrigado · Augur PME</title>
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@700;800&family=Poppins:wght@400;600&display=swap" rel="stylesheet">
+<style>
+*{{box-sizing:border-box;margin:0;padding:0}}
+body{{background:#0A0A0A;color:#F5F0E8;font-family:'Poppins',sans-serif;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:2rem;}}
+.card{{background:#141414;border:1px solid #2a2a2a;border-radius:20px;padding:3rem 2rem;max-width:480px;width:100%;text-align:center;}}
+.icon{{font-size:3rem;margin-bottom:1.5rem;}}
+h1{{font-family:'Syne',sans-serif;font-size:1.5rem;color:#C9963A;margin-bottom:.75rem;}}
+p{{font-size:.9rem;color:#888;line-height:1.7;margin-bottom:1.5rem;}}
+.btn{{display:inline-block;background:#C9963A;color:#0A0A0A;padding:.9rem 2rem;border-radius:12px;font-family:'Syne',sans-serif;font-weight:700;font-size:.95rem;text-decoration:none;}}
+</style></head><body>
+<div class="card">
+  <div class="icon">🎉</div>
+  <h1>Assinatura confirmada!</h1>
+  <p>Bem-vindo ao Augur PME. Nossa equipe entrará em contato em breve para criar seu acesso completo à plataforma.</p>
+  <p style="margin-bottom:2rem;">Qualquer dúvida, fale conosco pelo WhatsApp:</p>
+  <a href="https://wa.me/5547991359091?text=Acabei+de+assinar+o+Augur+PME" class="btn">Falar com a equipe →</a>
+</div></body></html>"""
+    return _HTML_tr(_html)
 
 
 # ── API: chat trial ───────────────────────────────────────────────────────────
@@ -580,17 +775,14 @@ async def trial_ask(request: _Req_tr):
         if not ok:
             return _JSON_tr({"paywall": True, "motivo": motivo})
 
-        # Chama Claude via ai_assistant (mesmo caminho do Augur principal)
         try:
             from ai_assistant.assistant import ask as _ask_tr
 
-            # Monta histórico no formato esperado pelo ask()
             conv_history = []
             for h in history[-18:]:
                 if h.get("role") in ("user", "assistant") and h.get("content"):
                     conv_history.append({"role": h["role"], "content": h["content"]})
 
-            # client_data mínimo — sem dados financeiros reais (prospect ainda não cadastrado)
             client_data_trial = {
                 "nome":    lead.nome,
                 "empresa": lead.empresa,
@@ -613,23 +805,21 @@ async def trial_ask(request: _Req_tr):
             print(f"[trial_ask] Claude erro: {_e_ai}")
             return _JSON_tr({"error": "Erro ao processar. Tente novamente."})
 
-        # Incrementa uso
         lead.messages_used += 1
         session.add(lead)
         session.commit()
 
         pode_ainda, _ = _trial_valido(lead)
         restantes = lead.messages_limit - lead.messages_used
-
         print(f"[trial_ask] {lead.empresa}: {lead.messages_used}/{lead.messages_limit} msgs")
 
         return _JSON_tr({
             "response": answer,
-            "used": lead.messages_used,
-            "limit": lead.messages_limit,
+            "used":     lead.messages_used,
+            "limit":    lead.messages_limit,
             "restantes": restantes,
             "pode_usar": pode_ainda,
         })
 
 
-print("[trial_augur] ✅ Augur PME Trial carregado")
+print("[trial_augur] ✅ Augur PME Trial v2 carregado")
