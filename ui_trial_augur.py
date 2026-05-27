@@ -708,6 +708,20 @@ async def trial_checkout(request: _Req_tr, token: str = ""):
         if not lead:
             return _JSON_tr({"error": "Acesso inválido."})
 
+        # Busca price_id do plano R$299 cadastrado na monetização
+        price_id = ""
+        try:
+            plano = session.exec(
+                _sel_tr(PlanoCredito)
+                .where(PlanoCredito.ativo == True, PlanoCredito.stripe_price_id != "")
+                .order_by(PlanoCredito.preco_cents)
+            ).first()
+            if plano:
+                price_id = plano.stripe_price_id
+                print(f"[trial_checkout] Plano encontrado: {plano.nome} price_id={price_id}")
+        except Exception as _ep:
+            print(f"[trial_checkout] Erro ao buscar plano: {_ep}")
+
     _WPP_FALLBACK = "https://wa.me/5547991359091?text=Quero+assinar+o+Augur+PME+%E2%80%94+R%24299%2Fm%C3%AAs"
 
     stripe_key = _os_tr.environ.get("STRIPE_SECRET_KEY", "")
@@ -715,18 +729,22 @@ async def trial_checkout(request: _Req_tr, token: str = ""):
         print("[trial_checkout] ⚠️  STRIPE_SECRET_KEY não configurado — fallback WhatsApp")
         return _JSON_tr({"url": _WPP_FALLBACK})
 
+    if not price_id:
+        print("[trial_checkout] ⚠️  Nenhum plano com stripe_price_id encontrado — fallback WhatsApp")
+        return _JSON_tr({"url": _WPP_FALLBACK})
+
     try:
         import stripe as _stripe_tr  # type: ignore
         _stripe_tr.api_key = stripe_key
 
         base = str(request.base_url).rstrip("/")
-        print(f"[trial_checkout] Criando checkout: price={_STRIPE_PRICE_PME} email={lead.email or 'N/A'} base={base}")
+        print(f"[trial_checkout] Criando checkout: price={price_id} email={lead.email or 'N/A'}")
         checkout = _stripe_tr.checkout.Session.create(
             mode="subscription",
             success_url=base + f"/trial/assinado?token={token}",
             cancel_url=base + f"/trial?token={token}",
             customer_email=lead.email or None,
-            line_items=[{"price": _STRIPE_PRICE_PME, "quantity": 1}],
+            line_items=[{"price": price_id, "quantity": 1}],
             metadata={
                 "trial_token": token,
                 "lead_id": str(lead.id),

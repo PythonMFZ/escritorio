@@ -130,23 +130,43 @@ def _criar_trial_lead_pf(session, sess: WhatsAppProspectSession) -> str:
 
 def _gerar_checkout_url_pf(token: str, phone: str) -> str:
     """Gera URL do Stripe checkout ou WhatsApp fallback."""
+    _WPP = "https://wa.me/5547991359091?text=Quero+assinar+o+Augur+PME"
     stripe_key = _os_pf.environ.get("STRIPE_SECRET_KEY", "")
-    if stripe_key:
-        try:
-            import stripe as _st  # type: ignore
-            _st.api_key = stripe_key
-            base = "https://app.maffezzollicapital.com.br"
-            ch = _st.checkout.Session.create(
-                mode="subscription",
-                success_url=base + f"/trial/assinado?token={token}",
-                cancel_url=base + f"/trial?token={token}",
-                line_items=[{"price": "price_1TSj9eDqHWO7wr", "quantity": 1}],
-                metadata={"trial_token": token, "source": "whatsapp"},
-            )
-            return ch.url
-        except Exception as _se:
-            print(f"[prospect_flow] Stripe: {_se}")
-    return "https://wa.me/5547991359091?text=Quero+assinar+o+Augur+PME"
+    if not stripe_key:
+        return _WPP
+
+    # Busca price_id do plano ativo na monetização
+    price_id = ""
+    try:
+        with _Sess_pf(engine) as _s:
+            plano = _s.exec(
+                _sel_pf(PlanoCredito)
+                .where(PlanoCredito.ativo == True, PlanoCredito.stripe_price_id != "")
+                .order_by(PlanoCredito.preco_cents)
+            ).first()
+            if plano:
+                price_id = plano.stripe_price_id
+    except Exception as _ep:
+        print(f"[prospect_flow] Plano: {_ep}")
+
+    if not price_id:
+        return _WPP
+
+    try:
+        import stripe as _st  # type: ignore
+        _st.api_key = stripe_key
+        base = "https://app.maffezzollicapital.com.br"
+        ch = _st.checkout.Session.create(
+            mode="subscription",
+            success_url=base + f"/trial/assinado?token={token}",
+            cancel_url=base + f"/trial?token={token}",
+            line_items=[{"price": price_id, "quantity": 1}],
+            metadata={"trial_token": token, "source": "whatsapp"},
+        )
+        return ch.url
+    except Exception as _se:
+        print(f"[prospect_flow] Stripe: {_se}")
+    return _WPP
 
 
 def _augur_resposta(question: str, nome: str, empresa: str, history: list) -> str:
