@@ -197,6 +197,35 @@ async def trial_cadastro_page():
     return _HTML_tr(_CADASTRO_HTML)
 
 
+# ── Rota admin: acesso direto ao trial para testes ───────────────────────────
+
+@app.get("/trial/demo")
+async def trial_demo(request: _Req_tr):
+    """Acesso direto ao trial para admin testar sem precisar de cadastro."""
+    from fastapi.responses import RedirectResponse as _RR_demo
+
+    # Exige que o usuário esteja logado na plataforma
+    if not request.session.get("user_id"):
+        return _HTML_tr("<script>location.href='/login'</script>")
+
+    token = "demo-" + str(_uuid_tr.uuid4())
+    with _Sess_tr(engine) as _s:
+        _s.add(TrialLead(
+            nome           = request.session.get("user_name", "Admin"),
+            empresa        = "Demo Interno",
+            cnpj           = "DEMO" + token[:8],
+            whatsapp       = "00000000000",
+            access_token   = token,
+            messages_used  = 0,
+            messages_limit = 999,
+            created_at     = _agora(),
+            expires_at     = (_dt_tr.now() + _td_tr(days=365)).strftime("%Y-%m-%d %H:%M:%S"),
+        ))
+        _s.commit()
+
+    return _RR_demo(f"/trial?token={token}", status_code=303)
+
+
 # ── API: criar trial ──────────────────────────────────────────────────────────
 
 @app.post("/api/trial/cadastro")
