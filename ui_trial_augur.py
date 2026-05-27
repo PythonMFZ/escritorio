@@ -712,8 +712,7 @@ async def trial_checkout(request: _Req_tr, token: str = ""):
 
     stripe_key = _os_tr.environ.get("STRIPE_SECRET_KEY", "")
     if not stripe_key:
-        # Stripe não configurado: direciona para WhatsApp
-        print("[trial_checkout] STRIPE_SECRET_KEY não configurado — fallback WhatsApp")
+        print("[trial_checkout] ⚠️  STRIPE_SECRET_KEY não configurado — fallback WhatsApp")
         return _JSON_tr({"url": _WPP_FALLBACK})
 
     try:
@@ -721,6 +720,7 @@ async def trial_checkout(request: _Req_tr, token: str = ""):
         _stripe_tr.api_key = stripe_key
 
         base = str(request.base_url).rstrip("/")
+        print(f"[trial_checkout] Criando checkout: price={_STRIPE_PRICE_PME} email={lead.email or 'N/A'} base={base}")
         checkout = _stripe_tr.checkout.Session.create(
             mode="subscription",
             success_url=base + f"/trial/assinado?token={token}",
@@ -733,9 +733,10 @@ async def trial_checkout(request: _Req_tr, token: str = ""):
                 "tipo": "augur_pme",
             },
         )
+        print(f"[trial_checkout] ✅ Checkout criado: {checkout.url[:60]}...")
         return _JSON_tr({"url": checkout.url})
     except Exception as _e_stripe:
-        print(f"[trial_checkout] Stripe erro: {_e_stripe}")
+        print(f"[trial_checkout] ❌ Stripe erro: {type(_e_stripe).__name__}: {_e_stripe}")
         return _JSON_tr({"url": _WPP_FALLBACK})
 
 
