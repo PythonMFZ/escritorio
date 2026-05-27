@@ -51,6 +51,20 @@ try:
 except Exception as _e_tr:
     print(f"[trial_augur] Tabela: {_e_tr}")
 
+# Migração: adiciona colunas novas se não existirem (ALTER TABLE idempotente)
+_MIGRATIONS_TR = [
+    "ALTER TABLE triallead ADD COLUMN IF NOT EXISTS email VARCHAR DEFAULT ''",
+    "ALTER TABLE triallead ADD COLUMN IF NOT EXISTS crm_deal_id INTEGER",
+]
+try:
+    with engine.connect() as _conn_tr:
+        for _sql_tr in _MIGRATIONS_TR:
+            _conn_tr.execute(_SM_tr.text(_sql_tr) if hasattr(_SM_tr, "text") else __import__("sqlalchemy").text(_sql_tr))
+        _conn_tr.commit()
+    print("[trial_augur] ✅ Migrações triallead aplicadas")
+except Exception as _em_tr:
+    print(f"[trial_augur] Migração: {_em_tr}")
+
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
