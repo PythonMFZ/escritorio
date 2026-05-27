@@ -13,7 +13,7 @@ import uuid as _uuid_tr
 import re  as _re_tr
 from datetime import datetime as _dt_tr, timedelta as _td_tr
 from typing   import Optional as _Opt_tr
-from sqlmodel import Field as _F_tr, SQLModel as _SM_tr, select as _sel_tr
+from sqlmodel import Field as _F_tr, SQLModel as _SM_tr, select as _sel_tr, Session as _Sess_tr
 from fastapi  import Request as _Req_tr, Form as _Form_tr
 from fastapi.responses import JSONResponse as _JSON_tr, HTMLResponse as _HTML_tr
 
@@ -214,7 +214,7 @@ async def trial_cadastro(request: _Req_tr):
     if not nome or not empresa or len(cnpj_raw) < 14 or len(wpp_raw) < 10:
         return _JSON_tr({"ok": False, "erro": "Preencha todos os campos corretamente."})
 
-    with next(get_session()) as session:
+    with _Sess_tr(engine) as session:
         # Bloqueia CNPJ duplicado (mesmo CNPJ = mesma empresa)
         existente = session.exec(
             _sel_tr(TrialLead).where(TrialLead.cnpj == cnpj_raw)
@@ -361,9 +361,9 @@ Para começar: **qual é o principal desafio financeiro da sua empresa hoje?** P
   const TOKEN = new URLSearchParams(location.search).get('token') || '';
   if(!TOKEN){ location.href='/cadastro'; return; }
 
-  let msgCount = 0;
   let limitTotal = 50;
   let limitUsed = 0;
+  let _history = [];  // [{role, content}] para contexto da conversa
 
   // Carrega status inicial
   fetch('/api/trial/status?token='+TOKEN)
@@ -436,6 +436,7 @@ Para começar: **qual é o principal desafio financeiro da sua empresa hoje?** P
     btn.disabled=true; inp.value='';
     document.getElementById('sugg').style.display='none';
 
+    _history.push({role:'user', content:q});
     addMsg('user', q, true);
     showTyping();
 
@@ -443,7 +444,7 @@ Para começar: **qual é o principal desafio financeiro da sua empresa hoje?** P
       const r = await fetch('/api/trial/ask',{
         method:'POST',
         headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({token:TOKEN, question:q})
+        body: JSON.stringify({token:TOKEN, question:q, history:_history.slice(-20)})
       });
       const d = await r.json();
       hideTyping();
@@ -456,6 +457,7 @@ Para começar: **qual é o principal desafio financeiro da sua empresa hoje?** P
 
       if(d.error){ addMsg('assistant','⚠️ '+(d.error||'Erro.'), true); return; }
 
+      _history.push({role:'assistant', content:d.response});
       addMsg('assistant', d.response, true);
       limitUsed = d.used || (limitUsed+1);
       atualizarCreditos();
@@ -479,7 +481,7 @@ Para começar: **qual é o principal desafio financeiro da sua empresa hoje?** P
 async def trial_page(token: str = ""):
     if not token:
         return _HTML_tr("<script>location.href='/cadastro'</script>")
-    with next(get_session()) as session:
+    with _Sess_tr(engine) as session:
         lead = session.exec(_sel_tr(TrialLead).where(TrialLead.access_token == token)).first()
         if not lead:
             return _HTML_tr("<script>location.href='/cadastro'</script>")
@@ -492,7 +494,7 @@ async def trial_page(token: str = ""):
 async def trial_status(token: str = ""):
     if not token:
         return _JSON_tr({"ok": False})
-    with next(get_session()) as session:
+    with _Sess_tr(engine) as session:
         lead = session.exec(_sel_tr(TrialLead).where(TrialLead.access_token == token)).first()
         if not lead:
             return _JSON_tr({"ok": False})
@@ -540,7 +542,7 @@ async def trial_ask(request: _Req_tr):
     if not token or not question:
         return _JSON_tr({"error": "Dados incompletos."})
 
-    with next(get_session()) as session:
+    with _Sess_tr(engine) as session:
         lead = session.exec(_sel_tr(TrialLead).where(TrialLead.access_token == token)).first()
         if not lead:
             return _JSON_tr({"error": "Acesso inválido.", "paywall": True})
