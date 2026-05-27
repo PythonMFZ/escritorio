@@ -183,17 +183,19 @@ def _calcular_obra(session, obra):
     projecao_final = round(orcado_total_obra / idc, 2) if idc > 0 else orcado_total_obra
 
     return {
-        "fases":          fases_data,
-        "orcado_total":   round(orcado_total_obra, 2),
-        "realizado_rs":   round(realizado_rs, 2),
-        "ev_total":       round(ev_total, 2),
-        "a_incorrer":     round(orcado_total_obra - realizado_rs, 2),
-        "fisico_geral":   fisico_geral,
-        "desvio_geral":   round(realizado_rs - ev_total, 2),
-        "idc":            idc,
-        "projecao_final": projecao_final,
-        "n_etapas":       n_etapas,
-        "n_fases":        len(fases),
+        "fases":              fases_data,
+        "orcado_total":       round(orcado_total_obra, 2),
+        "orcado_soma_etapas": round(orcado_total, 2),
+        "orcamento_obra":     round(obra.orcamento_total or 0, 2),
+        "realizado_rs":       round(realizado_rs, 2),
+        "ev_total":           round(ev_total, 2),
+        "a_incorrer":         round(orcado_total_obra - realizado_rs, 2),
+        "fisico_geral":       fisico_geral,
+        "desvio_geral":       round(realizado_rs - ev_total, 2),
+        "idc":                idc,
+        "projecao_final":     projecao_final,
+        "n_etapas":           n_etapas,
+        "n_fases":            len(fases),
     }
 
 
