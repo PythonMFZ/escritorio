@@ -211,44 +211,48 @@ _WIDGET_B6V2 = r"""{% if current_client %}
     btn.disabled=true; input.value='';
     document.getElementById('augurSuggestions').style.display='none';
 
-    // Resolve arquivos xlsx pendentes AGORA, dentro do send (sem race condition)
+    // Separa pendentes (xlsx ainda não extraído) dos prontos (csv, pdf, imagem)
+    const naoExcel = _augurAnexos.filter(a=>a.type!=='xlsx-pendente');
     const pendentes = _augurAnexos.filter(a=>a.type==='xlsx-pendente');
+    const extraidos = []; // xlsx extraídos com sucesso neste envio
+
     if(pendentes.length>0){
       btn.textContent='⏳ Extraindo…';
-      const nomeEl=document.getElementById('augurAnexoNome');
       for(const p of pendentes){
+        const nomeEl=document.getElementById('augurAnexoNome');
         if(nomeEl) nomeEl.textContent='⏳ Extraindo '+p.name+'…';
         try{
           const fd=new FormData(); fd.append('arquivo',p.file);
-          const r=await fetch('/api/augur/extract-file',{method:'POST',body:fd});
-          const d=await r.json();
-          if(d.ok&&d.content){
-            // Substitui o pendente pelo dado extraído
-            const idx=_augurAnexos.indexOf(p);
-            if(idx!==-1) _augurAnexos[idx]={type:'excel-texto',data:d.content,name:p.name};
+          const resp=await fetch('/api/augur/extract-file',{method:'POST',body:fd});
+          if(!resp.ok){
+            alert('Servidor retornou erro ao processar '+p.name+' (HTTP '+resp.status+'). Tente salvar como CSV.');
+            continue;
+          }
+          const d=await resp.json();
+          if(d.ok && d.content && d.content.length>0){
+            extraidos.push({type:'excel-texto',data:d.content,name:p.name});
           } else {
-            _renderMsg('assistant','❌ Não foi possível extrair '+p.name+': '+(d.erro||'Erro. Tente salvar como CSV.'),'',new Date().toTimeString().slice(0,5),true);
-            _augurAnexos=_augurAnexos.filter(a=>a!==p);
+            alert('Não foi possível extrair '+p.name+':\n'+(d.erro||'Conteúdo vazio')+'.\n\nTente salvar como CSV antes de enviar.');
           }
         }catch(e){
-          _renderMsg('assistant','❌ Erro ao processar '+p.name+'. Tente salvar como CSV.','',new Date().toTimeString().slice(0,5),true);
-          _augurAnexos=_augurAnexos.filter(a=>a!==p);
+          alert('Erro de rede ao processar '+p.name+'. Verifique sua conexão e tente novamente.');
         }
       }
     }
 
+    // Monta lista final de anexos: prontos + extraídos agora
+    const todosAnexos = [...naoExcel, ...extraidos];
+    _augurAnexos = [];
+    document.getElementById('augurAnexoPreview').style.display='none';
+
     btn.textContent='...';
     const hora = new Date().toTimeString().slice(0,5);
-    const lbl = _augurAnexos.length>0 ? ' [📎 '+_augurAnexos.map(a=>a.name).join(', ')+']' : '';
+    const lbl = todosAnexos.length>0 ? ' [📎 '+todosAnexos.map(a=>a.name).join(', ')+']' : '';
     _renderMsg('user', q+lbl, null, hora, true);
     _showTyping();
 
-    // Monta payload (excel-texto já foi resolvido acima)
-    const anexosParaEnviar = _augurAnexos.filter(a=>a.type!=='xlsx-pendente');
     const payload = {question: q||'(Analise os arquivos anexados)', session_id: _sessaoAtual||0};
-    if (anexosParaEnviar.length>0) payload.attachments = anexosParaEnviar;
-    _augurAnexos=[];
-    document.getElementById('augurAnexoPreview').style.display='none';
+    if (todosAnexos.length>0) payload.attachments = todosAnexos;
 
     try {
       const r = await fetch('/api/ai/ask', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
