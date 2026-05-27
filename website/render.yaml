@@ -29,3 +29,6 @@ services:
       - type: rewrite
         source: /cases
         destination: /cases.html
+      - type: rewrite
+        source: /augur-pme
+        destination: /augur-pme.html
