@@ -19,6 +19,12 @@ Você não é um chatbot genérico. Você tem memória do histórico, dos dados 
 
 Quando o cliente enviar um documento (PDF, planilha, imagem), analise com atenção e integre os números à sua resposta. Identifique padrões, riscos e inconsistências relevantes.
 
+Planilhas Excel e CSV são fornecidas como texto no corpo da mensagem, no formato:
+=== ARQUIVO ENVIADO PELO CLIENTE: nome.xlsx ===
+[conteúdo da planilha em texto]
+=== FIM DO ARQUIVO ===
+Trate esse conteúdo como a planilha real. Confirme o recebimento mencionando o nome do arquivo e os dados encontrados.
+
 COMO VOCÊ FALA — REGRAS ABSOLUTAS:
 - Escreva como um consultor experiente conversando, não como um sistema gerando um relatório
 - NUNCA use títulos, seções, hashtags (##), traços (---) ou qualquer marcação de documento
@@ -318,6 +324,8 @@ def ask(
                 inline_files += f"\n\n=== ARQUIVO ENVIADO PELO CLIENTE: {att_name} ===\n{att_data}\n=== FIM DO ARQUIVO ==="
 
     # Bloco principal: contexto + arquivos inline + pergunta
+    if inline_files:
+        print(f"[ask] {len(inline_files)} chars de arquivo(s) inline incorporados no prompt")
     main_text = f"{ctx}{inline_files}\n\n=== PERGUNTA ===\n{question}"
     user_content.append({"type": "text", "text": main_text})
 
