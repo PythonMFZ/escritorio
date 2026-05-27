@@ -32,3 +32,9 @@ services:
       - type: rewrite
         source: /augur-pme
         destination: /augur-pme.html
+      - type: rewrite
+        source: /pesquisa-nps
+        destination: /pesquisa-nps.html
+      - type: rewrite
+        source: /pesquisa-app
+        destination: /pesquisa-app.html

@@ -48455,4 +48455,5 @@ exec(open('ui_whatsapp_prospect_flow.py').read())
 exec(open('ui_cloud_storage.py').read())
 exec(open('ui_wizard_doc_import.py').read())
 exec(open('ui_trial_augur.py').read())
+exec(open('ui_pesquisas.py').read())
 
