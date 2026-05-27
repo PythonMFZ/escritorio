@@ -14057,6 +14057,28 @@ async def signup_page(request: Request, session: Session = Depends(get_session))
     return render("signup.html", request=request, context={"current_user": None})
 
 
+def _stripe_has_active_subscription(email: str) -> bool:
+    """Verifica se o e-mail possui assinatura Stripe ativa. Retorna True se sim ou se Stripe não configurado."""
+    if not _stripe_enabled() or stripe is None:
+        return True  # sem Stripe configurado, permite acesso
+    try:
+        stripe.api_key = os.environ.get("STRIPE_SECRET_KEY", "")
+        customers = stripe.Customer.search(query=f'email:"{email}"', limit=5)
+        items = customers.get("data") if hasattr(customers, "get") else getattr(customers, "data", [])
+        for cust in (items or []):
+            cust_id = cust.get("id") if hasattr(cust, "get") else getattr(cust, "id", None)
+            if not cust_id:
+                continue
+            subs = stripe.Subscription.list(customer=cust_id, status="active", limit=5)
+            sub_items = subs.get("data") if hasattr(subs, "get") else getattr(subs, "data", [])
+            if sub_items:
+                return True
+        return False
+    except Exception as _e_stripe_chk:
+        print(f"[signup_gate] Stripe check erro: {_e_stripe_chk}")
+        return True  # em caso de erro na API, não bloqueia
+
+
 @app.post("/signup")
 async def signup_action(
         request: Request,
@@ -14073,6 +14095,16 @@ async def signup_action(
 ) -> Response:
     if len(password) < 8:
         set_flash(request, "Senha muito curta (mínimo 8).")
+        return RedirectResponse("/signup", status_code=303)
+
+    # Gate: valida assinatura Stripe ativa (apenas quando Stripe está configurado)
+    if not _stripe_has_active_subscription(email.strip().lower()):
+        set_flash(
+            request,
+            "Para criar uma conta é necessário ter uma assinatura ativa do Augur PME. "
+            "<a href='https://app.maffezzollicapital.com.br/cadastro' style='color:inherit'>Faça o diagnóstico gratuito</a> "
+            "ou <a href='https://wa.me/5547991359091?text=Quero+assinar+o+Augur+PME' target='_blank' style='color:inherit'>fale com um consultor</a>."
+        )
         return RedirectResponse("/signup", status_code=303)
 
     user = User(name=name.strip(), email=email.strip().lower(), password_hash=hash_password(password))
