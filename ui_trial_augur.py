@@ -580,24 +580,35 @@ async def trial_ask(request: _Req_tr):
         if not ok:
             return _JSON_tr({"paywall": True, "motivo": motivo})
 
-        # Chama Claude
+        # Chama Claude via ai_assistant (mesmo caminho do Augur principal)
         try:
-            import anthropic as _ant_tr
-            client_ai = _ant_tr.Anthropic()
+            from ai_assistant.assistant import ask as _ask_tr
 
-            messages = []
-            for h in history[-10:]:  # últimas 10 mensagens de contexto
+            # Monta histórico no formato esperado pelo ask()
+            conv_history = []
+            for h in history[-18:]:
                 if h.get("role") in ("user", "assistant") and h.get("content"):
-                    messages.append({"role": h["role"], "content": h["content"]})
-            messages.append({"role": "user", "content": question})
+                    conv_history.append({"role": h["role"], "content": h["content"]})
 
-            resp = client_ai.messages.create(
-                model="claude-sonnet-4-6",
-                max_tokens=1024,
-                system=_TRIAL_SYSTEM,
-                messages=messages,
+            # client_data mínimo — sem dados financeiros reais (prospect ainda não cadastrado)
+            client_data_trial = {
+                "nome":    lead.nome,
+                "empresa": lead.empresa,
+                "cnpj":    lead.cnpj if not lead.cnpj.startswith("DEMO") else "",
+                "segment": "pme",
+                "_trial_system_override": _TRIAL_SYSTEM,
+            }
+
+            result = _ask_tr(
+                question=question,
+                client_data=client_data_trial,
+                conversation_history=conv_history if conv_history else None,
             )
-            answer = resp.content[0].text if resp.content else "Não consegui processar sua pergunta."
+            answer = result.get("response") or "Não consegui processar sua pergunta."
+            if result.get("error"):
+                return _JSON_tr({"error": answer})
+        except ImportError:
+            return _JSON_tr({"error": "Assistente não disponível. Tente novamente."})
         except Exception as _e_ai:
             print(f"[trial_ask] Claude erro: {_e_ai}")
             return _JSON_tr({"error": "Erro ao processar. Tente novamente."})
