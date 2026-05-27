@@ -553,16 +553,27 @@ Para começar: **qual é o principal desafio financeiro da sua empresa hoje?** P
     document.getElementById('inp').disabled = true;
   }
 
+  const _WPP_ASSINAR = 'https://wa.me/5547991359091?text=Quero+assinar+o+Augur+PME+%E2%80%94+R%24299%2Fm%C3%AAs';
+
   window.abrirStripeCheckout = function(){
     const btn = document.getElementById('stripeBtn');
+    const orig = btn.textContent;
     btn.textContent = 'Aguarde...';
     fetch('/api/trial/checkout?token='+TOKEN)
       .then(r=>r.json())
       .then(d=>{
-        if(d.url) window.location.href = d.url;
-        else { btn.textContent='Erro — tente novamente'; }
+        if(d.url){
+          window.location.href = d.url;
+        } else {
+          // Stripe não configurado ou erro — abre WhatsApp como fallback
+          window.open(_WPP_ASSINAR, '_blank');
+          btn.textContent = orig;
+        }
       })
-      .catch(()=>{ btn.textContent='Erro — tente novamente'; });
+      .catch(()=>{
+        window.open(_WPP_ASSINAR, '_blank');
+        btn.textContent = orig;
+      });
   };
 
   function _esc(t){ return String(t).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
@@ -697,11 +708,17 @@ async def trial_checkout(request: _Req_tr, token: str = ""):
         if not lead:
             return _JSON_tr({"error": "Acesso inválido."})
 
+    _WPP_FALLBACK = "https://wa.me/5547991359091?text=Quero+assinar+o+Augur+PME+%E2%80%94+R%24299%2Fm%C3%AAs"
+
+    stripe_key = _os_tr.environ.get("STRIPE_SECRET_KEY", "")
+    if not stripe_key:
+        # Stripe não configurado: direciona para WhatsApp
+        print("[trial_checkout] STRIPE_SECRET_KEY não configurado — fallback WhatsApp")
+        return _JSON_tr({"url": _WPP_FALLBACK})
+
     try:
         import stripe as _stripe_tr  # type: ignore
-        _stripe_tr.api_key = _os_tr.environ.get("STRIPE_SECRET_KEY", "")
-        if not _stripe_tr.api_key:
-            raise ValueError("STRIPE_SECRET_KEY não configurado")
+        _stripe_tr.api_key = stripe_key
 
         base = str(request.base_url).rstrip("/")
         checkout = _stripe_tr.checkout.Session.create(
@@ -719,7 +736,7 @@ async def trial_checkout(request: _Req_tr, token: str = ""):
         return _JSON_tr({"url": checkout.url})
     except Exception as _e_stripe:
         print(f"[trial_checkout] Stripe erro: {_e_stripe}")
-        return _JSON_tr({"error": "Erro ao criar checkout. Tente novamente."})
+        return _JSON_tr({"url": _WPP_FALLBACK})
 
 
 # ── Página de sucesso pós-assinatura ─────────────────────────────────────────
