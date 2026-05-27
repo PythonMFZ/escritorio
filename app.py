@@ -42168,21 +42168,25 @@ def _whatsapp_apply_meta_status_event(
     return True
 
 
-async def _whatsapp_prospect_welcome(
+async def _whatsapp_prospect_reply(
     company_id: int,
     thread_id: int,
     phone: str,
+    body: str,
     config_phone_number_id: str,
 ) -> None:
-    """Envia boas-vindas para número desconhecido e direciona para o trial."""
-    _MSG = (
-        "Olá! 👋 Aqui é o *Augur*, assistente financeiro da Maffezzolli Capital.\n\n"
-        "Para receber seu *Diagnóstico Financeiro Gratuito* — que identifica exatamente onde sua empresa está perdendo dinheiro — acesse o link abaixo:\n\n"
-        "🔗 https://app.maffezzollicapital.com.br/cadastro\n\n"
-        "Leva cerca de 10 minutos e você sai com o *Score de Saúde Financeira* e um plano de ação.\n\n"
-        "Prefere falar com um consultor? 👉 https://wa.me/5547991359091"
-    )
+    """Processa mensagem de prospect (número desconhecido) via máquina de estados."""
     try:
+        resposta = processar_mensagem_prospect(
+            phone=phone,
+            body=body,
+            thread_id=thread_id,
+            company_id=company_id,
+            config_phone_number_id=config_phone_number_id,
+        )
+        if not resposta:
+            return
+
         class _MinCfg:
             is_enabled           = True
             meta_phone_number_id = config_phone_number_id
@@ -42191,7 +42195,7 @@ async def _whatsapp_prospect_welcome(
             config=_MinCfg(),
             recipient_id=phone,
             recipient_type="individual",
-            body=_MSG,
+            body=resposta[:4000],
         )
         if ok:
             with _WazSession(engine) as _db:
@@ -42201,14 +42205,14 @@ async def _whatsapp_prospect_welcome(
                         _db,
                         thread=_th,
                         direction="outbound",
-                        body=_MSG,
+                        body=resposta[:4000],
                         sender_name="Augur",
                         created_by_user_id=None,
                         delivery_status="sent",
                         external_message_id=ext_id or "",
                     )
     except Exception as _pe:
-        print(f"[webhook] prospect_welcome erro: {_pe}")
+        print(f"[webhook] prospect_reply erro: {_pe}")
 
 
 @app.post("/api/whatsapp/webhook")
@@ -42493,21 +42497,15 @@ async def whatsapp_webhook_receive(request: Request, session: Session = Depends(
                     message_body=body,
                 ))
 
-        # Número desconhecido (prospect) — envia boas-vindas uma única vez
-        elif not thread.client_id and not is_group and body:
-            _outbound_count = session.exec(
-                select(func.count(WhatsAppThreadMessage.id)).where(
-                    WhatsAppThreadMessage.thread_id == thread.id,
-                    WhatsAppThreadMessage.direction == "outbound",
-                )
-            ).one()
-            if (_outbound_count or 0) == 0:
-                asyncio.create_task(_whatsapp_prospect_welcome(
-                    company_id=company_id,
-                    thread_id=thread.id,
-                    phone=incoming_phone,
-                    config_phone_number_id=config.meta_phone_number_id,
-                ))
+        # Número desconhecido (prospect) — máquina de estados de onboarding
+        elif not thread.client_id and not is_group and body and not body.startswith("[mensagem "):
+            asyncio.create_task(_whatsapp_prospect_reply(
+                company_id=company_id,
+                thread_id=thread.id,
+                phone=incoming_phone,
+                body=body,
+                config_phone_number_id=config.meta_phone_number_id,
+            ))
 
         processed += 1
 
@@ -48453,6 +48451,7 @@ exec(open('ui_obras_duplicar_obra.py').read())
 exec(open('ui_augur_commands.py').read())
 exec(open('ui_whatsapp_augur.py').read())
 exec(open('ui_whatsapp_diagnostico.py').read())
+exec(open('ui_whatsapp_prospect_flow.py').read())
 exec(open('ui_cloud_storage.py').read())
 exec(open('ui_wizard_doc_import.py').read())
 exec(open('ui_trial_augur.py').read())
