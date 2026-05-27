@@ -340,8 +340,8 @@ TEMPLATES["ferramenta_obras_cronograma.html"] = r"""
 </div>
 
 {# Card resumo orçamento #}
-{% set _soma_etapas = _soma_etapas | default(0) %}
-{% set _orcamento_cub = _orcamento_cub | default(0) %}
+{% set _soma_etapas = calc.orcado_soma_etapas | default(0) %}
+{% set _orcamento_cub = (obra.area_m2 * obra.cub_m2) if (obra.area_m2 and obra.cub_m2) else 0 %}
 {% set diff_cub = _soma_etapas - _orcamento_cub %}
 <div class="card mb-3" style="border:1.5px solid var(--mc-border);border-radius:14px;overflow:hidden;">
   <div style="background:#f8fafc;border-bottom:1px solid var(--mc-border);padding:.55rem 1.25rem;font-size:.72rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--mc-muted);">
