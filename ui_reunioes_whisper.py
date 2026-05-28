@@ -447,17 +447,16 @@ _WHISPER_PANEL = r"""
       <h6 class="mb-0">🎙️ Transcrição de Áudio</h6>
       <div class="muted small">Grave a reunião diretamente ou faça upload de um arquivo.</div>
     </div>
-    {% if meeting.notion_status %}
+    {% if meeting.notion_status in ['notes_ready', 'error', 'transcription_in_progress', 'summary_in_progress'] %}
     <div id="whisperStatus" class="badge
       {% if meeting.notion_status == 'notes_ready' %}text-bg-success
       {% elif meeting.notion_status == 'error' %}text-bg-danger
-      {% elif meeting.notion_status %}text-bg-warning
+      {% else %}text-bg-warning
       {% endif %}">
       {% if meeting.notion_status == 'notes_ready' %}✅ Transcrição pronta
       {% elif meeting.notion_status == 'transcription_in_progress' %}⏳ Transcrevendo...
       {% elif meeting.notion_status == 'summary_in_progress' %}🤖 Gerando resumo...
       {% elif meeting.notion_status == 'error' %}❌ Erro
-      {% else %}⏳ Processando...
       {% endif %}
     </div>
     {% endif %}
@@ -507,7 +506,7 @@ _WHISPER_PANEL = r"""
   </div>
   {% endif %}
 
-  {% if meeting.notion_status in ['transcription_in_progress', 'summary_in_progress', 'transcription_not_started'] %}
+  {% if meeting.notion_status in ['transcription_in_progress', 'summary_in_progress'] %}
   <div class="alert alert-info mb-0" style="font-size:.85rem;">
     <div class="spinner-border spinner-border-sm me-2" role="status"></div>
     Processando em background — atualizando automaticamente...
@@ -652,7 +651,7 @@ async function gerarResumo() {
 }
 
 // Auto-refresh enquanto processando
-{% if meeting.notion_status in ['transcription_in_progress', 'summary_in_progress', 'transcription_not_started'] %}
+{% if meeting.notion_status in ['transcription_in_progress', 'summary_in_progress'] %}
 (function checkStatus() {
   setTimeout(async function() {
     const r = await fetch('/reunioes/{{ meeting.id }}/status');
