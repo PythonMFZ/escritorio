@@ -22,7 +22,7 @@ import json as _json_w
 import shutil as _shutil
 import tempfile as _tmpfile
 from pathlib import Path as _Path
-from datetime import datetime as _dt_w
+from datetime import datetime as _dt_w, timedelta as _td_w
 from fastapi import BackgroundTasks as _BG
 
 # ── Configuração de paths ─────────────────────────────────────────────────────
@@ -463,6 +463,17 @@ _WHISPER_PANEL = r"""
     {% endif %}
   </div>
 
+  {% if meeting.notion_status in ['transcription_in_progress', 'summary_in_progress'] %}
+  <div class="d-flex gap-2 align-items-center mb-2">
+    <form method="post" action="/reunioes/{{ meeting.id }}/reset-transcricao" class="d-inline">
+      <button type="submit" class="btn btn-outline-warning btn-sm">
+        🔄 Tentar novamente
+      </button>
+    </form>
+    <span class="text-muted small">Preso? Clique para reiniciar a transcrição.</span>
+  </div>
+  {% endif %}
+
   {% if meeting.notion_status not in ['notes_ready', 'transcription_in_progress', 'summary_in_progress'] %}
   <div class="d-flex gap-2 align-items-center flex-wrap mb-2">
 
@@ -667,5 +678,54 @@ if _mt_tmpl and "whisperPanel" not in _mt_tmpl:
 
 if hasattr(templates_env.loader, "mapping"):
     templates_env.loader.mapping = TEMPLATES
+
+
+# ── Rota POST /reunioes/{id}/reset-transcricao ────────────────────────────────
+
+@app.post("/reunioes/{meeting_id}/reset-transcricao")
+@require_login
+async def reuniao_reset_transcricao(
+    meeting_id: int,
+    request: Request,
+    session: Session = Depends(get_session),
+):
+    """Reseta reunião presa em transcription_in_progress/summary_in_progress."""
+    ctx = get_tenant_context(request, session)
+    if not ctx or ctx.membership.role not in ("admin", "equipe"):
+        return RedirectResponse(f"/reunioes/{meeting_id}", status_code=303)
+
+    mt = session.get(Meeting, meeting_id)
+    if mt and mt.company_id == ctx.company.id:
+        mt.notion_status = "transcription_not_started"
+        mt.updated_at = _dt_w.utcnow()
+        session.add(mt)
+        session.commit()
+        print(f"[whisper] Reunião {meeting_id} resetada manualmente para transcription_not_started")
+
+    return RedirectResponse(f"/reunioes/{meeting_id}", status_code=303)
+
+
+# ── Reset de reuniões presas no startup ───────────────────────────────────────
+# Quando o app reinicia (deploy, crash), qualquer reunião presa em
+# transcription_in_progress ou summary_in_progress nunca vai terminar.
+# Resetamos para transcription_not_started para que o usuário possa tentar novamente.
+
+try:
+    from sqlmodel import Session as _SessWS
+    with _SessWS(engine) as _sess_startup:
+        _presas = _sess_startup.exec(
+            select(Meeting).where(
+                Meeting.notion_status.in_(["transcription_in_progress", "summary_in_progress"])
+            )
+        ).all()
+        for _mp in _presas:
+            _mp.notion_status = "transcription_not_started"
+            _sess_startup.add(_mp)
+        if _presas:
+            _sess_startup.commit()
+            print(f"[whisper] ⚠️  {len(_presas)} reunião(ões) presa(s) resetada(s) no startup.")
+except Exception as _ew:
+    print(f"[whisper] Startup reset: {_ew}")
+
 
 print("[whisper] Patch de transcrição carregado.")
