@@ -119,73 +119,103 @@ def _processar_audio_background(
     company_id: int,
 ):
     """
-    Background task: roda o Whisper em subprocess separado para não
-    consumir RAM/CPU do processo principal do Gunicorn.
+    Background task: transcreve com OpenAI Whisper API (preferencial) ou
+    Whisper local como fallback.
     """
-    import subprocess as _sp
-    import sys as _sys_w
-
-    print(f"[whisper] Iniciando transcrição da reunião {meeting_id} em subprocess...")
+    print(f"[whisper] Iniciando transcrição da reunião {meeting_id}...")
 
     from sqlmodel import Session as _SessW
     with _SessW(engine) as _sess:
         mt = _sess.get(Meeting, meeting_id)
         if not mt:
             return
-
         mt.notion_status = "transcription_in_progress"
         mt.updated_at = _dt_w.utcnow()
         _sess.add(mt); _sess.commit()
 
-    # Script Python que roda em processo separado
-    script = f"""
-import sys, os, json
-sys.path.insert(0, '{_os2.path.dirname(_os2.path.abspath(__file__))}')
-os.environ.update(dict(os.environ))
+    transcricao = ""
 
+    # ── Tenta OpenAI Whisper API primeiro (mais confiável) ───────────────────
+    openai_key = _os2.environ.get("OPENAI_API_KEY", "")
+    if openai_key and _Path(audio_path).exists():
+        try:
+            import openai as _oai
+            _oai.api_key = openai_key
+            print(f"[whisper] Usando OpenAI Whisper API...")
+            with open(audio_path, "rb") as _af:
+                result = _oai.audio.transcriptions.create(
+                    model="whisper-1",
+                    file=_af,
+                    language="pt",
+                )
+            transcricao = result.text.strip()
+            print(f"[whisper] OpenAI API OK: {len(transcricao)} chars")
+        except Exception as _oe:
+            print(f"[whisper] OpenAI API falhou: {_oe} — tentando local...")
+
+    # ── Fallback: Whisper local via subprocess ───────────────────────────────
+    if not transcricao and _Path(audio_path).exists():
+        import subprocess as _sp
+        import sys as _sys_w
+        print(f"[whisper] Usando Whisper local (modelo {_WHISPER_MODEL_NAME})...")
+
+        script = f"""
+import sys, os, json
 try:
     import whisper
     model = whisper.load_model('{_WHISPER_MODEL_NAME}')
     result = model.transcribe('{audio_path}', language='pt', verbose=False)
-    transcricao = result.get('text', '').strip()
-    print(json.dumps({{'ok': True, 'text': transcricao}}))
+    print(json.dumps({{'ok': True, 'text': result.get('text', '').strip()}}))
 except Exception as e:
     print(json.dumps({{'ok': False, 'error': str(e)}}))
 """
+        try:
+            proc = _sp.run(
+                [_sys_w.executable, '-c', script],
+                capture_output=True, text=True, timeout=5400,
+            )
+            for line in proc.stdout.strip().splitlines():
+                if line.strip().startswith('{'):
+                    try:
+                        r = __import__('json').loads(line.strip())
+                        if r.get('ok'):
+                            transcricao = r.get('text', '')
+                        else:
+                            print(f"[whisper] Local erro: {r.get('error')}")
+                        break
+                    except Exception:
+                        pass
+            if proc.returncode != 0 and not transcricao:
+                print(f"[whisper] Subprocess stderr: {proc.stderr[:200]}")
+        except Exception as _le:
+            print(f"[whisper] Whisper local falhou: {_le}")
 
-    try:
-        # Roda Whisper em processo filho com limite de memória
-        proc = _sp.run(
-            [_sys_w.executable, '-c', script],
-            capture_output=True,
-            text=True,
-            timeout=5400,  # 90 minutos máximo para reuniões longas
-        )
+    # ── Arquivo não encontrado ───────────────────────────────────────────────
+    if not _Path(audio_path).exists() and not transcricao:
+        print(f"[whisper] ❌ Arquivo não encontrado: {audio_path}")
+        with _SessW(engine) as _s:
+            _mt = _s.get(Meeting, meeting_id)
+            if _mt:
+                _mt.notion_status = "error"
+                _mt.notes_text = "Arquivo de áudio não encontrado. O servidor pode ter reiniciado durante o upload. Por favor, faça upload novamente."
+                _s.add(_mt); _s.commit()
+        return
 
-        resultado = {}
-        for line in proc.stdout.strip().splitlines():
-            line = line.strip()
-            if line.startswith('{'):
-                try:
-                    resultado = __import__('json').loads(line)
-                    break
-                except Exception:
-                    pass
+    if not transcricao:
+        print(f"[whisper] ❌ Transcrição vazia após todas as tentativas.")
+        with _SessW(engine) as _s:
+            _mt = _s.get(Meeting, meeting_id)
+            if _mt:
+                _mt.notion_status = "error"
+                _mt.notes_text = "Não foi possível transcrever o áudio. Verifique se OPENAI_API_KEY está configurada no Render, ou tente um arquivo MP3/M4A."
+                _s.add(_mt); _s.commit()
+        try:
+            _Path(audio_path).unlink(missing_ok=True)
+        except Exception:
+            pass
+        return
 
-        transcricao = resultado.get('text', '') if resultado.get('ok') else ''
-
-        if proc.returncode != 0 and not transcricao:
-            erro = proc.stderr[:300] if proc.stderr else 'Erro desconhecido'
-            print(f"[whisper] Erro subprocess: {erro}")
-            with _SessW(engine) as _s:
-                _mt = _s.get(Meeting, meeting_id)
-                if _mt:
-                    _mt.notion_status = "error"
-                    _mt.notes_text = f"Erro na transcrição: {erro[:200]}"
-                    _s.add(_mt); _s.commit()
-            return
-
-        print(f"[whisper] Transcrição concluída: {len(transcricao)} chars")
+    print(f"[whisper] ✅ Transcrição OK: {len(transcricao)} chars")
 
         # Atualiza banco com transcrição
         with _SessW(engine) as _s:
