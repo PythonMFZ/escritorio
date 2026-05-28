@@ -95,21 +95,19 @@ def _trial_valido(lead: TrialLead) -> tuple[bool, str]:
 def _criar_crm_lead(session, lead: TrialLead) -> _Opt_tr[int]:
     """Cria um BusinessDeal no CRM para rastrear o lead. Retorna deal_id ou None."""
     try:
-        # Encontra admin e sua empresa
         admin_user = session.exec(_sel_tr(User).where(User.email == _ADMIN_EMAIL)).first()
         if not admin_user:
+            print(f"[trial_crm] Admin não encontrado: {_ADMIN_EMAIL}")
             return None
+
         membership = session.exec(
-            _sel_tr(Membership).where(
-                Membership.user_id == admin_user.id,
-                Membership.role.in_(["admin", "owner"]),
-            )
+            _sel_tr(Membership).where(Membership.user_id == admin_user.id)
         ).first()
         if not membership:
+            print(f"[trial_crm] Membership não encontrado para user_id={admin_user.id}")
             return None
         company_id = membership.company_id
 
-        # Encontra ou cria cliente-placeholder "Leads Augur PME"
         placeholder = session.exec(
             _sel_tr(Client).where(
                 Client.company_id == company_id,
@@ -145,9 +143,10 @@ def _criar_crm_lead(session, lead: TrialLead) -> _Opt_tr[int]:
         )
         session.add(deal)
         session.flush()
+        print(f"[trial_crm] ✅ Deal criado: id={deal.id} título='{deal.title}'")
         return deal.id
     except Exception as _e_crm:
-        print(f"[trial_crm] Erro ao criar deal: {_e_crm}")
+        print(f"[trial_crm] ❌ Erro ao criar deal: {type(_e_crm).__name__}: {_e_crm}")
         return None
 
 
@@ -758,30 +757,153 @@ async def trial_checkout(request: _Req_tr, token: str = ""):
         return _JSON_tr({"url": _WPP_FALLBACK})
 
 
-# ── Página de sucesso pós-assinatura ─────────────────────────────────────────
+# ── Página de sucesso pós-assinatura: criar conta ────────────────────────────
 
 @app.get("/trial/assinado")
 async def trial_assinado(token: str = ""):
+    if not token:
+        return _HTML_tr("<script>location.href='/cadastro'</script>")
+
+    with _Sess_tr(engine) as _s:
+        lead = _s.exec(_sel_tr(TrialLead).where(TrialLead.access_token == token)).first()
+        if not lead:
+            return _HTML_tr("<script>location.href='/cadastro'</script>")
+        nome    = lead.nome
+        empresa = lead.empresa
+        email   = lead.email or ""
+
     _html = f"""<!DOCTYPE html><html lang="pt-BR"><head><meta charset="UTF-8">
-<title>Obrigado · Augur PME</title>
-<link href="https://fonts.googleapis.com/css2?family=Syne:wght@700;800&family=Poppins:wght@400;600&display=swap" rel="stylesheet">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Criar sua conta · Augur PME</title>
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@700;800&family=Poppins:wght@300;400;500;600&display=swap" rel="stylesheet">
 <style>
 *{{box-sizing:border-box;margin:0;padding:0}}
-body{{background:#0A0A0A;color:#F5F0E8;font-family:'Poppins',sans-serif;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:2rem;}}
-.card{{background:#141414;border:1px solid #2a2a2a;border-radius:20px;padding:3rem 2rem;max-width:480px;width:100%;text-align:center;}}
-.icon{{font-size:3rem;margin-bottom:1.5rem;}}
-h1{{font-family:'Syne',sans-serif;font-size:1.5rem;color:#C9963A;margin-bottom:.75rem;}}
-p{{font-size:.9rem;color:#888;line-height:1.7;margin-bottom:1.5rem;}}
-.btn{{display:inline-block;background:#C9963A;color:#0A0A0A;padding:.9rem 2rem;border-radius:12px;font-family:'Syne',sans-serif;font-weight:700;font-size:.95rem;text-decoration:none;}}
+body{{background:#0A0A0A;color:#F5F0E8;font-family:'Poppins',sans-serif;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:2rem 1rem;}}
+.card{{background:#141414;border:1px solid #2a2a2a;border-radius:20px;padding:2.5rem 2rem;max-width:460px;width:100%;}}
+.icon{{font-size:2.5rem;text-align:center;margin-bottom:1rem;}}
+h1{{font-family:'Syne',sans-serif;font-size:1.4rem;color:#C9963A;text-align:center;margin-bottom:.5rem;}}
+.sub{{font-size:.85rem;color:#888;text-align:center;margin-bottom:2rem;line-height:1.6;}}
+label{{display:block;font-size:.75rem;font-weight:600;color:#888;margin-bottom:.35rem;text-transform:uppercase;letter-spacing:.04em;}}
+input{{width:100%;background:#1a1a1a;border:1px solid #2a2a2a;border-radius:10px;padding:.7rem 1rem;font-size:.9rem;color:#F5F0E8;font-family:'Poppins',sans-serif;outline:none;transition:border .2s;}}
+input:focus{{border-color:#C9963A;}}
+.field{{margin-bottom:1rem;}}
+.btn{{width:100%;background:#C9963A;color:#0A0A0A;font-family:'Syne',sans-serif;font-weight:700;font-size:1rem;padding:.9rem;border:none;border-radius:12px;cursor:pointer;margin-top:.5rem;}}
+.btn:hover{{background:#E0A84B;}}
+.err{{color:#f87171;font-size:.8rem;margin-top:.5rem;display:none;text-align:center;}}
+.hint{{font-size:.72rem;color:#666;margin-top:.4rem;}}
 </style></head><body>
 <div class="card">
   <div class="icon">🎉</div>
   <h1>Assinatura confirmada!</h1>
-  <p>Bem-vindo ao Augur PME. Nossa equipe entrará em contato em breve para criar seu acesso completo à plataforma.</p>
-  <p style="margin-bottom:2rem;">Qualquer dúvida, fale conosco pelo WhatsApp:</p>
-  <a href="https://wa.me/5547991359091?text=Acabei+de+assinar+o+Augur+PME" class="btn">Falar com a equipe →</a>
-</div></body></html>"""
+  <p class="sub">Bem-vindo, <strong style="color:#F5F0E8">{nome}</strong>! Crie sua senha para acessar a plataforma completa.</p>
+  <form id="form" onsubmit="criar(event)">
+    <div class="field">
+      <label>E-mail</label>
+      <input type="email" id="email" value="{email}" required autocomplete="email">
+    </div>
+    <div class="field">
+      <label>Senha</label>
+      <input type="password" id="senha" placeholder="Mínimo 8 caracteres" required minlength="8" autocomplete="new-password">
+      <div class="hint">Use letras e números</div>
+    </div>
+    <div class="field">
+      <label>Confirmar senha</label>
+      <input type="password" id="senha2" placeholder="Repita a senha" required autocomplete="new-password">
+    </div>
+    <div class="err" id="err"></div>
+    <button type="submit" class="btn" id="btn">Criar minha conta →</button>
+  </form>
+</div>
+<script>
+async function criar(e){{
+  e.preventDefault();
+  const err = document.getElementById('err');
+  err.style.display='none';
+  const email = document.getElementById('email').value.trim();
+  const senha = document.getElementById('senha').value;
+  const senha2 = document.getElementById('senha2').value;
+  if(senha !== senha2){{ err.textContent='As senhas não coincidem.'; err.style.display='block'; return; }}
+  if(senha.length < 8){{ err.textContent='Senha muito curta.'; err.style.display='block'; return; }}
+  const btn = document.getElementById('btn');
+  btn.disabled=true; btn.textContent='Criando conta...';
+  try{{
+    const r = await fetch('/api/trial/criar-conta',{{
+      method:'POST',
+      headers:{{'Content-Type':'application/json'}},
+      body: JSON.stringify({{token:'{token}', email, senha}})
+    }});
+    const d = await r.json();
+    if(d.ok){{ window.location.href = '/'; }}
+    else{{ err.textContent = d.erro || 'Erro ao criar conta.'; err.style.display='block'; btn.disabled=false; btn.textContent='Criar minha conta →'; }}
+  }}catch(ex){{ err.textContent='Erro de conexão.'; err.style.display='block'; btn.disabled=false; btn.textContent='Criar minha conta →'; }}
+}}
+</script>
+</body></html>"""
     return _HTML_tr(_html)
+
+
+@app.post("/api/trial/criar-conta")
+async def trial_criar_conta(request: _Req_tr):
+    """Cria User + Company + Membership para o lead que acabou de assinar."""
+    try:
+        body = await request.json()
+    except Exception:
+        return _JSON_tr({"ok": False, "erro": "Dados inválidos."})
+
+    token = (body.get("token") or "").strip()
+    email = (body.get("email") or "").strip().lower()
+    senha = (body.get("senha") or "").strip()
+
+    if not token or not email or len(senha) < 8:
+        return _JSON_tr({"ok": False, "erro": "Preencha todos os campos."})
+
+    with _Sess_tr(engine) as session:
+        lead = session.exec(_sel_tr(TrialLead).where(TrialLead.access_token == token)).first()
+        if not lead:
+            return _JSON_tr({"ok": False, "erro": "Link inválido."})
+
+        # Verifica se e-mail já existe
+        existente = session.exec(_sel_tr(User).where(User.email == email)).first()
+        if existente:
+            return _JSON_tr({"ok": False, "erro": "Este e-mail já possui uma conta. Acesse /login."})
+
+        # Cria usuário
+        novo_user = User(
+            name          = lead.nome or lead.empresa,
+            email         = email,
+            password_hash = hash_password(senha),
+        )
+        session.add(novo_user)
+        session.flush()
+
+        # Cria empresa
+        nova_company = Company(name=lead.empresa)
+        session.add(nova_company)
+        session.flush()
+
+        # Vincula
+        session.add(Membership(user_id=novo_user.id, company_id=nova_company.id, role="admin"))
+
+        # Marca lead como convertido
+        lead.converted = True
+        session.add(lead)
+
+        # Atualiza CRM deal para "ganho"
+        if lead.crm_deal_id:
+            deal = session.get(BusinessDeal, lead.crm_deal_id)
+            if deal:
+                deal.stage = "ganho"
+                deal.notes = (deal.notes or "") + f"\n✅ Conta criada em {_agora()} — {email}"
+                session.add(deal)
+
+        session.commit()
+        print(f"[trial_criar_conta] ✅ Conta criada: {email} / {lead.empresa}")
+
+        # Faz login automático
+        request.session["user_id"]    = novo_user.id
+        request.session["company_id"] = nova_company.id
+
+    return _JSON_tr({"ok": True})
 
 
 # ── API: chat trial ───────────────────────────────────────────────────────────
