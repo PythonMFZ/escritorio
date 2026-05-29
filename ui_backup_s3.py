@@ -66,9 +66,21 @@ def _run_backup() -> bool:
         _bk_state["last_status"] = "skipped"
         return False
 
-    # pg_dump exige postgresql:// não postgres://
-    if db_url.startswith("postgres://"):
-        db_url = "postgresql://" + db_url[len("postgres://"):]
+    # Parseia a URL para extrair componentes individuais
+    # formato: postgres://user:password@host:port/dbname
+    try:
+        from urllib.parse import urlparse as _urlparse
+        _parsed = _urlparse(db_url)
+        _pg_host = _parsed.hostname or "localhost"
+        _pg_port = str(_parsed.port or 5432)
+        _pg_user = _parsed.username or "postgres"
+        _pg_pass = _parsed.password or ""
+        _pg_db   = (_parsed.path or "/postgres").lstrip("/")
+        print(f"[backup_s3] Conectando em {_pg_host}:{_pg_port}/{_pg_db} como {_pg_user}")
+    except Exception as _pu:
+        print(f"[backup_s3] Erro ao parsear DATABASE_URL: {_pu}")
+        _bk_state.update({"last_status": "error", "last_error": str(_pu)})
+        return False
 
     s3 = _get_s3_client()
     if not s3:
@@ -85,13 +97,21 @@ def _run_backup() -> bool:
     tmp_gz  = _Path_bk(_tmp_bk.gettempdir()) / filename
 
     try:
-        # ── pg_dump ──────────────────────────────────────────────────────────
+        # ── pg_dump com parâmetros explícitos ────────────────────────────────
         result = _sp_bk.run(
-            ["pg_dump", "--no-password", "--format=plain", "--encoding=UTF8",
-             "--dbname", db_url],
+            [
+                "pg_dump",
+                "--format=plain",
+                "--encoding=UTF8",
+                "--no-password",
+                f"--host={_pg_host}",
+                f"--port={_pg_port}",
+                f"--username={_pg_user}",
+                f"--dbname={_pg_db}",
+            ],
             capture_output=True,
             timeout=300,
-            env={**_os_bk.environ, "PGPASSWORD": _os_bk.environ.get("PGPASSWORD", "")},
+            env={**_os_bk.environ, "PGPASSWORD": _pg_pass},
         )
         if result.returncode != 0:
             err = result.stderr.decode()[:300]
