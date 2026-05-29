@@ -214,15 +214,14 @@ async def backup_status(request: Request, session: Session = Depends(get_session
 @require_login
 async def backup_rodar_agora(
     request: Request,
-    background_tasks,
     session: Session = Depends(get_session),
 ):
     ctx = get_tenant_context(request, session)
     if not ctx or ctx.membership.role not in ("admin", "owner"):
         return JSONResponse({"ok": False, "erro": "Sem permissão."}, status_code=403)
 
-    background_tasks.add_task(_run_backup)
-    return JSONResponse({"ok": True, "msg": "Backup iniciado em background. Verifique /admin/backup/status em alguns minutos."})
+    _thread_bk.Thread(target=_run_backup, daemon=True).start()
+    return JSONResponse({"ok": True, "msg": "Backup iniciado. Verifique /admin/backup/status em 1-2 minutos."})
 
 
 print("[backup_s3] ✅ Módulo de backup S3 carregado.")
