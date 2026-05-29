@@ -66,6 +66,10 @@ def _run_backup() -> bool:
         _bk_state["last_status"] = "skipped"
         return False
 
+    # pg_dump exige postgresql:// não postgres://
+    if db_url.startswith("postgres://"):
+        db_url = "postgresql://" + db_url[len("postgres://"):]
+
     s3 = _get_s3_client()
     if not s3:
         return False
@@ -83,9 +87,11 @@ def _run_backup() -> bool:
     try:
         # ── pg_dump ──────────────────────────────────────────────────────────
         result = _sp_bk.run(
-            ["pg_dump", "--no-password", "--format=plain", "--encoding=UTF8", db_url],
+            ["pg_dump", "--no-password", "--format=plain", "--encoding=UTF8",
+             "--dbname", db_url],
             capture_output=True,
             timeout=300,
+            env={**_os_bk.environ, "PGPASSWORD": _os_bk.environ.get("PGPASSWORD", "")},
         )
         if result.returncode != 0:
             err = result.stderr.decode()[:300]
