@@ -217,56 +217,36 @@ except Exception as e:
 
     print(f"[whisper] ✅ Transcrição OK: {len(transcricao)} chars")
 
-        # Atualiza banco com transcrição
-        with _SessW(engine) as _s:
-            _mt = _s.get(Meeting, meeting_id)
-            if _mt:
-                _mt.transcript_text = transcricao
-                _mt.notion_status = "summary_in_progress"
-                _s.add(_mt); _s.commit()
+    # Atualiza banco com transcrição
+    with _SessW(engine) as _s:
+        _mt = _s.get(Meeting, meeting_id)
+        if _mt:
+            _mt.transcript_text = transcricao
+            _mt.notion_status = "summary_in_progress"
+            _s.add(_mt); _s.commit()
 
-        # Gera resumo com Claude (no processo principal — leve)
-        if transcricao:
-            with _SessW(engine) as _s:
-                _mt = _s.get(Meeting, meeting_id)
-                if _mt:
-                    resumo = _gerar_resumo_ia(transcricao, _mt.title)
-                    # Garante que todos os campos são strings
-                    def _to_str(v):
-                        if isinstance(v, (list, dict)):
-                            return _json_w.dumps(v, ensure_ascii=False, indent=2)
-                        return str(v or "")
-                    _mt.summary_text      = _to_str(resumo.get("summary", ""))
-                    _mt.action_items_text = _to_str(resumo.get("action_items", ""))
-                    _mt.notes_text        = _to_str(resumo.get("notes", ""))
-                    _mt.notion_status     = "notes_ready"
-                    _mt.last_synced_at    = _dt_w.utcnow()
-                    _mt.updated_at        = _dt_w.utcnow()
-                    _s.add(_mt); _s.commit()
-                    print(f"[whisper] Reunião {meeting_id} processada com sucesso.")
+    # Gera resumo com Claude
+    with _SessW(engine) as _s:
+        _mt = _s.get(Meeting, meeting_id)
+        if _mt:
+            resumo = _gerar_resumo_ia(transcricao, _mt.title)
+            def _to_str(v):
+                if isinstance(v, (list, dict)):
+                    return _json_w.dumps(v, ensure_ascii=False, indent=2)
+                return str(v or "")
+            _mt.summary_text      = _to_str(resumo.get("summary", ""))
+            _mt.action_items_text = _to_str(resumo.get("action_items", ""))
+            _mt.notes_text        = _to_str(resumo.get("notes", ""))
+            _mt.notion_status     = "notes_ready"
+            _mt.last_synced_at    = _dt_w.utcnow()
+            _mt.updated_at        = _dt_w.utcnow()
+            _s.add(_mt); _s.commit()
+            print(f"[whisper] Reunião {meeting_id} processada com sucesso.")
 
-    except _sp.TimeoutExpired:
-        print(f"[whisper] Timeout na transcrição da reunião {meeting_id}")
-        with _SessW(engine) as _s:
-            _mt = _s.get(Meeting, meeting_id)
-            if _mt:
-                _mt.notion_status = "error"
-                _mt.notes_text = "Tempo limite excedido. Tente um arquivo menor."
-                _s.add(_mt); _s.commit()
-    except Exception as e:
-        print(f"[whisper] Erro inesperado: {e}")
-        with _SessW(engine) as _s:
-            _mt = _s.get(Meeting, meeting_id)
-            if _mt:
-                _mt.notion_status = "error"
-                _mt.notes_text = f"Erro: {str(e)[:200]}"
-                _s.add(_mt); _s.commit()
-    finally:
-        try:
-            _Path(audio_path).unlink(missing_ok=True)
-            print(f"[whisper] Áudio deletado: {audio_path}")
-        except Exception:
-            pass
+    try:
+        _Path(audio_path).unlink(missing_ok=True)
+    except Exception:
+        pass
 
 
 # ── Rota POST /reunioes/{id}/upload-audio ─────────────────────────────────────
