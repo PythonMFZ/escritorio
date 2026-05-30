@@ -1072,20 +1072,53 @@ _AUGUR_WIDGET_V4 = r"""
 
     const btn = document.getElementById('augurBtn');
     btn.disabled = true;
+    btn.textContent = '📸';
+
+    // Captura screenshot da tela atual (excluindo o widget Augur)
+    let _screenshot = null;
+    try {
+      if (!window.html2canvas) {
+        await new Promise((res, rej) => {
+          const s = document.createElement('script');
+          s.src = 'https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js';
+          s.onload = res; s.onerror = rej;
+          document.head.appendChild(s);
+        });
+      }
+      const augurEl = document.getElementById('augurCard');
+      if (augurEl) augurEl.style.visibility = 'hidden';
+      const canvas = await html2canvas(document.body, {
+        scale: 0.5, useCORS: true, logging: false, allowTaint: true,
+      });
+      if (augurEl) augurEl.style.visibility = '';
+      const b64 = canvas.toDataURL('image/jpeg', 0.6).split(',')[1];
+      if (b64 && b64.length < 2000000) {
+        _screenshot = { type: 'image/jpeg', data: b64, name: 'tela.jpg' };
+      }
+    } catch(_se) {
+      const augurEl = document.getElementById('augurCard');
+      if (augurEl) augurEl.style.visibility = '';
+    }
+
     btn.textContent = '...';
     input.value = '';
     document.getElementById('augurSuggestions').style.display = 'none';
 
     const hora = new Date().toTimeString().slice(0,5);
-    const displayQ = q + (_augurAnexo ? ` [📎 ${_augurAnexo.name}]` : '');
+    const _temAnexo = _augurAnexo || _screenshot;
+    const displayQ = q + (_augurAnexo ? ` [📎 ${_augurAnexo.name}]` : '') + (_screenshot ? ' [🖥️ tela]' : '');
     _augurRenderMsg('user', displayQ, null, hora, true);
     _augurShowTyping();
 
+    const _attachments = [];
+    if (_screenshot) _attachments.push(_screenshot);
+    if (_augurAnexo)  _attachments.push(_augurAnexo);
+
     const payload = {
-      question: q || '(Analise o arquivo anexado)',
+      question: q || '(Analise o arquivo ou tela enviados)',
       session_id: _sessaoAtual || 0,
     };
-    if (_augurAnexo) payload.attachments = [_augurAnexo];
+    if (_attachments.length) payload.attachments = _attachments;
 
     _augurAnexo = null;
     document.getElementById('augurAnexoPreview').style.display = 'none';
