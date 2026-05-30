@@ -132,6 +132,44 @@ def _format_client_context(client_data: dict) -> str:
                 f"IDC: {c.get('idc',1):.3f}"
             )
 
+    # ── Tarefas abertas ───────────────────────────────────────────────────────
+    tarefas = client_data.get("tarefas_abertas", [])
+    if tarefas:
+        lines.append("\n=== TAREFAS ABERTAS DO CLIENTE ===")
+        _status_label = {"nao_iniciada": "Não iniciada", "em_andamento": "Em andamento"}
+        for t in tarefas[:8]:
+            prazo = f" | Prazo: {t.get('prazo')}" if t.get("prazo") else ""
+            sl = _status_label.get(t.get("status", ""), t.get("status", ""))
+            lines.append(f"• [{t.get('prioridade','media').upper()}] {t.get('titulo','')} — {sl}{prazo}")
+
+    # ── SmartAlerts não lidos ────────────────────────────────────────────────
+    alertas = client_data.get("smart_alerts", [])
+    if alertas:
+        lines.append("\n=== ALERTAS FINANCEIROS ATIVOS ===")
+        _sev_order = {"alta": 0, "media": 1, "baixa": 2}
+        for a in sorted(alertas, key=lambda x: _sev_order.get(x.get("severidade", "baixa"), 3)):
+            lines.append(f"• [{a.get('severidade','').upper()}] {a.get('mensagem','')}")
+
+    # ── Documentos recentes ───────────────────────────────────────────────────
+    docs = client_data.get("documentos_recentes", [])
+    if docs:
+        lines.append("\n=== DOCUMENTOS DO CLIENTE ===")
+        for d in docs[:3]:
+            lines.append(f"\n--- {d.get('titulo','')} ---")
+            if d.get("conteudo"):
+                lines.append(d["conteudo"][:500])
+
+    # ── Base de conhecimento ──────────────────────────────────────────────────
+    base_docs = client_data.get("base_conhecimento", [])
+    if base_docs:
+        lines.append("\n=== BASE DE CONHECIMENTO DO CLIENTE ===")
+        for b in base_docs[:3]:
+            lines.append(f"\n--- {b.get('nome','')} ---")
+            if b.get("descricao"):
+                lines.append(b["descricao"])
+            if b.get("conteudo"):
+                lines.append(b["conteudo"][:500])
+
     return "\n".join(lines)
 
 
