@@ -152,6 +152,96 @@ def _enriquecer_client_data(session, company_id: int, client_id: int, client, cl
     except Exception:
         client_data["obras_ativas"] = []
 
+    # 5. Tarefas abertas (não iniciadas + em andamento)
+    try:
+        tarefas = session.exec(
+            select(Task)
+            .where(
+                Task.company_id == company_id,
+                Task.client_id  == client_id,
+                Task.status.in_(["nao_iniciada", "em_andamento"]),
+            )
+            .order_by(Task.due_date.asc())
+            .limit(10)
+        ).all()
+        client_data["tarefas_abertas"] = [
+            {
+                "titulo":    t.title,
+                "status":    t.status,
+                "prioridade": t.priority,
+                "prazo":     t.due_date or "",
+            }
+            for t in tarefas
+        ]
+    except Exception:
+        client_data["tarefas_abertas"] = []
+
+    # 6. SmartAlerts não lidos
+    try:
+        alertas = session.exec(
+            select(SmartAlert)
+            .where(
+                SmartAlert.company_id == company_id,
+                SmartAlert.client_id  == client_id,
+                SmartAlert.is_read    == False,
+            )
+            .order_by(SmartAlert.created_at.desc())
+            .limit(5)
+        ).all()
+        client_data["smart_alerts"] = [
+            {
+                "tipo":       a.alert_type,
+                "severidade": a.severity,
+                "mensagem":   a.message_text,
+            }
+            for a in alertas
+        ]
+    except Exception:
+        client_data["smart_alerts"] = []
+
+    # 7. Documentos recentes
+    try:
+        docs = session.exec(
+            select(Document)
+            .where(
+                Document.company_id == company_id,
+                Document.client_id  == client_id,
+            )
+            .order_by(Document.updated_at.desc())
+            .limit(3)
+        ).all()
+        client_data["documentos_recentes"] = [
+            {
+                "titulo":   d.title,
+                "conteudo": d.content[:500] if d.content else "",
+            }
+            for d in docs
+        ]
+    except Exception:
+        client_data["documentos_recentes"] = []
+
+    # 8. Base de conhecimento
+    try:
+        base_docs = session.exec(
+            select(BaseConhecimento)
+            .where(
+                BaseConhecimento.company_id == company_id,
+                BaseConhecimento.client_id  == client_id,
+            )
+            .order_by(BaseConhecimento.id.desc())
+            .limit(3)
+        ).all()
+        client_data["base_conhecimento"] = [
+            {
+                "nome":      b.nome,
+                "descricao": b.descricao,
+                "conteudo":  b.conteudo_texto[:500] if b.conteudo_texto else "",
+            }
+            for b in base_docs
+        ]
+    except Exception:
+        client_data["base_conhecimento"] = []
+
     return client_data
 
 
