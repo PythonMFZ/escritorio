@@ -113,13 +113,26 @@ async def _augur_whatsapp_reply(
 
         print(f"[augur_whatsapp] chamando Augur para thread {thread_id} | cliente: {client_id}")
 
-        # ── Command layer (task creation etc.) — runs in thread executor ──
         loop = asyncio.get_event_loop()
-        _cp = contact_phone  # capture for lambda
+        _cp  = contact_phone
         _cid = client_id
         _coid = company_id
-        _mb = message_body
+        _mb  = message_body
+        _tid = thread_id
 
+        # ── Check-in semanal: testa se é resposta a check-in antes de tudo ──
+        _ck_reply = None
+        try:
+            def _run_checkin():
+                with _WazSession(engine) as _db_ck:
+                    return checkin_processar_resposta(
+                        _db_ck, _coid, _cid, _tid, _mb
+                    )
+            _ck_reply = await loop.run_in_executor(None, _run_checkin)
+        except Exception as _ck_e:
+            print(f"[augur_whatsapp] checkin check: {_ck_e}")
+
+        # ── Command layer (task creation etc.) — runs in thread executor ──
         def _run_command_layer():
             with _WazSession(engine) as _db:
                 # Resolve real user_id from whatsapp_phone
@@ -140,7 +153,10 @@ async def _augur_whatsapp_reply(
             import traceback; traceback.print_exc()
             cmd_reply = None
 
-        if cmd_reply:
+        if _ck_reply:
+            reply = _ck_reply
+            print(f"[augur_whatsapp] check-in processado: {reply[:80]}")
+        elif cmd_reply:
             reply = cmd_reply
             print(f"[augur_whatsapp] comando executado: {reply[:80]}")
         else:
