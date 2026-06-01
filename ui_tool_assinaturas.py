@@ -790,16 +790,16 @@ _patch_precificacao_html()
 # preco_mensal_cents_* and stripe_price_id_*
 
 _orig_precificacao_salvar = None
-for _r in app.routes:
+for _r in app.router.routes:
     if hasattr(_r, "path") and _r.path == "/admin/precificacao/salvar" and "POST" in getattr(_r, "methods", set()):
         _orig_precificacao_salvar = getattr(_r, "endpoint", None)
         break
 
 if _orig_precificacao_salvar is not None:
-    # Remove old route
-    app.routes = [_r for _r in app.routes
-                  if not (hasattr(_r, "path") and _r.path == "/admin/precificacao/salvar"
-                          and "POST" in getattr(_r, "methods", set()))]
+    # Remove old route (app.router.routes is a mutable list; app.routes is read-only property)
+    app.router.routes[:] = [_r for _r in app.router.routes
+                             if not (hasattr(_r, "path") and _r.path == "/admin/precificacao/salvar"
+                                     and "POST" in getattr(_r, "methods", set()))]
 
     @app.post("/admin/precificacao/salvar")
     @require_login
