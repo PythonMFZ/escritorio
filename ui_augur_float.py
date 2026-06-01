@@ -7,7 +7,7 @@
 
 _AUGUR_FLOAT_HTML = r"""
 {% if current_user %}
-<div id="augurFloatWrap" style="position:fixed;bottom:1.5rem;right:1.5rem;z-index:9990;display:flex;flex-direction:column;align-items:flex-end;gap:.5rem;">
+<div id="augurFloatWrap" style="position:fixed;bottom:6rem;right:1.75rem;z-index:9990;display:flex;flex-direction:column;align-items:flex-end;gap:.5rem;">
 
   <div id="augurFloatPanel" style="display:none;width:360px;background:#fff;border-radius:16px;
     box-shadow:0 8px 32px rgba(0,0,0,.22);overflow:hidden;flex-direction:column;">
