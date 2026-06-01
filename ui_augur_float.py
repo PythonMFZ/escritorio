@@ -160,19 +160,22 @@ _AUGUR_FLOAT_HTML = r"""
 })();
 </script>
 {% endif %}
-</body>
-</html>
 """
 
-# Injeta no base.html substituindo </body>\n</html>
+# Injeta no base.html antes do último </body>
 try:
     _tpl = TEMPLATES.get("base.html", "")
-    if "</body>" in _tpl and _AUGUR_FLOAT_HTML.strip()[:20] not in _tpl:
-        TEMPLATES["base.html"] = _tpl.replace("  </body>\n</html>", _AUGUR_FLOAT_HTML)
+    _marker = "augurFloatWrap"
+    if "</body>" in _tpl and _marker not in _tpl:
+        # Usa rsplit para garantir que pega o ÚLTIMO </body>
+        _parts = _tpl.rsplit("</body>", 1)
+        TEMPLATES["base.html"] = _parts[0] + _AUGUR_FLOAT_HTML + "\n</body>" + _parts[1]
         if hasattr(templates_env.loader, "mapping"):
             templates_env.loader.mapping = TEMPLATES
         print("[augur_float] Botão flutuante injetado no base.html.")
+    elif _marker in _tpl:
+        print("[augur_float] Widget já presente no base.html.")
     else:
-        print("[augur_float] base.html já contém o widget ou </body> não encontrado.")
+        print("[augur_float] </body> não encontrado no base.html.")
 except Exception as _e_af:
     print(f"[augur_float] Erro ao injetar: {_e_af}")
