@@ -48460,5 +48460,5 @@ exec(open('ui_trial_augur.py').read())
 exec(open('ui_pesquisas.py').read())
 exec(open('ui_augur_float.py').read())
 exec(open('ui_admin_assinaturas.py').read())
-exec(open('ui_tool_assinaturas.py').read())
+exec(open('ui_creditos_features.py').read())
 

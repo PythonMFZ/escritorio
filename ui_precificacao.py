@@ -36,9 +36,10 @@ except Exception:
 _PRODUTOS_BASE = [
     {"codigo": "financeiro_gerencial_mensal", "nome": "Financeiro Gerencial",    "descricao": "Acesso mensal ao controle financeiro",         "categoria": "ferramenta", "modelo": "assinatura", "creditos": 70},
     {"codigo": "viabilidade_analise",         "nome": "Viabilidade Imobiliária", "descricao": "Por análise salva (após 3 gratuitas)",          "categoria": "ferramenta", "modelo": "uso",        "creditos": 49},
-    {"codigo": "obras_horas_mensal",          "nome": "Obras + Horas",           "descricao": "Controle de obras e apontamento",               "categoria": "ferramenta", "modelo": "gratuito",   "creditos": 0},
-    {"codigo": "nova_avaliacao",              "nome": "Nova Avaliação",           "descricao": "2ª+ avaliação no mês (1ª sempre gratuita)",     "categoria": "ferramenta", "modelo": "uso",        "creditos": 0},
-    {"codigo": "augur_mensal",                "nome": "Augur — Consultor IA",    "descricao": "Assinatura mensal de acesso ao Augur",           "categoria": "ia",         "modelo": "assinatura", "creditos": 99},
+    {"codigo": "obras_horas_mensal",          "nome": "Gestão de Obras",         "descricao": "Cronograma físico-financeiro, fases e Gantt",   "categoria": "ferramenta", "modelo": "assinatura", "creditos": 60},
+    {"codigo": "mapa_unidades_mensal",        "nome": "Mapa de Unidades",        "descricao": "Empreendimentos e status de venda de unidades", "categoria": "ferramenta", "modelo": "assinatura", "creditos": 30},
+    {"codigo": "nova_avaliacao",              "nome": "Nova Avaliação",           "descricao": "2ª+ avaliação no mês (1ª sempre gratuita)",    "categoria": "ferramenta", "modelo": "uso",        "creditos": 0},
+    {"codigo": "augur_mensal",                "nome": "Augur — Consultor IA",    "descricao": "Assinatura mensal de acesso ao Augur por usuário","categoria": "ia",        "modelo": "assinatura", "creditos": 99},
 ]
 
 def _get_preco(session, company_id, codigo, default=0):
