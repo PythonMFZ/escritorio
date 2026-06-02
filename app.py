@@ -9190,9 +9190,13 @@ TEMPLATES.update({
                     <td>
                       <div class="d-flex gap-1">
                         <a class="btn btn-outline-secondary btn-sm" href="/perfil/avaliacao/{{ s.id }}">Ver</a>
+                        <form method="post" action="/perfil/avaliacao/{{ s.id }}/reabrir"
+                              onsubmit="return confirm('Reabrir para edição?')" style="margin:0;">
+                          <button type="submit" class="btn btn-outline-primary btn-sm">✏️ Editar</button>
+                        </form>
                         <form method="post" action="/perfil/avaliacao/{{ s.id }}/duplicar"
                               onsubmit="return confirm('Duplicar este diagnóstico?')" style="margin:0;">
-                          <button type="submit" class="btn btn-outline-primary btn-sm">⎘ Duplicar</button>
+                          <button type="submit" class="btn btn-outline-secondary btn-sm">⎘ Duplicar</button>
                         </form>
                       </div>
                     </td>
