@@ -105,6 +105,16 @@ async def carteira_page(
                     g4 = "alerta"
                 else:
                     g4 = "deficiente"
+            elif snap:
+                # Sem dados de balanço — classifica pelo score do diagnóstico
+                if score_total >= 70:
+                    g4 = "saudavel"
+                elif score_total >= 50:
+                    g4 = "alerta"
+                elif score_total > 0:
+                    g4 = "deficiente"
+                else:
+                    g4 = "sem_dados"
             else:
                 g4 = "sem_dados"
 

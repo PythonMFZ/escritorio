@@ -9639,6 +9639,34 @@ TEMPLATES.update({
         <label class="form-label">Notas internas</label>
         <textarea class="form-control" name="notes" rows="3"></textarea>
       </div>
+
+      <div class="col-12">
+        <hr class="my-1"/>
+        <div class="fw-semibold small mb-2">📋 Tarefa inicial (opcional)</div>
+        <div class="row g-2">
+          <div class="col-md-6">
+            <input class="form-control" name="task_title" placeholder="Título da tarefa (deixe vazio para não criar)" />
+          </div>
+          <div class="col-md-2">
+            <input class="form-control mono" name="task_due_date" placeholder="DD/MM/AAAA" />
+          </div>
+          <div class="col-md-2">
+            <select class="form-select" name="task_priority">
+              <option value="media">Prioridade: Média</option>
+              <option value="alta">Alta</option>
+              <option value="baixa">Baixa</option>
+            </select>
+          </div>
+          <div class="col-md-2">
+            <select class="form-select" name="task_assignee">
+              <option value="0">Responsável</option>
+              {% for u in owners %}
+                <option value="{{ u.id }}">{{ u.name }}</option>
+              {% endfor %}
+            </select>
+          </div>
+        </div>
+      </div>
     </div>
 
     <div class="mt-4 d-flex gap-2">
@@ -20162,7 +20190,13 @@ async def tasks_list(
         due_label = ""
         try:
             if t.due_date:
-                due_dt = date.fromisoformat(str(t.due_date))
+                _d = str(t.due_date).strip()
+                # suporta DD/MM/AAAA e AAAA-MM-DD
+                if "/" in _d:
+                    _parts = _d.split("/")
+                    due_dt = date(int(_parts[2]), int(_parts[1]), int(_parts[0]))
+                else:
+                    due_dt = date.fromisoformat(_d)
                 days_left = (due_dt - today).days
                 if t.status != "concluida" and days_left < 0:
                     due_state = "danger"
@@ -21783,6 +21817,25 @@ async def crm_new_action(
 
     session.add(BusinessDealNote(deal_id=deal.id, author_user_id=ctx.user.id, message="Negócio criado."))
     session.commit()
+
+    # Cria tarefa vinculada se o título foi informado
+    if task_title.strip():
+        _due = _normalize_date_input(task_due_date.strip()) if task_due_date.strip() else ""
+        _prio = task_priority if task_priority in ("baixa", "media", "alta") else "media"
+        _assignee = int(task_assignee or 0) or None
+        _t = Task(
+            company_id=ctx.company.id,
+            client_id=client.id,
+            created_by_user_id=ctx.user.id,
+            assignee_user_id=_assignee,
+            title=task_title.strip(),
+            description=f"Criada junto ao negócio: {deal.title}",
+            status="nao_iniciada",
+            priority=_prio,
+            due_date=_due,
+        )
+        session.add(_t)
+        session.commit()
 
     set_flash(request, "Negócio criado.")
     return RedirectResponse(f"/negocios/{deal.id}", status_code=303)
@@ -30531,7 +30584,7 @@ def _dashboard_next_steps(analysis: Optional[dict[str, Any]]) -> list[dict[str, 
             {"title": "Simular alternativas", "text": "Compare cenários antes de tomar uma decisão.", "href": "/simulador"},
         ]
     return [
-        {"title": "Falar com um especialista", "text": "O melhor próximo passo é reorganizar caixa e estrutura.", "href": "/consultoria"},
+        {"title": "Falar com um especialista", "text": "O melhor próximo passo é reorganizar caixa e estrutura.", "href": "/especialista"},
         {"title": "Atualizar diagnóstico", "text": "Revise os dados para entender onde está a maior pressão.", "href": "/perfil"},
         {"title": "Ver oportunidades liberadas", "text": "Consulte apenas oportunidades coerentes com o estágio atual.", "href": "/ofertas"},
     ]
@@ -30562,7 +30615,7 @@ def _offer_stage_payload(analysis: Optional[dict[str, Any]], matches_count: int)
         "title": "O foco agora é reorganizar a casa antes de ampliar crédito.",
         "subtitle": "As melhores decisões neste estágio tendem a passar por consultoria, caixa e reestruturação.",
         "badge": "Prioridade consultiva",
-        "cta_href": "/consultoria",
+        "cta_href": "/especialista",
         "cta_label": "Falar com especialista",
     }
 
@@ -36882,9 +36935,17 @@ FEATURE_GROUPS = [
     {"key": "solucoes", "title": "Soluções Financeiras", "features": ["ofertas", "simulador", "propostas"]},
     {"key": "meu_projeto", "title": "Meu Projeto", "features": ["consultoria", "reunioes", "tarefas"]},
     {"key": "ferramentas_conteudo", "title": "Ferramentas e Conteúdo", "features": ["ferramentas", "educacao", "construrisk", "gestao_obras"]},
-    {"key": "gestao_interna", "title": "Gestão Interna", "features": ["crm", "motor_ofertas", "credito", "financeiro_escritorio", "ui", "gestao", "familias", "servicos_internos", "parceiros", "members", "precificacao", "saude"]},
+    {"key": "gestao_interna", "title": "Gestão Interna", "features": ["crm", "motor_ofertas", "credito", "financeiro_escritorio", "ui", "gestao", "familias", "servicos_internos", "parceiros", "members", "precificacao", "saude", "assinaturas", "pesquisas", "checkin_semanal", "uso_plataforma"]},
 ]
 FEATURE_KEYS["members"] = {"title": "Membros", "desc": "Gerenciar membros e permissoes.", "href": "/admin/members"}
+FEATURE_KEYS["assinaturas"] = {"title": "Assinaturas", "desc": "MRR, planos ativos e status por cliente.", "href": "/admin/assinaturas"}
+FEATURE_KEYS["pesquisas"] = {"title": "Pesquisas", "desc": "NPS e pesquisas personalizadas.", "href": "/admin/pesquisas"}
+FEATURE_KEYS["checkin_semanal"] = {"title": "Check-in Semanal", "desc": "Disparo e log dos check-ins WhatsApp.", "href": "/admin/checkin"}
+FEATURE_KEYS["uso_plataforma"] = {"title": "Uso da Plataforma", "desc": "O que cada usuário acessou recentemente.", "href": "/admin/uso"}
+FEATURE_VISIBLE_ROLES["assinaturas"] = {"admin", "equipe"}
+FEATURE_VISIBLE_ROLES["pesquisas"] = {"admin", "equipe"}
+FEATURE_VISIBLE_ROLES["checkin_semanal"] = {"admin", "equipe"}
+FEATURE_VISIBLE_ROLES["uso_plataforma"] = {"admin", "equipe"}
 FEATURE_KEYS["gestao_obras"] = {"title": "Gestao de Obras", "desc": "Cronograma fisico-financeiro.", "href": "/ferramentas/obras"}
 FEATURE_KEYS["construrisk"] = {"title": "ConstruRisk", "desc": "Dossie de analise de risco PF/PJ.", "href": "/construrisk"}
 FEATURE_VISIBLE_ROLES["gestao_obras"] = {"admin", "equipe", "cliente"}
@@ -48494,4 +48555,5 @@ exec(open('ui_pesquisas.py').read())
 exec(open('ui_augur_float.py').read())
 exec(open('ui_admin_assinaturas.py').read())
 exec(open('ui_creditos_features.py').read())
+exec(open('ui_admin_uso.py').read())
 
