@@ -147,6 +147,70 @@ async def api_clients_list(request: Request, session: Session = Depends(get_sess
     return JSONResponse({"clients": [{"id": c.id, "name": c.name} for c in clients]})
 
 
+@app.get("/admin/creditos/diagnostico")
+@require_login
+async def creditos_diagnostico(request: Request, session: Session = Depends(get_session)):
+    """Diagnóstico completo de créditos + features para um cliente. ?client_id=X"""
+    ctx = get_tenant_context(request, session)
+    if not ctx or ctx.membership.role not in ("admin", "equipe"):
+        return JSONResponse({"erro": "Sem permissão."}, status_code=403)
+
+    client_id = int(request.query_params.get("client_id") or 0)
+    if not client_id:
+        clients = session.exec(select(Client).where(Client.company_id==ctx.company.id).order_by(Client.name)).all()
+        return JSONResponse({"erro": "Informe ?client_id=X", "clientes_disponiveis": [{"id": c.id, "name": c.name} for c in clients]})
+
+    client = get_client_or_none(session, ctx.company.id, client_id)
+    if not client:
+        return JSONResponse({"erro": "Cliente não encontrado."}, status_code=404)
+
+    # Wallet
+    try:
+        wallet = _get_or_create_wallet(session, company_id=ctx.company.id, client_id=client_id)
+        saldo_cents  = wallet.balance_cents or 0
+        saldo_cr     = saldo_cents / 100
+    except Exception as e:
+        return JSONResponse({"erro": f"Erro wallet: {e}"})
+
+    # Plano ativo
+    try:
+        cp = session.exec(select(ClientePlano).where(ClientePlano.company_id==ctx.company.id, ClientePlano.client_id==client_id, ClientePlano.ativo==True)).first()
+        plano = session.get(PlanoCredito, cp.plano_id) if cp else None
+    except Exception:
+        cp, plano = None, None
+
+    # AssinaturaFeature (novo sistema)
+    try:
+        afs = session.exec(select(AssinaturaFeature).where(AssinaturaFeature.company_id==ctx.company.id, AssinaturaFeature.client_id==client_id)).all()
+        features_novo = [{"codigo": af.feature_codigo, "ativo": af.ativo, "creditos_mes": af.creditos_mes, "renovacao_em": af.renovacao_em} for af in afs]
+    except Exception as e:
+        features_novo = [{"erro": str(e)}]
+
+    # ClientToolSubscription (sistema legado)
+    try:
+        subs = session.exec(select(ClientToolSubscription).where(ClientToolSubscription.company_id==ctx.company.id, ClientToolSubscription.client_id==client_id)).all()
+        subs_legado = [{"tool_code": s.tool_code, "status": s.status, "is_active": s.is_active, "monthly_price_credits": s.monthly_price_credits, "trial_ends_at": str(s.trial_ends_at)[:16] if s.trial_ends_at else None} for s in subs]
+    except Exception as e:
+        subs_legado = [{"erro": str(e)}]
+
+    # Últimas transações do ledger
+    try:
+        ledger = session.exec(select(CreditLedger).where(CreditLedger.company_id==ctx.company.id, CreditLedger.client_id==client_id).order_by(CreditLedger.id.desc()).limit(10)).all()
+        ledger_items = [{"kind": l.kind, "amount_cents": l.amount_cents, "note": l.note, "ref_type": l.ref_type} for l in ledger]
+    except Exception as e:
+        ledger_items = [{"erro": str(e)}]
+
+    return JSONResponse({
+        "cliente":          {"id": client.id, "nome": client.name},
+        "saldo_creditos":   saldo_cr,
+        "saldo_cents":      saldo_cents,
+        "plano":            {"nome": plano.nome, "creditos_mes": plano.creditos_mes, "proximo_ciclo": cp.proximo_ciclo} if plano else None,
+        "features_novo_sistema":   features_novo,
+        "subscriptions_legado":    subs_legado,
+        "ultimas_transacoes":      ledger_items,
+    })
+
+
 TEMPLATES["precificacao.html"] = r"""
 {% extends "base.html" %}
 {% block content %}

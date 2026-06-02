@@ -37376,6 +37376,18 @@ async def ferramentas_financeiro_page(request: Request, session: Session = Depen
         tool_code=CLIENT_TOOL_FINANCE_CODE,
     )
 
+    # Fallback: se o novo sistema (AssinaturaFeature) tiver a feature ativa, libera acesso
+    try:
+        if not finance_tool.get("access_ok") and _feature_ativa(
+            session, ctx.company.id, current_client.id, "financeiro_gerencial_mensal"
+        ):
+            finance_tool = dict(finance_tool)
+            finance_tool["access_ok"]    = True
+            finance_tool["status_label"] = "Ativa"
+            finance_tool["message"]      = "Acesso liberado pelo plano de créditos."
+    except Exception:
+        pass
+
     finance_summary = {
         "open_receivable": 0.0,
         "open_payable": 0.0,
@@ -40579,6 +40591,7 @@ TEMPLATES["whatsapp_hub.html"] = r"""
   <div class="d-flex gap-2 flex-wrap">
     <a class="btn btn-outline-secondary" href="/admin/whatsapp/config">Configuração</a>
     <a class="btn btn-outline-secondary" href="/admin/whatsapp/filas">Filas</a>
+    <a class="btn btn-outline-secondary" href="/admin/checkin">Check-in Semanal</a>
     <a class="btn btn-primary" href="/admin/whatsapp/caixa">Abrir caixa</a>
   </div>
 </div>

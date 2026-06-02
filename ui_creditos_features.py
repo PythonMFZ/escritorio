@@ -200,6 +200,31 @@ def _feature_ativar(session, company_id: int, client_id: int,
                 return False, "Erro ao debitar créditos."
 
         session.commit()
+
+        # Sincroniza sistema legado (ClientToolSubscription) para financeiro_gerencial
+        if feature_codigo == "financeiro_gerencial_mensal":
+            try:
+                sub_leg = session.exec(
+                    select(ClientToolSubscription)
+                    .where(ClientToolSubscription.company_id == company_id,
+                           ClientToolSubscription.client_id  == client_id,
+                           ClientToolSubscription.tool_code  == "financeiro_gerencial")
+                ).first()
+                if not sub_leg:
+                    sub_leg = ClientToolSubscription(
+                        company_id=company_id, client_id=client_id,
+                        tool_code="financeiro_gerencial",
+                    )
+                sub_leg.is_active             = True
+                sub_leg.status                = "active"
+                sub_leg.monthly_price_credits = 0   # créditos já debitados pelo novo sistema
+                sub_leg.trial_ends_at         = None
+                sub_leg.updated_at            = _dtCF.now(_tzCF.utc)
+                session.add(sub_leg)
+                session.commit()
+            except Exception as _e_leg:
+                print(f"[creditos_features] sync legado financeiro: {_e_leg}")
+
         return True, f"Feature '{feature_codigo}' ativada com sucesso."
 
     except Exception as _e_at:
@@ -224,6 +249,25 @@ def _feature_desativar(session, company_id: int, client_id: int,
         af.ativo = False
         session.add(af)
         session.commit()
+
+        # Sincroniza sistema legado na desativação
+        if feature_codigo == "financeiro_gerencial_mensal":
+            try:
+                sub_leg = session.exec(
+                    select(ClientToolSubscription)
+                    .where(ClientToolSubscription.company_id == company_id,
+                           ClientToolSubscription.client_id  == client_id,
+                           ClientToolSubscription.tool_code  == "financeiro_gerencial")
+                ).first()
+                if sub_leg:
+                    sub_leg.is_active  = False
+                    sub_leg.status     = "blocked"
+                    sub_leg.updated_at = _dtCF.now(_tzCF.utc)
+                    session.add(sub_leg)
+                    session.commit()
+            except Exception:
+                pass
+
         return True
     except Exception as _e_da:
         session.rollback()
