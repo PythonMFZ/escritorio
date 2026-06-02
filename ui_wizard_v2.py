@@ -459,10 +459,6 @@ async def perfil_snapshot_reabrir(request: Request, session: Session = Depends(g
     if not ctx:
         return RedirectResponse("/login", status_code=303)
 
-    if ctx.membership.role not in ("admin", "equipe"):
-        set_flash(request, "Sem permissão.")
-        return RedirectResponse("/perfil", status_code=303)
-
     snap = session.get(ClientSnapshot, int(snapshot_id))
     if not snap or snap.company_id != ctx.company.id:
         set_flash(request, "Avaliação não encontrada.")
@@ -498,10 +494,6 @@ async def perfil_snapshot_duplicar(request: Request, session: Session = Depends(
     ctx = get_tenant_context(request, session)
     if not ctx:
         return RedirectResponse("/login", status_code=303)
-
-    if ctx.membership.role not in ("admin", "equipe"):
-        set_flash(request, "Sem permissão.")
-        return RedirectResponse("/perfil", status_code=303)
 
     original = session.get(ClientSnapshot, int(snapshot_id))
     if not original or original.company_id != ctx.company.id:
@@ -1461,7 +1453,6 @@ TEMPLATES["perfil_snapshot_detail.html"] = r"""
     </div>
     <div class="d-flex gap-2">
       <a class="btn btn-outline-secondary btn-sm" href="/perfil">← Voltar</a>
-      {% if role in ["admin", "equipe"] %}
       <form method="post" action="/perfil/avaliacao/{{ snap.id }}/reabrir"
             onsubmit="return confirm('Reabrir este diagnóstico para edição? O rascunho atual será substituído.')">
         <button type="submit" class="btn btn-outline-primary btn-sm">✏️ Editar</button>
@@ -1470,6 +1461,7 @@ TEMPLATES["perfil_snapshot_detail.html"] = r"""
             onsubmit="return confirm('Duplicar este diagnóstico? Uma cópia será criada e aberta para edição.')">
         <button type="submit" class="btn btn-outline-secondary btn-sm">⎘ Duplicar</button>
       </form>
+      {% if role in ["admin", "equipe"] %}
       <form method="post" action="/perfil/avaliacao/{{ snap.id }}/excluir"
             onsubmit="return confirm('Excluir esta avaliação? A ação não pode ser desfeita.')">
         <button type="submit" class="btn btn-outline-danger btn-sm">🗑 Excluir</button>
