@@ -1,0 +1,168 @@
+# ui_admin_uso.py — Rota /especialista + painel /admin/uso
+# Exec'd no namespace do app.py
+
+from datetime import timedelta as _tdUso
+
+# ── /especialista — redireciona ao WhatsApp do escritório ────────────────────
+
+@app.get("/especialista")
+@require_login
+async def especialista_redirect(request: Request, session: Session = Depends(get_session)):
+    """Redireciona para o WhatsApp do escritório. Usado em CTAs 'Falar com especialista'."""
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        return RedirectResponse("/login", status_code=303)
+
+    phone = ""
+    try:
+        canal = session.exec(
+            select(WhatsAppChannelConfig)
+            .where(WhatsAppChannelConfig.company_id == ctx.company.id)
+        ).first()
+        if canal and canal.business_phone:
+            phone = "".join(c for c in canal.business_phone if c.isdigit())
+    except Exception:
+        pass
+
+    if phone:
+        # Remove leading 0 se houver, adiciona 55 (Brasil) se não tiver
+        if not phone.startswith("55"):
+            phone = "55" + phone
+        return RedirectResponse(f"https://wa.me/{phone}", status_code=302)
+
+    # fallback: página de contato interna
+    return RedirectResponse("/consultoria", status_code=302)
+
+
+# ── /admin/uso — painel de uso da plataforma ─────────────────────────────────
+
+@app.get("/admin/uso", response_class=HTMLResponse)
+@require_login
+async def admin_uso_page(request: Request, session: Session = Depends(get_session)):
+    ctx = get_tenant_context(request, session)
+    if not ctx or ctx.membership.role not in ("admin", "equipe"):
+        return RedirectResponse("/", status_code=303)
+
+    filtro = request.query_params.get("periodo", "hoje")  # hoje | 7d | 30d | todos
+    agora  = utcnow()
+    desde  = {
+        "1h":    agora - _tdUso(hours=1),
+        "hoje":  agora - _tdUso(hours=24),
+        "7d":    agora - _tdUso(days=7),
+        "30d":   agora - _tdUso(days=30),
+        "todos": None,
+    }.get(filtro, agora - _tdUso(hours=24))
+
+    try:
+        q = select(UserActivity).where(UserActivity.company_id == ctx.company.id)
+        if desde:
+            q = q.where(UserActivity.last_seen_at >= desde)
+        q = q.order_by(UserActivity.last_seen_at.desc())
+        registros = session.exec(q).all()
+    except Exception:
+        registros = []
+
+    # Enriquece com nome do usuário e cliente
+    dados = []
+    for r in registros:
+        user = session.get(User, r.user_id) if r.user_id else None
+        client = session.get(Client, r.last_client_id) if r.last_client_id else None
+        dados.append({
+            "user_name":    user.name if user else f"user#{r.user_id}",
+            "user_email":   getattr(user, "email", ""),
+            "role":         r.role or "—",
+            "client_name":  client.name if client else "—",
+            "last_path":    r.last_path or "—",
+            "request_count": r.request_count or 0,
+            "last_seen_at": r.last_seen_at,
+        })
+
+    # Top rotas
+    from collections import Counter as _Ctr
+    path_counts = _Ctr(d["last_path"] for d in dados if d["last_path"] not in ("—", ""))
+    top_paths   = path_counts.most_common(10)
+
+    cc = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
+    return render("admin_uso.html", request=request, context={
+        "current_user": ctx.user, "current_company": ctx.company,
+        "role": ctx.membership.role, "current_client": cc,
+        "dados": dados, "filtro": filtro, "top_paths": top_paths,
+        "total": len(dados),
+    })
+
+
+TEMPLATES["admin_uso.html"] = r"""
+{% extends "base.html" %}
+{% block content %}
+<style>
+  .uso-table td,.uso-table th{vertical-align:middle;font-size:.82rem;}
+  .uso-path{font-family:monospace;font-size:.75rem;color:var(--mc-muted);}
+</style>
+
+<div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+  <div>
+    <h4 class="mb-0">Uso da Plataforma</h4>
+    <div class="muted small">Última atividade registrada por usuário — {{ total }} registro(s)</div>
+  </div>
+  <div class="d-flex gap-1 flex-wrap">
+    {% for p,lbl in [("1h","Última hora"),("hoje","24h"),("7d","7 dias"),("30d","30 dias"),("todos","Todos")] %}
+      <a href="?periodo={{ p }}" class="btn btn-sm {% if filtro==p %}btn-primary{% else %}btn-outline-secondary{% endif %}">{{ lbl }}</a>
+    {% endfor %}
+  </div>
+</div>
+
+{% if top_paths %}
+<div class="card p-3 mb-3">
+  <div class="fw-semibold small mb-2">🔝 Páginas mais acessadas (período)</div>
+  <div class="d-flex flex-wrap gap-2">
+    {% for path, cnt in top_paths %}
+      <span class="badge bg-light text-dark border" style="font-size:.75rem;">{{ path }} <b>×{{ cnt }}</b></span>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
+
+{% if dados %}
+<div class="card p-0 overflow-hidden">
+  <table class="table table-hover mb-0 uso-table">
+    <thead class="table-light">
+      <tr>
+        <th>Usuário</th>
+        <th>Perfil</th>
+        <th>Cliente ativo</th>
+        <th>Última página</th>
+        <th class="text-end">Req.</th>
+        <th>Último acesso</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for d in dados %}
+      <tr>
+        <td>
+          <div class="fw-semibold">{{ d.user_name }}</div>
+          <div class="muted" style="font-size:.72rem;">{{ d.user_email }}</div>
+        </td>
+        <td><span class="badge bg-light text-dark border">{{ d.role }}</span></td>
+        <td>{{ d.client_name }}</td>
+        <td class="uso-path">{{ d.last_path }}</td>
+        <td class="text-end fw-semibold">{{ d.request_count }}</td>
+        <td class="muted" style="font-size:.78rem;">
+          {% if d.last_seen_at %}
+            {{ d.last_seen_at.strftime("%d/%m %H:%M") if d.last_seen_at else "—" }}
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+  <div class="alert alert-info">Nenhuma atividade registrada no período.</div>
+{% endif %}
+{% endblock %}
+"""
+
+if hasattr(templates_env.loader, "mapping"):
+    templates_env.loader.mapping["admin_uso.html"] = TEMPLATES["admin_uso.html"]
+
+print("[admin_uso] ✅ Rotas /especialista e /admin/uso carregadas")
