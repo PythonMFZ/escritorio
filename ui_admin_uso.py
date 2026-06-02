@@ -166,3 +166,12 @@ if hasattr(templates_env.loader, "mapping"):
     templates_env.loader.mapping["admin_uso.html"] = TEMPLATES["admin_uso.html"]
 
 print("[admin_uso] ✅ Rotas /especialista e /admin/uso carregadas")
+
+# Garante que as novas features aparecem no menu para admin/equipe
+_new_features = {"assinaturas", "pesquisas", "checkin_semanal", "uso_plataforma"}
+for _role in ("admin", "equipe"):
+    ROLE_DEFAULT_FEATURES.setdefault(_role, set()).update(_new_features)
+for _fk in _new_features:
+    FEATURE_VISIBLE_ROLES.setdefault(_fk, {"admin", "equipe"})
+
+print(f"[admin_uso] ROLE_DEFAULT_FEATURES admin inclui: {sorted(_new_features & ROLE_DEFAULT_FEATURES.get('admin', set()))}")
