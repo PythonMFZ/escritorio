@@ -504,6 +504,174 @@ _thread_ck.Thread(target=_ck_scheduler_loop, daemon=True, name="checkin-semanal"
 
 # ── Rotas admin ───────────────────────────────────────────────────────────────
 
+@app.get("/admin/checkin", response_class=HTMLResponse)
+@require_login
+async def checkin_admin_page(request: Request, session: Session = Depends(get_session)):
+    ctx = get_tenant_context(request, session)
+    if not ctx or ctx.membership.role not in ("admin", "owner", "equipe"):
+        return RedirectResponse("/", status_code=303)
+    cc = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
+    return render("checkin_admin.html", request=request, context={
+        "current_user": ctx.user, "current_company": ctx.company,
+        "role": ctx.membership.role, "current_client": cc,
+    })
+
+
+TEMPLATES["checkin_admin.html"] = r"""
+{% extends "base.html" %}
+{% block content %}
+<style>
+  .ck-card{border:1px solid var(--mc-border);border-radius:14px;padding:1.25rem;background:#fff;margin-bottom:1rem;}
+  .ck-log{font-family:monospace;font-size:.78rem;background:#f8f8f8;border-radius:8px;padding:1rem;max-height:340px;overflow-y:auto;white-space:pre-wrap;word-break:break-all;}
+  .ck-stat{font-size:1.6rem;font-weight:700;}
+  .ck-label{font-size:.72rem;color:var(--mc-muted);text-transform:uppercase;letter-spacing:.05em;}
+</style>
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <div>
+    <h4 class="mb-0">Check-in Semanal</h4>
+    <div class="muted small">Disparo e monitoramento dos check-ins WhatsApp às segundas-feiras.</div>
+  </div>
+  <a href="/admin/whatsapp" class="btn btn-outline-secondary btn-sm">← WhatsApp</a>
+</div>
+
+{# ── Status atual ── #}
+<div class="ck-card" id="cardStatus">
+  <div class="fw-semibold mb-2">📊 Status da semana</div>
+  <div class="row g-3 text-center" id="statsRow">
+    <div class="col"><div class="ck-stat" id="stTotal">—</div><div class="ck-label">Enviados</div></div>
+    <div class="col"><div class="ck-stat text-success" id="stResp">—</div><div class="ck-label">Respondidos</div></div>
+    <div class="col"><div class="ck-stat text-warning" id="stAg">—</div><div class="ck-label">Aguardando</div></div>
+    <div class="col"><div class="ck-stat text-muted" id="stSemana">—</div><div class="ck-label">Semana</div></div>
+  </div>
+  <div id="diagBox" class="mt-3" style="display:none;">
+    <div class="fw-semibold small mb-1">🔍 Diagnóstico</div>
+    <div class="ck-log" id="diagText"></div>
+  </div>
+  <div class="d-flex gap-2 mt-3">
+    <button class="btn btn-outline-secondary btn-sm" onclick="carregarStatus()">🔄 Atualizar status</button>
+    <button class="btn btn-outline-secondary btn-sm" onclick="toggleDiag()">🔍 Diagnóstico</button>
+  </div>
+</div>
+
+{# ── Ações ── #}
+<div class="ck-card">
+  <div class="fw-semibold mb-2">⚡ Ações manuais</div>
+  <div class="row g-3">
+    <div class="col-md-6">
+      <div class="border rounded p-3">
+        <div class="fw-semibold mb-1">Disparar check-ins agora</div>
+        <div class="muted small mb-2">Envia para todos os clientes que ainda não receberam nesta semana.</div>
+        <div class="form-check mb-2">
+          <input class="form-check-input" type="checkbox" id="forceCheck">
+          <label class="form-check-label small" for="forceCheck">Forçar reenvio (mesmo que já enviado esta semana)</label>
+        </div>
+        <button class="btn btn-primary btn-sm" onclick="disparar()"><i class="bi bi-send me-1"></i>Disparar agora</button>
+      </div>
+    </div>
+    <div class="col-md-6">
+      <div class="border rounded p-3">
+        <div class="fw-semibold mb-1">Enviar lembretes</div>
+        <div class="muted small mb-2">Reenvia para quem não respondeu nos últimos 2 dias.</div>
+        <button class="btn btn-outline-warning btn-sm" onclick="lembretes()"><i class="bi bi-bell me-1"></i>Enviar lembretes</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+{# ── Log de resultado ── #}
+<div class="ck-card" id="logCard" style="display:none;">
+  <div class="d-flex justify-content-between align-items-center mb-2">
+    <div class="fw-semibold">📋 Log da operação</div>
+    <span id="logBadge" class="badge bg-secondary">—</span>
+  </div>
+  <div class="ck-log" id="logBox"></div>
+</div>
+
+<script>
+let _diagVisible = false;
+
+async function carregarStatus() {
+  try {
+    const r = await fetch('/admin/checkin/status');
+    const d = await r.json();
+    document.getElementById('stTotal').textContent  = d.total ?? '—';
+    document.getElementById('stResp').textContent   = d.respondidos ?? '—';
+    document.getElementById('stAg').textContent     = d.aguardando ?? '—';
+    document.getElementById('stSemana').textContent = d.semana ?? '—';
+    // Diagnóstico
+    const diag = d.diagnostico || {};
+    let txt = '';
+    txt += 'Token WhatsApp : ' + (diag.whatsapp_token || '?') + '\n';
+    if (typeof diag.canal === 'object' && diag.canal) {
+      txt += 'Canal          : ' + (diag.canal.status || '?') + '\n';
+      txt += 'Phone ID       : ' + (diag.canal.meta_phone_number_id || '?') + '\n';
+    } else {
+      txt += 'Canal          : ' + (diag.canal || '?') + '\n';
+    }
+    txt += 'Threads c/ cliente: ' + (diag.threads_com_cliente ?? '?') + '\n';
+    txt += 'Hora BRT       : ' + (diag.hora_brt || '?') + '\n';
+    txt += 'É segunda-feira: ' + (diag.e_segunda ? '✅ Sim' : '❌ Não') + '\n';
+    document.getElementById('diagText').textContent = txt;
+  } catch(e) {
+    document.getElementById('stSemana').textContent = 'Erro';
+  }
+}
+
+function toggleDiag() {
+  _diagVisible = !_diagVisible;
+  document.getElementById('diagBox').style.display = _diagVisible ? 'block' : 'none';
+}
+
+async function disparar() {
+  const force = document.getElementById('forceCheck').checked ? '1' : '0';
+  mostrarLog('Disparando check-ins…');
+  try {
+    const r = await fetch('/admin/checkin/disparar-agora?force=' + force, {method:'POST'});
+    const d = await r.json();
+    const badge = document.getElementById('logBadge');
+    badge.textContent = d.ok ? '✅ OK' : '⚠️ Com erros';
+    badge.className = 'badge ' + (d.ok ? 'bg-success' : 'bg-warning text-dark');
+    let resumo = `Semana: ${d.semana}  |  Enviados: ${d.enviados}  Pulados: ${d.pulados}  Erros: ${d.erros}\n\n`;
+    resumo += (d.log || []).join('\n');
+    document.getElementById('logBox').textContent = resumo;
+    carregarStatus();
+  } catch(e) {
+    document.getElementById('logBox').textContent = 'Erro de comunicação: ' + e;
+  }
+}
+
+async function lembretes() {
+  mostrarLog('Enviando lembretes…');
+  try {
+    const r = await fetch('/admin/checkin/disparar-lembretes', {method:'POST'});
+    const d = await r.json();
+    document.getElementById('logBadge').textContent = '✅ OK';
+    document.getElementById('logBadge').className = 'badge bg-success';
+    let resumo = `Semana: ${d.semana}  |  Enviados: ${d.enviados}  Pulados: ${d.pulados}  Erros: ${d.erros}\n\n`;
+    resumo += (d.log || []).join('\n');
+    document.getElementById('logBox').textContent = resumo;
+  } catch(e) {
+    document.getElementById('logBox').textContent = 'Erro: ' + e;
+  }
+}
+
+function mostrarLog(msg) {
+  document.getElementById('logCard').style.display = 'block';
+  document.getElementById('logBox').textContent = msg;
+  document.getElementById('logBadge').textContent = '…';
+  document.getElementById('logBadge').className = 'badge bg-secondary';
+}
+
+carregarStatus();
+</script>
+{% endblock %}
+"""
+
+if hasattr(templates_env.loader, "mapping"):
+    templates_env.loader.mapping = TEMPLATES
+
+
 @app.get("/admin/checkin/status")
 @require_login
 async def checkin_status(request: Request, session: Session = Depends(get_session)):

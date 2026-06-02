@@ -40579,6 +40579,7 @@ TEMPLATES["whatsapp_hub.html"] = r"""
   <div class="d-flex gap-2 flex-wrap">
     <a class="btn btn-outline-secondary" href="/admin/whatsapp/config">Configuração</a>
     <a class="btn btn-outline-secondary" href="/admin/whatsapp/filas">Filas</a>
+    <a class="btn btn-outline-secondary" href="/admin/checkin">Check-in Semanal</a>
     <a class="btn btn-primary" href="/admin/whatsapp/caixa">Abrir caixa</a>
   </div>
 </div>
