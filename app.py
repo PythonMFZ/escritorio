@@ -9187,7 +9187,15 @@ TEMPLATES.update({
                     <td>{{ "%.1f"|format(s.score_process) }}</td>
                     <td>{{ "%.1f"|format(s.score_financial) }}</td>
                     <td>{{ s.nps_score }}</td>
-                    <td><a class="btn btn-outline-secondary btn-sm" href="/perfil/avaliacao/{{ s.id }}">Ver</a></td>
+                    <td>
+                      <div class="d-flex gap-1">
+                        <a class="btn btn-outline-secondary btn-sm" href="/perfil/avaliacao/{{ s.id }}">Ver</a>
+                        <form method="post" action="/perfil/avaliacao/{{ s.id }}/duplicar"
+                              onsubmit="return confirm('Duplicar este diagnóstico?')" style="margin:0;">
+                          <button type="submit" class="btn btn-outline-primary btn-sm">⎘ Duplicar</button>
+                        </form>
+                      </div>
+                    </td>
                   </tr>
                 {% endfor %}
               </tbody>
@@ -47272,12 +47280,20 @@ _PERFIL_NEW_CARD = """<div class="card p-4 mb-3">
                       <span class="muted">{{ s.created_at.strftime("%d/%m/%Y") }}</span>
                       <span class="fw-semibold ms-2">Score {{ "%.0f"|format(s.score_total) }}</span>
                     </a>
-                    <form method="post" action="/perfil/avaliacao/{{ s.id }}/reabrir"
-                          onsubmit="return confirm('Reabrir este diagnóstico para edição?')"
-                          style="margin:0;">
-                      <button type="submit" class="btn btn-outline-primary btn-sm py-0 px-2"
-                              style="font-size:.72rem;">✏️ Editar</button>
-                    </form>
+                    <div class="d-flex gap-1">
+                      <form method="post" action="/perfil/avaliacao/{{ s.id }}/reabrir"
+                            onsubmit="return confirm('Reabrir este diagnóstico para edição?')"
+                            style="margin:0;">
+                        <button type="submit" class="btn btn-outline-primary btn-sm py-0 px-2"
+                                style="font-size:.72rem;">✏️ Editar</button>
+                      </form>
+                      <form method="post" action="/perfil/avaliacao/{{ s.id }}/duplicar"
+                            onsubmit="return confirm('Duplicar este diagnóstico?')"
+                            style="margin:0;">
+                        <button type="submit" class="btn btn-outline-secondary btn-sm py-0 px-2"
+                                style="font-size:.72rem;">⎘ Duplicar</button>
+                      </form>
+                    </div>
                   </div>
                 {% endfor %}
               </div>

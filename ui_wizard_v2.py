@@ -489,6 +489,64 @@ async def perfil_snapshot_reabrir(request: Request, session: Session = Depends(g
     return RedirectResponse("/perfil/wizard?etapa=1", status_code=303)
 
 
+# ── Rota POST /perfil/avaliacao/{snapshot_id}/duplicar ───────────────────────
+
+@app.post("/perfil/avaliacao/{snapshot_id}/duplicar")
+@require_login
+async def perfil_snapshot_duplicar(request: Request, session: Session = Depends(get_session),
+                                    snapshot_id: int = 0):
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        return RedirectResponse("/login", status_code=303)
+
+    if ctx.membership.role not in ("admin", "equipe"):
+        set_flash(request, "Sem permissão.")
+        return RedirectResponse("/perfil", status_code=303)
+
+    original = session.get(ClientSnapshot, int(snapshot_id))
+    if not original or original.company_id != ctx.company.id:
+        set_flash(request, "Avaliação não encontrada.")
+        return RedirectResponse("/perfil", status_code=303)
+
+    copia = ClientSnapshot(
+        company_id=original.company_id,
+        client_id=original.client_id,
+        created_by_user_id=ctx.user.id,
+        revenue_monthly_brl=original.revenue_monthly_brl,
+        debt_total_brl=original.debt_total_brl,
+        cash_balance_brl=original.cash_balance_brl,
+        employees_count=original.employees_count,
+        nps_score=original.nps_score,
+        notes=original.notes,
+        answers_json=original.answers_json,
+        score_process=original.score_process,
+        score_financial=original.score_financial,
+        score_total=original.score_total,
+        created_at=_dtWiz.utcnow(),
+    )
+    session.add(copia)
+    session.commit()
+    session.refresh(copia)
+
+    # Activa o cliente correto na sessão e abre wizard com dados da cópia
+    request.session["active_client_id"] = copia.client_id
+    try:
+        answers = _json_wiz2.loads(copia.answers_json or "{}")
+        wizard_dados = answers.get("_wizard_dados") or {}
+    except Exception:
+        wizard_dados = {}
+
+    rascunho = _wiz_get_rascunho(session, ctx.company.id, copia.client_id)
+    rascunho.dados_json  = _json_wiz2.dumps(wizard_dados, ensure_ascii=False)
+    rascunho.etapa_atual = 1
+    rascunho.updated_at  = str(_dtWiz.utcnow())
+    session.add(rascunho)
+    session.commit()
+
+    set_flash(request, "Diagnóstico duplicado. Edite e salve para criar uma nova versão.")
+    return RedirectResponse("/perfil/wizard?etapa=1", status_code=303)
+
+
 # ── Rota POST /perfil/avaliacao/{snapshot_id}/excluir ────────────────────────
 
 @app.post("/perfil/avaliacao/{snapshot_id}/excluir")
@@ -1407,6 +1465,10 @@ TEMPLATES["perfil_snapshot_detail.html"] = r"""
       <form method="post" action="/perfil/avaliacao/{{ snap.id }}/reabrir"
             onsubmit="return confirm('Reabrir este diagnóstico para edição? O rascunho atual será substituído.')">
         <button type="submit" class="btn btn-outline-primary btn-sm">✏️ Editar</button>
+      </form>
+      <form method="post" action="/perfil/avaliacao/{{ snap.id }}/duplicar"
+            onsubmit="return confirm('Duplicar este diagnóstico? Uma cópia será criada e aberta para edição.')">
+        <button type="submit" class="btn btn-outline-secondary btn-sm">⎘ Duplicar</button>
       </form>
       <form method="post" action="/perfil/avaliacao/{{ snap.id }}/excluir"
             onsubmit="return confirm('Excluir esta avaliação? A ação não pode ser desfeita.')">
