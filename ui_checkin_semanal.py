@@ -345,11 +345,28 @@ def _ck_disparar_checkins(semana: str, force: bool = False) -> dict:
                         log.append(f"  ⚠️  Client {thread.client_id} não encontrado.")
                         continue
 
+                    # Prefere o whatsapp_phone do usuário vinculado ao cliente
+                    phone_destino = thread.contact_phone
+                    try:
+                        membro = db.exec(
+                            select(Membership).where(
+                                Membership.company_id == config.company_id,
+                                Membership.client_id  == client.id,
+                                Membership.role       == "cliente",
+                            )
+                        ).first()
+                        if membro:
+                            usuario = db.get(User, membro.user_id)
+                            if usuario and usuario.whatsapp_phone:
+                                phone_destino = usuario.whatsapp_phone
+                    except Exception:
+                        pass
+
                     nome = (client.name or "cliente").split()[0]
                     msg  = _CK_MSG_CHECKIN.format(nome=nome)
 
                     ok, err = _ck_enviar_sync(
-                        thread.contact_phone,
+                        phone_destino,
                         config.meta_phone_number_id,
                         msg,
                     )
@@ -374,15 +391,15 @@ def _ck_disparar_checkins(semana: str, force: bool = False) -> dict:
                             client_id=thread.client_id,
                             thread_id=thread.id,
                             semana=semana,
-                            contact_phone=thread.contact_phone,
+                            contact_phone=phone_destino,
                             enviado_at=_dt_ck.now(_tz_ck.utc),
                         ))
                         db.commit()
                         enviados += 1
-                        log.append(f"  ✅ Enviado: {client.name} → {thread.contact_phone}")
+                        log.append(f"  ✅ Enviado: {client.name} → {phone_destino}")
                     else:
                         erros += 1
-                        log.append(f"  ❌ Falhou: {client.name} ({thread.contact_phone}): {err}")
+                        log.append(f"  ❌ Falhou: {client.name} ({phone_destino}): {err}")
 
             except Exception as _e:
                 erros += 1
@@ -579,6 +596,16 @@ TEMPLATES["checkin_admin.html"] = r"""
   </div>
 </div>
 
+{# ── Mensagem personalizada ── #}
+<div class="ck-card">
+  <div class="fw-semibold mb-2">📢 Mensagem personalizada para todos</div>
+  <div class="muted small mb-2">Envia uma mensagem livre para todos os usuários que têm WhatsApp cadastrado.</div>
+  <textarea id="msgPersonalizada" class="form-control mb-2" rows="4" placeholder="Digite sua mensagem aqui..."></textarea>
+  <button class="btn btn-outline-primary btn-sm" onclick="enviarMsgPersonalizada()">
+    <i class="bi bi-broadcast me-1"></i>Enviar para todos
+  </button>
+</div>
+
 {# ── Log de resultado ── #}
 <div class="ck-card" id="logCard" style="display:none;">
   <div class="d-flex justify-content-between align-items-center mb-2">
@@ -651,6 +678,27 @@ async function lembretes() {
     let resumo = `Semana: ${d.semana}  |  Enviados: ${d.enviados}  Pulados: ${d.pulados}  Erros: ${d.erros}\n\n`;
     resumo += (d.log || []).join('\n');
     document.getElementById('logBox').textContent = resumo;
+  } catch(e) {
+    document.getElementById('logBox').textContent = 'Erro: ' + e;
+  }
+}
+
+async function enviarMsgPersonalizada() {
+  const msg = document.getElementById('msgPersonalizada').value.trim();
+  if (!msg) { alert('Digite uma mensagem antes de enviar.'); return; }
+  if (!confirm(`Enviar para TODOS os usuários com WhatsApp cadastrado?\n\nMensagem:\n${msg}`)) return;
+  mostrarLog('Enviando mensagem personalizada…');
+  try {
+    const r = await fetch('/admin/checkin/mensagem-broadcast', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({mensagem: msg}),
+    });
+    const d = await r.json();
+    const badge = document.getElementById('logBadge');
+    badge.textContent = d.ok ? '✅ OK' : '⚠️ Com erros';
+    badge.className = 'badge ' + (d.ok ? 'bg-success' : 'bg-warning text-dark');
+    document.getElementById('logBox').textContent = (d.log || []).join('\n');
   } catch(e) {
     document.getElementById('logBox').textContent = 'Erro: ' + e;
   }
@@ -790,6 +838,55 @@ async def checkin_disparar_lembretes_agora(
     resultado = await loop.run_in_executor(None, _ck_disparar_lembretes, semana)
 
     return JSONResponse({"ok": True, "semana": semana, **resultado})
+
+
+@app.post("/admin/checkin/mensagem-broadcast")
+@require_login
+async def checkin_mensagem_broadcast(request: Request, session: Session = Depends(get_session)):
+    """Envia mensagem livre para todos os usuários com whatsapp_phone cadastrado na empresa."""
+    ctx = get_tenant_context(request, session)
+    if not ctx or ctx.membership.role not in ("admin", "owner", "equipe"):
+        return JSONResponse({"ok": False, "erro": "Sem permissão."}, status_code=403)
+
+    body = await request.json()
+    mensagem = (body.get("mensagem") or "").strip()
+    if not mensagem:
+        return JSONResponse({"ok": False, "erro": "Mensagem vazia."}, status_code=400)
+
+    canal = session.exec(
+        _sel_ck(WhatsAppChannelConfig)
+        .where(WhatsAppChannelConfig.company_id == ctx.company.id)
+    ).first()
+    if not canal or not canal.meta_phone_number_id:
+        return JSONResponse({"ok": False, "erro": "Canal WhatsApp não configurado."}, status_code=400)
+
+    # Busca todos os membros com whatsapp_phone definido
+    membros = session.exec(
+        _sel_ck(Membership)
+        .where(Membership.company_id == ctx.company.id)
+    ).all()
+
+    log = []
+    enviados = erros = 0
+    for m in membros:
+        try:
+            user = session.get(User, m.user_id)
+            if not user or not user.whatsapp_phone:
+                continue
+            ok, err = _ck_enviar_sync(user.whatsapp_phone, canal.meta_phone_number_id, mensagem)
+            nome_display = f"{user.name or user.email} ({user.whatsapp_phone})"
+            if ok:
+                enviados += 1
+                log.append(f"✅ {nome_display}")
+            else:
+                erros += 1
+                log.append(f"❌ {nome_display}: {err}")
+        except Exception as _e:
+            erros += 1
+            log.append(f"❌ user#{m.user_id}: {_e}")
+
+    log.append(f"\nTotal: {enviados} enviados, {erros} erros.")
+    return JSONResponse({"ok": erros == 0, "enviados": enviados, "erros": erros, "log": log})
 
 
 print("[checkin] ✅ Módulo de check-in semanal carregado (v2 — httpx síncrono).")
