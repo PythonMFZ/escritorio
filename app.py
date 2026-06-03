@@ -33431,12 +33431,24 @@ async def activity_tracking_middleware(request: Request, call_next: Callable[...
                 or path.startswith("/health")
                 or path.startswith("/__")
                 or path.startswith("/favicon")
+                or path == "/healthz"
         ):
             return response
-        if session_user_id(request) is None:
+        uid = session_user_id(request)
+        if uid is None:
             return response
         with Session(engine) as _db:
             ctx = get_tenant_context(request, _db)
+            if not ctx:
+                # Fallback: tenta construir contexto mínimo só com user_id + membership
+                user_obj = _db.get(User, uid)
+                if user_obj:
+                    mem = _db.exec(select(Membership).where(Membership.user_id == uid)).first()
+                    if mem:
+                        company_obj = _db.get(Company, mem.company_id)
+                        if company_obj:
+                            from dataclasses import dataclass as _dc
+                            ctx = TenantContext(user=user_obj, company=company_obj, membership=mem)
             if not ctx:
                 return response
             row = _db.exec(
@@ -33466,8 +33478,9 @@ async def activity_tracking_middleware(request: Request, call_next: Callable[...
             row.updated_at = utcnow()
             _db.add(row)
             _db.commit()
-    except Exception:
-        pass
+    except Exception as _act_err:
+        import logging as _act_log
+        _act_log.getLogger(__name__).warning("[activity] falha ao rastrear %s: %s", request.url.path, _act_err)
     return response
 
 
