@@ -138,6 +138,63 @@ def _ck_enviar_sync(contact_phone: str, meta_phone_id: str, mensagem: str) -> tu
         return False, str(_e_send)
 
 
+def _ck_enviar_template_sync(
+    contact_phone: str,
+    meta_phone_id: str,
+    template_name: str,
+    language_code: str,
+    body_params: list[str],
+) -> tuple[bool, str]:
+    """Envia template WhatsApp aprovado — funciona fora da janela de 24h."""
+    try:
+        import httpx as _hx_ck
+    except ImportError:
+        return False, "httpx não instalado"
+
+    token   = _os_ck.environ.get("WHATSAPP_ACCESS_TOKEN", "")
+    version = _os_ck.environ.get("WHATSAPP_GRAPH_VERSION", "v18.0")
+
+    if not token:
+        return False, "WHATSAPP_ACCESS_TOKEN não configurado"
+
+    digits = "".join(c for c in (contact_phone or "") if c.isdigit())
+    if not digits:
+        return False, f"Número inválido: {contact_phone!r}"
+    if len(digits) in (10, 11) and not digits.startswith("55"):
+        digits = "55" + digits
+
+    components = []
+    if body_params:
+        components.append({
+            "type": "body",
+            "parameters": [{"type": "text", "text": p} for p in body_params],
+        })
+
+    payload = {
+        "messaging_product": "whatsapp",
+        "recipient_type":    "individual",
+        "to":                digits,
+        "type":              "template",
+        "template": {
+            "name":     template_name,
+            "language": {"code": language_code},
+            "components": components,
+        },
+    }
+    try:
+        resp = _hx_ck.post(
+            f"https://graph.facebook.com/{version}/{meta_phone_id}/messages",
+            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+            json=payload,
+            timeout=20.0,
+        )
+        if 200 <= resp.status_code < 300:
+            return True, digits
+        return False, f"HTTP {resp.status_code}: {resp.text[:400]}"
+    except Exception as _e:
+        return False, str(_e)
+
+
 # ── Extração de dados financeiros com Claude ──────────────────────────────────
 
 def _ck_extrair_dados(texto: str, client_name: str) -> dict:
@@ -605,10 +662,20 @@ TEMPLATES["checkin_admin.html"] = r"""
   </div>
 </div>
 
+{# ── Template aprovado (comunicado_augur) ── #}
+<div class="ck-card" style="border-color:#0d6efd33;background:#f0f5ff;">
+  <div class="fw-semibold mb-1">📨 Comunicado Augur <span class="badge bg-success ms-1" style="font-size:.65rem;">Template aprovado</span></div>
+  <div class="muted small mb-3">Envia o template <strong>comunicado_augur</strong> para todos os usuários com WhatsApp cadastrado.<br>
+  Funciona mesmo fora da janela de 24h — o nome do usuário é inserido automaticamente como cumprimento.</div>
+  <button class="btn btn-primary btn-sm" onclick="enviarTemplate('comunicado_augur','pt_BR')">
+    <i class="bi bi-megaphone me-1"></i>Enviar Comunicado Augur para todos
+  </button>
+</div>
+
 {# ── Mensagem personalizada ── #}
 <div class="ck-card">
-  <div class="fw-semibold mb-2">📢 Mensagem personalizada para todos</div>
-  <div class="muted small mb-2">Envia uma mensagem livre para todos os usuários que têm WhatsApp cadastrado.</div>
+  <div class="fw-semibold mb-2">📢 Mensagem livre para todos <span class="badge bg-warning text-dark ms-1" style="font-size:.65rem;">Só para janela 24h</span></div>
+  <div class="muted small mb-2">Envia texto livre para usuários que interagiram via WhatsApp nas últimas 24h.</div>
   <textarea id="msgPersonalizada" class="form-control mb-2" rows="4" placeholder="Digite sua mensagem aqui..."></textarea>
   <button class="btn btn-outline-primary btn-sm" onclick="enviarMsgPersonalizada()">
     <i class="bi bi-broadcast me-1"></i>Enviar para todos
@@ -687,6 +754,25 @@ async function lembretes() {
     let resumo = `Semana: ${d.semana}  |  Enviados: ${d.enviados}  Pulados: ${d.pulados}  Erros: ${d.erros}\n\n`;
     resumo += (d.log || []).join('\n');
     document.getElementById('logBox').textContent = resumo;
+  } catch(e) {
+    document.getElementById('logBox').textContent = 'Erro: ' + e;
+  }
+}
+
+async function enviarTemplate(templateName, langCode) {
+  if (!confirm(`Enviar o template "${templateName}" para TODOS os usuários com WhatsApp cadastrado?\n\nO nome de cada usuário será inserido automaticamente.`)) return;
+  mostrarLog(`Enviando template "${templateName}"…`);
+  try {
+    const r = await fetch('/admin/checkin/broadcast-template', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({template_name: templateName, language_code: langCode}),
+    });
+    const d = await r.json();
+    const badge = document.getElementById('logBadge');
+    badge.textContent = d.ok ? '✅ OK' : '⚠️ Com erros';
+    badge.className = 'badge ' + (d.ok ? 'bg-success' : 'bg-warning text-dark');
+    document.getElementById('logBox').textContent = (d.log || []).join('\n');
   } catch(e) {
     document.getElementById('logBox').textContent = 'Erro: ' + e;
   }
@@ -889,6 +975,61 @@ async def checkin_mensagem_broadcast(request: Request, session: Session = Depend
                 enviados += 1
                 num_enviado = detalhe or user.whatsapp_phone
                 log.append(f"✅ {nome_display} → +{num_enviado}")
+            else:
+                erros += 1
+                log.append(f"❌ {nome_display}: {detalhe}")
+        except Exception as _e:
+            erros += 1
+            log.append(f"❌ user#{m.user_id}: {_e}")
+
+    log.append(f"\nTotal: {enviados} enviados, {erros} erros.")
+    return JSONResponse({"ok": erros == 0, "enviados": enviados, "erros": erros, "log": log})
+
+
+@app.post("/admin/checkin/broadcast-template")
+@require_login
+async def checkin_broadcast_template(request: Request, session: Session = Depends(get_session)):
+    """Envia template WhatsApp aprovado para todos os usuários com whatsapp_phone."""
+    ctx = get_tenant_context(request, session)
+    if not ctx or ctx.membership.role not in ("admin", "owner", "equipe"):
+        return JSONResponse({"ok": False, "erro": "Sem permissão."}, status_code=403)
+
+    body          = await request.json()
+    template_name = (body.get("template_name") or "").strip()
+    language_code = (body.get("language_code") or "pt_BR").strip()
+    body_params   = body.get("body_params") or []  # lista de strings para {{1}}, {{2}}...
+
+    if not template_name:
+        return JSONResponse({"ok": False, "erro": "template_name obrigatório."}, status_code=400)
+
+    canal = session.exec(
+        _sel_ck(WhatsAppChannelConfig)
+        .where(WhatsAppChannelConfig.company_id == ctx.company.id)
+    ).first()
+    if not canal or not canal.meta_phone_number_id:
+        return JSONResponse({"ok": False, "erro": "Canal WhatsApp não configurado."}, status_code=400)
+
+    membros = session.exec(
+        _sel_ck(Membership).where(Membership.company_id == ctx.company.id)
+    ).all()
+
+    log = []
+    enviados = erros = 0
+    for m in membros:
+        try:
+            user = session.get(User, m.user_id)
+            if not user or not user.whatsapp_phone:
+                continue
+            # Substitui {{1}} pelo primeiro nome do usuário se body_params não vier preenchido
+            params = body_params if body_params else [(user.name or user.email or "").split()[0] or "cliente"]
+            ok, detalhe = _ck_enviar_template_sync(
+                user.whatsapp_phone, canal.meta_phone_number_id,
+                template_name, language_code, params,
+            )
+            nome_display = f"{user.name or user.email} ({user.whatsapp_phone})"
+            if ok:
+                enviados += 1
+                log.append(f"✅ {nome_display} → +{detalhe}")
             else:
                 erros += 1
                 log.append(f"❌ {nome_display}: {detalhe}")
