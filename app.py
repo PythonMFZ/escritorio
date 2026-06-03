@@ -12286,6 +12286,9 @@ def get_membership_allowed_features(session: Session, *, company_id: int, member
     if row:
         lst = _parse_json_list(row.features_json)
         if lst:
+            # Para admin/equipe: sempre une com os defaults para que novas features apareçam automaticamente
+            if membership.role in ("admin", "equipe"):
+                return base | set(lst)
             return set(lst)
     return base
 
@@ -33452,7 +33455,10 @@ async def activity_tracking_middleware(request: Request, call_next: Callable[...
                     updated_at=utcnow(),
                 )
             row.role = ctx.membership.role
-            row.last_client_id = get_active_client_id(request, _db, ctx)
+            try:
+                row.last_client_id = get_active_client_id(request, _db, ctx)
+            except Exception:
+                row.last_client_id = None
             row.last_path = _clean_text(path, 250)
             row.last_method = _clean_text(request.method, 20)
             row.request_count = int(row.request_count or 0) + 1

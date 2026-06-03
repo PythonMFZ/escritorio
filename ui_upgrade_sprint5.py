@@ -18,6 +18,8 @@
 
 
 # ── 1. Rota /carteira ─────────────────────────────────────────────────────────
+# Alias para evitar conflito: score_total é também nome de variável local na função
+_fn_score_total = score_total  # referência à função global antes de qualquer shadowing
 
 @app.get("/carteira", response_class=HTMLResponse)
 @require_login
@@ -75,6 +77,23 @@ async def carteira_page(
                 score_fin      = float(snap.score_financial or 0)
                 snap_date      = snap.created_at
                 dias_sem_update = (utcnow() - snap.created_at).days if snap.created_at else 999
+                # Snapshots antigos podem ter score_total=0 mesmo com respostas salvas — recalcula
+                if score_total == 0 and snap.answers_json:
+                    try:
+                        _answers = json.loads(snap.answers_json) if isinstance(snap.answers_json, str) else snap.answers_json
+                        if _answers:
+                            _proc = score_process_from_answers(_answers)
+                            _fin  = score_financial_simple(
+                                float(snap.revenue_monthly_brl or client.revenue_monthly_brl or 0),
+                                float(snap.debt_total_brl     or client.debt_total_brl     or 0),
+                                float(snap.cash_balance_brl   or client.cash_balance_brl   or 0),
+                            )
+                            _tot = _fn_score_total(_proc, _fin, float(snap.nps_score or 0))
+                            score_total   = _tot
+                            score_process = _proc
+                            score_fin     = _fin
+                    except Exception:
+                        pass
             else:
                 score_total = score_process = score_fin = 0.0
                 snap_date = None
