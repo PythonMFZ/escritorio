@@ -104,6 +104,15 @@ def _ck_enviar_sync(contact_phone: str, meta_phone_id: str, mensagem: str) -> tu
     if not digits:
         return False, f"Número inválido: {contact_phone!r}"
 
+    # Normaliza para número internacional brasileiro se necessário.
+    # WhatsApp exige código de país: 5511999999999 (13 dígitos) ou 55119999-9999 (12 dígitos).
+    # Números de 10-11 dígitos provavelmente são brasileiros sem o +55.
+    if len(digits) in (10, 11) and not digits.startswith("55"):
+        digits = "55" + digits
+    elif len(digits) == 9 and not digits.startswith("55"):
+        # só o número sem DDD — não conseguimos normalizar
+        pass
+
     url = f"https://graph.facebook.com/{version}/{meta_phone_id}/messages"
     payload = {
         "messaging_product": "whatsapp",
@@ -123,7 +132,7 @@ def _ck_enviar_sync(contact_phone: str, meta_phone_id: str, mensagem: str) -> tu
             timeout=20.0,
         )
         if 200 <= resp.status_code < 300:
-            return True, ""
+            return True, digits  # retorna número normalizado para log
         return False, f"HTTP {resp.status_code}: {resp.text[:400]}"
     except Exception as _e_send:
         return False, str(_e_send)
@@ -873,14 +882,16 @@ async def checkin_mensagem_broadcast(request: Request, session: Session = Depend
             user = session.get(User, m.user_id)
             if not user or not user.whatsapp_phone:
                 continue
-            ok, err = _ck_enviar_sync(user.whatsapp_phone, canal.meta_phone_number_id, mensagem)
+            ok, detalhe = _ck_enviar_sync(user.whatsapp_phone, canal.meta_phone_number_id, mensagem)
+            # detalhe = número normalizado (ok=True) ou mensagem de erro (ok=False)
             nome_display = f"{user.name or user.email} ({user.whatsapp_phone})"
             if ok:
                 enviados += 1
-                log.append(f"✅ {nome_display}")
+                num_enviado = detalhe or user.whatsapp_phone
+                log.append(f"✅ {nome_display} → +{num_enviado}")
             else:
                 erros += 1
-                log.append(f"❌ {nome_display}: {err}")
+                log.append(f"❌ {nome_display}: {detalhe}")
         except Exception as _e:
             erros += 1
             log.append(f"❌ user#{m.user_id}: {_e}")
