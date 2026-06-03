@@ -42205,13 +42205,14 @@ def _extract_meta_whatsapp_statuses(payload: dict[str, Any]) -> list[dict[str, A
                 errors = status_row.get("errors") or []
                 if isinstance(errors, list) and errors:
                     first = errors[0] if isinstance(errors[0], dict) else {}
-                    error_text = str(
+                    code = first.get("code", "")
+                    title = (
                         first.get("title")
                         or first.get("message")
                         or first.get("error_data", {}).get("details")
-                        or first.get("code")
                         or ""
-                    ).strip()
+                    )
+                    error_text = (f"[{code}] {title}" if code and title else str(code or title)).strip()
                 items.append(
                     {
                         "phone_number_id": phone_number_id,
@@ -42240,6 +42241,14 @@ def _whatsapp_apply_meta_status_event(
         .order_by(WhatsAppThreadMessage.id.desc())
     ).first()
     if not msg:
+        # Mensagem sem registro local (ex: broadcast direto via API).
+        # Loga erros de entrega para facilitar diagnóstico.
+        if status_value in ("failed",) and error_text:
+            import logging as _log_wa
+            _log_wa.getLogger(__name__).warning(
+                "[WA webhook] entrega falhou (sem thread local) msg=%s erro=%r",
+                message_id, error_text,
+            )
         return False
 
     normalized = status_value.strip().lower()
