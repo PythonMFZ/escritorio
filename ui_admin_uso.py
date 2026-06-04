@@ -63,10 +63,12 @@ async def admin_uso_page(request: Request, session: Session = Depends(get_sessio
         registros = []
 
     # Enriquece com nome do usuário e cliente
+    tracked_user_ids = set()
     dados = []
     for r in registros:
         user = session.get(User, r.user_id) if r.user_id else None
         client = session.get(Client, r.last_client_id) if r.last_client_id else None
+        tracked_user_ids.add(r.user_id)
         dados.append({
             "user_name":    user.name if user else f"user#{r.user_id}",
             "user_email":   getattr(user, "email", ""),
@@ -75,6 +77,23 @@ async def admin_uso_page(request: Request, session: Session = Depends(get_sessio
             "last_path":    r.last_path or "—",
             "request_count": r.request_count or 0,
             "last_seen_at": r.last_seen_at,
+        })
+
+    # Membros sem nenhuma atividade registrada
+    todos_membros = session.exec(
+        select(Membership).where(Membership.company_id == ctx.company.id)
+    ).all()
+    sem_atividade = []
+    for m in todos_membros:
+        if m.user_id in tracked_user_ids:
+            continue
+        u = session.get(User, m.user_id)
+        if not u:
+            continue
+        sem_atividade.append({
+            "user_name":  u.name or f"user#{u.id}",
+            "user_email": u.email or "",
+            "role":       m.role or "—",
         })
 
     # Top rotas
@@ -88,6 +107,7 @@ async def admin_uso_page(request: Request, session: Session = Depends(get_sessio
         "role": ctx.membership.role, "current_client": cc,
         "dados": dados, "filtro": filtro, "top_paths": top_paths,
         "total": len(dados),
+        "sem_atividade": sem_atividade,
     })
 
 
@@ -157,7 +177,26 @@ TEMPLATES["admin_uso.html"] = r"""
   </table>
 </div>
 {% else %}
-  <div class="alert alert-info">Nenhuma atividade registrada no período.</div>
+  <div class="alert alert-info">Nenhuma atividade registrada no período selecionado.</div>
+{% endif %}
+
+{% if sem_atividade %}
+<div class="card p-3 mt-3" style="border-color:#ffc10744;">
+  <div class="fw-semibold mb-2 text-warning">⚠️ Membros sem atividade registrada ({{ sem_atividade|length }})</div>
+  <div class="muted small mb-2">Esses usuários têm conta mas nenhum acesso foi registrado ainda — seja porque nunca entraram, ou porque a coleta de dados foi recentemente ativada.</div>
+  <table class="table table-sm mb-0">
+    <thead class="table-light"><tr><th>Usuário</th><th>E-mail</th><th>Perfil</th></tr></thead>
+    <tbody>
+      {% for u in sem_atividade %}
+      <tr>
+        <td class="fw-semibold" style="font-size:.82rem;">{{ u.user_name }}</td>
+        <td class="muted" style="font-size:.78rem;">{{ u.user_email }}</td>
+        <td><span class="badge bg-light text-dark border" style="font-size:.72rem;">{{ u.role }}</span></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
 {% endif %}
 {% endblock %}
 """
