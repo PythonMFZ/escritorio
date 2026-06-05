@@ -221,7 +221,7 @@ async def orcamento_contas(request: Request, session: Session = Depends(get_sess
 
     accounts = session.exec(
         select(BudgetAccount)
-        .where(BudgetAccount.company_id == ctx.company.id)
+        .where(BudgetAccount.company_id == ctx.company.id, BudgetAccount.is_active == True)
         .order_by(BudgetAccount.sort_order, BudgetAccount.code)
     ).all()
     tree = _build_account_tree(accounts)
@@ -602,9 +602,9 @@ TEMPLATES["orcamento_contas.html"] = r"""
         <td><span class="badge bg-light text-dark border" style="font-size:.72rem;">{{ acc.account_type }}</span></td>
         <td>{% if acc.is_totalizer %}<span class="badge bg-primary">Sim</span>{% else %}<span class="muted small">—</span>{% endif %}</td>
         <td class="text-end" style="white-space:nowrap;">
-          <button class="btn btn-outline-secondary btn-sm py-0 px-2" onclick="novaConta({{ acc.id }})" title="Nova sub-conta">+</button>
-          <button class="btn btn-outline-secondary btn-sm py-0 px-2" onclick="editarConta({{ acc.id }}, '{{ acc.code }}', '{{ acc.name|replace("'", "\\'") }}', '{{ acc.account_type }}', {{ acc.is_totalizer|lower }}, {{ acc.sign }})" title="Editar">✎</button>
-          <button class="btn btn-outline-danger btn-sm py-0 px-2" onclick="deletarConta({{ acc.id }}, '{{ acc.name|replace("'", "\\'") }}')" title="Excluir">✕</button>
+          <button class="btn btn-outline-secondary btn-sm" onclick="novaConta({{ acc.id }})" title="Nova sub-conta" style="font-size:.75rem;padding:1px 6px;">+ Sub</button>
+          <button class="btn btn-outline-secondary btn-sm" onclick="editarConta({{ acc.id }}, '{{ acc.code }}', '{{ acc.name|replace("'", "\\'") }}', '{{ acc.account_type }}', {{ acc.is_totalizer|lower }}, {{ acc.sign }})" title="Editar" style="font-size:.75rem;padding:1px 6px;">Editar</button>
+          <button class="btn btn-outline-danger btn-sm" onclick="deletarConta({{ acc.id }}, '{{ acc.name|replace("'", "\\'") }}')" title="Excluir" style="font-size:.75rem;padding:1px 6px;">Remover</button>
         </td>
       </tr>
       {% endfor %}
