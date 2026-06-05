@@ -33156,6 +33156,7 @@ def ensure_delivery3_columns() -> None:
     ]
     activity_columns = [
         ("role", "VARCHAR NOT NULL DEFAULT ''", "TEXT NOT NULL DEFAULT ''"),
+        ("membership_role", "VARCHAR NOT NULL DEFAULT ''", "TEXT NOT NULL DEFAULT ''"),
         ("last_client_id", "INTEGER", "INTEGER"),
         ("last_path", "TEXT NOT NULL DEFAULT ''", "TEXT NOT NULL DEFAULT ''"),
         ("last_method", "VARCHAR NOT NULL DEFAULT ''", "TEXT NOT NULL DEFAULT ''"),
@@ -33481,14 +33482,15 @@ async def activity_tracking_middleware(request: Request, call_next: Callable[...
                     if backend.startswith("postgres"):
                         _conn.execute(_sa_text("""
                             INSERT INTO useractivity
-                                (company_id, user_id, role, last_client_id, last_path,
+                                (company_id, user_id, role, membership_role, last_client_id, last_path,
                                  last_method, request_count, last_seen_at, created_at, updated_at)
                             VALUES
-                                (:cid, :uid, :role, :lcid, :lpath,
+                                (:cid, :uid, :role, :role, :lcid, :lpath,
                                  :lmeth, 1, :now, :now, :now)
                             ON CONFLICT (company_id, user_id)
                             DO UPDATE SET
                                 role           = EXCLUDED.role,
+                                membership_role = EXCLUDED.membership_role,
                                 last_client_id = EXCLUDED.last_client_id,
                                 last_path      = EXCLUDED.last_path,
                                 last_method    = EXCLUDED.last_method,

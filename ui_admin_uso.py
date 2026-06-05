@@ -65,18 +65,19 @@ async def admin_uso_debug(request: Request, session: Session = Depends(get_sessi
         with engine.begin() as _conn:
             _conn.execute(_sa_text("""
                 INSERT INTO useractivity
-                    (company_id, user_id, role, last_client_id, last_path,
+                    (company_id, user_id, role, membership_role, last_client_id, last_path,
                      last_method, request_count, last_seen_at, created_at, updated_at)
                 VALUES
-                    (:cid, :uid, :role, :lcid, :lpath,
+                    (:cid, :uid, :role, :role, :lcid, :lpath,
                      :lmeth, 1, :now, :now, :now)
                 ON CONFLICT (company_id, user_id)
                 DO UPDATE SET
-                    role           = EXCLUDED.role,
-                    last_path      = EXCLUDED.last_path,
-                    request_count  = useractivity.request_count + 1,
-                    last_seen_at   = EXCLUDED.last_seen_at,
-                    updated_at     = EXCLUDED.updated_at
+                    role            = EXCLUDED.role,
+                    membership_role = EXCLUDED.membership_role,
+                    last_path       = EXCLUDED.last_path,
+                    request_count   = useractivity.request_count + 1,
+                    last_seen_at    = EXCLUDED.last_seen_at,
+                    updated_at      = EXCLUDED.updated_at
             """), {
                 "cid": int(ctx.company.id), "uid": int(ctx.user.id),
                 "role": ctx.membership.role or "", "lcid": None,
