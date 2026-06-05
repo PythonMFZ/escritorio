@@ -37306,35 +37306,6 @@ TEMPLATES["ferramentas.html"] = r"""
         <a class="btn btn-primary" href="/ferramentas/obras">Abrir Gestão de Obras</a>
       </div>
     </div>
-    <div class="col-lg-6">
-      <div class="card p-4 h-100">
-        <div class="d-flex justify-content-between align-items-start gap-3 flex-wrap">
-          <div>
-            <h5 class="mb-1">Orçamento</h5>
-            <div class="muted">Planejamento orçamentário com plano de contas, Orçado vs Realizado.</div>
-          </div>
-          <span class="badge text-bg-primary">Disponível</span>
-        </div>
-        <div class="row g-3 mt-1 mb-3">
-          <div class="col-md-6">
-            <div class="border rounded p-3 h-100">
-              <div class="muted small">Controle</div>
-              <div class="fw-semibold">Orçado vs Realizado</div>
-            </div>
-          </div>
-          <div class="col-md-6">
-            <div class="border rounded p-3 h-100">
-              <div class="muted small">Análise IA</div>
-              <div class="fw-semibold">Augur integrado</div>
-            </div>
-          </div>
-        </div>
-        <div class="alert alert-info" style="font-size:.85rem;">
-          Monte o plano de contas, preencha os valores mensais e acompanhe a execução orçamentária.
-        </div>
-        <a class="btn btn-primary" href="/ferramentas/orcamento">Abrir Orçamento</a>
-      </div>
-    </div>
   </div>
 {% endif %}
 {% endblock %}
