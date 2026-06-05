@@ -1,7 +1,6 @@
-# ui_orcamento.py — Módulo de Planejamento Orçamentário
+# ui_orcamento.py — Ferramenta de Planejamento Orçamentário (cliente)
 # Exec'd no namespace do app.py
 
-from decimal import Decimal as _Dec
 import json as _json_orc
 
 # ── Modelos ───────────────────────────────────────────────────────────────────
@@ -11,7 +10,8 @@ class BudgetPlan(SQLModel, table=True):
     __table_args__ = {"extend_existing": True}
     id:          Optional[int] = Field(default=None, primary_key=True)
     company_id:  int  = Field(index=True)
-    name:        str  = Field(default="")          # "Orçamento 2026"
+    client_id:   Optional[int] = Field(default=None, index=True)  # cliente ativo
+    name:        str  = Field(default="")
     year:        int  = Field(default=2026)
     description: str  = Field(default="")
     is_active:   bool = Field(default=True)
@@ -24,11 +24,11 @@ class BudgetAccount(SQLModel, table=True):
     __table_args__ = {"extend_existing": True}
     id:           Optional[int] = Field(default=None, primary_key=True)
     company_id:   int  = Field(index=True)
-    code:         str  = Field(default="")   # "1", "1.1", "1.1.2"
+    code:         str  = Field(default="")
     name:         str  = Field(default="")
-    account_type: str  = Field(default="despesa")  # receita|despesa|resultado
+    account_type: str  = Field(default="despesa")  # receita|despesa|resultado|ativo|passivo
     parent_id:    Optional[int] = Field(default=None, index=True)
-    is_totalizer: bool = Field(default=False)  # soma filhos automaticamente
+    is_totalizer: bool = Field(default=False)
     sign:         int  = Field(default=1)      # +1 soma, -1 subtrai do pai
     sort_order:   int  = Field(default=0)
     is_active:    bool = Field(default=True)
@@ -46,7 +46,7 @@ class BudgetEntry(SQLModel, table=True):
     company_id:      int  = Field(index=True)
     plan_id:         int  = Field(index=True)
     account_id:      int  = Field(index=True)
-    month:           int  = Field(default=1)   # 1-12
+    month:           int  = Field(default=1)
     value_budgeted:  float = Field(default=0.0)
     value_realized:  float = Field(default=0.0)
     notes:           str  = Field(default="")
@@ -59,6 +59,13 @@ def _ensure_orcamento_tables():
             tbl.create(engine, checkfirst=True)
         except Exception:
             pass
+    # migração: adiciona client_id se tabela já existia sem essa coluna
+    try:
+        from sqlalchemy import text as _t
+        with engine.begin() as _c:
+            _c.execute(_t("ALTER TABLE budgetplan ADD COLUMN IF NOT EXISTS client_id INTEGER"))
+    except Exception:
+        pass
 
 try:
     _ensure_orcamento_tables()
@@ -72,12 +79,9 @@ _MONTHS_PT = ["Jan","Fev","Mar","Abr","Mai","Jun","Jul","Ago","Set","Out","Nov",
 
 
 def _build_account_tree(accounts: list) -> list:
-    """Retorna contas em ordem hierárquica para exibição no grid."""
-    by_id   = {a.id: a for a in accounts}
     by_parent: dict = {}
     for a in accounts:
         by_parent.setdefault(a.parent_id, []).append(a)
-
     result = []
     def _walk(parent_id, depth):
         for a in sorted(by_parent.get(parent_id, []), key=lambda x: (x.sort_order, x.code)):
@@ -88,7 +92,6 @@ def _build_account_tree(accounts: list) -> list:
 
 
 def _calc_totalizer(account_id: int, entries_by_account: dict, accounts_by_parent: dict) -> dict:
-    """Soma recursivamente filhos de uma totalizadora. Retorna {month: (budget, realized)}."""
     totals: dict = {m: [0.0, 0.0] for m in range(1, 13)}
     for child in accounts_by_parent.get(account_id, []):
         if child.is_totalizer:
@@ -106,7 +109,6 @@ def _calc_totalizer(account_id: int, entries_by_account: dict, accounts_by_paren
 
 
 def _load_grid(session, company_id: int, plan_id: int):
-    """Carrega contas + entradas e calcula totalizadoras."""
     accounts = session.exec(
         select(BudgetAccount)
         .where(BudgetAccount.company_id == company_id, BudgetAccount.is_active == True)
@@ -116,12 +118,10 @@ def _load_grid(session, company_id: int, plan_id: int):
         select(BudgetEntry)
         .where(BudgetEntry.company_id == company_id, BudgetEntry.plan_id == plan_id)
     ).all()
-
     entries_by_account = {(e.account_id, e.month): e for e in entries}
     accounts_by_parent: dict = {}
     for a in accounts:
         accounts_by_parent.setdefault(a.parent_id, []).append(a)
-
     tree = _build_account_tree(accounts)
     rows = []
     for (acc, depth) in tree:
@@ -137,34 +137,34 @@ def _load_grid(session, company_id: int, plan_id: int):
         total_b = sum(months[m]["b"] for m in range(1, 13))
         total_r = sum(months[m]["r"] for m in range(1, 13))
         rows.append({
-            "id":           acc.id,
-            "code":         acc.code,
-            "name":         acc.name,
-            "type":         acc.account_type,
-            "is_totalizer": acc.is_totalizer,
-            "depth":        depth,
-            "months":       months,
-            "total_b":      round(total_b, 2),
-            "total_r":      round(total_r, 2),
+            "id": acc.id, "code": acc.code, "name": acc.name,
+            "type": acc.account_type, "is_totalizer": acc.is_totalizer,
+            "depth": depth, "months": months,
+            "total_b": round(total_b, 2), "total_r": round(total_r, 2),
         })
     return rows
 
 
+_ORC_ROLES = ("admin", "equipe", "cliente")
+
+
 # ── Rotas ─────────────────────────────────────────────────────────────────────
 
-@app.get("/admin/orcamento", response_class=HTMLResponse)
+@app.get("/ferramentas/orcamento", response_class=HTMLResponse)
 @require_login
 async def orcamento_index(request: Request, session: Session = Depends(get_session)):
     ctx = get_tenant_context(request, session)
-    if not ctx or ctx.membership.role not in ("admin", "equipe"):
+    if not ctx or ctx.membership.role not in _ORC_ROLES:
         return RedirectResponse("/", status_code=303)
+    cc = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
+    if not cc:
+        return RedirectResponse("/ferramentas", status_code=303)
 
     plans = session.exec(
         select(BudgetPlan)
-        .where(BudgetPlan.company_id == ctx.company.id)
+        .where(BudgetPlan.company_id == ctx.company.id, BudgetPlan.client_id == cc.id)
         .order_by(BudgetPlan.year.desc(), BudgetPlan.name)
     ).all()
-    cc = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
     return render("orcamento_index.html", request=request, context={
         "current_user": ctx.user, "current_company": ctx.company,
         "role": ctx.membership.role, "current_client": cc,
@@ -172,15 +172,19 @@ async def orcamento_index(request: Request, session: Session = Depends(get_sessi
     })
 
 
-@app.post("/admin/orcamento/plano/criar")
+@app.post("/ferramentas/orcamento/plano/criar")
 @require_login
 async def orcamento_criar_plano(request: Request, session: Session = Depends(get_session)):
     ctx = get_tenant_context(request, session)
-    if not ctx or ctx.membership.role not in ("admin", "equipe"):
+    if not ctx or ctx.membership.role not in _ORC_ROLES:
         return JSONResponse({"ok": False}, status_code=403)
+    cc = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
+    if not cc:
+        return JSONResponse({"ok": False, "erro": "Selecione um cliente"}, status_code=400)
     body = await request.json()
     plan = BudgetPlan(
         company_id=ctx.company.id,
+        client_id=cc.id,
         name=(body.get("name") or "").strip() or f"Orçamento {body.get('year', 2026)}",
         year=int(body.get("year") or 2026),
         description=(body.get("description") or "").strip(),
@@ -191,34 +195,55 @@ async def orcamento_criar_plano(request: Request, session: Session = Depends(get
     return JSONResponse({"ok": True, "id": plan.id})
 
 
-@app.post("/admin/orcamento/plano/{plan_id}/deletar")
+@app.post("/ferramentas/orcamento/plano/{plan_id}/deletar")
 @require_login
 async def orcamento_deletar_plano(plan_id: int, request: Request, session: Session = Depends(get_session)):
     ctx = get_tenant_context(request, session)
-    if not ctx or ctx.membership.role not in ("admin",):
+    if not ctx or ctx.membership.role not in _ORC_ROLES:
         return JSONResponse({"ok": False}, status_code=403)
     plan = session.get(BudgetPlan, plan_id)
     if plan and plan.company_id == ctx.company.id:
-        session.exec(
-            select(BudgetEntry).where(BudgetEntry.plan_id == plan_id)
-        )
+        for e in session.exec(select(BudgetEntry).where(BudgetEntry.plan_id == plan_id)).all():
+            session.delete(e)
         session.delete(plan)
         session.commit()
     return JSONResponse({"ok": True})
 
 
-@app.get("/admin/orcamento/{plan_id}", response_class=HTMLResponse)
+# ATENÇÃO: /contas deve vir ANTES de /{plan_id} para não ser capturado como ID
+@app.get("/ferramentas/orcamento/contas", response_class=HTMLResponse)
+@require_login
+async def orcamento_contas(request: Request, session: Session = Depends(get_session)):
+    ctx = get_tenant_context(request, session)
+    if not ctx or ctx.membership.role not in _ORC_ROLES:
+        return RedirectResponse("/", status_code=303)
+    cc = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
+
+    accounts = session.exec(
+        select(BudgetAccount)
+        .where(BudgetAccount.company_id == ctx.company.id)
+        .order_by(BudgetAccount.sort_order, BudgetAccount.code)
+    ).all()
+    tree = _build_account_tree(accounts)
+    return render("orcamento_contas.html", request=request, context={
+        "current_user": ctx.user, "current_company": ctx.company,
+        "role": ctx.membership.role, "current_client": cc,
+        "tree": tree,
+    })
+
+
+@app.get("/ferramentas/orcamento/{plan_id}", response_class=HTMLResponse)
 @require_login
 async def orcamento_grid(plan_id: int, request: Request, session: Session = Depends(get_session)):
     ctx = get_tenant_context(request, session)
-    if not ctx or ctx.membership.role not in ("admin", "equipe"):
+    if not ctx or ctx.membership.role not in _ORC_ROLES:
         return RedirectResponse("/", status_code=303)
     plan = session.get(BudgetPlan, plan_id)
     if not plan or plan.company_id != ctx.company.id:
-        return RedirectResponse("/admin/orcamento", status_code=303)
+        return RedirectResponse("/ferramentas/orcamento", status_code=303)
+    cc = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
 
     rows = _load_grid(session, ctx.company.id, plan_id)
-    cc = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
     return render("orcamento_grid.html", request=request, context={
         "current_user": ctx.user, "current_company": ctx.company,
         "role": ctx.membership.role, "current_client": cc,
@@ -228,18 +253,19 @@ async def orcamento_grid(plan_id: int, request: Request, session: Session = Depe
     })
 
 
+# ── API endpoints ─────────────────────────────────────────────────────────────
+
 @app.post("/api/orcamento/entry")
 @require_login
 async def orcamento_save_entry(request: Request, session: Session = Depends(get_session)):
-    """Salva/atualiza valor orçado ou realizado de uma célula."""
     ctx = get_tenant_context(request, session)
-    if not ctx or ctx.membership.role not in ("admin", "equipe"):
+    if not ctx or ctx.membership.role not in _ORC_ROLES:
         return JSONResponse({"ok": False}, status_code=403)
-    body = await request.json()
+    body   = await request.json()
     plan_id    = int(body["plan_id"])
     account_id = int(body["account_id"])
     month      = int(body["month"])
-    field      = body["field"]  # "b" ou "r"
+    field      = body["field"]
     value      = float(body.get("value") or 0)
 
     plan = session.get(BudgetPlan, plan_id)
@@ -254,12 +280,8 @@ async def orcamento_save_entry(request: Request, session: Session = Depends(get_
         )
     ).first()
     if not entry:
-        entry = BudgetEntry(
-            company_id=ctx.company.id,
-            plan_id=plan_id,
-            account_id=account_id,
-            month=month,
-        )
+        entry = BudgetEntry(company_id=ctx.company.id, plan_id=plan_id,
+                            account_id=account_id, month=month)
     if field == "b":
         entry.value_budgeted = value
     else:
@@ -270,37 +292,13 @@ async def orcamento_save_entry(request: Request, session: Session = Depends(get_
     return JSONResponse({"ok": True})
 
 
-# ── Plano de contas CRUD ──────────────────────────────────────────────────────
-
-@app.get("/admin/orcamento/contas", response_class=HTMLResponse)
-@require_login
-async def orcamento_contas(request: Request, session: Session = Depends(get_session)):
-    ctx = get_tenant_context(request, session)
-    if not ctx or ctx.membership.role not in ("admin", "equipe"):
-        return RedirectResponse("/", status_code=303)
-
-    accounts = session.exec(
-        select(BudgetAccount)
-        .where(BudgetAccount.company_id == ctx.company.id)
-        .order_by(BudgetAccount.sort_order, BudgetAccount.code)
-    ).all()
-    tree = _build_account_tree(accounts)
-    cc = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
-    return render("orcamento_contas.html", request=request, context={
-        "current_user": ctx.user, "current_company": ctx.company,
-        "role": ctx.membership.role, "current_client": cc,
-        "tree": tree, "accounts": accounts,
-    })
-
-
 @app.post("/api/orcamento/conta/criar")
 @require_login
 async def orcamento_criar_conta(request: Request, session: Session = Depends(get_session)):
     ctx = get_tenant_context(request, session)
-    if not ctx or ctx.membership.role not in ("admin", "equipe"):
+    if not ctx or ctx.membership.role not in _ORC_ROLES:
         return JSONResponse({"ok": False}, status_code=403)
     body = await request.json()
-    # sort_order: depois do último filho do mesmo pai
     siblings = session.exec(
         select(BudgetAccount).where(
             BudgetAccount.company_id == ctx.company.id,
@@ -308,7 +306,6 @@ async def orcamento_criar_conta(request: Request, session: Session = Depends(get
         )
     ).all()
     max_order = max((a.sort_order for a in siblings), default=-1) + 1
-
     acc = BudgetAccount(
         company_id=ctx.company.id,
         code=(body.get("code") or "").strip(),
@@ -322,26 +319,29 @@ async def orcamento_criar_conta(request: Request, session: Session = Depends(get
     session.add(acc)
     session.commit()
     session.refresh(acc)
-    return JSONResponse({"ok": True, "id": acc.id, "code": acc.code, "name": acc.name})
+    return JSONResponse({"ok": True, "id": acc.id})
 
 
 @app.post("/api/orcamento/conta/{acc_id}/editar")
 @require_login
 async def orcamento_editar_conta(acc_id: int, request: Request, session: Session = Depends(get_session)):
     ctx = get_tenant_context(request, session)
-    if not ctx or ctx.membership.role not in ("admin", "equipe"):
+    if not ctx or ctx.membership.role not in _ORC_ROLES:
         return JSONResponse({"ok": False}, status_code=403)
     body = await request.json()
     acc = session.get(BudgetAccount, acc_id)
     if not acc or acc.company_id != ctx.company.id:
         return JSONResponse({"ok": False}, status_code=404)
-    if "code"         in body: acc.code         = body["code"]
-    if "name"         in body: acc.name         = body["name"]
-    if "account_type" in body: acc.account_type = body["account_type"]
-    if "is_totalizer" in body: acc.is_totalizer = bool(body["is_totalizer"])
-    if "sign"         in body: acc.sign         = int(body["sign"])
-    if "parent_id"    in body: acc.parent_id    = body["parent_id"] or None
-    if "sort_order"   in body: acc.sort_order   = int(body["sort_order"])
+    for k, v in [("code", body.get("code")), ("name", body.get("name")),
+                  ("account_type", body.get("account_type")),
+                  ("is_totalizer", body.get("is_totalizer")),
+                  ("sign", body.get("sign")), ("parent_id", body.get("parent_id")),
+                  ("sort_order", body.get("sort_order"))]:
+        if k in body:
+            if k == "is_totalizer": setattr(acc, k, bool(v))
+            elif k in ("sign", "sort_order"): setattr(acc, k, int(v))
+            elif k == "parent_id": acc.parent_id = v or None
+            else: setattr(acc, k, v)
     acc.updated_at = utcnow()
     session.add(acc)
     session.commit()
@@ -352,12 +352,11 @@ async def orcamento_editar_conta(acc_id: int, request: Request, session: Session
 @require_login
 async def orcamento_deletar_conta(acc_id: int, request: Request, session: Session = Depends(get_session)):
     ctx = get_tenant_context(request, session)
-    if not ctx or ctx.membership.role not in ("admin", "equipe"):
+    if not ctx or ctx.membership.role not in _ORC_ROLES:
         return JSONResponse({"ok": False}, status_code=403)
     acc = session.get(BudgetAccount, acc_id)
     if not acc or acc.company_id != ctx.company.id:
         return JSONResponse({"ok": False}, status_code=404)
-    # Marca inativo em vez de deletar para preservar histórico
     acc.is_active = False
     acc.updated_at = utcnow()
     session.add(acc)
@@ -369,9 +368,9 @@ async def orcamento_deletar_conta(acc_id: int, request: Request, session: Sessio
 @require_login
 async def orcamento_reordenar(request: Request, session: Session = Depends(get_session)):
     ctx = get_tenant_context(request, session)
-    if not ctx or ctx.membership.role not in ("admin", "equipe"):
+    if not ctx or ctx.membership.role not in _ORC_ROLES:
         return JSONResponse({"ok": False}, status_code=403)
-    body = await request.json()  # [{id, sort_order, parent_id}, ...]
+    body = await request.json()
     for item in body:
         acc = session.get(BudgetAccount, int(item["id"]))
         if acc and acc.company_id == ctx.company.id:
@@ -382,31 +381,29 @@ async def orcamento_reordenar(request: Request, session: Session = Depends(get_s
     return JSONResponse({"ok": True})
 
 
-# ── Augur: análise orçamentária ───────────────────────────────────────────────
-
 @app.get("/api/orcamento/{plan_id}/augur-contexto")
 @require_login
 async def orcamento_augur_contexto(plan_id: int, request: Request, session: Session = Depends(get_session)):
-    """Retorna o orçamento formatado como texto para o Augur analisar."""
     ctx = get_tenant_context(request, session)
     if not ctx:
         return JSONResponse({"ok": False}, status_code=403)
     plan = session.get(BudgetPlan, plan_id)
     if not plan or plan.company_id != ctx.company.id:
         return JSONResponse({"ok": False}, status_code=404)
-
     rows = _load_grid(session, ctx.company.id, plan_id)
     return JSONResponse({"ok": True, "plan": plan.name, "year": plan.year, "rows": rows})
 
 
-def _orcamento_contexto_para_augur(session, company_id: int) -> str:
-    """Gera texto resumido do orçamento ativo para injetar no contexto do Augur."""
+# ── Augur: injeção de contexto ─────────────────────────────────────────────────
+
+def _orcamento_contexto_para_augur(session, company_id: int, client_id=None) -> str:
     try:
-        plan = session.exec(
-            select(BudgetPlan)
-            .where(BudgetPlan.company_id == company_id, BudgetPlan.is_active == True)
-            .order_by(BudgetPlan.year.desc())
-        ).first()
+        q = select(BudgetPlan).where(
+            BudgetPlan.company_id == company_id, BudgetPlan.is_active == True
+        )
+        if client_id:
+            q = q.where(BudgetPlan.client_id == client_id)
+        plan = session.exec(q.order_by(BudgetPlan.year.desc())).first()
         if not plan:
             return ""
         rows = _load_grid(session, company_id, plan.id)
@@ -429,14 +426,13 @@ def _orcamento_contexto_para_augur(session, company_id: int) -> str:
         return ""
 
 
-# Injeta orçamento no contexto do Augur
 try:
     _orig_enriquecer_orc = _enriquecer_client_data
 
     def _enriquecer_com_orcamento(session, company_id, client_id, client, client_data):
         data = _orig_enriquecer_orc(session, company_id, client_id, client, client_data)
         try:
-            texto = _orcamento_contexto_para_augur(session, company_id)
+            texto = _orcamento_contexto_para_augur(session, company_id, client_id)
             if texto:
                 data["orcamento_resumo"] = texto
         except Exception:
@@ -448,7 +444,7 @@ except Exception:
     pass
 
 
-# ── Templates HTML ────────────────────────────────────────────────────────────
+# ── Templates ─────────────────────────────────────────────────────────────────
 
 TEMPLATES["orcamento_index.html"] = r"""
 {% extends "base.html" %}
@@ -456,10 +452,12 @@ TEMPLATES["orcamento_index.html"] = r"""
 <div class="d-flex justify-content-between align-items-center mb-3">
   <div>
     <h4 class="mb-0">Planejamento Orçamentário</h4>
-    <div class="muted small">Gerencie seus planos orçamentários e acompanhe o realizado.</div>
+    <div class="muted small">
+      {% if current_client %}Cliente: <strong>{{ current_client.name }}</strong>{% endif %}
+    </div>
   </div>
   <div class="d-flex gap-2">
-    <a href="/admin/orcamento/contas" class="btn btn-outline-secondary btn-sm">
+    <a href="/ferramentas/orcamento/contas" class="btn btn-outline-secondary btn-sm">
       <i class="bi bi-list-ul me-1"></i>Plano de Contas
     </a>
     <button class="btn btn-primary btn-sm" onclick="novoPlano()">
@@ -483,11 +481,9 @@ TEMPLATES["orcamento_index.html"] = r"""
             {% if p.is_active %}Ativo{% else %}Inativo{% endif %}
           </span>
         </div>
-        {% if p.description %}
-        <div class="muted small mb-2">{{ p.description }}</div>
-        {% endif %}
+        {% if p.description %}<div class="muted small mb-2">{{ p.description }}</div>{% endif %}
         <div class="d-flex gap-2 mt-3">
-          <a href="/admin/orcamento/{{ p.id }}" class="btn btn-primary btn-sm flex-grow-1">
+          <a href="/ferramentas/orcamento/{{ p.id }}" class="btn btn-primary btn-sm flex-grow-1">
             <i class="bi bi-table me-1"></i>Abrir
           </a>
           <button class="btn btn-outline-danger btn-sm" onclick="deletarPlano({{ p.id }}, '{{ p.name }}')">
@@ -501,16 +497,16 @@ TEMPLATES["orcamento_index.html"] = r"""
 </div>
 {% else %}
 <div class="alert alert-info mt-3">
-  Nenhum plano orçamentário criado ainda.<br>
-  <strong>Comece criando o plano de contas</strong> e depois crie seu primeiro orçamento.
+  Nenhum plano criado para este cliente ainda.<br>
+  <strong>Dica:</strong> primeiro configure o <a href="/ferramentas/orcamento/contas">plano de contas</a> e depois crie um plano.
 </div>
 {% endif %}
 
-<!-- Modal novo plano -->
 <div class="modal fade" id="modalPlano" tabindex="-1">
   <div class="modal-dialog">
     <div class="modal-content">
-      <div class="modal-header"><h5 class="modal-title">Novo Plano Orçamentário</h5>
+      <div class="modal-header">
+        <h5 class="modal-title">Novo Plano Orçamentário</h5>
         <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
       </div>
       <div class="modal-body">
@@ -535,11 +531,9 @@ TEMPLATES["orcamento_index.html"] = r"""
   </div>
 </div>
 <script>
-function novoPlano() {
-  new bootstrap.Modal(document.getElementById('modalPlano')).show();
-}
+function novoPlano() { new bootstrap.Modal(document.getElementById('modalPlano')).show(); }
 async function criarPlano() {
-  const r = await fetch('/admin/orcamento/plano/criar', {
+  const r = await fetch('/ferramentas/orcamento/plano/criar', {
     method:'POST', headers:{'Content-Type':'application/json'},
     body: JSON.stringify({
       name: document.getElementById('pName').value,
@@ -548,11 +542,12 @@ async function criarPlano() {
     })
   });
   const d = await r.json();
-  if (d.ok) window.location = '/admin/orcamento/' + d.id;
+  if (d.ok) window.location = '/ferramentas/orcamento/' + d.id;
+  else alert(d.erro || 'Erro ao criar plano.');
 }
 async function deletarPlano(id, name) {
-  if (!confirm('Deletar plano "' + name + '"? Esta ação não pode ser desfeita.')) return;
-  await fetch('/admin/orcamento/plano/' + id + '/deletar', {method:'POST'});
+  if (!confirm('Deletar plano "' + name + '"?')) return;
+  await fetch('/ferramentas/orcamento/plano/' + id + '/deletar', {method:'POST'});
   location.reload();
 }
 </script>
@@ -563,7 +558,6 @@ TEMPLATES["orcamento_contas.html"] = r"""
 {% extends "base.html" %}
 {% block content %}
 <style>
-.orc-row{cursor:default;}
 .orc-totalizer{background:#f0f5ff;font-weight:600;}
 .orc-indent-0{padding-left:4px!important;}
 .orc-indent-1{padding-left:20px!important;}
@@ -571,14 +565,13 @@ TEMPLATES["orcamento_contas.html"] = r"""
 .orc-indent-3{padding-left:60px!important;}
 .orc-indent-4{padding-left:80px!important;}
 </style>
-
 <div class="d-flex justify-content-between align-items-center mb-3">
   <div>
     <h4 class="mb-0">Plano de Contas</h4>
-    <div class="muted small">Organize as contas em hierarquia com totalizadoras.</div>
+    <div class="muted small">Estrutura compartilhada entre todos os clientes da empresa.</div>
   </div>
   <div class="d-flex gap-2">
-    <a href="/admin/orcamento" class="btn btn-outline-secondary btn-sm">← Voltar</a>
+    <a href="/ferramentas/orcamento" class="btn btn-outline-secondary btn-sm">← Voltar</a>
     <button class="btn btn-primary btn-sm" onclick="novaConta(null)">
       <i class="bi bi-plus-lg me-1"></i>Nova Conta
     </button>
@@ -586,27 +579,25 @@ TEMPLATES["orcamento_contas.html"] = r"""
 </div>
 
 <div class="card p-0 overflow-hidden">
-  <table class="table table-hover mb-0" id="tblContas">
+  <table class="table table-hover mb-0">
     <thead class="table-light">
       <tr>
         <th style="width:80px">Código</th>
         <th>Nome</th>
         <th style="width:100px">Tipo</th>
-        <th style="width:90px">Nível</th>
         <th style="width:120px">Totalizadora</th>
         <th style="width:100px"></th>
       </tr>
     </thead>
     <tbody>
       {% for acc, depth in tree %}
-      <tr class="orc-row {% if acc.is_totalizer %}orc-totalizer{% endif %}" data-id="{{ acc.id }}" data-parent="{{ acc.parent_id or '' }}">
+      <tr class="{% if acc.is_totalizer %}orc-totalizer{% endif %}" data-id="{{ acc.id }}">
         <td class="orc-indent-{{ depth }} small font-monospace">{{ acc.code }}</td>
         <td class="orc-indent-{{ depth }}">
           {% if acc.is_totalizer %}<i class="bi bi-calculator me-1 text-primary"></i>{% endif %}
           {{ acc.name }}
         </td>
         <td><span class="badge bg-light text-dark border" style="font-size:.72rem;">{{ acc.account_type }}</span></td>
-        <td class="muted small">{{ depth }}</td>
         <td>{% if acc.is_totalizer %}<span class="badge bg-primary">Sim</span>{% else %}<span class="muted small">—</span>{% endif %}</td>
         <td class="text-end">
           <button class="btn btn-outline-secondary btn-xs py-0 px-1" onclick="novaConta({{ acc.id }})" title="Sub-conta">
@@ -622,13 +613,12 @@ TEMPLATES["orcamento_contas.html"] = r"""
       </tr>
       {% endfor %}
       {% if not tree %}
-      <tr><td colspan="6" class="text-center muted py-4">Nenhuma conta cadastrada.</td></tr>
+      <tr><td colspan="5" class="text-center muted py-4">Nenhuma conta cadastrada. Clique em "Nova Conta" para começar.</td></tr>
       {% endif %}
     </tbody>
   </table>
 </div>
 
-<!-- Modal conta -->
 <div class="modal fade" id="modalConta" tabindex="-1">
   <div class="modal-dialog">
     <div class="modal-content">
@@ -647,11 +637,11 @@ TEMPLATES["orcamento_contas.html"] = r"""
           </div>
           <div class="col-8">
             <label class="form-label">Nome</label>
-            <input type="text" id="cName" class="form-control form-control-sm" placeholder="Nome da conta">
+            <input type="text" id="cName" class="form-control form-control-sm">
           </div>
         </div>
         <div class="row g-2 mt-1">
-          <div class="col-6">
+          <div class="col-5">
             <label class="form-label">Tipo</label>
             <select id="cType" class="form-select form-select-sm">
               <option value="receita">Receita</option>
@@ -661,15 +651,15 @@ TEMPLATES["orcamento_contas.html"] = r"""
               <option value="passivo">Passivo</option>
             </select>
           </div>
-          <div class="col-3">
+          <div class="col-4">
             <label class="form-label">Sinal</label>
             <select id="cSign" class="form-select form-select-sm">
               <option value="1">+ (soma)</option>
-              <option value="-1">- (subtrai)</option>
+              <option value="-1">− (subtrai)</option>
             </select>
           </div>
           <div class="col-3">
-            <label class="form-label">Totalizadora</label>
+            <label class="form-label">Totaliz.</label>
             <select id="cTot" class="form-select form-select-sm">
               <option value="false">Não</option>
               <option value="true">Sim</option>
@@ -684,29 +674,26 @@ TEMPLATES["orcamento_contas.html"] = r"""
     </div>
   </div>
 </div>
-
 <script>
-let _modalConta;
-document.addEventListener('DOMContentLoaded', () => { _modalConta = new bootstrap.Modal(document.getElementById('modalConta')); });
-
-function novaConta(parentId) {
-  document.getElementById('modalContaTitulo').textContent = parentId ? 'Nova Sub-conta' : 'Nova Conta';
+let _mc;
+document.addEventListener('DOMContentLoaded', () => { _mc = new bootstrap.Modal(document.getElementById('modalConta')); });
+function novaConta(pid) {
+  document.getElementById('modalContaTitulo').textContent = pid ? 'Nova Sub-conta' : 'Nova Conta';
   document.getElementById('cId').value = '';
-  document.getElementById('cParentId').value = parentId || '';
+  document.getElementById('cParentId').value = pid || '';
   document.getElementById('cCode').value = '';
   document.getElementById('cName').value = '';
   document.getElementById('cType').value = 'despesa';
   document.getElementById('cSign').value = '1';
   document.getElementById('cTot').value = 'false';
   const info = document.getElementById('cParentInfo');
-  if (parentId) {
-    const row = document.querySelector('[data-id="' + parentId + '"]');
-    info.textContent = 'Sub-conta de: ' + (row ? row.querySelector('td:nth-child(2)').textContent.trim() : '#' + parentId);
+  if (pid) {
+    const row = document.querySelector('[data-id="' + pid + '"]');
+    info.textContent = 'Sub-conta de: ' + (row ? row.querySelector('td:nth-child(2)').textContent.trim() : '#' + pid);
     info.style.display = '';
   } else { info.style.display = 'none'; }
-  _modalConta.show();
+  _mc.show();
 }
-
 function editarConta(id, code, name, type, isTot, sign) {
   document.getElementById('modalContaTitulo').textContent = 'Editar Conta';
   document.getElementById('cId').value = id;
@@ -717,9 +704,8 @@ function editarConta(id, code, name, type, isTot, sign) {
   document.getElementById('cSign').value = String(sign);
   document.getElementById('cTot').value = isTot ? 'true' : 'false';
   document.getElementById('cParentInfo').style.display = 'none';
-  _modalConta.show();
+  _mc.show();
 }
-
 async function salvarConta() {
   const id = document.getElementById('cId').value;
   const payload = {
@@ -733,10 +719,8 @@ async function salvarConta() {
   const url = id ? '/api/orcamento/conta/' + id + '/editar' : '/api/orcamento/conta/criar';
   const r = await fetch(url, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)});
   const d = await r.json();
-  if (d.ok) { _modalConta.hide(); location.reload(); }
-  else alert('Erro ao salvar.');
+  if (d.ok) { _mc.hide(); location.reload(); } else alert('Erro ao salvar.');
 }
-
 async function deletarConta(id, name) {
   if (!confirm('Remover conta "' + name + '"?')) return;
   await fetch('/api/orcamento/conta/' + id + '/deletar', {method:'POST'});
@@ -760,25 +744,26 @@ TEMPLATES["orcamento_grid.html"] = r"""
 .orc-depth-1 .col-name{padding-left:18px!important;}
 .orc-depth-2 .col-name{padding-left:34px!important;}
 .orc-depth-3 .col-name{padding-left:50px!important;}
-.orc-depth-4 .col-name{padding-left:66px!important;}
 .orc-val{text-align:right!important;min-width:76px;}
 .orc-val input{width:72px;border:none;background:transparent;text-align:right;font-size:.78rem;padding:0;}
 .orc-val input:focus{background:#fff3cd;outline:none;border-bottom:1px solid #ffc107;}
 .orc-realizado{background:#f0fff0!important;}
-.orc-var-neg{color:#dc3545;}
-.orc-var-pos{color:#198754;}
+.orc-var-neg{color:#dc3545;font-weight:600;}
+.orc-var-pos{color:#198754;font-weight:600;}
 .orc-total-col{background:#f0f5ff!important;font-weight:600;}
-.orc-header-month{min-width:220px;}
 </style>
 
 <div class="d-flex justify-content-between align-items-center mb-2 flex-wrap gap-2">
   <div>
     <h5 class="mb-0">{{ plan.name }}</h5>
-    <div class="muted small">Clique em qualquer célula para editar · Verde = Realizado · Azul = Totalizadora</div>
+    <div class="muted small">
+      {% if current_client %}<strong>{{ current_client.name }}</strong> · {% endif %}
+      Clique em qualquer célula para editar · <span style="color:#198754;">■</span> Realizado · <span style="color:#3b5bdb;">■</span> Totalizadora
+    </div>
   </div>
   <div class="d-flex gap-2">
-    <a href="/admin/orcamento" class="btn btn-outline-secondary btn-sm">← Planos</a>
-    <a href="/admin/orcamento/contas" class="btn btn-outline-secondary btn-sm">
+    <a href="/ferramentas/orcamento" class="btn btn-outline-secondary btn-sm">← Planos</a>
+    <a href="/ferramentas/orcamento/contas" class="btn btn-outline-secondary btn-sm">
       <i class="bi bi-list-ul me-1"></i>Plano de Contas
     </a>
     <button class="btn btn-outline-primary btn-sm" onclick="augurAnalisar()">
@@ -787,7 +772,6 @@ TEMPLATES["orcamento_grid.html"] = r"""
   </div>
 </div>
 
-<!-- Análise Augur inline -->
 <div id="augurBox" class="card p-3 mb-2" style="display:none;">
   <div class="d-flex justify-content-between align-items-center mb-2">
     <div class="fw-semibold"><i class="bi bi-robot me-1"></i>Análise Augur</div>
@@ -802,9 +786,9 @@ TEMPLATES["orcamento_grid.html"] = r"""
     <tr>
       <th class="col-name">Conta</th>
       {% for m in months %}
-      <th colspan="3" class="orc-header-month">{{ m }}</th>
+      <th colspan="3" style="min-width:220px;">{{ m }}</th>
       {% endfor %}
-      <th colspan="3" class="orc-total-col orc-header-month">Total Ano</th>
+      <th colspan="3" class="orc-total-col" style="min-width:220px;">Total Ano</th>
     </tr>
     <tr>
       <th class="col-name"></th>
@@ -823,38 +807,32 @@ TEMPLATES["orcamento_grid.html"] = r"""
     <tr class="{% if row.is_totalizer %}orc-totalizer{% endif %} orc-depth-{{ row.depth }}">
       <td class="col-name">
         {% if row.is_totalizer %}<i class="bi bi-calculator me-1 text-primary" style="font-size:.7rem;"></i>{% endif %}
-        <span class="text-muted" style="font-size:.68rem;">{{ row.code }}</span>
-        {{ row.name }}
+        <span class="text-muted" style="font-size:.68rem;">{{ row.code }}</span> {{ row.name }}
       </td>
       {% for m in range(1, 13) %}
       {% set mv = row.months[m] %}
       <td class="orc-val">
-        {% if row.is_totalizer %}
-          <span>{{ "%.0f"|format(mv.b) }}</span>
-        {% else %}
-          <input type="number" step="0.01"
-            data-plan="{{ plan.id }}" data-acc="{{ row.id }}"
-            data-month="{{ m }}" data-field="b"
-            value="{{ mv.b if mv.b != 0 else '' }}"
-            onblur="saveEntry(this)" onkeydown="if(event.key==='Enter'||event.key==='Tab'){this.blur();}">
+        {% if row.is_totalizer %}<span>{{ "%.0f"|format(mv.b) }}</span>
+        {% else %}<input type="number" step="0.01"
+          data-plan="{{ plan.id }}" data-acc="{{ row.id }}"
+          data-month="{{ m }}" data-field="b"
+          value="{{ mv.b if mv.b != 0 else '' }}"
+          onblur="saveEntry(this)" onkeydown="if(event.key==='Enter'||event.key==='Tab'){this.blur();}">
         {% endif %}
       </td>
       <td class="orc-val orc-realizado">
-        {% if row.is_totalizer %}
-          <span>{{ "%.0f"|format(mv.r) }}</span>
-        {% else %}
-          <input type="number" step="0.01"
-            data-plan="{{ plan.id }}" data-acc="{{ row.id }}"
-            data-month="{{ m }}" data-field="r"
-            value="{{ mv.r if mv.r != 0 else '' }}"
-            onblur="saveEntry(this)" onkeydown="if(event.key==='Enter'||event.key==='Tab'){this.blur();}">
+        {% if row.is_totalizer %}<span>{{ "%.0f"|format(mv.r) }}</span>
+        {% else %}<input type="number" step="0.01"
+          data-plan="{{ plan.id }}" data-acc="{{ row.id }}"
+          data-month="{{ m }}" data-field="r"
+          value="{{ mv.r if mv.r != 0 else '' }}"
+          onblur="saveEntry(this)" onkeydown="if(event.key==='Enter'||event.key==='Tab'){this.blur();}">
         {% endif %}
       </td>
       <td class="orc-val {% if mv.b and mv.r < mv.b %}orc-var-neg{% elif mv.b and mv.r >= mv.b %}orc-var-pos{% endif %}">
         {% if mv.b %}{{ "%+.0f%%"|format((mv.r - mv.b) / mv.b * 100) }}{% else %}—{% endif %}
       </td>
       {% endfor %}
-      <!-- Total anual -->
       <td class="orc-val orc-total-col">{{ "%.0f"|format(row.total_b) }}</td>
       <td class="orc-val orc-total-col orc-realizado">{{ "%.0f"|format(row.total_r) }}</td>
       <td class="orc-val orc-total-col {% if row.total_b and row.total_r < row.total_b %}orc-var-neg{% elif row.total_b and row.total_r >= row.total_b %}orc-var-pos{% endif %}">
@@ -864,8 +842,8 @@ TEMPLATES["orcamento_grid.html"] = r"""
     {% endfor %}
     {% if not rows %}
     <tr><td colspan="42" class="text-center muted py-4">
-      Nenhuma conta cadastrada.
-      <a href="/admin/orcamento/contas">Criar plano de contas</a>
+      Nenhuma conta no plano de contas.
+      <a href="/ferramentas/orcamento/contas">Configurar plano de contas →</a>
     </td></tr>
     {% endif %}
   </tbody>
@@ -875,68 +853,42 @@ TEMPLATES["orcamento_grid.html"] = r"""
 <script>
 async function saveEntry(input) {
   const val = parseFloat(input.value) || 0;
-  const prev = input.dataset.prev;
-  if (String(val) === String(prev)) return;
+  if (String(val) === String(input.dataset.prev)) return;
   input.dataset.prev = val;
   const r = await fetch('/api/orcamento/entry', {
-    method: 'POST',
-    headers: {'Content-Type':'application/json'},
+    method:'POST', headers:{'Content-Type':'application/json'},
     body: JSON.stringify({
-      plan_id: input.dataset.plan,
-      account_id: input.dataset.acc,
-      month: input.dataset.month,
-      field: input.dataset.field,
-      value: val,
+      plan_id: input.dataset.plan, account_id: input.dataset.acc,
+      month: input.dataset.month, field: input.dataset.field, value: val,
     })
   });
   const d = await r.json();
-  if (d.ok) {
-    input.style.background = '#d1fae5';
-    setTimeout(() => input.style.background = 'transparent', 800);
-  }
+  if (d.ok) { input.style.background='#d1fae5'; setTimeout(()=>input.style.background='transparent',800); }
 }
-
-// Inicializa prev
 document.querySelectorAll('.orc-val input').forEach(i => { i.dataset.prev = i.value; });
 
 async function augurAnalisar() {
   const box = document.getElementById('augurBox');
   const txt = document.getElementById('augurText');
-  box.style.display = '';
-  txt.textContent = 'Analisando...';
-
+  box.style.display = ''; txt.textContent = 'Carregando dados...';
   const r = await fetch('/api/orcamento/{{ plan.id }}/augur-contexto');
   const d = await r.json();
-  if (!d.ok) { txt.textContent = 'Erro ao carregar dados.'; return; }
-
-  // Monta prompt e envia para o Augur
-  const rows = d.rows;
+  if (!d.ok) { txt.textContent = 'Erro ao carregar.'; return; }
   let resumo = `Orçamento: ${d.plan} (${d.year})\n\n`;
-  resumo += 'Conta | Orçado Total | Realizado Total | Variação\n';
-  resumo += '---\n';
-  for (const row of rows) {
-    const indent = '  '.repeat(row.depth);
+  for (const row of d.rows) {
     const tag = row.is_totalizer ? '[TOTAL] ' : '';
-    const varPct = row.total_b ? ((row.total_r - row.total_b) / row.total_b * 100).toFixed(1) + '%' : '—';
-    resumo += `${indent}${tag}${row.code} ${row.name}: Orç R$${row.total_b.toFixed(0)} | Real R$${row.total_r.toFixed(0)} | Var ${varPct}\n`;
+    const vp = row.total_b ? ((row.total_r - row.total_b)/row.total_b*100).toFixed(1)+'%' : '—';
+    resumo += `${'  '.repeat(row.depth)}${tag}${row.code} ${row.name}: Orç R$${row.total_b.toFixed(0)} | Real R$${row.total_r.toFixed(0)} | Var ${vp}\n`;
   }
-
   txt.textContent = 'Enviando para o Augur...';
-
   try {
     const resp = await fetch('/api/augur/quick-analysis', {
-      method: 'POST',
-      headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({
-        prompt: `Analise o seguinte orçamento e forneça insights sobre:\n1. Contas com maior variação negativa entre orçado e realizado\n2. Pontos de atenção\n3. Recomendações\n\n${resumo}`
-      })
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({prompt:`Analise o orçamento e destaque:\n1. Contas com maior variação negativa\n2. Pontos de atenção\n3. Recomendações\n\n${resumo}`})
     });
     const rd = await resp.json();
     txt.textContent = rd.answer || rd.text || resumo;
-  } catch(e) {
-    // Fallback: mostra dados brutos se endpoint não existir
-    txt.textContent = resumo;
-  }
+  } catch(e) { txt.textContent = resumo; }
 }
 </script>
 {% endblock %}
@@ -946,14 +898,24 @@ if hasattr(templates_env.loader, "mapping"):
     for _tpl in ("orcamento_index.html", "orcamento_contas.html", "orcamento_grid.html"):
         templates_env.loader.mapping[_tpl] = TEMPLATES[_tpl]
 
-# Feature keys
+# ── Feature registration ───────────────────────────────────────────────────────
+
 FEATURE_KEYS["orcamento"] = {
     "title": "Orçamento",
     "desc":  "Planejamento orçamentário com plano de contas e acompanhamento mensal.",
-    "href":  "/admin/orcamento",
+    "href":  "/ferramentas/orcamento",
 }
-FEATURE_VISIBLE_ROLES["orcamento"] = {"admin", "equipe"}
-for _role in ("admin", "equipe"):
+FEATURE_VISIBLE_ROLES["orcamento"] = {"admin", "equipe", "cliente"}
+
+# Adiciona ao grupo "Ferramentas e Conteúdo"
+try:
+    _orc_group = next((g for g in FEATURE_GROUPS if g.get("key") == "ferramentas_conteudo"), None)
+    if _orc_group and "orcamento" not in _orc_group.get("features", []):
+        _orc_group["features"].append("orcamento")
+except Exception:
+    pass
+
+for _role in ("admin", "equipe", "cliente"):
     ROLE_DEFAULT_FEATURES.setdefault(_role, set()).add("orcamento")
 
-print("[orcamento] ✅ Módulo de planejamento orçamentário carregado")
+print("[orcamento] ✅ Ferramenta /ferramentas/orcamento carregada")
