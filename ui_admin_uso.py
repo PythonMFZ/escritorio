@@ -34,6 +34,84 @@ async def especialista_redirect(request: Request, session: Session = Depends(get
     return RedirectResponse("/consultoria", status_code=302)
 
 
+# ── /admin/uso/debug — diagnóstico direto do tracking ────────────────────────
+
+@app.get("/admin/uso/debug")
+@require_login
+async def admin_uso_debug(request: Request, session: Session = Depends(get_session)):
+    ctx = get_tenant_context(request, session)
+    if not ctx or ctx.membership.role not in ("admin", "equipe"):
+        from fastapi.responses import JSONResponse as _JR
+        return _JR({"erro": "sem permissão"}, status_code=403)
+
+    from fastapi.responses import JSONResponse as _JR
+    from sqlalchemy import text as _t
+
+    resultado = {}
+
+    # 1. Verifica se a tabela existe
+    try:
+        r = session.exec(select(UserActivity).limit(1)).first()
+        resultado["tabela_existe"] = True
+        resultado["amostra"] = str(r) if r else None
+    except Exception as e:
+        resultado["tabela_existe"] = False
+        resultado["tabela_erro"] = str(e)
+
+    # 2. Tenta INSERT direto via engine.begin() + text()
+    try:
+        from sqlalchemy import text as _sa_text
+        _now = utcnow()
+        with engine.begin() as _conn:
+            _conn.execute(_sa_text("""
+                INSERT INTO useractivity
+                    (company_id, user_id, role, last_client_id, last_path,
+                     last_method, request_count, last_seen_at, created_at, updated_at)
+                VALUES
+                    (:cid, :uid, :role, :lcid, :lpath,
+                     :lmeth, 1, :now, :now, :now)
+                ON CONFLICT ON CONSTRAINT uq_user_activity_company_user
+                DO UPDATE SET
+                    role           = EXCLUDED.role,
+                    last_path      = EXCLUDED.last_path,
+                    request_count  = useractivity.request_count + 1,
+                    last_seen_at   = EXCLUDED.last_seen_at,
+                    updated_at     = EXCLUDED.updated_at
+            """), {
+                "cid": int(ctx.company.id), "uid": int(ctx.user.id),
+                "role": ctx.membership.role or "", "lcid": None,
+                "lpath": "/admin/uso/debug", "lmeth": "GET", "now": _now,
+            })
+        resultado["insert_ok"] = True
+    except Exception as e:
+        resultado["insert_ok"] = False
+        resultado["insert_erro"] = str(e)
+
+    # 3. Conta registros na tabela
+    try:
+        cnt = session.exec(
+            select(UserActivity).where(UserActivity.company_id == ctx.company.id)
+        ).all()
+        resultado["total_registros"] = len(cnt)
+        resultado["registros"] = [
+            {"user_id": r.user_id, "request_count": r.request_count, "last_path": r.last_path}
+            for r in cnt
+        ]
+    except Exception as e:
+        resultado["count_erro"] = str(e)
+
+    # 4. Info do contexto atual
+    resultado["ctx"] = {
+        "user_id": ctx.user.id,
+        "company_id": ctx.company.id,
+        "role": ctx.membership.role,
+        "session_user_id": session_user_id(request),
+        "session_company_id": session_company_id(request),
+    }
+
+    return _JR(resultado)
+
+
 # ── /admin/uso — painel de uso da plataforma ─────────────────────────────────
 
 @app.get("/admin/uso", response_class=HTMLResponse)
