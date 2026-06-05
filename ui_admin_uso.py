@@ -70,7 +70,7 @@ async def admin_uso_debug(request: Request, session: Session = Depends(get_sessi
                 VALUES
                     (:cid, :uid, :role, :lcid, :lpath,
                      :lmeth, 1, :now, :now, :now)
-                ON CONFLICT ON CONSTRAINT uq_user_activity_company_user
+                ON CONFLICT (company_id, user_id)
                 DO UPDATE SET
                     role           = EXCLUDED.role,
                     last_path      = EXCLUDED.last_path,

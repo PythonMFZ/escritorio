@@ -33199,6 +33199,15 @@ def ensure_delivery3_columns() -> None:
                         conn.exec_driver_sql(stmt)
                     except Exception:
                         pass
+                # Garante índice único em useractivity(company_id, user_id)
+                # necessário para o ON CONFLICT funcionar
+                try:
+                    conn.exec_driver_sql(
+                        "CREATE UNIQUE INDEX IF NOT EXISTS uq_user_activity_company_user "
+                        "ON useractivity (company_id, user_id)"
+                    )
+                except Exception:
+                    pass
             elif backend.startswith("sqlite"):
                 for table_name, cols in all_by_table.items():
                     try:
@@ -33477,7 +33486,7 @@ async def activity_tracking_middleware(request: Request, call_next: Callable[...
                             VALUES
                                 (:cid, :uid, :role, :lcid, :lpath,
                                  :lmeth, 1, :now, :now, :now)
-                            ON CONFLICT ON CONSTRAINT uq_user_activity_company_user
+                            ON CONFLICT (company_id, user_id)
                             DO UPDATE SET
                                 role           = EXCLUDED.role,
                                 last_client_id = EXCLUDED.last_client_id,
