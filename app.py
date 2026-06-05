@@ -33456,60 +33456,63 @@ async def activity_tracking_middleware(request: Request, call_next: Callable[...
             except Exception:
                 last_client_id = None
 
-            # Upsert atômico — evita IntegrityError por race condition entre requests simultâneos
+            # Upsert via SQL bruto — funciona em PostgreSQL e SQLite
+            # Usamos engine.begin() em vez da session para garantir transação limpa
+            _now = utcnow()
+            _cid  = int(ctx.company.id)
+            _uid  = int(ctx.user.id)
+            _role = ctx.membership.role or ""
+            _lpath = _clean_text(path, 250)
+            _lmeth = _clean_text(request.method, 20)
             try:
-                from sqlalchemy.dialects.postgresql import insert as _pg_insert
-                stmt = _pg_insert(UserActivity).values(
-                    company_id=int(ctx.company.id),
-                    user_id=int(ctx.user.id),
-                    role=ctx.membership.role or "",
-                    last_client_id=last_client_id,
-                    last_path=_clean_text(path, 250),
-                    last_method=_clean_text(request.method, 20),
-                    request_count=1,
-                    last_seen_at=utcnow(),
-                    created_at=utcnow(),
-                    updated_at=utcnow(),
-                ).on_conflict_do_update(
-                    constraint="uq_user_activity_company_user",
-                    set_={
-                        "role":           ctx.membership.role or "",
-                        "last_client_id": last_client_id,
-                        "last_path":      _clean_text(path, 250),
-                        "last_method":    _clean_text(request.method, 20),
-                        "request_count":  UserActivity.__table__.c.request_count + 1,
-                        "last_seen_at":   utcnow(),
-                        "updated_at":     utcnow(),
-                    },
-                )
-                _db.exec(stmt)  # type: ignore[arg-type]
-                _db.commit()
-            except Exception:
-                # Fallback SQLite / DB sem suporte a ON CONFLICT DO UPDATE
-                row = _db.exec(
-                    select(UserActivity).where(
-                        UserActivity.company_id == ctx.company.id,
-                        UserActivity.user_id == ctx.user.id,
-                    )
-                ).first()
-                if not row:
-                    row = UserActivity(
-                        company_id=ctx.company.id,
-                        user_id=ctx.user.id,
-                        role=ctx.membership.role,
-                        request_count=0,
-                        created_at=utcnow(),
-                        updated_at=utcnow(),
-                    )
-                row.role = ctx.membership.role
-                row.last_client_id = last_client_id
-                row.last_path = _clean_text(path, 250)
-                row.last_method = _clean_text(request.method, 20)
-                row.request_count = int(row.request_count or 0) + 1
-                row.last_seen_at = utcnow()
-                row.updated_at = utcnow()
-                _db.add(row)
-                _db.commit()
+                backend = engine.url.get_backend_name()
+                with engine.begin() as _conn:
+                    if backend.startswith("postgres"):
+                        _conn.exec_driver_sql(
+                            """
+                            INSERT INTO useractivity
+                                (company_id, user_id, role, last_client_id, last_path, last_method,
+                                 request_count, last_seen_at, created_at, updated_at)
+                            VALUES
+                                (:cid, :uid, :role, :lcid, :lpath, :lmeth, 1, :now, :now, :now)
+                            ON CONFLICT ON CONSTRAINT uq_user_activity_company_user
+                            DO UPDATE SET
+                                role = EXCLUDED.role,
+                                last_client_id = EXCLUDED.last_client_id,
+                                last_path = EXCLUDED.last_path,
+                                last_method = EXCLUDED.last_method,
+                                request_count = useractivity.request_count + 1,
+                                last_seen_at = EXCLUDED.last_seen_at,
+                                updated_at = EXCLUDED.updated_at
+                            """,
+                            {"cid": _cid, "uid": _uid, "role": _role,
+                             "lcid": last_client_id, "lpath": _lpath,
+                             "lmeth": _lmeth, "now": _now},
+                        )
+                    else:
+                        # SQLite: INSERT OR REPLACE não incrementa — fazemos manualmente
+                        _conn.exec_driver_sql(
+                            "INSERT OR IGNORE INTO useractivity "
+                            "(company_id,user_id,role,last_client_id,last_path,last_method,"
+                            "request_count,last_seen_at,created_at,updated_at) "
+                            "VALUES (:cid,:uid,:role,:lcid,:lpath,:lmeth,0,:now,:now,:now)",
+                            {"cid": _cid, "uid": _uid, "role": _role,
+                             "lcid": last_client_id, "lpath": _lpath,
+                             "lmeth": _lmeth, "now": _now},
+                        )
+                        _conn.exec_driver_sql(
+                            "UPDATE useractivity SET role=:role,last_client_id=:lcid,"
+                            "last_path=:lpath,last_method=:lmeth,"
+                            "request_count=request_count+1,last_seen_at=:now,updated_at=:now "
+                            "WHERE company_id=:cid AND user_id=:uid",
+                            {"cid": _cid, "uid": _uid, "role": _role,
+                             "lcid": last_client_id, "lpath": _lpath,
+                             "lmeth": _lmeth, "now": _now},
+                        )
+            except Exception as _upsert_err:
+                import logging as _act_log2
+                _act_log2.getLogger(__name__).warning(
+                    "[activity] upsert falhou uid=%s path=%s: %s", _uid, path, _upsert_err)
     except Exception as _act_err:
         import logging as _act_log
         _act_log.getLogger(__name__).warning("[activity] falha ao rastrear %s: %s", request.url.path, _act_err)
