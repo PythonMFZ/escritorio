@@ -299,10 +299,12 @@ async def orcamento_criar_conta(request: Request, session: Session = Depends(get
     if not ctx or ctx.membership.role not in _ORC_ROLES:
         return JSONResponse({"ok": False}, status_code=403)
     body = await request.json()
+    _raw_pid = body.get("parent_id")
+    _parent_id = int(_raw_pid) if _raw_pid not in (None, "", 0, "0") else None
     siblings = session.exec(
         select(BudgetAccount).where(
             BudgetAccount.company_id == ctx.company.id,
-            BudgetAccount.parent_id == (body.get("parent_id") or None),
+            BudgetAccount.parent_id == _parent_id,
         )
     ).all()
     max_order = max((a.sort_order for a in siblings), default=-1) + 1
@@ -311,7 +313,7 @@ async def orcamento_criar_conta(request: Request, session: Session = Depends(get
         code=(body.get("code") or "").strip(),
         name=(body.get("name") or "").strip(),
         account_type=(body.get("account_type") or "despesa"),
-        parent_id=body.get("parent_id") or None,
+        parent_id=_parent_id,
         is_totalizer=bool(body.get("is_totalizer")),
         sign=int(body.get("sign") or 1),
         sort_order=max_order,
@@ -340,7 +342,7 @@ async def orcamento_editar_conta(acc_id: int, request: Request, session: Session
         if k in body:
             if k == "is_totalizer": setattr(acc, k, bool(v))
             elif k in ("sign", "sort_order"): setattr(acc, k, int(v))
-            elif k == "parent_id": acc.parent_id = v or None
+            elif k == "parent_id": acc.parent_id = int(v) if v not in (None, "", 0, "0") else None
             else: setattr(acc, k, v)
     acc.updated_at = utcnow()
     session.add(acc)
@@ -375,7 +377,7 @@ async def orcamento_reordenar(request: Request, session: Session = Depends(get_s
         acc = session.get(BudgetAccount, int(item["id"]))
         if acc and acc.company_id == ctx.company.id:
             acc.sort_order = int(item["sort_order"])
-            acc.parent_id  = item.get("parent_id") or None
+            _pid = item.get("parent_id"); acc.parent_id = int(_pid) if _pid not in (None, "", 0, "0") else None
             session.add(acc)
     session.commit()
     return JSONResponse({"ok": True})
@@ -599,16 +601,10 @@ TEMPLATES["orcamento_contas.html"] = r"""
         </td>
         <td><span class="badge bg-light text-dark border" style="font-size:.72rem;">{{ acc.account_type }}</span></td>
         <td>{% if acc.is_totalizer %}<span class="badge bg-primary">Sim</span>{% else %}<span class="muted small">—</span>{% endif %}</td>
-        <td class="text-end">
-          <button class="btn btn-outline-secondary btn-xs py-0 px-1" onclick="novaConta({{ acc.id }})" title="Sub-conta">
-            <i class="bi bi-plus" style="font-size:.7rem;"></i>
-          </button>
-          <button class="btn btn-outline-secondary btn-xs py-0 px-1" onclick="editarConta({{ acc.id }}, '{{ acc.code }}', '{{ acc.name|replace("'", "\\'") }}', '{{ acc.account_type }}', {{ acc.is_totalizer|lower }}, {{ acc.sign }})">
-            <i class="bi bi-pencil" style="font-size:.7rem;"></i>
-          </button>
-          <button class="btn btn-outline-danger btn-xs py-0 px-1" onclick="deletarConta({{ acc.id }}, '{{ acc.name|replace("'", "\\'") }}')">
-            <i class="bi bi-trash" style="font-size:.7rem;"></i>
-          </button>
+        <td class="text-end" style="white-space:nowrap;">
+          <button class="btn btn-outline-secondary btn-sm py-0 px-2" onclick="novaConta({{ acc.id }})" title="Nova sub-conta">+</button>
+          <button class="btn btn-outline-secondary btn-sm py-0 px-2" onclick="editarConta({{ acc.id }}, '{{ acc.code }}', '{{ acc.name|replace("'", "\\'") }}', '{{ acc.account_type }}', {{ acc.is_totalizer|lower }}, {{ acc.sign }})" title="Editar">✎</button>
+          <button class="btn btn-outline-danger btn-sm py-0 px-2" onclick="deletarConta({{ acc.id }}, '{{ acc.name|replace("'", "\\'") }}')" title="Excluir">✕</button>
         </td>
       </tr>
       {% endfor %}
