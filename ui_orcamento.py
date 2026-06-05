@@ -73,6 +73,135 @@ except Exception:
     pass
 
 
+# ── Modelo padrão de plano de contas ─────────────────────────────────────────
+# Derivado do Excel Modelo_Plano_de_Contas.xlsx — estrutura DRE completa.
+# parent_code=None → conta raiz; parent_code="XX" → filha daquela conta.
+
+_ORC_MODELO_PADRAO = [
+    {"code":"01",      "name":"Receitas Operacionais",                    "account_type":"receita",  "is_totalizer":False,"sign":1,  "parent_code":None},
+    {"code":"01.1",    "name":"Geral/Varejo",                             "account_type":"receita",  "is_totalizer":False,"sign":1,  "parent_code":"01"},
+    {"code":"01.2",    "name":"Saldo/Resíduo",                            "account_type":"receita",  "is_totalizer":False,"sign":1,  "parent_code":"01"},
+    {"code":"01.3",    "name":"Magazine",                                 "account_type":"receita",  "is_totalizer":False,"sign":1,  "parent_code":"01"},
+    {"code":"01.4",    "name":"Export",                                   "account_type":"receita",  "is_totalizer":False,"sign":1,  "parent_code":"01"},
+    {"code":"01.5",    "name":"Ecommerce",                                "account_type":"receita",  "is_totalizer":False,"sign":1,  "parent_code":"01"},
+    {"code":"01.6",    "name":"Stop Shop",                                "account_type":"receita",  "is_totalizer":False,"sign":1,  "parent_code":"01"},
+    {"code":"01.7",    "name":"Loja Centro",                              "account_type":"receita",  "is_totalizer":False,"sign":1,  "parent_code":"01"},
+    {"code":"01.8",    "name":"Loja Fábrica",                             "account_type":"receita",  "is_totalizer":False,"sign":1,  "parent_code":"01"},
+    {"code":"02",      "name":"Devoluções",                               "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":None},
+    {"code":"02.1",    "name":"Devolução Varejo",                         "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":"02"},
+    {"code":"02.2",    "name":"Devolução Magazine",                       "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":"02"},
+    {"code":"02T",     "name":"Receita Bruta de Vendas",                  "account_type":"resultado","is_totalizer":True, "sign":1,  "parent_code":None},
+    {"code":"03",      "name":"Custos Operacionais",                      "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":None},
+    {"code":"03.1",    "name":"Custos de Produção",                       "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":"03"},
+    {"code":"03.1.1",  "name":"Matéria Prima",                            "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":"03.1"},
+    {"code":"03.1.2",  "name":"(-) Devolução de Compras de MP",           "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":"03.1"},
+    {"code":"03.1.3",  "name":"Industrialização por Terceiros",           "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":"03.1"},
+    {"code":"03.1.4",  "name":"Fretes",                                   "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":"03.1"},
+    {"code":"03.1.5",  "name":"Manutenção de Equipamentos",               "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":"03.1"},
+    {"code":"03.1.6",  "name":"Combustível",                              "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":"03.1"},
+    {"code":"03.1.7",  "name":"Manutenção de Veículos",                   "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":"03.1"},
+    {"code":"03.1.8",  "name":"Insumos",                                  "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":"03.1"},
+    {"code":"03.1.9",  "name":"Estoque Inicial",                          "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":"03.1"},
+    {"code":"03.1.10", "name":"Estoque Final",                            "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":"03.1"},
+    {"code":"03.2",    "name":"MOD - Produção",                           "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":"03"},
+    {"code":"03.2.1",  "name":"Salários - Mão de Obra",                   "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":"03.2"},
+    {"code":"03.2.2",  "name":"Gratificações Produção",                   "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":"03.2"},
+    {"code":"03.2.3",  "name":"Comissões Produção",                       "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":"03.2"},
+    {"code":"03T",     "name":"Margem Bruta",                             "account_type":"resultado","is_totalizer":True, "sign":1,  "parent_code":None},
+    {"code":"04",      "name":"Despesas Comerciais",                      "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":None},
+    {"code":"04.1",    "name":"Despesas Comerciais",                      "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":"04"},
+    {"code":"04.1.1",  "name":"Marketing e Publicidade",                  "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":"04.1"},
+    {"code":"04.1.2",  "name":"Comissão sobre Vendas",                    "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":"04.1"},
+    {"code":"04.1.3",  "name":"Viagens e Representações",                 "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":"04.1"},
+    {"code":"04.1.4",  "name":"Cartão de Crédito",                        "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":"04.1"},
+    {"code":"04.2",    "name":"Mão de Obra - Comercial",                  "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":"04"},
+    {"code":"04.2.1",  "name":"Salários Comercial",                       "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":"04.2"},
+    {"code":"04.2.2",  "name":"Salário Comercial PJ",                     "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":"04.2"},
+    {"code":"04.2.3",  "name":"Comissões do Comercial - Lojas",           "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":"04.2"},
+    {"code":"05T",     "name":"Margem Líquida",                           "account_type":"resultado","is_totalizer":True, "sign":1,  "parent_code":None},
+    {"code":"06",      "name":"Despesas Administrativas",                 "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":None},
+    {"code":"06.1",    "name":"Mão de Obra - Administrativo",             "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":"06"},
+    {"code":"06.1.1",  "name":"Salário Administrativo",                   "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":"06.1"},
+    {"code":"06.2",    "name":"Despesas Mensais",                         "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":"06"},
+    {"code":"06.2.1",  "name":"Água e Saneamento",                        "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":"06.2"},
+    {"code":"06.2.2",  "name":"Energia Elétrica",                         "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":"06.2"},
+    {"code":"06.2.3",  "name":"Pedágios",                                 "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":"06.2"},
+    {"code":"06.2.4",  "name":"Honorários Advocatícios",                  "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":"06.2"},
+    {"code":"06.2.5",  "name":"Uso e Consumo",                            "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":"06.2"},
+    {"code":"06.2.6",  "name":"Correios",                                 "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":"06.2"},
+    {"code":"06.2.7",  "name":"Seguros Diversos",                         "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":"06.2"},
+    {"code":"06.2.8",  "name":"Serviços Profissionais",                   "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":"06.2"},
+    {"code":"06.2.9",  "name":"Segurança e Vigilância",                   "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":"06.2"},
+    {"code":"06.2.10", "name":"Entidades e Associações",                  "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":"06.2"},
+    {"code":"06.2.11", "name":"Aluguéis",                                 "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":"06.2"},
+    {"code":"06.2.12", "name":"Consultoria Financeira ADM",               "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":"06.2"},
+    {"code":"06.2.13", "name":"Sistemas e Software",                      "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":"06.2"},
+    {"code":"06.2.14", "name":"Notificação de Trânsito",                  "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":"06.2"},
+    {"code":"06.2.15", "name":"Telefonia e Internet",                     "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":"06.2"},
+    {"code":"06.2.16", "name":"Manutenção Predial",                       "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":"06.2"},
+    {"code":"06.2.17", "name":"Consórcio",                                "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":"06.2"},
+    {"code":"06.2.18", "name":"Manutenção de Veículos",                   "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":"06.2"},
+    {"code":"06.2.19", "name":"Lanches, Refeições, Copa e Cozinha",       "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":"06.2"},
+    {"code":"06.2.20", "name":"Assistência Médica",                       "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":"06.2"},
+    {"code":"06.2.21", "name":"Honorários Contábeis",                     "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":"06.2"},
+    {"code":"06.2.22", "name":"Mensalidade Sindical",                     "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":"06.2"},
+    {"code":"06.2.23", "name":"Mensalidade Sistemas e Software",          "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":"06.2"},
+    {"code":"06.2.24", "name":"Processos e Ações Judiciais",              "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":"06.2"},
+    {"code":"06.2.25", "name":"Material de Expediente",                   "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":"06.2"},
+    {"code":"07",      "name":"Despesas Tributárias Operacionais",        "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":None},
+    {"code":"07.1",    "name":"Impostos e Taxas",                         "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":"07"},
+    {"code":"07.1.1",  "name":"Impostos e Taxas Diversas",                "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":"07.1"},
+    {"code":"07.1.2",  "name":"IPTU",                                     "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":"07.1"},
+    {"code":"07.1.3",  "name":"IPVA",                                     "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":"07.1"},
+    {"code":"07.1.4",  "name":"Alvará",                                   "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":"07.1"},
+    {"code":"07T",     "name":"Lucro / Prejuízo Operacional",             "account_type":"resultado","is_totalizer":True, "sign":1,  "parent_code":None},
+    {"code":"08",      "name":"Receitas e Despesas Financeiras",          "account_type":"resultado","is_totalizer":False,"sign":1,  "parent_code":None},
+    {"code":"08.1",    "name":"Receitas e Rendimentos Financeiros",       "account_type":"receita",  "is_totalizer":False,"sign":1,  "parent_code":"08"},
+    {"code":"08.1.1",  "name":"Descontos Financeiros Obtidos",            "account_type":"receita",  "is_totalizer":False,"sign":1,  "parent_code":"08.1"},
+    {"code":"08.1.2",  "name":"Rendimentos de Aplicações",                "account_type":"receita",  "is_totalizer":False,"sign":1,  "parent_code":"08.1"},
+    {"code":"08.2",    "name":"Despesas Financeiras",                     "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":"08"},
+    {"code":"08.2.1",  "name":"IOF",                                      "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":"08.2"},
+    {"code":"08.2.2",  "name":"Juros s/ Empréstimo",                      "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":"08.2"},
+    {"code":"08.2.3",  "name":"Tarifas Bancárias",                        "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":"08.2"},
+    {"code":"08.2.4",  "name":"Juros Antecipação",                        "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":"08.2"},
+    {"code":"08.2.5",  "name":"Verba MKT",                                "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":"08.2"},
+    {"code":"08.2.6",  "name":"Apropriação de Juros sobre Empréstimos",   "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":"08.2"},
+    {"code":"08.2.7",  "name":"Multas e Juros sobre Tributos",            "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":"08.2"},
+    {"code":"08T",     "name":"Resultado Antes de Outras Receitas e Despesas","account_type":"resultado","is_totalizer":True,"sign":1,"parent_code":None},
+    {"code":"09",      "name":"Outras Receitas e Despesas Não Operacionais","account_type":"resultado","is_totalizer":False,"sign":1, "parent_code":None},
+    {"code":"09.1",    "name":"Outras Receitas Não Operacionais",         "account_type":"receita",  "is_totalizer":False,"sign":1,  "parent_code":"09"},
+    {"code":"09.1.1",  "name":"Bonificações",                             "account_type":"receita",  "is_totalizer":False,"sign":1,  "parent_code":"09.1"},
+    {"code":"09.1.2",  "name":"Vendas do Ativo Imobilizado",              "account_type":"receita",  "is_totalizer":False,"sign":1,  "parent_code":"09.1"},
+    {"code":"09.2",    "name":"Outras Despesas Não Operacionais",         "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":"09"},
+    {"code":"09.2.1",  "name":"Custo Vendas do Ativo Imobilizado",        "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":"09.2"},
+    {"code":"09.2.2",  "name":"Depreciações",                             "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":"09.2"},
+    {"code":"09T",     "name":"Resultado Antes de Impostos",              "account_type":"resultado","is_totalizer":True, "sign":1,  "parent_code":None},
+    {"code":"10",      "name":"Impostos sobre o Faturamento",             "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":None},
+    {"code":"10.1",    "name":"Impostos sobre Faturamento",               "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":"10"},
+    {"code":"10.1.1",  "name":"FUMDES",                                   "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":"10.1"},
+    {"code":"10.1.2",  "name":"PIS",                                      "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":"10.1"},
+    {"code":"10.1.3",  "name":"DIFAL MG",                                 "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":"10.1"},
+    {"code":"10.1.4",  "name":"DIFAL ES",                                 "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":"10.1"},
+    {"code":"10.1.5",  "name":"DIFAL PR",                                 "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":"10.1"},
+    {"code":"10.1.6",  "name":"DIFAL RS",                                 "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":"10.1"},
+    {"code":"10.1.7",  "name":"DIFAL SP",                                 "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":"10.1"},
+    {"code":"10.1.8",  "name":"ISS",                                      "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":"10.1"},
+    {"code":"10.1.9",  "name":"IR PJ",                                    "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":"10.1"},
+    {"code":"10.1.10", "name":"CSLL",                                     "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":"10.1"},
+    {"code":"10.1.11", "name":"COFINS",                                   "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":"10.1"},
+    {"code":"10.1.12", "name":"ICMS",                                     "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":"10.1"},
+    {"code":"10.1.13", "name":"ICMS Fundo Social",                        "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":"10.1"},
+    {"code":"10T",     "name":"Resultado Líquido",                        "account_type":"resultado","is_totalizer":True, "sign":1,  "parent_code":None},
+    {"code":"11",      "name":"Aportes e Distribuições a Sócios",         "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":None},
+    {"code":"11.1",    "name":"Distribuições de Lucros",                  "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":"11"},
+    {"code":"11.1.1",  "name":"Pro Labore",                               "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":"11.1"},
+    {"code":"11.1.2",  "name":"Retiradas",                                "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":"11.1"},
+    {"code":"11T",     "name":"Resultado Após Distribuições",             "account_type":"resultado","is_totalizer":True, "sign":1,  "parent_code":None},
+    {"code":"12",      "name":"Principal de Empréstimos",                 "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":None},
+    {"code":"12T",     "name":"Resultado Após Pagamento de Empréstimos",  "account_type":"resultado","is_totalizer":True, "sign":1,  "parent_code":None},
+]
+
+
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 _MONTHS_PT = ["Jan","Fev","Mar","Abr","Mai","Jun","Jul","Ago","Set","Out","Nov","Dez"]
@@ -383,6 +512,44 @@ async def orcamento_reordenar(request: Request, session: Session = Depends(get_s
     return JSONResponse({"ok": True})
 
 
+@app.post("/api/orcamento/conta/importar-modelo")
+@require_login
+async def orcamento_importar_modelo(request: Request, session: Session = Depends(get_session)):
+    ctx = get_tenant_context(request, session)
+    if not ctx or ctx.membership.role not in ("admin", "equipe"):
+        return JSONResponse({"ok": False, "msg": "Sem permissão"}, status_code=403)
+
+    existing = session.exec(
+        select(BudgetAccount).where(
+            BudgetAccount.company_id == ctx.company.id,
+            BudgetAccount.is_active == True,
+        )
+    ).first()
+    if existing:
+        return JSONResponse({"ok": False, "msg": "Já existem contas cadastradas. Limpe o plano antes de importar o modelo."}, status_code=409)
+
+    # Insere em ordem, mantendo mapa code → id para resolver parent_id
+    code_to_id: dict = {}
+    for i, item in enumerate(_ORC_MODELO_PADRAO):
+        parent_id = code_to_id.get(item["parent_code"]) if item["parent_code"] else None
+        acc = BudgetAccount(
+            company_id=ctx.company.id,
+            code=item["code"],
+            name=item["name"],
+            account_type=item["account_type"],
+            parent_id=parent_id,
+            is_totalizer=item["is_totalizer"],
+            sign=item["sign"],
+            sort_order=i,
+        )
+        session.add(acc)
+        session.flush()
+        code_to_id[item["code"]] = acc.id
+
+    session.commit()
+    return JSONResponse({"ok": True, "total": len(_ORC_MODELO_PADRAO)})
+
+
 @app.get("/api/orcamento/{plan_id}/augur-contexto")
 @require_login
 async def orcamento_augur_contexto(plan_id: int, request: Request, session: Session = Depends(get_session)):
@@ -572,10 +739,15 @@ TEMPLATES["orcamento_contas.html"] = r"""
     <h4 class="mb-0">Plano de Contas</h4>
     <div class="muted small">Estrutura compartilhada entre todos os clientes da empresa.</div>
   </div>
-  <div class="d-flex gap-2">
+  <div class="d-flex gap-2 flex-wrap">
     <a href="/ferramentas/orcamento" class="btn btn-outline-secondary btn-sm">← Voltar</a>
+    {% if not tree %}
+    <button class="btn btn-outline-primary btn-sm" onclick="importarModelo()" id="btnModelo">
+      📥 Usar modelo padrão
+    </button>
+    {% endif %}
     <button class="btn btn-primary btn-sm" onclick="novaConta(null)">
-      <i class="bi bi-plus-lg me-1"></i>Nova Conta
+      Nova Conta
     </button>
   </div>
 </div>
@@ -721,6 +893,15 @@ async function deletarConta(id, name) {
   if (!confirm('Remover conta "' + name + '"?')) return;
   await fetch('/api/orcamento/conta/' + id + '/deletar', {method:'POST'});
   location.reload();
+}
+async function importarModelo() {
+  if (!confirm('Importar o modelo padrão de plano de contas (DRE completo)?\n\nIsso só funciona com o plano vazio. Você poderá editar, renomear ou remover contas depois.')) return;
+  var btn = document.getElementById('btnModelo');
+  if (btn) { btn.disabled = true; btn.textContent = 'Importando...'; }
+  var r = await fetch('/api/orcamento/conta/importar-modelo', {method:'POST'});
+  var d = await r.json();
+  if (d.ok) { location.reload(); }
+  else { alert(d.msg || 'Erro ao importar.'); if (btn) { btn.disabled = false; btn.textContent = '📥 Usar modelo padrão'; } }
 }
 </script>
 {% endblock %}
