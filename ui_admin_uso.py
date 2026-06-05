@@ -58,6 +58,23 @@ async def admin_uso_debug(request: Request, session: Session = Depends(get_sessi
         resultado["tabela_existe"] = False
         resultado["tabela_erro"] = str(e)
 
+    # 1b. Mostra schema completo da tabela
+    try:
+        from sqlalchemy import text as _sa_text
+        with engine.begin() as _conn:
+            rows = _conn.execute(_sa_text("""
+                SELECT column_name, data_type, is_nullable, column_default
+                FROM information_schema.columns
+                WHERE table_name = 'useractivity'
+                ORDER BY ordinal_position
+            """)).fetchall()
+            resultado["schema"] = [
+                {"col": r[0], "type": r[1], "nullable": r[2], "default": r[3]}
+                for r in rows
+            ]
+    except Exception as e:
+        resultado["schema_erro"] = str(e)
+
     # 2. Tenta INSERT direto via engine.begin() + text()
     try:
         from sqlalchemy import text as _sa_text
