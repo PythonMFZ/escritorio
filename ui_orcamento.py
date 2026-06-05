@@ -519,17 +519,7 @@ async def orcamento_importar_modelo(request: Request, session: Session = Depends
     if not ctx or ctx.membership.role not in ("admin", "equipe"):
         return JSONResponse({"ok": False, "msg": "Sem permissão"}, status_code=403)
 
-    # Bloqueia apenas se houver contas ativas — soft-deleted são limpos automaticamente
-    active = session.exec(
-        select(BudgetAccount).where(
-            BudgetAccount.company_id == ctx.company.id,
-            BudgetAccount.is_active.is_(True),
-        )
-    ).first()
-    if active:
-        return JSONResponse({"ok": False, "msg": "Ainda existem contas ativas. Remova todas antes de importar o modelo."}, status_code=409)
-
-    # Remove fisicamente registros soft-deleted para evitar conflitos de código
+    # Remove fisicamente todos os registros (ativos e soft-deleted) antes de reimportar
     from sqlalchemy import delete as _sa_delete
     session.exec(_sa_delete(BudgetAccount).where(BudgetAccount.company_id == ctx.company.id))
     session.flush()
