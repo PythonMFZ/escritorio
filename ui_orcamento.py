@@ -920,51 +920,20 @@ for _role in ("admin", "equipe", "cliente"):
 
 print("[orcamento] ✅ Ferramenta /ferramentas/orcamento carregada")
 
-# ── Patch ferramentas.html — injeta card de Orçamento ────────────────────────
-_ORC_CARD = """
-    <div class="col-lg-6" data-tool="orcamento">
-      <div class="card p-4 h-100">
-        <div class="d-flex justify-content-between align-items-start gap-3 flex-wrap">
-          <div>
-            <h5 class="mb-1">Orçamento</h5>
-            <div class="muted">Planejamento orçamentário com plano de contas, Orçado vs Realizado.</div>
-          </div>
-          <span class="badge text-bg-primary">Disponível</span>
-        </div>
-        <div class="row g-3 mt-1 mb-3">
-          <div class="col-md-6">
-            <div class="border rounded p-3 h-100">
-              <div class="muted small">Controle</div>
-              <div class="fw-semibold">Orçado vs Realizado</div>
-            </div>
-          </div>
-          <div class="col-md-6">
-            <div class="border rounded p-3 h-100">
-              <div class="muted small">Análise IA</div>
-              <div class="fw-semibold">Augur integrado</div>
-            </div>
-          </div>
-        </div>
-        <div class="alert alert-info" style="font-size:.85rem;">
-          Monte o plano de contas, preencha os valores mensais e acompanhe a execução orçamentária.
-        </div>
-        <a class="btn btn-primary" href="/ferramentas/orcamento">Abrir Orçamento</a>
-      </div>
-    </div>"""
-
+# ── Registra no catálogo de features (fonte do /api/features/status) ──────────
+# _CF_CATALOGO é definido em ui_creditos_features.py e exec'd no mesmo namespace.
+# Esse registro faz o card aparecer dinamicamente na página /ferramentas.
 try:
-    _ft = TEMPLATES.get("ferramentas.html", "")
-    if _ft and "Abrir Orçamento" not in _ft:
-        # Injeta antes do fechamento do row/endif/endblock
-        for _anchor in ("  </div>\n{% endif %}\n{% endblock %}", "  </div>\n{% endif %}\n{% endblock %}\n"):
-            if _anchor in _ft:
-                _ft = _ft.replace(_anchor, _ORC_CARD + "\n  </div>\n{% endif %}\n{% endblock %}", 1)
-                break
-        TEMPLATES["ferramentas.html"] = _ft
-        if hasattr(templates_env.loader, "mapping"):
-            templates_env.loader.mapping["ferramentas.html"] = _ft
-        print("[orcamento] ✅ Card injetado em ferramentas.html")
+    if "orcamento_mensal" not in _CF_CATALOGO:
+        _CF_CATALOGO["orcamento_mensal"] = {
+            "nome":      "Orçamento",
+            "descricao": "Planejamento orçamentário com plano de contas, Orçado vs Realizado.",
+            "nivel":     "empresa",
+            "url":       "/ferramentas/orcamento",
+            "icone":     "📋",
+        }
+        print("[orcamento] ✅ orcamento_mensal adicionado ao _CF_CATALOGO")
     else:
-        print("[orcamento] ℹ️ Card já presente em ferramentas.html")
+        print("[orcamento] ℹ️ orcamento_mensal já presente em _CF_CATALOGO")
 except Exception as _e:
-    print(f"[orcamento] ⚠️ Falha ao injetar card: {_e}")
+    print(f"[orcamento] ⚠️ Falha ao registrar em _CF_CATALOGO: {_e}")
