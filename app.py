@@ -33200,8 +33200,23 @@ def ensure_delivery3_columns() -> None:
                         conn.exec_driver_sql(stmt)
                     except Exception:
                         pass
+                # Garante defaults nas colunas NOT NULL sem default padrão
+                for _alter in [
+                    "ALTER TABLE useractivity ALTER COLUMN total_requests  SET DEFAULT 0",
+                    "ALTER TABLE useractivity ALTER COLUMN total_page_views SET DEFAULT 0",
+                    "ALTER TABLE useractivity ALTER COLUMN total_logins     SET DEFAULT 0",
+                    "ALTER TABLE useractivity ALTER COLUMN last_ip          SET DEFAULT ''",
+                    "ALTER TABLE useractivity ALTER COLUMN last_user_agent  SET DEFAULT ''",
+                    "ALTER TABLE useractivity ALTER COLUMN last_path        SET DEFAULT ''",
+                    "ALTER TABLE useractivity ALTER COLUMN membership_role  SET DEFAULT ''",
+                    "ALTER TABLE useractivity ALTER COLUMN created_at       SET DEFAULT NOW()",
+                    "ALTER TABLE useractivity ALTER COLUMN updated_at       SET DEFAULT NOW()",
+                ]:
+                    try:
+                        conn.exec_driver_sql(_alter)
+                    except Exception:
+                        pass
                 # Garante índice único em useractivity(company_id, user_id)
-                # necessário para o ON CONFLICT funcionar
                 try:
                     conn.exec_driver_sql(
                         "CREATE UNIQUE INDEX IF NOT EXISTS uq_user_activity_company_user "
@@ -33482,21 +33497,26 @@ async def activity_tracking_middleware(request: Request, call_next: Callable[...
                     if backend.startswith("postgres"):
                         _conn.execute(_sa_text("""
                             INSERT INTO useractivity
-                                (company_id, user_id, role, membership_role, last_client_id, last_path,
+                                (company_id, user_id, role, membership_role,
+                                 total_requests, total_page_views, total_logins,
+                                 last_client_id, last_path, last_ip, last_user_agent,
                                  last_method, request_count, last_seen_at, created_at, updated_at)
                             VALUES
-                                (:cid, :uid, :role, :role, :lcid, :lpath,
+                                (:cid, :uid, :role, :role,
+                                 1, 1, 0,
+                                 :lcid, :lpath, '', '',
                                  :lmeth, 1, :now, :now, :now)
                             ON CONFLICT (company_id, user_id)
                             DO UPDATE SET
-                                role           = EXCLUDED.role,
+                                role            = EXCLUDED.role,
                                 membership_role = EXCLUDED.membership_role,
-                                last_client_id = EXCLUDED.last_client_id,
-                                last_path      = EXCLUDED.last_path,
-                                last_method    = EXCLUDED.last_method,
-                                request_count  = useractivity.request_count + 1,
-                                last_seen_at   = EXCLUDED.last_seen_at,
-                                updated_at     = EXCLUDED.updated_at
+                                total_requests  = useractivity.total_requests + 1,
+                                last_client_id  = EXCLUDED.last_client_id,
+                                last_path       = EXCLUDED.last_path,
+                                last_method     = EXCLUDED.last_method,
+                                request_count   = useractivity.request_count + 1,
+                                last_seen_at    = EXCLUDED.last_seen_at,
+                                updated_at      = EXCLUDED.updated_at
                         """), _params)
                     else:
                         _conn.execute(_sa_text(
