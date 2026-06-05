@@ -33456,59 +33456,50 @@ async def activity_tracking_middleware(request: Request, call_next: Callable[...
             except Exception:
                 last_client_id = None
 
-            # Upsert via SQL bruto — funciona em PostgreSQL e SQLite
-            # Usamos engine.begin() em vez da session para garantir transação limpa
-            _now = utcnow()
-            _cid  = int(ctx.company.id)
-            _uid  = int(ctx.user.id)
-            _role = ctx.membership.role or ""
+            _now   = utcnow()
+            _cid   = int(ctx.company.id)
+            _uid   = int(ctx.user.id)
+            _role  = ctx.membership.role or ""
             _lpath = _clean_text(path, 250)
             _lmeth = _clean_text(request.method, 20)
+            _params = {"cid": _cid, "uid": _uid, "role": _role,
+                       "lcid": last_client_id, "lpath": _lpath,
+                       "lmeth": _lmeth, "now": _now}
             try:
+                from sqlalchemy import text as _sa_text
                 backend = engine.url.get_backend_name()
                 with engine.begin() as _conn:
                     if backend.startswith("postgres"):
-                        _conn.exec_driver_sql(
-                            """
+                        _conn.execute(_sa_text("""
                             INSERT INTO useractivity
-                                (company_id, user_id, role, last_client_id, last_path, last_method,
-                                 request_count, last_seen_at, created_at, updated_at)
+                                (company_id, user_id, role, last_client_id, last_path,
+                                 last_method, request_count, last_seen_at, created_at, updated_at)
                             VALUES
-                                (:cid, :uid, :role, :lcid, :lpath, :lmeth, 1, :now, :now, :now)
+                                (:cid, :uid, :role, :lcid, :lpath,
+                                 :lmeth, 1, :now, :now, :now)
                             ON CONFLICT ON CONSTRAINT uq_user_activity_company_user
                             DO UPDATE SET
-                                role = EXCLUDED.role,
+                                role           = EXCLUDED.role,
                                 last_client_id = EXCLUDED.last_client_id,
-                                last_path = EXCLUDED.last_path,
-                                last_method = EXCLUDED.last_method,
-                                request_count = useractivity.request_count + 1,
-                                last_seen_at = EXCLUDED.last_seen_at,
-                                updated_at = EXCLUDED.updated_at
-                            """,
-                            {"cid": _cid, "uid": _uid, "role": _role,
-                             "lcid": last_client_id, "lpath": _lpath,
-                             "lmeth": _lmeth, "now": _now},
-                        )
+                                last_path      = EXCLUDED.last_path,
+                                last_method    = EXCLUDED.last_method,
+                                request_count  = useractivity.request_count + 1,
+                                last_seen_at   = EXCLUDED.last_seen_at,
+                                updated_at     = EXCLUDED.updated_at
+                        """), _params)
                     else:
-                        # SQLite: INSERT OR REPLACE não incrementa — fazemos manualmente
-                        _conn.exec_driver_sql(
+                        _conn.execute(_sa_text(
                             "INSERT OR IGNORE INTO useractivity "
                             "(company_id,user_id,role,last_client_id,last_path,last_method,"
                             "request_count,last_seen_at,created_at,updated_at) "
-                            "VALUES (:cid,:uid,:role,:lcid,:lpath,:lmeth,0,:now,:now,:now)",
-                            {"cid": _cid, "uid": _uid, "role": _role,
-                             "lcid": last_client_id, "lpath": _lpath,
-                             "lmeth": _lmeth, "now": _now},
-                        )
-                        _conn.exec_driver_sql(
+                            "VALUES (:cid,:uid,:role,:lcid,:lpath,:lmeth,0,:now,:now,:now)"
+                        ), _params)
+                        _conn.execute(_sa_text(
                             "UPDATE useractivity SET role=:role,last_client_id=:lcid,"
                             "last_path=:lpath,last_method=:lmeth,"
                             "request_count=request_count+1,last_seen_at=:now,updated_at=:now "
-                            "WHERE company_id=:cid AND user_id=:uid",
-                            {"cid": _cid, "uid": _uid, "role": _role,
-                             "lcid": last_client_id, "lpath": _lpath,
-                             "lmeth": _lmeth, "now": _now},
-                        )
+                            "WHERE company_id=:cid AND user_id=:uid"
+                        ), _params)
             except Exception as _upsert_err:
                 import logging as _act_log2
                 _act_log2.getLogger(__name__).warning(

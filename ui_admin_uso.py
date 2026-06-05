@@ -79,13 +79,18 @@ async def admin_uso_page(request: Request, session: Session = Depends(get_sessio
             "last_seen_at": r.last_seen_at,
         })
 
-    # Membros sem nenhuma atividade registrada
+    # Membros que NUNCA tiveram atividade (sem row na tabela, independente do período)
+    todos_com_atividade = {
+        r.user_id for r in session.exec(
+            select(UserActivity).where(UserActivity.company_id == ctx.company.id)
+        ).all()
+    }
     todos_membros = session.exec(
         select(Membership).where(Membership.company_id == ctx.company.id)
     ).all()
     sem_atividade = []
     for m in todos_membros:
-        if m.user_id in tracked_user_ids:
+        if m.user_id in todos_com_atividade:
             continue
         u = session.get(User, m.user_id)
         if not u:
