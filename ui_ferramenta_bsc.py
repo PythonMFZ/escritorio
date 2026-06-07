@@ -67,6 +67,9 @@ class BSCIndicator(SQLModel, table=True):
     frequency:      str   = Field(default="mensal")
     baseline_value: float = Field(default=0.0)
     target_value:   float = Field(default=0.0)
+    source_module:  Optional[str] = Field(default=None)   # "orcamento" | None
+    source_metric:  Optional[str] = Field(default=None)   # "realizado" | "orcado" | "execucao_pct"
+    source_config:  str           = Field(default="{}")   # JSON: {"account_id": 123}
     is_active:      bool  = Field(default=True)
     created_at:     datetime = Field(default_factory=utcnow)
     updated_at:     datetime = Field(default_factory=utcnow)
@@ -115,6 +118,9 @@ def _ensure_bsc_tables():
         from sqlalchemy import text as _t
         with engine.begin() as _c:
             _c.execute(_t("ALTER TABLE bscaction ADD COLUMN IF NOT EXISTS task_id INTEGER"))
+            _c.execute(_t("ALTER TABLE bscindicator ADD COLUMN IF NOT EXISTS source_module VARCHAR"))
+            _c.execute(_t("ALTER TABLE bscindicator ADD COLUMN IF NOT EXISTS source_metric VARCHAR"))
+            _c.execute(_t("ALTER TABLE bscindicator ADD COLUMN IF NOT EXISTS source_config VARCHAR DEFAULT '{}'"))
     except Exception:
         pass
 
@@ -158,6 +164,42 @@ def _bsc_bar_color(pct: float) -> str:
     if pct >= 90: return "#198754"
     if pct >= 70: return "#ffc107"
     return "#dc3545"
+
+def _bsc_resolve_source(session, company_id: int, ind) -> Optional[float]:
+    """Resolve KPI value from linked source module. Returns None if unavailable."""
+    if not ind.source_module or not ind.source_metric:
+        return None
+    try:
+        cfg = _json_bsc.loads(ind.source_config or "{}")
+        if ind.source_module == "orcamento":
+            account_id = cfg.get("account_id")
+            year       = cfg.get("year")
+            month      = cfg.get("month")
+            q = select(BudgetEntry).where(
+                BudgetEntry.company_id == company_id,
+            )
+            if account_id:
+                q = q.where(BudgetEntry.account_id == int(account_id))
+            if year:
+                q = q.where(BudgetEntry.year == int(year))
+            if month:
+                q = q.where(BudgetEntry.month == int(month))
+            rows = session.exec(q).all()
+            if not rows:
+                return None
+            if ind.source_metric == "realizado":
+                return sum(r.value_realized for r in rows)
+            elif ind.source_metric == "orcado":
+                return sum(r.value_budgeted for r in rows)
+            elif ind.source_metric == "execucao_pct":
+                orc = sum(r.value_budgeted for r in rows)
+                if orc == 0:
+                    return None
+                return round(sum(r.value_realized for r in rows) / orc * 100, 2)
+    except Exception:
+        pass
+    return None
+
 
 def _bsc_load_dashboard(session, company_id: int, plan_id: int):
     objectives = session.exec(
@@ -203,6 +245,10 @@ def _bsc_load_dashboard(session, company_id: int, plan_id: int):
     inds_by_obj: dict = {}
     for ind in indicators:
         cur = _bsc_current_value(ind.id, values_by_ind)
+        # Override with live source value if linked
+        resolved = _bsc_resolve_source(session, company_id, ind)
+        if resolved is not None:
+            cur = resolved
         inds_by_obj.setdefault(ind.objective_id, []).append((ind, cur))
 
     acts_by_obj: dict = {}
@@ -316,6 +362,17 @@ async def bsc_dashboard(plan_id: int, request: Request, session: Session = Depen
     objs_by_persp, inds_by_obj, acts_by_obj, values_by_ind, ach_by_obj = \
         _bsc_load_dashboard(session, ctx.company.id, plan_id)
 
+    # Budget accounts for source linking selector
+    try:
+        budget_accounts = session.exec(
+            select(BudgetAccount)
+            .where(BudgetAccount.company_id == ctx.company.id,
+                   BudgetAccount.is_active == True)
+            .order_by(BudgetAccount.code)
+        ).all()
+    except Exception:
+        budget_accounts = []
+
     # Serialize values_by_ind for JS
     values_json = _json_bsc.dumps(values_by_ind)
 
@@ -334,6 +391,7 @@ async def bsc_dashboard(plan_id: int, request: Request, session: Session = Depen
         "cur_month": _date_bsc.today().month,
         "dot_color": _bsc_dot_color,
         "bar_color": _bsc_bar_color,
+        "budget_accounts": budget_accounts,
     })
 
 
@@ -410,6 +468,9 @@ async def bsc_criar_indicador(request: Request, session: Session = Depends(get_s
     obj = session.get(BSCObjective, int(body.get("objective_id") or 0))
     if not obj or obj.company_id != ctx.company.id:
         return JSONResponse({"ok": False}, status_code=404)
+    _src_cfg = body.get("source_config") or "{}"
+    if isinstance(_src_cfg, dict):
+        _src_cfg = _json_bsc.dumps(_src_cfg)
     ind = BSCIndicator(
         company_id=ctx.company.id, objective_id=obj.id,
         name=(body.get("name") or "").strip(),
@@ -417,6 +478,9 @@ async def bsc_criar_indicador(request: Request, session: Session = Depends(get_s
         frequency=(body.get("frequency") or "mensal"),
         baseline_value=float(body.get("baseline_value") or 0),
         target_value=float(body.get("target_value") or 0),
+        source_module=body.get("source_module") or None,
+        source_metric=body.get("source_metric") or None,
+        source_config=_src_cfg,
     )
     session.add(ind); session.commit(); session.refresh(ind)
     return JSONResponse({"ok": True, "id": ind.id})
@@ -437,6 +501,11 @@ async def bsc_editar_indicador(ind_id: int, request: Request, session: Session =
     if "frequency"      in body: ind.frequency      = body["frequency"]
     if "target_value"   in body: ind.target_value   = float(body["target_value"] or 0)
     if "baseline_value" in body: ind.baseline_value = float(body["baseline_value"] or 0)
+    if "source_module"  in body: ind.source_module  = body["source_module"] or None
+    if "source_metric"  in body: ind.source_metric  = body["source_metric"] or None
+    if "source_config"  in body:
+        _sc = body["source_config"]
+        ind.source_config = _json_bsc.dumps(_sc) if isinstance(_sc, dict) else (_sc or "{}")
     ind.updated_at = utcnow()
     session.add(ind); session.commit()
     return JSONResponse({"ok": True})
@@ -871,7 +940,7 @@ TEMPLATES["bsc_dashboard.html"] = r"""
                 {% elif pct >= 70 %}{% set bc = "#ffc107" %}
                 {% else %}{% set bc = "#dc3545" %}{% endif %}
                 <tr>
-                  <td>{{ ind.name }}</td>
+                  <td>{{ ind.name }}{% if ind.source_module %} <span class="badge bg-info text-dark" style="font-size:.62rem;">🔗 {{ ind.source_module }}</span>{% endif %}</td>
                   <td class="muted">{{ ind.unit }}</td>
                   <td class="muted">{{ ind.baseline_value }}</td>
                   <td>{{ ind.target_value }}</td>
@@ -882,6 +951,17 @@ TEMPLATES["bsc_dashboard.html"] = r"""
                   </td>
                   <td class="text-end" style="white-space:nowrap;">
                     {% if role in ("admin","equipe") %}
+                    <button class="btn btn-sm bsc-obj-btn btn-outline-secondary"
+                            data-id="{{ ind.id }}"
+                            data-nome="{{ ind.name }}"
+                            data-unit="{{ ind.unit }}"
+                            data-freq="{{ ind.frequency }}"
+                            data-base="{{ ind.baseline_value }}"
+                            data-meta="{{ ind.target_value }}"
+                            data-src-module="{{ ind.source_module or '' }}"
+                            data-src-metric="{{ ind.source_metric or '' }}"
+                            data-src-config='{{ ind.source_config or "{}" }}'
+                            onclick="editarIndicador(this)">✏️</button>
                     <button class="btn btn-sm bsc-obj-btn btn-outline-primary"
                             onclick="atualizarValor({{ ind.id }}, '{{ ind.name|replace("'","\\'") }}', {{ ind.target_value }}, '{{ ind.unit }}')">↑</button>
                     <button class="btn btn-sm bsc-obj-btn btn-outline-danger"
@@ -1027,7 +1107,7 @@ TEMPLATES["bsc_dashboard.html"] = r"""
 
 <!-- Modal: Indicador -->
 <div class="modal fade" id="modalInd" tabindex="-1">
-  <div class="modal-dialog">
+  <div class="modal-dialog modal-lg">
     <div class="modal-content">
       <div class="modal-header"><h5 class="modal-title" id="modalIndTitulo">Novo Indicador (KPI)</h5>
         <button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
@@ -1051,6 +1131,39 @@ TEMPLATES["bsc_dashboard.html"] = r"""
             <input id="iBase" type="number" step="any" class="form-control" value="0"></div>
           <div class="col-6"><label class="form-label fw-semibold">Meta</label>
             <input id="iMeta" type="number" step="any" class="form-control" value="100"></div>
+        </div>
+        <!-- Fonte de dados automática -->
+        <hr class="my-2">
+        <div class="mb-2">
+          <label class="form-label fw-semibold">🔗 Fonte de Dados Automática <span class="text-muted fw-normal">(opcional)</span></label>
+          <select id="iSourceModule" class="form-select mb-2" onchange="_bscToggleSource()">
+            <option value="">— Manual (sem fonte)</option>
+            <option value="orcamento">📋 Orçamento</option>
+          </select>
+        </div>
+        <div id="iSourceOrcamento" style="display:none;">
+          <div class="row g-2 mb-2">
+            <div class="col-6">
+              <label class="form-label fw-semibold">Métrica</label>
+              <select id="iSourceMetric" class="form-select">
+                <option value="realizado">Valor Realizado</option>
+                <option value="orcado">Valor Orçado</option>
+                <option value="execucao_pct">% Execução (Realizado/Orçado)</option>
+              </select>
+            </div>
+            <div class="col-6">
+              <label class="form-label fw-semibold">Conta do Plano</label>
+              <select id="iSourceAccountId" class="form-select">
+                <option value="">— Todas as contas —</option>
+                {% for acc in budget_accounts %}
+                <option value="{{ acc.id }}">{{ acc.code }} — {{ acc.name }}</option>
+                {% endfor %}
+              </select>
+            </div>
+          </div>
+          <div class="alert alert-info py-1 px-2" style="font-size:.8rem;">
+            O valor atual do KPI será calculado automaticamente a partir do Orçamento. Você ainda pode definir a meta acima.
+          </div>
         </div>
       </div>
       <div class="modal-footer">
@@ -1234,6 +1347,10 @@ async function deletarObjetivo(id, titulo) {
 }
 
 // ── Indicadores ──
+function _bscToggleSource() {
+  var mod = document.getElementById('iSourceModule').value;
+  document.getElementById('iSourceOrcamento').style.display = (mod === 'orcamento') ? '' : 'none';
+}
 function novoIndicador(objId) {
   _bscModals();
   document.getElementById('iIndId').value = '';
@@ -1243,11 +1360,40 @@ function novoIndicador(objId) {
   document.getElementById('iFrequencia').value = 'mensal';
   document.getElementById('iBase').value = '0';
   document.getElementById('iMeta').value = '100';
+  document.getElementById('iSourceModule').value = '';
+  document.getElementById('iSourceMetric').value = 'realizado';
+  document.getElementById('iSourceAccountId').value = '';
+  document.getElementById('iSourceOrcamento').style.display = 'none';
   document.getElementById('modalIndTitulo').textContent = 'Novo Indicador (KPI)';
+  _mInd.show();
+}
+function editarIndicador(btn) {
+  _bscModals();
+  var d = btn.dataset;
+  var cfg = {};
+  try { cfg = JSON.parse(d.srcConfig || '{}'); } catch(e) {}
+  document.getElementById('iIndId').value = d.id;
+  document.getElementById('iObjId').value = '';
+  document.getElementById('iNome').value = d.nome;
+  document.getElementById('iUnidade').value = d.unit;
+  document.getElementById('iFrequencia').value = d.freq;
+  document.getElementById('iBase').value = d.base;
+  document.getElementById('iMeta').value = d.meta;
+  document.getElementById('iSourceModule').value = d.srcModule || '';
+  document.getElementById('iSourceMetric').value = d.srcMetric || 'realizado';
+  document.getElementById('iSourceAccountId').value = cfg.account_id || '';
+  _bscToggleSource();
+  document.getElementById('modalIndTitulo').textContent = 'Editar Indicador';
   _mInd.show();
 }
 async function salvarIndicador() {
   var id = document.getElementById('iIndId').value;
+  var srcModule = document.getElementById('iSourceModule').value;
+  var srcCfg = {};
+  if (srcModule === 'orcamento') {
+    var accId = document.getElementById('iSourceAccountId').value;
+    if (accId) srcCfg.account_id = parseInt(accId);
+  }
   var body = {
     objective_id: document.getElementById('iObjId').value,
     name: document.getElementById('iNome').value,
@@ -1255,6 +1401,9 @@ async function salvarIndicador() {
     frequency: document.getElementById('iFrequencia').value,
     baseline_value: document.getElementById('iBase').value,
     target_value: document.getElementById('iMeta').value,
+    source_module: srcModule || null,
+    source_metric: srcModule ? document.getElementById('iSourceMetric').value : null,
+    source_config: JSON.stringify(srcCfg),
   };
   var url = id ? '/api/bsc/indicador/' + id + '/editar' : '/api/bsc/indicador/criar';
   var r = await fetch(url, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
