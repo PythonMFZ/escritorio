@@ -1541,10 +1541,10 @@ if hasattr(templates_env.loader, "mapping"):
 
 # ── Augur: injeta contexto BSC ────────────────────────────────────────────────
 try:
-    _orig_bsc_ctx = _enriquecer_client_data.__wrapped__ if hasattr(_enriquecer_client_data, '__wrapped__') else _enriquecer_client_data
+    _orig_bsc_ctx = _enriquecer_client_data
 
-    async def _bsc_ctx_enriquecer(session, company_id: int, client_id: int, user_id: int = None):
-        base = await _orig_bsc_ctx(session, company_id, client_id, user_id)
+    def _bsc_ctx_enriquecer(session, company_id: int, client_id: int, client, client_data: dict) -> dict:
+        client_data = _orig_bsc_ctx(session, company_id, client_id, client, client_data)
         try:
             plans = session.exec(
                 select(BSCPlan).where(BSCPlan.company_id == company_id, BSCPlan.is_active == True)
@@ -1567,10 +1567,11 @@ try:
                             lines.append(f"  - KPI {ind.name}: {cur}{ind.unit} / meta {ind.target_value}{ind.unit} ({pct}%)")
                         for ac in acts_by_obj.get(obj.id, []):
                             lines.append(f"  - Ação [{ac.status}]: {ac.title} — {ac.responsible or '—'} | {ac.progress}%")
-                base = (base or "") + "\n".join(lines)
+                existing = client_data.get("bsc_context", "")
+                client_data["bsc_context"] = (existing + "\n".join(lines)).strip()
         except Exception:
             pass
-        return base
+        return client_data
 
     _enriquecer_client_data = _bsc_ctx_enriquecer
     print("[bsc] ✅ Contexto BSC injetado no Augur")
