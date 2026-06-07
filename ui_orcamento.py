@@ -1110,3 +1110,5 @@ try:
         print("[orcamento] ℹ️ orcamento_mensal já presente em _CF_CATALOGO")
 except Exception as _e:
     print(f"[orcamento] ⚠️ Falha ao registrar em _CF_CATALOGO: {_e}")
+
+exec(open('ui_ferramenta_bsc.py').read())
