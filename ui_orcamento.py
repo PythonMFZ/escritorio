@@ -361,6 +361,9 @@ async def orcamento_contas(request: Request, session: Session = Depends(get_sess
     })
 
 
+exec(open('ui_orcamento_import.py').read())
+
+
 @app.get("/ferramentas/orcamento/{plan_id}", response_class=HTMLResponse)
 @require_login
 async def orcamento_grid(plan_id: int, request: Request, session: Session = Depends(get_session)):
@@ -1114,5 +1117,4 @@ try:
 except Exception as _e:
     print(f"[orcamento] ⚠️ Falha ao registrar em _CF_CATALOGO: {_e}")
 
-exec(open('ui_orcamento_import.py').read())
 exec(open('ui_ferramenta_bsc.py').read())
