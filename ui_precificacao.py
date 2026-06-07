@@ -40,6 +40,7 @@ _PRODUTOS_BASE = [
     {"codigo": "mapa_unidades_mensal",        "nome": "Mapa de Unidades",        "descricao": "Empreendimentos e status de venda de unidades", "categoria": "ferramenta", "modelo": "assinatura", "creditos": 30},
     {"codigo": "nova_avaliacao",              "nome": "Nova Avaliação",           "descricao": "2ª+ avaliação no mês (1ª sempre gratuita)",    "categoria": "ferramenta", "modelo": "uso",        "creditos": 0},
     {"codigo": "orcamento_mensal",            "nome": "Orçamento",               "descricao": "Planejamento orçamentário com plano de contas", "categoria": "ferramenta", "modelo": "assinatura", "creditos": 0},
+    {"codigo": "bsc_mensal",                  "nome": "BSC — Planejamento Estratégico", "descricao": "Balanced Scorecard com 4 perspectivas, KPIs e plano de ações", "categoria": "ferramenta", "modelo": "assinatura", "creditos": 0},
     {"codigo": "augur_mensal",                "nome": "Augur — Consultor IA",    "descricao": "Assinatura mensal de acesso ao Augur por usuário","categoria": "ia",        "modelo": "assinatura", "creditos": 99},
 ]
 
