@@ -934,10 +934,13 @@ TEMPLATES["orcamento_grid.html"] = r"""
       Clique em qualquer célula para editar · <span style="color:#198754;">■</span> Realizado · <span style="color:#3b5bdb;">■</span> Totalizadora
     </div>
   </div>
-  <div class="d-flex gap-2">
+  <div class="d-flex gap-2 flex-wrap">
     <a href="/ferramentas/orcamento" class="btn btn-outline-secondary btn-sm">← Planos</a>
     <a href="/ferramentas/orcamento/contas" class="btn btn-outline-secondary btn-sm">
       <i class="bi bi-list-ul me-1"></i>Plano de Contas
+    </a>
+    <a href="/ferramentas/orcamento/importar" class="btn btn-outline-success btn-sm">
+      <i class="bi bi-file-earmark-arrow-up me-1"></i>Importar Realizado
     </a>
     <button class="btn btn-outline-primary btn-sm" onclick="augurAnalisar()">
       <i class="bi bi-robot me-1"></i>Augur Analisar
@@ -1111,4 +1114,5 @@ try:
 except Exception as _e:
     print(f"[orcamento] ⚠️ Falha ao registrar em _CF_CATALOGO: {_e}")
 
+exec(open('ui_orcamento_import.py').read())
 exec(open('ui_ferramenta_bsc.py').read())
