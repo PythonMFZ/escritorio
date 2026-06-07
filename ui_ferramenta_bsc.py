@@ -719,14 +719,15 @@ TEMPLATES["bsc_index.html"] = r"""
 </div>
 
 <script>
-var _mp = new bootstrap.Modal(document.getElementById('modalPlano'));
+var _mp = null;
+function _getMP() { if (!_mp) _mp = new bootstrap.Modal(document.getElementById('modalPlano')); return _mp; }
 function abrirModalPlano() {
   document.getElementById('pPlanoId').value = '';
   document.getElementById('pNome').value = '';
   document.getElementById('pAno').value = new Date().getFullYear();
   document.getElementById('pDesc').value = '';
   document.getElementById('modalPlanoTitulo').textContent = 'Novo Plano BSC';
-  _mp.show();
+  _getMP().show();
 }
 function editarPlano(id, nome, ano, desc) {
   document.getElementById('pPlanoId').value = id;
@@ -734,7 +735,7 @@ function editarPlano(id, nome, ano, desc) {
   document.getElementById('pAno').value = ano;
   document.getElementById('pDesc').value = desc;
   document.getElementById('modalPlanoTitulo').textContent = 'Editar Plano';
-  _mp.show();
+  _getMP().show();
 }
 async function salvarPlano() {
   var id = document.getElementById('pPlanoId').value;
@@ -748,7 +749,7 @@ async function salvarPlano() {
   var d = await r.json();
   if (d.ok) {
     if (!id && d.id) { window.location.href = '/ferramentas/bsc/' + d.id; }
-    else { _mp.hide(); location.reload(); }
+    else { _getMP().hide(); location.reload(); }
   } else alert('Erro ao salvar.');
 }
 async function deletarPlano(id, nome) {
@@ -1073,8 +1074,8 @@ TEMPLATES["bsc_dashboard.html"] = r"""
         <div class="row g-2 mb-3">
           <div class="col-5"><label class="form-label fw-semibold">Mês</label>
             <select id="vMes" class="form-select">
-              {% for i, m in enumerate(months_pt) %}
-              <option value="{{ i+1 }}" {% if i+1==cur_month %}selected{% endif %}>{{ m }}</option>
+              {% for m in months_pt %}
+              <option value="{{ loop.index }}" {% if loop.index==cur_month %}selected{% endif %}>{{ m }}</option>
               {% endfor %}
             </select></div>
           <div class="col-4"><label class="form-label fw-semibold">Ano</label>
@@ -1156,15 +1157,19 @@ TEMPLATES["bsc_dashboard.html"] = r"""
 const ALL_VALUES = {{ values_json|safe }};
 const MONTHS_PT  = {{ months_pt|tojson }};
 
-// ── Bootstrap modals ──
-const _mPlano = new bootstrap.Modal(document.getElementById('modalPlano'));
-const _mObj   = new bootstrap.Modal(document.getElementById('modalObj'));
-const _mInd   = new bootstrap.Modal(document.getElementById('modalInd'));
-const _mValor = new bootstrap.Modal(document.getElementById('modalValor'));
-const _mAcao  = new bootstrap.Modal(document.getElementById('modalAcao'));
+// ── Bootstrap modals (lazy init) ──
+var _mPlano, _mObj, _mInd, _mValor, _mAcao;
+function _bscModals() {
+  if (!_mPlano) _mPlano = new bootstrap.Modal(document.getElementById('modalPlano'));
+  if (!_mObj)   _mObj   = new bootstrap.Modal(document.getElementById('modalObj'));
+  if (!_mInd)   _mInd   = new bootstrap.Modal(document.getElementById('modalInd'));
+  if (!_mValor) _mValor = new bootstrap.Modal(document.getElementById('modalValor'));
+  if (!_mAcao)  _mAcao  = new bootstrap.Modal(document.getElementById('modalAcao'));
+}
 
 // ── Plano ──
 function editarPlano(id, nome, ano, desc) {
+  _bscModals();
   document.getElementById('pPlanoId').value = id;
   document.getElementById('pNome').value = nome;
   document.getElementById('pAno').value = ano;
@@ -1187,6 +1192,7 @@ async function salvarPlano() {
 
 // ── Objetivos ──
 function novoObjetivo(persp, planId) {
+  _bscModals();
   document.getElementById('oObjId').value = '';
   document.getElementById('oPlanId').value = planId;
   document.getElementById('oPerspectiva').value = persp;
@@ -1197,6 +1203,7 @@ function novoObjetivo(persp, planId) {
   _mObj.show();
 }
 function editarObjetivo(id, titulo, desc, owner, persp) {
+  _bscModals();
   document.getElementById('oObjId').value = id;
   document.getElementById('oTitulo').value = titulo;
   document.getElementById('oDesc').value = desc;
@@ -1228,6 +1235,7 @@ async function deletarObjetivo(id, titulo) {
 
 // ── Indicadores ──
 function novoIndicador(objId) {
+  _bscModals();
   document.getElementById('iIndId').value = '';
   document.getElementById('iObjId').value = objId;
   document.getElementById('iNome').value = '';
@@ -1261,6 +1269,7 @@ async function deletarIndicador(id, nome) {
 
 // ── Valor do indicador ──
 function atualizarValor(indId, nome, meta, unid) {
+  _bscModals();
   document.getElementById('vIndId').value = indId;
   document.getElementById('vIndNome').textContent = nome;
   document.getElementById('vMeta').textContent = meta + ' ' + unid;
@@ -1316,6 +1325,7 @@ async function salvarValor() {
 
 // ── Ações ──
 function novaAcao(objId, planId) {
+  _bscModals();
   document.getElementById('aAcaoId').value = '';
   document.getElementById('aObjId').value = objId;
   document.getElementById('aTitulo').value = '';
@@ -1331,6 +1341,7 @@ function novaAcao(objId, planId) {
   _mAcao.show();
 }
 function editarAcao(id, titulo, desc, resp, prazo, status, prioridade, progresso) {
+  _bscModals();
   document.getElementById('aAcaoId').value = id;
   document.getElementById('aTitulo').value = titulo;
   document.getElementById('aDesc').value = desc;
