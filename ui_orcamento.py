@@ -1045,7 +1045,10 @@ TEMPLATES["orcamento_grid.html"] = r"""
 .orc-grid{font-size:.78rem;border-collapse:collapse;width:100%;min-width:1400px;}
 .orc-grid th,.orc-grid td{border:1px solid #dee2e6;padding:2px 6px;white-space:nowrap;}
 .orc-grid thead th{background:#f8f9fa;text-align:center;font-weight:600;}
-.orc-grid .col-name{text-align:left!important;min-width:200px;}
+.orc-grid .col-name{text-align:left!important;min-width:200px;position:sticky;left:0;z-index:2;background:#fff;}
+.orc-grid thead .col-name{background:#f8f9fa;z-index:3;}
+.orc-totalizer .col-name{background:#e8f0fe!important;}
+.orc-parent-sum .col-name{background:#f5f5f5!important;}
 .orc-totalizer{background:#e8f0fe!important;font-weight:700;}
 .orc-totalizer td{background:#e8f0fe!important;}
 .orc-parent-sum td{background:#f5f5f5!important;font-style:italic;color:#555;}
