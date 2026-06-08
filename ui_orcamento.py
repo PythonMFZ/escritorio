@@ -255,8 +255,8 @@ def _subtree_sum_by_code(acc_code: str, all_accounts: list,
         for m in range(1, 13):
             e = entries_by_account.get((a.id, m))
             if e:
-                totals[m][0] += e.value_budgeted
-                totals[m][1] += e.value_realized
+                totals[m][0] += e.value_budgeted * a.sign
+                totals[m][1] += e.value_realized * a.sign
     return {m: (totals[m][0], totals[m][1]) for m in range(1, 13)}
 
 
