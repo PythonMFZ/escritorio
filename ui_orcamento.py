@@ -476,12 +476,21 @@ async def orcamento_grid(plan_id: int, request: Request, session: Session = Depe
     cc = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
 
     rows = _load_grid(session, ctx.company.id, plan_id)
+    # Base para Análise Vertical: preferência 02T (receita líquida), fallback 01
+    _av_row = next((r for r in rows if r["code"] == "02T"), None) or \
+              next((r for r in rows if r["code"] == "01"), None)
+    av_base_b = {m: (_av_row["months"][m]["b"] if _av_row else 0.0) for m in range(1, 13)}
+    av_base_r = {m: (_av_row["months"][m]["r"] if _av_row else 0.0) for m in range(1, 13)}
+    av_total_b = _av_row["total_b"] if _av_row else 0.0
+    av_total_r = _av_row["total_r"] if _av_row else 0.0
     return render("orcamento_grid.html", request=request, context={
         "current_user": ctx.user, "current_company": ctx.company,
         "role": ctx.membership.role, "current_client": cc,
         "plan": plan, "rows": rows,
         "months": _MONTHS_PT,
         "rows_json": _json_orc.dumps(rows),
+        "av_base_b": av_base_b, "av_base_r": av_base_r,
+        "av_total_b": av_total_b, "av_total_r": av_total_r,
     })
 
 
@@ -876,11 +885,11 @@ TEMPLATES["orcamento_contas.html"] = r"""
         <td><span class="badge bg-light text-dark border" style="font-size:.72rem;">{{ acc.account_type }}</span></td>
         <td>
           {% if acc.is_totalizer %}
-            <span class="badge bg-primary">Sim</span>
-            {% if acc.formula %}<code class="ms-1" style="font-size:.7rem;">={{ acc.formula }}</code>{% endif %}
+            <div><span class="badge bg-primary">Sim</span></div>
+            {% if acc.formula %}<div><code style="font-size:.7rem;color:#3b5bdb;">={{ acc.formula }}</code></div>{% endif %}
           {% else %}<span class="muted small">—</span>{% endif %}
         </td>
-        <td class="text-end" style="white-space:nowrap;">
+        <td class="text-end" style="white-space:nowrap;min-width:160px;">
           <button class="btn btn-outline-secondary btn-sm" onclick="novaConta({{ acc.id }})" title="Nova sub-conta" style="font-size:.75rem;padding:1px 6px;">+ Sub</button>
           <button class="btn btn-outline-secondary btn-sm" onclick="editarConta({{ acc.id }}, '{{ acc.code }}', '{{ acc.name|replace("'", "\\'") }}', '{{ acc.account_type }}', {{ acc.is_totalizer|lower }}, {{ acc.sign }}, '{{ acc.formula|default("")|replace("'", "\\'") }}')" title="Editar" style="font-size:.75rem;padding:1px 6px;">Editar</button>
           <button class="btn btn-outline-danger btn-sm" onclick="deletarConta({{ acc.id }}, '{{ acc.name|replace("'", "\\'") }}')" title="Excluir" style="font-size:.75rem;padding:1px 6px;">Remover</button>
@@ -1051,6 +1060,7 @@ TEMPLATES["orcamento_grid.html"] = r"""
 .orc-var-neg{color:#dc3545;font-weight:600;}
 .orc-var-pos{color:#198754;font-weight:600;}
 .orc-total-col{background:#f0f5ff!important;font-weight:600;}
+.orc-av{background:#fffbea!important;color:#856404;font-size:.72rem;text-align:right!important;min-width:52px;}
 </style>
 
 <div class="d-flex justify-content-between align-items-center mb-2 flex-wrap gap-2">
@@ -1089,19 +1099,23 @@ TEMPLATES["orcamento_grid.html"] = r"""
     <tr>
       <th class="col-name">Conta</th>
       {% for m in months %}
-      <th colspan="3" style="min-width:220px;">{{ m }}</th>
+      <th colspan="5" style="min-width:340px;">{{ m }}</th>
       {% endfor %}
-      <th colspan="3" class="orc-total-col" style="min-width:220px;">Total Ano</th>
+      <th colspan="5" class="orc-total-col" style="min-width:340px;">Total Ano</th>
     </tr>
     <tr>
       <th class="col-name"></th>
       {% for m in months %}
       <th class="orc-val">Orçado</th>
+      <th class="orc-av">AV%</th>
       <th class="orc-val orc-realizado">Realizado</th>
+      <th class="orc-av">AV%</th>
       <th class="orc-val">Var%</th>
       {% endfor %}
       <th class="orc-val orc-total-col">Orçado</th>
+      <th class="orc-av orc-total-col">AV%</th>
       <th class="orc-val orc-total-col orc-realizado">Realizado</th>
+      <th class="orc-av orc-total-col">AV%</th>
       <th class="orc-val orc-total-col">Var%</th>
     </tr>
   </thead>
@@ -1114,6 +1128,8 @@ TEMPLATES["orcamento_grid.html"] = r"""
       </td>
       {% for m in range(1, 13) %}
       {% set mv = row.months[m] %}
+      {% set base_b = av_base_b[m] %}
+      {% set base_r = av_base_r[m] %}
       <td class="orc-val">
         {% if row.is_totalizer or row.has_children %}<span>{{ mv.b | brl }}</span>
         {% else %}<input type="number" step="0.01"
@@ -1123,6 +1139,7 @@ TEMPLATES["orcamento_grid.html"] = r"""
           onblur="saveEntry(this)" onkeydown="if(event.key==='Enter'||event.key==='Tab'){this.blur();}">
         {% endif %}
       </td>
+      <td class="orc-av">{% if base_b %}{{ "%.1f%%"|format(mv.b / base_b * 100) }}{% else %}—{% endif %}</td>
       <td class="orc-val orc-realizado">
         {% if row.is_totalizer or row.has_children %}<span>{{ mv.r | brl }}</span>
         {% else %}<input type="number" step="0.01"
@@ -1132,19 +1149,22 @@ TEMPLATES["orcamento_grid.html"] = r"""
           onblur="saveEntry(this)" onkeydown="if(event.key==='Enter'||event.key==='Tab'){this.blur();}">
         {% endif %}
       </td>
+      <td class="orc-av">{% if base_r %}{{ "%.1f%%"|format(mv.r / base_r * 100) }}{% else %}—{% endif %}</td>
       <td class="orc-val {% if mv.b and mv.r < mv.b %}orc-var-neg{% elif mv.b and mv.r >= mv.b %}orc-var-pos{% endif %}">
         {% if mv.b %}{{ "%+.0f%%"|format((mv.r - mv.b) / mv.b * 100) }}{% else %}—{% endif %}
       </td>
       {% endfor %}
       <td class="orc-val orc-total-col">{{ row.total_b | brl }}</td>
+      <td class="orc-av orc-total-col">{% if av_total_b %}{{ "%.1f%%"|format(row.total_b / av_total_b * 100) }}{% else %}—{% endif %}</td>
       <td class="orc-val orc-total-col orc-realizado">{{ row.total_r | brl }}</td>
+      <td class="orc-av orc-total-col">{% if av_total_r %}{{ "%.1f%%"|format(row.total_r / av_total_r * 100) }}{% else %}—{% endif %}</td>
       <td class="orc-val orc-total-col {% if row.total_b and row.total_r < row.total_b %}orc-var-neg{% elif row.total_b and row.total_r >= row.total_b %}orc-var-pos{% endif %}">
         {% if row.total_b %}{{ "%+.0f%%"|format((row.total_r - row.total_b) / row.total_b * 100) }}{% else %}—{% endif %}
       </td>
     </tr>
     {% endfor %}
     {% if not rows %}
-    <tr><td colspan="42" class="text-center muted py-4">
+    <tr><td colspan="66" class="text-center muted py-4">
       Nenhuma conta no plano de contas.
       <a href="/ferramentas/orcamento/contas">Configurar plano de contas →</a>
     </td></tr>
