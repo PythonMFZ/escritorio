@@ -220,78 +220,74 @@ def _build_account_tree(accounts: list) -> list:
     return result
 
 
-def _calc_totalizer(account_id: int, entries_by_account: dict, accounts_by_parent: dict) -> dict:
-    totals: dict = {m: [0.0, 0.0] for m in range(1, 13)}
-    for child in accounts_by_parent.get(account_id, []):
-        if child.is_totalizer:
-            sub = _calc_totalizer(child.id, entries_by_account, accounts_by_parent)
-            for m in range(1, 13):
-                totals[m][0] += sub[m][0] * child.sign
-                totals[m][1] += sub[m][1] * child.sign
-        else:
-            for m in range(1, 13):
-                e = entries_by_account.get((child.id, m))
-                if e:
-                    totals[m][0] += e.value_budgeted * child.sign
-                    totals[m][1] += e.value_realized * child.sign
-    return {m: (totals[m][0], totals[m][1]) for m in range(1, 13)}
+# Fórmulas explícitas para cada totalizador: lista de códigos que compõem o total.
+# Os valores já chegam do DB com sinal (receitas positivas, despesas negativas),
+# então a soma é algébrica direta, sem multiplicar por sign novamente.
+_DRE_TOTALIZER_FORMULAS: dict = {
+    "02T": ["01", "02"],
+    "03T": ["02T", "03"],
+    "05T": ["03T", "04"],
+    "07T": ["05T", "06", "07"],
+    "08T": ["07T", "08"],
+    "09T": ["08T", "09"],
+    "10T": ["09T", "10"],
+    "11T": ["10T", "11"],
+    "12T": ["11T", "12"],
+}
 
 
-def _subtree_sum(account_id: int, entries_by_account: dict, accounts_by_parent: dict) -> dict:
-    """Soma recursiva de todas as entradas da subárvore (sem aplicar sign — valores brutos)."""
+def _subtree_sum_by_code(acc_code: str, all_accounts: list,
+                         leaf_codes: set, entries_by_account: dict) -> dict:
+    """
+    Soma das entradas de folhas cujo código pertence à subárvore de acc_code.
+    Usa prefixo de código para identificar filhos — independe de parent_id no DB.
+    Os valores são somados como estão no DB (sem aplicar sign).
+    """
+    prefix = acc_code + "."
     totals: dict = {m: [0.0, 0.0] for m in range(1, 13)}
-    for m in range(1, 13):
-        e = entries_by_account.get((account_id, m))
-        if e:
-            totals[m][0] += e.value_budgeted
-            totals[m][1] += e.value_realized
-    for child in accounts_by_parent.get(account_id, []):
-        sub = _subtree_sum(child.id, entries_by_account, accounts_by_parent)
+    for a in all_accounts:
+        if a.code != acc_code and not a.code.startswith(prefix):
+            continue
+        if a.code not in leaf_codes:
+            continue
         for m in range(1, 13):
-            totals[m][0] += sub[m][0]
-            totals[m][1] += sub[m][1]
+            e = entries_by_account.get((a.id, m))
+            if e:
+                totals[m][0] += e.value_budgeted
+                totals[m][1] += e.value_realized
     return {m: (totals[m][0], totals[m][1]) for m in range(1, 13)}
 
 
-def _calc_dre_totalizer(acc, root_accounts: list, entries_by_account: dict,
-                        accounts_by_parent: dict, computed_root: dict) -> dict:
+def _calc_dre_totalizer(acc, accounts_by_code: dict, all_accounts: list,
+                        leaf_codes: set, entries_by_account: dict,
+                        computed_root: dict) -> dict:
     """
-    Totalizador DRE por posição: soma todas as contas-raiz desde o totalizador
-    raiz anterior (inclusive) até esta (exclusive), aplicando o sign de cada uma.
-
-    Convenção: valores devem ser lançados como positivos. O sign do plano de
-    contas (-1 para despesas) determina se somam ou subtraem no DRE.
+    Totaliza usando fórmula explícita por código.
+    Soma algébrica direta — valores já carregam sinal no DB.
     """
-    idx = next((i for i, a in enumerate(root_accounts) if a.id == acc.id), None)
-    if idx is None:
+    components = _DRE_TOTALIZER_FORMULAS.get(acc.code)
+    if not components:
+        # Fallback: totalizador sem fórmula definida retorna zero
         return {m: (0.0, 0.0) for m in range(1, 13)}
 
     totals: dict = {m: [0.0, 0.0] for m in range(1, 13)}
-
-    # Encontra totalizador raiz anterior
-    prev_t_idx = None
-    for i in range(idx - 1, -1, -1):
-        if root_accounts[i].is_totalizer:
-            prev_t_idx = i
-            break
-
-    start = prev_t_idx if prev_t_idx is not None else 0
-
-    for i in range(start, idx):
-        a = root_accounts[i]
-        sign = a.sign if a.sign else 1
-        if a.is_totalizer:
-            cv = computed_root.get(a.id, {m: (0.0, 0.0) for m in range(1, 13)})
+    for comp_code in components:
+        comp_acc = accounts_by_code.get(comp_code)
+        if comp_acc is None:
+            continue
+        if comp_acc.is_totalizer and comp_acc.id in computed_root:
+            cv = computed_root[comp_acc.id]
             for m in range(1, 13):
-                totals[m][0] += cv[m][0] * sign
-                totals[m][1] += cv[m][1] * sign
+                totals[m][0] += cv[m][0]
+                totals[m][1] += cv[m][1]
         else:
-            sub = _subtree_sum(a.id, entries_by_account, accounts_by_parent)
+            sub = _subtree_sum_by_code(comp_code, all_accounts, leaf_codes, entries_by_account)
             for m in range(1, 13):
-                totals[m][0] += sub[m][0] * sign
-                totals[m][1] += sub[m][1] * sign
-
+                totals[m][0] += sub[m][0]
+                totals[m][1] += sub[m][1]
     return {m: (totals[m][0], totals[m][1]) for m in range(1, 13)}
+
+
 def _load_grid(session, company_id: int, plan_id: int):
     accounts = session.exec(
         select(BudgetAccount)
@@ -307,12 +303,16 @@ def _load_grid(session, company_id: int, plan_id: int):
     for a in accounts:
         accounts_by_parent.setdefault(a.parent_id, []).append(a)
 
-    # Contas raiz ordenadas — usadas pelo totalizador DRE por posição
-    root_accounts = sorted(
-        [a for a in accounts if a.parent_id is None],
-        key=lambda x: (x.sort_order, x.code)
-    )
-    computed_root: dict = {}  # account_id → {month: (b, r)} para totalizadores raiz já processados
+    # Lookup por código para fórmulas explícitas de totalizadores
+    accounts_by_code = {a.code: a for a in accounts}
+
+    # Códigos folha: não têm nenhum filho por prefixo de código
+    all_codes = {a.code for a in accounts}
+    leaf_codes = {c for c in all_codes if not any(
+        other.startswith(c + ".") for other in all_codes
+    )}
+
+    computed_root: dict = {}  # account_id → {month: (b, r)}
 
     tree = _build_account_tree(accounts)
     rows = []
@@ -320,20 +320,15 @@ def _load_grid(session, company_id: int, plan_id: int):
         has_children = bool(accounts_by_parent.get(acc.id))
 
         if acc.is_totalizer:
-            if has_children:
-                # Totaliza filhos explícitos (comportamento original)
-                vals = _calc_totalizer(acc.id, entries_by_account, accounts_by_parent)
-            else:
-                # DRE por posição: soma contas raiz desde o totalizador anterior
-                vals = _calc_dre_totalizer(acc, root_accounts, entries_by_account,
-                                           accounts_by_parent, computed_root)
+            vals = _calc_dre_totalizer(acc, accounts_by_code, accounts,
+                                       leaf_codes, entries_by_account, computed_root)
             if acc.parent_id is None:
                 computed_root[acc.id] = vals
             months = {m: {"b": round(vals[m][0], 2), "r": round(vals[m][1], 2)} for m in range(1, 13)}
 
         elif has_children:
-            # Conta-pai não totalizadora: exibe soma da subárvore (somente leitura)
-            vals = _subtree_sum(acc.id, entries_by_account, accounts_by_parent)
+            # Subtotal do grupo: soma por prefixo de código (robusto a erros de parent_id)
+            vals = _subtree_sum_by_code(acc.code, accounts, leaf_codes, entries_by_account)
             months = {m: {"b": round(vals[m][0], 2), "r": round(vals[m][1], 2)} for m in range(1, 13)}
 
         else:
@@ -360,12 +355,13 @@ _ORC_ROLES = ("admin", "equipe", "cliente")
 
 
 def _orc_brl(v):
-    """Formata número no padrão BRL: 1.900.389 ou (1.900.389) para negativos."""
+    """Formata número no padrão BRL: 1.900.389,00 ou (1.900.389,00) para negativos."""
     try:
         v = float(v or 0)
         if v == 0:
             return "—"
-        s = f"{abs(v):,.0f}".replace(",", ".")
+        # f"{x:,.2f}" → "1,900,389.00" → trocar separadores → "1.900.389,00"
+        s = f"{abs(v):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
         return f"({s})" if v < 0 else s
     except Exception:
         return "—"
