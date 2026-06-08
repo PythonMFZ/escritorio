@@ -159,6 +159,17 @@ def _format_client_context(client_data: dict) -> str:
             if d.get("conteudo"):
                 lines.append(d["conteudo"][:500])
 
+    # ── Orçamento DRE (injetado por ui_orcamento.py) ─────────────────────────
+    orc = client_data.get("orcamento_resumo", "")
+    if orc:
+        lines.append("\n" + orc)
+
+    # ── BSC / Balanced Scorecard (injetado por ui_ferramenta_bsc.py) ─────────
+    bsc = client_data.get("bsc_context", "")
+    if bsc:
+        lines.append("\n=== BSC / INDICADORES ESTRATÉGICOS ===")
+        lines.append(bsc[:4000])
+
     # ── Base de conhecimento ──────────────────────────────────────────────────
     base_docs = client_data.get("base_conhecimento", [])
     if base_docs:
