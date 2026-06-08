@@ -111,6 +111,29 @@ def _format_client_context(client_data: dict) -> str:
             else:
                 lines.append(f"{label}: R$ {val:,.0f}")
 
+    # ── Orçamento (injetado por ui_orcamento.py) ──────────────────────────────
+    orc = client_data.get("orcamento_resumo", "")
+    if orc:
+        lines.append("\n" + orc)
+
+    # ── BSC / Balanced Scorecard (injetado por ui_ferramenta_bsc.py) ─────────
+    bsc = client_data.get("bsc_context", "")
+    if bsc:
+        lines.append("\n=== BSC / INDICADORES ESTRATÉGICOS ===")
+        lines.append(bsc[:4000])
+
+    # ── Reuniões recentes (injetado por ui_reunioes_whisper.py) ───────────────
+    reunioes = client_data.get("reunioes_recentes", [])
+    if reunioes:
+        lines.append("\n=== REUNIÕES RECENTES ===")
+        for r in reunioes[:3]:
+            titulo = r.get("titulo") or r.get("title") or "Reunião"
+            data_r = r.get("data") or r.get("date") or ""
+            resumo = r.get("resumo") or r.get("summary") or r.get("transcricao") or ""
+            lines.append(f"\n— {titulo} ({data_r})")
+            if resumo:
+                lines.append(resumo[:1500])
+
     return "\n".join(lines)
 
 
