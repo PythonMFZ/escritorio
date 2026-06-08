@@ -689,18 +689,24 @@ def _orcamento_contexto_para_augur(session, company_id: int, client_id=None) -> 
         rows = _load_grid(session, company_id, plan.id)
         if not rows:
             return ""
-        lines = [f"## Orçamento: {plan.name} ({plan.year})", ""]
-        lines.append(f"{'Conta':<40} {'Orçado Anual':>14} {'Realizado':>14} {'Var%':>7}")
-        lines.append("-" * 78)
+        # Base AV%: 02T (receita líquida) ou 01
+        av_row = next((r for r in rows if r["code"] == "02T"), None) or \
+                 next((r for r in rows if r["code"] == "01"), None)
+        av_base_b = av_row["total_b"] if av_row else 0
+        av_base_r = av_row["total_r"] if av_row else 0
+
+        lines = [f"## Orçamento DRE: {plan.name} ({plan.year})", ""]
+        lines.append(f"{'Conta':<42} {'Orçado':>14} {'AV%':>6} {'Realizado':>14} {'AV%':>6} {'Var%':>7}")
+        lines.append("-" * 94)
         for row in rows:
             indent = "  " * row["depth"]
-            tag    = "[ TOTAL ]" if row["is_totalizer"] else ""
+            tag = "[T]" if row["is_totalizer"] else "   "
             tb, tr = row["total_b"], row["total_r"]
-            var    = f"{((tr-tb)/abs(tb)*100):+.1f}%" if tb else "—"
-            lines.append(
-                f"{indent}{row['code']} {row['name'][:35-len(indent)]:<35} {tag}"
-                f" {tb:>14,.2f} {tr:>14,.2f} {var:>7}"
-            )
+            av_b = f"{tb/av_base_b*100:.1f}%" if av_base_b else "—"
+            av_r = f"{tr/av_base_r*100:.1f}%" if av_base_r else "—"
+            var  = f"{((tr-tb)/abs(tb)*100):+.1f}%" if tb else "—"
+            name = (indent + row["code"] + " " + row["name"])[:42]
+            lines.append(f"{name:<42} {tag} {tb:>14,.0f} {av_b:>6} {tr:>14,.0f} {av_r:>6} {var:>7}")
         return "\n".join(lines)
     except Exception:
         return ""
