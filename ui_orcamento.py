@@ -60,19 +60,30 @@ def _ensure_orcamento_tables():
             tbl.create(engine, checkfirst=True)
         except Exception:
             pass
-    # migrações de colunas adicionadas após criação inicial
-    try:
-        from sqlalchemy import text as _t
-        with engine.begin() as _c:
-            _c.execute(_t("ALTER TABLE budgetplan ADD COLUMN IF NOT EXISTS client_id INTEGER"))
-            _c.execute(_t("ALTER TABLE budgetaccount ADD COLUMN IF NOT EXISTS formula VARCHAR DEFAULT ''"))
-    except Exception:
-        pass
+    # migrações de colunas — trata Postgres e SQLite separadamente
+    _is_pg = DATABASE_URL.startswith("postgres")
+    from sqlalchemy import text as _t
+    _migrations = [
+        ("budgetplan",    "client_id", "INTEGER"),
+        ("budgetaccount", "formula",   "VARCHAR DEFAULT ''"),
+    ]
+    for _tbl, _col, _ddl in _migrations:
+        try:
+            with engine.begin() as _c:
+                if _is_pg:
+                    _c.execute(_t(f"ALTER TABLE {_tbl} ADD COLUMN IF NOT EXISTS {_col} {_ddl}"))
+                else:
+                    _c.exec_driver_sql(f"ALTER TABLE {_tbl} ADD COLUMN {_col} {_ddl}")
+        except Exception as _e:
+            # "duplicate column" é esperado se já existir — ignora silenciosamente
+            if "duplicate" not in str(_e).lower() and "already exists" not in str(_e).lower():
+                print(f"[orcamento] migração {_tbl}.{_col}: {_e}")
 
 try:
     _ensure_orcamento_tables()
-except Exception:
-    pass
+except Exception as _e:
+    print(f"[orcamento] _ensure_orcamento_tables falhou: {_e}")
+
 
 
 # ── Modelo padrão de plano de contas ─────────────────────────────────────────
@@ -685,9 +696,11 @@ def _orcamento_contexto_para_augur(session, company_id: int, client_id=None) -> 
             q = q.where(BudgetPlan.client_id == client_id)
         plan = session.exec(q.order_by(BudgetPlan.year.desc())).first()
         if not plan:
+            print(f"[orcamento_augur] nenhum plano ativo para company={company_id} client={client_id}")
             return ""
         rows = _load_grid(session, company_id, plan.id)
         if not rows:
+            print(f"[orcamento_augur] plano {plan.id} sem linhas no grid")
             return ""
         # Base AV%: 02T (receita líquida) ou 01
         av_row = next((r for r in rows if r["code"] == "02T"), None) or \
@@ -707,8 +720,11 @@ def _orcamento_contexto_para_augur(session, company_id: int, client_id=None) -> 
             var  = f"{((tr-tb)/abs(tb)*100):+.1f}%" if tb else "—"
             name = (indent + row["code"] + " " + row["name"])[:42]
             lines.append(f"{name:<42} {tag} {tb:>14,.0f} {av_b:>6} {tr:>14,.0f} {av_r:>6} {var:>7}")
-        return "\n".join(lines)
-    except Exception:
+        result = "\n".join(lines)
+        print(f"[orcamento_augur] ✅ contexto gerado: {len(result)} chars, plano={plan.name}")
+        return result
+    except Exception as _e:
+        print(f"[orcamento_augur] ❌ erro ao gerar contexto: {_e}")
         return ""
 
 
