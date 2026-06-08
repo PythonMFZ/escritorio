@@ -883,10 +883,10 @@ TEMPLATES["orcamento_contas.html"] = r"""
           {{ acc.name }}
         </td>
         <td><span class="badge bg-light text-dark border" style="font-size:.72rem;">{{ acc.account_type }}</span></td>
-        <td>
+        <td style="width:160px;max-width:160px;">
           {% if acc.is_totalizer %}
             <div><span class="badge bg-primary">Sim</span></div>
-            {% if acc.formula %}<div><code style="font-size:.7rem;color:#3b5bdb;">={{ acc.formula }}</code></div>{% endif %}
+            {% if acc.formula %}<div style="max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="{{ acc.formula }}"><code style="font-size:.7rem;color:#3b5bdb;">={{ acc.formula }}</code></div>{% endif %}
           {% else %}<span class="muted small">—</span>{% endif %}
         </td>
         <td class="text-end" style="white-space:nowrap;min-width:160px;">
