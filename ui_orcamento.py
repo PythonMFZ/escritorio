@@ -29,6 +29,7 @@ class BudgetAccount(SQLModel, table=True):
     account_type: str  = Field(default="despesa")  # receita|despesa|resultado|ativo|passivo
     parent_id:    Optional[int] = Field(default=None, index=True)
     is_totalizer: bool = Field(default=False)
+    formula:      str  = Field(default="")     # ex: "01+02" ou "02T+03" para totalizadoras
     sign:         int  = Field(default=1)      # +1 soma, -1 subtrai do pai
     sort_order:   int  = Field(default=0)
     is_active:    bool = Field(default=True)
@@ -59,11 +60,12 @@ def _ensure_orcamento_tables():
             tbl.create(engine, checkfirst=True)
         except Exception:
             pass
-    # migração: adiciona client_id se tabela já existia sem essa coluna
+    # migrações de colunas adicionadas após criação inicial
     try:
         from sqlalchemy import text as _t
         with engine.begin() as _c:
             _c.execute(_t("ALTER TABLE budgetplan ADD COLUMN IF NOT EXISTS client_id INTEGER"))
+            _c.execute(_t("ALTER TABLE budgetaccount ADD COLUMN IF NOT EXISTS formula VARCHAR DEFAULT ''"))
     except Exception:
         pass
 
@@ -90,7 +92,7 @@ _ORC_MODELO_PADRAO = [
     {"code":"02",      "name":"Devoluções",                               "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":None},
     {"code":"02.1",    "name":"Devolução Varejo",                         "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":"02"},
     {"code":"02.2",    "name":"Devolução Magazine",                       "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":"02"},
-    {"code":"02T",     "name":"Receita Bruta de Vendas",                  "account_type":"resultado","is_totalizer":True, "sign":1,  "parent_code":None},
+    {"code":"02T",     "name":"Receita Bruta de Vendas",                  "account_type":"resultado","is_totalizer":True, "sign":1,  "parent_code":None, "formula":"01+02"},
     {"code":"03",      "name":"Custos Operacionais",                      "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":None},
     {"code":"03.1",    "name":"Custos de Produção",                       "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":"03"},
     {"code":"03.1.1",  "name":"Matéria Prima",                            "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":"03.1"},
@@ -107,7 +109,7 @@ _ORC_MODELO_PADRAO = [
     {"code":"03.2.1",  "name":"Salários - Mão de Obra",                   "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":"03.2"},
     {"code":"03.2.2",  "name":"Gratificações Produção",                   "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":"03.2"},
     {"code":"03.2.3",  "name":"Comissões Produção",                       "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":"03.2"},
-    {"code":"03T",     "name":"Margem Bruta",                             "account_type":"resultado","is_totalizer":True, "sign":1,  "parent_code":None},
+    {"code":"03T",     "name":"Margem Bruta",                             "account_type":"resultado","is_totalizer":True, "sign":1,  "parent_code":None, "formula":"02T+03"},
     {"code":"04",      "name":"Despesas Comerciais",                      "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":None},
     {"code":"04.1",    "name":"Despesas Comerciais",                      "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":"04"},
     {"code":"04.1.1",  "name":"Marketing e Publicidade",                  "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":"04.1"},
@@ -118,7 +120,7 @@ _ORC_MODELO_PADRAO = [
     {"code":"04.2.1",  "name":"Salários Comercial",                       "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":"04.2"},
     {"code":"04.2.2",  "name":"Salário Comercial PJ",                     "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":"04.2"},
     {"code":"04.2.3",  "name":"Comissões do Comercial - Lojas",           "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":"04.2"},
-    {"code":"05T",     "name":"Margem Líquida",                           "account_type":"resultado","is_totalizer":True, "sign":1,  "parent_code":None},
+    {"code":"05T",     "name":"Margem Líquida",                           "account_type":"resultado","is_totalizer":True, "sign":1,  "parent_code":None, "formula":"03T+04"},
     {"code":"06",      "name":"Despesas Administrativas",                 "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":None},
     {"code":"06.1",    "name":"Mão de Obra - Administrativo",             "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":"06"},
     {"code":"06.1.1",  "name":"Salário Administrativo",                   "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":"06.1"},
@@ -154,7 +156,7 @@ _ORC_MODELO_PADRAO = [
     {"code":"07.1.2",  "name":"IPTU",                                     "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":"07.1"},
     {"code":"07.1.3",  "name":"IPVA",                                     "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":"07.1"},
     {"code":"07.1.4",  "name":"Alvará",                                   "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":"07.1"},
-    {"code":"07T",     "name":"Lucro / Prejuízo Operacional",             "account_type":"resultado","is_totalizer":True, "sign":1,  "parent_code":None},
+    {"code":"07T",     "name":"Lucro / Prejuízo Operacional",             "account_type":"resultado","is_totalizer":True, "sign":1,  "parent_code":None, "formula":"05T+06+07"},
     {"code":"08",      "name":"Receitas e Despesas Financeiras",          "account_type":"resultado","is_totalizer":False,"sign":1,  "parent_code":None},
     {"code":"08.1",    "name":"Receitas e Rendimentos Financeiros",       "account_type":"receita",  "is_totalizer":False,"sign":1,  "parent_code":"08"},
     {"code":"08.1.1",  "name":"Descontos Financeiros Obtidos",            "account_type":"receita",  "is_totalizer":False,"sign":1,  "parent_code":"08.1"},
@@ -167,7 +169,7 @@ _ORC_MODELO_PADRAO = [
     {"code":"08.2.5",  "name":"Verba MKT",                                "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":"08.2"},
     {"code":"08.2.6",  "name":"Apropriação de Juros sobre Empréstimos",   "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":"08.2"},
     {"code":"08.2.7",  "name":"Multas e Juros sobre Tributos",            "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":"08.2"},
-    {"code":"08T",     "name":"Resultado Antes de Outras Receitas e Despesas","account_type":"resultado","is_totalizer":True,"sign":1,"parent_code":None},
+    {"code":"08T",     "name":"Resultado Antes de Outras Receitas e Despesas","account_type":"resultado","is_totalizer":True,"sign":1,"parent_code":None, "formula":"07T+08"},
     {"code":"09",      "name":"Outras Receitas e Despesas Não Operacionais","account_type":"resultado","is_totalizer":False,"sign":1, "parent_code":None},
     {"code":"09.1",    "name":"Outras Receitas Não Operacionais",         "account_type":"receita",  "is_totalizer":False,"sign":1,  "parent_code":"09"},
     {"code":"09.1.1",  "name":"Bonificações",                             "account_type":"receita",  "is_totalizer":False,"sign":1,  "parent_code":"09.1"},
@@ -175,7 +177,7 @@ _ORC_MODELO_PADRAO = [
     {"code":"09.2",    "name":"Outras Despesas Não Operacionais",         "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":"09"},
     {"code":"09.2.1",  "name":"Custo Vendas do Ativo Imobilizado",        "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":"09.2"},
     {"code":"09.2.2",  "name":"Depreciações",                             "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":"09.2"},
-    {"code":"09T",     "name":"Resultado Antes de Impostos",              "account_type":"resultado","is_totalizer":True, "sign":1,  "parent_code":None},
+    {"code":"09T",     "name":"Resultado Antes de Impostos",              "account_type":"resultado","is_totalizer":True, "sign":1,  "parent_code":None, "formula":"08T+09"},
     {"code":"10",      "name":"Impostos sobre o Faturamento",             "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":None},
     {"code":"10.1",    "name":"Impostos sobre Faturamento",               "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":"10"},
     {"code":"10.1.1",  "name":"FUMDES",                                   "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":"10.1"},
@@ -191,14 +193,14 @@ _ORC_MODELO_PADRAO = [
     {"code":"10.1.11", "name":"COFINS",                                   "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":"10.1"},
     {"code":"10.1.12", "name":"ICMS",                                     "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":"10.1"},
     {"code":"10.1.13", "name":"ICMS Fundo Social",                        "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":"10.1"},
-    {"code":"10T",     "name":"Resultado Líquido",                        "account_type":"resultado","is_totalizer":True, "sign":1,  "parent_code":None},
+    {"code":"10T",     "name":"Resultado Líquido",                        "account_type":"resultado","is_totalizer":True, "sign":1,  "parent_code":None, "formula":"09T+10"},
     {"code":"11",      "name":"Aportes e Distribuições a Sócios",         "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":None},
     {"code":"11.1",    "name":"Distribuições de Lucros",                  "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":"11"},
     {"code":"11.1.1",  "name":"Pro Labore",                               "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":"11.1"},
     {"code":"11.1.2",  "name":"Retiradas",                                "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":"11.1"},
-    {"code":"11T",     "name":"Resultado Após Distribuições",             "account_type":"resultado","is_totalizer":True, "sign":1,  "parent_code":None},
+    {"code":"11T",     "name":"Resultado Após Distribuições",             "account_type":"resultado","is_totalizer":True, "sign":1,  "parent_code":None, "formula":"10T+11"},
     {"code":"12",      "name":"Principal de Empréstimos",                 "account_type":"despesa",  "is_totalizer":False,"sign":-1, "parent_code":None},
-    {"code":"12T",     "name":"Resultado Após Pagamento de Empréstimos",  "account_type":"resultado","is_totalizer":True, "sign":1,  "parent_code":None},
+    {"code":"12T",     "name":"Resultado Após Pagamento de Empréstimos",  "account_type":"resultado","is_totalizer":True, "sign":1,  "parent_code":None, "formula":"11T+12"},
 ]
 
 
@@ -262,12 +264,15 @@ def _calc_dre_totalizer(acc, accounts_by_code: dict, all_accounts: list,
                         leaf_codes: set, entries_by_account: dict,
                         computed_root: dict) -> dict:
     """
-    Totaliza usando fórmula explícita por código.
+    Totaliza usando fórmula da conta (acc.formula = "01+02") ou fallback no dict.
     Soma algébrica direta — valores já carregam sinal no DB.
     """
-    components = _DRE_TOTALIZER_FORMULAS.get(acc.code)
+    formula_str = (acc.formula or "").strip()
+    if formula_str:
+        components = [c.strip() for c in formula_str.split("+") if c.strip()]
+    else:
+        components = _DRE_TOTALIZER_FORMULAS.get(acc.code)
     if not components:
-        # Fallback: totalizador sem fórmula definida retorna zero
         return {m: (0.0, 0.0) for m in range(1, 13)}
 
     totals: dict = {m: [0.0, 0.0] for m in range(1, 13)}
@@ -542,6 +547,7 @@ async def orcamento_criar_conta(request: Request, session: Session = Depends(get
         account_type=(body.get("account_type") or "despesa"),
         parent_id=_parent_id,
         is_totalizer=bool(body.get("is_totalizer")),
+        formula=(body.get("formula") or "").strip(),
         sign=int(body.get("sign") or 1),
         sort_order=max_order,
     )
@@ -564,13 +570,14 @@ async def orcamento_editar_conta(acc_id: int, request: Request, session: Session
     for k, v in [("code", body.get("code")), ("name", body.get("name")),
                   ("account_type", body.get("account_type")),
                   ("is_totalizer", body.get("is_totalizer")),
+                  ("formula", body.get("formula")),
                   ("sign", body.get("sign")), ("parent_id", body.get("parent_id")),
                   ("sort_order", body.get("sort_order"))]:
         if k in body:
             if k == "is_totalizer": setattr(acc, k, bool(v))
             elif k in ("sign", "sort_order"): setattr(acc, k, int(v))
             elif k == "parent_id": acc.parent_id = int(v) if v not in (None, "", 0, "0") else None
-            else: setattr(acc, k, v)
+            else: setattr(acc, k, v or "")
     acc.updated_at = utcnow()
     session.add(acc)
     session.commit()
@@ -633,6 +640,7 @@ async def orcamento_importar_modelo(request: Request, session: Session = Depends
             account_type=item["account_type"],
             parent_id=parent_id,
             is_totalizer=item["is_totalizer"],
+            formula=item.get("formula", ""),
             sign=item["sign"],
             sort_order=i,
         )
@@ -866,10 +874,15 @@ TEMPLATES["orcamento_contas.html"] = r"""
           {{ acc.name }}
         </td>
         <td><span class="badge bg-light text-dark border" style="font-size:.72rem;">{{ acc.account_type }}</span></td>
-        <td>{% if acc.is_totalizer %}<span class="badge bg-primary">Sim</span>{% else %}<span class="muted small">—</span>{% endif %}</td>
+        <td>
+          {% if acc.is_totalizer %}
+            <span class="badge bg-primary">Sim</span>
+            {% if acc.formula %}<code class="ms-1" style="font-size:.7rem;">={{ acc.formula }}</code>{% endif %}
+          {% else %}<span class="muted small">—</span>{% endif %}
+        </td>
         <td class="text-end" style="white-space:nowrap;">
           <button class="btn btn-outline-secondary btn-sm" onclick="novaConta({{ acc.id }})" title="Nova sub-conta" style="font-size:.75rem;padding:1px 6px;">+ Sub</button>
-          <button class="btn btn-outline-secondary btn-sm" onclick="editarConta({{ acc.id }}, '{{ acc.code }}', '{{ acc.name|replace("'", "\\'") }}', '{{ acc.account_type }}', {{ acc.is_totalizer|lower }}, {{ acc.sign }})" title="Editar" style="font-size:.75rem;padding:1px 6px;">Editar</button>
+          <button class="btn btn-outline-secondary btn-sm" onclick="editarConta({{ acc.id }}, '{{ acc.code }}', '{{ acc.name|replace("'", "\\'") }}', '{{ acc.account_type }}', {{ acc.is_totalizer|lower }}, {{ acc.sign }}, '{{ acc.formula|default("")|replace("'", "\\'") }}')" title="Editar" style="font-size:.75rem;padding:1px 6px;">Editar</button>
           <button class="btn btn-outline-danger btn-sm" onclick="deletarConta({{ acc.id }}, '{{ acc.name|replace("'", "\\'") }}')" title="Excluir" style="font-size:.75rem;padding:1px 6px;">Remover</button>
         </td>
       </tr>
@@ -922,11 +935,17 @@ TEMPLATES["orcamento_contas.html"] = r"""
           </div>
           <div class="col-3">
             <label class="form-label">Totaliz.</label>
-            <select id="cTot" class="form-select form-select-sm">
+            <select id="cTot" class="form-select form-select-sm" onchange="toggleFormula()">
               <option value="false">Não</option>
               <option value="true">Sim</option>
             </select>
           </div>
+        </div>
+        <div class="mt-2" id="cFormulaRow" style="display:none;">
+          <label class="form-label">Fórmula <span class="text-muted small">(ex: 01+02 ou 02T+03)</span></label>
+          <input type="text" id="cFormula" class="form-control form-control-sm font-monospace"
+            placeholder="ex: 01+02" autocomplete="off">
+          <div class="form-text">Códigos separados por +. A soma é algébrica (valores do DB já têm sinal).</div>
         </div>
       </div>
       <div class="modal-footer">
@@ -939,6 +958,10 @@ TEMPLATES["orcamento_contas.html"] = r"""
 <script>
 let _mc;
 document.addEventListener('DOMContentLoaded', () => { _mc = new bootstrap.Modal(document.getElementById('modalConta')); });
+function toggleFormula() {
+  const isTot = document.getElementById('cTot').value === 'true';
+  document.getElementById('cFormulaRow').style.display = isTot ? '' : 'none';
+}
 function novaConta(pid) {
   document.getElementById('modalContaTitulo').textContent = pid ? 'Nova Sub-conta' : 'Nova Conta';
   document.getElementById('cId').value = '';
@@ -948,6 +971,8 @@ function novaConta(pid) {
   document.getElementById('cType').value = 'despesa';
   document.getElementById('cSign').value = '1';
   document.getElementById('cTot').value = 'false';
+  document.getElementById('cFormula').value = '';
+  toggleFormula();
   const info = document.getElementById('cParentInfo');
   if (pid) {
     const row = document.querySelector('[data-id="' + pid + '"]');
@@ -956,7 +981,7 @@ function novaConta(pid) {
   } else { info.style.display = 'none'; }
   _mc.show();
 }
-function editarConta(id, code, name, type, isTot, sign) {
+function editarConta(id, code, name, type, isTot, sign, formula) {
   document.getElementById('modalContaTitulo').textContent = 'Editar Conta';
   document.getElementById('cId').value = id;
   document.getElementById('cParentId').value = '';
@@ -965,7 +990,9 @@ function editarConta(id, code, name, type, isTot, sign) {
   document.getElementById('cType').value = type;
   document.getElementById('cSign').value = String(sign);
   document.getElementById('cTot').value = isTot ? 'true' : 'false';
+  document.getElementById('cFormula').value = formula || '';
   document.getElementById('cParentInfo').style.display = 'none';
+  toggleFormula();
   _mc.show();
 }
 async function salvarConta() {
@@ -976,6 +1003,7 @@ async function salvarConta() {
     account_type: document.getElementById('cType').value,
     sign: parseInt(document.getElementById('cSign').value),
     is_totalizer: document.getElementById('cTot').value === 'true',
+    formula: document.getElementById('cFormula').value.trim(),
     parent_id: document.getElementById('cParentId').value || null,
   };
   const url = id ? '/api/orcamento/conta/' + id + '/editar' : '/api/orcamento/conta/criar';
