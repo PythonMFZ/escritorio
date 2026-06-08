@@ -237,6 +237,61 @@ def _calc_totalizer(account_id: int, entries_by_account: dict, accounts_by_paren
     return {m: (totals[m][0], totals[m][1]) for m in range(1, 13)}
 
 
+def _subtree_sum(account_id: int, entries_by_account: dict, accounts_by_parent: dict) -> dict:
+    """Soma recursiva de todas as entradas da subárvore (sem aplicar sign — valores brutos)."""
+    totals: dict = {m: [0.0, 0.0] for m in range(1, 13)}
+    for m in range(1, 13):
+        e = entries_by_account.get((account_id, m))
+        if e:
+            totals[m][0] += e.value_budgeted
+            totals[m][1] += e.value_realized
+    for child in accounts_by_parent.get(account_id, []):
+        sub = _subtree_sum(child.id, entries_by_account, accounts_by_parent)
+        for m in range(1, 13):
+            totals[m][0] += sub[m][0]
+            totals[m][1] += sub[m][1]
+    return {m: (totals[m][0], totals[m][1]) for m in range(1, 13)}
+
+
+def _calc_dre_totalizer(acc, root_accounts: list, entries_by_account: dict,
+                        accounts_by_parent: dict, computed_root: dict) -> dict:
+    """
+    Totalizador DRE por posição: soma todas as contas-raiz desde o totalizador
+    raiz anterior (inclusive) até esta (exclusive), aplicando o sign de cada uma.
+
+    Convenção: valores devem ser lançados como positivos. O sign do plano de
+    contas (-1 para despesas) determina se somam ou subtraem no DRE.
+    """
+    idx = next((i for i, a in enumerate(root_accounts) if a.id == acc.id), None)
+    if idx is None:
+        return {m: (0.0, 0.0) for m in range(1, 13)}
+
+    totals: dict = {m: [0.0, 0.0] for m in range(1, 13)}
+
+    # Encontra totalizador raiz anterior
+    prev_t_idx = None
+    for i in range(idx - 1, -1, -1):
+        if root_accounts[i].is_totalizer:
+            prev_t_idx = i
+            break
+
+    start = prev_t_idx if prev_t_idx is not None else 0
+
+    for i in range(start, idx):
+        a = root_accounts[i]
+        sign = a.sign if a.sign else 1
+        if a.is_totalizer:
+            cv = computed_root.get(a.id, {m: (0.0, 0.0) for m in range(1, 13)})
+            for m in range(1, 13):
+                totals[m][0] += cv[m][0] * sign
+                totals[m][1] += cv[m][1] * sign
+        else:
+            sub = _subtree_sum(a.id, entries_by_account, accounts_by_parent)
+            for m in range(1, 13):
+                totals[m][0] += sub[m][0] * sign
+                totals[m][1] += sub[m][1] * sign
+
+    return {m: (totals[m][0], totals[m][1]) for m in range(1, 13)}
 def _load_grid(session, company_id: int, plan_id: int):
     accounts = session.exec(
         select(BudgetAccount)
@@ -251,23 +306,50 @@ def _load_grid(session, company_id: int, plan_id: int):
     accounts_by_parent: dict = {}
     for a in accounts:
         accounts_by_parent.setdefault(a.parent_id, []).append(a)
+
+    # Contas raiz ordenadas — usadas pelo totalizador DRE por posição
+    root_accounts = sorted(
+        [a for a in accounts if a.parent_id is None],
+        key=lambda x: (x.sort_order, x.code)
+    )
+    computed_root: dict = {}  # account_id → {month: (b, r)} para totalizadores raiz já processados
+
     tree = _build_account_tree(accounts)
     rows = []
     for (acc, depth) in tree:
+        has_children = bool(accounts_by_parent.get(acc.id))
+
         if acc.is_totalizer:
-            vals = _calc_totalizer(acc.id, entries_by_account, accounts_by_parent)
+            if has_children:
+                # Totaliza filhos explícitos (comportamento original)
+                vals = _calc_totalizer(acc.id, entries_by_account, accounts_by_parent)
+            else:
+                # DRE por posição: soma contas raiz desde o totalizador anterior
+                vals = _calc_dre_totalizer(acc, root_accounts, entries_by_account,
+                                           accounts_by_parent, computed_root)
+            if acc.parent_id is None:
+                computed_root[acc.id] = vals
             months = {m: {"b": round(vals[m][0], 2), "r": round(vals[m][1], 2)} for m in range(1, 13)}
+
+        elif has_children:
+            # Conta-pai não totalizadora: exibe soma da subárvore (somente leitura)
+            vals = _subtree_sum(acc.id, entries_by_account, accounts_by_parent)
+            months = {m: {"b": round(vals[m][0], 2), "r": round(vals[m][1], 2)} for m in range(1, 13)}
+
         else:
+            # Conta folha: entradas editáveis
             months = {}
             for m in range(1, 13):
                 e = entries_by_account.get((acc.id, m))
                 months[m] = {"b": e.value_budgeted if e else 0.0,
                               "r": e.value_realized if e else 0.0}
+
         total_b = sum(months[m]["b"] for m in range(1, 13))
         total_r = sum(months[m]["r"] for m in range(1, 13))
         rows.append({
             "id": acc.id, "code": acc.code, "name": acc.name,
             "type": acc.account_type, "is_totalizer": acc.is_totalizer,
+            "has_children": has_children,
             "depth": depth, "months": months,
             "total_b": round(total_b, 2), "total_r": round(total_r, 2),
         })
@@ -275,6 +357,23 @@ def _load_grid(session, company_id: int, plan_id: int):
 
 
 _ORC_ROLES = ("admin", "equipe", "cliente")
+
+
+def _orc_brl(v):
+    """Formata número no padrão BRL: 1.900.389 ou (1.900.389) para negativos."""
+    try:
+        v = float(v or 0)
+        if v == 0:
+            return "—"
+        s = f"{abs(v):,.0f}".replace(",", ".")
+        return f"({s})" if v < 0 else s
+    except Exception:
+        return "—"
+
+try:
+    templates_env.filters["brl"] = _orc_brl
+except Exception:
+    pass
 
 
 # ── Rotas ─────────────────────────────────────────────────────────────────────
@@ -916,6 +1015,7 @@ TEMPLATES["orcamento_grid.html"] = r"""
 .orc-grid .col-name{text-align:left!important;min-width:200px;}
 .orc-totalizer{background:#e8f0fe!important;font-weight:700;}
 .orc-totalizer td{background:#e8f0fe!important;}
+.orc-parent-sum td{background:#f5f5f5!important;font-style:italic;color:#555;}
 .orc-depth-0 .col-name{padding-left:4px!important;font-weight:700;font-size:.8rem;}
 .orc-depth-1 .col-name{padding-left:18px!important;}
 .orc-depth-2 .col-name{padding-left:34px!important;}
@@ -983,7 +1083,7 @@ TEMPLATES["orcamento_grid.html"] = r"""
   </thead>
   <tbody>
     {% for row in rows %}
-    <tr class="{% if row.is_totalizer %}orc-totalizer{% endif %} orc-depth-{{ row.depth }}">
+    <tr class="{% if row.is_totalizer %}orc-totalizer{% elif row.has_children %}orc-parent-sum{% endif %} orc-depth-{{ row.depth }}">
       <td class="col-name">
         {% if row.is_totalizer %}<i class="bi bi-calculator me-1 text-primary" style="font-size:.7rem;"></i>{% endif %}
         <span class="text-muted" style="font-size:.68rem;">{{ row.code }}</span> {{ row.name }}
@@ -991,7 +1091,7 @@ TEMPLATES["orcamento_grid.html"] = r"""
       {% for m in range(1, 13) %}
       {% set mv = row.months[m] %}
       <td class="orc-val">
-        {% if row.is_totalizer %}<span>{{ "%.0f"|format(mv.b) }}</span>
+        {% if row.is_totalizer or row.has_children %}<span>{{ mv.b | brl }}</span>
         {% else %}<input type="number" step="0.01"
           data-plan="{{ plan.id }}" data-acc="{{ row.id }}"
           data-month="{{ m }}" data-field="b"
@@ -1000,7 +1100,7 @@ TEMPLATES["orcamento_grid.html"] = r"""
         {% endif %}
       </td>
       <td class="orc-val orc-realizado">
-        {% if row.is_totalizer %}<span>{{ "%.0f"|format(mv.r) }}</span>
+        {% if row.is_totalizer or row.has_children %}<span>{{ mv.r | brl }}</span>
         {% else %}<input type="number" step="0.01"
           data-plan="{{ plan.id }}" data-acc="{{ row.id }}"
           data-month="{{ m }}" data-field="r"
@@ -1012,8 +1112,8 @@ TEMPLATES["orcamento_grid.html"] = r"""
         {% if mv.b %}{{ "%+.0f%%"|format((mv.r - mv.b) / mv.b * 100) }}{% else %}—{% endif %}
       </td>
       {% endfor %}
-      <td class="orc-val orc-total-col">{{ "%.0f"|format(row.total_b) }}</td>
-      <td class="orc-val orc-total-col orc-realizado">{{ "%.0f"|format(row.total_r) }}</td>
+      <td class="orc-val orc-total-col">{{ row.total_b | brl }}</td>
+      <td class="orc-val orc-total-col orc-realizado">{{ row.total_r | brl }}</td>
       <td class="orc-val orc-total-col {% if row.total_b and row.total_r < row.total_b %}orc-var-neg{% elif row.total_b and row.total_r >= row.total_b %}orc-var-pos{% endif %}">
         {% if row.total_b %}{{ "%+.0f%%"|format((row.total_r - row.total_b) / row.total_b * 100) }}{% else %}—{% endif %}
       </td>
