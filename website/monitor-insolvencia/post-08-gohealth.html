@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Monitor de Insolvência · Ed. 02 · GoHealth</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Syne:wght@700;800&family=Poppins:wght@300;400;500;600;700;800&family=DM+Mono:wght@400;500&display=swap');
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: #1a1a1a; display: flex; justify-content: center; align-items: flex-start; min-height: 100vh; padding: 40px 20px; font-family: 'Poppins', sans-serif; }
+  .card { width: 1080px; background: #0D0D0D; position: relative; overflow: hidden; }
+  .card-topbar { width: 100%; height: 5px; background: #E07020; }
+  .card-header { padding: 48px 64px 36px; display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 1px solid rgba(224,112,32,0.15); }
+  .header-serie { display: flex; flex-direction: column; gap: 6px; }
+  .serie-label { font-family: 'DM Mono', monospace; font-size: 11px; letter-spacing: 0.18em; text-transform: uppercase; color: #E07020; }
+  .serie-title { font-family: 'Syne', sans-serif; font-size: 22px; font-weight: 800; color: #FAF7F2; letter-spacing: -0.01em; }
+  .header-meta { text-align: right; display: flex; flex-direction: column; gap: 4px; }
+  .meta-edicao { font-family: 'DM Mono', monospace; font-size: 11px; color: rgba(224,112,32,0.7); letter-spacing: 0.12em; }
+  .meta-data { font-family: 'DM Mono', monospace; font-size: 11px; color: #666; letter-spacing: 0.08em; }
+  .case-origin { padding: 28px 64px 0; display: flex; align-items: center; gap: 12px; }
+  .tag-pais { font-family: 'DM Mono', monospace; font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase; color: #0D0D0D; background: #E07020; padding: 4px 12px; font-weight: 500; }
+  .tag-tipo { font-family: 'DM Mono', monospace; font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase; color: #E07020; border: 1px solid rgba(224,112,32,0.4); padding: 4px 12px; }
+  .card-headline { padding: 32px 64px 28px; }
+  .headline-text { font-family: 'Poppins', sans-serif; font-size: 40px; font-weight: 700; color: #FAF7F2; line-height: 1.15; letter-spacing: -0.01em; }
+  .headline-text em { color: #E07020; font-style: normal; }
+  .headline-sub { margin-top: 14px; font-size: 15px; font-weight: 300; color: #8B8B8B; line-height: 1.6; max-width: 780px; }
+  .card-logos { padding: 0 64px 32px; display: flex; align-items: center; gap: 20px; }
+  .logo-box { border: 1px solid rgba(224,112,32,0.2); padding: 14px 28px; display: flex; flex-direction: column; gap: 4px; min-width: 200px; }
+  .logo-box span { font-family: 'Poppins', sans-serif; font-size: 15px; font-weight: 700; color: #FAF7F2; }
+  .logo-box small { font-family: 'DM Mono', monospace; font-size: 10px; color: #555; letter-spacing: 0.06em; }
+  .logo-detail { font-family: 'DM Mono', monospace; font-size: 11px; color: #555; margin-left: 8px; line-height: 1.6; }
+  .card-body { padding: 36px 64px 40px; border-top: 1px solid rgba(224,112,32,0.08); }
+  .body-text { font-size: 15px; font-weight: 300; color: #C8C4BE; line-height: 1.8; margin-bottom: 16px; }
+  .body-text strong { color: #FAF7F2; font-weight: 500; }
+  .body-text em { color: #E07020; font-style: normal; }
+  .card-analise { margin: 0 64px 36px; padding: 24px 28px; border-left: 3px solid #E07020; background: rgba(224,112,32,0.05); }
+  .analise-label { font-family: 'DM Mono', monospace; font-size: 9px; letter-spacing: 0.2em; text-transform: uppercase; color: #E07020; margin-bottom: 10px; }
+  .analise-text { font-size: 14px; font-weight: 300; color: #C8C4BE; line-height: 1.75; }
+  .analise-text strong { color: #FAF7F2; font-weight: 500; }
+  .card-numeros { display: grid; grid-template-columns: repeat(3, 1fr); border-top: 1px solid rgba(224,112,32,0.15); }
+  .num-item { padding: 36px 40px; border-right: 1px solid rgba(224,112,32,0.1); display: flex; flex-direction: column; gap: 10px; }
+  .num-item:last-child { border-right: none; }
+  .num-icon { width: 36px; height: 36px; border: 1px solid rgba(224,112,32,0.3); display: flex; align-items: center; justify-content: center; font-family: 'DM Mono', monospace; font-size: 14px; color: #E07020; margin-bottom: 4px; }
+  .num-valor { font-family: 'Poppins', sans-serif; font-size: 26px; font-weight: 700; color: #FAF7F2; line-height: 1.1; letter-spacing: -0.01em; }
+  .num-label { font-family: 'DM Mono', monospace; font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: #666; line-height: 1.5; }
+  .card-footer { padding: 24px 64px; border-top: 1px solid rgba(224,112,32,0.1); display: flex; justify-content: space-between; align-items: center; }
+  .footer-fonte { display: flex; flex-direction: column; gap: 3px; }
+  .fonte-label { font-family: 'DM Mono', monospace; font-size: 9px; letter-spacing: 0.16em; text-transform: uppercase; color: #444; }
+  .fonte-text { font-family: 'DM Mono', monospace; font-size: 10px; color: #666; }
+  .footer-brand { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; }
+  .brand-name { font-family: 'Syne', sans-serif; font-size: 14px; font-weight: 800; color: #E07020; letter-spacing: 0.02em; }
+  .brand-sub { font-family: 'DM Mono', monospace; font-size: 9px; color: #444; letter-spacing: 0.1em; text-transform: uppercase; }
+  .card-bottombar { width: 100%; height: 3px; background: linear-gradient(to right, #E07020, rgba(224,112,32,0.2)); }
+  .preview-controls { margin-top: 32px; text-align: center; color: #888; font-family: 'Poppins', sans-serif; font-size: 13px; }
+  .preview-controls kbd { background: #222; border: 1px solid #444; padding: 2px 8px; border-radius: 3px; color: #ccc; font-size: 12px; }
+</style>
+</head>
+<body>
+<div style="display: flex; flex-direction: column; align-items: center;">
+
+<div class="card">
+  <div class="card-topbar"></div>
+
+  <div class="card-header">
+    <div class="header-serie">
+      <span class="serie-label">Maffezzolli Capital · Reestruturação &amp; Insolvência</span>
+      <span class="serie-title">Monitor de Insolvência</span>
+    </div>
+    <div class="header-meta">
+      <span class="meta-edicao">Edição 02 · Internacional</span>
+      <span class="meta-data">Jun 2026</span>
+    </div>
+  </div>
+
+  <div class="case-origin">
+    <span class="tag-pais">EUA</span>
+    <span class="tag-tipo">Chapter 11 Prepackaged</span>
+    <span class="tag-tipo">Saúde · Medicare · Corretagem</span>
+  </div>
+
+  <div class="card-headline">
+    <div class="headline-text">
+      GoHealth entra em Chapter 11 após<br>
+      receita cair <em>95% em um ano</em> —<br>
+      Medicare Advantage cortou comissões
+    </div>
+    <div class="headline-sub">
+      Corretora digital de planos Medicare protocolou Chapter 11 prepackaged em Delaware em 7 de junho de 2026 com USD 772M em dívida. 100% dos credores assinaram RSA pré-protocolo. Meta: emergir antes da temporada AEP de outubro.
+    </div>
+  </div>
+
+  <div class="card-logos">
+    <div class="logo-box">
+      <span>GoHealth Inc.</span>
+      <small>Chicago, IL · Fundada 2001 · Nasdaq: GOCO</small>
+    </div>
+    <span class="logo-detail">Plataforma digital de corretagem de Medicare Advantage<br>Clientes: Humana · UnitedHealth · Aetna · CVS Health</span>
+  </div>
+
+  <div class="card-body">
+    <p class="body-text">
+      A GoHealth operava como intermediária digital entre consumidores americanos e seguradoras de Medicare Advantage, ganhando comissões por cada apólice vendida. O modelo funcionou enquanto as seguradoras precisavam crescer em distribuição. Em 2024-2025, pressionadas por sinistros acima do esperado, <strong>as grandes seguradoras cortaram drasticamente as comissões pagas a brokers externos</strong> — alguns contratos foram encerrados sem aviso. A receita da GoHealth despencou de USD 221 milhões no Q1 de 2025 para <em>apenas USD 11,9 milhões no Q1 de 2026</em>, queda de 95% em 12 meses.
+    </p>
+    <p class="body-text">
+      Com receita insuficiente para servir o term loan de <strong>USD 772 milhões a taxa efetiva de 14,7%</strong>, a empresa negociou um RSA (Restructuring Support Agreement) com 100% dos credores antes do protocolo — estrutura conhecida como "prepackaged", que permite tramitação judicial ultra-rápida. O plano converte dívida em equity e preserva as operações tecnológicas e a plataforma de matching de segurados. A empresa mira sair do Chapter 11 antes de outubro de 2026, quando começa o Annual Enrollment Period (AEP) — janela crítica de vendas de Medicare.
+    </p>
+  </div>
+
+  <div class="card-analise">
+    <div class="analise-label">Análise Maffezzolli</div>
+    <p class="analise-text">
+      A GoHealth é um caso clássico de <strong>risco de concentração de receita disfarçado de diversificação</strong>: a empresa tinha dezenas de seguradoras como clientes, mas todas dependiam da mesma lógica — comissões de distribuição de Medicare Advantage. Quando o setor inteiro retraiu ao mesmo tempo, não havia hedge. O <strong>Chapter 11 prepackaged com RSA de 100% dos credores</strong> é a forma mais eficiente de reestruturação de dívida nos EUA — equivale a uma troca de dívida por equity consensual chancelada pelo Judiciário, com proteção contra dissidentes. A corrida para emergir antes do AEP de outubro revela que a empresa ainda tem valor operacional real: se perder a janela de inscrições, perde um ano inteiro de receita. Lição para o Brasil: empresas de intermediação digital (fintechs, insurtechs, corretoras digitais) são altamente vulneráveis a mudanças unilaterais de política das plataformas ou seguradoras contratantes — o modelo de negócio precisa de contratos de longo prazo ou receita recorrente própria.
+    </p>
+  </div>
+
+  <div class="card-numeros">
+    <div class="num-item">
+      <div class="num-icon">$</div>
+      <div class="num-valor">USD 772M</div>
+      <div class="num-label">Dívida total<br>(term loan 14,7%)</div>
+    </div>
+    <div class="num-item">
+      <div class="num-icon">↓</div>
+      <div class="num-valor">−95%</div>
+      <div class="num-label">Queda de receita<br>Q1/25 → Q1/26</div>
+    </div>
+    <div class="num-item">
+      <div class="num-icon">✓</div>
+      <div class="num-valor">100%</div>
+      <div class="num-label">Credores com RSA<br>pré-protocolo</div>
+    </div>
+  </div>
+
+  <div class="card-footer">
+    <div class="footer-fonte">
+      <span class="fonte-label">Fontes</span>
+      <span class="fonte-text">Reuters · Bloomberg · Court filings D.Del. · Nasdaq GOCO · Jun/2026</span>
+    </div>
+    <div class="footer-brand">
+      <span class="brand-name">MAFFEZZOLLI.CAPITAL</span>
+      <span class="brand-sub">Reestruturação · Mercado de Capitais</span>
+    </div>
+  </div>
+
+  <div class="card-bottombar"></div>
+</div>
+
+<div class="preview-controls">
+  <p>Zoom 100% → <kbd>Cmd+Shift+4</kbd> para screenshot · Largura: 1080px</p>
+</div>
+
+</div>
+</body>
+</html>
