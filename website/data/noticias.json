@@ -51,6 +51,58 @@
       "manchete": "West Marine afunda com USD 550M em dívida — LBO de 2017 cobra sua conta",
       "resumo": "Maior varejista náutico dos EUA entra em Chapter 11 pré-negociado com apoio de 96% dos credores.",
       "arquivo": "monitor-insolvencia/post-04-westmarine.html"
+    },
+    {
+      "id": "raizen-2026-06",
+      "edicao": "Ed. 02",
+      "data": "2026-06-01",
+      "pais": "Brasil",
+      "tipo": "Recuperação Extrajudicial",
+      "empresa": "Raízen S.A.",
+      "marcas": "Shell + Cosan · Combustíveis · Etanol · SAF",
+      "passivo": "R$ 75,3Bi",
+      "manchete": "Raízen protocola maior REx da história — R$ 64,7 bilhões em dívida e Shell injetando R$ 3,5 bi",
+      "resumo": "Joint venture Shell + Cosan chega ao limite após seca severa, queda no açúcar e juros reais elevados. Plano aprovado por 75% dos credores converte 45% da dívida em ações.",
+      "arquivo": "monitor-insolvencia/post-05-raizen.html"
+    },
+    {
+      "id": "coteminas-2026-06",
+      "edicao": "Ed. 02",
+      "data": "2026-06-02",
+      "pais": "Brasil",
+      "tipo": "Recuperação Judicial",
+      "empresa": "Coteminas",
+      "marcas": "Artex · MMartan · Santista · Casa Moysés",
+      "passivo": "R$ 2Bi",
+      "manchete": "Coteminas tem RJ de R$ 2 bilhões homologada — Artex e MMartan sobrevivem, mas caixa é crítico",
+      "resumo": "Juiz homologa plano em maio de 2026, mas alerta: atraso nos honorários do administrador judicial pode converter recuperação em falência. Fast fashion asiático foi o golpe final.",
+      "arquivo": "monitor-insolvencia/post-06-coteminas.html"
+    },
+    {
+      "id": "fatbrands-2026-06",
+      "edicao": "Ed. 02",
+      "data": "2026-06-05",
+      "pais": "EUA",
+      "tipo": "Chapter 11",
+      "empresa": "FAT Brands Inc.",
+      "marcas": "Fatburger · Johnny Rockets · Twin Peaks · Round Table",
+      "passivo": "USD 1,3Bi",
+      "manchete": "FAT Brands fragmentada em USD 1 bilhão — Fatburger, Johnny Rockets e Twin Peaks vendidas separadamente",
+      "resumo": "Empire de 18 marcas de fast food entra em Chapter 11 com USD 1,3 bi em dívidas e USD 2,1 mi em caixa. Tribunal aprova venda do portfólio para quatro compradores. Smokey Bones encerra definitivamente.",
+      "arquivo": "monitor-insolvencia/post-07-fatbrands.html"
+    },
+    {
+      "id": "gohealth-2026-06",
+      "edicao": "Ed. 02",
+      "data": "2026-06-07",
+      "pais": "EUA",
+      "tipo": "Chapter 11 Prepackaged",
+      "empresa": "GoHealth Inc.",
+      "marcas": "Nasdaq: GOCO · Medicare Advantage",
+      "passivo": "USD 772M",
+      "manchete": "GoHealth entra em Chapter 11 após receita cair 95% em um ano — Medicare Advantage cortou comissões",
+      "resumo": "Corretora digital de planos Medicare protocolou Chapter 11 prepackaged em Delaware com 100% dos credores em RSA. Meta: emergir antes da temporada AEP de outubro de 2026.",
+      "arquivo": "monitor-insolvencia/post-08-gohealth.html"
     }
   ]
 }

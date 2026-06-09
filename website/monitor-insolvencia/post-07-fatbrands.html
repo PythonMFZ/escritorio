@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Monitor de Insolvência · Ed. 02 · FAT Brands</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Syne:wght@700;800&family=Poppins:wght@300;400;500;600;700;800&family=DM+Mono:wght@400;500&display=swap');
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: #1a1a1a; display: flex; justify-content: center; align-items: flex-start; min-height: 100vh; padding: 40px 20px; font-family: 'Poppins', sans-serif; }
+  .card { width: 1080px; background: #0D0D0D; position: relative; overflow: hidden; }
+  .card-topbar { width: 100%; height: 5px; background: #E07020; }
+  .card-header { padding: 48px 64px 36px; display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 1px solid rgba(224,112,32,0.15); }
+  .header-serie { display: flex; flex-direction: column; gap: 6px; }
+  .serie-label { font-family: 'DM Mono', monospace; font-size: 11px; letter-spacing: 0.18em; text-transform: uppercase; color: #E07020; }
+  .serie-title { font-family: 'Syne', sans-serif; font-size: 22px; font-weight: 800; color: #FAF7F2; letter-spacing: -0.01em; }
+  .header-meta { text-align: right; display: flex; flex-direction: column; gap: 4px; }
+  .meta-edicao { font-family: 'DM Mono', monospace; font-size: 11px; color: rgba(224,112,32,0.7); letter-spacing: 0.12em; }
+  .meta-data { font-family: 'DM Mono', monospace; font-size: 11px; color: #666; letter-spacing: 0.08em; }
+  .case-origin { padding: 28px 64px 0; display: flex; align-items: center; gap: 12px; }
+  .tag-pais { font-family: 'DM Mono', monospace; font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase; color: #0D0D0D; background: #E07020; padding: 4px 12px; font-weight: 500; }
+  .tag-tipo { font-family: 'DM Mono', monospace; font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase; color: #E07020; border: 1px solid rgba(224,112,32,0.4); padding: 4px 12px; }
+  .card-headline { padding: 32px 64px 28px; }
+  .headline-text { font-family: 'Poppins', sans-serif; font-size: 40px; font-weight: 700; color: #FAF7F2; line-height: 1.15; letter-spacing: -0.01em; }
+  .headline-text em { color: #E07020; font-style: normal; }
+  .headline-sub { margin-top: 14px; font-size: 15px; font-weight: 300; color: #8B8B8B; line-height: 1.6; max-width: 780px; }
+  .card-logos { padding: 0 64px 32px; display: flex; align-items: center; gap: 20px; }
+  .logo-box { border: 1px solid rgba(224,112,32,0.2); padding: 14px 28px; display: flex; flex-direction: column; gap: 4px; min-width: 200px; }
+  .logo-box span { font-family: 'Poppins', sans-serif; font-size: 15px; font-weight: 700; color: #FAF7F2; }
+  .logo-box small { font-family: 'DM Mono', monospace; font-size: 10px; color: #555; letter-spacing: 0.06em; }
+  .logo-detail { font-family: 'DM Mono', monospace; font-size: 11px; color: #555; margin-left: 8px; line-height: 1.6; }
+  .card-body { padding: 36px 64px 40px; border-top: 1px solid rgba(224,112,32,0.08); }
+  .body-text { font-size: 15px; font-weight: 300; color: #C8C4BE; line-height: 1.8; margin-bottom: 16px; }
+  .body-text strong { color: #FAF7F2; font-weight: 500; }
+  .body-text em { color: #E07020; font-style: normal; }
+  .card-analise { margin: 0 64px 36px; padding: 24px 28px; border-left: 3px solid #E07020; background: rgba(224,112,32,0.05); }
+  .analise-label { font-family: 'DM Mono', monospace; font-size: 9px; letter-spacing: 0.2em; text-transform: uppercase; color: #E07020; margin-bottom: 10px; }
+  .analise-text { font-size: 14px; font-weight: 300; color: #C8C4BE; line-height: 1.75; }
+  .analise-text strong { color: #FAF7F2; font-weight: 500; }
+  .card-numeros { display: grid; grid-template-columns: repeat(3, 1fr); border-top: 1px solid rgba(224,112,32,0.15); }
+  .num-item { padding: 36px 40px; border-right: 1px solid rgba(224,112,32,0.1); display: flex; flex-direction: column; gap: 10px; }
+  .num-item:last-child { border-right: none; }
+  .num-icon { width: 36px; height: 36px; border: 1px solid rgba(224,112,32,0.3); display: flex; align-items: center; justify-content: center; font-family: 'DM Mono', monospace; font-size: 14px; color: #E07020; margin-bottom: 4px; }
+  .num-valor { font-family: 'Poppins', sans-serif; font-size: 26px; font-weight: 700; color: #FAF7F2; line-height: 1.1; letter-spacing: -0.01em; }
+  .num-label { font-family: 'DM Mono', monospace; font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: #666; line-height: 1.5; }
+  .card-footer { padding: 24px 64px; border-top: 1px solid rgba(224,112,32,0.1); display: flex; justify-content: space-between; align-items: center; }
+  .footer-fonte { display: flex; flex-direction: column; gap: 3px; }
+  .fonte-label { font-family: 'DM Mono', monospace; font-size: 9px; letter-spacing: 0.16em; text-transform: uppercase; color: #444; }
+  .fonte-text { font-family: 'DM Mono', monospace; font-size: 10px; color: #666; }
+  .footer-brand { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; }
+  .brand-name { font-family: 'Syne', sans-serif; font-size: 14px; font-weight: 800; color: #E07020; letter-spacing: 0.02em; }
+  .brand-sub { font-family: 'DM Mono', monospace; font-size: 9px; color: #444; letter-spacing: 0.1em; text-transform: uppercase; }
+  .card-bottombar { width: 100%; height: 3px; background: linear-gradient(to right, #E07020, rgba(224,112,32,0.2)); }
+  .preview-controls { margin-top: 32px; text-align: center; color: #888; font-family: 'Poppins', sans-serif; font-size: 13px; }
+  .preview-controls kbd { background: #222; border: 1px solid #444; padding: 2px 8px; border-radius: 3px; color: #ccc; font-size: 12px; }
+</style>
+</head>
+<body>
+<div style="display: flex; flex-direction: column; align-items: center;">
+
+<div class="card">
+  <div class="card-topbar"></div>
+
+  <div class="card-header">
+    <div class="header-serie">
+      <span class="serie-label">Maffezzolli Capital · Reestruturação &amp; Insolvência</span>
+      <span class="serie-title">Monitor de Insolvência</span>
+    </div>
+    <div class="header-meta">
+      <span class="meta-edicao">Edição 02 · Internacional</span>
+      <span class="meta-data">Jan — Jun 2026</span>
+    </div>
+  </div>
+
+  <div class="case-origin">
+    <span class="tag-pais">EUA</span>
+    <span class="tag-tipo">Chapter 11</span>
+    <span class="tag-tipo">Franquias · 18 marcas · 2.200 unidades</span>
+  </div>
+
+  <div class="card-headline">
+    <div class="headline-text">
+      FAT Brands fragmentada em <em>USD 1 bilhão</em><br>
+      — Fatburger, Johnny Rockets e<br>
+      Twin Peaks vendidas separadamente
+    </div>
+    <div class="headline-sub">
+      Empire de 18 marcas de fast food entra em Chapter 11 com USD 1,3 bi em dívidas e USD 2,1 mi em caixa. Tribunal aprova venda do portfólio para quatro compradores. Smokey Bones encerra definitivamente.
+    </div>
+  </div>
+
+  <div class="card-logos">
+    <div class="logo-box">
+      <span>FAT Brands Inc.</span>
+      <small>18 marcas · +2.200 unidades globais</small>
+    </div>
+    <span class="logo-detail">Fatburger · Johnny Rockets · Round Table Pizza<br>Fazoli's · Twin Peaks · Ponderosa · Bonanza · e mais 11</span>
+  </div>
+
+  <div class="card-body">
+    <p class="body-text">
+      Entre 2017 e 2023, o fundador Andy Wiederhorn — com histórico de processos criminais anteriores — expandiu o portfólio da FAT Brands de 1 para 18 marcas, financiando tudo com uma <strong>estrutura de securitização de royalties</strong> que funcionava enquanto as receitas cresciam. Quando a inflação nos EUA pressionou o tráfego em fast food em 2023-2024, a receita caiu e o custo da dívida tornou-se esmagador. Em janeiro de 2026, a empresa protocolou Chapter 11 com <em>apenas USD 2,1 milhões em caixa</em>.
+    </p>
+    <p class="body-text">
+      O Tribunal do Texas aprovou a venda do portfólio por aproximadamente <strong>USD 1 bilhão</strong>: Fatburger, Johnny Rockets e Round Table em credit bid de USD 595 milhões pelos próprios credores; Twin Peaks por USD 359,5 milhões; Hot Dog on a Stick por USD 8 milhões. Apenas o Smokey Bones não encontrou comprador e encerrou definitivamente. Todas as demais unidades permanecem abertas, com franqueados protegidos.
+    </p>
+  </div>
+
+  <div class="card-analise">
+    <div class="analise-label">Análise Maffezzolli</div>
+    <p class="analise-text">
+      A FAT Brands é o epitáfio do modelo de <strong>"roll-up" de marcas de restaurantes via securitização</strong>, popular nos anos 2010. Crescimento via aquisições alavancadas sem sustentação operacional, liderado por um fundador com conflitos de governança sérios: receita para o desastre. O desfecho é instrutivo: o processo preservou quase todas as marcas e protegeu os franqueados, mas <strong>liquidou completamente a holding</strong>. Lição para o Brasil: crescimento inorgânico acelerado em setores de baixa margem exige estrutura de capital conservadora — o contrário do que foi feito aqui.
+    </p>
+  </div>
+
+  <div class="card-numeros">
+    <div class="num-item">
+      <div class="num-icon">$</div>
+      <div class="num-valor">USD 1,3Bi</div>
+      <div class="num-label">Dívida total<br>no protocolo</div>
+    </div>
+    <div class="num-item">
+      <div class="num-icon">→</div>
+      <div class="num-valor">USD ~1Bi</div>
+      <div class="num-label">Venda aprovada<br>pelo Tribunal TX</div>
+    </div>
+    <div class="num-item">
+      <div class="num-icon">#</div>
+      <div class="num-valor">17 de 18</div>
+      <div class="num-label">Marcas preservadas<br>(Smokey Bones encerrou)</div>
+    </div>
+  </div>
+
+  <div class="card-footer">
+    <div class="footer-fonte">
+      <span class="fonte-label">Fontes</span>
+      <span class="fonte-text">Restaurant Dive · QSR Magazine · Law360 · Bloomberg · Jan–Jun/2026</span>
+    </div>
+    <div class="footer-brand">
+      <span class="brand-name">MAFFEZZOLLI.CAPITAL</span>
+      <span class="brand-sub">Reestruturação · Mercado de Capitais</span>
+    </div>
+  </div>
+
+  <div class="card-bottombar"></div>
+</div>
+
+<div class="preview-controls">
+  <p>Zoom 100% → <kbd>Cmd+Shift+4</kbd> para screenshot · Largura: 1080px</p>
+</div>
+
+</div>
+</body>
+</html>
