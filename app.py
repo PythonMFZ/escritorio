@@ -21741,6 +21741,10 @@ async def crm_new_action(
         source: str = Form(""),
         next_step: str = Form(""),
         next_step_date: str = Form(""),
+        task_title: str = Form(""),
+        task_due_date: str = Form(""),
+        task_priority: str = Form("media"),
+        task_assignee: int = Form(0),
 ) -> Response:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
