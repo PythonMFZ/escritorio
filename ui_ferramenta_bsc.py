@@ -34,6 +34,7 @@ class BSCPlan(SQLModel, table=True):
     __table_args__ = {"extend_existing": True}
     id:          Optional[int] = Field(default=None, primary_key=True)
     company_id:  int  = Field(index=True)
+    client_id:   Optional[int] = Field(default=None, index=True)
     name:        str  = Field(default="Planejamento Estratégico")
     year:        int  = Field(default=2026)
     description: str  = Field(default="")
@@ -121,6 +122,7 @@ def _ensure_bsc_tables():
             _c.execute(_t("ALTER TABLE bscindicator ADD COLUMN IF NOT EXISTS source_module VARCHAR"))
             _c.execute(_t("ALTER TABLE bscindicator ADD COLUMN IF NOT EXISTS source_metric VARCHAR"))
             _c.execute(_t("ALTER TABLE bscindicator ADD COLUMN IF NOT EXISTS source_config VARCHAR DEFAULT '{}'"))
+            _c.execute(_t("ALTER TABLE bscplan ADD COLUMN IF NOT EXISTS client_id INTEGER"))
     except Exception:
         pass
 
@@ -274,10 +276,13 @@ async def bsc_index(request: Request, session: Session = Depends(get_session)):
     if not ctx or ctx.membership.role not in _BSC_ROLES:
         return RedirectResponse("/", status_code=303)
     cc = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
+    active_client_id = get_active_client_id(request, session, ctx)
 
     plans = session.exec(
         select(BSCPlan)
-        .where(BSCPlan.company_id == ctx.company.id, BSCPlan.is_active == True)
+        .where(BSCPlan.company_id == ctx.company.id,
+               BSCPlan.client_id == active_client_id,
+               BSCPlan.is_active == True)
         .order_by(BSCPlan.year.desc(), BSCPlan.id.desc())
     ).all()
 
@@ -306,6 +311,7 @@ async def bsc_criar_plano(request: Request, session: Session = Depends(get_sessi
     body = await request.json()
     plan = BSCPlan(
         company_id=ctx.company.id,
+        client_id=get_active_client_id(request, session, ctx),
         name=(body.get("name") or "Planejamento Estratégico").strip(),
         year=int(body.get("year") or _date_bsc.today().year),
         description=(body.get("description") or "").strip(),
@@ -1547,7 +1553,9 @@ try:
         client_data = _orig_bsc_ctx(session, company_id, client_id, client, client_data)
         try:
             plans = session.exec(
-                select(BSCPlan).where(BSCPlan.company_id == company_id, BSCPlan.is_active == True)
+                select(BSCPlan).where(BSCPlan.company_id == company_id,
+                                      BSCPlan.client_id == client_id,
+                                      BSCPlan.is_active == True)
                 .order_by(BSCPlan.year.desc()).limit(1)
             ).first()
             if plans:
