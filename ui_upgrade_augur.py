@@ -270,6 +270,26 @@ async def augur_ask_v3(request: Request, session: Session = Depends(get_session)
     if not client:
         return JSONResponse({"error": "Cliente não encontrado."}, status_code=404)
 
+    # ── Rate limiting: 20 perguntas por hora por usuário ────────────────────
+    _AUGUR_RATE_LIMIT = 20
+    try:
+        from datetime import timezone as _tz
+        _uma_hora_atras = (_dt_a3.utcnow().replace(tzinfo=_tz.utc) - _td_a3(hours=1)).isoformat()
+        _msgs_hora = session.exec(
+            select(AugurMensagem).where(
+                AugurMensagem.company_id == ctx.company.id,
+                AugurMensagem.role == "user",
+                AugurMensagem.created_at >= _uma_hora_atras,
+            )
+        ).all()
+        if len(_msgs_hora) >= _AUGUR_RATE_LIMIT:
+            return JSONResponse({
+                "error": f"Limite de {_AUGUR_RATE_LIMIT} perguntas por hora atingido. Aguarde alguns minutos.",
+                "rate_limited": True,
+            }, status_code=429)
+    except Exception as _e_rl:
+        print(f"[augur] rate limit check error: {_e_rl}")
+
     # ── Verifica créditos para uso do Augur ──────────────────────────────────
     try:
         _preco_augur = _get_preco(session, ctx.company.id, "augur_mensal", default=0)
