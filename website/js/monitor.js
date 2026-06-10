@@ -36,7 +36,7 @@
   fetch(jsonPath)
     .then(r => r.json())
     .then(data => {
-      const items = (data.monitor || []).slice(0, 4);
+      const items = (data.monitor || []).slice().reverse().slice(0, 4);
       container.innerHTML = items.map(buildCard).join('');
     })
     .catch(() => {
