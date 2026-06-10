@@ -284,6 +284,7 @@ TEMPLATES["fluxo_caixa_dashboard.html"] = r"""
     <div class="d-flex gap-2">
       <a href="/ferramentas/fluxo-caixa/novo" class="btn btn-primary btn-sm">+ Lançamento</a>
       <a href="/ferramentas/fluxo-caixa/importar" class="btn btn-outline-secondary btn-sm">Importar Excel</a>
+      <a href="/ferramentas/fluxo-caixa/importacoes" class="btn btn-outline-secondary btn-sm">Importações</a>
       <a href="/ferramentas/fluxo-caixa/config" class="btn btn-outline-secondary btn-sm">⚙ Configurar</a>
     </div>
   </div>
