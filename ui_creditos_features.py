@@ -855,6 +855,42 @@ for _r_old in list(app.router.routes):
         except Exception:
             pass
 
+# ── Widget de créditos no dashboard ───────────────────────────────────────────
+# Injeta um banner de saldo + plano no topo do dashboard, logo após o hero
+
+_CF_CREDITS_WIDGET = """
+{%- if wallet_saldo_total is defined %}
+<div class="d-flex align-items-center gap-3 flex-wrap px-1 mb-3" style="font-size:.88rem;">
+  <a href="/creditos" class="d-flex align-items-center gap-2 text-decoration-none"
+     style="background:var(--mc-primary-soft,#e8f0fe);border-radius:8px;padding:.45rem .85rem;">
+    <span style="font-size:1.1rem;">💳</span>
+    <span>
+      <span class="fw-semibold" style="color:var(--mc-primary,#1a56db)">{{ wallet_saldo_total }} créditos</span>
+      <span class="text-muted"> disponíveis</span>
+      {%- if plano_nome %}
+        &nbsp;·&nbsp;<span class="text-muted">Plano <strong>{{ plano_nome }}</strong></span>
+      {%- endif %}
+    </span>
+  </a>
+  <a href="/creditos" class="btn btn-sm btn-outline-primary" style="font-size:.8rem;">Recarregar</a>
+</div>
+{%- endif %}
+"""
+
+try:
+    _dash_tpl = TEMPLATES.get("dashboard.html", "")
+    if _dash_tpl and "wallet_saldo_total" not in _dash_tpl:
+        # Injeta logo após {% block content %} ou após o primeiro <div
+        _anchor = "{% block content %}"
+        if _anchor in _dash_tpl:
+            TEMPLATES["dashboard.html"] = _dash_tpl.replace(
+                _anchor, _anchor + "\n" + _CF_CREDITS_WIDGET, 1
+            )
+            if hasattr(templates_env, "loader") and hasattr(templates_env.loader, "mapping"):
+                templates_env.loader.mapping["dashboard.html"] = TEMPLATES["dashboard.html"]
+except Exception as _e_cw:
+    print(f"[creditos_features] wallet widget: {_e_cw}")
+
 print("[creditos_features] ✅ Sistema de ativação por créditos carregado")
 print("[creditos_features]    Rotas: GET /api/features/status")
 print("[creditos_features]           POST /api/features/{codigo}/ativar")
