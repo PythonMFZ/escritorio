@@ -48702,3 +48702,5 @@ exec(open('ui_admin_assinaturas.py').read())
 exec(open('ui_creditos_features.py').read())
 exec(open('ui_admin_uso.py').read())
 
+
+exec(open('ui_fluxo_caixa.py').read())

@@ -170,6 +170,12 @@ def _format_client_context(client_data: dict) -> str:
         lines.append("\n=== BSC / INDICADORES ESTRATÉGICOS ===")
         lines.append(bsc[:4000])
 
+    # ── Fluxo de Caixa (injetado por ui_fluxo_caixa.py) ──────────────────────
+    fc = client_data.get("fluxo_caixa_resumo", "")
+    if fc:
+        lines.append("\n=== FLUXO DE CAIXA ===")
+        lines.append(fc[:3000])
+
     # ── Base de conhecimento ──────────────────────────────────────────────────
     base_docs = client_data.get("base_conhecimento", [])
     if base_docs:
