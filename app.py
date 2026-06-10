@@ -37363,6 +37363,38 @@ TEMPLATES["ferramentas.html"] = r"""
         <a class="btn btn-primary" href="/ferramentas/obras">Abrir Gestão de Obras</a>
       </div>
     </div>
+
+    <div class="col-lg-6">
+      <div class="card p-4 h-100">
+        <div class="d-flex justify-content-between align-items-start gap-3 flex-wrap">
+          <div>
+            <h5 class="mb-1">Fluxo de Caixa</h5>
+            <div class="muted">Importe lançamentos via Excel, acompanhe entradas e saídas por dia, semana ou mês e visualize projeções com saldo inicial e limites de alerta.</div>
+          </div>
+          <span class="badge text-bg-primary">Disponível</span>
+        </div>
+        <div class="row g-3 mt-1 mb-3">
+          <div class="col-md-6">
+            <div class="border rounded p-3 h-100">
+              <div class="muted small">Importação</div>
+              <div class="fw-semibold">Via planilha Excel</div>
+            </div>
+          </div>
+          <div class="col-md-6">
+            <div class="border rounded p-3 h-100">
+              <div class="muted small">Visualização</div>
+              <div class="fw-semibold">Dia / Semana / Mês</div>
+            </div>
+          </div>
+        </div>
+        <div class="alert alert-info" style="font-size:.85rem;">
+          Configure o saldo inicial, defina limites de alerta e acompanhe a projeção de caixa com entradas e saídas categorizadas.
+        </div>
+        <div class="d-flex gap-2 flex-wrap">
+          <a class="btn btn-primary" href="/ferramentas/fluxo-caixa">Abrir Fluxo de Caixa</a>
+        </div>
+      </div>
+    </div>
   </div>
 {% endif %}
 {% endblock %}
