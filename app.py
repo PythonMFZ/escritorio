@@ -12405,7 +12405,7 @@ def _get_selected_client_for_staff(request: Request, session: Session, company_i
             return cid
 
     clients = session.exec(
-        select(Client).where(Client.company_id == company_id).order_by(Client.created_at)
+        select(Client).where(Client.company_id == company_id, Client.is_deleted == False).order_by(Client.created_at)
     ).all()
     first_client = next(
         (c for c in clients if c.id and entity_is_allowed(session, entity_type="client", entity_id=c.id)), None)
@@ -13501,7 +13501,7 @@ async def consultoria_new_page(request: Request, session: Session = Depends(get_
         set_flash(request, "Sistema de convites não está configurado (migração pendente no banco).")
         return RedirectResponse("/client/switch", status_code=303)
 
-    clients = session.exec(select(Client).where(Client.company_id == ctx.company.id).order_by(Client.created_at)).all()
+    clients = session.exec(select(Client).where(Client.company_id == ctx.company.id, Client.is_deleted == False).order_by(Client.created_at)).all()
     active_client_id = get_active_client_id(request, session, ctx)
     current_client = get_client_or_none(session, ctx.company.id, active_client_id)
 
@@ -14716,7 +14716,7 @@ async def client_switch_page(request: Request, session: Session = Depends(get_se
         set_flash(request, "Sistema de convites não está configurado (migração pendente no banco).")
         return RedirectResponse("/", status_code=303)
 
-    clients = session.exec(select(Client).where(Client.company_id == ctx.company.id).order_by(Client.created_at)).all()
+    clients = session.exec(select(Client).where(Client.company_id == ctx.company.id, Client.is_deleted == False).order_by(Client.created_at)).all()
     active_client_id = get_active_client_id(request, session, ctx)
     current_client = get_client_or_none(session, ctx.company.id, active_client_id)
 
@@ -15174,7 +15174,7 @@ async def members_page(request: Request, session: Session = Depends(get_session)
 
     rows.sort(key=lambda x: (x["membership"].role, x["user"].name.lower()))
 
-    clients = session.exec(select(Client).where(Client.company_id == ctx.company.id).order_by(Client.created_at)).all()
+    clients = session.exec(select(Client).where(Client.company_id == ctx.company.id, Client.is_deleted == False).order_by(Client.created_at)).all()
 
     for row in rows:
         m = row["membership"]
@@ -16489,7 +16489,7 @@ async def pending_new_page(request: Request, session: Session = Depends(get_sess
         set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
         return RedirectResponse("/credito", status_code=303)
 
-    clients = session.exec(select(Client).where(Client.company_id == ctx.company.id).order_by(Client.created_at)).all()
+    clients = session.exec(select(Client).where(Client.company_id == ctx.company.id, Client.is_deleted == False).order_by(Client.created_at)).all()
     current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
     return render(
         "pending_new.html",
@@ -16842,7 +16842,7 @@ async def docs_new_page(request: Request, session: Session = Depends(get_session
         set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
         return RedirectResponse("/credito", status_code=303)
 
-    clients = session.exec(select(Client).where(Client.company_id == ctx.company.id).order_by(Client.created_at)).all()
+    clients = session.exec(select(Client).where(Client.company_id == ctx.company.id, Client.is_deleted == False).order_by(Client.created_at)).all()
     current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
     return render(
         "docs_new.html",
@@ -17206,7 +17206,7 @@ async def props_new_staff_page(request: Request, session: Session = Depends(get_
         set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
         return RedirectResponse("/credito", status_code=303)
 
-    clients = session.exec(select(Client).where(Client.company_id == ctx.company.id).order_by(Client.created_at)).all()
+    clients = session.exec(select(Client).where(Client.company_id == ctx.company.id, Client.is_deleted == False).order_by(Client.created_at)).all()
     current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
     return render(
         "props_new_staff.html",
@@ -18421,7 +18421,7 @@ def _office_is_open(entry: OfficeFinancialEntry) -> bool:
 def _office_catalog(session: Session, company_id: int) -> dict[str, list[Any]]:
     seed_office_finance_defaults(session, company_id)
     return {
-        "clients": session.exec(select(Client).where(Client.company_id == company_id).order_by(Client.name)).all(),
+        "clients": session.exec(select(Client).where(Client.company_id == company_id, Client.is_deleted == False).order_by(Client.name)).all(),
         "suppliers": session.exec(select(OfficeSupplier).where(OfficeSupplier.company_id == company_id,
                                                                OfficeSupplier.is_active == True).order_by(
             OfficeSupplier.name)).all(),
@@ -18446,7 +18446,7 @@ def _office_catalog(session: Session, company_id: int) -> dict[str, list[Any]]:
 def _office_finance_rows(session: Session, company_id: int, *, q: str = "", entry_kind: str = "", status: str = "",
                          month: str = "", client_id: str = "") -> tuple[
     list[dict[str, Any]], dict[str, Any], list[Client]]:
-    clients = session.exec(select(Client).where(Client.company_id == company_id).order_by(Client.name)).all()
+    clients = session.exec(select(Client).where(Client.company_id == company_id, Client.is_deleted == False).order_by(Client.name)).all()
     entries = session.exec(
         select(OfficeFinancialEntry)
         .where(OfficeFinancialEntry.company_id == company_id)
@@ -19715,7 +19715,7 @@ async def fin_new_page(request: Request, session: Session = Depends(get_session)
         set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
         return RedirectResponse("/credito", status_code=303)
 
-    clients = session.exec(select(Client).where(Client.company_id == ctx.company.id).order_by(Client.created_at)).all()
+    clients = session.exec(select(Client).where(Client.company_id == ctx.company.id, Client.is_deleted == False).order_by(Client.created_at)).all()
     current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
     return render(
         "fin_new.html",
@@ -20146,7 +20146,7 @@ async def tasks_list(
         ).order_by(Task.updated_at.desc())
     else:
         clients = session.exec(
-            select(Client).where(Client.company_id == ctx.company.id).order_by(Client.created_at)
+            select(Client).where(Client.company_id == ctx.company.id, Client.is_deleted == False).order_by(Client.created_at)
         ).all()
 
         memberships = session.exec(select(Membership).where(Membership.company_id == ctx.company.id)).all()
@@ -20333,7 +20333,7 @@ async def tasks_time_report(
     current_client = get_client_or_none(session, ctx.company.id, active_client_id)
 
     clients = session.exec(
-        select(Client).where(Client.company_id == ctx.company.id).order_by(Client.created_at)
+        select(Client).where(Client.company_id == ctx.company.id, Client.is_deleted == False).order_by(Client.created_at)
     ).all()
 
     assignees: list[dict[str, Any]] = []
@@ -20466,7 +20466,7 @@ async def tasks_new_page(
         set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
         return RedirectResponse("/credito", status_code=303)
 
-    clients = session.exec(select(Client).where(Client.company_id == ctx.company.id).order_by(Client.created_at)).all()
+    clients = session.exec(select(Client).where(Client.company_id == ctx.company.id, Client.is_deleted == False).order_by(Client.created_at)).all()
 
     # staff assignees (admin/equipe) + current user always
     memberships = session.exec(select(Membership).where(Membership.company_id == ctx.company.id)).all()
@@ -20920,7 +20920,7 @@ async def tasks_edit_page(request: Request, session: Session = Depends(get_sessi
     if not task or task.company_id != ctx.company.id:
         return render("error.html", request=request, context={"message": "Tarefa não encontrada."}, status_code=404)
 
-    clients = session.exec(select(Client).where(Client.company_id == ctx.company.id).order_by(Client.created_at)).all()
+    clients = session.exec(select(Client).where(Client.company_id == ctx.company.id, Client.is_deleted == False).order_by(Client.created_at)).all()
     memberships = session.exec(select(Membership).where(Membership.company_id == ctx.company.id)).all()
     assignees = []
     for m in memberships:
@@ -21641,7 +21641,7 @@ async def crm_list(
         set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
         return RedirectResponse("/credito", status_code=303)
 
-    clients = session.exec(select(Client).where(Client.company_id == ctx.company.id).order_by(Client.created_at)).all()
+    clients = session.exec(select(Client).where(Client.company_id == ctx.company.id, Client.is_deleted == False).order_by(Client.created_at)).all()
     owners = _owner_users_for_company(session, ctx.company.id)
 
     q = select(BusinessDeal).where(BusinessDeal.company_id == ctx.company.id).order_by(BusinessDeal.updated_at.desc())
@@ -21725,7 +21725,7 @@ async def crm_new_page(request: Request, session: Session = Depends(get_session)
         set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
         return RedirectResponse("/credito", status_code=303)
 
-    clients = session.exec(select(Client).where(Client.company_id == ctx.company.id).order_by(Client.created_at)).all()
+    clients = session.exec(select(Client).where(Client.company_id == ctx.company.id, Client.is_deleted == False).order_by(Client.created_at)).all()
     owners = _owner_users_for_company(session, ctx.company.id)
 
     # Permite abrir a tela mesmo sem clientes cadastrados (para criar Lead no CRM).
@@ -21943,7 +21943,7 @@ async def crm_edit_page(request: Request, session: Session = Depends(get_session
     if not deal or deal.company_id != ctx.company.id:
         return render("error.html", request=request, context={"message": "Negócio não encontrado."}, status_code=404)
 
-    clients = session.exec(select(Client).where(Client.company_id == ctx.company.id).order_by(Client.created_at)).all()
+    clients = session.exec(select(Client).where(Client.company_id == ctx.company.id, Client.is_deleted == False).order_by(Client.created_at)).all()
     owners = _owner_users_for_company(session, ctx.company.id)
 
     active_client_id = get_active_client_id(request, session, ctx)
@@ -22307,7 +22307,7 @@ async def meetings_list(
         q = q.where(Meeting.client_id == (ctx.membership.client_id or -1))
     else:
         clients = session.exec(
-            select(Client).where(Client.company_id == ctx.company.id).order_by(Client.created_at)
+            select(Client).where(Client.company_id == ctx.company.id, Client.is_deleted == False).order_by(Client.created_at)
         ).all()
         if client_id and client_id > 0:
             fc = get_client_or_none(session, ctx.company.id, int(client_id))
@@ -22373,7 +22373,7 @@ async def meetings_new_page(request: Request, session: Session = Depends(get_ses
         set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
         return RedirectResponse("/credito", status_code=303)
 
-    clients = session.exec(select(Client).where(Client.company_id == ctx.company.id).order_by(Client.created_at)).all()
+    clients = session.exec(select(Client).where(Client.company_id == ctx.company.id, Client.is_deleted == False).order_by(Client.created_at)).all()
     active_client_id = get_active_client_id(request, session, ctx)
     current_client = get_client_or_none(session, ctx.company.id, active_client_id)
 
@@ -23263,7 +23263,7 @@ async def edu_courses(request: Request, session: Session = Depends(get_session),
             courses_q = courses_q.where(EducationCourse.id == -1)
     else:
         clients = session.exec(
-            select(Client).where(Client.company_id == ctx.company.id).order_by(Client.created_at)).all()
+            select(Client).where(Client.company_id == ctx.company.id, Client.is_deleted == False).order_by(Client.created_at)).all()
         if client_id and client_id > 0:
             fc = get_client_or_none(session, ctx.company.id, int(client_id))
             if fc:
@@ -23320,7 +23320,7 @@ async def edu_course_new_page(request: Request, session: Session = Depends(get_s
         set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
         return RedirectResponse("/credito", status_code=303)
 
-    clients = session.exec(select(Client).where(Client.company_id == ctx.company.id).order_by(Client.created_at)).all()
+    clients = session.exec(select(Client).where(Client.company_id == ctx.company.id, Client.is_deleted == False).order_by(Client.created_at)).all()
     current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
     return render("edu_course_new.html", request=request,
                   context={"current_user": ctx.user, "current_company": ctx.company, "role": ctx.membership.role,
@@ -23441,7 +23441,7 @@ async def edu_course_edit_page(request: Request, session: Session = Depends(get_
     if not course or course.company_id != ctx.company.id:
         return render("error.html", request=request, context={"message": "Curso não encontrado."}, status_code=404)
 
-    clients = session.exec(select(Client).where(Client.company_id == ctx.company.id).order_by(Client.created_at)).all()
+    clients = session.exec(select(Client).where(Client.company_id == ctx.company.id, Client.is_deleted == False).order_by(Client.created_at)).all()
     assigned = session.exec(select(EducationCourseAccess).where(EducationCourseAccess.course_id == course.id)).all()
     assigned_ids = {a.client_id for a in assigned}
     current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
@@ -25617,7 +25617,7 @@ async def simulador_page(request: Request, session: Session = Depends(get_sessio
         borrower_name = current_client.name if current_client else ""
         client_locked = True
     else:
-        clients = session.exec(select(Client).where(Client.company_id == ctx.company.id).order_by(Client.name)).all()
+        clients = session.exec(select(Client).where(Client.company_id == ctx.company.id, Client.is_deleted == False).order_by(Client.name)).all()
         selected_client_id = current_client.id if current_client else 0
         borrower_name = current_client.name if current_client else ""
         client_locked = False
@@ -26497,7 +26497,7 @@ async def admin_gestao(request: Request, session: Session = Depends(get_session)
     else:
         companies = [ctx.company]
         clients = session.exec(
-            select(Client).where(Client.company_id == ctx.company.id).order_by(Client.created_at)).all()
+            select(Client).where(Client.company_id == ctx.company.id, Client.is_deleted == False).order_by(Client.created_at)).all()
         members = session.exec(
             select(Membership).where(Membership.company_id == ctx.company.id).order_by(Membership.created_at)).all()
 
@@ -41733,7 +41733,7 @@ async def whatsapp_inbox_page(
 async def whatsapp_thread_new_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
     ctx = get_tenant_context(request, session)
     assert ctx is not None
-    clients = session.exec(select(Client).where(Client.company_id == ctx.company.id).order_by(Client.name)).all()
+    clients = session.exec(select(Client).where(Client.company_id == ctx.company.id, Client.is_deleted == False).order_by(Client.name)).all()
     staff_memberships = _whatsapp_staff_memberships(session, company_id=ctx.company.id)
     users = {int(u.id): u for u in session.exec(select(User)).all()}
     staff_options = []
@@ -41843,7 +41843,7 @@ async def whatsapp_thread_detail_page(
     config = _get_or_create_whatsapp_config(session, company_id=ctx.company.id)
     topic_options = list(_whatsapp_queue_label_map(session, company_id=ctx.company.id).items())
     status_options = [("aberto", "Aberto"), ("aguardando_cliente", "Aguardando cliente"), ("resolvido", "Resolvido")]
-    clients = session.exec(select(Client).where(Client.company_id == ctx.company.id).order_by(Client.name)).all()
+    clients = session.exec(select(Client).where(Client.company_id == ctx.company.id, Client.is_deleted == False).order_by(Client.name)).all()
     client = get_client_or_none(session, ctx.company.id, thread.client_id)
     staff_memberships = _whatsapp_staff_memberships(session, company_id=ctx.company.id)
     users = {int(u.id): u for u in session.exec(select(User)).all()}
