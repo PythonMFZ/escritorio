@@ -1265,13 +1265,13 @@ TEMPLATES["fluxo_caixa_importacoes.html"] = r"""
         <tbody>
           {% for b in batches %}
           <tr>
-            <td class="ps-3"><code>{{ b.batch_id }}</code></td>
-            <td>{{ b.count }} lançamentos</td>
-            <td class="text-muted small">{{ b.data_min }} → {{ b.data_max }}</td>
+            <td class="ps-3"><code>{{ b['batch_id'] }}</code></td>
+            <td>{{ b['count'] }} lançamentos</td>
+            <td class="text-muted small">{{ b['data_min'] }} → {{ b['data_max'] }}</td>
             <td class="text-end pe-3">
-              <form method="POST" action="/ferramentas/fluxo-caixa/importacoes/{{ b.batch_id }}/excluir"
-                    onsubmit="return confirm('Excluir todos os {{ b.count }} lançamentos deste lote?')">
-                <button class="btn btn-sm btn-outline-danger">Excluir lote</button>
+              <form method="POST" action="/ferramentas/fluxo-caixa/importacoes/{{ b['batch_id'] }}/excluir"
+                    onsubmit="return confirm('Excluir todos os ' + {{ b['count'] }} + ' lançamentos deste lote?')">
+                <button type="submit" class="btn btn-sm btn-outline-danger">Excluir lote</button>
               </form>
             </td>
           </tr>
@@ -1283,6 +1283,8 @@ TEMPLATES["fluxo_caixa_importacoes.html"] = r"""
 </div>
 {% endblock %}
 """
+if hasattr(templates_env, "loader") and hasattr(templates_env.loader, "mapping"):
+    templates_env.loader.mapping["fluxo_caixa_importacoes.html"] = TEMPLATES["fluxo_caixa_importacoes.html"]
 
 
 @app.get("/ferramentas/fluxo-caixa/importacoes", response_class=HTMLResponse)
@@ -1293,9 +1295,9 @@ async def fc_importacoes_page(request: Request, session: Session = Depends(get_s
 
     entries = session.exec(
         select(CashFlowEntry).where(
-            CashFlowEntry.company_id   == ctx.company.id,
-            CashFlowEntry.client_id    == client_id,
-            CashFlowEntry.import_batch != None,
+            CashFlowEntry.company_id == ctx.company.id,
+            CashFlowEntry.client_id  == client_id,
+            CashFlowEntry.import_batch.isnot(None),
         )
     ).all()
 
