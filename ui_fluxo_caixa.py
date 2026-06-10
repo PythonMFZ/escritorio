@@ -398,6 +398,7 @@ TEMPLATES["fluxo_caixa_lancamentos.html"] = r"""
     <h4 class="mb-0">Lançamentos — Fluxo de Caixa</h4>
     <div class="d-flex gap-2">
       <a href="/ferramentas/fluxo-caixa/novo" class="btn btn-primary btn-sm">+ Novo</a>
+      <a href="/ferramentas/fluxo-caixa/importacoes" class="btn btn-outline-secondary btn-sm">Importações</a>
       <a href="/ferramentas/fluxo-caixa" class="btn btn-outline-secondary btn-sm">← Dashboard</a>
     </div>
   </div>
@@ -1237,7 +1238,113 @@ async def fc_importar_confirmar(request: Request, session: Session = Depends(get
     })
 
 
-# ── Integração Augur — sobrescreve _enriquecer_client_data ───────────────────
+# ── Gerenciar importações (listar lotes e excluir) ────────────────────────────
+
+TEMPLATES["fluxo_caixa_importacoes.html"] = r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="container-fluid px-4 py-3" style="max-width:800px">
+  <div class="d-flex align-items-center gap-2 mb-3">
+    <a href="/ferramentas/fluxo-caixa/lancamentos" class="btn btn-outline-secondary btn-sm">←</a>
+    <h4 class="mb-0">Importações — Fluxo de Caixa</h4>
+  </div>
+
+  {% if not batches %}
+    <div class="alert alert-info">Nenhuma importação encontrada.</div>
+  {% else %}
+    <div class="card p-0">
+      <table class="table table-sm align-middle mb-0">
+        <thead class="table-light">
+          <tr>
+            <th class="ps-3">Lote</th>
+            <th>Lançamentos</th>
+            <th>Período</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for b in batches %}
+          <tr>
+            <td class="ps-3"><code>{{ b.batch_id }}</code></td>
+            <td>{{ b.count }} lançamentos</td>
+            <td class="text-muted small">{{ b.data_min }} → {{ b.data_max }}</td>
+            <td class="text-end pe-3">
+              <form method="POST" action="/ferramentas/fluxo-caixa/importacoes/{{ b.batch_id }}/excluir"
+                    onsubmit="return confirm('Excluir todos os {{ b.count }} lançamentos deste lote?')">
+                <button class="btn btn-sm btn-outline-danger">Excluir lote</button>
+              </form>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% endif %}
+</div>
+{% endblock %}
+"""
+
+
+@app.get("/ferramentas/fluxo-caixa/importacoes", response_class=HTMLResponse)
+@require_login
+async def fc_importacoes_page(request: Request, session: Session = Depends(get_session)):
+    ctx       = get_tenant_context(request, session)
+    client_id = get_active_client_id(request, session, ctx)
+
+    entries = session.exec(
+        select(CashFlowEntry).where(
+            CashFlowEntry.company_id   == ctx.company.id,
+            CashFlowEntry.client_id    == client_id,
+            CashFlowEntry.import_batch != None,
+        )
+    ).all()
+
+    # Agrupa por batch_id
+    batches_map = {}
+    for e in entries:
+        b = e.import_batch
+        if b not in batches_map:
+            batches_map[b] = {"batch_id": b, "count": 0, "datas": []}
+        batches_map[b]["count"] += 1
+        if e.data_vencimento:
+            batches_map[b]["datas"].append(e.data_vencimento)
+
+    batches = []
+    for b, info in batches_map.items():
+        datas = sorted(info["datas"])
+        batches.append({
+            "batch_id": b,
+            "count":    info["count"],
+            "data_min": datas[0] if datas else "—",
+            "data_max": datas[-1] if datas else "—",
+        })
+    batches.sort(key=lambda x: x["data_min"])
+
+    return render("fluxo_caixa_importacoes.html", request=request, context={
+        "batches":    batches,
+        "page_title": "Importações — Fluxo de Caixa",
+    })
+
+
+@app.post("/ferramentas/fluxo-caixa/importacoes/{batch_id}/excluir", response_class=HTMLResponse)
+@require_login
+async def fc_excluir_batch(batch_id: str, request: Request, session: Session = Depends(get_session)):
+    from fastapi.responses import RedirectResponse
+    ctx       = get_tenant_context(request, session)
+    client_id = get_active_client_id(request, session, ctx)
+
+    entries = session.exec(
+        select(CashFlowEntry).where(
+            CashFlowEntry.company_id   == ctx.company.id,
+            CashFlowEntry.client_id    == client_id,
+            CashFlowEntry.import_batch == batch_id,
+        )
+    ).all()
+    for e in entries:
+        session.delete(e)
+    session.commit()
+    set_flash(request, f"Lote {batch_id} excluído ({len(entries)} lançamentos removidos).")
+    return RedirectResponse("/ferramentas/fluxo-caixa/importacoes", status_code=303)
 
 _orig_fc_enriquecer = _enriquecer_client_data
 
