@@ -188,9 +188,26 @@ def _calc_fluxo(entries: list, config: CashFlowConfig, group_by: str = "semana")
     for e in entries:
         key = _fc_periodo_key(e.data_vencimento, group_by)
         if key not in periodos:
+            # Calcula data_inicio e data_fim do período
+            try:
+                _dk = _date_fc.fromisoformat(key)
+                if group_by == "dia":
+                    _pdi, _pdf = key, key
+                elif group_by == "semana":
+                    _pdi = key
+                    _pdf = (_dk + _td_fc(days=6)).isoformat()
+                else:  # mês
+                    import calendar as _cal_fc
+                    _last = _cal_fc.monthrange(_dk.year, _dk.month)[1]
+                    _pdi = key + "-01"
+                    _pdf = f"{key}-{_last:02d}"
+            except Exception:
+                _pdi, _pdf = key, key
             periodos[key] = {
                 "key": key,
                 "label": _fc_periodo_label(key, group_by),
+                "data_inicio": _pdi,
+                "data_fim": _pdf,
                 "entradas_previstas": 0,
                 "saidas_previstas":   0,
                 "entradas_realizadas":0,
@@ -357,7 +374,9 @@ TEMPLATES["fluxo_caixa_dashboard.html"] = r"""
           {% for p in periodos %}
           <tr {% if p.critico %}style="background:rgba(220,53,69,0.08)"{% endif %}>
             <td>
-              {{ p.label }}
+              <a href="/ferramentas/fluxo-caixa/lancamentos?data_inicio={{ p.data_inicio }}&data_fim={{ p.data_fim }}" class="text-decoration-none text-dark">
+                {{ p.label }}
+              </a>
               {% if p.critico %}<span class="badge ms-1" style="background:#dc3545;font-size:0.65rem">ALERTA</span>{% endif %}
             </td>
             <td class="text-end" style="color:#198754">{{ p.entradas_previstas_brl }}</td>
@@ -471,25 +490,25 @@ TEMPLATES["fluxo_caixa_lancamentos.html"] = r"""
             </td>
             <td>
               {% if e.status == 'realizado' %}
-              <span class="badge" style="background:#198754">Realizado</span>
+              <span class="badge" style="background:#198754;font-size:.8rem">✅ Realizado</span>
               {% elif e.status == 'cancelado' %}
               <span class="badge bg-secondary">Cancelado</span>
               {% else %}
-              <span class="badge bg-warning text-dark">Previsto</span>
+              <span class="badge" style="background:#fd7e14;font-size:.8rem">⏳ A pagar/receber</span>
               {% endif %}
             </td>
             <td class="text-muted small text-nowrap">{{ e.data_pagamento_fmt or '—' }}</td>
             <td class="text-nowrap">
-              <a href="/ferramentas/fluxo-caixa/{{ e.id }}/editar" class="btn btn-outline-secondary btn-sm py-0 px-1">✏</a>
+              <a href="/ferramentas/fluxo-caixa/{{ e.id }}/editar" class="btn btn-outline-secondary btn-sm py-0 px-2" title="Editar">✏</a>
               {% if e.status == 'previsto' %}
               <form method="POST" action="/ferramentas/fluxo-caixa/{{ e.id }}/realizar" style="display:inline">
-                <button class="btn btn-outline-success btn-sm py-0 px-1" title="Marcar como realizado">✓</button>
+                <button class="btn btn-success btn-sm py-0 px-2" title="Marcar como realizado (pago/recebido)" style="font-size:.8rem">✓ Realizar</button>
               </form>
               {% endif %}
               {% if e.status != 'cancelado' %}
               <form method="POST" action="/ferramentas/fluxo-caixa/{{ e.id }}/excluir" style="display:inline"
-                    onsubmit="return confirm('Cancelar este lançamento?')">
-                <button class="btn btn-outline-danger btn-sm py-0 px-1">✕</button>
+                    onsubmit="return confirm('Excluir este lançamento?')">
+                <button class="btn btn-outline-danger btn-sm py-0 px-1" title="Excluir">✕</button>
               </form>
               {% endif %}
             </td>
