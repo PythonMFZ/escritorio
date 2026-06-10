@@ -13031,7 +13031,7 @@ async def __build() -> dict:
     return {"build": "stable_debug_v2"}
 
 
-https_only = os.getenv("SESSION_HTTPS_ONLY", "0") == "1"
+https_only = os.getenv("SESSION_HTTPS_ONLY", "1") == "1"
 # NOTE: SessionMiddleware must wrap feature_access_middleware, installed later.
 
 STATIC_DIR = Path(__file__).with_name("static").resolve()
@@ -13403,7 +13403,7 @@ async def feature_access_middleware(request: Request, call_next: Callable[..., A
 
 
 # Install SessionMiddleware last so request.session is available inside BaseHTTPMiddleware.
-app.add_middleware(SessionMiddleware, secret_key=APP_SECRET_KEY, https_only=https_only, same_site="lax")
+app.add_middleware(SessionMiddleware, secret_key=APP_SECRET_KEY, https_only=https_only, same_site="lax", max_age=86400)
 
 
 @app.on_event("startup")
@@ -14142,6 +14142,11 @@ async def signup_action(
 ) -> Response:
     if len(password) < 8:
         set_flash(request, "Senha muito curta (mínimo 8).")
+        return RedirectResponse("/signup", status_code=303)
+
+    import re as _re_signup
+    if not _re_signup.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email.strip()):
+        set_flash(request, "E-mail inválido.")
         return RedirectResponse("/signup", status_code=303)
 
     # Gate: valida assinatura Stripe ativa (apenas quando Stripe está configurado)
@@ -43782,6 +43787,7 @@ def resolve_feature_key(path: str) -> Optional[str]:
         ("/agenda", "agenda"),
         ("/educacao", "educacao"),
         ("/obras-horas", "obras_horas"),
+        ("/ferramentas", "ferramentas"),
     ]
     for prefix, key in mapping:
         if path == prefix or path.startswith(prefix + "/"):
@@ -48608,7 +48614,6 @@ exec(open("ui_augur_privacy_fix.py").read())
 exec(open("ui_fix_permissions.py").read())
 exec(open('ui_fix_obras_horas_access.py').read())
 exec(open('ui_fix_feature_groups.py').read())
-exec(open('ui_fix_feature_groups.py').read())
 exec(open('ui_fix_equipe_routes.py').read())
 exec(open('ui_construrisk_v2.py').read())
 exec(open('ui_fix_news_role_pdf.py').read())
@@ -48623,7 +48628,6 @@ exec(open('ui_fix_augur_ctx_texto.py').read())
 # ui_fix_base_excel.py removed — superseded by /api/base-conhecimento/upload-file with server-side extraction
 exec(open('ui_fixes_batch3.py').read())
 exec(open('ui_fixes_batch4.py').read())
-exec(open('ui_fixes_batch5.py').read())
 exec(open('ui_fixes_batch5.py').read())
 exec(open('ui_fixes_batch6.py').read())
 exec(open('ui_wizard_v2.py').read())
