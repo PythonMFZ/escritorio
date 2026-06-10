@@ -9701,6 +9701,10 @@ TEMPLATES.update({
     <div class="d-flex gap-2">
       <a class="btn btn-outline-secondary" href="/negocios">Voltar</a>
       <a class="btn btn-outline-primary" href="/negocios/{{ deal.id }}/editar">Editar</a>
+      <form method="post" action="/negocios/{{ deal.id }}/excluir" onsubmit="return confirm('Excluir este negócio permanentemente?');">
+        <input type="hidden" name="confirm" value="EXCLUIR"/>
+        <button type="submit" class="btn btn-outline-danger">Excluir</button>
+      </form>
     </div>
   </div>
 
