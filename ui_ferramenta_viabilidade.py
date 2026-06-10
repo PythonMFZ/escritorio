@@ -229,6 +229,9 @@ def _calcular_viabilidade_v2(dados: dict) -> dict:
     mes_atual_venda = mes_inicio_vend
     unidades_disponiveis = unidades_total - unidades_permuta_n
     vgv_disponivel = vgv_liquido
+    # totais originais: meta % de cada fase é relativo ao total, não ao remanescente
+    _unidades_total_orig = unidades_disponiveis
+    _vgv_total_orig      = vgv_disponivel
 
     for fase in fases:
         meta_pct     = float(fase.get("meta", 15)) / 100
@@ -242,12 +245,14 @@ def _calcular_viabilidade_v2(dados: dict) -> dict:
         n_ref        = int(fase.get("n_reforcos", 0))
         chv_pct      = max(0.0, 1.0 - ent_pct - par_pct - ref_pct)
 
-        un_fase       = round(unidades_disponiveis * meta_pct)
-        preco_fase    = vgv_disponivel / max(unidades_disponiveis, 1) * (1 + reajuste_pct)
-        vgv_fase      = un_fase * preco_fase
+        # meta % aplicado diretamente sobre o VGV total (não sobre unidades remanescentes)
+        preco_medio   = _vgv_total_orig / max(_unidades_total_orig, 1)
+        preco_fase    = preco_medio * (1 + reajuste_pct)
+        vgv_fase      = min(_vgv_total_orig * meta_pct * (1 + reajuste_pct), vgv_disponivel)
+        un_fase       = min(round(vgv_fase / preco_fase) if preco_fase > 0 else 0, unidades_disponiveis)
         vgv_un_fase   = preco_fase
 
-        # Velocidade: distribui unidades ao longo da fase
+        # Velocidade: distribui receita ao longo da fase
         un_por_mes    = un_fase / max(duracao_f, 1)
 
         for m_rel in range(duracao_f):
