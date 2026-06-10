@@ -727,6 +727,14 @@ function renderPreview(data) {
       <option value="entrada">Entrada (receita)</option>
     </select>
   </div>`;
+  // Campo fixo: status dos lançamentos
+  html += `<div class="col-12 col-md-4">
+    <label class="form-label small fw-semibold">Status deste arquivo</label>
+    <select id="map_status_padrao" class="form-select form-select-sm border-primary">
+      <option value="previsto" selected>⏳ A pagar / A receber (a data é o vencimento)</option>
+      <option value="realizado">✅ Já pago / Já recebido (a data é do pagamento)</option>
+    </select>
+  </div>`;
   document.getElementById('mapping-form').innerHTML = html;
 
   // Tabela preview
@@ -745,7 +753,8 @@ async function confirmarImportacao() {
   ['col_data','col_valor','col_descricao','col_tipo','col_centro_custo','col_categoria'].forEach(k => {
     mapeamento[k] = document.getElementById('map_'+k)?.value || '';
   });
-  mapeamento['tipo_padrao'] = document.getElementById('map_tipo_padrao')?.value || 'saida';
+  mapeamento['tipo_padrao']   = document.getElementById('map_tipo_padrao')?.value || 'saida';
+  mapeamento['status_padrao'] = document.getElementById('map_status_padrao')?.value || 'previsto';
   const body = { mapeamento, dados: _uploadPayload.dados_completos };
   const resp = await fetch('/api/fluxo-caixa/importar-confirmar', {
     method: 'POST',
@@ -1206,6 +1215,7 @@ async def fc_importar_confirmar(request: Request, session: Session = Depends(get
     col_desc  = mapeamento.get("col_descricao", "")
     col_tipo      = mapeamento.get("col_tipo", "")
     tipo_padrao   = mapeamento.get("tipo_padrao", "saida")
+    status_padrao = mapeamento.get("status_padrao", "previsto")  # "previsto" ou "realizado"
     col_cc        = mapeamento.get("col_centro_custo", "")
     col_cat       = mapeamento.get("col_categoria", "")
 
@@ -1220,9 +1230,9 @@ async def fc_importar_confirmar(request: Request, session: Session = Depends(get
         try:
             data_str      = _fc_parse_date(row.get(col_data, ""))
             valor_c, tipo_v = _fc_parse_valor(row.get(col_valor, 0))
-            # Se não há coluna de tipo mapeada, usa tipo_padrao como fallback (em vez do sinal do valor)
-            tipo_col       = _fc_parse_tipo(str(row.get(col_tipo, "")) if col_tipo else "", tipo_padrao if not col_tipo else tipo_v)
-            descricao      = str(row.get(col_desc, f"Importado linha {i+2}")).strip() or f"Importado linha {i+2}"
+            # Se não há coluna de tipo mapeada, usa tipo_padrao como fallback
+            tipo_col      = _fc_parse_tipo(str(row.get(col_tipo, "")) if col_tipo else "", tipo_padrao if not col_tipo else tipo_v)
+            descricao     = str(row.get(col_desc, f"Importado linha {i+2}")).strip() or f"Importado linha {i+2}"
             centro_custo   = str(row.get(col_cc, "Importado")).strip() or "Importado"
             categoria      = str(row.get(col_cat, "Importado")).strip() or "Importado"
 
@@ -1230,16 +1240,26 @@ async def fc_importar_confirmar(request: Request, session: Session = Depends(get
                 erros.append(f"Linha {i+2}: data ou valor inválido — ignorado.")
                 continue
 
+            # Se realizado: data importada = data de pagamento, vencimento = mesma data
+            # Se previsto:  data importada = data de vencimento, pagamento = vazio
+            if status_padrao == "realizado":
+                _data_venc = data_str
+                _data_pgto = data_str
+            else:
+                _data_venc = data_str
+                _data_pgto = None
+
             entry = CashFlowEntry(
                 company_id=ctx.company.id,
                 client_id=client_id,
-                data_vencimento=data_str,
+                data_vencimento=_data_venc,
+                data_pagamento=_data_pgto,
                 descricao=descricao,
                 centro_custo=centro_custo,
                 categoria=categoria,
                 tipo=tipo_col,
                 valor_cents=valor_c,
-                status="previsto",
+                status=status_padrao,
                 import_batch=batch_id,
                 created_at=utcnow(),
                 updated_at=utcnow(),
