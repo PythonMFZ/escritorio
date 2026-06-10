@@ -18,7 +18,7 @@ from datetime import datetime as _dt_pf, timedelta as _td_pf
 from typing   import Optional as _Opt_pf
 from sqlmodel import Field as _F_pf, SQLModel as _SM_pf, select as _sel_pf, Session as _Sess_pf
 
-_DIAG_LIMIT    = 5   # perguntas do diagnóstico
+_DIAG_LIMIT    = 10  # perguntas do diagnóstico
 _ADMIN_EMAIL_P = "maffezzolli.eng@gmail.com"
 
 
@@ -180,12 +180,14 @@ Faça UMA pergunta objetiva por vez para entender:
 - Fluxo de caixa (sobra ou falta?)
 - Margem de lucro aproximada
 - Maior desafio financeiro hoje
+- Custos fixos principais
+- Sazonalidade ou variações de receita
+- Número de funcionários e folha
+- Clientes principais (concentração de receita)
+- Metas de crescimento ou preocupações imediatas
 
-Após 5 trocas de mensagem, apresente um Score de Saúde Financeira (0-100) com:
-- Nota e justificativa em 2 linhas
-- Top 3 ações prioritárias numeradas
-
-Estilo: direto, empático, linguagem de WhatsApp (sem markdown complexo, use *negrito* só ocasionalmente)."""
+Estilo: direto, empático, linguagem de WhatsApp (sem markdown complexo, use *negrito* só ocasionalmente).
+Faça exatamente uma pergunta por mensagem. Não faça múltiplas perguntas de uma vez."""
 
     try:
         from ai_assistant.assistant import ask as _ask
@@ -323,21 +325,42 @@ def processar_mensagem_prospect(
             sess.msgs_used    += 1
             sess.history_json  = _json_pf.dumps(history[-20:], ensure_ascii=False)
 
-            # Após _DIAG_LIMIT turnos → paywall
+            # Após _DIAG_LIMIT turnos → paywall com resumo
             if sess.msgs_used >= _DIAG_LIMIT:
                 sess.state = "paywall"
                 session.add(sess)
                 session.commit()
 
+                # Gera resumo executivo com base em tudo que foi coletado
+                _RESUMO_SYSTEM = """Você é o Augur. Com base na conversa de diagnóstico financeiro que acabou de ocorrer,
+produza um *Resumo Executivo* conciso para o WhatsApp com:
+1. Nome da empresa e setor (se identificado)
+2. Score de Saúde Financeira: nota de 0 a 100 com 1 linha de justificativa
+3. Pontos críticos identificados (máx 3 bullets curtos)
+4. Top 3 ações prioritárias numeradas
+
+Seja direto, use linguagem de WhatsApp. Máximo 200 palavras. Termine com uma frase de encerramento motivadora."""
+                try:
+                    from ai_assistant.assistant import ask as _ask_s
+                    _r = _ask_s(
+                        question="Gere o resumo executivo do diagnóstico completo desta empresa.",
+                        client_data={"nome": sess.nome, "empresa": sess.empresa, "_trial_system_override": _RESUMO_SYSTEM},
+                        conversation_history=history[-20:],
+                    )
+                    resumo = _r.get("response") or resposta
+                except Exception:
+                    resumo = resposta
+
                 checkout_url = _gerar_checkout_url_pf(sess.trial_token, phone)
                 return (
-                    resposta + "\n\n"
+                    f"📋 *Resumo do Diagnóstico — {sess.empresa}*\n\n"
+                    + resumo + "\n\n"
                     "─────────────────────\n"
-                    "🔓 *Quer continuar com o Augur completo?*\n\n"
+                    "🔓 *Quer o Augur trabalhando por você todos os dias?*\n\n"
                     "Com a assinatura você tem:\n"
-                    "✅ Diagnósticos ilimitados\n"
-                    "✅ Histórico e alertas automáticos\n"
-                    "✅ Acesso à plataforma completa\n\n"
+                    "✅ Consultoria financeira ilimitada\n"
+                    "✅ Alertas automáticos de caixa e metas\n"
+                    "✅ Acesso à plataforma completa com BSC, Orçamento e mais\n\n"
                     f"📲 *Assine agora por R$299/mês:*\n{checkout_url}\n\n"
                     "Ou fale com um consultor: https://wa.me/5547991359091"
                 )
