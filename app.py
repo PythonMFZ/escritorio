@@ -14369,6 +14369,30 @@ async def dashboard(request: Request, session: Session = Depends(get_session)) -
             smart_alerts = []
             smart_alerts_unread_count = 0
 
+    # Saldo total de créditos da empresa (soma de todas as carteiras dos clientes)
+    _wallet_saldo_total = 0
+    _plano_nome = None
+    try:
+        _wallets = session.exec(
+            select(CreditWallet).where(CreditWallet.company_id == ctx.company.id)
+        ).all()
+        _wallet_saldo_total = sum(w.balance_cents for w in _wallets) // 100
+        # Plano ativo do cliente atual
+        if current_client:
+            _cp_dash = session.exec(
+                select(ClientePlano).where(
+                    ClientePlano.company_id == ctx.company.id,
+                    ClientePlano.client_id  == current_client.id,
+                    ClientePlano.ativo      == True,
+                )
+            ).first()
+            if _cp_dash:
+                _pl_dash = session.get(PlanoCredito, _cp_dash.plano_id)
+                if _pl_dash:
+                    _plano_nome = _pl_dash.nome
+    except Exception:
+        pass
+
     return render(
         "dashboard.html",
         request=request,
@@ -14391,6 +14415,8 @@ async def dashboard(request: Request, session: Session = Depends(get_session)) -
             "standalone_title": "Acesso rápido",
             "standalone_desc": "Atalhos complementares",
             "allowed_features": allowed,
+            "wallet_saldo_total": _wallet_saldo_total,
+            "plano_nome": _plano_nome,
         },
     )
 
