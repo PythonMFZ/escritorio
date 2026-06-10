@@ -245,11 +245,11 @@ def _calcular_viabilidade_v2(dados: dict) -> dict:
         n_ref        = int(fase.get("n_reforcos", 0))
         chv_pct      = max(0.0, 1.0 - ent_pct - par_pct - ref_pct)
 
-        # meta % aplicado diretamente sobre o VGV total (não sobre unidades remanescentes)
+        # meta % sempre relativo ao TOTAL ORIGINAL (não sobre remanescentes)
         preco_medio   = _vgv_total_orig / max(_unidades_total_orig, 1)
         preco_fase    = preco_medio * (1 + reajuste_pct)
-        vgv_fase      = min(_vgv_total_orig * meta_pct * (1 + reajuste_pct), vgv_disponivel)
-        un_fase       = min(round(vgv_fase / preco_fase) if preco_fase > 0 else 0, unidades_disponiveis)
+        un_fase       = min(round(_unidades_total_orig * meta_pct), unidades_disponiveis)
+        vgv_fase      = un_fase * preco_fase   # VGV derivado de unidades × preço, sem cap por vgv_disponivel
         vgv_un_fase   = preco_fase
 
         # Velocidade: distribui receita ao longo da fase

@@ -314,22 +314,29 @@ def _calcular_v3(dados: dict) -> dict:
         {"desc": "Lucratividade",              "valor": round(resultado_bruto/vgv_liquido*100 if vgv_liquido else 0, 2), "tipo": "pct"},
     ]
 
-    # Chart data VP — meses com movimento, fluxo completo
+    # Chart data VP — acumulados para melhor leitura visual
     chart_labels, chart_pag, chart_rec, chart_exp = [], [], [], []
+    _pag_acum = 0.0; _rec_acum = 0.0
     for f in base["fluxo"]:
         if f["receita"] != 0 or f["custo_obra"] != 0 or f["saldo_mes"] != 0:
+            _pag_acum += f["custo_obra"] + f["comissao"] + f["tributos"]
+            _rec_acum += f["receita"]
             chart_labels.append(f["mes"])
-            chart_pag.append(round(-(f["custo_obra"] + f["comissao"] + f["tributos"]), 2))
-            chart_rec.append(round(f["receita"], 2))
+            chart_pag.append(round(-_pag_acum, 2))
+            chart_rec.append(round(_rec_acum, 2))
             chart_exp.append(round(f["saldo_acumulado"], 2))
 
     # Chart data VF — mesmos eixos, valores corrigidos
     chart_labels_vf, chart_pag_vf, chart_rec_vf, chart_exp_vf = [], [], [], []
+    _pag_acum_vf = 0.0; _rec_acum_vf = 0.0
     for f in base.get("vf_fluxo", []):
         if f["receita"] != 0 or f["custo_obra"] != 0 or f["saldo_mes"] != 0:
+            _pag_acum_vf += f["custo_obra"] + f["comissao"] + f["tributos"]
+            _rec_acum_vf += f["receita"]
             chart_labels_vf.append(f["mes"])
-            chart_pag_vf.append(round(-(f["custo_obra"] + f["comissao"] + f["tributos"]), 2))
-            chart_rec_vf.append(round(f["receita"], 2))
+            chart_pag_vf.append(round(-_pag_acum_vf, 2))
+            _rec_acum_vf += f["receita"]
+            chart_rec_vf.append(round(_rec_acum_vf, 2))
             chart_exp_vf.append(round(f["saldo_acumulado"], 2))
 
     # Desembolso anual aggregated
@@ -794,7 +801,7 @@ TEMPLATES["ferramenta_viabilidade.html"] = r"""
         <button type="button" class="btn btn-sm btn-outline-danger" onclick="rmFase({{ loop.index0 }})">Remover fase</button>
       </div>
       <div class="vb-row4">
-        <div><div class="vb-lbl">Meta de Vendas (%)</div><div class="pw"><span class="suf">%</span><input class="vb-inp pr" type="number" name="fase_meta_{{ loop.index0 }}" step="1" min="0" max="100" value="{{ f.meta }}"></div></div>
+        <div><div class="vb-lbl">% do VGV total nesta fase</div><div class="pw"><span class="suf">%</span><input class="vb-inp pr" type="number" name="fase_meta_{{ loop.index0 }}" step="1" min="0" max="100" value="{{ f.meta }}"></div><div class="vb-hint">% das unidades sobre o total do empreendimento</div></div>
         <div><div class="vb-lbl">Reajuste de Preço (%)</div><div class="pw"><span class="suf">%</span><input class="vb-inp pr" type="number" name="fase_reajuste_{{ loop.index0 }}" step="1" value="{{ f.reajuste }}"></div><div class="vb-hint">Negativo = desconto</div></div>
         <div><div class="vb-lbl">Duração (meses)</div><input class="vb-inp" type="number" name="fase_duracao_{{ loop.index0 }}" step="1" min="1" value="{{ f.duracao }}"></div>
         <div><div class="vb-lbl">Entrada (%)</div><div class="pw"><span class="suf">%</span><input class="vb-inp pr" type="number" name="fase_entrada_{{ loop.index0 }}" step="1" min="0" max="100" value="{{ f.entrada_pct }}"></div></div>
@@ -1048,7 +1055,7 @@ TEMPLATES["ferramenta_viabilidade.html"] = r"""
         {% endif %}
 
         {% if r.dre_vf %}
-        <h6 class="mb-2 mt-3" style="color:#ea580c;"><i class="bi bi-receipt-cutoff me-1"></i>DRE VF — Valor Final (Corrigido)</h6>
+        <h6 class="mb-2 mt-3" style="color:#ea580c;"><i class="bi bi-receipt-cutoff me-1"></i>DRE VF — Valor Final (Corrigido) <small class="text-muted fw-normal" style="font-size:.72rem;">— base: VGV Líquido (já deduzida a permuta)</small></h6>
         <table class="dre-table">
           <tbody>
             {% for row in r.dre_vf %}
@@ -1390,8 +1397,8 @@ document.addEventListener('DOMContentLoaded',function(){
     data: {
       labels: _fluxoDataVP.labels,
       datasets: [
-        {label:'Pagamentos',    data: _fluxoDataVP.pag, borderColor:'#ef4444', backgroundColor:'rgba(239,68,68,.1)', tension:.3, fill:true},
-        {label:'Recebimentos',  data: _fluxoDataVP.rec, borderColor:'#22c55e', backgroundColor:'rgba(34,197,94,.1)', tension:.3, fill:true},
+        {label:'Pagamentos Acum.',    data: _fluxoDataVP.pag, borderColor:'#ef4444', backgroundColor:'rgba(239,68,68,.08)', tension:.3, fill:false},
+        {label:'Recebimentos Acum.',  data: _fluxoDataVP.rec, borderColor:'#22c55e', backgroundColor:'rgba(34,197,94,.08)', tension:.3, fill:false},
         {label:'Exposição Acum.', data: _fluxoDataVP.exp, borderColor:'#94a3b8', borderDash:[5,5], tension:.3, fill:false}
       ]
     },
