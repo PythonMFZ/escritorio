@@ -499,7 +499,7 @@ TEMPLATES["fluxo_caixa_lancamentos.html"] = r"""
         </tbody>
       </table>
     </div>
-    {% if total > len(entries) %}
+    {% if total > entries|length %}
     <div class="text-muted small mt-2">Exibindo {{ entries|length }} de {{ total }} lançamentos.</div>
     {% endif %}
   </div>
@@ -682,8 +682,8 @@ function renderPreview(data) {
   document.getElementById('preview-area').style.display = '';
   // Mapeamento
   const campos = [
-    {key:'col_data',        label:'Coluna de Data'},
-    {key:'col_valor',       label:'Coluna de Valor'},
+    {key:'col_data',        label:'Coluna de Data *'},
+    {key:'col_valor',       label:'Coluna de Valor *'},
     {key:'col_descricao',   label:'Coluna de Descrição'},
     {key:'col_tipo',        label:'Coluna de Tipo (Entrada/Saída)'},
     {key:'col_centro_custo',label:'Coluna de Centro de Custo'},
@@ -699,6 +699,14 @@ function renderPreview(data) {
       </select>
     </div>`;
   }
+  // Campo fixo: tipo padrão quando não há coluna de tipo
+  html += `<div class="col-12 col-md-4">
+    <label class="form-label small">Tipo padrão (quando sem coluna de tipo)</label>
+    <select id="map_tipo_padrao" class="form-select form-select-sm">
+      <option value="saida" selected>Saída (despesa)</option>
+      <option value="entrada">Entrada (receita)</option>
+    </select>
+  </div>`;
   document.getElementById('mapping-form').innerHTML = html;
 
   // Tabela preview
@@ -717,6 +725,7 @@ async function confirmarImportacao() {
   ['col_data','col_valor','col_descricao','col_tipo','col_centro_custo','col_categoria'].forEach(k => {
     mapeamento[k] = document.getElementById('map_'+k)?.value || '';
   });
+  mapeamento['tipo_padrao'] = document.getElementById('map_tipo_padrao')?.value || 'saida';
   const body = { mapeamento, dados: _uploadPayload.dados_completos };
   const resp = await fetch('/api/fluxo-caixa/importar-confirmar', {
     method: 'POST',
@@ -1175,9 +1184,10 @@ async def fc_importar_confirmar(request: Request, session: Session = Depends(get
     col_data  = mapeamento.get("col_data", "")
     col_valor = mapeamento.get("col_valor", "")
     col_desc  = mapeamento.get("col_descricao", "")
-    col_tipo  = mapeamento.get("col_tipo", "")
-    col_cc    = mapeamento.get("col_centro_custo", "")
-    col_cat   = mapeamento.get("col_categoria", "")
+    col_tipo      = mapeamento.get("col_tipo", "")
+    tipo_padrao   = mapeamento.get("tipo_padrao", "saida")
+    col_cc        = mapeamento.get("col_centro_custo", "")
+    col_cat       = mapeamento.get("col_categoria", "")
 
     if not col_data or not col_valor:
         return JSONResponse({"erro": "As colunas de Data e Valor são obrigatórias."})
@@ -1190,7 +1200,8 @@ async def fc_importar_confirmar(request: Request, session: Session = Depends(get
         try:
             data_str      = _fc_parse_date(row.get(col_data, ""))
             valor_c, tipo_v = _fc_parse_valor(row.get(col_valor, 0))
-            tipo_col       = _fc_parse_tipo(str(row.get(col_tipo, "")), tipo_v)
+            # Se não há coluna de tipo mapeada, usa tipo_padrao como fallback (em vez do sinal do valor)
+            tipo_col       = _fc_parse_tipo(str(row.get(col_tipo, "")) if col_tipo else "", tipo_padrao if not col_tipo else tipo_v)
             descricao      = str(row.get(col_desc, f"Importado linha {i+2}")).strip() or f"Importado linha {i+2}"
             centro_custo   = str(row.get(col_cc, "Importado")).strip() or "Importado"
             categoria      = str(row.get(col_cat, "Importado")).strip() or "Importado"
