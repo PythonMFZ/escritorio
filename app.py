@@ -14369,16 +14369,19 @@ async def dashboard(request: Request, session: Session = Depends(get_session)) -
             smart_alerts = []
             smart_alerts_unread_count = 0
 
-    # Saldo total de créditos da empresa (soma de todas as carteiras dos clientes)
+    # Saldo de créditos do cliente ativo (carteira isolada por cliente)
     _wallet_saldo_total = 0
     _plano_nome = None
     try:
-        _wallets = session.exec(
-            select(CreditWallet).where(CreditWallet.company_id == ctx.company.id)
-        ).all()
-        _wallet_saldo_total = sum(w.balance_cents for w in _wallets) // 100
-        # Plano ativo do cliente atual
         if current_client:
+            _w = session.exec(
+                select(CreditWallet).where(
+                    CreditWallet.company_id == ctx.company.id,
+                    CreditWallet.client_id  == current_client.id,
+                )
+            ).first()
+            if _w:
+                _wallet_saldo_total = _w.balance_cents // 100
             _cp_dash = session.exec(
                 select(ClientePlano).where(
                     ClientePlano.company_id == ctx.company.id,
