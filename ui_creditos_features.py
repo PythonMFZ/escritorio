@@ -480,6 +480,13 @@ _CF_CATALOGO = {
         "url": "/ferramentas/mapa-unidades",
         "icone": "🗺️",
     },
+    "fluxo_caixa_mensal": {
+        "nome": "Fluxo de Caixa",
+        "descricao": "Importe lançamentos via Excel, acompanhe entradas e saídas por dia, semana ou mês e visualize projeções com saldo inicial e limites de alerta.",
+        "nivel": "empresa",
+        "url": "/ferramentas/fluxo-caixa",
+        "icone": "💵",
+    },
 }
 
 # ── API: status de features ────────────────────────────────────────────────────
