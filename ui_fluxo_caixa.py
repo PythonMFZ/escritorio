@@ -1351,9 +1351,23 @@ _orig_fc_enriquecer = _enriquecer_client_data
 def _fc_enriquecer(session, company_id, client_id, client, client_data):
     client_data = _orig_fc_enriquecer(session, company_id, client_id, client, client_data)
     try:
-        client_data["fluxo_caixa_resumo"] = _build_fc_context(session, company_id, client_id)
+        fc = _build_fc_context(session, company_id, client_id)
+        # Converte dict para texto legível pelo Augur
+        lines = [
+            f"Saldo inicial: {fc['saldo_inicial_brl']}",
+            f"Limite de alerta: {fc['limite_alerta_brl']}",
+            f"Entradas previstas (30d): {fc['entradas_previstas_brl']}",
+            f"Saídas previstas (30d): {fc['saidas_previstas_brl']}",
+            f"Entradas realizadas (30d): {fc['entradas_realizadas_brl']}",
+            f"Saídas realizadas (30d): {fc['saidas_realizadas_brl']}",
+            f"Saldo projetado: {fc['saldo_projetado_brl']}",
+            f"Total de lançamentos: {fc['total_lancamentos']}",
+        ]
+        if fc["periodos_criticos"]:
+            lines.append(f"Períodos críticos: {', '.join(fc['periodos_criticos'])}")
+        client_data["fluxo_caixa_resumo"] = "\n".join(lines)
     except Exception as _e_aug_fc:
-        client_data["fluxo_caixa_resumo"] = {"erro": str(_e_aug_fc)}
+        client_data["fluxo_caixa_resumo"] = f"Erro ao carregar fluxo de caixa: {_e_aug_fc}"
     return client_data
 
 _enriquecer_client_data = _fc_enriquecer
