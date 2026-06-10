@@ -14196,6 +14196,28 @@ async def signup_action(
 
     await sync_to_notion_negocios(user=user, company=company, diagnostic=diagnostic)
 
+    # E-mail de boas-vindas
+    try:
+        _smtp_send_email(
+            to_email=user.email,
+            subject="Bem-vindo ao Augur PME — Maffezzolli Capital",
+            html_body=f"""
+<div style="font-family:sans-serif;max-width:560px;margin:0 auto;color:#222;">
+  <h2 style="color:#E07020;">Bem-vindo ao Augur PME, {user.name.split()[0]}!</h2>
+  <p>Seu escritório <strong>{company.name}</strong> foi criado com sucesso.</p>
+  <p>Agora você tem acesso à plataforma Maffezzolli Capital — o Augur, seu assistente financeiro com IA, já está pronto para analisar sua empresa e ajudar nas decisões estratégicas.</p>
+  <p style="margin-top:24px;">
+    <a href="https://app.maffezzollicapital.com.br" style="background:#E07020;color:#fff;padding:12px 24px;border-radius:4px;text-decoration:none;font-weight:bold;">Acessar plataforma →</a>
+  </p>
+  <p style="margin-top:32px;font-size:13px;color:#888;">Dúvidas? Fale com a equipe pelo WhatsApp: <a href="https://wa.me/5547991359091">+55 47 99135-9091</a></p>
+  <hr style="border:none;border-top:1px solid #eee;margin-top:32px;"/>
+  <p style="font-size:11px;color:#bbb;">Maffezzolli Capital · Reestruturação &amp; Mercado de Capitais</p>
+</div>""",
+            text_body=f"Bem-vindo ao Augur PME, {user.name}! Seu escritório {company.name} foi criado. Acesse: https://app.maffezzollicapital.com.br",
+        )
+    except Exception as _e_email:
+        print(f"[signup] Falha ao enviar e-mail de boas-vindas para {user.email}: {_e_email}")
+
     request.session["user_id"] = user.id
     request.session["company_id"] = company.id
     request.session.pop("selected_client_id", None)
