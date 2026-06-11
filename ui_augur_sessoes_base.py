@@ -873,16 +873,31 @@ _AUGUR_WIDGET_V4 = r"""
 
     {# Header #}
     <div class="d-flex align-items-center gap-2 p-3" style="border-bottom:1px solid var(--mc-border);">
-      <div style="width:34px;height:34px;border-radius:10px;background:#1a1a1a;display:flex;align-items:center;justify-content:center;flex-shrink:0;overflow:hidden;">
+      <div style="width:34px;height:34px;border-radius:10px;background:#fff;border:1px solid var(--mc-border);display:flex;align-items:center;justify-content:center;flex-shrink:0;overflow:hidden;">
         <img src="/static/augur_logo_v3.png" alt="Augur" style="width:24px;height:24px;object-fit:contain;">
       </div>
       <div style="flex:1;">
         <div class="fw-bold" style="font-size:.92rem;">Augur <span id="augurSessaoTitulo" style="font-weight:400;font-size:.78rem;color:var(--mc-muted);margin-left:.5rem;"></span></div>
         <div class="muted" style="font-size:.7rem;">Consultor financeiro inteligente</div>
       </div>
-      <button class="btn btn-sm btn-outline-secondary" onclick="augurNovaConversa()" style="font-size:.75rem;">
-        ✏️ Nova conversa
-      </button>
+      <div class="d-flex gap-2 align-items-center">
+        <div class="dropdown">
+          <button class="btn btn-sm btn-outline-primary dropdown-toggle" data-bs-toggle="dropdown" style="font-size:.75rem;">
+            🤝 Falar com Consultor
+          </button>
+          <ul class="dropdown-menu dropdown-menu-end" style="min-width:230px;">
+            <li><a class="dropdown-item" href="https://wa.me/5547991359091?text=Ol%C3%A1!+Gostaria+de+falar+com+um+consultor+da+Maffezzolli+Capital" target="_blank" style="font-size:.82rem;">
+              <span style="margin-right:.4rem;">💬</span> WhatsApp — dúvida rápida
+            </a></li>
+            <li><a class="dropdown-item" id="augurAgendarBtn" href="#" target="_blank" style="font-size:.82rem;" onclick="abrirAgenda(event)">
+              <span style="margin-right:.4rem;">📅</span> Agendar reunião
+            </a></li>
+          </ul>
+        </div>
+        <button class="btn btn-sm btn-outline-secondary" onclick="augurNovaConversa()" style="font-size:.75rem;">
+          ✏️ Nova conversa
+        </button>
+      </div>
     </div>
 
     {# Layout: chat + sidebar sessões #}
@@ -949,7 +964,7 @@ _AUGUR_WIDGET_V4 = r"""
   .aug-bubble.assistant{background:#fff;border:1px solid var(--mc-border);border-radius:14px 14px 14px 4px;color:var(--mc-text);}
   .aug-avatar{width:28px;height:28px;border-radius:50%;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:.7rem;font-weight:700;align-self:flex-end;}
   .aug-avatar.user{background:var(--mc-primary);color:#fff;}
-  .aug-avatar.assistant{background:#1a1a1a;overflow:hidden;}
+  .aug-avatar.assistant{background:#fff;border:1px solid #e5e7eb;overflow:hidden;}
   .aug-meta{font-size:.68rem;color:var(--mc-muted);margin-top:.25rem;}
   .aug-feedback{display:flex;gap:.3rem;margin-top:.35rem;}
   .aug-typing{display:flex;gap:4px;align-items:center;padding:.5rem .8rem;}
@@ -1254,6 +1269,15 @@ _AUGUR_WIDGET_V4 = r"""
   };
 
   augurCarregarSessoes();
+
+  // ── Botão Falar com Consultor ──────────────────────────────────────────
+  window.abrirAgenda = function(e) {
+    e.preventDefault();
+    // Link de agendamento — configurável via atributo data ou fallback para WhatsApp
+    const link = document.getElementById('augurAgendarBtn')?.dataset?.agendaUrl
+                 || 'https://wa.me/5547991359091?text=Ol%C3%A1!+Gostaria+de+agendar+uma+reuni%C3%A3o+com+um+consultor+da+Maffezzolli+Capital';
+    window.open(link, '_blank');
+  };
 })();
 </script>
 
