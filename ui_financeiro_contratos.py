@@ -171,6 +171,18 @@ def _ct_gerar_cobrancas_mes(session, company_id: int, competencia: str = None):
         geradas += 1
     if geradas:
         session.commit()
+        # Sincroniza com OfficeFinancialEntry para o dashboard
+        for _c in session.exec(
+            _sel_ct(CobrancaMensal).where(
+                CobrancaMensal.company_id  == company_id,
+                CobrancaMensal.competencia == competencia,
+                CobrancaMensal.status      == "pendente",
+            )
+        ).all():
+            try:
+                _ct_sync_entry(session, _c)
+            except Exception:
+                pass
     return geradas
 
 
@@ -271,6 +283,113 @@ def _ct_mp_gerar_boleto(cobranca: CobrancaMensal, contrato: ContratoCliente, ses
     }
 
 
+# ── Email boleto ─────────────────────────────────────────────────────────────
+
+_ADMIN_EMAIL = "maffezzolli.eng@gmail.com"
+
+def _ct_enviar_email_boleto(cobranca: CobrancaMensal, contrato: ContratoCliente, session=None):
+    """Envia boleto por e-mail para o cliente e cópia para o escritório."""
+    cliente_obj = None
+    if contrato.client_id and session:
+        try:
+            cliente_obj = session.get(Client, contrato.client_id)
+        except Exception:
+            pass
+
+    email_cliente = (cliente_obj.email if cliente_obj and cliente_obj.email else "") or contrato.email_cliente
+    if not email_cliente:
+        raise RuntimeError("Cliente sem e-mail cadastrado.")
+
+    valor_fmt = _ct_brl(cobranca.valor_cents)
+    html = f"""
+<div style="font-family:sans-serif;max-width:600px;margin:0 auto">
+  <h2 style="color:#1a1a2e">Boleto disponível — {cobranca.nome_contrato}</h2>
+  <p>Olá, <strong>{cobranca.nome_cliente}</strong>!</p>
+  <p>Segue o boleto referente à competência <strong>{cobranca.competencia}</strong>:</p>
+  <table style="width:100%;border-collapse:collapse;margin:16px 0">
+    <tr><td style="padding:8px;background:#f5f5f5;font-weight:bold">Valor</td>
+        <td style="padding:8px">{valor_fmt}</td></tr>
+    <tr><td style="padding:8px;background:#f5f5f5;font-weight:bold">Vencimento</td>
+        <td style="padding:8px">{cobranca.data_vencimento}</td></tr>
+    <tr><td style="padding:8px;background:#f5f5f5;font-weight:bold">Serviço</td>
+        <td style="padding:8px">{cobranca.nome_contrato}</td></tr>
+  </table>
+  {"<p><strong>Linha digitável:</strong><br><code style='font-size:13px'>" + cobranca.boleto_codigo + "</code></p>" if cobranca.boleto_codigo else ""}
+  <p style="margin-top:24px">
+    <a href="{cobranca.boleto_url}" style="background:#e65c00;color:#fff;padding:12px 24px;border-radius:6px;text-decoration:none;font-weight:bold">
+      📄 Abrir boleto
+    </a>
+  </p>
+  <p style="color:#888;font-size:12px;margin-top:32px">Maffezzolli Capital — Consultoria Financeira</p>
+</div>"""
+
+    _smtp_send_email(
+        to_email=email_cliente,
+        subject=f"Boleto {cobranca.nome_contrato} — {cobranca.competencia} — {valor_fmt}",
+        html_body=html,
+        text_body=f"Boleto {cobranca.nome_contrato} venc. {cobranca.data_vencimento}: {cobranca.boleto_url}",
+    )
+    # Cópia para o escritório
+    try:
+        _smtp_send_email(
+            to_email=_ADMIN_EMAIL,
+            subject=f"[Cópia] Boleto enviado — {cobranca.nome_cliente} — {cobranca.competencia}",
+            html_body=html,
+            text_body=f"Boleto {cobranca.nome_cliente} {cobranca.competencia}: {cobranca.boleto_url}",
+        )
+    except Exception:
+        pass
+    print(f"[boleto] 📧 email enviado para {email_cliente}")
+
+
+# ── Integração com OfficeFinancialEntry (dashboard) ───────────────────────────
+
+def _ct_sync_entry(session, cobranca: CobrancaMensal, user_id: int = 1):
+    """Cria ou atualiza OfficeFinancialEntry correspondente à CobrancaMensal."""
+    try:
+        ref = f"contrato-{cobranca.contrato_id}-{cobranca.competencia}"
+        entry = session.exec(
+            _sel_ct(OfficeFinancialEntry).where(
+                OfficeFinancialEntry.company_id    == cobranca.company_id,
+                OfficeFinancialEntry.document_number == ref,
+            )
+        ).first()
+
+        status_map = {
+            "pendente":  "aberto",
+            "vencido":   "aberto",
+            "pago":      "recebido",
+            "cancelado": "cancelado",
+        }
+        novo_status = status_map.get(cobranca.status, "aberto")
+
+        if entry is None:
+            entry = OfficeFinancialEntry(
+                company_id            = cobranca.company_id,
+                created_by_user_id    = user_id,
+                entry_kind            = "receber",
+                status                = novo_status,
+                client_id             = cobranca.client_id,
+                description           = f"{cobranca.nome_contrato} — {cobranca.competencia}",
+                document_number       = ref,
+                competence_date       = cobranca.competencia + "-01",
+                due_date              = cobranca.data_vencimento,
+                settlement_date       = cobranca.data_pagamento or "",
+                amount_expected_brl   = cobranca.valor_cents / 100,
+                amount_realized_brl   = (cobranca.valor_pago_cents or cobranca.valor_cents) / 100 if cobranca.status == "pago" else 0.0,
+            )
+        else:
+            entry.status              = novo_status
+            entry.settlement_date     = cobranca.data_pagamento or ""
+            entry.amount_realized_brl = (cobranca.valor_pago_cents or cobranca.valor_cents) / 100 if cobranca.status == "pago" else 0.0
+            entry.updated_by_user_id  = user_id
+
+        session.add(entry)
+        session.commit()
+    except Exception as _e:
+        print(f"[contratos] sync_entry cobranca {cobranca.id}: {_e}")
+
+
 # ── Rotas ─────────────────────────────────────────────────────────────────────
 
 @app.get("/admin/financeiro/contratos", response_class=_HTML_ct)
@@ -282,6 +401,11 @@ async def financeiro_contratos_lista(request: _Req_ct, session=_Dep_ct(get_sessi
     try:
         _ct_gerar_cobrancas_mes(session, ctx.company.id)
         _ct_atualizar_vencidos(session)
+        # Garante que cobranças existentes estejam no dashboard
+        for _c in session.exec(
+            _sel_ct(CobrancaMensal).where(CobrancaMensal.company_id == ctx.company.id)
+        ).all():
+            _ct_sync_entry(session, _c, user_id=ctx.user.id)
     except Exception as _e:
         print(f"[contratos] auto-gerar: {_e}")
 
@@ -761,6 +885,7 @@ async def financeiro_cobranca_pagar(cobranca_id: int, request: _Req_ct, session=
         cobranca.updated_at       = _dt_ct.utcnow()
         session.add(cobranca)
         session.commit()
+        _ct_sync_entry(session, cobranca, user_id=ctx.user.id)
         return _JR_ct({"ok": True})
     except Exception as _e:
         return _JR_ct({"error": str(_e)}, status_code=500)
@@ -850,6 +975,13 @@ async def financeiro_cobranca_gerar_boleto_form(cobranca_id: int, request: _Req_
         session.add(cobranca)
         session.commit()
         print(f"[boleto] ✅ cobranca {cobranca_id} — {cobranca.boleto_url}")
+
+        # Envia boleto por e-mail para o cliente + cópia para o escritório
+        try:
+            _ct_enviar_email_boleto(cobranca, contrato, session)
+        except Exception as _em:
+            print(f"[boleto] email não enviado: {_em}")
+
         return _RR_ct(cobranca.boleto_url, status_code=303)
     except Exception as _e:
         print(f"[boleto] erro cobranca {cobranca_id}: {_e}")
@@ -900,6 +1032,7 @@ async def webhook_mercadopago(request: _Req_ct, session=_Dep_ct(get_session)):
             cobranca.updated_at       = _dt_ct.utcnow()
             session.add(cobranca)
             session.commit()
+            _ct_sync_entry(session, cobranca)
             print(f"[webhook_mp] ✅ Cobrança {cobranca.id} marcada como paga via MP {mp_id}")
 
         return _JR_ct({"ok": True})
