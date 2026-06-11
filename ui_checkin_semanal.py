@@ -371,6 +371,99 @@ def _ck_disparar_checkins(semana: str, force: bool = False) -> dict:
         for config in configs:
             log.append(f"Canal: empresa {config.company_id} | phone_id={config.meta_phone_number_id or '(vazio)'}")
             try:
+                # ── Abordagem 1: usuários com whatsapp_phone cadastrado ────────
+                membros = db.exec(
+                    _sel_ck(Membership)
+                    .where(
+                        Membership.company_id == config.company_id,
+                        Membership.client_id  != None,
+                    )
+                ).all()
+
+                clientes_enviados: set = set()
+
+                for membro in membros:
+                    if not membro.client_id or membro.client_id in clientes_enviados:
+                        continue
+
+                    usuario = db.get(User, membro.user_id)
+                    if not usuario or not usuario.whatsapp_phone:
+                        continue
+
+                    phone_destino = usuario.whatsapp_phone
+                    client = db.get(Client, membro.client_id)
+                    if not client:
+                        continue
+
+                    if not force:
+                        ja = db.exec(
+                            _sel_ck(CheckinSemanal)
+                            .where(
+                                CheckinSemanal.company_id == config.company_id,
+                                CheckinSemanal.client_id  == membro.client_id,
+                                CheckinSemanal.semana     == semana,
+                            )
+                        ).first()
+                        if ja:
+                            pulados += 1
+                            log.append(f"  ⏭  Pulado (já enviado): {client.name}")
+                            continue
+
+                    nome = (client.name or "cliente").split()[0]
+                    msg  = _CK_MSG_CHECKIN.format(nome=nome)
+
+                    ok, err = _ck_enviar_sync(
+                        phone_destino,
+                        config.meta_phone_number_id,
+                        msg,
+                    )
+
+                    if ok:
+                        if force:
+                            antigo = db.exec(
+                                _sel_ck(CheckinSemanal)
+                                .where(
+                                    CheckinSemanal.company_id == config.company_id,
+                                    CheckinSemanal.client_id  == membro.client_id,
+                                    CheckinSemanal.semana     == semana,
+                                )
+                            ).first()
+                            if antigo:
+                                db.delete(antigo)
+                                db.flush()
+
+                        # Tenta achar thread vinculada ao cliente para registrar
+                        thread_id = None
+                        try:
+                            th = db.exec(
+                                _sel_ck(WhatsAppThread)
+                                .where(
+                                    WhatsAppThread.company_id == config.company_id,
+                                    WhatsAppThread.client_id  == membro.client_id,
+                                )
+                                .order_by(WhatsAppThread.id.desc())
+                            ).first()
+                            thread_id = th.id if th else None
+                        except Exception:
+                            pass
+
+                        db.add(CheckinSemanal(
+                            company_id=config.company_id,
+                            client_id=membro.client_id,
+                            thread_id=thread_id,
+                            semana=semana,
+                            contact_phone=phone_destino,
+                            enviado_at=_dt_ck.now(_tz_ck.utc),
+                        ))
+                        db.commit()
+                        enviados += 1
+                        clientes_enviados.add(membro.client_id)
+                        log.append(f"  ✅ Enviado: {client.name} → {phone_destino}")
+                    else:
+                        erros += 1
+                        log.append(f"  ❌ Falhou: {client.name} ({phone_destino}): {err}")
+
+                # ── Abordagem 2: fallback para threads sem usuário com phone ──
                 threads = db.exec(
                     _sel_ck(WhatsAppThread)
                     .where(
@@ -381,16 +474,11 @@ def _ck_disparar_checkins(semana: str, force: bool = False) -> dict:
                     .order_by(WhatsAppThread.id.desc())
                 ).all()
 
-                if not threads:
-                    log.append("  ⚠️  Sem threads vinculadas a clientes.")
-                    continue
-
-                # Thread mais recente por cliente
-                visto: set = set()
+                visto_thread: set = set()
                 for thread in threads:
-                    if thread.client_id in visto:
+                    if thread.client_id in visto_thread or thread.client_id in clientes_enviados:
                         continue
-                    visto.add(thread.client_id)
+                    visto_thread.add(thread.client_id)
 
                     if not force:
                         ja = db.exec(
@@ -403,31 +491,13 @@ def _ck_disparar_checkins(semana: str, force: bool = False) -> dict:
                         ).first()
                         if ja:
                             pulados += 1
-                            log.append(f"  ⏭  Pulado (já enviado): client_id={thread.client_id}")
                             continue
 
                     client = db.get(Client, thread.client_id)
                     if not client:
-                        log.append(f"  ⚠️  Client {thread.client_id} não encontrado.")
                         continue
 
-                    # Prefere o whatsapp_phone do usuário vinculado ao cliente
                     phone_destino = thread.contact_phone
-                    try:
-                        membro = db.exec(
-                            select(Membership).where(
-                                Membership.company_id == config.company_id,
-                                Membership.client_id  == client.id,
-                                Membership.role       == "cliente",
-                            )
-                        ).first()
-                        if membro:
-                            usuario = db.get(User, membro.user_id)
-                            if usuario and usuario.whatsapp_phone:
-                                phone_destino = usuario.whatsapp_phone
-                    except Exception:
-                        pass
-
                     nome = (client.name or "cliente").split()[0]
                     msg  = _CK_MSG_CHECKIN.format(nome=nome)
 
@@ -438,7 +508,6 @@ def _ck_disparar_checkins(semana: str, force: bool = False) -> dict:
                     )
 
                     if ok:
-                        # Remove registro antigo se force=True, cria novo
                         if force:
                             antigo = db.exec(
                                 _sel_ck(CheckinSemanal)
@@ -462,10 +531,10 @@ def _ck_disparar_checkins(semana: str, force: bool = False) -> dict:
                         ))
                         db.commit()
                         enviados += 1
-                        log.append(f"  ✅ Enviado: {client.name} → {phone_destino}")
+                        log.append(f"  ✅ Enviado (thread): {client.name} → {phone_destino}")
                     else:
                         erros += 1
-                        log.append(f"  ❌ Falhou: {client.name} ({phone_destino}): {err}")
+                        log.append(f"  ❌ Falhou (thread): {client.name} ({phone_destino}): {err}")
 
             except Exception as _e:
                 erros += 1
