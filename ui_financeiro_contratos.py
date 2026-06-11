@@ -549,7 +549,7 @@ async def financeiro_cobrancas_painel(request: _Req_ct, session=_Dep_ct(get_sess
         if c.boleto_url:
             boleto_btn = f'<a class="btn btn-sm btn-outline-info ms-1" href="{c.boleto_url}" target="_blank">📄 Boleto</a>'
         elif c.status in ("pendente", "vencido"):
-            boleto_btn = f'<form method="post" action="/admin/financeiro/cobrancas/{c.id}/boleto-gerar" style="display:inline"><button type="submit" class="btn btn-sm btn-outline-info ms-1">Gerar boleto</button></form>'
+            boleto_btn = f'<a href="/admin/financeiro/cobrancas/{c.id}/boleto-gerar" class="btn btn-sm btn-outline-info ms-1">Gerar boleto</a>'
         else:
             boleto_btn = ""
 
@@ -824,7 +824,7 @@ async def financeiro_cobranca_gerar_boleto_json(cobranca_id: int, request: _Req_
         return _JR_ct({"error": str(_e)}, status_code=422)
 
 
-@app.post("/admin/financeiro/cobrancas/{cobranca_id}/boleto-gerar")
+@app.get("/admin/financeiro/cobrancas/{cobranca_id}/boleto-gerar")
 @require_role({"admin", "equipe"})
 async def financeiro_cobranca_gerar_boleto_form(cobranca_id: int, request: _Req_ct, session=_Dep_ct(get_session)):
     """Form POST — gera boleto e redireciona para o PDF ou volta com erro."""
