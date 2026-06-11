@@ -65,14 +65,29 @@ _WIDGET_B6V2 = r"""{% if current_client %}
 <div class="card mb-3" id="augurCard" style="border:1px solid var(--mc-border);"><!-- _b6v2AugurWidget -->
   <div class="card-body p-0">
     <div class="d-flex align-items-center gap-2 p-3" style="border-bottom:1px solid var(--mc-border);">
-      <div style="width:34px;height:34px;border-radius:10px;background:#1a1a1a;display:flex;align-items:center;justify-content:center;flex-shrink:0;overflow:hidden;">
+      <div style="width:34px;height:34px;border-radius:10px;background:#fff;border:1px solid var(--mc-border);display:flex;align-items:center;justify-content:center;flex-shrink:0;overflow:hidden;">
         <img src="/static/augur_logo_v3.png" alt="Augur" style="width:24px;height:24px;object-fit:contain;">
       </div>
       <div style="flex:1;">
         <div class="fw-bold" style="font-size:.92rem;">Augur <span id="augurSessaoTitulo" style="font-weight:400;font-size:.78rem;color:var(--mc-muted);margin-left:.5rem;"></span></div>
         <div class="muted" style="font-size:.7rem;">Consultor financeiro inteligente</div>
       </div>
-      <button class="btn btn-sm btn-outline-secondary" onclick="augurNovaConversa()" style="font-size:.75rem;">✏️ Nova conversa</button>
+      <div class="d-flex gap-2 align-items-center">
+        <div class="dropdown">
+          <button class="btn btn-sm btn-outline-primary dropdown-toggle" data-bs-toggle="dropdown" style="font-size:.75rem;">
+            🤝 Falar com Consultor
+          </button>
+          <ul class="dropdown-menu dropdown-menu-end" style="min-width:230px;">
+            <li><a class="dropdown-item" href="https://wa.me/5547991359091?text=Ol%C3%A1!+Gostaria+de+falar+com+um+consultor+da+Maffezzolli+Capital" target="_blank" style="font-size:.82rem;">
+              <span style="margin-right:.4rem;">💬</span> WhatsApp — dúvida rápida
+            </a></li>
+            <li><a class="dropdown-item" href="https://outlook.office.com/book/ReservasMaffezzolliConsultorRafael@mfzcapital.onmicrosoft.com/?ismsaljsauthenabled" target="_blank" style="font-size:.82rem;">
+              <span style="margin-right:.4rem;">📅</span> Agendar reunião
+            </a></li>
+          </ul>
+        </div>
+        <button class="btn btn-sm btn-outline-secondary" onclick="augurNovaConversa()" style="font-size:.75rem;">✏️ Nova conversa</button>
+      </div>
     </div>
     <div style="display:flex;height:460px;overflow:hidden;">
       <div id="augurSidebar" style="display:none;width:210px;border-right:1px solid var(--mc-border);overflow-y:auto;padding:.5rem;background:#f8f9fa;flex-shrink:0;">
