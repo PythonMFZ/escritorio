@@ -152,22 +152,16 @@ async def augur_ask_v4(request: _Req_av4, session=_Dep_av4(get_session)):
         session.commit()
         session.refresh(sessao)
 
-    # Verifica créditos
+    # Verifica assinatura Augur — modelo de assinatura: uso ilimitado enquanto ativo
     try:
-        _preco_augur = _get_preco(session, ctx.company.id, "augur_mensal", default=0)
-        if _preco_augur > 0:
-            _wallet = session.exec(
-                _sel_av4(CreditWallet)
-                .where(CreditWallet.company_id == ctx.company.id, CreditWallet.client_id == client.id)
-            ).first()
-            _saldo = (_wallet.balance_cents / 100) if _wallet else 0.0
-            if _saldo < _preco_augur:
-                return _JSON_av4({"error": f"Saldo insuficiente.", "precisa_creditos": True}, status_code=402)
-            if _wallet:
-                _wallet.balance_cents -= int(_preco_augur * 100)
-                _wallet.updated_at = utcnow()
-                session.add(_wallet)
-                session.commit()
+        _augur_ativo = _feature_ativa(session, ctx.company.id, client.id, "augur_mensal", user_id=ctx.user.id)
+        if not _augur_ativo:
+            try:
+                _augur_ativo = _augur_assinatura_ativa(session, ctx.company.id, ctx.user.id, client.id)
+            except Exception:
+                _augur_ativo = False
+        if not _augur_ativo:
+            return _JSON_av4({"error": "Augur não está ativo. Ative a assinatura em Ferramentas.", "precisa_assinatura": True}, status_code=402)
     except Exception:
         pass
 

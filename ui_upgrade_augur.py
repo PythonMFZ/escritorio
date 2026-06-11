@@ -395,22 +395,6 @@ async def augur_ask_v3(request: Request, session: Session = Depends(get_session)
     except ImportError:
         return JSONResponse({"error": "Augur não instalado.", "response": None}, status_code=503)
     except Exception as e:
-        # Estorna créditos debitados se a IA falhou
-        try:
-            if _preco_augur > 0 and _wallet_augur:
-                _wallet_augur.balance_cents += int(_preco_augur * 100)
-                _wallet_augur.updated_at = utcnow()
-                session.add(_wallet_augur)
-                session.add(CreditLedger(
-                    company_id=ctx.company.id, client_id=client.id,
-                    kind="REFUND",
-                    amount_cents=int(_preco_augur * 100),
-                    ref_type="augur", ref_id="",
-                    note="Augur — estorno por falha na IA",
-                ))
-                session.commit()
-        except Exception:
-            pass
         return JSONResponse({"error": str(e), "response": None}, status_code=500)
 
     # Salva resposta

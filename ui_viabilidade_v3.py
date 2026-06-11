@@ -566,127 +566,53 @@ async def ferramenta_viabilidade_excel(
 
     r = _calcular_v3(dados)
 
-    # ── Build workbook ──────────────────────────────────────────────────────
+    # ── Build workbook — apenas Fluxo VP e VF ──────────────────────────────
     wb = _opxl.Workbook()
-    HDR_FILL  = _PF("solid", fgColor="F97316")
-    HDR_FONT  = _Font(bold=True, color="FFFFFF", size=10)
-    SUB_FILL  = _PF("solid", fgColor="FFF0E6")
-    SUB_FONT  = _Font(bold=True, size=10)
-    MONO_FONT = _Font(name="Courier New", size=9)
-    THIN      = _Brd(left=_Side(style="thin"), right=_Side(style="thin"),
-                     top=_Side(style="thin"), bottom=_Side(style="thin"))
-    NUM_FMT   = '#,##0.00'
-    PCT_FMT   = '0.00"%"'
+    HDR_FILL = _PF("solid", fgColor="F97316")
+    HDR_FONT = _Font(bold=True, color="FFFFFF", size=10)
+    THIN     = _Brd(left=_Side(style="thin"), right=_Side(style="thin"),
+                    top=_Side(style="thin"), bottom=_Side(style="thin"))
+    N_FMT    = '#,##0.00'
+    COLS     = ["Mês", "Receita", "Comissão", "Tributos", "Custo Obra", "CRI", "Saldo Mês", "Saldo Acumulado"]
 
-    def _hdr(ws, row, cols):
-        for c, val in enumerate(cols, 1):
-            cell = ws.cell(row=row, column=c, value=val)
+    def _hdr(ws):
+        for c, val in enumerate(COLS, 1):
+            cell = ws.cell(row=1, column=c, value=val)
             cell.fill = HDR_FILL; cell.font = HDR_FONT
             cell.alignment = _Al(horizontal="center"); cell.border = THIN
+        ws.freeze_panes = "A2"
 
-    def _row(ws, row, vals, fmt=None):
-        for c, val in enumerate(vals, 1):
-            cell = ws.cell(row=row, column=c, value=val)
-            cell.border = THIN
-            if fmt and isinstance(val, (int, float)):
-                cell.number_format = fmt[c-1] if isinstance(fmt, list) else fmt
+    def _fluxo_rows(ws, fluxo):
+        for rr, row in enumerate(fluxo, 2):
+            vals = [
+                row.get("mes"), row.get("receita"), row.get("comissao"),
+                row.get("tributos"), row.get("custo_obra"), row.get("cri") or 0,
+                row.get("saldo_mes"), row.get("saldo_acumulado"),
+            ]
+            for c, val in enumerate(vals, 1):
+                cell = ws.cell(row=rr, column=c, value=val)
+                cell.border = THIN
+                if c > 1 and isinstance(val, (int, float)):  # c=1 é Mês (int puro, sem formato)
+                    cell.number_format = N_FMT
 
     def _autofit(ws):
         for col in ws.columns:
             max_len = max((len(str(c.value or "")) for c in col), default=8)
-            ws.column_dimensions[_gcl(col[0].column)].width = min(max_len + 2, 30)
+            ws.column_dimensions[_gcl(col[0].column)].width = min(max_len + 2, 22)
 
-    # ── Aba Resumo ──────────────────────────────────────────────────────────
-    ws = wb.active
-    ws.title = "Resumo"
-    ws["A1"] = "Viabilidade Imobiliária — Resumo"
-    ws["A1"].font = _Font(bold=True, size=13, color="F97316")
-    ws["A2"] = f"Gerado em {_dt.now().strftime('%d/%m/%Y %H:%M')}"
-    ws["A2"].font = _Font(italic=True, size=9, color="888888")
-    ws.append([])
+    # Fluxo VP
+    ws_vp = wb.active
+    ws_vp.title = "Fluxo VP (Nominal)"
+    _hdr(ws_vp)
+    _fluxo_rows(ws_vp, r.get("fluxo") or [])
+    _autofit(ws_vp)
 
-    kpis_vp = [
-        ("VGV Total (VP)", r.get("vgv_total")),
-        ("Custo Total (VP)", r.get("custo_total")),
-        ("Resultado Bruto (VP)", r.get("resultado_bruto")),
-        ("Margem Bruta (%)", r.get("margem_bruta")),
-        ("TIR Mensal (%)", r.get("tir_mensal")),
-        ("TIR Anual (%)", r.get("tir_anual")),
-        ("VPL (VP)", r.get("vpl")),
-        ("Payback (meses)", r.get("payback_meses")),
-        ("Exposição Máx. (VP)", r.get("exposicao_max")),
-        ("Índice de Lucratividade", r.get("il")),
-        ("Múltiplo do Capital", r.get("multiplo")),
-    ]
-    ws.cell(4, 1, "Indicador").fill = SUB_FILL; ws.cell(4, 1).font = SUB_FONT
-    ws.cell(4, 2, "Valor VP").fill = SUB_FILL; ws.cell(4, 2).font = SUB_FONT
-    ws.cell(4, 3, "Valor VF").fill = SUB_FILL; ws.cell(4, 3).font = SUB_FONT
-
-    kpis_vf = {
-        "VGV Total (VP)": r.get("vf_vgv"),
-        "Resultado Bruto (VP)": r.get("vf_resultado"),
-        "Margem Bruta (%)": r.get("vf_margem"),
-        "TIR Mensal (%)": r.get("vf_tir_mensal"),
-        "TIR Anual (%)": r.get("vf_tir_anual"),
-        "VPL (VP)": r.get("vf_vpl"),
-        "Exposição Máx. (VP)": r.get("vf_exposicao_max"),
-    }
-    for rr, (label, val_vp) in enumerate(kpis_vp, 5):
-        val_vf = kpis_vf.get(label)
-        is_pct = "%" in label
-        ws.cell(rr, 1, label).border = THIN
-        c2 = ws.cell(rr, 2, val_vp); c2.border = THIN
-        c3 = ws.cell(rr, 3, val_vf if val_vf is not None else "—"); c3.border = THIN
-        if isinstance(val_vp, float):
-            c2.number_format = PCT_FMT if is_pct else NUM_FMT
-        if isinstance(val_vf, float):
-            c3.number_format = PCT_FMT if is_pct else NUM_FMT
-    _autofit(ws)
-
-    # ── Aba Fases ───────────────────────────────────────────────────────────
-    wf = wb.create_sheet("Fases de Comercialização")
-    _hdr(wf, 1, ["Fase", "% VGV Total", "Reajuste (%)", "Duração (meses)", "Entrada (%)", "Parcelas (%)", "Nº Parcelas", "Reforços (%)", "Nº Reforços"])
-    for rr, f in enumerate((dados.get("fases") or []), 2):
-        _row(wf, rr, [
-            f.get("nome", ""), f.get("meta", 0), f.get("reajuste", 0),
-            f.get("duracao", 0), f.get("entrada_pct", 0), f.get("parcelas_pct", 0),
-            f.get("n_parcelas", 0), f.get("reforco_pct", 0), f.get("n_reforcos", 0),
-        ])
-    _autofit(wf)
-
-    # ── Aba Fluxo VP ────────────────────────────────────────────────────────
-    wvp = wb.create_sheet("Fluxo VP (Nominal)")
-    _hdr(wvp, 1, ["Mês", "Receita", "Comissão", "Tributos", "Custo Obra", "CRI", "Saldo Mês", "Saldo Acumulado"])
-    FMTS_F = [None, NUM_FMT, NUM_FMT, NUM_FMT, NUM_FMT, NUM_FMT, NUM_FMT, NUM_FMT]
-    for rr, row in enumerate((r.get("fluxo") or []), 2):
-        _row(wvp, rr, [
-            row.get("mes"), row.get("receita"), row.get("comissao"),
-            row.get("tributos"), row.get("custo_obra"), row.get("cri") or 0,
-            row.get("saldo_mes"), row.get("saldo_acumulado"),
-        ], fmt=FMTS_F)
-    _autofit(wvp)
-
-    # ── Aba Fluxo VF ────────────────────────────────────────────────────────
+    # Fluxo VF
     if r.get("vf_fluxo"):
-        wvf2 = wb.create_sheet("Fluxo VF (Corrigido)")
-        _hdr(wvf2, 1, ["Mês", "Receita", "Comissão", "Tributos", "Custo Obra", "CRI", "Saldo Mês", "Saldo Acumulado"])
-        for rr, row in enumerate(r["vf_fluxo"], 2):
-            _row(wvf2, rr, [
-                row.get("mes"), row.get("receita"), row.get("comissao"),
-                row.get("tributos"), row.get("custo_obra"), row.get("cri") or 0,
-                row.get("saldo_mes"), row.get("saldo_acumulado"),
-            ], fmt=FMTS_F)
-        _autofit(wvf2)
-
-    # ── Aba Custos ──────────────────────────────────────────────────────────
-    if r.get("cronograma"):
-        wc = wb.create_sheet("Cronograma de Custos")
-        first = r["cronograma"][0] if r["cronograma"] else {}
-        headers = list(first.keys())
-        _hdr(wc, 1, headers)
-        for rr, row in enumerate(r["cronograma"], 2):
-            _row(wc, rr, [row.get(h) for h in headers])
-        _autofit(wc)
+        ws_vf = wb.create_sheet("Fluxo VF (Corrigido)")
+        _hdr(ws_vf)
+        _fluxo_rows(ws_vf, r["vf_fluxo"])
+        _autofit(ws_vf)
 
     buf = _io.BytesIO()
     wb.save(buf)
