@@ -517,7 +517,7 @@ async def financeiro_cobrancas_painel(request: _Req_ct, session=_Dep_ct(get_sess
         if c.boleto_url:
             boleto_btn = f'<a class="btn btn-sm btn-outline-info ms-1" href="{c.boleto_url}" target="_blank">📄 Boleto</a>'
         elif c.status in ("pendente", "vencido"):
-            boleto_btn = f'<button class="btn btn-sm btn-outline-info ms-1" onclick="gerarBoleto(this,{c.id})">Gerar boleto</button>'
+            boleto_btn = f'<form method="post" action="/admin/financeiro/cobrancas/{c.id}/boleto-gerar" style="display:inline"><button type="submit" class="btn btn-sm btn-outline-info ms-1">Gerar boleto</button></form>'
         else:
             boleto_btn = ""
 
@@ -765,8 +765,8 @@ async def financeiro_cobrancas_gerar(request: _Req_ct, session=_Dep_ct(get_sessi
 
 @app.post("/admin/financeiro/cobrancas/{cobranca_id}/boleto")
 @require_role({"admin", "equipe"})
-async def financeiro_cobranca_gerar_boleto(cobranca_id: int, request: _Req_ct, session=_Dep_ct(get_session)):
-    """Gera boleto no Mercado Pago para a cobrança informada."""
+async def financeiro_cobranca_gerar_boleto_json(cobranca_id: int, request: _Req_ct, session=_Dep_ct(get_session)):
+    """API JSON — mantida para compatibilidade."""
     ctx = get_tenant_context(request, session)
     if not ctx:
         return _JR_ct({"error": "não autenticado"}, status_code=401)
@@ -774,7 +774,7 @@ async def financeiro_cobranca_gerar_boleto(cobranca_id: int, request: _Req_ct, s
     if not cobranca or cobranca.company_id != ctx.company.id:
         return _JR_ct({"error": "não encontrado"}, status_code=404)
     if cobranca.boleto_url:
-        return _JR_ct({"ok": True, "boleto_url": cobranca.boleto_url, "boleto_codigo": cobranca.boleto_codigo})
+        return _JR_ct({"ok": True, "boleto_url": cobranca.boleto_url})
     contrato = session.get(ContratoCliente, cobranca.contrato_id)
     if not contrato:
         return _JR_ct({"error": "Contrato não encontrado"}, status_code=404)
@@ -786,10 +786,43 @@ async def financeiro_cobranca_gerar_boleto(cobranca_id: int, request: _Req_ct, s
         cobranca.updated_at    = _dt_ct.utcnow()
         session.add(cobranca)
         session.commit()
-        return _JR_ct({"ok": True, "boleto_url": cobranca.boleto_url, "boleto_codigo": cobranca.boleto_codigo})
+        return _JR_ct({"ok": True, "boleto_url": cobranca.boleto_url})
     except Exception as _e:
         print(f"[boleto] erro cobranca {cobranca_id}: {_e}")
         return _JR_ct({"error": str(_e)}, status_code=422)
+
+
+@app.post("/admin/financeiro/cobrancas/{cobranca_id}/boleto-gerar")
+@require_role({"admin", "equipe"})
+async def financeiro_cobranca_gerar_boleto_form(cobranca_id: int, request: _Req_ct, session=_Dep_ct(get_session)):
+    """Form POST — gera boleto e redireciona para o PDF ou volta com erro."""
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        return _RR_ct("/login", status_code=303)
+    cobranca = session.get(CobrancaMensal, cobranca_id)
+    if not cobranca or cobranca.company_id != ctx.company.id:
+        set_flash(request, "Cobrança não encontrada.")
+        return _RR_ct("/admin/financeiro/cobrancas", status_code=303)
+    if cobranca.boleto_url:
+        return _RR_ct(cobranca.boleto_url, status_code=303)
+    contrato = session.get(ContratoCliente, cobranca.contrato_id)
+    if not contrato:
+        set_flash(request, "Contrato não encontrado.")
+        return _RR_ct("/admin/financeiro/cobrancas", status_code=303)
+    try:
+        dados = _ct_mp_gerar_boleto(cobranca, contrato)
+        cobranca.mp_payment_id = dados["mp_payment_id"]
+        cobranca.boleto_url    = dados["boleto_url"]
+        cobranca.boleto_codigo = dados["boleto_codigo"]
+        cobranca.updated_at    = _dt_ct.utcnow()
+        session.add(cobranca)
+        session.commit()
+        print(f"[boleto] ✅ cobranca {cobranca_id} — {cobranca.boleto_url}")
+        return _RR_ct(cobranca.boleto_url, status_code=303)
+    except Exception as _e:
+        print(f"[boleto] erro cobranca {cobranca_id}: {_e}")
+        set_flash(request, f"Erro ao gerar boleto: {_e}")
+        return _RR_ct("/admin/financeiro/cobrancas", status_code=303)
 
 
 # ── Webhook Mercado Pago — confirmação automática ─────────────────────────────
