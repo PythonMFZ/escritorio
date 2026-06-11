@@ -19,7 +19,7 @@ import uuid      as _uuid_fc
 import io        as _io_fc
 from datetime   import date as _date_fc, timedelta as _td_fc
 from typing     import Optional as _Opt_fc, List as _List_fc
-from sqlalchemy import text as _t_fc
+from sqlalchemy import text as _t_fc, Column, BigInteger
 
 # ── Modelos ───────────────────────────────────────────────────────────────────
 
@@ -47,7 +47,7 @@ class CashFlowEntry(SQLModel, table=True):
     centro_custo:    str                = Field(default="Geral")
     categoria:       str                = Field(default="Outros")
     tipo:            str                = Field(default="saida")   # "entrada" | "saida"
-    valor_cents:     int                = Field(default=0)         # sempre positivo
+    valor_cents:     int                = Field(default=0, sa_column=Column(BigInteger, default=0))  # sempre positivo; BigInteger para suportar valores > R$21M
     status:          str                = Field(default="previsto")# "previsto"|"realizado"|"cancelado"
     observacao:      str                = Field(default="")
     import_batch:    Optional[str]      = Field(default=None)
@@ -73,6 +73,16 @@ def _ensure_fc_tables():
         ("cashflowentry",  "categoria",             "VARCHAR DEFAULT 'Outros'"),
         ("cashflowentry",  "data_pagamento",        "VARCHAR DEFAULT NULL"),
     ]
+    # Altera valor_cents para BIGINT se ainda for INTEGER (suporta valores > R$21M)
+    if _is_pg:
+        try:
+            with engine.begin() as _c:
+                _c.execute(_t_fc(
+                    "ALTER TABLE cashflowentry ALTER COLUMN valor_cents TYPE BIGINT"
+                ))
+        except Exception as _e_big:
+            if "already" not in str(_e_big).lower() and "bigint" not in str(_e_big).lower():
+                print(f"[fluxo_caixa] migração bigint: {_e_big}")
     for _tbl, _col, _ddl in _migrations:
         try:
             with engine.begin() as _c:
