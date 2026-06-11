@@ -517,7 +517,7 @@ async def financeiro_cobrancas_painel(request: _Req_ct, session=_Dep_ct(get_sess
         if c.boleto_url:
             boleto_btn = f'<a class="btn btn-sm btn-outline-info ms-1" href="{c.boleto_url}" target="_blank">📄 Boleto</a>'
         elif c.status in ("pendente", "vencido"):
-            boleto_btn = f'<button class="btn btn-sm btn-outline-info ms-1" onclick="gerarBoleto({c.id})">Gerar boleto</button>'
+            boleto_btn = f'<button class="btn btn-sm btn-outline-info ms-1" onclick="gerarBoleto(this,{c.id})">Gerar boleto</button>'
         else:
             boleto_btn = ""
 
@@ -680,8 +680,7 @@ async function gerarMes() {{
   alert(d.message || 'Gerado!');
   location.reload();
 }}
-async function gerarBoleto(id) {{
-  const btn = event.target;
+async function gerarBoleto(btn, id) {{
   btn.disabled = true;
   btn.textContent = 'Gerando...';
   try {{
