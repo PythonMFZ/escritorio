@@ -1274,8 +1274,7 @@ _AUGUR_WIDGET_V4 = r"""
   window.abrirAgenda = function(e) {
     e.preventDefault();
     // Link de agendamento — configurável via atributo data ou fallback para WhatsApp
-    const link = document.getElementById('augurAgendarBtn')?.dataset?.agendaUrl
-                 || 'https://wa.me/5547991359091?text=Ol%C3%A1!+Gostaria+de+agendar+uma+reuni%C3%A3o+com+um+consultor+da+Maffezzolli+Capital';
+    const link = 'https://outlook.office.com/book/ReservasMaffezzolliConsultorRafael@mfzcapital.onmicrosoft.com/?ismsaljsauthenabled';
     window.open(link, '_blank');
   };
 })();
