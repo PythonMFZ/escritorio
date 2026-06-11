@@ -226,6 +226,11 @@ def _ct_mp_gerar_boleto(cobranca: CobrancaMensal, contrato: ContratoCliente, ses
 
     # E-mail: cliente > contrato
     email = (cliente_obj.email if cliente_obj and cliente_obj.email else "") or contrato.email_cliente
+    if not contrato.cep if hasattr(contrato, 'cep') else False:
+        pass  # campo removido, ok
+    if cobranca.valor_cents <= 0:
+        raise ValueError(f"Valor da cobrança inválido: {cobranca.valor_cents} centavos. Verifique o valor do contrato.")
+
     if not email:
         raise ValueError("Preencha o e-mail no cadastro do cliente (ou no campo E-mail do contrato) para gerar boleto.")
 
