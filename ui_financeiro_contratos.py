@@ -5,8 +5,8 @@
 
 import json         as _json_ct
 import os           as _os_ct
-import urllib.request as _urlreq_ct
-import urllib.error   as _urlerr_ct
+import uuid         as _uuid_ct
+import httpx        as _httpx_ct
 from datetime       import date as _date_ct, datetime as _dt_ct, timedelta as _td_ct
 from typing         import Optional as _Opt_ct
 from sqlmodel       import Field as _F_ct, SQLModel as _SM_ct, select as _sel_ct
@@ -177,18 +177,28 @@ def _ct_gerar_cobrancas_mes(session, company_id: int, competencia: str = None):
 # ── Mercado Pago — boleto ─────────────────────────────────────────────────────
 
 def _mp_request(method: str, path: str, body: dict = None) -> dict:
-    url  = f"{_MP_BASE}{path}"
-    data = _json_ct.dumps(body).encode() if body else None
-    req  = _urlreq_ct.Request(url, data=data, method=method, headers={
-        "Authorization": f"Bearer {_MP_TOKEN}",
-        "Content-Type":  "application/json",
-        "X-Idempotency-Key": "",
-    })
-    try:
-        with _urlreq_ct.urlopen(req, timeout=15) as resp:
-            return _json_ct.loads(resp.read())
-    except _urlerr_ct.HTTPError as e:
-        raise ValueError(_json_ct.loads(e.read()).get("message", str(e)))
+    url     = f"{_MP_BASE}{path}"
+    headers = {
+        "Authorization":    f"Bearer {_MP_TOKEN}",
+        "Content-Type":     "application/json",
+        "X-Idempotency-Key": str(_uuid_ct.uuid4()),
+    }
+    with _httpx_ct.Client(timeout=20) as client:
+        if method == "GET":
+            resp = client.get(url, headers=headers)
+        else:
+            resp = client.post(url, headers=headers, json=body)
+
+    if not resp.is_success:
+        try:
+            err = resp.json()
+            msg = err.get("message") or err.get("error") or resp.text
+        except Exception:
+            msg = resp.text
+        print(f"[mp] erro {resp.status_code}: {msg}")
+        raise ValueError(f"MP {resp.status_code}: {msg}")
+
+    return resp.json()
 
 
 def _ct_mp_gerar_boleto(cobranca: CobrancaMensal, contrato: ContratoCliente) -> dict:
@@ -676,17 +686,18 @@ async function gerarBoleto(id) {{
   btn.textContent = 'Gerando...';
   try {{
     const r = await fetch('/admin/financeiro/cobrancas/' + id + '/boleto', {{method: 'POST'}});
-    const d = await r.json();
+    let d = {{}};
+    try {{ d = await r.json(); }} catch(e) {{ d = {{error: 'Resposta inválida do servidor'}}; }}
     if (d.boleto_url) {{
       window.open(d.boleto_url, '_blank');
       location.reload();
     }} else {{
-      alert('Erro: ' + (d.error || 'Não foi possível gerar o boleto'));
+      alert('Erro ao gerar boleto:\n' + (d.error || 'Tente novamente'));
       btn.disabled = false;
       btn.textContent = 'Gerar boleto';
     }}
   }} catch(e) {{
-    alert('Erro de comunicação');
+    alert('Erro de comunicação: ' + e.message);
     btn.disabled = false;
     btn.textContent = 'Gerar boleto';
   }}
@@ -778,7 +789,8 @@ async def financeiro_cobranca_gerar_boleto(cobranca_id: int, request: _Req_ct, s
         session.commit()
         return _JR_ct({"ok": True, "boleto_url": cobranca.boleto_url, "boleto_codigo": cobranca.boleto_codigo})
     except Exception as _e:
-        return _JR_ct({"error": str(_e)}, status_code=500)
+        print(f"[boleto] erro cobranca {cobranca_id}: {_e}")
+        return _JR_ct({"error": str(_e)}, status_code=422)
 
 
 # ── Webhook Mercado Pago — confirmação automática ─────────────────────────────
