@@ -10,6 +10,7 @@
 
 import json as _json
 import math as _math
+import io as _io
 from datetime import datetime as _dt
 
 
@@ -499,6 +500,205 @@ async def ferramenta_viabilidade_post_v3(
     })
 
 
+# ── Export Excel ─────────────────────────────────────────────────────────────
+
+@app.post("/ferramentas/viabilidade/exportar-excel")
+@require_login
+async def ferramenta_viabilidade_excel(
+    request: Request, session: Session = Depends(get_session),
+):
+    from fastapi.responses import StreamingResponse as _SR
+    import openpyxl as _opxl
+    from openpyxl.styles import Font as _Font, PatternFill as _PF, Alignment as _Al, Border as _Brd, Side as _Side
+    from openpyxl.utils import get_column_letter as _gcl
+
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        return RedirectResponse("/login", status_code=303)
+
+    form = await request.form()
+    dados: dict = dict(form)
+
+    tipologias = []
+    i = 0
+    while f"tip_nome_{i}" in dados or f"tip_metragem_{i}" in dados:
+        met = float(dados.get(f"tip_metragem_{i}", 0) or 0)
+        qtd = int(dados.get(f"tip_qtd_{i}", 0) or 0)
+        if met > 0 and qtd > 0:
+            tipologias.append({
+                "nome": dados.get(f"tip_nome_{i}", ""),
+                "tipo": dados.get(f"tip_tipo_{i}", "Residencial"),
+                "metragem": met,
+                "quantidade": qtd,
+                "preco_m2": float(dados.get(f"tip_preco_{i}", 0) or 0) or float(dados.get("preco_m2_base", 12500)),
+                "andar_inicio": int(dados.get(f"tip_andar_{i}", 1) or 1),
+                "permuta": dados.get(f"tip_permuta_{i}") == "1",
+            })
+        i += 1
+    dados["tipologias"] = tipologias
+
+    fases = []
+    j = 0
+    while f"fase_nome_{j}" in dados:
+        fases.append({
+            "nome": dados.get(f"fase_nome_{j}", ""),
+            "meta": float(dados.get(f"fase_meta_{j}", 0) or 0),
+            "reajuste": float(dados.get(f"fase_reajuste_{j}", 0) or 0),
+            "duracao": int(dados.get(f"fase_duracao_{j}", 12) or 12),
+            "entrada_pct": float(dados.get(f"fase_entrada_{j}", 10) or 10),
+            "parcelas_pct": float(dados.get(f"fase_parcelas_{j}", 80) or 80),
+            "n_parcelas": int(dados.get(f"fase_nparcelas_{j}", 24) or 24),
+            "reforco_pct": float(dados.get(f"fase_reforco_{j}", 0) or 0),
+            "n_reforcos": int(dados.get(f"fase_nreforcos_{j}", 0) or 0),
+        })
+        j += 1
+    if fases:
+        dados["fases"] = fases
+
+    cenario = dados.get("cenario", "realista")
+    mult = {"otimista": 1.15, "realista": 1.00, "pessimista": 0.85}.get(cenario, 1.00)
+    if mult != 1.00:
+        dados["preco_m2_base"] = float(dados.get("preco_m2_base", 12500) or 12500) * mult
+        if dados.get("tipologias"):
+            for t in dados["tipologias"]:
+                t["preco_m2"] = float(t.get("preco_m2", 0) or 0) * mult
+    dados["cenario"] = cenario
+
+    r = _calcular_v3(dados)
+
+    # ── Build workbook ──────────────────────────────────────────────────────
+    wb = _opxl.Workbook()
+    HDR_FILL  = _PF("solid", fgColor="F97316")
+    HDR_FONT  = _Font(bold=True, color="FFFFFF", size=10)
+    SUB_FILL  = _PF("solid", fgColor="FFF0E6")
+    SUB_FONT  = _Font(bold=True, size=10)
+    MONO_FONT = _Font(name="Courier New", size=9)
+    THIN      = _Brd(left=_Side(style="thin"), right=_Side(style="thin"),
+                     top=_Side(style="thin"), bottom=_Side(style="thin"))
+    NUM_FMT   = '#,##0.00'
+    PCT_FMT   = '0.00"%"'
+
+    def _hdr(ws, row, cols):
+        for c, val in enumerate(cols, 1):
+            cell = ws.cell(row=row, column=c, value=val)
+            cell.fill = HDR_FILL; cell.font = HDR_FONT
+            cell.alignment = _Al(horizontal="center"); cell.border = THIN
+
+    def _row(ws, row, vals, fmt=None):
+        for c, val in enumerate(vals, 1):
+            cell = ws.cell(row=row, column=c, value=val)
+            cell.border = THIN
+            if fmt and isinstance(val, (int, float)):
+                cell.number_format = fmt[c-1] if isinstance(fmt, list) else fmt
+
+    def _autofit(ws):
+        for col in ws.columns:
+            max_len = max((len(str(c.value or "")) for c in col), default=8)
+            ws.column_dimensions[_gcl(col[0].column)].width = min(max_len + 2, 30)
+
+    # ── Aba Resumo ──────────────────────────────────────────────────────────
+    ws = wb.active
+    ws.title = "Resumo"
+    ws["A1"] = "Viabilidade Imobiliária — Resumo"
+    ws["A1"].font = _Font(bold=True, size=13, color="F97316")
+    ws["A2"] = f"Gerado em {_dt.now().strftime('%d/%m/%Y %H:%M')}"
+    ws["A2"].font = _Font(italic=True, size=9, color="888888")
+    ws.append([])
+
+    kpis_vp = [
+        ("VGV Total (VP)", r.get("vgv_total")),
+        ("Custo Total (VP)", r.get("custo_total")),
+        ("Resultado Bruto (VP)", r.get("resultado_bruto")),
+        ("Margem Bruta (%)", r.get("margem_bruta")),
+        ("TIR Mensal (%)", r.get("tir_mensal")),
+        ("TIR Anual (%)", r.get("tir_anual")),
+        ("VPL (VP)", r.get("vpl")),
+        ("Payback (meses)", r.get("payback_meses")),
+        ("Exposição Máx. (VP)", r.get("exposicao_max")),
+        ("Índice de Lucratividade", r.get("il")),
+        ("Múltiplo do Capital", r.get("multiplo")),
+    ]
+    ws.cell(4, 1, "Indicador").fill = SUB_FILL; ws.cell(4, 1).font = SUB_FONT
+    ws.cell(4, 2, "Valor VP").fill = SUB_FILL; ws.cell(4, 2).font = SUB_FONT
+    ws.cell(4, 3, "Valor VF").fill = SUB_FILL; ws.cell(4, 3).font = SUB_FONT
+
+    kpis_vf = {
+        "VGV Total (VP)": r.get("vf_vgv"),
+        "Resultado Bruto (VP)": r.get("vf_resultado"),
+        "Margem Bruta (%)": r.get("vf_margem"),
+        "TIR Mensal (%)": r.get("vf_tir_mensal"),
+        "TIR Anual (%)": r.get("vf_tir_anual"),
+        "VPL (VP)": r.get("vf_vpl"),
+        "Exposição Máx. (VP)": r.get("vf_exposicao_max"),
+    }
+    for rr, (label, val_vp) in enumerate(kpis_vp, 5):
+        val_vf = kpis_vf.get(label)
+        is_pct = "%" in label
+        ws.cell(rr, 1, label).border = THIN
+        c2 = ws.cell(rr, 2, val_vp); c2.border = THIN
+        c3 = ws.cell(rr, 3, val_vf if val_vf is not None else "—"); c3.border = THIN
+        if isinstance(val_vp, float):
+            c2.number_format = PCT_FMT if is_pct else NUM_FMT
+        if isinstance(val_vf, float):
+            c3.number_format = PCT_FMT if is_pct else NUM_FMT
+    _autofit(ws)
+
+    # ── Aba Fases ───────────────────────────────────────────────────────────
+    wf = wb.create_sheet("Fases de Comercialização")
+    _hdr(wf, 1, ["Fase", "% VGV Total", "Reajuste (%)", "Duração (meses)", "Entrada (%)", "Parcelas (%)", "Nº Parcelas", "Reforços (%)", "Nº Reforços"])
+    for rr, f in enumerate((dados.get("fases") or []), 2):
+        _row(wf, rr, [
+            f.get("nome", ""), f.get("meta", 0), f.get("reajuste", 0),
+            f.get("duracao", 0), f.get("entrada_pct", 0), f.get("parcelas_pct", 0),
+            f.get("n_parcelas", 0), f.get("reforco_pct", 0), f.get("n_reforcos", 0),
+        ])
+    _autofit(wf)
+
+    # ── Aba Fluxo VP ────────────────────────────────────────────────────────
+    wvp = wb.create_sheet("Fluxo VP (Nominal)")
+    _hdr(wvp, 1, ["Mês", "Receita", "Comissão", "Tributos", "Custo Obra", "CRI", "Saldo Mês", "Saldo Acumulado"])
+    FMTS_F = [None, NUM_FMT, NUM_FMT, NUM_FMT, NUM_FMT, NUM_FMT, NUM_FMT, NUM_FMT]
+    for rr, row in enumerate((r.get("fluxo") or []), 2):
+        _row(wvp, rr, [
+            row.get("mes"), row.get("receita"), row.get("comissao"),
+            row.get("tributos"), row.get("custo_obra"), row.get("cri") or 0,
+            row.get("saldo_mes"), row.get("saldo_acumulado"),
+        ], fmt=FMTS_F)
+    _autofit(wvp)
+
+    # ── Aba Fluxo VF ────────────────────────────────────────────────────────
+    if r.get("vf_fluxo"):
+        wvf2 = wb.create_sheet("Fluxo VF (Corrigido)")
+        _hdr(wvf2, 1, ["Mês", "Receita", "Comissão", "Tributos", "Custo Obra", "CRI", "Saldo Mês", "Saldo Acumulado"])
+        for rr, row in enumerate(r["vf_fluxo"], 2):
+            _row(wvf2, rr, [
+                row.get("mes"), row.get("receita"), row.get("comissao"),
+                row.get("tributos"), row.get("custo_obra"), row.get("cri") or 0,
+                row.get("saldo_mes"), row.get("saldo_acumulado"),
+            ], fmt=FMTS_F)
+        _autofit(wvf2)
+
+    # ── Aba Custos ──────────────────────────────────────────────────────────
+    if r.get("cronograma"):
+        wc = wb.create_sheet("Cronograma de Custos")
+        first = r["cronograma"][0] if r["cronograma"] else {}
+        headers = list(first.keys())
+        _hdr(wc, 1, headers)
+        for rr, row in enumerate(r["cronograma"], 2):
+            _row(wc, rr, [row.get(h) for h in headers])
+        _autofit(wc)
+
+    buf = _io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    nome_arq = f"viabilidade_{_dt.now().strftime('%Y%m%d_%H%M')}.xlsx"
+    return _SR(
+        buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{nome_arq}"'},
+    )
+
+
 # ── Template override ─────────────────────────────────────────────────────────
 
 TEMPLATES["ferramenta_viabilidade.html"] = r"""
@@ -815,7 +1015,11 @@ TEMPLATES["ferramenta_viabilidade.html"] = r"""
     </div>
     {% endfor %}
   </div>
-  <button type="button" class="btn btn-outline-secondary btn-sm mt-1" onclick="addFase()"><i class="bi bi-plus-circle me-1"></i> Adicionar fase</button>
+  <div class="d-flex align-items-center gap-2 mt-2">
+    <button type="button" class="btn btn-outline-secondary btn-sm" onclick="addFase()"><i class="bi bi-plus-circle me-1"></i> Adicionar fase</button>
+    <button type="button" class="btn btn-outline-success btn-sm" onclick="salvarFasesLocal()"><i class="bi bi-floppy me-1"></i> Salvar comercialização</button>
+    <span id="fasesSalvoMsg" style="font-size:.8rem;color:#22c55e;display:none;">✓ Salvo</span>
+  </div>
   <div class="d-flex justify-content-between mt-3">
     <button type="button" class="btn btn-outline-secondary" onclick="vbTab('custos',document.querySelector('[onclick*=custos]'))"><i class="bi bi-arrow-left me-1"></i> Voltar</button>
     <button type="button" class="btn btn-primary" onclick="vbTab('financiamento',document.querySelector('[onclick*=financiamento]'))">Financiamento <i class="bi bi-arrow-right ms-1"></i></button>
@@ -1369,6 +1573,7 @@ TEMPLATES["ferramenta_viabilidade.html"] = r"""
   <div class="d-flex gap-2 flex-wrap mt-3">
     <button type="button" class="btn btn-outline-secondary" onclick="vbTab('premissas',document.querySelector('[onclick*=premissas]'))"><i class="bi bi-pencil me-1"></i> Editar premissas</button>
     <button onclick="window.print()" type="button" class="btn btn-outline-primary"><i class="bi bi-printer me-1"></i> Exportar PDF</button>
+    <button type="button" class="btn btn-success" onclick="exportarExcel()"><i class="bi bi-file-earmark-excel me-1"></i> Exportar Excel</button>
   </div>
 </div>
 {% endif %}
@@ -1493,6 +1698,94 @@ document.getElementById('vbForm')?.addEventListener('submit',()=>{
   const b=document.getElementById('calcBtn');
   if(b){b.disabled=true;b.innerHTML='<i class="bi bi-hourglass-split me-2"></i>Calculando...';}
 });
+
+// ── Salvar / restaurar fases (localStorage) ──────────────────────────────
+const _LS_KEY = 'vb_fases_salvas';
+function _lerFasesDOM(){
+  const cards = document.querySelectorAll('#faseCont .fase-card');
+  const fases = [];
+  cards.forEach((card,idx)=>{
+    const g = n => { const el = card.querySelector(`[name$="_${idx}"]`); return el ? el.value : (card.querySelector(`[name="${n}"]`) || {value:''}).value; };
+    const gn = name => { const el = card.querySelector(`[name="${name}"]`); return el ? el.value : ''; };
+    fases.push({
+      nome:        gn(`fase_nome_${idx}`),
+      meta:        gn(`fase_meta_${idx}`),
+      reajuste:    gn(`fase_reajuste_${idx}`),
+      duracao:     gn(`fase_duracao_${idx}`),
+      entrada_pct: gn(`fase_entrada_${idx}`),
+      parcelas_pct:gn(`fase_parcelas_${idx}`),
+      n_parcelas:  gn(`fase_nparcelas_${idx}`),
+      reforco_pct: gn(`fase_reforco_${idx}`),
+      n_reforcos:  gn(`fase_nreforcos_${idx}`),
+    });
+  });
+  return fases;
+}
+function salvarFasesLocal(){
+  const fases = _lerFasesDOM();
+  localStorage.setItem(_LS_KEY, JSON.stringify(fases));
+  const msg = document.getElementById('fasesSalvoMsg');
+  if(msg){ msg.style.display='inline'; setTimeout(()=>{ msg.style.display='none'; }, 2500); }
+}
+function _restaurarFasesLocal(){
+  try {
+    const raw = localStorage.getItem(_LS_KEY);
+    if(!raw) return;
+    const fases = JSON.parse(raw);
+    if(!fases || !fases.length) return;
+    // Só restaura se nenhum fase_nome_0 estiver preenchido (formulário vazio)
+    const nomeAtual = document.querySelector('[name="fase_nome_0"]');
+    if(nomeAtual && nomeAtual.value && nomeAtual.value !== 'Lançamento') return;
+    const cont = document.getElementById('faseCont');
+    if(!cont) return;
+    cont.innerHTML = '';
+    faseN = 0;
+    fases.forEach((f,i)=>{
+      faseN = i+1;
+      const d = document.createElement('div');
+      d.className='fase-card'; d.id='fase-'+i;
+      d.innerHTML = `<div class="fase-hdr"><input class="vb-inp" type="text" name="fase_nome_${i}" value="${f.nome||''}" placeholder="Nome da fase" style="max-width:200px;"><button type="button" class="btn btn-sm btn-outline-danger" onclick="rmFase(${i})">Remover fase</button></div>`+
+        `<div class="vb-row4">`+
+        `<div><div class="vb-lbl">% do VGV total nesta fase</div><div class="pw"><span class="suf">%</span><input class="vb-inp pr" type="number" name="fase_meta_${i}" step="1" min="0" max="100" value="${f.meta||0}"></div><div class="vb-hint">% das unidades sobre o total do empreendimento</div></div>`+
+        `<div><div class="vb-lbl">Reajuste de Preço (%)</div><div class="pw"><span class="suf">%</span><input class="vb-inp pr" type="number" name="fase_reajuste_${i}" step="1" value="${f.reajuste||0}"></div><div class="vb-hint">Negativo = desconto</div></div>`+
+        `<div><div class="vb-lbl">Duração (meses)</div><input class="vb-inp" type="number" name="fase_duracao_${i}" step="1" min="1" value="${f.duracao||12}"></div>`+
+        `<div><div class="vb-lbl">Entrada (%)</div><div class="pw"><span class="suf">%</span><input class="vb-inp pr" type="number" name="fase_entrada_${i}" step="1" min="0" max="100" value="${f.entrada_pct||10}"></div></div>`+
+        `</div><div class="vb-row4">`+
+        `<div><div class="vb-lbl">Parcelas (%)</div><div class="pw"><span class="suf">%</span><input class="vb-inp pr" type="number" name="fase_parcelas_${i}" step="1" min="0" max="100" value="${f.parcelas_pct||80}"></div></div>`+
+        `<div><div class="vb-lbl">Nº de Parcelas</div><input class="vb-inp" type="number" name="fase_nparcelas_${i}" step="1" min="1" value="${f.n_parcelas||24}"></div>`+
+        `<div><div class="vb-lbl">Reforços (%)</div><div class="pw"><span class="suf">%</span><input class="vb-inp pr" type="number" name="fase_reforco_${i}" step="1" min="0" max="100" value="${f.reforco_pct||0}"></div></div>`+
+        `<div><div class="vb-lbl">Nº de Reforços</div><input class="vb-inp" type="number" name="fase_nreforcos_${i}" step="1" min="0" value="${f.n_reforcos||0}"></div>`+
+        `</div>`;
+      cont.appendChild(d);
+    });
+  } catch(e){ console.warn('vb restore fases:', e); }
+}
+// Restaura automaticamente ao carregar (só se não há resultado calculado)
+{% if not resultado %}
+document.addEventListener('DOMContentLoaded', _restaurarFasesLocal);
+{% endif %}
+
+// ── Exportar Excel ────────────────────────────────────────────────────────
+function exportarExcel(){
+  const form = document.getElementById('vbForm');
+  if(!form) return;
+  const tmp = document.createElement('form');
+  tmp.method = 'POST';
+  tmp.action = '/ferramentas/viabilidade/exportar-excel';
+  tmp.style.display = 'none';
+  const inputs = form.querySelectorAll('input,select,textarea');
+  inputs.forEach(el=>{
+    if(!el.name) return;
+    if(el.type==='checkbox' && !el.checked) return;
+    const h = document.createElement('input');
+    h.type='hidden'; h.name=el.name;
+    h.value = (el.type==='checkbox') ? el.value : el.value;
+    tmp.appendChild(h);
+  });
+  document.body.appendChild(tmp);
+  tmp.submit();
+  setTimeout(()=>document.body.removeChild(tmp), 3000);
+}
 </script>
 {% endblock %}
 """
