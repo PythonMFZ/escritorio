@@ -517,54 +517,16 @@ async def ferramenta_viabilidade_excel(
         return RedirectResponse("/login", status_code=303)
 
     form = await request.form()
-    dados: dict = dict(form)
+    try:
+        fluxo_vp = _json.loads(form.get("fluxo_json") or "[]")
+    except Exception:
+        fluxo_vp = []
+    try:
+        fluxo_vf = _json.loads(form.get("fluxo_vf_json") or "[]")
+    except Exception:
+        fluxo_vf = []
 
-    tipologias = []
-    i = 0
-    while f"tip_nome_{i}" in dados or f"tip_metragem_{i}" in dados:
-        met = float(dados.get(f"tip_metragem_{i}", 0) or 0)
-        qtd = int(dados.get(f"tip_qtd_{i}", 0) or 0)
-        if met > 0 and qtd > 0:
-            tipologias.append({
-                "nome": dados.get(f"tip_nome_{i}", ""),
-                "tipo": dados.get(f"tip_tipo_{i}", "Residencial"),
-                "metragem": met,
-                "quantidade": qtd,
-                "preco_m2": float(dados.get(f"tip_preco_{i}", 0) or 0) or float(dados.get("preco_m2_base", 12500)),
-                "andar_inicio": int(dados.get(f"tip_andar_{i}", 1) or 1),
-                "permuta": dados.get(f"tip_permuta_{i}") == "1",
-            })
-        i += 1
-    dados["tipologias"] = tipologias
-
-    fases = []
-    j = 0
-    while f"fase_nome_{j}" in dados:
-        fases.append({
-            "nome": dados.get(f"fase_nome_{j}", ""),
-            "meta": float(dados.get(f"fase_meta_{j}", 0) or 0),
-            "reajuste": float(dados.get(f"fase_reajuste_{j}", 0) or 0),
-            "duracao": int(dados.get(f"fase_duracao_{j}", 12) or 12),
-            "entrada_pct": float(dados.get(f"fase_entrada_{j}", 10) or 10),
-            "parcelas_pct": float(dados.get(f"fase_parcelas_{j}", 80) or 80),
-            "n_parcelas": int(dados.get(f"fase_nparcelas_{j}", 24) or 24),
-            "reforco_pct": float(dados.get(f"fase_reforco_{j}", 0) or 0),
-            "n_reforcos": int(dados.get(f"fase_nreforcos_{j}", 0) or 0),
-        })
-        j += 1
-    if fases:
-        dados["fases"] = fases
-
-    cenario = dados.get("cenario", "realista")
-    mult = {"otimista": 1.15, "realista": 1.00, "pessimista": 0.85}.get(cenario, 1.00)
-    if mult != 1.00:
-        dados["preco_m2_base"] = float(dados.get("preco_m2_base", 12500) or 12500) * mult
-        if dados.get("tipologias"):
-            for t in dados["tipologias"]:
-                t["preco_m2"] = float(t.get("preco_m2", 0) or 0) * mult
-    dados["cenario"] = cenario
-
-    r = _calcular_v3(dados)
+    r = {"fluxo": fluxo_vp, "vf_fluxo": fluxo_vf if fluxo_vf else None}
 
     # ── Build workbook — apenas Fluxo VP e VF ──────────────────────────────
     wb = _opxl.Workbook()
@@ -1693,21 +1655,44 @@ document.addEventListener('DOMContentLoaded', _restaurarFasesLocal);
 
 // ── Exportar Excel ────────────────────────────────────────────────────────
 function exportarExcel(){
-  const form = document.getElementById('vbForm');
-  if(!form) return;
+  // Passa o fluxo já calculado como JSON — não recalcula
+  const fluxoVP = (typeof _fluxoDataVP !== 'undefined') ? JSON.stringify(_fluxoDataVP) : '{}';
+  const fluxoVF = (typeof _fluxoDataVF !== 'undefined') ? JSON.stringify(_fluxoDataVF) : '{}';
+  // Pega labels do fluxo diretamente da tabela VP para ter receita/comissao/etc
+  const rows = [];
+  const _parseCell = s => {
+    const clean = (s||'').trim().replace(/R\$\s*/g,'').replace(/\./g,'').replace(',','.');
+    const n = parseFloat(clean.replace(/[()]/g, s => s==='('?'-':''));
+    return isNaN(n)?0:n;
+  };
+  const _extractRows = tableId => {
+    const out = [];
+    document.querySelectorAll('#'+tableId+' tbody tr').forEach(tr=>{
+      const tds = tr.querySelectorAll('td');
+      if(tds.length < 5) return;
+      // cols: 0=Mês 1=Receita 2=Comissão 3=Tributos 4=Custo Obra [5=CRI?] last-2=Saldo Mês last-1=Saldo Acum
+      const n = tds.length;
+      out.push({
+        mes:             parseInt(tds[0].textContent)||0,
+        receita:         _parseCell(tds[1].textContent),
+        comissao:        _parseCell(tds[2].textContent),
+        tributos:        _parseCell(tds[3].textContent),
+        custo_obra:      _parseCell(tds[4].textContent),
+        saldo_mes:       _parseCell(tds[n-2].textContent),
+        saldo_acumulado: _parseCell(tds[n-1].textContent),
+      });
+    });
+    return out;
+  };
+  const rows = _extractRows('tabelaFluxoVP');
+  const rowsVF = _extractRows('tabelaFluxoVF');
   const tmp = document.createElement('form');
   tmp.method = 'POST';
   tmp.action = '/ferramentas/viabilidade/exportar-excel';
   tmp.style.display = 'none';
-  const inputs = form.querySelectorAll('input,select,textarea');
-  inputs.forEach(el=>{
-    if(!el.name) return;
-    if(el.type==='checkbox' && !el.checked) return;
-    const h = document.createElement('input');
-    h.type='hidden'; h.name=el.name;
-    h.value = (el.type==='checkbox') ? el.value : el.value;
-    tmp.appendChild(h);
-  });
+  const addH = (name, val) => { const h=document.createElement('input'); h.type='hidden'; h.name=name; h.value=val; tmp.appendChild(h); };
+  addH('fluxo_json', JSON.stringify(rows));
+  addH('fluxo_vf_json', JSON.stringify(rowsVF));
   document.body.appendChild(tmp);
   tmp.submit();
   setTimeout(()=>document.body.removeChild(tmp), 3000);
