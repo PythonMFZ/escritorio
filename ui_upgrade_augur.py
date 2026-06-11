@@ -290,36 +290,24 @@ async def augur_ask_v3(request: Request, session: Session = Depends(get_session)
     except Exception as _e_rl:
         print(f"[augur] rate limit check error: {_e_rl}")
 
-    # ── Verifica créditos para uso do Augur ──────────────────────────────────
+    # ── Verifica assinatura Augur ─────────────────────────────────────────────
+    # Augur é modelo de assinatura mensal: enquanto ativo, uso ilimitado.
+    # Não debita por pergunta — o custo já foi cobrado na ativação/renovação.
     try:
-        _preco_augur = _get_preco(session, ctx.company.id, "augur_mensal", default=0)
-        if _preco_augur > 0:
-            _wallet_augur = session.exec(
-                select(CreditWallet)
-                .where(CreditWallet.company_id == ctx.company.id,
-                       CreditWallet.client_id  == client.id)
-            ).first()
-            _saldo_augur = (_wallet_augur.balance_cents / 100) if _wallet_augur else 0.0
-            if _saldo_augur < _preco_augur:
-                return JSONResponse({
-                    "error": f"Saldo insuficiente para usar o Augur. Necessário: {_preco_augur} créditos. Disponível: {_saldo_augur:.0f}.",
-                    "precisa_creditos": True,
-                }, status_code=402)
-            # Debita créditos
-            if _wallet_augur:
-                _wallet_augur.balance_cents -= int(_preco_augur * 100)
-                _wallet_augur.updated_at = utcnow()
-                session.add(_wallet_augur)
-                session.add(CreditLedger(
-                    company_id=ctx.company.id, client_id=client.id,
-                    kind="CONSULT_CAPTURED",
-                    amount_cents=-int(_preco_augur * 100),
-                    ref_type="augur", ref_id=str(client.id),
-                    note=f"Augur — pergunta debitada",
-                ))
-                session.commit()
+        _augur_ativo = _feature_ativa(session, ctx.company.id, client.id, "augur_mensal", user_id=ctx.user.id)
+        if not _augur_ativo:
+            # Verifica também pela tabela legada ToolAssinatura
+            try:
+                _augur_ativo = _augur_assinatura_ativa(session, ctx.company.id, ctx.user.id, client.id)
+            except Exception:
+                _augur_ativo = False
+        if not _augur_ativo:
+            return JSONResponse({
+                "error": "Augur não está ativo. Ative a assinatura em Ferramentas → Augur.",
+                "precisa_assinatura": True,
+            }, status_code=402)
     except Exception as _e_augur:
-        print(f"[augur] Erro verificacao creditos: {_e_augur}")
+        print(f"[augur] Erro verificacao assinatura: {_e_augur}")
 
     # Monta client_data base
     client_data: dict = {

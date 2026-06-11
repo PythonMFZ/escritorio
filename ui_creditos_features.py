@@ -464,7 +464,7 @@ _CF_CATALOGO = {
         "nivel": "empresa",
         "url": "/ferramentas/viabilidade",
         "icone": "📊",
-        "tipo": "uso",  # por uso, não assinatura
+        # tipo lido dinamicamente do ProdutoPreco para refletir config do admin
     },
     "augur_mensal": {
         "nome": "Augur — IA Consultiva",
@@ -535,13 +535,25 @@ async def api_features_status(
         uid = ctx.user.id if meta.get("nivel") == "usuario" else None
         custo = _cf_preco(session, ctx.company.id, codigo)
         ativo = _feature_ativa(session, ctx.company.id, cid, codigo, user_id=uid)
+        # Lê modelo do banco (admin pode alterar entre uso/assinatura/gratuito)
+        _tipo_catalog = meta.get("tipo", "assinatura")
+        try:
+            _pp = session.exec(
+                select(ProdutoPreco)
+                .where(ProdutoPreco.company_id == ctx.company.id,
+                       ProdutoPreco.codigo == codigo,
+                       ProdutoPreco.ativo == True)
+            ).first()
+            _tipo_db = _pp.modelo if _pp and _pp.modelo else _tipo_catalog
+        except Exception:
+            _tipo_db = _tipo_catalog
         resultado["features"][codigo] = {
             "nome":        meta["nome"],
             "descricao":   meta["descricao"],
             "nivel":       meta["nivel"],
             "icone":       meta["icone"],
             "url":         meta["url"],
-            "tipo":        meta.get("tipo", "assinatura"),
+            "tipo":        _tipo_db,
             "custo":       custo,
             "ativo":       ativo,
         }
