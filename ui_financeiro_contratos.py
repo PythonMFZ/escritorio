@@ -492,9 +492,12 @@ async def financeiro_contratos_lista(request: _Req_ct, session=_Dep_ct(get_sessi
           <td class="text-center">Dia {c.dia_vencimento}</td>
           <td class="text-center">{c.data_inicio or '—'}</td>
           <td class="text-center"><span class="badge {badge}">{c.status.capitalize()}</span></td>
-          <td class="text-end">
+          <td class="text-end text-nowrap">
             <a class="btn btn-sm btn-outline-secondary" href="/admin/financeiro/contratos/{c.id}/editar">Editar</a>
             <a class="btn btn-sm btn-outline-primary" href="/admin/financeiro/contratos/{c.id}/cobrancas">Cobranças</a>
+            {'<a class="btn btn-sm btn-outline-warning" href="/admin/financeiro/contratos/'+str(c.id)+'/pausar">⏸ Pausar</a>' if c.status == 'ativo' else ''}
+            {'<a class="btn btn-sm btn-outline-success" href="/admin/financeiro/contratos/'+str(c.id)+'/ativar">▶ Ativar</a>' if c.status == 'pausado' else ''}
+            <a class="btn btn-sm btn-outline-danger" href="/admin/financeiro/contratos/{c.id}/excluir" onclick="return confirm('Excluir contrato e todas as cobranças?')">🗑</a>
           </td>
         </tr>"""
     if not contratos:
@@ -701,8 +704,9 @@ async def financeiro_cobrancas_painel(request: _Req_ct, session=_Dep_ct(get_sess
         else:
             boleto_btn = ""
 
-        acoes_pagar   = '' if c.status == 'pago' else f'<button class="btn btn-sm btn-success" onclick="marcarPago({c.id}, {c.valor_cents})">✓ Pago</button>'
-        acoes_cancelar= '' if c.status == 'cancelado' else f'<button class="btn btn-sm btn-outline-secondary ms-1" onclick="cancelar({c.id})">✕</button>'
+        acoes_pagar    = '' if c.status == 'pago' else f'<button class="btn btn-sm btn-success" onclick="marcarPago({c.id}, {c.valor_cents})">✓ Pago</button>'
+        acoes_cancelar = '' if c.status in ('cancelado','pago') else f'<a href="/admin/financeiro/cobrancas/{c.id}/cancelar-get" class="btn btn-sm btn-outline-secondary ms-1" onclick="return confirm(\'Cancelar cobrança?\')">✕ Cancelar</a>'
+        acoes_excluir  = f'<a href="/admin/financeiro/cobrancas/{c.id}/excluir" class="btn btn-sm btn-outline-danger ms-1" onclick="return confirm(\'Excluir permanentemente?\')">🗑</a>'
 
         rows += f"""
         <tr>
@@ -713,7 +717,7 @@ async def financeiro_cobrancas_painel(request: _Req_ct, session=_Dep_ct(get_sess
           <td class="text-center">{c.data_vencimento}</td>
           <td class="text-center"><span class="badge {badge}">{c.status.capitalize()}</span></td>
           <td class="text-end text-success">{pago_str}</td>
-          <td class="text-center text-nowrap">{acoes_pagar}{boleto_btn}{acoes_cancelar}</td>
+          <td class="text-center text-nowrap">{acoes_pagar}{boleto_btn}{acoes_cancelar}{acoes_excluir}</td>
         </tr>"""
 
     html = f"""{{% extends "base.html" %}}
@@ -917,7 +921,7 @@ async def financeiro_cobranca_pagar(cobranca_id: int, request: _Req_ct, session=
 
 @app.post("/admin/financeiro/cobrancas/{cobranca_id}/cancelar")
 @require_role({"admin", "equipe"})
-async def financeiro_cobranca_cancelar(cobranca_id: int, request: _Req_ct, session=_Dep_ct(get_session)):
+async def financeiro_cobranca_cancelar_post(cobranca_id: int, request: _Req_ct, session=_Dep_ct(get_session)):
     ctx = get_tenant_context(request, session)
     if not ctx:
         return _JR_ct({"error": "não autenticado"}, status_code=401)
@@ -928,7 +932,91 @@ async def financeiro_cobranca_cancelar(cobranca_id: int, request: _Req_ct, sessi
     cobranca.updated_at = _dt_ct.utcnow()
     session.add(cobranca)
     session.commit()
+    _ct_sync_entry(session, cobranca)
     return _JR_ct({"ok": True})
+
+
+@app.get("/admin/financeiro/cobrancas/{cobranca_id}/cancelar-get")
+@require_role({"admin", "equipe"})
+async def financeiro_cobranca_cancelar_get(cobranca_id: int, request: _Req_ct, session=_Dep_ct(get_session)):
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        return _RR_ct("/login", status_code=303)
+    cobranca = session.get(CobrancaMensal, cobranca_id)
+    if cobranca and cobranca.company_id == ctx.company.id:
+        cobranca.status     = "cancelado"
+        cobranca.updated_at = _dt_ct.utcnow()
+        session.add(cobranca)
+        session.commit()
+        _ct_sync_entry(session, cobranca, user_id=ctx.user.id)
+        set_flash(request, "Cobrança cancelada.")
+    return _RR_ct("/admin/financeiro/cobrancas", status_code=303)
+
+
+@app.get("/admin/financeiro/cobrancas/{cobranca_id}/excluir")
+@require_role({"admin", "equipe"})
+async def financeiro_cobranca_excluir(cobranca_id: int, request: _Req_ct, session=_Dep_ct(get_session)):
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        return _RR_ct("/login", status_code=303)
+    cobranca = session.get(CobrancaMensal, cobranca_id)
+    if cobranca and cobranca.company_id == ctx.company.id:
+        session.delete(cobranca)
+        session.commit()
+        set_flash(request, "Cobrança excluída.")
+    return _RR_ct("/admin/financeiro/cobrancas", status_code=303)
+
+
+@app.get("/admin/financeiro/contratos/{contrato_id}/pausar")
+@require_role({"admin", "equipe"})
+async def financeiro_contrato_pausar(contrato_id: int, request: _Req_ct, session=_Dep_ct(get_session)):
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        return _RR_ct("/login", status_code=303)
+    contrato = session.get(ContratoCliente, contrato_id)
+    if contrato and contrato.company_id == ctx.company.id:
+        contrato.status     = "pausado"
+        contrato.updated_at = _dt_ct.utcnow()
+        session.add(contrato)
+        session.commit()
+        set_flash(request, f"Contrato '{contrato.nome_contrato}' pausado.")
+    return _RR_ct("/admin/financeiro/contratos", status_code=303)
+
+
+@app.get("/admin/financeiro/contratos/{contrato_id}/ativar")
+@require_role({"admin", "equipe"})
+async def financeiro_contrato_ativar(contrato_id: int, request: _Req_ct, session=_Dep_ct(get_session)):
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        return _RR_ct("/login", status_code=303)
+    contrato = session.get(ContratoCliente, contrato_id)
+    if contrato and contrato.company_id == ctx.company.id:
+        contrato.status     = "ativo"
+        contrato.updated_at = _dt_ct.utcnow()
+        session.add(contrato)
+        session.commit()
+        set_flash(request, f"Contrato '{contrato.nome_contrato}' reativado.")
+    return _RR_ct("/admin/financeiro/contratos", status_code=303)
+
+
+@app.get("/admin/financeiro/contratos/{contrato_id}/excluir")
+@require_role({"admin", "equipe"})
+async def financeiro_contrato_excluir(contrato_id: int, request: _Req_ct, session=_Dep_ct(get_session)):
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        return _RR_ct("/login", status_code=303)
+    contrato = session.get(ContratoCliente, contrato_id)
+    if contrato and contrato.company_id == ctx.company.id:
+        # Remove cobranças vinculadas
+        cobrancas = session.exec(
+            _sel_ct(CobrancaMensal).where(CobrancaMensal.contrato_id == contrato_id)
+        ).all()
+        for cb in cobrancas:
+            session.delete(cb)
+        session.delete(contrato)
+        session.commit()
+        set_flash(request, "Contrato e cobranças excluídos.")
+    return _RR_ct("/admin/financeiro/contratos", status_code=303)
 
 
 @app.post("/admin/financeiro/cobrancas/gerar")
