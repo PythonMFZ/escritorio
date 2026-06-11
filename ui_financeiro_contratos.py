@@ -35,8 +35,8 @@ class ContratoCliente(_SM_ct, table=True):
     data_fim:         str          = _F_ct(default="")
     status:           str          = _F_ct(default="ativo")
     observacao:       str          = _F_ct(default="")
-    email_cliente:    str          = _F_ct(default="")   # necessário para boleto
-    documento_cliente:str          = _F_ct(default="")   # CPF/CNPJ (só números)
+    email_cliente:    str          = _F_ct(default="")   # fallback se cliente não tiver email
+    documento_cliente:str          = _F_ct(default="")   # fallback se cliente não tiver CNPJ/CPF
     created_at:       _dt_ct       = _F_ct(default_factory=lambda: _dt_ct.utcnow())
     updated_at:       _dt_ct       = _F_ct(default_factory=lambda: _dt_ct.utcnow())
 
@@ -201,21 +201,45 @@ def _mp_request(method: str, path: str, body: dict = None) -> dict:
     return resp.json()
 
 
-def _ct_mp_gerar_boleto(cobranca: CobrancaMensal, contrato: ContratoCliente) -> dict:
-    """Cria boleto no Mercado Pago e retorna dict com url e codigo_barras."""
-    if not contrato.email_cliente:
-        raise ValueError("Cadastre o e-mail do cliente no contrato para gerar boleto.")
-    if not contrato.documento_cliente:
-        raise ValueError("Cadastre o CPF/CNPJ do cliente no contrato para gerar boleto.")
+def _ct_mp_gerar_boleto(cobranca: CobrancaMensal, contrato: ContratoCliente, session=None) -> dict:
+    """Cria boleto no Mercado Pago. Puxa dados do cadastro do cliente quando disponível."""
 
-    doc = contrato.documento_cliente.replace(".", "").replace("-", "").replace("/", "").strip()
+    # Tenta carregar o cliente da plataforma para puxar dados cadastrais
+    cliente_obj = None
+    if contrato.client_id and session:
+        try:
+            cliente_obj = session.get(Client, contrato.client_id)
+        except Exception:
+            pass
+
+    # E-mail: cliente > contrato
+    email = (cliente_obj.email if cliente_obj and cliente_obj.email else "") or contrato.email_cliente
+    if not email:
+        raise ValueError("Preencha o e-mail no cadastro do cliente (ou no campo E-mail do contrato) para gerar boleto.")
+
+    # Documento (CPF/CNPJ): cliente > contrato
+    doc_raw = (cliente_obj.cnpj if cliente_obj and cliente_obj.cnpj else "") or contrato.documento_cliente
+    doc = doc_raw.replace(".", "").replace("-", "").replace("/", "").replace(" ", "").strip()
+    if not doc:
+        raise ValueError("Preencha o CNPJ/CPF no cadastro do cliente para gerar boleto.")
     doc_type = "CPF" if len(doc) == 11 else "CNPJ"
+
+    # Endereço: cliente
+    zip_code = (cliente_obj.zip_code if cliente_obj else "").replace("-", "").strip()
+    city     = (cliente_obj.city  if cliente_obj else "").strip()
+    uf       = (cliente_obj.state if cliente_obj else "").strip().upper()
+    street   = (cliente_obj.address if cliente_obj else "").strip() or "Endereço não informado"
+
+    if not zip_code or not city or not uf:
+        raise ValueError(
+            "Preencha CEP, Cidade e Estado no cadastro do cliente para gerar boleto. "
+            f"Atual: CEP='{zip_code}' Cidade='{city}' UF='{uf}'"
+        )
 
     nome_parts = (contrato.nome_cliente or "Cliente").split(" ", 1)
     primeiro   = nome_parts[0]
     sobrenome  = nome_parts[1] if len(nome_parts) > 1 else "."
 
-    # Vencimento: data_vencimento do contrato às 23:59 horário de Brasília (UTC-3)
     venc_iso = f"{cobranca.data_vencimento}T23:59:00.000-03:00"
 
     payload = {
@@ -224,10 +248,18 @@ def _ct_mp_gerar_boleto(cobranca: CobrancaMensal, contrato: ContratoCliente) -> 
         "payment_method_id":  "bolbradesco",
         "date_of_expiration": venc_iso,
         "payer": {
-            "email":        contrato.email_cliente,
-            "first_name":   primeiro,
-            "last_name":    sobrenome,
+            "email":      email,
+            "first_name": primeiro,
+            "last_name":  sobrenome,
             "identification": {"type": doc_type, "number": doc},
+            "address": {
+                "zip_code":      zip_code,
+                "street_name":   street,
+                "street_number": "S/N",
+                "neighborhood":  city,
+                "city":          city,
+                "federal_unit":  uf,
+            },
         },
     }
     result = _mp_request("POST", "/v1/payments", payload)
@@ -779,7 +811,7 @@ async def financeiro_cobranca_gerar_boleto_json(cobranca_id: int, request: _Req_
     if not contrato:
         return _JR_ct({"error": "Contrato não encontrado"}, status_code=404)
     try:
-        dados = _ct_mp_gerar_boleto(cobranca, contrato)
+        dados = _ct_mp_gerar_boleto(cobranca, contrato, session)
         cobranca.mp_payment_id = dados["mp_payment_id"]
         cobranca.boleto_url    = dados["boleto_url"]
         cobranca.boleto_codigo = dados["boleto_codigo"]
@@ -810,7 +842,7 @@ async def financeiro_cobranca_gerar_boleto_form(cobranca_id: int, request: _Req_
         set_flash(request, "Contrato não encontrado.")
         return _RR_ct("/admin/financeiro/cobrancas", status_code=303)
     try:
-        dados = _ct_mp_gerar_boleto(cobranca, contrato)
+        dados = _ct_mp_gerar_boleto(cobranca, contrato, session)
         cobranca.mp_payment_id = dados["mp_payment_id"]
         cobranca.boleto_url    = dados["boleto_url"]
         cobranca.boleto_codigo = dados["boleto_codigo"]
