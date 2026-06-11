@@ -10592,6 +10592,7 @@ TEMPLATES.update({
     </div>
     <div class="d-flex gap-2 flex-wrap">
       <a class="btn btn-outline-secondary" href="/admin/financeiro/cadastros">Cadastros</a>
+      <a class="btn btn-outline-secondary" href="/admin/financeiro/contratos">Contratos</a>
       <a class="btn btn-outline-primary" href="/admin/financeiro/dre">DRE</a>
       <a class="btn btn-outline-primary" href="/admin/financeiro/fluxo-caixa">Fluxo de caixa</a>
       <a class="btn btn-primary" href="/admin/financeiro/novo">Novo lançamento</a>
@@ -36263,6 +36264,7 @@ TEMPLATES.update({
       <a class="btn btn-outline-secondary" href="/admin/financeiro/cadastros">Cadastros</a>
       <a class="btn btn-outline-secondary" href="/admin/financeiro/recorrencias">Recorrências</a>
       <a class="btn btn-outline-secondary" href="/admin/financeiro/conciliacao">Conciliação</a>
+      <a class="btn btn-outline-secondary" href="/admin/financeiro/contratos">Contratos</a>
       <a class="btn btn-outline-primary" href="/admin/financeiro/dashboard-gerencial">Dashboard</a>
       <a class="btn btn-outline-primary" href="/admin/financeiro/dre">DRE</a>
       <a class="btn btn-outline-primary" href="/admin/financeiro/fluxo-caixa">Fluxo de caixa</a>
@@ -48765,3 +48767,4 @@ exec(open('ui_admin_uso.py').read())
 
 
 exec(open('ui_fluxo_caixa.py').read())
+exec(open('ui_financeiro_contratos.py').read())
