@@ -616,6 +616,25 @@ async def financeiro_contratos_editar_post(contrato_id: int, request: _Req_ct, s
                 contrato.nome_cliente = cl.name
         session.add(contrato)
         session.commit()
+        # Atualiza cobranças pendentes do mês atual se o valor mudou
+        try:
+            _pendentes = session.exec(
+                _sel_ct(CobrancaMensal).where(
+                    CobrancaMensal.contrato_id == contrato.id,
+                    CobrancaMensal.status.in_(["pendente", "vencido"]),
+                )
+            ).all()
+            for _p in _pendentes:
+                _p.valor_cents  = contrato.valor_cents
+                _p.nome_cliente = contrato.nome_cliente
+                _p.nome_contrato= contrato.nome_contrato
+                _p.updated_at   = _dt_ct.utcnow()
+                session.add(_p)
+                _ct_sync_entry(session, _p, user_id=ctx.user.id)
+            if _pendentes:
+                session.commit()
+        except Exception as _eu:
+            print(f"[contratos] update pendentes: {_eu}")
         set_flash(request, "Contrato atualizado!")
     except Exception as _e:
         set_flash(request, f"Erro: {_e}")
