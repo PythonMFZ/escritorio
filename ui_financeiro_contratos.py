@@ -232,7 +232,7 @@ def _ct_mp_gerar_boleto(cobranca: CobrancaMensal, contrato: ContratoCliente) -> 
 # ── Rotas ─────────────────────────────────────────────────────────────────────
 
 @app.get("/admin/financeiro/contratos", response_class=_HTML_ct)
-@require_admin
+@require_role({"admin", "equipe"})
 async def financeiro_contratos_lista(request: _Req_ct, session=_Dep_ct(get_session)):
     ctx = get_tenant_context(request, session)
     if not ctx:
@@ -344,7 +344,7 @@ async def financeiro_contratos_lista(request: _Req_ct, session=_Dep_ct(get_sessi
 
 
 @app.get("/admin/financeiro/contratos/novo", response_class=_HTML_ct)
-@require_admin
+@require_role({"admin", "equipe"})
 async def financeiro_contratos_novo_get(request: _Req_ct, session=_Dep_ct(get_session)):
     ctx = get_tenant_context(request, session)
     if not ctx:
@@ -360,7 +360,7 @@ async def financeiro_contratos_novo_get(request: _Req_ct, session=_Dep_ct(get_se
 
 
 @app.post("/admin/financeiro/contratos/novo")
-@require_admin
+@require_role({"admin", "equipe"})
 async def financeiro_contratos_novo_post(request: _Req_ct, session=_Dep_ct(get_session)):
     ctx = get_tenant_context(request, session)
     if not ctx:
@@ -396,7 +396,7 @@ async def financeiro_contratos_novo_post(request: _Req_ct, session=_Dep_ct(get_s
 
 
 @app.get("/admin/financeiro/contratos/{contrato_id}/editar", response_class=_HTML_ct)
-@require_admin
+@require_role({"admin", "equipe"})
 async def financeiro_contratos_editar_get(contrato_id: int, request: _Req_ct, session=_Dep_ct(get_session)):
     ctx = get_tenant_context(request, session)
     if not ctx:
@@ -415,7 +415,7 @@ async def financeiro_contratos_editar_get(contrato_id: int, request: _Req_ct, se
 
 
 @app.post("/admin/financeiro/contratos/{contrato_id}/editar")
-@require_admin
+@require_role({"admin", "equipe"})
 async def financeiro_contratos_editar_post(contrato_id: int, request: _Req_ct, session=_Dep_ct(get_session)):
     ctx = get_tenant_context(request, session)
     if not ctx:
@@ -452,7 +452,7 @@ async def financeiro_contratos_editar_post(contrato_id: int, request: _Req_ct, s
 
 
 @app.get("/admin/financeiro/contratos/{contrato_id}/cobrancas", response_class=_HTML_ct)
-@require_admin
+@require_role({"admin", "equipe"})
 async def financeiro_contrato_cobrancas(contrato_id: int, request: _Req_ct, session=_Dep_ct(get_session)):
     ctx = get_tenant_context(request, session)
     if not ctx:
@@ -473,7 +473,7 @@ async def financeiro_contrato_cobrancas(contrato_id: int, request: _Req_ct, sess
 
 
 @app.get("/admin/financeiro/cobrancas", response_class=_HTML_ct)
-@require_admin
+@require_role({"admin", "equipe"})
 async def financeiro_cobrancas_painel(request: _Req_ct, session=_Dep_ct(get_session)):
     ctx = get_tenant_context(request, session)
     if not ctx:
@@ -701,7 +701,7 @@ async function gerarBoleto(id) {{
 
 
 @app.post("/admin/financeiro/cobrancas/{cobranca_id}/pagar")
-@require_admin
+@require_role({"admin", "equipe"})
 async def financeiro_cobranca_pagar(cobranca_id: int, request: _Req_ct, session=_Dep_ct(get_session)):
     ctx = get_tenant_context(request, session)
     if not ctx:
@@ -725,7 +725,7 @@ async def financeiro_cobranca_pagar(cobranca_id: int, request: _Req_ct, session=
 
 
 @app.post("/admin/financeiro/cobrancas/{cobranca_id}/cancelar")
-@require_admin
+@require_role({"admin", "equipe"})
 async def financeiro_cobranca_cancelar(cobranca_id: int, request: _Req_ct, session=_Dep_ct(get_session)):
     ctx = get_tenant_context(request, session)
     if not ctx:
@@ -741,7 +741,7 @@ async def financeiro_cobranca_cancelar(cobranca_id: int, request: _Req_ct, sessi
 
 
 @app.post("/admin/financeiro/cobrancas/gerar")
-@require_admin
+@require_role({"admin", "equipe"})
 async def financeiro_cobrancas_gerar(request: _Req_ct, session=_Dep_ct(get_session)):
     ctx = get_tenant_context(request, session)
     if not ctx:
@@ -754,7 +754,7 @@ async def financeiro_cobrancas_gerar(request: _Req_ct, session=_Dep_ct(get_sessi
 
 
 @app.post("/admin/financeiro/cobrancas/{cobranca_id}/boleto")
-@require_admin
+@require_role({"admin", "equipe"})
 async def financeiro_cobranca_gerar_boleto(cobranca_id: int, request: _Req_ct, session=_Dep_ct(get_session)):
     """Gera boleto no Mercado Pago para a cobrança informada."""
     ctx = get_tenant_context(request, session)
