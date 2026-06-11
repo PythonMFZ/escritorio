@@ -120,7 +120,7 @@ _WIDGET_B6V2 = r"""{% if current_client %}
   .aug-bubble.user{background:var(--mc-primary);color:#fff;border-radius:14px 14px 4px 14px;}
   .aug-bubble.assistant{background:#fff;border:1px solid var(--mc-border);border-radius:14px 14px 14px 4px;color:var(--mc-text);}
   .aug-avatar{width:28px;height:28px;border-radius:50%;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:.7rem;font-weight:700;align-self:flex-end;}
-  .aug-avatar.user{background:var(--mc-primary);color:#fff;}.aug-avatar.assistant{background:#1a1a1a;overflow:hidden;}
+  .aug-avatar.user{background:var(--mc-primary);color:#fff;}.aug-avatar.assistant{background:#fff;border:1px solid #e5e7eb;overflow:hidden;}
   .aug-meta{font-size:.68rem;color:var(--mc-muted);margin-top:.25rem;}
   .aug-feedback{display:flex;gap:.3rem;margin-top:.35rem;}
   .aug-typing{display:flex;gap:4px;align-items:center;padding:.5rem .8rem;}
