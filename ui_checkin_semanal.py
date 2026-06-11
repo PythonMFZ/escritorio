@@ -35,7 +35,7 @@ class CheckinSemanal(_SM_ck, table=True):
     id:              _Opt_ck[int]     = _F_ck(default=None, primary_key=True)
     company_id:      int              = _F_ck(index=True)
     client_id:       int              = _F_ck(index=True)
-    thread_id:       int              = _F_ck(index=True)
+    thread_id:       _Opt_ck[int]     = _F_ck(default=None, index=True)
     semana:          str              = _F_ck(index=True)   # "2026-05-25" (segunda da semana)
     contact_phone:   str              = _F_ck(default="")
     enviado_at:      _Opt_ck[_dt_ck] = _F_ck(default=None)
@@ -51,6 +51,15 @@ try:
     print("[checkin] ✅ Tabela checkinsemanal OK")
 except Exception as _e_ck_tbl:
     print(f"[checkin] Tabela: {_e_ck_tbl}")
+
+# Migration: thread_id deve ser nullable (checkins por usuário não têm thread)
+try:
+    if DATABASE_URL.startswith("postgres"):
+        from sqlalchemy import text as _txt_ck
+        with engine.begin() as _c_ck:
+            _c_ck.execute(_txt_ck("ALTER TABLE checkinsemanal ALTER COLUMN thread_id DROP NOT NULL"))
+except Exception as _e_ck_mg:
+    print(f"[checkin] migração thread_id nullable: {_e_ck_mg}")
 
 
 # ── Helpers de data ───────────────────────────────────────────────────────────
