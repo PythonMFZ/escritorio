@@ -126,7 +126,7 @@ def _nf_build_dps(cobranca, contrato, n_dps: int) -> bytes:
         dcomp_dt = _dt_nf.strptime(dcomp, "%Y-%m").date()
     except Exception:
         dcomp_dt = _date_nf.today()
-    dcomp_str = dcomp_dt.strftime("%Y-%m")   # para dCompet: YYYY-MM
+    dcomp_str = dcomp_dt.strftime("%Y-%m-%d")  # TSData exige YYYY-MM-DD
 
     # dhEmi — data/hora de emissão com offset BR
     now_br = _dt_nf.now(_tz_nf(offset=_td_nf(hours=-3)))
