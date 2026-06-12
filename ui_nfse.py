@@ -172,8 +172,9 @@ def _nf_build_dps(cobranca, contrato, n_dps: int) -> bytes:
     _sub(prest, "xNome",   _NF_RAZAO[:150])
     _sub(prest, "email",   _NF_EMAIL)
     regTrib = _sub(prest, "regTrib")
-    _sub(regTrib, "opSimpNac",  "1")  # 1 = optante Simples Nacional
-    _sub(regTrib, "regEspTrib", "6")  # 6 = ME/EPP – Simples Nacional
+    _sub(regTrib, "opSimpNac",   "1")  # 1 = optante Simples Nacional
+    _sub(regTrib, "regApTribSN", "3")  # 3 = ME/EPP tributada pelo Simples Nacional
+    _sub(regTrib, "regEspTrib",  "6")  # 6 = ME/EPP – Simples Nacional
 
     # ── tomador ───────────────────────────────────────────────────────────────
     toma = _sub(inf, "toma")
@@ -202,10 +203,12 @@ def _nf_build_dps(cobranca, contrato, n_dps: int) -> bytes:
     _sub(vServ, "vServ",  valor_str)
     _sub(vServ, "vReceb", valor_str)
 
-    tribMun = _sub(vals, "tribMun")
+    # tribMun deve estar dentro do grupo obrigatório "trib"
+    trib = _sub(vals, "trib")
+    tribMun = _sub(trib, "tribMun")
     _sub(tribMun, "tribISSQN", "3")   # 3 = Simples Nacional
-    _sub(tribMun, "cLocInc",   _NF_IBGE)
-    _sub(tribMun, "cNatOp",    "1")   # 1 = Tributação no município
+    totTrib = _sub(trib, "totTrib")
+    _sub(totTrib, "pTotTribSN", "6.00")  # alíquota Simples Nacional
 
     return _etloc.tostring(root, xml_declaration=True, encoding="UTF-8", pretty_print=False)
 
