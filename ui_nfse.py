@@ -235,8 +235,36 @@ def _nf_sign_dps(dps_bytes: bytes, key_pem: bytes, cert_pem: bytes) -> bytes:
         cert=cert_pem,
         reference_uri="#" + tree.find(f"{{{_NF_NS}}}infDPS").get("Id"),
     )
+    import re as _re_sign
     signed_bytes = _etloc2.tostring(signed, xml_declaration=True, encoding="UTF-8")
-    print(f"[nfse] signed XML (800): {signed_bytes[:800]!r}")
+
+    # SNNFSE rejeita qualquer prefixo de namespace (E1228).
+    # O signxml adiciona ds:Signature; convertemos para namespace padrão.
+    # Isso é seguro: a Signature é excluída do digest pela transform enveloped-signature.
+    _xmldsig_ns = b"http://www.w3.org/2000/09/xmldsig#"
+    _m = _re_sign.search(rb'xmlns:(\w+)="http://www\.w3\.org/2000/09/xmldsig#"', signed_bytes)
+    if _m:
+        _pfx = _m.group(1)  # e.g. b"ds"
+        signed_bytes = signed_bytes.replace(
+            b'xmlns:' + _pfx + b'="http://www.w3.org/2000/09/xmldsig#"',
+            b'xmlns="http://www.w3.org/2000/09/xmldsig#"',
+        )
+        signed_bytes = _re_sign.sub(b'<' + _pfx + b':', b'<', signed_bytes)
+        signed_bytes = _re_sign.sub(b'</' + _pfx + b':', b'</', signed_bytes)
+
+    # Também remove qualquer prefixo residual do namespace NFS-e (ns0: etc.)
+    _nfse_ns_b = _NF_NS.encode()
+    _m2 = _re_sign.search(rb'xmlns:(\w+)="' + _re_sign.escape(_nfse_ns_b) + rb'"', signed_bytes)
+    if _m2:
+        _pfx2 = _m2.group(1)
+        signed_bytes = signed_bytes.replace(
+            b'xmlns:' + _pfx2 + b'="' + _nfse_ns_b + b'"',
+            b'xmlns="' + _nfse_ns_b + b'"',
+        )
+        signed_bytes = _re_sign.sub(b'<' + _pfx2 + b':', b'<', signed_bytes)
+        signed_bytes = _re_sign.sub(b'</' + _pfx2 + b':', b'</', signed_bytes)
+
+    print(f"[nfse] signed XML (600 tail): {signed_bytes[-600:]!r}")
     return signed_bytes
 
 
