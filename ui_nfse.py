@@ -167,8 +167,13 @@ def _nf_build_dps(cobranca, contrato, n_dps: int) -> bytes:
 
     # ── prestador ─────────────────────────────────────────────────────────────
     prest = _sub(inf, "prest")
-    _sub(prest, "CNPJ", _NF_CNPJ)
-    _sub(prest, "IM",   _NF_IM)
+    _sub(prest, "CNPJ",    _NF_CNPJ)
+    _sub(prest, "IM",      _NF_IM)
+    _sub(prest, "xNome",   _NF_RAZAO[:150])
+    _sub(prest, "email",   _NF_EMAIL)
+    regTrib = _sub(prest, "regTrib")
+    _sub(regTrib, "opSimpNac", "1")   # 1 = optante Simples Nacional
+    _sub(regTrib, "regApTribSN", "3") # 3 = ME/EPP tributada pelo Simples Nacional
 
     # ── tomador ───────────────────────────────────────────────────────────────
     toma = _sub(inf, "toma")
