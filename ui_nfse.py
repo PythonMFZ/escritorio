@@ -146,7 +146,7 @@ def _nf_build_dps(cobranca, contrato, n_dps: int) -> bytes:
 
     from lxml import etree as _etloc
     E = _etloc.Element
-    root = E(f"{{{ns}}}DPS", versao="1.00")
+    root = E(f"{{{ns}}}DPS", versao="1.00", nsmap={None: ns})
     inf  = _etloc.SubElement(root, f"{{{ns}}}infDPS", Id=inf_id)
 
     def _sub(parent, tag, text=None, **attrs):
