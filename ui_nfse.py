@@ -10,13 +10,6 @@ import tempfile    as _tmp_nf
 import re          as _re_nf
 from datetime      import date as _date_nf, datetime as _dt_nf, timezone as _tz_nf, timedelta as _td_nf
 from typing        import Optional as _Opt_nf
-from lxml          import etree as _ET_nf
-from signxml       import XMLSigner as _Signer_nf, methods as _smeth
-from cryptography.hazmat.primitives.serialization.pkcs12 import load_key_and_certificates as _load_pfx
-from cryptography.hazmat.primitives.serialization import (
-    Encoding as _Enc, PrivateFormat as _PvtFmt, NoEncryption as _NoEnc,
-    PublicFormat as _PubFmt,
-)
 import httpx        as _httpx_nf
 from fastapi        import Request as _Req_nf, Depends as _Dep_nf
 from fastapi.responses import RedirectResponse as _RR_nf, HTMLResponse as _HTML_nf
@@ -87,11 +80,15 @@ def _nf_load_cert():
         with open(cert_path, "rb") as fh:
             pfx_bytes = fh.read()
 
-    key, cert, chain = _load_pfx(pfx_bytes, password)
+    from cryptography.hazmat.primitives.serialization.pkcs12 import load_key_and_certificates as _lpfx
+    from cryptography.hazmat.primitives.serialization import (
+        Encoding, PrivateFormat, NoEncryption,
+    )
+    key, cert, chain = _lpfx(pfx_bytes, password)
 
-    key_pem  = key.private_bytes(_Enc.PEM, _PvtFmt.PKCS8, _NoEnc())
-    cert_pem = cert.public_bytes(_Enc.PEM)
-    chain_pem = b"".join(c.public_bytes(_Enc.PEM) for c in (chain or []))
+    key_pem  = key.private_bytes(Encoding.PEM, PrivateFormat.PKCS8, NoEncryption())
+    cert_pem = cert.public_bytes(Encoding.PEM)
+    chain_pem = b"".join(c.public_bytes(Encoding.PEM) for c in (chain or []))
 
     return key_pem, cert_pem, chain_pem
 
@@ -145,12 +142,13 @@ def _nf_build_dps(cobranca, contrato, n_dps: int) -> bytes:
     )
     nome_toma = (contrato.nome_cliente or "NÃO INFORMADO").upper()
 
-    E = _ET_nf.Element
+    from lxml import etree as _etloc
+    E = _etloc.Element
     root = E(f"{{{ns}}}DPS", versao="1.00")
-    inf  = _ET_nf.SubElement(root, f"{{{ns}}}infDPS", Id=inf_id)
+    inf  = _etloc.SubElement(root, f"{{{ns}}}infDPS", Id=inf_id)
 
     def _sub(parent, tag, text=None, **attrs):
-        el = _ET_nf.SubElement(parent, f"{{{ns}}}{tag}", **attrs)
+        el = _etloc.SubElement(parent, f"{{{ns}}}{tag}", **attrs)
         if text is not None:
             el.text = str(text)
         return el
@@ -211,7 +209,7 @@ def _nf_build_dps(cobranca, contrato, n_dps: int) -> bytes:
     _sub(bm, "vBC",   valor_str)
     _sub(bm, "pAliq", "3.00")             # 3% conforme Simples Nacional
 
-    return _ET_nf.tostring(root, xml_declaration=True, encoding="UTF-8", pretty_print=False)
+    return _etloc.tostring(root, xml_declaration=True, encoding="UTF-8", pretty_print=False)
 
 
 # ── Assinatura XML ────────────────────────────────────────────────────────────
@@ -221,9 +219,11 @@ def _nf_sign_dps(dps_bytes: bytes, key_pem: bytes, cert_pem: bytes) -> bytes:
     Assina digitalmente o XML DPS usando enveloped signature (XMLDSig).
     Retorna o XML assinado como bytes.
     """
-    tree   = _ET_nf.fromstring(dps_bytes)
-    signer = _Signer_nf(
-        method=_smeth.enveloped,
+    from lxml import etree as _etloc2
+    from signxml import XMLSigner, methods
+    tree   = _etloc2.fromstring(dps_bytes)
+    signer = XMLSigner(
+        method=methods.enveloped,
         digest_algorithm="sha256",
         signature_algorithm="rsa-sha256",
     )
@@ -233,7 +233,7 @@ def _nf_sign_dps(dps_bytes: bytes, key_pem: bytes, cert_pem: bytes) -> bytes:
         cert=cert_pem,
         reference_uri="#" + tree.find(f"{{{_NF_NS}}}infDPS").get("Id"),
     )
-    return _ET_nf.tostring(signed, xml_declaration=True, encoding="UTF-8")
+    return _etloc2.tostring(signed, xml_declaration=True, encoding="UTF-8")
 
 
 # ── Envio via mTLS ────────────────────────────────────────────────────────────
@@ -269,7 +269,8 @@ async def _nf_enviar(xml_bytes: bytes, key_pem: bytes, cert_pem: bytes) -> dict:
             raise ValueError(f"SNNFSE {resp.status_code}: {resp.text[:500]}")
 
         # Resposta é XML da NFS-e gerada
-        resp_tree = _ET_nf.fromstring(resp.content)
+        from lxml import etree as _etresp
+        resp_tree = _etresp.fromstring(resp.content)
         ns = _NF_NS
 
         def _find(tag):
