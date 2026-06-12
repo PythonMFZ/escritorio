@@ -297,7 +297,7 @@ async def _nf_enviar(xml_bytes: bytes, key_pem: bytes, cert_pem: bytes) -> dict:
 
 print("[nfse] registrando rotas...")  # DEBUG
 
-@app.get("/admin/financeiro/cobrancas/{cob_id}/emitir-nf")
+@app.get("/admin/financeiro/cobrancas/{cob_id}/emitir-nf", response_model=None)
 @require_role({"admin", "equipe"})
 async def financeiro_cobrancas_emitir_nf(
     cob_id: int,
@@ -358,7 +358,7 @@ async def financeiro_cobrancas_emitir_nf(
 
 # ── Rota de consulta de NFS-e ────────────────────────────────────────────────
 
-@app.get("/admin/financeiro/cobrancas/{cob_id}/nf-ver")
+@app.get("/admin/financeiro/cobrancas/{cob_id}/nf-ver", response_model=None)
 @require_role({"admin", "equipe"})
 async def financeiro_cobrancas_nf_ver(
     cob_id: int,
