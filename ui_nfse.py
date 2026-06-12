@@ -190,33 +190,26 @@ def _nf_build_dps(cobranca, contrato, n_dps: int) -> bytes:
     serv     = _sub(inf, "serv")
     locPrest = _sub(serv, "locPrest")
     _sub(locPrest, "cLocPrestacao", _NF_IBGE)
-    _sub(locPrest, "cPaisPrestacao", _NF_PAIS_BR)
+    # cPaisPrestacao só para serviços no exterior — omitir para prestação nacional
 
     cServ = _sub(serv, "cServ")
-    _sub(cServ, "cTribNac", _NF_CTRIB_NAC)
-    _sub(cServ, "cNBS",     _NF_NBS)
-    _sub(cServ, "CNAE",     _NF_CNAE)
+    _sub(cServ, "cTribNac",  _NF_CTRIB_NAC)
+    _sub(cServ, "cNBS",      _NF_NBS)
+    _sub(cServ, "CNAE",      _NF_CNAE)
 
     desc = (contrato.servicos or contrato.nome_contrato or "Serviços administrativos").strip()
     _sub(cServ, "xDescServ", desc[:2000])
 
     # ── valores ───────────────────────────────────────────────────────────────
-    vals   = _sub(inf, "valores")
-    vServ  = _sub(vals, "vServPrest")
+    vals  = _sub(inf, "valores")
+    vServ = _sub(vals, "vServPrest")
     _sub(vServ, "vServ",  valor_str)
     _sub(vServ, "vReceb", valor_str)
 
-    _sub(vals, "vDescCondicionado",    "0.00")
-    _sub(vals, "vDescIncondicionado",  "0.00")
-
-    # tribMun — Simples Nacional: tribISSQN=3
     tribMun = _sub(vals, "tribMun")
-    _sub(tribMun, "tribISSQN", "3")       # 3 = Simples Nacional
+    _sub(tribMun, "tribISSQN", "3")   # 3 = Simples Nacional
     _sub(tribMun, "cLocInc",   _NF_IBGE)
-    _sub(tribMun, "cNatOp",    "1")       # 1 = Operação tributável
-    bm = _sub(tribMun, "BM")
-    _sub(bm, "vBC",   valor_str)
-    _sub(bm, "pAliq", "3.00")             # 3% conforme Simples Nacional
+    _sub(tribMun, "cNatOp",    "1")   # 1 = Tributação no município
 
     return _etloc.tostring(root, xml_declaration=True, encoding="UTF-8", pretty_print=False)
 
