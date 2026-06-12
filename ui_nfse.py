@@ -155,13 +155,15 @@ def _nf_build_dps(cobranca, contrato, n_dps: int) -> bytes:
             el.text = str(text)
         return el
 
-    _sub(inf, "tpAmb",   _NF_tpAmb)
-    _sub(inf, "dhEmi",   dh_emi)
-    _sub(inf, "serie",   _NF_SERIE)
-    _sub(inf, "nDPS",    str(n_dps))
-    _sub(inf, "dCompet", dcomp_str)
-    _sub(inf, "cLocEmi", _NF_IBGE)
-    _sub(inf, "tpEmit",  "1")       # 1 = prestador
+    # Ordem exata conforme XSD DPS Nacional (infDPS sequence)
+    _sub(inf, "tpAmb",    _NF_tpAmb)
+    _sub(inf, "dhEmi",    dh_emi)
+    _sub(inf, "verAplic", "ERP_1.0")
+    _sub(inf, "serie",    _NF_SERIE)
+    _sub(inf, "nDPS",     str(n_dps))
+    _sub(inf, "dCompet",  dcomp_str)
+    _sub(inf, "tpEmit",   "1")       # 1 = prestador
+    _sub(inf, "cLocEmi",  _NF_IBGE)
 
     # ── prestador ─────────────────────────────────────────────────────────────
     prest = _sub(inf, "prest")
