@@ -135,15 +135,15 @@ def _processar_audio_background(
 
     transcricao = ""
 
-    # ── Tenta OpenAI Whisper API primeiro (mais confiável) ───────────────────
+    # ── Tenta OpenAI Whisper API ─────────────────────────────────────────────
     openai_key = _os2.environ.get("OPENAI_API_KEY", "")
     if openai_key and _Path(audio_path).exists():
         try:
             import openai as _oai
-            _oai.api_key = openai_key
+            _oai_client = _oai.OpenAI(api_key=openai_key)
             print(f"[whisper] Usando OpenAI Whisper API...")
             with open(audio_path, "rb") as _af:
-                result = _oai.audio.transcriptions.create(
+                result = _oai_client.audio.transcriptions.create(
                     model="whisper-1",
                     file=_af,
                     language="pt",
@@ -151,44 +151,9 @@ def _processar_audio_background(
             transcricao = result.text.strip()
             print(f"[whisper] OpenAI API OK: {len(transcricao)} chars")
         except Exception as _oe:
-            print(f"[whisper] OpenAI API falhou: {_oe} — tentando local...")
-
-    # ── Fallback: Whisper local via subprocess ───────────────────────────────
-    if not transcricao and _Path(audio_path).exists():
-        import subprocess as _sp
-        import sys as _sys_w
-        print(f"[whisper] Usando Whisper local (modelo {_WHISPER_MODEL_NAME})...")
-
-        script = f"""
-import sys, os, json
-try:
-    import whisper
-    model = whisper.load_model('{_WHISPER_MODEL_NAME}')
-    result = model.transcribe('{audio_path}', language='pt', verbose=False)
-    print(json.dumps({{'ok': True, 'text': result.get('text', '').strip()}}))
-except Exception as e:
-    print(json.dumps({{'ok': False, 'error': str(e)}}))
-"""
-        try:
-            proc = _sp.run(
-                [_sys_w.executable, '-c', script],
-                capture_output=True, text=True, timeout=5400,
-            )
-            for line in proc.stdout.strip().splitlines():
-                if line.strip().startswith('{'):
-                    try:
-                        r = __import__('json').loads(line.strip())
-                        if r.get('ok'):
-                            transcricao = r.get('text', '')
-                        else:
-                            print(f"[whisper] Local erro: {r.get('error')}")
-                        break
-                    except Exception:
-                        pass
-            if proc.returncode != 0 and not transcricao:
-                print(f"[whisper] Subprocess stderr: {proc.stderr[:200]}")
-        except Exception as _le:
-            print(f"[whisper] Whisper local falhou: {_le}")
+            print(f"[whisper] OpenAI API falhou: {_oe}")
+    elif not openai_key:
+        print("[whisper] ⚠️ OPENAI_API_KEY não configurada — configure no Render para ativar transcrição.")
 
     # ── Arquivo não encontrado ───────────────────────────────────────────────
     if not _Path(audio_path).exists() and not transcricao:

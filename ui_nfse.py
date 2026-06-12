@@ -30,12 +30,8 @@ _NF_NS            = "http://www.sped.fazenda.gov.br/nfse"
 # ── Ambiente ──────────────────────────────────────────────────────────────────
 _NF_AMB = _os_nf.environ.get("NFSE_AMBIENTE", "homologacao")
 _NF_URLS = {
-    # URLs conforme Swagger em /contribuintes/docs/index.html
-    "homologacao": "https://adn.producaorestrita.nfse.gov.br/contribuintes/nfse",
-    "producao":    "https://adn.nfse.gov.br/contribuintes/nfse",
-    # Alternativas caso 404:
-    "producao_v1": "https://adn.nfse.gov.br/EmissorPublico/v1/contribuintes/nfse",
-    "hom_v1":      "https://adn.producaorestrita.nfse.gov.br/EmissorPublico/v1/contribuintes/nfse",
+    "homologacao": "https://sefin.producaorestrita.nfse.gov.br/SefinNacional/nfse",
+    "producao":    "https://sefin.nfse.gov.br/SefinNacional/nfse",
 }
 _NF_tpAmb = "2" if _NF_AMB == "homologacao" else "1"
 
