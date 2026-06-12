@@ -257,6 +257,14 @@ async def _nf_enviar(xml_bytes: bytes, key_pem: bytes, cert_pem: bytes) -> dict:
         key_path = kf.name
 
     try:
+        import gzip as _gzip_nf
+        import json as _json_nf
+
+        # SNNFSE Sefin espera JSON com DPS comprimido em gzip e codificado em base64
+        compressed = _gzip_nf.compress(xml_bytes)
+        b64_xml = _b64_nf.b64encode(compressed).decode("ascii")
+        body_json = _json_nf.dumps({"dpsXmlGZipB64": b64_xml})
+
         async with _httpx_nf.AsyncClient(
             cert=(cert_path, key_path),
             timeout=60,
@@ -264,29 +272,42 @@ async def _nf_enviar(xml_bytes: bytes, key_pem: bytes, cert_pem: bytes) -> dict:
         ) as client:
             resp = await client.post(
                 url,
-                content=xml_bytes,
-                headers={"Content-Type": "application/xml; charset=UTF-8"},
+                content=body_json.encode("utf-8"),
+                headers={"Content-Type": "application/json; charset=UTF-8"},
             )
 
-        print(f"[nfse] resposta: HTTP {resp.status_code} | headers: {dict(resp.headers)} | body: {resp.text[:300]!r}")
+        print(f"[nfse] resposta: HTTP {resp.status_code} | headers: {dict(resp.headers)} | body: {resp.text[:500]!r}")
         if resp.status_code not in (200, 201):
             raise ValueError(f"SNNFSE {resp.status_code}: {resp.text[:500]}")
 
-        # Resposta é XML da NFS-e gerada
-        from lxml import etree as _etresp
-        resp_tree = _etresp.fromstring(resp.content)
-        ns = _NF_NS
+        # Resposta JSON contém nfseXmlGZipB64 com o XML da NFS-e
+        resp_data = resp.json()
+        print(f"[nfse] resposta JSON keys: {list(resp_data.keys()) if isinstance(resp_data, dict) else type(resp_data)}")
 
-        def _find(tag):
-            # Procura tanto com namespace quanto sem
-            el = resp_tree.find(f".//{{{ns}}}{tag}")
-            if el is None:
-                el = resp_tree.find(f".//{tag}")
-            return el.text.strip() if el is not None and el.text else ""
+        nfse_b64 = resp_data.get("nfseXmlGZipB64", "")
+        chave = resp_data.get("chaveAcesso", "")
+        numero = resp_data.get("numeroNFSe", "")
+        url_nf = resp_data.get("linkNFSe", "") or resp_data.get("urlNFSe", "")
 
-        chave   = _find("chNFSe") or _find("chave")
-        numero  = _find("nNFSe") or _find("numero")
-        url_nf  = _find("urlNFSe") or _find("linkNFSe") or ""
+        # Se o XML da NFS-e estiver embutido, extrair dados adicionais
+        if nfse_b64 and (not chave or not numero):
+            try:
+                from lxml import etree as _etresp
+                nfse_xml = _gzip_nf.decompress(_b64_nf.b64decode(nfse_b64))
+                resp_tree = _etresp.fromstring(nfse_xml)
+                ns = _NF_NS
+
+                def _find(tag):
+                    el = resp_tree.find(f".//{{{ns}}}{tag}")
+                    if el is None:
+                        el = resp_tree.find(f".//{tag}")
+                    return el.text.strip() if el is not None and el.text else ""
+
+                chave  = chave  or _find("chNFSe") or _find("chave")
+                numero = numero or _find("nNFSe")  or _find("numero")
+                url_nf = url_nf or _find("urlNFSe") or _find("linkNFSe") or ""
+            except Exception as _ex_parse:
+                print(f"[nfse] aviso: não foi possível parsear XML da resposta: {_ex_parse}")
 
         return {"chave": chave, "numero": numero, "url": url_nf}
 
