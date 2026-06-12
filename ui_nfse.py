@@ -30,8 +30,12 @@ _NF_NS            = "http://www.sped.fazenda.gov.br/nfse"
 # ── Ambiente ──────────────────────────────────────────────────────────────────
 _NF_AMB = _os_nf.environ.get("NFSE_AMBIENTE", "homologacao")
 _NF_URLS = {
+    # URLs conforme Swagger em /contribuintes/docs/index.html
     "homologacao": "https://adn.producaorestrita.nfse.gov.br/contribuintes/nfse",
     "producao":    "https://adn.nfse.gov.br/contribuintes/nfse",
+    # Alternativas caso 404:
+    "producao_v1": "https://adn.nfse.gov.br/EmissorPublico/v1/contribuintes/nfse",
+    "hom_v1":      "https://adn.producaorestrita.nfse.gov.br/EmissorPublico/v1/contribuintes/nfse",
 }
 _NF_tpAmb = "2" if _NF_AMB == "homologacao" else "1"
 
@@ -246,6 +250,7 @@ async def _nf_enviar(xml_bytes: bytes, key_pem: bytes, cert_pem: bytes) -> dict:
     Retorna dict com chave, numero, url ou lança exceção com mensagem de erro.
     """
     url = _NF_URLS[_NF_AMB]
+    print(f"[nfse] POST {url} (ambiente={_NF_AMB})")
 
     # httpx aceita cert como (cert_file, key_file) ou como arquivos temporários
     with _tmp_nf.NamedTemporaryFile(suffix=".pem", delete=False) as cf:
@@ -267,6 +272,7 @@ async def _nf_enviar(xml_bytes: bytes, key_pem: bytes, cert_pem: bytes) -> dict:
                 headers={"Content-Type": "application/xml; charset=UTF-8"},
             )
 
+        print(f"[nfse] resposta: HTTP {resp.status_code} | headers: {dict(resp.headers)} | body: {resp.text[:300]!r}")
         if resp.status_code not in (200, 201):
             raise ValueError(f"SNNFSE {resp.status_code}: {resp.text[:500]}")
 
