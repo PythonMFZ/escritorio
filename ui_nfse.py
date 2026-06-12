@@ -235,7 +235,9 @@ def _nf_sign_dps(dps_bytes: bytes, key_pem: bytes, cert_pem: bytes) -> bytes:
         cert=cert_pem,
         reference_uri="#" + tree.find(f"{{{_NF_NS}}}infDPS").get("Id"),
     )
-    return _etloc2.tostring(signed, xml_declaration=True, encoding="UTF-8")
+    signed_bytes = _etloc2.tostring(signed, xml_declaration=True, encoding="UTF-8")
+    print(f"[nfse] signed XML (800): {signed_bytes[:800]!r}")
+    return signed_bytes
 
 
 # ── Envio via mTLS ────────────────────────────────────────────────────────────
