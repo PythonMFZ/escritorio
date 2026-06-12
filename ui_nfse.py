@@ -293,24 +293,22 @@ async def _nf_enviar(xml_bytes: bytes, key_pem: bytes, cert_pem: bytes) -> dict:
         _os_nf.unlink(key_path)
 
 
-# ── Rota principal ────────────────────────────────────────────────────────────
+# ── Rotas ─────────────────────────────────────────────────────────────────────
 
 print("[nfse] registrando rotas...")  # DEBUG
 
-@app.get("/admin/financeiro/cobrancas/{cob_id}/emitir-nf", response_model=None)
-@require_role({"admin", "equipe"})
+@app.get("/admin/financeiro/cobrancas/{cob_id}/emitir-nf")
 async def financeiro_cobrancas_emitir_nf(
     cob_id: int,
     request: _Req_nf,
     session=_Dep_nf(get_session),
-    current_user=_Dep_nf(get_current_user),
 ):
-    """Emite NFS-e para a cobrança e salva chave/número/URL."""
-    from sqlmodel import select as _sel_nf_loc
-    from sqlalchemy import text as _txt_nf_loc
+    ctx = get_tenant_context(request, session)
+    if not ctx or ctx.membership.role not in {"admin", "equipe"}:
+        return _RR_nf("/login", status_code=303)
 
     cobranca = session.get(CobrancaMensal, cob_id)
-    if not cobranca:
+    if not cobranca or cobranca.company_id != ctx.company.id:
         return _RR_nf("/admin/financeiro/cobrancas", status_code=302)
 
     contrato = session.get(ContratoCliente, cobranca.contrato_id)
@@ -323,20 +321,17 @@ async def financeiro_cobrancas_emitir_nf(
             status_code=302,
         )
 
-    # Número DPS sequencial: usa ID da cobrança (único por empresa na prática)
     n_dps = cobranca.id
-
     try:
         key_pem, cert_pem, _chain = _nf_load_cert()
         dps_xml  = _nf_build_dps(cobranca, contrato, n_dps)
         signed   = _nf_sign_dps(dps_xml, key_pem, cert_pem)
         resultado = await _nf_enviar(signed, key_pem, cert_pem)
 
-        # Persiste resultado
-        cobranca.nf_numero = resultado.get("numero", "")
-        cobranca.nf_chave  = resultado.get("chave",  "")
-        cobranca.nf_url    = resultado.get("url",    "")
         from datetime import datetime as _dtl
+        cobranca.nf_numero  = resultado.get("numero", "")
+        cobranca.nf_chave   = resultado.get("chave",  "")
+        cobranca.nf_url     = resultado.get("url",    "")
         cobranca.updated_at = _dtl.utcnow()
         session.add(cobranca)
         session.commit()
@@ -356,25 +351,23 @@ async def financeiro_cobrancas_emitir_nf(
         )
 
 
-# ── Rota de consulta de NFS-e ────────────────────────────────────────────────
-
-@app.get("/admin/financeiro/cobrancas/{cob_id}/nf-ver", response_model=None)
-@require_role({"admin", "equipe"})
+@app.get("/admin/financeiro/cobrancas/{cob_id}/nf-ver")
 async def financeiro_cobrancas_nf_ver(
     cob_id: int,
     request: _Req_nf,
     session=_Dep_nf(get_session),
-    current_user=_Dep_nf(get_current_user),
 ):
-    """Redireciona para a URL da NF emitida, ou mostra a chave."""
+    ctx = get_tenant_context(request, session)
+    if not ctx or ctx.membership.role not in {"admin", "equipe"}:
+        return _RR_nf("/login", status_code=303)
+
     cobranca = session.get(CobrancaMensal, cob_id)
-    if not cobranca:
+    if not cobranca or cobranca.company_id != ctx.company.id:
         return _RR_nf("/admin/financeiro/cobrancas", status_code=302)
 
     nf_url = getattr(cobranca, "nf_url", "") or ""
     if nf_url and nf_url.startswith("http"):
-        from fastapi.responses import RedirectResponse
-        return RedirectResponse(nf_url, status_code=302)
+        return _RR_nf(nf_url, status_code=302)
 
     chave = getattr(cobranca, "nf_chave", "") or getattr(cobranca, "nf_numero", "") or "sem chave"
     return _HTML_nf(f"<p>NFS-e emitida. Chave de acesso: <code>{chave}</code></p>")
