@@ -190,14 +190,10 @@ def _nf_build_dps(cobranca, contrato, n_dps: int) -> bytes:
     serv     = _sub(inf, "serv")
     locPrest = _sub(serv, "locPrest")
     _sub(locPrest, "cLocPrestacao", _NF_IBGE)
-    # cPaisPrestacao só para serviços no exterior — omitir para prestação nacional
 
+    desc  = (contrato.servicos or contrato.nome_contrato or "Serviços administrativos").strip()
     cServ = _sub(serv, "cServ")
     _sub(cServ, "cTribNac",  _NF_CTRIB_NAC)
-    _sub(cServ, "cNBS",      _NF_NBS)
-    _sub(cServ, "CNAE",      _NF_CNAE)
-
-    desc = (contrato.servicos or contrato.nome_contrato or "Serviços administrativos").strip()
     _sub(cServ, "xDescServ", desc[:2000])
 
     # ── valores ───────────────────────────────────────────────────────────────
