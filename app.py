@@ -48768,4 +48768,9 @@ exec(open('ui_admin_uso.py').read())
 
 exec(open('ui_fluxo_caixa.py').read())
 exec(open('ui_financeiro_contratos.py').read())
-exec(open('ui_nfse.py').read())
+try:
+    exec(open('ui_nfse.py').read())
+except Exception as _e_nfse_load:
+    import traceback as _tb_nfse
+    print(f"[nfse] ⚠️ Falha ao carregar ui_nfse.py: {_e_nfse_load}")
+    _tb_nfse.print_exc()

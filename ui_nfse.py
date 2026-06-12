@@ -56,6 +56,8 @@ try:
 except Exception as _e_nf_mg:
     print(f"[nfse] migration: {_e_nf_mg}")
 
+print("[nfse] definindo funções...")  # DEBUG
+
 
 # ── Certificado ───────────────────────────────────────────────────────────────
 
@@ -293,6 +295,8 @@ async def _nf_enviar(xml_bytes: bytes, key_pem: bytes, cert_pem: bytes) -> dict:
 
 # ── Rota principal ────────────────────────────────────────────────────────────
 
+print("[nfse] registrando rotas...")  # DEBUG
+
 @app.get("/admin/financeiro/cobrancas/{cob_id}/emitir-nf")
 @require_role({"admin", "equipe"})
 async def financeiro_cobrancas_emitir_nf(
@@ -374,3 +378,5 @@ async def financeiro_cobrancas_nf_ver(
 
     chave = getattr(cobranca, "nf_chave", "") or getattr(cobranca, "nf_numero", "") or "sem chave"
     return _HTML_nf(f"<p>NFS-e emitida. Chave de acesso: <code>{chave}</code></p>")
+
+print("[nfse] ✅ Rotas NFS-e registradas com sucesso")
