@@ -48768,3 +48768,4 @@ exec(open('ui_admin_uso.py').read())
 
 exec(open('ui_fluxo_caixa.py').read())
 exec(open('ui_financeiro_contratos.py').read())
+exec(open('ui_nfse.py').read())

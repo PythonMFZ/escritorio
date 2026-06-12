@@ -708,6 +708,19 @@ async def financeiro_cobrancas_painel(request: _Req_ct, session=_Dep_ct(get_sess
         acoes_cancelar = '' if c.status in ('cancelado','pago') else f'<a href="/admin/financeiro/cobrancas/{c.id}/cancelar-get" class="btn btn-sm btn-outline-secondary ms-1" onclick="return confirm(\'Cancelar cobrança?\')">✕ Cancelar</a>'
         acoes_excluir  = f'<a href="/admin/financeiro/cobrancas/{c.id}/excluir" class="btn btn-sm btn-outline-danger ms-1" onclick="return confirm(\'Excluir permanentemente?\')">🗑</a>'
 
+        # Botão NFS-e
+        nf_url_val  = getattr(c, "nf_url", "") or ""
+        nf_num_val  = getattr(c, "nf_numero", "") or ""
+        nf_chave_val = getattr(c, "nf_chave", "") or ""
+        if nf_url_val and nf_url_val.startswith("http"):
+            nf_btn = f'<a href="{nf_url_val}" target="_blank" class="btn btn-sm btn-outline-success ms-1">📃 NF</a>'
+        elif nf_num_val or nf_chave_val:
+            nf_btn = f'<a href="/admin/financeiro/cobrancas/{c.id}/nf-ver" class="btn btn-sm btn-outline-success ms-1">📃 NF</a>'
+        elif c.status in ("pago", "pendente", "vencido"):
+            nf_btn = f'<a href="/admin/financeiro/cobrancas/{c.id}/emitir-nf" class="btn btn-sm btn-outline-success ms-1" onclick="return confirm(\'Emitir NFS-e para esta cobrança?\')">📃 Emitir NF</a>'
+        else:
+            nf_btn = ""
+
         rows += f"""
         <tr>
           <td>{c.competencia}</td>
@@ -717,7 +730,7 @@ async def financeiro_cobrancas_painel(request: _Req_ct, session=_Dep_ct(get_sess
           <td class="text-center">{c.data_vencimento}</td>
           <td class="text-center"><span class="badge {badge}">{c.status.capitalize()}</span></td>
           <td class="text-end text-success">{pago_str}</td>
-          <td class="text-center text-nowrap">{acoes_pagar}{boleto_btn}{acoes_cancelar}{acoes_excluir}</td>
+          <td class="text-center text-nowrap">{acoes_pagar}{boleto_btn}{nf_btn}{acoes_cancelar}{acoes_excluir}</td>
         </tr>"""
 
     html = f"""{{% extends "base.html" %}}
@@ -1278,6 +1291,21 @@ def _ct_cobrancas_html(contrato, cobrancas):
         boleto_cell = ""
         if c.boleto_url:
             boleto_cell = f'<a href="{c.boleto_url}" target="_blank" class="btn btn-sm btn-outline-info">📄 Ver</a>'
+        elif c.status in ("pendente", "vencido"):
+            boleto_cell = f'<a href="/admin/financeiro/cobrancas/{c.id}/boleto-gerar" class="btn btn-sm btn-outline-info">Gerar</a>'
+
+        nf_url_v  = getattr(c, "nf_url",    "") or ""
+        nf_num_v  = getattr(c, "nf_numero", "") or ""
+        nf_chave_v = getattr(c, "nf_chave", "") or ""
+        if nf_url_v and nf_url_v.startswith("http"):
+            nf_cell = f'<a href="{nf_url_v}" target="_blank" class="btn btn-sm btn-outline-success">📃 NF</a>'
+        elif nf_num_v or nf_chave_v:
+            nf_cell = f'<a href="/admin/financeiro/cobrancas/{c.id}/nf-ver" class="btn btn-sm btn-outline-success">📃 NF</a>'
+        elif c.status in ("pago", "pendente", "vencido"):
+            nf_cell = f'<a href="/admin/financeiro/cobrancas/{c.id}/emitir-nf" class="btn btn-sm btn-outline-success" onclick="return confirm(\'Emitir NFS-e?\')">Emitir NF</a>'
+        else:
+            nf_cell = ""
+
         rows += f"""
         <tr>
           <td>{c.competencia}</td>
@@ -1288,6 +1316,7 @@ def _ct_cobrancas_html(contrato, cobrancas):
           <td class="text-center">{c.data_pagamento or '—'}</td>
           <td>{c.forma_pagamento or '—'}</td>
           <td class="text-center">{boleto_cell}</td>
+          <td class="text-center">{nf_cell}</td>
         </tr>"""
 
     total_pago = sum(c.valor_pago_cents or c.valor_cents for c in cobrancas if c.status == "pago")
@@ -1317,9 +1346,10 @@ def _ct_cobrancas_html(contrato, cobrancas):
           <th class="text-center">Data pag.</th>
           <th>Forma</th>
           <th class="text-center">Boleto</th>
+          <th class="text-center">NFS-e</th>
         </tr>
       </thead>
-      <tbody>{rows if rows else '<tr><td colspan="8" class="text-center text-muted py-4">Nenhuma cobrança gerada ainda</td></tr>'}</tbody>
+      <tbody>{rows if rows else '<tr><td colspan="9" class="text-center text-muted py-4">Nenhuma cobrança gerada ainda</td></tr>'}</tbody>
     </table>
   </div>
 </div>
