@@ -156,11 +156,11 @@ def _nf_build_dps(cobranca, contrato, n_dps: int) -> bytes:
         return el
 
     _sub(inf, "tpAmb",   _NF_tpAmb)
-    _sub(inf, "cLocEmi", _NF_IBGE)
+    _sub(inf, "dhEmi",   dh_emi)
     _sub(inf, "serie",   _NF_SERIE)
     _sub(inf, "nDPS",    str(n_dps))
-    _sub(inf, "dhEmi",   dh_emi)
     _sub(inf, "dCompet", dcomp_str)
+    _sub(inf, "cLocEmi", _NF_IBGE)
     _sub(inf, "tpEmit",  "1")       # 1 = prestador
 
     # ── prestador ─────────────────────────────────────────────────────────────
