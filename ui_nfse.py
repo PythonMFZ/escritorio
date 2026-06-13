@@ -206,7 +206,8 @@ def _nf_build_dps(cobranca, contrato, n_dps: int) -> bytes:
     # tribMun deve estar dentro do grupo obrigatório "trib"
     trib = _sub(vals, "trib")
     tribMun = _sub(trib, "tribMun")
-    _sub(tribMun, "tribISSQN", "3")   # 3 = Simples Nacional
+    _sub(tribMun, "tribISSQN",  "3")  # 3 = Simples Nacional
+    _sub(tribMun, "tpRetISSQN", "1")  # 1 = Não retido
     totTrib = _sub(trib, "totTrib")
     _sub(totTrib, "pTotTribSN", "6.00")  # alíquota Simples Nacional
 
