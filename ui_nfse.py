@@ -21,8 +21,8 @@ _NF_IBGE          = "4202909"         # Código IBGE Brusque-SC
 _NF_SERIE         = "1"
 _NF_RAZAO         = "MZ SERVICOS ADMINISTRATIVOS LTDA"
 _NF_EMAIL         = "MERIZIOALINE@GMAIL.COM"
-_NF_CTRIB_NAC     = "170100"           # TSCodTribNac 6 dígitos — LC 116 subitem 17.01 (assessoria/consultoria)
-_NF_NBS           = "1.18.06.40.00"  # NBS code
+_NF_CTRIB_NAC     = "170300"           # TSCodTribNac — LC 116 subitem 17.03
+_NF_NBS           = "118064000"        # NBS 9 dígitos sem pontos (da NF emitida)
 _NF_CNAE          = "8211300"
 _NF_PAIS_BR       = "1058"
 _NF_NS            = "http://www.sped.fazenda.gov.br/nfse"
@@ -196,6 +196,7 @@ def _nf_build_dps(cobranca, contrato, n_dps: int) -> bytes:
     cServ = _sub(serv, "cServ")
     _sub(cServ, "cTribNac",  _NF_CTRIB_NAC)
     _sub(cServ, "xDescServ", desc[:2000])
+    _sub(cServ, "cNBS",      _NF_NBS)
 
     # ── valores ───────────────────────────────────────────────────────────────
     vals  = _sub(inf, "valores")
