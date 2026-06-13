@@ -199,9 +199,9 @@ def _nf_build_dps(cobranca, contrato, n_dps: int) -> bytes:
 
     # ── valores ───────────────────────────────────────────────────────────────
     vals  = _sub(inf, "valores")
-    vServ = _sub(vals, "vServPrest")
-    _sub(vServ, "vServ",  valor_str)
-    _sub(vServ, "vReceb", valor_str)
+    vServPrest = _sub(vals, "vServPrest")
+    _sub(vServPrest, "vReceb", valor_str)
+    _sub(vServPrest, "vServ",  valor_str)
 
     # tribMun deve estar dentro do grupo obrigatório "trib"
     trib = _sub(vals, "trib")
