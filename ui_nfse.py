@@ -195,7 +195,6 @@ def _nf_build_dps(cobranca, contrato, n_dps: int) -> bytes:
     cServ = _sub(serv, "cServ")
     _sub(cServ, "cTribNac",  _NF_CTRIB_NAC)
     _sub(cServ, "xDescServ", desc[:2000])
-    _sub(cServ, "cNBS",      _NF_NBS)
 
     # ── valores ───────────────────────────────────────────────────────────────
     vals  = _sub(inf, "valores")
