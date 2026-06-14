@@ -187,29 +187,28 @@ def _nf_build_dps(cobranca, contrato, n_dps: int) -> bytes:
     _sub(toma, "xNome", nome_toma[:150])
 
     # ── serviço ───────────────────────────────────────────────────────────────
-    serv     = _sub(inf, "serv")
-    locPrest = _sub(serv, "locPrest")
-    _sub(locPrest, "cLocPrestacao", _NF_IBGE)
-
-    desc  = (contrato.servicos or contrato.nome_contrato or "Serviços administrativos").strip()
-    cServ = _sub(serv, "cServ")
-    _sub(cServ, "cTribNac",  _NF_CTRIB_NAC)
-    _sub(cServ, "xDescServ", desc[:2000])
-    _sub(cServ, "cNBS",      _NF_NBS)
+    desc = (contrato.servicos or contrato.nome_contrato or "Serviços administrativos").strip()
+    serv = _sub(inf, "serv")
+    _sub(serv, "cTribNac",    _NF_CTRIB_NAC)
+    _sub(serv, "cLocServico", _NF_IBGE)
+    _sub(serv, "xDescServ",   desc[:2000])
+    _sub(serv, "cRegTrib",    "1")   # 1 = Simples Nacional
 
     # ── valores ───────────────────────────────────────────────────────────────
-    vals  = _sub(inf, "valores")
-    vServPrest = _sub(vals, "vServPrest")
-    _sub(vServPrest, "vReceb", valor_str)
-    _sub(vServPrest, "vServ",  valor_str)
-
-    # tribMun deve estar dentro do grupo obrigatório "trib"
+    vals = _sub(inf, "valores")
+    _sub(vals, "vServPrest", valor_str)
+    _sub(vals, "vDescIncond", "0.00")
+    _sub(vals, "vDescCond",   "0.00")
     trib = _sub(vals, "trib")
-    tribMun = _sub(trib, "tribMun")
-    _sub(tribMun, "tribISSQN",  "3")  # 3 = Simples Nacional
-    _sub(tribMun, "tpRetISSQN", "1")  # 1 = Não retido
-    totTrib = _sub(trib, "totTrib")
-    _sub(totTrib, "pTotTribSN", "6.00")  # alíquota Simples Nacional
+    _sub(trib, "opSimplesNac",     "1")  # 1 = optante
+    _sub(trib, "regTribAnterior",  "1")
+    issqn = _sub(trib, "issqn")
+    valor_cents = cobranca.valor_cents
+    v_issqn = f"{valor_cents * 6 / 10000:.2f}"
+    _sub(issqn, "vBC",        valor_str)
+    _sub(issqn, "pISSQN",     "6.00")
+    _sub(issqn, "vISSQN",     v_issqn)
+    _sub(issqn, "tpRetISSQN", "1")   # 1 = não retido
 
     _dps_bytes = _etloc.tostring(root, xml_declaration=True, encoding="UTF-8", pretty_print=False)
     print(f"[nfse] DPS XML: {_dps_bytes.decode('utf-8', errors='replace')[:2000]}")
@@ -374,13 +373,15 @@ async def nfse_probe_codigo(request: _Req_nf, cod: str = "170300", cnpj_toma: st
         sub(rtrib, "opSimpNac", "1"); sub(rtrib, "regApTribSN", "3"); sub(rtrib, "regEspTrib", "6")
         toma = sub(inf, "toma"); sub(toma, "CNPJ", cnpj_toma); sub(toma, "xNome", "TESTE")
         serv = sub(inf, "serv")
-        lp = sub(serv, "locPrest"); sub(lp, "cLocPrestacao", _NF_IBGE)
-        cs = sub(serv, "cServ"); sub(cs, "cTribNac", cod); sub(cs, "xDescServ", "Planejamento e organização administrativa"); sub(cs, "cNBS", _NF_NBS)
+        sub(serv, "cTribNac", cod); sub(serv, "cLocServico", _NF_IBGE)
+        sub(serv, "xDescServ", "Planejamento e organização administrativa")
+        sub(serv, "cRegTrib", "1")
         vals = sub(inf, "valores")
-        vsp = sub(vals, "vServPrest"); sub(vsp, "vReceb", "100.00"); sub(vsp, "vServ", "100.00")
+        sub(vals, "vServPrest", "100.00"); sub(vals, "vDescIncond", "0.00"); sub(vals, "vDescCond", "0.00")
         trib = sub(vals, "trib")
-        tm = sub(trib, "tribMun"); sub(tm, "tribISSQN", "3"); sub(tm, "tpRetISSQN", "1")
-        tot = sub(trib, "totTrib"); sub(tot, "pTotTribSN", "6.00")
+        sub(trib, "opSimplesNac", "1"); sub(trib, "regTribAnterior", "1")
+        issqn = sub(trib, "issqn")
+        sub(issqn, "vBC", "100.00"); sub(issqn, "pISSQN", "6.00"); sub(issqn, "vISSQN", "6.00"); sub(issqn, "tpRetISSQN", "1")
         dps_bytes = _etx.tostring(root, xml_declaration=True, encoding="UTF-8")
         signed = _nf_sign_dps(dps_bytes, key_pem, cert_pem)
         with _tmp_nf.NamedTemporaryFile(suffix=".pem", delete=False) as cf:
