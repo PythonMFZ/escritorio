@@ -21,7 +21,7 @@ _NF_IBGE          = "4202909"         # Código IBGE Brusque-SC
 _NF_SERIE         = "1"
 _NF_RAZAO         = "MZ SERVICOS ADMINISTRATIVOS LTDA"
 _NF_EMAIL         = "MERIZIOALINE@GMAIL.COM"
-_NF_CTRIB_NAC     = "170300"           # TSCodTribNac — LC 116 item 17.03 (conforme NF RPS248)
+_NF_CTRIB_NAC     = "170303"           # TSCodTribNac — LC 116 item 17.03 sub-subitem 03 (doméstico)
 _NF_NBS           = "118064000"        # NBS 9 dígitos sem pontos (da NF emitida)
 _NF_CNAE          = "8211300"
 _NF_PAIS_BR       = "1058"
@@ -193,8 +193,9 @@ def _nf_build_dps(cobranca, contrato, n_dps: int) -> bytes:
 
     desc  = (contrato.servicos or contrato.nome_contrato or "Serviços administrativos").strip()
     cServ = _sub(serv, "cServ")
-    _sub(cServ, "cTribNac",  _NF_CTRIB_NAC)
-    _sub(cServ, "xDescServ", desc[:2000])
+    _sub(cServ, "cTribNac",    _NF_CTRIB_NAC)
+    _sub(cServ, "xDescServ",   desc[:2000])
+    _sub(cServ, "cLocServico", _NF_IBGE)
 
     # ── valores ───────────────────────────────────────────────────────────────
     vals  = _sub(inf, "valores")
@@ -374,7 +375,7 @@ async def nfse_probe_codigo(request: _Req_nf, cod: str = "170300", cnpj_toma: st
         toma = sub(inf, "toma"); sub(toma, "CNPJ", cnpj_toma); sub(toma, "xNome", "TESTE")
         serv = sub(inf, "serv")
         lp = sub(serv, "locPrest"); sub(lp, "cLocPrestacao", _NF_IBGE)
-        cs = sub(serv, "cServ"); sub(cs, "cTribNac", cod); sub(cs, "xDescServ", "Planejamento e organização administrativa")
+        cs = sub(serv, "cServ"); sub(cs, "cTribNac", cod); sub(cs, "xDescServ", "Planejamento e organização administrativa"); sub(cs, "cLocServico", _NF_IBGE)
         vals = sub(inf, "valores")
         vsp = sub(vals, "vServPrest"); sub(vsp, "vReceb", "100.00"); sub(vsp, "vServ", "100.00")
         trib = sub(vals, "trib")
