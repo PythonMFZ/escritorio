@@ -200,15 +200,11 @@ def _nf_build_dps(cobranca, contrato, n_dps: int) -> bytes:
     _sub(vServPrest, "vReceb", valor_str)
     _sub(vServPrest, "vServ",  valor_str)
     trib = _sub(vals, "trib")
-    _sub(trib, "opSimplesNac",    "1")
-    _sub(trib, "regTribAnterior", "1")
-    issqn = _sub(trib, "issqn")
-    valor_cents = cobranca.valor_cents
-    v_issqn = f"{valor_cents * 6 / 10000:.2f}"
-    _sub(issqn, "vBC",        valor_str)
-    _sub(issqn, "pAliqAplic", "6.00")
-    _sub(issqn, "vISSQN",     v_issqn)
-    _sub(issqn, "tpRetISSQN", "1")
+    tribMun = _sub(trib, "tribMun")
+    _sub(tribMun, "tribISSQN",  "3")  # 3 = Simples Nacional
+    _sub(tribMun, "tpRetISSQN", "1")  # 1 = não retido
+    totTrib = _sub(trib, "totTrib")
+    _sub(totTrib, "pTotTribSN", "6.00")
 
     _dps_bytes = _etloc.tostring(root, xml_declaration=True, encoding="UTF-8", pretty_print=False)
     print(f"[nfse] DPS XML: {_dps_bytes.decode('utf-8', errors='replace')[:2000]}")
@@ -378,9 +374,8 @@ async def nfse_probe_codigo(request: _Req_nf, cod: str = "170300", cnpj_toma: st
         vals = sub(inf, "valores")
         vsp = sub(vals, "vServPrest"); sub(vsp, "vReceb", "100.00"); sub(vsp, "vServ", "100.00")
         trib = sub(vals, "trib")
-        sub(trib, "opSimplesNac", "1"); sub(trib, "regTribAnterior", "1")
-        issqn = sub(trib, "issqn")
-        sub(issqn, "vBC", "100.00"); sub(issqn, "pAliqAplic", "6.00"); sub(issqn, "vISSQN", "6.00"); sub(issqn, "tpRetISSQN", "1")
+        tm = sub(trib, "tribMun"); sub(tm, "tribISSQN", "3"); sub(tm, "tpRetISSQN", "1")
+        tot = sub(trib, "totTrib"); sub(tot, "pTotTribSN", "6.00")
         dps_bytes = _etx.tostring(root, xml_declaration=True, encoding="UTF-8")
         signed = _nf_sign_dps(dps_bytes, key_pem, cert_pem)
         with _tmp_nf.NamedTemporaryFile(suffix=".pem", delete=False) as cf:
