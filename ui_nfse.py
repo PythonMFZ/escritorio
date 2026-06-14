@@ -212,7 +212,9 @@ def _nf_build_dps(cobranca, contrato, n_dps: int) -> bytes:
     totTrib = _sub(trib, "totTrib")
     _sub(totTrib, "pTotTribSN", "6.00")  # alíquota Simples Nacional
 
-    return _etloc.tostring(root, xml_declaration=True, encoding="UTF-8", pretty_print=False)
+    dps_bytes = _etloc.tostring(root, xml_declaration=True, encoding="UTF-8", pretty_print=False)
+    print(f"[nfse] DPS XML (antes de assinar): {dps_bytes.decode('utf-8', errors='replace')[:1500]}")
+    return dps_bytes
 
 
 # ── Assinatura XML ────────────────────────────────────────────────────────────
