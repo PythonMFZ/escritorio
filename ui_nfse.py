@@ -184,7 +184,14 @@ def _nf_build_dps(cobranca, contrato, n_dps: int) -> bytes:
     else:
         _sub(tom, "CNPJ", "00000000000000")
     _sub(tom, "xNome", nome_toma[:150])
-    _sub(_sub(_sub(tom, "end"), "endNac"), "cMun", _NF_IBGE)
+    _end = _sub(tom, "end")
+    _endNac = _sub(_end, "endNac")
+    _sub(_endNac, "cMun", _NF_IBGE)
+    _sub(_endNac, "UF",   "SC")
+    _sub(_endNac, "CEP",  "88350000")
+    _sub(_end, "xLgr",    "NAO INFORMADO")
+    _sub(_end, "nro",     "S/N")
+    _sub(_end, "xBairro", "NAO INFORMADO")
 
     # ── serviço ───────────────────────────────────────────────────────────────
     desc = (contrato.servicos or contrato.nome_contrato or "Serviços administrativos").strip()
@@ -369,7 +376,9 @@ async def nfse_probe_codigo(request: _Req_nf, cod: str = "170300", cnpj_toma: st
         rtrib = sub(prest, "regTrib")
         sub(rtrib, "opSimpNac", "1"); sub(rtrib, "regApTribSN", "3"); sub(rtrib, "regEspTrib", "6")
         tom = sub(inf, "toma"); sub(tom, "CNPJ", cnpj_toma); sub(tom, "xNome", "TESTE")
-        sub(sub(sub(tom, "end"), "endNac"), "cMun", _NF_IBGE)
+        _e = sub(tom, "end"); _en = sub(_e, "endNac")
+        sub(_en, "cMun", _NF_IBGE); sub(_en, "UF", "SC"); sub(_en, "CEP", "88350000")
+        sub(_e, "xLgr", "NAO INFORMADO"); sub(_e, "nro", "S/N"); sub(_e, "xBairro", "NAO INFORMADO")
         serv = sub(inf, "serv")
         lp = sub(serv, "locPrest"); sub(lp, "cLocPrestacao", _NF_IBGE)
         cs = sub(serv, "cServ"); sub(cs, "cTribNac", cod); sub(cs, "xDescServ", "Planejamento e organizacao administrativa")
