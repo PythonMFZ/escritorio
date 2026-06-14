@@ -303,19 +303,24 @@ def _nf_sign_dps(dps_bytes: bytes, key_pem: bytes, cert_pem: bytes) -> bytes:
     ki_el = _et2.fromstring(ki_xml.replace("__CERT__", cert_b64).encode())
     sig_el.append(ki_el)
 
-    # 5. Adicionar Signature ao DPS e serializar sem mexer no documento depois.
+    # 5. Verificar digest localmente antes de serializar.
+    ref_check = tree.xpath(f"//*[@Id='{ref_id}']")
+    if not ref_check:
+        raise ValueError(f"Elemento referenciado não encontrado: {ref_id}")
+    local_digest = _b64s.b64encode(_hl.sha1(inf_c14n).digest()).decode()
+    if local_digest != digest:
+        raise ValueError(f"Digest local divergente: esperado={digest} calculado={local_digest}")
+
+    # 6. Adicionar Signature ao DPS e serializar sem mexer no documento depois.
     tree.append(sig_el)
     signed = _et2.tostring(tree, xml_declaration=True, encoding="UTF-8", pretty_print=False)
-
-    if b'Reference URI=""' in signed:
-        raise ValueError("Assinatura inválida: Reference URI vazia")
-
+    print(f"[nfse] assinatura local OK | ref={ref_id} | digest={digest}")
     return signed
 
 
 # ── Envio via mTLS ────────────────────────────────────────────────────────────
 
-async def _nf_enviar(xml_bytes: bytes, key_pem: bytes, cert_pem: bytes) -> dict:
+async def _nf_enviar(xml_bytes: bytes, key_pem: bytes, cert_pem: bytes, chain_pem: bytes = b"") -> dict:
     """
     Envia o XML DPS assinado para a API SNNFSE via mTLS.
     Retorna dict com chave, numero, url ou lança exceção com mensagem de erro.
@@ -323,9 +328,10 @@ async def _nf_enviar(xml_bytes: bytes, key_pem: bytes, cert_pem: bytes) -> dict:
     url = _NF_URLS[_NF_AMB]
     print(f"[nfse] POST {url} (ambiente={_NF_AMB})")
 
-    # httpx aceita cert como (cert_file, key_file) ou como arquivos temporários
+    # Bundle cert + chain para mTLS (ICP-Brasil exige cadeia completa)
+    cert_bundle = cert_pem + (chain_pem or b"")
     with _tmp_nf.NamedTemporaryFile(suffix=".pem", delete=False) as cf:
-        cf.write(cert_pem)
+        cf.write(cert_bundle)
         cert_path = cf.name
     with _tmp_nf.NamedTemporaryFile(suffix=".pem", delete=False) as kf:
         kf.write(key_pem)
@@ -431,7 +437,7 @@ async def nfse_probe_codigo(request: _Req_nf, cod: str = "170300", cnpj_toma: st
         dps_bytes = _etx.tostring(root, xml_declaration=True, encoding="UTF-8")
         signed = _nf_sign_dps(dps_bytes, key_pem, cert_pem)
         with _tmp_nf.NamedTemporaryFile(suffix=".pem", delete=False) as cf:
-            cf.write(cert_pem); cert_path = cf.name
+            cf.write(cert_pem + (chain_pem or b"")); cert_path = cf.name
         with _tmp_nf.NamedTemporaryFile(suffix=".pem", delete=False) as kf:
             kf.write(key_pem); key_path = kf.name
         try:
@@ -475,11 +481,11 @@ async def financeiro_cobrancas_emitir_nf(
 
     n_dps = cobranca.id
     try:
-        key_pem, cert_pem, _chain = _nf_load_cert()
+        key_pem, cert_pem, chain_pem = _nf_load_cert()
         dps_xml  = _nf_build_dps(cobranca, contrato, n_dps)
         signed   = _nf_sign_dps(dps_xml, key_pem, cert_pem)
         print(f"[nfse] XML assinado: {signed.decode('utf-8', errors='replace')[:3000]}")
-        resultado = await _nf_enviar(signed, key_pem, cert_pem)
+        resultado = await _nf_enviar(signed, key_pem, cert_pem, chain_pem)
 
         from datetime import datetime as _dtl
         cobranca.nf_numero  = resultado.get("numero", "")
