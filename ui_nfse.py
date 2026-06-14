@@ -356,8 +356,9 @@ async def nfse_probe_codigo(request: _Req_nf, cod: str = "170200"):
         key_pem, cert_pem, chain_pem = _nf_load_cert()
         from lxml import etree as _etx
         ns = _NF_NS
+        _probe_chave = _nf_chave_acesso(999)
         root = _etx.Element(f"{{{ns}}}DPS", versao="1.00", nsmap={None: ns})
-        inf = _etx.SubElement(root, f"{{{ns}}}infDPS", Id="DPSprobe001")
+        inf = _etx.SubElement(root, f"{{{ns}}}infDPS", Id="DPS" + _probe_chave)
         def sub(p, t, v=None): e = _etx.SubElement(p, f"{{{ns}}}{t}"); e.text = v; return e
         sub(inf, "tpAmb", _NF_tpAmb)
         sub(inf, "dhEmi", "2026-06-14T12:00:00-03:00")
