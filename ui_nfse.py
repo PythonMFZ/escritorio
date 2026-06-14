@@ -176,7 +176,7 @@ def _nf_build_dps(cobranca, contrato, n_dps: int) -> bytes:
     _sub(regTrib, "regEspTrib",  "6")  # 6 = ME/EPP – Simples Nacional
 
     # ── tomador ───────────────────────────────────────────────────────────────
-    tom = _sub(inf, "tom")
+    tom = _sub(inf, "toma")
     if len(doc_toma) == 14:
         _sub(tom, "CNPJ", doc_toma)
     elif len(doc_toma) == 11:
@@ -372,7 +372,7 @@ async def nfse_probe_codigo(request: _Req_nf, cod: str = "170300", cnpj_toma: st
         sub(prest, "xNome", _NF_RAZAO[:150]); sub(prest, "email", _NF_EMAIL)
         rtrib = sub(prest, "regTrib")
         sub(rtrib, "opSimpNac", "1"); sub(rtrib, "regApTribSN", "3"); sub(rtrib, "regEspTrib", "6")
-        tom = sub(inf, "tom"); sub(tom, "CNPJ", cnpj_toma); sub(tom, "xNome", "TESTE")
+        tom = sub(inf, "toma"); sub(tom, "CNPJ", cnpj_toma); sub(tom, "xNome", "TESTE")
         serv = sub(inf, "serv")
         lp = sub(serv, "locPrest"); sub(lp, "cLocPrestacao", _NF_IBGE); sub(lp, "cLocServico", _NF_IBGE)
         cs = sub(serv, "cServ"); sub(cs, "cTribNac", cod); sub(cs, "xDescServ", "Planejamento e organizacao administrativa")
