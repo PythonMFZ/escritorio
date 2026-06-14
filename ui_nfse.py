@@ -326,6 +326,45 @@ class _E0014Error(Exception):
     """DPS duplicada: NFS-e já existe para esta série/número/município/CNPJ."""
 
 
+async def _nf_consultar(chave_dps: str, key_pem: bytes, cert_pem: bytes, chain_pem: bytes = b"") -> dict:
+    """Consulta NFS-e já emitida pela chave de acesso da DPS (GET /SefinNacional/nfse/{chave})."""
+    url = _NF_URLS[_NF_AMB].rstrip("/") + "/" + chave_dps
+    cert_bundle = cert_pem + (chain_pem or b"")
+    with _tmp_nf.NamedTemporaryFile(suffix=".pem", delete=False) as cf:
+        cf.write(cert_bundle); cert_path = cf.name
+    with _tmp_nf.NamedTemporaryFile(suffix=".pem", delete=False) as kf:
+        kf.write(key_pem); key_path = kf.name
+    try:
+        async with _httpx_nf.AsyncClient(cert=(cert_path, key_path), timeout=30, verify=True) as client:
+            resp = await client.get(url, headers={"Accept": "application/json"})
+        print(f"[nfse] consulta GET {url} → {resp.status_code} {resp.text[:300]!r}")
+        if resp.status_code != 200:
+            return {}
+        import json as _jc, gzip as _gc
+        data = resp.json()
+        nfse_b64 = data.get("nfseXmlGZipB64", "")
+        chave  = data.get("chaveAcesso", "") or data.get("chNFSe", "")
+        numero = data.get("numeroNFSe",  "") or data.get("nNFSe", "")
+        url_nf = data.get("linkNFSe", "") or data.get("urlNFSe", "")
+        if nfse_b64 and not (chave and numero):
+            try:
+                from lxml import etree as _etr
+                xb = _gc.decompress(_b64_nf.b64decode(nfse_b64))
+                t  = _etr.fromstring(xb)
+                ns = _NF_NS
+                def _g(tag):
+                    e = t.find(f".//{{{ns}}}{tag}") or t.find(f".//{tag}")
+                    return (e.text or "").strip() if e is not None else ""
+                chave  = chave  or _g("chNFSe")  or _g("chave")
+                numero = numero or _g("nNFSe")   or _g("numero")
+                url_nf = url_nf or _g("urlNFSe") or _g("linkNFSe")
+            except Exception as _ep:
+                print(f"[nfse] consulta: erro ao parsear XML: {_ep}")
+        return {"chave": chave, "numero": numero, "url": url_nf}
+    finally:
+        _os_nf.unlink(cert_path); _os_nf.unlink(key_path)
+
+
 async def _nf_enviar(xml_bytes: bytes, key_pem: bytes, cert_pem: bytes, chain_pem: bytes = b"") -> dict:
     """
     Envia o XML DPS assinado para a API SNNFSE via mTLS.
@@ -461,12 +500,21 @@ async def financeiro_cobrancas_emitir_nf(
         )
 
     except _E0014Error:
-        # NFS-e já emitida numa tentativa anterior — salvar chave da DPS e redirecionar com sucesso
+        # NFS-e já emitida numa tentativa anterior — consultar SNNFSE para obter dados reais
         chave_dps = _nf_chave_acesso(n_dps)
-        _salvar_nf("", chave_dps, "")
-        print(f"[nfse] cob {cob_id}: NFS-e já existe (E0014), chave DPS={chave_dps}")
+        print(f"[nfse] cob {cob_id}: NFS-e já existe (E0014), consultando chave DPS={chave_dps}")
+        try:
+            consulta = await _nf_consultar(chave_dps, key_pem, cert_pem, chain_pem)
+            chave_nf = consulta.get("chave") or chave_dps
+            numero   = consulta.get("numero") or ""
+            url_nf   = consulta.get("url") or ""
+        except Exception as _ec:
+            print(f"[nfse] consulta E0014 falhou: {_ec}")
+            chave_nf, numero, url_nf = chave_dps, "", ""
+        _salvar_nf(numero, chave_nf, url_nf)
+        nr = numero or chave_nf[:20] + "..."
         return _RR_nf(
-            f"/admin/financeiro/contratos/{cobranca.contrato_id}/cobrancas?ok=NF+ja+emitida+(chave:{chave_dps[:20]}...)",
+            f"/admin/financeiro/contratos/{cobranca.contrato_id}/cobrancas?ok=NF+{nr}+emitida+com+sucesso",
             status_code=302,
         )
 
