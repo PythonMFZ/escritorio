@@ -357,7 +357,6 @@ async def nfse_debug_params(request: _Req_nf):
     from fastapi.responses import JSONResponse as _JR
     try:
         key_pem, cert_pem, chain_pem = _nf_load_cert()
-        base = _NF_URLS[_NF_AMB].replace("/nfse", "")
         results = {}
         with _tmp_nf.NamedTemporaryFile(suffix=".pem", delete=False) as cf:
             cf.write(cert_pem); cert_path = cf.name
@@ -365,22 +364,29 @@ async def nfse_debug_params(request: _Req_nf):
             kf.write(key_pem); key_path = kf.name
         try:
             async with _httpx_nf.AsyncClient(cert=(cert_path, key_path), timeout=30, verify=True) as client:
-                for path in [
-                    f"/parametros_municipais/{_NF_IBGE}/convenio",
-                    f"/parametros_municipais/{_NF_IBGE}/170300",
-                    f"/parametros_municipais/{_NF_IBGE}/170100",
-                ]:
+                # Testa múltiplos base URLs e caminhos possíveis
+                candidates = [
+                    "https://sefin.nfse.gov.br/SefinNacional/parametros_municipais/4202909/convenio",
+                    "https://sefin.nfse.gov.br/SefinNacional/contribuinte/parametros_municipais/4202909/convenio",
+                    "https://adn.nfse.gov.br/contribuintes/parametros_municipais/4202909/convenio",
+                    "https://adn.nfse.gov.br/parametros_municipais/4202909/convenio",
+                    "https://contribuinte.nfse.gov.br/parametros_municipais/4202909/convenio",
+                    # Testa códigos diferentes de serviço
+                    "https://sefin.nfse.gov.br/SefinNacional/parametros_municipais/4202909/170300",
+                    "https://adn.nfse.gov.br/contribuintes/parametros_municipais/4202909/170300",
+                ]
+                for url in candidates:
                     try:
-                        r = await client.get(base + path)
-                        results[path] = {"status": r.status_code, "body": r.text[:800]}
+                        r = await client.get(url)
+                        results[url] = {"status": r.status_code, "body": r.text[:300]}
                     except Exception as e:
-                        results[path] = {"error": str(e)}
+                        results[url] = {"error": str(e)[:200]}
         finally:
             _os_nf.unlink(cert_path); _os_nf.unlink(key_path)
-        return _JR(content={"base": base, "results": results})
+        return _JR(content=results)
     except Exception as e:
         import traceback
-        return _JR(content={"error": str(e), "trace": traceback.format_exc()}, status_code=500)
+        return _JR(content={"error": str(e), "trace": traceback.format_exc()[-500:]}, status_code=500)
 
 print("[nfse] registrando rotas...")  # DEBUG
 
