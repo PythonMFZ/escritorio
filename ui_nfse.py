@@ -222,25 +222,69 @@ def _nf_build_dps(cobranca, contrato, n_dps: int) -> bytes:
 
 def _nf_sign_dps(dps_bytes: bytes, key_pem: bytes, cert_pem: bytes) -> bytes:
     """
-    Assina digitalmente o XML DPS usando enveloped signature (XMLDSig).
-    Retorna o XML assinado como bytes.
+    Assina o DPS manualmente (XMLDSig enveloped) gerando <Signature> com
+    namespace padrão (sem prefixo), conforme exige o SNNFSE (E1228).
+
+    Algoritmos: RSA-SHA256 / digest SHA-256 / C14N inclusivo.
     """
-    from lxml import etree as _etloc2
-    from signxml import XMLSigner, methods
-    tree   = _etloc2.fromstring(dps_bytes)
-    signer = XMLSigner(
-        method=methods.enveloped,
-        digest_algorithm="sha256",
-        signature_algorithm="rsa-sha256",
-    )
-    inf_id = tree.find(f"{{{_NF_NS}}}infDPS").get("Id")
-    signed = signer.sign(
-        tree,
-        key=key_pem,
-        cert=cert_pem,
-        reference_uri="#" + inf_id,
-    )
-    return _etloc2.tostring(signed, xml_declaration=True, encoding="UTF-8")
+    import hashlib as _hl
+    import base64  as _b64s
+    from lxml import etree as _et2
+    from cryptography.hazmat.primitives import hashes as _hsh, serialization as _ser
+    from cryptography.hazmat.primitives.asymmetric import padding as _pad
+    from cryptography.hazmat.primitives.serialization import load_pem_private_key as _lpk
+    from cryptography.x509 import load_pem_x509_certificate as _lx509
+
+    DSIG    = "http://www.w3.org/2000/09/xmldsig#"
+    C14N    = "http://www.w3.org/TR/2001/REC-xml-c14n-20010315"
+    ENVL    = "http://www.w3.org/2000/09/xmldsig#enveloped-signature"
+    SHA256D = "http://www.w3.org/2001/04/xmlenc#sha256"
+    RSASHA  = "http://www.w3.org/2001/04/xmldsig-more#rsa-sha256"
+
+    tree   = _et2.fromstring(dps_bytes)
+    inf    = tree.find(f"{{{_NF_NS}}}infDPS")
+    ref_id = inf.get("Id")
+
+    # 1. Digest do elemento referenciado (infDPS) via C14N inclusivo
+    inf_c14n = _et2.tostring(inf, method="c14n", exclusive=False, with_comments=False)
+    digest   = _b64s.b64encode(_hl.sha256(inf_c14n).digest()).decode()
+
+    # 2. Montar SignedInfo com namespace padrão (sem prefixo)
+    _nsm = {None: DSIG}
+    si   = _et2.Element(f"{{{DSIG}}}SignedInfo", nsmap=_nsm)
+    _et2.SubElement(si, f"{{{DSIG}}}CanonicalizationMethod", Algorithm=C14N)
+    _et2.SubElement(si, f"{{{DSIG}}}SignatureMethod",       Algorithm=RSASHA)
+    ref  = _et2.SubElement(si, f"{{{DSIG}}}Reference",     URI=f"#{ref_id}")
+    tfs  = _et2.SubElement(ref, f"{{{DSIG}}}Transforms")
+    _et2.SubElement(tfs, f"{{{DSIG}}}Transform", Algorithm=ENVL)
+    _et2.SubElement(tfs, f"{{{DSIG}}}Transform", Algorithm=C14N)
+    _et2.SubElement(ref, f"{{{DSIG}}}DigestMethod", Algorithm=SHA256D)
+    dv   = _et2.SubElement(ref, f"{{{DSIG}}}DigestValue")
+    dv.text = digest
+
+    # 3. Assinar SignedInfo canonicalizado
+    si_c14n  = _et2.tostring(si, method="c14n", exclusive=False, with_comments=False)
+    priv_key = _lpk(key_pem, password=None)
+    sig_raw  = priv_key.sign(si_c14n, _pad.PKCS1v15(), _hsh.SHA256())
+    sig_b64  = _b64s.b64encode(sig_raw).decode()
+
+    # 4. Certificado em DER/base64
+    cert_obj   = _lx509(cert_pem)
+    cert_der64 = _b64s.b64encode(cert_obj.public_bytes(_ser.Encoding.DER)).decode()
+
+    # 5. Montar elemento <Signature> completo (namespace padrão, sem prefixo)
+    sig_el = _et2.Element(f"{{{DSIG}}}Signature", nsmap=_nsm)
+    sig_el.append(si)
+    sv = _et2.SubElement(sig_el, f"{{{DSIG}}}SignatureValue")
+    sv.text = sig_b64
+    ki   = _et2.SubElement(sig_el, f"{{{DSIG}}}KeyInfo")
+    x5d  = _et2.SubElement(ki,    f"{{{DSIG}}}X509Data")
+    x5c  = _et2.SubElement(x5d,   f"{{{DSIG}}}X509Certificate")
+    x5c.text = cert_der64
+
+    # 6. Adicionar Signature ao DPS e serializar
+    tree.append(sig_el)
+    return _et2.tostring(tree, xml_declaration=True, encoding="UTF-8")
 
 
 # ── Envio via mTLS ────────────────────────────────────────────────────────────
