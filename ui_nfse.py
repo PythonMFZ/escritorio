@@ -372,7 +372,7 @@ async def nfse_probe_codigo(request: _Req_nf, cod: str = "170200"):
         sub(prest, "xNome", _NF_RAZAO[:150]); sub(prest, "email", _NF_EMAIL)
         rtrib = sub(prest, "regTrib")
         sub(rtrib, "opSimpNac", "1"); sub(rtrib, "regApTribSN", "3"); sub(rtrib, "regEspTrib", "6")
-        toma = sub(inf, "toma"); sub(toma, "CNPJ", "00000000000000"); sub(toma, "xNome", "TESTE")
+        toma = sub(inf, "toma"); sub(toma, "CNPJ", _NF_CNPJ); sub(toma, "xNome", "TESTE")
         serv = sub(inf, "serv")
         lp = sub(serv, "locPrest"); sub(lp, "cLocPrestacao", _NF_IBGE)
         cs = sub(serv, "cServ"); sub(cs, "cTribNac", cod); sub(cs, "xDescServ", "Teste")
