@@ -354,29 +354,33 @@ async def _nf_enviar(xml_bytes: bytes, key_pem: bytes, cert_pem: bytes) -> dict:
 @app.get("/admin/nfse/debug-params")
 async def nfse_debug_params(request: _Req_nf):
     """Consulta parametros_municipais do SNNFSE para diagnóstico."""
-    import json as _json_dbg
-    key_pem, cert_pem = _nf_load_cert()
-    base = _NF_URLS[_NF_AMB].replace("/nfse", "")
-    results = {}
-    with _tmp_nf.NamedTemporaryFile(suffix=".pem", delete=False) as cf:
-        cf.write(cert_pem); cert_path = cf.name
-    with _tmp_nf.NamedTemporaryFile(suffix=".pem", delete=False) as kf:
-        key_pem_b = key_pem if isinstance(key_pem, bytes) else key_pem.encode()
-        kf.write(key_pem_b); key_path = kf.name
-    try:
-        async with _httpx_nf.AsyncClient(cert=(cert_path, key_path), timeout=30, verify=True) as client:
-            for path in [
-                f"/parametros_municipais/{_NF_IBGE}/convenio",
-                f"/parametros_municipais/{_NF_IBGE}/{_NF_CTRIB_NAC}",
-                f"/parametros_municipais/{_NF_IBGE}/170100",
-                f"/parametros_municipais/{_NF_IBGE}/170300",
-            ]:
-                r = await client.get(base + path)
-                results[path] = {"status": r.status_code, "body": r.text[:500]}
-    finally:
-        _os_nf.unlink(cert_path); _os_nf.unlink(key_path)
     from fastapi.responses import JSONResponse as _JR
-    return _JR(content=results)
+    try:
+        key_pem, cert_pem, chain_pem = _nf_load_cert()
+        base = _NF_URLS[_NF_AMB].replace("/nfse", "")
+        results = {}
+        with _tmp_nf.NamedTemporaryFile(suffix=".pem", delete=False) as cf:
+            cf.write(cert_pem); cert_path = cf.name
+        with _tmp_nf.NamedTemporaryFile(suffix=".pem", delete=False) as kf:
+            kf.write(key_pem); key_path = kf.name
+        try:
+            async with _httpx_nf.AsyncClient(cert=(cert_path, key_path), timeout=30, verify=True) as client:
+                for path in [
+                    f"/parametros_municipais/{_NF_IBGE}/convenio",
+                    f"/parametros_municipais/{_NF_IBGE}/170300",
+                    f"/parametros_municipais/{_NF_IBGE}/170100",
+                ]:
+                    try:
+                        r = await client.get(base + path)
+                        results[path] = {"status": r.status_code, "body": r.text[:800]}
+                    except Exception as e:
+                        results[path] = {"error": str(e)}
+        finally:
+            _os_nf.unlink(cert_path); _os_nf.unlink(key_path)
+        return _JR(content={"base": base, "results": results})
+    except Exception as e:
+        import traceback
+        return _JR(content={"error": str(e), "trace": traceback.format_exc()}, status_code=500)
 
 print("[nfse] registrando rotas...")  # DEBUG
 
