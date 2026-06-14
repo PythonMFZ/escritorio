@@ -167,7 +167,7 @@ def _nf_build_dps(cobranca, contrato, n_dps: int) -> bytes:
     # ── prestador ─────────────────────────────────────────────────────────────
     prest = _sub(inf, "prest")
     _sub(prest, "CNPJ",    _NF_CNPJ)
-    _sub(prest, "IM",      _NF_IM)
+    # IM omitido: Brusque-SC não possui dados complementares no CNC NFS-e (E0120)
     _sub(prest, "xNome",   _NF_RAZAO[:150])
     _sub(prest, "email",   _NF_EMAIL)
     regTrib = _sub(prest, "regTrib")
