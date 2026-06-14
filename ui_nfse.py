@@ -214,7 +214,6 @@ def _nf_build_dps(cobranca, contrato, n_dps: int) -> bytes:
     _sub(totTrib, "pTotTribSN", "6.00")
 
     _dps_bytes = _etloc.tostring(root, xml_declaration=True, encoding="UTF-8", pretty_print=False)
-    print(f"[nfse] DPS XML: {_dps_bytes.decode('utf-8', errors='replace')[:2000]}")
     return _dps_bytes
 
 
@@ -323,6 +322,10 @@ def _nf_sign_dps(dps_bytes: bytes, key_pem: bytes, cert_pem: bytes) -> bytes:
 
 # ── Envio via mTLS ────────────────────────────────────────────────────────────
 
+class _E0014Error(Exception):
+    """DPS duplicada: NFS-e já existe para esta série/número/município/CNPJ."""
+
+
 async def _nf_enviar(xml_bytes: bytes, key_pem: bytes, cert_pem: bytes, chain_pem: bytes = b"") -> dict:
     """
     Envia o XML DPS assinado para a API SNNFSE via mTLS.
@@ -360,13 +363,19 @@ async def _nf_enviar(xml_bytes: bytes, key_pem: bytes, cert_pem: bytes, chain_pe
                 headers={"Content-Type": "application/json; charset=UTF-8"},
             )
 
-        print(f"[nfse] resposta: HTTP {resp.status_code} | headers: {dict(resp.headers)} | body: {resp.text[:500]!r}")
         if resp.status_code not in (200, 201):
-            raise ValueError(f"SNNFSE {resp.status_code}: {resp.text[:500]}")
+            # E0014 = DPS duplicada: NFS-e já foi emitida numa tentativa anterior.
+            # Tratar como sucesso sem dados (serão preenchidos com chave da DPS).
+            try:
+                _errs = resp.json().get("erros", [])
+            except Exception:
+                _errs = []
+            if any(e.get("Codigo") == "E0014" for e in _errs):
+                raise _E0014Error()
+            raise ValueError(f"SNNFSE {resp.status_code}: {resp.text[:400]}")
 
         # Resposta JSON contém nfseXmlGZipB64 com o XML da NFS-e
         resp_data = resp.json()
-        print(f"[nfse] resposta JSON keys: {list(resp_data.keys()) if isinstance(resp_data, dict) else type(resp_data)}")
 
         nfse_b64 = resp_data.get("nfseXmlGZipB64", "")
         chave = resp_data.get("chaveAcesso", "")
@@ -403,61 +412,6 @@ async def _nf_enviar(xml_bytes: bytes, key_pem: bytes, cert_pem: bytes, chain_pe
 # ── Rotas ─────────────────────────────────────────────────────────────────────
 
 
-@app.get("/admin/nfse/probe-codigo")
-async def nfse_probe_codigo(request: _Req_nf, cod: str = "170300", cnpj_toma: str = "27012470000121"):
-    """Testa TSCodTribNac contra o SNNFSE. ?cod=XXXXXX&cnpj_toma=CNPJ14digitos"""
-    from fastapi.responses import JSONResponse as _JR
-    import gzip as _gz, json as _jj, base64 as _b64p
-    try:
-        key_pem, cert_pem, chain_pem = _nf_load_cert()
-        from lxml import etree as _etx
-        ns = _NF_NS
-        _probe_chave = _nf_chave_acesso(998)
-        root = _etx.Element(f"{{{ns}}}DPS", versao="1.00", nsmap={None: ns})
-        inf = _etx.SubElement(root, f"{{{ns}}}infDPS", Id="DPS" + _probe_chave)
-        def sub(p, t, v=None): e = _etx.SubElement(p, f"{{{ns}}}{t}"); e.text = v; return e
-        sub(inf, "tpAmb", _NF_tpAmb)
-        sub(inf, "dhEmi", "2026-06-14T12:00:00-03:00")
-        sub(inf, "verAplic", "ERP_1.0")
-        sub(inf, "serie", "1"); sub(inf, "nDPS", "998")
-        sub(inf, "dCompet", "2026-06-01"); sub(inf, "tpEmit", "1"); sub(inf, "cLocEmi", _NF_IBGE)
-        prest = sub(inf, "prest"); sub(prest, "CNPJ", _NF_CNPJ); sub(prest, "IM", _NF_IM)
-        sub(prest, "xNome", _NF_RAZAO[:150]); sub(prest, "email", _NF_EMAIL)
-        rtrib = sub(prest, "regTrib")
-        sub(rtrib, "opSimpNac", "1"); sub(rtrib, "regApTribSN", "3"); sub(rtrib, "regEspTrib", "6")
-        tom = sub(inf, "toma"); sub(tom, "CNPJ", cnpj_toma); sub(tom, "xNome", "TESTE")
-        _e = sub(tom, "end"); _en = sub(_e, "endNac")
-        sub(_en, "cMun", _NF_IBGE); sub(_en, "CEP", "88350000")
-        sub(_e, "xLgr", "NAO INFORMADO"); sub(_e, "nro", "S/N"); sub(_e, "xBairro", "NAO INFORMADO")
-        serv = sub(inf, "serv")
-        lp = sub(serv, "locPrest"); sub(lp, "cLocPrestacao", _NF_IBGE)
-        cs = sub(serv, "cServ"); sub(cs, "cTribNac", cod); sub(cs, "xDescServ", "Planejamento e organizacao administrativa")
-        vals = sub(inf, "valores")
-        vsp = sub(vals, "vServPrest"); sub(vsp, "vReceb", "100.00"); sub(vsp, "vServ", "100.00")
-        trib = sub(vals, "trib")
-        tm = sub(trib, "tribMun"); sub(tm, "tribISSQN", "1"); sub(tm, "tpRetISSQN", "1")
-        tot = sub(trib, "totTrib"); sub(tot, "pTotTribSN", "6.00")
-        dps_bytes = _etx.tostring(root, xml_declaration=True, encoding="UTF-8")
-        signed = _nf_sign_dps(dps_bytes, key_pem, cert_pem)
-        with _tmp_nf.NamedTemporaryFile(suffix=".pem", delete=False) as cf:
-            cf.write(cert_pem + (chain_pem or b"")); cert_path = cf.name
-        with _tmp_nf.NamedTemporaryFile(suffix=".pem", delete=False) as kf:
-            kf.write(key_pem); key_path = kf.name
-        try:
-            body = _jj.dumps({"dpsXmlGZipB64": _b64p.b64encode(_gz.compress(signed)).decode()})
-            async with _httpx_nf.AsyncClient(cert=(cert_path, key_path), timeout=30, verify=True) as client:
-                r = await client.post(_NF_URLS[_NF_AMB], content=body.encode(), headers={"Content-Type": "application/json; charset=UTF-8"})
-            try: rj = r.json()
-            except: rj = r.text[:500]
-            return _JR(content={"cod": cod, "cnpj_toma": cnpj_toma, "status": r.status_code, "body": rj})
-        finally:
-            _os_nf.unlink(cert_path); _os_nf.unlink(key_path)
-    except Exception as e:
-        import traceback
-        return _JR(content={"cod": cod, "error": str(e), "trace": traceback.format_exc()[-800:]}, status_code=500)
-
-
-
 @app.get("/admin/financeiro/cobrancas/{cob_id}/emitir-nf")
 async def financeiro_cobrancas_emitir_nf(
     cob_id: int,
@@ -487,7 +441,6 @@ async def financeiro_cobrancas_emitir_nf(
         key_pem, cert_pem, chain_pem = _nf_load_cert()
         dps_xml  = _nf_build_dps(cobranca, contrato, n_dps)
         signed   = _nf_sign_dps(dps_xml, key_pem, cert_pem)
-        print(f"[nfse] XML assinado: {signed.decode('utf-8', errors='replace')[:3000]}")
         resultado = await _nf_enviar(signed, key_pem, cert_pem, chain_pem)
 
         from datetime import datetime as _dtl
@@ -501,6 +454,21 @@ async def financeiro_cobrancas_emitir_nf(
         nr = cobranca.nf_numero or cobranca.nf_chave or "emitida"
         return _RR_nf(
             f"/admin/financeiro/contratos/{cobranca.contrato_id}/cobrancas?ok=NF+{nr}+emitida+com+sucesso",
+            status_code=302,
+        )
+
+    except _E0014Error:
+        # NFS-e já emitida numa tentativa anterior — salvar chave da DPS e redirecionar com sucesso
+        from datetime import datetime as _dtl
+        chave_dps = _nf_chave_acesso(n_dps)
+        if not getattr(cobranca, "nf_chave", ""):
+            cobranca.nf_chave   = chave_dps
+            cobranca.updated_at = _dtl.utcnow()
+            session.add(cobranca)
+            session.commit()
+        print(f"[nfse] cob {cob_id}: NFS-e já existe (E0014), chave DPS={chave_dps}")
+        return _RR_nf(
+            f"/admin/financeiro/contratos/{cobranca.contrato_id}/cobrancas?ok=NF+ja+emitida+anteriormente+(chave:{chave_dps[:20]}...)",
             status_code=302,
         )
 
