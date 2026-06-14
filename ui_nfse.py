@@ -256,35 +256,52 @@ def _nf_sign_dps(dps_bytes: bytes, key_pem: bytes, cert_pem: bytes) -> bytes:
     inf_c14n = _et2.tostring(inf, method="c14n", exclusive=False, with_comments=False)
     digest = _b64s.b64encode(_hl.sha1(inf_c14n).digest()).decode()
 
-    # 2. Montar Signature/SignedInfo sem prefixo. O atributo Id em Signature
-    #    é exigido pelo leiaute adotado pela NFS-e nacional.
-    sig_el = _et2.Element(f"{{{DSIG}}}Signature", Id=f"SIG{ref_id}", nsmap={None: DSIG})
+    # 2. Montar Signature/SignedInfo sem prefixo via string XML para garantir
+    #    namespace uniforme em todos os elementos e evitar xmlns="" no C14N.
+    sig_xml = (
+        f'<Signature xmlns="{DSIG}" Id="SIG{ref_id}">'
+        f'<SignedInfo>'
+        f'<CanonicalizationMethod Algorithm="{C14N}"></CanonicalizationMethod>'
+        f'<SignatureMethod Algorithm="{RSASHA}"></SignatureMethod>'
+        f'<Reference URI="#{ref_id}">'
+        f'<Transforms>'
+        f'<Transform Algorithm="{ENVL}"></Transform>'
+        f'<Transform Algorithm="{C14N}"></Transform>'
+        f'</Transforms>'
+        f'<DigestMethod Algorithm="{SHA1D}"></DigestMethod>'
+        f'<DigestValue>{digest}</DigestValue>'
+        f'</Reference>'
+        f'</SignedInfo>'
+        f'<SignatureValue></SignatureValue>'
+        f'</Signature>'
+    )
+    sig_el = _et2.fromstring(sig_xml.encode())
+    si = sig_el.find(f"{{{DSIG}}}SignedInfo")
 
-    si = _et2.SubElement(sig_el, f"{{{DSIG}}}SignedInfo")
-    _et2.SubElement(si, f"{{{DSIG}}}CanonicalizationMethod", Algorithm=C14N)
-    _et2.SubElement(si, f"{{{DSIG}}}SignatureMethod", Algorithm=RSASHA)
-    ref = _et2.SubElement(si, f"{{{DSIG}}}Reference", URI=f"#{ref_id}")
-    tfs = _et2.SubElement(ref, f"{{{DSIG}}}Transforms")
-    _et2.SubElement(tfs, f"{{{DSIG}}}Transform", Algorithm=ENVL)
-    _et2.SubElement(tfs, f"{{{DSIG}}}Transform", Algorithm=C14N)
-    _et2.SubElement(ref, f"{{{DSIG}}}DigestMethod", Algorithm=SHA1D)
-    dv = _et2.SubElement(ref, f"{{{DSIG}}}DigestValue")
-    dv.text = digest
-
-    # 3. Assinar o SignedInfo no contexto de Signature.
-    si_c14n = _et2.tostring(si, method="c14n", exclusive=False, with_comments=False)
+    # 3. C14N de SignedInfo: lxml tem bug de subtree C14N (xmlns="" em netos).
+    #    Solução: C14N do sig_el completo, extrair SignedInfo e injetar xmlns.
+    _sig_full_c14n = _et2.tostring(sig_el, method="c14n", exclusive=False, with_comments=False)
+    _si_start = _sig_full_c14n.index(b"<SignedInfo>")
+    _si_end   = _sig_full_c14n.index(b"</SignedInfo>") + len(b"</SignedInfo>")
+    si_c14n = _sig_full_c14n[_si_start:_si_end].replace(
+        b"<SignedInfo>", f'<SignedInfo xmlns="{DSIG}">'.encode(), 1
+    )
     priv_key = _lpk(key_pem, password=None)
     sig_raw = priv_key.sign(si_c14n, _pad.PKCS1v15(), _hsh.SHA1())
     sig_b64 = _b64s.b64encode(sig_raw).decode()
 
     # 4. Completar Signature com o certificado final (EndCertOnly).
-    sv = _et2.SubElement(sig_el, f"{{{DSIG}}}SignatureValue")
+    sv = sig_el.find(f"{{{DSIG}}}SignatureValue")
     sv.text = sig_b64
-    ki = _et2.SubElement(sig_el, f"{{{DSIG}}}KeyInfo")
-    x5d = _et2.SubElement(ki, f"{{{DSIG}}}X509Data")
-    x5c = _et2.SubElement(x5d, f"{{{DSIG}}}X509Certificate")
+    ki_xml = (
+        f'<KeyInfo xmlns="{DSIG}">'
+        f'<X509Data><X509Certificate>__CERT__</X509Certificate></X509Data>'
+        f'</KeyInfo>'
+    )
     cert_obj = _lx509(cert_pem)
-    x5c.text = _b64s.b64encode(cert_obj.public_bytes(_ser.Encoding.DER)).decode()
+    cert_b64 = _b64s.b64encode(cert_obj.public_bytes(_ser.Encoding.DER)).decode()
+    ki_el = _et2.fromstring(ki_xml.replace("__CERT__", cert_b64).encode())
+    sig_el.append(ki_el)
 
     # 5. Adicionar Signature ao DPS e serializar sem mexer no documento depois.
     tree.append(sig_el)
