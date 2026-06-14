@@ -173,7 +173,7 @@ def _nf_build_dps(cobranca, contrato, n_dps: int) -> bytes:
     regTrib = _sub(prest, "regTrib")
     _sub(regTrib, "opSimpNac",   "1")  # 1 = optante Simples Nacional
     _sub(regTrib, "regApTribSN", "3")  # 3 = ME/EPP tributada pelo Simples Nacional
-    _sub(regTrib, "regEspTrib",  "6")  # 6 = ME/EPP – Simples Nacional
+    _sub(regTrib, "regEspTrib",  "0")  # 0 = Nenhum regime especial de ISSQN
 
     # ── tomador ───────────────────────────────────────────────────────────────
     tom = _sub(inf, "toma")
