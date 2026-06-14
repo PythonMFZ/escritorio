@@ -59,6 +59,8 @@ class CobrancaMensal(_SM_ct, table=True):
     forma_pagamento:  str          = _F_ct(default="")
     observacao:       str          = _F_ct(default="")
     nf_numero:        str          = _F_ct(default="")
+    nf_chave:         str          = _F_ct(default="")
+    nf_url:           str          = _F_ct(default="")
     boleto_url:       str          = _F_ct(default="")
     boleto_codigo:    str          = _F_ct(default="")   # linha digitável
     mp_payment_id:    str          = _F_ct(default="")   # ID do pagamento no MP
