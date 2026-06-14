@@ -188,11 +188,12 @@ def _nf_build_dps(cobranca, contrato, n_dps: int) -> bytes:
 
     # ── serviço ───────────────────────────────────────────────────────────────
     desc = (contrato.servicos or contrato.nome_contrato or "Serviços administrativos").strip()
-    serv = _sub(inf, "serv")
-    _sub(serv, "cTribNac",    _NF_CTRIB_NAC)
-    _sub(serv, "cLocServico", _NF_IBGE)
-    _sub(serv, "xDescServ",   desc[:2000])
-    _sub(serv, "cRegTrib",    "1")   # 1 = Simples Nacional
+    serv     = _sub(inf, "serv")
+    locPrest = _sub(serv, "locPrest")
+    _sub(locPrest, "cLocPrestacao", _NF_IBGE)
+    cServ = _sub(serv, "cServ")
+    _sub(cServ, "cTribNac",  _NF_CTRIB_NAC)
+    _sub(cServ, "xDescServ", desc[:2000])
 
     # ── valores ───────────────────────────────────────────────────────────────
     vals = _sub(inf, "valores")
@@ -373,9 +374,8 @@ async def nfse_probe_codigo(request: _Req_nf, cod: str = "170300", cnpj_toma: st
         sub(rtrib, "opSimpNac", "1"); sub(rtrib, "regApTribSN", "3"); sub(rtrib, "regEspTrib", "6")
         toma = sub(inf, "toma"); sub(toma, "CNPJ", cnpj_toma); sub(toma, "xNome", "TESTE")
         serv = sub(inf, "serv")
-        sub(serv, "cTribNac", cod); sub(serv, "cLocServico", _NF_IBGE)
-        sub(serv, "xDescServ", "Planejamento e organização administrativa")
-        sub(serv, "cRegTrib", "1")
+        lp = sub(serv, "locPrest"); sub(lp, "cLocPrestacao", _NF_IBGE)
+        cs = sub(serv, "cServ"); sub(cs, "cTribNac", cod); sub(cs, "xDescServ", "Planejamento e organização administrativa")
         vals = sub(inf, "valores")
         sub(vals, "vServPrest", "100.00"); sub(vals, "vDescIncond", "0.00"); sub(vals, "vDescCond", "0.00")
         trib = sub(vals, "trib")
