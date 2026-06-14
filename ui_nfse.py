@@ -21,7 +21,7 @@ _NF_IBGE          = "4202909"         # Código IBGE Brusque-SC
 _NF_SERIE         = "1"
 _NF_RAZAO         = "MZ SERVICOS ADMINISTRATIVOS LTDA"
 _NF_EMAIL         = "MERIZIOALINE@GMAIL.COM"
-_NF_CTRIB_NAC     = "170101"           # TSCodTribNac — testando item 17.01 (assessoria/consultoria)
+_NF_CTRIB_NAC     = "170303"           # TSCodTribNac — LC 116 item 17.03 sub-subitem 03
 _NF_NBS           = "118064000"        # NBS 9 dígitos sem pontos (da NF emitida)
 _NF_CNAE          = "8211300"
 _NF_PAIS_BR       = "1058"
@@ -184,6 +184,13 @@ def _nf_build_dps(cobranca, contrato, n_dps: int) -> bytes:
     else:
         _sub(tom, "CNPJ", "00000000000000")
     _sub(tom, "xNome", nome_toma[:150])
+    ender = _sub(tom, "enderNac")
+    _sub(ender, "xLgr",    "NAO INFORMADO")
+    _sub(ender, "nro",     "S/N")
+    _sub(ender, "xBairro", "NAO INFORMADO")
+    _sub(ender, "cMun",    _NF_IBGE)   # AR7 também em Brusque-SC
+    _sub(ender, "UF",      "SC")
+    _sub(ender, "CEP",     "88350000")
 
     # ── serviço ───────────────────────────────────────────────────────────────
     desc = (contrato.servicos or contrato.nome_contrato or "Serviços administrativos").strip()
@@ -368,6 +375,8 @@ async def nfse_probe_codigo(request: _Req_nf, cod: str = "170300", cnpj_toma: st
         rtrib = sub(prest, "regTrib")
         sub(rtrib, "opSimpNac", "1"); sub(rtrib, "regApTribSN", "3"); sub(rtrib, "regEspTrib", "6")
         tom = sub(inf, "toma"); sub(tom, "CNPJ", cnpj_toma); sub(tom, "xNome", "TESTE")
+        en = sub(tom, "enderNac"); sub(en, "xLgr", "NAO INFORMADO"); sub(en, "nro", "S/N")
+        sub(en, "xBairro", "NAO INFORMADO"); sub(en, "cMun", _NF_IBGE); sub(en, "UF", "SC"); sub(en, "CEP", "88350000")
         serv = sub(inf, "serv")
         lp = sub(serv, "locPrest"); sub(lp, "cLocPrestacao", _NF_IBGE)
         cs = sub(serv, "cServ"); sub(cs, "cTribNac", cod); sub(cs, "xDescServ", "Planejamento e organizacao administrativa")
