@@ -225,7 +225,7 @@ def _nf_sign_dps(dps_bytes: bytes, key_pem: bytes, cert_pem: bytes) -> bytes:
     Assina o DPS manualmente (XMLDSig enveloped) gerando <Signature> com
     namespace padrão (sem prefixo), conforme exige o SNNFSE (E1228).
 
-    Algoritmos: RSA-SHA256 / digest SHA-256 / C14N inclusivo.
+    Algoritmos: RSA-SHA1 / digest SHA-1 / C14N inclusivo (padrão manual DPS).
     """
     import hashlib as _hl
     import base64  as _b64s
@@ -235,40 +235,40 @@ def _nf_sign_dps(dps_bytes: bytes, key_pem: bytes, cert_pem: bytes) -> bytes:
     from cryptography.hazmat.primitives.serialization import load_pem_private_key as _lpk
     from cryptography.x509 import load_pem_x509_certificate as _lx509
 
-    DSIG    = "http://www.w3.org/2000/09/xmldsig#"
-    C14N    = "http://www.w3.org/TR/2001/REC-xml-c14n-20010315"
-    ENVL    = "http://www.w3.org/2000/09/xmldsig#enveloped-signature"
-    SHA256D = "http://www.w3.org/2001/04/xmlenc#sha256"
-    RSASHA  = "http://www.w3.org/2001/04/xmldsig-more#rsa-sha256"
+    DSIG   = "http://www.w3.org/2000/09/xmldsig#"
+    C14N   = "http://www.w3.org/TR/2001/REC-xml-c14n-20010315"
+    ENVL   = "http://www.w3.org/2000/09/xmldsig#enveloped-signature"
+    SHA1D  = "http://www.w3.org/2000/09/xmldsig#sha1"
+    RSASHA = "http://www.w3.org/2000/09/xmldsig#rsa-sha1"
 
     tree   = _et2.fromstring(dps_bytes)
     inf    = tree.find(f"{{{_NF_NS}}}infDPS")
     ref_id = inf.get("Id")
 
-    # 1. Digest do elemento referenciado (infDPS) via C14N inclusivo
+    # 1. Digest SHA-1 do elemento referenciado (infDPS) via C14N inclusivo
     inf_c14n = _et2.tostring(inf, method="c14n", exclusive=False, with_comments=False)
-    digest   = _b64s.b64encode(_hl.sha256(inf_c14n).digest()).decode()
+    digest   = _b64s.b64encode(_hl.sha1(inf_c14n).digest()).decode()
 
     # 2. Montar SignedInfo com namespace padrão (sem prefixo)
     _nsm = {None: DSIG}
     si   = _et2.Element(f"{{{DSIG}}}SignedInfo", nsmap=_nsm)
     _et2.SubElement(si, f"{{{DSIG}}}CanonicalizationMethod", Algorithm=C14N)
-    _et2.SubElement(si, f"{{{DSIG}}}SignatureMethod",       Algorithm=RSASHA)
-    ref  = _et2.SubElement(si, f"{{{DSIG}}}Reference",     URI=f"#{ref_id}")
+    _et2.SubElement(si, f"{{{DSIG}}}SignatureMethod",        Algorithm=RSASHA)
+    ref  = _et2.SubElement(si, f"{{{DSIG}}}Reference",      URI=f"#{ref_id}")
     tfs  = _et2.SubElement(ref, f"{{{DSIG}}}Transforms")
     _et2.SubElement(tfs, f"{{{DSIG}}}Transform", Algorithm=ENVL)
     _et2.SubElement(tfs, f"{{{DSIG}}}Transform", Algorithm=C14N)
-    _et2.SubElement(ref, f"{{{DSIG}}}DigestMethod", Algorithm=SHA256D)
+    _et2.SubElement(ref, f"{{{DSIG}}}DigestMethod", Algorithm=SHA1D)
     dv   = _et2.SubElement(ref, f"{{{DSIG}}}DigestValue")
     dv.text = digest
 
-    # 3. Assinar SignedInfo canonicalizado
+    # 3. Assinar SignedInfo canonicalizado com RSA-SHA1
     si_c14n  = _et2.tostring(si, method="c14n", exclusive=False, with_comments=False)
     priv_key = _lpk(key_pem, password=None)
-    sig_raw  = priv_key.sign(si_c14n, _pad.PKCS1v15(), _hsh.SHA256())
+    sig_raw  = priv_key.sign(si_c14n, _pad.PKCS1v15(), _hsh.SHA1())
     sig_b64  = _b64s.b64encode(sig_raw).decode()
 
-    # 4. Certificado em DER/base64
+    # 4. Certificado em DER/base64 (EndCertOnly — apenas cert do usuário final)
     cert_obj   = _lx509(cert_pem)
     cert_der64 = _b64s.b64encode(cert_obj.public_bytes(_ser.Encoding.DER)).decode()
 
@@ -452,6 +452,7 @@ async def financeiro_cobrancas_emitir_nf(
         key_pem, cert_pem, _chain = _nf_load_cert()
         dps_xml  = _nf_build_dps(cobranca, contrato, n_dps)
         signed   = _nf_sign_dps(dps_xml, key_pem, cert_pem)
+        print(f"[nfse] XML assinado: {signed.decode('utf-8', errors='replace')[:3000]}")
         resultado = await _nf_enviar(signed, key_pem, cert_pem)
 
         from datetime import datetime as _dtl
