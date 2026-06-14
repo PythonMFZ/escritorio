@@ -437,21 +437,24 @@ async def financeiro_cobrancas_emitir_nf(
         )
 
     n_dps = cobranca.id
+
+    def _salvar_nf(numero: str, chave: str, url: str) -> None:
+        # CobrancaMensal não declara esses campos no SQLModel — atualizar via SQL direto
+        from sqlalchemy import text as _txt_nf2
+        from datetime import datetime as _dtl
+        session.execute(_txt_nf2(
+            "UPDATE cobranca_mensal SET nf_numero=:n, nf_chave=:c, nf_url=:u, updated_at=:t WHERE id=:id"
+        ), {"n": numero, "c": chave, "u": url, "t": _dtl.utcnow(), "id": cobranca.id})
+        session.commit()
+
     try:
         key_pem, cert_pem, chain_pem = _nf_load_cert()
         dps_xml  = _nf_build_dps(cobranca, contrato, n_dps)
         signed   = _nf_sign_dps(dps_xml, key_pem, cert_pem)
         resultado = await _nf_enviar(signed, key_pem, cert_pem, chain_pem)
 
-        from datetime import datetime as _dtl
-        cobranca.nf_numero  = resultado.get("numero", "")
-        cobranca.nf_chave   = resultado.get("chave",  "")
-        cobranca.nf_url     = resultado.get("url",    "")
-        cobranca.updated_at = _dtl.utcnow()
-        session.add(cobranca)
-        session.commit()
-
-        nr = cobranca.nf_numero or cobranca.nf_chave or "emitida"
+        _salvar_nf(resultado.get("numero", ""), resultado.get("chave", ""), resultado.get("url", ""))
+        nr = resultado.get("numero") or resultado.get("chave") or "emitida"
         return _RR_nf(
             f"/admin/financeiro/contratos/{cobranca.contrato_id}/cobrancas?ok=NF+{nr}+emitida+com+sucesso",
             status_code=302,
@@ -459,16 +462,11 @@ async def financeiro_cobrancas_emitir_nf(
 
     except _E0014Error:
         # NFS-e já emitida numa tentativa anterior — salvar chave da DPS e redirecionar com sucesso
-        from datetime import datetime as _dtl
         chave_dps = _nf_chave_acesso(n_dps)
-        if not getattr(cobranca, "nf_chave", ""):
-            cobranca.nf_chave   = chave_dps
-            cobranca.updated_at = _dtl.utcnow()
-            session.add(cobranca)
-            session.commit()
+        _salvar_nf("", chave_dps, "")
         print(f"[nfse] cob {cob_id}: NFS-e já existe (E0014), chave DPS={chave_dps}")
         return _RR_nf(
-            f"/admin/financeiro/contratos/{cobranca.contrato_id}/cobrancas?ok=NF+ja+emitida+anteriormente+(chave:{chave_dps[:20]}...)",
+            f"/admin/financeiro/contratos/{cobranca.contrato_id}/cobrancas?ok=NF+ja+emitida+(chave:{chave_dps[:20]}...)",
             status_code=302,
         )
 
