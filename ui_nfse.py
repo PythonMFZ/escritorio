@@ -251,9 +251,16 @@ def _nf_sign_dps(dps_bytes: bytes, key_pem: bytes, cert_pem: bytes) -> bytes:
         raise ValueError("XML DPS inválido: atributo Id de infDPS ausente")
 
     # 1. Digest SHA-1 do elemento referenciado (infDPS) via C14N inclusivo.
-    #    A Signature é adicionada como irmã de infDPS; portanto o transform
-    #    enveloped-signature não altera o nó referenciado.
-    inf_c14n = _et2.tostring(inf, method="c14n", exclusive=False, with_comments=False)
+    #    lxml tem bug: subtree C14N adiciona xmlns="" em elementos a partir da
+    #    profundidade 2. Fix: C14N do tree completo, extrair infDPS, injetar xmlns.
+    _tree_c14n = _et2.tostring(tree, method="c14n", exclusive=False, with_comments=False)
+    _inf_tag_start = _tree_c14n.index(b"<infDPS ")
+    _inf_end = _tree_c14n.index(b"</infDPS>") + len(b"</infDPS>")
+    inf_c14n = _tree_c14n[_inf_tag_start:_inf_end]
+    # Injetar xmlns="NF_NS" antes do atributo Id (C14N requer xmlns antes de attrs)
+    inf_c14n = inf_c14n.replace(
+        b"<infDPS ", f'<infDPS xmlns="{_NF_NS}" '.encode(), 1
+    )
     digest = _b64s.b64encode(_hl.sha1(inf_c14n).digest()).decode()
 
     # 2. Montar Signature/SignedInfo sem prefixo via string XML para garantir
@@ -304,12 +311,8 @@ def _nf_sign_dps(dps_bytes: bytes, key_pem: bytes, cert_pem: bytes) -> bytes:
     sig_el.append(ki_el)
 
     # 5. Verificar digest localmente antes de serializar.
-    ref_check = tree.xpath(f"//*[@Id='{ref_id}']")
-    if not ref_check:
+    if not tree.xpath(f"//*[@Id='{ref_id}']"):
         raise ValueError(f"Elemento referenciado não encontrado: {ref_id}")
-    local_digest = _b64s.b64encode(_hl.sha1(inf_c14n).digest()).decode()
-    if local_digest != digest:
-        raise ValueError(f"Digest local divergente: esperado={digest} calculado={local_digest}")
 
     # 6. Adicionar Signature ao DPS e serializar sem mexer no documento depois.
     tree.append(sig_el)
