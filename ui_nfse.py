@@ -208,7 +208,7 @@ def _nf_build_dps(cobranca, contrato, n_dps: int) -> bytes:
     _sub(vServPrest, "vServ",  valor_str)
     trib = _sub(vals, "trib")
     tribMun = _sub(trib, "tribMun")
-    _sub(tribMun, "tribISSQN",  "3")  # 3 = Simples Nacional
+    _sub(tribMun, "tribISSQN",  "1")  # 1 = tributada no município
     _sub(tribMun, "tpRetISSQN", "1")  # 1 = não retido
     totTrib = _sub(trib, "totTrib")
     _sub(totTrib, "pTotTribSN", "6.00")
