@@ -21,7 +21,7 @@ _NF_IBGE          = "4202909"         # Código IBGE Brusque-SC
 _NF_SERIE         = "1"
 _NF_RAZAO         = "MZ SERVICOS ADMINISTRATIVOS LTDA"
 _NF_EMAIL         = "MERIZIOALINE@GMAIL.COM"
-_NF_CTRIB_NAC     = "170300"           # TSCodTribNac — LC 116 subitem 17.03
+_NF_CTRIB_NAC     = "170200"           # TSCodTribNac — LC 116 subitem 17.02 (apoio administrativo)
 _NF_NBS           = "118064000"        # NBS 9 dígitos sem pontos (da NF emitida)
 _NF_CNAE          = "8211300"
 _NF_PAIS_BR       = "1058"
@@ -56,7 +56,6 @@ try:
 except Exception as _e_nf_mg:
     print(f"[nfse] migration: {_e_nf_mg}")
 
-print("[nfse] definindo funções...")  # DEBUG
 
 
 # ── Certificado ───────────────────────────────────────────────────────────────
@@ -212,9 +211,7 @@ def _nf_build_dps(cobranca, contrato, n_dps: int) -> bytes:
     totTrib = _sub(trib, "totTrib")
     _sub(totTrib, "pTotTribSN", "6.00")  # alíquota Simples Nacional
 
-    dps_bytes = _etloc.tostring(root, xml_declaration=True, encoding="UTF-8", pretty_print=False)
-    print(f"[nfse] DPS XML (antes de assinar): {dps_bytes.decode('utf-8', errors='replace')[:1500]}")
-    return dps_bytes
+    return _etloc.tostring(root, xml_declaration=True, encoding="UTF-8", pretty_print=False)
 
 
 # ── Assinatura XML ────────────────────────────────────────────────────────────
@@ -267,7 +264,6 @@ def _nf_sign_dps(dps_bytes: bytes, key_pem: bytes, cert_pem: bytes) -> bytes:
         signed_bytes = _re_sign.sub(b'<' + _pfx2 + b':', b'<', signed_bytes)
         signed_bytes = _re_sign.sub(b'</' + _pfx2 + b':', b'</', signed_bytes)
 
-    print(f"[nfse] signed XML (600 tail): {signed_bytes[-600:]!r}")
     return signed_bytes
 
 
@@ -351,44 +347,6 @@ async def _nf_enviar(xml_bytes: bytes, key_pem: bytes, cert_pem: bytes) -> dict:
 
 # ── Rotas ─────────────────────────────────────────────────────────────────────
 
-@app.get("/admin/nfse/debug-params")
-async def nfse_debug_params(request: _Req_nf):
-    """Consulta parametros_municipais do SNNFSE para diagnóstico."""
-    from fastapi.responses import JSONResponse as _JR
-    try:
-        key_pem, cert_pem, chain_pem = _nf_load_cert()
-        results = {}
-        with _tmp_nf.NamedTemporaryFile(suffix=".pem", delete=False) as cf:
-            cf.write(cert_pem); cert_path = cf.name
-        with _tmp_nf.NamedTemporaryFile(suffix=".pem", delete=False) as kf:
-            kf.write(key_pem); key_path = kf.name
-        try:
-            async with _httpx_nf.AsyncClient(cert=(cert_path, key_path), timeout=30, verify=True) as client:
-                # Testa múltiplos base URLs e caminhos possíveis
-                candidates = [
-                    "https://sefin.nfse.gov.br/SefinNacional/parametros_municipais/4202909/convenio",
-                    "https://sefin.nfse.gov.br/SefinNacional/contribuinte/parametros_municipais/4202909/convenio",
-                    "https://adn.nfse.gov.br/contribuintes/parametros_municipais/4202909/convenio",
-                    "https://adn.nfse.gov.br/parametros_municipais/4202909/convenio",
-                    "https://contribuinte.nfse.gov.br/parametros_municipais/4202909/convenio",
-                    # Testa códigos diferentes de serviço
-                    "https://sefin.nfse.gov.br/SefinNacional/parametros_municipais/4202909/170300",
-                    "https://adn.nfse.gov.br/contribuintes/parametros_municipais/4202909/170300",
-                ]
-                for url in candidates:
-                    try:
-                        r = await client.get(url)
-                        results[url] = {"status": r.status_code, "body": r.text[:300]}
-                    except Exception as e:
-                        results[url] = {"error": str(e)[:200]}
-        finally:
-            _os_nf.unlink(cert_path); _os_nf.unlink(key_path)
-        return _JR(content=results)
-    except Exception as e:
-        import traceback
-        return _JR(content={"error": str(e), "trace": traceback.format_exc()[-500:]}, status_code=500)
-
-print("[nfse] registrando rotas...")  # DEBUG
 
 @app.get("/admin/financeiro/cobrancas/{cob_id}/emitir-nf")
 async def financeiro_cobrancas_emitir_nf(
