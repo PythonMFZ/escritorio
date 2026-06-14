@@ -349,6 +349,58 @@ async def _nf_enviar(xml_bytes: bytes, key_pem: bytes, cert_pem: bytes) -> dict:
 # ── Rotas ─────────────────────────────────────────────────────────────────────
 
 
+@app.get("/admin/nfse/probe-codigo")
+async def nfse_probe_codigo(request: _Req_nf, cod: str = "170300", cnpj_toma: str = "27012470000121"):
+    """Testa TSCodTribNac contra o SNNFSE. ?cod=XXXXXX&cnpj_toma=CNPJ14digitos"""
+    from fastapi.responses import JSONResponse as _JR
+    import gzip as _gz, json as _jj, base64 as _b64p
+    try:
+        key_pem, cert_pem, chain_pem = _nf_load_cert()
+        from lxml import etree as _etx
+        ns = _NF_NS
+        _probe_chave = _nf_chave_acesso(998)
+        root = _etx.Element(f"{{{ns}}}DPS", versao="1.00", nsmap={None: ns})
+        inf = _etx.SubElement(root, f"{{{ns}}}infDPS", Id="DPS" + _probe_chave)
+        def sub(p, t, v=None): e = _etx.SubElement(p, f"{{{ns}}}{t}"); e.text = v; return e
+        sub(inf, "tpAmb", _NF_tpAmb)
+        sub(inf, "dhEmi", "2026-06-14T12:00:00-03:00")
+        sub(inf, "verAplic", "ERP_1.0")
+        sub(inf, "serie", "1"); sub(inf, "nDPS", "998")
+        sub(inf, "dCompet", "2026-06-01"); sub(inf, "tpEmit", "1"); sub(inf, "cLocEmi", _NF_IBGE)
+        prest = sub(inf, "prest"); sub(prest, "CNPJ", _NF_CNPJ); sub(prest, "IM", _NF_IM)
+        sub(prest, "xNome", _NF_RAZAO[:150]); sub(prest, "email", _NF_EMAIL)
+        rtrib = sub(prest, "regTrib")
+        sub(rtrib, "opSimpNac", "1"); sub(rtrib, "regApTribSN", "3"); sub(rtrib, "regEspTrib", "6")
+        toma = sub(inf, "toma"); sub(toma, "CNPJ", cnpj_toma); sub(toma, "xNome", "TESTE")
+        serv = sub(inf, "serv")
+        lp = sub(serv, "locPrest"); sub(lp, "cLocPrestacao", _NF_IBGE)
+        cs = sub(serv, "cServ"); sub(cs, "cTribNac", cod); sub(cs, "xDescServ", "Planejamento e organização administrativa")
+        vals = sub(inf, "valores")
+        vsp = sub(vals, "vServPrest"); sub(vsp, "vReceb", "100.00"); sub(vsp, "vServ", "100.00")
+        trib = sub(vals, "trib")
+        tm = sub(trib, "tribMun"); sub(tm, "tribISSQN", "3"); sub(tm, "tpRetISSQN", "1")
+        tot = sub(trib, "totTrib"); sub(tot, "pTotTribSN", "6.00")
+        dps_bytes = _etx.tostring(root, xml_declaration=True, encoding="UTF-8")
+        signed = _nf_sign_dps(dps_bytes, key_pem, cert_pem)
+        with _tmp_nf.NamedTemporaryFile(suffix=".pem", delete=False) as cf:
+            cf.write(cert_pem); cert_path = cf.name
+        with _tmp_nf.NamedTemporaryFile(suffix=".pem", delete=False) as kf:
+            kf.write(key_pem); key_path = kf.name
+        try:
+            body = _jj.dumps({"dpsXmlGZipB64": _b64p.b64encode(_gz.compress(signed)).decode()})
+            async with _httpx_nf.AsyncClient(cert=(cert_path, key_path), timeout=30, verify=True) as client:
+                r = await client.post(_NF_URLS[_NF_AMB], content=body.encode(), headers={"Content-Type": "application/json; charset=UTF-8"})
+            try: rj = r.json()
+            except: rj = r.text[:500]
+            return _JR(content={"cod": cod, "cnpj_toma": cnpj_toma, "status": r.status_code, "body": rj})
+        finally:
+            _os_nf.unlink(cert_path); _os_nf.unlink(key_path)
+    except Exception as e:
+        import traceback
+        return _JR(content={"cod": cod, "error": str(e), "trace": traceback.format_exc()[-800:]}, status_code=500)
+
+
+
 @app.get("/admin/financeiro/cobrancas/{cob_id}/emitir-nf")
 async def financeiro_cobrancas_emitir_nf(
     cob_id: int,
