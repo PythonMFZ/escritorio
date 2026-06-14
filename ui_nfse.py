@@ -184,7 +184,7 @@ def _nf_build_dps(cobranca, contrato, n_dps: int) -> bytes:
     else:
         _sub(tom, "CNPJ", "00000000000000")
     _sub(tom, "xNome", nome_toma[:150])
-    ender = _sub(tom, "enderNac")
+    ender = _sub(tom, "end")
     _sub(ender, "xLgr",    "NAO INFORMADO")
     _sub(ender, "nro",     "S/N")
     _sub(ender, "xBairro", "NAO INFORMADO")
@@ -375,7 +375,7 @@ async def nfse_probe_codigo(request: _Req_nf, cod: str = "170300", cnpj_toma: st
         rtrib = sub(prest, "regTrib")
         sub(rtrib, "opSimpNac", "1"); sub(rtrib, "regApTribSN", "3"); sub(rtrib, "regEspTrib", "6")
         tom = sub(inf, "toma"); sub(tom, "CNPJ", cnpj_toma); sub(tom, "xNome", "TESTE")
-        en = sub(tom, "enderNac"); sub(en, "xLgr", "NAO INFORMADO"); sub(en, "nro", "S/N")
+        en = sub(tom, "end"); sub(en, "xLgr", "NAO INFORMADO"); sub(en, "nro", "S/N")
         sub(en, "xBairro", "NAO INFORMADO"); sub(en, "cMun", _NF_IBGE); sub(en, "UF", "SC"); sub(en, "CEP", "88350000")
         serv = sub(inf, "serv")
         lp = sub(serv, "locPrest"); sub(lp, "cLocPrestacao", _NF_IBGE)
