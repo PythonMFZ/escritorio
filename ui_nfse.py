@@ -222,14 +222,10 @@ def _nf_build_dps(cobranca, contrato, n_dps: int) -> bytes:
 
 def _nf_sign_dps(dps_bytes: bytes, key_pem: bytes, cert_pem: bytes) -> bytes:
     """
-    Assina o DPS manualmente (XMLDSig enveloped) gerando <Signature> com
-    namespace padrão (sem prefixo), conforme exige o SNNFSE (E1228).
+    Assina a tag infDPS via XMLDSig enveloped, referenciando explicitamente
+    o atributo Id do documento (#Id), sem prefixos de namespace.
 
     Algoritmos: RSA-SHA1 / digest SHA-1 / C14N inclusivo (manual NFS-e v1.01).
-
-    ATENÇÃO: o C14N de SignedInfo deve ser computado APÓS sig_el.append(si),
-    para que o xmlns= não seja redeclarado em SignedInfo (já está em escopo
-    via Signature pai). Isso é o que o verificador do SNNFSE também faz.
     """
     import hashlib as _hl
     import base64  as _b64s
@@ -245,50 +241,59 @@ def _nf_sign_dps(dps_bytes: bytes, key_pem: bytes, cert_pem: bytes) -> bytes:
     SHA1D  = "http://www.w3.org/2000/09/xmldsig#sha1"
     RSASHA = "http://www.w3.org/2000/09/xmldsig#rsa-sha1"
 
-    tree   = _et2.fromstring(dps_bytes)
-    inf    = tree.find(f"{{{_NF_NS}}}infDPS")
-    ref_id = inf.get("Id")
+    tree = _et2.fromstring(dps_bytes)
+    inf = tree.find(f"{{{_NF_NS}}}infDPS")
+    if inf is None:
+        raise ValueError("XML DPS inválido: tag infDPS não encontrada")
 
-    # 1. Digest SHA-1 do documento inteiro (URI="") via C14N inclusivo.
-    #    Assinamos ANTES de adicionar Signature; quando o verificador applica
-    #    enveloped-signature + C14N ele obtém o mesmo resultado.
-    doc_c14n = _et2.tostring(tree, method="c14n", exclusive=False, with_comments=False)
-    digest   = _b64s.b64encode(_hl.sha1(doc_c14n).digest()).decode()
+    ref_id = (inf.get("Id") or "").strip()
+    if not ref_id:
+        raise ValueError("XML DPS inválido: atributo Id de infDPS ausente")
 
-    # 2. Montar estrutura Signature/SignedInfo com namespace padrão
-    #    Id em Signature é obrigatório conforme manual NFS-e v1.01 (XS02)
-    _nsm   = {None: DSIG}
-    sig_el = _et2.Element(f"{{{DSIG}}}Signature", Id=f"SIG{ref_id}", nsmap=_nsm)
+    # 1. Digest SHA-1 do elemento referenciado (infDPS) via C14N inclusivo.
+    #    A Signature é adicionada como irmã de infDPS; portanto o transform
+    #    enveloped-signature não altera o nó referenciado.
+    inf_c14n = _et2.tostring(inf, method="c14n", exclusive=False, with_comments=False)
+    digest = _b64s.b64encode(_hl.sha1(inf_c14n).digest()).decode()
 
-    si  = _et2.SubElement(sig_el, f"{{{DSIG}}}SignedInfo")
+    # 2. Montar Signature/SignedInfo sem prefixo. O atributo Id em Signature
+    #    é exigido pelo leiaute adotado pela NFS-e nacional.
+    sig_el = _et2.Element(f"{{{DSIG}}}Signature", Id=f"SIG{ref_id}", nsmap={None: DSIG})
+
+    si = _et2.SubElement(sig_el, f"{{{DSIG}}}SignedInfo")
     _et2.SubElement(si, f"{{{DSIG}}}CanonicalizationMethod", Algorithm=C14N)
-    _et2.SubElement(si, f"{{{DSIG}}}SignatureMethod",        Algorithm=RSASHA)
-    ref = _et2.SubElement(si, f"{{{DSIG}}}Reference",       URI="")
+    _et2.SubElement(si, f"{{{DSIG}}}SignatureMethod", Algorithm=RSASHA)
+    ref = _et2.SubElement(si, f"{{{DSIG}}}Reference", URI=f"#{ref_id}")
     tfs = _et2.SubElement(ref, f"{{{DSIG}}}Transforms")
     _et2.SubElement(tfs, f"{{{DSIG}}}Transform", Algorithm=ENVL)
     _et2.SubElement(tfs, f"{{{DSIG}}}Transform", Algorithm=C14N)
     _et2.SubElement(ref, f"{{{DSIG}}}DigestMethod", Algorithm=SHA1D)
-    dv  = _et2.SubElement(ref, f"{{{DSIG}}}DigestValue")
+    dv = _et2.SubElement(ref, f"{{{DSIG}}}DigestValue")
     dv.text = digest
 
-    # 3. C14N de SignedInfo NO CONTEXTO de Signature (xmlns= não é redeclarado)
-    si_c14n  = _et2.tostring(si, method="c14n", exclusive=False, with_comments=False)
+    # 3. Assinar o SignedInfo no contexto de Signature.
+    si_c14n = _et2.tostring(si, method="c14n", exclusive=False, with_comments=False)
     priv_key = _lpk(key_pem, password=None)
-    sig_raw  = priv_key.sign(si_c14n, _pad.PKCS1v15(), _hsh.SHA1())
-    sig_b64  = _b64s.b64encode(sig_raw).decode()
+    sig_raw = priv_key.sign(si_c14n, _pad.PKCS1v15(), _hsh.SHA1())
+    sig_b64 = _b64s.b64encode(sig_raw).decode()
 
-    # 4. Completar Signature
-    sv  = _et2.SubElement(sig_el, f"{{{DSIG}}}SignatureValue")
+    # 4. Completar Signature com o certificado final (EndCertOnly).
+    sv = _et2.SubElement(sig_el, f"{{{DSIG}}}SignatureValue")
     sv.text = sig_b64
-    ki  = _et2.SubElement(sig_el, f"{{{DSIG}}}KeyInfo")
-    x5d = _et2.SubElement(ki,     f"{{{DSIG}}}X509Data")
-    x5c = _et2.SubElement(x5d,    f"{{{DSIG}}}X509Certificate")
-    cert_obj   = _lx509(cert_pem)
-    x5c.text   = _b64s.b64encode(cert_obj.public_bytes(_ser.Encoding.DER)).decode()
+    ki = _et2.SubElement(sig_el, f"{{{DSIG}}}KeyInfo")
+    x5d = _et2.SubElement(ki, f"{{{DSIG}}}X509Data")
+    x5c = _et2.SubElement(x5d, f"{{{DSIG}}}X509Certificate")
+    cert_obj = _lx509(cert_pem)
+    x5c.text = _b64s.b64encode(cert_obj.public_bytes(_ser.Encoding.DER)).decode()
 
-    # 5. Adicionar Signature ao DPS e serializar
+    # 5. Adicionar Signature ao DPS e serializar sem mexer no documento depois.
     tree.append(sig_el)
-    return _et2.tostring(tree, xml_declaration=True, encoding="UTF-8")
+    signed = _et2.tostring(tree, xml_declaration=True, encoding="UTF-8", pretty_print=False)
+
+    if b'Reference URI=""' in signed:
+        raise ValueError("Assinatura inválida: Reference URI vazia")
+
+    return signed
 
 
 # ── Envio via mTLS ────────────────────────────────────────────────────────────
@@ -404,7 +409,7 @@ async def nfse_probe_codigo(request: _Req_nf, cod: str = "170300", cnpj_toma: st
         vals = sub(inf, "valores")
         vsp = sub(vals, "vServPrest"); sub(vsp, "vReceb", "100.00"); sub(vsp, "vServ", "100.00")
         trib = sub(vals, "trib")
-        tm = sub(trib, "tribMun"); sub(tm, "tribISSQN", "3"); sub(tm, "tpRetISSQN", "1")
+        tm = sub(trib, "tribMun"); sub(tm, "tribISSQN", "1"); sub(tm, "tpRetISSQN", "1")
         tot = sub(trib, "totTrib"); sub(tot, "pTotTribSN", "6.00")
         dps_bytes = _etx.tostring(root, xml_declaration=True, encoding="UTF-8")
         signed = _nf_sign_dps(dps_bytes, key_pem, cert_pem)
