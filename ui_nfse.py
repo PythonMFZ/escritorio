@@ -196,7 +196,6 @@ def _nf_build_dps(cobranca, contrato, n_dps: int) -> bytes:
     _sub(cServ, "cTribNac",  _NF_CTRIB_NAC)
     _sub(cServ, "xDescServ", desc[:2000])
     _sub(cServ, "cNBS",      _NF_NBS)
-    _sub(serv,  "cLocServico", _NF_IBGE)
 
     # ── valores ───────────────────────────────────────────────────────────────
     vals  = _sub(inf, "valores")
@@ -376,7 +375,7 @@ async def nfse_probe_codigo(request: _Req_nf, cod: str = "170300", cnpj_toma: st
         toma = sub(inf, "toma"); sub(toma, "CNPJ", cnpj_toma); sub(toma, "xNome", "TESTE")
         serv = sub(inf, "serv")
         lp = sub(serv, "locPrest"); sub(lp, "cLocPrestacao", _NF_IBGE)
-        cs = sub(serv, "cServ"); sub(cs, "cTribNac", cod); sub(cs, "xDescServ", "Planejamento e organização administrativa"); sub(cs, "cNBS", _NF_NBS); sub(serv, "cLocServico", _NF_IBGE)
+        cs = sub(serv, "cServ"); sub(cs, "cTribNac", cod); sub(cs, "xDescServ", "Planejamento e organização administrativa"); sub(cs, "cNBS", _NF_NBS)
         vals = sub(inf, "valores")
         vsp = sub(vals, "vServPrest"); sub(vsp, "vReceb", "100.00"); sub(vsp, "vServ", "100.00")
         trib = sub(vals, "trib")
