@@ -196,9 +196,9 @@ def _nf_build_dps(cobranca, contrato, n_dps: int) -> bytes:
 
     # ── valores ───────────────────────────────────────────────────────────────
     vals = _sub(inf, "valores")
-    _sub(vals, "vServPrest",  valor_str)
-    _sub(vals, "vDescIncond", "0.00")
-    _sub(vals, "vDescCond",   "0.00")
+    vServPrest = _sub(vals, "vServPrest")
+    _sub(vServPrest, "vReceb", valor_str)
+    _sub(vServPrest, "vServ",  valor_str)
     trib = _sub(vals, "trib")
     _sub(trib, "opSimplesNac",    "1")
     _sub(trib, "regTribAnterior", "1")
@@ -376,7 +376,7 @@ async def nfse_probe_codigo(request: _Req_nf, cod: str = "170300", cnpj_toma: st
         lp = sub(serv, "locPrest"); sub(lp, "cLocPrestacao", _NF_IBGE)
         cs = sub(serv, "cServ"); sub(cs, "cTribNac", cod); sub(cs, "xDescServ", "Planejamento e organizacao administrativa")
         vals = sub(inf, "valores")
-        sub(vals, "vServPrest", "100.00"); sub(vals, "vDescIncond", "0.00"); sub(vals, "vDescCond", "0.00")
+        vsp = sub(vals, "vServPrest"); sub(vsp, "vReceb", "100.00"); sub(vsp, "vServ", "100.00")
         trib = sub(vals, "trib")
         sub(trib, "opSimplesNac", "1"); sub(trib, "regTribAnterior", "1")
         issqn = sub(trib, "issqn")
