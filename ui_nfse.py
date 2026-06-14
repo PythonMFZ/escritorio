@@ -249,9 +249,11 @@ def _nf_sign_dps(dps_bytes: bytes, key_pem: bytes, cert_pem: bytes) -> bytes:
     inf    = tree.find(f"{{{_NF_NS}}}infDPS")
     ref_id = inf.get("Id")
 
-    # 1. Digest SHA-1 do infDPS via C14N inclusivo (infDPS ainda é filho de DPS)
-    inf_c14n = _et2.tostring(inf, method="c14n", exclusive=False, with_comments=False)
-    digest   = _b64s.b64encode(_hl.sha1(inf_c14n).digest()).decode()
+    # 1. Digest SHA-1 do documento inteiro (URI="") via C14N inclusivo.
+    #    Assinamos ANTES de adicionar Signature; quando o verificador applica
+    #    enveloped-signature + C14N ele obtém o mesmo resultado.
+    doc_c14n = _et2.tostring(tree, method="c14n", exclusive=False, with_comments=False)
+    digest   = _b64s.b64encode(_hl.sha1(doc_c14n).digest()).decode()
 
     # 2. Montar estrutura Signature/SignedInfo com namespace padrão
     #    Id em Signature é obrigatório conforme manual NFS-e v1.01 (XS02)
@@ -261,7 +263,7 @@ def _nf_sign_dps(dps_bytes: bytes, key_pem: bytes, cert_pem: bytes) -> bytes:
     si  = _et2.SubElement(sig_el, f"{{{DSIG}}}SignedInfo")
     _et2.SubElement(si, f"{{{DSIG}}}CanonicalizationMethod", Algorithm=C14N)
     _et2.SubElement(si, f"{{{DSIG}}}SignatureMethod",        Algorithm=RSASHA)
-    ref = _et2.SubElement(si, f"{{{DSIG}}}Reference",       URI=f"#{ref_id}")
+    ref = _et2.SubElement(si, f"{{{DSIG}}}Reference",       URI="")
     tfs = _et2.SubElement(ref, f"{{{DSIG}}}Transforms")
     _et2.SubElement(tfs, f"{{{DSIG}}}Transform", Algorithm=ENVL)
     _et2.SubElement(tfs, f"{{{DSIG}}}Transform", Algorithm=C14N)
@@ -270,7 +272,6 @@ def _nf_sign_dps(dps_bytes: bytes, key_pem: bytes, cert_pem: bytes) -> bytes:
     dv.text = digest
 
     # 3. C14N de SignedInfo NO CONTEXTO de Signature (xmlns= não é redeclarado)
-    #    — idêntico ao que o verificador produzirá ao verificar a assinatura
     si_c14n  = _et2.tostring(si, method="c14n", exclusive=False, with_comments=False)
     priv_key = _lpk(key_pem, password=None)
     sig_raw  = priv_key.sign(si_c14n, _pad.PKCS1v15(), _hsh.SHA1())
