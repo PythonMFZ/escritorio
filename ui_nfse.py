@@ -510,7 +510,8 @@ def _nf_build_dps(cobranca, contrato, n_dps: int, session=None) -> bytes:
     _sub(inf, "serie",    _NF_SERIE)
     _sub(inf, "nDPS",     str(n_dps))
     _sub(inf, "dCompet",  dcomp_str)
-    _sub(inf, "tpEmit",   "1")       # 1 = prestador
+    tp_emit = "1"  # 1 = prestador
+    _sub(inf, "tpEmit",   tp_emit)
     _sub(inf, "cLocEmi",  _NF_IBGE)
 
     # ── prestador ─────────────────────────────────────────────────────────────
@@ -554,7 +555,8 @@ def _nf_build_dps(cobranca, contrato, n_dps: int, session=None) -> bytes:
     # ── valores ───────────────────────────────────────────────────────────────
     vals = _sub(inf, "valores")
     vServPrest = _sub(vals, "vServPrest")
-    _sub(vServPrest, "vReceb", valor_str)
+    if tp_emit != "1":
+        _sub(vServPrest, "vReceb", valor_str)
     _sub(vServPrest, "vServ",  valor_str)
     trib = _sub(vals, "trib")
     tribMun = _sub(trib, "tribMun")
@@ -763,11 +765,11 @@ async def nfse_probe_codigo(request: _Req_nf, cod: str = "170300", cnpj_toma: st
         sub(inf, "dhEmi", "2026-06-14T12:00:00-03:00")
         sub(inf, "verAplic", "ERP_1.0")
         sub(inf, "serie", "1"); sub(inf, "nDPS", "998")
-        sub(inf, "dCompet", "2026-06-01"); sub(inf, "tpEmit", "1"); sub(inf, "cLocEmi", _NF_IBGE)
+        sub(inf, "dCompet", "2026-05-01"); sub(inf, "tpEmit", "1"); sub(inf, "cLocEmi", _NF_IBGE)
         prest = sub(inf, "prest"); sub(prest, "CNPJ", _NF_CNPJ); sub(prest, "IM", _NF_IM)
         sub(prest, "xNome", _NF_RAZAO[:150]); sub(prest, "email", _NF_EMAIL)
         rtrib = sub(prest, "regTrib")
-        sub(rtrib, "opSimpNac", "1"); sub(rtrib, "regApTribSN", "3"); sub(rtrib, "regEspTrib", "6")
+        sub(rtrib, "opSimpNac", "3"); sub(rtrib, "regApTribSN", "1"); sub(rtrib, "regEspTrib", "0")
         tom = sub(inf, "toma"); sub(tom, "CNPJ", cnpj_toma); sub(tom, "xNome", "TESTE")
         _e = sub(tom, "end"); _en = sub(_e, "endNac")
         sub(_en, "cMun", _NF_IBGE); sub(_en, "CEP", "88350000")
@@ -776,7 +778,7 @@ async def nfse_probe_codigo(request: _Req_nf, cod: str = "170300", cnpj_toma: st
         lp = sub(serv, "locPrest"); sub(lp, "cLocPrestacao", _NF_IBGE)
         cs = sub(serv, "cServ"); sub(cs, "cTribNac", cod); sub(cs, "xDescServ", "Planejamento e organizacao administrativa")
         vals = sub(inf, "valores")
-        vsp = sub(vals, "vServPrest"); sub(vsp, "vReceb", "100.00"); sub(vsp, "vServ", "100.00")
+        vsp = sub(vals, "vServPrest"); sub(vsp, "vServ", "100.00")
         trib = sub(vals, "trib")
         tm = sub(trib, "tribMun"); sub(tm, "tribISSQN", "1"); sub(tm, "tpRetISSQN", "1")
         tot = sub(trib, "totTrib"); sub(tot, "pTotTribSN", "6.00")
