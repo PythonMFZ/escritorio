@@ -52,9 +52,38 @@ try:
                     ))
                 except Exception:
                     pass
+            # Tabela de controle do contador sequencial de nDPS (por série/CNPJ)
+            _c_nf.execute(_txt_nf("""
+                CREATE TABLE IF NOT EXISTS nfse_ndps_counter (
+                    cnpj    VARCHAR(14) NOT NULL,
+                    serie   VARCHAR(5)  NOT NULL,
+                    ultimo  INTEGER     NOT NULL DEFAULT 265,
+                    PRIMARY KEY (cnpj, serie)
+                )
+            """))
+            _c_nf.execute(_txt_nf("""
+                INSERT INTO nfse_ndps_counter (cnpj, serie, ultimo)
+                VALUES (:cnpj, :serie, 265)
+                ON CONFLICT (cnpj, serie) DO NOTHING
+            """), {"cnpj": _NF_CNPJ, "serie": _NF_SERIE})
         print("[nfse] ✅ Migrations OK")
 except Exception as _e_nf_mg:
     print(f"[nfse] migration: {_e_nf_mg}")
+
+
+def _nf_proximo_ndps() -> int:
+    """Retorna o próximo nDPS sequencial e atualiza o contador atomicamente."""
+    from sqlalchemy import text as _txt_seq
+    with engine.begin() as _conn:
+        row = _conn.execute(_txt_seq("""
+            UPDATE nfse_ndps_counter
+               SET ultimo = ultimo + 1
+             WHERE cnpj = :cnpj AND serie = :serie
+         RETURNING ultimo
+        """), {"cnpj": _NF_CNPJ, "serie": _NF_SERIE}).fetchone()
+    if row is None:
+        raise RuntimeError("Contador nDPS não inicializado")
+    return row[0]
 
 
 
@@ -788,7 +817,8 @@ async def financeiro_cobrancas_emitir_nf(
 
     # Offset para evitar colisão com tentativas anteriores onde a DPS foi recebida
     # pelo SNNFSE mas nenhuma NFS-e foi gerada (assinatura inválida nas tentativas iniciais).
-    n_dps = cobranca.id + 20000
+    # nDPS: contador sequencial por série, continua a partir do último DPS do sistema antigo (265)
+    n_dps = _nf_proximo_ndps()
     try:
         key_pem, cert_pem, chain_pem = _nf_load_cert()
         dps_xml  = _nf_build_dps(cobranca, contrato, n_dps, session=session)
