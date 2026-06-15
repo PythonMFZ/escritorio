@@ -520,10 +520,9 @@ def _nf_build_dps(cobranca, contrato, n_dps: int, session=None) -> bytes:
     _sub(prest, "xNome",   _NF_RAZAO[:150])
     _sub(prest, "email",   _NF_EMAIL)
     regTrib = _sub(prest, "regTrib")
-    _sub(regTrib, "opSimpNac",   "1")  # 1 = Optante pelo Simples Nacional
-    # regApTribSN omitido — campo opcional, valor incorreto causava E0160
-    _sub(regTrib, "regEspTrib",  "0")  # 0 = Nenhum (Brusque-SC não aceita ME/EPP p/ cTribNac 170303)
-
+    _sub(regTrib, "opSimpNac", "3")   # optante ME/EPP, se esse for o enquadramento real
+    _sub(regTrib, "regApTribSN", "...")  # preencher conforme a apuração correta
+    _sub(regTrib, "regEspTrib", "0")
     # ── tomador ───────────────────────────────────────────────────────────────
     tom = _sub(inf, "toma")
     if len(doc_toma) == 14:
