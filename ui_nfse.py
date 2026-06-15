@@ -476,13 +476,13 @@ def _nf_build_dps(cobranca, contrato, n_dps: int, session=None) -> bytes:
     # ── prestador ─────────────────────────────────────────────────────────────
     prest = _sub(inf, "prest")
     _sub(prest, "CNPJ",    _NF_CNPJ)
-    _sub(prest, "IM",      _NF_IM)
+    # IM omitido: Brusque-SC não possui dados complementares no CNC NFS-e (E0120)
     _sub(prest, "xNome",   _NF_RAZAO[:150])
     _sub(prest, "email",   _NF_EMAIL)
     regTrib = _sub(prest, "regTrib")
     _sub(regTrib, "opSimpNac",   "1")  # 1 = optante Simples Nacional
     _sub(regTrib, "regApTribSN", "3")  # 3 = ME/EPP tributada pelo Simples Nacional
-    _sub(regTrib, "regEspTrib",  "6")  # 6 = ME/EPP – Simples Nacional
+    _sub(regTrib, "regEspTrib",  "0")  # 0 = Nenhum (Brusque-SC não aceita ME/EPP p/ cTribNac 170303)
 
     # ── tomador ───────────────────────────────────────────────────────────────
     tom = _sub(inf, "toma")
@@ -534,15 +534,15 @@ def _nf_build_dps(cobranca, contrato, n_dps: int, session=None) -> bytes:
 
 def _nf_sign_dps(dps_bytes: bytes, key_pem: bytes, cert_pem: bytes) -> bytes:
     """
-    Assina a tag infDPS no padrão XMLDSig enveloped usado pela DPS.
+    Assina infDPS via XMLDSig enveloped — RSA-SHA1 / C14N 1.0 (manual NFS-e v1.01).
 
-    Ajustes desta versão:
-      - Reference URI aponta para o Id de infDPS ("#DPS...")
-      - Digest é calculado sobre a tag referenciada, não sobre o documento inteiro
-      - SignedInfo é assinado já no contexto final do documento
-      - A assinatura é validada localmente antes do envio
+    ATENÇÃO — bug do lxml: _et2.tostring(element, method="c14n") em SUBTREE
+    adiciona xmlns="" em elementos a partir da profundidade 2, gerando digest/
+    assinatura que o SNNFSE rejeita (E0714). Fix: serializar o PARENT completo
+    e extrair a seção desejada por índice de string, injetando xmlns.
     """
     import hashlib as _hl
+    import base64  as _b64s
     from lxml import etree as _et2
     from cryptography.hazmat.primitives import hashes as _hsh, serialization as _ser
     from cryptography.hazmat.primitives.asymmetric import padding as _pad
@@ -555,90 +555,74 @@ def _nf_sign_dps(dps_bytes: bytes, key_pem: bytes, cert_pem: bytes) -> bytes:
     SHA1D  = "http://www.w3.org/2000/09/xmldsig#sha1"
     RSASHA = "http://www.w3.org/2000/09/xmldsig#rsa-sha1"
 
-    def _c14n(node) -> bytes:
-        return _et2.tostring(node, method="c14n", exclusive=False, with_comments=False)
-
-    def _b64sha1(data: bytes) -> str:
-        return _b64_nf.b64encode(_hl.sha1(data).digest()).decode("ascii")
-
-    def _find_by_id(root, id_value: str):
-        hits = root.xpath("//*[@Id=$target_id]", target_id=id_value)
-        return hits[0] if hits else None
-
-    def _verify_signature_or_raise(signed_root) -> None:
-        sig = signed_root.find(f"{{{DSIG}}}Signature")
-        if sig is None:
-            raise ValueError("Assinatura não encontrada no XML assinado")
-
-        si = sig.find(f"{{{DSIG}}}SignedInfo")
-        ref = si.find(f"{{{DSIG}}}Reference") if si is not None else None
-        dv = ref.find(f"{{{DSIG}}}DigestValue") if ref is not None else None
-        sv = sig.find(f"{{{DSIG}}}SignatureValue")
-        if si is None or ref is None or dv is None or sv is None or not sv.text:
-            raise ValueError("Estrutura da assinatura incompleta")
-
-        ref_uri = ref.get("URI", "")
-        if not ref_uri.startswith("#"):
-            raise ValueError(f"Reference URI inválida: {ref_uri!r}")
-
-        ref_node = _find_by_id(signed_root, ref_uri[1:])
-        if ref_node is None:
-            raise ValueError(f"Nó referenciado não encontrado: {ref_uri}")
-
-        digest_local = _b64sha1(_c14n(ref_node))
-        if digest_local != (dv.text or "").strip():
-            raise ValueError(
-                f"Digest local divergente do XML: esperado={(dv.text or '').strip()} calculado={digest_local}"
-            )
-
-        cert_obj = _lx509(cert_pem)
-        pub_key = cert_obj.public_key()
-        sig_raw = _b64_nf.b64decode((sv.text or "").encode("ascii"))
-        si_c14n = _c14n(si)
-        pub_key.verify(sig_raw, si_c14n, _pad.PKCS1v15(), _hsh.SHA1())
-
-    parser = _et2.XMLParser(remove_blank_text=False, resolve_entities=False)
-    root = _et2.fromstring(dps_bytes, parser=parser)
-    inf = root.find(f"{{{_NF_NS}}}infDPS")
+    tree = _et2.fromstring(dps_bytes)
+    inf = tree.find(f"{{{_NF_NS}}}infDPS")
     if inf is None:
-        raise ValueError("Tag infDPS não encontrada no XML da DPS")
+        raise ValueError("XML DPS inválido: tag infDPS não encontrada")
 
     ref_id = (inf.get("Id") or "").strip()
     if not ref_id:
-        raise ValueError("Atributo Id de infDPS não informado")
+        raise ValueError("XML DPS inválido: atributo Id de infDPS ausente")
 
-    digest = _b64sha1(_c14n(inf))
+    # 1. Digest SHA-1 do infDPS via C14N inclusivo.
+    #    Fix lxml: C14N do tree completo → extrair seção infDPS → injetar xmlns.
+    _tree_c14n = _et2.tostring(tree, method="c14n", exclusive=False, with_comments=False)
+    _inf_start = _tree_c14n.index(b"<infDPS ")
+    _inf_end   = _tree_c14n.index(b"</infDPS>") + len(b"</infDPS>")
+    inf_c14n   = _tree_c14n[_inf_start:_inf_end].replace(
+        b"<infDPS ", f'<infDPS xmlns="{_NF_NS}" '.encode(), 1
+    )
+    digest = _b64s.b64encode(_hl.sha1(inf_c14n).digest()).decode()
 
-    sig_el = _et2.Element(f"{{{DSIG}}}Signature", Id=f"SIG{ref_id}", nsmap={None: DSIG})
-    si = _et2.SubElement(sig_el, f"{{{DSIG}}}SignedInfo")
-    _et2.SubElement(si, f"{{{DSIG}}}CanonicalizationMethod", Algorithm=C14N)
-    _et2.SubElement(si, f"{{{DSIG}}}SignatureMethod", Algorithm=RSASHA)
+    # 2. Montar Signature via string XML (garante namespace uniforme, sem xmlns="" nos filhos).
+    sig_xml = (
+        f'<Signature xmlns="{DSIG}" Id="SIG{ref_id}">'
+        f'<SignedInfo>'
+        f'<CanonicalizationMethod Algorithm="{C14N}"></CanonicalizationMethod>'
+        f'<SignatureMethod Algorithm="{RSASHA}"></SignatureMethod>'
+        f'<Reference URI="#{ref_id}">'
+        f'<Transforms>'
+        f'<Transform Algorithm="{ENVL}"></Transform>'
+        f'<Transform Algorithm="{C14N}"></Transform>'
+        f'</Transforms>'
+        f'<DigestMethod Algorithm="{SHA1D}"></DigestMethod>'
+        f'<DigestValue>{digest}</DigestValue>'
+        f'</Reference>'
+        f'</SignedInfo>'
+        f'<SignatureValue></SignatureValue>'
+        f'</Signature>'
+    )
+    sig_el = _et2.fromstring(sig_xml.encode())
 
-    ref = _et2.SubElement(si, f"{{{DSIG}}}Reference", URI=f"#{ref_id}")
-    tfs = _et2.SubElement(ref, f"{{{DSIG}}}Transforms")
-    _et2.SubElement(tfs, f"{{{DSIG}}}Transform", Algorithm=ENVL)
-    _et2.SubElement(tfs, f"{{{DSIG}}}Transform", Algorithm=C14N)
-    _et2.SubElement(ref, f"{{{DSIG}}}DigestMethod", Algorithm=SHA1D)
-    _et2.SubElement(ref, f"{{{DSIG}}}DigestValue").text = digest
-
-    root.append(sig_el)
-
+    # 3. C14N do SignedInfo — ANTES de anexar ao tree (após append o contexto muda).
+    #    Fix lxml: C14N do sig_el completo → extrair SignedInfo → injetar xmlns.
+    _sig_full_c14n = _et2.tostring(sig_el, method="c14n", exclusive=False, with_comments=False)
+    _si_start = _sig_full_c14n.index(b"<SignedInfo>")
+    _si_end   = _sig_full_c14n.index(b"</SignedInfo>") + len(b"</SignedInfo>")
+    si_c14n   = _sig_full_c14n[_si_start:_si_end].replace(
+        b"<SignedInfo>", f'<SignedInfo xmlns="{DSIG}">'.encode(), 1
+    )
     priv_key = _lpk(key_pem, password=None)
-    si_c14n = _c14n(si)
-    sig_raw = priv_key.sign(si_c14n, _pad.PKCS1v15(), _hsh.SHA1())
-    _et2.SubElement(sig_el, f"{{{DSIG}}}SignatureValue").text = _b64_nf.b64encode(sig_raw).decode("ascii")
+    sig_raw  = priv_key.sign(si_c14n, _pad.PKCS1v15(), _hsh.SHA1())
+    sig_b64  = _b64s.b64encode(sig_raw).decode()
 
-    ki = _et2.SubElement(sig_el, f"{{{DSIG}}}KeyInfo")
-    x5d = _et2.SubElement(ki, f"{{{DSIG}}}X509Data")
+    # 4. Preencher SignatureValue e KeyInfo, depois annexar ao tree.
+    sv = sig_el.find(f"{{{DSIG}}}SignatureValue")
+    sv.text = sig_b64
+    ki_xml = (
+        f'<KeyInfo xmlns="{DSIG}">'
+        f'<X509Data><X509Certificate>__CERT__</X509Certificate></X509Data>'
+        f'</KeyInfo>'
+    )
     cert_obj = _lx509(cert_pem)
-    cert_der_b64 = _b64_nf.b64encode(cert_obj.public_bytes(_ser.Encoding.DER)).decode("ascii")
-    _et2.SubElement(x5d, f"{{{DSIG}}}X509Certificate").text = cert_der_b64
+    cert_b64 = _b64s.b64encode(cert_obj.public_bytes(_ser.Encoding.DER)).decode()
+    ki_el = _et2.fromstring(ki_xml.replace("__CERT__", cert_b64).encode())
+    sig_el.append(ki_el)
+    tree.append(sig_el)
 
-    _verify_signature_or_raise(root)
-
-    signed_bytes = _et2.tostring(root, xml_declaration=True, encoding="UTF-8", pretty_print=False)
+    signed = _et2.tostring(tree, xml_declaration=True, encoding="UTF-8", pretty_print=False)
     print(f"[nfse] assinatura local OK | ref={ref_id} | digest={digest}")
-    return signed_bytes
+    return signed
 
 
 # ── Envio via mTLS ────────────────────────────────────────────────────────────
