@@ -134,14 +134,187 @@ def _nf_pick_attr(*objs, names: tuple[str, ...], default: str = "") -> str:
     return default
 
 
-def _nf_get_tomador_endereco(contrato, cobranca) -> dict:
+def _nf_normaliza_texto(valor: str) -> str:
+    import unicodedata as _ud_nf
+
+    texto = str(valor or "").strip()
+    texto = _ud_nf.normalize("NFKD", texto)
+    texto = "".join(ch for ch in texto if not _ud_nf.combining(ch))
+    texto = _re_nf.sub(r"\s+", " ", texto)
+    return texto.strip().upper()
+
+
+def _nf_iter_tomador_sources(contrato, cobranca, session=None):
+    vistos = set()
+
+    def _emit(obj):
+        if obj is None:
+            return
+        key = id(obj)
+        if key in vistos:
+            return
+        vistos.add(key)
+        yield obj
+
+    for base in (contrato, cobranca):
+        yield from _emit(base)
+
+    rel_names = (
+        "cliente_plataforma",
+        "cliente_empresa",
+        "empresa_cliente",
+        "cliente",
+        "company_cliente",
+        "client_company",
+        "platform_client",
+        "customer_company",
+        "customer",
+        "empresa",
+        "company",
+        "client",
+    )
+    for base in (contrato, cobranca):
+        if base is None:
+            continue
+        for name in rel_names:
+            try:
+                rel = getattr(base, name, None)
+            except Exception:
+                rel = None
+            yield from _emit(rel)
+
+    if session is not None:
+        id_names = (
+            "cliente_plataforma_id",
+            "cliente_empresa_id",
+            "empresa_cliente_id",
+            "company_cliente_id",
+            "client_company_id",
+            "platform_client_id",
+            "customer_company_id",
+            "customer_id",
+            "cliente_id",
+            "client_id",
+        )
+        model_names = (
+            "Company",
+            "Empresa",
+            "Cliente",
+            "Client",
+            "Organization",
+            "TenantCompany",
+        )
+        for base in (contrato, cobranca):
+            if base is None:
+                continue
+            for id_name in id_names:
+                try:
+                    raw_id = getattr(base, id_name, None)
+                except Exception:
+                    raw_id = None
+                if raw_id in (None, "", 0, "0"):
+                    continue
+                try:
+                    obj_id = int(raw_id)
+                except Exception:
+                    continue
+                for model_name in model_names:
+                    model_cls = globals().get(model_name)
+                    if model_cls is None:
+                        continue
+                    try:
+                        rel = session.get(model_cls, obj_id)
+                    except Exception:
+                        rel = None
+                    yield from _emit(rel)
+
+
+_NF_IBGE_CACHE = {
+    ("BRUSQUE", "SC"): "4202909",
+}
+
+
+def _nf_resolve_ibge_por_cidade_uf(cidade: str, uf: str) -> str:
+    cidade_norm = _nf_normaliza_texto(cidade)
+    uf_norm = _nf_normaliza_texto(uf)[:2]
+    if not cidade_norm or len(uf_norm) != 2:
+        return ""
+
+    cached = _NF_IBGE_CACHE.get((cidade_norm, uf_norm))
+    if cached:
+        return cached
+
+    url = f"https://servicodados.ibge.gov.br/api/v1/localidades/estados/{uf_norm}/municipios"
+    try:
+        with _httpx_nf.Client(timeout=20, verify=True) as client:
+            resp = client.get(url, headers={"Accept": "application/json"})
+        resp.raise_for_status()
+        municipios = resp.json()
+    except Exception as ex:
+        print(f"[nfse] aviso: falha ao consultar IBGE para {cidade_norm}/{uf_norm}: {ex}")
+        return ""
+
+    alvo_simples = _re_nf.sub(r"[^A-Z0-9]", "", cidade_norm)
+    melhor = ""
+    for item in municipios if isinstance(municipios, list) else []:
+        nome = _nf_normaliza_texto(item.get("nome", ""))
+        codigo = str(item.get("id", "")).strip()
+        if len(codigo) != 7:
+            continue
+        nome_simples = _re_nf.sub(r"[^A-Z0-9]", "", nome)
+        if nome == cidade_norm or nome_simples == alvo_simples:
+            _NF_IBGE_CACHE[(cidade_norm, uf_norm)] = codigo
+            return codigo
+        if not melhor and (nome.startswith(cidade_norm) or cidade_norm.startswith(nome)):
+            melhor = codigo
+
+    if melhor:
+        _NF_IBGE_CACHE[(cidade_norm, uf_norm)] = melhor
+        return melhor
+
+    return ""
+
+
+def _nf_pick_tomador_identificacao(*objs) -> tuple[str, str]:
+    doc = _nf_limpa_cnpj(_nf_pick_attr(
+        *objs,
+        names=(
+            "documento_cliente",
+            "cnpj_cliente",
+            "cpf_cliente",
+            "cpf_cnpj_cliente",
+            "cpf_cnpj",
+            "cnpj_cpf",
+            "cpfcnpj",
+            "documento",
+            "cnpj",
+            "cpf",
+        ),
+    ))
+    nome = _nf_pick_attr(
+        *objs,
+        names=(
+            "nome_cliente",
+            "razao_social",
+            "nome_fantasia",
+            "nome",
+            "razao",
+            "empresa_nome",
+        ),
+        default="NAO INFORMADO",
+    )
+    return doc, _nf_normaliza_texto(nome)[:150]
+
+
+def _nf_get_tomador_endereco(contrato, cobranca, session=None) -> dict:
     """
-    Lê o endereço do tomador a partir do cadastro do cliente/contrato.
-    Usa vários nomes de campo para tolerar diferenças de modelo.
+    Lê o endereço do tomador a partir do contrato/cobrança e, se necessário,
+    do cadastro da empresa vinculada em "Cliente da plataforma".
     """
+    fontes = tuple(_nf_iter_tomador_sources(contrato, cobranca, session=session))
+
     cep = _nf_limpa_cep(_nf_pick_attr(
-        contrato,
-        cobranca,
+        *fontes,
         names=(
             "cep_cliente",
             "cliente_cep",
@@ -152,8 +325,7 @@ def _nf_get_tomador_endereco(contrato, cobranca) -> dict:
         ),
     ))
     cmun = _re_nf.sub(r"\D", "", _nf_pick_attr(
-        contrato,
-        cobranca,
+        *fontes,
         names=(
             "ibge_cliente",
             "codigo_ibge_cliente",
@@ -168,9 +340,26 @@ def _nf_get_tomador_endereco(contrato, cobranca) -> dict:
             "c_mun",
         ),
     ))
+    cidade = _nf_pick_attr(
+        *fontes,
+        names=(
+            "cidade_cliente",
+            "municipio_cliente",
+            "cidade",
+            "municipio",
+        ),
+    )
+    uf = _nf_pick_attr(
+        *fontes,
+        names=(
+            "uf_cliente",
+            "estado_cliente",
+            "uf",
+            "estado",
+        ),
+    )
     x_lgr = _nf_pick_attr(
-        contrato,
-        cobranca,
+        *fontes,
         names=(
             "logradouro_cliente",
             "endereco_cliente",
@@ -182,8 +371,7 @@ def _nf_get_tomador_endereco(contrato, cobranca) -> dict:
         default="NAO INFORMADO",
     ).upper()[:150]
     nro = _nf_pick_attr(
-        contrato,
-        cobranca,
+        *fontes,
         names=(
             "numero_cliente",
             "numero_endereco_cliente",
@@ -194,8 +382,7 @@ def _nf_get_tomador_endereco(contrato, cobranca) -> dict:
         default="S/N",
     ).upper()[:60]
     bairro = _nf_pick_attr(
-        contrato,
-        cobranca,
+        *fontes,
         names=(
             "bairro_cliente",
             "endereco_bairro",
@@ -204,8 +391,7 @@ def _nf_get_tomador_endereco(contrato, cobranca) -> dict:
         default="NAO INFORMADO",
     ).upper()[:60]
     complemento = _nf_pick_attr(
-        contrato,
-        cobranca,
+        *fontes,
         names=(
             "complemento_cliente",
             "endereco_complemento",
@@ -215,9 +401,12 @@ def _nf_get_tomador_endereco(contrato, cobranca) -> dict:
     ).upper()[:60]
 
     if len(cmun) != 7:
+        cmun = _nf_resolve_ibge_por_cidade_uf(cidade, uf)
+
+    if len(cmun) != 7:
         raise ValueError(
             "Cadastro do cliente incompleto para NFS-e: informe o código IBGE do município do tomador "
-            "(campo como ibge_cliente/codigo_municipio_cliente)."
+            "ou cadastre cidade/UF válidos no cliente da plataforma."
         )
     if len(cep) != 8:
         raise ValueError(
@@ -225,7 +414,7 @@ def _nf_get_tomador_endereco(contrato, cobranca) -> dict:
         )
 
     print(
-        f"[nfse] endereço tomador | cMun={cmun} | CEP={cep} | "
+        f"[nfse] endereço tomador | cMun={cmun} | CEP={cep} | cidade={cidade!r} | uf={uf!r} | "
         f"logradouro={x_lgr!r} | nro={nro!r} | bairro={bairro!r}"
     )
 
@@ -239,8 +428,7 @@ def _nf_get_tomador_endereco(contrato, cobranca) -> dict:
     }
 
 
-
-def _nf_build_dps(cobranca, contrato, n_dps: int) -> bytes:
+def _nf_build_dps(cobranca, contrato, n_dps: int, session=None) -> bytes:
     """
     Monta o XML DPS sem assinatura.
     Retorna bytes UTF-8.
@@ -263,13 +451,9 @@ def _nf_build_dps(cobranca, contrato, n_dps: int) -> bytes:
     inf_id    = "DPS" + chave
 
     # ── tomador ───────────────────────────────────────────────────────────────
-    doc_toma = _nf_limpa_cnpj(
-        getattr(contrato, "documento_cliente", "")
-        or getattr(cobranca,  "documento_cliente", "")
-        or ""
-    )
-    nome_toma = (contrato.nome_cliente or "NÃO INFORMADO").upper()
-    end_toma = _nf_get_tomador_endereco(contrato, cobranca)
+    fontes_tomador = tuple(_nf_iter_tomador_sources(contrato, cobranca, session=session))
+    doc_toma, nome_toma = _nf_pick_tomador_identificacao(*fontes_tomador)
+    end_toma = _nf_get_tomador_endereco(contrato, cobranca, session=session)
 
     from lxml import etree as _etloc
     E = _etloc.Element
@@ -624,7 +808,7 @@ async def financeiro_cobrancas_emitir_nf(
     n_dps = cobranca.id
     try:
         key_pem, cert_pem, chain_pem = _nf_load_cert()
-        dps_xml  = _nf_build_dps(cobranca, contrato, n_dps)
+        dps_xml  = _nf_build_dps(cobranca, contrato, n_dps, session=session)
         signed   = _nf_sign_dps(dps_xml, key_pem, cert_pem)
         print(f"[nfse] XML assinado: {signed.decode('utf-8', errors='replace')[:3000]}")
         resultado = await _nf_enviar(signed, key_pem, cert_pem, chain_pem)
