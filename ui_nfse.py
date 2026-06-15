@@ -480,8 +480,8 @@ def _nf_build_dps(cobranca, contrato, n_dps: int, session=None) -> bytes:
     _sub(prest, "xNome",   _NF_RAZAO[:150])
     _sub(prest, "email",   _NF_EMAIL)
     regTrib = _sub(prest, "regTrib")
-    _sub(regTrib, "opSimpNac",   "2")  # 2 = ME/EPP optante Simples Nacional (1=MEI, 2=ME/EPP, 3=não optante)
-    _sub(regTrib, "regApTribSN", "1")  # 1 = tributação normal pelo Simples Nacional
+    _sub(regTrib, "opSimpNac",   "1")  # 1 = Optante pelo Simples Nacional
+    # regApTribSN omitido — campo opcional, valor incorreto causava E0160
     _sub(regTrib, "regEspTrib",  "0")  # 0 = Nenhum (Brusque-SC não aceita ME/EPP p/ cTribNac 170303)
 
     # ── tomador ───────────────────────────────────────────────────────────────
@@ -788,7 +788,7 @@ async def financeiro_cobrancas_emitir_nf(
 
     # Offset para evitar colisão com tentativas anteriores onde a DPS foi recebida
     # pelo SNNFSE mas nenhuma NFS-e foi gerada (assinatura inválida nas tentativas iniciais).
-    n_dps = cobranca.id + 10000
+    n_dps = cobranca.id + 20000
     try:
         key_pem, cert_pem, chain_pem = _nf_load_cert()
         dps_xml  = _nf_build_dps(cobranca, contrato, n_dps, session=session)
