@@ -424,7 +424,7 @@ def _ck_disparar_checkins(semana: str, force: bool = False) -> dict:
                     ok, err = _ck_enviar_template_sync(
                         phone_destino,
                         config.meta_phone_number_id,
-                        "comunicado_augur",
+                        "checkin_semanal_augur",
                         "pt_BR",
                         [nome],
                     )
@@ -515,7 +515,7 @@ def _ck_disparar_checkins(semana: str, force: bool = False) -> dict:
                     ok, err = _ck_enviar_template_sync(
                         phone_destino,
                         config.meta_phone_number_id,
-                        "comunicado_augur",
+                        "checkin_semanal_augur",
                         "pt_BR",
                         [nome],
                     )
