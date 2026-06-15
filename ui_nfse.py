@@ -460,8 +460,17 @@ def _nf_build_dps(cobranca, contrato, n_dps: int, session=None) -> bytes:
     Retorna bytes UTF-8.
     """
     ns   = _NF_NS
-    dcomp = cobranca.competencia or _date_nf.today().strftime("%Y-%m")
-    # competência no formato YYYY-MM → usar primeiro dia do mês
+    # Competência: usa o campo da cobrança se preenchido; caso contrário usa o mês
+    # ANTERIOR ao atual — o SNNFSE valida opSimpNac contra o cadastro SN do mês de
+    # competência e a base de junho/2026 pode ainda não estar disponível.
+    if cobranca.competencia:
+        dcomp = cobranca.competencia
+    else:
+        _hoje = _date_nf.today()
+        if _hoje.month == 1:
+            dcomp = f"{_hoje.year - 1}-12"
+        else:
+            dcomp = f"{_hoje.year}-{_hoje.month - 1:02d}"
     try:
         dcomp_dt = _dt_nf.strptime(dcomp, "%Y-%m").date()
     except Exception:
