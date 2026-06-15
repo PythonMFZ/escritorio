@@ -480,8 +480,8 @@ def _nf_build_dps(cobranca, contrato, n_dps: int, session=None) -> bytes:
     _sub(prest, "xNome",   _NF_RAZAO[:150])
     _sub(prest, "email",   _NF_EMAIL)
     regTrib = _sub(prest, "regTrib")
-    _sub(regTrib, "opSimpNac",   "1")  # 1 = optante Simples Nacional
-    _sub(regTrib, "regApTribSN", "3")  # 3 = ME/EPP tributada pelo Simples Nacional
+    _sub(regTrib, "opSimpNac",   "2")  # 2 = ME/EPP optante Simples Nacional (1=MEI, 2=ME/EPP, 3=não optante)
+    _sub(regTrib, "regApTribSN", "1")  # 1 = tributação normal pelo Simples Nacional
     _sub(regTrib, "regEspTrib",  "0")  # 0 = Nenhum (Brusque-SC não aceita ME/EPP p/ cTribNac 170303)
 
     # ── tomador ───────────────────────────────────────────────────────────────
