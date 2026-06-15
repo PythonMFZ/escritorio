@@ -521,7 +521,7 @@ def _nf_build_dps(cobranca, contrato, n_dps: int, session=None) -> bytes:
     _sub(prest, "email",   _NF_EMAIL)
     regTrib = _sub(prest, "regTrib")
     _sub(regTrib, "opSimpNac", "3")   # optante ME/EPP, se esse for o enquadramento real
-    _sub(regTrib, "regApTribSN", "...")  # preencher conforme a apuração correta
+    _sub(regTrib, "regApTribSN", "1")  # preencher conforme a apuração correta
     _sub(regTrib, "regEspTrib", "0")
     # ── tomador ───────────────────────────────────────────────────────────────
     tom = _sub(inf, "toma")
