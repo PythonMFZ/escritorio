@@ -462,19 +462,21 @@ def _nf_build_dps(cobranca, contrato, n_dps: int, session=None) -> bytes:
     ns   = _NF_NS
     # Competência: usa o campo da cobrança se preenchido; caso contrário usa o mês
     # ANTERIOR ao atual — o SNNFSE valida opSimpNac contra o cadastro SN do mês de
-    # competência e a base de junho/2026 pode ainda não estar disponível.
-    if cobranca.competencia:
-        dcomp = cobranca.competencia
-    else:
-        _hoje = _date_nf.today()
-        if _hoje.month == 1:
-            dcomp = f"{_hoje.year - 1}-12"
-        else:
-            dcomp = f"{_hoje.year}-{_hoje.month - 1:02d}"
+    # competência e a base do mês corrente pode ainda não estar consolidada no SNNFSE.
+    # Regra: usa o mês informado na cobrança, mas NUNCA o mês atual — usa o anterior.
+    _hoje = _date_nf.today()
+    _mes_anterior = (
+        f"{_hoje.year - 1}-12" if _hoje.month == 1
+        else f"{_hoje.year}-{_hoje.month - 1:02d}"
+    )
+    dcomp = cobranca.competencia or _mes_anterior
     try:
         dcomp_dt = _dt_nf.strptime(dcomp, "%Y-%m").date()
     except Exception:
-        dcomp_dt = _date_nf.today()
+        dcomp_dt = _date_nf.today().replace(day=1)
+    # Se a competência for o mês atual, recua para o anterior
+    if dcomp_dt.year == _hoje.year and dcomp_dt.month == _hoje.month:
+        dcomp_dt = (_dt_nf.strptime(_mes_anterior, "%Y-%m")).date()
     dcomp_str = dcomp_dt.strftime("%Y-%m-%d")  # TSData exige YYYY-MM-DD
 
     # dhEmi — data/hora de emissão com offset BR
