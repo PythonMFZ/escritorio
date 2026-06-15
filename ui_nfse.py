@@ -556,8 +556,9 @@ def _nf_build_dps(cobranca, contrato, n_dps: int, session=None) -> bytes:
     # ── valores ───────────────────────────────────────────────────────────────
     vals = _sub(inf, "valores")
     vServPrest = _sub(vals, "vServPrest")
-    _sub(vServPrest, "vReceb", valor_str)
-    _sub(vServPrest, "vServ",  valor_str)
+    _sub(vServPrest, "vServ", valor_str)
+    if tp_emit != "1":
+        _sub(vServPrest, "vReceb", valor_str)
     trib = _sub(vals, "trib")
     tribMun = _sub(trib, "tribMun")
     _sub(tribMun, "tribISSQN",  "1")  # 1 = tributada no município
