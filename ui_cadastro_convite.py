@@ -14,6 +14,7 @@ import os as _os_cc
 from datetime import datetime as _dt_cc, timedelta as _td_cc
 from typing import Optional as _Opt_cc
 from sqlmodel import Field as _F_cc, SQLModel as _SM_cc, select as _sel_cc
+from sqlalchemy import func as _func_cc
 from fastapi import Request as _Req_cc, Depends as _Dep_cc, Form as _Form_cc
 from fastapi.responses import HTMLResponse as _HTML_cc, RedirectResponse as _RR_cc, JSONResponse as _JSON_cc
 
@@ -216,21 +217,37 @@ async def cadastro_action(
     if existing_user:
         return _err("Este e-mail já está cadastrado. Tente fazer login.")
 
-    # Cria empresa
     import re as _re_cad
-    slug = _re_cad.sub(r'[^a-z0-9]', '-', company_name.lower())[:40].strip('-')
-    company = Company(
-        name=company_name,
-        slug=slug,
-        cnpj=_re_cad.sub(r'\D', '', cnpj)[:18],
-        created_at=utcnow(),
-        updated_at=utcnow(),
-    )
-    session.add(company)
-    session.commit()
-    session.refresh(company)
+    cnpj_digits = _re_cad.sub(r'\D', '', cnpj)[:18]
 
-    # Cria usuário admin
+    # Este cadastro público é sempre de um CLIENTE da Maffezzolli Capital,
+    # nunca de um novo escritório/tenant — localiza a empresa (escritório) existente.
+    office = session.exec(
+        _sel_cc(Company).where(_func_cc.lower(Company.name).like("%maffezzolli%"))
+    ).first()
+    if not office:
+        office = session.exec(_sel_cc(Company).order_by(Company.id)).first()
+    if not office:
+        return _err("Erro interno: escritório não configurado. Contate o suporte.")
+
+    # Reaproveita o Client se já existir com o mesmo nome nesse escritório
+    client = session.exec(
+        _sel_cc(Client).where(
+            Client.company_id == office.id,
+            _func_cc.lower(Client.name) == company_name.lower(),
+        )
+    ).first()
+    if not client:
+        client = Client(
+            company_id=office.id,
+            name=company_name,
+            cnpj=cnpj_digits,
+        )
+        session.add(client)
+        session.commit()
+        session.refresh(client)
+
+    # Cria usuário
     from passlib.context import CryptContext as _CryptCtx
     _pwd_ctx = _CryptCtx(schemes=["bcrypt"], deprecated="auto")
     hashed = _pwd_ctx.hash(password)
@@ -239,27 +256,25 @@ async def cadastro_action(
         name=name,
         email=email,
         password_hash=hashed,
-        created_at=utcnow(),
-        updated_at=utcnow(),
     )
     session.add(user)
     session.commit()
     session.refresh(user)
 
-    # Cria membership admin
+    # Cria membership como cliente, vinculado ao Client criado
     membership = Membership(
-        company_id=company.id,
+        company_id=office.id,
         user_id=user.id,
-        role="admin",
-        created_at=utcnow(),
-        updated_at=utcnow(),
+        role="cliente",
+        client_id=client.id,
     )
     session.add(membership)
     session.commit()
 
     # Faz login automático
     request.session["user_id"] = user.id
-    request.session["company_id"] = company.id
+    request.session["company_id"] = office.id
+    request.session["selected_client_id"] = client.id
 
     set_flash(request, f"Bem-vindo, {name}! Sua conta foi criada com sucesso.")
     return _RR_cc("/", status_code=303)
