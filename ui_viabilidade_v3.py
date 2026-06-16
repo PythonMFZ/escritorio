@@ -1659,7 +1659,6 @@ function exportarExcel(){
   const fluxoVP = (typeof _fluxoDataVP !== 'undefined') ? JSON.stringify(_fluxoDataVP) : '{}';
   const fluxoVF = (typeof _fluxoDataVF !== 'undefined') ? JSON.stringify(_fluxoDataVF) : '{}';
   // Pega labels do fluxo diretamente da tabela VP para ter receita/comissao/etc
-  const rows = [];
   const _parseCell = s => {
     const clean = (s||'').trim().replace(/R\$\s*/g,'').replace(/\./g,'').replace(',','.');
     const n = parseFloat(clean.replace(/[()]/g, s => s==='('?'-':''));

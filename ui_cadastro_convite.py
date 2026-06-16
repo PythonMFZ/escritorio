@@ -238,7 +238,7 @@ async def cadastro_action(
     user = User(
         name=name,
         email=email,
-        hashed_password=hashed,
+        password_hash=hashed,
         created_at=utcnow(),
         updated_at=utcnow(),
     )
@@ -409,7 +409,7 @@ async def convite_membro_action(
         user = User(
             name=name,
             email=email,
-            hashed_password=_pwd_ctx2.hash(password),
+            password_hash=_pwd_ctx2.hash(password),
             created_at=utcnow(),
             updated_at=utcnow(),
         )
