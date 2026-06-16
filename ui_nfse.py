@@ -52,9 +52,38 @@ try:
                     ))
                 except Exception:
                     pass
+            # Tabela de controle do contador sequencial de nDPS (por série/CNPJ)
+            _c_nf.execute(_txt_nf("""
+                CREATE TABLE IF NOT EXISTS nfse_ndps_counter (
+                    cnpj    VARCHAR(14) NOT NULL,
+                    serie   VARCHAR(5)  NOT NULL,
+                    ultimo  INTEGER     NOT NULL DEFAULT 265,
+                    PRIMARY KEY (cnpj, serie)
+                )
+            """))
+            _c_nf.execute(_txt_nf("""
+                INSERT INTO nfse_ndps_counter (cnpj, serie, ultimo)
+                VALUES (:cnpj, :serie, 265)
+                ON CONFLICT (cnpj, serie) DO NOTHING
+            """), {"cnpj": _NF_CNPJ, "serie": _NF_SERIE})
         print("[nfse] ✅ Migrations OK")
 except Exception as _e_nf_mg:
     print(f"[nfse] migration: {_e_nf_mg}")
+
+
+def _nf_proximo_ndps() -> int:
+    """Retorna o próximo nDPS sequencial e atualiza o contador atomicamente."""
+    from sqlalchemy import text as _txt_seq
+    with engine.begin() as _conn:
+        row = _conn.execute(_txt_seq("""
+            UPDATE nfse_ndps_counter
+               SET ultimo = ultimo + 1
+             WHERE cnpj = :cnpj AND serie = :serie
+         RETURNING ultimo
+        """), {"cnpj": _NF_CNPJ, "serie": _NF_SERIE}).fetchone()
+    if row is None:
+        raise RuntimeError("Contador nDPS não inicializado")
+    return row[0]
 
 
 
@@ -113,18 +142,341 @@ def _nf_limpa_cnpj(doc: str) -> str:
     return _re_nf.sub(r"\D", "", doc or "")
 
 
-def _nf_build_dps(cobranca, contrato, n_dps: int) -> bytes:
+def _nf_limpa_cep(valor: str) -> str:
+    return _re_nf.sub(r"\D", "", valor or "")
+
+
+def _nf_pick_attr(*objs, names: tuple[str, ...], default: str = "") -> str:
+    for obj in objs:
+        if obj is None:
+            continue
+        for name in names:
+            try:
+                value = getattr(obj, name, "")
+            except Exception:
+                value = ""
+            if value is None:
+                continue
+            value_str = str(value).strip()
+            if value_str:
+                return value_str
+    return default
+
+
+def _nf_normaliza_texto(valor: str) -> str:
+    import unicodedata as _ud_nf
+
+    texto = str(valor or "").strip()
+    texto = _ud_nf.normalize("NFKD", texto)
+    texto = "".join(ch for ch in texto if not _ud_nf.combining(ch))
+    texto = _re_nf.sub(r"\s+", " ", texto)
+    return texto.strip().upper()
+
+
+def _nf_iter_tomador_sources(contrato, cobranca, session=None):
+    vistos = set()
+
+    def _emit(obj):
+        if obj is None:
+            return
+        key = id(obj)
+        if key in vistos:
+            return
+        vistos.add(key)
+        yield obj
+
+    for base in (contrato, cobranca):
+        yield from _emit(base)
+
+    rel_names = (
+        "cliente_plataforma",
+        "cliente_empresa",
+        "empresa_cliente",
+        "cliente",
+        "company_cliente",
+        "client_company",
+        "platform_client",
+        "customer_company",
+        "customer",
+        "empresa",
+        "company",
+        "client",
+    )
+    for base in (contrato, cobranca):
+        if base is None:
+            continue
+        for name in rel_names:
+            try:
+                rel = getattr(base, name, None)
+            except Exception:
+                rel = None
+            yield from _emit(rel)
+
+    if session is not None:
+        id_names = (
+            "cliente_plataforma_id",
+            "cliente_empresa_id",
+            "empresa_cliente_id",
+            "company_cliente_id",
+            "client_company_id",
+            "platform_client_id",
+            "customer_company_id",
+            "customer_id",
+            "cliente_id",
+            "client_id",
+        )
+        model_names = (
+            "Company",
+            "Empresa",
+            "Cliente",
+            "Client",
+            "Organization",
+            "TenantCompany",
+        )
+        for base in (contrato, cobranca):
+            if base is None:
+                continue
+            for id_name in id_names:
+                try:
+                    raw_id = getattr(base, id_name, None)
+                except Exception:
+                    raw_id = None
+                if raw_id in (None, "", 0, "0"):
+                    continue
+                try:
+                    obj_id = int(raw_id)
+                except Exception:
+                    continue
+                for model_name in model_names:
+                    model_cls = globals().get(model_name)
+                    if model_cls is None:
+                        continue
+                    try:
+                        rel = session.get(model_cls, obj_id)
+                    except Exception:
+                        rel = None
+                    yield from _emit(rel)
+
+
+_NF_IBGE_CACHE = {
+    ("BRUSQUE", "SC"): "4202909",
+}
+
+
+def _nf_resolve_ibge_por_cidade_uf(cidade: str, uf: str) -> str:
+    cidade_norm = _nf_normaliza_texto(cidade)
+    uf_norm = _nf_normaliza_texto(uf)[:2]
+    if not cidade_norm or len(uf_norm) != 2:
+        return ""
+
+    cached = _NF_IBGE_CACHE.get((cidade_norm, uf_norm))
+    if cached:
+        return cached
+
+    url = f"https://servicodados.ibge.gov.br/api/v1/localidades/estados/{uf_norm}/municipios"
+    try:
+        with _httpx_nf.Client(timeout=20, verify=True) as client:
+            resp = client.get(url, headers={"Accept": "application/json"})
+        resp.raise_for_status()
+        municipios = resp.json()
+    except Exception as ex:
+        print(f"[nfse] aviso: falha ao consultar IBGE para {cidade_norm}/{uf_norm}: {ex}")
+        return ""
+
+    alvo_simples = _re_nf.sub(r"[^A-Z0-9]", "", cidade_norm)
+    melhor = ""
+    for item in municipios if isinstance(municipios, list) else []:
+        nome = _nf_normaliza_texto(item.get("nome", ""))
+        codigo = str(item.get("id", "")).strip()
+        if len(codigo) != 7:
+            continue
+        nome_simples = _re_nf.sub(r"[^A-Z0-9]", "", nome)
+        if nome == cidade_norm or nome_simples == alvo_simples:
+            _NF_IBGE_CACHE[(cidade_norm, uf_norm)] = codigo
+            return codigo
+        if not melhor and (nome.startswith(cidade_norm) or cidade_norm.startswith(nome)):
+            melhor = codigo
+
+    if melhor:
+        _NF_IBGE_CACHE[(cidade_norm, uf_norm)] = melhor
+        return melhor
+
+    return ""
+
+
+def _nf_pick_tomador_identificacao(*objs) -> tuple[str, str]:
+    doc = _nf_limpa_cnpj(_nf_pick_attr(
+        *objs,
+        names=(
+            "documento_cliente",
+            "cnpj_cliente",
+            "cpf_cliente",
+            "cpf_cnpj_cliente",
+            "cpf_cnpj",
+            "cnpj_cpf",
+            "cpfcnpj",
+            "documento",
+            "cnpj",
+            "cpf",
+        ),
+    ))
+    nome = _nf_pick_attr(
+        *objs,
+        names=(
+            "nome_cliente",
+            "razao_social",
+            "nome_fantasia",
+            "nome",
+            "razao",
+            "empresa_nome",
+        ),
+        default="NAO INFORMADO",
+    )
+    return doc, _nf_normaliza_texto(nome)[:150]
+
+
+def _nf_get_tomador_endereco(contrato, cobranca, session=None) -> dict:
+    """
+    Lê o endereço do tomador a partir do contrato/cobrança e, se necessário,
+    do cadastro da empresa vinculada em "Cliente da plataforma".
+    """
+    fontes = tuple(_nf_iter_tomador_sources(contrato, cobranca, session=session))
+
+    cep = _nf_limpa_cep(_nf_pick_attr(
+        *fontes,
+        names=(
+            "cep_cliente",
+            "cliente_cep",
+            "cep_tomador",
+            "cep_sacado",
+            "cep",
+            "endereco_cep",
+        ),
+    ))
+    cmun = _re_nf.sub(r"\D", "", _nf_pick_attr(
+        *fontes,
+        names=(
+            "ibge_cliente",
+            "codigo_ibge_cliente",
+            "codigo_municipio_cliente",
+            "municipio_ibge_cliente",
+            "cidade_ibge",
+            "cmun_cliente",
+            "c_mun_cliente",
+            "codigo_ibge",
+            "ibge",
+            "cmun",
+            "c_mun",
+        ),
+    ))
+    cidade = _nf_pick_attr(
+        *fontes,
+        names=(
+            "cidade_cliente",
+            "municipio_cliente",
+            "cidade",
+            "municipio",
+        ),
+    )
+    uf = _nf_pick_attr(
+        *fontes,
+        names=(
+            "uf_cliente",
+            "estado_cliente",
+            "uf",
+            "estado",
+        ),
+    )
+    x_lgr = _nf_pick_attr(
+        *fontes,
+        names=(
+            "logradouro_cliente",
+            "endereco_cliente",
+            "rua_cliente",
+            "logradouro",
+            "endereco",
+            "rua",
+        ),
+        default="NAO INFORMADO",
+    ).upper()[:150]
+    nro = _nf_pick_attr(
+        *fontes,
+        names=(
+            "numero_cliente",
+            "numero_endereco_cliente",
+            "numero",
+            "endereco_numero",
+            "nro",
+        ),
+        default="S/N",
+    ).upper()[:60]
+    bairro = _nf_pick_attr(
+        *fontes,
+        names=(
+            "bairro_cliente",
+            "endereco_bairro",
+            "bairro",
+        ),
+        default="NAO INFORMADO",
+    ).upper()[:60]
+    complemento = _nf_pick_attr(
+        *fontes,
+        names=(
+            "complemento_cliente",
+            "endereco_complemento",
+            "complemento",
+        ),
+        default="",
+    ).upper()[:60]
+
+    if len(cmun) != 7:
+        cmun = _nf_resolve_ibge_por_cidade_uf(cidade, uf)
+
+    if len(cmun) != 7:
+        print(f"[nfse] aviso: IBGE do tomador não encontrado (cidade={cidade!r}, uf={uf!r}), usando Brusque-SC como fallback")
+        cmun = _NF_IBGE
+    if len(cep) != 8:
+        print(f"[nfse] aviso: CEP do tomador inválido ({cep!r}), usando CEP padrão Brusque-SC como fallback")
+        cep = "88352000"
+
+    print(
+        f"[nfse] endereço tomador | cMun={cmun} | CEP={cep} | cidade={cidade!r} | uf={uf!r} | "
+        f"logradouro={x_lgr!r} | nro={nro!r} | bairro={bairro!r}"
+    )
+
+    return {
+        "cMun": cmun,
+        "CEP": cep,
+        "xLgr": x_lgr or "NAO INFORMADO",
+        "nro": nro or "S/N",
+        "xBairro": bairro or "NAO INFORMADO",
+        "xCpl": complemento,
+    }
+
+
+def _nf_build_dps(cobranca, contrato, n_dps: int, session=None) -> bytes:
     """
     Monta o XML DPS sem assinatura.
     Retorna bytes UTF-8.
     """
     ns   = _NF_NS
-    dcomp = cobranca.competencia or _date_nf.today().strftime("%Y-%m")
-    # competência no formato YYYY-MM → usar primeiro dia do mês
+    # Competência: usa o campo da cobrança se preenchido; caso contrário usa o mês
+    # ANTERIOR ao atual — o SNNFSE valida opSimpNac contra o cadastro SN do mês de
+    # competência e a base do mês corrente pode ainda não estar consolidada no SNNFSE.
+    # Regra: usa o mês informado na cobrança, mas NUNCA o mês atual — usa o anterior.
+    _hoje = _date_nf.today()
+    _mes_anterior = (
+        f"{_hoje.year - 1}-12" if _hoje.month == 1
+        else f"{_hoje.year}-{_hoje.month - 1:02d}"
+    )
+    dcomp = cobranca.competencia or _mes_anterior
     try:
         dcomp_dt = _dt_nf.strptime(dcomp, "%Y-%m").date()
     except Exception:
-        dcomp_dt = _date_nf.today()
+        dcomp_dt = _date_nf.today().replace(day=1)
+    # Se a competência for o mês atual, recua para o anterior
+    if dcomp_dt.year == _hoje.year and dcomp_dt.month == _hoje.month:
+        dcomp_dt = (_dt_nf.strptime(_mes_anterior, "%Y-%m")).date()
     dcomp_str = dcomp_dt.strftime("%Y-%m-%d")  # TSData exige YYYY-MM-DD
 
     # dhEmi — data/hora de emissão com offset BR
@@ -134,14 +486,12 @@ def _nf_build_dps(cobranca, contrato, n_dps: int) -> bytes:
     valor_str = f"{cobranca.valor_cents / 100:.2f}"
     chave     = _nf_chave_acesso(n_dps)
     inf_id    = "DPS" + chave
+    tp_emit   = "1"
 
     # ── tomador ───────────────────────────────────────────────────────────────
-    doc_toma = _nf_limpa_cnpj(
-        getattr(contrato, "documento_cliente", "")
-        or getattr(cobranca,  "documento_cliente", "")
-        or ""
-    )
-    nome_toma = (contrato.nome_cliente or "NÃO INFORMADO").upper()
+    fontes_tomador = tuple(_nf_iter_tomador_sources(contrato, cobranca, session=session))
+    doc_toma, nome_toma = _nf_pick_tomador_identificacao(*fontes_tomador)
+    end_toma = _nf_get_tomador_endereco(contrato, cobranca, session=session)
 
     from lxml import etree as _etloc
     E = _etloc.Element
@@ -161,20 +511,20 @@ def _nf_build_dps(cobranca, contrato, n_dps: int) -> bytes:
     _sub(inf, "serie",    _NF_SERIE)
     _sub(inf, "nDPS",     str(n_dps))
     _sub(inf, "dCompet",  dcomp_str)
-    _sub(inf, "tpEmit",   "1")       # 1 = prestador
+    _sub(inf, "tpEmit",   tp_emit)   # 1 = prestador
     _sub(inf, "cLocEmi",  _NF_IBGE)
 
     # ── prestador ─────────────────────────────────────────────────────────────
     prest = _sub(inf, "prest")
     _sub(prest, "CNPJ",    _NF_CNPJ)
-    # IM omitido: Brusque-SC não possui dados complementares no CNC NFS-e (E0120)
-    _sub(prest, "xNome",   _NF_RAZAO[:150])
+    # xNome não deve ser informado quando o emitente da DPS for o próprio prestador (E0121).
+    if tp_emit != "1":
+        _sub(prest, "xNome", _NF_RAZAO[:150])
     _sub(prest, "email",   _NF_EMAIL)
     regTrib = _sub(prest, "regTrib")
-    _sub(regTrib, "opSimpNac",   "1")  # 1 = optante Simples Nacional
-    _sub(regTrib, "regApTribSN", "3")  # 3 = ME/EPP tributada pelo Simples Nacional
-    _sub(regTrib, "regEspTrib",  "0")  # 0 = Nenhum regime especial de ISSQN
-
+    _sub(regTrib, "opSimpNac", "3")   # optante ME/EPP, se esse for o enquadramento real
+    _sub(regTrib, "regApTribSN", "1")  # preencher conforme a apuração correta
+    _sub(regTrib, "regEspTrib", "0")
     # ── tomador ───────────────────────────────────────────────────────────────
     tom = _sub(inf, "toma")
     if len(doc_toma) == 14:
@@ -186,11 +536,13 @@ def _nf_build_dps(cobranca, contrato, n_dps: int) -> bytes:
     _sub(tom, "xNome", nome_toma[:150])
     _end = _sub(tom, "end")
     _endNac = _sub(_end, "endNac")
-    _sub(_endNac, "cMun", _NF_IBGE)
-    _sub(_endNac, "CEP",  "88350000")
-    _sub(_end, "xLgr",    "NAO INFORMADO")
-    _sub(_end, "nro",     "S/N")
-    _sub(_end, "xBairro", "NAO INFORMADO")
+    _sub(_endNac, "cMun", end_toma["cMun"])
+    _sub(_endNac, "CEP",  end_toma["CEP"])
+    _sub(_end, "xLgr",    end_toma["xLgr"])
+    _sub(_end, "nro",     end_toma["nro"])
+    if end_toma["xCpl"]:
+        _sub(_end, "xCpl", end_toma["xCpl"])
+    _sub(_end, "xBairro", end_toma["xBairro"])
 
     # ── serviço ───────────────────────────────────────────────────────────────
     desc = (contrato.servicos or contrato.nome_contrato or "Serviços administrativos").strip()
@@ -204,8 +556,9 @@ def _nf_build_dps(cobranca, contrato, n_dps: int) -> bytes:
     # ── valores ───────────────────────────────────────────────────────────────
     vals = _sub(inf, "valores")
     vServPrest = _sub(vals, "vServPrest")
-    _sub(vServPrest, "vReceb", valor_str)
-    _sub(vServPrest, "vServ",  valor_str)
+    _sub(vServPrest, "vServ", valor_str)
+    if tp_emit != "1":
+        _sub(vServPrest, "vReceb", valor_str)
     trib = _sub(vals, "trib")
     tribMun = _sub(trib, "tribMun")
     _sub(tribMun, "tribISSQN",  "1")  # 1 = tributada no município
@@ -214,17 +567,21 @@ def _nf_build_dps(cobranca, contrato, n_dps: int) -> bytes:
     _sub(totTrib, "pTotTribSN", "6.00")
 
     _dps_bytes = _etloc.tostring(root, xml_declaration=True, encoding="UTF-8", pretty_print=False)
+    print(f"[nfse] DPS XML: {_dps_bytes.decode('utf-8', errors='replace')[:2000]}")
     return _dps_bytes
 
 
 # ── Assinatura XML ────────────────────────────────────────────────────────────
 
+
 def _nf_sign_dps(dps_bytes: bytes, key_pem: bytes, cert_pem: bytes) -> bytes:
     """
-    Assina a tag infDPS via XMLDSig enveloped, referenciando explicitamente
-    o atributo Id do documento (#Id), sem prefixos de namespace.
+    Assina infDPS via XMLDSig enveloped — RSA-SHA1 / C14N 1.0 (manual NFS-e v1.01).
 
-    Algoritmos: RSA-SHA1 / digest SHA-1 / C14N inclusivo (manual NFS-e v1.01).
+    ATENÇÃO — bug do lxml: _et2.tostring(element, method="c14n") em SUBTREE
+    adiciona xmlns="" em elementos a partir da profundidade 2, gerando digest/
+    assinatura que o SNNFSE rejeita (E0714). Fix: serializar o PARENT completo
+    e extrair a seção desejada por índice de string, injetando xmlns.
     """
     import hashlib as _hl
     import base64  as _b64s
@@ -249,21 +606,17 @@ def _nf_sign_dps(dps_bytes: bytes, key_pem: bytes, cert_pem: bytes) -> bytes:
     if not ref_id:
         raise ValueError("XML DPS inválido: atributo Id de infDPS ausente")
 
-    # 1. Digest SHA-1 do elemento referenciado (infDPS) via C14N inclusivo.
-    #    lxml tem bug: subtree C14N adiciona xmlns="" em elementos a partir da
-    #    profundidade 2. Fix: C14N do tree completo, extrair infDPS, injetar xmlns.
+    # 1. Digest SHA-1 do infDPS via C14N inclusivo.
+    #    Fix lxml: C14N do tree completo → extrair seção infDPS → injetar xmlns.
     _tree_c14n = _et2.tostring(tree, method="c14n", exclusive=False, with_comments=False)
-    _inf_tag_start = _tree_c14n.index(b"<infDPS ")
-    _inf_end = _tree_c14n.index(b"</infDPS>") + len(b"</infDPS>")
-    inf_c14n = _tree_c14n[_inf_tag_start:_inf_end]
-    # Injetar xmlns="NF_NS" antes do atributo Id (C14N requer xmlns antes de attrs)
-    inf_c14n = inf_c14n.replace(
+    _inf_start = _tree_c14n.index(b"<infDPS ")
+    _inf_end   = _tree_c14n.index(b"</infDPS>") + len(b"</infDPS>")
+    inf_c14n   = _tree_c14n[_inf_start:_inf_end].replace(
         b"<infDPS ", f'<infDPS xmlns="{_NF_NS}" '.encode(), 1
     )
     digest = _b64s.b64encode(_hl.sha1(inf_c14n).digest()).decode()
 
-    # 2. Montar Signature/SignedInfo sem prefixo via string XML para garantir
-    #    namespace uniforme em todos os elementos e evitar xmlns="" no C14N.
+    # 2. Montar Signature via string XML (garante namespace uniforme, sem xmlns="" nos filhos).
     sig_xml = (
         f'<Signature xmlns="{DSIG}" Id="SIG{ref_id}">'
         f'<SignedInfo>'
@@ -282,21 +635,20 @@ def _nf_sign_dps(dps_bytes: bytes, key_pem: bytes, cert_pem: bytes) -> bytes:
         f'</Signature>'
     )
     sig_el = _et2.fromstring(sig_xml.encode())
-    si = sig_el.find(f"{{{DSIG}}}SignedInfo")
 
-    # 3. C14N de SignedInfo: lxml tem bug de subtree C14N (xmlns="" em netos).
-    #    Solução: C14N do sig_el completo, extrair SignedInfo e injetar xmlns.
+    # 3. C14N do SignedInfo — ANTES de anexar ao tree (após append o contexto muda).
+    #    Fix lxml: C14N do sig_el completo → extrair SignedInfo → injetar xmlns.
     _sig_full_c14n = _et2.tostring(sig_el, method="c14n", exclusive=False, with_comments=False)
     _si_start = _sig_full_c14n.index(b"<SignedInfo>")
     _si_end   = _sig_full_c14n.index(b"</SignedInfo>") + len(b"</SignedInfo>")
-    si_c14n = _sig_full_c14n[_si_start:_si_end].replace(
+    si_c14n   = _sig_full_c14n[_si_start:_si_end].replace(
         b"<SignedInfo>", f'<SignedInfo xmlns="{DSIG}">'.encode(), 1
     )
     priv_key = _lpk(key_pem, password=None)
-    sig_raw = priv_key.sign(si_c14n, _pad.PKCS1v15(), _hsh.SHA1())
-    sig_b64 = _b64s.b64encode(sig_raw).decode()
+    sig_raw  = priv_key.sign(si_c14n, _pad.PKCS1v15(), _hsh.SHA1())
+    sig_b64  = _b64s.b64encode(sig_raw).decode()
 
-    # 4. Completar Signature com o certificado final (EndCertOnly).
+    # 4. Preencher SignatureValue e KeyInfo, depois annexar ao tree.
     sv = sig_el.find(f"{{{DSIG}}}SignatureValue")
     sv.text = sig_b64
     ki_xml = (
@@ -308,62 +660,14 @@ def _nf_sign_dps(dps_bytes: bytes, key_pem: bytes, cert_pem: bytes) -> bytes:
     cert_b64 = _b64s.b64encode(cert_obj.public_bytes(_ser.Encoding.DER)).decode()
     ki_el = _et2.fromstring(ki_xml.replace("__CERT__", cert_b64).encode())
     sig_el.append(ki_el)
-
-    # 5. Verificar digest localmente antes de serializar.
-    if not tree.xpath(f"//*[@Id='{ref_id}']"):
-        raise ValueError(f"Elemento referenciado não encontrado: {ref_id}")
-
-    # 6. Adicionar Signature ao DPS e serializar sem mexer no documento depois.
     tree.append(sig_el)
+
     signed = _et2.tostring(tree, xml_declaration=True, encoding="UTF-8", pretty_print=False)
     print(f"[nfse] assinatura local OK | ref={ref_id} | digest={digest}")
     return signed
 
 
 # ── Envio via mTLS ────────────────────────────────────────────────────────────
-
-class _E0014Error(Exception):
-    """DPS duplicada: NFS-e já existe para esta série/número/município/CNPJ."""
-
-
-async def _nf_consultar(chave_dps: str, key_pem: bytes, cert_pem: bytes, chain_pem: bytes = b"") -> dict:
-    """Consulta NFS-e já emitida pela chave de acesso da DPS (GET /SefinNacional/nfse/{chave})."""
-    url = _NF_URLS[_NF_AMB].rstrip("/") + "/" + chave_dps
-    cert_bundle = cert_pem + (chain_pem or b"")
-    with _tmp_nf.NamedTemporaryFile(suffix=".pem", delete=False) as cf:
-        cf.write(cert_bundle); cert_path = cf.name
-    with _tmp_nf.NamedTemporaryFile(suffix=".pem", delete=False) as kf:
-        kf.write(key_pem); key_path = kf.name
-    try:
-        async with _httpx_nf.AsyncClient(cert=(cert_path, key_path), timeout=30, verify=True) as client:
-            resp = await client.get(url, headers={"Accept": "application/json"})
-        print(f"[nfse] consulta GET {url} → {resp.status_code} {resp.text[:300]!r}")
-        if resp.status_code != 200:
-            return {}
-        import json as _jc, gzip as _gc
-        data = resp.json()
-        nfse_b64 = data.get("nfseXmlGZipB64", "")
-        chave  = data.get("chaveAcesso", "") or data.get("chNFSe", "")
-        numero = data.get("numeroNFSe",  "") or data.get("nNFSe", "")
-        url_nf = data.get("linkNFSe", "") or data.get("urlNFSe", "")
-        if nfse_b64 and not (chave and numero):
-            try:
-                from lxml import etree as _etr
-                xb = _gc.decompress(_b64_nf.b64decode(nfse_b64))
-                t  = _etr.fromstring(xb)
-                ns = _NF_NS
-                def _g(tag):
-                    e = t.find(f".//{{{ns}}}{tag}") or t.find(f".//{tag}")
-                    return (e.text or "").strip() if e is not None else ""
-                chave  = chave  or _g("chNFSe")  or _g("chave")
-                numero = numero or _g("nNFSe")   or _g("numero")
-                url_nf = url_nf or _g("urlNFSe") or _g("linkNFSe")
-            except Exception as _ep:
-                print(f"[nfse] consulta: erro ao parsear XML: {_ep}")
-        return {"chave": chave, "numero": numero, "url": url_nf}
-    finally:
-        _os_nf.unlink(cert_path); _os_nf.unlink(key_path)
-
 
 async def _nf_enviar(xml_bytes: bytes, key_pem: bytes, cert_pem: bytes, chain_pem: bytes = b"") -> dict:
     """
@@ -373,7 +677,7 @@ async def _nf_enviar(xml_bytes: bytes, key_pem: bytes, cert_pem: bytes, chain_pe
     url = _NF_URLS[_NF_AMB]
     print(f"[nfse] POST {url} (ambiente={_NF_AMB})")
 
-    # Bundle cert + chain para mTLS (ICP-Brasil exige cadeia completa)
+    # httpx aceita cert como (cert_file, key_file) ou como arquivos temporários
     cert_bundle = cert_pem + (chain_pem or b"")
     with _tmp_nf.NamedTemporaryFile(suffix=".pem", delete=False) as cf:
         cf.write(cert_bundle)
@@ -402,19 +706,13 @@ async def _nf_enviar(xml_bytes: bytes, key_pem: bytes, cert_pem: bytes, chain_pe
                 headers={"Content-Type": "application/json; charset=UTF-8"},
             )
 
+        print(f"[nfse] resposta: HTTP {resp.status_code} | headers: {dict(resp.headers)} | body: {resp.text[:500]!r}")
         if resp.status_code not in (200, 201):
-            # E0014 = DPS duplicada: NFS-e já foi emitida numa tentativa anterior.
-            # Tratar como sucesso sem dados (serão preenchidos com chave da DPS).
-            try:
-                _errs = resp.json().get("erros", [])
-            except Exception:
-                _errs = []
-            if any(e.get("Codigo") == "E0014" for e in _errs):
-                raise _E0014Error()
-            raise ValueError(f"SNNFSE {resp.status_code}: {resp.text[:400]}")
+            raise ValueError(f"SNNFSE {resp.status_code}: {resp.text[:500]}")
 
         # Resposta JSON contém nfseXmlGZipB64 com o XML da NFS-e
         resp_data = resp.json()
+        print(f"[nfse] resposta JSON keys: {list(resp_data.keys()) if isinstance(resp_data, dict) else type(resp_data)}")
 
         nfse_b64 = resp_data.get("nfseXmlGZipB64", "")
         chave = resp_data.get("chaveAcesso", "")
@@ -451,6 +749,61 @@ async def _nf_enviar(xml_bytes: bytes, key_pem: bytes, cert_pem: bytes, chain_pe
 # ── Rotas ─────────────────────────────────────────────────────────────────────
 
 
+@app.get("/admin/nfse/probe-codigo")
+async def nfse_probe_codigo(request: _Req_nf, cod: str = "170300", cnpj_toma: str = "27012470000121"):
+    """Testa TSCodTribNac contra o SNNFSE. ?cod=XXXXXX&cnpj_toma=CNPJ14digitos"""
+    from fastapi.responses import JSONResponse as _JR
+    import gzip as _gz, json as _jj, base64 as _b64p
+    try:
+        key_pem, cert_pem, chain_pem = _nf_load_cert()
+        from lxml import etree as _etx
+        ns = _NF_NS
+        _probe_chave = _nf_chave_acesso(998)
+        root = _etx.Element(f"{{{ns}}}DPS", versao="1.00", nsmap={None: ns})
+        inf = _etx.SubElement(root, f"{{{ns}}}infDPS", Id="DPS" + _probe_chave)
+        def sub(p, t, v=None): e = _etx.SubElement(p, f"{{{ns}}}{t}"); e.text = v; return e
+        sub(inf, "tpAmb", _NF_tpAmb)
+        sub(inf, "dhEmi", "2026-06-14T12:00:00-03:00")
+        sub(inf, "verAplic", "ERP_1.0")
+        sub(inf, "serie", "1"); sub(inf, "nDPS", "998")
+        sub(inf, "dCompet", "2026-06-01"); sub(inf, "tpEmit", "1"); sub(inf, "cLocEmi", _NF_IBGE)
+        prest = sub(inf, "prest"); sub(prest, "CNPJ", _NF_CNPJ)
+        sub(prest, "email", _NF_EMAIL)
+        rtrib = sub(prest, "regTrib")
+        sub(rtrib, "opSimpNac", "1"); sub(rtrib, "regApTribSN", "3"); sub(rtrib, "regEspTrib", "6")
+        tom = sub(inf, "toma"); sub(tom, "CNPJ", cnpj_toma); sub(tom, "xNome", "TESTE")
+        _e = sub(tom, "end"); _en = sub(_e, "endNac")
+        sub(_en, "cMun", _NF_IBGE); sub(_en, "CEP", "88350000")
+        sub(_e, "xLgr", "NAO INFORMADO"); sub(_e, "nro", "S/N"); sub(_e, "xBairro", "NAO INFORMADO")
+        serv = sub(inf, "serv")
+        lp = sub(serv, "locPrest"); sub(lp, "cLocPrestacao", _NF_IBGE)
+        cs = sub(serv, "cServ"); sub(cs, "cTribNac", cod); sub(cs, "xDescServ", "Planejamento e organizacao administrativa")
+        vals = sub(inf, "valores")
+        vsp = sub(vals, "vServPrest"); sub(vsp, "vReceb", "100.00"); sub(vsp, "vServ", "100.00")
+        trib = sub(vals, "trib")
+        tm = sub(trib, "tribMun"); sub(tm, "tribISSQN", "1"); sub(tm, "tpRetISSQN", "1")
+        tot = sub(trib, "totTrib"); sub(tot, "pTotTribSN", "6.00")
+        dps_bytes = _etx.tostring(root, xml_declaration=True, encoding="UTF-8")
+        signed = _nf_sign_dps(dps_bytes, key_pem, cert_pem)
+        with _tmp_nf.NamedTemporaryFile(suffix=".pem", delete=False) as cf:
+            cf.write(cert_pem + (chain_pem or b"")); cert_path = cf.name
+        with _tmp_nf.NamedTemporaryFile(suffix=".pem", delete=False) as kf:
+            kf.write(key_pem); key_path = kf.name
+        try:
+            body = _jj.dumps({"dpsXmlGZipB64": _b64p.b64encode(_gz.compress(signed)).decode()})
+            async with _httpx_nf.AsyncClient(cert=(cert_path, key_path), timeout=30, verify=True) as client:
+                r = await client.post(_NF_URLS[_NF_AMB], content=body.encode(), headers={"Content-Type": "application/json; charset=UTF-8"})
+            try: rj = r.json()
+            except: rj = r.text[:500]
+            return _JR(content={"cod": cod, "cnpj_toma": cnpj_toma, "status": r.status_code, "body": rj})
+        finally:
+            _os_nf.unlink(cert_path); _os_nf.unlink(key_path)
+    except Exception as e:
+        import traceback
+        return _JR(content={"cod": cod, "error": str(e), "trace": traceback.format_exc()[-800:]}, status_code=500)
+
+
+
 @app.get("/admin/financeiro/cobrancas/{cob_id}/emitir-nf")
 async def financeiro_cobrancas_emitir_nf(
     cob_id: int,
@@ -475,44 +828,26 @@ async def financeiro_cobrancas_emitir_nf(
             status_code=302,
         )
 
-    n_dps = cobranca.id
-
-    def _salvar_nf(numero: str, chave: str, url: str) -> None:
-        # CobrancaMensal não declara esses campos no SQLModel — atualizar via SQL direto
-        from sqlalchemy import text as _txt_nf2
-        from datetime import datetime as _dtl
-        session.execute(_txt_nf2(
-            "UPDATE cobranca_mensal SET nf_numero=:n, nf_chave=:c, nf_url=:u, updated_at=:t WHERE id=:id"
-        ), {"n": numero, "c": chave, "u": url, "t": _dtl.utcnow(), "id": cobranca.id})
-        session.commit()
-
+    # Offset para evitar colisão com tentativas anteriores onde a DPS foi recebida
+    # pelo SNNFSE mas nenhuma NFS-e foi gerada (assinatura inválida nas tentativas iniciais).
+    # nDPS: contador sequencial por série, continua a partir do último DPS do sistema antigo (265)
+    n_dps = _nf_proximo_ndps()
     try:
         key_pem, cert_pem, chain_pem = _nf_load_cert()
-        dps_xml  = _nf_build_dps(cobranca, contrato, n_dps)
+        dps_xml  = _nf_build_dps(cobranca, contrato, n_dps, session=session)
         signed   = _nf_sign_dps(dps_xml, key_pem, cert_pem)
+        print(f"[nfse] XML assinado: {signed.decode('utf-8', errors='replace')[:3000]}")
         resultado = await _nf_enviar(signed, key_pem, cert_pem, chain_pem)
 
-        _salvar_nf(resultado.get("numero", ""), resultado.get("chave", ""), resultado.get("url", ""))
-        nr = resultado.get("numero") or resultado.get("chave") or "emitida"
-        return _RR_nf(
-            f"/admin/financeiro/contratos/{cobranca.contrato_id}/cobrancas?ok=NF+{nr}+emitida+com+sucesso",
-            status_code=302,
-        )
+        from datetime import datetime as _dtl
+        cobranca.nf_numero  = resultado.get("numero", "")
+        cobranca.nf_chave   = resultado.get("chave",  "")
+        cobranca.nf_url     = resultado.get("url",    "")
+        cobranca.updated_at = _dtl.utcnow()
+        session.add(cobranca)
+        session.commit()
 
-    except _E0014Error:
-        # NFS-e já emitida numa tentativa anterior — consultar SNNFSE para obter dados reais
-        chave_dps = _nf_chave_acesso(n_dps)
-        print(f"[nfse] cob {cob_id}: NFS-e já existe (E0014), consultando chave DPS={chave_dps}")
-        try:
-            consulta = await _nf_consultar(chave_dps, key_pem, cert_pem, chain_pem)
-            chave_nf = consulta.get("chave") or chave_dps
-            numero   = consulta.get("numero") or ""
-            url_nf   = consulta.get("url") or ""
-        except Exception as _ec:
-            print(f"[nfse] consulta E0014 falhou: {_ec}")
-            chave_nf, numero, url_nf = chave_dps, "", ""
-        _salvar_nf(numero, chave_nf, url_nf)
-        nr = numero or chave_nf[:20] + "..."
+        nr = cobranca.nf_numero or cobranca.nf_chave or "emitida"
         return _RR_nf(
             f"/admin/financeiro/contratos/{cobranca.contrato_id}/cobrancas?ok=NF+{nr}+emitida+com+sucesso",
             status_code=302,

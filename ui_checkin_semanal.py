@@ -419,12 +419,14 @@ def _ck_disparar_checkins(semana: str, force: bool = False) -> dict:
                             continue
 
                     nome = (client.name or "cliente").split()[0]
-                    msg  = _CK_MSG_CHECKIN.format(nome=nome)
 
-                    ok, err = _ck_enviar_sync(
+                    # Template aprovado — funciona fora da janela de 24h (131047)
+                    ok, err = _ck_enviar_template_sync(
                         phone_destino,
                         config.meta_phone_number_id,
-                        msg,
+                        "checkin_semanal_augur",
+                        "pt_BR",
+                        [nome],
                     )
 
                     if ok:
@@ -508,12 +510,14 @@ def _ck_disparar_checkins(semana: str, force: bool = False) -> dict:
 
                     phone_destino = thread.contact_phone
                     nome = (client.name or "cliente").split()[0]
-                    msg  = _CK_MSG_CHECKIN.format(nome=nome)
 
-                    ok, err = _ck_enviar_sync(
+                    # Template aprovado — funciona fora da janela de 24h (131047)
+                    ok, err = _ck_enviar_template_sync(
                         phone_destino,
                         config.meta_phone_number_id,
-                        msg,
+                        "checkin_semanal_augur",
+                        "pt_BR",
+                        [nome],
                     )
 
                     if ok:
