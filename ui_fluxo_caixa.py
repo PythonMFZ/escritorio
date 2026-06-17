@@ -20,6 +20,7 @@ import io        as _io_fc
 from datetime   import date as _date_fc, timedelta as _td_fc
 from typing     import Optional as _Opt_fc, List as _List_fc
 from sqlalchemy import text as _t_fc, Column, BigInteger
+from fastapi import Query as _Query_fc
 
 # ── Modelos ───────────────────────────────────────────────────────────────────
 
@@ -30,6 +31,7 @@ class CashFlowConfig(SQLModel, table=True):
     company_id:           int                = Field(index=True)
     client_id:            Optional[int]      = Field(default=None, index=True)
     saldo_inicial_cents:  int                = Field(default=0)
+    saldo_data:           str                = Field(default="")  # ISO date — data de apuração do saldo_inicial_cents
     limite_cc_cents:      int                = Field(default=0)
     limite_alerta_cents:  int                = Field(default=0)
     updated_at:           datetime           = Field(default_factory=utcnow)
@@ -74,6 +76,7 @@ def _ensure_fc_tables():
         ("cashflowentry",  "categoria",             "VARCHAR DEFAULT 'Outros'"),
         ("cashflowentry",  "data_pagamento",        "VARCHAR DEFAULT NULL"),
         ("cashflowentry",  "empresa",               "VARCHAR DEFAULT ''"),
+        ("cashflowconfig", "saldo_data",            "VARCHAR DEFAULT ''"),
     ]
     # Altera valor_cents para BIGINT se ainda for INTEGER (suporta valores > R$21M)
     if _is_pg:
@@ -176,12 +179,15 @@ def _fc_filtrar_por_modo(entries: list, modo: str, hoje: _Opt_fc[_date_fc] = Non
       "todos"             — previsto + realizado (inclui atrasados)
       "realizado"         — só o que já foi pago/recebido
       "realizado_futuro"  — realizado + previsto com vencimento >= hoje (sem atrasados)
+      "atrasados"         — só os previstos com vencimento já passado
     """
     hoje = hoje or _date_fc.today()
     if modo == "realizado":
         return [e for e in entries if e.status == "realizado"]
     if modo == "realizado_futuro":
         return [e for e in entries if e.status == "realizado" or not _fc_is_atrasado(e, hoje)]
+    if modo == "atrasados":
+        return [e for e in entries if _fc_is_atrasado(e, hoje)]
     return entries  # "todos"
 
 
@@ -336,6 +342,7 @@ TEMPLATES["fluxo_caixa_dashboard.html"] = r"""
     <div class="d-flex gap-2">
       <a href="/ferramentas/fluxo-caixa/novo" class="btn btn-primary btn-sm">+ Lançamento</a>
       <a href="/ferramentas/fluxo-caixa/importar" class="btn btn-outline-secondary btn-sm">Importar Excel</a>
+      <a href="/ferramentas/fluxo-caixa/importar-obra" class="btn btn-outline-secondary btn-sm">🏗 Importar de Obra</a>
       <a href="/ferramentas/fluxo-caixa/importacoes" class="btn btn-outline-secondary btn-sm">Importações</a>
       <a href="/ferramentas/fluxo-caixa/config" class="btn btn-outline-secondary btn-sm">⚙ Configurar</a>
     </div>
@@ -412,6 +419,7 @@ TEMPLATES["fluxo_caixa_dashboard.html"] = r"""
           <option value="realizado"        {% if modo=='realizado'        %}selected{% endif %}>Só Realizado</option>
           <option value="todos"            {% if modo=='todos'            %}selected{% endif %}>Todos (inclui atrasados)</option>
           <option value="realizado_futuro" {% if modo=='realizado_futuro' %}selected{% endif %}>Realizado + A Realizar de hoje em diante (sem atrasados)</option>
+          <option value="atrasados"        {% if modo=='atrasados'        %}selected{% endif %}>Só Atrasados</option>
         </select>
       </div>
       <div class="col-auto">
@@ -728,6 +736,14 @@ TEMPLATES["fluxo_caixa_config.html"] = r"""
         <div class="form-text">Saldo de partida para cálculo do saldo acumulado.</div>
       </div>
       <div class="mb-3">
+        <label class="form-label">Data de Apuração do Saldo</label>
+        <input type="date" name="saldo_data" value="{{ saldo_data }}" class="form-control">
+        <div class="form-text">
+          Data em que esse saldo foi apurado. O sistema contabiliza apenas os lançamentos
+          a partir dessa data, independente do período escolhido para visualizar o relatório.
+        </div>
+      </div>
+      <div class="mb-3">
         <label class="form-label">Limite Conta Garantida (R$)</label>
         <input type="text" name="limite_cc" value="{{ limite_cc_str }}"
                class="form-control" placeholder="0,00">
@@ -892,8 +908,8 @@ async def fc_dashboard(
     data_fim: str = "",
     group_by: str = "semana",
     modo: str = "todos",
-    centros: _List_fc[str] = None,
-    empresas: _List_fc[str] = None,
+    centros: _Opt_fc[_List_fc[str]] = _Query_fc(None),
+    empresas: _Opt_fc[_List_fc[str]] = _Query_fc(None),
 ):
     ctx        = get_tenant_context(request, session)
     client_id  = get_active_client_id(request, session, ctx)
@@ -902,7 +918,7 @@ async def fc_dashboard(
     _df        = data_fim    or (hoje + _td_fc(days=60)).isoformat()
     centros    = centros or []
     empresas   = empresas or []
-    if modo not in ("todos", "realizado", "realizado_futuro"):
+    if modo not in ("todos", "realizado", "realizado_futuro", "atrasados"):
         modo = "todos"
     cfg        = _fc_get_config(session, ctx.company.id, client_id)
     entries_periodo = _fc_get_entries(session, ctx.company.id, client_id, _di, _df,
@@ -915,7 +931,18 @@ async def fc_dashboard(
     centros_disp  = sorted(set(e.centro_custo for e in todos if e.centro_custo))
     empresas_disp = sorted(set(e.empresa for e in todos if e.empresa))
 
-    periodos_raw = _calc_fluxo(entries_all, cfg, group_by)
+    # O saldo é apurado em uma data própria (cfg.saldo_data), independente do
+    # período de análise selecionado: a acumulação roda desde essa data, e o
+    # período exibido (_di..._df) só recorta a janela de exibição da tabela.
+    _calc_inicio = cfg.saldo_data or _di
+    entries_calc = _fc_get_entries(session, ctx.company.id, client_id, _calc_inicio, _df,
+                                  centros if centros else None,
+                                  empresas if empresas else None)
+    entries_calc_filtrado = _fc_filtrar_por_modo(entries_calc, modo, hoje)
+    periodos_full = _calc_fluxo(entries_calc_filtrado, cfg, group_by)
+    periodos_raw   = [p for p in periodos_full if p["data_fim"] >= _di]
+    periodos_antes = [p for p in periodos_full if p["data_fim"] <  _di]
+    caixa_inicial_cents = periodos_antes[-1]["saldo_acumulado"] if periodos_antes else cfg.saldo_inicial_cents
 
     # Enriquece periodos com strings formatadas
     for p in periodos_raw:
@@ -937,11 +964,11 @@ async def fc_dashboard(
     pago_c      = sum(e.valor_cents for e in entries_all if e.tipo=="saida"   and e.status=="realizado")
     atrasados   = [e for e in entries_all if _fc_is_atrasado(e, hoje)]
     atrasados_c = sum(e.valor_cents if e.tipo=="entrada" else -e.valor_cents for e in atrasados)
-    saldo_proj  = cfg.saldo_inicial_cents + (a_receber_c + recebido_c) - (a_pagar_c + pago_c)
+    saldo_proj  = caixa_inicial_cents + (a_receber_c + recebido_c) - (a_pagar_c + pago_c)
 
     return render("fluxo_caixa_dashboard.html", request=request, context={
-        "saldo_atual_cents":  cfg.saldo_inicial_cents,
-        "saldo_atual_brl":    _cents_to_brl(cfg.saldo_inicial_cents),
+        "saldo_atual_cents":  caixa_inicial_cents,
+        "saldo_atual_brl":    _cents_to_brl(caixa_inicial_cents),
         "entradas_prev_brl":  _cents_to_brl(a_receber_c + recebido_c),
         "saidas_prev_brl":    _cents_to_brl(a_pagar_c + pago_c),
         "saldo_proj_cents":   saldo_proj,
@@ -1203,6 +1230,7 @@ async def fc_config_get(request: Request, session: Session = Depends(get_session
 
     return render("fluxo_caixa_config.html", request=request, context={
         "saldo_inicial_str":  _fmt(cfg.saldo_inicial_cents),
+        "saldo_data":         cfg.saldo_data,
         "limite_cc_str":      _fmt(cfg.limite_cc_cents),
         "limite_alerta_str":  _fmt(cfg.limite_alerta_cents),
         "page_title":         "Configurações — Fluxo de Caixa",
@@ -1217,6 +1245,7 @@ async def fc_config_post(request: Request, session: Session = Depends(get_sessio
     cfg       = _fc_get_config(session, ctx.company.id, client_id)
     form      = await request.form()
     cfg.saldo_inicial_cents = _brl_to_cents(form.get("saldo_inicial", "0"))
+    cfg.saldo_data          = form.get("saldo_data", "").strip()
     cfg.limite_cc_cents     = _brl_to_cents(form.get("limite_cc", "0"))
     cfg.limite_alerta_cents = _brl_to_cents(form.get("limite_alerta", "0"))
     cfg.updated_at          = utcnow()
@@ -1539,6 +1568,227 @@ async def fc_excluir_batch(batch_id: str, request: Request, session: Session = D
     session.commit()
     set_flash(request, f"Lote {batch_id} excluído ({len(entries)} lançamentos removidos).")
     return RedirectResponse("/ferramentas/fluxo-caixa/importacoes", status_code=303)
+
+
+# ── Importar previsão (a incorrer) de uma Obra (Gestão de Obras) ──────────────
+
+_FC_MESES_PT = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun",
+                "Jul", "Ago", "Set", "Out", "Nov", "Dez"]
+
+TEMPLATES["fluxo_caixa_importar_obra.html"] = r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="container-fluid px-4 py-3" style="max-width:1000px">
+  <div class="d-flex align-items-center gap-2 mb-3">
+    <a href="/ferramentas/fluxo-caixa" class="btn btn-outline-secondary btn-sm">←</a>
+    <h4 class="mb-0">🏗 Importar previsão de Obra</h4>
+  </div>
+
+  {% if not obras %}
+    <div class="alert alert-info">
+      Nenhuma obra cadastrada para este cliente em <a href="/ferramentas/obras">Gestão de Obras</a>.
+    </div>
+  {% else %}
+  <form method="GET" action="/ferramentas/fluxo-caixa/importar-obra" class="row g-2 mb-3">
+    <div class="col-12 col-md-6">
+      <label class="form-label small fw-semibold">Obra</label>
+      <select name="obra_id" class="form-select form-select-sm" onchange="this.form.submit()">
+        <option value="">Selecione uma obra…</option>
+        {% for o in obras %}
+        <option value="{{ o.id }}" {% if obra and obra.id == o.id %}selected{% endif %}>{{ o.nome }}</option>
+        {% endfor %}
+      </select>
+    </div>
+  </form>
+
+  {% if obra %}
+    {% if not etapas_pendentes %}
+      <div class="alert alert-success">Esta obra não tem saldo a incorrer (tudo já realizado ou sem orçamento).</div>
+    {% else %}
+    <form method="POST" action="/ferramentas/fluxo-caixa/importar-obra/confirmar">
+      <input type="hidden" name="obra_id" value="{{ obra.id }}">
+      <div class="row g-2 mb-3">
+        <div class="col-12 col-md-4">
+          <label class="form-label small fw-semibold">Centro de Custo</label>
+          <input type="text" name="centro_custo" class="form-control form-control-sm" value="{{ obra.nome }}">
+        </div>
+        <div class="col-12 col-md-4">
+          <label class="form-label small fw-semibold">Empresa (opcional)</label>
+          <input type="text" name="empresa" class="form-control form-control-sm" list="emp-list-obra" placeholder="Ex: Empresa A">
+          <datalist id="emp-list-obra">
+            {% for emp in empresas_disponiveis %}<option value="{{ emp }}">{% endfor %}
+          </datalist>
+        </div>
+        <div class="col-12 col-md-4">
+          <label class="form-label small fw-semibold">Data de vencimento padrão (etapas sem data fim)</label>
+          <input type="date" name="data_padrao" class="form-control form-control-sm" value="{{ data_padrao }}">
+        </div>
+      </div>
+
+      <p class="text-muted small">
+        A previsão é gerada automaticamente a partir das datas de vencimento já cadastradas em cada etapa
+        da obra — não é necessário marcar fase a fase. Reimportar atualiza (substitui) a previsão anterior desta obra.
+      </p>
+
+      <div class="card p-0 mb-3">
+        <table class="table table-sm align-middle mb-0">
+          <thead class="table-light">
+            <tr>
+              <th class="ps-3">Mês de vencimento</th>
+              <th>Etapas</th>
+              <th class="text-end pe-3">A desembolsar (previsto)</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for m in meses %}
+            <tr>
+              <td class="ps-3">{{ m.label }}</td>
+              <td class="text-muted small">{{ m.qtd }} etapa(s)</td>
+              <td class="text-end pe-3 fw-semibold">R$ {{ "%.2f"|format(m.total) }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+          <tfoot class="table-light">
+            <tr>
+              <th class="ps-3">Total</th>
+              <th>{{ etapas_pendentes|length }} etapa(s)</th>
+              <th class="text-end pe-3">R$ {{ "%.2f"|format(total_geral) }}</th>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+
+      <button type="submit" class="btn btn-primary">Gerar previsão mensal de desembolso</button>
+    </form>
+    {% endif %}
+  {% endif %}
+  {% endif %}
+</div>
+{% endblock %}
+"""
+if hasattr(templates_env, "loader") and hasattr(templates_env.loader, "mapping"):
+    templates_env.loader.mapping["fluxo_caixa_importar_obra.html"] = TEMPLATES["fluxo_caixa_importar_obra.html"]
+
+
+@app.get("/ferramentas/fluxo-caixa/importar-obra", response_class=HTMLResponse)
+@require_login
+async def fc_importar_obra_page(request: Request, obra_id: _Opt_fc[int] = None, session: Session = Depends(get_session)):
+    ctx       = get_tenant_context(request, session)
+    client_id = get_active_client_id(request, session, ctx)
+
+    obras = session.exec(
+        select(Obra).where(Obra.company_id == ctx.company.id, Obra.client_id == client_id)
+    ).all()
+
+    obra = None
+    etapas_pendentes = []
+    meses = []
+    total_geral = 0.0
+    data_padrao_default = (_date_fc.today() + _td_fc(days=30)).isoformat()
+    if obra_id:
+        obra = _get_obra_or_404(session, obra_id, ctx.company.id)
+        if obra and obra.client_id != client_id:
+            obra = None
+        if obra:
+            calc = _calcular_obra(session, obra)
+            for fase in calc["fases"]:
+                for e in fase["etapas"]:
+                    if e["a_incorrer"] > 0:
+                        etapas_pendentes.append({
+                            **e,
+                            "fase_nome": fase["nome"],
+                        })
+
+            meses_map = {}
+            for e in etapas_pendentes:
+                venc = e["data_fim"] or data_padrao_default
+                mes_key = venc[:7] if len(venc) >= 7 else data_padrao_default[:7]
+                if mes_key not in meses_map:
+                    meses_map[mes_key] = {"qtd": 0, "total": 0.0}
+                meses_map[mes_key]["qtd"]   += 1
+                meses_map[mes_key]["total"] += e["a_incorrer"]
+                total_geral += e["a_incorrer"]
+
+            for mes_key in sorted(meses_map.keys()):
+                ano, mes = mes_key.split("-")
+                label = f"{_FC_MESES_PT[int(mes)-1]}/{ano}"
+                meses.append({"label": label, "qtd": meses_map[mes_key]["qtd"], "total": meses_map[mes_key]["total"]})
+
+    return render("fluxo_caixa_importar_obra.html", request=request, context={
+        "page_title":           "Importar de Obra — Fluxo de Caixa",
+        "obras":                obras,
+        "obra":                 obra,
+        "etapas_pendentes":     etapas_pendentes,
+        "meses":                meses,
+        "total_geral":          total_geral,
+        "empresas_disponiveis": _fc_empresas(session, ctx.company.id, client_id),
+        "data_padrao":          data_padrao_default,
+    })
+
+
+@app.post("/ferramentas/fluxo-caixa/importar-obra/confirmar", response_class=HTMLResponse)
+@require_login
+async def fc_importar_obra_confirmar(
+    request: Request,
+    session: Session = Depends(get_session),
+    obra_id: int = Form(...),
+    centro_custo: str = Form(""),
+    empresa: str = Form(""),
+    data_padrao: str = Form(""),
+):
+    from fastapi.responses import RedirectResponse
+    ctx       = get_tenant_context(request, session)
+    client_id = get_active_client_id(request, session, ctx)
+
+    obra = _get_obra_or_404(session, obra_id, ctx.company.id)
+    if not obra or obra.client_id != client_id:
+        set_flash(request, "Obra não encontrada.")
+        return RedirectResponse("/ferramentas/fluxo-caixa/importar-obra", status_code=303)
+
+    calc = _calcular_obra(session, obra)
+
+    # Batch fixo por obra: reimportar substitui a previsão anterior gerada por esta obra.
+    batch_id = f"obra{obra.id}"
+    antigos = session.exec(
+        select(CashFlowEntry).where(
+            CashFlowEntry.company_id   == ctx.company.id,
+            CashFlowEntry.client_id    == client_id,
+            CashFlowEntry.import_batch == batch_id,
+        )
+    ).all()
+    for old in antigos:
+        session.delete(old)
+
+    data_padrao_final = data_padrao or (_date_fc.today() + _td_fc(days=30)).isoformat()
+    importados = 0
+    for fase in calc["fases"]:
+        for e in fase["etapas"]:
+            if e["a_incorrer"] <= 0:
+                continue
+            venc = e["data_fim"] or data_padrao_final
+            entry = CashFlowEntry(
+                company_id=ctx.company.id,
+                client_id=client_id,
+                data_vencimento=venc,
+                data_pagamento=None,
+                descricao=f"{obra.nome} — {e['descricao']}",
+                empresa=empresa.strip(),
+                centro_custo=(centro_custo.strip() or obra.nome),
+                categoria="Obra",
+                tipo="saida",
+                valor_cents=int(round(e["a_incorrer"] * 100)),
+                status="previsto",
+                import_batch=batch_id,
+                created_at=utcnow(),
+                updated_at=utcnow(),
+            )
+            session.add(entry)
+            importados += 1
+
+    session.commit()
+    set_flash(request, f"Previsão mensal gerada: {importados} etapa(s) da obra '{obra.nome}' importada(s) como contas a pagar (previsto).")
+    return RedirectResponse("/ferramentas/fluxo-caixa/lancamentos", status_code=303)
+
 
 _orig_fc_enriquecer = _enriquecer_client_data
 
