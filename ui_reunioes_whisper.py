@@ -56,6 +56,98 @@ def _get_whisper_model():
     return _whisper_model_cache.get(_WHISPER_MODEL_NAME)
 
 
+# ── Compressão/Divisão de áudio para respeitar o limite de 25MB da OpenAI ────
+
+_OPENAI_MAX_BYTES = 24 * 1024 * 1024  # margem de segurança abaixo dos 25MB da API
+
+
+def _ffmpeg_bin():
+    return _shutil.which("ffmpeg")
+
+
+def _compress_audio_for_whisper(src_path: str, dst_path: str) -> bool:
+    """Reencoda para mono/Opus 32kbps — reduz bastante o tamanho mantendo a voz inteligível."""
+    ffmpeg_bin = _ffmpeg_bin()
+    if not ffmpeg_bin:
+        return False
+    import subprocess as _sp_w
+    cmd = [
+        ffmpeg_bin, "-y", "-i", src_path,
+        "-vn", "-ac", "1", "-ar", "16000",
+        "-c:a", "libopus", "-b:a", "32k",
+        "-f", "ogg", dst_path,
+    ]
+    try:
+        proc = _sp_w.run(cmd, capture_output=True, timeout=900)
+        if proc.returncode != 0:
+            print(f"[whisper] ffmpeg compressão falhou: {proc.stderr.decode(errors='ignore')[:400]}")
+            return False
+        return _Path(dst_path).exists()
+    except Exception as _e_comp:
+        print(f"[whisper] ffmpeg compressão exceção: {_e_comp}")
+        return False
+
+
+def _split_audio_for_whisper(src_path: str, out_dir: str, segment_seconds: int = 1200) -> list:
+    """Divide o áudio (já comprimido) em pedaços de N segundos sem recodificar."""
+    ffmpeg_bin = _ffmpeg_bin()
+    if not ffmpeg_bin:
+        return []
+    import subprocess as _sp_w
+    pattern = str(_Path(out_dir) / "chunk_%03d.ogg")
+    cmd = [
+        ffmpeg_bin, "-y", "-i", src_path,
+        "-c", "copy", "-f", "segment",
+        "-segment_time", str(segment_seconds),
+        "-reset_timestamps", "1",
+        pattern,
+    ]
+    try:
+        proc = _sp_w.run(cmd, capture_output=True, timeout=1200)
+        if proc.returncode != 0:
+            print(f"[whisper] ffmpeg split falhou: {proc.stderr.decode(errors='ignore')[:400]}")
+            return []
+    except Exception as _e_split:
+        print(f"[whisper] ffmpeg split exceção: {_e_split}")
+        return []
+    return sorted(str(p) for p in _Path(out_dir).glob("chunk_*.ogg"))
+
+
+def _prepare_audio_for_whisper(audio_path: str):
+    """
+    Garante que cada arquivo enviado à API da OpenAI fique abaixo do limite de 25MB.
+    Comprime para Opus mono 32kbps e, se ainda assim exceder, divide em pedaços.
+    Retorna (lista_de_caminhos_em_ordem, tmp_dir_ou_None) — tmp_dir deve ser
+    removido pelo chamador após o uso.
+    """
+    try:
+        size = _Path(audio_path).stat().st_size
+    except Exception:
+        return [audio_path], None
+
+    if size <= _OPENAI_MAX_BYTES:
+        return [audio_path], None
+
+    print(f"[whisper] Arquivo de {size/1024/1024:.1f}MB excede 25MB — comprimindo...")
+    tmp_dir = _tmpfile.mkdtemp(prefix="whisper_")
+    compressed_path = str(_Path(tmp_dir) / "compressed.ogg")
+
+    if not _compress_audio_for_whisper(audio_path, compressed_path):
+        print("[whisper] Compressão indisponível (FFmpeg ausente no servidor?) — tentando enviar arquivo original.")
+        _shutil.rmtree(tmp_dir, ignore_errors=True)
+        return [audio_path], None
+
+    comp_size = _Path(compressed_path).stat().st_size
+    print(f"[whisper] Comprimido para {comp_size/1024/1024:.1f}MB")
+
+    if comp_size <= _OPENAI_MAX_BYTES:
+        return [compressed_path], tmp_dir
+
+    print("[whisper] Ainda acima de 25MB após compressão — dividindo em pedaços...")
+    chunks = _split_audio_for_whisper(compressed_path, tmp_dir, segment_seconds=1200)
+    return (chunks if chunks else [compressed_path]), tmp_dir
+
+
 def _gerar_resumo_ia(transcricao: str, titulo: str) -> dict:
     """Usa Claude para gerar resumo estruturado da transcrição."""
     import requests as _req_w
@@ -134,24 +226,35 @@ def _processar_audio_background(
         _sess.add(mt); _sess.commit()
 
     transcricao = ""
+    _erro_real = ""
 
     # ── Tenta OpenAI Whisper API ─────────────────────────────────────────────
     openai_key = _os2.environ.get("OPENAI_API_KEY", "")
     if openai_key and _Path(audio_path).exists():
+        _tmp_dir_whisper = None
         try:
             import openai as _oai
             _oai_client = _oai.OpenAI(api_key=openai_key)
-            print(f"[whisper] Usando OpenAI Whisper API...")
-            with open(audio_path, "rb") as _af:
-                result = _oai_client.audio.transcriptions.create(
-                    model="whisper-1",
-                    file=_af,
-                    language="pt",
-                )
-            transcricao = result.text.strip()
+            partes, _tmp_dir_whisper = _prepare_audio_for_whisper(audio_path)
+            print(f"[whisper] Usando OpenAI Whisper API ({len(partes)} parte(s))...")
+            textos = []
+            for _i_parte, parte in enumerate(partes, start=1):
+                print(f"[whisper] Transcrevendo parte {_i_parte}/{len(partes)}...")
+                with open(parte, "rb") as _af:
+                    result = _oai_client.audio.transcriptions.create(
+                        model="whisper-1",
+                        file=_af,
+                        language="pt",
+                    )
+                textos.append(result.text.strip())
+            transcricao = "\n\n".join(t for t in textos if t)
             print(f"[whisper] OpenAI API OK: {len(transcricao)} chars")
         except Exception as _oe:
+            _erro_real = str(_oe)
             print(f"[whisper] OpenAI API falhou: {_oe}")
+        finally:
+            if _tmp_dir_whisper:
+                _shutil.rmtree(_tmp_dir_whisper, ignore_errors=True)
     elif not openai_key:
         print("[whisper] ⚠️ OPENAI_API_KEY não configurada — configure no Render para ativar transcrição.")
 
@@ -172,7 +275,11 @@ def _processar_audio_background(
             _mt = _s.get(Meeting, meeting_id)
             if _mt:
                 _mt.notion_status = "error"
-                _mt.notes_text = "Não foi possível transcrever o áudio. Verifique se OPENAI_API_KEY está configurada no Render, ou tente um arquivo MP3/M4A."
+                _detalhe = f" Detalhe: {_erro_real}" if _erro_real else ""
+                _mt.notes_text = (
+                    "Não foi possível transcrever o áudio. Verifique se OPENAI_API_KEY "
+                    "está configurada no Render, ou tente um arquivo MP3/M4A." + _detalhe
+                )
                 _s.add(_mt); _s.commit()
         try:
             _Path(audio_path).unlink(missing_ok=True)
