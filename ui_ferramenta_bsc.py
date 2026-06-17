@@ -306,7 +306,7 @@ async def bsc_index(request: Request, session: Session = Depends(get_session)):
 @require_login
 async def bsc_criar_plano(request: Request, session: Session = Depends(get_session)):
     ctx = get_tenant_context(request, session)
-    if not ctx or ctx.membership.role not in ("admin", "equipe"):
+    if not ctx or ctx.membership.role not in ("admin", "equipe", "cliente"):
         return JSONResponse({"ok": False}, status_code=403)
     body = await request.json()
     plan = BSCPlan(
@@ -324,7 +324,7 @@ async def bsc_criar_plano(request: Request, session: Session = Depends(get_sessi
 @require_login
 async def bsc_editar_plano(plan_id: int, request: Request, session: Session = Depends(get_session)):
     ctx = get_tenant_context(request, session)
-    if not ctx or ctx.membership.role not in ("admin", "equipe"):
+    if not ctx or ctx.membership.role not in ("admin", "equipe", "cliente"):
         return JSONResponse({"ok": False}, status_code=403)
     plan = session.get(BSCPlan, plan_id)
     if not plan or plan.company_id != ctx.company.id:
@@ -342,7 +342,7 @@ async def bsc_editar_plano(plan_id: int, request: Request, session: Session = De
 @require_login
 async def bsc_deletar_plano(plan_id: int, request: Request, session: Session = Depends(get_session)):
     ctx = get_tenant_context(request, session)
-    if not ctx or ctx.membership.role not in ("admin", "equipe"):
+    if not ctx or ctx.membership.role not in ("admin", "equipe", "cliente"):
         return JSONResponse({"ok": False}, status_code=403)
     plan = session.get(BSCPlan, plan_id)
     if not plan or plan.company_id != ctx.company.id:
@@ -407,7 +407,7 @@ async def bsc_dashboard(plan_id: int, request: Request, session: Session = Depen
 @require_login
 async def bsc_criar_objetivo(request: Request, session: Session = Depends(get_session)):
     ctx = get_tenant_context(request, session)
-    if not ctx or ctx.membership.role not in ("admin", "equipe"):
+    if not ctx or ctx.membership.role not in ("admin", "equipe", "cliente"):
         return JSONResponse({"ok": False}, status_code=403)
     body = await request.json()
     plan_id = int(body.get("plan_id") or 0)
@@ -435,7 +435,7 @@ async def bsc_criar_objetivo(request: Request, session: Session = Depends(get_se
 @require_login
 async def bsc_editar_objetivo(obj_id: int, request: Request, session: Session = Depends(get_session)):
     ctx = get_tenant_context(request, session)
-    if not ctx or ctx.membership.role not in ("admin", "equipe"):
+    if not ctx or ctx.membership.role not in ("admin", "equipe", "cliente"):
         return JSONResponse({"ok": False}, status_code=403)
     obj = session.get(BSCObjective, obj_id)
     if not obj or obj.company_id != ctx.company.id:
@@ -452,7 +452,7 @@ async def bsc_editar_objetivo(obj_id: int, request: Request, session: Session = 
 @require_login
 async def bsc_deletar_objetivo(obj_id: int, request: Request, session: Session = Depends(get_session)):
     ctx = get_tenant_context(request, session)
-    if not ctx or ctx.membership.role not in ("admin", "equipe"):
+    if not ctx or ctx.membership.role not in ("admin", "equipe", "cliente"):
         return JSONResponse({"ok": False}, status_code=403)
     obj = session.get(BSCObjective, obj_id)
     if not obj or obj.company_id != ctx.company.id:
@@ -468,7 +468,7 @@ async def bsc_deletar_objetivo(obj_id: int, request: Request, session: Session =
 @require_login
 async def bsc_criar_indicador(request: Request, session: Session = Depends(get_session)):
     ctx = get_tenant_context(request, session)
-    if not ctx or ctx.membership.role not in ("admin", "equipe"):
+    if not ctx or ctx.membership.role not in ("admin", "equipe", "cliente"):
         return JSONResponse({"ok": False}, status_code=403)
     body = await request.json()
     obj = session.get(BSCObjective, int(body.get("objective_id") or 0))
@@ -496,7 +496,7 @@ async def bsc_criar_indicador(request: Request, session: Session = Depends(get_s
 @require_login
 async def bsc_editar_indicador(ind_id: int, request: Request, session: Session = Depends(get_session)):
     ctx = get_tenant_context(request, session)
-    if not ctx or ctx.membership.role not in ("admin", "equipe"):
+    if not ctx or ctx.membership.role not in ("admin", "equipe", "cliente"):
         return JSONResponse({"ok": False}, status_code=403)
     ind = session.get(BSCIndicator, ind_id)
     if not ind or ind.company_id != ctx.company.id:
@@ -521,7 +521,7 @@ async def bsc_editar_indicador(ind_id: int, request: Request, session: Session =
 @require_login
 async def bsc_deletar_indicador(ind_id: int, request: Request, session: Session = Depends(get_session)):
     ctx = get_tenant_context(request, session)
-    if not ctx or ctx.membership.role not in ("admin", "equipe"):
+    if not ctx or ctx.membership.role not in ("admin", "equipe", "cliente"):
         return JSONResponse({"ok": False}, status_code=403)
     ind = session.get(BSCIndicator, ind_id)
     if not ind or ind.company_id != ctx.company.id:
@@ -535,7 +535,7 @@ async def bsc_deletar_indicador(ind_id: int, request: Request, session: Session 
 @require_login
 async def bsc_atualizar_valor(ind_id: int, request: Request, session: Session = Depends(get_session)):
     ctx = get_tenant_context(request, session)
-    if not ctx or ctx.membership.role not in ("admin", "equipe"):
+    if not ctx or ctx.membership.role not in ("admin", "equipe", "cliente"):
         return JSONResponse({"ok": False}, status_code=403)
     ind = session.get(BSCIndicator, ind_id)
     if not ind or ind.company_id != ctx.company.id:
@@ -572,7 +572,7 @@ async def bsc_atualizar_valor(ind_id: int, request: Request, session: Session = 
 @require_login
 async def bsc_criar_acao(request: Request, session: Session = Depends(get_session)):
     ctx = get_tenant_context(request, session)
-    if not ctx or ctx.membership.role not in ("admin", "equipe"):
+    if not ctx or ctx.membership.role not in ("admin", "equipe", "cliente"):
         return JSONResponse({"ok": False}, status_code=403)
     body = await request.json()
     obj = session.get(BSCObjective, int(body.get("objective_id") or 0))
@@ -622,7 +622,7 @@ async def bsc_criar_acao(request: Request, session: Session = Depends(get_sessio
 @require_login
 async def bsc_editar_acao(ac_id: int, request: Request, session: Session = Depends(get_session)):
     ctx = get_tenant_context(request, session)
-    if not ctx or ctx.membership.role not in ("admin", "equipe"):
+    if not ctx or ctx.membership.role not in ("admin", "equipe", "cliente"):
         return JSONResponse({"ok": False}, status_code=403)
     ac = session.get(BSCAction, ac_id)
     if not ac or ac.company_id != ctx.company.id:
@@ -654,7 +654,7 @@ async def bsc_editar_acao(ac_id: int, request: Request, session: Session = Depen
 @require_login
 async def bsc_deletar_acao(ac_id: int, request: Request, session: Session = Depends(get_session)):
     ctx = get_tenant_context(request, session)
-    if not ctx or ctx.membership.role not in ("admin", "equipe"):
+    if not ctx or ctx.membership.role not in ("admin", "equipe", "cliente"):
         return JSONResponse({"ok": False}, status_code=403)
     ac = session.get(BSCAction, ac_id)
     if not ac or ac.company_id != ctx.company.id:
@@ -718,7 +718,7 @@ TEMPLATES["bsc_index.html"] = r"""
     <h4 class="mb-0">Planejamento Estratégico (BSC)</h4>
     <div class="muted small">Balanced Scorecard — 4 perspectivas, objetivos, indicadores e ações</div>
   </div>
-  {% if role in ("admin","equipe") %}
+  {% if role in ("admin","equipe","cliente") %}
   <button class="btn btn-primary btn-sm" onclick="abrirModalPlano()">+ Novo Plano</button>
   {% endif %}
 </div>
@@ -740,7 +740,7 @@ TEMPLATES["bsc_index.html"] = r"""
       {% endif %}
       <div class="mt-3 d-flex gap-2">
         <a href="/ferramentas/bsc/{{ plan.id }}" class="btn btn-primary btn-sm flex-grow-1">Abrir BSC</a>
-        {% if role in ("admin","equipe") %}
+        {% if role in ("admin","equipe","cliente") %}
         <button class="btn btn-outline-secondary btn-sm"
                 onclick="editarPlano({{ plan.id }}, '{{ plan.name|replace("'","\\'") }}', {{ plan.year }}, '{{ plan.description|replace("'","\\'") }}')">Editar</button>
         <button class="btn btn-outline-danger btn-sm"
@@ -756,7 +756,7 @@ TEMPLATES["bsc_index.html"] = r"""
   <div style="font-size:3rem;">🎯</div>
   <h5 class="mt-3">Nenhum plano criado ainda</h5>
   <div class="muted mb-3">Crie seu primeiro Balanced Scorecard com as 4 perspectivas estratégicas.</div>
-  {% if role in ("admin","equipe") %}
+  {% if role in ("admin","equipe","cliente") %}
   <button class="btn btn-primary" onclick="abrirModalPlano()">+ Criar Primeiro Plano</button>
   {% endif %}
 </div>
@@ -857,7 +857,7 @@ TEMPLATES["bsc_dashboard.html"] = r"""
     <h4 class="mb-0">{{ plan.name }} <span class="badge bg-light text-dark border ms-1">{{ plan.year }}</span></h4>
     {% if plan.description %}<div class="muted small">{{ plan.description }}</div>{% endif %}
   </div>
-  {% if role in ("admin","equipe") %}
+  {% if role in ("admin","equipe","cliente") %}
   <button class="btn btn-outline-secondary btn-sm"
           onclick="editarPlano({{ plan.id }}, '{{ plan.name|replace("'","\\'") }}', {{ plan.year }}, '{{ plan.description|replace("'","\\'") }}')">
     Editar Plano
@@ -875,7 +875,7 @@ TEMPLATES["bsc_dashboard.html"] = r"""
     <div class="card-header py-2 px-3 d-flex justify-content-between align-items-center"
          style="background:{{ persp.color }}18;">
       <span class="fw-semibold">{{ persp.icon }} {{ persp.name }}</span>
-      {% if role in ("admin","equipe") %}
+      {% if role in ("admin","equipe","cliente") %}
       <button class="btn btn-sm bsc-obj-btn btn-outline-secondary"
               onclick="novoObjetivo('{{ persp.key }}', {{ plan.id }})">+ Objetivo</button>
       {% endif %}
@@ -927,7 +927,7 @@ TEMPLATES["bsc_dashboard.html"] = r"""
               <!-- Indicadores -->
               <div class="d-flex justify-content-between align-items-center mb-1">
                 <div class="fw-semibold" style="font-size:.8rem;">📊 Indicadores</div>
-                {% if role in ("admin","equipe") %}
+                {% if role in ("admin","equipe","cliente") %}
                 <button class="btn btn-sm bsc-obj-btn btn-outline-secondary"
                         onclick="novoIndicador({{ obj.id }})">+ KPI</button>
                 {% endif %}
@@ -956,7 +956,7 @@ TEMPLATES["bsc_dashboard.html"] = r"""
                     <div style="font-size:.68rem;color:{{ bc }};">{{ pct|round(1) }}%</div>
                   </td>
                   <td class="text-end" style="white-space:nowrap;">
-                    {% if role in ("admin","equipe") %}
+                    {% if role in ("admin","equipe","cliente") %}
                     <button class="btn btn-sm bsc-obj-btn btn-outline-secondary"
                             data-id="{{ ind.id }}"
                             data-nome="{{ ind.name }}"
@@ -985,7 +985,7 @@ TEMPLATES["bsc_dashboard.html"] = r"""
               <!-- Ações -->
               <div class="d-flex justify-content-between align-items-center mb-1">
                 <div class="fw-semibold" style="font-size:.8rem;">🎯 Plano de Ações</div>
-                {% if role in ("admin","equipe") %}
+                {% if role in ("admin","equipe","cliente") %}
                 <button class="btn btn-sm bsc-obj-btn btn-outline-secondary"
                         onclick="novaAcao({{ obj.id }}, {{ plan.id }})">+ Ação</button>
                 {% endif %}
@@ -1015,7 +1015,7 @@ TEMPLATES["bsc_dashboard.html"] = r"""
                     <div style="font-size:.68rem;color:#0d6efd;">{{ ac.progress }}%</div>
                   </td>
                   <td class="text-end" style="white-space:nowrap;">
-                    {% if role in ("admin","equipe") %}
+                    {% if role in ("admin","equipe","cliente") %}
                     <button class="btn btn-sm bsc-obj-btn btn-outline-secondary"
                             onclick="editarAcao({{ ac.id }}, '{{ ac.title|replace("'","\\'") }}', '{{ ac.description|replace("'","\\'") }}', '{{ ac.responsible }}', '{{ ac.due_date }}', '{{ ac.status }}', '{{ ac.priority }}', {{ ac.progress }})">Ed</button>
                     <button class="btn btn-sm bsc-obj-btn btn-outline-danger"
@@ -1030,7 +1030,7 @@ TEMPLATES["bsc_dashboard.html"] = r"""
               <div class="muted mb-2" style="font-size:.78rem;">Nenhuma ação definida.</div>
               {% endif %}
 
-              {% if role in ("admin","equipe") %}
+              {% if role in ("admin","equipe","cliente") %}
               <div class="text-end mt-1">
                 <button class="btn btn-sm bsc-obj-btn btn-outline-secondary"
                         onclick="editarObjetivo({{ obj.id }}, '{{ obj.title|replace("'","\\'") }}', '{{ obj.description|replace("'","\\'") }}', '{{ obj.owner }}', '{{ obj.perspective }}')">Editar objetivo</button>
