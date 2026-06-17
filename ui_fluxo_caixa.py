@@ -1575,6 +1575,51 @@ async def fc_excluir_batch(batch_id: str, request: Request, session: Session = D
 _FC_MESES_PT = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun",
                 "Jul", "Ago", "Set", "Out", "Nov", "Dez"]
 
+
+def _fc_obra_rateio_mensal(valor: float, dt_inicio_str: str, dt_fim_str: str, hoje: _date_fc) -> list:
+    """
+    Distribui um valor (a incorrer) mês a mês, proporcional aos dias de cada mês,
+    cobrindo o período que falta da etapa: de hoje (ou do início da etapa, se ainda
+    não começou) até o fim. Não rateia o que já passou — só o que falta desembolsar.
+    Cada mês cai no dia 1º. Retorna lista de tuplas (mes_iso, valor_mes).
+    """
+    try:
+        dt_i = _date_fc.fromisoformat(dt_inicio_str) if dt_inicio_str else None
+    except Exception:
+        dt_i = None
+    try:
+        dt_f = _date_fc.fromisoformat(dt_fim_str) if dt_fim_str else None
+    except Exception:
+        dt_f = None
+    if not dt_f:
+        dt_f = hoje
+
+    inicio = dt_i if (dt_i and dt_i > hoje) else hoje
+
+    if dt_f <= inicio:
+        return [(_date_fc(dt_f.year, dt_f.month, 1).isoformat(), round(valor, 2))]
+
+    total_dias = (dt_f - inicio).days
+    resultados = []
+    cur = _date_fc(inicio.year, inicio.month, 1)
+    end_month = _date_fc(dt_f.year, dt_f.month, 1)
+    while cur <= end_month:
+        nxt = _date_fc(cur.year + 1, 1, 1) if cur.month == 12 else _date_fc(cur.year, cur.month + 1, 1)
+        seg_start = max(inicio, cur)
+        seg_end   = min(dt_f, nxt)
+        dias_mes  = max((seg_end - seg_start).days, 0)
+        if dias_mes > 0:
+            resultados.append([cur.isoformat(), valor * dias_mes / total_dias])
+        cur = nxt
+
+    if not resultados:
+        return [(_date_fc(dt_f.year, dt_f.month, 1).isoformat(), round(valor, 2))]
+
+    # Ajusta arredondamento no último mês para a soma bater com o valor original
+    soma = sum(v for _, v in resultados)
+    resultados[-1][1] += (valor - soma)
+    return [(mes, round(v, 2)) for mes, v in resultados]
+
 TEMPLATES["fluxo_caixa_importar_obra.html"] = r"""
 {% extends "base.html" %}
 {% block content %}
@@ -1700,13 +1745,17 @@ async def fc_importar_obra_page(request: Request, obra_id: _Opt_fc[int] = None, 
                         })
 
             meses_map = {}
+            hoje = _date_fc.today()
             for e in etapas_pendentes:
-                venc = e["data_fim"] or data_padrao_default
-                mes_key = venc[:7] if len(venc) >= 7 else data_padrao_default[:7]
-                if mes_key not in meses_map:
-                    meses_map[mes_key] = {"qtd": 0, "total": 0.0}
-                meses_map[mes_key]["qtd"]   += 1
-                meses_map[mes_key]["total"] += e["a_incorrer"]
+                dt_fim_etapa = e["data_fim"] or data_padrao_default
+                for mes_key_full, valor_mes in _fc_obra_rateio_mensal(
+                    e["a_incorrer"], e["data_inicio"], dt_fim_etapa, hoje
+                ):
+                    mes_key = mes_key_full[:7]
+                    if mes_key not in meses_map:
+                        meses_map[mes_key] = {"qtd": 0, "total": 0.0}
+                    meses_map[mes_key]["qtd"]   += 1
+                    meses_map[mes_key]["total"] += valor_mes
                 total_geral += e["a_incorrer"]
 
             for mes_key in sorted(meses_map.keys()):
@@ -1760,33 +1809,39 @@ async def fc_importar_obra_confirmar(
         session.delete(old)
 
     data_padrao_final = data_padrao or (_date_fc.today() + _td_fc(days=30)).isoformat()
+    hoje = _date_fc.today()
     importados = 0
+    etapas_count = 0
     for fase in calc["fases"]:
         for e in fase["etapas"]:
             if e["a_incorrer"] <= 0:
                 continue
-            venc = e["data_fim"] or data_padrao_final
-            entry = CashFlowEntry(
-                company_id=ctx.company.id,
-                client_id=client_id,
-                data_vencimento=venc,
-                data_pagamento=None,
-                descricao=f"{obra.nome} — {e['descricao']}",
-                empresa=empresa.strip(),
-                centro_custo=(centro_custo.strip() or obra.nome),
-                categoria="Obra",
-                tipo="saida",
-                valor_cents=int(round(e["a_incorrer"] * 100)),
-                status="previsto",
-                import_batch=batch_id,
-                created_at=utcnow(),
-                updated_at=utcnow(),
-            )
-            session.add(entry)
-            importados += 1
+            etapas_count += 1
+            dt_fim_etapa = e["data_fim"] or data_padrao_final
+            for mes_iso, valor_mes in _fc_obra_rateio_mensal(e["a_incorrer"], e["data_inicio"], dt_fim_etapa, hoje):
+                if valor_mes <= 0:
+                    continue
+                entry = CashFlowEntry(
+                    company_id=ctx.company.id,
+                    client_id=client_id,
+                    data_vencimento=mes_iso,
+                    data_pagamento=None,
+                    descricao=f"{obra.nome} — {e['descricao']} ({mes_iso[:7]})",
+                    empresa=empresa.strip(),
+                    centro_custo=(centro_custo.strip() or obra.nome),
+                    categoria="Obra",
+                    tipo="saida",
+                    valor_cents=int(round(valor_mes * 100)),
+                    status="previsto",
+                    import_batch=batch_id,
+                    created_at=utcnow(),
+                    updated_at=utcnow(),
+                )
+                session.add(entry)
+                importados += 1
 
     session.commit()
-    set_flash(request, f"Previsão mensal gerada: {importados} etapa(s) da obra '{obra.nome}' importada(s) como contas a pagar (previsto).")
+    set_flash(request, f"Previsão mensal gerada: {etapas_count} etapa(s) da obra '{obra.nome}' distribuídas em {importados} lançamento(s) mês a mês (previsto).")
     return RedirectResponse("/ferramentas/fluxo-caixa/lancamentos", status_code=303)
 
 
