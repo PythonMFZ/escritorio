@@ -21,6 +21,7 @@ from datetime   import date as _date_fc, timedelta as _td_fc
 from typing     import Optional as _Opt_fc, List as _List_fc
 from sqlalchemy import text as _t_fc, Column, BigInteger
 from fastapi import Query as _Query_fc
+from types import SimpleNamespace as _SimpleNamespace_fc
 
 # ── Modelos ───────────────────────────────────────────────────────────────────
 
@@ -963,14 +964,35 @@ async def fc_dashboard(
     empresas_disp = sorted(set(e.empresa for e in todos if e.empresa))
 
     # O saldo é apurado em uma data própria (cfg.saldo_data), independente do
-    # período de análise selecionado: a acumulação roda desde essa data, e o
-    # período exibido (_di..._df) só recorta a janela de exibição da tabela.
-    _calc_inicio = None if modo == "atrasados" else (cfg.saldo_data or _di)
+    # período de análise selecionado. O passado (antes de saldo_data) é exibido
+    # como está, acumulando a partir de zero; exatamente em saldo_data, o saldo
+    # informado é somado ao acumulado corrente, e a partir daí continua somando.
+    saldo_data_eff = cfg.saldo_data or ""
+    if modo == "atrasados":
+        _calc_inicio = None
+    elif saldo_data_eff and saldo_data_eff < _di:
+        _calc_inicio = saldo_data_eff
+    else:
+        _calc_inicio = _di
     entries_calc = _fc_get_entries(session, ctx.company.id, client_id, _calc_inicio, _df,
                                   centros if centros else None,
                                   empresas if empresas else None)
     entries_calc_filtrado = _fc_filtrar_por_modo(entries_calc, modo, hoje)
-    periodos_full = _calc_fluxo(entries_calc_filtrado, cfg, group_by)
+    cfg_zero = _SimpleNamespace_fc(saldo_inicial_cents=0, limite_alerta_cents=cfg.limite_alerta_cents)
+    periodos_full = _calc_fluxo(entries_calc_filtrado, cfg_zero, group_by)
+
+    acumulado = 0
+    injetado  = False
+    for p in periodos_full:
+        if not injetado and (not saldo_data_eff or p["data_fim"] >= saldo_data_eff):
+            acumulado += cfg.saldo_inicial_cents
+            injetado = True
+        acumulado += p["saldo_data"]
+        p["saldo_acumulado"] = acumulado
+        p["critico"] = acumulado < cfg.limite_alerta_cents
+    if not injetado:
+        acumulado += cfg.saldo_inicial_cents
+
     if modo == "atrasados":
         # Mostra todos os períodos com atrasado, sem recortar pela janela de análise.
         periodos_raw = periodos_full
@@ -978,7 +1000,7 @@ async def fc_dashboard(
     else:
         periodos_raw   = [p for p in periodos_full if p["data_fim"] >= _di]
         periodos_antes = [p for p in periodos_full if p["data_fim"] <  _di]
-        caixa_inicial_cents = periodos_antes[-1]["saldo_acumulado"] if periodos_antes else cfg.saldo_inicial_cents
+        caixa_inicial_cents = periodos_antes[-1]["saldo_acumulado"] if periodos_antes else 0
 
     # Enriquece periodos com strings formatadas
     for p in periodos_raw:
@@ -1772,9 +1794,14 @@ async def fc_importar_obra_page(request: Request, obra_id: _Opt_fc[int] = None, 
             obra = None
         if obra:
             calc = _calcular_obra(session, obra)
+            etapa_ids_da_obra = set(session.exec(
+                select(ObraEtapa.id).where(ObraEtapa.obra_id == obra.id)
+            ).all())
             for fase in calc["fases"]:
                 for e in fase["etapas"]:
-                    if e["a_incorrer"] > 0:
+                    # Confere obra_id direto na etapa (e não só via fase_id) —
+                    # evita arrastar etapas de outra obra em caso de inconsistência de dados.
+                    if e["a_incorrer"] > 0 and e["id"] in etapa_ids_da_obra:
                         etapas_pendentes.append({
                             **e,
                             "fase_nome": fase["nome"],
@@ -1831,6 +1858,9 @@ async def fc_importar_obra_confirmar(
         return RedirectResponse("/ferramentas/fluxo-caixa/importar-obra", status_code=303)
 
     calc = _calcular_obra(session, obra)
+    etapa_ids_da_obra = set(session.exec(
+        select(ObraEtapa.id).where(ObraEtapa.obra_id == obra.id)
+    ).all())
 
     # Batch fixo por obra: reimportar substitui a previsão anterior gerada por esta obra.
     batch_id = f"obra{obra.id}"
@@ -1850,7 +1880,7 @@ async def fc_importar_obra_confirmar(
     etapas_count = 0
     for fase in calc["fases"]:
         for e in fase["etapas"]:
-            if e["a_incorrer"] <= 0:
+            if e["a_incorrer"] <= 0 or e["id"] not in etapa_ids_da_obra:
                 continue
             etapas_count += 1
             dt_fim_etapa = e["data_fim"] or data_padrao_final
