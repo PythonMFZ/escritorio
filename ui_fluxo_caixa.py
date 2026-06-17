@@ -44,6 +44,7 @@ class CashFlowEntry(SQLModel, table=True):
     data_vencimento: str                = Field(default="")   # ISO date str YYYY-MM-DD
     data_pagamento:  Optional[str]      = Field(default=None) # ISO date str quando realizado
     descricao:       str                = Field(default="")
+    empresa:         str                = Field(default="")   # razão social / unidade do ERP de origem
     centro_custo:    str                = Field(default="Geral")
     categoria:       str                = Field(default="Outros")
     tipo:            str                = Field(default="saida")   # "entrada" | "saida"
@@ -72,6 +73,7 @@ def _ensure_fc_tables():
         ("cashflowentry",  "centro_custo",          "VARCHAR DEFAULT 'Geral'"),
         ("cashflowentry",  "categoria",             "VARCHAR DEFAULT 'Outros'"),
         ("cashflowentry",  "data_pagamento",        "VARCHAR DEFAULT NULL"),
+        ("cashflowentry",  "empresa",               "VARCHAR DEFAULT ''"),
     ]
     # Altera valor_cents para BIGINT se ainda for INTEGER (suporta valores > R$21M)
     if _is_pg:
@@ -139,7 +141,8 @@ def _fc_get_config(session, company_id: int, client_id: _Opt_fc[int]) -> CashFlo
 
 def _fc_get_entries(session, company_id: int, client_id: _Opt_fc[int],
                     data_inicio: _Opt_fc[str] = None, data_fim: _Opt_fc[str] = None,
-                    centros: _Opt_fc[_List_fc[str]] = None) -> list:
+                    centros: _Opt_fc[_List_fc[str]] = None,
+                    empresas: _Opt_fc[_List_fc[str]] = None) -> list:
     q = select(CashFlowEntry).where(
         CashFlowEntry.company_id == company_id,
         CashFlowEntry.client_id == client_id,
@@ -151,7 +154,35 @@ def _fc_get_entries(session, company_id: int, client_id: _Opt_fc[int],
         q = q.where(CashFlowEntry.data_vencimento <= data_fim)
     if centros:
         q = q.where(CashFlowEntry.centro_custo.in_(centros))
+    if empresas:
+        q = q.where(CashFlowEntry.empresa.in_(empresas))
     return list(session.exec(q.order_by(CashFlowEntry.data_vencimento)).all())
+
+
+def _fc_is_atrasado(e, hoje: _Opt_fc[_date_fc] = None) -> bool:
+    """Previsto com vencimento já passado e ainda não realizado = atrasado."""
+    if e.status != "previsto":
+        return False
+    hoje = hoje or _date_fc.today()
+    try:
+        return _date_fc.fromisoformat(e.data_vencimento) < hoje
+    except Exception:
+        return False
+
+
+def _fc_filtrar_por_modo(entries: list, modo: str, hoje: _Opt_fc[_date_fc] = None) -> list:
+    """
+    modo:
+      "todos"             — previsto + realizado (inclui atrasados)
+      "realizado"         — só o que já foi pago/recebido
+      "realizado_futuro"  — realizado + previsto com vencimento >= hoje (sem atrasados)
+    """
+    hoje = hoje or _date_fc.today()
+    if modo == "realizado":
+        return [e for e in entries if e.status == "realizado"]
+    if modo == "realizado_futuro":
+        return [e for e in entries if e.status == "realizado" or not _fc_is_atrasado(e, hoje)]
+    return entries  # "todos"
 
 
 def _fc_periodo_key(data_str: str, group_by: str) -> str:
@@ -189,11 +220,14 @@ def _fc_periodo_label(key: str, group_by: str) -> str:
 
 def _calc_fluxo(entries: list, config: CashFlowConfig, group_by: str = "semana") -> list:
     """
-    Agrupa lançamentos por período e calcula saldos acumulados.
+    Agrupa lançamentos por período e calcula saldos acumulados, na terminologia
+    A Receber / Recebido / A Pagar / Pago, destacando o que está atrasado
+    (previsto com vencimento já passado e ainda não realizado).
     Retorna lista de dicts com dados de cada período.
     """
     from collections import OrderedDict
     periodos: dict = OrderedDict()
+    hoje = _date_fc.today()
 
     for e in entries:
         key = _fc_periodo_key(e.data_vencimento, group_by)
@@ -218,40 +252,48 @@ def _calc_fluxo(entries: list, config: CashFlowConfig, group_by: str = "semana")
                 "label": _fc_periodo_label(key, group_by),
                 "data_inicio": _pdi,
                 "data_fim": _pdf,
-                "entradas_previstas": 0,
-                "saidas_previstas":   0,
-                "entradas_realizadas":0,
-                "saidas_realizadas":  0,
+                "a_receber":          0,  # previsto, entrada, não atrasado
+                "recebido":           0,  # realizado, entrada
+                "a_pagar":            0,  # previsto, saida, não atrasado
+                "pago":               0,  # realizado, saida
+                "atrasado_receber":   0,  # previsto, entrada, vencido
+                "atrasado_pagar":     0,  # previsto, saida, vencido
             }
         p = periodos[key]
+        atrasado = _fc_is_atrasado(e, hoje)
         if e.status == "realizado":
             if e.tipo == "entrada":
-                p["entradas_realizadas"] += e.valor_cents
-                p["entradas_previstas"]  += e.valor_cents
+                p["recebido"] += e.valor_cents
             else:
-                p["saidas_realizadas"]   += e.valor_cents
-                p["saidas_previstas"]    += e.valor_cents
+                p["pago"]     += e.valor_cents
         else:  # previsto
             if e.tipo == "entrada":
-                p["entradas_previstas"]  += e.valor_cents
+                if atrasado:
+                    p["atrasado_receber"] += e.valor_cents
+                else:
+                    p["a_receber"] += e.valor_cents
             else:
-                p["saidas_previstas"]    += e.valor_cents
+                if atrasado:
+                    p["atrasado_pagar"] += e.valor_cents
+                else:
+                    p["a_pagar"] += e.valor_cents
 
     saldo_inicial = config.saldo_inicial_cents if config else 0
     limite_alerta = config.limite_alerta_cents if config else 0
-    acum_previsto  = saldo_inicial
-    acum_realizado = saldo_inicial
+    acumulado = saldo_inicial
 
     resultado = []
     for key in sorted(periodos.keys()):
         p = periodos[key]
-        acum_previsto  += p["entradas_previstas"]  - p["saidas_previstas"]
-        acum_realizado += p["entradas_realizadas"] - p["saidas_realizadas"]
-        p["saldo_previsto"]           = p["entradas_previstas"]  - p["saidas_previstas"]
-        p["saldo_realizado"]          = p["entradas_realizadas"] - p["saidas_realizadas"]
-        p["saldo_acumulado_previsto"]  = acum_previsto
-        p["saldo_acumulado_realizado"] = acum_realizado
-        p["critico"] = acum_previsto < limite_alerta
+        total_receber = p["a_receber"] + p["recebido"] + p["atrasado_receber"]
+        total_pagar   = p["a_pagar"]   + p["pago"]      + p["atrasado_pagar"]
+        p["total_receber"]  = total_receber
+        p["total_pagar"]    = total_pagar
+        p["saldo_data"]     = total_receber - total_pagar
+        acumulado          += p["saldo_data"]
+        p["saldo_acumulado"] = acumulado
+        p["tem_atrasado"]   = (p["atrasado_receber"] + p["atrasado_pagar"]) > 0
+        p["critico"]        = acumulado < limite_alerta
         resultado.append(p)
 
     return resultado
@@ -303,7 +345,7 @@ TEMPLATES["fluxo_caixa_dashboard.html"] = r"""
   <div class="row g-3 mb-4">
     <div class="col-6 col-md-3">
       <div class="card p-4 mb-0">
-        <div class="text-muted small mb-1">Saldo Atual</div>
+        <div class="text-muted small mb-1">Caixa na Data Inicial</div>
         <div class="fs-5 fw-bold" style="color:{{ 'var(--color-success,#198754)' if saldo_atual_cents >= 0 else '#dc3545' }}">
           {{ saldo_atual_brl }}
         </div>
@@ -311,13 +353,13 @@ TEMPLATES["fluxo_caixa_dashboard.html"] = r"""
     </div>
     <div class="col-6 col-md-3">
       <div class="card p-4 mb-0">
-        <div class="text-muted small mb-1">Entradas Previstas</div>
+        <div class="text-muted small mb-1">A Receber + Recebido</div>
         <div class="fs-5 fw-bold" style="color:#198754">{{ entradas_prev_brl }}</div>
       </div>
     </div>
     <div class="col-6 col-md-3">
       <div class="card p-4 mb-0">
-        <div class="text-muted small mb-1">Saídas Previstas</div>
+        <div class="text-muted small mb-1">A Pagar + Pago</div>
         <div class="fs-5 fw-bold" style="color:#dc3545">{{ saidas_prev_brl }}</div>
       </div>
     </div>
@@ -331,6 +373,12 @@ TEMPLATES["fluxo_caixa_dashboard.html"] = r"""
     </div>
   </div>
 
+  {% if atrasados_qtd > 0 %}
+  <div class="alert alert-warning d-flex align-items-center gap-2 mb-3">
+    ⚠️ <strong>{{ atrasados_qtd }}</strong> lançamento(s) em aberto com vencimento já passado (atrasado), somando <strong>{{ atrasados_brl }}</strong>.
+  </div>
+  {% endif %}
+
   {# Filtros #}
   <div class="card p-4 mb-3">
     <form method="GET" action="/ferramentas/fluxo-caixa" class="row g-2 align-items-end">
@@ -343,11 +391,27 @@ TEMPLATES["fluxo_caixa_dashboard.html"] = r"""
         <input type="date" name="data_fim" value="{{ data_fim }}" class="form-control form-control-sm">
       </div>
       <div class="col-auto">
+        <label class="form-label small mb-1">Empresa</label>
+        <select name="empresas" multiple class="form-select form-select-sm" style="min-width:160px;height:auto">
+          {% for emp in empresas_disponiveis %}
+          <option value="{{ emp }}" {% if emp in empresas_selecionadas %}selected{% endif %}>{{ emp }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-auto">
         <label class="form-label small mb-1">Centro de Custo</label>
         <select name="centros" multiple class="form-select form-select-sm" style="min-width:160px;height:auto">
           {% for cc in centros_disponiveis %}
           <option value="{{ cc }}" {% if cc in centros_selecionados %}selected{% endif %}>{{ cc }}</option>
           {% endfor %}
+        </select>
+      </div>
+      <div class="col-auto">
+        <label class="form-label small mb-1">Considerar</label>
+        <select name="modo" class="form-select form-select-sm" style="min-width:260px">
+          <option value="realizado"        {% if modo=='realizado'        %}selected{% endif %}>Só Realizado</option>
+          <option value="todos"            {% if modo=='todos'            %}selected{% endif %}>Todos (inclui atrasados)</option>
+          <option value="realizado_futuro" {% if modo=='realizado_futuro' %}selected{% endif %}>Realizado + A Realizar de hoje em diante (sem atrasados)</option>
         </select>
       </div>
       <div class="col-auto">
@@ -371,13 +435,14 @@ TEMPLATES["fluxo_caixa_dashboard.html"] = r"""
       <table class="table table-sm align-middle mb-0">
         <thead class="table-light">
           <tr>
-            <th>Período</th>
-            <th class="text-end">Ent. Previstas</th>
-            <th class="text-end">Saí. Previstas</th>
-            <th class="text-end">Saldo Previsto</th>
-            <th class="text-end">Ent. Realizadas</th>
-            <th class="text-end">Saí. Realizadas</th>
-            <th class="text-end">Saldo Realizado</th>
+            <th>Data</th>
+            <th class="text-end">A Receber</th>
+            <th class="text-end">Recebido</th>
+            <th class="text-end">A Receber + Recebido</th>
+            <th class="text-end">A Pagar</th>
+            <th class="text-end">Pago</th>
+            <th class="text-end">A Pagar + Pago</th>
+            <th class="text-end">Saldo Data</th>
             <th class="text-end">Saldo Acumulado</th>
           </tr>
         </thead>
@@ -389,23 +454,29 @@ TEMPLATES["fluxo_caixa_dashboard.html"] = r"""
                 {{ p.label }}
               </a>
               {% if p.critico %}<span class="badge ms-1" style="background:#dc3545;font-size:0.65rem">ALERTA</span>{% endif %}
+              {% if p.tem_atrasado %}<span class="badge ms-1" style="background:#fd7e14;font-size:0.65rem" title="Há lançamentos em aberto com vencimento passado">ATRASADO</span>{% endif %}
             </td>
-            <td class="text-end" style="color:#198754">{{ p.entradas_previstas_brl }}</td>
-            <td class="text-end" style="color:#dc3545">{{ p.saidas_previstas_brl }}</td>
-            <td class="text-end fw-semibold" style="color:{{ '#198754' if p.saldo_previsto >= 0 else '#dc3545' }}">
-              {{ p.saldo_previsto_brl }}
+            <td class="text-end" style="color:#198754">
+              {{ p.a_receber_brl }}
+              {% if p.atrasado_receber > 0 %}<div class="small" style="color:#fd7e14">⚠ atrasado: {{ p.atrasado_receber_brl }}</div>{% endif %}
             </td>
-            <td class="text-end" style="color:#198754">{{ p.entradas_realizadas_brl }}</td>
-            <td class="text-end" style="color:#dc3545">{{ p.saidas_realizadas_brl }}</td>
-            <td class="text-end fw-semibold" style="color:{{ '#198754' if p.saldo_realizado >= 0 else '#dc3545' }}">
-              {{ p.saldo_realizado_brl }}
+            <td class="text-end" style="color:#198754">{{ p.recebido_brl }}</td>
+            <td class="text-end fw-semibold" style="color:#198754">{{ p.total_receber_brl }}</td>
+            <td class="text-end" style="color:#dc3545">
+              {{ p.a_pagar_brl }}
+              {% if p.atrasado_pagar > 0 %}<div class="small" style="color:#fd7e14">⚠ atrasado: {{ p.atrasado_pagar_brl }}</div>{% endif %}
             </td>
-            <td class="text-end fw-bold" style="color:{{ '#198754' if p.saldo_acumulado_previsto >= 0 else '#dc3545' }}">
-              {{ p.saldo_acumulado_previsto_brl }}
+            <td class="text-end" style="color:#dc3545">{{ p.pago_brl }}</td>
+            <td class="text-end fw-semibold" style="color:#dc3545">{{ p.total_pagar_brl }}</td>
+            <td class="text-end fw-semibold" style="color:{{ '#198754' if p.saldo_data >= 0 else '#dc3545' }}">
+              {{ p.saldo_data_brl }}
+            </td>
+            <td class="text-end fw-bold" style="color:{{ '#198754' if p.saldo_acumulado >= 0 else '#dc3545' }}">
+              {{ p.saldo_acumulado_brl }}
             </td>
           </tr>
           {% else %}
-          <tr><td colspan="8" class="text-center text-muted py-4">Nenhum lançamento encontrado para o período.</td></tr>
+          <tr><td colspan="9" class="text-center text-muted py-4">Nenhum lançamento encontrado para o período.</td></tr>
           {% endfor %}
         </tbody>
       </table>
@@ -444,7 +515,8 @@ TEMPLATES["fluxo_caixa_lancamentos.html"] = r"""
       <div class="col-auto">
         <select name="status" class="form-select form-select-sm">
           <option value="">Todos</option>
-          <option value="previsto"  {% if status_filtro=='previsto'  %}selected{% endif %}>Previsto</option>
+          <option value="previsto"  {% if status_filtro=='previsto'  %}selected{% endif %}>Em aberto (a pagar/receber)</option>
+          <option value="atrasado"  {% if status_filtro=='atrasado'  %}selected{% endif %}>Atrasado</option>
           <option value="realizado" {% if status_filtro=='realizado' %}selected{% endif %}>Realizado</option>
           <option value="cancelado" {% if status_filtro=='cancelado' %}selected{% endif %}>Cancelado</option>
         </select>
@@ -473,6 +545,7 @@ TEMPLATES["fluxo_caixa_lancamentos.html"] = r"""
           <tr>
             <th>Vencimento</th>
             <th>Descrição</th>
+            <th>Empresa</th>
             <th>Centro de Custo</th>
             <th>Categoria</th>
             <th>Tipo</th>
@@ -487,6 +560,7 @@ TEMPLATES["fluxo_caixa_lancamentos.html"] = r"""
           <tr>
             <td class="text-nowrap">{{ e.data_vencimento_fmt }}</td>
             <td>{{ e.descricao }}</td>
+            <td class="text-muted small">{{ e.empresa or '—' }}</td>
             <td><span class="badge bg-secondary">{{ e.centro_custo }}</span></td>
             <td class="text-muted small">{{ e.categoria }}</td>
             <td>
@@ -504,6 +578,8 @@ TEMPLATES["fluxo_caixa_lancamentos.html"] = r"""
               <span class="badge" style="background:#198754;font-size:.8rem">✅ Realizado</span>
               {% elif e.status == 'cancelado' %}
               <span class="badge bg-secondary">Cancelado</span>
+              {% elif e.atrasado %}
+              <span class="badge" style="background:#dc3545;font-size:.8rem">⚠ Atrasado</span>
               {% else %}
               <span class="badge" style="background:#fd7e14;font-size:.8rem">⏳ A pagar/receber</span>
               {% endif %}
@@ -525,7 +601,7 @@ TEMPLATES["fluxo_caixa_lancamentos.html"] = r"""
             </td>
           </tr>
           {% else %}
-          <tr><td colspan="9" class="text-center text-muted py-4">Nenhum lançamento encontrado.</td></tr>
+          <tr><td colspan="10" class="text-center text-muted py-4">Nenhum lançamento encontrado.</td></tr>
           {% endfor %}
         </tbody>
       </table>
@@ -566,6 +642,16 @@ TEMPLATES["fluxo_caixa_form.html"] = r"""
           <label class="form-label">Descrição *</label>
           <input type="text" name="descricao" value="{{ entry.descricao }}"
                  class="form-control" required placeholder="Ex: Recebimento Passione Bloco A">
+        </div>
+        <div class="col-12 col-sm-6">
+          <label class="form-label">Empresa</label>
+          <input type="text" name="empresa" value="{{ entry.empresa }}"
+                 class="form-control" list="emp-list" placeholder="Ex: Razão social no ERP">
+          <datalist id="emp-list">
+            {% for emp in empresas_disponiveis %}
+            <option value="{{ emp }}">
+            {% endfor %}
+          </datalist>
         </div>
         <div class="col-12 col-sm-6">
           <label class="form-label">Valor (R$) *</label>
@@ -717,6 +803,7 @@ function renderPreview(data) {
     {key:'col_valor',       label:'Coluna de Valor *'},
     {key:'col_descricao',   label:'Coluna de Descrição'},
     {key:'col_tipo',        label:'Coluna de Tipo (Entrada/Saída)'},
+    {key:'col_empresa',     label:'Coluna de Empresa'},
     {key:'col_centro_custo',label:'Coluna de Centro de Custo'},
     {key:'col_categoria',   label:'Coluna de Categoria'},
   ];
@@ -730,6 +817,17 @@ function renderPreview(data) {
       </select>
     </div>`;
   }
+  // Campos fixos: aplicados a todas as linhas deste arquivo, usados quando
+  // o ERP do cliente não exporta uma coluna própria de empresa/centro de custo
+  // (ex: arquivo já é de uma empresa/obra específica)
+  html += `<div class="col-12 col-md-4">
+    <label class="form-label small fw-semibold">Empresa deste arquivo (fixo)</label>
+    <input type="text" id="map_empresa_fixo" class="form-control form-control-sm" placeholder="Ex: Empresa A — deixe vazio para usar a coluna mapeada">
+  </div>`;
+  html += `<div class="col-12 col-md-4">
+    <label class="form-label small fw-semibold">Centro de Custo deste arquivo (fixo)</label>
+    <input type="text" id="map_centro_custo_fixo" class="form-control form-control-sm" placeholder="Ex: Obra X — deixe vazio para usar a coluna mapeada">
+  </div>`;
   // Campo fixo: tipo padrão quando não há coluna de tipo
   html += `<div class="col-12 col-md-4">
     <label class="form-label small">Tipo padrão (quando sem coluna de tipo)</label>
@@ -761,11 +859,13 @@ function renderPreview(data) {
 async function confirmarImportacao() {
   if (!_uploadPayload) return;
   const mapeamento = {};
-  ['col_data','col_valor','col_descricao','col_tipo','col_centro_custo','col_categoria'].forEach(k => {
+  ['col_data','col_valor','col_descricao','col_tipo','col_empresa','col_centro_custo','col_categoria'].forEach(k => {
     mapeamento[k] = document.getElementById('map_'+k)?.value || '';
   });
-  mapeamento['tipo_padrao']   = document.getElementById('map_tipo_padrao')?.value || 'saida';
-  mapeamento['status_padrao'] = document.getElementById('map_status_padrao')?.value || 'previsto';
+  mapeamento['tipo_padrao']        = document.getElementById('map_tipo_padrao')?.value || 'saida';
+  mapeamento['status_padrao']      = document.getElementById('map_status_padrao')?.value || 'previsto';
+  mapeamento['empresa_fixo']       = document.getElementById('map_empresa_fixo')?.value || '';
+  mapeamento['centro_custo_fixo']  = document.getElementById('map_centro_custo_fixo')?.value || '';
   const body = { mapeamento, dados: _uploadPayload.dados_completos };
   const resp = await fetch('/api/fluxo-caixa/importar-confirmar', {
     method: 'POST',
@@ -791,7 +891,9 @@ async def fc_dashboard(
     data_inicio: str = "",
     data_fim: str = "",
     group_by: str = "semana",
+    modo: str = "todos",
     centros: _List_fc[str] = None,
+    empresas: _List_fc[str] = None,
 ):
     ctx        = get_tenant_context(request, session)
     client_id  = get_active_client_id(request, session, ctx)
@@ -799,44 +901,62 @@ async def fc_dashboard(
     _di        = data_inicio or (hoje - _td_fc(days=30)).isoformat()
     _df        = data_fim    or (hoje + _td_fc(days=60)).isoformat()
     centros    = centros or []
+    empresas   = empresas or []
+    if modo not in ("todos", "realizado", "realizado_futuro"):
+        modo = "todos"
     cfg        = _fc_get_config(session, ctx.company.id, client_id)
-    entries_all = _fc_get_entries(session, ctx.company.id, client_id, _di, _df,
-                                  centros if centros else None)
+    entries_periodo = _fc_get_entries(session, ctx.company.id, client_id, _di, _df,
+                                  centros if centros else None,
+                                  empresas if empresas else None)
+    entries_all = _fc_filtrar_por_modo(entries_periodo, modo, hoje)
 
-    # Centros disponíveis (todos os lançamentos, sem filtro de período)
+    # Centros e empresas disponíveis (todos os lançamentos, sem filtro de período)
     todos = _fc_get_entries(session, ctx.company.id, client_id)
-    centros_disp = sorted(set(e.centro_custo for e in todos if e.centro_custo))
+    centros_disp  = sorted(set(e.centro_custo for e in todos if e.centro_custo))
+    empresas_disp = sorted(set(e.empresa for e in todos if e.empresa))
 
     periodos_raw = _calc_fluxo(entries_all, cfg, group_by)
 
     # Enriquece periodos com strings formatadas
     for p in periodos_raw:
-        p["entradas_previstas_brl"]       = _cents_to_brl(p["entradas_previstas"])
-        p["saidas_previstas_brl"]         = _cents_to_brl(p["saidas_previstas"])
-        p["saldo_previsto_brl"]           = _cents_to_brl(p["saldo_previsto"])
-        p["entradas_realizadas_brl"]      = _cents_to_brl(p["entradas_realizadas"])
-        p["saidas_realizadas_brl"]        = _cents_to_brl(p["saidas_realizadas"])
-        p["saldo_realizado_brl"]          = _cents_to_brl(p["saldo_realizado"])
-        p["saldo_acumulado_previsto_brl"] = _cents_to_brl(p["saldo_acumulado_previsto"])
+        p["a_receber_brl"]        = _cents_to_brl(p["a_receber"])
+        p["recebido_brl"]         = _cents_to_brl(p["recebido"])
+        p["total_receber_brl"]    = _cents_to_brl(p["total_receber"])
+        p["a_pagar_brl"]          = _cents_to_brl(p["a_pagar"])
+        p["pago_brl"]             = _cents_to_brl(p["pago"])
+        p["total_pagar_brl"]      = _cents_to_brl(p["total_pagar"])
+        p["saldo_data_brl"]       = _cents_to_brl(p["saldo_data"])
+        p["saldo_acumulado_brl"]  = _cents_to_brl(p["saldo_acumulado"])
+        p["atrasado_receber_brl"] = _cents_to_brl(p["atrasado_receber"])
+        p["atrasado_pagar_brl"]   = _cents_to_brl(p["atrasado_pagar"])
 
-    # Cards resumo (baseado no período filtrado)
-    ent_prev_c  = sum(e.valor_cents for e in entries_all if e.tipo=="entrada")
-    sai_prev_c  = sum(e.valor_cents for e in entries_all if e.tipo=="saida")
-    saldo_proj  = cfg.saldo_inicial_cents + ent_prev_c - sai_prev_c
+    # Cards resumo (baseado no período e modo filtrados)
+    a_receber_c = sum(e.valor_cents for e in entries_all if e.tipo=="entrada" and e.status=="previsto")
+    recebido_c  = sum(e.valor_cents for e in entries_all if e.tipo=="entrada" and e.status=="realizado")
+    a_pagar_c   = sum(e.valor_cents for e in entries_all if e.tipo=="saida"   and e.status=="previsto")
+    pago_c      = sum(e.valor_cents for e in entries_all if e.tipo=="saida"   and e.status=="realizado")
+    atrasados   = [e for e in entries_all if _fc_is_atrasado(e, hoje)]
+    atrasados_c = sum(e.valor_cents if e.tipo=="entrada" else -e.valor_cents for e in atrasados)
+    saldo_proj  = cfg.saldo_inicial_cents + (a_receber_c + recebido_c) - (a_pagar_c + pago_c)
 
     return render("fluxo_caixa_dashboard.html", request=request, context={
         "saldo_atual_cents":  cfg.saldo_inicial_cents,
         "saldo_atual_brl":    _cents_to_brl(cfg.saldo_inicial_cents),
-        "entradas_prev_brl":  _cents_to_brl(ent_prev_c),
-        "saidas_prev_brl":    _cents_to_brl(sai_prev_c),
+        "entradas_prev_brl":  _cents_to_brl(a_receber_c + recebido_c),
+        "saidas_prev_brl":    _cents_to_brl(a_pagar_c + pago_c),
         "saldo_proj_cents":   saldo_proj,
         "saldo_proj_brl":     _cents_to_brl(saldo_proj),
+        "atrasados_qtd":      len(atrasados),
+        "atrasados_brl":      _cents_to_brl(abs(atrasados_c)),
         "periodos":           periodos_raw,
         "group_by":           group_by,
+        "modo":               modo,
         "data_inicio":        _di,
         "data_fim":           _df,
         "centros_disponiveis":centros_disp,
         "centros_selecionados":centros,
+        "empresas_disponiveis":empresas_disp,
+        "empresas_selecionadas":empresas,
         "page_title":         "Fluxo de Caixa",
     })
 
@@ -862,7 +982,9 @@ async def fc_lista(
         query = query.where(CashFlowEntry.data_vencimento >= data_inicio)
     if data_fim:
         query = query.where(CashFlowEntry.data_vencimento <= data_fim)
-    if status:
+    if status == "atrasado":
+        query = query.where(CashFlowEntry.status == "previsto")
+    elif status:
         query = query.where(CashFlowEntry.status == status)
     else:
         query = query.where(CashFlowEntry.status != "cancelado")
@@ -871,6 +993,8 @@ async def fc_lista(
     entries = list(session.exec(query.order_by(CashFlowEntry.data_vencimento.desc())).all())
     if q:
         entries = [e for e in entries if q.lower() in e.descricao.lower()]
+    if status == "atrasado":
+        entries = [e for e in entries if _fc_is_atrasado(e)]
 
     def _fmt_date(s):
         if not s:
@@ -889,11 +1013,13 @@ async def fc_lista(
             "data_pagamento": e.data_pagamento,
             "data_pagamento_fmt": _fmt_date(e.data_pagamento),
             "descricao": e.descricao,
+            "empresa": e.empresa,
             "centro_custo": e.centro_custo,
             "categoria": e.categoria,
             "tipo": e.tipo,
             "valor_brl": _cents_to_brl(e.valor_cents),
             "status": e.status,
+            "atrasado": _fc_is_atrasado(e),
             "observacao": e.observacao,
         }
         rows.append(d)
@@ -916,6 +1042,7 @@ def _fc_entry_dict(e: CashFlowEntry) -> dict:
         "data_vencimento": e.data_vencimento,
         "data_pagamento":  e.data_pagamento or "",
         "descricao":       e.descricao,
+        "empresa":         e.empresa,
         "centro_custo":    e.centro_custo,
         "categoria":       e.categoria,
         "tipo":            e.tipo,
@@ -930,6 +1057,11 @@ def _fc_centros(session, company_id, client_id):
     return sorted(set(e.centro_custo for e in todos if e.centro_custo)) or [
         "Geral", "Administrativo", "Comercial"
     ]
+
+
+def _fc_empresas(session, company_id, client_id):
+    todos = _fc_get_entries(session, company_id, client_id)
+    return sorted(set(e.empresa for e in todos if e.empresa))
 
 
 @app.get("/ferramentas/fluxo-caixa/novo", response_class=HTMLResponse)
@@ -947,6 +1079,7 @@ async def fc_novo_get(request: Request, session: Session = Depends(get_session))
         "titulo":             "Novo Lançamento",
         "entry":              _fc_entry_dict(empty),
         "centros_disponiveis":_fc_centros(session, ctx.company.id, client_id),
+        "empresas_disponiveis":_fc_empresas(session, ctx.company.id, client_id),
         "page_title":         "Novo Lançamento",
     })
 
@@ -963,6 +1096,7 @@ async def fc_novo_post(request: Request, session: Session = Depends(get_session)
         data_vencimento=form.get("data_vencimento", ""),
         data_pagamento=form.get("data_pagamento") or None,
         descricao=form.get("descricao", "").strip(),
+        empresa=form.get("empresa", "").strip(),
         centro_custo=form.get("centro_custo", "Geral").strip() or "Geral",
         categoria=form.get("categoria", "Outros").strip() or "Outros",
         tipo=form.get("tipo", "saida"),
@@ -993,6 +1127,7 @@ async def fc_editar_get(entry_id: int, request: Request, session: Session = Depe
         "titulo":             "Editar Lançamento",
         "entry":              _fc_entry_dict(e),
         "centros_disponiveis":_fc_centros(session, ctx.company.id, client_id),
+        "empresas_disponiveis":_fc_empresas(session, ctx.company.id, client_id),
         "page_title":         "Editar Lançamento",
     })
 
@@ -1010,6 +1145,7 @@ async def fc_editar_post(entry_id: int, request: Request, session: Session = Dep
     e.data_vencimento = form.get("data_vencimento", e.data_vencimento)
     e.data_pagamento  = form.get("data_pagamento") or None
     e.descricao       = form.get("descricao", e.descricao).strip()
+    e.empresa         = form.get("empresa", e.empresa).strip()
     e.centro_custo    = form.get("centro_custo", e.centro_custo).strip() or "Geral"
     e.categoria       = form.get("categoria", e.categoria).strip() or "Outros"
     e.tipo            = form.get("tipo", e.tipo)
@@ -1193,6 +1329,7 @@ async def fc_upload(request: Request, session: Session = Depends(get_session)):
         "col_valor":        _fc_detect_col(cols, ["valor", "vl", "total", "amount"]),
         "col_descricao":    _fc_detect_col(cols, ["desc", "historico", "obs", "memo", "histórico", "históric"]),
         "col_tipo":         _fc_detect_col(cols, ["tipo", "natureza", "nature"]),
+        "col_empresa":      _fc_detect_col(cols, ["empresa", "razao", "razão", "company", "filial"]),
         "col_centro_custo": _fc_detect_col(cols, ["centro", "cc", "obra", "projeto", "project"]),
         "col_categoria":    _fc_detect_col(cols, ["categoria", "grupo", "group", "class"]),
     }
@@ -1229,6 +1366,9 @@ async def fc_importar_confirmar(request: Request, session: Session = Depends(get
     status_padrao = mapeamento.get("status_padrao", "previsto")  # "previsto" ou "realizado"
     col_cc        = mapeamento.get("col_centro_custo", "")
     col_cat       = mapeamento.get("col_categoria", "")
+    col_emp       = mapeamento.get("col_empresa", "")
+    empresa_fixo      = mapeamento.get("empresa_fixo", "").strip()
+    centro_custo_fixo = mapeamento.get("centro_custo_fixo", "").strip()
 
     if not col_data or not col_valor:
         return JSONResponse({"erro": "As colunas de Data e Valor são obrigatórias."})
@@ -1244,8 +1384,9 @@ async def fc_importar_confirmar(request: Request, session: Session = Depends(get
             # Se não há coluna de tipo mapeada, usa tipo_padrao como fallback
             tipo_col      = _fc_parse_tipo(str(row.get(col_tipo, "")) if col_tipo else "", tipo_padrao if not col_tipo else tipo_v)
             descricao     = str(row.get(col_desc, f"Importado linha {i+2}")).strip() or f"Importado linha {i+2}"
-            centro_custo   = str(row.get(col_cc, "Importado")).strip() or "Importado"
+            centro_custo   = centro_custo_fixo or str(row.get(col_cc, "Importado")).strip() or "Importado"
             categoria      = str(row.get(col_cat, "Importado")).strip() or "Importado"
+            empresa        = empresa_fixo or (str(row.get(col_emp, "")).strip() if col_emp else "")
 
             if not data_str or valor_c == 0:
                 erros.append(f"Linha {i+2}: data ou valor inválido — ignorado.")
@@ -1266,6 +1407,7 @@ async def fc_importar_confirmar(request: Request, session: Session = Depends(get
                 data_vencimento=_data_venc,
                 data_pagamento=_data_pgto,
                 descricao=descricao,
+                empresa=empresa,
                 centro_custo=centro_custo,
                 categoria=categoria,
                 tipo=tipo_col,
