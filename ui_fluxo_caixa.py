@@ -398,20 +398,46 @@ TEMPLATES["fluxo_caixa_dashboard.html"] = r"""
         <input type="date" name="data_fim" value="{{ data_fim }}" class="form-control form-control-sm">
       </div>
       <div class="col-auto">
-        <label class="form-label small mb-1">Empresa</label>
-        <select name="empresas" multiple class="form-select form-select-sm" style="min-width:160px;height:auto">
-          {% for emp in empresas_disponiveis %}
-          <option value="{{ emp }}" {% if emp in empresas_selecionadas %}selected{% endif %}>{{ emp }}</option>
-          {% endfor %}
-        </select>
+        <label class="form-label small mb-1 d-block">Empresa</label>
+        <div class="dropdown">
+          <button type="button" class="btn btn-outline-secondary btn-sm dropdown-toggle" data-bs-toggle="dropdown" data-bs-auto-close="outside" style="min-width:160px">
+            {% if empresas_selecionadas %}{{ empresas_selecionadas|length }} selecionada(s){% else %}Todas{% endif %}
+          </button>
+          <ul class="dropdown-menu p-2" style="max-height:260px;overflow:auto">
+            {% if not empresas_disponiveis %}
+            <li class="text-muted small px-2">Nenhuma empresa cadastrada</li>
+            {% endif %}
+            {% for emp in empresas_disponiveis %}
+            <li>
+              <label class="dropdown-item d-flex align-items-center gap-2 mb-0">
+                <input type="checkbox" name="empresas" value="{{ emp }}" class="form-check-input m-0" {% if emp in empresas_selecionadas %}checked{% endif %}>
+                {{ emp }}
+              </label>
+            </li>
+            {% endfor %}
+          </ul>
+        </div>
       </div>
       <div class="col-auto">
-        <label class="form-label small mb-1">Centro de Custo</label>
-        <select name="centros" multiple class="form-select form-select-sm" style="min-width:160px;height:auto">
-          {% for cc in centros_disponiveis %}
-          <option value="{{ cc }}" {% if cc in centros_selecionados %}selected{% endif %}>{{ cc }}</option>
-          {% endfor %}
-        </select>
+        <label class="form-label small mb-1 d-block">Centro de Custo</label>
+        <div class="dropdown">
+          <button type="button" class="btn btn-outline-secondary btn-sm dropdown-toggle" data-bs-toggle="dropdown" data-bs-auto-close="outside" style="min-width:160px">
+            {% if centros_selecionados %}{{ centros_selecionados|length }} selecionado(s){% else %}Todos{% endif %}
+          </button>
+          <ul class="dropdown-menu p-2" style="max-height:260px;overflow:auto">
+            {% if not centros_disponiveis %}
+            <li class="text-muted small px-2">Nenhum centro de custo cadastrado</li>
+            {% endif %}
+            {% for cc in centros_disponiveis %}
+            <li>
+              <label class="dropdown-item d-flex align-items-center gap-2 mb-0">
+                <input type="checkbox" name="centros" value="{{ cc }}" class="form-check-input m-0" {% if cc in centros_selecionados %}checked{% endif %}>
+                {{ cc }}
+              </label>
+            </li>
+            {% endfor %}
+          </ul>
+        </div>
       </div>
       <div class="col-auto">
         <label class="form-label small mb-1">Considerar</label>
@@ -921,7 +947,12 @@ async def fc_dashboard(
     if modo not in ("todos", "realizado", "realizado_futuro", "atrasados"):
         modo = "todos"
     cfg        = _fc_get_config(session, ctx.company.id, client_id)
-    entries_periodo = _fc_get_entries(session, ctx.company.id, client_id, _di, _df,
+
+    # "Atrasados" são, por definição, anteriores a hoje — podem estar fora da
+    # janela de análise selecionada (ex.: período padrão começa há só 30 dias).
+    # Nesse modo, ignora o limite inferior de data para não escondê-los.
+    _fetch_di = None if modo == "atrasados" else _di
+    entries_periodo = _fc_get_entries(session, ctx.company.id, client_id, _fetch_di, _df,
                                   centros if centros else None,
                                   empresas if empresas else None)
     entries_all = _fc_filtrar_por_modo(entries_periodo, modo, hoje)
@@ -934,15 +965,20 @@ async def fc_dashboard(
     # O saldo é apurado em uma data própria (cfg.saldo_data), independente do
     # período de análise selecionado: a acumulação roda desde essa data, e o
     # período exibido (_di..._df) só recorta a janela de exibição da tabela.
-    _calc_inicio = cfg.saldo_data or _di
+    _calc_inicio = None if modo == "atrasados" else (cfg.saldo_data or _di)
     entries_calc = _fc_get_entries(session, ctx.company.id, client_id, _calc_inicio, _df,
                                   centros if centros else None,
                                   empresas if empresas else None)
     entries_calc_filtrado = _fc_filtrar_por_modo(entries_calc, modo, hoje)
     periodos_full = _calc_fluxo(entries_calc_filtrado, cfg, group_by)
-    periodos_raw   = [p for p in periodos_full if p["data_fim"] >= _di]
-    periodos_antes = [p for p in periodos_full if p["data_fim"] <  _di]
-    caixa_inicial_cents = periodos_antes[-1]["saldo_acumulado"] if periodos_antes else cfg.saldo_inicial_cents
+    if modo == "atrasados":
+        # Mostra todos os períodos com atrasado, sem recortar pela janela de análise.
+        periodos_raw = periodos_full
+        caixa_inicial_cents = cfg.saldo_inicial_cents
+    else:
+        periodos_raw   = [p for p in periodos_full if p["data_fim"] >= _di]
+        periodos_antes = [p for p in periodos_full if p["data_fim"] <  _di]
+        caixa_inicial_cents = periodos_antes[-1]["saldo_acumulado"] if periodos_antes else cfg.saldo_inicial_cents
 
     # Enriquece periodos com strings formatadas
     for p in periodos_raw:
