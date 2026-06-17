@@ -336,6 +336,7 @@ TEMPLATES["fluxo_caixa_dashboard.html"] = r"""
     <div class="d-flex gap-2">
       <a href="/ferramentas/fluxo-caixa/novo" class="btn btn-primary btn-sm">+ Lançamento</a>
       <a href="/ferramentas/fluxo-caixa/importar" class="btn btn-outline-secondary btn-sm">Importar Excel</a>
+      <a href="/ferramentas/fluxo-caixa/importar-obra" class="btn btn-outline-secondary btn-sm">🏗 Importar de Obra</a>
       <a href="/ferramentas/fluxo-caixa/importacoes" class="btn btn-outline-secondary btn-sm">Importações</a>
       <a href="/ferramentas/fluxo-caixa/config" class="btn btn-outline-secondary btn-sm">⚙ Configurar</a>
     </div>
@@ -1539,6 +1540,190 @@ async def fc_excluir_batch(batch_id: str, request: Request, session: Session = D
     session.commit()
     set_flash(request, f"Lote {batch_id} excluído ({len(entries)} lançamentos removidos).")
     return RedirectResponse("/ferramentas/fluxo-caixa/importacoes", status_code=303)
+
+
+# ── Importar previsão (a incorrer) de uma Obra (Gestão de Obras) ──────────────
+
+TEMPLATES["fluxo_caixa_importar_obra.html"] = r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="container-fluid px-4 py-3" style="max-width:1000px">
+  <div class="d-flex align-items-center gap-2 mb-3">
+    <a href="/ferramentas/fluxo-caixa" class="btn btn-outline-secondary btn-sm">←</a>
+    <h4 class="mb-0">🏗 Importar previsão de Obra</h4>
+  </div>
+
+  {% if not obras %}
+    <div class="alert alert-info">
+      Nenhuma obra cadastrada para este cliente em <a href="/ferramentas/obras">Gestão de Obras</a>.
+    </div>
+  {% else %}
+  <form method="GET" action="/ferramentas/fluxo-caixa/importar-obra" class="row g-2 mb-3">
+    <div class="col-12 col-md-6">
+      <label class="form-label small fw-semibold">Obra</label>
+      <select name="obra_id" class="form-select form-select-sm" onchange="this.form.submit()">
+        <option value="">Selecione uma obra…</option>
+        {% for o in obras %}
+        <option value="{{ o.id }}" {% if obra and obra.id == o.id %}selected{% endif %}>{{ o.nome }}</option>
+        {% endfor %}
+      </select>
+    </div>
+  </form>
+
+  {% if obra %}
+    {% if not etapas_pendentes %}
+      <div class="alert alert-success">Esta obra não tem saldo a incorrer (tudo já realizado ou sem orçamento).</div>
+    {% else %}
+    <form method="POST" action="/ferramentas/fluxo-caixa/importar-obra/confirmar">
+      <input type="hidden" name="obra_id" value="{{ obra.id }}">
+      <div class="row g-2 mb-3">
+        <div class="col-12 col-md-4">
+          <label class="form-label small fw-semibold">Centro de Custo</label>
+          <input type="text" name="centro_custo" class="form-control form-control-sm" value="{{ obra.nome }}">
+        </div>
+        <div class="col-12 col-md-4">
+          <label class="form-label small fw-semibold">Empresa (opcional)</label>
+          <input type="text" name="empresa" class="form-control form-control-sm" list="emp-list-obra" placeholder="Ex: Empresa A">
+          <datalist id="emp-list-obra">
+            {% for emp in empresas_disponiveis %}<option value="{{ emp }}">{% endfor %}
+          </datalist>
+        </div>
+        <div class="col-12 col-md-4">
+          <label class="form-label small fw-semibold">Data de vencimento padrão (se a etapa não tiver data fim)</label>
+          <input type="date" name="data_padrao" class="form-control form-control-sm" value="{{ data_padrao }}">
+        </div>
+      </div>
+
+      <div class="card p-0 mb-3">
+        <table class="table table-sm align-middle mb-0">
+          <thead class="table-light">
+            <tr>
+              <th class="ps-3"><input type="checkbox" onclick="document.querySelectorAll('.etapa-chk').forEach(c=>c.checked=this.checked)" checked></th>
+              <th>Fase</th>
+              <th>Etapa</th>
+              <th>Orçado</th>
+              <th>Realizado</th>
+              <th>A incorrer (previsto)</th>
+              <th>Vencimento</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for e in etapas_pendentes %}
+            <tr>
+              <td class="ps-3"><input type="checkbox" class="etapa-chk" name="etapa_ids" value="{{ e.id }}" checked></td>
+              <td class="small text-muted">{{ e.fase_nome }}</td>
+              <td>{{ e.descricao }}</td>
+              <td class="small">R$ {{ "%.2f"|format(e.orcado_rs) }}</td>
+              <td class="small text-muted">R$ {{ "%.2f"|format(e.financeiro_rs) }}</td>
+              <td class="fw-semibold">R$ {{ "%.2f"|format(e.a_incorrer) }}</td>
+              <td class="small">{{ e.data_fim or '— (usa data padrão)' }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+
+      <button type="submit" class="btn btn-primary">Importar etapas selecionadas como "a pagar"</button>
+    </form>
+    {% endif %}
+  {% endif %}
+  {% endif %}
+</div>
+{% endblock %}
+"""
+if hasattr(templates_env, "loader") and hasattr(templates_env.loader, "mapping"):
+    templates_env.loader.mapping["fluxo_caixa_importar_obra.html"] = TEMPLATES["fluxo_caixa_importar_obra.html"]
+
+
+@app.get("/ferramentas/fluxo-caixa/importar-obra", response_class=HTMLResponse)
+@require_login
+async def fc_importar_obra_page(request: Request, obra_id: _Opt_fc[int] = None, session: Session = Depends(get_session)):
+    ctx       = get_tenant_context(request, session)
+    client_id = get_active_client_id(request, session, ctx)
+
+    obras = session.exec(
+        select(Obra).where(Obra.company_id == ctx.company.id, Obra.client_id == client_id)
+    ).all()
+
+    obra = None
+    etapas_pendentes = []
+    if obra_id:
+        obra = _get_obra_or_404(session, obra_id, ctx.company.id)
+        if obra and obra.client_id != client_id:
+            obra = None
+        if obra:
+            calc = _calcular_obra(session, obra)
+            for fase in calc["fases"]:
+                for e in fase["etapas"]:
+                    if e["a_incorrer"] > 0:
+                        etapas_pendentes.append({
+                            **e,
+                            "fase_nome": fase["nome"],
+                        })
+
+    return render("fluxo_caixa_importar_obra.html", request=request, context={
+        "page_title":           "Importar de Obra — Fluxo de Caixa",
+        "obras":                obras,
+        "obra":                 obra,
+        "etapas_pendentes":     etapas_pendentes,
+        "empresas_disponiveis": _fc_empresas(session, ctx.company.id, client_id),
+        "data_padrao":          (_date_fc.today() + _td_fc(days=30)).isoformat(),
+    })
+
+
+@app.post("/ferramentas/fluxo-caixa/importar-obra/confirmar", response_class=HTMLResponse)
+@require_login
+async def fc_importar_obra_confirmar(
+    request: Request,
+    session: Session = Depends(get_session),
+    obra_id: int = Form(...),
+    centro_custo: str = Form(""),
+    empresa: str = Form(""),
+    data_padrao: str = Form(""),
+    etapa_ids: _List_fc[int] = Form([]),
+):
+    from fastapi.responses import RedirectResponse
+    ctx       = get_tenant_context(request, session)
+    client_id = get_active_client_id(request, session, ctx)
+
+    obra = _get_obra_or_404(session, obra_id, ctx.company.id)
+    if not obra or obra.client_id != client_id:
+        set_flash(request, "Obra não encontrada.")
+        return RedirectResponse("/ferramentas/fluxo-caixa/importar-obra", status_code=303)
+
+    calc = _calcular_obra(session, obra)
+    etapas_by_id = {e["id"]: e for fase in calc["fases"] for e in fase["etapas"]}
+
+    batch_id   = str(_uuid_fc.uuid4())[:8]
+    importados = 0
+    for eid in etapa_ids:
+        e = etapas_by_id.get(eid)
+        if not e or e["a_incorrer"] <= 0:
+            continue
+        venc = e["data_fim"] or data_padrao or (_date_fc.today() + _td_fc(days=30)).isoformat()
+        entry = CashFlowEntry(
+            company_id=ctx.company.id,
+            client_id=client_id,
+            data_vencimento=venc,
+            data_pagamento=None,
+            descricao=f"{obra.nome} — {e['descricao']}",
+            empresa=empresa.strip(),
+            centro_custo=(centro_custo.strip() or obra.nome),
+            categoria="Obra",
+            tipo="saida",
+            valor_cents=int(round(e["a_incorrer"] * 100)),
+            status="previsto",
+            import_batch=batch_id,
+            created_at=utcnow(),
+            updated_at=utcnow(),
+        )
+        session.add(entry)
+        importados += 1
+
+    session.commit()
+    set_flash(request, f"{importados} etapa(s) importada(s) da obra '{obra.nome}' como contas a pagar (previsto).")
+    return RedirectResponse("/ferramentas/fluxo-caixa/lancamentos", status_code=303)
+
 
 _orig_fc_enriquecer = _enriquecer_client_data
 
