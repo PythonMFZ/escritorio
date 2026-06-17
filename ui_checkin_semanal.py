@@ -1123,4 +1123,69 @@ async def checkin_broadcast_template(request: Request, session: Session = Depend
     return JSONResponse({"ok": erros == 0, "enviados": enviados, "erros": erros, "log": log})
 
 
+@app.post("/admin/checkin/broadcast-reengajamento")
+@require_login
+async def checkin_broadcast_reengajamento(request: Request, session: Session = Depends(get_session)):
+    """Envia template de reengajamento apenas para clientes (role=cliente) sem nenhum
+    registro em UserActivity — ou seja, que nunca usaram o app."""
+    ctx = get_tenant_context(request, session)
+    if not ctx or ctx.membership.role not in ("admin", "owner", "equipe"):
+        return JSONResponse({"ok": False, "erro": "Sem permissão."}, status_code=403)
+
+    body          = await request.json()
+    template_name = (body.get("template_name") or "").strip()
+    language_code = (body.get("language_code") or "pt_BR").strip()
+
+    if not template_name:
+        return JSONResponse({"ok": False, "erro": "template_name obrigatório."}, status_code=400)
+
+    canal = session.exec(
+        _sel_ck(WhatsAppChannelConfig)
+        .where(WhatsAppChannelConfig.company_id == ctx.company.id)
+    ).first()
+    if not canal or not canal.meta_phone_number_id:
+        return JSONResponse({"ok": False, "erro": "Canal WhatsApp não configurado."}, status_code=400)
+
+    ativos_user_ids = set(session.exec(
+        _sel_ck(UserActivity.user_id).where(UserActivity.company_id == ctx.company.id)
+    ).all())
+
+    membros = session.exec(
+        _sel_ck(Membership).where(
+            Membership.company_id == ctx.company.id,
+            Membership.role == "cliente",
+        )
+    ).all()
+
+    log = []
+    enviados = erros = pulados = 0
+    for m in membros:
+        if m.user_id in ativos_user_ids:
+            pulados += 1
+            continue
+        try:
+            user = session.get(User, m.user_id)
+            if not user or not user.whatsapp_phone:
+                pulados += 1
+                continue
+            params = [(user.name or user.email or "").split()[0] or "cliente"]
+            ok, detalhe = _ck_enviar_template_sync(
+                user.whatsapp_phone, canal.meta_phone_number_id,
+                template_name, language_code, params,
+            )
+            nome_display = f"{user.name or user.email} ({user.whatsapp_phone})"
+            if ok:
+                enviados += 1
+                log.append(f"✅ {nome_display} → +{detalhe}")
+            else:
+                erros += 1
+                log.append(f"❌ {nome_display}: {detalhe}")
+        except Exception as _e:
+            erros += 1
+            log.append(f"❌ user#{m.user_id}: {_e}")
+
+    log.append(f"\nTotal: {enviados} enviados, {erros} erros, {pulados} pulados (já usam o app ou sem WhatsApp).")
+    return JSONResponse({"ok": erros == 0, "enviados": enviados, "erros": erros, "pulados": pulados, "log": log})
+
+
 print("[checkin] ✅ Módulo de check-in semanal carregado (v2 — httpx síncrono).")
