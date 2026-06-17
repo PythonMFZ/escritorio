@@ -20,6 +20,7 @@ import io        as _io_fc
 from datetime   import date as _date_fc, timedelta as _td_fc
 from typing     import Optional as _Opt_fc, List as _List_fc
 from sqlalchemy import text as _t_fc, Column, BigInteger
+from fastapi import Query as _Query_fc
 
 # ── Modelos ───────────────────────────────────────────────────────────────────
 
@@ -893,8 +894,8 @@ async def fc_dashboard(
     data_fim: str = "",
     group_by: str = "semana",
     modo: str = "todos",
-    centros: _List_fc[str] = None,
-    empresas: _List_fc[str] = None,
+    centros: _Opt_fc[_List_fc[str]] = _Query_fc(None),
+    empresas: _Opt_fc[_List_fc[str]] = _Query_fc(None),
 ):
     ctx        = get_tenant_context(request, session)
     client_id  = get_active_client_id(request, session, ctx)
@@ -1544,6 +1545,9 @@ async def fc_excluir_batch(batch_id: str, request: Request, session: Session = D
 
 # ── Importar previsão (a incorrer) de uma Obra (Gestão de Obras) ──────────────
 
+_FC_MESES_PT = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun",
+                "Jul", "Ago", "Set", "Out", "Nov", "Dez"]
+
 TEMPLATES["fluxo_caixa_importar_obra.html"] = r"""
 {% extends "base.html" %}
 {% block content %}
@@ -1589,41 +1593,45 @@ TEMPLATES["fluxo_caixa_importar_obra.html"] = r"""
           </datalist>
         </div>
         <div class="col-12 col-md-4">
-          <label class="form-label small fw-semibold">Data de vencimento padrão (se a etapa não tiver data fim)</label>
+          <label class="form-label small fw-semibold">Data de vencimento padrão (etapas sem data fim)</label>
           <input type="date" name="data_padrao" class="form-control form-control-sm" value="{{ data_padrao }}">
         </div>
       </div>
+
+      <p class="text-muted small">
+        A previsão é gerada automaticamente a partir das datas de vencimento já cadastradas em cada etapa
+        da obra — não é necessário marcar fase a fase. Reimportar atualiza (substitui) a previsão anterior desta obra.
+      </p>
 
       <div class="card p-0 mb-3">
         <table class="table table-sm align-middle mb-0">
           <thead class="table-light">
             <tr>
-              <th class="ps-3"><input type="checkbox" onclick="document.querySelectorAll('.etapa-chk').forEach(c=>c.checked=this.checked)" checked></th>
-              <th>Fase</th>
-              <th>Etapa</th>
-              <th>Orçado</th>
-              <th>Realizado</th>
-              <th>A incorrer (previsto)</th>
-              <th>Vencimento</th>
+              <th class="ps-3">Mês de vencimento</th>
+              <th>Etapas</th>
+              <th class="text-end pe-3">A desembolsar (previsto)</th>
             </tr>
           </thead>
           <tbody>
-            {% for e in etapas_pendentes %}
+            {% for m in meses %}
             <tr>
-              <td class="ps-3"><input type="checkbox" class="etapa-chk" name="etapa_ids" value="{{ e.id }}" checked></td>
-              <td class="small text-muted">{{ e.fase_nome }}</td>
-              <td>{{ e.descricao }}</td>
-              <td class="small">R$ {{ "%.2f"|format(e.orcado_rs) }}</td>
-              <td class="small text-muted">R$ {{ "%.2f"|format(e.financeiro_rs) }}</td>
-              <td class="fw-semibold">R$ {{ "%.2f"|format(e.a_incorrer) }}</td>
-              <td class="small">{{ e.data_fim or '— (usa data padrão)' }}</td>
+              <td class="ps-3">{{ m.label }}</td>
+              <td class="text-muted small">{{ m.qtd }} etapa(s)</td>
+              <td class="text-end pe-3 fw-semibold">R$ {{ "%.2f"|format(m.total) }}</td>
             </tr>
             {% endfor %}
           </tbody>
+          <tfoot class="table-light">
+            <tr>
+              <th class="ps-3">Total</th>
+              <th>{{ etapas_pendentes|length }} etapa(s)</th>
+              <th class="text-end pe-3">R$ {{ "%.2f"|format(total_geral) }}</th>
+            </tr>
+          </tfoot>
         </table>
       </div>
 
-      <button type="submit" class="btn btn-primary">Importar etapas selecionadas como "a pagar"</button>
+      <button type="submit" class="btn btn-primary">Gerar previsão mensal de desembolso</button>
     </form>
     {% endif %}
   {% endif %}
@@ -1647,6 +1655,9 @@ async def fc_importar_obra_page(request: Request, obra_id: _Opt_fc[int] = None, 
 
     obra = None
     etapas_pendentes = []
+    meses = []
+    total_geral = 0.0
+    data_padrao_default = (_date_fc.today() + _td_fc(days=30)).isoformat()
     if obra_id:
         obra = _get_obra_or_404(session, obra_id, ctx.company.id)
         if obra and obra.client_id != client_id:
@@ -1661,13 +1672,30 @@ async def fc_importar_obra_page(request: Request, obra_id: _Opt_fc[int] = None, 
                             "fase_nome": fase["nome"],
                         })
 
+            meses_map = {}
+            for e in etapas_pendentes:
+                venc = e["data_fim"] or data_padrao_default
+                mes_key = venc[:7] if len(venc) >= 7 else data_padrao_default[:7]
+                if mes_key not in meses_map:
+                    meses_map[mes_key] = {"qtd": 0, "total": 0.0}
+                meses_map[mes_key]["qtd"]   += 1
+                meses_map[mes_key]["total"] += e["a_incorrer"]
+                total_geral += e["a_incorrer"]
+
+            for mes_key in sorted(meses_map.keys()):
+                ano, mes = mes_key.split("-")
+                label = f"{_FC_MESES_PT[int(mes)-1]}/{ano}"
+                meses.append({"label": label, "qtd": meses_map[mes_key]["qtd"], "total": meses_map[mes_key]["total"]})
+
     return render("fluxo_caixa_importar_obra.html", request=request, context={
         "page_title":           "Importar de Obra — Fluxo de Caixa",
         "obras":                obras,
         "obra":                 obra,
         "etapas_pendentes":     etapas_pendentes,
+        "meses":                meses,
+        "total_geral":          total_geral,
         "empresas_disponiveis": _fc_empresas(session, ctx.company.id, client_id),
-        "data_padrao":          (_date_fc.today() + _td_fc(days=30)).isoformat(),
+        "data_padrao":          data_padrao_default,
     })
 
 
@@ -1680,7 +1708,6 @@ async def fc_importar_obra_confirmar(
     centro_custo: str = Form(""),
     empresa: str = Form(""),
     data_padrao: str = Form(""),
-    etapa_ids: _List_fc[int] = Form([]),
 ):
     from fastapi.responses import RedirectResponse
     ctx       = get_tenant_context(request, session)
@@ -1692,36 +1719,47 @@ async def fc_importar_obra_confirmar(
         return RedirectResponse("/ferramentas/fluxo-caixa/importar-obra", status_code=303)
 
     calc = _calcular_obra(session, obra)
-    etapas_by_id = {e["id"]: e for fase in calc["fases"] for e in fase["etapas"]}
 
-    batch_id   = str(_uuid_fc.uuid4())[:8]
-    importados = 0
-    for eid in etapa_ids:
-        e = etapas_by_id.get(eid)
-        if not e or e["a_incorrer"] <= 0:
-            continue
-        venc = e["data_fim"] or data_padrao or (_date_fc.today() + _td_fc(days=30)).isoformat()
-        entry = CashFlowEntry(
-            company_id=ctx.company.id,
-            client_id=client_id,
-            data_vencimento=venc,
-            data_pagamento=None,
-            descricao=f"{obra.nome} — {e['descricao']}",
-            empresa=empresa.strip(),
-            centro_custo=(centro_custo.strip() or obra.nome),
-            categoria="Obra",
-            tipo="saida",
-            valor_cents=int(round(e["a_incorrer"] * 100)),
-            status="previsto",
-            import_batch=batch_id,
-            created_at=utcnow(),
-            updated_at=utcnow(),
+    # Batch fixo por obra: reimportar substitui a previsão anterior gerada por esta obra.
+    batch_id = f"obra{obra.id}"
+    antigos = session.exec(
+        select(CashFlowEntry).where(
+            CashFlowEntry.company_id   == ctx.company.id,
+            CashFlowEntry.client_id    == client_id,
+            CashFlowEntry.import_batch == batch_id,
         )
-        session.add(entry)
-        importados += 1
+    ).all()
+    for old in antigos:
+        session.delete(old)
+
+    data_padrao_final = data_padrao or (_date_fc.today() + _td_fc(days=30)).isoformat()
+    importados = 0
+    for fase in calc["fases"]:
+        for e in fase["etapas"]:
+            if e["a_incorrer"] <= 0:
+                continue
+            venc = e["data_fim"] or data_padrao_final
+            entry = CashFlowEntry(
+                company_id=ctx.company.id,
+                client_id=client_id,
+                data_vencimento=venc,
+                data_pagamento=None,
+                descricao=f"{obra.nome} — {e['descricao']}",
+                empresa=empresa.strip(),
+                centro_custo=(centro_custo.strip() or obra.nome),
+                categoria="Obra",
+                tipo="saida",
+                valor_cents=int(round(e["a_incorrer"] * 100)),
+                status="previsto",
+                import_batch=batch_id,
+                created_at=utcnow(),
+                updated_at=utcnow(),
+            )
+            session.add(entry)
+            importados += 1
 
     session.commit()
-    set_flash(request, f"{importados} etapa(s) importada(s) da obra '{obra.nome}' como contas a pagar (previsto).")
+    set_flash(request, f"Previsão mensal gerada: {importados} etapa(s) da obra '{obra.nome}' importada(s) como contas a pagar (previsto).")
     return RedirectResponse("/ferramentas/fluxo-caixa/lancamentos", status_code=303)
 
 
