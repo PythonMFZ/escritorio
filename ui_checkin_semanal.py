@@ -754,6 +754,20 @@ TEMPLATES["checkin_admin.html"] = r"""
   </button>
 </div>
 
+{# ── Reengajamento (clientes sem uso) ── #}
+<div class="ck-card" style="border-color:#dc354533;background:#fff5f5;">
+  <div class="fw-semibold mb-1">🔔 Reengajamento — clientes sem uso <span class="badge bg-secondary ms-1" style="font-size:.65rem;">Requer template aprovado</span></div>
+  <div class="muted small mb-3">Envia template para clientes (role=cliente) que <strong>nunca usaram o app</strong> (sem nenhum registro de acesso).<br>
+  Pula automaticamente quem já usa o app ou não tem WhatsApp cadastrado. Informe o nome do template já aprovado na Meta.</div>
+  <div class="input-group input-group-sm mb-2" style="max-width:320px;">
+    <span class="input-group-text">Template</span>
+    <input type="text" id="reengTemplateName" class="form-control" value="reengajamento_onboarding">
+  </div>
+  <button class="btn btn-danger btn-sm" onclick="enviarReengajamento()">
+    <i class="bi bi-person-plus me-1"></i>Enviar para clientes sem uso
+  </button>
+</div>
+
 {# ── Mensagem personalizada ── #}
 <div class="ck-card">
   <div class="fw-semibold mb-2">📢 Mensagem livre para todos <span class="badge bg-warning text-dark ms-1" style="font-size:.65rem;">Só para janela 24h</span></div>
@@ -849,6 +863,27 @@ async function enviarTemplate(templateName, langCode) {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({template_name: templateName, language_code: langCode}),
+    });
+    const d = await r.json();
+    const badge = document.getElementById('logBadge');
+    badge.textContent = d.ok ? '✅ OK' : '⚠️ Com erros';
+    badge.className = 'badge ' + (d.ok ? 'bg-success' : 'bg-warning text-dark');
+    document.getElementById('logBox').textContent = (d.log || []).join('\n');
+  } catch(e) {
+    document.getElementById('logBox').textContent = 'Erro: ' + e;
+  }
+}
+
+async function enviarReengajamento() {
+  const templateName = document.getElementById('reengTemplateName').value.trim();
+  if (!templateName) { alert('Informe o nome do template.'); return; }
+  if (!confirm(`Enviar o template "${templateName}" para clientes que NUNCA usaram o app?`)) return;
+  mostrarLog(`Enviando reengajamento "${templateName}"…`);
+  try {
+    const r = await fetch('/admin/checkin/broadcast-reengajamento', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({template_name: templateName, language_code: 'pt_BR'}),
     });
     const d = await r.json();
     const badge = document.getElementById('logBadge');
