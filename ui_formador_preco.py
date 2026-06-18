@@ -85,6 +85,18 @@ TEMPLATES["formador_preco.html"] = r"""{% extends "base.html" %}
         <div class="fp-campo"><label>ICMS-Importação (%)</label><input type="number" step="0.01" id="imp_icms_pct" oninput="fpCalcular()" value="0"></div>
         <div class="fp-campo"><label>Despesas aduaneiras / desembaraço (R$/unid.)</label><input type="number" step="0.01" id="imp_despachante" oninput="fpCalcular()" value="0"></div>
       </div>
+      <div class="fp-campo full" style="margin-top:14px;background:#f4f6f9;border:1px solid #dbe3ec;border-radius:8px;padding:12px 14px;">
+        <label style="display:flex;align-items:center;gap:8px;margin-bottom:2px;">
+          <input type="checkbox" id="imp_lucro_real" style="width:auto;" onchange="fpCalcular()">
+          Empresa no Lucro Real — IPI, PIS/COFINS e ICMS de importação geram crédito tributário
+        </label>
+        <div class="ajuda" style="font-size:.76rem;color:#64748b;">
+          No regime não-cumulativo, esses impostos pagos na importação não são custo definitivo: geram crédito
+          a ser compensado com os débitos das vendas. Marcando esta opção, eles saem do custo do produto e
+          aparecem separadamente como "Créditos tributários a recuperar". O Imposto de Importação (II) nunca
+          gera crédito — continua sempre como custo.
+        </div>
+      </div>
     </div>
   </div>
 
@@ -117,6 +129,9 @@ TEMPLATES["formador_preco.html"] = r"""{% extends "base.html" %}
       <div class="item"><div class="lbl">Custo base (R$/unid.)</div><div class="num" id="fpCustoBase">R$ 0,00</div></div>
       <div class="item"><div class="lbl">Markup multiplicador</div><div class="num" id="fpMarkup">0,00x</div></div>
       <div class="item"><div class="lbl">Margem de contribuição (R$)</div><div class="num" id="fpMargemRs">R$ 0,00</div></div>
+    </div>
+    <div class="fp-resultado-grid" id="fpCreditoRow" style="display:none;">
+      <div class="item"><div class="lbl">Créditos tributários a recuperar (R$/unid.)</div><div class="num" id="fpCreditoTrib">R$ 0,00</div></div>
     </div>
   </div>
 </div>
@@ -152,16 +167,24 @@ function fpCustoBaseAtual(){
   }
   if (perfil === 'importacao'){
     const baseFob = num('imp_fob') * num('imp_cambio');
-    const impostosPct = (num('imp_ii_pct') + num('imp_ipi_pct') + num('imp_piscofins_pct') + num('imp_icms_pct')) / 100;
-    const impostosRs = baseFob * impostosPct;
-    return baseFob + impostosRs + num('imp_frete_seguro') + num('imp_despachante');
+    const lucroReal = document.getElementById('imp_lucro_real').checked;
+    // II nunca gera crédito — sempre é custo.
+    const iiRs = baseFob * (num('imp_ii_pct') / 100);
+    // IPI, PIS/COFINS e ICMS geram crédito no Lucro Real (não-cumulativo): saem do custo.
+    const creditaveisPct = (num('imp_ipi_pct') + num('imp_piscofins_pct') + num('imp_icms_pct')) / 100;
+    const creditaveisRs = baseFob * creditaveisPct;
+    const custo = baseFob + iiRs + num('imp_frete_seguro') + num('imp_despachante') + (lucroReal ? 0 : creditaveisRs);
+    return { custo: custo, credito: lucroReal ? creditaveisRs : 0 };
   }
-  return 0;
+  return { custo: 0, credito: 0 };
 }
 
 function fpCalcular(){
   const num = id => parseFloat(document.getElementById(id).value) || 0;
-  const custoBase = fpCustoBaseAtual();
+  const perfil = document.querySelector('.fp-perfil-btn.ativo').dataset.perfil;
+  const base = fpCustoBaseAtual();
+  const custoBase = (perfil === 'importacao') ? base.custo : base;
+  const creditoTrib = (perfil === 'importacao') ? base.credito : 0;
   const pctVariaveis = (num('ger_comissao') + num('ger_cartao') + num('ger_frete_venda') + num('ger_impostos') + num('ger_margem')) / 100;
 
   const alerta = document.getElementById('fpAlerta');
@@ -180,6 +203,14 @@ function fpCalcular(){
   document.getElementById('fpPrecoSugerido').textContent = fpFmt(precoSugerido);
   document.getElementById('fpMarkup').textContent = markup.toLocaleString('pt-BR', {minimumFractionDigits:2, maximumFractionDigits:2}) + 'x';
   document.getElementById('fpMargemRs').textContent = fpFmt(margemRs);
+
+  const creditoRow = document.getElementById('fpCreditoRow');
+  if (perfil === 'importacao' && document.getElementById('imp_lucro_real').checked){
+    creditoRow.style.display = '';
+    document.getElementById('fpCreditoTrib').textContent = fpFmt(creditoTrib);
+  } else {
+    creditoRow.style.display = 'none';
+  }
 }
 
 fpCalcular();
