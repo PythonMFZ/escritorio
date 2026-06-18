@@ -148,6 +148,37 @@ async def task_subitem_delete(
     return RedirectResponse(f"/tarefas/{task.id}", status_code=303)
 
 
+@app.post("/tarefas/{task_id}/subtarefas/excluir-lote")
+@require_login
+async def task_subitem_bulk_delete(
+        request: Request,
+        session: Session = Depends(get_session),
+        task_id: int = 0,
+) -> RedirectResponse:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+
+    task = session.get(Task, int(task_id))
+    if not task or not _task_can_view(ctx, task):
+        return RedirectResponse("/tarefas", status_code=303)
+
+    if ctx.membership.role not in ["admin", "equipe"]:
+        set_flash(request, "Sem permissão para excluir subtarefas.")
+        return RedirectResponse(f"/tarefas/{task.id}", status_code=303)
+
+    form = await request.form()
+    ids = [int(v) for v in form.getlist("ids") if str(v).strip().isdigit()]
+    if ids:
+        for sub in session.exec(
+            select(TaskSubitem).where(TaskSubitem.task_id == task.id, TaskSubitem.id.in_(ids))
+        ).all():
+            session.delete(sub)
+        session.commit()
+    return RedirectResponse(f"/tarefas/{task.id}", status_code=303)
+
+
 # ── Override de GET /tarefas/{task_id}: adiciona subtarefas + progresso ──
 
 app.router.routes[:] = [
@@ -285,8 +316,18 @@ try:
       <div class="muted small mb-2">Nenhuma subtarefa cadastrada.</div>
     {% endif %}
 
+    {% if can_manage_subitems and subitems %}
+      <div class="d-flex justify-content-end mb-2">
+        <button class="btn btn-sm btn-outline-danger" type="submit" form="form-sub-lote"
+                onclick="return confirm('Excluir as subtarefas selecionadas?');">Excluir selecionadas</button>
+      </div>
+    {% endif %}
+
     {% for sub in subitems %}
       <div class="d-flex align-items-center gap-2 mb-1">
+        {% if can_manage_subitems %}
+          <input type="checkbox" class="form-check-input" name="ids" value="{{ sub.id }}" form="form-sub-lote">
+        {% endif %}
         {% if can_toggle_subitems %}
           <form method="post" action="/tarefas/{{ task.id }}/subtarefas/{{ sub.id }}/toggle" class="d-flex align-items-center gap-2">
             <button class="btn btn-sm btn-outline-secondary" type="submit" style="width: 2rem;">{% if sub.done %}✓{% else %}{% endif %}</button>
@@ -309,6 +350,7 @@ try:
         <input class="form-control form-control-sm" name="title" placeholder="Nova subtarefa" required />
         <button class="btn btn-sm btn-outline-primary" type="submit">Adicionar</button>
       </form>
+      <form id="form-sub-lote" method="post" action="/tarefas/{{ task.id }}/subtarefas/excluir-lote"></form>
     {% endif %}
   </div>
 
