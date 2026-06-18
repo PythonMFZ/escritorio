@@ -48795,3 +48795,10 @@ except Exception as _e_tk_load:
     import traceback as _tb_tk
     print(f"[tarefas_view] ⚠️ Falha ao carregar ui_tarefas_view.py: {_e_tk_load}")
     _tb_tk.print_exc()
+
+try:
+    exec(open('ui_tarefas_subtarefas.py').read())
+except Exception as _e_st_load:
+    import traceback as _tb_st
+    print(f"[tarefas_subtarefas] ⚠️ Falha ao carregar ui_tarefas_subtarefas.py: {_e_st_load}")
+    _tb_st.print_exc()

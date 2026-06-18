@@ -189,6 +189,13 @@ async def tasks_list_v2(
             active_filtered_count += 1
 
         is_active_for_me = bool(active_for_user and active_for_user.task_id == t.id)
+        sub_done, sub_total = (0, 0)
+        if "_task_subitems_progress" in globals() and "ensure_task_subitem_table" in globals():
+            try:
+                if ensure_task_subitem_table():
+                    sub_done, sub_total = _task_subitems_progress(session, t.id)
+            except Exception:
+                sub_done, sub_total = (0, 0)
         view.append(
             {
                 "id": t.id,
@@ -206,6 +213,8 @@ async def tasks_list_v2(
                 "is_active_for_me": is_active_for_me,
                 "can_start_work": ctx.membership.role in ["admin",
                                                           "equipe"] and t.status != "concluida" and not is_active_for_me,
+                "sub_done": sub_done,
+                "sub_total": sub_total,
             }
         )
 
