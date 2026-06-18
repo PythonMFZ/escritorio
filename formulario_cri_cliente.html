@@ -1,0 +1,345 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Formulário de Interesse em CRI — Maffezzolli Capital</title>
+<style>
+  :root{
+    --azul:#0d3b66; --azul-claro:#e8f0fa; --laranja:#f4a300; --cinza:#64748b; --borda:#dbe3ec;
+  }
+  *{box-sizing:border-box;}
+  body{
+    font-family:'Segoe UI',Arial,sans-serif; background:#f4f6f9; margin:0; padding:0; color:#1f2937;
+  }
+  .wrap{max-width:760px; margin:0 auto; padding:32px 20px 80px;}
+  .header{
+    background:var(--azul); color:#fff; padding:28px 28px; border-radius:14px 14px 0 0;
+  }
+  .header h1{margin:0 0 6px; font-size:1.5rem;}
+  .header p{margin:0; opacity:.9; font-size:.92rem;}
+  .card{
+    background:#fff; border:1px solid var(--borda); border-top:none; border-radius:0 0 14px 14px;
+    padding:0; box-shadow:0 4px 18px rgba(0,0,0,.04);
+  }
+  .secao{padding:26px 28px; border-bottom:1px solid var(--borda);}
+  .secao:last-of-type{border-bottom:none;}
+  .secao h2{
+    font-size:1.05rem; color:var(--azul); margin:0 0 4px; display:flex; align-items:center; gap:8px;
+  }
+  .secao .desc{font-size:.85rem; color:var(--cinza); margin:0 0 18px;}
+  .grid{display:grid; grid-template-columns:1fr 1fr; gap:16px;}
+  .grid.full, .campo.full{grid-column:1 / -1;}
+  .campo label{
+    display:block; font-size:.82rem; font-weight:600; color:#374151; margin-bottom:5px;
+  }
+  .campo .ajuda{font-size:.74rem; color:var(--cinza); margin-top:3px;}
+  input[type=text], input[type=number], input[type=email], input[type=tel], input[type=date],
+  select, textarea{
+    width:100%; padding:9px 11px; border:1px solid var(--borda); border-radius:8px;
+    font-size:.9rem; font-family:inherit; background:#fbfcfe;
+  }
+  input:focus, select:focus, textarea:focus{outline:none; border-color:var(--azul); background:#fff;}
+  textarea{resize:vertical; min-height:70px;}
+  .radio-group{display:flex; gap:18px; flex-wrap:wrap; margin-top:4px;}
+  .radio-group label{display:flex; align-items:center; gap:6px; font-weight:500; font-size:.88rem; color:#374151;}
+  .radio-group input{width:auto;}
+  .check-group{display:flex; flex-direction:column; gap:8px; margin-top:4px;}
+  .check-group label{display:flex; align-items:flex-start; gap:8px; font-size:.86rem; color:#374151; font-weight:400;}
+  .check-group input{width:auto; margin-top:3px;}
+  .footer-actions{
+    padding:26px 28px; display:flex; gap:12px; flex-wrap:wrap; align-items:center;
+  }
+  button{
+    border:none; border-radius:8px; padding:12px 22px; font-size:.95rem; font-weight:600;
+    cursor:pointer; transition:.15s;
+  }
+  .btn-primary{background:var(--azul); color:#fff;}
+  .btn-primary:hover{background:#0a2c4e;}
+  .btn-outline{background:#fff; color:var(--azul); border:1px solid var(--azul);}
+  .btn-outline:hover{background:var(--azul-claro);}
+  #status{font-size:.85rem; color:#16a34a; margin-top:8px;}
+  .req{color:#dc2626;}
+  @media (max-width:620px){.grid{grid-template-columns:1fr;}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="header">
+    <h1>📋 Formulário de Interesse em CRI</h1>
+    <p>Maffezzolli Capital — preencha as informações abaixo para que possamos avaliar a viabilidade da sua operação.</p>
+  </div>
+
+  <form id="formCri" class="card">
+
+    <div class="secao">
+      <h2>🏢 Dados da Empresa</h2>
+      <p class="desc">Informações cadastrais e de contato.</p>
+      <div class="grid">
+        <div class="campo full">
+          <label>Razão Social <span class="req">*</span></label>
+          <input type="text" name="razao_social" required>
+        </div>
+        <div class="campo">
+          <label>CNPJ <span class="req">*</span></label>
+          <input type="text" name="cnpj" required placeholder="00.000.000/0000-00">
+        </div>
+        <div class="campo">
+          <label>Setor de Atividade</label>
+          <input type="text" name="setor" placeholder="Ex: Construção Civil / Incorporação">
+        </div>
+        <div class="campo">
+          <label>Nome do responsável <span class="req">*</span></label>
+          <input type="text" name="responsavel" required>
+        </div>
+        <div class="campo">
+          <label>Cargo</label>
+          <input type="text" name="cargo">
+        </div>
+        <div class="campo">
+          <label>E-mail <span class="req">*</span></label>
+          <input type="email" name="email" required>
+        </div>
+        <div class="campo">
+          <label>Telefone / WhatsApp <span class="req">*</span></label>
+          <input type="tel" name="telefone" required placeholder="(00) 00000-0000">
+        </div>
+        <div class="campo">
+          <label>Anos de operação da empresa</label>
+          <input type="number" name="anos_operacao" min="0">
+        </div>
+        <div class="campo">
+          <label>Cidade / UF</label>
+          <input type="text" name="cidade_uf" placeholder="Ex: Brusque / SC">
+        </div>
+      </div>
+    </div>
+
+    <div class="secao">
+      <h2>🏗️ Dados do Empreendimento / Imóvel</h2>
+      <p class="desc">O CRI é lastreado em recebíveis imobiliários — detalhe o ativo/empreendimento envolvido.</p>
+      <div class="grid">
+        <div class="campo full">
+          <label>Nome / identificação do empreendimento</label>
+          <input type="text" name="nome_empreendimento">
+        </div>
+        <div class="campo">
+          <label>Tipo de empreendimento</label>
+          <select name="tipo_empreendimento">
+            <option value="">— Selecione —</option>
+            <option>Residencial</option>
+            <option>Comercial</option>
+            <option>Loteamento</option>
+            <option>Misto</option>
+            <option>Built to suit</option>
+            <option>Outro</option>
+          </select>
+        </div>
+        <div class="campo">
+          <label>Fase atual</label>
+          <select name="fase_atual">
+            <option value="">— Selecione —</option>
+            <option>Terreno / pré-lançamento</option>
+            <option>Lançamento</option>
+            <option>Em obras</option>
+            <option>Pronto / entregue</option>
+          </select>
+        </div>
+        <div class="campo">
+          <label>VGV total (Valor Geral de Vendas)</label>
+          <input type="number" name="vgv_total" placeholder="R$">
+        </div>
+        <div class="campo">
+          <label>% já vendido (VSO)</label>
+          <input type="number" name="vso_pct" min="0" max="100" placeholder="%">
+        </div>
+        <div class="campo full">
+          <label>Endereço / localização</label>
+          <input type="text" name="localizacao">
+        </div>
+        <div class="campo full">
+          <label>Existem recebíveis já constituídos (contratos de venda, CCBs, etc.)?</label>
+          <div class="radio-group">
+            <label><input type="radio" name="tem_recebiveis" value="sim">Sim</label>
+            <label><input type="radio" name="tem_recebiveis" value="nao">Não</label>
+            <label><input type="radio" name="tem_recebiveis" value="parcial">Parcialmente</label>
+          </div>
+        </div>
+        <div class="campo full">
+          <label>Se sim, qual o valor total dos recebíveis disponíveis para securitização?</label>
+          <input type="number" name="valor_recebiveis" placeholder="R$">
+        </div>
+      </div>
+    </div>
+
+    <div class="secao">
+      <h2>💰 Operação Pretendida</h2>
+      <p class="desc">O que você busca captar com o CRI.</p>
+      <div class="grid">
+        <div class="campo">
+          <label>Valor pretendido da operação <span class="req">*</span></label>
+          <input type="number" name="valor_pretendido" required placeholder="R$">
+        </div>
+        <div class="campo">
+          <label>Prazo desejado (meses)</label>
+          <input type="number" name="prazo_meses">
+        </div>
+        <div class="campo">
+          <label>Finalidade dos recursos</label>
+          <select name="finalidade">
+            <option value="">— Selecione —</option>
+            <option>Capital de giro</option>
+            <option>Construção / obra</option>
+            <option>Aquisição de terreno</option>
+            <option>Refinanciamento de dívida</option>
+            <option>Outro</option>
+          </select>
+        </div>
+        <div class="campo">
+          <label>Urgência da captação</label>
+          <select name="urgencia">
+            <option value="">— Selecione —</option>
+            <option>Imediata (até 30 dias)</option>
+            <option>Curto prazo (1-3 meses)</option>
+            <option>Médio prazo (3-6 meses)</option>
+            <option>Sem urgência / planejamento</option>
+          </select>
+        </div>
+        <div class="campo full">
+          <label>Já tentou estruturar operação semelhante antes? Com quem?</label>
+          <textarea name="historico_operacoes"></textarea>
+        </div>
+      </div>
+    </div>
+
+    <div class="secao">
+      <h2>🔒 Garantias Disponíveis</h2>
+      <div class="grid">
+        <div class="campo full">
+          <label>Quais garantias podem ser oferecidas? (marque todas que se aplicam)</label>
+          <div class="check-group">
+            <label><input type="checkbox" name="garantia[]" value="alienacao_fiduciaria">Alienação fiduciária do imóvel/terreno</label>
+            <label><input type="checkbox" name="garantia[]" value="cessao_recebiveis">Cessão fiduciária de recebíveis</label>
+            <label><input type="checkbox" name="garantia[]" value="aval_fianca">Aval / fiança dos sócios</label>
+            <label><input type="checkbox" name="garantia[]" value="hipoteca">Hipoteca</label>
+            <label><input type="checkbox" name="garantia[]" value="outros_imoveis">Outros imóveis em garantia</label>
+            <label><input type="checkbox" name="garantia[]" value="nenhuma">Ainda não definido</label>
+          </div>
+        </div>
+        <div class="campo full">
+          <label>Valor estimado das garantias (R$)</label>
+          <input type="number" name="valor_garantias">
+        </div>
+      </div>
+    </div>
+
+    <div class="secao">
+      <h2>📊 Situação Financeira</h2>
+      <div class="grid">
+        <div class="campo">
+          <label>Faturamento médio mensal</label>
+          <input type="number" name="faturamento_mensal" placeholder="R$">
+        </div>
+        <div class="campo">
+          <label>Dívida total atual (bancos/financiamentos)</label>
+          <input type="number" name="divida_total" placeholder="R$">
+        </div>
+        <div class="campo">
+          <label>Patrimônio líquido estimado</label>
+          <input type="number" name="patrimonio_liquido" placeholder="R$">
+        </div>
+        <div class="campo">
+          <label>Possui inadimplência / restrições (Serasa, protesto)?</label>
+          <div class="radio-group">
+            <label><input type="radio" name="possui_restricao" value="sim">Sim</label>
+            <label><input type="radio" name="possui_restricao" value="nao">Não</label>
+          </div>
+        </div>
+        <div class="campo full">
+          <label>Demonstrações financeiras / balanço auditado disponível?</label>
+          <div class="radio-group">
+            <label><input type="radio" name="tem_balanco" value="sim">Sim</label>
+            <label><input type="radio" name="tem_balanco" value="nao">Não</label>
+            <label><input type="radio" name="tem_balanco" value="parcial">Apenas contábil simples</label>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="secao">
+      <h2>📁 Documentação Disponível</h2>
+      <div class="check-group">
+        <label><input type="checkbox" name="doc[]" value="matricula">Matrícula(s) do imóvel atualizada</label>
+        <label><input type="checkbox" name="doc[]" value="licencas">Licenças / alvarás da obra</label>
+        <label><input type="checkbox" name="doc[]" value="contrato_social">Contrato social / atos societários</label>
+        <label><input type="checkbox" name="doc[]" value="balanco">Balanço / DRE dos últimos 2 anos</label>
+        <label><input type="checkbox" name="doc[]" value="contratos_venda">Contratos de venda das unidades</label>
+        <label><input type="checkbox" name="doc[]" value="memorial">Memorial de incorporação</label>
+      </div>
+    </div>
+
+    <div class="secao">
+      <h2>📝 Observações</h2>
+      <div class="campo full">
+        <textarea name="observacoes" placeholder="Conte mais sobre o que você busca, restrições, ou qualquer informação relevante para a análise."></textarea>
+      </div>
+    </div>
+
+    <div class="footer-actions">
+      <button type="submit" class="btn-primary">Enviar formulário</button>
+      <button type="button" class="btn-outline" onclick="copiarResumo()">Copiar respostas</button>
+    </div>
+    <div class="footer-actions" style="padding-top:0;">
+      <div id="status"></div>
+    </div>
+  </form>
+</div>
+
+<script>
+// E-mail de destino — edite aqui antes de enviar o formulário ao cliente.
+const EMAIL_DESTINO = "contato@maffezzollicapital.com.br";
+
+function montarResumo(form) {
+  const data = new FormData(form);
+  const linhas = [];
+  const labels = {};
+  form.querySelectorAll('[name]').forEach(el => {
+    const nomeBase = el.name.replace('[]', '');
+    if (!labels[nomeBase]) {
+      const campo = el.closest('.campo');
+      const lbl = campo ? campo.querySelector('label') : null;
+      labels[nomeBase] = lbl ? lbl.textContent.replace('*','').trim() : nomeBase;
+    }
+  });
+  const vistos = new Set();
+  for (const [nome] of data.entries()) {
+    const nomeBase = nome.replace('[]', '');
+    if (vistos.has(nomeBase)) continue;
+    vistos.add(nomeBase);
+    const valores = data.getAll(nome);
+    if (valores.join('').trim() === '') continue;
+    linhas.push(`${labels[nomeBase] || nomeBase}: ${valores.join(', ')}`);
+  }
+  return linhas.join('\n');
+}
+
+function copiarResumo() {
+  const resumo = montarResumo(document.getElementById('formCri'));
+  navigator.clipboard.writeText(resumo).then(() => {
+    document.getElementById('status').textContent = '✅ Respostas copiadas para a área de transferência.';
+  }).catch(() => {
+    document.getElementById('status').textContent = '⚠️ Não foi possível copiar automaticamente.';
+  });
+}
+
+document.getElementById('formCri').addEventListener('submit', function(e) {
+  e.preventDefault();
+  const resumo = montarResumo(this);
+  const assunto = encodeURIComponent('Formulário de Interesse em CRI');
+  const corpo = encodeURIComponent(resumo);
+  window.location.href = `mailto:${EMAIL_DESTINO}?subject=${assunto}&body=${corpo}`;
+  document.getElementById('status').textContent = '📧 Abrindo seu aplicativo de e-mail para enviar as respostas...';
+});
+</script>
+</body>
+</html>
