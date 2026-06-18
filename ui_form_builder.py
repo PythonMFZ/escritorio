@@ -748,6 +748,47 @@ try:
 except Exception as _e_fb_patch:
     print(f"[form_builder] ⚠️ Erro ao patchear crm_detail.html: {_e_fb_patch}")
 
+# ── Override: exclusão de negócio precisa apagar FormSubmission primeiro ────
+# (senão quebra por FK violation quando o negócio tem formulário enviado)
+
+app.router.routes[:] = [
+    r for r in app.router.routes
+    if not (
+        hasattr(r, "path") and r.path == "/negocios/{deal_id}/excluir"
+        and hasattr(r, "methods") and r.methods and "POST" in r.methods
+    )
+]
+
+
+@app.post("/negocios/{deal_id}/excluir")
+@require_role({"admin", "equipe"})
+async def crm_delete_com_formularios(request: Request, session: Session = Depends(get_session), deal_id: int = 0,
+                                      confirm: str = Form("")) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    if not ensure_credit_consent_table():
+        set_flash(request, "Sistema de aceite não está configurado (migração pendente no banco).")
+        return RedirectResponse("/credito", status_code=303)
+
+    deal = session.get(BusinessDeal, int(deal_id))
+    if not deal or deal.company_id != ctx.company.id:
+        set_flash(request, "Negócio não encontrado.")
+        return RedirectResponse("/negocios", status_code=303)
+
+    if (confirm or "").strip().upper() != "EXCLUIR":
+        set_flash(request, "Confirmação inválida. Digite EXCLUIR.")
+        return RedirectResponse(f"/negocios/{deal.id}", status_code=303)
+
+    session.exec(delete(BusinessDealNote).where(BusinessDealNote.deal_id == deal.id))
+    session.exec(delete(FormSubmission).where(FormSubmission.deal_id == deal.id))
+    session.exec(delete(BusinessDeal).where(BusinessDeal.id == deal.id))
+    session.commit()
+
+    set_flash(request, "Negócio excluído.")
+    return RedirectResponse("/negocios", status_code=303)
+
+
 if hasattr(templates_env.loader, "mapping"):
     templates_env.loader.mapping = TEMPLATES
 
