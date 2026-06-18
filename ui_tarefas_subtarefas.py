@@ -3,6 +3,7 @@
 # =============================================================================
 
 from typing import Optional as _Opt_st
+from fastapi import Form as _Form_st
 
 
 class TaskSubitem(SQLModel, table=True):
@@ -49,7 +50,7 @@ async def task_subitem_create(
         request: Request,
         session: Session = Depends(get_session),
         task_id: int = 0,
-        title: str = "",
+        title: str = _Form_st(""),
 ) -> RedirectResponse:
     ctx = get_tenant_context(request, session)
     if not ctx:
@@ -177,6 +178,48 @@ async def task_subitem_bulk_delete(
             session.delete(sub)
         session.commit()
     return RedirectResponse(f"/tarefas/{task.id}", status_code=303)
+
+
+@app.post("/tarefas/excluir-lote")
+@require_role({"admin", "equipe"})
+async def tasks_bulk_delete(
+        request: Request,
+        session: Session = Depends(get_session),
+) -> RedirectResponse:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    form = await request.form()
+    ids = [int(v) for v in form.getlist("ids") if str(v).strip().isdigit()]
+    if not ids:
+        set_flash(request, "Nenhuma tarefa selecionada.")
+        return RedirectResponse("/tarefas", status_code=303)
+
+    tasks = session.exec(
+        select(Task).where(Task.company_id == ctx.company.id, Task.id.in_(ids))
+    ).all()
+
+    excluidas = 0
+    com_anexo = 0
+    for task in tasks:
+        has_att = session.exec(select(Attachment.id).where(Attachment.task_id == task.id)).first()
+        if has_att:
+            com_anexo += 1
+            continue
+        if ensure_task_work_session_table():
+            session.exec(delete(TaskWorkSession).where(TaskWorkSession.task_id == task.id))
+        if ensure_task_subitem_table():
+            session.exec(delete(TaskSubitem).where(TaskSubitem.task_id == task.id))
+        session.exec(delete(TaskComment).where(TaskComment.task_id == task.id))
+        session.exec(delete(Task).where(Task.id == task.id))
+        excluidas += 1
+    session.commit()
+
+    msg = f"{excluidas} tarefa(s) excluída(s)."
+    if com_anexo:
+        msg += f" {com_anexo} não foram excluídas por terem anexos."
+    set_flash(request, msg)
+    return RedirectResponse("/tarefas", status_code=303)
 
 
 # ── Override de GET /tarefas/{task_id}: adiciona subtarefas + progresso ──
@@ -384,6 +427,62 @@ try:
         print("[tarefas_subtarefas] ⚠️ Âncora não encontrada em tasks_list.html — progresso não injetado")
 except Exception as _e_st_patch2:
     print(f"[tarefas_subtarefas] ⚠️ Erro ao patchear tasks_list.html: {_e_st_patch2}")
+
+# ── Patch do template: checkbox em cada card + botão de exclusão em lote (tasks_list.html) ──
+try:
+    _anchor_st3 = '''  {% if role in ["admin","equipe"] %}
+    <div class="d-flex gap-2 flex-wrap">
+      <a class="btn btn-outline-secondary" href="/tarefas/relatorio-horas">Relatório de horas</a>
+      <a class="btn btn-primary" href="/tarefas/nova{% if filter_client_id %}?client_id={{ filter_client_id }}{% endif %}">Nova tarefa</a>
+    </div>
+  {% endif %}'''
+    _replacement_st3 = '''  {% if role in ["admin","equipe"] %}
+    <div class="d-flex gap-2 flex-wrap">
+      <a class="btn btn-outline-secondary" href="/tarefas/relatorio-horas">Relatório de horas</a>
+      <a class="btn btn-primary" href="/tarefas/nova{% if filter_client_id %}?client_id={{ filter_client_id }}{% endif %}">Nova tarefa</a>
+      <button class="btn btn-outline-danger" type="submit" form="form-tasks-lote"
+              onclick="return confirm('Excluir as tarefas selecionadas?');">Excluir selecionadas</button>
+    </div>
+  {% endif %}'''
+    if _anchor_st3 in TEMPLATES["tasks_list.html"]:
+        TEMPLATES["tasks_list.html"] = TEMPLATES["tasks_list.html"].replace(_anchor_st3, _replacement_st3, 1)
+        print("[tarefas_subtarefas] ✅ Botão de exclusão em lote injetado em tasks_list.html")
+    else:
+        print("[tarefas_subtarefas] ⚠️ Âncora (botão) não encontrada em tasks_list.html")
+
+    _anchor_st4 = '''                  <div class="d-flex justify-content-between align-items-start">
+                    <div class="fw-semibold">{{ t.title }}</div>
+                    <span class="badge text-bg-light border">{{ t.priority }}</span>
+                  </div>'''
+    _replacement_st4 = '''                  <div class="d-flex justify-content-between align-items-start">
+                    <div class="d-flex align-items-start gap-2">
+                      {% if role in ["admin","equipe"] %}
+                        <input type="checkbox" class="form-check-input mt-1" name="ids" value="{{ t.id }}" form="form-tasks-lote" onclick="event.stopPropagation()">
+                      {% endif %}
+                      <div class="fw-semibold">{{ t.title }}</div>
+                    </div>
+                    <span class="badge text-bg-light border">{{ t.priority }}</span>
+                  </div>'''
+    if _anchor_st4 in TEMPLATES["tasks_list.html"]:
+        TEMPLATES["tasks_list.html"] = TEMPLATES["tasks_list.html"].replace(_anchor_st4, _replacement_st4, 1)
+        print("[tarefas_subtarefas] ✅ Checkbox de seleção injetado nos cards de tasks_list.html")
+    else:
+        print("[tarefas_subtarefas] ⚠️ Âncora (checkbox) não encontrada em tasks_list.html")
+
+    _anchor_st5 = '''  </div>
+</div>
+{% endblock %}'''
+    _replacement_st5 = '''  </div>
+  <form id="form-tasks-lote" method="post" action="/tarefas/excluir-lote"></form>
+</div>
+{% endblock %}'''
+    if _anchor_st5 in TEMPLATES["tasks_list.html"]:
+        TEMPLATES["tasks_list.html"] = TEMPLATES["tasks_list.html"].replace(_anchor_st5, _replacement_st5, 1)
+        print("[tarefas_subtarefas] ✅ Form de exclusão em lote injetado em tasks_list.html")
+    else:
+        print("[tarefas_subtarefas] ⚠️ Âncora (form) não encontrada em tasks_list.html")
+except Exception as _e_st_patch3:
+    print(f"[tarefas_subtarefas] ⚠️ Erro ao patchear botão/checkbox de exclusão em lote: {_e_st_patch3}")
 
 if hasattr(templates_env.loader, "mapping"):
     templates_env.loader.mapping = TEMPLATES
