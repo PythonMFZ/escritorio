@@ -188,8 +188,8 @@ fpCalcular();
 """
 
 
-@app.get("/admin/formador-preco", response_class=HTMLResponse)
-@require_role({"admin", "equipe"})
+@app.get("/ferramentas/formador-preco", response_class=HTMLResponse)
+@require_login
 async def formador_preco_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
     ctx = get_tenant_context(request, session)
     cc = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
@@ -206,20 +206,39 @@ async def formador_preco_page(request: Request, session: Session = Depends(get_s
     )
 
 
+# ── Junta-se ao grupo "Ferramentas e Conteúdo" (mesma aba das demais ferramentas) ──
 try:
     FEATURE_KEYS["formador_preco"] = {
         "title": "Formador de Preço de Venda",
         "desc": "Calculadora de precificação por perfil: indústria, serviço, comércio e importação.",
-        "href": "/admin/formador-preco",
+        "href": "/ferramentas/formador-preco",
     }
     for _grp_fp in FEATURE_GROUPS:
-        if _grp_fp.get("key") == "gestao_interna" and "formador_preco" not in _grp_fp["features"]:
+        if _grp_fp.get("key") == "ferramentas_conteudo" and "formador_preco" not in _grp_fp["features"]:
             _grp_fp["features"].append("formador_preco")
-    ROLE_DEFAULT_FEATURES["admin"].add("formador_preco")
-    ROLE_DEFAULT_FEATURES["equipe"].add("formador_preco")
-    print("[formador_preco] ✅ Card 'Formador de Preço de Venda' registrado em Gestão Interna")
+    for _role_fp in ("admin", "equipe", "cliente"):
+        ROLE_DEFAULT_FEATURES.setdefault(_role_fp, set()).add("formador_preco")
+    print("[formador_preco] ✅ Card 'Formador de Preço de Venda' registrado em Ferramentas")
 except Exception as _e_fp_card:
-    print(f"[formador_preco] ⚠️ Falha ao registrar card em Gestão Interna: {_e_fp_card}")
+    print(f"[formador_preco] ⚠️ Falha ao registrar card em Ferramentas: {_e_fp_card}")
+
+# ── Registra no catálogo de features (fonte do /api/features/status) ──────────
+# Isso faz o card aparecer na página /ferramentas com botão Ativar/Desativar
+# por cliente, igual às demais ferramentas (Orçamento, BSC, Fluxo de Caixa etc.).
+try:
+    if "formador_preco_mensal" not in _CF_CATALOGO:
+        _CF_CATALOGO["formador_preco_mensal"] = {
+            "nome":      "Formador de Preço de Venda",
+            "descricao": "Calculadora de precificação por perfil: indústria, serviço, comércio e importação.",
+            "nivel":     "empresa",
+            "url":       "/ferramentas/formador-preco",
+            "icone":     "💰",
+        }
+        print("[formador_preco] ✅ formador_preco_mensal adicionado ao _CF_CATALOGO")
+    else:
+        print("[formador_preco] ℹ️ formador_preco_mensal já presente em _CF_CATALOGO")
+except Exception as _e_fp_cat:
+    print(f"[formador_preco] ⚠️ Falha ao registrar em _CF_CATALOGO: {_e_fp_cat}")
 
 if hasattr(templates_env.loader, "mapping"):
     templates_env.loader.mapping = TEMPLATES
