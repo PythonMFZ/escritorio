@@ -48774,3 +48774,10 @@ except Exception as _e_nfse_load:
     import traceback as _tb_nfse
     print(f"[nfse] ⚠️ Falha ao carregar ui_nfse.py: {_e_nfse_load}")
     _tb_nfse.print_exc()
+
+try:
+    exec(open('ui_form_builder.py').read())
+except Exception as _e_fb_load:
+    import traceback as _tb_fb
+    print(f"[form_builder] ⚠️ Falha ao carregar ui_form_builder.py: {_e_fb_load}")
+    _tb_fb.print_exc()
