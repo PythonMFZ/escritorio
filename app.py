@@ -48788,3 +48788,10 @@ except Exception as _e_fp_load:
     import traceback as _tb_fp
     print(f"[formador_preco] ⚠️ Falha ao carregar ui_formador_preco.py: {_e_fp_load}")
     _tb_fp.print_exc()
+
+try:
+    exec(open('ui_tarefas_view.py').read())
+except Exception as _e_tk_load:
+    import traceback as _tb_tk
+    print(f"[tarefas_view] ⚠️ Falha ao carregar ui_tarefas_view.py: {_e_tk_load}")
+    _tb_tk.print_exc()
