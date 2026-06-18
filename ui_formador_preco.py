@@ -118,6 +118,7 @@ TEMPLATES["formador_preco.html"] = r"""{% extends "base.html" %}
       </div>
       <div class="fp-campo"><label>Impostos sobre a venda (%)</label><input type="number" step="0.01" id="ger_impostos" oninput="fpCalcular()" value="0"></div>
       <div class="fp-campo"><label>Margem de lucro desejada (%)</label><input type="number" step="0.01" id="ger_margem" oninput="fpCalcular()" value="20"></div>
+      <div class="fp-campo"><label>Despesas fixas/administrativas rateadas (R$/unid.)</label><input type="number" step="0.01" id="ger_despesa_fixa" oninput="fpCalcular()" value="0"></div>
     </div>
     <div class="fp-alerta" id="fpAlerta">⚠️ A soma de despesas variáveis + impostos + margem não pode atingir 100% — ajuste os percentuais.</div>
   </div>
@@ -126,9 +127,9 @@ TEMPLATES["formador_preco.html"] = r"""{% extends "base.html" %}
     <div class="lbl">Preço de venda sugerido</div>
     <div class="num" id="fpPrecoSugerido">R$ 0,00</div>
     <div class="fp-resultado-grid">
-      <div class="item"><div class="lbl">Custo base (R$/unid.)</div><div class="num" id="fpCustoBase">R$ 0,00</div></div>
+      <div class="item"><div class="lbl">Custo total (R$/unid.)</div><div class="num" id="fpCustoBase">R$ 0,00</div></div>
       <div class="item"><div class="lbl">Markup multiplicador</div><div class="num" id="fpMarkup">0,00x</div></div>
-      <div class="item"><div class="lbl">Margem de contribuição (R$)</div><div class="num" id="fpMargemRs">R$ 0,00</div></div>
+      <div class="item"><div class="lbl">Lucro em R$ (margem desejada)</div><div class="num" id="fpMargemRs">R$ 0,00</div></div>
     </div>
     <div class="fp-resultado-grid" id="fpCreditoRow" style="display:none;">
       <div class="item"><div class="lbl">Créditos tributários a recuperar (R$/unid.)</div><div class="num" id="fpCreditoTrib">R$ 0,00</div></div>
@@ -183,7 +184,8 @@ function fpCalcular(){
   const num = id => parseFloat(document.getElementById(id).value) || 0;
   const perfil = document.querySelector('.fp-perfil-btn.ativo').dataset.perfil;
   const base = fpCustoBaseAtual();
-  const custoBase = (perfil === 'importacao') ? base.custo : base;
+  const custoVariavel = (perfil === 'importacao') ? base.custo : base;
+  const custoBase = custoVariavel + num('ger_despesa_fixa');
   const creditoTrib = (perfil === 'importacao') ? base.credito : 0;
   const pctVariaveis = (num('ger_comissao') + num('ger_cartao') + num('ger_frete_venda') + num('ger_impostos') + num('ger_margem')) / 100;
 
