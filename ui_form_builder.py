@@ -789,6 +789,22 @@ async def crm_delete_com_formularios(request: Request, session: Session = Depend
     return RedirectResponse("/negocios", status_code=303)
 
 
+# ── Card de acesso em Gestão Interna ────────────────────────────────────────
+try:
+    FEATURE_KEYS["formularios"] = {
+        "title": "Banco de Formulários",
+        "desc": "Modelos de formulário e respostas recebidas de clientes.",
+        "href": "/admin/formularios",
+    }
+    for _grp_fb in FEATURE_GROUPS:
+        if _grp_fb.get("key") == "gestao_interna" and "formularios" not in _grp_fb["features"]:
+            _grp_fb["features"].append("formularios")
+    ROLE_DEFAULT_FEATURES["admin"].add("formularios")
+    ROLE_DEFAULT_FEATURES["equipe"].add("formularios")
+    print("[form_builder] ✅ Card 'Banco de Formulários' registrado em Gestão Interna")
+except Exception as _e_fb_card:
+    print(f"[form_builder] ⚠️ Falha ao registrar card em Gestão Interna: {_e_fb_card}")
+
 if hasattr(templates_env.loader, "mapping"):
     templates_env.loader.mapping = TEMPLATES
 

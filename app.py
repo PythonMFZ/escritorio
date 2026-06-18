@@ -48781,3 +48781,10 @@ except Exception as _e_fb_load:
     import traceback as _tb_fb
     print(f"[form_builder] ⚠️ Falha ao carregar ui_form_builder.py: {_e_fb_load}")
     _tb_fb.print_exc()
+
+try:
+    exec(open('ui_formador_preco.py').read())
+except Exception as _e_fp_load:
+    import traceback as _tb_fp
+    print(f"[formador_preco] ⚠️ Falha ao carregar ui_formador_preco.py: {_e_fp_load}")
+    _tb_fp.print_exc()
