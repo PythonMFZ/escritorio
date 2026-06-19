@@ -14,6 +14,7 @@ reportlab>=4.0
 stripe>=9.0.0
 chromadb
 openai>=1.0.0
+faster-whisper>=1.0.0
 boto3>=1.34.0
 pandas>=2.0.0
 openpyxl>=3.1.0
