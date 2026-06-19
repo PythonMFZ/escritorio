@@ -38,22 +38,38 @@ except Exception:
     _AUDIO_DIR = _Path("uploads/reunioes")
     _AUDIO_DIR.mkdir(parents=True, exist_ok=True)
 
-_WHISPER_MODEL_NAME = _os2.environ.get("WHISPER_MODEL", "tiny")
+_WHISPER_MODEL_NAME = _os2.environ.get("WHISPER_MODEL", "small")
 _whisper_model_cache = {}  # cache do modelo carregado
 
 
 def _get_whisper_model():
-    """Carrega o modelo Whisper uma vez e reutiliza."""
+    """Carrega o modelo faster-whisper uma vez (CPU) e reutiliza entre transcrições."""
     if _WHISPER_MODEL_NAME not in _whisper_model_cache:
         try:
-            import whisper as _whisper
-            print(f"[whisper] Carregando modelo '{_WHISPER_MODEL_NAME}'...")
-            _whisper_model_cache[_WHISPER_MODEL_NAME] = _whisper.load_model(_WHISPER_MODEL_NAME)
-            print(f"[whisper] Modelo '{_WHISPER_MODEL_NAME}' carregado.")
+            from faster_whisper import WhisperModel as _WhisperModel
+            print(f"[whisper] Carregando modelo local '{_WHISPER_MODEL_NAME}' (faster-whisper, CPU)...")
+            _whisper_model_cache[_WHISPER_MODEL_NAME] = _WhisperModel(
+                _WHISPER_MODEL_NAME, device="cpu", compute_type="int8"
+            )
+            print(f"[whisper] Modelo local '{_WHISPER_MODEL_NAME}' carregado.")
         except ImportError:
-            print("[whisper] openai-whisper não instalado. Adicione ao requirements.txt")
+            print("[whisper] faster-whisper não instalado. Adicione ao requirements.txt")
+            return None
+        except Exception as _e_load:
+            print(f"[whisper] Falha ao carregar modelo local: {_e_load}")
             return None
     return _whisper_model_cache.get(_WHISPER_MODEL_NAME)
+
+
+def _transcrever_local_faster_whisper(audio_path: str) -> str:
+    """Transcreve o áudio inteiro localmente via faster-whisper (sem depender de API externa)."""
+    model = _get_whisper_model()
+    if not model:
+        return ""
+    print("[whisper] Transcrevendo localmente com faster-whisper...")
+    segments, _info = model.transcribe(audio_path, language="pt", vad_filter=True)
+    texto = " ".join(seg.text.strip() for seg in segments)
+    return texto.strip()
 
 
 # ── Compressão/Divisão de áudio para respeitar o limite de 25MB da OpenAI ────
@@ -211,8 +227,8 @@ def _processar_audio_background(
     company_id: int,
 ):
     """
-    Background task: transcreve com OpenAI Whisper API (preferencial) ou
-    Whisper local como fallback.
+    Background task: transcreve localmente com faster-whisper (sem dependência
+    de API externa); se indisponível, cai para OpenAI Whisper API (se configurada).
     """
     print(f"[whisper] Iniciando transcrição da reunião {meeting_id}...")
 
@@ -228,9 +244,19 @@ def _processar_audio_background(
     transcricao = ""
     _erro_real = ""
 
-    # ── Tenta OpenAI Whisper API ─────────────────────────────────────────────
+    # ── Tenta transcrição local (faster-whisper, sem custo nem API key) ──────
+    if _Path(audio_path).exists():
+        try:
+            transcricao = _transcrever_local_faster_whisper(audio_path)
+            if transcricao:
+                print(f"[whisper] Transcrição local OK: {len(transcricao)} chars")
+        except Exception as _le:
+            _erro_real = str(_le)
+            print(f"[whisper] Transcrição local falhou: {_le}")
+
+    # ── Fallback: OpenAI Whisper API (se configurada) ────────────────────────
     openai_key = _os2.environ.get("OPENAI_API_KEY", "")
-    if openai_key and _Path(audio_path).exists():
+    if not transcricao and openai_key and _Path(audio_path).exists():
         _tmp_dir_whisper = None
         try:
             import openai as _oai
@@ -255,8 +281,6 @@ def _processar_audio_background(
         finally:
             if _tmp_dir_whisper:
                 _shutil.rmtree(_tmp_dir_whisper, ignore_errors=True)
-    elif not openai_key:
-        print("[whisper] ⚠️ OPENAI_API_KEY não configurada — configure no Render para ativar transcrição.")
 
     # ── Arquivo não encontrado ───────────────────────────────────────────────
     if not _Path(audio_path).exists() and not transcricao:
@@ -277,8 +301,8 @@ def _processar_audio_background(
                 _mt.notion_status = "error"
                 _detalhe = f" Detalhe: {_erro_real}" if _erro_real else ""
                 _mt.notes_text = (
-                    "Não foi possível transcrever o áudio. Verifique se OPENAI_API_KEY "
-                    "está configurada no Render, ou tente um arquivo MP3/M4A." + _detalhe
+                    "Não foi possível transcrever o áudio (modelo local indisponível e "
+                    "nenhum fallback configurado). Tente um arquivo MP3/M4A." + _detalhe
                 )
                 _s.add(_mt); _s.commit()
         try:
