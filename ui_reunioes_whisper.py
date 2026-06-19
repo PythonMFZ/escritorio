@@ -61,15 +61,61 @@ def _get_whisper_model():
     return _whisper_model_cache.get(_WHISPER_MODEL_NAME)
 
 
+def _to_wav_for_local_whisper(audio_path: str) -> str:
+    """
+    Reconverte o áudio para WAV PCM 16kHz mono via ffmpeg antes de passar ao
+    faster-whisper. Formatos vindos do navegador (WebM/Opus do MediaRecorder)
+    às vezes são mal interpretados pelo decodificador interno (PyAV) e geram
+    transcrição vazia sem erro — um WAV puro elimina essa fonte de falha.
+    Retorna o caminho do WAV (pode ser o próprio audio_path se a conversão falhar).
+    """
+    ffmpeg_bin = _ffmpeg_bin()
+    if not ffmpeg_bin:
+        return audio_path
+    import subprocess as _sp_w
+    wav_path = audio_path + ".local16k.wav"
+    cmd = [ffmpeg_bin, "-y", "-i", audio_path, "-vn", "-ac", "1", "-ar", "16000", wav_path]
+    try:
+        proc = _sp_w.run(cmd, capture_output=True, timeout=900)
+        if proc.returncode != 0 or not _Path(wav_path).exists():
+            print(f"[whisper] ffmpeg conversão p/ WAV falhou: {proc.stderr.decode(errors='ignore')[:400]}")
+            return audio_path
+        return wav_path
+    except Exception as _e_wav:
+        print(f"[whisper] ffmpeg conversão p/ WAV exceção: {_e_wav}")
+        return audio_path
+
+
 def _transcrever_local_faster_whisper(audio_path: str) -> str:
     """Transcreve o áudio inteiro localmente via faster-whisper (sem depender de API externa)."""
     model = _get_whisper_model()
     if not model:
         return ""
-    print("[whisper] Transcrevendo localmente com faster-whisper...")
-    segments, _info = model.transcribe(audio_path, language="pt", vad_filter=True)
-    texto = " ".join(seg.text.strip() for seg in segments)
-    return texto.strip()
+
+    wav_path = _to_wav_for_local_whisper(audio_path)
+    try:
+        print("[whisper] Transcrevendo localmente com faster-whisper (vad_filter=True)...")
+        segments, info = model.transcribe(wav_path, language="pt", vad_filter=True)
+        segments = list(segments)
+        print(f"[whisper] duração detectada: {getattr(info, 'duration', '?')}s — segmentos: {len(segments)}")
+        texto = " ".join(seg.text.strip() for seg in segments).strip()
+
+        if not texto:
+            # VAD pode ter descartado o áudio inteiro (ex.: ruído de fundo,
+            # volume baixo, formato atípico) — tenta de novo sem VAD.
+            print("[whisper] Resultado vazio com VAD — tentando novamente sem vad_filter...")
+            segments2, info2 = model.transcribe(wav_path, language="pt", vad_filter=False)
+            segments2 = list(segments2)
+            print(f"[whisper] (sem VAD) duração: {getattr(info2, 'duration', '?')}s — segmentos: {len(segments2)}")
+            texto = " ".join(seg.text.strip() for seg in segments2).strip()
+
+        return texto
+    finally:
+        if wav_path != audio_path:
+            try:
+                _Path(wav_path).unlink(missing_ok=True)
+            except Exception:
+                pass
 
 
 # ── Compressão/Divisão de áudio para respeitar o limite de 25MB da OpenAI ────
