@@ -368,12 +368,9 @@ try:
 
     {% for sub in subitems %}
       <div class="d-flex align-items-center gap-2 mb-1">
-        {% if can_manage_subitems %}
-          <input type="checkbox" class="form-check-input" name="ids" value="{{ sub.id }}" form="form-sub-lote">
-        {% endif %}
         {% if can_toggle_subitems %}
           <form method="post" action="/tarefas/{{ task.id }}/subtarefas/{{ sub.id }}/toggle" class="d-flex align-items-center gap-2">
-            <button class="btn btn-sm btn-outline-secondary" type="submit" style="width: 2rem;">{% if sub.done %}✓{% else %}{% endif %}</button>
+            <button class="btn btn-sm btn-outline-secondary" type="submit" style="width: 2rem;" title="Marcar como concluída">{% if sub.done %}✓{% else %}{% endif %}</button>
             <span class="{% if sub.done %}text-decoration-line-through text-muted{% endif %}">{{ sub.title }}</span>
           </form>
         {% else %}
@@ -384,6 +381,7 @@ try:
           <form method="post" action="/tarefas/{{ task.id }}/subtarefas/{{ sub.id }}/excluir" class="ms-auto">
             <button class="btn btn-sm btn-outline-danger" type="submit">remover</button>
           </form>
+          <input type="checkbox" class="form-check-input" name="ids" value="{{ sub.id }}" form="form-sub-lote" title="Selecionar para excluir em lote">
         {% endif %}
       </div>
     {% endfor %}
