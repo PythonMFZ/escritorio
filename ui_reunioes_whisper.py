@@ -628,10 +628,16 @@ _WHISPER_PANEL = r"""
   {% if meeting.notion_status not in ['notes_ready', 'transcription_in_progress', 'summary_in_progress'] %}
   <div class="d-flex gap-2 align-items-center flex-wrap mb-2">
 
-    {# Botão de gravação nativa #}
+    {# Botão de gravação nativa (microfone) #}
     <button id="btnGravar" class="btn btn-danger btn-sm" onclick="iniciarGravacao()">
-      <i class="bi bi-record-circle me-1"></i>Iniciar Gravação
+      <i class="bi bi-record-circle me-1"></i>Gravar microfone
     </button>
+
+    {# Botão de gravação de call (áudio da aba/tela + microfone) #}
+    <button id="btnGravarCall" class="btn btn-outline-danger btn-sm" onclick="iniciarGravacaoCall()" title="Capture o áudio de uma aba ou tela compartilhada (ex.: Google Meet) junto com seu microfone">
+      <i class="bi bi-camera-video me-1"></i>Gravar call (aba/tela)
+    </button>
+
     <button id="btnParar" class="btn btn-warning btn-sm" onclick="pararGravacao()" style="display:none;">
       <i class="bi bi-stop-circle me-1"></i>Parar e Transcrever
     </button>
@@ -646,6 +652,12 @@ _WHISPER_PANEL = r"""
       <i class="bi bi-upload me-1"></i>Upload de arquivo
     </button>
     <span class="muted small">MP3, M4A, WAV · Máx. 500MB</span>
+  </div>
+  <div class="muted small mb-2" style="max-width:520px;">
+    "Gravar call" pede para você escolher uma aba/tela para compartilhar — marque
+    a opção <strong>"Compartilhar áudio"</strong> na janela do navegador para capturar
+    a voz dos outros participantes junto com seu microfone (funciona no Chrome/Edge;
+    no Mac, só captura áudio se você compartilhar uma aba, não a tela inteira).
   </div>
 
   {# Timer de gravação #}
@@ -697,51 +709,119 @@ _WHISPER_PANEL = r"""
 
 <script>
 // ── Gravação nativa via MediaRecorder ────────────────────────────────────────
-let _mediaRecorder = null;
-let _audioChunks   = [];
-let _timerInterval = null;
-let _segundos      = 0;
+let _mediaRecorder   = null;
+let _audioChunks     = [];
+let _timerInterval   = null;
+let _segundos        = 0;
+let _micStreamRef    = null;
+let _displayStreamRef = null;
+let _audioCtxRef     = null;
+
+function _iniciarTimerEUi(statusMsg) {
+  document.getElementById('btnGravar').style.display = 'none';
+  document.getElementById('btnGravarCall').style.display = 'none';
+  document.getElementById('btnParar').style.display  = 'inline-flex';
+  document.getElementById('gravarInfo').style.display = 'block';
+  document.getElementById('gravarStatus').textContent = statusMsg;
+  _timerInterval = setInterval(() => {
+    _segundos++;
+    const m = String(Math.floor(_segundos/60)).padStart(2,'0');
+    const s = String(_segundos%60).padStart(2,'0');
+    document.getElementById('gravarTimer').textContent = m+':'+s;
+  }, 1000);
+}
+
+function _melhorMimeType() {
+  return MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+    ? 'audio/webm;codecs=opus'
+    : MediaRecorder.isTypeSupported('audio/webm')
+      ? 'audio/webm'
+      : 'audio/ogg';
+}
 
 async function iniciarGravacao() {
   try {
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    _micStreamRef = stream;
     _audioChunks = [];
     _segundos = 0;
 
-    // Tenta webm primeiro, fallback para outros formatos
-    const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
-      ? 'audio/webm;codecs=opus'
-      : MediaRecorder.isTypeSupported('audio/webm')
-        ? 'audio/webm'
-        : 'audio/ogg';
-
+    const mimeType = _melhorMimeType();
     _mediaRecorder = new MediaRecorder(stream, { mimeType });
     _mediaRecorder.ondataavailable = e => { if (e.data.size > 0) _audioChunks.push(e.data); };
     _mediaRecorder.onstop = () => enviarGravacao(mimeType);
     _mediaRecorder.start(1000); // coleta chunks a cada 1s
 
-    // UI
-    document.getElementById('btnGravar').style.display = 'none';
-    document.getElementById('btnParar').style.display  = 'inline-flex';
-    document.getElementById('gravarInfo').style.display = 'block';
-
-    // Timer
-    _timerInterval = setInterval(() => {
-      _segundos++;
-      const m = String(Math.floor(_segundos/60)).padStart(2,'0');
-      const s = String(_segundos%60).padStart(2,'0');
-      document.getElementById('gravarTimer').textContent = m+':'+s;
-    }, 1000);
-
+    _iniciarTimerEUi('Microfone ativo...');
   } catch(e) {
     alert('Não foi possível acessar o microfone: ' + e.message + '\n\nVerifique as permissões do navegador.');
+  }
+}
+
+// Captura o áudio de uma aba/tela compartilhada (ex.: Google Meet, Zoom web)
+// e mixa com o microfone, para gravar a call inteira (todos os participantes).
+async function iniciarGravacaoCall() {
+  try {
+    const displayStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+    _displayStreamRef = displayStream;
+
+    let micStream = null;
+    try {
+      micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch (e) {
+      // Segue sem microfone se o usuário negar — ainda grava o áudio da call.
+    }
+    _micStreamRef = micStream;
+
+    const displayAudioTracks = displayStream.getAudioTracks();
+    if (displayAudioTracks.length === 0) {
+      alert('A aba/tela compartilhada não enviou áudio. Ao escolher o que compartilhar, marque a opção "Compartilhar áudio da aba/sistema".');
+    }
+
+    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    _audioCtxRef = audioCtx;
+    const destination = audioCtx.createMediaStreamDestination();
+
+    if (displayAudioTracks.length > 0) {
+      audioCtx.createMediaStreamSource(new MediaStream(displayAudioTracks)).connect(destination);
+    }
+    if (micStream) {
+      audioCtx.createMediaStreamSource(micStream).connect(destination);
+    }
+
+    _audioChunks = [];
+    _segundos = 0;
+    const mimeType = _melhorMimeType();
+    _mediaRecorder = new MediaRecorder(destination.stream, { mimeType });
+    _mediaRecorder.ondataavailable = e => { if (e.data.size > 0) _audioChunks.push(e.data); };
+    _mediaRecorder.onstop = () => enviarGravacao(mimeType);
+    _mediaRecorder.start(1000);
+
+    // Se o usuário clicar em "Parar de compartilhar" na barra do navegador.
+    const videoTrack = displayStream.getVideoTracks()[0];
+    if (videoTrack) videoTrack.addEventListener('ended', pararGravacao);
+
+    _iniciarTimerEUi('Capturando áudio da call' + (micStream ? ' + microfone' : '') + '...');
+  } catch(e) {
+    alert('Não foi possível capturar a aba/tela: ' + e.message);
   }
 }
 
 function pararGravacao() {
   if (_mediaRecorder && _mediaRecorder.state !== 'inactive') {
     _mediaRecorder.stop();
-    _mediaRecorder.stream.getTracks().forEach(t => t.stop());
+  }
+  if (_micStreamRef) {
+    _micStreamRef.getTracks().forEach(t => t.stop());
+    _micStreamRef = null;
+  }
+  if (_displayStreamRef) {
+    _displayStreamRef.getTracks().forEach(t => t.stop());
+    _displayStreamRef = null;
+  }
+  if (_audioCtxRef) {
+    _audioCtxRef.close();
+    _audioCtxRef = null;
   }
   clearInterval(_timerInterval);
   document.getElementById('btnParar').style.display  = 'none';
@@ -768,10 +848,12 @@ async function enviarGravacao(mimeType) {
     } else {
       fb.innerHTML = '<div class="alert alert-danger">❌ ' + (d.erro || 'Erro ao enviar.') + '</div>';
       document.getElementById('btnGravar').style.display = 'inline-flex';
+      document.getElementById('btnGravarCall').style.display = 'inline-flex';
     }
   } catch(e) {
     fb.innerHTML = '<div class="alert alert-danger">❌ Erro de conexão. Tente novamente.</div>';
     document.getElementById('btnGravar').style.display = 'inline-flex';
+    document.getElementById('btnGravarCall').style.display = 'inline-flex';
   }
 }
 
