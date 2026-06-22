@@ -7,7 +7,7 @@
 #   3. /trial?token=UUID        → Augur standalone, 5 msgs grátis
 #   4. POST /api/trial/ask      → chat com limite + CTA progressivo
 #   5. GET  /api/trial/status   → créditos restantes
-#   6. GET  /api/trial/checkout → Stripe subscription checkout (R$299/mês)
+#   6. GET  /api/trial/checkout → Stripe subscription checkout (price configurável via admin)
 # ============================================================================
 
 import uuid as _uuid_tr
@@ -450,7 +450,7 @@ _TRIAL_HTML = """<!DOCTYPE html>
     <strong>Está gostando do Augur?</strong> Você tem <strong id="ctaRestantes">X</strong> mensagens restantes no trial.
     Assine e tenha acesso ilimitado ao diagnóstico financeiro da sua empresa.
   </div>
-  <button class="cta-banner-btn" onclick="abrirStripeCheckout()">Assinar R$299/mês →</button>
+  <button class="cta-banner-btn" onclick="abrirStripeCheckout()">Assinar R$99/mês →</button>
 </div>
 
 <div class="chat-wrap" id="chatArea">
@@ -485,7 +485,7 @@ Para começar: **qual é o principal desafio financeiro da sua empresa hoje?** P
     <div class="paywall-icon">🔐</div>
     <h2 id="paywallTitle">Você usou seu diagnóstico gratuito</h2>
     <p id="paywallDesc">Gostou do Augur? Com a assinatura você tem acesso ilimitado, histórico completo e alertas financeiros automáticos.</p>
-    <div class="paywall-price">R$299<span>/mês</span></div>
+    <div class="paywall-price">R$99<span>/mês</span></div>
     <ul class="paywall-features">
       <li>Augur ilimitado</li>
       <li>Histórico completo</li>
@@ -496,7 +496,7 @@ Para começar: **qual é o principal desafio financeiro da sua empresa hoje?** P
     </ul>
     <div class="paywall-btns">
       <a id="stripeBtn" href="#" class="btn-gold" onclick="abrirStripeCheckout();return false;">
-        Assinar agora — R$299/mês
+        Assinar agora — R$99/mês
       </a>
       <a href="https://wa.me/5547991359091?text=Quero+assinar+o+Augur+PME" target="_blank" class="btn-outline">
         Falar com um consultor
@@ -552,7 +552,7 @@ Para começar: **qual é o principal desafio financeiro da sua empresa hoje?** P
     document.getElementById('inp').disabled = true;
   }
 
-  const _WPP_ASSINAR = 'https://wa.me/5547991359091?text=Quero+assinar+o+Augur+PME+%E2%80%94+R%24299%2Fm%C3%AAs';
+  const _WPP_ASSINAR = 'https://wa.me/5547991359091?text=Quero+assinar+o+Augur+PME+%E2%80%94+R%2499%2Fm%C3%AAs';
 
   window.abrirStripeCheckout = function(){
     const btn = document.getElementById('stripeBtn');
@@ -695,7 +695,7 @@ async def trial_status(token: str = ""):
         })
 
 
-# ── API: Stripe checkout (subscription R$299/mês) ─────────────────────────────
+# ── API: Stripe checkout (subscription — price configurável via admin) ─────────────────────────────
 
 @app.get("/api/trial/checkout")
 async def trial_checkout(request: _Req_tr, token: str = ""):
@@ -707,7 +707,7 @@ async def trial_checkout(request: _Req_tr, token: str = ""):
         if not lead:
             return _JSON_tr({"error": "Acesso inválido."})
 
-        # Busca price_id do plano R$299 cadastrado na monetização
+        # Busca price_id do plano mais barato cadastrado na monetização
         price_id = ""
         try:
             plano = session.exec(
@@ -721,7 +721,7 @@ async def trial_checkout(request: _Req_tr, token: str = ""):
         except Exception as _ep:
             print(f"[trial_checkout] Erro ao buscar plano: {_ep}")
 
-    _WPP_FALLBACK = "https://wa.me/5547991359091?text=Quero+assinar+o+Augur+PME+%E2%80%94+R%24299%2Fm%C3%AAs"
+    _WPP_FALLBACK = "https://wa.me/5547991359091?text=Quero+assinar+o+Augur+PME+%E2%80%94+R%2499%2Fm%C3%AAs"
 
     stripe_key = _os_tr.environ.get("STRIPE_SECRET_KEY", "")
     if not stripe_key:
