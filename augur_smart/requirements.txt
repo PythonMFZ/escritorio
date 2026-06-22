@@ -1,0 +1,10 @@
+fastapi==0.111.0
+uvicorn[standard]==0.30.1
+gunicorn==25.1.0
+sqlmodel==0.0.21
+passlib==1.7.4
+bcrypt==4.0.1
+itsdangerous==2.2.0
+httpx==0.27.0
+requests>=2.31.0
+stripe>=9.0.0

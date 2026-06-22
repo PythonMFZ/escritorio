@@ -1,0 +1,4 @@
+__pycache__/
+*.pyc
+augur_smart.db
+*.db
