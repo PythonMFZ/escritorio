@@ -1284,8 +1284,8 @@ async function salvarConta() {
     sign: parseInt(document.getElementById('cSign').value),
     is_totalizer: document.getElementById('cTot').value === 'true',
     formula: document.getElementById('cFormula').value.trim(),
-    parent_id: document.getElementById('cParentId').value || null,
   };
+  if (!id) { payload.parent_id = document.getElementById('cParentId').value || null; }
   const url = id ? '/api/orcamento/conta/' + id + '/editar' : '/api/orcamento/conta/criar';
   const r = await fetch(url, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)});
   const d = await r.json();
