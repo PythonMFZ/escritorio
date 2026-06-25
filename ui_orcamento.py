@@ -651,6 +651,20 @@ async def orcamento_deletar_conta(acc_id: int, request: Request, session: Sessio
     return JSONResponse({"ok": True})
 
 
+@app.post("/api/orcamento/conta/limpar")
+@require_login
+async def orcamento_limpar_contas(request: Request, session: Session = Depends(get_session)):
+    ctx = get_tenant_context(request, session)
+    if not ctx or ctx.membership.role not in ("admin", "equipe"):
+        return JSONResponse({"ok": False, "msg": "Sem permissão"}, status_code=403)
+    client_id = get_active_client_id(request, session, ctx)
+    from sqlalchemy import delete as _sa_delete
+    session.exec(_sa_delete(BudgetAccount).where(
+        BudgetAccount.company_id == ctx.company.id, BudgetAccount.client_id == client_id))
+    session.commit()
+    return JSONResponse({"ok": True})
+
+
 @app.post("/api/orcamento/conta/reordenar")
 @require_login
 async def orcamento_reordenar(request: Request, session: Session = Depends(get_session)):
@@ -1044,6 +1058,11 @@ tr.orc-drag-over{outline:2px dashed #3b5bdb;background:#e7f1ff!important;}
     <button class="btn btn-outline-primary btn-sm" data-bs-toggle="modal" data-bs-target="#modalImportExcel">
       📄 Importar Excel
     </button>
+    {% if tree %}
+    <button class="btn btn-outline-danger btn-sm" onclick="limparContas()" id="btnLimpar">
+      🗑️ Apagar plano atual
+    </button>
+    {% endif %}
     <button class="btn btn-primary btn-sm" onclick="novaConta(null)">
       Nova Conta
     </button>
@@ -1256,6 +1275,15 @@ async function importarModelo() {
   var d = await r.json();
   if (d.ok) { location.reload(); }
   else { alert(d.msg || 'Erro ao importar.'); if (btn) { btn.disabled = false; btn.textContent = '📥 Usar modelo padrão'; } }
+}
+async function limparContas() {
+  if (!confirm('Isso vai apagar TODO o plano de contas atual deste cliente (sem possibilidade de desfazer). Continuar?')) return;
+  const btn = document.getElementById('btnLimpar');
+  btn.disabled = true; btn.textContent = 'Apagando...';
+  const r = await fetch('/api/orcamento/conta/limpar', {method: 'POST'});
+  const d = await r.json();
+  if (d.ok) { location.reload(); }
+  else { alert(d.msg || 'Erro ao apagar.'); btn.disabled = false; btn.textContent = '🗑️ Apagar plano atual'; }
 }
 async function importarExcel() {
   const f = document.getElementById('impArquivo').files[0];
