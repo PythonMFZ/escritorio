@@ -24,6 +24,7 @@ class BudgetAccount(SQLModel, table=True):
     __table_args__ = {"extend_existing": True}
     id:           Optional[int] = Field(default=None, primary_key=True)
     company_id:   int  = Field(index=True)
+    client_id:    Optional[int] = Field(default=None, index=True)  # plano de contas é por cliente, não compartilhado
     code:         str  = Field(default="")
     name:         str  = Field(default="")
     account_type: str  = Field(default="despesa")  # receita|despesa|resultado|ativo|passivo
@@ -66,6 +67,7 @@ def _ensure_orcamento_tables():
     _migrations = [
         ("budgetplan",    "client_id", "INTEGER"),
         ("budgetaccount", "formula",   "VARCHAR DEFAULT ''"),
+        ("budgetaccount", "client_id", "INTEGER"),
     ]
     for _tbl, _col, _ddl in _migrations:
         try:
@@ -78,6 +80,26 @@ def _ensure_orcamento_tables():
             # "duplicate column" é esperado se já existir — ignora silenciosamente
             if "duplicate" not in str(_e).lower() and "already exists" not in str(_e).lower():
                 print(f"[orcamento] migração {_tbl}.{_col}: {_e}")
+
+    # Backfill: contas antigas (client_id NULL) eram compartilhadas por toda a empresa.
+    # Atribui ao primeiro cliente da empresa para não perder o plano já cadastrado;
+    # os demais clientes passam a ter plano de contas próprio, vazio, a partir daqui.
+    try:
+        with engine.begin() as _c:
+            rows = _c.exec_driver_sql(
+                "SELECT DISTINCT company_id FROM budgetaccount WHERE client_id IS NULL"
+            ).fetchall()
+            for (_cid,) in rows:
+                first_client = _c.exec_driver_sql(
+                    f"SELECT id FROM client WHERE company_id = {_cid} ORDER BY id LIMIT 1"
+                ).fetchone()
+                if first_client:
+                    _c.exec_driver_sql(
+                        f"UPDATE budgetaccount SET client_id = {first_client[0]} "
+                        f"WHERE company_id = {_cid} AND client_id IS NULL"
+                    )
+    except Exception as _e:
+        print(f"[orcamento] backfill budgetaccount.client_id: {_e}")
 
 try:
     _ensure_orcamento_tables()
@@ -304,10 +326,11 @@ def _calc_dre_totalizer(acc, accounts_by_code: dict, all_accounts: list,
     return {m: (totals[m][0], totals[m][1]) for m in range(1, 13)}
 
 
-def _load_grid(session, company_id: int, plan_id: int):
+def _load_grid(session, company_id: int, plan_id: int, client_id: Optional[int] = None):
     accounts = session.exec(
         select(BudgetAccount)
-        .where(BudgetAccount.company_id == company_id, BudgetAccount.is_active == True)
+        .where(BudgetAccount.company_id == company_id, BudgetAccount.client_id == client_id,
+               BudgetAccount.is_active == True)
         .order_by(BudgetAccount.sort_order, BudgetAccount.code)
     ).all()
     entries = session.exec(
@@ -457,11 +480,13 @@ async def orcamento_contas(request: Request, session: Session = Depends(get_sess
     ctx = get_tenant_context(request, session)
     if not ctx or ctx.membership.role not in _ORC_ROLES:
         return RedirectResponse("/", status_code=303)
-    cc = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
+    client_id = get_active_client_id(request, session, ctx)
+    cc = get_client_or_none(session, ctx.company.id, client_id)
 
     accounts = session.exec(
         select(BudgetAccount)
-        .where(BudgetAccount.company_id == ctx.company.id, BudgetAccount.is_active == True)
+        .where(BudgetAccount.company_id == ctx.company.id, BudgetAccount.client_id == client_id,
+               BudgetAccount.is_active == True)
         .order_by(BudgetAccount.sort_order, BudgetAccount.code)
     ).all()
     tree = _build_account_tree(accounts)
@@ -484,9 +509,10 @@ async def orcamento_grid(plan_id: int, request: Request, session: Session = Depe
     plan = session.get(BudgetPlan, plan_id)
     if not plan or plan.company_id != ctx.company.id:
         return RedirectResponse("/ferramentas/orcamento", status_code=303)
-    cc = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
+    client_id = get_active_client_id(request, session, ctx)
+    cc = get_client_or_none(session, ctx.company.id, client_id)
 
-    rows = _load_grid(session, ctx.company.id, plan_id)
+    rows = _load_grid(session, ctx.company.id, plan_id, client_id)
     # Base para Análise Vertical: preferência 02T (receita líquida), fallback 01
     _av_row = next((r for r in rows if r["code"] == "02T"), None) or \
               next((r for r in rows if r["code"] == "01"), None)
@@ -550,18 +576,21 @@ async def orcamento_criar_conta(request: Request, session: Session = Depends(get
     ctx = get_tenant_context(request, session)
     if not ctx or ctx.membership.role not in _ORC_ROLES:
         return JSONResponse({"ok": False}, status_code=403)
+    client_id = get_active_client_id(request, session, ctx)
     body = await request.json()
     _raw_pid = body.get("parent_id")
     _parent_id = int(_raw_pid) if _raw_pid not in (None, "", 0, "0") else None
     siblings = session.exec(
         select(BudgetAccount).where(
             BudgetAccount.company_id == ctx.company.id,
+            BudgetAccount.client_id == client_id,
             BudgetAccount.parent_id == _parent_id,
         )
     ).all()
     max_order = max((a.sort_order for a in siblings), default=-1) + 1
     acc = BudgetAccount(
         company_id=ctx.company.id,
+        client_id=client_id,
         code=(body.get("code") or "").strip(),
         name=(body.get("name") or "").strip(),
         account_type=(body.get("account_type") or "despesa"),
@@ -583,9 +612,10 @@ async def orcamento_editar_conta(acc_id: int, request: Request, session: Session
     ctx = get_tenant_context(request, session)
     if not ctx or ctx.membership.role not in _ORC_ROLES:
         return JSONResponse({"ok": False}, status_code=403)
+    client_id = get_active_client_id(request, session, ctx)
     body = await request.json()
     acc = session.get(BudgetAccount, acc_id)
-    if not acc or acc.company_id != ctx.company.id:
+    if not acc or acc.company_id != ctx.company.id or acc.client_id != client_id:
         return JSONResponse({"ok": False}, status_code=404)
     for k, v in [("code", body.get("code")), ("name", body.get("name")),
                   ("account_type", body.get("account_type")),
@@ -610,8 +640,9 @@ async def orcamento_deletar_conta(acc_id: int, request: Request, session: Sessio
     ctx = get_tenant_context(request, session)
     if not ctx or ctx.membership.role not in _ORC_ROLES:
         return JSONResponse({"ok": False}, status_code=403)
+    client_id = get_active_client_id(request, session, ctx)
     acc = session.get(BudgetAccount, acc_id)
-    if not acc or acc.company_id != ctx.company.id:
+    if not acc or acc.company_id != ctx.company.id or acc.client_id != client_id:
         return JSONResponse({"ok": False}, status_code=404)
     acc.is_active = False
     acc.updated_at = utcnow()
@@ -626,10 +657,11 @@ async def orcamento_reordenar(request: Request, session: Session = Depends(get_s
     ctx = get_tenant_context(request, session)
     if not ctx or ctx.membership.role not in _ORC_ROLES:
         return JSONResponse({"ok": False}, status_code=403)
+    client_id = get_active_client_id(request, session, ctx)
     body = await request.json()
     for item in body:
         acc = session.get(BudgetAccount, int(item["id"]))
-        if acc and acc.company_id == ctx.company.id:
+        if acc and acc.company_id == ctx.company.id and acc.client_id == client_id:
             acc.sort_order = int(item["sort_order"])
             _pid = item.get("parent_id"); acc.parent_id = int(_pid) if _pid not in (None, "", 0, "0") else None
             session.add(acc)
@@ -643,10 +675,12 @@ async def orcamento_importar_modelo(request: Request, session: Session = Depends
     ctx = get_tenant_context(request, session)
     if not ctx or ctx.membership.role not in ("admin", "equipe"):
         return JSONResponse({"ok": False, "msg": "Sem permissão"}, status_code=403)
+    client_id = get_active_client_id(request, session, ctx)
 
     # Remove fisicamente todos os registros (ativos e soft-deleted) antes de reimportar
     from sqlalchemy import delete as _sa_delete
-    session.exec(_sa_delete(BudgetAccount).where(BudgetAccount.company_id == ctx.company.id))
+    session.exec(_sa_delete(BudgetAccount).where(
+        BudgetAccount.company_id == ctx.company.id, BudgetAccount.client_id == client_id))
     session.flush()
 
     # Insere em ordem, mantendo mapa code → id para resolver parent_id
@@ -655,6 +689,7 @@ async def orcamento_importar_modelo(request: Request, session: Session = Depends
         parent_id = code_to_id.get(item["parent_code"]) if item["parent_code"] else None
         acc = BudgetAccount(
             company_id=ctx.company.id,
+            client_id=client_id,
             code=item["code"],
             name=item["name"],
             account_type=item["account_type"],
@@ -693,6 +728,7 @@ async def orcamento_importar_excel(
     ctx = get_tenant_context(request, session)
     if not ctx or ctx.membership.role not in ("admin", "equipe"):
         return JSONResponse({"ok": False, "msg": "Sem permissão"}, status_code=403)
+    client_id = get_active_client_id(request, session, ctx)
 
     raw = await arquivo.read()
     try:
@@ -747,12 +783,14 @@ async def orcamento_importar_excel(
 
     if modo == "substituir":
         from sqlalchemy import delete as _sa_delete
-        session.exec(_sa_delete(BudgetAccount).where(BudgetAccount.company_id == ctx.company.id))
+        session.exec(_sa_delete(BudgetAccount).where(
+            BudgetAccount.company_id == ctx.company.id, BudgetAccount.client_id == client_id))
         session.flush()
         code_to_id: dict = {}
     else:
         existentes = session.exec(
-            select(BudgetAccount).where(BudgetAccount.company_id == ctx.company.id)
+            select(BudgetAccount).where(
+                BudgetAccount.company_id == ctx.company.id, BudgetAccount.client_id == client_id)
         ).all()
         code_to_id = {a.code: a.id for a in existentes}
 
@@ -775,6 +813,7 @@ async def orcamento_importar_excel(
         else:
             acc = BudgetAccount(
                 company_id=ctx.company.id,
+                client_id=client_id,
                 code=item["code"],
                 name=item["name"],
                 account_type=item["account_type"],
@@ -802,7 +841,7 @@ async def orcamento_augur_contexto(plan_id: int, request: Request, session: Sess
     plan = session.get(BudgetPlan, plan_id)
     if not plan or plan.company_id != ctx.company.id:
         return JSONResponse({"ok": False}, status_code=404)
-    rows = _load_grid(session, ctx.company.id, plan_id)
+    rows = _load_grid(session, ctx.company.id, plan_id, plan.client_id)
     return JSONResponse({"ok": True, "plan": plan.name, "year": plan.year, "rows": rows})
 
 
@@ -819,7 +858,7 @@ def _orcamento_contexto_para_augur(session, company_id: int, client_id=None) -> 
         if not plan:
             print(f"[orcamento_augur] nenhum plano ativo para company={company_id} client={client_id}")
             return ""
-        rows = _load_grid(session, company_id, plan.id)
+        rows = _load_grid(session, company_id, plan.id, plan.client_id)
         if not rows:
             print(f"[orcamento_augur] plano {plan.id} sem linhas no grid")
             return ""
@@ -993,7 +1032,7 @@ tr.orc-drag-over{outline:2px dashed #3b5bdb;background:#e7f1ff!important;}
 <div class="d-flex justify-content-between align-items-center mb-3">
   <div>
     <h4 class="mb-0">Plano de Contas</h4>
-    <div class="muted small">Estrutura compartilhada entre todos os clientes da empresa.</div>
+    <div class="muted small">Estrutura específica do cliente selecionado{% if current_client %} ({{ current_client.name }}){% endif %}.</div>
   </div>
   <div class="d-flex gap-2 flex-wrap">
     <a href="/ferramentas/orcamento" class="btn btn-outline-secondary btn-sm">← Voltar</a>
