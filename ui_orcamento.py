@@ -242,6 +242,28 @@ _ORC_MODELO_PADRAO = [
 _MONTHS_PT = ["Jan","Fev","Mar","Abr","Mai","Jun","Jul","Ago","Set","Out","Nov","Dez"]
 
 
+def _orc_auto_formulas(accounts: list) -> dict:
+    """Para cada totalizadora sem fórmula manual, monta uma fórmula de exibição
+    a partir dos códigos dos filhos diretos, respeitando o sinal de cada um
+    (ex: "1.1+1.2-1.3")."""
+    by_parent: dict = {}
+    for a in accounts:
+        by_parent.setdefault(a.parent_id, []).append(a)
+    result = {}
+    for a in accounts:
+        if not a.is_totalizer or a.formula:
+            continue
+        children = sorted(by_parent.get(a.id, []), key=lambda x: (x.sort_order, x.code))
+        if not children:
+            continue
+        parts = []
+        for i, c in enumerate(children):
+            op = "-" if c.sign < 0 else ("+" if i > 0 else "")
+            parts.append(f"{op}{c.code}")
+        result[a.id] = "".join(parts)
+    return result
+
+
 def _build_account_tree(accounts: list) -> list:
     by_parent: dict = {}
     for a in accounts:
@@ -490,10 +512,11 @@ async def orcamento_contas(request: Request, session: Session = Depends(get_sess
         .order_by(BudgetAccount.sort_order, BudgetAccount.code)
     ).all()
     tree = _build_account_tree(accounts)
+    auto_formulas = _orc_auto_formulas(accounts)
     return render("orcamento_contas.html", request=request, context={
         "current_user": ctx.user, "current_company": ctx.company,
         "role": ctx.membership.role, "current_client": cc,
-        "tree": tree,
+        "tree": tree, "auto_formulas": auto_formulas,
     })
 
 
@@ -1108,7 +1131,9 @@ tr.orc-drag-over{outline:2px dashed #3b5bdb;background:#e7f1ff!important;}
         <th style="width:80px">Código</th>
         <th>Nome</th>
         <th style="width:100px">Tipo</th>
+        <th style="width:100px">Sinal</th>
         <th style="width:120px">Totalizadora</th>
+        <th style="width:180px">Fórmula</th>
         <th style="width:100px"></th>
       </tr>
     </thead>
@@ -1123,11 +1148,16 @@ tr.orc-drag-over{outline:2px dashed #3b5bdb;background:#e7f1ff!important;}
           {{ acc.name }}
         </td>
         <td><span class="badge bg-light text-dark border" style="font-size:.72rem;">{{ acc.account_type }}</span></td>
-        <td style="width:160px;max-width:160px;">
-          {% if acc.is_totalizer %}
-            <div><span class="badge bg-primary">Sim</span></div>
-            {% if acc.formula %}<div style="max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="{{ acc.formula }}"><code style="font-size:.7rem;color:#3b5bdb;">={{ acc.formula }}</code></div>{% endif %}
-          {% else %}<span class="muted small">—</span>{% endif %}
+        <td>
+          {% if acc.sign < 0 %}<span class="badge bg-danger-subtle text-danger border border-danger-subtle">Subtrai</span>
+          {% else %}<span class="badge bg-success-subtle text-success border border-success-subtle">Soma</span>{% endif %}
+        </td>
+        <td>
+          {% if acc.is_totalizer %}<span class="badge bg-primary">Sim</span>{% else %}<span class="muted small">—</span>{% endif %}
+        </td>
+        <td style="max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
+          {% set _f = acc.formula or auto_formulas.get(acc.id) %}
+          {% if _f %}<code style="font-size:.7rem;color:#3b5bdb;" title="={{ _f }}">={{ _f }}</code>{% else %}<span class="muted small">—</span>{% endif %}
         </td>
         <td class="text-end" style="white-space:nowrap;min-width:160px;">
           <button class="btn btn-outline-secondary btn-sm" onclick="novaConta({{ acc.id }})" title="Nova sub-conta" style="font-size:.75rem;padding:1px 6px;">+ Sub</button>
@@ -1137,7 +1167,7 @@ tr.orc-drag-over{outline:2px dashed #3b5bdb;background:#e7f1ff!important;}
       </tr>
       {% endfor %}
       {% if not tree %}
-      <tr><td colspan="5" class="text-center muted py-4">Nenhuma conta cadastrada. Clique em "Nova Conta" para começar.</td></tr>
+      <tr><td colspan="7" class="text-center muted py-4">Nenhuma conta cadastrada. Clique em "Nova Conta" para começar.</td></tr>
       {% endif %}
     </tbody>
   </table>
@@ -1284,8 +1314,8 @@ async function salvarConta() {
     sign: parseInt(document.getElementById('cSign').value),
     is_totalizer: document.getElementById('cTot').value === 'true',
     formula: document.getElementById('cFormula').value.trim(),
-    parent_id: document.getElementById('cParentId').value || null,
   };
+  if (!id) { payload.parent_id = document.getElementById('cParentId').value || null; }
   const url = id ? '/api/orcamento/conta/' + id + '/editar' : '/api/orcamento/conta/criar';
   const r = await fetch(url, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)});
   const d = await r.json();
