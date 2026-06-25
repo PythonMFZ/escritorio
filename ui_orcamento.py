@@ -672,6 +672,127 @@ async def orcamento_importar_modelo(request: Request, session: Session = Depends
     return JSONResponse({"ok": True, "total": len(_ORC_MODELO_PADRAO)})
 
 
+def _orc_parent_code(code: str) -> Optional[str]:
+    code = (code or "").strip()
+    if "." not in code:
+        return None
+    return code.rsplit(".", 1)[0]
+
+
+def _orc_norm_bool(v) -> bool:
+    return str(v).strip().lower() in ("sim", "yes", "true", "1", "s", "x")
+
+
+@app.post("/api/orcamento/conta/importar-excel")
+@require_login
+async def orcamento_importar_excel(
+        request: Request,
+        arquivo: UploadFile = File(...),
+        modo: str = Form("mesclar"),
+        session: Session = Depends(get_session)):
+    ctx = get_tenant_context(request, session)
+    if not ctx or ctx.membership.role not in ("admin", "equipe"):
+        return JSONResponse({"ok": False, "msg": "Sem permissão"}, status_code=403)
+
+    raw = await arquivo.read()
+    try:
+        import openpyxl
+        from io import BytesIO
+        wb = openpyxl.load_workbook(BytesIO(raw), data_only=True)
+        ws = wb.active
+        rows = list(ws.iter_rows(values_only=True))
+    except Exception as e:
+        return JSONResponse({"ok": False, "msg": f"Não foi possível ler o arquivo: {e}"}, status_code=400)
+
+    if not rows:
+        return JSONResponse({"ok": False, "msg": "Arquivo vazio."}, status_code=400)
+
+    header = [str(h or "").strip().lower() for h in rows[0]]
+    def _col(*names):
+        for n in names:
+            if n in header:
+                return header.index(n)
+        return None
+    i_code = _col("código", "codigo", "code")
+    i_name = _col("nome", "name")
+    i_type = _col("tipo", "account_type", "type")
+    i_tot = _col("totalizadora", "totalizador", "is_totalizer")
+    i_form = _col("fórmula", "formula")
+    i_sign = _col("sinal", "sign")
+    if i_code is None or i_name is None:
+        return JSONResponse({"ok": False, "msg": "Cabeçalho precisa ter colunas 'Código' e 'Nome' (Tipo, Totalizadora e Fórmula são opcionais)."}, status_code=400)
+
+    items = []
+    for row in rows[1:]:
+        if row is None or all(c in (None, "") for c in row):
+            continue
+        code = str(row[i_code] or "").strip()
+        name = str(row[i_name] or "").strip() if i_name < len(row) else ""
+        if not code or not name:
+            continue
+        acc_type = str(row[i_type] or "despesa").strip().lower() if i_type is not None and i_type < len(row) and row[i_type] else "despesa"
+        is_tot = _orc_norm_bool(row[i_tot]) if i_tot is not None and i_tot < len(row) else False
+        formula = str(row[i_form] or "").strip() if i_form is not None and i_form < len(row) and row[i_form] else ""
+        try:
+            sign = int(row[i_sign]) if i_sign is not None and i_sign < len(row) and row[i_sign] not in (None, "") else 1
+        except (TypeError, ValueError):
+            sign = 1
+        items.append({"code": code, "name": name, "account_type": acc_type,
+                       "is_totalizer": is_tot, "formula": formula, "sign": sign})
+
+    if not items:
+        return JSONResponse({"ok": False, "msg": "Nenhuma linha válida encontrada na planilha."}, status_code=400)
+
+    items.sort(key=lambda it: (len(it["code"].split(".")), it["code"]))
+
+    if modo == "substituir":
+        from sqlalchemy import delete as _sa_delete
+        session.exec(_sa_delete(BudgetAccount).where(BudgetAccount.company_id == ctx.company.id))
+        session.flush()
+        code_to_id: dict = {}
+    else:
+        existentes = session.exec(
+            select(BudgetAccount).where(BudgetAccount.company_id == ctx.company.id)
+        ).all()
+        code_to_id = {a.code: a.id for a in existentes}
+
+    criadas, atualizadas = 0, 0
+    for i, item in enumerate(items):
+        parent_code = _orc_parent_code(item["code"])
+        parent_id = code_to_id.get(parent_code) if parent_code else None
+        existing_id = code_to_id.get(item["code"]) if modo != "substituir" else None
+        if existing_id:
+            acc = session.get(BudgetAccount, existing_id)
+            acc.name = item["name"]
+            acc.account_type = item["account_type"]
+            acc.is_totalizer = item["is_totalizer"]
+            acc.formula = item["formula"]
+            acc.sign = item["sign"]
+            acc.parent_id = parent_id
+            acc.updated_at = utcnow()
+            session.add(acc)
+            atualizadas += 1
+        else:
+            acc = BudgetAccount(
+                company_id=ctx.company.id,
+                code=item["code"],
+                name=item["name"],
+                account_type=item["account_type"],
+                parent_id=parent_id,
+                is_totalizer=item["is_totalizer"],
+                formula=item["formula"],
+                sign=item["sign"],
+                sort_order=i,
+            )
+            session.add(acc)
+            session.flush()
+            criadas += 1
+        code_to_id[item["code"]] = acc.id
+
+    session.commit()
+    return JSONResponse({"ok": True, "criadas": criadas, "atualizadas": atualizadas})
+
+
 @app.get("/api/orcamento/{plan_id}/augur-contexto")
 @require_login
 async def orcamento_augur_contexto(plan_id: int, request: Request, session: Session = Depends(get_session)):
@@ -866,6 +987,8 @@ TEMPLATES["orcamento_contas.html"] = r"""
 .orc-indent-2{padding-left:40px!important;}
 .orc-indent-3{padding-left:60px!important;}
 .orc-indent-4{padding-left:80px!important;}
+tr[draggable="true"]{cursor:grab;}
+tr.orc-drag-over{outline:2px dashed #3b5bdb;background:#e7f1ff!important;}
 </style>
 <div class="d-flex justify-content-between align-items-center mb-3">
   <div>
@@ -879,11 +1002,17 @@ TEMPLATES["orcamento_contas.html"] = r"""
       📥 Usar modelo padrão
     </button>
     {% endif %}
+    <button class="btn btn-outline-primary btn-sm" data-bs-toggle="modal" data-bs-target="#modalImportExcel">
+      📄 Importar Excel
+    </button>
     <button class="btn btn-primary btn-sm" onclick="novaConta(null)">
       Nova Conta
     </button>
   </div>
 </div>
+{% if tree %}
+<div class="muted small mb-2">Arraste uma conta sobre uma totalizadora (fundo azul) para movê-la para dentro dela.</div>
+{% endif %}
 
 <div class="card p-0 overflow-hidden">
   <table class="table table-hover mb-0">
@@ -898,7 +1027,9 @@ TEMPLATES["orcamento_contas.html"] = r"""
     </thead>
     <tbody>
       {% for acc, depth in tree %}
-      <tr class="{% if acc.is_totalizer %}orc-totalizer{% endif %}" data-id="{{ acc.id }}">
+      <tr class="{% if acc.is_totalizer %}orc-totalizer{% endif %}" data-id="{{ acc.id }}" data-is-tot="{{ acc.is_totalizer|lower }}"
+          draggable="true" ondragstart="orcDragStart(event)" ondragover="orcDragOver(event)"
+          ondragleave="orcDragLeave(event)" ondrop="orcDrop(event)">
         <td class="orc-indent-{{ depth }} small font-monospace">{{ acc.code }}</td>
         <td class="orc-indent-{{ depth }}">
           {% if acc.is_totalizer %}<i class="bi bi-calculator me-1 text-primary"></i>{% endif %}
@@ -986,6 +1117,37 @@ TEMPLATES["orcamento_contas.html"] = r"""
     </div>
   </div>
 </div>
+
+<div class="modal fade" id="modalImportExcel" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">Importar Plano de Contas (Excel)</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <p class="small muted">Planilha com colunas: <strong>Código</strong>, <strong>Nome</strong>, e opcionalmente Tipo, Totalizadora (Sim/Não) e Fórmula. A hierarquia é inferida pelo código (ex: "01.1" é filho de "01").</p>
+        <div class="mb-2">
+          <label class="form-label">Arquivo (.xlsx)</label>
+          <input type="file" id="impArquivo" class="form-control form-control-sm" accept=".xlsx,.xls">
+        </div>
+        <div class="mb-2">
+          <label class="form-label">Modo</label>
+          <select id="impModo" class="form-select form-select-sm">
+            <option value="mesclar">Mesclar (atualiza por código, mantém o resto)</option>
+            <option value="substituir">Substituir tudo (remove o plano atual)</option>
+          </select>
+        </div>
+        <div id="impMsg" class="small"></div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
+        <button class="btn btn-primary" id="btnImportar" onclick="importarExcel()">Importar</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <script>
 let _mc;
 document.addEventListener('DOMContentLoaded', () => { _mc = new bootstrap.Modal(document.getElementById('modalConta')); });
@@ -1055,6 +1217,55 @@ async function importarModelo() {
   var d = await r.json();
   if (d.ok) { location.reload(); }
   else { alert(d.msg || 'Erro ao importar.'); if (btn) { btn.disabled = false; btn.textContent = '📥 Usar modelo padrão'; } }
+}
+async function importarExcel() {
+  const f = document.getElementById('impArquivo').files[0];
+  const msg = document.getElementById('impMsg');
+  if (!f) { msg.textContent = 'Selecione um arquivo.'; return; }
+  const modo = document.getElementById('impModo').value;
+  if (modo === 'substituir' && !confirm('Isso vai remover todo o plano de contas atual e substituir pelo da planilha. Continuar?')) return;
+  const btn = document.getElementById('btnImportar');
+  btn.disabled = true; btn.textContent = 'Importando...';
+  const fd = new FormData();
+  fd.append('arquivo', f);
+  fd.append('modo', modo);
+  try {
+    const r = await fetch('/api/orcamento/conta/importar-excel', {method: 'POST', body: fd});
+    const d = await r.json();
+    if (d.ok) { location.reload(); }
+    else { msg.textContent = d.msg || 'Erro ao importar.'; btn.disabled = false; btn.textContent = 'Importar'; }
+  } catch (e) {
+    msg.textContent = 'Erro ao enviar arquivo.'; btn.disabled = false; btn.textContent = 'Importar';
+  }
+}
+
+let _orcDragId = null;
+function orcDragStart(ev) {
+  _orcDragId = ev.currentTarget.getAttribute('data-id');
+  ev.dataTransfer.effectAllowed = 'move';
+}
+function orcDragOver(ev) {
+  if (ev.currentTarget.getAttribute('data-id') === _orcDragId) return;
+  ev.preventDefault();
+  ev.currentTarget.classList.add('orc-drag-over');
+}
+function orcDragLeave(ev) {
+  ev.currentTarget.classList.remove('orc-drag-over');
+}
+async function orcDrop(ev) {
+  ev.preventDefault();
+  ev.currentTarget.classList.remove('orc-drag-over');
+  const targetId = ev.currentTarget.getAttribute('data-id');
+  if (!_orcDragId || targetId === _orcDragId) return;
+  const isTot = ev.currentTarget.getAttribute('data-is-tot') === 'true';
+  if (!isTot) { alert('Só é possível arrastar uma conta para dentro de uma totalizadora.'); return; }
+  const r = await fetch('/api/orcamento/conta/reordenar', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify([{id: parseInt(_orcDragId), parent_id: parseInt(targetId), sort_order: 999}])
+  });
+  const d = await r.json();
+  if (d.ok) { location.reload(); } else { alert('Erro ao mover conta.'); }
+  _orcDragId = null;
 }
 </script>
 {% endblock %}
