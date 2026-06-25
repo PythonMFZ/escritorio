@@ -729,7 +729,10 @@ def _orc_parent_code(code: str) -> Optional[str]:
 
 
 def _orc_norm_bool(v) -> bool:
-    return str(v).strip().lower() in ("sim", "yes", "true", "1", "s", "x")
+    s = str(v if v is not None else "").strip().lower()
+    if not s or s in ("nao", "não", "no", "false", "0", "n"):
+        return False
+    return True
 
 
 @app.post("/api/orcamento/conta/importar-excel")
@@ -782,6 +785,14 @@ async def orcamento_importar_excel(
             i_tot = _col("totalizadora", "totalizador", "is_totalizer")
             i_form = _col("formula", "formula")
             i_sign = _col("sinal", "sign")
+            # planilhas sem cabeçalho nas colunas extras: assume Tipo logo após Nome,
+            # e Totalizadora na coluna seguinte, se essas colunas tiverem algum dado.
+            extra_cols = [j for j in range(len(row)) if j not in (c_code, c_name)]
+            extra_cols.sort()
+            if i_type is None and extra_cols:
+                i_type = extra_cols.pop(0)
+            if i_tot is None and extra_cols:
+                i_tot = extra_cols.pop(0)
             break
 
     if header_idx is None:
