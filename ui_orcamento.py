@@ -757,26 +757,44 @@ async def orcamento_importar_excel(
     if not rows:
         return JSONResponse({"ok": False, "msg": "Arquivo vazio."}, status_code=400)
 
-    header = [str(h or "").strip().lower() for h in rows[0]]
-    def _col(*names):
-        for n in names:
-            if n in header:
-                return header.index(n)
-        return None
-    i_code = _col("código", "codigo", "code")
-    i_name = _col("nome", "name")
-    i_type = _col("tipo", "account_type", "type")
-    i_tot = _col("totalizadora", "totalizador", "is_totalizer")
-    i_form = _col("fórmula", "formula")
-    i_sign = _col("sinal", "sign")
-    if i_code is None or i_name is None:
+    def _norm(s):
+        s = str(s or "").strip().lower()
+        for a, b in (("á","a"),("à","a"),("ã","a"),("â","a"),("é","e"),("ê","e"),
+                     ("í","i"),("ó","o"),("ô","o"),("õ","o"),("ú","u"),("ç","c")):
+            s = s.replace(a, b)
+        return s
+
+    header_idx, header, i_code, i_name = None, None, None, None
+    i_type = i_tot = i_form = i_sign = None
+    for ridx, row in enumerate(rows[:10]):
+        cand = [_norm(h) for h in row]
+        def _col(*names):
+            for n in names:
+                if n in cand:
+                    return cand.index(n)
+            return None
+        c_code = _col("codigo", "code", "cod")
+        c_name = _col("nome", "name", "descricao", "conta")
+        if c_code is not None and c_name is not None:
+            header_idx, header = ridx, cand
+            i_code, i_name = c_code, c_name
+            i_type = _col("tipo", "account_type", "type")
+            i_tot = _col("totalizadora", "totalizador", "is_totalizer")
+            i_form = _col("formula", "formula")
+            i_sign = _col("sinal", "sign")
+            break
+
+    if header_idx is None:
         return JSONResponse({"ok": False, "msg": "Cabeçalho precisa ter colunas 'Código' e 'Nome' (Tipo, Totalizadora e Fórmula são opcionais)."}, status_code=400)
 
     items = []
-    for row in rows[1:]:
+    for row in rows[header_idx + 1:]:
         if row is None or all(c in (None, "") for c in row):
             continue
-        code = str(row[i_code] or "").strip()
+        _raw_code = row[i_code]
+        if isinstance(_raw_code, float) and _raw_code == int(_raw_code):
+            _raw_code = int(_raw_code)
+        code = str(_raw_code if _raw_code is not None else "").strip()
         name = str(row[i_name] or "").strip() if i_name < len(row) else ""
         if not code or not name:
             continue
