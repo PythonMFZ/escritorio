@@ -103,6 +103,32 @@
       "manchete": "GoHealth entra em Chapter 11 após receita cair 95% em um ano — Medicare Advantage cortou comissões",
       "resumo": "Corretora digital de planos Medicare protocolou Chapter 11 prepackaged em Delaware com 100% dos credores em RSA. Meta: emergir antes da temporada AEP de outubro de 2026.",
       "arquivo": "monitor-insolvencia/post-08-gohealth.html"
+    },
+    {
+      "id": "stmarche-2026-06",
+      "edicao": "Ed. 09",
+      "data": "2026-06-20",
+      "pais": "Brasil",
+      "tipo": "Recuperação Judicial",
+      "empresa": "Grupo Hortus (St Marche)",
+      "marcas": "St Marche · Negociação com Cencosud",
+      "passivo": "R$ 574,3M",
+      "manchete": "St Marche entra com RJ enquanto negocia venda para Cencosud com dívida de R$ 574,3 milhões",
+      "resumo": "Grupo Hortus protocola recuperação judicial em junho de 2026, simultaneamente à negociação de venda de parte das operações para a chilena Cencosud. Tentativa anterior de recuperação extrajudicial foi cancelada.",
+      "arquivo": "monitor-insolvencia/post-09-stmarche.html"
+    },
+    {
+      "id": "refit-2026-06",
+      "edicao": "Ed. 10",
+      "data": "2026-06-26",
+      "pais": "Brasil",
+      "tipo": "MP pede conversão em Falência",
+      "empresa": "Refit S.A.",
+      "marcas": "Refinaria · Duque de Caxias, RJ",
+      "passivo": "R$ 25,7Bi",
+      "manchete": "Após 10 anos em RJ, MPRJ pede falência da Refit — dívida fiscal saltou de R$ 5 bi para R$ 25,7 bi",
+      "resumo": "MPRJ requer convolação da recuperação judicial da refinaria em falência após quase uma década sem reestruturação efetiva. Sefaz-RJ revoga inscrição estadual dias depois.",
+      "arquivo": "monitor-insolvencia/post-10-refit.html"
     }
   ]
 }
