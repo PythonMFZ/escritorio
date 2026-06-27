@@ -3,54 +3,54 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Monitor de Insolvência · Ed. 02 · Raízen</title>
+<title>Monitor de Insolvência · Ed. 09 · St Marche / Grupo Hortus</title>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Syne:wght@700;800&family=Poppins:wght@300;400;500;600;700;800&family=DM+Mono:wght@400;500&display=swap');
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { background: #1a1a1a; display: flex; justify-content: center; align-items: flex-start; min-height: 100vh; padding: 40px 20px; font-family: 'Poppins', sans-serif; }
   .card { width: 1080px; background: #0D0D0D; position: relative; overflow: hidden; }
-  .card-topbar { width: 100%; height: 5px; background: #E07020; }
-  .card-header { padding: 48px 64px 36px; display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 1px solid rgba(224,112,32,0.15); }
+  .card-topbar { width: 100%; height: 5px; background: #2F8F5B; }
+  .card-header { padding: 48px 64px 36px; display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 1px solid rgba(47,143,91,0.15); }
   .header-serie { display: flex; flex-direction: column; gap: 6px; }
-  .serie-label { font-family: 'DM Mono', monospace; font-size: 11px; letter-spacing: 0.18em; text-transform: uppercase; color: #E07020; }
+  .serie-label { font-family: 'DM Mono', monospace; font-size: 11px; letter-spacing: 0.18em; text-transform: uppercase; color: #2F8F5B; }
   .serie-title { font-family: 'Syne', sans-serif; font-size: 22px; font-weight: 800; color: #FAF7F2; letter-spacing: -0.01em; }
   .header-meta { text-align: right; display: flex; flex-direction: column; gap: 4px; }
-  .meta-edicao { font-family: 'DM Mono', monospace; font-size: 11px; color: rgba(224,112,32,0.7); letter-spacing: 0.12em; }
+  .meta-edicao { font-family: 'DM Mono', monospace; font-size: 11px; color: rgba(47,143,91,0.7); letter-spacing: 0.12em; }
   .meta-data { font-family: 'DM Mono', monospace; font-size: 11px; color: #666; letter-spacing: 0.08em; }
   .case-origin { padding: 28px 64px 0; display: flex; align-items: center; gap: 12px; }
-  .tag-pais { font-family: 'DM Mono', monospace; font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase; color: #0D0D0D; background: #E07020; padding: 4px 12px; font-weight: 500; }
-  .tag-tipo { font-family: 'DM Mono', monospace; font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase; color: #E07020; border: 1px solid rgba(224,112,32,0.4); padding: 4px 12px; }
+  .tag-pais { font-family: 'DM Mono', monospace; font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase; color: #0D0D0D; background: #2F8F5B; padding: 4px 12px; font-weight: 500; }
+  .tag-tipo { font-family: 'DM Mono', monospace; font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase; color: #2F8F5B; border: 1px solid rgba(47,143,91,0.4); padding: 4px 12px; }
   .card-headline { padding: 32px 64px 28px; }
   .headline-text { font-family: 'Poppins', sans-serif; font-size: 40px; font-weight: 700; color: #FAF7F2; line-height: 1.15; letter-spacing: -0.01em; }
-  .headline-text em { color: #E07020; font-style: normal; }
+  .headline-text em { color: #2F8F5B; font-style: normal; }
   .headline-sub { margin-top: 14px; font-size: 15px; font-weight: 300; color: #8B8B8B; line-height: 1.6; max-width: 780px; }
   .card-logos { padding: 0 64px 32px; display: flex; align-items: center; gap: 20px; }
-  .logo-box { border: 1px solid rgba(224,112,32,0.2); padding: 14px 28px; display: flex; flex-direction: column; gap: 4px; min-width: 200px; }
+  .logo-box { border: 1px solid rgba(47,143,91,0.2); padding: 14px 28px; display: flex; flex-direction: column; gap: 4px; min-width: 200px; }
   .logo-box span { font-family: 'Poppins', sans-serif; font-size: 15px; font-weight: 700; color: #FAF7F2; }
   .logo-box small { font-family: 'DM Mono', monospace; font-size: 10px; color: #555; letter-spacing: 0.06em; }
   .logo-detail { font-family: 'DM Mono', monospace; font-size: 11px; color: #555; margin-left: 8px; line-height: 1.6; }
-  .card-body { padding: 36px 64px 40px; border-top: 1px solid rgba(224,112,32,0.08); }
+  .card-body { padding: 36px 64px 40px; border-top: 1px solid rgba(47,143,91,0.08); }
   .body-text { font-size: 15px; font-weight: 300; color: #C8C4BE; line-height: 1.8; margin-bottom: 16px; }
   .body-text strong { color: #FAF7F2; font-weight: 500; }
-  .body-text em { color: #E07020; font-style: normal; }
-  .card-analise { margin: 0 64px 36px; padding: 24px 28px; border-left: 3px solid #E07020; background: rgba(224,112,32,0.05); }
-  .analise-label { font-family: 'DM Mono', monospace; font-size: 9px; letter-spacing: 0.2em; text-transform: uppercase; color: #E07020; margin-bottom: 10px; }
+  .body-text em { color: #2F8F5B; font-style: normal; }
+  .card-analise { margin: 0 64px 36px; padding: 24px 28px; border-left: 3px solid #2F8F5B; background: rgba(47,143,91,0.05); }
+  .analise-label { font-family: 'DM Mono', monospace; font-size: 9px; letter-spacing: 0.2em; text-transform: uppercase; color: #2F8F5B; margin-bottom: 10px; }
   .analise-text { font-size: 14px; font-weight: 300; color: #C8C4BE; line-height: 1.75; }
   .analise-text strong { color: #FAF7F2; font-weight: 500; }
-  .card-numeros { display: grid; grid-template-columns: repeat(3, 1fr); border-top: 1px solid rgba(224,112,32,0.15); }
-  .num-item { padding: 36px 40px; border-right: 1px solid rgba(224,112,32,0.1); display: flex; flex-direction: column; gap: 10px; }
+  .card-numeros { display: grid; grid-template-columns: repeat(3, 1fr); border-top: 1px solid rgba(47,143,91,0.15); }
+  .num-item { padding: 36px 40px; border-right: 1px solid rgba(47,143,91,0.1); display: flex; flex-direction: column; gap: 10px; }
   .num-item:last-child { border-right: none; }
-  .num-icon { width: 36px; height: 36px; border: 1px solid rgba(224,112,32,0.3); display: flex; align-items: center; justify-content: center; font-family: 'DM Mono', monospace; font-size: 14px; color: #E07020; margin-bottom: 4px; }
+  .num-icon { width: 36px; height: 36px; border: 1px solid rgba(47,143,91,0.3); display: flex; align-items: center; justify-content: center; font-family: 'DM Mono', monospace; font-size: 14px; color: #2F8F5B; margin-bottom: 4px; }
   .num-valor { font-family: 'Poppins', sans-serif; font-size: 26px; font-weight: 700; color: #FAF7F2; line-height: 1.1; letter-spacing: -0.01em; }
   .num-label { font-family: 'DM Mono', monospace; font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: #666; line-height: 1.5; }
-  .card-footer { padding: 24px 64px; border-top: 1px solid rgba(224,112,32,0.1); display: flex; justify-content: space-between; align-items: center; }
+  .card-footer { padding: 24px 64px; border-top: 1px solid rgba(47,143,91,0.1); display: flex; justify-content: space-between; align-items: center; }
   .footer-fonte { display: flex; flex-direction: column; gap: 3px; }
   .fonte-label { font-family: 'DM Mono', monospace; font-size: 9px; letter-spacing: 0.16em; text-transform: uppercase; color: #444; }
   .fonte-text { font-family: 'DM Mono', monospace; font-size: 10px; color: #666; }
   .footer-brand { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; }
-  .brand-name { font-family: 'Syne', sans-serif; font-size: 14px; font-weight: 800; color: #E07020; letter-spacing: 0.02em; }
+  .brand-name { font-family: 'Syne', sans-serif; font-size: 14px; font-weight: 800; color: #2F8F5B; letter-spacing: 0.02em; }
   .brand-sub { font-family: 'DM Mono', monospace; font-size: 9px; color: #444; letter-spacing: 0.1em; text-transform: uppercase; }
-  .card-bottombar { width: 100%; height: 3px; background: linear-gradient(to right, #E07020, rgba(224,112,32,0.2)); }
+  .card-bottombar { width: 100%; height: 3px; background: linear-gradient(to right, #2F8F5B, rgba(47,143,91,0.2)); }
   .preview-controls { margin-top: 32px; text-align: center; color: #888; font-family: 'Poppins', sans-serif; font-size: 13px; }
   .preview-controls kbd { background: #222; border: 1px solid #444; padding: 2px 8px; border-radius: 3px; color: #ccc; font-size: 12px; }
 </style>
@@ -67,74 +67,74 @@
       <span class="serie-title">Monitor de Insolvência</span>
     </div>
     <div class="header-meta">
-      <span class="meta-edicao">Edição 02 · Brasil</span>
+      <span class="meta-edicao">Edição 09 · Brasil</span>
       <span class="meta-data">Jun 2026</span>
     </div>
   </div>
 
   <div class="case-origin">
-    <span class="tag-pais">Brasil</span>
-    <span class="tag-tipo">Recuperação Extrajudicial</span>
-    <span class="tag-tipo">Energia · Agronegócio</span>
+    <span class="tag-pais">BRASIL</span>
+    <span class="tag-tipo">Recuperação Judicial</span>
+    <span class="tag-tipo">Varejo · Supermercados Premium</span>
   </div>
 
   <div class="card-headline">
     <div class="headline-text">
-      Raízen protocola maior REx da história —<br>
-      <em>R$ 64,7 bilhões</em> em dívida<br>
-      e Shell injetando R$ 3,5 bi
+      St Marche entra com RJ enquanto<br>
+      negocia venda para <em>Cencosud</em><br>
+      com dívida de R$ 574,3 milhões
     </div>
     <div class="headline-sub">
-      Joint venture Shell + Cosan chega ao limite após seca severa, queda no açúcar e juros reais elevados. Plano aprovado por 75% dos credores converte 45% da dívida em ações.
+      Grupo Hortus, controlador da rede paulista de supermercados premium St Marche, protocolou recuperação judicial em junho de 2026 — simultaneamente à negociação de venda de parte das operações para a chilena Cencosud. Tentativa anterior de recuperação extrajudicial havia sido cancelada.
     </div>
   </div>
 
   <div class="card-logos">
     <div class="logo-box">
-      <span>Raízen S.A.</span>
-      <small>Shell + Cosan · Combustíveis · Etanol · SAF</small>
+      <span>Grupo Hortus (St Marche)</span>
+      <small>São Paulo, SP · Rede premium · Fundada nos anos 1990</small>
     </div>
-    <span class="logo-detail">Subsidiárias: Raízen Combustíveis · Raízen Energia<br>Proquigel Química · CBE · Unidades de SAF (Etanol 2G)</span>
+    <span class="logo-detail">Supermercados premium em São Paulo<br>Potencial comprador: Cencosud (controladora do GPA/Pão de Açúcar no Chile)</span>
   </div>
 
   <div class="card-body">
     <p class="body-text">
-      A Raízen, criada em 2011 como joint venture entre Shell e Cosan, tornou-se em 2026 o epicentro do maior processo de recuperação extrajudicial da história brasileira. A dívida líquida saltou de <strong>R$ 13,8 bilhões em 2021/22 para R$ 55,3 bilhões em 2025/26</strong>, impulsionada por investimentos pesados em etanol de segunda geração (2G) e SAF (combustível sustentável de aviação) num momento em que os juros domésticos permaneciam em dois dígitos reais.
+      A St Marche construiu posicionamento como rede de supermercados premium em São Paulo, com forte expansão de lojas durante e após a pandemia. O crescimento acelerado de operações, somado a custos financeiros elevados, <strong>pressionou o caixa do Grupo Hortus a ponto de inviabilizar o serviço da dívida</strong>. Uma tentativa anterior de reestruturação via recuperação extrajudicial não avançou e foi cancelada, levando a companhia a buscar a via judicial mais ampla.
     </p>
     <p class="body-text">
-      O golpe final veio do clima: a seca prolongada no Centro-Sul em 2024/2025 reduziu a safra de cana e pressionou margens já comprimidas pela queda de <em>7% nos preços do açúcar</em>. A recuperação extrajudicial foi escolhida por ser mais célere e preservar os relacionamentos comerciais com postos, distribuidores e parceiros agrícolas — estratégicos para o negócio de base.
+      Em paralelo ao pedido de recuperação judicial, protocolado em junho de 2026 com <strong>R$ 574,3 milhões em dívidas</strong> listadas, a empresa negocia a venda de parte de suas operações para a chilena <em>Cencosud</em>, gigante latino-americana de varejo (dona também do GPA no Brasil). A movimentação simultânea — pedir RJ e buscar comprador estratégico — é uma estrutura comum quando o objetivo é preservar valor operacional e marca enquanto se equaciona o passivo financeiro sob proteção judicial.
     </p>
   </div>
 
   <div class="card-analise">
     <div class="analise-label">Análise Maffezzolli</div>
     <p class="analise-text">
-      A Raízen apostou na transição energética no pior momento possível: capital caro, clima adverso e preços de commodities em queda simultânea. O plano aprovado por <strong>75% dos credores</strong> — incluindo bondholders internacionais e grandes bancos brasileiros — sinaliza que o mercado enxerga viabilidade no negócio de base. O risco central é a execução: a <strong>conversão de 45% da dívida em ações dilui Shell e Cosan</strong>, e o sucesso depende da recuperação do etanol e do açúcar nos próximos dois a três anos. Um descumprimento do plano levaria a empresa ao caminho da recuperação judicial, com consequências severas para o setor energético nacional.
+      O caso St Marche ilustra um padrão recorrente no varejo premium brasileiro pós-pandemia: <strong>expansão de lojas financiada por dívida cara, sem geração de caixa operacional suficiente para sustentar o crescimento</strong>. A tentativa fracassada de recuperação extrajudicial antes do pedido judicial sugere que os credores não viram valor suficiente — ou não confiaram na governança — para aceitar uma negociação privada, forçando a via judicial mais formal e protegida. A negociação simultânea com a Cencosud é o ponto-chave: um comprador estratégico internacional disposto a adquirir ativos operacionais saudáveis dentro de uma RJ sinaliza que a marca e a operação têm valor real, mesmo com a estrutura de capital quebrada. Para empresários de varejo, a lição é clara: expansão física agressiva exige disciplina de capital de giro e estrutura de dívida compatível com o ciclo de caixa do negócio — caso contrário, o crescimento que deveria gerar valor termina destruindo-o.
     </p>
   </div>
 
   <div class="card-numeros">
     <div class="num-item">
-      <div class="num-icon">R$</div>
-      <div class="num-valor">R$ 75,3Bi</div>
-      <div class="num-label">Passivo Total<br>sujeito ao plano</div>
+      <div class="num-icon">$</div>
+      <div class="num-valor">R$ 574,3M</div>
+      <div class="num-label">Dívida total<br>listada na RJ</div>
     </div>
     <div class="num-item">
-      <div class="num-icon">%</div>
-      <div class="num-valor">75,45%</div>
-      <div class="num-label">Credores que<br>aderiram ao plano</div>
+      <div class="num-icon">⇄</div>
+      <div class="num-valor">Cencosud</div>
+      <div class="num-label">Comprador estratégico<br>em negociação</div>
     </div>
     <div class="num-item">
-      <div class="num-icon">→</div>
-      <div class="num-valor">R$ 3,5Bi</div>
-      <div class="num-label">Aporte Shell<br>de capital novo</div>
+      <div class="num-icon">✕</div>
+      <div class="num-valor">1</div>
+      <div class="num-label">Tentativa extrajudicial<br>cancelada antes da RJ</div>
     </div>
   </div>
 
   <div class="card-footer">
     <div class="footer-fonte">
       <span class="fonte-label">Fontes</span>
-      <span class="fonte-text">Brazil Journal · XP Investimentos · InfoMoney · Seu Dinheiro · Jun/2026</span>
+      <span class="fonte-text">Valor Econômico · NeoFeed · Diário Oficial SP · Jun/2026</span>
     </div>
     <div class="footer-brand">
       <span class="brand-name">MAFFEZZOLLI.CAPITAL</span>

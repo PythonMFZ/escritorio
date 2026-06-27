@@ -408,5 +408,30 @@
 </div>
 
 </div>
+
+<div class="share-bar" style="margin-top:18px; display:flex; gap:10px; align-items:center; font-family:'Poppins',sans-serif;">
+  <span style="font-size:11px; color:#888; letter-spacing:.08em; text-transform:uppercase;">Compartilhar:</span>
+  <button onclick="orcShare('linkedin')" style="background:#0A66C2; color:#fff; border:none; padding:8px 14px; font-size:12px; font-weight:600; cursor:pointer;">LinkedIn</button>
+  <button onclick="orcShare('whatsapp')" style="background:#25D366; color:#fff; border:none; padding:8px 14px; font-size:12px; font-weight:600; cursor:pointer;">WhatsApp</button>
+  <button onclick="orcShare('twitter')" style="background:#000; color:#fff; border:none; padding:8px 14px; font-size:12px; font-weight:600; cursor:pointer;">X</button>
+  <button onclick="orcShare('copy')" style="background:#333; color:#fff; border:none; padding:8px 14px; font-size:12px; font-weight:600; cursor:pointer;">Copiar link</button>
+  <span style="font-size:11px; color:#555; margin-left:6px;">Para Instagram: salve o card como imagem (screenshot acima) e publique manualmente — a rede não permite compartilhar links diretamente.</span>
+</div>
+<script>
+function orcShare(kind) {
+  var url = encodeURIComponent(window.location.href);
+  var text = encodeURIComponent(document.title);
+  var dest = null;
+  if (kind === 'linkedin') dest = 'https://www.linkedin.com/sharing/share-offsite/?url=' + url;
+  else if (kind === 'whatsapp') dest = 'https://wa.me/?text=' + text + '%20' + url;
+  else if (kind === 'twitter') dest = 'https://twitter.com/intent/tweet?url=' + url + '&text=' + text;
+  else if (kind === 'copy') {
+    navigator.clipboard.writeText(window.location.href).then(function(){ alert('Link copiado!'); });
+    return;
+  }
+  if (dest) window.open(dest, '_blank', 'noopener,width=600,height=600');
+}
+</script>
+
 </body>
 </html>
