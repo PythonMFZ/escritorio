@@ -10687,7 +10687,12 @@ TEMPLATES.update({
               <td><span class="badge text-bg-light border">{{ row.status }}</span></td>
               <td class="text-end">{{ row.amount_expected_brl|brl }}</td>
               <td class="text-end">{{ row.amount_realized_brl|brl }}</td>
-              <td class="text-end"><a class="btn btn-sm btn-outline-primary" href="/admin/financeiro/{{ row.id }}/editar">Editar</a></td>
+              <td class="text-end d-flex gap-1 justify-content-end flex-wrap">
+                <a class="btn btn-sm btn-outline-primary" href="/admin/financeiro/{{ row.id }}/editar">Editar</a>
+                <form method="post" action="/admin/financeiro/{{ row.id }}/excluir" style="display:inline" onsubmit="return confirm('Excluir este lançamento?');">
+                  <button class="btn btn-sm btn-outline-danger" type="submit">Excluir</button>
+                </form>
+              </td>
             </tr>
           {% endfor %}
         </tbody>
@@ -19383,6 +19388,22 @@ async def office_finance_edit_action(request: Request, session: Session = Depend
     session.add(entry)
     session.commit()
     set_flash(request, "Lançamento atualizado.")
+    return RedirectResponse("/admin/financeiro", status_code=303)
+
+
+@app.post("/admin/financeiro/{entry_id}/excluir")
+@require_role({"admin", "equipe"})
+async def office_finance_delete_action(request: Request, session: Session = Depends(get_session),
+                                       entry_id: int = 0) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+    entry = session.get(OfficeFinancialEntry, int(entry_id))
+    if not entry or entry.company_id != ctx.company.id:
+        set_flash(request, "Lançamento não encontrado.")
+        return RedirectResponse("/admin/financeiro", status_code=303)
+    session.delete(entry)
+    session.commit()
+    set_flash(request, "Lançamento excluído.")
     return RedirectResponse("/admin/financeiro", status_code=303)
 
 
@@ -35546,7 +35567,7 @@ def _office_series_payload_from_form(
         "competence_date": (start_date or "").strip(),
         "due_date": (start_date or "").strip(),
         "settlement_date": "",
-        "amount_expected_brl": parse_brl_number(amount_expected_brl),
+        "amount_expected_brl": _parse_brl_amount(amount_expected_brl),
         "amount_realized_brl": 0.0,
         "product_family_code": _office_service_family_code(session, service_id_int),
         "notes": (notes or "").strip(),
@@ -36052,7 +36073,7 @@ async def office_finance_conciliate_entry(
         return RedirectResponse("/admin/financeiro/conciliacao", status_code=303)
 
     previous_status = str(entry.status or "")
-    realized = parse_brl_number(amount_realized_brl)
+    realized = _parse_brl_amount(amount_realized_brl)
     expected = float(entry.amount_expected_brl or 0.0)
     if realized <= 0:
         realized = expected
@@ -36366,6 +36387,9 @@ TEMPLATES.update({
               <td class="text-end d-flex gap-1 justify-content-end flex-wrap">
                 <a class="btn btn-sm btn-outline-secondary" href="/admin/financeiro/conciliacao">Conciliar</a>
                 <a class="btn btn-sm btn-outline-primary" href="/admin/financeiro/{{ row.id }}/editar">Editar</a>
+                <form method="post" action="/admin/financeiro/{{ row.id }}/excluir" style="display:inline" onsubmit="return confirm('Excluir este lançamento?');">
+                  <button class="btn btn-sm btn-outline-danger" type="submit">Excluir</button>
+                </form>
               </td>
             </tr>
           {% endfor %}
