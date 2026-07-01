@@ -48928,9 +48928,9 @@ def _agenda_get_config(session: Session, company_id: int) -> AgendaConfig:
 
 _DIAS_SEMANA_PT = ["Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado", "Domingo"]
 _LOCAL_LABELS = {
-    "nosso_escritorio": "Nosso escritório",
-    "cliente": "Escritório do cliente",
-    "online": "Online (videoconferência)",
+    "nosso_escritorio": "Escritório Maffezzolli",
+    "cliente": "Sede Empresa Cliente",
+    "online": "Online",
 }
 
 
@@ -49293,6 +49293,7 @@ async function loadSlots() {
     <a class="btn btn-outline-primary btn-sm" href="/admin/agenda/membro/novo">+ Membro</a>
     <a class="btn btn-sm btn-outline-dark" href="/p/agenda/{{ cfg.public_token }}" target="_blank">Link público ↗</a>
     <a class="btn btn-sm btn-outline-warning" href="/admin/agenda/clientes">Limites por cliente</a>
+    <a class="btn btn-sm btn-outline-info" href="/admin/agenda/calendario">📅 Calendário</a>
   </div>
 </div>
 {% if flash %}<div class="alert alert-info">{{ flash }}</div>{% endif %}
@@ -50584,5 +50585,245 @@ async def admin_agenda_clientes_page(request: Request, session: Session = Depend
         "current_user": ctx.user, "current_company": ctx.company, "role": ctx.membership.role,
         "current_client": current_client, "clientes": clientes,
         "limite_global": cfg.limite_mensal_por_cliente, "flash": flash,
+    })
+
+
+# ── Calendário visual (admin/equipe) ──────────────────────────────────────────
+
+TEMPLATES["admin_agenda_calendario.html"] = """
+{% extends "base.html" %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center flex-wrap gap-3 mb-3">
+  <div>
+    <h4 class="mb-0">Calendário de Reuniões</h4>
+    <div class="muted">{{ mes_label }}</div>
+  </div>
+  <div class="d-flex gap-2 flex-wrap align-items-center">
+    <form method="get" class="d-flex gap-2 align-items-center flex-wrap">
+      <input type="hidden" name="ano" value="{{ ano }}">
+      <input type="hidden" name="mes" value="{{ mes }}">
+      <select name="membro_id" class="form-select form-select-sm" style="width:180px" onchange="this.form.submit()">
+        <option value="0">Todos os consultores</option>
+        {% for m in membros %}
+          <option value="{{ m.id }}" {% if membro_id == m.id %}selected{% endif %}>{{ m.nome }}</option>
+        {% endfor %}
+      </select>
+    </form>
+    <div class="btn-group btn-group-sm">
+      <a class="btn btn-outline-secondary" href="?ano={{ prev_ano }}&mes={{ prev_mes }}&membro_id={{ membro_id }}">&#8249;</a>
+      <a class="btn btn-outline-secondary" href="?ano={{ hoje_ano }}&mes={{ hoje_mes }}&membro_id={{ membro_id }}">Hoje</a>
+      <a class="btn btn-outline-secondary" href="?ano={{ next_ano }}&mes={{ next_mes }}&membro_id={{ membro_id }}">&#8250;</a>
+    </div>
+    <a class="btn btn-outline-secondary btn-sm" href="/admin/agenda">&#8592; Lista</a>
+  </div>
+</div>
+
+<!-- Grade do mês -->
+<div class="card p-0 overflow-hidden">
+  <div class="d-grid" style="grid-template-columns:repeat(7,1fr);border-bottom:1px solid #e5e7eb;">
+    {% for d in ['Seg','Ter','Qua','Qui','Sex','Sáb','Dom'] %}
+    <div class="text-center py-2 small fw-semibold" style="background:#f9fafb;color:#6b7280;border-right:1px solid #e5e7eb;">{{ d }}</div>
+    {% endfor %}
+  </div>
+  <div class="d-grid" style="grid-template-columns:repeat(7,1fr);">
+    {% for cell in calendar_cells %}
+    <div class="p-1" style="min-height:100px;border-right:1px solid #f3f4f6;border-bottom:1px solid #f3f4f6;
+         {% if cell.today %}background:#eff6ff;{% elif not cell.cur_month %}background:#fafafa;{% endif %}">
+      {% if cell.day %}
+      <div class="small fw-semibold mb-1 {% if cell.today %}text-primary{% elif not cell.cur_month %}text-muted{% endif %}">
+        {{ cell.day }}
+      </div>
+      {% for b in cell.bookings %}
+      <div class="rounded px-1 mb-1 small text-white"
+           style="background:{{ b.color }};cursor:pointer;font-size:.72rem;line-height:1.3"
+           title="{{ b.hora_inicio }} · {{ b.servico_nome }} · {{ b.solicitante_nome }}"
+           onclick="showBooking({{ b.id }})">
+        {{ b.hora_inicio }} {{ b.solicitante_nome[:12] }}
+      </div>
+      {% endfor %}
+      {% endif %}
+    </div>
+    {% endfor %}
+  </div>
+</div>
+
+<!-- Modal detalhe -->
+<div class="modal fade" id="modalBooking" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="modal-title">Reunião</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body" id="modal-body">
+        <div class="text-center py-3 muted">Carregando...</div>
+      </div>
+      <div class="modal-footer">
+        <form id="modal-confirmar-form" method="post" style="display:inline">
+          <input type="hidden" name="status" value="confirmado">
+          <button class="btn btn-success btn-sm" type="submit" id="btn-confirmar">Confirmar</button>
+        </form>
+        <form id="modal-cancelar-form" method="post" style="display:inline">
+          <input type="hidden" name="status" value="cancelado">
+          <button class="btn btn-outline-danger btn-sm" type="submit" id="btn-cancelar"
+                  onclick="return confirm('Cancelar esta reunião?')">Cancelar</button>
+        </form>
+        <button class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Fechar</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const BOOKINGS_DATA = {{ bookings_json | safe }};
+function showBooking(id) {
+  const b = BOOKINGS_DATA.find(x => x.id === id);
+  if (!b) return;
+  document.getElementById('modal-title').textContent = b.servico_nome + ' — ' + b.data_fmt;
+  document.getElementById('modal-body').innerHTML = `
+    <table class="table table-sm">
+      <tr><th>Serviço</th><td>${b.servico_nome}</td></tr>
+      <tr><th>Solicitante</th><td>${b.solicitante_nome}<br><small class="text-muted">${b.solicitante_email}</small>${b.solicitante_telefone ? '<br><small>' + b.solicitante_telefone + '</small>' : ''}</td></tr>
+      <tr><th>Responsável</th><td>${b.membro_nome}</td></tr>
+      <tr><th>Data / Hora</th><td>${b.data_fmt} · ${b.hora_inicio} – ${b.hora_fim}</td></tr>
+      <tr><th>Local</th><td>${b.local_label}</td></tr>
+      <tr><th>Status</th><td><span class="badge ${b.status==='confirmado'?'bg-success':b.status==='pendente'?'bg-warning text-dark':'bg-secondary'}">${b.status}</span></td></tr>
+      ${b.notas ? '<tr><th>Notas</th><td>' + b.notas + '</td></tr>' : ''}
+    </table>`;
+  const url = '/admin/agenda/booking/' + id + '/status';
+  document.getElementById('modal-confirmar-form').action = url;
+  document.getElementById('modal-cancelar-form').action = url;
+  document.getElementById('btn-confirmar').style.display = b.status === 'pendente' ? '' : 'none';
+  document.getElementById('btn-cancelar').style.display = b.status === 'cancelado' ? 'none' : '';
+  new bootstrap.Modal(document.getElementById('modalBooking')).show();
+}
+</script>
+{% endblock %}
+"""
+
+
+_MEMBRO_COLORS = [
+    "#2563eb", "#16a34a", "#d97706", "#7c3aed",
+    "#db2777", "#0891b2", "#ea580c", "#65a30d",
+]
+
+
+@app.get("/admin/agenda/calendario", response_class=HTMLResponse)
+@require_role({"admin", "equipe"})
+async def admin_agenda_calendario(
+    request: Request,
+    session: Session = Depends(get_session),
+    ano: int = 0, mes: int = 0, membro_id: int = 0,
+) -> HTMLResponse:
+    import calendar as _cal
+    from datetime import date as _date
+
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        return RedirectResponse("/login", status_code=303)
+
+    hoje = _date.today()
+    if not ano:
+        ano = hoje.year
+    if not mes:
+        mes = hoje.month
+
+    # navegação mês
+    if mes == 1:
+        prev_ano, prev_mes = ano - 1, 12
+    else:
+        prev_ano, prev_mes = ano, mes - 1
+    if mes == 12:
+        next_ano, next_mes = ano + 1, 1
+    else:
+        next_ano, next_mes = ano, mes + 1
+
+    MESES_PT = ["", "Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho",
+                "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"]
+    mes_label = MESES_PT[mes] + " " + str(ano)
+
+    membros = session.exec(
+        select(AgendaMembro).where(AgendaMembro.company_id == ctx.company.id)
+    ).all()
+    membro_color_map = {m.id: _MEMBRO_COLORS[i % len(_MEMBRO_COLORS)] for i, m in enumerate(membros)}
+
+    # buscar bookings do mês
+    ano_mes_str = "%04d-%02d" % (ano, mes)
+    q = select(AgendaBooking).where(
+        AgendaBooking.company_id == ctx.company.id,
+        AgendaBooking.status != "cancelado",
+        AgendaBooking.data.startswith(ano_mes_str),
+    )
+    if membro_id:
+        q = q.where(AgendaBooking.membro_id == membro_id)
+    raw_bookings = session.exec(q.order_by(AgendaBooking.hora_inicio)).all()
+
+    servico_map = {s.id: s for s in session.exec(select(AgendaServico).where(AgendaServico.company_id == ctx.company.id)).all()}
+    membro_map  = {m.id: m for m in membros}
+
+    # data structure for JS and calendar cells
+    bookings_by_day: dict = {}
+    bookings_json_list = []
+    for b in raw_bookings:
+        day_num = int(b.data[8:10]) if b.data and len(b.data) == 10 else 0
+        if not day_num:
+            continue
+        membro = membro_map.get(b.membro_id)
+        servico = servico_map.get(b.servico_id)
+        color = membro_color_map.get(b.membro_id, "#6b7280")
+        data_fmt = b.data[8:10] + "/" + b.data[5:7] + "/" + b.data[:4]
+        entry = {
+            "id": b.id,
+            "hora_inicio": b.hora_inicio,
+            "hora_fim": b.hora_fim,
+            "solicitante_nome": b.solicitante_nome,
+            "solicitante_email": b.solicitante_email,
+            "solicitante_telefone": b.solicitante_telefone or "",
+            "membro_nome": membro.nome if membro else "—",
+            "servico_nome": servico.nome if servico else "—",
+            "local_label": _LOCAL_LABELS.get(b.local, b.local),
+            "status": b.status,
+            "notas": b.notas or "",
+            "data_fmt": data_fmt,
+            "color": color,
+        }
+        bookings_json_list.append(entry)
+        bookings_by_day.setdefault(day_num, []).append(entry)
+
+    # build calendar grid (Monday-first)
+    first_weekday, days_in_month = _cal.monthrange(ano, mes)
+    # first_weekday: 0=Mon .. 6=Sun
+    calendar_cells = []
+    # leading empty cells
+    for _ in range(first_weekday):
+        calendar_cells.append({"day": None, "bookings": [], "today": False, "cur_month": False})
+    for day in range(1, days_in_month + 1):
+        d = _date(ano, mes, day)
+        calendar_cells.append({
+            "day": day,
+            "bookings": bookings_by_day.get(day, []),
+            "today": d == hoje,
+            "cur_month": True,
+        })
+    # trailing cells to complete last row
+    remainder = len(calendar_cells) % 7
+    if remainder:
+        for _ in range(7 - remainder):
+            calendar_cells.append({"day": None, "bookings": [], "today": False, "cur_month": False})
+
+    active_client_id = get_active_client_id(request, session, ctx)
+    current_client = get_client_or_none(session, ctx.company.id, active_client_id)
+
+    return render("admin_agenda_calendario.html", request=request, context={
+        "current_user": ctx.user, "current_company": ctx.company, "role": ctx.membership.role,
+        "current_client": current_client,
+        "ano": ano, "mes": mes, "mes_label": mes_label,
+        "prev_ano": prev_ano, "prev_mes": prev_mes,
+        "next_ano": next_ano, "next_mes": next_mes,
+        "hoje_ano": hoje.year, "hoje_mes": hoje.month,
+        "membro_id": membro_id, "membros": membros,
+        "calendar_cells": calendar_cells,
+        "bookings_json": __import__("json").dumps(bookings_json_list, ensure_ascii=False),
+        "flash": request.session.pop("flash", None),
     })
 
