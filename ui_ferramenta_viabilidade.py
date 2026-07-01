@@ -407,8 +407,8 @@ def _calcular_viabilidade_v2(dados: dict) -> dict:
         if f["saldo_acumulado"] > 0 and payback is None:
             payback = f["mes"]
 
-    # Classificação
-    status = _classificar(margem_vgv, tir_anual)
+    # Classificação — usa VF (valor corrigido pelo índice) como base
+    status = _classificar(vf_margem_vgv, tir_vf_anual)
 
     # Resumo do fluxo para gráfico (trimestral, fluxo completo)
     fluxo_trimestral = []
