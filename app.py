@@ -4468,7 +4468,7 @@ FEATURE_KEYS.setdefault(
 
 FEATURE_GROUPS: list[dict[str, Any]] = [
     {"key": "gestao_interna", "title": "Gestão Interna",
-     "features": ["ui", "gestao", "crm", "credito", "motor_ofertas", "financeiro_escritorio", "familias",
+     "features": ["ui", "gestao", "crm", "credito", "motor_ofertas", "financeiro_escritorio", "agenda_admin", "familias",
                   "servicos_internos", "parceiros"]},
     {"key": "cliente", "title": "Cliente",
      "features": ["empresa", "perfil", "financeiro", "documentos", "consultoria", "reunioes", "tarefas",
@@ -4490,6 +4490,7 @@ FEATURE_VISIBLE_ROLES: dict[str, set[str]] = {
     "motor_ofertas": {"admin", "equipe"},
     "ofertas": {"admin", "equipe", "cliente"},
     "financeiro_escritorio": {"admin", "equipe"},
+    "agenda_admin": {"admin", "equipe"},
 }
 
 ROLE_DEFAULT_FEATURES: dict[str, set[str]] = {
@@ -4516,7 +4517,7 @@ FEATURE_KEYS.update({
 })
 FEATURE_GROUPS = [
     {"key": "gestao_interna", "title": "Gestão Interna",
-     "features": ["ui", "gestao", "crm", "credito", "motor_ofertas", "financeiro_escritorio", "familias",
+     "features": ["ui", "gestao", "crm", "credito", "motor_ofertas", "financeiro_escritorio", "agenda_admin", "familias",
                   "servicos_internos", "parceiros"]},
     {"key": "cliente", "title": "Cliente",
      "features": ["empresa", "perfil", "financeiro", "documentos", "consultoria", "reunioes", "tarefas",
@@ -48831,20 +48832,31 @@ except Exception as _e_st_load:
     print(f"[tarefas_subtarefas] ⚠️ Falha ao carregar ui_tarefas_subtarefas.py: {_e_st_load}")
     _tb_st.print_exc()
 
+
 # ============================================================================
 # MÓDULO: AGENDA NATIVA (substitui Microsoft Bookings)
 # ============================================================================
-
-# ── Modelos ──────────────────────────────────────────────────────────────────
 
 class AgendaConfig(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     company_id: int = Field(index=True, foreign_key="company.id", unique=True)
     public_token: str = Field(default_factory=lambda: secrets.token_urlsafe(20), index=True, unique=True)
-    locais: str = Field(default="nosso_escritorio,cliente,online")  # CSV
-    duracao_padrao_min: int = 60
-    limite_mensal_por_cliente: int = 4  # 0 = ilimitado
+    locais: str = Field(default="nosso_escritorio,cliente,online")
+    limite_mensal_por_cliente: int = 4
     ativo: bool = True
+    criado_em: datetime = Field(default_factory=utcnow)
+
+
+class AgendaServico(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    company_id: int = Field(index=True, foreign_key="company.id")
+    nome: str
+    descricao: str = ""
+    duracao_min: int = 60
+    buffer_min: int = 0
+    locais: str = ""
+    ativo: bool = True
+    ordem: int = 0
     criado_em: datetime = Field(default_factory=utcnow)
 
 
@@ -48863,33 +48875,31 @@ class AgendaDisponibilidade(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     membro_id: int = Field(index=True, foreign_key="agendamembro.id")
     company_id: int = Field(index=True, foreign_key="company.id")
-    dia_semana: int  # 0=seg .. 6=dom
-    hora_inicio: str  # "09:00"
-    hora_fim: str     # "17:00"
+    dia_semana: int
+    hora_inicio: str
+    hora_fim: str
 
 
 class AgendaBooking(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     company_id: int = Field(index=True, foreign_key="company.id")
+    servico_id: Optional[int] = Field(default=None, index=True, foreign_key="agendaservico.id")
     membro_id: Optional[int] = Field(default=None, index=True, foreign_key="agendamembro.id")
     client_id: Optional[int] = Field(default=None, index=True, foreign_key="client.id")
-    # campos preenchidos pelo solicitante (público ou cliente)
     solicitante_nome: str = ""
     solicitante_email: str = ""
     solicitante_telefone: str = ""
-    data: str = ""       # "YYYY-MM-DD"
-    hora_inicio: str = ""  # "HH:MM"
+    data: str = ""
+    hora_inicio: str = ""
     hora_fim: str = ""
-    local: str = ""      # nosso_escritorio | cliente | online
+    local: str = ""
     notas: str = ""
-    status: str = Field(default="pendente", index=True)  # pendente | confirmado | cancelado
+    status: str = Field(default="pendente", index=True)
     token: str = Field(default_factory=lambda: secrets.token_urlsafe(24), index=True, unique=True)
     ics_uid: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    origem: str = Field(default="cliente", index=True)  # cliente | publico
+    origem: str = Field(default="cliente", index=True)
     criado_em: datetime = Field(default_factory=utcnow)
 
-
-# ── Startup ───────────────────────────────────────────────────────────────────
 
 def _ensure_agenda_tables() -> None:
     try:
@@ -48897,22 +48907,30 @@ def _ensure_agenda_tables() -> None:
             engine,
             tables=[
                 AgendaConfig.__table__,
+                AgendaServico.__table__,
                 AgendaMembro.__table__,
                 AgendaDisponibilidade.__table__,
                 AgendaBooking.__table__,
             ],
             checkfirst=True,
         )
+        try:
+            with engine.connect() as conn:
+                conn.execute(text(
+                    "ALTER TABLE agendabooking ADD COLUMN IF NOT EXISTS "
+                    "servico_id INTEGER REFERENCES agendaservico(id)"
+                ))
+                conn.commit()
+        except Exception:
+            pass
     except Exception as _e:
-        print(f"[agenda] ⚠️ create_all: {_e}")
+        print("[agenda] create_all:", _e)
 
 
 @app.on_event("startup")
 def _startup_agenda() -> None:
     _ensure_agenda_tables()
 
-
-# ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _agenda_get_config(session: Session, company_id: int) -> AgendaConfig:
     cfg = session.exec(select(AgendaConfig).where(AgendaConfig.company_id == company_id)).first()
@@ -48933,32 +48951,24 @@ _LOCAL_LABELS = {
 
 
 def _agenda_build_ics(*, uid: str, summary: str, description: str, dtstart: str,
-                       dtend: str, organizer_email: str, attendee_emails: list[str]) -> str:
-    """Gera conteúdo .ics (iCalendar) para um evento."""
+                       dtend: str, organizer_email: str, attendee_emails: list) -> str:
+    nl = "\r\n"
     lines = [
-        "BEGIN:VCALENDAR",
-        "VERSION:2.0",
-        "PRODID:-//Maffezzolli Capital//Agenda//PT",
-        "METHOD:REQUEST",
-        "BEGIN:VEVENT",
-        f"UID:{uid}",
-        f"SUMMARY:{summary}",
+        "BEGIN:VCALENDAR", "VERSION:2.0",
+        "PRODID:-//Maffezzolli Capital//Agenda//PT", "METHOD:REQUEST",
+        "BEGIN:VEVENT", "UID:" + uid, "SUMMARY:" + summary,
         "DESCRIPTION:" + description.replace("\n", "\\n"),
-        f"DTSTART:{dtstart}",
-        f"DTEND:{dtend}",
-        f"ORGANIZER:mailto:{organizer_email}",
+        "DTSTART:" + dtstart, "DTEND:" + dtend,
+        "ORGANIZER:mailto:" + organizer_email,
     ]
     for ae in attendee_emails:
-        lines.append(f"ATTENDEE;RSVP=TRUE:mailto:{ae}")
+        lines.append("ATTENDEE;RSVP=TRUE:mailto:" + ae)
     lines += ["END:VEVENT", "END:VCALENDAR"]
-    return "\r\n".join(lines)
+    return nl.join(lines)
 
 
 def _agenda_dtstr(data: str, hora: str) -> str:
-    """Converte 'YYYY-MM-DD' + 'HH:MM' em iCal local datetime string."""
-    d = data.replace("-", "")
-    h = hora.replace(":", "")
-    return f"{d}T{h}00"
+    return data.replace("-", "") + "T" + hora.replace(":", "") + "00"
 
 
 def _agenda_send_email(*, to_email: str, to_name: str, subject: str, html_body: str,
@@ -48970,18 +48980,15 @@ def _agenda_send_email(*, to_email: str, to_name: str, subject: str, html_body: 
         msg["Subject"] = subject
         msg["From"] = SMTP_FROM
         msg["To"] = to_email
-
         alt = MIMEMultipart("alternative")
         alt.attach(MIMEText(html_body, "html", "utf-8"))
         msg.attach(alt)
-
         if ics_content:
             ics_part = MIMEBase("text", "calendar", method="REQUEST", charset="utf-8")
             ics_part.set_payload(ics_content.encode("utf-8"))
             email_encoders.encode_base64(ics_part)
             ics_part.add_header("Content-Disposition", "attachment", filename="reuniao.ics")
             msg.attach(ics_part)
-
         if SMTP_USE_SSL:
             with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, timeout=20) as s:
                 if SMTP_USERNAME and SMTP_PASSWORD:
@@ -48999,75 +49006,70 @@ def _agenda_send_email(*, to_email: str, to_name: str, subject: str, html_body: 
                     s.login(SMTP_USERNAME, SMTP_PASSWORD)
                 s.sendmail(SMTP_FROM, [to_email], msg.as_string())
     except Exception as _e:
-        print(f"[agenda] ⚠️ Falha ao enviar e-mail para {to_email}: {_e}")
+        print("[agenda] email error:", _e)
 
 
 def _agenda_dispatch_notifications(session: Session, booking: AgendaBooking, company: Company) -> None:
-    """Envia e-mail + .ics para solicitante e membro da equipe."""
     membro = session.get(AgendaMembro, booking.membro_id) if booking.membro_id else None
+    servico = session.get(AgendaServico, booking.servico_id) if booking.servico_id else None
     local_label = _LOCAL_LABELS.get(booking.local, booking.local)
-    data_fmt = booking.data[8:10] + "/" + booking.data[5:7] + "/" + booking.data[:4] if len(booking.data) == 10 else booking.data
-
+    data_fmt = (booking.data[8:10] + "/" + booking.data[5:7] + "/" + booking.data[:4]
+                if len(booking.data) == 10 else booking.data)
     dtstart = _agenda_dtstr(booking.data, booking.hora_inicio)
-    dtend = _agenda_dtstr(booking.data, booking.hora_fim) if booking.hora_fim else _agenda_dtstr(booking.data, booking.hora_inicio)
-
-    attendees = [booking.solicitante_email]
-    if membro and membro.email:
-        attendees.append(membro.email)
+    dtend = _agenda_dtstr(booking.data, booking.hora_fim) if booking.hora_fim else dtstart
+    attendees = [e for e in [booking.solicitante_email,
+                              membro.email if membro else ""] if e]
     organizer = SMTP_FROM or "contato@maffezzollicapital.com.br"
-
-    summary = f"Reunião — {company.name}"
-    description = (
-        f"Solicitante: {booking.solicitante_nome}\n"
-        f"Data: {data_fmt} | {booking.hora_inicio}–{booking.hora_fim}\n"
-        f"Local: {local_label}\n"
-        f"Responsável: {membro.nome if membro else '—'}\n"
-        f"Notas: {booking.notas or '—'}"
-    )
+    svc_nome = servico.nome if servico else "—"
+    mbr_nome = membro.nome if membro else "—"
+    summary = svc_nome + " — " + company.name
+    desc_parts = [
+        "Serviço: " + svc_nome,
+        "Solicitante: " + booking.solicitante_nome,
+        "Data: " + data_fmt + " | " + booking.hora_inicio + "–" + booking.hora_fim,
+        "Local: " + local_label,
+        "Responsável: " + mbr_nome,
+        "Notas: " + (booking.notas or "—"),
+    ]
+    description = "\n".join(desc_parts)
     ics = _agenda_build_ics(
-        uid=booking.ics_uid,
-        summary=summary,
-        description=description,
-        dtstart=dtstart,
-        dtend=dtend,
-        organizer_email=organizer,
-        attendee_emails=[e for e in attendees if e],
+        uid=booking.ics_uid, summary=summary, description=description,
+        dtstart=dtstart, dtend=dtend, organizer_email=organizer,
+        attendee_emails=attendees,
     )
-
-    html_base = f"""
-<p>Olá, {{name}}!</p>
-<p>Uma reunião foi agendada com <strong>{company.name}</strong>.</p>
-<table style="border-collapse:collapse;font-family:sans-serif;font-size:14px;">
-  <tr><td style="padding:4px 12px 4px 0;color:#666;">Data</td><td><strong>{data_fmt} · {booking.hora_inicio}–{booking.hora_fim}</strong></td></tr>
-  <tr><td style="padding:4px 12px 4px 0;color:#666;">Local</td><td>{local_label}</td></tr>
-  <tr><td style="padding:4px 12px 4px 0;color:#666;">Responsável</td><td>{membro.nome if membro else "—"}</td></tr>
-  <tr><td style="padding:4px 12px 4px 0;color:#666;">Solicitante</td><td>{booking.solicitante_nome}</td></tr>
-  {"<tr><td style='padding:4px 12px 4px 0;color:#666;'>Notas</td><td>" + booking.notas + "</td></tr>" if booking.notas else ""}
-</table>
-<p style="margin-top:16px;font-size:12px;color:#999;">{company.name} · Agendamento nativo</p>
-"""
-
+    row_style = "padding:4px 12px 4px 0;color:#666"
+    rows = (
+        "<tr><td style='" + row_style + "'>Serviço</td><td><strong>" + svc_nome + "</strong></td></tr>"
+        "<tr><td style='" + row_style + "'>Data</td><td><strong>" + data_fmt + " · " + booking.hora_inicio + "–" + booking.hora_fim + "</strong></td></tr>"
+        "<tr><td style='" + row_style + "'>Local</td><td>" + local_label + "</td></tr>"
+        "<tr><td style='" + row_style + "'>Responsável</td><td>" + mbr_nome + "</td></tr>"
+        "<tr><td style='" + row_style + "'>Solicitante</td><td>" + booking.solicitante_nome + "</td></tr>"
+        + ("<tr><td style='" + row_style + "'>Notas</td><td>" + booking.notas + "</td></tr>" if booking.notas else "")
+    )
+    html_tmpl = (
+        "<p>Olá, {name}!</p>"
+        "<p>Reunião agendada com <strong>" + company.name + "</strong>.</p>"
+        "<table style='border-collapse:collapse;font-size:14px'>" + rows + "</table>"
+        "<p style='font-size:12px;color:#999'>" + company.name + " · Agendamento nativo</p>"
+    )
     if booking.solicitante_email:
         _agenda_send_email(
-            to_email=booking.solicitante_email,
-            to_name=booking.solicitante_nome,
-            subject=f"Reunião confirmada — {data_fmt} · {booking.hora_inicio}",
-            html_body=html_base.replace("{name}", booking.solicitante_nome or "você"),
+            to_email=booking.solicitante_email, to_name=booking.solicitante_nome,
+            subject="Reunião confirmada — " + data_fmt + " · " + booking.hora_inicio,
+            html_body=html_tmpl.replace("{name}", booking.solicitante_nome or "você"),
             ics_content=ics,
         )
     if membro and membro.email:
         _agenda_send_email(
-            to_email=membro.email,
-            to_name=membro.nome,
-            subject=f"Nova reunião agendada — {booking.solicitante_nome} · {data_fmt}",
-            html_body=html_base.replace("{name}", membro.nome),
+            to_email=membro.email, to_name=membro.nome,
+            subject="Nova reunião — " + booking.solicitante_nome + " · " + data_fmt,
+            html_body=html_tmpl.replace("{name}", membro.nome),
             ics_content=ics,
         )
 
 
 def _agenda_count_mes(session: Session, company_id: int, client_id: Optional[int],
                        solicitante_email: str, ano_mes: str) -> int:
-    """Conta bookings do cliente no mês (YYYY-MM)."""
     q = select(func.count(AgendaBooking.id)).where(
         AgendaBooking.company_id == company_id,
         AgendaBooking.status != "cancelado",
@@ -49080,24 +49082,26 @@ def _agenda_count_mes(session: Session, company_id: int, client_id: Optional[int
     return int(session.exec(q).one() or 0)
 
 
-def _agenda_slots_livres(session: Session, membro_id: int, data: str, duracao_min: int) -> list[str]:
-    """Retorna lista de horários livres (strings 'HH:MM') para a data/membro."""
-    from datetime import date as _date, timedelta as _td
+def _to_min(hm: str) -> int:
+    h, m = hm.split(":")
+    return int(h) * 60 + int(m)
+
+
+def _agenda_slots_livres(session: Session, membro_id: int, data: str,
+                          duracao_min: int, buffer_min: int = 0) -> list:
+    from datetime import date as _date
     try:
         d = _date.fromisoformat(data)
     except ValueError:
         return []
-    dia_sem = d.weekday()  # 0=seg
-
     disp = session.exec(
         select(AgendaDisponibilidade).where(
             AgendaDisponibilidade.membro_id == membro_id,
-            AgendaDisponibilidade.dia_semana == dia_sem,
+            AgendaDisponibilidade.dia_semana == d.weekday(),
         )
     ).all()
     if not disp:
         return []
-
     ocupados = session.exec(
         select(AgendaBooking).where(
             AgendaBooking.membro_id == membro_id,
@@ -49105,78 +49109,100 @@ def _agenda_slots_livres(session: Session, membro_id: int, data: str, duracao_mi
             AgendaBooking.status != "cancelado",
         )
     ).all()
-
-    def to_min(hm: str) -> int:
-        h, m = hm.split(":")
-        return int(h) * 60 + int(m)
-
-    ocupados_ranges = [(to_min(b.hora_inicio), to_min(b.hora_fim)) for b in ocupados if b.hora_inicio and b.hora_fim]
-
-    slots: list[str] = []
+    ocupados_ranges = [
+        (_to_min(b.hora_inicio), _to_min(b.hora_fim) + buffer_min)
+        for b in ocupados if b.hora_inicio and b.hora_fim
+    ]
+    slots = []
     for bloco in disp:
-        cur = to_min(bloco.hora_inicio)
-        fim_bloco = to_min(bloco.hora_fim)
-        while cur + duracao_min <= fim_bloco:
+        cur = _to_min(bloco.hora_inicio)
+        fim = _to_min(bloco.hora_fim)
+        while cur + duracao_min <= fim:
             slot_fim = cur + duracao_min
-            conflito = any(s < slot_fim and cur < f for s, f in ocupados_ranges)
-            if not conflito:
-                slots.append(f"{cur // 60:02d}:{cur % 60:02d}")
-            cur += 30  # step 30 min
+            if not any(s < slot_fim and cur < f for s, f in ocupados_ranges):
+                slots.append("%02d:%02d" % (cur // 60, cur % 60))
+            cur += 30
     return slots
+
+
+def _brdate_filter(v: str) -> str:
+    if not v or len(v) < 10:
+        return v or ""
+    return v[8:10] + "/" + v[5:7] + "/" + v[:4]
+
+
+try:
+    templates_env.filters["brdate"] = _brdate_filter
+except Exception:
+    pass
+
+
+def _add_locais_keys(s: AgendaServico, cfg: AgendaConfig) -> AgendaServico:
+    lc = s.locais if s.locais else (cfg.locais or "nosso_escritorio,cliente,online")
+    s.locais_keys = [l.strip() for l in lc.split(",") if l.strip()]
+    return s
 
 
 # ── Templates ────────────────────────────────────────────────────────────────
 
 TEMPLATES.update({
 
-# ---------- form de agendamento (reutilizado para cliente e público) ----------
-"agenda_booking_form.html": r"""
-{% extends "base_or_public.html" %}
-{% block title %}Agendar Reunião{% endblock %}
+"agenda_booking_form.html": """
+{% extends "base.html" %}
 {% block content %}
-<div class="card p-4" style="max-width:640px;margin:auto;">
+<div class="card p-4" style="max-width:680px;margin:auto;">
   <h4 class="mb-1">Agendar Reunião</h4>
   <div class="muted mb-4">{{ company_name }}</div>
-
-  {% if flash %}<div class="alert alert-warning">{{ flash }}</div>{% endif %}
+  {% if flash %}<div class="alert alert-info">{{ flash }}</div>{% endif %}
   {% if error %}<div class="alert alert-danger">{{ error }}</div>{% endif %}
 
   <form method="post" id="form-agenda">
-    {% if not logged_in %}
-    <div class="row g-3 mb-3">
-      <div class="col-md-6">
-        <label class="form-label">Seu nome *</label>
-        <input class="form-control" name="solicitante_nome" value="{{ form.solicitante_nome or '' }}" required>
-      </div>
-      <div class="col-md-6">
-        <label class="form-label">Seu e-mail *</label>
-        <input class="form-control" type="email" name="solicitante_email" value="{{ form.solicitante_email or '' }}" required>
-      </div>
-      <div class="col-md-6">
-        <label class="form-label">Telefone</label>
-        <input class="form-control" name="solicitante_telefone" value="{{ form.solicitante_telefone or '' }}">
-      </div>
-    </div>
-    {% endif %}
 
-    <div class="row g-3 mb-3">
+    <h6 class="text-uppercase small fw-semibold mb-3" style="letter-spacing:.08em;">1. Tipo de reunião</h6>
+    <div class="row g-3 mb-4">
+      {% for s in servicos %}
+      <div class="col-md-6">
+        <label class="d-block border rounded p-3" style="cursor:pointer;transition:border-color .15s"
+               id="svc-lbl-{{ s.id }}"
+               onclick="selectServico({{ s.id }}, {{ s.duracao_min }}, {{ s.buffer_min }}, '{{ s.locais_keys|join(',') }}')">
+          <input type="radio" name="servico_id" value="{{ s.id }}" class="form-check-input me-2"
+                 {% if form.servico_id|string == s.id|string %}checked{% endif %}>
+          <strong>{{ s.nome }}</strong>
+          <div class="small muted mt-1">
+            {{ s.duracao_min }} min
+            {% if s.buffer_min %} · {{ s.buffer_min }} min intervalo{% endif %}
+            {% if s.descricao %}<br>{{ s.descricao }}{% endif %}
+          </div>
+        </label>
+      </div>
+      {% endfor %}
+    </div>
+
+    <h6 class="text-uppercase small fw-semibold mb-3" style="letter-spacing:.08em;">2. Responsável e local</h6>
+    <div class="row g-3 mb-4">
       <div class="col-md-6">
         <label class="form-label">Responsável *</label>
-        <select class="form-select" name="membro_id" required onchange="loadSlots()">
+        <select class="form-select" name="membro_id" required id="sel-membro" onchange="resetCal()">
           <option value="">Selecione...</option>
           {% for m in membros %}
-            <option value="{{ m.id }}" {% if form.membro_id|string == m.id|string %}selected{% endif %}>{{ m.nome }}</option>
+            <option value="{{ m.id }}" {% if form.membro_id|string == m.id|string %}selected{% endif %}>
+              {{ m.nome }}{% if m.bio %} — {{ m.bio }}{% endif %}
+            </option>
           {% endfor %}
         </select>
       </div>
       <div class="col-md-6">
         <label class="form-label">Local *</label>
-        <select class="form-select" name="local" required>
+        <select class="form-select" name="local" required id="sel-local">
           {% for lk, lv in locais %}
             <option value="{{ lk }}" {% if form.local == lk %}selected{% endif %}>{{ lv }}</option>
           {% endfor %}
         </select>
       </div>
+    </div>
+
+    <h6 class="text-uppercase small fw-semibold mb-3" style="letter-spacing:.08em;">3. Data e horário</h6>
+    <div class="row g-3 mb-4">
       <div class="col-md-6">
         <label class="form-label">Data *</label>
         <input class="form-control" type="date" name="data" id="inp-data"
@@ -49185,17 +49211,15 @@ TEMPLATES.update({
       <div class="col-md-6">
         <label class="form-label">Horário *</label>
         <select class="form-select" name="hora_inicio" id="sel-hora" required>
-          <option value="">— escolha data e responsável primeiro —</option>
-          {% for s in slots_pre %}
-            <option value="{{ s }}" {% if form.hora_inicio == s %}selected{% endif %}>{{ s }}</option>
-          {% endfor %}
+          <option value="">— escolha data primeiro —</option>
         </select>
         <div id="slots-loading" class="form-text d-none">Carregando horários...</div>
       </div>
-      <div class="col-12">
-        <label class="form-label">Notas / Pauta</label>
-        <textarea class="form-control" name="notas" rows="3">{{ form.notas or '' }}</textarea>
-      </div>
+    </div>
+
+    <div class="mb-4">
+      <label class="form-label">Notas / Pauta da reunião</label>
+      <textarea class="form-control" name="notas" rows="3" placeholder="Assuntos que deseja tratar...">{{ form.notas or '' }}</textarea>
     </div>
 
     <button class="btn btn-primary" type="submit">Confirmar agendamento</button>
@@ -49204,111 +49228,108 @@ TEMPLATES.update({
     {% endif %}
   </form>
 </div>
-
 <script>
+let _dur = {{ form.servico_duracao or 60 }}, _buf = {{ form.servico_buffer or 0 }};
+function selectServico(id, dur, buf, locaisCSV) {
+  _dur = dur; _buf = buf;
+  document.querySelectorAll('[id^="svc-lbl-"]').forEach(el => el.style.borderColor = '');
+  const lbl = document.getElementById('svc-lbl-' + id);
+  if (lbl) lbl.style.borderColor = '#2563eb';
+  const sel = document.getElementById('sel-local');
+  const keys = locaisCSV ? locaisCSV.split(',').filter(Boolean) : [];
+  Array.from(sel.options).forEach(o => { o.hidden = keys.length && o.value && !keys.includes(o.value); });
+  const cur = sel.selectedOptions[0];
+  if (cur && cur.hidden) {
+    const first = Array.from(sel.options).find(o => !o.hidden && o.value);
+    if (first) sel.value = first.value;
+  }
+  resetCal();
+}
+function resetCal() {
+  document.getElementById('sel-hora').innerHTML = '<option value="">— escolha a data —</option>';
+}
 async function loadSlots() {
-  const membro = document.querySelector('[name=membro_id]').value;
+  const membro = document.getElementById('sel-membro').value;
   const data   = document.getElementById('inp-data').value;
   const sel    = document.getElementById('sel-hora');
   const load   = document.getElementById('slots-loading');
   if (!membro || !data) return;
-  load.classList.remove('d-none');
-  sel.innerHTML = '';
+  load.classList.remove('d-none'); sel.innerHTML = '';
   try {
-    const res = await fetch(`{{ slots_api_url }}?membro_id=${membro}&data=${data}`);
-    const json = await res.json();
-    if (!json.slots || !json.slots.length) {
-      sel.innerHTML = '<option value="">Sem horários disponíveis nesta data</option>';
-    } else {
-      sel.innerHTML = json.slots.map(s => `<option value="${s}">${s}</option>`).join('');
-    }
-  } catch(e) {
-    sel.innerHTML = '<option value="">Erro ao carregar horários</option>';
-  }
+    const r = await fetch('/api/agenda/slots?membro_id=' + membro + '&data=' + data + '&duracao=' + _dur + '&buffer=' + _buf);
+    const j = await r.json();
+    sel.innerHTML = (j.slots && j.slots.length)
+      ? j.slots.map(s => '<option value="' + s + '">' + s + '</option>').join('')
+      : '<option value="">Sem horários disponíveis nesta data</option>';
+  } catch(e) { sel.innerHTML = '<option value="">Erro ao carregar</option>'; }
   load.classList.add('d-none');
 }
 </script>
 {% endblock %}
 """,
 
-# ---------- confirmação ----------
-"agenda_confirmado.html": r"""
-{% extends "base_or_public.html" %}
+"agenda_confirmado.html": """
+{% extends "base.html" %}
 {% block title %}Reunião Confirmada{% endblock %}
 {% block content %}
 <div class="card p-5 text-center" style="max-width:520px;margin:auto;">
-  <div style="font-size:2.5rem;">✅</div>
+  <div style="font-size:2.5rem;">&#10003;&#65039;</div>
   <h4 class="mt-3">Reunião agendada!</h4>
-  <p class="muted">Um convite de calendário foi enviado para <strong>{{ booking.solicitante_email }}</strong>.</p>
+  <p class="muted">Convite enviado para <strong>{{ booking.solicitante_email }}</strong>.</p>
   <table class="table table-sm mt-3 text-start">
+    <tr><th>Serviço</th><td>{{ servico_nome }}</td></tr>
     <tr><th>Data</th><td>{{ booking.data|brdate if booking.data else '—' }}</td></tr>
     <tr><th>Horário</th><td>{{ booking.hora_inicio }} – {{ booking.hora_fim }}</td></tr>
     <tr><th>Local</th><td>{{ local_label }}</td></tr>
     <tr><th>Responsável</th><td>{{ membro_nome }}</td></tr>
   </table>
-  {% if back_url %}
-    <a class="btn btn-outline-primary mt-2" href="{{ back_url }}">Voltar</a>
-  {% endif %}
+  {% if back_url %}<a class="btn btn-outline-primary mt-2" href="{{ back_url }}">Voltar</a>{% endif %}
 </div>
 {% endblock %}
 """,
 
-# ---------- admin: agenda dashboard ----------
-"admin_agenda.html": r"""
+"admin_agenda.html": """
 {% extends "base.html" %}
 {% block content %}
 <div class="d-flex justify-content-between align-items-center flex-wrap gap-3 mb-4">
   <div>
     <h4 class="mb-0">Agenda Nativa</h4>
-    <div class="muted">Gerenciamento de reuniões e disponibilidade</div>
+    <div class="muted">Reuniões, serviços e disponibilidade</div>
   </div>
   <div class="d-flex gap-2 flex-wrap">
     <a class="btn btn-outline-secondary btn-sm" href="/admin/agenda/config">Configurações</a>
+    <a class="btn btn-outline-success btn-sm" href="/admin/agenda/servico/novo">+ Serviço</a>
     <a class="btn btn-outline-primary btn-sm" href="/admin/agenda/membro/novo">+ Membro</a>
-    <a class="btn btn-sm btn-outline-dark" href="/p/agenda/{{ cfg.public_token }}" target="_blank">Link público</a>
+    <a class="btn btn-sm btn-outline-dark" href="/p/agenda/{{ cfg.public_token }}" target="_blank">Link público ↗</a>
+    <a class="btn btn-sm btn-outline-warning" href="/admin/agenda/clientes">Limites por cliente</a>
   </div>
 </div>
-
 {% if flash %}<div class="alert alert-info">{{ flash }}</div>{% endif %}
 
 <div class="row g-3 mb-4">
-  <div class="col-md-4">
-    <div class="card p-3">
-      <div class="muted small">Reuniões este mês</div>
-      <div class="fw-semibold fs-5">{{ bookings_mes }}</div>
-    </div>
-  </div>
-  <div class="col-md-4">
-    <div class="card p-3">
-      <div class="muted small">Pendentes de confirmação</div>
-      <div class="fw-semibold fs-5">{{ bookings_pendentes }}</div>
-    </div>
-  </div>
-  <div class="col-md-4">
-    <div class="card p-3">
-      <div class="muted small">Membros ativos</div>
-      <div class="fw-semibold fs-5">{{ membros|length }}</div>
-    </div>
-  </div>
+  <div class="col-md-3"><div class="card p-3"><div class="muted small">Reuniões este mês</div><div class="fw-semibold fs-5">{{ bookings_mes }}</div></div></div>
+  <div class="col-md-3"><div class="card p-3"><div class="muted small">Pendentes</div><div class="fw-semibold fs-5">{{ bookings_pendentes }}</div></div></div>
+  <div class="col-md-3"><div class="card p-3"><div class="muted small">Serviços</div><div class="fw-semibold fs-5">{{ servicos|length }}</div></div></div>
+  <div class="col-md-3"><div class="card p-3"><div class="muted small">Membros ativos</div><div class="fw-semibold fs-5">{{ membros|length }}</div></div></div>
 </div>
 
-<!-- Membros -->
 <div class="card p-4 mb-4">
-  <h6>Equipe disponível para agendamentos</h6>
-  {% if membros %}
+  <h6>Tipos de reunião / serviços</h6>
+  {% if servicos %}
   <div class="table-responsive">
     <table class="table table-sm align-middle">
-      <thead><tr><th>Nome</th><th>E-mail</th><th>Status</th><th>Disponibilidade</th><th></th></tr></thead>
+      <thead><tr><th>Nome</th><th>Duração</th><th>Buffer</th><th>Status</th><th></th></tr></thead>
       <tbody>
-        {% for m in membros %}
+        {% for s in servicos %}
         <tr>
-          <td>{{ m.nome }}</td>
-          <td class="mono small">{{ m.email or "—" }}</td>
-          <td><span class="badge {{ 'bg-success' if m.ativo else 'bg-secondary' }}">{{ 'Ativo' if m.ativo else 'Inativo' }}</span></td>
-          <td><a class="btn btn-sm btn-outline-secondary" href="/admin/agenda/membro/{{ m.id }}/disponibilidade">Horários</a></td>
-          <td>
-            <form method="post" action="/admin/agenda/membro/{{ m.id }}/excluir" style="display:inline"
-                  onsubmit="return confirm('Remover {{ m.nome }}?')">
+          <td>{{ s.nome }}<br><span class="muted small">{{ s.descricao or '' }}</span></td>
+          <td class="mono">{{ s.duracao_min }} min</td>
+          <td class="mono">{{ s.buffer_min }} min</td>
+          <td><span class="badge {{ 'bg-success' if s.ativo else 'bg-secondary' }}">{{ 'Ativo' if s.ativo else 'Inativo' }}</span></td>
+          <td class="d-flex gap-1">
+            <a class="btn btn-sm btn-outline-secondary" href="/admin/agenda/servico/{{ s.id }}/editar">Editar</a>
+            <form method="post" action="/admin/agenda/servico/{{ s.id }}/excluir" style="display:inline"
+                  onsubmit="return confirm('Remover serviço?')">
               <button class="btn btn-sm btn-outline-danger" type="submit">Remover</button>
             </form>
           </td>
@@ -49318,11 +49339,39 @@ async function loadSlots() {
     </table>
   </div>
   {% else %}
-    <div class="muted">Nenhum membro cadastrado. <a href="/admin/agenda/membro/novo">Adicionar agora</a></div>
+  <div class="muted">Nenhum serviço. <a href="/admin/agenda/servico/novo">Adicionar agora</a></div>
   {% endif %}
 </div>
 
-<!-- Bookings recentes -->
+<div class="card p-4 mb-4">
+  <h6>Equipe disponível para agendamentos</h6>
+  {% if membros %}
+  <div class="table-responsive">
+    <table class="table table-sm align-middle">
+      <thead><tr><th>Nome</th><th>E-mail</th><th>Status</th><th>Disponibilidade</th><th></th></tr></thead>
+      <tbody>
+        {% for m in membros %}
+        <tr>
+          <td>{{ m.nome }}{% if m.bio %}<br><span class="muted small">{{ m.bio }}</span>{% endif %}</td>
+          <td class="mono small">{{ m.email or '—' }}</td>
+          <td><span class="badge {{ 'bg-success' if m.ativo else 'bg-secondary' }}">{{ 'Ativo' if m.ativo else 'Inativo' }}</span></td>
+          <td><a class="btn btn-sm btn-outline-secondary" href="/admin/agenda/membro/{{ m.id }}/disponibilidade">Horários</a></td>
+          <td>
+            <form method="post" action="/admin/agenda/membro/{{ m.id }}/excluir" style="display:inline"
+                  onsubmit="return confirm('Remover?')">
+              <button class="btn btn-sm btn-outline-danger" type="submit">Remover</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="muted">Nenhum membro. <a href="/admin/agenda/membro/novo">Adicionar</a></div>
+  {% endif %}
+</div>
+
 <div class="card p-4">
   <div class="d-flex justify-content-between align-items-center mb-3">
     <h6 class="mb-0">Reuniões agendadas</h6>
@@ -49338,13 +49387,14 @@ async function loadSlots() {
   {% if bookings %}
   <div class="table-responsive">
     <table class="table table-sm align-middle">
-      <thead><tr><th>Data/Hora</th><th>Solicitante</th><th>Responsável</th><th>Local</th><th>Status</th><th></th></tr></thead>
+      <thead><tr><th>Data/Hora</th><th>Serviço</th><th>Solicitante</th><th>Responsável</th><th>Local</th><th>Status</th><th></th></tr></thead>
       <tbody>
         {% for b in bookings %}
         <tr>
           <td class="mono small">{{ b.data }} {{ b.hora_inicio }}</td>
+          <td class="small">{{ b.servico_nome or '—' }}</td>
           <td>{{ b.solicitante_nome }}<br><span class="muted small">{{ b.solicitante_email }}</span></td>
-          <td>{{ b.membro_nome or "—" }}</td>
+          <td>{{ b.membro_nome or '—' }}</td>
           <td class="small">{{ b.local_label }}</td>
           <td><span class="badge {{ 'bg-warning text-dark' if b.status=='pendente' else ('bg-success' if b.status=='confirmado' else 'bg-secondary') }}">{{ b.status }}</span></td>
           <td>
@@ -49352,7 +49402,7 @@ async function loadSlots() {
             <form method="post" action="/admin/agenda/booking/{{ b.id }}/status" style="display:inline">
               <input type="hidden" name="status" value="{{ 'confirmado' if b.status=='pendente' else 'cancelado' }}">
               <button class="btn btn-sm {{ 'btn-outline-success' if b.status=='pendente' else 'btn-outline-secondary' }}" type="submit">
-                {{ '✓ Confirmar' if b.status=='pendente' else 'Cancelar' }}
+                {{ 'Confirmar' if b.status=='pendente' else 'Cancelar' }}
               </button>
             </form>
             {% endif %}
@@ -49363,14 +49413,77 @@ async function loadSlots() {
     </table>
   </div>
   {% else %}
-    <div class="muted">Nenhuma reunião encontrada.</div>
+  <div class="muted">Nenhuma reunião encontrada.</div>
   {% endif %}
 </div>
 {% endblock %}
 """,
 
-# ---------- admin: config ----------
-"admin_agenda_config.html": r"""
+"admin_agenda_servico_form.html": """
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4" style="max-width:560px;">
+  <h5>{{ 'Editar' if servico else 'Novo' }} Tipo de Reunião</h5>
+  {% if flash %}<div class="alert alert-info">{{ flash }}</div>{% endif %}
+  <form method="post">
+    <div class="mb-3">
+      <label class="form-label">Nome do serviço *</label>
+      <input class="form-control" name="nome" value="{{ servico.nome if servico else '' }}" required
+             placeholder="Ex: Consultoria Presencial, Reunião Online...">
+    </div>
+    <div class="mb-3">
+      <label class="form-label">Descrição (exibida no formulário de agendamento)</label>
+      <input class="form-control" name="descricao" value="{{ servico.descricao if servico else '' }}">
+    </div>
+    <div class="row g-3 mb-3">
+      <div class="col-6">
+        <label class="form-label">Duração (minutos) *</label>
+        <select class="form-select" name="duracao_min">
+          {% for d in [30, 45, 60, 90, 120, 180] %}
+            <option value="{{ d }}"
+              {% if servico and servico.duracao_min == d %}selected
+              {% elif not servico and d == 60 %}selected{% endif %}>{{ d }} min</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-6">
+        <label class="form-label">Buffer após a reunião (min)</label>
+        <select class="form-select" name="buffer_min">
+          {% for d in [0, 15, 30, 45, 60] %}
+            <option value="{{ d }}" {% if servico and servico.buffer_min == d %}selected{% endif %}>{{ d }} min</option>
+          {% endfor %}
+        </select>
+        <div class="form-text">Tempo bloqueado entre reuniões.</div>
+      </div>
+    </div>
+    <div class="mb-3">
+      <label class="form-label">Locais disponíveis para este serviço</label>
+      <div class="form-text mb-2">Vazio = herda configuração global da agenda.</div>
+      {% for lk, lv in all_locais %}
+      <div class="form-check">
+        <input class="form-check-input" type="checkbox" name="locais" value="{{ lk }}" id="sl-{{ lk }}"
+               {% if servico and lk in (servico.locais or '') %}checked{% endif %}>
+        <label class="form-check-label" for="sl-{{ lk }}">{{ lv }}</label>
+      </div>
+      {% endfor %}
+    </div>
+    <div class="mb-3">
+      <label class="form-label">Ordem de exibição</label>
+      <input class="form-control" type="number" name="ordem" value="{{ servico.ordem if servico else 0 }}" min="0">
+    </div>
+    <div class="form-check mb-3">
+      <input class="form-check-input" type="checkbox" name="ativo" value="1" id="ck-ativo"
+             {% if not servico or servico.ativo %}checked{% endif %}>
+      <label class="form-check-label" for="ck-ativo">Ativo (aparece no formulário de agendamento)</label>
+    </div>
+    <button class="btn btn-primary" type="submit">Salvar</button>
+    <a class="btn btn-outline-secondary ms-2" href="/admin/agenda">Voltar</a>
+  </form>
+</div>
+{% endblock %}
+""",
+
+"admin_agenda_config.html": """
 {% extends "base.html" %}
 {% block content %}
 <div class="card p-4" style="max-width:580px;">
@@ -49378,19 +49491,11 @@ async function loadSlots() {
   {% if flash %}<div class="alert alert-info">{{ flash }}</div>{% endif %}
   <form method="post" action="/admin/agenda/config">
     <div class="mb-3">
-      <label class="form-label">Duração padrão das reuniões (minutos)</label>
-      <select class="form-select" name="duracao_padrao_min">
-        {% for d in [30, 45, 60, 90, 120] %}
-          <option value="{{ d }}" {% if cfg.duracao_padrao_min == d %}selected{% endif %}>{{ d }} min</option>
-        {% endfor %}
-      </select>
-    </div>
-    <div class="mb-3">
       <label class="form-label">Limite mensal de reuniões por cliente (0 = ilimitado)</label>
       <input class="form-control" type="number" min="0" name="limite_mensal_por_cliente" value="{{ cfg.limite_mensal_por_cliente }}">
     </div>
     <div class="mb-3">
-      <label class="form-label">Locais disponíveis</label>
+      <label class="form-label">Locais padrão (herdados por serviços sem locais próprios)</label>
       <div class="form-check"><input class="form-check-input" type="checkbox" name="locais" value="nosso_escritorio"
         {% if 'nosso_escritorio' in cfg_locais %}checked{% endif %} id="l1">
         <label class="form-check-label" for="l1">Nosso escritório</label></div>
@@ -49404,8 +49509,7 @@ async function loadSlots() {
     <div class="mb-3">
       <label class="form-label">Link público externo</label>
       <div class="input-group">
-        <input class="form-control mono" type="text" readonly
-               value="{{ base_url }}/p/agenda/{{ cfg.public_token }}">
+        <input class="form-control mono" type="text" readonly value="{{ base_url }}/p/agenda/{{ cfg.public_token }}">
         <button class="btn btn-outline-secondary" type="button"
                 onclick="navigator.clipboard.writeText(this.previousElementSibling.value);this.textContent='Copiado!'">Copiar</button>
       </div>
@@ -49418,8 +49522,7 @@ async function loadSlots() {
 {% endblock %}
 """,
 
-# ---------- admin: novo membro ----------
-"admin_agenda_membro_form.html": r"""
+"admin_agenda_membro_form.html": """
 {% extends "base.html" %}
 {% block content %}
 <div class="card p-4" style="max-width:520px;">
@@ -49435,7 +49538,7 @@ async function loadSlots() {
       <input class="form-control" type="email" name="email" value="{{ membro.email if membro else '' }}">
     </div>
     <div class="mb-3">
-      <label class="form-label">Bio / especialidade (exibida no formulário)</label>
+      <label class="form-label">Bio / especialidade</label>
       <textarea class="form-control" name="bio" rows="2">{{ membro.bio if membro else '' }}</textarea>
     </div>
     <div class="mb-3">
@@ -49450,7 +49553,7 @@ async function loadSlots() {
     <div class="form-check mb-3">
       <input class="form-check-input" type="checkbox" name="ativo" value="1" id="ck-ativo"
              {% if not membro or membro.ativo %}checked{% endif %}>
-      <label class="form-check-label" for="ck-ativo">Ativo (aparece no formulário de agendamento)</label>
+      <label class="form-check-label" for="ck-ativo">Ativo</label>
     </div>
     <button class="btn btn-primary" type="submit">Salvar</button>
     <a class="btn btn-outline-secondary ms-2" href="/admin/agenda">Voltar</a>
@@ -49459,17 +49562,13 @@ async function loadSlots() {
 {% endblock %}
 """,
 
-# ---------- admin: disponibilidade ----------
-"admin_agenda_disponibilidade.html": r"""
+"admin_agenda_disponibilidade.html": """
 {% extends "base.html" %}
 {% block content %}
 <div class="card p-4" style="max-width:640px;">
   <h5>Disponibilidade — {{ membro.nome }}</h5>
-  <div class="muted mb-4">Defina os blocos de horário em que este membro pode receber reuniões.</div>
-
+  <div class="muted mb-4">Blocos de horário em que este membro pode receber reuniões.</div>
   {% if flash %}<div class="alert alert-info">{{ flash }}</div>{% endif %}
-
-  <!-- Adicionar bloco -->
   <form method="post" class="border rounded p-3 mb-4">
     <div class="row g-2 align-items-end">
       <div class="col-md-4">
@@ -49494,8 +49593,6 @@ async function loadSlots() {
     </div>
     <input type="hidden" name="action" value="add">
   </form>
-
-  <!-- Blocos existentes -->
   {% if disponibilidades %}
   <table class="table table-sm">
     <thead><tr><th>Dia</th><th>Início</th><th>Fim</th><th></th></tr></thead>
@@ -49517,16 +49614,17 @@ async function loadSlots() {
     </tbody>
   </table>
   {% else %}
-    <div class="muted">Nenhum bloco cadastrado. Adicione acima.</div>
+  <div class="muted">Nenhum bloco cadastrado.</div>
   {% endif %}
-
   <a class="btn btn-outline-secondary mt-3" href="/admin/agenda">Voltar</a>
 </div>
 {% endblock %}
 """,
 
-# ---------- página pública (sem login) ----------
-"agenda_public.html": r"""<!DOCTYPE html>
+})
+
+# ── Página pública (sem login) ─────────────────────────────────────────────────
+_AGENDA_PUBLIC_TPL = """<!DOCTYPE html>
 <html lang="pt-BR">
 <head>
   <meta charset="UTF-8">
@@ -49534,173 +49632,190 @@ async function loadSlots() {
   <title>Agendar Reunião — {{ company_name }}</title>
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
   <style>
-    body { background:#f5f7fa; font-family:system-ui,sans-serif; }
-    .card { border:none; border-radius:12px; box-shadow:0 2px 12px rgba(0,0,0,.07); }
-    .muted { color:#6b7280; }
-    .mono { font-family:monospace; }
+    body{background:#f5f7fa;font-family:system-ui,sans-serif;}
+    .card{border:none;border-radius:12px;box-shadow:0 2px 12px rgba(0,0,0,.07);}
+    .muted{color:#6b7280;}.mono{font-family:monospace;}
+    .svc-card{border:2px solid #e5e7eb;border-radius:8px;padding:16px;cursor:pointer;transition:border-color .15s,background .15s;}
+    .svc-card:hover,.svc-card.sel{border-color:#2563eb;background:#eff6ff;}
   </style>
 </head>
 <body>
 <div class="container py-5">
-  <div class="row justify-content-center">
-    <div class="col-lg-6">
-      <div class="text-center mb-4">
-        <div class="fw-bold fs-5">{{ company_name }}</div>
-        <div class="muted">Agendamento de reunião</div>
-      </div>
-      <div class="card p-4">
-        {% if flash %}<div class="alert alert-warning">{{ flash }}</div>{% endif %}
-        {% if error %}<div class="alert alert-danger">{{ error }}</div>{% endif %}
-
-        {% if success %}
-          <div class="text-center py-4">
-            <div style="font-size:2.5rem">✅</div>
-            <h5 class="mt-3">Reunião agendada!</h5>
-            <p class="muted">Um convite de calendário foi enviado para <strong>{{ success_email }}</strong>.</p>
-            <table class="table table-sm mt-3 text-start">
-              <tr><th>Data</th><td>{{ success_data }}</td></tr>
-              <tr><th>Horário</th><td>{{ success_hora }}</td></tr>
-              <tr><th>Local</th><td>{{ success_local }}</td></tr>
-              <tr><th>Responsável</th><td>{{ success_membro }}</td></tr>
-            </table>
-            <a class="btn btn-outline-primary mt-2" href="">Agendar outra</a>
-          </div>
-        {% else %}
-        <form method="post" id="form-pub">
-          <div class="row g-3">
-            <div class="col-md-6">
-              <label class="form-label">Seu nome *</label>
-              <input class="form-control" name="solicitante_nome" value="{{ form.solicitante_nome or '' }}" required>
-            </div>
-            <div class="col-md-6">
-              <label class="form-label">Seu e-mail *</label>
-              <input class="form-control" type="email" name="solicitante_email" value="{{ form.solicitante_email or '' }}" required>
-            </div>
-            <div class="col-md-6">
-              <label class="form-label">Telefone</label>
-              <input class="form-control" name="solicitante_telefone" value="{{ form.solicitante_telefone or '' }}">
-            </div>
-            <div class="col-md-6">
-              <label class="form-label">Responsável *</label>
-              <select class="form-select" name="membro_id" required onchange="loadSlots()">
-                <option value="">Selecione...</option>
-                {% for m in membros %}
-                  <option value="{{ m.id }}" {% if form.membro_id|string == m.id|string %}selected{% endif %}>{{ m.nome }}</option>
-                {% endfor %}
-              </select>
-            </div>
-            <div class="col-md-6">
-              <label class="form-label">Local *</label>
-              <select class="form-select" name="local" required>
-                {% for lk, lv in locais %}
-                  <option value="{{ lk }}" {% if form.local == lk %}selected{% endif %}>{{ lv }}</option>
-                {% endfor %}
-              </select>
-            </div>
-            <div class="col-md-6">
-              <label class="form-label">Data *</label>
-              <input class="form-control" type="date" name="data" id="inp-data"
-                     min="{{ min_date }}" value="{{ form.data or '' }}" required onchange="loadSlots()">
-            </div>
-            <div class="col-12">
-              <label class="form-label">Horário *</label>
-              <select class="form-select" name="hora_inicio" id="sel-hora" required>
-                <option value="">— escolha data e responsável —</option>
-              </select>
-              <div id="slots-loading" class="form-text d-none">Carregando horários...</div>
-            </div>
-            <div class="col-12">
-              <label class="form-label">Notas / Pauta</label>
-              <textarea class="form-control" name="notas" rows="2">{{ form.notas or '' }}</textarea>
-            </div>
-          </div>
-          <button class="btn btn-primary mt-4 w-100" type="submit">Confirmar agendamento</button>
-        </form>
-        {% endif %}
-      </div>
-      <div class="text-center muted small mt-4">{{ company_name }} · Sistema de agendamento nativo</div>
-    </div>
+<div class="row justify-content-center"><div class="col-lg-7">
+  <div class="text-center mb-4">
+    <div class="fw-bold fs-5">{{ company_name }}</div>
+    <div class="muted">Agendamento de reunião</div>
   </div>
-</div>
+  <div class="card p-4">
+    {% if flash %}<div class="alert alert-warning">{{ flash }}</div>{% endif %}
+    {% if error %}<div class="alert alert-danger">{{ error }}</div>{% endif %}
+
+    {% if success %}
+    <div class="text-center py-4">
+      <div style="font-size:2.5rem">&#10003;&#65039;</div>
+      <h5 class="mt-3">Reunião agendada!</h5>
+      <p class="muted">Convite enviado para <strong>{{ success_email }}</strong>.</p>
+      <table class="table table-sm mt-3 text-start">
+        <tr><th>Serviço</th><td>{{ success_servico }}</td></tr>
+        <tr><th>Data</th><td>{{ success_data }}</td></tr>
+        <tr><th>Horário</th><td>{{ success_hora }}</td></tr>
+        <tr><th>Local</th><td>{{ success_local }}</td></tr>
+        <tr><th>Responsável</th><td>{{ success_membro }}</td></tr>
+      </table>
+      <a class="btn btn-outline-primary mt-2" href="">Agendar outra</a>
+    </div>
+    {% else %}
+    <form method="post">
+      <h6 class="text-uppercase small fw-semibold mb-3" style="letter-spacing:.08em;">Seus dados</h6>
+      <div class="row g-3 mb-4">
+        <div class="col-md-6">
+          <label class="form-label">Nome completo *</label>
+          <input class="form-control" name="solicitante_nome" value="{{ form.solicitante_nome or '' }}" required>
+        </div>
+        <div class="col-md-6">
+          <label class="form-label">E-mail *</label>
+          <input class="form-control" type="email" name="solicitante_email" value="{{ form.solicitante_email or '' }}" required>
+        </div>
+        <div class="col-md-6">
+          <label class="form-label">Telefone</label>
+          <input class="form-control" name="solicitante_telefone" value="{{ form.solicitante_telefone or '' }}">
+        </div>
+      </div>
+
+      <h6 class="text-uppercase small fw-semibold mb-3" style="letter-spacing:.08em;">Tipo de reunião</h6>
+      <div class="row g-3 mb-4">
+        {% for s in servicos %}
+        <div class="col-md-6">
+          <div class="svc-card {% if form.servico_id|string == s.id|string %}sel{% endif %}"
+               id="svc-{{ s.id }}"
+               onclick="selSvc(this,{{ s.id }},{{ s.duracao_min }},{{ s.buffer_min }},'{{ s.locais_keys|join(',') }}')">
+            <input type="radio" name="servico_id" value="{{ s.id }}" style="display:none"
+                   {% if form.servico_id|string == s.id|string %}checked{% endif %}>
+            <div class="fw-semibold">{{ s.nome }}</div>
+            <div class="muted small mt-1">{{ s.duracao_min }} min{% if s.buffer_min %} · {{ s.buffer_min }} min intervalo{% endif %}
+              {% if s.descricao %}<br>{{ s.descricao }}{% endif %}</div>
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+
+      <h6 class="text-uppercase small fw-semibold mb-3" style="letter-spacing:.08em;">Responsável e local</h6>
+      <div class="row g-3 mb-4">
+        <div class="col-md-6">
+          <label class="form-label">Responsável *</label>
+          <select class="form-select" name="membro_id" id="sel-membro" required onchange="resetCal()">
+            <option value="">Selecione...</option>
+            {% for m in membros %}
+              <option value="{{ m.id }}" {% if form.membro_id|string == m.id|string %}selected{% endif %}>
+                {{ m.nome }}{% if m.bio %} — {{ m.bio }}{% endif %}
+              </option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="col-md-6">
+          <label class="form-label">Local *</label>
+          <select class="form-select" name="local" id="sel-local" required>
+            {% for lk, lv in locais %}
+              <option value="{{ lk }}" {% if form.local == lk %}selected{% endif %}>{{ lv }}</option>
+            {% endfor %}
+          </select>
+        </div>
+      </div>
+
+      <h6 class="text-uppercase small fw-semibold mb-3" style="letter-spacing:.08em;">Data e horário</h6>
+      <div class="row g-3 mb-4">
+        <div class="col-md-6">
+          <label class="form-label">Data *</label>
+          <input class="form-control" type="date" name="data" id="inp-data"
+                 min="{{ min_date }}" value="{{ form.data or '' }}" required onchange="loadSlots()">
+        </div>
+        <div class="col-md-6">
+          <label class="form-label">Horário *</label>
+          <select class="form-select" name="hora_inicio" id="sel-hora" required>
+            <option value="">— escolha data primeiro —</option>
+          </select>
+          <div id="slots-loading" class="form-text d-none">Carregando...</div>
+        </div>
+      </div>
+
+      <div class="mb-4">
+        <label class="form-label">Notas / Pauta</label>
+        <textarea class="form-control" name="notas" rows="2">{{ form.notas or '' }}</textarea>
+      </div>
+      <button class="btn btn-primary w-100" type="submit">Confirmar agendamento</button>
+    </form>
+    {% endif %}
+  </div>
+  <div class="text-center muted small mt-4">{{ company_name }} · Agendamento nativo</div>
+</div></div></div>
 <script>
-async function loadSlots() {
-  const membro = document.querySelector('[name=membro_id]').value;
-  const data   = document.getElementById('inp-data').value;
-  const sel    = document.getElementById('sel-hora');
-  const load   = document.getElementById('slots-loading');
-  if (!membro || !data) return;
-  load.classList.remove('d-none');
-  sel.innerHTML = '';
-  try {
-    const res = await fetch(`/api/agenda/slots?membro_id=${membro}&data=${data}&token={{ public_token }}`);
-    const json = await res.json();
-    if (!json.slots || !json.slots.length) {
-      sel.innerHTML = '<option value="">Sem horários disponíveis nesta data</option>';
-    } else {
-      sel.innerHTML = json.slots.map(s => `<option value="${s}">${s}</option>`).join('');
-    }
-  } catch(e) {
-    sel.innerHTML = '<option value="">Erro ao carregar horários</option>';
-  }
+let _dur=60,_buf=0;
+function selSvc(el,id,dur,buf,locaisCSV){
+  _dur=dur;_buf=buf;
+  document.querySelectorAll('.svc-card').forEach(c=>c.classList.remove('sel'));
+  el.classList.add('sel');
+  el.querySelector('input[type=radio]').checked=true;
+  const sel=document.getElementById('sel-local');
+  const keys=locaisCSV?locaisCSV.split(',').filter(Boolean):[];
+  Array.from(sel.options).forEach(o=>{o.hidden=keys.length&&o.value&&!keys.includes(o.value);});
+  const cur=sel.selectedOptions[0];
+  if(cur&&cur.hidden){const f=Array.from(sel.options).find(o=>!o.hidden&&o.value);if(f)sel.value=f.value;}
+  resetCal();
+}
+function resetCal(){document.getElementById('sel-hora').innerHTML='<option value="">— escolha a data —</option>';}
+async function loadSlots(){
+  const mb=document.getElementById('sel-membro').value;
+  const dt=document.getElementById('inp-data').value;
+  const sel=document.getElementById('sel-hora');
+  const load=document.getElementById('slots-loading');
+  if(!mb||!dt)return;
+  load.classList.remove('d-none');sel.innerHTML='';
+  try{
+    const r=await fetch('/api/agenda/slots?membro_id='+mb+'&data='+dt+'&duracao='+_dur+'&buffer='+_buf+'&token={{ public_token }}');
+    const j=await r.json();
+    sel.innerHTML=(j.slots&&j.slots.length)?j.slots.map(s=>'<option value="'+s+'">'+s+'</option>').join(''):'<option value="">Sem horários nesta data</option>';
+  }catch(e){sel.innerHTML='<option value="">Erro</option>';}
   load.classList.add('d-none');
 }
 </script>
-</body>
-</html>
-""",
+</body></html>"""
 
-})
+TEMPLATES["agenda_public.html"] = _AGENDA_PUBLIC_TPL
 
-# ── Jinja filter helper ───────────────────────────────────────────────────────
 
-def _brdate_filter(v: str) -> str:
-    if not v or len(v) < 10:
-        return v or ""
-    return v[8:10] + "/" + v[5:7] + "/" + v[:4]
-
-try:
-    templates_env.filters["brdate"] = _brdate_filter
-except Exception:
-    pass
-
-# ── base_or_public mini-template (fallback para páginas sem login) ─────────────
-# Injeta "base_or_public.html" que herda de base.html quando logado,
-# ou renderiza standalone quando não logado.
-TEMPLATES["base_or_public.html"] = """{% extends "base.html" %}"""
-
-# ── API: slots disponíveis ────────────────────────────────────────────────────
+# ── API: slots disponíveis ─────────────────────────────────────────────────────
 
 @app.get("/api/agenda/slots")
 async def api_agenda_slots(
     membro_id: int,
     data: str,
+    duracao: int = 0,
+    buffer: int = 0,
     token: str = "",
     request: Request = None,
     session: Session = Depends(get_session),
 ):
-    # resolve company via token público OU sessão de usuário
     company_id: Optional[int] = None
     if token:
-        cfg = session.exec(select(AgendaConfig).where(AgendaConfig.public_token == token)).first()
-        if cfg:
-            company_id = cfg.company_id
+        cfg_q = session.exec(select(AgendaConfig).where(AgendaConfig.public_token == token)).first()
+        if cfg_q:
+            company_id = cfg_q.company_id
     if not company_id and request:
         ctx = get_tenant_context(request, session)
         if ctx:
             company_id = ctx.company.id
     if not company_id:
         return JSONResponse({"slots": []})
-
-    cfg = _agenda_get_config(session, company_id)
     membro = session.get(AgendaMembro, membro_id)
     if not membro or membro.company_id != company_id:
         return JSONResponse({"slots": []})
-
-    slots = _agenda_slots_livres(session, membro_id, data, cfg.duracao_padrao_min)
+    if not duracao:
+        duracao = 60
+    slots = _agenda_slots_livres(session, membro_id, data, duracao, buffer)
     return JSONResponse({"slots": slots})
 
 
-# ── Rota /agenda (cliente logado) ─────────────────────────────────────────────
+# ── Rota /agenda (cliente logado) ──────────────────────────────────────────────
 
 @app.get("/agenda", response_class=HTMLResponse)
 @require_login
@@ -49709,53 +49824,30 @@ async def agenda_page_native(request: Request, session: Session = Depends(get_se
     if not ctx:
         request.session.clear()
         return RedirectResponse("/login", status_code=303)
-
     cfg = _agenda_get_config(session, ctx.company.id)
+    servicos = session.exec(
+        select(AgendaServico).where(AgendaServico.company_id == ctx.company.id, AgendaServico.ativo == True)
+        .order_by(AgendaServico.ordem)
+    ).all()
+    for s in servicos:
+        _add_locais_keys(s, cfg)
     membros = session.exec(
         select(AgendaMembro).where(AgendaMembro.company_id == ctx.company.id, AgendaMembro.ativo == True)
     ).all()
-
     locais_csv = cfg.locais or "nosso_escritorio,cliente,online"
-    locais_keys = [l.strip() for l in locais_csv.split(",") if l.strip()]
-    locais = [(k, _LOCAL_LABELS.get(k, k)) for k in locais_keys]
-
+    locais = [(k, _LOCAL_LABELS.get(k, k)) for k in [l.strip() for l in locais_csv.split(",") if l.strip()]]
     from datetime import date as _date
     min_date = _date.today().isoformat()
-
-    # bookings deste cliente
-    client_bookings = []
-    if ctx.membership.client_id:
-        client_bookings = session.exec(
-            select(AgendaBooking).where(
-                AgendaBooking.company_id == ctx.company.id,
-                AgendaBooking.client_id == ctx.membership.client_id,
-                AgendaBooking.status != "cancelado",
-            ).order_by(AgendaBooking.data.desc())
-        ).all()
-
     active_client_id = get_active_client_id(request, session, ctx)
     current_client = get_client_or_none(session, ctx.company.id, active_client_id)
-
-    return render(
-        "agenda_booking_form.html",
-        request=request,
-        context={
-            "current_user": ctx.user,
-            "current_company": ctx.company,
-            "role": ctx.membership.role,
-            "current_client": current_client,
-            "company_name": ctx.company.name,
-            "membros": membros,
-            "locais": locais,
-            "min_date": min_date,
-            "form": {},
-            "slots_pre": [],
-            "slots_api_url": "/api/agenda/slots",
-            "cancel_url": "/",
-            "logged_in": True,
-            "client_bookings": client_bookings,
-        },
-    )
+    flash = request.session.pop("flash", None)
+    return render("agenda_booking_form.html", request=request, context={
+        "current_user": ctx.user, "current_company": ctx.company, "role": ctx.membership.role,
+        "current_client": current_client, "company_name": ctx.company.name,
+        "servicos": servicos, "membros": membros, "locais": locais,
+        "min_date": min_date, "form": {}, "slots_pre": [],
+        "cancel_url": "/", "flash": flash,
+    })
 
 
 @app.post("/agenda", response_class=HTMLResponse)
@@ -49764,60 +49856,55 @@ async def agenda_post_native(request: Request, session: Session = Depends(get_se
     ctx = get_tenant_context(request, session)
     if not ctx:
         return RedirectResponse("/login", status_code=303)
-
     form = await request.form()
     cfg = _agenda_get_config(session, ctx.company.id)
 
-    membro_id = int(form.get("membro_id") or 0)
-    local = str(form.get("local") or "")
-    data = str(form.get("data") or "")
+    servico_id = int(form.get("servico_id") or 0)
+    membro_id  = int(form.get("membro_id") or 0)
+    local      = str(form.get("local") or "")
+    data       = str(form.get("data") or "")
     hora_inicio = str(form.get("hora_inicio") or "")
-    notas = str(form.get("notas") or "")
+    notas      = str(form.get("notas") or "")
 
-    # dados do solicitante (vem do perfil de usuário logado)
-    solicitante_nome = ctx.user.name
-    solicitante_email = ctx.user.email
-    solicitante_telefone = ctx.user.whatsapp_phone
+    servico = session.get(AgendaServico, servico_id) if servico_id else None
+    duracao_min = servico.duracao_min if servico else 60
+    buffer_min  = servico.buffer_min if servico else 0
 
     error = None
-    from datetime import date as _date
-    if not membro_id or not local or not data or not hora_inicio:
+    if not servico_id or not membro_id or not local or not data or not hora_inicio:
         error = "Preencha todos os campos obrigatórios."
-    else:
-        # limite mensal
-        if cfg.limite_mensal_por_cliente and ctx.membership.client_id:
-            ano_mes = data[:7]
-            count = _agenda_count_mes(session, ctx.company.id, ctx.membership.client_id, solicitante_email, ano_mes)
-            if count >= cfg.limite_mensal_por_cliente:
-                error = f"Limite de {cfg.limite_mensal_por_cliente} reuniões/mês atingido."
+    elif ctx.membership.client_id:
+        limite = _agenda_limite_efetivo(session, ctx.company.id, ctx.membership.client_id, cfg)
+        if limite:
+            count = _agenda_count_mes(session, ctx.company.id, ctx.membership.client_id, ctx.user.email, data[:7])
+            if count >= limite:
+                error = "Limite de %d reuniões/mês atingido." % limite
 
     if error:
+        servicos = session.exec(select(AgendaServico).where(AgendaServico.company_id == ctx.company.id, AgendaServico.ativo == True).order_by(AgendaServico.ordem)).all()
+        for s in servicos:
+            _add_locais_keys(s, cfg)
         membros = session.exec(select(AgendaMembro).where(AgendaMembro.company_id == ctx.company.id, AgendaMembro.ativo == True)).all()
-        locais_keys = [l.strip() for l in (cfg.locais or "").split(",") if l.strip()]
-        locais = [(k, _LOCAL_LABELS.get(k, k)) for k in locais_keys]
+        locais = [(k, _LOCAL_LABELS.get(k, k)) for k in [l.strip() for l in (cfg.locais or "").split(",") if l.strip()]]
+        from datetime import date as _date
+        active_client_id = get_active_client_id(request, session, ctx)
+        current_client = get_client_or_none(session, ctx.company.id, active_client_id)
         return render("agenda_booking_form.html", request=request, context={
             "current_user": ctx.user, "current_company": ctx.company, "role": ctx.membership.role,
-            "company_name": ctx.company.name, "membros": membros, "locais": locais,
+            "current_client": current_client, "company_name": ctx.company.name,
+            "servicos": servicos, "membros": membros, "locais": locais,
             "min_date": _date.today().isoformat(), "form": dict(form), "slots_pre": [],
-            "slots_api_url": "/api/agenda/slots", "cancel_url": "/", "logged_in": True, "error": error,
+            "cancel_url": "/", "error": error,
         })
 
-    # calcular hora_fim
-    slots = _agenda_slots_livres(session, membro_id, data, cfg.duracao_padrao_min)
-    hora_fim_min = None
-    if hora_inicio in slots:
-        def to_min(hm: str) -> int:
-            h, m = hm.split(":");return int(h)*60+int(m)
-        hora_fim_min = to_min(hora_inicio) + cfg.duracao_padrao_min
-    hora_fim = f"{hora_fim_min//60:02d}:{hora_fim_min%60:02d}" if hora_fim_min else hora_inicio
+    hora_fim_min = _to_min(hora_inicio) + duracao_min
+    hora_fim = "%02d:%02d" % (hora_fim_min // 60, hora_fim_min % 60)
 
     booking = AgendaBooking(
-        company_id=ctx.company.id,
-        membro_id=membro_id,
+        company_id=ctx.company.id, servico_id=servico_id, membro_id=membro_id,
         client_id=ctx.membership.client_id,
-        solicitante_nome=solicitante_nome,
-        solicitante_email=solicitante_email,
-        solicitante_telefone=solicitante_telefone,
+        solicitante_nome=ctx.user.name, solicitante_email=ctx.user.email,
+        solicitante_telefone=ctx.user.whatsapp_phone,
         data=data, hora_inicio=hora_inicio, hora_fim=hora_fim,
         local=local, notas=notas, status="confirmado", origem="cliente",
     )
@@ -49825,8 +49912,7 @@ async def agenda_post_native(request: Request, session: Session = Depends(get_se
     session.commit()
     session.refresh(booking)
     _agenda_dispatch_notifications(session, booking, ctx.company)
-
-    return RedirectResponse(f"/agenda/confirmado/{booking.token}", status_code=303)
+    return RedirectResponse("/agenda/confirmado/" + booking.token, status_code=303)
 
 
 @app.get("/agenda/confirmado/{token}", response_class=HTMLResponse)
@@ -49835,53 +49921,46 @@ async def agenda_confirmado(token: str, request: Request, session: Session = Dep
     ctx = get_tenant_context(request, session)
     if not ctx:
         return RedirectResponse("/login", status_code=303)
-
     booking = session.exec(select(AgendaBooking).where(AgendaBooking.token == token)).first()
     if not booking or booking.company_id != ctx.company.id:
         set_flash(request, "Agendamento não encontrado.")
         return RedirectResponse("/agenda", status_code=303)
-
     membro = session.get(AgendaMembro, booking.membro_id) if booking.membro_id else None
-
+    servico = session.get(AgendaServico, booking.servico_id) if booking.servico_id else None
     active_client_id = get_active_client_id(request, session, ctx)
     current_client = get_client_or_none(session, ctx.company.id, active_client_id)
-
     return render("agenda_confirmado.html", request=request, context={
         "current_user": ctx.user, "current_company": ctx.company, "role": ctx.membership.role,
-        "current_client": current_client,
-        "booking": booking,
+        "current_client": current_client, "booking": booking,
+        "servico_nome": servico.nome if servico else "—",
         "membro_nome": membro.nome if membro else "—",
         "local_label": _LOCAL_LABELS.get(booking.local, booking.local),
         "back_url": "/agenda",
     })
 
 
-# ── Link público externo ──────────────────────────────────────────────────────
+# ── Página pública (sem login) ─────────────────────────────────────────────────
 
 @app.get("/p/agenda/{token}", response_class=HTMLResponse)
 async def agenda_public_page(token: str, session: Session = Depends(get_session)) -> HTMLResponse:
     cfg = session.exec(select(AgendaConfig).where(AgendaConfig.public_token == token)).first()
     if not cfg or not cfg.ativo:
-        return HTMLResponse("<h3>Link de agendamento inválido ou desativado.</h3>", status_code=404)
-
+        return HTMLResponse("<h3 style='font-family:sans-serif;padding:40px'>Link inválido ou desativado.</h3>", status_code=404)
     company = session.get(Company, cfg.company_id)
-    membros = session.exec(
-        select(AgendaMembro).where(AgendaMembro.company_id == cfg.company_id, AgendaMembro.ativo == True)
+    servicos = session.exec(
+        select(AgendaServico).where(AgendaServico.company_id == cfg.company_id, AgendaServico.ativo == True)
+        .order_by(AgendaServico.ordem)
     ).all()
-    locais_keys = [l.strip() for l in (cfg.locais or "").split(",") if l.strip()]
-    locais = [(k, _LOCAL_LABELS.get(k, k)) for k in locais_keys]
-
+    for s in servicos:
+        _add_locais_keys(s, cfg)
+    membros = session.exec(select(AgendaMembro).where(AgendaMembro.company_id == cfg.company_id, AgendaMembro.ativo == True)).all()
+    locais_csv = cfg.locais or "nosso_escritorio,cliente,online"
+    locais = [(k, _LOCAL_LABELS.get(k, k)) for k in [l.strip() for l in locais_csv.split(",") if l.strip()]]
     from datetime import date as _date
     return HTMLResponse(templates_env.get_template("agenda_public.html").render(
         company_name=company.name if company else "",
-        public_token=token,
-        membros=membros,
-        locais=locais,
-        min_date=_date.today().isoformat(),
-        form={},
-        flash=None,
-        error=None,
-        success=False,
+        public_token=token, servicos=servicos, membros=membros, locais=locais,
+        min_date=_date.today().isoformat(), form={}, flash=None, error=None, success=False,
     ))
 
 
@@ -49889,60 +49968,56 @@ async def agenda_public_page(token: str, session: Session = Depends(get_session)
 async def agenda_public_post(token: str, request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
     cfg = session.exec(select(AgendaConfig).where(AgendaConfig.public_token == token)).first()
     if not cfg or not cfg.ativo:
-        return HTMLResponse("<h3>Link de agendamento inválido.</h3>", status_code=404)
-
+        return HTMLResponse("<h3>Link inválido.</h3>", status_code=404)
     company = session.get(Company, cfg.company_id)
     form = await request.form()
+    servicos = session.exec(select(AgendaServico).where(AgendaServico.company_id == cfg.company_id, AgendaServico.ativo == True).order_by(AgendaServico.ordem)).all()
+    for s in servicos:
+        _add_locais_keys(s, cfg)
     membros = session.exec(select(AgendaMembro).where(AgendaMembro.company_id == cfg.company_id, AgendaMembro.ativo == True)).all()
-    locais_keys = [l.strip() for l in (cfg.locais or "").split(",") if l.strip()]
-    locais = [(k, _LOCAL_LABELS.get(k, k)) for k in locais_keys]
+    locais_csv = cfg.locais or "nosso_escritorio,cliente,online"
+    locais = [(k, _LOCAL_LABELS.get(k, k)) for k in [l.strip() for l in locais_csv.split(",") if l.strip()]]
     from datetime import date as _date
     min_date = _date.today().isoformat()
 
-    def _err(msg: str):
+    def _err(msg: str) -> HTMLResponse:
         return HTMLResponse(templates_env.get_template("agenda_public.html").render(
             company_name=company.name if company else "", public_token=token,
-            membros=membros, locais=locais, min_date=min_date, form=dict(form),
-            flash=None, error=msg, success=False,
+            servicos=servicos, membros=membros, locais=locais, min_date=min_date,
+            form=dict(form), flash=None, error=msg, success=False,
         ))
 
-    solicitante_nome = str(form.get("solicitante_nome") or "").strip()
+    solicitante_nome  = str(form.get("solicitante_nome") or "").strip()
     solicitante_email = str(form.get("solicitante_email") or "").strip()
-    solicitante_telefone = str(form.get("solicitante_telefone") or "").strip()
-    membro_id = int(form.get("membro_id") or 0)
-    local = str(form.get("local") or "")
-    data = str(form.get("data") or "")
+    solicitante_tel   = str(form.get("solicitante_telefone") or "").strip()
+    servico_id  = int(form.get("servico_id") or 0)
+    membro_id   = int(form.get("membro_id") or 0)
+    local       = str(form.get("local") or "")
+    data        = str(form.get("data") or "")
     hora_inicio = str(form.get("hora_inicio") or "")
-    notas = str(form.get("notas") or "")
+    notas       = str(form.get("notas") or "")
 
-    if not solicitante_nome or not solicitante_email or not membro_id or not local or not data or not hora_inicio:
+    if not all([solicitante_nome, solicitante_email, servico_id, membro_id, local, data, hora_inicio]):
         return _err("Preencha todos os campos obrigatórios.")
 
-    # limite mensal por e-mail
+    servico = session.get(AgendaServico, servico_id)
+    duracao_min = servico.duracao_min if servico else 60
+    buffer_min  = servico.buffer_min if servico else 0
+
     if cfg.limite_mensal_por_cliente:
         count = _agenda_count_mes(session, cfg.company_id, None, solicitante_email, data[:7])
         if count >= cfg.limite_mensal_por_cliente:
-            return _err(f"Limite de {cfg.limite_mensal_por_cliente} reuniões/mês atingido para este e-mail.")
+            return _err("Limite de %d reuniões/mês atingido para este e-mail." % cfg.limite_mensal_por_cliente)
 
-    # hora_fim
-    slots = _agenda_slots_livres(session, membro_id, data, cfg.duracao_padrao_min)
-    hora_fim_min = None
-    if hora_inicio in slots:
-        def to_min(hm: str) -> int:
-            h, m = hm.split(":");return int(h)*60+int(m)
-        hora_fim_min = to_min(hora_inicio) + cfg.duracao_padrao_min
-    hora_fim = f"{hora_fim_min//60:02d}:{hora_fim_min%60:02d}" if hora_fim_min else hora_inicio
-
+    hora_fim_min = _to_min(hora_inicio) + duracao_min
+    hora_fim = "%02d:%02d" % (hora_fim_min // 60, hora_fim_min % 60)
     membro = session.get(AgendaMembro, membro_id)
+
     booking = AgendaBooking(
-        company_id=cfg.company_id,
-        membro_id=membro_id,
-        client_id=None,
-        solicitante_nome=solicitante_nome,
-        solicitante_email=solicitante_email,
-        solicitante_telefone=solicitante_telefone,
-        data=data, hora_inicio=hora_inicio, hora_fim=hora_fim,
-        local=local, notas=notas, status="confirmado", origem="publico",
+        company_id=cfg.company_id, servico_id=servico_id, membro_id=membro_id,
+        solicitante_nome=solicitante_nome, solicitante_email=solicitante_email,
+        solicitante_telefone=solicitante_tel, data=data, hora_inicio=hora_inicio,
+        hora_fim=hora_fim, local=local, notas=notas, status="confirmado", origem="publico",
     )
     session.add(booking)
     session.commit()
@@ -49953,17 +50028,18 @@ async def agenda_public_post(token: str, request: Request, session: Session = De
     data_fmt = data[8:10] + "/" + data[5:7] + "/" + data[:4] if len(data) == 10 else data
     return HTMLResponse(templates_env.get_template("agenda_public.html").render(
         company_name=company.name if company else "", public_token=token,
-        membros=membros, locais=locais, min_date=min_date, form={},
-        flash=None, error=None, success=True,
+        servicos=servicos, membros=membros, locais=locais, min_date=min_date,
+        form={}, flash=None, error=None, success=True,
         success_email=solicitante_email,
+        success_servico=servico.nome if servico else "—",
         success_data=data_fmt,
-        success_hora=f"{hora_inicio} – {hora_fim}",
+        success_hora=hora_inicio + " – " + hora_fim,
         success_local=_LOCAL_LABELS.get(local, local),
         success_membro=membro.nome if membro else "—",
     ))
 
 
-# ── Admin: agenda dashboard ───────────────────────────────────────────────────
+# ── Admin: dashboard ───────────────────────────────────────────────────────────
 
 @app.get("/admin/agenda", response_class=HTMLResponse)
 @require_role({"admin", "equipe"})
@@ -49972,52 +50048,42 @@ async def admin_agenda_page(request: Request, session: Session = Depends(get_ses
     ctx = get_tenant_context(request, session)
     if not ctx:
         return RedirectResponse("/login", status_code=303)
-
     cfg = _agenda_get_config(session, ctx.company.id)
+    servicos = session.exec(select(AgendaServico).where(AgendaServico.company_id == ctx.company.id).order_by(AgendaServico.ordem)).all()
     membros = session.exec(select(AgendaMembro).where(AgendaMembro.company_id == ctx.company.id)).all()
-
     from datetime import date as _date
     ano_mes = _date.today().strftime("%Y-%m")
     bookings_mes = session.exec(
         select(func.count(AgendaBooking.id)).where(
-            AgendaBooking.company_id == ctx.company.id,
-            AgendaBooking.status != "cancelado",
+            AgendaBooking.company_id == ctx.company.id, AgendaBooking.status != "cancelado",
             AgendaBooking.data.startswith(ano_mes),
         )
     ).one() or 0
     bookings_pendentes = session.exec(
         select(func.count(AgendaBooking.id)).where(
-            AgendaBooking.company_id == ctx.company.id,
-            AgendaBooking.status == "pendente",
+            AgendaBooking.company_id == ctx.company.id, AgendaBooking.status == "pendente",
         )
     ).one() or 0
-
     q = select(AgendaBooking).where(AgendaBooking.company_id == ctx.company.id)
     if status_filter:
         q = q.where(AgendaBooking.status == status_filter)
-    raw_bookings = session.exec(q.order_by(AgendaBooking.data.desc())).all()
-
+    raw = session.exec(q.order_by(AgendaBooking.data.desc())).all()
     membro_map = {m.id: m for m in membros}
-    bookings = []
-    for b in raw_bookings:
-        m = membro_map.get(b.membro_id)
-        bookings.append({
-            "id": b.id, "data": b.data, "hora_inicio": b.hora_inicio,
-            "solicitante_nome": b.solicitante_nome, "solicitante_email": b.solicitante_email,
-            "membro_nome": m.nome if m else "—",
-            "local_label": _LOCAL_LABELS.get(b.local, b.local),
-            "status": b.status,
-        })
-
+    servico_map = {s.id: s for s in servicos}
+    bookings = [{
+        "id": b.id, "data": b.data, "hora_inicio": b.hora_inicio,
+        "solicitante_nome": b.solicitante_nome, "solicitante_email": b.solicitante_email,
+        "membro_nome": (membro_map[b.membro_id].nome if b.membro_id and b.membro_id in membro_map else "—"),
+        "servico_nome": (servico_map[b.servico_id].nome if b.servico_id and b.servico_id in servico_map else "—"),
+        "local_label": _LOCAL_LABELS.get(b.local, b.local), "status": b.status,
+    } for b in raw]
     active_client_id = get_active_client_id(request, session, ctx)
     current_client = get_client_or_none(session, ctx.company.id, active_client_id)
-
     flash = request.session.pop("flash", None)
     return render("admin_agenda.html", request=request, context={
         "current_user": ctx.user, "current_company": ctx.company, "role": ctx.membership.role,
-        "current_client": current_client,
-        "cfg": cfg, "membros": membros, "bookings": bookings,
-        "bookings_mes": bookings_mes, "bookings_pendentes": bookings_pendentes,
+        "current_client": current_client, "cfg": cfg, "servicos": servicos, "membros": membros,
+        "bookings": bookings, "bookings_mes": bookings_mes, "bookings_pendentes": bookings_pendentes,
         "filter_status": status_filter, "flash": flash,
     })
 
@@ -50029,7 +50095,6 @@ async def admin_agenda_booking_status(booking_id: int, request: Request,
     ctx = get_tenant_context(request, session)
     if not ctx:
         return RedirectResponse("/login", status_code=303)
-
     form = await request.form()
     new_status = str(form.get("status") or "")
     booking = session.get(AgendaBooking, booking_id)
@@ -50037,9 +50102,124 @@ async def admin_agenda_booking_status(booking_id: int, request: Request,
         booking.status = new_status
         session.add(booking)
         session.commit()
-        set_flash(request, f"Reunião marcada como '{new_status}'.")
+        set_flash(request, "Reunião marcada como '%s'." % new_status)
     return RedirectResponse("/admin/agenda", status_code=303)
 
+
+# ── Admin: serviços ────────────────────────────────────────────────────────────
+
+_ALL_LOCAIS = [
+    ("nosso_escritorio", "Nosso escritório"),
+    ("cliente", "Escritório do cliente"),
+    ("online", "Online (videoconferência)"),
+]
+
+
+@app.get("/admin/agenda/servico/novo", response_class=HTMLResponse)
+@require_role({"admin"})
+async def admin_agenda_servico_novo_form(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        return RedirectResponse("/login", status_code=303)
+    active_client_id = get_active_client_id(request, session, ctx)
+    current_client = get_client_or_none(session, ctx.company.id, active_client_id)
+    flash = request.session.pop("flash", None)
+    return render("admin_agenda_servico_form.html", request=request, context={
+        "current_user": ctx.user, "current_company": ctx.company, "role": ctx.membership.role,
+        "current_client": current_client, "servico": None,
+        "all_locais": _ALL_LOCAIS, "flash": flash,
+    })
+
+
+@app.post("/admin/agenda/servico/novo")
+@require_role({"admin"})
+async def admin_agenda_servico_novo_save(request: Request, session: Session = Depends(get_session)) -> Response:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        return RedirectResponse("/login", status_code=303)
+    form = await request.form()
+    nome = str(form.get("nome") or "").strip()
+    if not nome:
+        set_flash(request, "Nome é obrigatório.")
+        return RedirectResponse("/admin/agenda/servico/novo", status_code=303)
+    locais_sel = form.getlist("locais")
+    s = AgendaServico(
+        company_id=ctx.company.id, nome=nome,
+        descricao=str(form.get("descricao") or "").strip(),
+        duracao_min=int(form.get("duracao_min") or 60),
+        buffer_min=int(form.get("buffer_min") or 0),
+        locais=",".join(locais_sel),
+        ordem=int(form.get("ordem") or 0),
+        ativo=bool(form.get("ativo")),
+    )
+    session.add(s)
+    session.commit()
+    set_flash(request, "Serviço '%s' criado." % nome)
+    return RedirectResponse("/admin/agenda", status_code=303)
+
+
+@app.get("/admin/agenda/servico/{servico_id}/editar", response_class=HTMLResponse)
+@require_role({"admin"})
+async def admin_agenda_servico_editar_form(servico_id: int, request: Request,
+                                            session: Session = Depends(get_session)) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        return RedirectResponse("/login", status_code=303)
+    servico = session.get(AgendaServico, servico_id)
+    if not servico or servico.company_id != ctx.company.id:
+        set_flash(request, "Serviço não encontrado.")
+        return RedirectResponse("/admin/agenda", status_code=303)
+    active_client_id = get_active_client_id(request, session, ctx)
+    current_client = get_client_or_none(session, ctx.company.id, active_client_id)
+    flash = request.session.pop("flash", None)
+    return render("admin_agenda_servico_form.html", request=request, context={
+        "current_user": ctx.user, "current_company": ctx.company, "role": ctx.membership.role,
+        "current_client": current_client, "servico": servico,
+        "all_locais": _ALL_LOCAIS, "flash": flash,
+    })
+
+
+@app.post("/admin/agenda/servico/{servico_id}/editar")
+@require_role({"admin"})
+async def admin_agenda_servico_editar_save(servico_id: int, request: Request,
+                                            session: Session = Depends(get_session)) -> Response:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        return RedirectResponse("/login", status_code=303)
+    servico = session.get(AgendaServico, servico_id)
+    if not servico or servico.company_id != ctx.company.id:
+        return RedirectResponse("/admin/agenda", status_code=303)
+    form = await request.form()
+    locais_sel = form.getlist("locais")
+    servico.nome = str(form.get("nome") or "").strip()
+    servico.descricao = str(form.get("descricao") or "").strip()
+    servico.duracao_min = int(form.get("duracao_min") or 60)
+    servico.buffer_min = int(form.get("buffer_min") or 0)
+    servico.locais = ",".join(locais_sel)
+    servico.ordem = int(form.get("ordem") or 0)
+    servico.ativo = bool(form.get("ativo"))
+    session.add(servico)
+    session.commit()
+    set_flash(request, "Serviço atualizado.")
+    return RedirectResponse("/admin/agenda", status_code=303)
+
+
+@app.post("/admin/agenda/servico/{servico_id}/excluir")
+@require_role({"admin"})
+async def admin_agenda_servico_excluir(servico_id: int, request: Request,
+                                        session: Session = Depends(get_session)) -> Response:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        return RedirectResponse("/login", status_code=303)
+    servico = session.get(AgendaServico, servico_id)
+    if servico and servico.company_id == ctx.company.id:
+        session.delete(servico)
+        session.commit()
+        set_flash(request, "Serviço removido.")
+    return RedirectResponse("/admin/agenda", status_code=303)
+
+
+# ── Admin: config ──────────────────────────────────────────────────────────────
 
 @app.get("/admin/agenda/config", response_class=HTMLResponse)
 @require_role({"admin"})
@@ -50047,13 +50227,11 @@ async def admin_agenda_config_page(request: Request, session: Session = Depends(
     ctx = get_tenant_context(request, session)
     if not ctx:
         return RedirectResponse("/login", status_code=303)
-
     cfg = _agenda_get_config(session, ctx.company.id)
     cfg_locais = [l.strip() for l in (cfg.locais or "").split(",") if l.strip()]
     active_client_id = get_active_client_id(request, session, ctx)
     current_client = get_client_or_none(session, ctx.company.id, active_client_id)
     flash = request.session.pop("flash", None)
-
     return render("admin_agenda_config.html", request=request, context={
         "current_user": ctx.user, "current_company": ctx.company, "role": ctx.membership.role,
         "current_client": current_client, "cfg": cfg, "cfg_locais": cfg_locais,
@@ -50067,10 +50245,8 @@ async def admin_agenda_config_save(request: Request, session: Session = Depends(
     ctx = get_tenant_context(request, session)
     if not ctx:
         return RedirectResponse("/login", status_code=303)
-
     form = await request.form()
     cfg = _agenda_get_config(session, ctx.company.id)
-    cfg.duracao_padrao_min = int(form.get("duracao_padrao_min") or 60)
     cfg.limite_mensal_por_cliente = int(form.get("limite_mensal_por_cliente") or 0)
     locais_sel = form.getlist("locais")
     cfg.locais = ",".join(locais_sel) if locais_sel else "nosso_escritorio,cliente,online"
@@ -50080,17 +50256,17 @@ async def admin_agenda_config_save(request: Request, session: Session = Depends(
     return RedirectResponse("/admin/agenda/config", status_code=303)
 
 
+# ── Admin: membros ─────────────────────────────────────────────────────────────
+
 @app.get("/admin/agenda/membro/novo", response_class=HTMLResponse)
 @require_role({"admin"})
 async def admin_agenda_membro_form(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
     ctx = get_tenant_context(request, session)
     if not ctx:
         return RedirectResponse("/login", status_code=303)
-
     users = session.exec(
         select(User).join(Membership, Membership.user_id == User.id).where(
-            Membership.company_id == ctx.company.id,
-            Membership.role.in_(["admin", "equipe"]),
+            Membership.company_id == ctx.company.id, Membership.role.in_(["admin", "equipe"]),
         )
     ).all()
     active_client_id = get_active_client_id(request, session, ctx)
@@ -50108,26 +50284,22 @@ async def admin_agenda_membro_save(request: Request, session: Session = Depends(
     ctx = get_tenant_context(request, session)
     if not ctx:
         return RedirectResponse("/login", status_code=303)
-
     form = await request.form()
     nome = str(form.get("nome") or "").strip()
     if not nome:
         set_flash(request, "Nome é obrigatório.")
         return RedirectResponse("/admin/agenda/membro/novo", status_code=303)
-
     user_id_raw = form.get("user_id")
     user_id = int(user_id_raw) if user_id_raw and str(user_id_raw).strip() else None
     membro = AgendaMembro(
-        company_id=ctx.company.id,
-        user_id=user_id,
-        nome=nome,
+        company_id=ctx.company.id, user_id=user_id, nome=nome,
         email=str(form.get("email") or "").strip(),
         bio=str(form.get("bio") or "").strip(),
         ativo=bool(form.get("ativo")),
     )
     session.add(membro)
     session.commit()
-    set_flash(request, f"Membro '{nome}' adicionado.")
+    set_flash(request, "Membro '%s' adicionado." % nome)
     return RedirectResponse("/admin/agenda", status_code=303)
 
 
@@ -50138,7 +50310,6 @@ async def admin_agenda_membro_excluir(membro_id: int, request: Request,
     ctx = get_tenant_context(request, session)
     if not ctx:
         return RedirectResponse("/login", status_code=303)
-
     membro = session.get(AgendaMembro, membro_id)
     if membro and membro.company_id == ctx.company.id:
         session.exec(delete(AgendaDisponibilidade).where(AgendaDisponibilidade.membro_id == membro_id))
@@ -50155,25 +50326,19 @@ async def admin_agenda_disp_page(membro_id: int, request: Request,
     ctx = get_tenant_context(request, session)
     if not ctx:
         return RedirectResponse("/login", status_code=303)
-
     membro = session.get(AgendaMembro, membro_id)
     if not membro or membro.company_id != ctx.company.id:
         set_flash(request, "Membro não encontrado.")
         return RedirectResponse("/admin/agenda", status_code=303)
-
     disps = session.exec(
-        select(AgendaDisponibilidade).where(
-            AgendaDisponibilidade.membro_id == membro_id
-        ).order_by(AgendaDisponibilidade.dia_semana)
+        select(AgendaDisponibilidade).where(AgendaDisponibilidade.membro_id == membro_id)
+        .order_by(AgendaDisponibilidade.dia_semana)
     ).all()
-
     dias = list(enumerate(_DIAS_SEMANA_PT))
     dias_map = dict(enumerate(_DIAS_SEMANA_PT))
-
     active_client_id = get_active_client_id(request, session, ctx)
     current_client = get_client_or_none(session, ctx.company.id, active_client_id)
     flash = request.session.pop("flash", None)
-
     return render("admin_agenda_disponibilidade.html", request=request, context={
         "current_user": ctx.user, "current_company": ctx.company, "role": ctx.membership.role,
         "current_client": current_client, "membro": membro,
@@ -50188,25 +50353,21 @@ async def admin_agenda_disp_save(membro_id: int, request: Request,
     ctx = get_tenant_context(request, session)
     if not ctx:
         return RedirectResponse("/login", status_code=303)
-
     membro = session.get(AgendaMembro, membro_id)
     if not membro or membro.company_id != ctx.company.id:
         return RedirectResponse("/admin/agenda", status_code=303)
-
     form = await request.form()
     action = str(form.get("action") or "")
-
     if action == "add":
         d = AgendaDisponibilidade(
-            membro_id=membro_id,
-            company_id=ctx.company.id,
+            membro_id=membro_id, company_id=ctx.company.id,
             dia_semana=int(form.get("dia_semana") or 0),
             hora_inicio=str(form.get("hora_inicio") or "09:00"),
             hora_fim=str(form.get("hora_fim") or "17:00"),
         )
         session.add(d)
         session.commit()
-        set_flash(request, "Bloco de disponibilidade adicionado.")
+        set_flash(request, "Bloco adicionado.")
     elif action == "del":
         disp_id = int(form.get("disp_id") or 0)
         d = session.get(AgendaDisponibilidade, disp_id)
@@ -50214,18 +50375,223 @@ async def admin_agenda_disp_save(membro_id: int, request: Request,
             session.delete(d)
             session.commit()
             set_flash(request, "Bloco removido.")
+    return RedirectResponse("/admin/agenda/membro/%d/disponibilidade" % membro_id, status_code=303)
 
-    return RedirectResponse(f"/admin/agenda/membro/{membro_id}/disponibilidade", status_code=303)
+# ── Patch: limite de reuniões por cliente (override individual) ───────────────
 
-# ── Patch nav: adiciona link /admin/agenda na navegação admin ─────────────────
+class AgendaClienteLimite(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    company_id: int = Field(index=True, foreign_key="company.id")
+    client_id: int = Field(index=True, foreign_key="client.id")
+    limite_mes: int = 0  # 0 = ilimitado
 
-try:
-    if "agenda" in TEMPLATES.get("base.html", ""):
-        _base_html = TEMPLATES["base.html"]
-        _old_nav_agenda = '"/agenda", "agenda"'
-        _new_nav_agenda = '"/agenda", "agenda"'
-        # patch sidebar para admin: adicionar entrada Agenda Nativa
-        _agenda_nav_entry = """{"title": "Agenda", "desc": "Agendamentos.", "href": "/agenda"}"""
-except Exception:
-    pass
+    __table_args__ = (
+        __import__('sqlalchemy').UniqueConstraint("company_id", "client_id", name="uq_agenda_cliente_limite"),
+    )
+
+
+@app.on_event("startup")
+def _startup_agenda_cliente_limite() -> None:
+    try:
+        SQLModel.metadata.create_all(engine, tables=[AgendaClienteLimite.__table__], checkfirst=True)
+    except Exception as _e:
+        print("[agenda] cliente_limite create_all:", _e)
+
+
+def _agenda_limite_efetivo(session: Session, company_id: int, client_id: Optional[int],
+                             cfg: AgendaConfig) -> int:
+    """Retorna o limite mensal efetivo para este cliente (override individual > global; 0 = ilimitado)."""
+    if client_id:
+        row = session.exec(
+            select(AgendaClienteLimite).where(
+                AgendaClienteLimite.company_id == company_id,
+                AgendaClienteLimite.client_id == client_id,
+            )
+        ).first()
+        if row is not None:
+            return row.limite_mes
+    return cfg.limite_mensal_por_cliente
+
+
+# ── Admin: gerenciar limite por cliente ───────────────────────────────────────
+
+TEMPLATES["admin_agenda_cliente_limite.html"] = """
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4" style="max-width:560px;">
+  <h5>Limite de Reuniões — {{ client.name }}</h5>
+  <div class="muted mb-4">Define quantas reuniões este cliente pode agendar por mês via plataforma.<br>
+    Deixe 0 para ilimitado. Se não definido, usa o limite global ({{ limite_global }} reuniões/mês).</div>
+  {% if flash %}<div class="alert alert-info">{{ flash }}</div>{% endif %}
+  <form method="post">
+    <div class="mb-3">
+      <label class="form-label">Limite mensal (0 = ilimitado)</label>
+      <input class="form-control" type="number" name="limite_mes" min="0"
+             value="{{ limite_atual if limite_atual is not none else limite_global }}">
+      <div class="form-text">Limite global atual: {{ limite_global }} reuniões/mês</div>
+    </div>
+    <button class="btn btn-primary" type="submit">Salvar</button>
+    <a class="btn btn-outline-secondary ms-2" href="/admin/agenda">Voltar</a>
+    {% if limite_atual is not none %}
+    <form method="post" action="/admin/agenda/cliente/{{ client.id }}/limite/remover" style="display:inline">
+      <button class="btn btn-outline-danger ms-2" type="submit"
+              onclick="return confirm('Remover override e usar o limite global?')">Usar limite global</button>
+    </form>
+    {% endif %}
+  </form>
+</div>
+{% endblock %}
+"""
+
+
+@app.get("/admin/agenda/cliente/{client_id}/limite", response_class=HTMLResponse)
+@require_role({"admin"})
+async def admin_agenda_cliente_limite_page(client_id: int, request: Request,
+                                            session: Session = Depends(get_session)) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        return RedirectResponse("/login", status_code=303)
+    client = get_client_or_none(session, ctx.company.id, client_id)
+    if not client:
+        set_flash(request, "Cliente não encontrado.")
+        return RedirectResponse("/admin/agenda", status_code=303)
+    cfg = _agenda_get_config(session, ctx.company.id)
+    row = session.exec(
+        select(AgendaClienteLimite).where(
+            AgendaClienteLimite.company_id == ctx.company.id,
+            AgendaClienteLimite.client_id == client_id,
+        )
+    ).first()
+    active_client_id = get_active_client_id(request, session, ctx)
+    current_client = get_client_or_none(session, ctx.company.id, active_client_id)
+    flash = request.session.pop("flash", None)
+    return render("admin_agenda_cliente_limite.html", request=request, context={
+        "current_user": ctx.user, "current_company": ctx.company, "role": ctx.membership.role,
+        "current_client": current_client, "client": client,
+        "limite_global": cfg.limite_mensal_por_cliente,
+        "limite_atual": row.limite_mes if row is not None else None,
+        "flash": flash,
+    })
+
+
+@app.post("/admin/agenda/cliente/{client_id}/limite")
+@require_role({"admin"})
+async def admin_agenda_cliente_limite_save(client_id: int, request: Request,
+                                            session: Session = Depends(get_session)) -> Response:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        return RedirectResponse("/login", status_code=303)
+    form = await request.form()
+    limite = int(form.get("limite_mes") or 0)
+    row = session.exec(
+        select(AgendaClienteLimite).where(
+            AgendaClienteLimite.company_id == ctx.company.id,
+            AgendaClienteLimite.client_id == client_id,
+        )
+    ).first()
+    if row:
+        row.limite_mes = limite
+        session.add(row)
+    else:
+        session.add(AgendaClienteLimite(company_id=ctx.company.id, client_id=client_id, limite_mes=limite))
+    session.commit()
+    set_flash(request, "Limite salvo.")
+    return RedirectResponse("/admin/agenda/cliente/%d/limite" % client_id, status_code=303)
+
+
+@app.post("/admin/agenda/cliente/{client_id}/limite/remover")
+@require_role({"admin"})
+async def admin_agenda_cliente_limite_remover(client_id: int, request: Request,
+                                               session: Session = Depends(get_session)) -> Response:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        return RedirectResponse("/login", status_code=303)
+    row = session.exec(
+        select(AgendaClienteLimite).where(
+            AgendaClienteLimite.company_id == ctx.company.id,
+            AgendaClienteLimite.client_id == client_id,
+        )
+    ).first()
+    if row:
+        session.delete(row)
+        session.commit()
+        set_flash(request, "Override removido. Limite global será usado.")
+    return RedirectResponse("/admin/agenda/cliente/%d/limite" % client_id, status_code=303)
+
+
+# ── Admin: lista de clientes com limites da agenda ────────────────────────────
+
+TEMPLATES["admin_agenda_clientes.html"] = """
+{% extends "base.html" %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+  <div>
+    <h4 class="mb-0">Limites de Reuniões por Cliente</h4>
+    <div class="muted">Define quantas reuniões cada cliente pode agendar por mês. 0 = ilimitado.</div>
+  </div>
+  <a class="btn btn-outline-secondary btn-sm" href="/admin/agenda">← Voltar à Agenda</a>
+</div>
+{% if flash %}<div class="alert alert-info">{{ flash }}</div>{% endif %}
+<div class="card p-0">
+  <div class="table-responsive">
+    <table class="table table-sm align-middle mb-0">
+      <thead class="table-light">
+        <tr>
+          <th class="ps-3">Cliente</th>
+          <th>Limite global</th>
+          <th>Override individual</th>
+          <th>Limite efetivo</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in clientes %}
+        <tr>
+          <td class="ps-3">{{ row.client_name }}</td>
+          <td class="mono">{{ limite_global or '∞' }}</td>
+          <td class="mono">{% if row.limite_override is not none %}{{ row.limite_override }}{% else %}<span class="muted">—</span>{% endif %}</td>
+          <td class="mono fw-semibold">{{ row.limite_efetivo or '∞' }}</td>
+          <td>
+            <a class="btn btn-sm btn-outline-secondary" href="/admin/agenda/cliente/{{ row.client_id }}/limite">Editar</a>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}
+"""
+
+
+@app.get("/admin/agenda/clientes", response_class=HTMLResponse)
+@require_role({"admin"})
+async def admin_agenda_clientes_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        return RedirectResponse("/login", status_code=303)
+    cfg = _agenda_get_config(session, ctx.company.id)
+    clients = session.exec(
+        select(Client).where(Client.company_id == ctx.company.id).order_by(Client.name)
+    ).all()
+    # load all overrides for this company
+    overrides = {row.client_id: row.limite_mes for row in session.exec(
+        select(AgendaClienteLimite).where(AgendaClienteLimite.company_id == ctx.company.id)
+    ).all()}
+    clientes = []
+    for c in clients:
+        override = overrides.get(c.id)
+        efetivo = override if override is not None else cfg.limite_mensal_por_cliente
+        clientes.append({
+            "client_id": c.id, "client_name": c.name,
+            "limite_override": override, "limite_efetivo": efetivo,
+        })
+    active_client_id = get_active_client_id(request, session, ctx)
+    current_client = get_client_or_none(session, ctx.company.id, active_client_id)
+    flash = request.session.pop("flash", None)
+    return render("admin_agenda_clientes.html", request=request, context={
+        "current_user": ctx.user, "current_company": ctx.company, "role": ctx.membership.role,
+        "current_client": current_client, "clientes": clientes,
+        "limite_global": cfg.limite_mensal_por_cliente, "flash": flash,
+    })
 
