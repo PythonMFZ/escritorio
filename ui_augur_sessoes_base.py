@@ -46,6 +46,7 @@ class BaseConhecimento(_SM_av4, table=True):
     tipo:            str           = _F_av4(default="")
     conteudo_texto:  str           = _F_av4(default="")
     created_at:      str           = _F_av4(default="")
+    attachment_id:   _Opt_av4[int] = _F_av4(default=None, index=True)
 
 try:
     _SM_av4.metadata.create_all(engine, tables=[
