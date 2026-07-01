@@ -736,19 +736,13 @@ if hasattr(templates_env.loader, "mapping"):
 
 # ── Recalcular todos os estudos salvos com a engine atualizada ────────────────
 
-@app.post("/admin/viabilidade/recalcular-todos")
-async def _viab_recalcular_todos(request: Request, session: Session = Depends(get_session)):
-    ctx = get_auth_context(request, session)
-    if not ctx or not getattr(ctx, "is_admin", False):
-        return JSONResponse({"ok": False, "erro": "Acesso restrito."}, status_code=403)
-
+def _viab_recalcular_todos_handler(session):
     analises = session.exec(select(ViabilidadeAnalise)).all()
     atualizados = 0
     erros = []
     for analise in analises:
         try:
             dados = _json2.loads(analise.dados_json or "{}")
-            # Detecta qual engine usar (v3 tem "usar_financiamento" no payload)
             if "usar_financiamento" in dados:
                 resultado = _calcular_v3(dados)
             else:
@@ -759,7 +753,20 @@ async def _viab_recalcular_todos(request: Request, session: Session = Depends(ge
         except Exception as ex:
             erros.append({"id": analise.id, "nome": analise.nome, "erro": str(ex)})
     session.commit()
-    return JSONResponse({"ok": True, "atualizados": atualizados, "erros": erros})
+    return {"ok": True, "atualizados": atualizados, "erros": erros}
+
+
+@app.get("/admin/viabilidade/recalcular-todos")
+@app.post("/admin/viabilidade/recalcular-todos")
+async def _viab_recalcular_todos(request: Request, session: Session = Depends(get_session)):
+    ctx = get_auth_context(request, session)
+    if not ctx:
+        return JSONResponse({"ok": False, "erro": "Não autenticado."}, status_code=401)
+    role = getattr(getattr(ctx, "membership", None), "role", None)
+    if role not in ("admin", "equipe"):
+        return JSONResponse({"ok": False, "erro": "Acesso restrito a admin/equipe."}, status_code=403)
+    resultado = _viab_recalcular_todos_handler(session)
+    return JSONResponse(resultado)
 
 # ============================================================================
 # FIM DO PATCH — Viabilidade: Salvar, Histórico e Compartilhamento
