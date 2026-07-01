@@ -20003,27 +20003,11 @@ def _delete_attachment_file(att: Attachment) -> None:
         pass
 
 
-@app.get("/agenda", response_class=HTMLResponse)
+@app.get("/agenda_bookings_legacy", response_class=HTMLResponse)
 @require_login
 async def agenda_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
-    ctx = get_tenant_context(request, session)
-    if not ctx:
-        request.session.clear()
-        return RedirectResponse("/login", status_code=303)
-
-    active_client_id = get_active_client_id(request, session, ctx)
-    current_client = get_client_or_none(session, ctx.company.id, active_client_id)
-
-    return render(
-        "agenda.html",
-        request=request,
-        context={
-            "current_user": ctx.user,
-            "current_company": ctx.company,
-            "role": ctx.membership.role,
-            "current_client": current_client,
-        },
-    )
+    """Legacy Bookings route — kept for URL safety, redirects to native agenda."""
+    return RedirectResponse("/agenda", status_code=302)
 
 
 # ----------------------------
@@ -49137,10 +49121,17 @@ except Exception:
     pass
 
 
-def _add_locais_keys(s: AgendaServico, cfg: AgendaConfig) -> AgendaServico:
+def _add_locais_keys(s: AgendaServico, cfg: AgendaConfig):
+    """Wraps an AgendaServico with a locais_keys attribute for templates."""
+    import types
     lc = s.locais if s.locais else (cfg.locais or "nosso_escritorio,cliente,online")
-    s.locais_keys = [l.strip() for l in lc.split(",") if l.strip()]
-    return s
+    ns = types.SimpleNamespace(
+        id=s.id, nome=s.nome, descricao=s.descricao,
+        duracao_min=s.duracao_min, buffer_min=s.buffer_min,
+        ativo=s.ativo, ordem=s.ordem, locais=s.locais,
+        locais_keys=[l.strip() for l in lc.split(",") if l.strip()],
+    )
+    return ns
 
 
 # ── Templates ────────────────────────────────────────────────────────────────
