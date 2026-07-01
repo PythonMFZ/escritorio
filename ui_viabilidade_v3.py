@@ -25,7 +25,7 @@ def _tir_v3(fluxos: list, max_iter: int = 300) -> float | None:
             npv  = sum(f / (1 + r) ** i for i, f in enumerate(fluxos))
             dnpv = sum(-i * f / (1 + r) ** (i + 1) for i, f in enumerate(fluxos))
             if abs(dnpv) < 1e-10:
-                break
+                return None  # derivada nula sem convergência
             r_new = r - npv / dnpv
             if abs(r_new - r) < 1e-9:
                 r = r_new
@@ -145,9 +145,10 @@ def _calcular_v3(dados: dict) -> dict:
         valor_financiado = round(saldo_pico, 2)
 
         # TIR alavancada: fluxo do equity (custo - drawdown + amortizacao)
+        _sc_by_mes = {s["mes"]: s for s in schedule}
         fluxo_equity = []
-        for i, f in enumerate(base["fluxo"]):
-            sc  = schedule[i] if i < len(schedule) else {}
+        for f in base["fluxo"]:
+            sc  = _sc_by_mes.get(f["mes"], {})
             dd  = sc.get("drawdown", 0)
             am  = sc.get("amortizacao", 0)
             jj  = sc.get("juros", 0)
@@ -164,8 +165,8 @@ def _calcular_v3(dados: dict) -> dict:
         # Exposição com financiamento
         saldo_acum_fin = 0.0
         exposicao_fin  = 0.0
-        for i, f in enumerate(base["fluxo"]):
-            sc  = schedule[i] if i < len(schedule) else {}
+        for f in base["fluxo"]:
+            sc  = _sc_by_mes.get(f["mes"], {})
             dd  = sc.get("drawdown", 0)
             am  = sc.get("amortizacao", 0)
             jj  = sc.get("juros", 0)
@@ -174,21 +175,26 @@ def _calcular_v3(dados: dict) -> dict:
                 exposicao_fin = saldo_acum_fin
         exposicao_com_fin = abs(exposicao_fin)
 
-        # DSCR médio
+        # DSCR médio — usa NOI (receita - custo_obra - comissão - tributos) / serviço da dívida
         dscr_list = []
-        for i, f in enumerate(base["fluxo"]):
-            sc  = schedule[i] if i < len(schedule) else {}
+        for f in base["fluxo"]:
+            sc  = _sc_by_mes.get(f["mes"], {})
             serv = sc.get("servico_divida", 0)
             if serv > 0:
-                dscr_list.append(f["receita"] / serv)
+                noi = f["receita"] - f["custo_obra"] - f["comissao"] - f["tributos"]
+                dscr_list.append(noi / serv)
         dscr_medio = sum(dscr_list) / len(dscr_list) if dscr_list else None
 
         # ── B. INDICADORES CRI ────────────────────────────────────────────
         pct_entrada_media = 0.10
         fases_d = dados.get("fases", [])
         if fases_d:
-            entradas = [float(f.get("entrada_pct", 10) or 10) / 100 for f in fases_d]
-            pct_entrada_media = sum(entradas) / len(entradas)
+            # média ponderada pelo peso de cada fase (meta_pct)
+            _total_peso = sum(float(f.get("meta", 0) or 0) for f in fases_d) or 1.0
+            pct_entrada_media = sum(
+                (float(f.get("entrada_pct", 10) or 10) / 100) * (float(f.get("meta", 0) or 0) / _total_peso)
+                for f in fases_d
+            )
 
         carteira_recebiveis_pico = vgv_liquido * (1 - pct_entrada_media)
         emissao_cri_bruta = carteira_recebiveis_pico * (1 - haircut_pct)
@@ -336,7 +342,6 @@ def _calcular_v3(dados: dict) -> dict:
             _rec_acum_vf += f["receita"]
             chart_labels_vf.append(f["mes"])
             chart_pag_vf.append(round(-_pag_acum_vf, 2))
-            _rec_acum_vf += f["receita"]
             chart_rec_vf.append(round(_rec_acum_vf, 2))
             chart_exp_vf.append(round(f["saldo_acumulado"], 2))
 

@@ -108,7 +108,8 @@ def _calcular_viabilidade_v2(dados: dict) -> dict:
         unidades_total = n_un
         unidades_permuta_n = n_perm
 
-    vgv_medio_m2 = vgv_liquido / area_privativa_total if area_privativa_total > 0 else 0
+    area_vendavel = area_privativa_total - area_permutada
+    vgv_medio_m2 = vgv_liquido / area_vendavel if area_vendavel > 0 else 0
 
     # ── CUSTO DE OBRA ─────────────────────────────────────────────────────
     cub_base        = float(dados.get("cub_m2", 3019) or 3019)
@@ -243,7 +244,14 @@ def _calcular_viabilidade_v2(dados: dict) -> dict:
         n_par        = int(fase.get("n_parcelas", 24))
         ref_pct      = float(fase.get("reforco_pct", 0)) / 100
         n_ref        = int(fase.get("n_reforcos", 0))
-        chv_pct      = max(0.0, 1.0 - ent_pct - par_pct - ref_pct)
+        _soma_pct    = ent_pct + par_pct + ref_pct
+        if _soma_pct > 1.001:
+            # normaliza para evitar distribuir mais de 100% do valor da unidade
+            ent_pct = ent_pct / _soma_pct
+            par_pct = par_pct / _soma_pct
+            ref_pct = ref_pct / _soma_pct
+            _soma_pct = 1.0
+        chv_pct      = max(0.0, 1.0 - _soma_pct)
 
         # meta % sempre relativo ao TOTAL ORIGINAL (não sobre remanescentes)
         preco_medio   = _vgv_total_orig / max(_unidades_total_orig, 1)
@@ -368,7 +376,9 @@ def _calcular_viabilidade_v2(dados: dict) -> dict:
         else:
             # Pós-entrega: índice reinicia do zero na data de entrega (não acumula sobre a obra)
             cf_m = (1 + corr_pos_obra) ** (m - mes_fim_obra)
-        vf_rec = f["receita"] * cf_m
+        # Receitas: já carregam indexação INCC das parcelas (aplicada no loop VP).
+        # Custos: trazidos a valores corrigidos pelo índice de obra.
+        vf_rec = f["receita"]
         vf_cst = f["custo_obra"] * cf_m
         vf_com = f["comissao"]          # comissão fica nominal
         vf_tri = vf_rec * pct_impostos
@@ -497,7 +507,7 @@ def _tir(fluxos: list, max_iter: int = 200) -> float | None:
             npv  = sum(f / (1 + r) ** i for i, f in enumerate(fluxos))
             dnpv = sum(-i * f / (1 + r) ** (i + 1) for i, f in enumerate(fluxos))
             if abs(dnpv) < 1e-10:
-                break
+                return None  # derivada nula sem convergência
             r_new = r - npv / dnpv
             if abs(r_new - r) < 1e-9:
                 r = r_new
