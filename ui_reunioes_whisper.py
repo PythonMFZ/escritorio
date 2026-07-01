@@ -77,12 +77,29 @@ def _to_wav_for_local_whisper(audio_path: str) -> str:
     cmd = [ffmpeg_bin, "-y", "-i", audio_path, "-vn", "-ac", "1", "-ar", "16000", wav_path]
     try:
         proc = _sp_w.run(cmd, capture_output=True, timeout=900)
-        if proc.returncode != 0 or not _Path(wav_path).exists():
+        wav_exists = _Path(wav_path).exists() and _Path(wav_path).stat().st_size > 0
+        if proc.returncode != 0:
+            if wav_exists:
+                # ffmpeg gerou o arquivo mas retornou warning como erro — usa mesmo assim
+                print(f"[whisper] ffmpeg retornou código {proc.returncode} mas WAV foi criado — usando o arquivo")
+                return wav_path
             print(f"[whisper] ffmpeg conversão p/ WAV falhou: {proc.stderr.decode(errors='ignore')[:400]}")
+            # apaga WAV parcial se existir
+            try:
+                _Path(wav_path).unlink(missing_ok=True)
+            except Exception:
+                pass
+            return audio_path
+        if not wav_exists:
+            print("[whisper] ffmpeg não gerou WAV válido")
             return audio_path
         return wav_path
     except Exception as _e_wav:
         print(f"[whisper] ffmpeg conversão p/ WAV exceção: {_e_wav}")
+        try:
+            _Path(wav_path).unlink(missing_ok=True)
+        except Exception:
+            pass
         return audio_path
 
 
