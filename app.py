@@ -30104,7 +30104,7 @@ FEATURE_GROUPS = [
     {"key": "solucoes", "title": "Soluções Financeiras", "features": ["ofertas", "simulador", "propostas"]},
     {"key": "meu_projeto", "title": "Meu Projeto", "features": ["consultoria", "reunioes", "tarefas"]},
     {"key": "ferramentas_conteudo", "title": "Ferramentas e Conteúdo", "features": ["ferramentas", "educacao"]},
-    {"key": "gestao_interna", "title": "Gestão Interna", "features": ["crm", "motor_ofertas", "credito", "financeiro_escritorio", "ui", "gestao", "familias", "servicos_internos", "parceiros"]},
+    {"key": "gestao_interna", "title": "Gestão Interna", "features": ["crm", "motor_ofertas", "credito", "financeiro_escritorio", "ui", "gestao", "familias", "servicos_internos", "parceiros", "agenda_admin"]},
 ]
 FEATURE_STANDALONE = ["pendencias", "agenda", "educacao"]
 FEATURE_VISIBLE_ROLES.update({
@@ -37112,7 +37112,7 @@ FEATURE_GROUPS = [
     {"key": "solucoes", "title": "Soluções Financeiras", "features": ["ofertas", "simulador", "propostas"]},
     {"key": "meu_projeto", "title": "Meu Projeto", "features": ["consultoria", "reunioes", "tarefas"]},
     {"key": "ferramentas_conteudo", "title": "Ferramentas e Conteúdo", "features": ["ferramentas", "educacao", "construrisk", "gestao_obras"]},
-    {"key": "gestao_interna", "title": "Gestão Interna", "features": ["crm", "motor_ofertas", "credito", "financeiro_escritorio", "ui", "gestao", "familias", "servicos_internos", "parceiros", "members", "precificacao", "saude", "assinaturas", "pesquisas", "checkin_semanal", "uso_plataforma"]},
+    {"key": "gestao_interna", "title": "Gestão Interna", "features": ["crm", "motor_ofertas", "credito", "financeiro_escritorio", "ui", "gestao", "familias", "servicos_internos", "parceiros", "members", "precificacao", "saude", "assinaturas", "pesquisas", "checkin_semanal", "uso_plataforma", "agenda_admin"]},
 ]
 FEATURE_KEYS["members"] = {"title": "Membros", "desc": "Gerenciar membros e permissoes.", "href": "/admin/members"}
 FEATURE_KEYS["assinaturas"] = {"title": "Assinaturas", "desc": "MRR, planos ativos e status por cliente.", "href": "/admin/assinaturas"}
