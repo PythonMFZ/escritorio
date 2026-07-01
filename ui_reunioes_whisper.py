@@ -18,6 +18,7 @@
 # ============================================================================
 
 import os as _os2
+import sys
 import json as _json_w
 import shutil as _shutil
 import tempfile as _tmpfile
@@ -104,33 +105,65 @@ def _to_wav_for_local_whisper(audio_path: str) -> str:
 
 
 def _transcrever_local_faster_whisper(audio_path: str) -> str:
-    """Transcreve o áudio inteiro localmente via faster-whisper (sem depender de API externa)."""
-    model = _get_whisper_model()
-    if not model:
-        return ""
+    """
+    Transcreve via faster-whisper em subprocesso separado.
+    O subprocesso carrega o modelo e transcre o áudio isoladamente —
+    se houver OOM ele é morto sem derrubar o web server.
+    """
+    import subprocess as _sp_wk
+    import tempfile as _tf_wk
+    import json as _json_wk
 
     wav_path = _to_wav_for_local_whisper(audio_path)
+    out_file = None
     try:
-        print("[whisper] Transcrevendo localmente com faster-whisper (vad_filter=True)...")
-        segments, info = model.transcribe(wav_path, language="pt", vad_filter=True)
-        segments = list(segments)
-        print(f"[whisper] duração detectada: {getattr(info, 'duration', '?')}s — segmentos: {len(segments)}")
-        texto = " ".join(seg.text.strip() for seg in segments).strip()
+        # arquivo temporário para o worker escrever o resultado
+        fd, out_file = _tf_wk.mkstemp(suffix=".json", prefix="whisper_out_")
+        _os2.close(fd)
 
-        if not texto:
-            # VAD pode ter descartado o áudio inteiro (ex.: ruído de fundo,
-            # volume baixo, formato atípico) — tenta de novo sem VAD.
-            print("[whisper] Resultado vazio com VAD — tentando novamente sem vad_filter...")
-            segments2, info2 = model.transcribe(wav_path, language="pt", vad_filter=False)
-            segments2 = list(segments2)
-            print(f"[whisper] (sem VAD) duração: {getattr(info2, 'duration', '?')}s — segmentos: {len(segments2)}")
-            texto = " ".join(seg.text.strip() for seg in segments2).strip()
+        worker = _Path(__file__).parent / "whisper_worker.py"
+        if not worker.exists():
+            # fallback: tenta no cwd
+            worker = _Path("whisper_worker.py")
 
-        return texto
+        print("[whisper] Transcrevendo em subprocesso isolado (faster-whisper)...")
+        proc = _sp_wk.run(
+            [sys.executable, str(worker), wav_path, _WHISPER_MODEL_NAME, out_file],
+            timeout=3600,  # 1h máximo
+            capture_output=True,
+        )
+
+        if proc.returncode != 0:
+            stderr = proc.stderr.decode(errors="replace")[:400]
+            print(f"[whisper] Subprocesso encerrou com código {proc.returncode}: {stderr}")
+
+        if not _Path(out_file).exists() or _Path(out_file).stat().st_size == 0:
+            print("[whisper] Subprocesso não gerou saída (provavelmente OOM)")
+            return ""
+
+        result = _json_wk.loads(_Path(out_file).read_text())
+        if result.get("ok"):
+            texto = result.get("text", "")
+            print(f"[whisper] Transcrição via subprocesso OK: {len(texto)} chars")
+            return texto
+        else:
+            print(f"[whisper] Erro no subprocesso: {result.get('error')}")
+            return ""
+    except _sp_wk.TimeoutExpired:
+        print("[whisper] Subprocesso excedeu timeout de 1h — abortado")
+        return ""
+    except Exception as _e_wk:
+        print(f"[whisper] Erro ao invocar subprocesso: {_e_wk}")
+        return ""
     finally:
         if wav_path != audio_path:
             try:
                 _Path(wav_path).unlink(missing_ok=True)
+            except Exception:
+                pass
+        if out_file:
+            try:
+                _Path(out_file).unlink(missing_ok=True)
             except Exception:
                 pass
 
