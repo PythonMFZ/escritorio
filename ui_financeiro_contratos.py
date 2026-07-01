@@ -874,10 +874,24 @@ async function cancelar(id) {{
   if (r.ok) location.reload();
 }}
 async function gerarMes() {{
-  const r = await fetch('/admin/financeiro/cobrancas/gerar', {{method: 'POST'}});
-  const d = await r.json();
-  alert(d.message || 'Gerado!');
-  location.reload();
+  try {{
+    const r = await fetch('/admin/financeiro/cobrancas/gerar', {{method: 'POST'}});
+    let d;
+    try {{ d = await r.json(); }} catch(e) {{ d = {{}}; }}
+    if (!r.ok) {{
+      alert('Erro ' + r.status + ': ' + (d.error || d.message || r.statusText));
+      return;
+    }}
+    if (d.ok === false) {{
+      alert('Erro: ' + (d.error || d.message || 'Falha desconhecida'));
+      return;
+    }}
+    const n = d.message || 'Cobranças geradas!';
+    alert(n);
+    location.reload();
+  }} catch(e) {{
+    alert('Erro de conexão: ' + e.message);
+  }}
 }}
 async function gerarBoleto(btn, id) {{
   btn.disabled = true;
