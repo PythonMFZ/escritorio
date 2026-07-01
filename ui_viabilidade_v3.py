@@ -25,7 +25,7 @@ def _tir_v3(fluxos: list, max_iter: int = 300) -> float | None:
             npv  = sum(f / (1 + r) ** i for i, f in enumerate(fluxos))
             dnpv = sum(-i * f / (1 + r) ** (i + 1) for i, f in enumerate(fluxos))
             if abs(dnpv) < 1e-10:
-                break
+                return None  # derivada nula sem convergência
             r_new = r - npv / dnpv
             if abs(r_new - r) < 1e-9:
                 r = r_new
@@ -145,9 +145,10 @@ def _calcular_v3(dados: dict) -> dict:
         valor_financiado = round(saldo_pico, 2)
 
         # TIR alavancada: fluxo do equity (custo - drawdown + amortizacao)
+        _sc_by_mes = {s["mes"]: s for s in schedule}
         fluxo_equity = []
-        for i, f in enumerate(base["fluxo"]):
-            sc  = schedule[i] if i < len(schedule) else {}
+        for f in base["fluxo"]:
+            sc  = _sc_by_mes.get(f["mes"], {})
             dd  = sc.get("drawdown", 0)
             am  = sc.get("amortizacao", 0)
             jj  = sc.get("juros", 0)
@@ -164,8 +165,8 @@ def _calcular_v3(dados: dict) -> dict:
         # Exposição com financiamento
         saldo_acum_fin = 0.0
         exposicao_fin  = 0.0
-        for i, f in enumerate(base["fluxo"]):
-            sc  = schedule[i] if i < len(schedule) else {}
+        for f in base["fluxo"]:
+            sc  = _sc_by_mes.get(f["mes"], {})
             dd  = sc.get("drawdown", 0)
             am  = sc.get("amortizacao", 0)
             jj  = sc.get("juros", 0)
@@ -174,21 +175,26 @@ def _calcular_v3(dados: dict) -> dict:
                 exposicao_fin = saldo_acum_fin
         exposicao_com_fin = abs(exposicao_fin)
 
-        # DSCR médio
+        # DSCR médio — usa NOI (receita - custo_obra - comissão - tributos) / serviço da dívida
         dscr_list = []
-        for i, f in enumerate(base["fluxo"]):
-            sc  = schedule[i] if i < len(schedule) else {}
+        for f in base["fluxo"]:
+            sc  = _sc_by_mes.get(f["mes"], {})
             serv = sc.get("servico_divida", 0)
             if serv > 0:
-                dscr_list.append(f["receita"] / serv)
+                noi = f["receita"] - f["custo_obra"] - f["comissao"] - f["tributos"]
+                dscr_list.append(noi / serv)
         dscr_medio = sum(dscr_list) / len(dscr_list) if dscr_list else None
 
         # ── B. INDICADORES CRI ────────────────────────────────────────────
         pct_entrada_media = 0.10
         fases_d = dados.get("fases", [])
         if fases_d:
-            entradas = [float(f.get("entrada_pct", 10) or 10) / 100 for f in fases_d]
-            pct_entrada_media = sum(entradas) / len(entradas)
+            # média ponderada pelo peso de cada fase (meta_pct)
+            _total_peso = sum(float(f.get("meta", 0) or 0) for f in fases_d) or 1.0
+            pct_entrada_media = sum(
+                (float(f.get("entrada_pct", 10) or 10) / 100) * (float(f.get("meta", 0) or 0) / _total_peso)
+                for f in fases_d
+            )
 
         carteira_recebiveis_pico = vgv_liquido * (1 - pct_entrada_media)
         emissao_cri_bruta = carteira_recebiveis_pico * (1 - haircut_pct)
@@ -336,7 +342,6 @@ def _calcular_v3(dados: dict) -> dict:
             _rec_acum_vf += f["receita"]
             chart_labels_vf.append(f["mes"])
             chart_pag_vf.append(round(-_pag_acum_vf, 2))
-            _rec_acum_vf += f["receita"]
             chart_rec_vf.append(round(_rec_acum_vf, 2))
             chart_exp_vf.append(round(f["saldo_acumulado"], 2))
 
@@ -470,6 +475,7 @@ async def ferramenta_viabilidade_post_v3(
             "reajuste":    float(dados.get(f"fase_reajuste_{j}", 0) or 0),
             "duracao":     int(dados.get(f"fase_duracao_{j}", 12) or 12),
             "entrada_pct": float(dados.get(f"fase_entrada_{j}", 10) or 10),
+            "n_entrada":   int(dados.get(f"fase_nentrada_{j}", 1) or 1),
             "parcelas_pct": float(dados.get(f"fase_parcelas_{j}", 80) or 80),
             "n_parcelas":  int(dados.get(f"fase_nparcelas_{j}", 24) or 24),
             "reforco_pct": float(dados.get(f"fase_reforco_{j}", 0) or 0),
@@ -879,8 +885,8 @@ TEMPLATES["ferramenta_viabilidade.html"] = r"""
   <div class="vb-sep">Fases de Venda</div>
   <div id="faseCont">
     {% set fases_dados = dados.fases if dados.fases else [
-      {"nome":"Lançamento","meta":15,"reajuste":-15,"duracao":12,"entrada_pct":10,"parcelas_pct":90,"n_parcelas":24,"reforco_pct":0,"n_reforcos":0},
-      {"nome":"Pós-Lançamento","meta":85,"reajuste":5,"duracao":24,"entrada_pct":15,"parcelas_pct":40,"n_parcelas":48,"reforco_pct":25,"n_reforcos":4}
+      {"nome":"Lançamento","meta":15,"reajuste":-15,"duracao":12,"entrada_pct":10,"n_entrada":1,"parcelas_pct":90,"n_parcelas":24,"reforco_pct":0,"n_reforcos":0},
+      {"nome":"Pós-Lançamento","meta":85,"reajuste":5,"duracao":24,"entrada_pct":15,"n_entrada":1,"parcelas_pct":40,"n_parcelas":48,"reforco_pct":25,"n_reforcos":4}
     ] %}
     {% for f in fases_dados %}
     <div class="fase-card" id="fase-{{ loop.index0 }}">
@@ -893,6 +899,7 @@ TEMPLATES["ferramenta_viabilidade.html"] = r"""
         <div><div class="vb-lbl">Reajuste de Preço (%)</div><div class="pw"><span class="suf">%</span><input class="vb-inp pr" type="number" name="fase_reajuste_{{ loop.index0 }}" step="1" value="{{ f.reajuste }}"></div><div class="vb-hint">Negativo = desconto</div></div>
         <div><div class="vb-lbl">Duração (meses)</div><input class="vb-inp" type="number" name="fase_duracao_{{ loop.index0 }}" step="1" min="1" value="{{ f.duracao }}"></div>
         <div><div class="vb-lbl">Entrada (%)</div><div class="pw"><span class="suf">%</span><input class="vb-inp pr" type="number" name="fase_entrada_{{ loop.index0 }}" step="1" min="0" max="100" value="{{ f.entrada_pct }}"></div></div>
+        <div><div class="vb-lbl">Nº Parc. Entrada</div><input class="vb-inp" type="number" name="fase_nentrada_{{ loop.index0 }}" step="1" min="1" max="24" value="{{ f.n_entrada|default(1) }}"><div class="vb-hint">1 = à vista</div></div>
       </div>
       <div class="vb-row4">
         <div><div class="vb-lbl">Parcelas (%)</div><div class="pw"><span class="suf">%</span><input class="vb-inp pr" type="number" name="fase_parcelas_{{ loop.index0 }}" step="1" min="0" max="100" value="{{ f.parcelas_pct }}"></div></div>

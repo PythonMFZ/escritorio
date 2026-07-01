@@ -124,60 +124,59 @@ def _to_wav_for_local_whisper(audio_path: str) -> str:
 def _transcrever_local_faster_whisper(audio_path: str) -> str:
     """
     Transcreve via faster-whisper em subprocesso separado.
-    O subprocesso carrega o modelo e transcre o áudio isoladamente —
-    se houver OOM ele é morto sem derrubar o web server.
+    Passa o áudio direto ao worker (faster-whisper suporta MP3/M4A via ffmpeg interno),
+    evitando criação de WAV intermediário no processo principal.
     """
     import subprocess as _sp_wk
     import tempfile as _tf_wk
     import json as _json_wk
 
-    wav_path = _to_wav_for_local_whisper(audio_path)
     out_file = None
     try:
-        # arquivo temporário para o worker escrever o resultado
         fd, out_file = _tf_wk.mkstemp(suffix=".json", prefix="whisper_out_")
         _os2.close(fd)
 
-        worker = _Path(__file__).parent / "whisper_worker.py"
+        # Localiza o worker
+        try:
+            worker = _Path(__file__).parent / "whisper_worker.py"
+        except Exception:
+            worker = _Path("whisper_worker.py")
         if not worker.exists():
-            # fallback: tenta no cwd
             worker = _Path("whisper_worker.py")
 
-        print("[whisper] Transcrevendo em subprocesso isolado (faster-whisper)...")
+        print(f"[whisper] Subprocesso iniciado para {_Path(audio_path).name} ...")
         proc = _sp_wk.run(
-            [sys.executable, str(worker), wav_path, _WHISPER_MODEL_NAME, out_file],
-            timeout=3600,  # 1h máximo
+            [sys.executable, str(worker), audio_path, _WHISPER_MODEL_NAME, out_file],
+            timeout=1800,  # 30 min máximo
             capture_output=True,
         )
 
-        if proc.returncode != 0:
-            stderr = proc.stderr.decode(errors="replace")[:400]
-            print(f"[whisper] Subprocesso encerrou com código {proc.returncode}: {stderr}")
+        stdout = proc.stdout.decode(errors="replace").strip()
+        stderr = proc.stderr.decode(errors="replace").strip()
+        if stdout:
+            print(f"[whisper-worker] {stdout[:600]}")
+        if proc.returncode != 0 and stderr:
+            print(f"[whisper] Worker código {proc.returncode}: {stderr[:400]}")
 
         if not _Path(out_file).exists() or _Path(out_file).stat().st_size == 0:
-            print("[whisper] Subprocesso não gerou saída (provavelmente OOM)")
+            print("[whisper] Worker não gerou saída — possivelmente OOM ou crash")
             return ""
 
         result = _json_wk.loads(_Path(out_file).read_text())
         if result.get("ok"):
             texto = result.get("text", "")
-            print(f"[whisper] Transcrição via subprocesso OK: {len(texto)} chars")
+            print(f"[whisper] ✅ Subprocesso OK: {len(texto)} chars")
             return texto
         else:
-            print(f"[whisper] Erro no subprocesso: {result.get('error')}")
+            print(f"[whisper] Worker erro: {result.get('error')}")
             return ""
     except _sp_wk.TimeoutExpired:
-        print("[whisper] Subprocesso excedeu timeout de 1h — abortado")
+        print("[whisper] Worker excedeu timeout de 30 min — abortado")
         return ""
     except Exception as _e_wk:
-        print(f"[whisper] Erro ao invocar subprocesso: {_e_wk}")
+        print(f"[whisper] Erro ao invocar worker: {_e_wk}")
         return ""
     finally:
-        if wav_path != audio_path:
-            try:
-                _Path(wav_path).unlink(missing_ok=True)
-            except Exception:
-                pass
         if out_file:
             try:
                 _Path(out_file).unlink(missing_ok=True)
