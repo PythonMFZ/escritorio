@@ -734,6 +734,33 @@ if _vb_tmpl and "salvarAnalise" not in _vb_tmpl:
 if hasattr(templates_env.loader, "mapping"):
     templates_env.loader.mapping = TEMPLATES
 
+# ── Recalcular todos os estudos salvos com a engine atualizada ────────────────
+
+@app.post("/admin/viabilidade/recalcular-todos")
+async def _viab_recalcular_todos(request: Request, session: Session = Depends(get_session)):
+    ctx = get_auth_context(request, session)
+    if not ctx or not getattr(ctx, "is_admin", False):
+        return JSONResponse({"ok": False, "erro": "Acesso restrito."}, status_code=403)
+
+    analises = session.exec(select(ViabilidadeAnalise)).all()
+    atualizados = 0
+    erros = []
+    for analise in analises:
+        try:
+            dados = _json2.loads(analise.dados_json or "{}")
+            # Detecta qual engine usar (v3 tem "usar_financiamento" no payload)
+            if "usar_financiamento" in dados:
+                resultado = _calcular_v3(dados)
+            else:
+                resultado = _calcular_viabilidade_v2(dados)
+            analise.resultado_json = _json2.dumps(resultado, default=str)
+            session.add(analise)
+            atualizados += 1
+        except Exception as ex:
+            erros.append({"id": analise.id, "nome": analise.nome, "erro": str(ex)})
+    session.commit()
+    return JSONResponse({"ok": True, "atualizados": atualizados, "erros": erros})
+
 # ============================================================================
 # FIM DO PATCH — Viabilidade: Salvar, Histórico e Compartilhamento
 # ============================================================================

@@ -475,6 +475,7 @@ async def ferramenta_viabilidade_post_v3(
             "reajuste":    float(dados.get(f"fase_reajuste_{j}", 0) or 0),
             "duracao":     int(dados.get(f"fase_duracao_{j}", 12) or 12),
             "entrada_pct": float(dados.get(f"fase_entrada_{j}", 10) or 10),
+            "n_entrada":   int(dados.get(f"fase_nentrada_{j}", 1) or 1),
             "parcelas_pct": float(dados.get(f"fase_parcelas_{j}", 80) or 80),
             "n_parcelas":  int(dados.get(f"fase_nparcelas_{j}", 24) or 24),
             "reforco_pct": float(dados.get(f"fase_reforco_{j}", 0) or 0),
@@ -884,8 +885,8 @@ TEMPLATES["ferramenta_viabilidade.html"] = r"""
   <div class="vb-sep">Fases de Venda</div>
   <div id="faseCont">
     {% set fases_dados = dados.fases if dados.fases else [
-      {"nome":"Lançamento","meta":15,"reajuste":-15,"duracao":12,"entrada_pct":10,"parcelas_pct":90,"n_parcelas":24,"reforco_pct":0,"n_reforcos":0},
-      {"nome":"Pós-Lançamento","meta":85,"reajuste":5,"duracao":24,"entrada_pct":15,"parcelas_pct":40,"n_parcelas":48,"reforco_pct":25,"n_reforcos":4}
+      {"nome":"Lançamento","meta":15,"reajuste":-15,"duracao":12,"entrada_pct":10,"n_entrada":1,"parcelas_pct":90,"n_parcelas":24,"reforco_pct":0,"n_reforcos":0},
+      {"nome":"Pós-Lançamento","meta":85,"reajuste":5,"duracao":24,"entrada_pct":15,"n_entrada":1,"parcelas_pct":40,"n_parcelas":48,"reforco_pct":25,"n_reforcos":4}
     ] %}
     {% for f in fases_dados %}
     <div class="fase-card" id="fase-{{ loop.index0 }}">
@@ -898,6 +899,7 @@ TEMPLATES["ferramenta_viabilidade.html"] = r"""
         <div><div class="vb-lbl">Reajuste de Preço (%)</div><div class="pw"><span class="suf">%</span><input class="vb-inp pr" type="number" name="fase_reajuste_{{ loop.index0 }}" step="1" value="{{ f.reajuste }}"></div><div class="vb-hint">Negativo = desconto</div></div>
         <div><div class="vb-lbl">Duração (meses)</div><input class="vb-inp" type="number" name="fase_duracao_{{ loop.index0 }}" step="1" min="1" value="{{ f.duracao }}"></div>
         <div><div class="vb-lbl">Entrada (%)</div><div class="pw"><span class="suf">%</span><input class="vb-inp pr" type="number" name="fase_entrada_{{ loop.index0 }}" step="1" min="0" max="100" value="{{ f.entrada_pct }}"></div></div>
+        <div><div class="vb-lbl">Nº Parc. Entrada</div><input class="vb-inp" type="number" name="fase_nentrada_{{ loop.index0 }}" step="1" min="1" max="24" value="{{ f.n_entrada|default(1) }}"><div class="vb-hint">1 = à vista</div></div>
       </div>
       <div class="vb-row4">
         <div><div class="vb-lbl">Parcelas (%)</div><div class="pw"><span class="suf">%</span><input class="vb-inp pr" type="number" name="fase_parcelas_{{ loop.index0 }}" step="1" min="0" max="100" value="{{ f.parcelas_pct }}"></div></div>

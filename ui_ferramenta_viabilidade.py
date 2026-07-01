@@ -158,8 +158,9 @@ def _calcular_viabilidade_v2(dados: dict) -> dict:
     pct_impostos    = float(dados.get("pct_impostos", 4.0) or 4.0) / 100
     pct_total_com   = pct_corretagem + pct_gestao + pct_marketing + pct_outros_com
 
-    custo_comercial = vgv_liquido * pct_total_com
-    custo_impostos  = vgv_liquido * pct_impostos
+    # Placeholders — serão recalculados como soma real do fluxo após o loop de fases
+    custo_comercial = 0.0
+    custo_impostos  = 0.0
 
     # ── FASES DE VENDA ────────────────────────────────────────────────────
     fases = dados.get("fases", [])
@@ -314,6 +315,15 @@ def _calcular_viabilidade_v2(dados: dict) -> dict:
         unidades_disponiveis = max(0, unidades_disponiveis - un_fase)
         vgv_disponivel = max(0.0, vgv_disponivel - vgv_fase)
 
+    # ── ALERTA: fases não somam 100% ──────────────────────────────────────
+    _meta_total = sum(float(f.get("meta", 0)) for f in fases)
+    _alerta_fases = None
+    if abs(_meta_total - 100) > 1.0:
+        if _meta_total < 100:
+            _alerta_fases = f"⚠️ As fases de venda somam {_meta_total:.0f}% — {100 - _meta_total:.0f}% das unidades ficam sem fase definida e não entram no VGV."
+        else:
+            _alerta_fases = f"⚠️ As fases de venda somam {_meta_total:.0f}% — excede 100%. A fase final foi limitada às unidades disponíveis."
+
     # ── FLUXO LÍQUIDO ─────────────────────────────────────────────────────
     fluxo = []
     saldo_acum = 0.0
@@ -342,6 +352,10 @@ def _calcular_viabilidade_v2(dados: dict) -> dict:
         })
 
     # ── INDICADORES FINAIS ────────────────────────────────────────────────
+    # Recalcula custo_comercial e custo_impostos como soma real do fluxo
+    # (consistente com as comissões e tributos efetivos por fase/reajuste)
+    custo_comercial = sum(f["comissao"] for f in fluxo)
+    custo_impostos  = sum(f["tributos"] for f in fluxo)
     custo_total = custo_obra_total + custo_comercial + custo_impostos + valor_terreno
     resultado_bruto = vgv_liquido - custo_total
     margem_vgv    = resultado_bruto / vgv_liquido if vgv_liquido > 0 else 0
@@ -369,12 +383,12 @@ def _calcular_viabilidade_v2(dados: dict) -> dict:
     exposicao_maxima_vf = 0.0
     for f in fluxo:
         m = f["mes"]
-        if m == 0:
-            cf_m = 1.0
+        if m < mes_inicio_obra:
+            cf_m = 1.0  # pré-obra: terreno/aprovações não sofrem INCC
         elif m <= mes_fim_obra:
-            cf_m = (1 + corr_obra) ** m
+            cf_m = (1 + corr_obra) ** (m - mes_inicio_obra + 1)  # relativo ao início da obra
         else:
-            # Pós-entrega: índice reinicia do zero na data de entrega (não acumula sobre a obra)
+            # Pós-entrega: índice reinicia do zero na data de entrega
             cf_m = (1 + corr_pos_obra) ** (m - mes_fim_obra)
         # Receitas: já carregam indexação INCC das parcelas (aplicada no loop VP).
         # Custos: trazidos a valores corrigidos pelo índice de obra.
@@ -495,6 +509,7 @@ def _calcular_viabilidade_v2(dados: dict) -> dict:
         "fluxo": fluxo,
         "vf_fluxo": vf_fluxo,
         "fluxo_trimestral": fluxo_trimestral,
+        "alerta_fases": _alerta_fases,
     }
 
 
@@ -865,6 +880,10 @@ TEMPLATES["ferramenta_viabilidade.html"] = r"""
     <h5 class="mb-0">Resultado da Análise</h5>
     {% if dados.nome_projeto %}<span class="badge text-bg-light border fw-normal">{{ dados.nome_projeto }}</span>{% endif %}
   </div>
+
+  {% if r.alerta_fases %}
+  <div class="alert alert-warning py-2 mb-3" role="alert" style="font-size:.88rem;">{{ r.alerta_fases }}</div>
+  {% endif %}
 
   <div class="verdict mb-3">
     <div class="v-badge {{ st.color }}">{{ st.icon }} {{ st.label }}</div>
