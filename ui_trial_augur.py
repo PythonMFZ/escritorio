@@ -226,7 +226,7 @@ _CADASTRO_HTML = """<!DOCTYPE html>
 </div>
 <script>
 function mascaraCNPJ(el){
-  let v=el.value.replace(/\D/g,'').slice(0,14);
+  let v=el.value.replace(/\\D/g,'').slice(0,14);
   if(v.length>12) v=v.replace(/^(\d{2})(\d{3})(\d{3})(\d{4})(\d)/,'$1.$2.$3/$4-$5');
   else if(v.length>8) v=v.replace(/^(\d{2})(\d{3})(\d{3})(\d)/,'$1.$2.$3/$4');
   else if(v.length>5) v=v.replace(/^(\d{2})(\d{3})(\d)/,'$1.$2.$3');
