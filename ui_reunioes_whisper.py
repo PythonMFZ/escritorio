@@ -42,6 +42,23 @@ except Exception:
 _WHISPER_MODEL_NAME = _os2.environ.get("WHISPER_MODEL", "small")
 _whisper_model_cache = {}  # cache do modelo carregado
 
+# Limpeza de WAVs temporários órfãos deixados por crashes anteriores
+def _cleanup_orphan_wavs():
+    try:
+        removed = 0
+        freed = 0
+        for f in _AUDIO_DIR.glob("*.wav"):
+            size = f.stat().st_size
+            f.unlink()
+            removed += 1
+            freed += size
+        if removed:
+            print(f"[whisper] 🧹 Limpeza startup: {removed} WAV(s) órfão(s) removidos ({freed // 1024 // 1024} MB liberados)")
+    except Exception as _e_clean:
+        print(f"[whisper] Aviso: falha na limpeza de WAVs órfãos: {_e_clean}")
+
+_cleanup_orphan_wavs()
+
 
 def _get_whisper_model():
     """Carrega o modelo faster-whisper uma vez (CPU) e reutiliza entre transcrições."""
@@ -470,16 +487,47 @@ async def reuniao_upload_audio(
     if ext not in ("mp3", "m4a", "wav", "ogg", "webm", "mp4"):
         return JSONResponse({"ok": False, "erro": f"Formato .{ext} não suportado. Use MP3, M4A, WAV ou OGG."})
 
-    # Salva em disco
-    audio_path = _AUDIO_DIR / f"meeting_{meeting_id}_{_dt_w.utcnow().strftime('%Y%m%d_%H%M%S')}.{ext}"
+    # Salva em disco (sempre como .mp3 comprimido para economizar espaço)
+    raw_path  = _AUDIO_DIR / f"meeting_{meeting_id}_{_dt_w.utcnow().strftime('%Y%m%d_%H%M%S')}_raw.{ext}"
+    audio_path = _AUDIO_DIR / f"meeting_{meeting_id}_{_dt_w.utcnow().strftime('%Y%m%d_%H%M%S')}.mp3"
     try:
         content = await audio_file.read()
         if len(content) > 500 * 1024 * 1024:  # 500MB
             return JSONResponse({"ok": False, "erro": "Arquivo muito grande (máx. 500MB)."})
-        with open(audio_path, "wb") as f:
+        # verifica espaço disponível (precisa de 2x o tamanho do arquivo)
+        import shutil as _shu
+        free = _shu.disk_usage(str(_AUDIO_DIR)).free
+        if len(content) * 2 > free:
+            return JSONResponse({"ok": False, "erro": f"Espaço insuficiente no servidor ({free // 1024 // 1024} MB livres). Contate o suporte."})
+        with open(raw_path, "wb") as f:
             f.write(content)
     except Exception as e:
         return JSONResponse({"ok": False, "erro": f"Erro ao salvar arquivo: {e}"})
+
+    # Comprime para MP3 mono 32kbps via ffmpeg (reduz 90% do tamanho)
+    ffmpeg_bin = _ffmpeg_bin()
+    if ffmpeg_bin and ext not in ("mp3",):
+        import subprocess as _sp_up
+        try:
+            proc = _sp_up.run(
+                [ffmpeg_bin, "-y", "-i", str(raw_path),
+                 "-vn", "-ac", "1", "-ar", "16000", "-ab", "32k",
+                 str(audio_path)],
+                capture_output=True, timeout=300,
+            )
+            raw_path.unlink(missing_ok=True)
+            if proc.returncode != 0 or not audio_path.exists():
+                # fallback: usa o arquivo original
+                raw_path.rename(audio_path) if raw_path.exists() else None
+        except Exception:
+            if raw_path.exists():
+                raw_path.rename(audio_path)
+    else:
+        # já é mp3 ou sem ffmpeg: usa direto
+        try:
+            raw_path.rename(audio_path)
+        except Exception:
+            audio_path = raw_path
 
     # Atualiza status
     mt.notion_status = "transcription_not_started"

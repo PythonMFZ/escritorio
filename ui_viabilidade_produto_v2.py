@@ -33,14 +33,33 @@ async def ferramenta_viabilidade_post_prodv2(
     # ── Parse pavimentos → tipologias (novo formato) ──────────────────────
     tipologias = []
     pavimentos = []   # para re-renderização do form
-    p = 0
-    while f"pav_nome_{p}" in dados or f"pav_andar_{p}" in dados:
+
+    # Coleta todos os índices de pavimento e unidade presentes no form
+    # (varredura por chaves reais para tolerar gaps causados por deleções no JS)
+    import re as _re_vb
+    pav_indices = sorted({
+        int(m.group(1))
+        for k in dados
+        for m in [_re_vb.match(r"pav_nome_(\d+)", k) or _re_vb.match(r"pav_andar_(\d+)", k)]
+        if m
+    })
+    un_indices = {}  # {pav_idx: [un_idx, ...]}
+    for k in dados:
+        m = _re_vb.match(r"un_met_(\d+)_(\d+)", k)
+        if m:
+            pi, ui = int(m.group(1)), int(m.group(2))
+            un_indices.setdefault(pi, [])
+            if ui not in un_indices[pi]:
+                un_indices[pi].append(ui)
+    for pi in un_indices:
+        un_indices[pi].sort()
+
+    for p in pav_indices:
         pav_nome  = dados.get(f"pav_nome_{p}", f"Pavimento {p+1}")
         pav_andar = int(dados.get(f"pav_andar_{p}", p + 1) or p + 1)
 
         pav_unidades = []
-        u = 0
-        while f"un_met_{p}_{u}" in dados:
+        for u in un_indices.get(p, []):
             met = float(dados.get(f"un_met_{p}_{u}", 0) or 0)
             if met > 0:
                 preco_proprio = float(dados.get(f"un_preco_{p}_{u}", 0) or 0)
@@ -68,9 +87,7 @@ async def ferramenta_viabilidade_post_prodv2(
                     "dif_proprio":  dif_prop,
                     "permuta":      permuta,
                 })
-            u += 1
         pavimentos.append({"nome": pav_nome, "andar": pav_andar, "unidades": pav_unidades})
-        p += 1
 
     # Backward compat: se não há pavimentos no form, tenta ler formato antigo tip_nome_*
     if not tipologias:
