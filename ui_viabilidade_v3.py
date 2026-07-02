@@ -391,6 +391,17 @@ def _calcular_v3(dados: dict) -> dict:
         base["dre"].append({"desc": "Resultado com Financiamento",        "valor": round(res_com, 2), "tipo": "resultado"})
         base["dre"].append({"desc": "Lucratividade (com CCB)",            "valor": mgm_com,           "tipo": "pct"})
 
+        # Reclassifica usando VF ajustado pelo custo financeiro
+        vf_vgv    = base.get("vf_vgv") or vgv_liquido or 1
+        vf_res_com = (base.get("vf_resultado") or res_sem) - custo_fin
+        vf_mgm_com = vf_res_com / vf_vgv if vf_vgv else 0
+        tir_alav   = fin_result.get("tir_alavancada_anual")
+        tir_ref    = (tir_alav / 100) if tir_alav is not None else base.get("tir_vf_anual") or 0
+        base["status"] = _classificar(vf_mgm_com, tir_ref if tir_ref else None)
+        # Atualiza métricas VF com custo financeiro incluído
+        base["vf_resultado"]  = round(vf_res_com, 2)
+        base["vf_margem_vgv"] = round(vf_mgm_com * 100, 2)
+
     # ── E. VP DAS RECEITAS E VPL COMPARATIVO ────────────────────────────────────
     _tma_m_calc = (1.12 ** (1 / 12)) - 1
     _vp_rec_calc = round(sum(
