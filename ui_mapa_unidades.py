@@ -196,7 +196,10 @@ async def mapa_unidades_list(
 
     estudos = session.exec(
         select(EstudoViabilidade)
-        .where(EstudoViabilidade.company_id == ctx.company.id)
+        .where(
+            EstudoViabilidade.company_id == ctx.company.id,
+            EstudoViabilidade.client_id == cc.id,
+        )
         .order_by(EstudoViabilidade.id.desc())
     ).all()
 
