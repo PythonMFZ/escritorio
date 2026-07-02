@@ -582,17 +582,15 @@ def _patch_cri_template() -> None:
     if OLD_ROW_FILTER in tpl:
         tpl = tpl.replace(OLD_ROW_FILTER, NEW_ROW_FILTER, 1)  # VF table second
 
-    # VF table TD — usa custo_obra como âncora porque após o patch da VP o padrão
-    # OLD_FLUXO_TD aparece DENTRO de NEW_FLUXO_TD (é sufixo), então replace(...,1)
-    # atingiria a VP novamente. A âncora custo_obra→saldo_mes só existe na VF
-    # (na VP há CRI_CELL entre custo_obra e saldo_mes após o patch).
+    # VF table TD — ancora no bloco fin_delta (único na VF após o patch de CCB)
+    # VP table já tem CRI_CELL entre custo_obra e saldo_mes; VF tem fin_delta conditional.
     OLD_VF_CUSTO_SALDO = (
-        '<td class="fc-neg">{{ f.custo_obra|brl }}</td>\n'
+        '{% endif %}\n'
         '            <td class="{{ \'fc-pos\' if f.saldo_mes >= 0 else \'fc-neg\' }}">{{ f.saldo_mes|brl }}</td>\n'
         '            <td class="{{ \'fc-pos\' if f.saldo_acumulado >= 0 else \'fc-neg\' }}">{{ f.saldo_acumulado|brl }}</td>'
     )
     NEW_VF_CUSTO_SALDO = (
-        '<td class="fc-neg">{{ f.custo_obra|brl }}</td>\n'
+        '{% endif %}\n'
         '            ' + _CRI_CELL +
         '<td class="{{ \'fc-pos\' if f.saldo_mes >= 0 else \'fc-neg\' }}">{{ f.saldo_mes|brl }}</td>\n'
         '            <td class="{{ \'fc-pos\' if f.saldo_acumulado >= 0 else \'fc-neg\' }}">{{ f.saldo_acumulado|brl }}</td>'
