@@ -213,7 +213,8 @@ def _calcular_viabilidade_v2(dados: dict) -> dict:
     duracao_total_vendas = int(dados.get("duracao_analise", 129) or 129)
     n_meses = max(mes_fim_obra + 60, duracao_total_vendas + 10)
 
-    receita_mensal  = [0.0] * (n_meses + 1)
+    receita_mensal         = [0.0] * (n_meses + 1)  # com INCC nas parcelas → para VF
+    receita_nominal_mensal = [0.0] * (n_meses + 1)  # sem INCC → para VP Nominal
     comissao_mensal = [0.0] * (n_meses + 1)
     tributo_mensal  = [0.0] * (n_meses + 1)
     custo_mensal    = [0.0] * (n_meses + 1)
@@ -280,7 +281,8 @@ def _calcular_viabilidade_v2(dados: dict) -> dict:
             for e_i in range(n_ent):
                 m_e = m_abs + e_i
                 if m_e <= n_meses:
-                    receita_mensal[m_e] += ent_parcela
+                    receita_mensal[m_e]         += ent_parcela
+                    receita_nominal_mensal[m_e] += ent_parcela  # entrada sem INCC = mesmo valor
 
             # Parcelas mensais durante n_par meses (começam após a entrada)
             parc_total = venda_mes * par_pct
@@ -293,7 +295,8 @@ def _calcular_viabilidade_v2(dados: dict) -> dict:
                     else:
                         corr = corr_pos_obra
                     parc_corr = parc_mensal_v * ((1 + corr) ** p)
-                    receita_mensal[m_p] += parc_corr
+                    receita_mensal[m_p]         += parc_corr       # com INCC → VF
+                    receita_nominal_mensal[m_p] += parc_mensal_v   # sem INCC → VP Nominal
 
             # Reforços: distribuídos ao longo da obra
             if n_ref > 0 and ref_pct > 0:
@@ -302,14 +305,16 @@ def _calcular_viabilidade_v2(dados: dict) -> dict:
                 for r in range(n_ref):
                     m_r = m_abs + int((duracao_obra / max(n_ref, 1)) * (r + 1))
                     if m_r <= n_meses:
-                        receita_mensal[m_r] += ref_unit
+                        receita_mensal[m_r]         += ref_unit
+                        receita_nominal_mensal[m_r] += ref_unit  # reforços sem INCC = mesmo valor
 
             # Chaves: no mês de conclusão da obra
             if chv_pct > 0:
                 chv_total = venda_mes * chv_pct
                 m_chaves  = mes_fim_obra
                 if m_chaves <= n_meses:
-                    receita_mensal[m_chaves] += chv_total
+                    receita_mensal[m_chaves]         += chv_total
+                    receita_nominal_mensal[m_chaves] += chv_total  # chaves sem INCC = mesmo valor
 
         mes_atual_venda += duracao_f
         unidades_disponiveis = max(0, unidades_disponiveis - un_fase)
@@ -331,7 +336,7 @@ def _calcular_viabilidade_v2(dados: dict) -> dict:
     tma_mensal = (1.12 ** (1/12)) - 1  # 12% a.a.
 
     for m in range(n_meses + 1):
-        rec = receita_mensal[m]
+        rec = receita_nominal_mensal[m]  # VP usa receita nominal (sem INCC nas parcelas)
         com = comissao_mensal[m]
         # Fix 2: impostos sobre toda receita recebida no mês (não só entrada na venda)
         tri = rec * pct_impostos
@@ -390,9 +395,9 @@ def _calcular_viabilidade_v2(dados: dict) -> dict:
         else:
             # Pós-entrega: índice reinicia do zero na data de entrega
             cf_m = (1 + corr_pos_obra) ** (m - mes_fim_obra)
-        # Receitas: já carregam indexação INCC das parcelas (aplicada no loop VP).
+        # Receitas VF: usa receita_mensal com INCC nas parcelas (VP usa a nominal).
         # Custos: trazidos a valores corrigidos pelo índice de obra.
-        vf_rec = f["receita"]
+        vf_rec = receita_mensal[f["mes"]]
         vf_cst = f["custo_obra"] * cf_m
         vf_com = f["comissao"]          # comissão fica nominal
         vf_tri = vf_rec * pct_impostos
