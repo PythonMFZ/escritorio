@@ -225,12 +225,21 @@ WHATSAPP_MEDIA_DIR.mkdir(parents=True, exist_ok=True)
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
+_is_pg = not DATABASE_URL.startswith("sqlite")
 engine = create_engine(
     DATABASE_URL,
     echo=False,
     pool_pre_ping=True,
-    pool_recycle=300,
-    connect_args={"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {"connect_timeout": 5},
+    pool_recycle=240,          # recicla antes dos 5min de idle timeout do Render
+    pool_size=5,
+    max_overflow=10,
+    connect_args={"check_same_thread": False} if not _is_pg else {
+        "connect_timeout": 10,
+        "keepalives": 1,
+        "keepalives_idle": 60,
+        "keepalives_interval": 10,
+        "keepalives_count": 5,
+    },
 )
 
 _MAX_PASSWORD_BYTES = 1024
