@@ -765,8 +765,17 @@ async def financeiro_cobrancas_painel(request: _Req_ct, session=_Dep_ct(get_sess
           <td class="text-center text-nowrap">{acoes_pagar}{boleto_btn}{nf_btn}{acoes_cancelar}{acoes_excluir}</td>
         </tr>"""
 
+    msg_flash  = request.query_params.get("msg", "")
+    erro_flash = request.query_params.get("erro", "")
+    _flash = ""
+    if msg_flash:
+        _flash = f'<div class="alert alert-success alert-dismissible fade show py-2" role="alert">{msg_flash}<button type="button" class="btn-close" data-bs-dismiss="alert"></button></div>'
+    elif erro_flash:
+        _flash = f'<div class="alert alert-danger alert-dismissible fade show py-2" role="alert">Erro: {erro_flash}<button type="button" class="btn-close" data-bs-dismiss="alert"></button></div>'
+
     html = f"""{{% extends "base.html" %}}
 {{% block content %}}
+{_flash}
 <div class="d-flex justify-content-between align-items-start flex-wrap gap-2 mb-3">
   <div>
     <h4 class="mb-0">Cobranças Mensais</h4>
