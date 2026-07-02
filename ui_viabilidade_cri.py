@@ -498,6 +498,10 @@ def _calcular_v3_com_cri(dados: dict) -> dict:
         # Atualiza vf_resultado e vf_margem_vgv no base
         base["vf_resultado"]  = vf_resultado_com_cri
         base["vf_margem_vgv"] = vf_mgm_com_cri
+        # Reclassifica badge com margem VF ajustada pelo CRI
+        vf_mgm_frac = vf_resultado_com_cri / vf_total_rec if vf_total_rec else 0
+        tir_cri_ref = (tir_com_cri / 100) if tir_com_cri is not None else (base.get("tir_vf_anual") or 0)
+        base["status"] = _classificar(vf_mgm_frac, tir_cri_ref)  # type: ignore[name-defined]
 
     base["cri"] = cri
     return base
