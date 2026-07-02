@@ -39,7 +39,7 @@ except Exception:
     _AUDIO_DIR = _Path("uploads/reunioes")
     _AUDIO_DIR.mkdir(parents=True, exist_ok=True)
 
-_WHISPER_MODEL_NAME = _os2.environ.get("WHISPER_MODEL", "small")
+_WHISPER_MODEL_NAME = _os2.environ.get("WHISPER_MODEL", "tiny")
 _whisper_model_cache = {}  # cache do modelo carregado
 
 # Limpeza de WAVs temporários órfãos deixados por crashes anteriores
@@ -339,8 +339,8 @@ def _processar_audio_background(
     company_id: int,
 ):
     """
-    Background task: transcreve localmente com faster-whisper (sem dependência
-    de API externa); se indisponível, cai para OpenAI Whisper API (se configurada).
+    Background task: transcreve via OpenAI Whisper API (primário, sem download
+    de modelo); se não configurada, tenta faster-whisper local (fallback).
     """
     print(f"[whisper] Iniciando transcrição da reunião {meeting_id}...")
 
@@ -356,19 +356,9 @@ def _processar_audio_background(
     transcricao = ""
     _erro_real = ""
 
-    # ── Tenta transcrição local (faster-whisper, sem custo nem API key) ──────
-    if _Path(audio_path).exists():
-        try:
-            transcricao = _transcrever_local_faster_whisper(audio_path)
-            if transcricao:
-                print(f"[whisper] Transcrição local OK: {len(transcricao)} chars")
-        except Exception as _le:
-            _erro_real = str(_le)
-            print(f"[whisper] Transcrição local falhou: {_le}")
-
-    # ── Fallback: OpenAI Whisper API (se configurada) ────────────────────────
+    # ── Primário: OpenAI Whisper API (não requer download de modelo) ──────────
     openai_key = _os2.environ.get("OPENAI_API_KEY", "")
-    if not transcricao and openai_key and _Path(audio_path).exists():
+    if openai_key and _Path(audio_path).exists():
         _tmp_dir_whisper = None
         try:
             import openai as _oai
@@ -393,6 +383,16 @@ def _processar_audio_background(
         finally:
             if _tmp_dir_whisper:
                 _shutil.rmtree(_tmp_dir_whisper, ignore_errors=True)
+
+    # ── Fallback: faster-whisper local (apenas se sem OpenAI key) ────────────
+    if not transcricao and not openai_key and _Path(audio_path).exists():
+        try:
+            transcricao = _transcrever_local_faster_whisper(audio_path)
+            if transcricao:
+                print(f"[whisper] Transcrição local OK: {len(transcricao)} chars")
+        except Exception as _le:
+            _erro_real = str(_le)
+            print(f"[whisper] Transcrição local falhou: {_le}")
 
     # ── Arquivo não encontrado ───────────────────────────────────────────────
     if not _Path(audio_path).exists() and not transcricao:
