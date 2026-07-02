@@ -327,7 +327,7 @@ def _ct_enviar_email_boleto(cobranca: CobrancaMensal, contrato: ContratoCliente,
         if _link_nf:
             _nf_btns += f'<a href="{_link_nf}" style="background:#1a7a4a;color:#fff;padding:10px 20px;border-radius:6px;text-decoration:none;font-weight:bold;margin-right:8px">📋 Ver NFS-e</a>'
         # Portal de consulta pública — usuário insere a chave manualmente
-        _nf_btns += '<a href="https://www.nfse.gov.br/ConsultaNacional/" style="background:#2563eb;color:#fff;padding:10px 20px;border-radius:6px;text-decoration:none;font-weight:bold">🔍 Portal de Consulta NFS-e</a>'
+        _nf_btns += '<a href="https://www.nfse.gov.br/consultapublica" style="background:#2563eb;color:#fff;padding:10px 20px;border-radius:6px;text-decoration:none;font-weight:bold">🔍 Consultar NFS-e</a>'
         _bloco_nf = f"""
   <hr style="border:none;border-top:1px solid #e5e7eb;margin:24px 0">
   <h3 style="color:#1a1a2e;margin-bottom:12px">📄 Nota Fiscal de Serviço (NFS-e)</h3>
