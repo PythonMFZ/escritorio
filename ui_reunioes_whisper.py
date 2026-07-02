@@ -490,22 +490,32 @@ async def reuniao_upload_audio(
     raw_path  = _AUDIO_DIR / f"meeting_{meeting_id}_{_dt_w.utcnow().strftime('%Y%m%d_%H%M%S')}_raw.{ext}"
     audio_path = _AUDIO_DIR / f"meeting_{meeting_id}_{_dt_w.utcnow().strftime('%Y%m%d_%H%M%S')}.mp3"
     try:
-        content = await audio_file.read()
-        if len(content) > 500 * 1024 * 1024:  # 500MB
-            return JSONResponse({"ok": False, "erro": "Arquivo muito grande (máx. 500MB)."})
-        # verifica espaço disponível (precisa de 2x o tamanho do arquivo)
+        # Salva em chunks para não carregar tudo na RAM
         import shutil as _shu
+        _MAX_UPLOAD = 1024 * 1024 * 1024  # 1 GB
+        _written = 0
+        with open(raw_path, "wb") as _f:
+            while True:
+                chunk = await audio_file.read(1024 * 1024)  # 1MB por vez
+                if not chunk:
+                    break
+                _written += len(chunk)
+                if _written > _MAX_UPLOAD:
+                    _f.close()
+                    raw_path.unlink(missing_ok=True)
+                    return JSONResponse({"ok": False, "erro": "Arquivo muito grande (máx. 1GB). Comprime o áudio antes de enviar."})
+                _f.write(chunk)
+        # verifica espaço disponível para compressão
         free = _shu.disk_usage(str(_AUDIO_DIR)).free
-        if len(content) * 2 > free:
+        if _written * 2 > free:
+            raw_path.unlink(missing_ok=True)
             return JSONResponse({"ok": False, "erro": f"Espaço insuficiente no servidor ({free // 1024 // 1024} MB livres). Contate o suporte."})
-        with open(raw_path, "wb") as f:
-            f.write(content)
     except Exception as e:
         return JSONResponse({"ok": False, "erro": f"Erro ao salvar arquivo: {e}"})
 
-    # Comprime para MP3 mono 32kbps via ffmpeg (reduz 90% do tamanho)
+    # Comprime sempre para MP3 mono 32kbps via ffmpeg (reduz 90% do tamanho)
     ffmpeg_bin = _ffmpeg_bin()
-    if ffmpeg_bin and ext not in ("mp3",):
+    if ffmpeg_bin:
         import subprocess as _sp_up
         try:
             proc = _sp_up.run(
