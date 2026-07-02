@@ -329,6 +329,7 @@ def _nf_pick_tomador_identificacao(*objs) -> tuple[str, str]:
             "nome",
             "razao",
             "empresa_nome",
+            "name",           # Client.name
         ),
         default="NAO INFORMADO",
     )
@@ -351,6 +352,9 @@ def _nf_get_tomador_endereco(contrato, cobranca, session=None) -> dict:
             "cep_sacado",
             "cep",
             "endereco_cep",
+            "zip_code",       # Client.zip_code
+            "zipcode",
+            "postal_code",
         ),
     ))
     cmun = _re_nf.sub(r"\D", "", _nf_pick_attr(
@@ -376,6 +380,7 @@ def _nf_get_tomador_endereco(contrato, cobranca, session=None) -> dict:
             "municipio_cliente",
             "cidade",
             "municipio",
+            "city",           # Client.city
         ),
     )
     uf = _nf_pick_attr(
@@ -385,6 +390,7 @@ def _nf_get_tomador_endereco(contrato, cobranca, session=None) -> dict:
             "estado_cliente",
             "uf",
             "estado",
+            "state",          # Client.state
         ),
     )
     x_lgr = _nf_pick_attr(
@@ -532,7 +538,9 @@ def _nf_build_dps(cobranca, contrato, n_dps: int, session=None) -> bytes:
     elif len(doc_toma) == 11:
         _sub(tom, "CPF", doc_toma)
     else:
-        _sub(tom, "CNPJ", "00000000000000")
+        # Sem documento válido: omite o elemento (NFS-e nacional aceita tomador sem doc
+        # quando o prestador é optante pelo Simples e o valor não exige identificação)
+        pass
     _sub(tom, "xNome", nome_toma[:150])
     _end = _sub(tom, "end")
     _endNac = _sub(_end, "endNac")
