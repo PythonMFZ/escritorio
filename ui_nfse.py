@@ -139,7 +139,11 @@ def _nf_chave_acesso(n_dps: int, serie: str = _NF_SERIE) -> str:
 
 
 def _nf_limpa_cnpj(doc: str) -> str:
-    return _re_nf.sub(r"\D", "", doc or "")
+    d = _re_nf.sub(r"\D", "", doc or "")
+    # CNPJ deve ter 14 dígitos; CPF 11. Se tiver 15 com zero à esquerda, remove.
+    if len(d) == 15 and d.startswith("0"):
+        d = d[1:]
+    return d
 
 
 def _nf_limpa_cep(valor: str) -> str:
