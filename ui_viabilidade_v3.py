@@ -402,6 +402,18 @@ def _calcular_v3(dados: dict) -> dict:
         base["vf_resultado"]  = round(vf_res_com, 2)
         base["vf_margem_vgv"] = round(vf_mgm_com * 100, 2)
 
+        # Embed fin_delta (drawdown - amort - juros) em cada item do fluxo VP e VF
+        for f in base.get("fluxo", []):
+            sc = _sc_by_mes.get(f["mes"], {})
+            fd = sc.get("drawdown", 0) - sc.get("amortizacao", 0) - sc.get("juros", 0)
+            if fd != 0:
+                f["fin_delta"] = round(fd, 2)
+        for f in base.get("vf_fluxo", []):
+            sc = _sc_by_mes.get(f["mes"], {})
+            fd = sc.get("drawdown", 0) - sc.get("amortizacao", 0) - sc.get("juros", 0)
+            if fd != 0:
+                f["fin_delta"] = round(fd, 2)
+
     # ── E. VP DAS RECEITAS E VPL COMPARATIVO ────────────────────────────────────
     _tma_m_calc = (1.12 ** (1 / 12)) - 1
     _vp_rec_calc = round(sum(
@@ -1230,19 +1242,21 @@ TEMPLATES["ferramenta_viabilidade.html"] = r"""
             <th>Comissão</th>
             <th>Tributos</th>
             <th>Custo Obra</th>
+            {% if r.financiamento %}<th style="color:#86efac;">Fin. CCB</th>{% endif %}
             <th>Saldo Mês</th>
             <th>Saldo Acumulado</th>
           </tr>
         </thead>
         <tbody>
           {% for f in r.fluxo %}
-          {% if f.receita != 0 or f.custo_obra != 0 or f.saldo_mes != 0 %}
+          {% if f.receita != 0 or f.custo_obra != 0 or f.saldo_mes != 0 or f.fin_delta|default(0) != 0 %}
           <tr>
             <td>{{ f.mes }}</td>
             <td class="fc-pos">{{ f.receita|brl }}</td>
             <td class="fc-neg">{{ f.comissao|brl }}</td>
             <td class="fc-neg">{{ f.tributos|brl }}</td>
             <td class="fc-neg">{{ f.custo_obra|brl }}</td>
+            {% if r.financiamento %}<td class="{{ 'fc-pos' if f.fin_delta|default(0) > 0 else ('fc-neg' if f.fin_delta|default(0) < 0 else '') }}" style="font-size:.75rem;">{% if f.fin_delta is defined and f.fin_delta != 0 %}{{ f.fin_delta|brl }}{% else %}—{% endif %}</td>{% endif %}
             <td class="{{ 'fc-pos' if f.saldo_mes >= 0 else 'fc-neg' }}">{{ f.saldo_mes|brl }}</td>
             <td class="{{ 'fc-pos' if f.saldo_acumulado >= 0 else 'fc-neg' }}">{{ f.saldo_acumulado|brl }}</td>
           </tr>
@@ -1259,6 +1273,7 @@ TEMPLATES["ferramenta_viabilidade.html"] = r"""
             <th>Comissão</th>
             <th>Tributos (Corr.)</th>
             <th>Custo Obra (Corr.)</th>
+            {% if r.financiamento %}<th style="color:#86efac;">Fin. CCB</th>{% endif %}
             <th>Saldo Mês (VF)</th>
             <th>Saldo Acum. (VF)</th>
           </tr>
@@ -1266,13 +1281,14 @@ TEMPLATES["ferramenta_viabilidade.html"] = r"""
         <tbody>
           {% if r.vf_fluxo %}
           {% for f in r.vf_fluxo %}
-          {% if f.receita != 0 or f.custo_obra != 0 or f.saldo_mes != 0 %}
+          {% if f.receita != 0 or f.custo_obra != 0 or f.saldo_mes != 0 or f.fin_delta|default(0) != 0 %}
           <tr>
             <td>{{ f.mes }}</td>
             <td class="fc-pos">{{ f.receita|brl }}</td>
             <td class="fc-neg">{{ f.comissao|brl }}</td>
             <td class="fc-neg">{{ f.tributos|brl }}</td>
             <td class="fc-neg">{{ f.custo_obra|brl }}</td>
+            {% if r.financiamento %}<td class="{{ 'fc-pos' if f.fin_delta|default(0) > 0 else ('fc-neg' if f.fin_delta|default(0) < 0 else '') }}" style="font-size:.75rem;">{% if f.fin_delta is defined and f.fin_delta != 0 %}{{ f.fin_delta|brl }}{% else %}—{% endif %}</td>{% endif %}
             <td class="{{ 'fc-pos' if f.saldo_mes >= 0 else 'fc-neg' }}">{{ f.saldo_mes|brl }}</td>
             <td class="{{ 'fc-pos' if f.saldo_acumulado >= 0 else 'fc-neg' }}">{{ f.saldo_acumulado|brl }}</td>
           </tr>
