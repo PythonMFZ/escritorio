@@ -759,7 +759,7 @@ def _viab_recalcular_todos_handler(session):
 @app.get("/admin/viabilidade/recalcular-todos")
 @app.post("/admin/viabilidade/recalcular-todos")
 async def _viab_recalcular_todos(request: Request, session: Session = Depends(get_session)):
-    ctx = get_auth_context(request, session)
+    ctx = get_tenant_context(request, session)
     if not ctx:
         return JSONResponse({"ok": False, "erro": "Não autenticado."}, status_code=401)
     role = getattr(getattr(ctx, "membership", None), "role", None)
