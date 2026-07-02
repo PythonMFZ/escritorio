@@ -315,25 +315,25 @@ def _ct_enviar_email_boleto(cobranca: CobrancaMensal, contrato: ContratoCliente,
     nf_url    = getattr(cobranca, "nf_url",    "") or ""
     if nf_numero or nf_chave or nf_url:
         _link_nf = nf_url if nf_url.startswith("http") else ""
-        _link_validar = (
-            f"https://www.nfse.gov.br/ConsultaNacional/v2/consulta?chave={nf_chave}"
-            if nf_chave else ""
-        )
         _nf_rows = ""
         if nf_numero:
             _nf_rows += f"<tr><td style='padding:8px;background:#f0f8f0;font-weight:bold'>Número NFS-e</td><td style='padding:8px'>{nf_numero}</td></tr>"
         if nf_chave:
-            _nf_rows += f"<tr><td style='padding:8px;background:#f0f8f0;font-weight:bold'>Chave de acesso</td><td style='padding:8px;font-family:monospace;font-size:12px'>{nf_chave}</td></tr>"
+            _nf_rows += (
+                f"<tr><td style='padding:8px;background:#f0f8f0;font-weight:bold'>Chave de acesso</td>"
+                f"<td style='padding:8px;font-family:monospace;font-size:11px;word-break:break-all'>{nf_chave}</td></tr>"
+            )
         _nf_btns = ""
         if _link_nf:
             _nf_btns += f'<a href="{_link_nf}" style="background:#1a7a4a;color:#fff;padding:10px 20px;border-radius:6px;text-decoration:none;font-weight:bold;margin-right:8px">📋 Ver NFS-e</a>'
-        if _link_validar:
-            _nf_btns += f'<a href="{_link_validar}" style="background:#2563eb;color:#fff;padding:10px 20px;border-radius:6px;text-decoration:none;font-weight:bold">🔍 Validar na Receita</a>'
+        # Portal de consulta pública — usuário insere a chave manualmente
+        _nf_btns += '<a href="https://www.nfse.gov.br/ConsultaNacional/" style="background:#2563eb;color:#fff;padding:10px 20px;border-radius:6px;text-decoration:none;font-weight:bold">🔍 Portal de Consulta NFS-e</a>'
         _bloco_nf = f"""
   <hr style="border:none;border-top:1px solid #e5e7eb;margin:24px 0">
-  <h3 style="color:#1a1a2e;margin-bottom:12px">📄 Nota Fiscal de Serviço</h3>
+  <h3 style="color:#1a1a2e;margin-bottom:12px">📄 Nota Fiscal de Serviço (NFS-e)</h3>
   <table style="width:100%;border-collapse:collapse;margin-bottom:16px">{_nf_rows}</table>
-  {"<p style='margin-top:12px'>" + _nf_btns + "</p>" if _nf_btns else ""}"""
+  <p style="margin-top:12px">{_nf_btns}</p>
+  {"<p style='font-size:12px;color:#555;margin-top:8px'>Para consultar no portal, acesse o link acima e informe a chave de acesso.</p>" if nf_chave and not _link_nf else ""}"""
     else:
         _bloco_nf = ""
 
