@@ -987,7 +987,7 @@ async function gerarResumo() {
   setTimeout(async function() {
     const r = await fetch('/reunioes/{{ meeting.id }}/status');
     const d = await r.json();
-    if (d.status === 'notes_ready' || d.status === 'error') {
+    if (d.status === 'notes_ready' || d.status === 'error' || d.status === 'transcription_not_started') {
       location.reload();
     } else { checkStatus(); }
   }, 15000);

@@ -1277,10 +1277,10 @@ TEMPLATES["ferramenta_viabilidade.html"] = r"""
         <thead>
           <tr>
             <th style="text-align:left;">Mês</th>
-            <th>Receita (Corr.)</th>
+            <th>Receita (c/ INCC)</th>
             <th>Comissão</th>
-            <th>Tributos (Corr.)</th>
-            <th>Custo Obra (Corr.)</th>
+            <th>Tributos</th>
+            <th>Custo Obra (Corr. INCC)</th>
             {% if r.financiamento %}<th style="color:#86efac;">Fin. CCB</th>{% endif %}
             <th>Saldo Mês (VF)</th>
             <th>Saldo Acum. (VF)</th>
