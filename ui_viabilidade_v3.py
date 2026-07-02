@@ -402,17 +402,25 @@ def _calcular_v3(dados: dict) -> dict:
         base["vf_resultado"]  = round(vf_res_com, 2)
         base["vf_margem_vgv"] = round(vf_mgm_com * 100, 2)
 
-        # Embed fin_delta (drawdown - amort - juros) em cada item do fluxo VP e VF
+        # Embed fin_delta e atualiza saldo_mes / saldo_acumulado nos fluxos VP e VF
+        _saldo_acum_vp = 0.0
         for f in base.get("fluxo", []):
             sc = _sc_by_mes.get(f["mes"], {})
             fd = sc.get("drawdown", 0) - sc.get("amortizacao", 0) - sc.get("juros", 0)
             if fd != 0:
                 f["fin_delta"] = round(fd, 2)
+                f["saldo_mes"] = round(f["saldo_mes"] + fd, 2)
+            _saldo_acum_vp += f["saldo_mes"]
+            f["saldo_acumulado"] = round(_saldo_acum_vp, 2)
+        _saldo_acum_vf = 0.0
         for f in base.get("vf_fluxo", []):
             sc = _sc_by_mes.get(f["mes"], {})
             fd = sc.get("drawdown", 0) - sc.get("amortizacao", 0) - sc.get("juros", 0)
             if fd != 0:
                 f["fin_delta"] = round(fd, 2)
+                f["saldo_mes"] = round(f["saldo_mes"] + fd, 2)
+            _saldo_acum_vf += f["saldo_mes"]
+            f["saldo_acumulado"] = round(_saldo_acum_vf, 2)
 
     # ── E. VP DAS RECEITAS E VPL COMPARATIVO ────────────────────────────────────
     _tma_m_calc = (1.12 ** (1 / 12)) - 1
