@@ -308,6 +308,35 @@ def _ct_enviar_email_boleto(cobranca: CobrancaMensal, contrato: ContratoCliente,
         raise RuntimeError("Cliente sem e-mail cadastrado.")
 
     valor_fmt = _ct_brl(cobranca.valor_cents)
+
+    # Bloco NF — só exibe se a NF foi emitida
+    nf_numero = getattr(cobranca, "nf_numero", "") or ""
+    nf_chave  = getattr(cobranca, "nf_chave",  "") or ""
+    nf_url    = getattr(cobranca, "nf_url",    "") or ""
+    if nf_numero or nf_chave or nf_url:
+        _link_nf = nf_url if nf_url.startswith("http") else ""
+        _link_validar = (
+            f"https://www.nfse.gov.br/ConsultaNacional/v2/consulta?chave={nf_chave}"
+            if nf_chave else ""
+        )
+        _nf_rows = ""
+        if nf_numero:
+            _nf_rows += f"<tr><td style='padding:8px;background:#f0f8f0;font-weight:bold'>Número NFS-e</td><td style='padding:8px'>{nf_numero}</td></tr>"
+        if nf_chave:
+            _nf_rows += f"<tr><td style='padding:8px;background:#f0f8f0;font-weight:bold'>Chave de acesso</td><td style='padding:8px;font-family:monospace;font-size:12px'>{nf_chave}</td></tr>"
+        _nf_btns = ""
+        if _link_nf:
+            _nf_btns += f'<a href="{_link_nf}" style="background:#1a7a4a;color:#fff;padding:10px 20px;border-radius:6px;text-decoration:none;font-weight:bold;margin-right:8px">📋 Ver NFS-e</a>'
+        if _link_validar:
+            _nf_btns += f'<a href="{_link_validar}" style="background:#2563eb;color:#fff;padding:10px 20px;border-radius:6px;text-decoration:none;font-weight:bold">🔍 Validar na Receita</a>'
+        _bloco_nf = f"""
+  <hr style="border:none;border-top:1px solid #e5e7eb;margin:24px 0">
+  <h3 style="color:#1a1a2e;margin-bottom:12px">📄 Nota Fiscal de Serviço</h3>
+  <table style="width:100%;border-collapse:collapse;margin-bottom:16px">{_nf_rows}</table>
+  {"<p style='margin-top:12px'>" + _nf_btns + "</p>" if _nf_btns else ""}"""
+    else:
+        _bloco_nf = ""
+
     html = f"""
 <div style="font-family:sans-serif;max-width:600px;margin:0 auto">
   <h2 style="color:#1a1a2e">Boleto disponível — {cobranca.nome_contrato}</h2>
@@ -327,6 +356,7 @@ def _ct_enviar_email_boleto(cobranca: CobrancaMensal, contrato: ContratoCliente,
       📄 Abrir boleto
     </a>
   </p>
+  {_bloco_nf}
   <p style="color:#888;font-size:12px;margin-top:32px">Maffezzolli Capital — Consultoria Financeira</p>
 </div>"""
 
