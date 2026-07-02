@@ -774,7 +774,7 @@ async def financeiro_cobrancas_painel(request: _Req_ct, session=_Dep_ct(get_sess
   </div>
   <div class="d-flex gap-2 flex-wrap">
     <a class="btn btn-outline-secondary" href="/admin/financeiro/contratos">← Contratos</a>
-    <button class="btn btn-outline-primary" onclick="gerarMes()">⚡ Gerar cobranças do mês</button>
+    <a class="btn btn-outline-primary" href="/admin/financeiro/cobrancas/gerar-get">⚡ Gerar cobranças do mês</a>
   </div>
 </div>
 
@@ -1078,16 +1078,23 @@ async def financeiro_contrato_excluir(contrato_id: int, request: _Req_ct, sessio
     return _RR_ct("/admin/financeiro/contratos", status_code=303)
 
 
+@app.get("/admin/financeiro/cobrancas/gerar-get")
 @app.post("/admin/financeiro/cobrancas/gerar")
 @require_role({"admin", "equipe"})
 async def financeiro_cobrancas_gerar(request: _Req_ct, session=_Dep_ct(get_session)):
     ctx = get_tenant_context(request, session)
     if not ctx:
-        return _JR_ct({"error": "não autenticado"}, status_code=401)
+        return _RR_ct("/login", status_code=303)
     try:
         n = _ct_gerar_cobrancas_mes(session, ctx.company.id)
-        return _JR_ct({"ok": True, "message": f"{n} cobrança(s) gerada(s) para {_ct_competencia_atual()}"})
+        msg = f"{n} cobrança(s) gerada(s) para {_ct_competencia_atual()}" if n else f"Todas as cobranças de {_ct_competencia_atual()} já existem."
+        # GET: redireciona de volta com mensagem na URL; POST: retorna JSON
+        if request.method == "GET":
+            return _RR_ct(f"/admin/financeiro/cobrancas?msg={msg}", status_code=303)
+        return _JR_ct({"ok": True, "message": msg})
     except Exception as _e:
+        if request.method == "GET":
+            return _RR_ct(f"/admin/financeiro/cobrancas?erro={_e}", status_code=303)
         return _JR_ct({"error": str(_e)}, status_code=500)
 
 
