@@ -498,7 +498,9 @@ def _calcular_viabilidade_v2(dados: dict) -> dict:
         "tir_vf_anual": round(tir_vf_anual * 100, 2) if tir_vf_anual is not None else None,
         "vpl_vf": round(vpl_vf, 2),
         "dre_vf": [
-            {"desc": "VGV Corrigido",        "valor": round(vf_total_rec, 2),                          "tipo": "receita"},
+            {"desc": "VGV Bruto Corrigido",         "valor": round(vf_total_rec + valor_permuta, 2),           "tipo": "receita"},
+            {"desc": "(−) Permuta",                 "valor": -round(valor_permuta, 2),                         "tipo": "deducao"},
+            {"desc": "VGV Líquido Corrigido",       "valor": round(vf_total_rec, 2),                           "tipo": "subtotal"},
             {"desc": "(−) Impostos s/ Receita VF",  "valor": -round(vf_custo_imp, 2),                         "tipo": "deducao"},
             {"desc": "(−) Comercialização",         "valor": -round(vf_custo_com, 2),                         "tipo": "deducao"},
             {"desc": "(−) Custo de Obra (VF)",      "valor": -round(vf_total_cst, 2),                         "tipo": "deducao"},

@@ -483,7 +483,10 @@ def _calcular_v3_com_cri(dados: dict) -> dict:
     if dre_vf:
         vf_resultado_sem_cri = base.get("vf_resultado", 0) or 0
         vf_resultado_com_cri = round(vf_resultado_sem_cri - custo_total_cri, 2)
-        vf_total_rec = next((r["valor"] for r in dre_vf if r["tipo"] == "receita"), 1)
+        # Busca VGV Líquido Corrigido (subtotal após dedução da permuta) para base da margem
+        vf_total_rec = next((r["valor"] for r in dre_vf if r["desc"] == "VGV Líquido Corrigido"), None)
+        if vf_total_rec is None:
+            vf_total_rec = next((r["valor"] for r in dre_vf if r["tipo"] == "receita"), 1)
         vf_mgm_com_cri = round(vf_resultado_com_cri / vf_total_rec * 100, 2) if vf_total_rec else 0
         resultado_bruto_base = base.get("resultado_bruto", 0) or 0
         # Remove as 3 últimas linhas (Resultado VF, Margem VF, Ganho VF vs VP)

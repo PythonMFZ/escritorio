@@ -1185,7 +1185,7 @@ TEMPLATES["ferramenta_viabilidade.html"] = r"""
         {% endif %}
 
         {% if r.dre_vf %}
-        <h6 class="mb-2 mt-3" style="color:#ea580c;"><i class="bi bi-receipt-cutoff me-1"></i>DRE VF — Valor Final (Corrigido) <small class="text-muted fw-normal" style="font-size:.72rem;">— base: VGV Líquido (já deduzida a permuta)</small></h6>
+        <h6 class="mb-2 mt-3" style="color:#ea580c;"><i class="bi bi-receipt-cutoff me-1"></i>DRE VF — Valor Final (Corrigido pelo Índice Configurado)</h6>
         <table class="dre-table">
           <tbody>
             {% for row in r.dre_vf %}
