@@ -284,37 +284,52 @@ def _calcular_viabilidade_v2(dados: dict) -> dict:
                     receita_mensal[m_e]         += ent_parcela
                     receita_nominal_mensal[m_e] += ent_parcela  # entrada sem INCC = mesmo valor
 
+            # Helper: correção composta desde a venda (m_abs) até o mês de recebimento
+            def _corr_desde_venda(m_receb):
+                """Índice acumulado do mês de venda até m_receb (composto obra→pós-obra)."""
+                meses = m_receb - m_abs
+                if meses <= 0:
+                    return 1.0
+                if m_abs >= mes_fim_obra:
+                    # venda ocorreu pós-obra: todo o período usa corr_pos_obra
+                    return (1 + corr_pos_obra) ** meses
+                elif m_receb <= mes_fim_obra:
+                    # recebimento ainda dentro da obra
+                    return (1 + corr_obra) ** meses
+                else:
+                    # cruza a fronteira obra/pós-obra
+                    m_obra = mes_fim_obra - m_abs
+                    m_pos  = m_receb - mes_fim_obra
+                    return (1 + corr_obra) ** m_obra * (1 + corr_pos_obra) ** m_pos
+
             # Parcelas mensais durante n_par meses (começam após a entrada)
+            # Indexadas desde a data de venda (m_abs), como ocorre nos contratos
             parc_total = venda_mes * par_pct
             parc_mensal_v = parc_total / max(n_par, 1)
             for p in range(n_par):
-                m_p = m_abs + n_ent + p   # começa após as parcelas de entrada
+                m_p = m_abs + n_ent + p
                 if m_p <= n_meses:
-                    if m_p <= mes_fim_obra:
-                        corr = corr_obra
-                    else:
-                        corr = corr_pos_obra
-                    parc_corr = parc_mensal_v * ((1 + corr) ** p)
-                    receita_mensal[m_p]         += parc_corr       # com INCC → VF
-                    receita_nominal_mensal[m_p] += parc_mensal_v   # sem INCC → VP Nominal
+                    parc_corr = parc_mensal_v * _corr_desde_venda(m_p)
+                    receita_mensal[m_p]         += parc_corr
+                    receita_nominal_mensal[m_p] += parc_mensal_v
 
-            # Reforços: distribuídos ao longo da obra
+            # Reforços: distribuídos ao longo da obra — também indexados desde a venda
             if n_ref > 0 and ref_pct > 0:
                 ref_total = venda_mes * ref_pct
                 ref_unit  = ref_total / n_ref
                 for r in range(n_ref):
                     m_r = m_abs + int((duracao_obra / max(n_ref, 1)) * (r + 1))
                     if m_r <= n_meses:
-                        receita_mensal[m_r]         += ref_unit
-                        receita_nominal_mensal[m_r] += ref_unit  # reforços sem INCC = mesmo valor
+                        receita_mensal[m_r]         += ref_unit * _corr_desde_venda(m_r)
+                        receita_nominal_mensal[m_r] += ref_unit
 
-            # Chaves: no mês de conclusão da obra
+            # Chaves: no mês de conclusão da obra — indexadas desde a venda
             if chv_pct > 0:
                 chv_total = venda_mes * chv_pct
                 m_chaves  = mes_fim_obra
                 if m_chaves <= n_meses:
-                    receita_mensal[m_chaves]         += chv_total
-                    receita_nominal_mensal[m_chaves] += chv_total  # chaves sem INCC = mesmo valor
+                    receita_mensal[m_chaves]         += chv_total * _corr_desde_venda(m_chaves)
+                    receita_nominal_mensal[m_chaves] += chv_total
 
         mes_atual_venda += duracao_f
         unidades_disponiveis = max(0, unidades_disponiveis - un_fase)
@@ -498,7 +513,9 @@ def _calcular_viabilidade_v2(dados: dict) -> dict:
         "tir_vf_anual": round(tir_vf_anual * 100, 2) if tir_vf_anual is not None else None,
         "vpl_vf": round(vpl_vf, 2),
         "dre_vf": [
-            {"desc": "VGV Corrigido",        "valor": round(vf_total_rec, 2),                          "tipo": "receita"},
+            {"desc": "VGV Bruto Corrigido",         "valor": round(vf_total_rec + valor_permuta, 2),           "tipo": "receita"},
+            {"desc": "(−) Permuta",                 "valor": -round(valor_permuta, 2),                         "tipo": "deducao"},
+            {"desc": "VGV Líquido Corrigido",       "valor": round(vf_total_rec, 2),                           "tipo": "subtotal"},
             {"desc": "(−) Impostos s/ Receita VF",  "valor": -round(vf_custo_imp, 2),                         "tipo": "deducao"},
             {"desc": "(−) Comercialização",         "valor": -round(vf_custo_com, 2),                         "tipo": "deducao"},
             {"desc": "(−) Custo de Obra (VF)",      "valor": -round(vf_total_cst, 2),                         "tipo": "deducao"},
