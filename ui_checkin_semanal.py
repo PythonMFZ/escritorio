@@ -754,6 +754,16 @@ TEMPLATES["checkin_admin.html"] = r"""
   </button>
 </div>
 
+{# ── Aviso Agenda (novo sistema de agendamento) ── #}
+<div class="ck-card" style="border-color:#19875433;background:#f0fff8;">
+  <div class="fw-semibold mb-1">📅 Aviso Agenda <span class="badge bg-success ms-1" style="font-size:.65rem;">Template aprovado</span></div>
+  <div class="muted small mb-3">Envia o template <strong>aviso_agenda</strong> para todos os usuários com WhatsApp cadastrado.<br>
+  Funciona mesmo fora da janela de 24h — informa que o agendamento de reuniões agora é pelo app, na aba Agenda.</div>
+  <button class="btn btn-success btn-sm" onclick="enviarTemplate('aviso_agenda','pt_BR')">
+    <i class="bi bi-calendar-check me-1"></i>Enviar Aviso Agenda para todos
+  </button>
+</div>
+
 {# ── Reengajamento (clientes sem uso) ── #}
 <div class="ck-card" style="border-color:#dc354533;background:#fff5f5;">
   <div class="fw-semibold mb-1">🔔 Reengajamento — clientes sem uso <span class="badge bg-secondary ms-1" style="font-size:.65rem;">Requer template aprovado</span></div>
