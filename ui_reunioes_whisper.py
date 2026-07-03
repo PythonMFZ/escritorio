@@ -555,7 +555,7 @@ async def reuniao_upload_audio(
 
     return JSONResponse({
         "ok": True,
-        "msg": f"Áudio recebido ({len(content)/1024/1024:.1f}MB). Transcrição iniciada em background — atualize a página em alguns minutos.",
+        "msg": f"Áudio recebido ({_written/1024/1024:.1f}MB). Transcrição iniciada em background — atualize a página em alguns minutos.",
     })
 
 
