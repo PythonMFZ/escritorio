@@ -42,20 +42,26 @@ except Exception:
 _WHISPER_MODEL_NAME = _os2.environ.get("WHISPER_MODEL", "tiny")
 _whisper_model_cache = {}  # cache do modelo carregado
 
-# Limpeza de WAVs temporários órfãos deixados por crashes anteriores
+# Limpeza de WAVs temporários órfãos e MP3s antigos (> 7 dias) no startup
 def _cleanup_orphan_wavs():
+    import time as _time_cl
     try:
         removed = 0
         freed = 0
-        for f in _AUDIO_DIR.glob("*.wav"):
-            size = f.stat().st_size
-            f.unlink()
-            removed += 1
-            freed += size
+        cutoff = _time_cl.time() - 7 * 86400  # 7 dias
+        for f in list(_AUDIO_DIR.glob("*.wav")) + list(_AUDIO_DIR.glob("*.mp3")) + list(_AUDIO_DIR.glob("*_raw.*")):
+            try:
+                if f.stat().st_mtime < cutoff:
+                    size = f.stat().st_size
+                    f.unlink()
+                    removed += 1
+                    freed += size
+            except Exception:
+                pass
         if removed:
-            print(f"[whisper] 🧹 Limpeza startup: {removed} WAV(s) órfão(s) removidos ({freed // 1024 // 1024} MB liberados)")
+            print(f"[whisper] 🧹 Limpeza startup: {removed} arquivo(s) removidos ({freed // 1024 // 1024} MB liberados)")
     except Exception as _e_clean:
-        print(f"[whisper] Aviso: falha na limpeza de WAVs órfãos: {_e_clean}")
+        print(f"[whisper] Aviso: falha na limpeza de áudios antigos: {_e_clean}")
 
 _cleanup_orphan_wavs()
 
@@ -505,9 +511,9 @@ async def reuniao_upload_audio(
                     raw_path.unlink(missing_ok=True)
                     return JSONResponse({"ok": False, "erro": "Arquivo muito grande (máx. 1GB). Comprime o áudio antes de enviar."})
                 _f.write(chunk)
-        # verifica espaço disponível para compressão
+        # verifica espaço disponível para compressão (MP3 32kbps ocupa ~5% do original)
         free = _shu.disk_usage(str(_AUDIO_DIR)).free
-        if _written * 2 > free:
+        if _written * 1.2 > free:
             raw_path.unlink(missing_ok=True)
             return JSONResponse({"ok": False, "erro": f"Espaço insuficiente no servidor ({free // 1024 // 1024} MB livres). Contate o suporte."})
     except Exception as e:
