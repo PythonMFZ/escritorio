@@ -284,7 +284,10 @@ def _sg_sync_empreendimentos(client: _SiengeClient, company_id: int) -> dict:
 def _sg_sync_contratos_venda(client: _SiengeClient, company_id: int) -> dict:
     inicio = datetime.now(timezone.utc)
     try:
-        items = client.get_all("sale-contracts")
+        # Endpoint confirmado pela doc: /contracts (não /sale-contracts)
+        items = client.get_all("contracts")
+        if not items:
+            items = client.get_all("sale-contracts")
         with _Ses_sg(engine) as s:
             existentes = s.exec(_sel_sg(SiengeContratoVenda).where(
                 SiengeContratoVenda.company_id == company_id)).all()
@@ -329,7 +332,8 @@ def _sg_resolve_emp(emp_map: dict, raw_id) -> tuple[str, str]:
     return sid, nome
 
 
-def _sg_bulk_get_all(client: _SiengeClient, path: str, page_size: int = 500) -> list:
+def _sg_bulk_get_all(client: _SiengeClient, path: str, page_size: int = 500,
+                     extra_params: dict = None) -> list:
     """Busca todas as páginas da Bulk Data API do Sienge."""
     try:
         import httpx as _hx_bulk
@@ -340,12 +344,19 @@ def _sg_bulk_get_all(client: _SiengeClient, path: str, page_size: int = 500) -> 
     offset = 0
     while True:
         try:
+            params = {"limit": page_size, "offset": offset}
+            if extra_params:
+                params.update(extra_params)
             resp = _hx_bulk.get(
                 f"{bulk_base}/{path.lstrip('/')}",
                 headers=client._headers(),
-                params={"limit": page_size, "offset": offset},
+                params=params,
                 timeout=60.0,
             )
+            if resp.status_code == 429:
+                print(f"[sienge] bulk {path} rate limit — aguardando 65s")
+                _time_sg.sleep(65)
+                continue
             if resp.status_code != 200:
                 print(f"[sienge] bulk {path} HTTP {resp.status_code}: {resp.text[:200]}")
                 break
@@ -372,11 +383,14 @@ def _sg_sync_contas_pagar(client: _SiengeClient, company_id: int) -> dict:
                 SiengeEmpreendimento.company_id == company_id)).all()
         emp_map = {str(e.sienge_id): e.nome for e in emps}
 
-        # Endpoint correto: Bulk Data /outcome (Parcelas do contas a pagar)
-        # Fallback: /outcome/by-bills ou REST /bill-debts
-        items = _sg_bulk_get_all(client, "outcome")
+        # Bulk /outcome exige startDate obrigatório — últimos 24 meses
+        from datetime import date as _date_sg
+        start = (_date_sg.today().replace(year=_date_sg.today().year - 2)
+                 .isoformat())  # 2 anos atrás
+        bulk_params = {"startDate": start}
+        items = _sg_bulk_get_all(client, "outcome", extra_params=bulk_params)
         if not items:
-            items = _sg_bulk_get_all(client, "outcome/by-bills")
+            items = _sg_bulk_get_all(client, "outcome/by-bills", extra_params=bulk_params)
         if not items:
             items = client.get_all("bill-debts", page_size=200)
 
@@ -436,11 +450,14 @@ def _sg_sync_contas_receber(client: _SiengeClient, company_id: int) -> dict:
                 SiengeEmpreendimento.company_id == company_id)).all()
         emp_map = {str(e.sienge_id): e.nome for e in emps}
 
-        # Bulk Data: Parcelas do contas a receber → /outcome (mesmo path, módulo diferente)
-        # A Bulk Data de receber usa endpoint próprio; tenta os caminhos conhecidos
-        items = _sg_bulk_get_all(client, "receivable-bills/outcome")
+        from datetime import date as _date_sg2
+        start2 = (_date_sg2.today().replace(year=_date_sg2.today().year - 2).isoformat())
+        bulk_params2 = {"startDate": start2}
+        # Bulk parcelas a receber — tenta caminhos conhecidos com startDate
+        items = _sg_bulk_get_all(client, "receivable-bills", extra_params=bulk_params2)
         if not items:
-            items = _sg_bulk_get_all(client, "accounts-receivable/outcome")
+            items = _sg_bulk_get_all(client, "accounts-receivable/receivable-bills",
+                                     extra_params=bulk_params2)
         if not items:
             items = client.get_all("accounts-receivable/receivable-bills", page_size=200)
         with _Ses_sg(engine) as s:
@@ -486,7 +503,20 @@ def _sg_sync_medicoes(client: _SiengeClient, company_id: int) -> dict:
     """Sincroniza medições de contratos de suprimento."""
     inicio = datetime.now(timezone.utc)
     try:
-        items = client.get_all("supply-contracts/measurements", page_size=200)
+        # supply-contracts/measurements exige enterpriseId — busca por cada empreendimento
+        with _Ses_sg(engine) as s_emp:
+            emps_med = s_emp.exec(_sel_sg(SiengeEmpreendimento).where(
+                SiengeEmpreendimento.company_id == company_id)).all()
+        items = []
+        for emp in emps_med:
+            try:
+                r = client.get_all("supply-contracts/measurements",
+                                   extra_params={"enterpriseId": emp.sienge_id}, page_size=100)
+                items.extend(r)
+                if r:
+                    _time_sg.sleep(0.5)
+            except Exception:
+                pass
         # Armazena no log (medições não têm modelo próprio, guardamos só o count por ora)
         count = len(items)
         with _Ses_sg(engine) as s:
