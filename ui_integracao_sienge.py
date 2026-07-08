@@ -290,7 +290,8 @@ def _sg_sync_contratos_venda(client: _SiengeClient, company_id: int) -> dict:
         start_cv = _today_cv.replace(year=_today_cv.year - 5).isoformat()
         end_cv   = _today_cv.isoformat()
         print(f"[sienge] contratos_venda: tentando bulk /sales startDate={start_cv} endDate={end_cv}")
-        items = _sg_bulk_get_all(client, "sales", extra_params={"startDate": start_cv, "endDate": end_cv})
+        items = _sg_bulk_get_all(client, "sales", page_size=100,
+                                 extra_params={"startDate": start_cv, "endDate": end_cv})
         print(f"[sienge] contratos_venda: /sales={len(items)} itens")
         if not items:
             items = client.get_all("contracts")
@@ -341,7 +342,7 @@ def _sg_resolve_emp(emp_map: dict, raw_id) -> tuple[str, str]:
 
 
 def _sg_bulk_get_all(client: _SiengeClient, path: str, page_size: int = 500,
-                     extra_params: dict = None) -> list:
+                     extra_params: dict = None, max_rate_retries: int = 3) -> list:
     """Busca todas as páginas da Bulk Data API do Sienge."""
     try:
         import httpx as _hx_bulk
@@ -350,6 +351,7 @@ def _sg_bulk_get_all(client: _SiengeClient, path: str, page_size: int = 500,
     bulk_base = f"https://api.sienge.com.br/{client.tenant}/public/api/bulk-data/v1"
     result = []
     offset = 0
+    rate_retries = 0
     while True:
         try:
             params = {"limit": page_size, "offset": offset}
@@ -362,9 +364,15 @@ def _sg_bulk_get_all(client: _SiengeClient, path: str, page_size: int = 500,
                 timeout=60.0,
             )
             if resp.status_code == 429:
-                print(f"[sienge] bulk {path} rate limit — aguardando 65s")
-                _time_sg.sleep(65)
+                rate_retries += 1
+                if rate_retries > max_rate_retries:
+                    print(f"[sienge] bulk {path} rate limit excedido após {max_rate_retries} tentativas — abortando")
+                    break
+                wait = 65 * rate_retries   # backoff: 65s, 130s, 195s
+                print(f"[sienge] bulk {path} rate limit ({rate_retries}/{max_rate_retries}) — aguardando {wait}s")
+                _time_sg.sleep(wait)
                 continue
+            rate_retries = 0  # reset em caso de sucesso
             if resp.status_code != 200:
                 print(f"[sienge] bulk {path} HTTP {resp.status_code}: {resp.text[:400]}")
                 break
