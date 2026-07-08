@@ -386,71 +386,99 @@ def _sg_resolve_emp(emp_map: dict, raw_id) -> tuple[str, str]:
 
 def _sg_bulk_get_all(client: _SiengeClient, path: str, page_size: int = 500,
                      extra_params: dict = None, max_rate_retries: int = 3) -> list:
-    """Busca todas as páginas da Bulk Data API do Sienge."""
+    """Busca dados da Bulk Data API do Sienge.
+
+    A Bulk API NÃO aceita limit/offset — retorna tudo dentro do intervalo de datas.
+    Se a resposta indicar paginação (totalPages > 1), itera usando parâmetro 'page'.
+    """
     try:
         import httpx as _hx_bulk
     except ImportError:
         return []
     bulk_base = f"https://api.sienge.com.br/{client.tenant}/public/api/bulk-data/v1"
     result = []
-    offset = 0
     rate_retries = 0
+    page = 0  # alguns endpoints Bulk usam page-based (0-indexed)
+
     while True:
         try:
-            params = {"limit": page_size, "offset": offset}
-            if extra_params:
-                params.update(extra_params)
+            # Bulk API usa apenas os parâmetros do domínio (startDate/endDate)
+            # mais 'page' se houver mais páginas. Nunca envia limit/offset.
+            params = dict(extra_params or {})
+            if page > 0:
+                params["page"] = page
+
             resp = _hx_bulk.get(
                 f"{bulk_base}/{path.lstrip('/')}",
                 headers=client._headers(),
                 params=params,
-                timeout=60.0,
+                timeout=90.0,
             )
             if resp.status_code == 429:
                 rate_retries += 1
                 if rate_retries > max_rate_retries:
                     print(f"[sienge] bulk {path} rate limit excedido após {max_rate_retries} tentativas — abortando")
                     break
-                wait = 65 * rate_retries   # backoff: 65s, 130s, 195s
+                wait = 65 * rate_retries
                 print(f"[sienge] bulk {path} rate limit ({rate_retries}/{max_rate_retries}) — aguardando {wait}s")
                 _time_sg.sleep(wait)
                 continue
-            rate_retries = 0  # reset em caso de sucesso
+            rate_retries = 0
             if resp.status_code != 200:
-                print(f"[sienge] bulk {path} HTTP {resp.status_code}: {resp.text[:400]}")
+                print(f"[sienge] bulk {path} HTTP {resp.status_code}: {resp.text[:600]}")
                 break
             data = resp.json()
-            # Log diagnóstico da estrutura na primeira página
-            if offset == 0:
-                if isinstance(data, dict):
-                    print(f"[sienge] bulk {path} keys={list(data.keys())[:10]} total_field={data.get('resultSetMetadata') or data.get('totalCount') or data.get('total') or '?'}")
-                else:
-                    print(f"[sienge] bulk {path} type={type(data).__name__} len={len(data) if hasattr(data,'__len__') else '?'}")
-            # Tenta todas as chaves conhecidas de paginação Sienge
+
+            if page == 0:
+                keys = list(data.keys())[:12] if isinstance(data, dict) else f"list[{len(data)}]"
+                print(f"[sienge] bulk {path} estrutura: {keys}")
+
             if isinstance(data, list):
-                items = data
-            else:
-                items = (data.get("results")
-                      or data.get("data")
-                      or data.get("items")
-                      or data.get("records")
-                      or data.get("content")
-                      or [])
+                result.extend(data)
+                break  # lista plana = resposta completa
+
+            items = (data.get("results")
+                  or data.get("data")
+                  or data.get("items")
+                  or data.get("records")
+                  or data.get("content")
+                  or [])
             result.extend(items)
-            meta = data.get("resultSetMetadata") or {}
-            total = (meta.get("count")
-                  or data.get("totalCount")
-                  or data.get("total")
-                  or data.get("totalElements")
-                  or len(items))
-            offset += page_size
-            if offset >= total or not items:
-                break
-            _time_sg.sleep(3.5)   # Bulk: 20 req/min → ~3s entre páginas
+
+            # Verifica paginação (totalPages / hasNextPage)
+            total_pages = (data.get("totalPages")
+                        or (data.get("resultSetMetadata") or {}).get("totalPages")
+                        or 1)
+            has_next = data.get("hasNextPage") or data.get("last") is False
+            if (isinstance(total_pages, int) and page + 1 < total_pages) or has_next:
+                page += 1
+                _time_sg.sleep(4.0)
+                continue
+            break
         except Exception as _e_bulk:
             print(f"[sienge] bulk {path} erro: {_e_bulk}")
             break
     return result
+
+
+def _sg_date_inicio_sync(session, company_id: int, modulo: str, client_id=None,
+                          anos_historico: int = 2) -> str:
+    """Retorna startDate para sync incremental: 7 dias antes do último sync OK, ou N anos atrás."""
+    from datetime import date as _d, timedelta as _td
+    ultimo = session.exec(
+        _sel_sg(SiengeSyncLog).where(
+            SiengeSyncLog.company_id == company_id,
+            SiengeSyncLog.client_id == client_id,
+            SiengeSyncLog.modulo == modulo,
+            SiengeSyncLog.status == "ok",
+            SiengeSyncLog.registros > 0,
+        ).order_by(SiengeSyncLog.id.desc())
+    ).first()
+    if ultimo and ultimo.finalizado_em:
+        data = ultimo.finalizado_em.date() - _td(days=7)
+        return data.isoformat()
+    hoje = _d.today()
+    return hoje.replace(year=hoje.year - anos_historico).isoformat()
 
 
 def _sg_sync_contas_pagar(client: _SiengeClient, company_id: int, client_id=None) -> dict:
@@ -461,13 +489,11 @@ def _sg_sync_contas_pagar(client: _SiengeClient, company_id: int, client_id=None
             emps = s.exec(_sel_sg(SiengeEmpreendimento).where(
                 SiengeEmpreendimento.company_id == company_id,
                 SiengeEmpreendimento.client_id == client_id)).all()
-        emp_map = {str(e.sienge_id): e.nome for e in emps}
+            emp_map = {str(e.sienge_id): e.nome for e in emps}
+            start = _sg_date_inicio_sync(s, company_id, "contas_pagar", client_id)
 
-        # 1. Bulk /outcome (20 req/min, quota diária limitada)
         from datetime import date as _date_sg
-        _today_sg = _date_sg.today()
-        start = _today_sg.replace(year=_today_sg.year - 2).isoformat()
-        end   = _today_sg.isoformat()
+        end = _date_sg.today().isoformat()
         bulk_params = {"startDate": start, "endDate": end}
         print(f"[sienge] contas_pagar: bulk /outcome startDate={start} endDate={end}")
         items = _sg_bulk_get_all(client, "outcome", extra_params=bulk_params, max_rate_retries=2)
@@ -541,21 +567,18 @@ def _sg_sync_contas_receber(client: _SiengeClient, company_id: int, client_id=No
             emps = s.exec(_sel_sg(SiengeEmpreendimento).where(
                 SiengeEmpreendimento.company_id == company_id,
                 SiengeEmpreendimento.client_id == client_id)).all()
-        emp_map = {str(e.sienge_id): e.nome for e in emps}
+            emp_map = {str(e.sienge_id): e.nome for e in emps}
+            start2 = _sg_date_inicio_sync(s, company_id, "contas_receber", client_id)
 
-        # 1. Bulk /income (20 req/min, quota diária limitada)
         from datetime import date as _date_sg2
-        _today_sg2 = _date_sg2.today()
-        start2 = _today_sg2.replace(year=_today_sg2.year - 2).isoformat()
-        end2   = _today_sg2.isoformat()
+        end2 = _date_sg2.today().isoformat()
         bulk_params2 = {"startDate": start2, "endDate": end2}
         print(f"[sienge] contas_receber: bulk /income startDate={start2} endDate={end2}")
-        items = _sg_bulk_get_all(client, "income", extra_params=bulk_params2, max_rate_retries=2)
+        items = _sg_bulk_get_all(client, "income", extra_params=bulk_params2, max_rate_retries=3)
         print(f"[sienge] contas_receber: /income={len(items)} itens")
 
-        # 2. Fallback /income/by-bills
         if not items:
-            items = _sg_bulk_get_all(client, "income/by-bills", extra_params=bulk_params2, max_rate_retries=2)
+            items = _sg_bulk_get_all(client, "income/by-bills", extra_params=bulk_params2, max_rate_retries=3)
             print(f"[sienge] contas_receber: /income/by-bills={len(items)} itens")
 
         if not items:
