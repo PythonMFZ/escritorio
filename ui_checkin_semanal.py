@@ -800,10 +800,19 @@ TEMPLATES["checkin_admin.html"] = r"""
 <script>
 let _diagVisible = false;
 
+async function _safeJson(r) {
+  const ct = r.headers.get('content-type') || '';
+  if (!ct.includes('json')) {
+    if (r.status === 401 || r.url.includes('/login')) throw new Error('Sessão expirada — recarregue a página e faça login novamente.');
+    throw new Error(`Resposta inesperada (${r.status}). Recarregue a página.`);
+  }
+  return r.json();
+}
+
 async function carregarStatus() {
   try {
     const r = await fetch('/admin/checkin/status');
-    const d = await r.json();
+    const d = await _safeJson(r);
     document.getElementById('stTotal').textContent  = d.total ?? '—';
     document.getElementById('stResp').textContent   = d.respondidos ?? '—';
     document.getElementById('stAg').textContent     = d.aguardando ?? '—';
@@ -837,7 +846,7 @@ async function disparar() {
   mostrarLog('Disparando check-ins…');
   try {
     const r = await fetch('/admin/checkin/disparar-agora?force=' + force, {method:'POST'});
-    const d = await r.json();
+    const d = await _safeJson(r);
     const badge = document.getElementById('logBadge');
     badge.textContent = d.ok ? '✅ OK' : '⚠️ Com erros';
     badge.className = 'badge ' + (d.ok ? 'bg-success' : 'bg-warning text-dark');
@@ -854,7 +863,7 @@ async function lembretes() {
   mostrarLog('Enviando lembretes…');
   try {
     const r = await fetch('/admin/checkin/disparar-lembretes', {method:'POST'});
-    const d = await r.json();
+    const d = await _safeJson(r);
     document.getElementById('logBadge').textContent = '✅ OK';
     document.getElementById('logBadge').className = 'badge bg-success';
     let resumo = `Semana: ${d.semana}  |  Enviados: ${d.enviados}  Pulados: ${d.pulados}  Erros: ${d.erros}\n\n`;
@@ -874,7 +883,7 @@ async function enviarTemplate(templateName, langCode) {
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({template_name: templateName, language_code: langCode}),
     });
-    const d = await r.json();
+    const d = await _safeJson(r);
     const badge = document.getElementById('logBadge');
     badge.textContent = d.ok ? '✅ OK' : '⚠️ Com erros';
     badge.className = 'badge ' + (d.ok ? 'bg-success' : 'bg-warning text-dark');
@@ -895,7 +904,7 @@ async function enviarReengajamento() {
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({template_name: templateName, language_code: 'pt_BR'}),
     });
-    const d = await r.json();
+    const d = await _safeJson(r);
     const badge = document.getElementById('logBadge');
     badge.textContent = d.ok ? '✅ OK' : '⚠️ Com erros';
     badge.className = 'badge ' + (d.ok ? 'bg-success' : 'bg-warning text-dark');
@@ -916,7 +925,7 @@ async function enviarMsgPersonalizada() {
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({mensagem: msg}),
     });
-    const d = await r.json();
+    const d = await _safeJson(r);
     const badge = document.getElementById('logBadge');
     badge.textContent = d.ok ? '✅ OK' : '⚠️ Com erros';
     badge.className = 'badge ' + (d.ok ? 'bg-success' : 'bg-warning text-dark');
