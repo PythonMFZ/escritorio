@@ -223,7 +223,7 @@ class _SiengeClient:
     def test_connection(self) -> tuple[bool, str]:
         """Testa conectividade e credenciais."""
         try:
-            data = self.get("buildings", {"limit": 1, "offset": 0})
+            data = self.get("enterprises", {"limit": 1, "offset": 0})
             return True, f"Conexão OK — tenant '{self.tenant}'"
         except Exception as _e:
             return False, str(_e)
@@ -245,7 +245,7 @@ def _sg_log(session, company_id: int, modulo: str, status: str,
 def _sg_sync_empreendimentos(client: _SiengeClient, company_id: int) -> dict:
     inicio = datetime.now(timezone.utc)
     try:
-        items = client.get_all("buildings")
+        items = client.get_all("enterprises")
         with _Ses_sg(engine) as s:
             # Remove anteriores desta empresa para reimportar limpo
             existentes = s.exec(_sel_sg(SiengeEmpreendimento).where(
@@ -254,15 +254,20 @@ def _sg_sync_empreendimentos(client: _SiengeClient, company_id: int) -> dict:
 
             count = 0
             for item in items:
-                sid = item.get("id") or item.get("buildingId") or 0
+                # API /enterprises usa enterpriseId; fallback para id/buildingId
+                sid = item.get("enterpriseId") or item.get("id") or item.get("buildingId") or 0
                 obj = ids_existentes.get(sid) or SiengeEmpreendimento(
                     company_id=company_id, sienge_id=sid)
-                obj.nome       = item.get("name", "") or item.get("buildingName", "")
-                obj.codigo     = str(item.get("code", "") or "")
-                obj.situacao   = item.get("buildingStatus", "") or item.get("status", "")
-                obj.cidade     = (item.get("address") or {}).get("city", "")
-                obj.uf         = (item.get("address") or {}).get("state", "")
-                obj.n_unidades = item.get("numberOfUnits", 0) or 0
+                obj.nome       = (item.get("name") or item.get("enterpriseName") or
+                                  item.get("buildingName") or "")
+                obj.codigo     = str(item.get("code") or item.get("enterpriseCode") or "")
+                obj.situacao   = (item.get("status") or item.get("buildingStatus") or
+                                  item.get("enterpriseStatus") or "")
+                obj.cidade     = (item.get("city") or
+                                  (item.get("address") or {}).get("city", "") or "")
+                obj.uf         = (item.get("state") or item.get("uf") or
+                                  (item.get("address") or {}).get("state", "") or "")
+                obj.n_unidades = item.get("numberOfUnits") or item.get("unitsCount") or 0
                 obj.raw_json   = _json_sg.dumps(item, ensure_ascii=False)[:4000]
                 obj.synced_at  = datetime.now(timezone.utc)
                 s.add(obj)
@@ -279,7 +284,7 @@ def _sg_sync_empreendimentos(client: _SiengeClient, company_id: int) -> dict:
 def _sg_sync_contratos_venda(client: _SiengeClient, company_id: int) -> dict:
     inicio = datetime.now(timezone.utc)
     try:
-        items = client.get_all("sales-contracts")
+        items = client.get_all("sale-contracts")
         with _Ses_sg(engine) as s:
             existentes = s.exec(_sel_sg(SiengeContratoVenda).where(
                 SiengeContratoVenda.company_id == company_id)).all()
@@ -287,16 +292,20 @@ def _sg_sync_contratos_venda(client: _SiengeClient, company_id: int) -> dict:
 
             count = 0
             for item in items:
-                sid = item.get("id") or item.get("contractId") or 0
+                sid = (item.get("saleContractId") or item.get("contractId") or
+                       item.get("id") or 0)
                 obj = ids_existentes.get(sid) or SiengeContratoVenda(
                     company_id=company_id, sienge_id=sid)
-                obj.empreendimento_id = item.get("buildingId", 0) or 0
-                obj.numero       = str(item.get("contractNumber", "") or "")
-                obj.cliente_nome = item.get("customerName", "") or ""
-                obj.situacao     = item.get("contractStatus", "") or item.get("situation", "")
-                obj.valor_total  = float(item.get("totalValue", 0) or 0)
-                obj.data_contrato = str(item.get("contractDate", "") or "")
-                obj.unidade      = str(item.get("unitId", "") or item.get("unit", "") or "")
+                obj.empreendimento_id = (item.get("enterpriseId") or
+                                         item.get("buildingId") or 0)
+                obj.numero       = str(item.get("contractNumber") or item.get("number") or "")
+                obj.cliente_nome = (item.get("customerName") or item.get("clientName") or "")
+                obj.situacao     = (item.get("situation") or item.get("contractStatus") or
+                                    item.get("status") or "")
+                obj.valor_total  = float(item.get("totalValue") or item.get("value") or 0)
+                obj.data_contrato = str(item.get("contractDate") or item.get("date") or "")
+                obj.unidade      = str(item.get("unitId") or item.get("unit") or
+                                       item.get("unitCode") or "")
                 obj.raw_json     = _json_sg.dumps(item, ensure_ascii=False)[:4000]
                 obj.synced_at    = datetime.now(timezone.utc)
                 s.add(obj)
@@ -336,7 +345,7 @@ def _sg_sync_contas_pagar(client: _SiengeClient, company_id: int) -> dict:
             bulk_base = f"https://api.sienge.com.br/{client.tenant}/public/api/bulk-data/v1"
             import httpx as _hx2
             resp = _hx2.get(
-                f"{bulk_base}/bills-to-pay/installments",
+                f"{bulk_base}/bill-debts/installments",
                 headers=client._headers(),
                 params={"limit": 500, "offset": 0},
                 timeout=60.0,
@@ -348,7 +357,7 @@ def _sg_sync_contas_pagar(client: _SiengeClient, company_id: int) -> dict:
             pass
 
         if not items:
-            items = client.get_all("bills-to-pay", page_size=200)
+            items = client.get_all("bill-debts", page_size=200)
 
         with _Ses_sg(engine) as s:
             existentes = s.exec(_sel_sg(SiengeContaPagar).where(
@@ -357,18 +366,25 @@ def _sg_sync_contas_pagar(client: _SiengeClient, company_id: int) -> dict:
 
             count = 0
             for item in items:
-                sid = str(item.get("id") or item.get("installmentId") or item.get("billId", "")) + \
-                      "-" + str(item.get("installmentNumber", ""))
+                # bill-debts: id principal é billDebtId ou id; parcela via installmentNumber
+                bill_id = str(item.get("billDebtId") or item.get("id") or
+                              item.get("installmentId") or item.get("billId") or "")
+                inst_num = str(item.get("installmentNumber") or item.get("parcelNumber") or "")
+                sid = f"{bill_id}-{inst_num}" if inst_num else bill_id
                 if not sid.strip("-"):
                     continue
                 obj = ids_existentes.get(sid) or SiengeContaPagar(
                     company_id=company_id, sienge_id=sid)
-                obj.credor_nome  = item.get("creditorName", "") or item.get("supplierName", "") or ""
-                obj.descricao    = item.get("description", "") or item.get("historicDescription", "") or ""
-                obj.valor        = float(item.get("netValue", 0) or item.get("value", 0) or 0)
-                obj.vencimento   = str(item.get("dueDate", "") or "")
-                obj.situacao     = str(item.get("situation", "") or item.get("status", "") or "")
-                obj.data_realizacao = str(item.get("paymentDate", "") or item.get("settlementDate", "") or "")
+                obj.credor_nome  = (item.get("creditorName") or item.get("supplierName") or
+                                    item.get("vendorName") or "")
+                obj.descricao    = (item.get("description") or item.get("historicDescription") or
+                                    item.get("memo") or "")
+                obj.valor        = float(item.get("netValue") or item.get("value") or
+                                         item.get("amount") or 0)
+                obj.vencimento   = str(item.get("dueDate") or item.get("expirationDate") or "")
+                obj.situacao     = str(item.get("situation") or item.get("status") or "")
+                obj.data_realizacao = str(item.get("paymentDate") or item.get("settlementDate") or
+                                          item.get("paidDate") or "")
                 obj.centro_custo = str(item.get("costCenterName", "") or item.get("costCenter", "") or
                                        item.get("costCenterDescription", "") or "")
                 emp_id, emp_nome = _sg_resolve_emp(emp_map, item.get("buildingId", ""))
@@ -396,7 +412,7 @@ def _sg_sync_contas_receber(client: _SiengeClient, company_id: int) -> dict:
                 SiengeEmpreendimento.company_id == company_id)).all()
         emp_map = {str(e.sienge_id): e.nome for e in emps}
 
-        items = client.get_all("receivable-bills", page_size=200)
+        items = client.get_all("accounts-receivable/receivable-bills", page_size=200)
         with _Ses_sg(engine) as s:
             existentes = s.exec(_sel_sg(SiengeContaReceber).where(
                 SiengeContaReceber.company_id == company_id)).all()
@@ -404,17 +420,20 @@ def _sg_sync_contas_receber(client: _SiengeClient, company_id: int) -> dict:
 
             count = 0
             for item in items:
-                sid = str(item.get("id") or item.get("receivableBillId", ""))
+                sid = str(item.get("receivableBillId") or item.get("billId") or item.get("id") or "")
                 if not sid:
                     continue
                 obj = ids_existentes.get(sid) or SiengeContaReceber(
                     company_id=company_id, sienge_id=sid)
-                obj.devedor_nome = item.get("customerName", "") or item.get("debtorName", "") or ""
-                obj.descricao    = item.get("description", "") or ""
-                obj.valor        = float(item.get("value", 0) or item.get("grossValue", 0) or 0)
-                obj.vencimento   = str(item.get("dueDate", "") or "")
-                obj.situacao     = str(item.get("situation", "") or item.get("status", "") or "")
-                obj.data_realizacao = str(item.get("receiptDate", "") or item.get("settlementDate", "") or "")
+                obj.devedor_nome = (item.get("customerName") or item.get("clientName") or
+                                    item.get("debtorName") or "")
+                obj.descricao    = (item.get("description") or item.get("historicDescription") or "")
+                obj.valor        = float(item.get("value") or item.get("grossValue") or
+                                         item.get("amount") or 0)
+                obj.vencimento   = str(item.get("dueDate") or item.get("expirationDate") or "")
+                obj.situacao     = str(item.get("situation") or item.get("status") or "")
+                obj.data_realizacao = str(item.get("receiptDate") or item.get("settlementDate") or
+                                          item.get("receivedDate") or "")
                 obj.centro_custo = str(item.get("costCenterName", "") or item.get("costCenter", "") or "")
                 emp_id, emp_nome = _sg_resolve_emp(emp_map, item.get("buildingId", ""))
                 obj.empreendimento_id   = emp_id
@@ -437,7 +456,7 @@ def _sg_sync_medicoes(client: _SiengeClient, company_id: int) -> dict:
     """Sincroniza medições de contratos de suprimento."""
     inicio = datetime.now(timezone.utc)
     try:
-        items = client.get_all("supply-contracts/measurements/all", page_size=200)
+        items = client.get_all("supply-contracts/measurements", page_size=200)
         # Armazena no log (medições não têm modelo próprio, guardamos só o count por ora)
         count = len(items)
         with _Ses_sg(engine) as s:
