@@ -82,33 +82,41 @@ class SiengeContratoVenda(_SM_sg, table=True):
 class SiengeContaPagar(_SM_sg, table=True):
     __tablename__  = "siengecontapagar"
     __table_args__ = {"extend_existing": True}
-    id:             Optional[int] = _F_sg(default=None, primary_key=True)
-    company_id:     int           = _F_sg(index=True)
-    sienge_id:      str           = _F_sg(index=True)   # id composto Sienge
-    credor_nome:    str           = _F_sg(default="")
-    descricao:      str           = _F_sg(default="")
-    valor:          float         = _F_sg(default=0.0)
-    vencimento:     str           = _F_sg(default="")
-    situacao:       str           = _F_sg(default="")
-    empreendimento: str           = _F_sg(default="")
-    raw_json:       str           = _F_sg(default="")
-    synced_at:      datetime      = _F_sg(default_factory=lambda: datetime.now(timezone.utc))
+    id:                  Optional[int] = _F_sg(default=None, primary_key=True)
+    company_id:          int           = _F_sg(index=True)
+    sienge_id:           str           = _F_sg(index=True)   # id composto Sienge
+    credor_nome:         str           = _F_sg(default="")
+    descricao:           str           = _F_sg(default="")
+    valor:               float         = _F_sg(default=0.0)
+    vencimento:          str           = _F_sg(default="")
+    data_realizacao:     str           = _F_sg(default="")   # data do pagamento efetivo (se pago)
+    situacao:            str           = _F_sg(default="")
+    empreendimento_id:   str           = _F_sg(default="")   # ID do empreendimento no Sienge
+    empreendimento_nome: str           = _F_sg(default="")   # Nome resolvido
+    centro_custo:        str           = _F_sg(default="")   # centro de custo vindo do Sienge
+    empreendimento:      str           = _F_sg(default="")   # campo legado (mantido)
+    raw_json:            str           = _F_sg(default="")
+    synced_at:           datetime      = _F_sg(default_factory=lambda: datetime.now(timezone.utc))
 
 
 class SiengeContaReceber(_SM_sg, table=True):
     __tablename__  = "siengecontareceber"
     __table_args__ = {"extend_existing": True}
-    id:             Optional[int] = _F_sg(default=None, primary_key=True)
-    company_id:     int           = _F_sg(index=True)
-    sienge_id:      str           = _F_sg(index=True)
-    devedor_nome:   str           = _F_sg(default="")
-    descricao:      str           = _F_sg(default="")
-    valor:          float         = _F_sg(default=0.0)
-    vencimento:     str           = _F_sg(default="")
-    situacao:       str           = _F_sg(default="")
-    empreendimento: str           = _F_sg(default="")
-    raw_json:       str           = _F_sg(default="")
-    synced_at:      datetime      = _F_sg(default_factory=lambda: datetime.now(timezone.utc))
+    id:                  Optional[int] = _F_sg(default=None, primary_key=True)
+    company_id:          int           = _F_sg(index=True)
+    sienge_id:           str           = _F_sg(index=True)
+    devedor_nome:        str           = _F_sg(default="")
+    descricao:           str           = _F_sg(default="")
+    valor:               float         = _F_sg(default=0.0)
+    vencimento:          str           = _F_sg(default="")
+    data_realizacao:     str           = _F_sg(default="")   # data do recebimento efetivo
+    situacao:            str           = _F_sg(default="")
+    empreendimento_id:   str           = _F_sg(default="")
+    empreendimento_nome: str           = _F_sg(default="")
+    centro_custo:        str           = _F_sg(default="")
+    empreendimento:      str           = _F_sg(default="")   # campo legado
+    raw_json:            str           = _F_sg(default="")
+    synced_at:           datetime      = _F_sg(default_factory=lambda: datetime.now(timezone.utc))
 
 
 class SiengeSyncLog(_SM_sg, table=True):
@@ -131,6 +139,28 @@ for _tbl_sg in [SiengeConfig, SiengeEmpreendimento, SiengeContratoVenda,
         _SM_sg.metadata.create_all(engine, tables=[_tbl_sg.__table__], checkfirst=True)
     except Exception as _e_sg:
         print(f"[sienge] Tabela {_tbl_sg.__tablename__}: {_e_sg}")
+
+# Migrations: novos campos adicionados
+_sg_migrations = [
+    ("siengecontapagar",   "data_realizacao",     "VARCHAR DEFAULT ''"),
+    ("siengecontapagar",   "empreendimento_id",   "VARCHAR DEFAULT ''"),
+    ("siengecontapagar",   "empreendimento_nome", "VARCHAR DEFAULT ''"),
+    ("siengecontapagar",   "centro_custo",        "VARCHAR DEFAULT ''"),
+    ("siengecontareceber", "data_realizacao",     "VARCHAR DEFAULT ''"),
+    ("siengecontareceber", "empreendimento_id",   "VARCHAR DEFAULT ''"),
+    ("siengecontareceber", "empreendimento_nome", "VARCHAR DEFAULT ''"),
+    ("siengecontareceber", "centro_custo",        "VARCHAR DEFAULT ''"),
+]
+if DATABASE_URL.startswith("postgres"):
+    from sqlalchemy import text as _txt_sg
+    for _t_sg, _col_sg, _def_sg in _sg_migrations:
+        try:
+            with engine.begin() as _c_sg:
+                _c_sg.execute(_txt_sg(
+                    f"ALTER TABLE {_t_sg} ADD COLUMN IF NOT EXISTS {_col_sg} {_def_sg}"
+                ))
+        except Exception as _e_mg_sg:
+            print(f"[sienge] migration {_t_sg}.{_col_sg}: {_e_mg_sg}")
 
 
 # ── Cliente HTTP ──────────────────────────────────────────────────────────────
@@ -280,10 +310,26 @@ def _sg_sync_contratos_venda(client: _SiengeClient, company_id: int) -> dict:
         return {"ok": False, "erro": str(_e)}
 
 
+_SITUACAO_REALIZADO_PAGAR   = {"pago", "liquidado", "quitado", "pg", "paid"}
+_SITUACAO_REALIZADO_RECEBER = {"recebido", "liquidado", "quitado", "baixado", "received"}
+
+def _sg_resolve_emp(emp_map: dict, raw_id) -> tuple[str, str]:
+    """Retorna (empreendimento_id, empreendimento_nome) dado um id do Sienge."""
+    sid = str(raw_id or "")
+    nome = emp_map.get(sid, emp_map.get(raw_id, "")) or ""
+    return sid, nome
+
+
 def _sg_sync_contas_pagar(client: _SiengeClient, company_id: int) -> dict:
     """Usa Bulk Data API para buscar parcelas de contas a pagar."""
     inicio = datetime.now(timezone.utc)
     try:
+        # Mapa buildingId → nome para resolução rápida
+        with _Ses_sg(engine) as s:
+            emps = s.exec(_sel_sg(SiengeEmpreendimento).where(
+                SiengeEmpreendimento.company_id == company_id)).all()
+        emp_map = {str(e.sienge_id): e.nome for e in emps}
+
         # Bulk Data retorna volume maior; tenta endpoint bulk primeiro, fallback REST
         items = []
         try:
@@ -322,7 +368,13 @@ def _sg_sync_contas_pagar(client: _SiengeClient, company_id: int) -> dict:
                 obj.valor        = float(item.get("netValue", 0) or item.get("value", 0) or 0)
                 obj.vencimento   = str(item.get("dueDate", "") or "")
                 obj.situacao     = str(item.get("situation", "") or item.get("status", "") or "")
-                obj.empreendimento = str(item.get("buildingId", "") or "")
+                obj.data_realizacao = str(item.get("paymentDate", "") or item.get("settlementDate", "") or "")
+                obj.centro_custo = str(item.get("costCenterName", "") or item.get("costCenter", "") or
+                                       item.get("costCenterDescription", "") or "")
+                emp_id, emp_nome = _sg_resolve_emp(emp_map, item.get("buildingId", ""))
+                obj.empreendimento_id   = emp_id
+                obj.empreendimento_nome = emp_nome
+                obj.empreendimento      = emp_id   # campo legado
                 obj.raw_json     = _json_sg.dumps(item, ensure_ascii=False)[:4000]
                 obj.synced_at    = datetime.now(timezone.utc)
                 s.add(obj)
@@ -339,6 +391,11 @@ def _sg_sync_contas_pagar(client: _SiengeClient, company_id: int) -> dict:
 def _sg_sync_contas_receber(client: _SiengeClient, company_id: int) -> dict:
     inicio = datetime.now(timezone.utc)
     try:
+        with _Ses_sg(engine) as s:
+            emps = s.exec(_sel_sg(SiengeEmpreendimento).where(
+                SiengeEmpreendimento.company_id == company_id)).all()
+        emp_map = {str(e.sienge_id): e.nome for e in emps}
+
         items = client.get_all("receivable-bills", page_size=200)
         with _Ses_sg(engine) as s:
             existentes = s.exec(_sel_sg(SiengeContaReceber).where(
@@ -357,7 +414,12 @@ def _sg_sync_contas_receber(client: _SiengeClient, company_id: int) -> dict:
                 obj.valor        = float(item.get("value", 0) or item.get("grossValue", 0) or 0)
                 obj.vencimento   = str(item.get("dueDate", "") or "")
                 obj.situacao     = str(item.get("situation", "") or item.get("status", "") or "")
-                obj.empreendimento = str(item.get("buildingId", "") or "")
+                obj.data_realizacao = str(item.get("receiptDate", "") or item.get("settlementDate", "") or "")
+                obj.centro_custo = str(item.get("costCenterName", "") or item.get("costCenter", "") or "")
+                emp_id, emp_nome = _sg_resolve_emp(emp_map, item.get("buildingId", ""))
+                obj.empreendimento_id   = emp_id
+                obj.empreendimento_nome = emp_nome
+                obj.empreendimento      = emp_id
                 obj.raw_json     = _json_sg.dumps(item, ensure_ascii=False)[:4000]
                 obj.synced_at    = datetime.now(timezone.utc)
                 s.add(obj)

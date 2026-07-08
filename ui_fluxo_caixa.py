@@ -1975,8 +1975,10 @@ TEMPLATES["fluxo_caixa_importar_sienge.html"] = r"""
 <style>
   .sg-preview{font-size:.8rem;}
   .sg-preview thead th{background:#f8f9fa;font-size:.72rem;text-transform:uppercase;letter-spacing:.04em;}
-  .badge-entrada{background:#d1fae5;color:#065f46;}
-  .badge-saida{background:#fee2e2;color:#991b1b;}
+  .badge-entrada{background:#d1fae5;color:#065f46;border-radius:5px;padding:2px 7px;font-size:.68rem;font-weight:600;}
+  .badge-saida{background:#fee2e2;color:#991b1b;border-radius:5px;padding:2px 7px;font-size:.68rem;font-weight:600;}
+  .badge-realizado{background:#fef9c3;color:#713f12;border-radius:5px;padding:2px 7px;font-size:.65rem;}
+  .sg-map-card{border:1px solid var(--mc-border);border-radius:10px;padding:1rem;margin-bottom:1rem;background:#f9fafb;}
 </style>
 
 <div class="d-flex align-items-center gap-2 mb-3">
@@ -2004,10 +2006,25 @@ TEMPLATES["fluxo_caixa_importar_sienge.html"] = r"""
     </select>
   </div>
   <div class="col-auto">
+    <select name="situacao" class="form-select form-select-sm">
+      <option value="todos"     {{ 'selected' if situacao=='todos' }}>Previsto + Realizado</option>
+      <option value="previsto"  {{ 'selected' if situacao=='previsto' }}>Só Previsto (em aberto)</option>
+      <option value="realizado" {{ 'selected' if situacao=='realizado' }}>Só Realizado (pago/recebido)</option>
+    </select>
+  </div>
+  <div class="col-auto">
     <input type="date" name="data_ini" class="form-control form-control-sm" value="{{ data_ini }}" placeholder="Venc. de">
   </div>
   <div class="col-auto">
     <input type="date" name="data_fim" class="form-control form-control-sm" value="{{ data_fim }}" placeholder="Venc. até">
+  </div>
+  <div class="col-auto">
+    <select name="obra_id" class="form-select form-select-sm">
+      <option value="">Todas as obras</option>
+      {% for emp in empreendimentos %}
+      <option value="{{ emp.sienge_id }}" {{ 'selected' if obra_id==emp.sienge_id|string }}>{{ emp.nome }}</option>
+      {% endfor %}
+    </select>
   </div>
   <div class="col-auto">
     <button type="submit" class="btn btn-outline-primary btn-sm">Filtrar</button>
@@ -2015,45 +2032,81 @@ TEMPLATES["fluxo_caixa_importar_sienge.html"] = r"""
 </form>
 
 {% if itens %}
+
+{# Mapeamento de Centro de Custo por Obra #}
+{% if obras_unicas %}
+<div class="sg-map-card">
+  <div class="fw-semibold small mb-2">🗂️ Mapeamento: Obra → Centro de Custo no Fluxo de Caixa</div>
+  <div class="text-muted small mb-2">Defina o Centro de Custo que cada obra do Sienge receberá ao ser importada. Deixe em branco para usar o nome da obra.</div>
+  <div class="row g-2">
+    {% for obra in obras_unicas %}
+    <div class="col-md-6">
+      <div class="input-group input-group-sm">
+        <span class="input-group-text" style="min-width:140px;font-size:.75rem;">{{ obra[:30] }}</span>
+        <input type="text" class="form-control form-control-sm cc-map"
+               data-obra="{{ obra }}" placeholder="{{ obra[:25] }}">
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
+
 <div class="alert alert-info py-2 small mb-3">
-  <strong>{{ itens|length }} lançamentos</strong> encontrados no Sienge.
-  Total entradas: <strong>R$ {{ total_entradas }}</strong> | Total saídas: <strong>R$ {{ total_saidas }}</strong>
+  <strong>{{ itens|length }} lançamentos</strong> encontrados.
+  Entradas: <strong>R$ {{ total_entradas }}</strong> | Saídas: <strong>R$ {{ total_saidas }}</strong>
+  {% if n_realizado > 0 %} | <span class="badge-realizado">✅ {{ n_realizado }} realizados</span>{% endif %}
   <br><span class="text-muted">Lançamentos já importados anteriormente serão ignorados (detecção por ID Sienge).</span>
 </div>
 
-<form method="POST" action="/ferramentas/fluxo-caixa/importar-sienge/confirmar">
+<form id="formImport" method="POST" action="/ferramentas/fluxo-caixa/importar-sienge/confirmar">
   <input type="hidden" name="modulo"   value="{{ modulo }}">
   <input type="hidden" name="data_ini" value="{{ data_ini }}">
   <input type="hidden" name="data_fim" value="{{ data_fim }}">
+  <input type="hidden" name="cc_map"   id="ccMapInput" value="">
 
   <div class="table-responsive sg-preview mb-3">
     <table class="table table-sm table-hover align-middle">
       <thead><tr>
         <th><input type="checkbox" id="checkAll" onclick="toggleAll(this)"></th>
-        <th>Tipo</th><th>Credor / Devedor</th><th>Descrição</th>
-        <th>Vencimento</th><th>Valor</th><th>Situação Sienge</th>
+        <th>Tipo</th>
+        <th>Credor / Devedor</th>
+        <th>Obra</th>
+        <th>Centro de Custo</th>
+        <th>Vencimento</th>
+        <th>Valor</th>
+        <th>Status</th>
+        <th>Data Realiz.</th>
       </tr></thead>
       <tbody>
         {% for item in itens %}
-        <tr>
+        <tr class="{{ 'table-success' if item.is_realizado else '' }}" style="opacity:{{ '1' if item.is_realizado else '1' }}">
           <td><input type="checkbox" name="ids" value="{{ item.sid }}" checked></td>
           <td>
-            <span class="badge {{ 'badge-entrada' if item.tipo=='entrada' else 'badge-saida' }}">
+            <span class="{{ 'badge-entrada' if item.tipo=='entrada' else 'badge-saida' }}">
               {{ '↓ Receber' if item.tipo=='entrada' else '↑ Pagar' }}
             </span>
           </td>
-          <td>{{ item.nome[:35] }}</td>
-          <td class="text-muted">{{ item.descricao[:45] }}</td>
-          <td>{{ item.vencimento }}</td>
+          <td class="fw-semibold">{{ item.nome[:30] }}</td>
+          <td class="text-muted small">{{ item.obra_nome[:25] if item.obra_nome else '—' }}</td>
+          <td class="text-muted small">{{ item.centro_custo[:20] if item.centro_custo else '—' }}</td>
+          <td class="small">{{ item.vencimento }}</td>
           <td class="fw-semibold">R$ {{ item.valor_fmt }}</td>
-          <td><span class="badge bg-secondary" style="font-size:.6rem;">{{ item.situacao }}</span></td>
+          <td>
+            {% if item.is_realizado %}
+              <span class="badge-realizado">✅ Realizado</span>
+            {% else %}
+              <span class="badge bg-secondary" style="font-size:.6rem;">{{ item.situacao }}</span>
+            {% endif %}
+          </td>
+          <td class="small text-muted">{{ item.data_realizacao or '—' }}</td>
         </tr>
         {% endfor %}
       </tbody>
     </table>
   </div>
 
-  <button type="submit" class="btn btn-primary">
+  <button type="submit" class="btn btn-primary" onclick="preencherCCMap()">
     ✅ Importar selecionados para o Fluxo de Caixa
   </button>
   <a href="/ferramentas/fluxo-caixa" class="btn btn-outline-secondary ms-2">Cancelar</a>
@@ -2061,13 +2114,20 @@ TEMPLATES["fluxo_caixa_importar_sienge.html"] = r"""
 
 {% else %}
 <div class="alert alert-secondary">Nenhum lançamento Sienge encontrado com os filtros aplicados.</div>
-<a href="/admin/sienge/sync" class="btn btn-outline-primary btn-sm">🔄 Sincronizar Sienge agora</a>
+<a href="/admin/sienge" class="btn btn-outline-primary btn-sm">🔄 Ir para Sienge e sincronizar</a>
 {% endif %}
 {% endif %}
 
 <script>
 function toggleAll(cb) {
   document.querySelectorAll('input[name="ids"]').forEach(c => c.checked = cb.checked);
+}
+function preencherCCMap() {
+  const map = {};
+  document.querySelectorAll('.cc-map').forEach(inp => {
+    if (inp.value.trim()) map[inp.dataset.obra] = inp.value.trim();
+  });
+  document.getElementById('ccMapInput').value = JSON.stringify(map);
 }
 </script>
 {% endblock %}
@@ -2090,13 +2150,18 @@ if hasattr(templates_env.loader, "mapping"):
     templates_env.loader.mapping["fluxo_caixa_importar_sienge_ok.html"] = TEMPLATES["fluxo_caixa_importar_sienge_ok.html"]
 
 
+_REALIZADO_PAGAR   = {"pago", "liquidado", "quitado", "pg", "paid"}
+_REALIZADO_RECEBER = {"recebido", "liquidado", "quitado", "baixado", "received"}
+
 @app.get("/ferramentas/fluxo-caixa/importar-sienge", response_class=HTMLResponse)
 @require_login
 async def fc_importar_sienge_page(
-    request: Request,
+    request:  Request,
     modulo:   str = "ambos",
+    situacao: str = "todos",
     data_ini: str = "",
     data_fim: str = "",
+    obra_id:  str = "",
     session:  Session = Depends(get_session),
 ):
     ctx = get_tenant_context(request, session)
@@ -2104,7 +2169,6 @@ async def fc_importar_sienge_page(
         return RedirectResponse("/login", status_code=303)
     cid = ctx.company.id
 
-    # Verifica se Sienge está configurado (acessa os modelos via nome de classe registrado)
     try:
         from sqlmodel import select as _sel_si
         cfg_sg = session.exec(
@@ -2113,30 +2177,46 @@ async def fc_importar_sienge_page(
     except Exception:
         cfg_sg = None
 
-    itens = []
+    itens          = []
     total_entradas = "0,00"
     total_saidas   = "0,00"
+    n_realizado    = 0
+    empreendimentos = []
+    obras_unicas    = []
 
     if cfg_sg:
-        # Busca contas a pagar
+        try:
+            from sqlmodel import select as _sel_si2
+            empreendimentos = session.exec(
+                _sel_si2(SiengeEmpreendimento).where(
+                    SiengeEmpreendimento.company_id == cid
+                ).order_by(SiengeEmpreendimento.nome)
+            ).all()
+        except Exception:
+            empreendimentos = []
+
         pagar_rows = []
         receber_rows = []
         try:
-            from sqlmodel import select as _sel_si2
+            from sqlmodel import select as _sel_si3
             if modulo in ("ambos", "pagar"):
-                q = _sel_si2(SiengeContaPagar).where(SiengeContaPagar.company_id == cid)
+                q = _sel_si3(SiengeContaPagar).where(SiengeContaPagar.company_id == cid)
                 if data_ini:
                     q = q.where(SiengeContaPagar.vencimento >= data_ini)
                 if data_fim:
                     q = q.where(SiengeContaPagar.vencimento <= data_fim)
+                if obra_id:
+                    q = q.where(SiengeContaPagar.empreendimento_id == obra_id)
                 pagar_rows = session.exec(q.order_by(SiengeContaPagar.vencimento)).all()
 
             if modulo in ("ambos", "receber"):
-                q2 = _sel_si2(SiengeContaReceber).where(SiengeContaReceber.company_id == cid)
+                q2 = _sel_si3(SiengeContaReceber).where(SiengeContaReceber.company_id == cid)
                 if data_ini:
                     q2 = q2.where(SiengeContaReceber.vencimento >= data_ini)
                 if data_fim:
                     q2 = q2.where(SiengeContaReceber.vencimento <= data_fim)
+                if obra_id:
+                    q2 = q2.where(SiengeContaReceber.empreendimento_id == obra_id)
                 receber_rows = session.exec(q2.order_by(SiengeContaReceber.vencimento)).all()
         except Exception as _e_si:
             print(f"[fc_sienge] erro ao buscar dados: {_e_si}")
@@ -2144,46 +2224,75 @@ async def fc_importar_sienge_page(
         def _fmt_brl(v):
             return f"{v:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
+        obras_set = set()
         for p in pagar_rows:
+            is_real = p.situacao.lower().strip() in _REALIZADO_PAGAR
+            if situacao == "previsto"  and is_real:     continue
+            if situacao == "realizado" and not is_real:  continue
+            obra_nome = p.empreendimento_nome or p.empreendimento_id or ""
             itens.append({
-                "sid":       f"pagar-{p.sienge_id}",
-                "tipo":      "saida",
-                "nome":      p.credor_nome,
-                "descricao": p.descricao,
-                "vencimento": p.vencimento,
-                "valor":     p.valor,
-                "valor_fmt": _fmt_brl(p.valor),
-                "situacao":  p.situacao,
-                "categoria": "Fornecedor",
-                "empresa":   p.empreendimento,
+                "sid":            f"pagar-{p.sienge_id}",
+                "tipo":           "saida",
+                "nome":           p.credor_nome,
+                "descricao":      p.descricao,
+                "obra_nome":      obra_nome,
+                "centro_custo":   p.centro_custo,
+                "vencimento":     p.vencimento,
+                "valor":          p.valor,
+                "valor_fmt":      _fmt_brl(p.valor),
+                "situacao":       p.situacao,
+                "is_realizado":   is_real,
+                "data_realizacao": p.data_realizacao,
+                "categoria":      "Fornecedor",
+                "empresa":        obra_nome,
             })
-        for r in receber_rows:
-            itens.append({
-                "sid":       f"receber-{r.sienge_id}",
-                "tipo":      "entrada",
-                "nome":      r.devedor_nome,
-                "descricao": r.descricao,
-                "vencimento": r.vencimento,
-                "valor":     r.valor,
-                "valor_fmt": _fmt_brl(r.valor),
-                "situacao":  r.situacao,
-                "categoria": "Receita de Venda",
-                "empresa":   r.empreendimento,
-            })
+            if obra_nome:
+                obras_set.add(obra_nome)
 
-        soma_ent = sum(i["valor"] for i in itens if i["tipo"] == "entrada")
-        soma_sai = sum(i["valor"] for i in itens if i["tipo"] == "saida")
+        for r in receber_rows:
+            is_real = r.situacao.lower().strip() in _REALIZADO_RECEBER
+            if situacao == "previsto"  and is_real:     continue
+            if situacao == "realizado" and not is_real:  continue
+            obra_nome = r.empreendimento_nome or r.empreendimento_id or ""
+            itens.append({
+                "sid":            f"receber-{r.sienge_id}",
+                "tipo":           "entrada",
+                "nome":           r.devedor_nome,
+                "descricao":      r.descricao,
+                "obra_nome":      obra_nome,
+                "centro_custo":   r.centro_custo,
+                "vencimento":     r.vencimento,
+                "valor":          r.valor,
+                "valor_fmt":      _fmt_brl(r.valor),
+                "situacao":       r.situacao,
+                "is_realizado":   is_real,
+                "data_realizacao": r.data_realizacao,
+                "categoria":      "Receita de Venda",
+                "empresa":        obra_nome,
+            })
+            if obra_nome:
+                obras_set.add(obra_nome)
+
+        n_realizado    = sum(1 for i in itens if i["is_realizado"])
+        obras_unicas   = sorted(obras_set)
+        soma_ent       = sum(i["valor"] for i in itens if i["tipo"] == "entrada")
+        soma_sai       = sum(i["valor"] for i in itens if i["tipo"] == "saida")
         total_entradas = _fmt_brl(soma_ent)
         total_saidas   = _fmt_brl(soma_sai)
 
     return render("fluxo_caixa_importar_sienge.html", request=request, context={
-        "config_sienge":  cfg_sg,
-        "modulo":         modulo,
-        "data_ini":       data_ini,
-        "data_fim":       data_fim,
-        "itens":          itens,
-        "total_entradas": total_entradas,
-        "total_saidas":   total_saidas,
+        "config_sienge":   cfg_sg,
+        "modulo":          modulo,
+        "situacao":        situacao,
+        "data_ini":        data_ini,
+        "data_fim":        data_fim,
+        "obra_id":         obra_id,
+        "itens":           itens,
+        "empreendimentos": empreendimentos,
+        "obras_unicas":    obras_unicas,
+        "total_entradas":  total_entradas,
+        "total_saidas":    total_saidas,
+        "n_realizado":     n_realizado,
     })
 
 
@@ -2199,14 +2308,19 @@ async def fc_importar_sienge_confirmar(
     cid = ctx.company.id
     cl_id = get_active_client_id(request, session, ctx)
 
-    form = await request.form()
+    import json as _json_fc_si
+    form    = await request.form()
     ids_sel = set(form.getlist("ids"))
-    modulo   = form.get("modulo", "ambos")
-    data_ini = form.get("data_ini", "")
-    data_fim = form.get("data_fim", "")
 
     if not ids_sel:
         return RedirectResponse("/ferramentas/fluxo-caixa/importar-sienge", status_code=303)
+
+    # Mapeamento obra → centro de custo definido pelo usuário
+    cc_map = {}
+    try:
+        cc_map = _json_fc_si.loads(form.get("cc_map", "{}") or "{}")
+    except Exception:
+        pass
 
     # Busca IDs já importados (import_batch começa com "sienge-")
     ja_importados = set()
@@ -2222,11 +2336,9 @@ async def fc_importar_sienge_confirmar(
     except Exception:
         pass
 
-    import_batch_base = f"sienge-{__import__('datetime').date.today().isoformat()}"
-    importados  = 0
-    duplicados  = 0
+    importados = 0
+    duplicados = 0
 
-    # Reconstrói os itens para os IDs selecionados
     try:
         from sqlmodel import select as _sel_si4
         pagar_rows   = session.exec(_sel_si4(SiengeContaPagar).where(
@@ -2240,6 +2352,12 @@ async def fc_importar_sienge_confirmar(
     def _to_cents(v: float) -> int:
         return int(round(abs(v) * 100))
 
+    def _resolve_cc(obra_nome: str, cc_sienge: str) -> str:
+        """Centro de custo: mapeamento manual > CC do Sienge > nome da obra > 'Sienge'."""
+        return cc_map.get(obra_nome) or cc_sienge or obra_nome or "Sienge"
+
+    today_str = str(__import__('datetime').date.today())
+
     for p in pagar_rows:
         sid = f"pagar-{p.sienge_id}"
         if sid not in ids_sel:
@@ -2248,17 +2366,20 @@ async def fc_importar_sienge_confirmar(
         if batch_id in ja_importados:
             duplicados += 1
             continue
+        is_real   = p.situacao.lower().strip() in _REALIZADO_PAGAR
+        obra_nome = p.empreendimento_nome or p.empreendimento_id or ""
         entry = CashFlowEntry(
             company_id=cid, client_id=cl_id,
-            data_vencimento=p.vencimento or str(__import__('datetime').date.today()),
+            data_vencimento=p.vencimento or today_str,
+            data_pagamento=p.data_realizacao if is_real else None,
             descricao=p.descricao or p.credor_nome or "Conta a Pagar Sienge",
-            empresa=p.empreendimento or "",
-            centro_custo="Sienge",
+            empresa=obra_nome,
+            centro_custo=_resolve_cc(obra_nome, p.centro_custo),
             categoria="Fornecedor",
             tipo="saida",
             valor_cents=_to_cents(p.valor),
-            status="previsto",
-            observacao=f"Importado do Sienge — credor: {p.credor_nome}",
+            status="realizado" if is_real else "previsto",
+            observacao=f"Sienge — credor: {p.credor_nome} | situação: {p.situacao}",
             import_batch=batch_id,
         )
         session.add(entry)
@@ -2272,17 +2393,20 @@ async def fc_importar_sienge_confirmar(
         if batch_id in ja_importados:
             duplicados += 1
             continue
+        is_real   = r.situacao.lower().strip() in _REALIZADO_RECEBER
+        obra_nome = r.empreendimento_nome or r.empreendimento_id or ""
         entry = CashFlowEntry(
             company_id=cid, client_id=cl_id,
-            data_vencimento=r.vencimento or str(__import__('datetime').date.today()),
+            data_vencimento=r.vencimento or today_str,
+            data_pagamento=r.data_realizacao if is_real else None,
             descricao=r.descricao or r.devedor_nome or "Conta a Receber Sienge",
-            empresa=r.empreendimento or "",
-            centro_custo="Sienge",
+            empresa=obra_nome,
+            centro_custo=_resolve_cc(obra_nome, r.centro_custo),
             categoria="Receita de Venda",
             tipo="entrada",
             valor_cents=_to_cents(r.valor),
-            status="previsto",
-            observacao=f"Importado do Sienge — devedor: {r.devedor_nome}",
+            status="realizado" if is_real else "previsto",
+            observacao=f"Sienge — devedor: {r.devedor_nome} | situação: {r.situacao}",
             import_batch=batch_id,
         )
         session.add(entry)
