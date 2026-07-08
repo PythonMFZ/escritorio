@@ -1084,7 +1084,14 @@ async def sienge_admin_page(request: _Req_sg, session: _SesD_sg = Depends(get_se
     cid = ctx.company.id
     client_id = request.session.get("selected_client_id")
 
-    cfg = _sg_get_config(session, cid, client_id)
+    # Strict lookup — sem fallback para evitar mostrar config de outro cliente
+    cfg = session.exec(
+        _sel_sg(SiengeConfig).where(
+            SiengeConfig.company_id == cid,
+            SiengeConfig.client_id == client_id,
+            SiengeConfig.ativo == True,
+        )
+    ).first()
 
     # Status por módulo (último log de cada)
     modulos = ["empreendimentos", "contratos_venda", "contas_pagar", "contas_receber", "medicoes"]
@@ -1154,7 +1161,13 @@ async def sienge_salvar_config(request: _Req_sg, session: _SesD_sg = Depends(get
     cid  = ctx.company.id
     client_id = request.session.get("selected_client_id")
 
-    cfg = _sg_get_config(session, cid, client_id)
+    # Strict lookup — sem fallback, cada cliente tem sua própria linha de config
+    cfg = session.exec(
+        _sel_sg(SiengeConfig).where(
+            SiengeConfig.company_id == cid,
+            SiengeConfig.client_id == client_id,
+        )
+    ).first()
     if not cfg:
         cfg = SiengeConfig(company_id=cid, client_id=client_id)
 
