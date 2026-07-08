@@ -505,27 +505,55 @@ def _sg_sync_contas_receber(client: _SiengeClient, company_id: int) -> dict:
 
 
 def _sg_sync_medicoes(client: _SiengeClient, company_id: int) -> dict:
-    """Sincroniza medições de contratos de suprimento."""
+    """Sincroniza medições de contratos de suprimento.
+    Tenta: /supply-contracts?limit=200 → para cada contrato GET /supply-contracts/{id}/measurements
+    Se o endpoint retornar 400/403/404, pula silenciosamente (módulo não autorizado ou sem dados).
+    """
     inicio = datetime.now(timezone.utc)
     try:
-        # supply-contracts/measurements exige enterpriseId — busca por cada empreendimento
-        with _Ses_sg(engine) as s_emp:
-            emps_med = s_emp.exec(_sel_sg(SiengeEmpreendimento).where(
-                SiengeEmpreendimento.company_id == company_id)).all()
+        import httpx as _hx_med
         items = []
-        for emp in emps_med:
+        erros_400 = 0
+
+        # 1. Busca lista de contratos de suprimento (sem filtro — paginado)
+        try:
+            contratos_sup = client.get_all("supply-contracts", page_size=200)
+        except Exception:
+            contratos_sup = []
+
+        if contratos_sup:
+            # 2. Para cada contrato, busca medições via path param
+            for c in contratos_sup:
+                cid_sup = c.get("id") or c.get("supplyContractId")
+                if not cid_sup:
+                    continue
+                try:
+                    r = client.get_all(f"supply-contracts/{cid_sup}/measurements", page_size=100)
+                    items.extend(r)
+                    if r:
+                        _time_sg.sleep(0.3)
+                except Exception as _e_m:
+                    if "400" in str(_e_m):
+                        erros_400 += 1
+                    continue
+        else:
+            # Fallback: tenta endpoint direto sem parâmetros
             try:
-                r = client.get_all("supply-contracts/measurements",
-                                   extra_params={"enterpriseId": emp.sienge_id}, page_size=100)
-                items.extend(r)
-                if r:
-                    _time_sg.sleep(0.5)
-            except Exception:
-                pass
-        # Armazena no log (medições não têm modelo próprio, guardamos só o count por ora)
+                items = client.get_all("supply-contracts/measurements", page_size=200)
+            except Exception as _ef:
+                if "400" in str(_ef) or "403" in str(_ef) or "404" in str(_ef):
+                    # Endpoint não disponível/autorizado — não é erro crítico
+                    with _Ses_sg(engine) as s:
+                        _sg_log(s, company_id, "medicoes", "ok", 0,
+                                "Medições não disponíveis (endpoint retornou 400/403/404)", inicio)
+                    return {"ok": True, "registros": 0, "aviso": "Endpoint de medições não disponível"}
+
         count = len(items)
+        detalhe = f"{count} medições sincronizadas"
+        if erros_400:
+            detalhe += f" ({erros_400} contratos sem acesso)"
         with _Ses_sg(engine) as s:
-            _sg_log(s, company_id, "medicoes", "ok", count, f"{count} medições sincronizadas", inicio)
+            _sg_log(s, company_id, "medicoes", "ok", count, detalhe, inicio)
         return {"ok": True, "registros": count}
     except Exception as _e:
         with _Ses_sg(engine) as s:
