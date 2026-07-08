@@ -890,6 +890,13 @@ async function syncAll() {
   document.getElementById('logBox').textContent = 'Sincronizando… (pode levar alguns minutos)\n';
   try {
     const r = await fetch('/admin/sienge/sync', {method: 'POST'});
+    const ct = r.headers.get('content-type') || '';
+    if (!ct.includes('json')) {
+      document.getElementById('logBox').textContent = r.url.includes('/login') || r.status === 401
+        ? '⚠️ Sessão expirada — recarregue a página e faça login novamente.'
+        : `Erro inesperado (${r.status}). Recarregue a página.`;
+      return;
+    }
     const d = await r.json();
     if (!d.ok) {
       document.getElementById('logBox').textContent = '❌ ' + (d.erro || 'Erro desconhecido');
