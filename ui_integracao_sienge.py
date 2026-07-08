@@ -949,20 +949,41 @@ async function testarConexao() {
 }
 
 async function syncAll() {
+  const logBox = document.getElementById('logBox');
   document.getElementById('logCard').style.display = 'block';
-  document.getElementById('logBox').textContent = 'Sincronizando… (pode levar alguns minutos)\n';
+  logBox.textContent = 'Iniciando sincronização…\n';
   try {
     const r = await fetch('/admin/sienge/sync', {method: 'POST'});
     const ct = r.headers.get('content-type') || '';
     if (!ct.includes('json')) {
-      document.getElementById('logBox').textContent = r.url.includes('/login') || r.status === 401
+      logBox.textContent = r.url.includes('/login') || r.status === 401
         ? '⚠️ Sessão expirada — recarregue a página e faça login novamente.'
         : `Erro inesperado (${r.status}). Recarregue a página.`;
       return;
     }
     const d = await r.json();
     if (!d.ok) {
-      document.getElementById('logBox').textContent = '❌ ' + (d.erro || 'Erro desconhecido');
+      logBox.textContent = '❌ ' + (d.erro || 'Erro desconhecido');
+      return;
+    }
+    if (d.async) {
+      // Sync rodando em background — polling a cada 15s
+      logBox.textContent = '⏳ ' + d.mensagem + '\n\nAcompanhe abaixo (atualiza automaticamente):\n';
+      let polls = 0;
+      const poll = setInterval(async () => {
+        polls++;
+        logBox.textContent += '.';
+        try {
+          const rs = await fetch('/admin/sienge/status');
+          const ds = await rs.json();
+          const running = ds.running || false;
+          if (!running || polls >= 40) {
+            clearInterval(poll);
+            logBox.textContent += '\n\n✅ Concluído! Recarregando…';
+            setTimeout(() => location.reload(), 1500);
+          }
+        } catch(_) {}
+      }, 15000);
       return;
     }
     let log = '';
@@ -971,7 +992,7 @@ async function syncAll() {
       const det = res.ok ? `${res.registros} registros` : `Erro: ${res.erro}`;
       log += `${ico} ${mod.padEnd(20)} ${det}\n`;
     }
-    document.getElementById('logBox').textContent = log || 'Concluído.';
+    logBox.textContent = log || 'Concluído.';
     setTimeout(() => location.reload(), 1500);
   } catch(e) {
     document.getElementById('logBox').textContent = 'Erro de comunicação: ' + e;
@@ -1105,6 +1126,8 @@ async def sienge_testar(request: _Req_sg, session: _SesD_sg = Depends(get_sessio
     return _JSON_sg({"ok": ok, "mensagem": msg, "erro": msg if not ok else ""})
 
 
+_sg_sync_running: dict = {}   # company_id → True quando sync em andamento
+
 @app.post("/admin/sienge/sync")
 async def sienge_sync_manual(request: _Req_sg, session: _SesD_sg = Depends(get_session)):
     if session_user_id(request) is None:
@@ -1113,11 +1136,46 @@ async def sienge_sync_manual(request: _Req_sg, session: _SesD_sg = Depends(get_s
     if not ctx or ctx.membership.role not in ("admin", "owner", "equipe"):
         return _JSON_sg({"ok": False, "erro": "Sem permissão."})
 
-    try:
-        resultado = _sg_sync_all(ctx.company.id)
-    except Exception as _e_sync:
-        resultado = {"ok": False, "erro": str(_e_sync)}
-    return _JSON_sg(resultado)
+    cid = ctx.company.id
+    if _sg_sync_running.get(cid):
+        return _JSON_sg({"ok": True, "async": True, "mensagem": "Sincronização já em andamento. Aguarde e recarregue a página."})
+
+    def _run_bg():
+        _sg_sync_running[cid] = True
+        try:
+            _sg_sync_all(cid)
+        except Exception as _e_bg:
+            print(f"[sienge] sync bg erro: {_e_bg}")
+        finally:
+            _sg_sync_running[cid] = False
+
+    t = _thread_sg.Thread(target=_run_bg, daemon=True)
+    t.start()
+    return _JSON_sg({"ok": True, "async": True,
+                     "mensagem": "Sincronização iniciada em segundo plano. Aguarde 2-5 minutos e recarregue a página para ver o resultado."})
+
+
+@app.get("/admin/sienge/status")
+async def sienge_status(request: _Req_sg, session: _SesD_sg = Depends(get_session)):
+    """Status da última sync + se há sync em andamento."""
+    if session_user_id(request) is None:
+        return _JSON_sg({"ok": False, "erro": "Não autenticado."}, status_code=401)
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        return _JSON_sg({"ok": False, "erro": "Sem permissão."})
+    cid = ctx.company.id
+    running = bool(_sg_sync_running.get(cid))
+    logs = []
+    with _Ses_sg(engine) as s:
+        from sqlalchemy import text as _txt_st
+        rows = s.exec(_sel_sg(SiengeSyncLog)
+                      .where(SiengeSyncLog.company_id == cid)
+                      .order_by(SiengeSyncLog.finalizado_em.desc())
+                      .limit(10)).all()
+        logs = [{"modulo": r.modulo, "status": r.status,
+                 "registros": r.registros, "detalhe": r.detalhe,
+                 "em": r.finalizado_em.isoformat() if r.finalizado_em else ""} for r in rows]
+    return _JSON_sg({"ok": True, "running": running, "logs": logs})
 
 
 @app.post("/integracoes/sienge/webhook")
