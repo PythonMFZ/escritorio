@@ -867,12 +867,21 @@ async function testarConexao() {
   el.innerHTML = '<span class="text-muted small">Testando...</span>';
   try {
     const r = await fetch('/admin/sienge/testar', {method: 'POST'});
+    const ct = r.headers.get('content-type') || '';
+    if (!ct.includes('json')) {
+      if (r.status === 401 || r.url.includes('/login')) {
+        el.innerHTML = '<div class="alert alert-warning py-1 small mt-2">⚠️ Sessão expirada — <a href="/login">faça login novamente</a></div>';
+      } else {
+        el.innerHTML = `<div class="alert alert-danger py-1 small mt-2">Erro inesperado (${r.status}). Recarregue a página.</div>`;
+      }
+      return;
+    }
     const d = await r.json();
     el.innerHTML = d.ok
       ? `<div class="alert alert-success py-1 small mt-2">✅ ${d.mensagem}</div>`
       : `<div class="alert alert-danger py-1 small mt-2">❌ ${d.erro}</div>`;
   } catch(e) {
-    el.innerHTML = `<div class="alert alert-danger py-1 small mt-2">Erro: ${e}</div>`;
+    el.innerHTML = `<div class="alert alert-danger py-1 small mt-2">Erro de comunicação: ${e}</div>`;
   }
 }
 
@@ -1006,8 +1015,9 @@ async def sienge_salvar_config(request: _Req_sg, session: _SesD_sg = Depends(get
 
 
 @app.post("/admin/sienge/testar")
-@require_login
 async def sienge_testar(request: _Req_sg, session: _SesD_sg = Depends(get_session)):
+    if session_user_id(request) is None:
+        return _JSON_sg({"ok": False, "erro": "Sessão expirada. Recarregue a página."}, status_code=401)
     ctx = get_tenant_context(request, session)
     if not ctx or ctx.membership.role not in ("admin", "owner", "equipe"):
         return _JSON_sg({"ok": False, "erro": "Sem permissão."})
@@ -1017,19 +1027,26 @@ async def sienge_testar(request: _Req_sg, session: _SesD_sg = Depends(get_sessio
     if not cfg:
         return _JSON_sg({"ok": False, "erro": "Integração não configurada."})
 
-    client = _SiengeClient(cfg.tenant, cfg.api_user, cfg.api_password)
-    ok, msg = client.test_connection()
+    try:
+        client = _SiengeClient(cfg.tenant, cfg.api_user, cfg.api_password)
+        ok, msg = client.test_connection()
+    except Exception as _e_tst:
+        ok, msg = False, str(_e_tst)
     return _JSON_sg({"ok": ok, "mensagem": msg, "erro": msg if not ok else ""})
 
 
 @app.post("/admin/sienge/sync")
-@require_login
 async def sienge_sync_manual(request: _Req_sg, session: _SesD_sg = Depends(get_session)):
+    if session_user_id(request) is None:
+        return _JSON_sg({"ok": False, "erro": "Sessão expirada. Recarregue a página."}, status_code=401)
     ctx = get_tenant_context(request, session)
     if not ctx or ctx.membership.role not in ("admin", "owner", "equipe"):
         return _JSON_sg({"ok": False, "erro": "Sem permissão."})
 
-    resultado = _sg_sync_all(ctx.company.id)
+    try:
+        resultado = _sg_sync_all(ctx.company.id)
+    except Exception as _e_sync:
+        resultado = {"ok": False, "erro": str(_e_sync)}
     return _JSON_sg(resultado)
 
 
