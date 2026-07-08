@@ -449,6 +449,14 @@ def _sg_sync_contas_pagar(client: _SiengeClient, company_id: int) -> dict:
             items = _sg_bulk_get_all(client, "outcome/by-bills", extra_params=bulk_params, max_rate_retries=1)
             print(f"[sienge] contas_pagar: /outcome/by-bills={len(items)} itens")
 
+        if not items:
+            detalhe_erro = ("Nenhum dado retornado. Verifique se o usuário de API tem permissão para "
+                            "/bill-debts (REST) ou /outcome (Bulk) no Sienge → Integrações → Usuários de APIs.")
+            print(f"[sienge] contas_pagar: {detalhe_erro}")
+            with _Ses_sg(engine) as s:
+                _sg_log(s, company_id, "contas_pagar", "aviso", 0, detalhe_erro, inicio)
+            return {"ok": True, "registros": 0, "aviso": detalhe_erro}
+
         with _Ses_sg(engine) as s:
             existentes = s.exec(_sel_sg(SiengeContaPagar).where(
                 SiengeContaPagar.company_id == company_id)).all()
@@ -528,6 +536,16 @@ def _sg_sync_contas_receber(client: _SiengeClient, company_id: int) -> dict:
             bulk_params2 = {"startDate": start2, "endDate": end2}
             items = _sg_bulk_get_all(client, "income/by-bills", extra_params=bulk_params2, max_rate_retries=1)
             print(f"[sienge] contas_receber: /income/by-bills={len(items)} itens")
+
+        if not items:
+            detalhe_erro = ("Nenhum dado retornado. Verifique se o usuário de API tem permissão para "
+                            "/accounts-receivable/receivable-bills (REST) ou /income (Bulk) no Sienge → "
+                            "Integrações → Usuários de APIs.")
+            print(f"[sienge] contas_receber: {detalhe_erro}")
+            with _Ses_sg(engine) as s:
+                _sg_log(s, company_id, "contas_receber", "aviso", 0, detalhe_erro, inicio)
+            return {"ok": True, "registros": 0, "aviso": detalhe_erro}
+
         with _Ses_sg(engine) as s:
             existentes = s.exec(_sel_sg(SiengeContaReceber).where(
                 SiengeContaReceber.company_id == company_id)).all()
@@ -882,7 +900,11 @@ TEMPLATES["sienge_admin.html"] = r"""
     </div>
     {% if contas_pagar|length > 50 %}<div class="text-muted small">Mostrando 50 de {{ contas_pagar|length }}</div>{% endif %}
     {% else %}
-    <div class="text-muted small">Nenhuma conta a pagar sincronizada.</div>
+    <div class="alert alert-warning py-2 small">
+      ⚠️ Nenhuma conta a pagar sincronizada.<br>
+      Verifique se o usuário <strong>rozzo-augur</strong> tem permissão para <code>/bill-debts</code> (REST)
+      ou <code>/outcome</code> (Bulk) no Sienge → Integrações → Usuários de APIs.
+    </div>
     {% endif %}
   </div>
 
@@ -907,7 +929,11 @@ TEMPLATES["sienge_admin.html"] = r"""
     </div>
     {% if contas_receber|length > 50 %}<div class="text-muted small">Mostrando 50 de {{ contas_receber|length }}</div>{% endif %}
     {% else %}
-    <div class="text-muted small">Nenhuma conta a receber sincronizada.</div>
+    <div class="alert alert-warning py-2 small">
+      ⚠️ Nenhuma conta a receber sincronizada.<br>
+      Verifique se o usuário <strong>rozzo-augur</strong> tem permissão para <code>/accounts-receivable/receivable-bills</code> (REST)
+      ou <code>/income</code> (Bulk) no Sienge → Integrações → Usuários de APIs.
+    </div>
     {% endif %}
   </div>
 </div>
