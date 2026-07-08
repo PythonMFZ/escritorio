@@ -826,6 +826,9 @@ TEMPLATES["sienge_admin.html"] = r"""
           {% elif info.status == 'erro' %}
             <span class="sg-badge-err">❌ Erro</span>
             <span class="text-muted small" title="{{ info.detalhe }}">{{ info.detalhe[:60] }}</span>
+          {% elif info.status == 'aviso' %}
+            <span class="sg-badge-warn" style="background:#fff3cd;color:#856404;padding:2px 8px;border-radius:4px;font-size:.8em;font-weight:600;">⚠️ Aviso</span>
+            <span class="text-muted small" title="{{ info.detalhe }}">{{ info.detalhe[:80] }}</span>
           {% else %}
             <span class="sg-badge-none">—</span>
           {% endif %}
@@ -921,8 +924,8 @@ TEMPLATES["sienge_admin.html"] = r"""
     {% else %}
     <div class="alert alert-warning py-2 small">
       ⚠️ Nenhuma conta a pagar sincronizada.<br>
-      Verifique se o usuário <strong>rozzo-augur</strong> tem permissão para <code>/bill-debts</code> (REST)
-      ou <code>/outcome</code> (Bulk) no Sienge → Integrações → Usuários de APIs.
+      Verifique se o usuário <strong>{{ config.api_user if config else '?' }}</strong> tem permissão para
+      <code>/outcome</code> (Bulk) no Sienge → Integrações → Usuários de APIs.
     </div>
     {% endif %}
   </div>
@@ -950,8 +953,8 @@ TEMPLATES["sienge_admin.html"] = r"""
     {% else %}
     <div class="alert alert-warning py-2 small">
       ⚠️ Nenhuma conta a receber sincronizada.<br>
-      Verifique se o usuário <strong>rozzo-augur</strong> tem permissão para <code>/accounts-receivable/receivable-bills</code> (REST)
-      ou <code>/income</code> (Bulk) no Sienge → Integrações → Usuários de APIs.
+      Verifique se o usuário <strong>{{ config.api_user if config else '?' }}</strong> tem permissão para
+      <code>/income</code> (Bulk) no Sienge → Integrações → Usuários de APIs.
     </div>
     {% endif %}
   </div>
@@ -1298,7 +1301,8 @@ async def sienge_webhook(request: _Req_sg):
                 if "PAYMENT" in evento.upper() or "RECEIVABLE" in evento.upper():
                     _thread_sg.Thread(
                         target=_sg_sync_contas_pagar,
-                        args=(_SiengeClient(cfg.tenant, cfg.api_user, cfg.api_password), cfg.company_id),
+                        args=(_SiengeClient(cfg.tenant, cfg.api_user, cfg.api_password),
+                              cfg.company_id, cfg.client_id),
                         daemon=True,
                     ).start()
 
