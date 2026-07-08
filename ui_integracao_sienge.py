@@ -362,12 +362,32 @@ def _sg_bulk_get_all(client: _SiengeClient, path: str, page_size: int = 500,
                 _time_sg.sleep(65)
                 continue
             if resp.status_code != 200:
-                print(f"[sienge] bulk {path} HTTP {resp.status_code}: {resp.text[:200]}")
+                print(f"[sienge] bulk {path} HTTP {resp.status_code}: {resp.text[:400]}")
                 break
             data = resp.json()
-            items = data.get("results") or data.get("data") or (data if isinstance(data, list) else [])
+            # Log diagnóstico da estrutura na primeira página
+            if offset == 0:
+                if isinstance(data, dict):
+                    print(f"[sienge] bulk {path} keys={list(data.keys())[:10]} total_field={data.get('resultSetMetadata') or data.get('totalCount') or data.get('total') or '?'}")
+                else:
+                    print(f"[sienge] bulk {path} type={type(data).__name__} len={len(data) if hasattr(data,'__len__') else '?'}")
+            # Tenta todas as chaves conhecidas de paginação Sienge
+            if isinstance(data, list):
+                items = data
+            else:
+                items = (data.get("results")
+                      or data.get("data")
+                      or data.get("items")
+                      or data.get("records")
+                      or data.get("content")
+                      or [])
             result.extend(items)
-            total = (data.get("resultSetMetadata") or {}).get("count", len(items))
+            meta = data.get("resultSetMetadata") or {}
+            total = (meta.get("count")
+                  or data.get("totalCount")
+                  or data.get("total")
+                  or data.get("totalElements")
+                  or len(items))
             offset += page_size
             if offset >= total or not items:
                 break
@@ -392,11 +412,15 @@ def _sg_sync_contas_pagar(client: _SiengeClient, company_id: int) -> dict:
         start = (_date_sg.today().replace(year=_date_sg.today().year - 2)
                  .isoformat())  # 2 anos atrás
         bulk_params = {"startDate": start}
+        print(f"[sienge] contas_pagar: tentando bulk /outcome startDate={start}")
         items = _sg_bulk_get_all(client, "outcome", extra_params=bulk_params)
+        print(f"[sienge] contas_pagar: /outcome={len(items)} itens")
         if not items:
             items = _sg_bulk_get_all(client, "outcome/by-bills", extra_params=bulk_params)
+            print(f"[sienge] contas_pagar: /outcome/by-bills={len(items)} itens")
         if not items:
             items = client.get_all("bill-debts", page_size=200)
+            print(f"[sienge] contas_pagar: /bill-debts={len(items)} itens")
 
         with _Ses_sg(engine) as s:
             existentes = s.exec(_sel_sg(SiengeContaPagar).where(
@@ -458,11 +482,15 @@ def _sg_sync_contas_receber(client: _SiengeClient, company_id: int) -> dict:
         start2 = (_date_sg2.today().replace(year=_date_sg2.today().year - 2).isoformat())
         bulk_params2 = {"startDate": start2}
         # Bulk parcelas a receber — caminhos confirmados via painel Sienge: /income e /income/by-bills
+        print(f"[sienge] contas_receber: tentando bulk /income startDate={start2}")
         items = _sg_bulk_get_all(client, "income", extra_params=bulk_params2)
+        print(f"[sienge] contas_receber: /income={len(items)} itens")
         if not items:
             items = _sg_bulk_get_all(client, "income/by-bills", extra_params=bulk_params2)
+            print(f"[sienge] contas_receber: /income/by-bills={len(items)} itens")
         if not items:
             items = _sg_bulk_get_all(client, "receivable-bills", extra_params=bulk_params2)
+            print(f"[sienge] contas_receber: /receivable-bills={len(items)} itens")
         if not items:
             items = client.get_all("accounts-receivable/receivable-bills", page_size=200)
         with _Ses_sg(engine) as s:
@@ -505,27 +533,55 @@ def _sg_sync_contas_receber(client: _SiengeClient, company_id: int) -> dict:
 
 
 def _sg_sync_medicoes(client: _SiengeClient, company_id: int) -> dict:
-    """Sincroniza medições de contratos de suprimento."""
+    """Sincroniza medições de contratos de suprimento.
+    Tenta: /supply-contracts?limit=200 → para cada contrato GET /supply-contracts/{id}/measurements
+    Se o endpoint retornar 400/403/404, pula silenciosamente (módulo não autorizado ou sem dados).
+    """
     inicio = datetime.now(timezone.utc)
     try:
-        # supply-contracts/measurements exige enterpriseId — busca por cada empreendimento
-        with _Ses_sg(engine) as s_emp:
-            emps_med = s_emp.exec(_sel_sg(SiengeEmpreendimento).where(
-                SiengeEmpreendimento.company_id == company_id)).all()
+        import httpx as _hx_med
         items = []
-        for emp in emps_med:
+        erros_400 = 0
+
+        # 1. Busca lista de contratos de suprimento (sem filtro — paginado)
+        try:
+            contratos_sup = client.get_all("supply-contracts", page_size=200)
+        except Exception:
+            contratos_sup = []
+
+        if contratos_sup:
+            # 2. Para cada contrato, busca medições via path param
+            for c in contratos_sup:
+                cid_sup = c.get("id") or c.get("supplyContractId")
+                if not cid_sup:
+                    continue
+                try:
+                    r = client.get_all(f"supply-contracts/{cid_sup}/measurements", page_size=100)
+                    items.extend(r)
+                    if r:
+                        _time_sg.sleep(0.3)
+                except Exception as _e_m:
+                    if "400" in str(_e_m):
+                        erros_400 += 1
+                    continue
+        else:
+            # Fallback: tenta endpoint direto sem parâmetros
             try:
-                r = client.get_all("supply-contracts/measurements",
-                                   extra_params={"enterpriseId": emp.sienge_id}, page_size=100)
-                items.extend(r)
-                if r:
-                    _time_sg.sleep(0.5)
-            except Exception:
-                pass
-        # Armazena no log (medições não têm modelo próprio, guardamos só o count por ora)
+                items = client.get_all("supply-contracts/measurements", page_size=200)
+            except Exception as _ef:
+                if "400" in str(_ef) or "403" in str(_ef) or "404" in str(_ef):
+                    # Endpoint não disponível/autorizado — não é erro crítico
+                    with _Ses_sg(engine) as s:
+                        _sg_log(s, company_id, "medicoes", "ok", 0,
+                                "Medições não disponíveis (endpoint retornou 400/403/404)", inicio)
+                    return {"ok": True, "registros": 0, "aviso": "Endpoint de medições não disponível"}
+
         count = len(items)
+        detalhe = f"{count} medições sincronizadas"
+        if erros_400:
+            detalhe += f" ({erros_400} contratos sem acesso)"
         with _Ses_sg(engine) as s:
-            _sg_log(s, company_id, "medicoes", "ok", count, f"{count} medições sincronizadas", inicio)
+            _sg_log(s, company_id, "medicoes", "ok", count, detalhe, inicio)
         return {"ok": True, "registros": count}
     except Exception as _e:
         with _Ses_sg(engine) as s:
