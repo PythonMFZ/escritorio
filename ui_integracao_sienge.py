@@ -329,33 +329,54 @@ def _sg_resolve_emp(emp_map: dict, raw_id) -> tuple[str, str]:
     return sid, nome
 
 
+def _sg_bulk_get_all(client: _SiengeClient, path: str, page_size: int = 500) -> list:
+    """Busca todas as páginas da Bulk Data API do Sienge."""
+    try:
+        import httpx as _hx_bulk
+    except ImportError:
+        return []
+    bulk_base = f"https://api.sienge.com.br/{client.tenant}/public/api/bulk-data/v1"
+    result = []
+    offset = 0
+    while True:
+        try:
+            resp = _hx_bulk.get(
+                f"{bulk_base}/{path.lstrip('/')}",
+                headers=client._headers(),
+                params={"limit": page_size, "offset": offset},
+                timeout=60.0,
+            )
+            if resp.status_code != 200:
+                print(f"[sienge] bulk {path} HTTP {resp.status_code}: {resp.text[:200]}")
+                break
+            data = resp.json()
+            items = data.get("results") or data.get("data") or (data if isinstance(data, list) else [])
+            result.extend(items)
+            total = (data.get("resultSetMetadata") or {}).get("count", len(items))
+            offset += page_size
+            if offset >= total or not items:
+                break
+            _time_sg.sleep(3.5)   # Bulk: 20 req/min → ~3s entre páginas
+        except Exception as _e_bulk:
+            print(f"[sienge] bulk {path} erro: {_e_bulk}")
+            break
+    return result
+
+
 def _sg_sync_contas_pagar(client: _SiengeClient, company_id: int) -> dict:
-    """Usa Bulk Data API para buscar parcelas de contas a pagar."""
+    """Bulk Data API — endpoint /outcome (Parcelas do contas a pagar)."""
     inicio = datetime.now(timezone.utc)
     try:
-        # Mapa buildingId → nome para resolução rápida
         with _Ses_sg(engine) as s:
             emps = s.exec(_sel_sg(SiengeEmpreendimento).where(
                 SiengeEmpreendimento.company_id == company_id)).all()
         emp_map = {str(e.sienge_id): e.nome for e in emps}
 
-        # Bulk Data retorna volume maior; tenta endpoint bulk primeiro, fallback REST
-        items = []
-        try:
-            bulk_base = f"https://api.sienge.com.br/{client.tenant}/public/api/bulk-data/v1"
-            import httpx as _hx2
-            resp = _hx2.get(
-                f"{bulk_base}/bill-debts/installments",
-                headers=client._headers(),
-                params={"limit": 500, "offset": 0},
-                timeout=60.0,
-            )
-            if resp.status_code == 200:
-                data = resp.json()
-                items = data.get("results") or data.get("data") or (data if isinstance(data, list) else [])
-        except Exception:
-            pass
-
+        # Endpoint correto: Bulk Data /outcome (Parcelas do contas a pagar)
+        # Fallback: /outcome/by-bills ou REST /bill-debts
+        items = _sg_bulk_get_all(client, "outcome")
+        if not items:
+            items = _sg_bulk_get_all(client, "outcome/by-bills")
         if not items:
             items = client.get_all("bill-debts", page_size=200)
 
@@ -375,19 +396,22 @@ def _sg_sync_contas_pagar(client: _SiengeClient, company_id: int) -> dict:
                     continue
                 obj = ids_existentes.get(sid) or SiengeContaPagar(
                     company_id=company_id, sienge_id=sid)
+                # Bulk /outcome usa: creditorName, billValue, dueDate, paymentDate, enterpriseId
                 obj.credor_nome  = (item.get("creditorName") or item.get("supplierName") or
-                                    item.get("vendorName") or "")
+                                    item.get("vendorName") or item.get("creditor") or "")
                 obj.descricao    = (item.get("description") or item.get("historicDescription") or
-                                    item.get("memo") or "")
-                obj.valor        = float(item.get("netValue") or item.get("value") or
-                                         item.get("amount") or 0)
+                                    item.get("billDescription") or item.get("memo") or "")
+                obj.valor        = float(item.get("billValue") or item.get("netValue") or
+                                         item.get("value") or item.get("amount") or 0)
                 obj.vencimento   = str(item.get("dueDate") or item.get("expirationDate") or "")
-                obj.situacao     = str(item.get("situation") or item.get("status") or "")
+                obj.situacao     = str(item.get("situation") or item.get("status") or
+                                       item.get("paymentSituation") or "")
                 obj.data_realizacao = str(item.get("paymentDate") or item.get("settlementDate") or
                                           item.get("paidDate") or "")
-                obj.centro_custo = str(item.get("costCenterName", "") or item.get("costCenter", "") or
-                                       item.get("costCenterDescription", "") or "")
-                emp_id, emp_nome = _sg_resolve_emp(emp_map, item.get("buildingId", ""))
+                obj.centro_custo = str(item.get("costCenterName") or item.get("costCenter") or
+                                       item.get("costCenterDescription") or "")
+                emp_id, emp_nome = _sg_resolve_emp(emp_map,
+                    item.get("enterpriseId") or item.get("buildingId") or "")
                 obj.empreendimento_id   = emp_id
                 obj.empreendimento_nome = emp_nome
                 obj.empreendimento      = emp_id   # campo legado
@@ -412,7 +436,13 @@ def _sg_sync_contas_receber(client: _SiengeClient, company_id: int) -> dict:
                 SiengeEmpreendimento.company_id == company_id)).all()
         emp_map = {str(e.sienge_id): e.nome for e in emps}
 
-        items = client.get_all("accounts-receivable/receivable-bills", page_size=200)
+        # Bulk Data: Parcelas do contas a receber → /outcome (mesmo path, módulo diferente)
+        # A Bulk Data de receber usa endpoint próprio; tenta os caminhos conhecidos
+        items = _sg_bulk_get_all(client, "receivable-bills/outcome")
+        if not items:
+            items = _sg_bulk_get_all(client, "accounts-receivable/outcome")
+        if not items:
+            items = client.get_all("accounts-receivable/receivable-bills", page_size=200)
         with _Ses_sg(engine) as s:
             existentes = s.exec(_sel_sg(SiengeContaReceber).where(
                 SiengeContaReceber.company_id == company_id)).all()
