@@ -284,8 +284,12 @@ def _sg_sync_empreendimentos(client: _SiengeClient, company_id: int) -> dict:
 def _sg_sync_contratos_venda(client: _SiengeClient, company_id: int) -> dict:
     inicio = datetime.now(timezone.utc)
     try:
-        # Endpoint confirmado pela doc: /contracts (não /sale-contracts)
-        items = client.get_all("contracts")
+        # Endpoint Bulk confirmado via painel de autorização Sienge: /sales
+        from datetime import date as _date_sg2
+        start_cv = (_date_sg2.today().replace(year=_date_sg2.today().year - 5).isoformat())
+        items = _sg_bulk_get_all(client, "sales", extra_params={"startDate": start_cv})
+        if not items:
+            items = client.get_all("contracts")
         if not items:
             items = client.get_all("sale-contracts")
         with _Ses_sg(engine) as s:
@@ -453,11 +457,12 @@ def _sg_sync_contas_receber(client: _SiengeClient, company_id: int) -> dict:
         from datetime import date as _date_sg2
         start2 = (_date_sg2.today().replace(year=_date_sg2.today().year - 2).isoformat())
         bulk_params2 = {"startDate": start2}
-        # Bulk parcelas a receber — tenta caminhos conhecidos com startDate
-        items = _sg_bulk_get_all(client, "receivable-bills", extra_params=bulk_params2)
+        # Bulk parcelas a receber — caminhos confirmados via painel Sienge: /income e /income/by-bills
+        items = _sg_bulk_get_all(client, "income", extra_params=bulk_params2)
         if not items:
-            items = _sg_bulk_get_all(client, "accounts-receivable/receivable-bills",
-                                     extra_params=bulk_params2)
+            items = _sg_bulk_get_all(client, "income/by-bills", extra_params=bulk_params2)
+        if not items:
+            items = _sg_bulk_get_all(client, "receivable-bills", extra_params=bulk_params2)
         if not items:
             items = client.get_all("accounts-receivable/receivable-bills", page_size=200)
         with _Ses_sg(engine) as s:
