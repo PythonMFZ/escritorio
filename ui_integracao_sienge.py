@@ -286,8 +286,12 @@ def _sg_sync_contratos_venda(client: _SiengeClient, company_id: int) -> dict:
     try:
         # Endpoint Bulk confirmado via painel de autorização Sienge: /sales
         from datetime import date as _date_sg2
-        start_cv = (_date_sg2.today().replace(year=_date_sg2.today().year - 5).isoformat())
-        items = _sg_bulk_get_all(client, "sales", extra_params={"startDate": start_cv})
+        _today_cv = _date_sg2.today()
+        start_cv = _today_cv.replace(year=_today_cv.year - 5).isoformat()
+        end_cv   = _today_cv.isoformat()
+        print(f"[sienge] contratos_venda: tentando bulk /sales startDate={start_cv} endDate={end_cv}")
+        items = _sg_bulk_get_all(client, "sales", extra_params={"startDate": start_cv, "endDate": end_cv})
+        print(f"[sienge] contratos_venda: /sales={len(items)} itens")
         if not items:
             items = client.get_all("contracts")
         if not items:
@@ -407,12 +411,13 @@ def _sg_sync_contas_pagar(client: _SiengeClient, company_id: int) -> dict:
                 SiengeEmpreendimento.company_id == company_id)).all()
         emp_map = {str(e.sienge_id): e.nome for e in emps}
 
-        # Bulk /outcome exige startDate obrigatório — últimos 24 meses
+        # Bulk /outcome exige startDate E endDate obrigatórios
         from datetime import date as _date_sg
-        start = (_date_sg.today().replace(year=_date_sg.today().year - 2)
-                 .isoformat())  # 2 anos atrás
-        bulk_params = {"startDate": start}
-        print(f"[sienge] contas_pagar: tentando bulk /outcome startDate={start}")
+        _today_sg = _date_sg.today()
+        start = _today_sg.replace(year=_today_sg.year - 2).isoformat()
+        end   = _today_sg.isoformat()
+        bulk_params = {"startDate": start, "endDate": end}
+        print(f"[sienge] contas_pagar: tentando bulk /outcome startDate={start} endDate={end}")
         items = _sg_bulk_get_all(client, "outcome", extra_params=bulk_params)
         print(f"[sienge] contas_pagar: /outcome={len(items)} itens")
         if not items:
@@ -479,10 +484,12 @@ def _sg_sync_contas_receber(client: _SiengeClient, company_id: int) -> dict:
         emp_map = {str(e.sienge_id): e.nome for e in emps}
 
         from datetime import date as _date_sg2
-        start2 = (_date_sg2.today().replace(year=_date_sg2.today().year - 2).isoformat())
-        bulk_params2 = {"startDate": start2}
+        _today_sg2 = _date_sg2.today()
+        start2 = _today_sg2.replace(year=_today_sg2.year - 2).isoformat()
+        end2   = _today_sg2.isoformat()
+        bulk_params2 = {"startDate": start2, "endDate": end2}
         # Bulk parcelas a receber — caminhos confirmados via painel Sienge: /income e /income/by-bills
-        print(f"[sienge] contas_receber: tentando bulk /income startDate={start2}")
+        print(f"[sienge] contas_receber: tentando bulk /income startDate={start2} endDate={end2}")
         items = _sg_bulk_get_all(client, "income", extra_params=bulk_params2)
         print(f"[sienge] contas_receber: /income={len(items)} itens")
         if not items:
