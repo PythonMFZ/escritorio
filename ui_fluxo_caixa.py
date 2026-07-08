@@ -344,6 +344,7 @@ TEMPLATES["fluxo_caixa_dashboard.html"] = r"""
       <a href="/ferramentas/fluxo-caixa/novo" class="btn btn-primary btn-sm">+ Lançamento</a>
       <a href="/ferramentas/fluxo-caixa/importar" class="btn btn-outline-secondary btn-sm">Importar Excel</a>
       <a href="/ferramentas/fluxo-caixa/importar-obra" class="btn btn-outline-secondary btn-sm">🏗 Importar de Obra</a>
+      <a href="/ferramentas/fluxo-caixa/importar-sienge" class="btn btn-outline-secondary btn-sm">🔗 Importar do Sienge</a>
       <a href="/ferramentas/fluxo-caixa/importacoes" class="btn btn-outline-secondary btn-sm">Importações</a>
       <a href="/ferramentas/fluxo-caixa/config" class="btn btn-outline-secondary btn-sm">⚙ Configurar</a>
     </div>
@@ -1965,5 +1966,334 @@ try:
         _PRODUTOS_BASE.append(_FC_PRODUTO)
 except Exception as _e_prod_fc:
     print(f"[fluxo_caixa] _PRODUTOS_BASE: {_e_prod_fc}")
+
+# ── Importação do Sienge ──────────────────────────────────────────────────────
+
+TEMPLATES["fluxo_caixa_importar_sienge.html"] = r"""
+{% extends "base.html" %}
+{% block content %}
+<style>
+  .sg-preview{font-size:.8rem;}
+  .sg-preview thead th{background:#f8f9fa;font-size:.72rem;text-transform:uppercase;letter-spacing:.04em;}
+  .badge-entrada{background:#d1fae5;color:#065f46;}
+  .badge-saida{background:#fee2e2;color:#991b1b;}
+</style>
+
+<div class="d-flex align-items-center gap-2 mb-3">
+  <a href="/ferramentas/fluxo-caixa" class="btn btn-outline-secondary btn-sm">←</a>
+  <div>
+    <h4 class="mb-0">🔗 Importar do Sienge</h4>
+    <div class="text-muted small">Importa contas a pagar e a receber sincronizadas do Sienge para o Fluxo de Caixa.</div>
+  </div>
+</div>
+
+{% if not config_sienge %}
+<div class="alert alert-warning">
+  ⚠️ Integração Sienge não configurada para esta empresa.
+  <a href="/admin/sienge" class="alert-link">Configurar agora →</a>
+</div>
+{% else %}
+
+{# Filtros #}
+<form method="GET" action="/ferramentas/fluxo-caixa/importar-sienge" class="row g-2 mb-3">
+  <div class="col-auto">
+    <select name="modulo" class="form-select form-select-sm">
+      <option value="ambos" {{ 'selected' if modulo=='ambos' }}>Pagar + Receber</option>
+      <option value="pagar" {{ 'selected' if modulo=='pagar' }}>Só Contas a Pagar</option>
+      <option value="receber" {{ 'selected' if modulo=='receber' }}>Só Contas a Receber</option>
+    </select>
+  </div>
+  <div class="col-auto">
+    <input type="date" name="data_ini" class="form-control form-control-sm" value="{{ data_ini }}" placeholder="Venc. de">
+  </div>
+  <div class="col-auto">
+    <input type="date" name="data_fim" class="form-control form-control-sm" value="{{ data_fim }}" placeholder="Venc. até">
+  </div>
+  <div class="col-auto">
+    <button type="submit" class="btn btn-outline-primary btn-sm">Filtrar</button>
+  </div>
+</form>
+
+{% if itens %}
+<div class="alert alert-info py-2 small mb-3">
+  <strong>{{ itens|length }} lançamentos</strong> encontrados no Sienge.
+  Total entradas: <strong>R$ {{ total_entradas }}</strong> | Total saídas: <strong>R$ {{ total_saidas }}</strong>
+  <br><span class="text-muted">Lançamentos já importados anteriormente serão ignorados (detecção por ID Sienge).</span>
+</div>
+
+<form method="POST" action="/ferramentas/fluxo-caixa/importar-sienge/confirmar">
+  <input type="hidden" name="modulo"   value="{{ modulo }}">
+  <input type="hidden" name="data_ini" value="{{ data_ini }}">
+  <input type="hidden" name="data_fim" value="{{ data_fim }}">
+
+  <div class="table-responsive sg-preview mb-3">
+    <table class="table table-sm table-hover align-middle">
+      <thead><tr>
+        <th><input type="checkbox" id="checkAll" onclick="toggleAll(this)"></th>
+        <th>Tipo</th><th>Credor / Devedor</th><th>Descrição</th>
+        <th>Vencimento</th><th>Valor</th><th>Situação Sienge</th>
+      </tr></thead>
+      <tbody>
+        {% for item in itens %}
+        <tr>
+          <td><input type="checkbox" name="ids" value="{{ item.sid }}" checked></td>
+          <td>
+            <span class="badge {{ 'badge-entrada' if item.tipo=='entrada' else 'badge-saida' }}">
+              {{ '↓ Receber' if item.tipo=='entrada' else '↑ Pagar' }}
+            </span>
+          </td>
+          <td>{{ item.nome[:35] }}</td>
+          <td class="text-muted">{{ item.descricao[:45] }}</td>
+          <td>{{ item.vencimento }}</td>
+          <td class="fw-semibold">R$ {{ item.valor_fmt }}</td>
+          <td><span class="badge bg-secondary" style="font-size:.6rem;">{{ item.situacao }}</span></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <button type="submit" class="btn btn-primary">
+    ✅ Importar selecionados para o Fluxo de Caixa
+  </button>
+  <a href="/ferramentas/fluxo-caixa" class="btn btn-outline-secondary ms-2">Cancelar</a>
+</form>
+
+{% else %}
+<div class="alert alert-secondary">Nenhum lançamento Sienge encontrado com os filtros aplicados.</div>
+<a href="/admin/sienge/sync" class="btn btn-outline-primary btn-sm">🔄 Sincronizar Sienge agora</a>
+{% endif %}
+{% endif %}
+
+<script>
+function toggleAll(cb) {
+  document.querySelectorAll('input[name="ids"]').forEach(c => c.checked = cb.checked);
+}
+</script>
+{% endblock %}
+"""
+
+TEMPLATES["fluxo_caixa_importar_sienge_ok.html"] = r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="text-center py-5">
+  <div style="font-size:3rem;">✅</div>
+  <h4 class="mt-3">{{ importados }} lançamentos importados do Sienge!</h4>
+  <p class="text-muted">{{ duplicados }} já existiam e foram ignorados.</p>
+  <a href="/ferramentas/fluxo-caixa" class="btn btn-primary mt-2">Ver Fluxo de Caixa →</a>
+</div>
+{% endblock %}
+"""
+
+if hasattr(templates_env.loader, "mapping"):
+    templates_env.loader.mapping["fluxo_caixa_importar_sienge.html"]    = TEMPLATES["fluxo_caixa_importar_sienge.html"]
+    templates_env.loader.mapping["fluxo_caixa_importar_sienge_ok.html"] = TEMPLATES["fluxo_caixa_importar_sienge_ok.html"]
+
+
+@app.get("/ferramentas/fluxo-caixa/importar-sienge", response_class=HTMLResponse)
+@require_login
+async def fc_importar_sienge_page(
+    request: Request,
+    modulo:   str = "ambos",
+    data_ini: str = "",
+    data_fim: str = "",
+    session:  Session = Depends(get_session),
+):
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        return RedirectResponse("/login", status_code=303)
+    cid = ctx.company.id
+
+    # Verifica se Sienge está configurado (acessa os modelos via nome de classe registrado)
+    try:
+        from sqlmodel import select as _sel_si
+        cfg_sg = session.exec(
+            _sel_si(SiengeConfig).where(SiengeConfig.company_id == cid)
+        ).first()
+    except Exception:
+        cfg_sg = None
+
+    itens = []
+    total_entradas = "0,00"
+    total_saidas   = "0,00"
+
+    if cfg_sg:
+        # Busca contas a pagar
+        pagar_rows = []
+        receber_rows = []
+        try:
+            from sqlmodel import select as _sel_si2
+            if modulo in ("ambos", "pagar"):
+                q = _sel_si2(SiengeContaPagar).where(SiengeContaPagar.company_id == cid)
+                if data_ini:
+                    q = q.where(SiengeContaPagar.vencimento >= data_ini)
+                if data_fim:
+                    q = q.where(SiengeContaPagar.vencimento <= data_fim)
+                pagar_rows = session.exec(q.order_by(SiengeContaPagar.vencimento)).all()
+
+            if modulo in ("ambos", "receber"):
+                q2 = _sel_si2(SiengeContaReceber).where(SiengeContaReceber.company_id == cid)
+                if data_ini:
+                    q2 = q2.where(SiengeContaReceber.vencimento >= data_ini)
+                if data_fim:
+                    q2 = q2.where(SiengeContaReceber.vencimento <= data_fim)
+                receber_rows = session.exec(q2.order_by(SiengeContaReceber.vencimento)).all()
+        except Exception as _e_si:
+            print(f"[fc_sienge] erro ao buscar dados: {_e_si}")
+
+        def _fmt_brl(v):
+            return f"{v:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+
+        for p in pagar_rows:
+            itens.append({
+                "sid":       f"pagar-{p.sienge_id}",
+                "tipo":      "saida",
+                "nome":      p.credor_nome,
+                "descricao": p.descricao,
+                "vencimento": p.vencimento,
+                "valor":     p.valor,
+                "valor_fmt": _fmt_brl(p.valor),
+                "situacao":  p.situacao,
+                "categoria": "Fornecedor",
+                "empresa":   p.empreendimento,
+            })
+        for r in receber_rows:
+            itens.append({
+                "sid":       f"receber-{r.sienge_id}",
+                "tipo":      "entrada",
+                "nome":      r.devedor_nome,
+                "descricao": r.descricao,
+                "vencimento": r.vencimento,
+                "valor":     r.valor,
+                "valor_fmt": _fmt_brl(r.valor),
+                "situacao":  r.situacao,
+                "categoria": "Receita de Venda",
+                "empresa":   r.empreendimento,
+            })
+
+        soma_ent = sum(i["valor"] for i in itens if i["tipo"] == "entrada")
+        soma_sai = sum(i["valor"] for i in itens if i["tipo"] == "saida")
+        total_entradas = _fmt_brl(soma_ent)
+        total_saidas   = _fmt_brl(soma_sai)
+
+    return render("fluxo_caixa_importar_sienge.html", request=request, context={
+        "config_sienge":  cfg_sg,
+        "modulo":         modulo,
+        "data_ini":       data_ini,
+        "data_fim":       data_fim,
+        "itens":          itens,
+        "total_entradas": total_entradas,
+        "total_saidas":   total_saidas,
+    })
+
+
+@app.post("/ferramentas/fluxo-caixa/importar-sienge/confirmar", response_class=HTMLResponse)
+@require_login
+async def fc_importar_sienge_confirmar(
+    request: Request,
+    session: Session = Depends(get_session),
+):
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        return RedirectResponse("/login", status_code=303)
+    cid = ctx.company.id
+    cl_id = get_active_client_id(request, session, ctx)
+
+    form = await request.form()
+    ids_sel = set(form.getlist("ids"))
+    modulo   = form.get("modulo", "ambos")
+    data_ini = form.get("data_ini", "")
+    data_fim = form.get("data_fim", "")
+
+    if not ids_sel:
+        return RedirectResponse("/ferramentas/fluxo-caixa/importar-sienge", status_code=303)
+
+    # Busca IDs já importados (import_batch começa com "sienge-")
+    ja_importados = set()
+    try:
+        from sqlmodel import select as _sel_si3
+        existentes = session.exec(
+            _sel_si3(CashFlowEntry).where(
+                CashFlowEntry.company_id == cid,
+                CashFlowEntry.import_batch.like("sienge-%"),
+            )
+        ).all()
+        ja_importados = {e.import_batch for e in existentes}
+    except Exception:
+        pass
+
+    import_batch_base = f"sienge-{__import__('datetime').date.today().isoformat()}"
+    importados  = 0
+    duplicados  = 0
+
+    # Reconstrói os itens para os IDs selecionados
+    try:
+        from sqlmodel import select as _sel_si4
+        pagar_rows   = session.exec(_sel_si4(SiengeContaPagar).where(
+            SiengeContaPagar.company_id == cid)).all()
+        receber_rows = session.exec(_sel_si4(SiengeContaReceber).where(
+            SiengeContaReceber.company_id == cid)).all()
+    except Exception:
+        pagar_rows = []
+        receber_rows = []
+
+    def _to_cents(v: float) -> int:
+        return int(round(abs(v) * 100))
+
+    for p in pagar_rows:
+        sid = f"pagar-{p.sienge_id}"
+        if sid not in ids_sel:
+            continue
+        batch_id = f"sienge-{sid}"
+        if batch_id in ja_importados:
+            duplicados += 1
+            continue
+        entry = CashFlowEntry(
+            company_id=cid, client_id=cl_id,
+            data_vencimento=p.vencimento or str(__import__('datetime').date.today()),
+            descricao=p.descricao or p.credor_nome or "Conta a Pagar Sienge",
+            empresa=p.empreendimento or "",
+            centro_custo="Sienge",
+            categoria="Fornecedor",
+            tipo="saida",
+            valor_cents=_to_cents(p.valor),
+            status="previsto",
+            observacao=f"Importado do Sienge — credor: {p.credor_nome}",
+            import_batch=batch_id,
+        )
+        session.add(entry)
+        importados += 1
+
+    for r in receber_rows:
+        sid = f"receber-{r.sienge_id}"
+        if sid not in ids_sel:
+            continue
+        batch_id = f"sienge-{sid}"
+        if batch_id in ja_importados:
+            duplicados += 1
+            continue
+        entry = CashFlowEntry(
+            company_id=cid, client_id=cl_id,
+            data_vencimento=r.vencimento or str(__import__('datetime').date.today()),
+            descricao=r.descricao or r.devedor_nome or "Conta a Receber Sienge",
+            empresa=r.empreendimento or "",
+            centro_custo="Sienge",
+            categoria="Receita de Venda",
+            tipo="entrada",
+            valor_cents=_to_cents(r.valor),
+            status="previsto",
+            observacao=f"Importado do Sienge — devedor: {r.devedor_nome}",
+            import_batch=batch_id,
+        )
+        session.add(entry)
+        importados += 1
+
+    session.commit()
+
+    return render("fluxo_caixa_importar_sienge_ok.html", request=request, context={
+        "importados": importados,
+        "duplicados": duplicados,
+    })
+
 
 print("[fluxo_caixa] ✅ Módulo carregado — rotas /ferramentas/fluxo-caixa registradas.")
