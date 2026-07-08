@@ -362,12 +362,32 @@ def _sg_bulk_get_all(client: _SiengeClient, path: str, page_size: int = 500,
                 _time_sg.sleep(65)
                 continue
             if resp.status_code != 200:
-                print(f"[sienge] bulk {path} HTTP {resp.status_code}: {resp.text[:200]}")
+                print(f"[sienge] bulk {path} HTTP {resp.status_code}: {resp.text[:400]}")
                 break
             data = resp.json()
-            items = data.get("results") or data.get("data") or (data if isinstance(data, list) else [])
+            # Log diagnóstico da estrutura na primeira página
+            if offset == 0:
+                if isinstance(data, dict):
+                    print(f"[sienge] bulk {path} keys={list(data.keys())[:10]} total_field={data.get('resultSetMetadata') or data.get('totalCount') or data.get('total') or '?'}")
+                else:
+                    print(f"[sienge] bulk {path} type={type(data).__name__} len={len(data) if hasattr(data,'__len__') else '?'}")
+            # Tenta todas as chaves conhecidas de paginação Sienge
+            if isinstance(data, list):
+                items = data
+            else:
+                items = (data.get("results")
+                      or data.get("data")
+                      or data.get("items")
+                      or data.get("records")
+                      or data.get("content")
+                      or [])
             result.extend(items)
-            total = (data.get("resultSetMetadata") or {}).get("count", len(items))
+            meta = data.get("resultSetMetadata") or {}
+            total = (meta.get("count")
+                  or data.get("totalCount")
+                  or data.get("total")
+                  or data.get("totalElements")
+                  or len(items))
             offset += page_size
             if offset >= total or not items:
                 break
@@ -392,11 +412,15 @@ def _sg_sync_contas_pagar(client: _SiengeClient, company_id: int) -> dict:
         start = (_date_sg.today().replace(year=_date_sg.today().year - 2)
                  .isoformat())  # 2 anos atrás
         bulk_params = {"startDate": start}
+        print(f"[sienge] contas_pagar: tentando bulk /outcome startDate={start}")
         items = _sg_bulk_get_all(client, "outcome", extra_params=bulk_params)
+        print(f"[sienge] contas_pagar: /outcome={len(items)} itens")
         if not items:
             items = _sg_bulk_get_all(client, "outcome/by-bills", extra_params=bulk_params)
+            print(f"[sienge] contas_pagar: /outcome/by-bills={len(items)} itens")
         if not items:
             items = client.get_all("bill-debts", page_size=200)
+            print(f"[sienge] contas_pagar: /bill-debts={len(items)} itens")
 
         with _Ses_sg(engine) as s:
             existentes = s.exec(_sel_sg(SiengeContaPagar).where(
@@ -458,11 +482,15 @@ def _sg_sync_contas_receber(client: _SiengeClient, company_id: int) -> dict:
         start2 = (_date_sg2.today().replace(year=_date_sg2.today().year - 2).isoformat())
         bulk_params2 = {"startDate": start2}
         # Bulk parcelas a receber — caminhos confirmados via painel Sienge: /income e /income/by-bills
+        print(f"[sienge] contas_receber: tentando bulk /income startDate={start2}")
         items = _sg_bulk_get_all(client, "income", extra_params=bulk_params2)
+        print(f"[sienge] contas_receber: /income={len(items)} itens")
         if not items:
             items = _sg_bulk_get_all(client, "income/by-bills", extra_params=bulk_params2)
+            print(f"[sienge] contas_receber: /income/by-bills={len(items)} itens")
         if not items:
             items = _sg_bulk_get_all(client, "receivable-bills", extra_params=bulk_params2)
+            print(f"[sienge] contas_receber: /receivable-bills={len(items)} itens")
         if not items:
             items = client.get_all("accounts-receivable/receivable-bills", page_size=200)
         with _Ses_sg(engine) as s:
