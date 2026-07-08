@@ -285,18 +285,24 @@ def _sg_sync_contratos_venda(client: _SiengeClient, company_id: int) -> dict:
     inicio = datetime.now(timezone.utc)
     try:
         # Endpoint Bulk confirmado via painel de autorização Sienge: /sales
-        from datetime import date as _date_sg2
-        _today_cv = _date_sg2.today()
-        start_cv = _today_cv.replace(year=_today_cv.year - 5).isoformat()
-        end_cv   = _today_cv.isoformat()
-        print(f"[sienge] contratos_venda: tentando bulk /sales startDate={start_cv} endDate={end_cv}")
-        items = _sg_bulk_get_all(client, "sales", page_size=100,
-                                 extra_params={"startDate": start_cv, "endDate": end_cv})
-        print(f"[sienge] contratos_venda: /sales={len(items)} itens")
+        # 1. REST primeiro
+        print(f"[sienge] contratos_venda: tentando REST /contracts")
+        items = client.get_all("contracts", page_size=200)
+        print(f"[sienge] contratos_venda: /contracts={len(items)} itens")
         if not items:
-            items = client.get_all("contracts")
+            items = client.get_all("sale-contracts", page_size=200)
+            print(f"[sienge] contratos_venda: /sale-contracts={len(items)} itens")
+
+        # 2. Fallback Bulk /sales
         if not items:
-            items = client.get_all("sale-contracts")
+            from datetime import date as _date_sg2
+            _today_cv = _date_sg2.today()
+            start_cv = _today_cv.replace(year=_today_cv.year - 5).isoformat()
+            end_cv   = _today_cv.isoformat()
+            print(f"[sienge] contratos_venda: fallback bulk /sales startDate={start_cv} endDate={end_cv}")
+            items = _sg_bulk_get_all(client, "sales", page_size=100, max_rate_retries=1,
+                                     extra_params={"startDate": start_cv, "endDate": end_cv})
+            print(f"[sienge] contratos_venda: /sales={len(items)} itens")
         with _Ses_sg(engine) as s:
             existentes = s.exec(_sel_sg(SiengeContratoVenda).where(
                 SiengeContratoVenda.company_id == company_id)).all()
@@ -411,7 +417,7 @@ def _sg_bulk_get_all(client: _SiengeClient, path: str, page_size: int = 500,
 
 
 def _sg_sync_contas_pagar(client: _SiengeClient, company_id: int) -> dict:
-    """Bulk Data API — endpoint /outcome (Parcelas do contas a pagar)."""
+    """Sincroniza parcelas de contas a pagar — REST primeiro, Bulk como fallback."""
     inicio = datetime.now(timezone.utc)
     try:
         with _Ses_sg(engine) as s:
@@ -419,21 +425,29 @@ def _sg_sync_contas_pagar(client: _SiengeClient, company_id: int) -> dict:
                 SiengeEmpreendimento.company_id == company_id)).all()
         emp_map = {str(e.sienge_id): e.nome for e in emps}
 
-        # Bulk /outcome exige startDate E endDate obrigatórios
-        from datetime import date as _date_sg
-        _today_sg = _date_sg.today()
-        start = _today_sg.replace(year=_today_sg.year - 2).isoformat()
-        end   = _today_sg.isoformat()
-        bulk_params = {"startDate": start, "endDate": end}
-        print(f"[sienge] contas_pagar: tentando bulk /outcome startDate={start} endDate={end}")
-        items = _sg_bulk_get_all(client, "outcome", extra_params=bulk_params)
-        print(f"[sienge] contas_pagar: /outcome={len(items)} itens")
+        # 1. REST /bill-debts (200 req/min — sem quota diária)
+        print(f"[sienge] contas_pagar: tentando REST /bill-debts")
+        items = client.get_all("bill-debts", page_size=200)
+        print(f"[sienge] contas_pagar: /bill-debts={len(items)} itens")
+
+        # 2. Fallback Bulk (20 req/min, quota diária limitada)
         if not items:
-            items = _sg_bulk_get_all(client, "outcome/by-bills", extra_params=bulk_params)
+            from datetime import date as _date_sg
+            _today_sg = _date_sg.today()
+            start = _today_sg.replace(year=_today_sg.year - 2).isoformat()
+            end   = _today_sg.isoformat()
+            bulk_params = {"startDate": start, "endDate": end}
+            print(f"[sienge] contas_pagar: fallback bulk /outcome startDate={start} endDate={end}")
+            items = _sg_bulk_get_all(client, "outcome", extra_params=bulk_params, max_rate_retries=1)
+            print(f"[sienge] contas_pagar: /outcome={len(items)} itens")
+        if not items:
+            from datetime import date as _date_sg
+            _today_sg = _date_sg.today()
+            start = _today_sg.replace(year=_today_sg.year - 2).isoformat()
+            end   = _today_sg.isoformat()
+            bulk_params = {"startDate": start, "endDate": end}
+            items = _sg_bulk_get_all(client, "outcome/by-bills", extra_params=bulk_params, max_rate_retries=1)
             print(f"[sienge] contas_pagar: /outcome/by-bills={len(items)} itens")
-        if not items:
-            items = client.get_all("bill-debts", page_size=200)
-            print(f"[sienge] contas_pagar: /bill-debts={len(items)} itens")
 
         with _Ses_sg(engine) as s:
             existentes = s.exec(_sel_sg(SiengeContaPagar).where(
@@ -491,23 +505,29 @@ def _sg_sync_contas_receber(client: _SiengeClient, company_id: int) -> dict:
                 SiengeEmpreendimento.company_id == company_id)).all()
         emp_map = {str(e.sienge_id): e.nome for e in emps}
 
-        from datetime import date as _date_sg2
-        _today_sg2 = _date_sg2.today()
-        start2 = _today_sg2.replace(year=_today_sg2.year - 2).isoformat()
-        end2   = _today_sg2.isoformat()
-        bulk_params2 = {"startDate": start2, "endDate": end2}
-        # Bulk parcelas a receber — caminhos confirmados via painel Sienge: /income e /income/by-bills
-        print(f"[sienge] contas_receber: tentando bulk /income startDate={start2} endDate={end2}")
-        items = _sg_bulk_get_all(client, "income", extra_params=bulk_params2)
-        print(f"[sienge] contas_receber: /income={len(items)} itens")
+        # 1. REST primeiro (sem quota diária)
+        print(f"[sienge] contas_receber: tentando REST /accounts-receivable/receivable-bills")
+        items = client.get_all("accounts-receivable/receivable-bills", page_size=200)
+        print(f"[sienge] contas_receber: /accounts-receivable/receivable-bills={len(items)} itens")
+
+        # 2. Fallback Bulk
         if not items:
-            items = _sg_bulk_get_all(client, "income/by-bills", extra_params=bulk_params2)
+            from datetime import date as _date_sg2
+            _today_sg2 = _date_sg2.today()
+            start2 = _today_sg2.replace(year=_today_sg2.year - 2).isoformat()
+            end2   = _today_sg2.isoformat()
+            bulk_params2 = {"startDate": start2, "endDate": end2}
+            print(f"[sienge] contas_receber: fallback bulk /income startDate={start2} endDate={end2}")
+            items = _sg_bulk_get_all(client, "income", extra_params=bulk_params2, max_rate_retries=1)
+            print(f"[sienge] contas_receber: /income={len(items)} itens")
+        if not items:
+            from datetime import date as _date_sg2
+            _today_sg2 = _date_sg2.today()
+            start2 = _today_sg2.replace(year=_today_sg2.year - 2).isoformat()
+            end2   = _today_sg2.isoformat()
+            bulk_params2 = {"startDate": start2, "endDate": end2}
+            items = _sg_bulk_get_all(client, "income/by-bills", extra_params=bulk_params2, max_rate_retries=1)
             print(f"[sienge] contas_receber: /income/by-bills={len(items)} itens")
-        if not items:
-            items = _sg_bulk_get_all(client, "receivable-bills", extra_params=bulk_params2)
-            print(f"[sienge] contas_receber: /receivable-bills={len(items)} itens")
-        if not items:
-            items = client.get_all("accounts-receivable/receivable-bills", page_size=200)
         with _Ses_sg(engine) as s:
             existentes = s.exec(_sel_sg(SiengeContaReceber).where(
                 SiengeContaReceber.company_id == company_id)).all()
