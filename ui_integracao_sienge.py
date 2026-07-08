@@ -37,7 +37,8 @@ class SiengeConfig(_SM_sg, table=True):
     __tablename__  = "siengeconfig"
     __table_args__ = {"extend_existing": True}
     id:             Optional[int] = _F_sg(default=None, primary_key=True)
-    company_id:     int           = _F_sg(index=True, unique=True)
+    company_id:     int           = _F_sg(index=True)
+    client_id:      Optional[int] = _F_sg(default=None, index=True)  # NULL = config da empresa; preenchido = por cliente
     tenant:         str           = _F_sg(default="")   # subdomínio: minhaempresa
     api_user:       str           = _F_sg(default="")   # usuário criado em Integrações
     api_password:   str           = _F_sg(default="")   # senha (plain text — mesma política do OAuth no projeto)
@@ -51,6 +52,7 @@ class SiengeEmpreendimento(_SM_sg, table=True):
     __table_args__ = {"extend_existing": True}
     id:             Optional[int] = _F_sg(default=None, primary_key=True)
     company_id:     int           = _F_sg(index=True)
+    client_id:      Optional[int] = _F_sg(default=None, index=True)
     sienge_id:      int           = _F_sg(index=True)   # id do Sienge
     nome:           str           = _F_sg(default="")
     codigo:         str           = _F_sg(default="")
@@ -67,6 +69,7 @@ class SiengeContratoVenda(_SM_sg, table=True):
     __table_args__ = {"extend_existing": True}
     id:             Optional[int] = _F_sg(default=None, primary_key=True)
     company_id:     int           = _F_sg(index=True)
+    client_id:      Optional[int] = _F_sg(default=None, index=True)
     sienge_id:      int           = _F_sg(index=True)
     empreendimento_id: int        = _F_sg(default=0)
     numero:         str           = _F_sg(default="")
@@ -84,6 +87,7 @@ class SiengeContaPagar(_SM_sg, table=True):
     __table_args__ = {"extend_existing": True}
     id:                  Optional[int] = _F_sg(default=None, primary_key=True)
     company_id:          int           = _F_sg(index=True)
+    client_id:           Optional[int] = _F_sg(default=None, index=True)
     sienge_id:           str           = _F_sg(index=True)   # id composto Sienge
     credor_nome:         str           = _F_sg(default="")
     descricao:           str           = _F_sg(default="")
@@ -104,6 +108,7 @@ class SiengeContaReceber(_SM_sg, table=True):
     __table_args__ = {"extend_existing": True}
     id:                  Optional[int] = _F_sg(default=None, primary_key=True)
     company_id:          int           = _F_sg(index=True)
+    client_id:           Optional[int] = _F_sg(default=None, index=True)
     sienge_id:           str           = _F_sg(index=True)
     devedor_nome:        str           = _F_sg(default="")
     descricao:           str           = _F_sg(default="")
@@ -124,6 +129,7 @@ class SiengeSyncLog(_SM_sg, table=True):
     __table_args__ = {"extend_existing": True}
     id:             Optional[int] = _F_sg(default=None, primary_key=True)
     company_id:     int           = _F_sg(index=True)
+    client_id:      Optional[int] = _F_sg(default=None, index=True)
     modulo:         str           = _F_sg(default="")   # empreendimentos|contratos|financeiro|medicoes
     status:         str           = _F_sg(default="")   # ok|erro
     registros:      int           = _F_sg(default=0)
@@ -150,6 +156,13 @@ _sg_migrations = [
     ("siengecontareceber", "empreendimento_id",   "VARCHAR DEFAULT ''"),
     ("siengecontareceber", "empreendimento_nome", "VARCHAR DEFAULT ''"),
     ("siengecontareceber", "centro_custo",        "VARCHAR DEFAULT ''"),
+    # Suporte per-client: client_id em todas as tabelas
+    ("siengeconfig",              "client_id",     "INTEGER DEFAULT NULL"),
+    ("siengeempreendimento",      "client_id",     "INTEGER DEFAULT NULL"),
+    ("siengecontratovenda",       "client_id",     "INTEGER DEFAULT NULL"),
+    ("siengecontapagar",          "client_id",     "INTEGER DEFAULT NULL"),
+    ("siengecontareceber",        "client_id",     "INTEGER DEFAULT NULL"),
+    ("siengesynclog",             "client_id",     "INTEGER DEFAULT NULL"),
 ]
 if DATABASE_URL.startswith("postgres"):
     from sqlalchemy import text as _txt_sg
@@ -232,9 +245,10 @@ class _SiengeClient:
 # ── Funções de sincronização ──────────────────────────────────────────────────
 
 def _sg_log(session, company_id: int, modulo: str, status: str,
-            registros: int, detalhe: str, inicio: datetime) -> None:
+            registros: int, detalhe: str, inicio: datetime,
+            client_id: int = None) -> None:
     log = SiengeSyncLog(
-        company_id=company_id, modulo=modulo, status=status,
+        company_id=company_id, client_id=client_id, modulo=modulo, status=status,
         registros=registros, detalhe=detalhe[:1000], iniciado_em=inicio,
         finalizado_em=datetime.now(timezone.utc),
     )
@@ -242,14 +256,33 @@ def _sg_log(session, company_id: int, modulo: str, status: str,
     session.commit()
 
 
-def _sg_sync_empreendimentos(client: _SiengeClient, company_id: int) -> dict:
+def _sg_get_config(session, company_id: int, client_id: int = None):
+    """Busca config Sienge: primeiro por (company_id, client_id), depois só por company_id como fallback."""
+    if client_id:
+        cfg = session.exec(_sel_sg(SiengeConfig).where(
+            SiengeConfig.company_id == company_id,
+            SiengeConfig.client_id == client_id,
+            SiengeConfig.ativo == True,
+        )).first()
+        if cfg:
+            return cfg
+    # Fallback: config da empresa sem client_id específico
+    return session.exec(_sel_sg(SiengeConfig).where(
+        SiengeConfig.company_id == company_id,
+        SiengeConfig.client_id == None,
+        SiengeConfig.ativo == True,
+    )).first()
+
+
+def _sg_sync_empreendimentos(client: _SiengeClient, company_id: int, client_id=None) -> dict:
     inicio = datetime.now(timezone.utc)
     try:
         items = client.get_all("enterprises")
         with _Ses_sg(engine) as s:
             # Remove anteriores desta empresa para reimportar limpo
             existentes = s.exec(_sel_sg(SiengeEmpreendimento).where(
-                SiengeEmpreendimento.company_id == company_id)).all()
+                SiengeEmpreendimento.company_id == company_id,
+                SiengeEmpreendimento.client_id == client_id)).all()
             ids_existentes = {e.sienge_id: e for e in existentes}
 
             count = 0
@@ -257,7 +290,7 @@ def _sg_sync_empreendimentos(client: _SiengeClient, company_id: int) -> dict:
                 # API /enterprises usa enterpriseId; fallback para id/buildingId
                 sid = item.get("enterpriseId") or item.get("id") or item.get("buildingId") or 0
                 obj = ids_existentes.get(sid) or SiengeEmpreendimento(
-                    company_id=company_id, sienge_id=sid)
+                    company_id=company_id, sienge_id=sid, client_id=client_id)
                 obj.nome       = (item.get("name") or item.get("enterpriseName") or
                                   item.get("buildingName") or "")
                 obj.codigo     = str(item.get("code") or item.get("enterpriseCode") or "")
@@ -273,39 +306,30 @@ def _sg_sync_empreendimentos(client: _SiengeClient, company_id: int) -> dict:
                 s.add(obj)
                 count += 1
             s.commit()
-            _sg_log(s, company_id, "empreendimentos", "ok", count, f"{count} empreendimentos", inicio)
+            _sg_log(s, company_id, "empreendimentos", "ok", count, f"{count} empreendimentos", inicio, client_id=client_id)
         return {"ok": True, "registros": count}
     except Exception as _e:
         with _Ses_sg(engine) as s:
-            _sg_log(s, company_id, "empreendimentos", "erro", 0, str(_e), inicio)
+            _sg_log(s, company_id, "empreendimentos", "erro", 0, str(_e), inicio, client_id=client_id)
         return {"ok": False, "erro": str(_e)}
 
 
-def _sg_sync_contratos_venda(client: _SiengeClient, company_id: int) -> dict:
+def _sg_sync_contratos_venda(client: _SiengeClient, company_id: int, client_id=None) -> dict:
     inicio = datetime.now(timezone.utc)
     try:
         # Endpoint Bulk confirmado via painel de autorização Sienge: /sales
-        # 1. REST primeiro
-        print(f"[sienge] contratos_venda: tentando REST /contracts")
-        items = client.get_all("contracts", page_size=200)
-        print(f"[sienge] contratos_venda: /contracts={len(items)} itens")
-        if not items:
-            items = client.get_all("sale-contracts", page_size=200)
-            print(f"[sienge] contratos_venda: /sale-contracts={len(items)} itens")
-
-        # 2. Fallback Bulk /sales
-        if not items:
-            from datetime import date as _date_sg2
-            _today_cv = _date_sg2.today()
-            start_cv = _today_cv.replace(year=_today_cv.year - 5).isoformat()
-            end_cv   = _today_cv.isoformat()
-            print(f"[sienge] contratos_venda: fallback bulk /sales startDate={start_cv} endDate={end_cv}")
-            items = _sg_bulk_get_all(client, "sales", page_size=100, max_rate_retries=1,
-                                     extra_params={"startDate": start_cv, "endDate": end_cv})
-            print(f"[sienge] contratos_venda: /sales={len(items)} itens")
+        from datetime import date as _date_sg2
+        _today_cv = _date_sg2.today()
+        start_cv = _today_cv.replace(year=_today_cv.year - 5).isoformat()
+        end_cv   = _today_cv.isoformat()
+        print(f"[sienge] contratos_venda: bulk /sales startDate={start_cv} endDate={end_cv}")
+        items = _sg_bulk_get_all(client, "sales", page_size=100, max_rate_retries=2,
+                                 extra_params={"startDate": start_cv, "endDate": end_cv})
+        print(f"[sienge] contratos_venda: /sales={len(items)} itens")
         with _Ses_sg(engine) as s:
             existentes = s.exec(_sel_sg(SiengeContratoVenda).where(
-                SiengeContratoVenda.company_id == company_id)).all()
+                SiengeContratoVenda.company_id == company_id,
+                SiengeContratoVenda.client_id == client_id)).all()
             ids_existentes = {e.sienge_id: e for e in existentes}
 
             count = 0
@@ -313,7 +337,7 @@ def _sg_sync_contratos_venda(client: _SiengeClient, company_id: int) -> dict:
                 sid = (item.get("saleContractId") or item.get("contractId") or
                        item.get("id") or 0)
                 obj = ids_existentes.get(sid) or SiengeContratoVenda(
-                    company_id=company_id, sienge_id=sid)
+                    company_id=company_id, sienge_id=sid, client_id=client_id)
                 obj.empreendimento_id = (item.get("enterpriseId") or
                                          item.get("buildingId") or 0)
                 obj.numero       = str(item.get("contractNumber") or item.get("number") or "")
@@ -329,11 +353,11 @@ def _sg_sync_contratos_venda(client: _SiengeClient, company_id: int) -> dict:
                 s.add(obj)
                 count += 1
             s.commit()
-            _sg_log(s, company_id, "contratos_venda", "ok", count, f"{count} contratos", inicio)
+            _sg_log(s, company_id, "contratos_venda", "ok", count, f"{count} contratos", inicio, client_id=client_id)
         return {"ok": True, "registros": count}
     except Exception as _e:
         with _Ses_sg(engine) as s:
-            _sg_log(s, company_id, "contratos_venda", "erro", 0, str(_e), inicio)
+            _sg_log(s, company_id, "contratos_venda", "erro", 0, str(_e), inicio, client_id=client_id)
         return {"ok": False, "erro": str(_e)}
 
 
@@ -416,47 +440,48 @@ def _sg_bulk_get_all(client: _SiengeClient, path: str, page_size: int = 500,
     return result
 
 
-def _sg_sync_contas_pagar(client: _SiengeClient, company_id: int) -> dict:
-    """Sincroniza parcelas de contas a pagar — REST primeiro, Bulk como fallback."""
+def _sg_sync_contas_pagar(client: _SiengeClient, company_id: int, client_id=None) -> dict:
+    """Sincroniza parcelas de contas a pagar — Bulk /outcome primeiro, /outcome/by-bills como fallback."""
     inicio = datetime.now(timezone.utc)
     try:
         with _Ses_sg(engine) as s:
             emps = s.exec(_sel_sg(SiengeEmpreendimento).where(
-                SiengeEmpreendimento.company_id == company_id)).all()
+                SiengeEmpreendimento.company_id == company_id,
+                SiengeEmpreendimento.client_id == client_id)).all()
         emp_map = {str(e.sienge_id): e.nome for e in emps}
 
-        # 1. REST /bill-debts (200 req/min — sem quota diária)
-        print(f"[sienge] contas_pagar: tentando REST /bill-debts")
-        items = client.get_all("bill-debts", page_size=200)
-        print(f"[sienge] contas_pagar: /bill-debts={len(items)} itens")
+        # 1. Bulk /outcome (20 req/min, quota diária limitada)
+        from datetime import date as _date_sg
+        _today_sg = _date_sg.today()
+        start = _today_sg.replace(year=_today_sg.year - 2).isoformat()
+        end   = _today_sg.isoformat()
+        bulk_params = {"startDate": start, "endDate": end}
+        print(f"[sienge] contas_pagar: bulk /outcome startDate={start} endDate={end}")
+        items = _sg_bulk_get_all(client, "outcome", extra_params=bulk_params, max_rate_retries=2)
+        print(f"[sienge] contas_pagar: /outcome={len(items)} itens")
 
-        # 2. Fallback Bulk (20 req/min, quota diária limitada)
+        # 2. Fallback /outcome/by-bills
         if not items:
-            from datetime import date as _date_sg
-            _today_sg = _date_sg.today()
-            start = _today_sg.replace(year=_today_sg.year - 2).isoformat()
-            end   = _today_sg.isoformat()
-            bulk_params = {"startDate": start, "endDate": end}
-            print(f"[sienge] contas_pagar: fallback bulk /outcome startDate={start} endDate={end}")
-            items = _sg_bulk_get_all(client, "outcome", extra_params=bulk_params, max_rate_retries=1)
-            print(f"[sienge] contas_pagar: /outcome={len(items)} itens")
-        if not items:
-            from datetime import date as _date_sg
-            _today_sg = _date_sg.today()
-            start = _today_sg.replace(year=_today_sg.year - 2).isoformat()
-            end   = _today_sg.isoformat()
-            bulk_params = {"startDate": start, "endDate": end}
-            items = _sg_bulk_get_all(client, "outcome/by-bills", extra_params=bulk_params, max_rate_retries=1)
+            items = _sg_bulk_get_all(client, "outcome/by-bills", extra_params=bulk_params, max_rate_retries=2)
             print(f"[sienge] contas_pagar: /outcome/by-bills={len(items)} itens")
+
+        if not items:
+            detalhe_erro = ("Nenhum dado retornado. Verifique se o usuário de API tem permissão para "
+                            "/outcome (Bulk) no Sienge → Integrações → Usuários de APIs.")
+            print(f"[sienge] contas_pagar: {detalhe_erro}")
+            with _Ses_sg(engine) as s:
+                _sg_log(s, company_id, "contas_pagar", "aviso", 0, detalhe_erro, inicio, client_id=client_id)
+            return {"ok": True, "registros": 0, "aviso": detalhe_erro}
 
         with _Ses_sg(engine) as s:
             existentes = s.exec(_sel_sg(SiengeContaPagar).where(
-                SiengeContaPagar.company_id == company_id)).all()
+                SiengeContaPagar.company_id == company_id,
+                SiengeContaPagar.client_id == client_id)).all()
             ids_existentes = {e.sienge_id: e for e in existentes}
 
             count = 0
             for item in items:
-                # bill-debts: id principal é billDebtId ou id; parcela via installmentNumber
+                # Bulk /outcome usa: creditorName, billValue, dueDate, paymentDate, enterpriseId
                 bill_id = str(item.get("billDebtId") or item.get("id") or
                               item.get("installmentId") or item.get("billId") or "")
                 inst_num = str(item.get("installmentNumber") or item.get("parcelNumber") or "")
@@ -464,8 +489,7 @@ def _sg_sync_contas_pagar(client: _SiengeClient, company_id: int) -> dict:
                 if not sid.strip("-"):
                     continue
                 obj = ids_existentes.get(sid) or SiengeContaPagar(
-                    company_id=company_id, sienge_id=sid)
-                # Bulk /outcome usa: creditorName, billValue, dueDate, paymentDate, enterpriseId
+                    company_id=company_id, sienge_id=sid, client_id=client_id)
                 obj.credor_nome  = (item.get("creditorName") or item.get("supplierName") or
                                     item.get("vendorName") or item.get("creditor") or "")
                 obj.descricao    = (item.get("description") or item.get("historicDescription") or
@@ -489,48 +513,50 @@ def _sg_sync_contas_pagar(client: _SiengeClient, company_id: int) -> dict:
                 s.add(obj)
                 count += 1
             s.commit()
-            _sg_log(s, company_id, "contas_pagar", "ok", count, f"{count} parcelas", inicio)
+            _sg_log(s, company_id, "contas_pagar", "ok", count, f"{count} parcelas", inicio, client_id=client_id)
         return {"ok": True, "registros": count}
     except Exception as _e:
         with _Ses_sg(engine) as s:
-            _sg_log(s, company_id, "contas_pagar", "erro", 0, str(_e), inicio)
+            _sg_log(s, company_id, "contas_pagar", "erro", 0, str(_e), inicio, client_id=client_id)
         return {"ok": False, "erro": str(_e)}
 
 
-def _sg_sync_contas_receber(client: _SiengeClient, company_id: int) -> dict:
+def _sg_sync_contas_receber(client: _SiengeClient, company_id: int, client_id=None) -> dict:
     inicio = datetime.now(timezone.utc)
     try:
         with _Ses_sg(engine) as s:
             emps = s.exec(_sel_sg(SiengeEmpreendimento).where(
-                SiengeEmpreendimento.company_id == company_id)).all()
+                SiengeEmpreendimento.company_id == company_id,
+                SiengeEmpreendimento.client_id == client_id)).all()
         emp_map = {str(e.sienge_id): e.nome for e in emps}
 
-        # 1. REST primeiro (sem quota diária)
-        print(f"[sienge] contas_receber: tentando REST /accounts-receivable/receivable-bills")
-        items = client.get_all("accounts-receivable/receivable-bills", page_size=200)
-        print(f"[sienge] contas_receber: /accounts-receivable/receivable-bills={len(items)} itens")
+        # 1. Bulk /income (20 req/min, quota diária limitada)
+        from datetime import date as _date_sg2
+        _today_sg2 = _date_sg2.today()
+        start2 = _today_sg2.replace(year=_today_sg2.year - 2).isoformat()
+        end2   = _today_sg2.isoformat()
+        bulk_params2 = {"startDate": start2, "endDate": end2}
+        print(f"[sienge] contas_receber: bulk /income startDate={start2} endDate={end2}")
+        items = _sg_bulk_get_all(client, "income", extra_params=bulk_params2, max_rate_retries=2)
+        print(f"[sienge] contas_receber: /income={len(items)} itens")
 
-        # 2. Fallback Bulk
+        # 2. Fallback /income/by-bills
         if not items:
-            from datetime import date as _date_sg2
-            _today_sg2 = _date_sg2.today()
-            start2 = _today_sg2.replace(year=_today_sg2.year - 2).isoformat()
-            end2   = _today_sg2.isoformat()
-            bulk_params2 = {"startDate": start2, "endDate": end2}
-            print(f"[sienge] contas_receber: fallback bulk /income startDate={start2} endDate={end2}")
-            items = _sg_bulk_get_all(client, "income", extra_params=bulk_params2, max_rate_retries=1)
-            print(f"[sienge] contas_receber: /income={len(items)} itens")
-        if not items:
-            from datetime import date as _date_sg2
-            _today_sg2 = _date_sg2.today()
-            start2 = _today_sg2.replace(year=_today_sg2.year - 2).isoformat()
-            end2   = _today_sg2.isoformat()
-            bulk_params2 = {"startDate": start2, "endDate": end2}
-            items = _sg_bulk_get_all(client, "income/by-bills", extra_params=bulk_params2, max_rate_retries=1)
+            items = _sg_bulk_get_all(client, "income/by-bills", extra_params=bulk_params2, max_rate_retries=2)
             print(f"[sienge] contas_receber: /income/by-bills={len(items)} itens")
+
+        if not items:
+            detalhe_erro = ("Nenhum dado retornado. Verifique se o usuário de API tem permissão para "
+                            "/income (Bulk) no Sienge → Integrações → Usuários de APIs.")
+            print(f"[sienge] contas_receber: {detalhe_erro}")
+            with _Ses_sg(engine) as s:
+                _sg_log(s, company_id, "contas_receber", "aviso", 0, detalhe_erro, inicio, client_id=client_id)
+            return {"ok": True, "registros": 0, "aviso": detalhe_erro}
+
         with _Ses_sg(engine) as s:
             existentes = s.exec(_sel_sg(SiengeContaReceber).where(
-                SiengeContaReceber.company_id == company_id)).all()
+                SiengeContaReceber.company_id == company_id,
+                SiengeContaReceber.client_id == client_id)).all()
             ids_existentes = {e.sienge_id: e for e in existentes}
 
             count = 0
@@ -539,7 +565,7 @@ def _sg_sync_contas_receber(client: _SiengeClient, company_id: int) -> dict:
                 if not sid:
                     continue
                 obj = ids_existentes.get(sid) or SiengeContaReceber(
-                    company_id=company_id, sienge_id=sid)
+                    company_id=company_id, sienge_id=sid, client_id=client_id)
                 obj.devedor_nome = (item.get("customerName") or item.get("clientName") or
                                     item.get("debtorName") or "")
                 obj.descricao    = (item.get("description") or item.get("historicDescription") or "")
@@ -559,15 +585,15 @@ def _sg_sync_contas_receber(client: _SiengeClient, company_id: int) -> dict:
                 s.add(obj)
                 count += 1
             s.commit()
-            _sg_log(s, company_id, "contas_receber", "ok", count, f"{count} títulos", inicio)
+            _sg_log(s, company_id, "contas_receber", "ok", count, f"{count} títulos", inicio, client_id=client_id)
         return {"ok": True, "registros": count}
     except Exception as _e:
         with _Ses_sg(engine) as s:
-            _sg_log(s, company_id, "contas_receber", "erro", 0, str(_e), inicio)
+            _sg_log(s, company_id, "contas_receber", "erro", 0, str(_e), inicio, client_id=client_id)
         return {"ok": False, "erro": str(_e)}
 
 
-def _sg_sync_medicoes(client: _SiengeClient, company_id: int) -> dict:
+def _sg_sync_medicoes(client: _SiengeClient, company_id: int, client_id=None) -> dict:
     """Sincroniza medições de contratos de suprimento.
     Tenta: /supply-contracts?limit=200 → para cada contrato GET /supply-contracts/{id}/measurements
     Se o endpoint retornar 400/403/404, pula silenciosamente (módulo não autorizado ou sem dados).
@@ -608,7 +634,8 @@ def _sg_sync_medicoes(client: _SiengeClient, company_id: int) -> dict:
                     # Endpoint não disponível/autorizado — não é erro crítico
                     with _Ses_sg(engine) as s:
                         _sg_log(s, company_id, "medicoes", "ok", 0,
-                                "Medições não disponíveis (endpoint retornou 400/403/404)", inicio)
+                                "Medições não disponíveis (endpoint retornou 400/403/404)", inicio,
+                                client_id=client_id)
                     return {"ok": True, "registros": 0, "aviso": "Endpoint de medições não disponível"}
 
         count = len(items)
@@ -616,23 +643,20 @@ def _sg_sync_medicoes(client: _SiengeClient, company_id: int) -> dict:
         if erros_400:
             detalhe += f" ({erros_400} contratos sem acesso)"
         with _Ses_sg(engine) as s:
-            _sg_log(s, company_id, "medicoes", "ok", count, detalhe, inicio)
+            _sg_log(s, company_id, "medicoes", "ok", count, detalhe, inicio, client_id=client_id)
         return {"ok": True, "registros": count}
     except Exception as _e:
         with _Ses_sg(engine) as s:
-            _sg_log(s, company_id, "medicoes", "erro", 0, str(_e), inicio)
+            _sg_log(s, company_id, "medicoes", "erro", 0, str(_e), inicio, client_id=client_id)
         return {"ok": False, "erro": str(_e)}
 
 
-def _sg_sync_all(company_id: int) -> dict:
-    """Executa sync completo para uma empresa. Retorna resultado por módulo."""
+def _sg_sync_all(company_id: int, client_id: int = None) -> dict:
+    """Executa sync completo para uma empresa/cliente. Retorna resultado por módulo."""
     with _Ses_sg(engine) as s:
-        cfg = s.exec(_sel_sg(SiengeConfig).where(
-            SiengeConfig.company_id == company_id,
-            SiengeConfig.ativo == True,
-        )).first()
+        cfg = _sg_get_config(s, company_id, client_id)
     if not cfg:
-        return {"ok": False, "erro": "Integração Sienge não configurada para esta empresa."}
+        return {"ok": False, "erro": "Integração Sienge não configurada para esta empresa/cliente."}
 
     client = _SiengeClient(cfg.tenant, cfg.api_user, cfg.api_password)
     resultados = {}
@@ -643,8 +667,8 @@ def _sg_sync_all(company_id: int) -> dict:
         ("contas_receber",  _sg_sync_contas_receber),
         ("medicoes",        _sg_sync_medicoes),
     ]:
-        print(f"[sienge] Sincronizando {nome} — empresa {company_id}...")
-        resultados[nome] = fn(client, company_id)
+        print(f"[sienge] Sincronizando {nome} — empresa {company_id} cliente {client_id}...")
+        resultados[nome] = fn(client, company_id, client_id)
     return {"ok": True, "resultados": resultados}
 
 
@@ -675,7 +699,7 @@ def _sg_scheduler_loop():
                         _sg_ultimo_sync[cfg.company_id] = hoje
                         _thread_sg.Thread(
                             target=_sg_sync_all,
-                            args=(cfg.company_id,),
+                            args=(cfg.company_id, cfg.client_id),
                             daemon=True,
                             name=f"sienge-sync-{cfg.company_id}",
                         ).start()
@@ -882,7 +906,11 @@ TEMPLATES["sienge_admin.html"] = r"""
     </div>
     {% if contas_pagar|length > 50 %}<div class="text-muted small">Mostrando 50 de {{ contas_pagar|length }}</div>{% endif %}
     {% else %}
-    <div class="text-muted small">Nenhuma conta a pagar sincronizada.</div>
+    <div class="alert alert-warning py-2 small">
+      ⚠️ Nenhuma conta a pagar sincronizada.<br>
+      Verifique se o usuário <strong>rozzo-augur</strong> tem permissão para <code>/bill-debts</code> (REST)
+      ou <code>/outcome</code> (Bulk) no Sienge → Integrações → Usuários de APIs.
+    </div>
     {% endif %}
   </div>
 
@@ -907,7 +935,11 @@ TEMPLATES["sienge_admin.html"] = r"""
     </div>
     {% if contas_receber|length > 50 %}<div class="text-muted small">Mostrando 50 de {{ contas_receber|length }}</div>{% endif %}
     {% else %}
-    <div class="text-muted small">Nenhuma conta a receber sincronizada.</div>
+    <div class="alert alert-warning py-2 small">
+      ⚠️ Nenhuma conta a receber sincronizada.<br>
+      Verifique se o usuário <strong>rozzo-augur</strong> tem permissão para <code>/accounts-receivable/receivable-bills</code> (REST)
+      ou <code>/income</code> (Bulk) no Sienge → Integrações → Usuários de APIs.
+    </div>
     {% endif %}
   </div>
 </div>
@@ -1050,8 +1082,9 @@ async def sienge_admin_page(request: _Req_sg, session: _SesD_sg = Depends(get_se
         return _Redir_sg("/", status_code=303)
 
     cid = ctx.company.id
+    client_id = request.session.get("selected_client_id")
 
-    cfg = session.exec(_sel_sg(SiengeConfig).where(SiengeConfig.company_id == cid)).first()
+    cfg = _sg_get_config(session, cid, client_id)
 
     # Status por módulo (último log de cada)
     modulos = ["empreendimentos", "contratos_venda", "contas_pagar", "contas_receber", "medicoes"]
@@ -1059,28 +1092,33 @@ async def sienge_admin_page(request: _Req_sg, session: _SesD_sg = Depends(get_se
     for mod in modulos:
         log = session.exec(
             _sel_sg(SiengeSyncLog)
-            .where(SiengeSyncLog.company_id == cid, SiengeSyncLog.modulo == mod)
+            .where(SiengeSyncLog.company_id == cid, SiengeSyncLog.client_id == client_id,
+                   SiengeSyncLog.modulo == mod)
             .order_by(SiengeSyncLog.id.desc())
         ).first()
         status_modulos[mod] = log or SiengeSyncLog(modulo=mod, status="", registros=0, detalhe="")
 
     empreendimentos = session.exec(
-        _sel_sg(SiengeEmpreendimento).where(SiengeEmpreendimento.company_id == cid)
+        _sel_sg(SiengeEmpreendimento).where(SiengeEmpreendimento.company_id == cid,
+                                             SiengeEmpreendimento.client_id == client_id)
         .order_by(SiengeEmpreendimento.nome)
     ).all()
 
     contratos = session.exec(
-        _sel_sg(SiengeContratoVenda).where(SiengeContratoVenda.company_id == cid)
+        _sel_sg(SiengeContratoVenda).where(SiengeContratoVenda.company_id == cid,
+                                            SiengeContratoVenda.client_id == client_id)
         .order_by(SiengeContratoVenda.data_contrato.desc())
     ).all()
 
     contas_pagar = session.exec(
-        _sel_sg(SiengeContaPagar).where(SiengeContaPagar.company_id == cid)
+        _sel_sg(SiengeContaPagar).where(SiengeContaPagar.company_id == cid,
+                                         SiengeContaPagar.client_id == client_id)
         .order_by(SiengeContaPagar.vencimento)
     ).all()
 
     contas_receber = session.exec(
-        _sel_sg(SiengeContaReceber).where(SiengeContaReceber.company_id == cid)
+        _sel_sg(SiengeContaReceber).where(SiengeContaReceber.company_id == cid,
+                                           SiengeContaReceber.client_id == client_id)
         .order_by(SiengeContaReceber.vencimento)
     ).all()
 
@@ -1114,10 +1152,11 @@ async def sienge_salvar_config(request: _Req_sg, session: _SesD_sg = Depends(get
 
     form = await request.form()
     cid  = ctx.company.id
+    client_id = request.session.get("selected_client_id")
 
-    cfg = session.exec(_sel_sg(SiengeConfig).where(SiengeConfig.company_id == cid)).first()
+    cfg = _sg_get_config(session, cid, client_id)
     if not cfg:
-        cfg = SiengeConfig(company_id=cid)
+        cfg = SiengeConfig(company_id=cid, client_id=client_id)
 
     cfg.tenant   = (form.get("tenant") or "").strip().lower()
     cfg.api_user = (form.get("api_user") or "").strip()
@@ -1141,8 +1180,8 @@ async def sienge_testar(request: _Req_sg, session: _SesD_sg = Depends(get_sessio
     if not ctx or ctx.membership.role not in ("admin", "owner", "equipe"):
         return _JSON_sg({"ok": False, "erro": "Sem permissão."})
 
-    cfg = session.exec(_sel_sg(SiengeConfig).where(
-        SiengeConfig.company_id == ctx.company.id)).first()
+    client_id = request.session.get("selected_client_id")
+    cfg = _sg_get_config(session, ctx.company.id, client_id)
     if not cfg:
         return _JSON_sg({"ok": False, "erro": "Integração não configurada."})
 
@@ -1154,7 +1193,7 @@ async def sienge_testar(request: _Req_sg, session: _SesD_sg = Depends(get_sessio
     return _JSON_sg({"ok": ok, "mensagem": msg, "erro": msg if not ok else ""})
 
 
-_sg_sync_running: dict = {}   # company_id → True quando sync em andamento
+_sg_sync_running: dict = {}   # (company_id, client_id) → True quando sync em andamento
 
 @app.post("/admin/sienge/sync")
 async def sienge_sync_manual(request: _Req_sg, session: _SesD_sg = Depends(get_session)):
@@ -1165,17 +1204,19 @@ async def sienge_sync_manual(request: _Req_sg, session: _SesD_sg = Depends(get_s
         return _JSON_sg({"ok": False, "erro": "Sem permissão."})
 
     cid = ctx.company.id
-    if _sg_sync_running.get(cid):
+    client_id = request.session.get("selected_client_id")
+    _run_key = (cid, client_id)
+    if _sg_sync_running.get(_run_key):
         return _JSON_sg({"ok": True, "async": True, "mensagem": "Sincronização já em andamento. Aguarde e recarregue a página."})
 
     def _run_bg():
-        _sg_sync_running[cid] = True
+        _sg_sync_running[_run_key] = True
         try:
-            _sg_sync_all(cid)
+            _sg_sync_all(cid, client_id)
         except Exception as _e_bg:
             print(f"[sienge] sync bg erro: {_e_bg}")
         finally:
-            _sg_sync_running[cid] = False
+            _sg_sync_running[_run_key] = False
 
     t = _thread_sg.Thread(target=_run_bg, daemon=True)
     t.start()
@@ -1192,12 +1233,14 @@ async def sienge_status(request: _Req_sg, session: _SesD_sg = Depends(get_sessio
     if not ctx:
         return _JSON_sg({"ok": False, "erro": "Sem permissão."})
     cid = ctx.company.id
-    running = bool(_sg_sync_running.get(cid))
+    client_id = request.session.get("selected_client_id")
+    running = bool(_sg_sync_running.get((cid, client_id)))
     logs = []
     with _Ses_sg(engine) as s:
         from sqlalchemy import text as _txt_st
         rows = s.exec(_sel_sg(SiengeSyncLog)
-                      .where(SiengeSyncLog.company_id == cid)
+                      .where(SiengeSyncLog.company_id == cid,
+                             SiengeSyncLog.client_id == client_id)
                       .order_by(SiengeSyncLog.finalizado_em.desc())
                       .limit(10)).all()
         logs = [{"modulo": r.modulo, "status": r.status,
