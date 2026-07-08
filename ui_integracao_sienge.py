@@ -175,6 +175,19 @@ if DATABASE_URL.startswith("postgres"):
         except Exception as _e_mg_sg:
             print(f"[sienge] migration {_t_sg}.{_col_sg}: {_e_mg_sg}")
 
+    # Corrige índice único: company_id sozinho → (company_id, client_id)
+    _sg_idx_migrations = [
+        "DROP INDEX IF EXISTS ix_siengeconfig_company_id",
+        ("CREATE UNIQUE INDEX IF NOT EXISTS ix_siengeconfig_company_client "
+         "ON siengeconfig (company_id, client_id)"),
+    ]
+    for _sq_sg in _sg_idx_migrations:
+        try:
+            with engine.begin() as _c_sg:
+                _c_sg.execute(_txt_sg(_sq_sg))
+        except Exception as _e_idx_sg:
+            print(f"[sienge] index migration: {_e_idx_sg}")
+
 
 # ── Cliente HTTP ──────────────────────────────────────────────────────────────
 
