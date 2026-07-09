@@ -493,16 +493,14 @@ def _sg_sync_contas_pagar(client: _SiengeClient, company_id: int, client_id=None
             start = _sg_date_inicio_sync(s, company_id, "contas_pagar", client_id)
 
         from datetime import date as _date_sg
-        end = _date_sg.today().isoformat()
-        # /outcome requer: selectionType, correctionIndexerId, correctionDate
-        # correctionIndexerId=1 (indexador padrão); correctionDate=hoje
+        hoje = _date_sg.today()
         bulk_params = {
-            "startDate": start, "endDate": end,
+            "startDate": start, "endDate": "2100-01-01",
             "selectionType": "D",
             "correctionIndexerId": 1,
-            "correctionDate": end,
+            "correctionDate": hoje.isoformat(),
         }
-        print(f"[sienge] contas_pagar: bulk /outcome {start}→{end} selectionType=D")
+        print(f"[sienge] contas_pagar: bulk /outcome {start}→2100-01-01 selectionType=D")
         items = _sg_bulk_get_all(client, "outcome", extra_params=bulk_params, max_rate_retries=3)
         print(f"[sienge] contas_pagar: /outcome={len(items)} itens")
 
@@ -575,10 +573,7 @@ def _sg_sync_contas_receber(client: _SiengeClient, company_id: int, client_id=No
             emp_map = {str(e.sienge_id): e.nome for e in emps}
             start2 = _sg_date_inicio_sync(s, company_id, "contas_receber", client_id)
 
-        from datetime import date as _date_sg2
-        end2 = _date_sg2.today().isoformat()
-        # selectionType obrigatório: D=vencimento
-        bulk_params2 = {"startDate": start2, "endDate": end2, "selectionType": "D"}
+        bulk_params2 = {"startDate": start2, "endDate": "2100-01-01", "selectionType": "D"}
         print(f"[sienge] contas_receber: bulk /income {start2}→{end2} selectionType=D")
         items = _sg_bulk_get_all(client, "income", extra_params=bulk_params2, max_rate_retries=3)
         print(f"[sienge] contas_receber: /income={len(items)} itens")
@@ -868,11 +863,15 @@ TEMPLATES["sienge_admin.html"] = r"""
       </div>
       {% endfor %}
     </div>
-    <div class="d-flex gap-2 mt-3 flex-wrap">
+    <div class="d-flex gap-2 mt-3 flex-wrap align-items-center">
       <button class="btn btn-primary btn-sm" onclick="syncAll()">
         <i class="bi bi-arrow-repeat me-1"></i>Sincronizar tudo agora
       </button>
-      <span class="text-muted small align-self-center">Sync automático: diário às 06:00 BRT</span>
+      <button class="btn btn-outline-danger btn-sm" onclick="resetFinanceiro()"
+              title="Apaga contas a pagar e receber e reimporta tudo do Sienge">
+        <i class="bi bi-trash me-1"></i>Reimportar financeiro completo
+      </button>
+      <span class="text-muted small">Sync automático: diário às 06:00 BRT</span>
     </div>
   </div>
 
@@ -1053,6 +1052,22 @@ async function testarConexao() {
       : `<div class="alert alert-danger py-1 small mt-2">❌ ${d.erro}</div>`;
   } catch(e) {
     el.innerHTML = `<div class="alert alert-danger py-1 small mt-2">Erro de comunicação: ${e}</div>`;
+  }
+}
+
+async function resetFinanceiro() {
+  if (!confirm('Apagar todos os dados financeiros deste cliente e reimportar do Sienge?\n\nIsso inicia uma nova sincronização completa em seguida.')) return;
+  try {
+    const r = await fetch('/admin/sienge/reset-financeiro', {method:'POST'});
+    const d = await r.json();
+    if (d.ok) {
+      alert(d.mensagem);
+      syncAll();
+    } else {
+      alert('Erro: ' + (d.erro || 'desconhecido'));
+    }
+  } catch(e) {
+    alert('Erro de comunicação: ' + e);
   }
 }
 
@@ -1308,6 +1323,31 @@ async def sienge_status(request: _Req_sg, session: _SesD_sg = Depends(get_sessio
                  "registros": r.registros, "detalhe": r.detalhe,
                  "em": r.finalizado_em.isoformat() if r.finalizado_em else ""} for r in rows]
     return _JSON_sg({"ok": True, "running": running, "logs": logs})
+
+
+@app.post("/admin/sienge/reset-financeiro")
+async def sienge_reset_financeiro(request: _Req_sg, session: _SesD_sg = Depends(get_session)):
+    """Apaga contas_pagar e contas_receber do cliente atual para forçar resync completo."""
+    if session_user_id(request) is None:
+        return _JSON_sg({"ok": False, "erro": "Sessão expirada."}, status_code=401)
+    ctx = get_tenant_context(request, session)
+    if not ctx or ctx.membership.role not in ("admin", "owner"):
+        return _JSON_sg({"ok": False, "erro": "Sem permissão."})
+    cid = ctx.company.id
+    client_id = request.session.get("selected_client_id")
+    with _Ses_sg(engine) as s:
+        pagar    = s.exec(_sel_sg(SiengeContaPagar).where(
+            SiengeContaPagar.company_id == cid, SiengeContaPagar.client_id == client_id)).all()
+        receber  = s.exec(_sel_sg(SiengeContaReceber).where(
+            SiengeContaReceber.company_id == cid, SiengeContaReceber.client_id == client_id)).all()
+        logs_fin = s.exec(_sel_sg(SiengeSyncLog).where(
+            SiengeSyncLog.company_id == cid, SiengeSyncLog.client_id == client_id,
+            SiengeSyncLog.modulo.in_(["contas_pagar", "contas_receber"]))).all()
+        n_p, n_r = len(pagar), len(receber)
+        for obj in [*pagar, *receber, *logs_fin]:
+            s.delete(obj)
+        s.commit()
+    return _JSON_sg({"ok": True, "mensagem": f"Apagados {n_p} contas a pagar e {n_r} contas a receber. Sincronize agora para reimportar tudo."})
 
 
 @app.post("/integracoes/sienge/webhook")
