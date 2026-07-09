@@ -518,9 +518,17 @@ def _sg_sync_contas_pagar(client: _SiengeClient, company_id: int, client_id=None
                 SiengeContaPagar.client_id == client_id)).all()
             ids_existentes = {e.sienge_id: e for e in existentes}
 
+            # Diagnóstico: log da estrutura do 1º item
+            if items:
+                _s0 = items[0]
+                print(f"[sienge] contas_pagar sample keys={list(_s0.keys())[:15]}")
+                print(f"[sienge] contas_pagar sample payments={_s0.get('payments')} balance={_s0.get('balanceAmount')}")
+            n_aberto = sum(1 for i in items if not (i.get("payments") or []) and float(i.get("balanceAmount") or 0) >= 0)
+            n_baixado = len(items) - n_aberto
+            print(f"[sienge] contas_pagar: {n_aberto} em aberto, {n_baixado} com pagamentos")
+
             count = 0
             for item in items:
-                # Estrutura real /outcome: installmentId chave única, mesma estrutura do /income
                 sid = str(item.get("installmentId") or item.get("billId") or "")
                 if not sid:
                     continue
@@ -532,8 +540,12 @@ def _sg_sync_contas_pagar(client: _SiengeClient, company_id: int, client_id=None
                 obj.valor        = float(item.get("originalAmount") or 0)
                 obj.vencimento   = str(item.get("dueDate") or "")
                 payments = item.get("payments") or []
-                if payments:
+                balance  = float(item.get("balanceAmount") or 0)
+                if payments and balance == 0:
                     obj.situacao = "Baixado"
+                    obj.data_realizacao = str(payments[0].get("paymentDate") or "")
+                elif payments and balance > 0:
+                    obj.situacao = "Parcial"
                     obj.data_realizacao = str(payments[0].get("paymentDate") or "")
                 else:
                     obj.situacao = "Em aberto"
@@ -592,9 +604,13 @@ def _sg_sync_contas_receber(client: _SiengeClient, company_id: int, client_id=No
                 SiengeContaReceber.client_id == client_id)).all()
             ids_existentes = {e.sienge_id: e for e in existentes}
 
+            if items:
+                _s0r = items[0]
+                print(f"[sienge] contas_receber sample keys={list(_s0r.keys())[:15]}")
+                print(f"[sienge] contas_receber sample receipts={_s0r.get('receipts')} balance={_s0r.get('balanceAmount')}")
+
             count = 0
             for item in items:
-                # Estrutura real: installmentId como chave única, data dentro de {"data":[...]}
                 sid = str(item.get("installmentId") or item.get("billId") or "")
                 if not sid:
                     continue
@@ -603,12 +619,15 @@ def _sg_sync_contas_receber(client: _SiengeClient, company_id: int, client_id=No
                 obj.devedor_nome = str(item.get("clientName") or "")
                 obj.descricao    = str(item.get("documentIdentificationName") or
                                        item.get("documentNumber") or "")
-                obj.valor        = float(item.get("originalAmount") or item.get("balanceAmount") or 0)
+                obj.valor        = float(item.get("originalAmount") or 0)
                 obj.vencimento   = str(item.get("dueDate") or "")
-                # Situação: pago se tem receipts, aberto se tem balanceAmount
                 receipts = item.get("receipts") or []
-                if receipts:
+                balance  = float(item.get("balanceAmount") or 0)
+                if receipts and balance == 0:
                     obj.situacao = "Baixado"
+                    obj.data_realizacao = str(receipts[0].get("paymentDate") or "")
+                elif receipts and balance > 0:
+                    obj.situacao = "Parcial"
                     obj.data_realizacao = str(receipts[0].get("paymentDate") or "")
                 else:
                     obj.situacao = "Em aberto"
