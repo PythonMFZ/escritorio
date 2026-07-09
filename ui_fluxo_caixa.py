@@ -2334,7 +2334,8 @@ async def fc_importar_sienge_confirmar(
         pass
 
     # Busca IDs já importados (import_batch começa com "sienge-")
-    ja_importados = set()
+    # Guarda o objeto para poder corrigir client_id se estava NULL (importação antiga)
+    ja_importados = {}  # batch_id → CashFlowEntry
     try:
         from sqlmodel import select as _sel_si3
         existentes = session.exec(
@@ -2343,7 +2344,7 @@ async def fc_importar_sienge_confirmar(
                 CashFlowEntry.import_batch.like("sienge-%"),
             )
         ).all()
-        ja_importados = {e.import_batch for e in existentes}
+        ja_importados = {e.import_batch: e for e in existentes}
     except Exception:
         pass
 
@@ -2379,6 +2380,11 @@ async def fc_importar_sienge_confirmar(
             continue
         batch_id = f"sienge-{sid}"
         if batch_id in ja_importados:
+            # Corrige client_id se foi importado antes da correção de isolamento
+            existing = ja_importados[batch_id]
+            if existing.client_id != cl_id:
+                existing.client_id = cl_id
+                session.add(existing)
             duplicados += 1
             continue
         is_real   = p.situacao.lower().strip() in _REALIZADO_PAGAR
@@ -2406,6 +2412,10 @@ async def fc_importar_sienge_confirmar(
             continue
         batch_id = f"sienge-{sid}"
         if batch_id in ja_importados:
+            existing = ja_importados[batch_id]
+            if existing.client_id != cl_id:
+                existing.client_id = cl_id
+                session.add(existing)
             duplicados += 1
             continue
         is_real   = r.situacao.lower().strip() in _REALIZADO_RECEBER
