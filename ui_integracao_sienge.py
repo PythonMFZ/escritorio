@@ -419,7 +419,10 @@ def _sg_bulk_get_all(client: _SiengeClient, path: str, page_size: int = 500,
                 if rate_retries > max_rate_retries:
                     print(f"[sienge] bulk {path} rate limit excedido após {max_rate_retries} tentativas — abortando")
                     break
-                wait = 65 * rate_retries
+                # Espera curta (30s) para não ser morto por redeploy do Render.
+                # Com cota diária de 100 req, a sincronia das 06h BRT vai funcionar
+                # com cota cheia no dia seguinte se a espera falhar.
+                wait = min(30, 65 * rate_retries)
                 print(f"[sienge] bulk {path} rate limit ({rate_retries}/{max_rate_retries}) — aguardando {wait}s")
                 _time_sg.sleep(wait)
                 continue
@@ -501,7 +504,7 @@ def _sg_sync_contas_pagar(client: _SiengeClient, company_id: int, client_id=None
             "correctionDate": hoje.isoformat(),
         }
         print(f"[sienge] contas_pagar: bulk /outcome {start}→2100-01-01 selectionType=D")
-        items = _sg_bulk_get_all(client, "outcome", extra_params=bulk_params, max_rate_retries=3)
+        items = _sg_bulk_get_all(client, "outcome", extra_params=bulk_params, max_rate_retries=1)
         print(f"[sienge] contas_pagar: /outcome={len(items)} itens")
 
         if not items:
@@ -594,7 +597,7 @@ def _sg_sync_contas_receber(client: _SiengeClient, company_id: int, client_id=No
             "correctionDate": _d_rcb.today().isoformat(),
         }
         print(f"[sienge] contas_receber: bulk /income {start2}→2100-01-01 selectionType=D correctionIndexerId=1")
-        items = _sg_bulk_get_all(client, "income", extra_params=bulk_params2, max_rate_retries=3)
+        items = _sg_bulk_get_all(client, "income", extra_params=bulk_params2, max_rate_retries=1)
         print(f"[sienge] contas_receber: /income={len(items)} itens")
 
         if not items:
