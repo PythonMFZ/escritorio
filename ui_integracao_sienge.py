@@ -538,7 +538,8 @@ def _sg_sync_contas_pagar(client: _SiengeClient, company_id: int, client_id=None
                 obj.descricao    = str(item.get("documentIdentificationName") or
                                        item.get("documentNumber") or "")
                 obj.valor        = float(item.get("originalAmount") or 0)
-                obj.vencimento   = str(item.get("dueDate") or "")
+                obj.vencimento   = str(item.get("dueDate") or item.get("installmentBaseDate") or
+                                       item.get("billDate") or item.get("issueDate") or "")
                 payments = item.get("payments") or []
                 balance  = float(item.get("balanceAmount") or 0)
                 if payments and balance == 0:
@@ -620,7 +621,8 @@ def _sg_sync_contas_receber(client: _SiengeClient, company_id: int, client_id=No
                 obj.descricao    = str(item.get("documentIdentificationName") or
                                        item.get("documentNumber") or "")
                 obj.valor        = float(item.get("originalAmount") or 0)
-                obj.vencimento   = str(item.get("dueDate") or "")
+                obj.vencimento   = str(item.get("dueDate") or item.get("installmentBaseDate") or
+                                       item.get("billDate") or item.get("issueDate") or "")
                 receipts = item.get("receipts") or []
                 balance  = float(item.get("balanceAmount") or 0)
                 if receipts and balance == 0:
