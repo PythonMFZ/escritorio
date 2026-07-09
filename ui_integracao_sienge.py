@@ -1384,7 +1384,7 @@ async def sienge_reset_financeiro(request: _Req_sg, session: _SesD_sg = Depends(
 async def sienge_debug_bulk(
     request: _Req_sg,
     endpoint: str = "outcome",
-    session=_Dep_sg(_get_ses_sg),
+    session: _SesD_sg = Depends(get_session),
 ):
     """Diagnóstico: chama o bulk API e retorna estrutura do JSON (sem salvar nada)."""
     uid = request.session.get("user_id")
