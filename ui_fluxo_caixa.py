@@ -105,6 +105,20 @@ try:
 except Exception as _e_fc_tbl:
     print(f"[fluxo_caixa] _ensure_fc_tables: {_e_fc_tbl}")
 
+# Migração de segurança: remove TODAS as entradas Sienge para forçar reimportação limpa.
+# Necessário porque entradas antigas tinham client_id=NULL e foram incorretamente
+# atribuídas a clientes errados. A reimportação via /importar-sienge recria tudo
+# com isolamento correto por client_id.
+try:
+    with engine.begin() as _c_si_fix:
+        _result_fix = _c_si_fix.execute(_t_fc(
+            "DELETE FROM cashflowentry WHERE import_batch LIKE 'sienge-%'"
+        ))
+        _deleted = getattr(_result_fix, 'rowcount', '?')
+    print(f"[fluxo_caixa] migração: {_deleted} entradas sienge removidas — reimporte necessário por cliente")
+except Exception as _e_si_fix:
+    print(f"[fluxo_caixa] migração sienge client_id: {_e_si_fix}")
+
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -2333,18 +2347,19 @@ async def fc_importar_sienge_confirmar(
     except Exception:
         pass
 
-    # Busca IDs já importados (import_batch começa com "sienge-")
-    # Guarda o objeto para poder corrigir client_id se estava NULL (importação antiga)
-    ja_importados = {}  # batch_id → CashFlowEntry
+    # Busca IDs já importados para ESTE cliente (filtra por client_id para evitar
+    # que entradas de outros clientes sejam detectadas como duplicatas)
+    ja_importados = set()
     try:
         from sqlmodel import select as _sel_si3
         existentes = session.exec(
             _sel_si3(CashFlowEntry).where(
                 CashFlowEntry.company_id == cid,
+                CashFlowEntry.client_id == cl_id,
                 CashFlowEntry.import_batch.like("sienge-%"),
             )
         ).all()
-        ja_importados = {e.import_batch: e for e in existentes}
+        ja_importados = {e.import_batch for e in existentes}
     except Exception:
         pass
 
@@ -2380,11 +2395,6 @@ async def fc_importar_sienge_confirmar(
             continue
         batch_id = f"sienge-{sid}"
         if batch_id in ja_importados:
-            # Corrige client_id se foi importado antes da correção de isolamento
-            existing = ja_importados[batch_id]
-            if existing.client_id != cl_id:
-                existing.client_id = cl_id
-                session.add(existing)
             duplicados += 1
             continue
         is_real   = p.situacao.lower().strip() in _REALIZADO_PAGAR
@@ -2412,10 +2422,6 @@ async def fc_importar_sienge_confirmar(
             continue
         batch_id = f"sienge-{sid}"
         if batch_id in ja_importados:
-            existing = ja_importados[batch_id]
-            if existing.client_id != cl_id:
-                existing.client_id = cl_id
-                session.add(existing)
             duplicados += 1
             continue
         is_real   = r.situacao.lower().strip() in _REALIZADO_RECEBER
