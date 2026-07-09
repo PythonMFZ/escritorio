@@ -1380,6 +1380,63 @@ async def sienge_reset_financeiro(request: _Req_sg, session: _SesD_sg = Depends(
     return _JSON_sg({"ok": True, "mensagem": f"Apagados {n_p} contas a pagar e {n_r} contas a receber. Sincronize agora para reimportar tudo."})
 
 
+@app.get("/admin/sienge/debug-bulk")
+async def sienge_debug_bulk(
+    request: _Req_sg,
+    endpoint: str = "outcome",
+    session=_Dep_sg(_get_ses_sg),
+):
+    """Diagnóstico: chama o bulk API e retorna estrutura do JSON (sem salvar nada)."""
+    uid = request.session.get("user_id")
+    if not uid:
+        return _JSON_sg({"erro": "não autenticado"}, status_code=401)
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        return _JSON_sg({"erro": "contexto inválido"}, status_code=400)
+    cid = ctx.company.id
+    cl_id = get_active_client_id(request, session, ctx)
+    cfg = session.exec(_sel_sg(SiengeConfig).where(
+        SiengeConfig.company_id == cid,
+        SiengeConfig.client_id == cl_id,
+        SiengeConfig.ativo == True,
+    )).first()
+    if not cfg:
+        return _JSON_sg({"erro": "config não encontrada"})
+    client = _SiengeClient(cfg.tenant, cfg.api_user, cfg.api_password)
+    from datetime import date as _d_dbg
+    hoje = _d_dbg.today()
+    params = {
+        "startDate": hoje.replace(year=hoje.year - 1).isoformat(),
+        "endDate": hoje.isoformat(),
+        "selectionType": "D",
+        "correctionIndexerId": 1,
+        "correctionDate": hoje.isoformat(),
+    }
+    try:
+        import httpx as _hx_dbg
+        bulk_base = f"https://api.sienge.com.br/{cfg.tenant}/public/api/bulk-data/v1"
+        resp = _hx_dbg.get(f"{bulk_base}/{endpoint}", headers=client._headers(),
+                           params=params, timeout=30.0)
+        status = resp.status_code
+        if status != 200:
+            return _JSON_sg({"status": status, "body": resp.text[:500]})
+        raw = resp.json()
+        if isinstance(raw, list):
+            return _JSON_sg({"tipo": "list", "len": len(raw),
+                             "primeiro_item_keys": list(raw[0].keys()) if raw else []})
+        return _JSON_sg({"tipo": "dict", "keys": list(raw.keys()),
+                         "len_data": len(raw.get("data") or raw.get("results") or
+                                        raw.get("items") or raw.get("records") or []),
+                         "totalPages": raw.get("totalPages"),
+                         "amostra_keys_item": list((raw.get("data") or raw.get("results") or
+                                                    raw.get("items") or raw.get("records") or [{}])[0].keys())
+                                              if (raw.get("data") or raw.get("results") or
+                                                  raw.get("items") or raw.get("records")) else [],
+                         "raw_preview": _json_sg.dumps(raw)[:800]})
+    except Exception as _e_dbg:
+        return _JSON_sg({"erro": str(_e_dbg)})
+
+
 @app.post("/integracoes/sienge/webhook")
 async def sienge_webhook(request: _Req_sg):
     """Receptor de webhooks do Sienge (eventos de pagamento, parcelas, etc.)."""
