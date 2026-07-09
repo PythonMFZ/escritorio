@@ -494,15 +494,11 @@ def _sg_sync_contas_pagar(client: _SiengeClient, company_id: int, client_id=None
 
         from datetime import date as _date_sg
         end = _date_sg.today().isoformat()
-        bulk_params = {"startDate": start, "endDate": end}
-        print(f"[sienge] contas_pagar: bulk /outcome startDate={start} endDate={end}")
-        items = _sg_bulk_get_all(client, "outcome", extra_params=bulk_params, max_rate_retries=2)
+        # selectionType obrigatório: D=vencimento (traz pagas e a pagar no período)
+        bulk_params = {"startDate": start, "endDate": end, "selectionType": "D"}
+        print(f"[sienge] contas_pagar: bulk /outcome {start}→{end} selectionType=D")
+        items = _sg_bulk_get_all(client, "outcome", extra_params=bulk_params, max_rate_retries=3)
         print(f"[sienge] contas_pagar: /outcome={len(items)} itens")
-
-        # 2. Fallback /outcome/by-bills
-        if not items:
-            items = _sg_bulk_get_all(client, "outcome/by-bills", extra_params=bulk_params, max_rate_retries=2)
-            print(f"[sienge] contas_pagar: /outcome/by-bills={len(items)} itens")
 
         if not items:
             detalhe_erro = ("Nenhum dado retornado. Verifique se o usuário de API tem permissão para "
@@ -520,33 +516,32 @@ def _sg_sync_contas_pagar(client: _SiengeClient, company_id: int, client_id=None
 
             count = 0
             for item in items:
-                # Bulk /outcome usa: creditorName, billValue, dueDate, paymentDate, enterpriseId
-                bill_id = str(item.get("billDebtId") or item.get("id") or
-                              item.get("installmentId") or item.get("billId") or "")
-                inst_num = str(item.get("installmentNumber") or item.get("parcelNumber") or "")
-                sid = f"{bill_id}-{inst_num}" if inst_num else bill_id
-                if not sid.strip("-"):
+                # Estrutura real /outcome: installmentId chave única, mesma estrutura do /income
+                sid = str(item.get("installmentId") or item.get("billId") or "")
+                if not sid:
                     continue
                 obj = ids_existentes.get(sid) or SiengeContaPagar(
                     company_id=company_id, sienge_id=sid, client_id=client_id)
-                obj.credor_nome  = (item.get("creditorName") or item.get("supplierName") or
-                                    item.get("vendorName") or item.get("creditor") or "")
-                obj.descricao    = (item.get("description") or item.get("historicDescription") or
-                                    item.get("billDescription") or item.get("memo") or "")
-                obj.valor        = float(item.get("billValue") or item.get("netValue") or
-                                         item.get("value") or item.get("amount") or 0)
-                obj.vencimento   = str(item.get("dueDate") or item.get("expirationDate") or "")
-                obj.situacao     = str(item.get("situation") or item.get("status") or
-                                       item.get("paymentSituation") or "")
-                obj.data_realizacao = str(item.get("paymentDate") or item.get("settlementDate") or
-                                          item.get("paidDate") or "")
-                obj.centro_custo = str(item.get("costCenterName") or item.get("costCenter") or
-                                       item.get("costCenterDescription") or "")
+                obj.credor_nome  = str(item.get("supplierName") or item.get("creditorName") or
+                                       item.get("providerName") or "")
+                obj.descricao    = str(item.get("documentIdentificationName") or
+                                       item.get("documentNumber") or "")
+                obj.valor        = float(item.get("originalAmount") or item.get("balanceAmount") or 0)
+                obj.vencimento   = str(item.get("dueDate") or "")
+                payments = item.get("payments") or []
+                if payments:
+                    obj.situacao = "Baixado"
+                    obj.data_realizacao = str(payments[0].get("paymentDate") or "")
+                else:
+                    obj.situacao = "Em aberto"
+                    obj.data_realizacao = ""
+                cats = item.get("paymentsCategories") or item.get("receiptsCategories") or []
+                obj.centro_custo = str(cats[0].get("costCenterName") or "") if cats else ""
                 emp_id, emp_nome = _sg_resolve_emp(emp_map,
-                    item.get("enterpriseId") or item.get("buildingId") or "")
+                    item.get("projectId") or item.get("businessAreaId") or "")
                 obj.empreendimento_id   = emp_id
-                obj.empreendimento_nome = emp_nome
-                obj.empreendimento      = emp_id   # campo legado
+                obj.empreendimento_nome = emp_nome or str(item.get("projectName") or "")
+                obj.empreendimento      = emp_id
                 obj.raw_json     = _json_sg.dumps(item, ensure_ascii=False)[:4000]
                 obj.synced_at    = datetime.now(timezone.utc)
                 s.add(obj)
@@ -572,14 +567,11 @@ def _sg_sync_contas_receber(client: _SiengeClient, company_id: int, client_id=No
 
         from datetime import date as _date_sg2
         end2 = _date_sg2.today().isoformat()
-        bulk_params2 = {"startDate": start2, "endDate": end2}
-        print(f"[sienge] contas_receber: bulk /income startDate={start2} endDate={end2}")
+        # selectionType obrigatório: D=vencimento
+        bulk_params2 = {"startDate": start2, "endDate": end2, "selectionType": "D"}
+        print(f"[sienge] contas_receber: bulk /income {start2}→{end2} selectionType=D")
         items = _sg_bulk_get_all(client, "income", extra_params=bulk_params2, max_rate_retries=3)
         print(f"[sienge] contas_receber: /income={len(items)} itens")
-
-        if not items:
-            items = _sg_bulk_get_all(client, "income/by-bills", extra_params=bulk_params2, max_rate_retries=3)
-            print(f"[sienge] contas_receber: /income/by-bills={len(items)} itens")
 
         if not items:
             detalhe_erro = ("Nenhum dado retornado. Verifique se o usuário de API tem permissão para "
@@ -597,31 +589,38 @@ def _sg_sync_contas_receber(client: _SiengeClient, company_id: int, client_id=No
 
             count = 0
             for item in items:
-                sid = str(item.get("receivableBillId") or item.get("billId") or item.get("id") or "")
+                # Estrutura real: installmentId como chave única, data dentro de {"data":[...]}
+                sid = str(item.get("installmentId") or item.get("billId") or "")
                 if not sid:
                     continue
                 obj = ids_existentes.get(sid) or SiengeContaReceber(
                     company_id=company_id, sienge_id=sid, client_id=client_id)
-                obj.devedor_nome = (item.get("customerName") or item.get("clientName") or
-                                    item.get("debtorName") or "")
-                obj.descricao    = (item.get("description") or item.get("historicDescription") or "")
-                obj.valor        = float(item.get("value") or item.get("grossValue") or
-                                         item.get("amount") or 0)
-                obj.vencimento   = str(item.get("dueDate") or item.get("expirationDate") or "")
-                obj.situacao     = str(item.get("situation") or item.get("status") or "")
-                obj.data_realizacao = str(item.get("receiptDate") or item.get("settlementDate") or
-                                          item.get("receivedDate") or "")
-                obj.centro_custo = str(item.get("costCenterName", "") or item.get("costCenter", "") or "")
-                emp_id, emp_nome = _sg_resolve_emp(emp_map, item.get("buildingId", ""))
+                obj.devedor_nome = str(item.get("clientName") or "")
+                obj.descricao    = str(item.get("documentIdentificationName") or
+                                       item.get("documentNumber") or "")
+                obj.valor        = float(item.get("originalAmount") or item.get("balanceAmount") or 0)
+                obj.vencimento   = str(item.get("dueDate") or "")
+                # Situação: pago se tem receipts, aberto se tem balanceAmount
+                receipts = item.get("receipts") or []
+                if receipts:
+                    obj.situacao = "Baixado"
+                    obj.data_realizacao = str(receipts[0].get("paymentDate") or "")
+                else:
+                    obj.situacao = "Em aberto"
+                    obj.data_realizacao = ""
+                cats = item.get("receiptsCategories") or []
+                obj.centro_custo = str(cats[0].get("costCenterName") or "") if cats else ""
+                emp_id, emp_nome = _sg_resolve_emp(emp_map,
+                    item.get("projectId") or item.get("businessAreaId") or "")
                 obj.empreendimento_id   = emp_id
-                obj.empreendimento_nome = emp_nome
+                obj.empreendimento_nome = emp_nome or str(item.get("projectName") or "")
                 obj.empreendimento      = emp_id
                 obj.raw_json     = _json_sg.dumps(item, ensure_ascii=False)[:4000]
                 obj.synced_at    = datetime.now(timezone.utc)
                 s.add(obj)
                 count += 1
             s.commit()
-            _sg_log(s, company_id, "contas_receber", "ok", count, f"{count} títulos", inicio, client_id=client_id)
+            _sg_log(s, company_id, "contas_receber", "ok", count, f"{count} parcelas", inicio, client_id=client_id)
         return {"ok": True, "registros": count}
     except Exception as _e:
         with _Ses_sg(engine) as s:
