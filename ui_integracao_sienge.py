@@ -574,7 +574,7 @@ def _sg_sync_contas_receber(client: _SiengeClient, company_id: int, client_id=No
             start2 = _sg_date_inicio_sync(s, company_id, "contas_receber", client_id)
 
         bulk_params2 = {"startDate": start2, "endDate": "2100-01-01", "selectionType": "D"}
-        print(f"[sienge] contas_receber: bulk /income {start2}→{end2} selectionType=D")
+        print(f"[sienge] contas_receber: bulk /income {start2}→2100-01-01 selectionType=D")
         items = _sg_bulk_get_all(client, "income", extra_params=bulk_params2, max_rate_retries=3)
         print(f"[sienge] contas_receber: /income={len(items)} itens")
 
