@@ -2168,11 +2168,15 @@ async def fc_importar_sienge_page(
     if not ctx:
         return RedirectResponse("/login", status_code=303)
     cid = ctx.company.id
+    cl_id = get_active_client_id(request, session, ctx)
 
     try:
         from sqlmodel import select as _sel_si
         cfg_sg = session.exec(
-            _sel_si(SiengeConfig).where(SiengeConfig.company_id == cid)
+            _sel_si(SiengeConfig).where(
+                SiengeConfig.company_id == cid,
+                SiengeConfig.client_id == cl_id,
+            )
         ).first()
     except Exception:
         cfg_sg = None
@@ -2189,7 +2193,8 @@ async def fc_importar_sienge_page(
             from sqlmodel import select as _sel_si2
             empreendimentos = session.exec(
                 _sel_si2(SiengeEmpreendimento).where(
-                    SiengeEmpreendimento.company_id == cid
+                    SiengeEmpreendimento.company_id == cid,
+                    SiengeEmpreendimento.client_id == cl_id,
                 ).order_by(SiengeEmpreendimento.nome)
             ).all()
         except Exception:
@@ -2200,7 +2205,10 @@ async def fc_importar_sienge_page(
         try:
             from sqlmodel import select as _sel_si3
             if modulo in ("ambos", "pagar"):
-                q = _sel_si3(SiengeContaPagar).where(SiengeContaPagar.company_id == cid)
+                q = _sel_si3(SiengeContaPagar).where(
+                    SiengeContaPagar.company_id == cid,
+                    SiengeContaPagar.client_id == cl_id,
+                )
                 if data_ini:
                     q = q.where(SiengeContaPagar.vencimento >= data_ini)
                 if data_fim:
@@ -2210,7 +2218,10 @@ async def fc_importar_sienge_page(
                 pagar_rows = session.exec(q.order_by(SiengeContaPagar.vencimento)).all()
 
             if modulo in ("ambos", "receber"):
-                q2 = _sel_si3(SiengeContaReceber).where(SiengeContaReceber.company_id == cid)
+                q2 = _sel_si3(SiengeContaReceber).where(
+                    SiengeContaReceber.company_id == cid,
+                    SiengeContaReceber.client_id == cl_id,
+                )
                 if data_ini:
                     q2 = q2.where(SiengeContaReceber.vencimento >= data_ini)
                 if data_fim:
@@ -2342,9 +2353,13 @@ async def fc_importar_sienge_confirmar(
     try:
         from sqlmodel import select as _sel_si4
         pagar_rows   = session.exec(_sel_si4(SiengeContaPagar).where(
-            SiengeContaPagar.company_id == cid)).all()
+            SiengeContaPagar.company_id == cid,
+            SiengeContaPagar.client_id == cl_id,
+        )).all()
         receber_rows = session.exec(_sel_si4(SiengeContaReceber).where(
-            SiengeContaReceber.company_id == cid)).all()
+            SiengeContaReceber.company_id == cid,
+            SiengeContaReceber.client_id == cl_id,
+        )).all()
     except Exception:
         pagar_rows = []
         receber_rows = []
