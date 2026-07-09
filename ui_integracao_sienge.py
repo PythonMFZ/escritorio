@@ -493,16 +493,17 @@ def _sg_sync_contas_pagar(client: _SiengeClient, company_id: int, client_id=None
             start = _sg_date_inicio_sync(s, company_id, "contas_pagar", client_id)
 
         from datetime import date as _date_sg
-        end = _date_sg.today().isoformat()
-        # /outcome requer: selectionType, correctionIndexerId, correctionDate
-        # correctionIndexerId=1 (indexador padrão); correctionDate=hoje
+        hoje = _date_sg.today()
+        # endDate = 5 anos à frente para incluir parcelas futuras
+        end_future = hoje.replace(year=hoje.year + 5).isoformat()
+        # correctionDate sempre hoje (referência de correção monetária)
         bulk_params = {
-            "startDate": start, "endDate": end,
+            "startDate": start, "endDate": end_future,
             "selectionType": "D",
             "correctionIndexerId": 1,
-            "correctionDate": end,
+            "correctionDate": hoje.isoformat(),
         }
-        print(f"[sienge] contas_pagar: bulk /outcome {start}→{end} selectionType=D")
+        print(f"[sienge] contas_pagar: bulk /outcome {start}→{end_future} selectionType=D")
         items = _sg_bulk_get_all(client, "outcome", extra_params=bulk_params, max_rate_retries=3)
         print(f"[sienge] contas_pagar: /outcome={len(items)} itens")
 
@@ -576,9 +577,9 @@ def _sg_sync_contas_receber(client: _SiengeClient, company_id: int, client_id=No
             start2 = _sg_date_inicio_sync(s, company_id, "contas_receber", client_id)
 
         from datetime import date as _date_sg2
-        end2 = _date_sg2.today().isoformat()
-        # selectionType obrigatório: D=vencimento
-        bulk_params2 = {"startDate": start2, "endDate": end2, "selectionType": "D"}
+        hoje2 = _date_sg2.today()
+        end2_future = hoje2.replace(year=hoje2.year + 5).isoformat()
+        bulk_params2 = {"startDate": start2, "endDate": end2_future, "selectionType": "D"}
         print(f"[sienge] contas_receber: bulk /income {start2}→{end2} selectionType=D")
         items = _sg_bulk_get_all(client, "income", extra_params=bulk_params2, max_rate_retries=3)
         print(f"[sienge] contas_receber: /income={len(items)} itens")
