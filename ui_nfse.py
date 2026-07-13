@@ -442,9 +442,28 @@ def _nf_get_tomador_endereco(contrato, cobranca, session=None) -> dict:
     if len(cmun) != 7:
         cmun = _nf_resolve_ibge_por_cidade_uf(cidade, uf)
 
+    if len(cmun) != 7 and len(cep) == 8:
+        # Tenta resolver IBGE pelo CEP via ViaCEP (evita mismatch CEP × município)
+        try:
+            _via_resp = _httpx_nf.get(
+                f"https://viacep.com.br/ws/{cep}/json/", timeout=10
+            )
+            if _via_resp.status_code == 200:
+                _via = _via_resp.json()
+                _ibge_via = str(_via.get("ibge", "")).strip()
+                if len(_ibge_via) == 7:
+                    cmun = _ibge_via
+                    print(f"[nfse] IBGE resolvido via ViaCEP: CEP={cep} → ibge={cmun}")
+                elif _via.get("localidade") and _via.get("uf"):
+                    cmun = _nf_resolve_ibge_por_cidade_uf(_via["localidade"], _via["uf"])
+                    print(f"[nfse] IBGE resolvido via ViaCEP+nome: {_via['localidade']}/{_via['uf']} → {cmun}")
+        except Exception as _e_via:
+            print(f"[nfse] aviso: ViaCEP falhou ({_e_via})")
+
     if len(cmun) != 7:
-        print(f"[nfse] aviso: IBGE do tomador não encontrado (cidade={cidade!r}, uf={uf!r}), usando Brusque-SC como fallback")
+        print(f"[nfse] aviso: IBGE do tomador não encontrado (cidade={cidade!r}, uf={uf!r}, cep={cep!r}), usando Brusque-SC como fallback")
         cmun = _NF_IBGE
+        cep = "88352000"  # CEP de Brusque — mantém consistência cMun × CEP
     if len(cep) != 8:
         print(f"[nfse] aviso: CEP do tomador inválido ({cep!r}), usando CEP padrão Brusque-SC como fallback")
         cep = "88352000"

@@ -531,6 +531,7 @@ def _sg_sync_contas_pagar(client: _SiengeClient, company_id: int, client_id=None
             print(f"[sienge] contas_pagar: {n_aberto} em aberto, {n_baixado} com pagamentos")
 
             count = 0
+            BATCH = 100  # commit a cada 100 itens — sobrevive reinício do Render
             for item in items:
                 sid = str(item.get("installmentId") or item.get("billId") or "")
                 if not sid:
@@ -556,7 +557,6 @@ def _sg_sync_contas_pagar(client: _SiengeClient, company_id: int, client_id=None
                     obj.data_realizacao = ""
                 cats = item.get("paymentsCategories") or []
                 obj.centro_custo = str(cats[0].get("costCenterName") or "") if cats else ""
-                # buildingsCosts contém o empreendimento/obra
                 buildings = item.get("buildingsCosts") or []
                 if buildings:
                     b = buildings[0]
@@ -565,11 +565,14 @@ def _sg_sync_contas_pagar(client: _SiengeClient, company_id: int, client_id=None
                 else:
                     emp_id = ""
                     obj.empreendimento_nome = str(item.get("projectName") or "")
-                obj.empreendimento      = str(emp_id)
-                obj.raw_json     = _json_sg.dumps(item, ensure_ascii=False)[:4000]
-                obj.synced_at    = datetime.now(timezone.utc)
+                obj.empreendimento = str(emp_id)
+                obj.raw_json  = _json_sg.dumps(item, ensure_ascii=False)[:4000]
+                obj.synced_at = datetime.now(timezone.utc)
                 s.add(obj)
                 count += 1
+                if count % BATCH == 0:
+                    s.commit()
+                    print(f"[sienge] contas_pagar: commit parcial {count}/{len(items)}")
             s.commit()
             _sg_log(s, company_id, "contas_pagar", "ok", count, f"{count} parcelas", inicio, client_id=client_id)
         return {"ok": True, "registros": count}
@@ -620,6 +623,7 @@ def _sg_sync_contas_receber(client: _SiengeClient, company_id: int, client_id=No
                 print(f"[sienge] contas_receber sample receipts={_s0r.get('receipts')} balance={_s0r.get('balanceAmount')}")
 
             count = 0
+            BATCH = 100
             for item in items:
                 sid = str(item.get("installmentId") or item.get("billId") or "")
                 if not sid:
@@ -650,10 +654,13 @@ def _sg_sync_contas_receber(client: _SiengeClient, company_id: int, client_id=No
                 obj.empreendimento_id   = emp_id
                 obj.empreendimento_nome = emp_nome or str(item.get("projectName") or "")
                 obj.empreendimento      = emp_id
-                obj.raw_json     = _json_sg.dumps(item, ensure_ascii=False)[:4000]
-                obj.synced_at    = datetime.now(timezone.utc)
+                obj.raw_json  = _json_sg.dumps(item, ensure_ascii=False)[:4000]
+                obj.synced_at = datetime.now(timezone.utc)
                 s.add(obj)
                 count += 1
+                if count % BATCH == 0:
+                    s.commit()
+                    print(f"[sienge] contas_receber: commit parcial {count}/{len(items)}")
             s.commit()
             _sg_log(s, company_id, "contas_receber", "ok", count, f"{count} parcelas", inicio, client_id=client_id)
         return {"ok": True, "registros": count}
