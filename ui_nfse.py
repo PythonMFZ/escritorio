@@ -263,7 +263,24 @@ def _nf_iter_tomador_sources(contrato, cobranca, session=None):
 
 
 _NF_IBGE_CACHE = {
-    ("BRUSQUE", "SC"): "4202909",
+    ("BRUSQUE", "SC"):    "4202909",
+    ("CANELINHA", "SC"):  "4203451",
+    ("TIJUCAS", "SC"):    "4218004",
+    ("FLORIANOPOLIS", "SC"): "4205407",
+    ("BLUMENAU", "SC"):   "4202404",
+    ("JOINVILLE", "SC"):  "4209102",
+    ("ITAJAI", "SC"):     "4208203",
+    ("BALNEARIO CAMBORIU", "SC"): "4202008",
+    ("SAO JOSE", "SC"):   "4216602",
+    ("CHAPECO", "SC"):    "4204202",
+}
+
+# CEP padrão por IBGE quando o CEP cadastrado não pertence ao município
+_NF_CEP_PADRAO = {
+    "4203451": "88250000",  # Canelinha-SC
+    "4202909": "88352000",  # Brusque-SC
+    "4218004": "88200000",  # Tijucas-SC
+    "4205407": "88000000",  # Florianópolis-SC
 }
 
 
@@ -460,6 +477,12 @@ def _nf_get_tomador_endereco(contrato, cobranca, session=None) -> dict:
                         if len(_new_cep) == 8:
                             print(f"[nfse] CEP {cep} não pertence ao município {cmun} — substituindo por {_new_cep} ({cidade})")
                             cep = _new_cep
+                # Fallback: CEP padrão do município quando ViaCEP não resolve
+                if str(_chk.json().get("ibge", "")) != cmun:
+                    _padrao = _NF_CEP_PADRAO.get(cmun)
+                    if _padrao:
+                        print(f"[nfse] CEP {cep} não pertence ao município {cmun} — usando CEP padrão {_padrao} ({cidade})")
+                        cep = _padrao
         except Exception as _e_chk:
             print(f"[nfse] aviso: validação CEP×município falhou ({_e_chk})")
 
