@@ -264,7 +264,6 @@ def _nf_iter_tomador_sources(contrato, cobranca, session=None):
 
 _NF_IBGE_CACHE = {
     ("BRUSQUE", "SC"):    "4202909",
-    ("CANELINHA", "SC"):  "4203451",
     ("TIJUCAS", "SC"):    "4218004",
     ("FLORIANOPOLIS", "SC"): "4205407",
     ("BLUMENAU", "SC"):   "4202404",
@@ -277,7 +276,6 @@ _NF_IBGE_CACHE = {
 
 # CEP padrão por IBGE quando o CEP cadastrado não pertence ao município
 _NF_CEP_PADRAO = {
-    "4203451": "88250000",  # Canelinha-SC
     "4202909": "88352000",  # Brusque-SC
     "4218004": "88200000",  # Tijucas-SC
     "4205407": "88000000",  # Florianópolis-SC
@@ -458,6 +456,28 @@ def _nf_get_tomador_endereco(contrato, cobranca, session=None) -> dict:
 
     if len(cmun) != 7:
         cmun = _nf_resolve_ibge_por_cidade_uf(cidade, uf)
+
+    # Se ainda sem IBGE ou CEP inconsistente, tenta BrasilAPI com CNPJ do tomador
+    # (dados da Receita Federal — mesma fonte que o SEFIN usa para validar)
+    _doc_toma = _nf_limpa_cnpj(_nf_pick_attr(
+        *fontes,
+        names=("documento_cliente", "cnpj_cliente", "cpf_cnpj_cliente", "cpf_cnpj", "cnpj", "documento"),
+    ))
+    if len(_doc_toma) == 14:
+        try:
+            _rf = _httpx_nf.get(
+                f"https://brasilapi.com.br/api/cnpj/v1/{_doc_toma}", timeout=10)
+            if _rf.status_code == 200:
+                _rf_data = _rf.json()
+                _ibge_rf = str(_rf_data.get("codigo_municipio_ibge", "")).strip()
+                _cep_rf  = _nf_limpa_cep(str(_rf_data.get("cep", "")))
+                if len(_ibge_rf) == 7:
+                    print(f"[nfse] BrasilAPI CNPJ {_doc_toma}: ibge={_ibge_rf} cep={_cep_rf}")
+                    cmun = _ibge_rf
+                    if len(_cep_rf) == 8:
+                        cep = _cep_rf
+        except Exception as _e_rf:
+            print(f"[nfse] aviso: BrasilAPI CNPJ falhou ({_e_rf})")
 
     # Quando IBGE foi resolvido por nome da cidade, valida se o CEP pertence a esse município.
     # CEP pode estar errado no cadastro (ex: CEP de Brusque para tomador de Canelinha).
