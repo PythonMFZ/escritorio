@@ -442,21 +442,37 @@ def _nf_get_tomador_endereco(contrato, cobranca, session=None) -> dict:
     if len(cmun) != 7:
         cmun = _nf_resolve_ibge_por_cidade_uf(cidade, uf)
 
-    if len(cmun) != 7 and len(cep) == 8:
-        # Tenta resolver IBGE pelo CEP via ViaCEP (evita mismatch CEP × município)
+    # Quando IBGE foi resolvido por nome da cidade, valida se o CEP pertence a esse município.
+    # CEP pode estar errado no cadastro (ex: CEP de Brusque para tomador de Canelinha).
+    # Se não pertencer, busca um CEP válido para o município via ViaCEP.
+    if len(cmun) == 7 and len(cep) == 8:
         try:
-            _via_resp = _httpx_nf.get(
-                f"https://viacep.com.br/ws/{cep}/json/", timeout=10
-            )
+            _chk = _httpx_nf.get(f"https://viacep.com.br/ws/{cep}/json/", timeout=8)
+            if _chk.status_code == 200 and str(_chk.json().get("ibge", "")) != cmun:
+                _uf2 = (uf or "SC")[:2].upper()
+                _cid2 = _nf_normaliza_texto(cidade)
+                _srch = _httpx_nf.get(
+                    f"https://viacep.com.br/ws/{_uf2}/{_cid2}/a/json/", timeout=8)
+                if _srch.status_code == 200:
+                    _res = _srch.json()
+                    if isinstance(_res, list) and _res:
+                        _new_cep = _res[0].get("cep", "").replace("-", "")
+                        if len(_new_cep) == 8:
+                            print(f"[nfse] CEP {cep} não pertence ao município {cmun} — substituindo por {_new_cep} ({cidade})")
+                            cep = _new_cep
+        except Exception as _e_chk:
+            print(f"[nfse] aviso: validação CEP×município falhou ({_e_chk})")
+
+    if len(cmun) != 7 and len(cep) == 8:
+        # Último recurso: resolve IBGE pelo CEP via ViaCEP
+        try:
+            _via_resp = _httpx_nf.get(f"https://viacep.com.br/ws/{cep}/json/", timeout=10)
             if _via_resp.status_code == 200:
                 _via = _via_resp.json()
                 _ibge_via = str(_via.get("ibge", "")).strip()
                 if len(_ibge_via) == 7:
                     cmun = _ibge_via
                     print(f"[nfse] IBGE resolvido via ViaCEP: CEP={cep} → ibge={cmun}")
-                elif _via.get("localidade") and _via.get("uf"):
-                    cmun = _nf_resolve_ibge_por_cidade_uf(_via["localidade"], _via["uf"])
-                    print(f"[nfse] IBGE resolvido via ViaCEP+nome: {_via['localidade']}/{_via['uf']} → {cmun}")
         except Exception as _e_via:
             print(f"[nfse] aviso: ViaCEP falhou ({_e_via})")
 
