@@ -1111,14 +1111,30 @@ async def fc_lista(
 ):
     ctx        = get_tenant_context(request, session)
     client_id  = get_active_client_id(request, session, ctx)
+    from sqlalchemy import or_ as _or_fc2, and_ as _and_fc2
     query      = select(CashFlowEntry).where(
         CashFlowEntry.company_id == ctx.company.id,
         CashFlowEntry.client_id  == client_id,
     )
-    if data_inicio:
-        query = query.where(CashFlowEntry.data_vencimento >= data_inicio)
-    if data_fim:
-        query = query.where(CashFlowEntry.data_vencimento <= data_fim)
+    if data_inicio or data_fim:
+        # Realizados: filtra por data_pagamento; previstos: por data_vencimento
+        _cr = CashFlowEntry.status == "realizado"
+        _cp = CashFlowEntry.status != "realizado"
+        if data_inicio and data_fim:
+            query = query.where(_or_fc2(
+                _and_fc2(_cr, CashFlowEntry.data_pagamento >= data_inicio, CashFlowEntry.data_pagamento <= data_fim),
+                _and_fc2(_cp, CashFlowEntry.data_vencimento >= data_inicio, CashFlowEntry.data_vencimento <= data_fim),
+            ))
+        elif data_inicio:
+            query = query.where(_or_fc2(
+                _and_fc2(_cr, CashFlowEntry.data_pagamento >= data_inicio),
+                _and_fc2(_cp, CashFlowEntry.data_vencimento >= data_inicio),
+            ))
+        else:
+            query = query.where(_or_fc2(
+                _and_fc2(_cr, CashFlowEntry.data_pagamento <= data_fim),
+                _and_fc2(_cp, CashFlowEntry.data_vencimento <= data_fim),
+            ))
     if status == "atrasado":
         query = query.where(CashFlowEntry.status == "previsto")
     elif status:
