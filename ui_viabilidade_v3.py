@@ -647,6 +647,7 @@ TEMPLATES["ferramenta_viabilidade.html"] = r"""
   .vb-row{display:grid;grid-template-columns:1fr 1fr;gap:1rem;margin-bottom:1rem;}
   .vb-row3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:1rem;margin-bottom:1rem;}
   .vb-row4{display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:.75rem;margin-bottom:1rem;}
+  .vb-row5{display:grid;grid-template-columns:repeat(5,1fr);gap:.75rem;margin-bottom:1rem;}
   .vb-lbl{font-size:.74rem;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--mc-muted);margin-bottom:.3rem;}
   .vb-inp{width:100%;border:1.5px solid var(--mc-border);border-radius:10px;padding:.58rem .85rem;font-size:.88rem;outline:none;transition:border .15s;}
   .vb-inp:focus{border-color:var(--mc-primary);}
@@ -739,7 +740,7 @@ TEMPLATES["ferramenta_viabilidade.html"] = r"""
   .fs-table td{padding:.35rem .6rem;text-align:right;border-bottom:1px solid var(--mc-border);}
   .fs-table td:first-child{text-align:left;font-weight:600;}
   .fs-wrap{max-height:380px;overflow-y:auto;border:1px solid var(--mc-border);border-radius:12px;margin-top:.5rem;}
-  @media(max-width:640px){.vb-row,.vb-row3,.vb-row4{grid-template-columns:1fr;}.tip-hdr,.tip-row{grid-template-columns:1fr 1fr 1fr auto;}.tip-hdr span:nth-child(4),.tip-row>div:nth-child(4),.tip-hdr span:nth-child(5),.tip-row>div:nth-child(5),.tip-hdr span:nth-child(6),.tip-row>div:nth-child(6),.tip-hdr span:nth-child(7),.tip-row>div:nth-child(7){display:none;}}
+  @media(max-width:640px){.vb-row,.vb-row3,.vb-row4,.vb-row5{grid-template-columns:1fr 1fr;}.tip-hdr,.tip-row{grid-template-columns:1fr 1fr 1fr auto;}.tip-hdr span:nth-child(4),.tip-row>div:nth-child(4),.tip-hdr span:nth-child(5),.tip-row>div:nth-child(5),.tip-hdr span:nth-child(6),.tip-row>div:nth-child(6),.tip-hdr span:nth-child(7),.tip-row>div:nth-child(7){display:none;}}
   @media print{.vb-tabs,form button,nav,.navbar,aside,#augurCard{display:none!important;}.vb-sec{display:block!important;}.card{page-break-inside:avoid;}}
 </style>
 
@@ -812,8 +813,22 @@ TEMPLATES["ferramenta_viabilidade.html"] = r"""
   <div class="vb-sep">Cronograma</div>
   <div class="vb-row3">
     <div><div class="vb-lbl">Mês de Início da Obra</div><input class="vb-inp" type="number" name="mes_inicio_obra" step="1" min="1" placeholder="12" value="{{ dados.mes_inicio_obra or '12' }}"><div class="vb-hint">Relativo ao lançamento (mês 1)</div></div>
-    <div><div class="vb-lbl">Duração da Obra (meses)</div><input class="vb-inp" type="number" name="duracao_obra" step="1" min="6" placeholder="60" value="{{ dados.duracao_obra or '60' }}"></div>
+    <div><div class="vb-lbl">Duração da Obra (meses)</div><input class="vb-inp" type="number" id="duracao_obra_inp" name="duracao_obra" step="1" min="6" placeholder="60" value="{{ dados.duracao_obra or '60' }}" oninput="gerarCamposDesembolso(this.value)"></div>
     <div><div class="vb-lbl">Início das Vendas (mês)</div><input class="vb-inp" type="number" name="mes_inicio_vendas" step="1" min="1" placeholder="3" value="{{ dados.mes_inicio_vendas or '3' }}"><div class="vb-hint">Relativo ao lançamento</div></div>
+  </div>
+  <div class="vb-sep" style="display:flex;align-items:center;gap:.75rem;">
+    Desembolso de Obra por Mês
+    <span style="font-size:.75rem;font-weight:400;color:var(--mc-muted);">— deixe em branco para usar Curva S automática</span>
+    <button type="button" class="btn btn-sm btn-outline-secondary ms-auto" onclick="limparDesembolso()">Limpar (usar Curva S)</button>
+  </div>
+  <div id="desembolso-cont" style="display:flex;flex-wrap:wrap;gap:.4rem .5rem;margin-bottom:1rem;">
+    {% set _dur = (dados.duracao_obra or 60)|int %}
+    {% for i in range(_dur) %}
+    <div style="display:flex;flex-direction:column;align-items:center;min-width:52px;">
+      <span style="font-size:.65rem;color:var(--mc-muted);">M{{ i+1 }}</span>
+      <div class="pw" style="width:52px;"><span class="suf" style="padding:.2rem .3rem;">%</span><input class="vb-inp pr" type="number" name="desembolso_m{{ i }}" step="0.01" min="0" max="100" placeholder="—" style="padding:.2rem .4rem;width:52px;font-size:.8rem;" value="{{ dados.get('desembolso_m' ~ i, '') }}"></div>
+    </div>
+    {% endfor %}
   </div>
   <div class="d-flex justify-content-end mt-3">
     <button type="button" class="btn btn-primary" onclick="vbTab('produto',document.querySelector('[onclick*=produto]'))">Produto &amp; VGV <i class="bi bi-arrow-right ms-1"></i></button>
@@ -1624,6 +1639,22 @@ function addFase(){
   c.appendChild(d);
 }
 function rmFase(i){const el=document.getElementById('fase-'+i);if(el)el.remove();}
+function gerarCamposDesembolso(dur){
+  const n=parseInt(dur)||0;
+  const cont=document.getElementById('desembolso-cont');
+  if(!cont)return;
+  const existentes=cont.querySelectorAll('input[name^="desembolso_m"]');
+  const vals=[];
+  existentes.forEach(inp=>vals.push(inp.value));
+  cont.innerHTML='';
+  for(let i=0;i<n;i++){
+    const v=vals[i]||'';
+    cont.innerHTML+=`<div style="display:flex;flex-direction:column;align-items:center;min-width:52px;"><span style="font-size:.65rem;color:var(--mc-muted);">M${i+1}</span><div class="pw" style="width:52px;"><span class="suf" style="padding:.2rem .3rem;">%</span><input class="vb-inp pr" type="number" name="desembolso_m${i}" step="0.01" min="0" max="100" placeholder="—" style="padding:.2rem .4rem;width:52px;font-size:.8rem;" value="${v}"></div></div>`;
+  }
+}
+function limparDesembolso(){
+  document.querySelectorAll('[name^="desembolso_m"]').forEach(inp=>{inp.value='';});
+}
 document.getElementById('vbForm')?.addEventListener('submit',()=>{
   const b=document.getElementById('calcBtn');
   if(b){b.disabled=true;b.innerHTML='<i class="bi bi-hourglass-split me-2"></i>Calculando...';}
