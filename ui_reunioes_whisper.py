@@ -289,20 +289,37 @@ def _gerar_resumo_ia(transcricao: str, titulo: str) -> dict:
     if not api_key or not transcricao:
         return {"summary": "", "action_items": "", "notes": ""}
 
-    prompt = f"""Você é um assistente especializado em reuniões de consultoria financeira.
+    # Limita a ~120k chars (~30k tokens) para reuniões longas; o corte de 8k antes perdia 90% do conteúdo
+    transcricao_truncada = transcricao[:120000]
+    if len(transcricao) > 120000:
+        transcricao_truncada += "\n\n[TRANSCRIÇÃO TRUNCADA — fim do limite de processamento]"
 
-Analise a transcrição da reunião "{titulo}" e gere um relatório estruturado.
+    prompt = f"""Você é um assistente especializado em reuniões de empresas do setor de construção civil e incorporação imobiliária.
 
-IMPORTANTE: Responda APENAS com JSON válido, sem texto antes ou depois. Todos os valores devem ser strings simples (não listas nem objetos aninhados).
+Analise a transcrição completa da reunião "{titulo}" e gere um relatório estruturado e completo.
+
+Contexto: As reuniões costumam envolver discussões sobre:
+- Obras e empreendimentos imobiliários (lançamentos, velocidade de vendas, fluxo de caixa de obra)
+- Financeiro da empresa (fluxo de caixa semanal, contas a pagar/receber, aplicações, inadimplência)
+- Equipe comercial e corretores
+- Sistema de gestão interno (Augur) — integração com Sienge, importação de dados, demos de funcionalidades
+- Estratégia de negócios e mercado imobiliário
+
+IMPORTANTE:
+- Capture TODOS os temas discutidos, mesmo que brevemente
+- Inclua dados numéricos, nomes de empreendimentos e valores quando mencionados
+- Não omita temas por serem técnicos ou por parecerem secundários (demos de sistema, análises de planilha, etc.)
+- Responda APENAS com JSON válido, sem texto antes ou depois
+- Todos os valores devem ser strings simples (não listas nem objetos aninhados)
 
 Transcrição:
-{transcricao[:8000]}
+{transcricao_truncada}
 
 Responda exatamente neste formato JSON:
 {{
-  "summary": "Resumo executivo em 3-5 parágrafos sobre o que foi discutido, contexto da empresa e principais pontos.",
-  "action_items": "Lista de próximas ações em texto simples, uma por linha, com responsável quando mencionado.",
-  "notes": "Decisões tomadas e pontos de atenção em texto simples."
+  "summary": "Resumo detalhado cobrindo TODOS os temas da reunião, organizado por assunto com títulos em negrito. Mínimo 5 parágrafos. Inclua dados numéricos, nomes de projetos e pessoas relevantes.",
+  "action_items": "Lista de próximas ações, uma por linha, com responsável entre parênteses quando mencionado. Inclua TODAS as ações, tarefas e follow-ups mencionados.",
+  "decisions": "Decisões tomadas e pontos de atenção relevantes, um por linha."
 }}"""
 
     try:
@@ -315,10 +332,10 @@ Responda exatamente neste formato JSON:
             },
             json={
                 "model": "claude-sonnet-4-6",
-                "max_tokens": 2000,
+                "max_tokens": 4000,
                 "messages": [{"role": "user", "content": prompt}],
             },
-            timeout=60,
+            timeout=120,
         )
         resp.raise_for_status()
         texto = resp.json()["content"][0]["text"]
@@ -331,7 +348,7 @@ Responda exatamente neste formato JSON:
             return {
                 "summary":          dados.get("summary", ""),
                 "action_items":     dados.get("action_items", ""),
-                "notes":            f"Decisões: {dados.get('decisions','')}\n\nAtenção: {dados.get('attention_points','')}",
+                "notes":            dados.get("decisions", ""),
             }
     except Exception as e:
         print(f"[whisper] Erro ao gerar resumo IA: {e}")
