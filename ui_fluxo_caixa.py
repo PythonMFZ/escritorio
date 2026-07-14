@@ -611,7 +611,7 @@ TEMPLATES["fluxo_caixa_lancamentos.html"] = r"""
       <table class="table table-sm align-middle">
         <thead class="table-light">
           <tr>
-            <th>Vencimento</th>
+            <th>Data</th>
             <th>Descrição</th>
             <th>Empresa</th>
             <th>Centro de Custo</th>
@@ -619,14 +619,20 @@ TEMPLATES["fluxo_caixa_lancamentos.html"] = r"""
             <th>Tipo</th>
             <th class="text-end">Valor</th>
             <th>Status</th>
-            <th>Pagamento</th>
             <th></th>
           </tr>
         </thead>
         <tbody>
           {% for e in entries %}
           <tr>
-            <td class="text-nowrap">{{ e.data_vencimento_fmt }}</td>
+            <td class="text-nowrap">
+              {% if e.status == 'realizado' and e.data_pagamento %}
+                {{ e.data_pagamento_fmt }}
+                <div class="small text-muted" title="Vencimento: {{ e.data_vencimento_fmt }}">venc. {{ e.data_vencimento_fmt }}</div>
+              {% else %}
+                {{ e.data_vencimento_fmt }}
+              {% endif %}
+            </td>
             <td>{{ e.descricao }}</td>
             <td class="text-muted small">{{ e.empresa or '—' }}</td>
             <td><span class="badge bg-secondary">{{ e.centro_custo }}</span></td>
@@ -652,7 +658,6 @@ TEMPLATES["fluxo_caixa_lancamentos.html"] = r"""
               <span class="badge" style="background:#fd7e14;font-size:.8rem">⏳ A pagar/receber</span>
               {% endif %}
             </td>
-            <td class="text-muted small text-nowrap">{{ e.data_pagamento_fmt or '—' }}</td>
             <td class="text-nowrap">
               <a href="/ferramentas/fluxo-caixa/{{ e.id }}/editar" class="btn btn-outline-secondary btn-sm py-0 px-2" title="Editar">✏</a>
               {% if e.status == 'previsto' %}
