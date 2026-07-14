@@ -161,15 +161,31 @@ def _fc_get_entries(session, company_id: int, client_id: _Opt_fc[int],
                     data_inicio: _Opt_fc[str] = None, data_fim: _Opt_fc[str] = None,
                     centros: _Opt_fc[_List_fc[str]] = None,
                     empresas: _Opt_fc[_List_fc[str]] = None) -> list:
+    from sqlalchemy import or_ as _or_fc, and_ as _and_fc
     q = select(CashFlowEntry).where(
         CashFlowEntry.company_id == company_id,
         CashFlowEntry.client_id == client_id,
         CashFlowEntry.status != "cancelado",
     )
-    if data_inicio:
-        q = q.where(CashFlowEntry.data_vencimento >= data_inicio)
-    if data_fim:
-        q = q.where(CashFlowEntry.data_vencimento <= data_fim)
+    if data_inicio or data_fim:
+        # Realizados: filtra por data_pagamento (quando existe); previstos: por data_vencimento
+        _cond_real = CashFlowEntry.status == "realizado"
+        _cond_prev = CashFlowEntry.status != "realizado"
+        if data_inicio and data_fim:
+            q = q.where(_or_fc(
+                _and_fc(_cond_real, CashFlowEntry.data_pagamento >= data_inicio, CashFlowEntry.data_pagamento <= data_fim),
+                _and_fc(_cond_prev, CashFlowEntry.data_vencimento >= data_inicio, CashFlowEntry.data_vencimento <= data_fim),
+            ))
+        elif data_inicio:
+            q = q.where(_or_fc(
+                _and_fc(_cond_real, CashFlowEntry.data_pagamento >= data_inicio),
+                _and_fc(_cond_prev, CashFlowEntry.data_vencimento >= data_inicio),
+            ))
+        else:
+            q = q.where(_or_fc(
+                _and_fc(_cond_real, CashFlowEntry.data_pagamento <= data_fim),
+                _and_fc(_cond_prev, CashFlowEntry.data_vencimento <= data_fim),
+            ))
     if centros:
         q = q.where(CashFlowEntry.centro_custo.in_(centros))
     if empresas:
@@ -251,7 +267,9 @@ def _calc_fluxo(entries: list, config: CashFlowConfig, group_by: str = "semana")
     hoje = _date_fc.today()
 
     for e in entries:
-        key = _fc_periodo_key(e.data_vencimento, group_by)
+        # Realizados: agrupar pela data efetiva do pagamento; previstos: pela data de vencimento
+        _data_ref = (e.data_pagamento if e.status == "realizado" and e.data_pagamento else e.data_vencimento)
+        key = _fc_periodo_key(_data_ref, group_by)
         if key not in periodos:
             # Calcula data_inicio e data_fim do período
             try:
