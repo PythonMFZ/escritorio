@@ -205,7 +205,24 @@ def _calcular_viabilidade_v2(dados: dict) -> dict:
         total = sum(result)
         return [v / total for v in result]
 
-    dist_custos = _dist_para_meses(duracao_obra)
+    # Distribuição personalizada: pega campos desembolso_m0..mN-1
+    _des_custom = []
+    for _i in range(duracao_obra):
+        _v = dados.get(f"desembolso_m{_i}", "")
+        try:
+            _pct = float(_v) if _v not in (None, "") else None
+        except (ValueError, TypeError):
+            _pct = None
+        _des_custom.append(_pct)
+
+    _has_custom = any(v is not None for v in _des_custom)
+    if _has_custom:
+        # Substitui None por 0, normaliza soma para 1
+        _raw = [v if v is not None else 0.0 for v in _des_custom]
+        _tot = sum(_raw)
+        dist_custos = [v / _tot for v in _raw] if _tot > 0 else [1.0 / duracao_obra] * duracao_obra
+    else:
+        dist_custos = _dist_para_meses(duracao_obra)
 
     # ── MONTAGEM DO FLUXO DE CAIXA MENSAL ────────────────────────────────
     # Número total de meses da análise
@@ -406,7 +423,7 @@ def _calcular_viabilidade_v2(dados: dict) -> dict:
         if m < mes_inicio_obra:
             cf_m = 1.0  # pré-obra: terreno/aprovações não sofrem INCC
         elif m <= mes_fim_obra:
-            cf_m = (1 + corr_obra) ** (m - mes_inicio_obra + 1)  # relativo ao início da obra
+            cf_m = (1 + corr_obra) ** m  # INCC acumula desde o lançamento (mês 0)
         else:
             # Pós-entrega: índice reinicia do zero na data de entrega
             cf_m = (1 + corr_pos_obra) ** (m - mes_fim_obra)
@@ -709,7 +726,7 @@ TEMPLATES["ferramenta_viabilidade.html"] = r"""
   .v-badge.primary{background:rgba(59,130,246,.12);color:#1e40af;}
   .v-badge.warning{background:rgba(202,138,4,.12);color:#854d0e;}
   .v-badge.danger{background:rgba(220,38,38,.12);color:#991b1b;}
-  @media(max-width:640px){.vb-row,.vb-row3,.vb-row4{grid-template-columns:1fr;}.tip-hdr,.tip-row{grid-template-columns:1fr 1fr 1fr auto;}.tip-hdr span:nth-child(4),.tip-row>div:nth-child(4),.tip-hdr span:nth-child(5),.tip-row>div:nth-child(5),.tip-hdr span:nth-child(6),.tip-row>div:nth-child(6),.tip-hdr span:nth-child(7),.tip-row>div:nth-child(7){display:none;}}
+  @media(max-width:640px){.vb-row,.vb-row3,.vb-row4,.vb-row5{grid-template-columns:1fr 1fr;}.tip-hdr,.tip-row{grid-template-columns:1fr 1fr 1fr auto;}.tip-hdr span:nth-child(4),.tip-row>div:nth-child(4),.tip-hdr span:nth-child(5),.tip-row>div:nth-child(5),.tip-hdr span:nth-child(6),.tip-row>div:nth-child(6),.tip-hdr span:nth-child(7),.tip-row>div:nth-child(7){display:none;}}
   @media print{.vb-tabs,form button,nav,.navbar,aside,#augurCard{display:none!important;}.vb-sec{display:block!important;}.card{page-break-inside:avoid;}}
 </style>
 
@@ -755,8 +772,22 @@ TEMPLATES["ferramenta_viabilidade.html"] = r"""
   <div class="vb-sep">Cronograma</div>
   <div class="vb-row3">
     <div><div class="vb-lbl">Mês de Início da Obra</div><input class="vb-inp" type="number" name="mes_inicio_obra" step="1" min="1" placeholder="12" value="{{ dados.mes_inicio_obra or '12' }}"><div class="vb-hint">Relativo ao lançamento (mês 1)</div></div>
-    <div><div class="vb-lbl">Duração da Obra (meses)</div><input class="vb-inp" type="number" name="duracao_obra" step="1" min="6" placeholder="60" value="{{ dados.duracao_obra or '60' }}"></div>
+    <div><div class="vb-lbl">Duração da Obra (meses)</div><input class="vb-inp" type="number" id="duracao_obra_inp" name="duracao_obra" step="1" min="6" placeholder="60" value="{{ dados.duracao_obra or '60' }}" oninput="gerarCamposDesembolso(this.value)"></div>
     <div><div class="vb-lbl">Início das Vendas (mês)</div><input class="vb-inp" type="number" name="mes_inicio_vendas" step="1" min="1" placeholder="3" value="{{ dados.mes_inicio_vendas or '3' }}"><div class="vb-hint">Relativo ao lançamento</div></div>
+  </div>
+  <div class="vb-sep" style="display:flex;align-items:center;gap:.75rem;">
+    Desembolso de Obra por Mês
+    <span style="font-size:.75rem;font-weight:400;color:var(--mc-muted);">— deixe em branco para usar Curva S automática</span>
+    <button type="button" class="btn btn-sm btn-outline-secondary ms-auto" onclick="limparDesembolso()">Limpar (usar Curva S)</button>
+  </div>
+  <div id="desembolso-cont" style="display:flex;flex-wrap:wrap;gap:.4rem .5rem;margin-bottom:1rem;">
+    {% set _dur = (dados.duracao_obra or 60)|int %}
+    {% for i in range(_dur) %}
+    <div style="display:flex;flex-direction:column;align-items:center;min-width:52px;">
+      <span style="font-size:.65rem;color:var(--mc-muted);">M{{ i+1 }}</span>
+      <div class="pw" style="width:52px;"><span class="suf" style="padding:.2rem .3rem;">%</span><input class="vb-inp pr" type="number" name="desembolso_m{{ i }}" step="0.01" min="0" max="100" placeholder="—" style="padding:.2rem .4rem;width:52px;font-size:.8rem;" value="{{ dados['desembolso_m'~i] if ('desembolso_m'~i) in dados else '' }}"></div>
+    </div>
+    {% endfor %}
   </div>
   <div class="d-flex justify-content-end mt-3">
     <button type="button" class="btn btn-primary" onclick="vbTab('produto',document.querySelector('[onclick*=produto]'))">Produto & VGV <i class="bi bi-arrow-right ms-1"></i></button>
@@ -1028,6 +1059,22 @@ function addFase(){
   c.appendChild(d);
 }
 function rmFase(i){const el=document.getElementById('fase-'+i);if(el)el.remove();}
+function gerarCamposDesembolso(dur){
+  const n=parseInt(dur)||0;
+  const cont=document.getElementById('desembolso-cont');
+  if(!cont)return;
+  const existentes=cont.querySelectorAll('input[name^="desembolso_m"]');
+  const vals=[];
+  existentes.forEach(inp=>vals.push(inp.value));
+  cont.innerHTML='';
+  for(let i=0;i<n;i++){
+    const v=vals[i]||'';
+    cont.innerHTML+=`<div style="display:flex;flex-direction:column;align-items:center;min-width:52px;"><span style="font-size:.65rem;color:var(--mc-muted);">M${i+1}</span><div class="pw" style="width:52px;"><span class="suf" style="padding:.2rem .3rem;">%</span><input class="vb-inp pr" type="number" name="desembolso_m${i}" step="0.01" min="0" max="100" placeholder="—" style="padding:.2rem .4rem;width:52px;font-size:.8rem;" value="${v}"></div></div>`;
+  }
+}
+function limparDesembolso(){
+  document.querySelectorAll('[name^="desembolso_m"]').forEach(inp=>{inp.value='';});
+}
 document.getElementById('vbForm')?.addEventListener('submit',()=>{
   const b=document.getElementById('calcBtn');
   if(b){b.disabled=true;b.innerHTML='<i class="bi bi-hourglass-split me-2"></i>Calculando...';}
