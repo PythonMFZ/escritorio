@@ -808,18 +808,30 @@ TEMPLATES["fluxo_caixa_config.html"] = r"""
   </div>
   <div class="card p-4">
     <form method="POST">
-      <div class="mb-3">
-        <label class="form-label">Saldo Inicial em Caixa (R$)</label>
-        <input type="text" name="saldo_inicial" value="{{ saldo_inicial_str }}"
-               class="form-control" placeholder="0,00">
-        <div class="form-text">Saldo de partida para cálculo do saldo acumulado.</div>
+      <div class="alert alert-info py-2 small mb-3">
+        💡 <strong>Como usar:</strong> informe o saldo atual da conta bancária e a data de hoje.
+        O sistema usará esse valor como ponto de partida e projetará o fluxo futuro a partir dele.
+        Atualize sempre que quiser calibrar a posição de caixa real.
       </div>
-      <div class="mb-3">
-        <label class="form-label">Data de Apuração do Saldo</label>
-        <input type="date" name="saldo_data" value="{{ saldo_data }}" class="form-control">
-        <div class="form-text">
-          Data em que esse saldo foi apurado. O sistema contabiliza apenas os lançamentos
-          a partir dessa data, independente do período escolhido para visualizar o relatório.
+      <div class="row g-3 mb-3">
+        <div class="col-12 col-sm-6">
+          <label class="form-label fw-semibold">Saldo Atual em Caixa (R$)</label>
+          <input type="text" name="saldo_inicial" value="{{ saldo_inicial_str }}"
+                 class="form-control" placeholder="0,00">
+          <div class="form-text">Saldo real da conta bancária na data abaixo.</div>
+        </div>
+        <div class="col-12 col-sm-6">
+          <label class="form-label fw-semibold">Data de Apuração</label>
+          <div class="input-group">
+            <input type="date" name="saldo_data" id="saldo_data_input" value="{{ saldo_data }}" class="form-control">
+            <button type="button" class="btn btn-outline-secondary btn-sm"
+                    onclick="document.getElementById('saldo_data_input').value=new Date().toISOString().slice(0,10)">
+              Hoje
+            </button>
+          </div>
+          <div class="form-text">
+            Use a data de hoje: o saldo informado passa a ser o ponto de partida da projeção futura.
+          </div>
         </div>
       </div>
       <div class="mb-3">
@@ -1052,7 +1064,14 @@ async def fc_dashboard(
     else:
         periodos_raw   = [p for p in periodos_full if p["data_fim"] >= _di]
         periodos_antes = [p for p in periodos_full if p["data_fim"] <  _di]
-        caixa_inicial_cents = periodos_antes[-1]["saldo_acumulado"] if periodos_antes else 0
+        if periodos_antes:
+            caixa_inicial_cents = periodos_antes[-1]["saldo_acumulado"]
+        elif saldo_data_eff and saldo_data_eff >= _di:
+            # Saldo configurado é de hoje ou do futuro: usa diretamente como ponto de partida.
+            # Não tenta acumular histórico incompleto — o saldo informado já reflete a posição real.
+            caixa_inicial_cents = cfg.saldo_inicial_cents
+        else:
+            caixa_inicial_cents = 0
 
     # Enriquece periodos com strings formatadas
     for p in periodos_raw:
