@@ -119,6 +119,20 @@ try:
 except Exception as _e_si_fix:
     print(f"[fluxo_caixa] migração sienge client_id: {_e_si_fix}")
 
+# Corrige entradas com data_pagamento preenchida mas status='previsto' — foram importadas
+# com o bug onde "Baixado" não era reconhecido como realizado em contas a pagar.
+try:
+    with engine.begin() as _c_pago_fix:
+        _r_pago = _c_pago_fix.execute(_t_fc(
+            "UPDATE cashflowentry SET status='realizado' "
+            "WHERE status='previsto' AND data_pagamento IS NOT NULL AND data_pagamento != ''"
+        ))
+        _fixed = getattr(_r_pago, 'rowcount', '?')
+    if _fixed and _fixed != '?' and int(str(_fixed)) > 0:
+        print(f"[fluxo_caixa] migração: {_fixed} entradas corrigidas para status=realizado (tinham data_pagamento)")
+except Exception as _e_pago_fix:
+    print(f"[fluxo_caixa] migração status pago: {_e_pago_fix}")
+
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -2187,7 +2201,7 @@ if hasattr(templates_env.loader, "mapping"):
     templates_env.loader.mapping["fluxo_caixa_importar_sienge_ok.html"] = TEMPLATES["fluxo_caixa_importar_sienge_ok.html"]
 
 
-_REALIZADO_PAGAR   = {"pago", "liquidado", "quitado", "pg", "paid"}
+_REALIZADO_PAGAR   = {"pago", "liquidado", "quitado", "baixado", "pg", "paid"}
 _REALIZADO_RECEBER = {"recebido", "liquidado", "quitado", "baixado", "received"}
 
 @app.get("/ferramentas/fluxo-caixa/importar-sienge", response_class=HTMLResponse)
