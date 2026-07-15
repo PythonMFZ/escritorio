@@ -23,4 +23,4 @@ python-docx>=1.1.0
 pypdf>=4.0.0
 lxml>=5.0.0
 signxml>=4.0.0
-cryptography>=42.0.0
+cryptography>=42.0.0imageio-ffmpeg>=0.4.9

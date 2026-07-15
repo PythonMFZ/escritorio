@@ -196,7 +196,14 @@ _OPENAI_MAX_BYTES = 24 * 1024 * 1024  # margem de segurança abaixo dos 25MB da 
 
 
 def _ffmpeg_bin():
-    return _shutil.which("ffmpeg")
+    sys_ffmpeg = _shutil.which("ffmpeg")
+    if sys_ffmpeg:
+        return sys_ffmpeg
+    try:
+        import imageio_ffmpeg as _iio_ff
+        return _iio_ff.get_ffmpeg_exe()
+    except Exception:
+        return None
 
 
 def _compress_audio_for_whisper(src_path: str, dst_path: str) -> bool:
