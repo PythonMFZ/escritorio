@@ -28,15 +28,15 @@ from fastapi import BackgroundTasks as _BG
 
 # ── Configuração de paths ─────────────────────────────────────────────────────
 
-# Render Disk monta em /var/data por padrão
-# Se não existir, usa pasta local
+# Usa /tmp/reunioes por padrão — efêmero, não consome disco persistente do Render.
+# Sobrescreva com AUDIO_UPLOAD_DIR se quiser persistência (Render Disk).
 _AUDIO_DIR = _Path(
-    _os2.environ.get("AUDIO_UPLOAD_DIR", "/var/data/reunioes")
+    _os2.environ.get("AUDIO_UPLOAD_DIR", "/tmp/reunioes")
 )
 try:
     _AUDIO_DIR.mkdir(parents=True, exist_ok=True)
 except Exception:
-    _AUDIO_DIR = _Path("uploads/reunioes")
+    _AUDIO_DIR = _Path(_tmpfile.mkdtemp(prefix="reunioes_"))
     _AUDIO_DIR.mkdir(parents=True, exist_ok=True)
 
 _WHISPER_MODEL_NAME = _os2.environ.get("WHISPER_MODEL", "tiny")
@@ -48,8 +48,8 @@ def _cleanup_orphan_wavs():
     try:
         removed = 0
         freed = 0
-        cutoff = _time_cl.time() - 7 * 86400  # 7 dias
-        for f in list(_AUDIO_DIR.glob("*.wav")) + list(_AUDIO_DIR.glob("*.mp3")) + list(_AUDIO_DIR.glob("*_raw.*")):
+        cutoff = _time_cl.time() - 1 * 86400  # 1 dia (eram 7, reduzido para economizar espaço)
+        for f in list(_AUDIO_DIR.glob("*")):
             try:
                 if f.stat().st_mtime < cutoff:
                     size = f.stat().st_size
@@ -379,9 +379,39 @@ def _processar_audio_background(
     transcricao = ""
     _erro_real = ""
 
-    # ── Primário: OpenAI Whisper API (não requer download de modelo) ──────────
+    # ── Primário: Groq Whisper API (grátis, rápido, sem limite prático) ──────
+    groq_key = _os2.environ.get("GROQ_API_KEY", "")
+    if groq_key and _Path(audio_path).exists():
+        _tmp_dir_groq = None
+        try:
+            import httpx as _hx_groq
+            partes, _tmp_dir_groq = _prepare_audio_for_whisper(audio_path)
+            print(f"[whisper] Usando Groq Whisper API ({len(partes)} parte(s))...")
+            textos = []
+            for _i_parte, parte in enumerate(partes, start=1):
+                print(f"[whisper] Groq: parte {_i_parte}/{len(partes)}...")
+                with open(parte, "rb") as _af:
+                    resp = _hx_groq.post(
+                        "https://api.groq.com/openai/v1/audio/transcriptions",
+                        headers={"Authorization": f"Bearer {groq_key}"},
+                        data={"model": "whisper-large-v3-turbo", "language": "pt", "response_format": "text"},
+                        files={"file": (_Path(parte).name, _af, "audio/ogg")},
+                        timeout=300,
+                    )
+                resp.raise_for_status()
+                textos.append(resp.text.strip())
+            transcricao = "\n\n".join(t for t in textos if t)
+            print(f"[whisper] Groq OK: {len(transcricao)} chars")
+        except Exception as _ge:
+            _erro_real = str(_ge)
+            print(f"[whisper] Groq API falhou: {_ge}")
+        finally:
+            if _tmp_dir_groq:
+                _shutil.rmtree(_tmp_dir_groq, ignore_errors=True)
+
+    # ── Secundário: OpenAI Whisper API ───────────────────────────────────────
     openai_key = _os2.environ.get("OPENAI_API_KEY", "")
-    if openai_key and _Path(audio_path).exists():
+    if not transcricao and openai_key and _Path(audio_path).exists():
         _tmp_dir_whisper = None
         try:
             import openai as _oai
@@ -407,8 +437,8 @@ def _processar_audio_background(
             if _tmp_dir_whisper:
                 _shutil.rmtree(_tmp_dir_whisper, ignore_errors=True)
 
-    # ── Fallback: faster-whisper local (apenas se sem OpenAI key) ────────────
-    if not transcricao and not openai_key and _Path(audio_path).exists():
+    # ── Fallback: faster-whisper local (apenas se sem API keys) ─────────────
+    if not transcricao and not openai_key and not groq_key and _Path(audio_path).exists():
         try:
             transcricao = _transcrever_local_faster_whisper(audio_path)
             if transcricao:
