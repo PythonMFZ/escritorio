@@ -323,6 +323,7 @@ Responda exatamente neste formato JSON:
 }}"""
 
     try:
+        print(f"[whisper] Chamando Claude para resumo ({len(transcricao_truncada)} chars)...")
         resp = _req_w.post(
             "https://api.anthropic.com/v1/messages",
             headers={
@@ -335,10 +336,11 @@ Responda exatamente neste formato JSON:
                 "max_tokens": 4000,
                 "messages": [{"role": "user", "content": prompt}],
             },
-            timeout=120,
+            timeout=600,
         )
         resp.raise_for_status()
         texto = resp.json()["content"][0]["text"]
+        print(f"[whisper] Claude respondeu: {len(texto)} chars")
 
         # Tenta parsear JSON
         import re as _re_w
@@ -672,18 +674,37 @@ async def reuniao_resumo_manual(
 
     def _gerar_bg():
         from sqlmodel import Session as _SW2
-        with _SW2(engine) as _s:
-            _mt = _s.get(Meeting, meeting_id)
-            if _mt:
-                _mt.notion_status = "summary_in_progress"
-                _s.add(_mt); _s.commit()
-                resumo = _gerar_resumo_ia(_mt.transcript_text, _mt.title)
-                _mt.summary_text      = resumo.get("summary", "")
-                _mt.action_items_text = resumo.get("action_items", "")
-                _mt.notes_text        = resumo.get("notes", "")
-                _mt.notion_status     = "notes_ready"
-                _mt.updated_at        = _dt_w.utcnow()
-                _s.add(_mt); _s.commit()
+        try:
+            with _SW2(engine) as _s:
+                _mt = _s.get(Meeting, meeting_id)
+                if _mt:
+                    _mt.notion_status = "summary_in_progress"
+                    _s.add(_mt); _s.commit()
+            resumo = {}
+            with _SW2(engine) as _s:
+                _mt = _s.get(Meeting, meeting_id)
+                if _mt:
+                    resumo = _gerar_resumo_ia(_mt.transcript_text, _mt.title)
+            with _SW2(engine) as _s:
+                _mt = _s.get(Meeting, meeting_id)
+                if _mt:
+                    _mt.summary_text      = resumo.get("summary", "")
+                    _mt.action_items_text = resumo.get("action_items", "")
+                    _mt.notes_text        = resumo.get("notes", "")
+                    _mt.notion_status     = "notes_ready"
+                    _mt.updated_at        = _dt_w.utcnow()
+                    _s.add(_mt); _s.commit()
+                    print(f"[whisper] Resumo salvo para reunião {meeting_id}.")
+        except Exception as _e_bg:
+            print(f"[whisper] Erro no background resumo reunião {meeting_id}: {_e_bg}")
+            try:
+                with _SW2(engine) as _s:
+                    _mt = _s.get(Meeting, meeting_id)
+                    if _mt and _mt.notion_status == "summary_in_progress":
+                        _mt.notion_status = "notes_ready"
+                        _s.add(_mt); _s.commit()
+            except Exception:
+                pass
 
     background_tasks.add_task(_gerar_bg)
     return JSONResponse({"ok": True, "msg": "Resumo sendo gerado..."})
