@@ -353,14 +353,29 @@ Responda exatamente neste formato JSON:
 
         # Tenta parsear JSON
         import re as _re_w
-        json_match = _re_w.search(r'\{.*\}', texto, _re_w.DOTALL)
-        if json_match:
-            dados = _json_w.loads(json_match.group())
-            return {
-                "summary":          dados.get("summary", ""),
-                "action_items":     dados.get("action_items", ""),
-                "notes":            dados.get("decisions", ""),
+        dados = None
+        # Tenta parse direto primeiro
+        try:
+            dados = _json_w.loads(texto.strip())
+        except Exception:
+            pass
+        # Fallback: extrai bloco JSON com regex
+        if not dados:
+            json_match = _re_w.search(r'\{[\s\S]*\}', texto)
+            if json_match:
+                try:
+                    dados = _json_w.loads(json_match.group())
+                except Exception as _je:
+                    print(f"[whisper] Falha no parse JSON: {_je}. Primeiros 500 chars: {texto[:500]}")
+        if dados:
+            result = {
+                "summary":      dados.get("summary", ""),
+                "action_items": dados.get("action_items", ""),
+                "notes":        dados.get("decisions", ""),
             }
+            print(f"[whisper] Parse OK: summary={len(result['summary'])} actions={len(result['action_items'])}")
+            return result
+        print(f"[whisper] Nao conseguiu parsear JSON. Texto: {texto[:300]}")
     except Exception as e:
         print(f"[whisper] Erro ao gerar resumo IA: {e}")
 
@@ -704,7 +719,7 @@ async def reuniao_resumo_manual(
                     _mt.notion_status     = "notes_ready"
                     _mt.updated_at        = _dt_w.utcnow()
                     _s.add(_mt); _s.commit()
-                    print(f"[whisper] Resumo salvo para reunião {meeting_id}.")
+                    print(f"[whisper] Resumo salvo para reunião {meeting_id}. summary={len(_mt.summary_text)} chars, actions={len(_mt.action_items_text)} chars")
         except Exception as _e_bg:
             print(f"[whisper] Erro no background resumo reunião {meeting_id}: {_e_bg}")
             try:
