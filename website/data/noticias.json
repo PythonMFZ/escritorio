@@ -129,6 +129,58 @@
       "manchete": "Após 10 anos em RJ, MPRJ pede falência da Refit — dívida fiscal saltou de R$ 5 bi para R$ 25,7 bi",
       "resumo": "MPRJ requer convolação da recuperação judicial da refinaria em falência após quase uma década sem reestruturação efetiva. Sefaz-RJ revoga inscrição estadual dias depois.",
       "arquivo": "monitor-insolvencia/post-10-refit.html"
+    },
+    {
+      "id": "zentoshin-2026-07",
+      "edicao": "Ed. 11",
+      "data": "2026-07-07",
+      "pais": "Japão",
+      "tipo": "Falência Voluntária",
+      "empresa": "Zentoshin Co.",
+      "marcas": "Processadora de pagamentos · Osaka",
+      "passivo": "¥115,2Bi (~US$ 710M)",
+      "manchete": "Zentoshin: maior falência japonesa de 2026 — fraude contábil de 20 anos e 200 mil estabelecimentos sem terminal de pagamento",
+      "resumo": "Processadora de pagamentos B2B protocolou falência no Tribunal de Osaka em 7/jul/2026 com ¥115,2 bilhões em passivo. Esquema de falsificação contábil de 20 anos exposto; cinco bancos regionais registraram write-downs imediatos.",
+      "arquivo": "monitor-insolvencia/post-11-zentoshin.html"
+    },
+    {
+      "id": "tvazteca-2026-07",
+      "edicao": "Ed. 12",
+      "data": "2026-07-07",
+      "pais": "México",
+      "tipo": "Concurso Mercantil",
+      "empresa": "TV Azteca S.A.B.",
+      "marcas": "Grupo Salinas · Ricardo Salinas Pliego",
+      "passivo": "US$ 1,17Bi",
+      "manchete": "TV Azteca entra em concurso mercantil com US$ 1,17bi em dívidas e acusação de ativos escondidos em empresa nova",
+      "resumo": "Juíza federal mexicana aceitou o pedido em 7/jul/2026, abrindo 185 dias de conciliação. Credores norte-americanos acusam Grupo Salinas de ter transferido concessões de TV para empresa recém-criada para blindar ativos.",
+      "arquivo": "monitor-insolvencia/post-12-tvazteca.html"
+    },
+    {
+      "id": "ambipar-2026-07",
+      "edicao": "Ed. 13",
+      "data": "2026-07-09",
+      "pais": "Brasil",
+      "tipo": "Recuperação Judicial · RSA",
+      "empresa": "Ambipar S.A. (AMBP3)",
+      "marcas": "Ambipar Emergency Response · B3: AMBP3",
+      "passivo": "US$ 1,04Bi",
+      "manchete": "Ambipar assina RSA com maioria dos credores: US$ 1,04bi em green bonds viram US$ 925M com 7 anos e juros PIK",
+      "resumo": "Em 8–9/jul/2026, Ambipar assinou Restructuring Support Agreement com detentores de 53,8% dos green notes. Proposta troca bonds originais por novos títulos com 18 meses de juros 100% PIK, aliviando caixa no curto prazo.",
+      "arquivo": "monitor-insolvencia/post-13-ambipar.html"
+    },
+    {
+      "id": "baywa-2026-07",
+      "edicao": "Ed. 14",
+      "data": "2026-07-01",
+      "pais": "Alemanha",
+      "tipo": "StaRUG · Revisão do Plano",
+      "empresa": "BayWa AG (ETR: BYW6)",
+      "marcas": "Agronegócio · Energia Renovável · Construção",
+      "passivo": "€5,2Bi",
+      "manchete": "BayWa revisa plano StaRUG: €700M viram dívida subordinada e prazo vai a 2030 — sem balanço auditado de 2025",
+      "resumo": "Conglomerado bávaro e acionistas majoritários fecharam entendimento preliminar para revisar o plano aprovado em 2025, estendendo a dívida até 2030. Ausência de relatório auditado de 2025 deixa credores sem visibilidade sobre viabilidade real.",
+      "arquivo": "monitor-insolvencia/post-14-baywa.html"
     }
   ]
 }
