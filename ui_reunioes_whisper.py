@@ -679,6 +679,9 @@ async def reuniao_resumo_manual(
     if not mt.transcript_text:
         return JSONResponse({"ok": False, "erro": "Sem transcrição para resumir."})
 
+    transcript_text = mt.transcript_text
+    meeting_title   = mt.title
+
     def _gerar_bg():
         from sqlmodel import Session as _SW2
         try:
@@ -687,11 +690,9 @@ async def reuniao_resumo_manual(
                 if _mt:
                     _mt.notion_status = "summary_in_progress"
                     _s.add(_mt); _s.commit()
-            resumo = {}
-            with _SW2(engine) as _s:
-                _mt = _s.get(Meeting, meeting_id)
-                if _mt:
-                    resumo = _gerar_resumo_ia(_mt.transcript_text, _mt.title)
+            print(f"[whisper] Gerando resumo para reunião {meeting_id} ({len(transcript_text)} chars)...")
+            resumo = _gerar_resumo_ia(transcript_text, meeting_title)
+            print(f"[whisper] Resumo gerado, salvando...")
             with _SW2(engine) as _s:
                 _mt = _s.get(Meeting, meeting_id)
                 if _mt:
