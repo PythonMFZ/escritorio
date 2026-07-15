@@ -354,19 +354,22 @@ Responda exatamente neste formato JSON:
         # Tenta parsear JSON
         import re as _re_w
         dados = None
-        # Tenta parse direto primeiro
+        # Remove bloco markdown ```json ... ``` se presente
+        _txt = _re_w.sub(r'^```(?:json)?\s*', '', texto.strip(), flags=_re_w.MULTILINE)
+        _txt = _re_w.sub(r'```\s*$', '', _txt.strip(), flags=_re_w.MULTILINE).strip()
+        # Tenta parse direto
         try:
-            dados = _json_w.loads(texto.strip())
+            dados = _json_w.loads(_txt)
         except Exception:
             pass
         # Fallback: extrai bloco JSON com regex
         if not dados:
-            json_match = _re_w.search(r'\{[\s\S]*\}', texto)
+            json_match = _re_w.search(r'\{[\s\S]*\}', _txt)
             if json_match:
                 try:
                     dados = _json_w.loads(json_match.group())
                 except Exception as _je:
-                    print(f"[whisper] Falha no parse JSON: {_je}. Primeiros 500 chars: {texto[:500]}")
+                    print(f"[whisper] Falha no parse JSON: {_je}. Primeiros 300 chars: {_txt[:300]}")
         if dados:
             result = {
                 "summary":      dados.get("summary", ""),
