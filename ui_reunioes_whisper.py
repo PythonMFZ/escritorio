@@ -1081,19 +1081,25 @@ async function gerarResumo() {
     if (btn) { btn.disabled = false; btn.textContent = '🤖 Gerar resumo com IA'; }
     return;
   }
-  // Polling até o resumo estar pronto
+  // Aguarda o status virar summary_in_progress, depois aguarda notes_ready
+  let sawInProgress = false;
   (function poll() {
     setTimeout(async function() {
       try {
         const rs = await fetch('/reunioes/{{ meeting.id }}/status');
         const ds = await rs.json();
-        if (ds.status === 'notes_ready' || ds.status === 'error') {
+        if (ds.status === 'summary_in_progress') {
+          sawInProgress = true;
+          poll();
+        } else if (sawInProgress && (ds.status === 'notes_ready' || ds.status === 'error')) {
+          location.reload();
+        } else if (ds.status === 'error') {
           location.reload();
         } else {
           poll();
         }
       } catch(e) { poll(); }
-    }, 10000);
+    }, 5000);
   })();
 }
 
