@@ -303,7 +303,7 @@ def _gerar_resumo_ia(transcricao: str, titulo: str) -> dict:
 
     prompt = f"""Você é um assistente especializado em reuniões de empresas do setor de construção civil e incorporação imobiliária.
 
-Analise a transcrição completa da reunião "{titulo}" e gere um relatório estruturado e completo.
+Analise a transcrição completa da reunião "{titulo}" e gere uma ATA DE REUNIÃO profissional e detalhada.
 
 Contexto: As reuniões costumam envolver discussões sobre:
 - Obras e empreendimentos imobiliários (lançamentos, velocidade de vendas, fluxo de caixa de obra)
@@ -312,10 +312,12 @@ Contexto: As reuniões costumam envolver discussões sobre:
 - Sistema de gestão interno (Augur) — integração com Sienge, importação de dados, demos de funcionalidades
 - Estratégia de negócios e mercado imobiliário
 
-IMPORTANTE:
-- Capture TODOS os temas discutidos, mesmo que brevemente
-- Inclua dados numéricos, nomes de empreendimentos e valores quando mencionados
-- Não omita temas por serem técnicos ou por parecerem secundários (demos de sistema, análises de planilha, etc.)
+REGRAS PARA A ATA:
+- O campo "summary" deve ser a ATA em si: texto corrido em parágrafos, um parágrafo por tema discutido na reunião
+- Cada parágrafo descreve o tema, contexto, dados numéricos mencionados e conclusões parciais
+- Capture TODOS os temas discutidos, mesmo que brevemente — não omita nada
+- Inclua dados numéricos, nomes de empreendimentos, valores e nomes de pessoas quando mencionados
+- O campo "action_items" deve listar TODAS as ações e follow-ups definidos, numerados, com responsável entre parênteses
 - Responda APENAS com JSON válido, sem texto antes ou depois
 - Todos os valores devem ser strings simples (não listas nem objetos aninhados)
 
@@ -324,8 +326,8 @@ Transcrição:
 
 Responda exatamente neste formato JSON:
 {{
-  "summary": "Resumo detalhado cobrindo TODOS os temas da reunião, organizado por assunto com títulos em negrito. Mínimo 5 parágrafos. Inclua dados numéricos, nomes de projetos e pessoas relevantes.",
-  "action_items": "Lista de próximas ações, uma por linha, com responsável entre parênteses quando mencionado. Inclua TODAS as ações, tarefas e follow-ups mencionados.",
+  "summary": "ATA em texto corrido. Cada parágrafo aborda um tema discutido. Mínimo 5 parágrafos detalhados com contexto, dados numéricos, nomes de projetos e pessoas. Exemplo de parágrafo: 'O consultor apresentou o status do Botânico: vendas em 80%, VGV de R$ 12M. Foi discutido o fluxo de caixa dos próximos 3 meses...' — esse nível de detalhe para cada tema.",
+  "action_items": "1. (Responsável) Descrição da ação\n2. (Responsável) Descrição da ação\n...",
   "decisions": "Decisões tomadas e pontos de atenção relevantes, um por linha."
 }}"""
 
