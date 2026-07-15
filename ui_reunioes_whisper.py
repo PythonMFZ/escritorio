@@ -884,14 +884,17 @@ _WHISPER_PANEL = r"""
   {% endif %}
 
   {% if meeting.transcript_text %}
+  {% if not meeting.summary_text %}
+  <div class="mt-2">
+    <button id="btn-gerar-resumo" class="btn btn-sm btn-outline-primary" onclick="gerarResumo()">
+      🤖 Gerar resumo com IA
+    </button>
+  </div>
+  {% endif %}
   <details class="mt-2">
     <summary class="muted small" style="cursor:pointer;">Ver transcrição completa</summary>
     <div style="font-size:.78rem;white-space:pre-wrap;max-height:300px;overflow-y:auto;margin-top:.5rem;background:#f9fafb;padding:.75rem;border-radius:8px;">{{ meeting.transcript_text }}</div>
-    {% if not meeting.summary_text %}
-    <button class="btn btn-sm btn-outline-primary mt-2" onclick="gerarResumo()">
-      🤖 Gerar resumo com IA
-    </button>
-    {% endif %}
+
   </details>
   {% endif %}
 
@@ -1069,10 +1072,29 @@ async function uploadAudio(input) {
 }
 
 async function gerarResumo() {
+  const btn = document.getElementById('btn-gerar-resumo');
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Gerando ata...'; }
   const r = await fetch('/reunioes/{{ meeting.id }}/resumo-manual', {method:'POST'});
   const d = await r.json();
-  if (d.ok) { location.reload(); }
-  else { alert(d.erro || 'Erro ao gerar resumo.'); }
+  if (!d.ok) {
+    alert(d.erro || 'Erro ao gerar resumo.');
+    if (btn) { btn.disabled = false; btn.textContent = '🤖 Gerar resumo com IA'; }
+    return;
+  }
+  // Polling até o resumo estar pronto
+  (function poll() {
+    setTimeout(async function() {
+      try {
+        const rs = await fetch('/reunioes/{{ meeting.id }}/status');
+        const ds = await rs.json();
+        if (ds.status === 'notes_ready' || ds.status === 'error') {
+          location.reload();
+        } else {
+          poll();
+        }
+      } catch(e) { poll(); }
+    }, 10000);
+  })();
 }
 
 // Auto-refresh enquanto processando
