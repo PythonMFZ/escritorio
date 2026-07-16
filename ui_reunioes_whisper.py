@@ -355,11 +355,15 @@ Responda exatamente neste formato JSON:
         dados = None
         _start = texto.find('{')
         _end = texto.rfind('}')
+        print(f"[whisper] DEBUG find={{={_start} rfind}}={_end} len={len(texto)}")
         if _start != -1 and _end > _start:
+            _cand = texto[_start:_end+1]
+            print(f"[whisper] DEBUG candidato {len(_cand)} chars: {repr(_cand[:80])}")
             try:
-                dados = _json_w.loads(texto[_start:_end+1])
+                dados = _json_w.loads(_cand)
+                print(f"[whisper] DEBUG parse ok tipo={type(dados)} keys={list(dados.keys()) if isinstance(dados, dict) else 'N/A'}")
             except Exception as _je:
-                print(f"[whisper] Falha no parse JSON: {_je}. Trecho: {texto[_start:_start+300]}")
+                print(f"[whisper] Falha no parse JSON: {_je}. Trecho: {repr(_cand[:300])}")
         if dados:
             result = {
                 "summary":      dados.get("summary", ""),
