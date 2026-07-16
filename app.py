@@ -8162,6 +8162,111 @@ TEMPLATES.update({
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 {% endblock %}
 """,
+    "consult_edit_project.html": r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4" style="max-width:640px;">
+  <h5 class="mb-3">Editar Projeto</h5>
+  <form method="post" action="/consultoria/{{ project.id }}/editar">
+    <div class="mb-3">
+      <label class="form-label">Nome do projeto</label>
+      <input class="form-control" name="name" value="{{ project.name }}" required>
+    </div>
+    <div class="mb-3">
+      <label class="form-label">Status</label>
+      <select class="form-select" name="status">
+        <option value="ativo" {% if project.status == "ativo" %}selected{% endif %}>Ativo</option>
+        <option value="pausado" {% if project.status == "pausado" %}selected{% endif %}>Pausado</option>
+        <option value="concluido" {% if project.status == "concluido" %}selected{% endif %}>Concluído</option>
+      </select>
+    </div>
+    <div class="row g-3 mb-3">
+      <div class="col">
+        <label class="form-label">Data de início</label>
+        <input class="form-control" name="start_date" type="date" value="{{ project.start_date or '' }}">
+      </div>
+      <div class="col">
+        <label class="form-label">Prazo final</label>
+        <input class="form-control" name="due_date" type="date" value="{{ project.due_date or '' }}">
+      </div>
+    </div>
+    <div class="mb-3">
+      <label class="form-label">Descrição</label>
+      <textarea class="form-control" name="description" rows="3">{{ project.description or '' }}</textarea>
+    </div>
+    <div class="d-flex gap-2">
+      <button class="btn btn-primary">Salvar</button>
+      <a href="/consultoria/{{ project.id }}" class="btn btn-outline-secondary">Cancelar</a>
+    </div>
+  </form>
+</div>
+{% endblock %}
+""",
+    "consult_edit_stage.html": r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4" style="max-width:640px;">
+  <h5 class="mb-1">Editar Etapa</h5>
+  <div class="muted small mb-3">Projeto: {{ project.name }}</div>
+  <form method="post" action="/consultoria/stages/{{ stage.id }}/editar">
+    <div class="mb-3">
+      <label class="form-label">Título da etapa</label>
+      <input class="form-control" name="title" value="{{ stage.title }}" required>
+    </div>
+    <div class="mb-3">
+      <label class="form-label">Prazo</label>
+      <input class="form-control" name="due_date" type="date" value="{{ stage.due_date or '' }}">
+    </div>
+    <div class="mb-3">
+      <label class="form-label">Descrição</label>
+      <textarea class="form-control" name="description" rows="3">{{ stage.description or '' }}</textarea>
+    </div>
+    <div class="d-flex gap-2">
+      <button class="btn btn-primary">Salvar</button>
+      <a href="/consultoria/{{ project.id }}" class="btn btn-outline-secondary">Cancelar</a>
+    </div>
+  </form>
+</div>
+{% endblock %}
+""",
+    "consult_edit_step.html": r"""
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4" style="max-width:640px;">
+  <h5 class="mb-1">Editar Sub-etapa</h5>
+  <div class="muted small mb-3">Projeto: {{ project.name }}</div>
+  <form method="post" action="/consultoria/steps/{{ step.id }}/editar">
+    <div class="mb-3">
+      <label class="form-label">Título</label>
+      <input class="form-control" name="title" value="{{ step.title }}" required>
+    </div>
+    <div class="row g-3 mb-3">
+      <div class="col">
+        <label class="form-label">Prazo</label>
+        <input class="form-control" name="due_date" type="date" value="{{ step.due_date or '' }}">
+      </div>
+      <div class="col">
+        <label class="form-label">Peso</label>
+        <input class="form-control" name="weight" type="number" step="0.1" min="0.1" value="{{ step.weight or 1.0 }}">
+      </div>
+    </div>
+    <div class="mb-3">
+      <label class="form-label">Descrição</label>
+      <textarea class="form-control" name="description" rows="3">{{ step.description or '' }}</textarea>
+    </div>
+    <div class="mb-3 form-check">
+      <input class="form-check-input" type="checkbox" name="client_action" value="1" id="chkClient"
+        {% if step.client_action %}checked{% endif %}>
+      <label class="form-check-label" for="chkClient">Ação do cliente</label>
+    </div>
+    <div class="d-flex gap-2">
+      <button class="btn btn-primary">Salvar</button>
+      <a href="/consultoria/{{ project.id }}" class="btn btn-outline-secondary">Cancelar</a>
+    </div>
+  </form>
+</div>
+{% endblock %}
+""",
 })
 
 TEMPLATES.update({
