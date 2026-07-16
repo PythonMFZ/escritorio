@@ -290,46 +290,36 @@ def _prepare_audio_for_whisper(audio_path: str):
 
 
 def _gerar_resumo_ia(transcricao: str, titulo: str) -> dict:
-    """Usa Claude para gerar resumo estruturado da transcrição."""
+    """Usa Claude para gerar ata e action items da transcrição (texto puro, sem JSON)."""
     import requests as _req_w
     api_key = _os2.environ.get("ANTHROPIC_API_KEY", "")
     if not api_key or not transcricao:
         return {"summary": "", "action_items": "", "notes": ""}
 
-    # Limita a ~120k chars (~30k tokens) para reuniões longas; o corte de 8k antes perdia 90% do conteúdo
     transcricao_truncada = transcricao[:120000]
     if len(transcricao) > 120000:
-        transcricao_truncada += "\n\n[TRANSCRIÇÃO TRUNCADA — fim do limite de processamento]"
+        transcricao_truncada += "\n\n[TRANSCRIÇÃO TRUNCADA]"
+
+    SEPARADOR = "===ACOES==="
 
     prompt = f"""Você é um assistente especializado em reuniões de empresas do setor de construção civil e incorporação imobiliária.
 
-Analise a transcrição completa da reunião "{titulo}" e gere uma ATA DE REUNIÃO profissional e detalhada.
+Analise a transcrição da reunião "{titulo}" e produza:
 
-Contexto: As reuniões costumam envolver discussões sobre:
-- Obras e empreendimentos imobiliários (lançamentos, velocidade de vendas, fluxo de caixa de obra)
-- Financeiro da empresa (fluxo de caixa semanal, contas a pagar/receber, aplicações, inadimplência)
-- Equipe comercial e corretores
-- Sistema de gestão interno (Augur) — integração com Sienge, importação de dados, demos de funcionalidades
-- Estratégia de negócios e mercado imobiliário
+1. Uma ATA DE REUNIÃO profissional em texto corrido, com um parágrafo por tema discutido. Inclua dados numéricos, nomes de empreendimentos, valores e nomes de pessoas quando mencionados. Mínimo 5 parágrafos.
 
-REGRAS PARA A ATA:
-- O campo "summary" deve ser a ATA em si: texto corrido em parágrafos, um parágrafo por tema discutido na reunião
-- Cada parágrafo descreve o tema, contexto, dados numéricos mencionados e conclusões parciais
-- Capture TODOS os temas discutidos, mesmo que brevemente — não omita nada
-- Inclua dados numéricos, nomes de empreendimentos, valores e nomes de pessoas quando mencionados
-- O campo "action_items" deve listar TODAS as ações e follow-ups definidos, numerados, com responsável entre parênteses
-- Responda APENAS com JSON válido, sem texto antes ou depois
-- Todos os valores devem ser strings simples (não listas nem objetos aninhados)
+2. Uma lista numerada de AÇÕES E FOLLOW-UPS definidos na reunião, com responsável entre parênteses. Se não houver ações, escreva "Nenhuma ação identificada."
+
+Formato obrigatório — escreva a ata, depois uma linha contendo exatamente "{SEPARADOR}", depois as ações:
+
+[ATA aqui]
+
+{SEPARADOR}
+
+[AÇÕES aqui]
 
 Transcrição:
-{transcricao_truncada}
-
-Responda exatamente neste formato JSON:
-{{
-  "summary": "ATA em texto corrido. Cada parágrafo aborda um tema discutido. Mínimo 5 parágrafos detalhados com contexto, dados numéricos, nomes de projetos e pessoas. Exemplo de parágrafo: 'O consultor apresentou o status do Botânico: vendas em 80%, VGV de R$ 12M. Foi discutido o fluxo de caixa dos próximos 3 meses...' — esse nível de detalhe para cada tema.",
-  "action_items": "1. (Responsável) Descrição da ação\n2. (Responsável) Descrição da ação\n...",
-  "decisions": "Decisões tomadas e pontos de atenção relevantes, um por linha."
-}}"""
+{transcricao_truncada}"""
 
     try:
         print(f"[whisper] Chamando Claude para resumo ({len(transcricao_truncada)} chars)...")
@@ -342,37 +332,26 @@ Responda exatamente neste formato JSON:
             },
             json={
                 "model": "claude-sonnet-4-6",
-                "max_tokens": 4000,
+                "max_tokens": 8000,
                 "messages": [{"role": "user", "content": prompt}],
             },
             timeout=600,
         )
         resp.raise_for_status()
-        texto = resp.json()["content"][0]["text"]
+        texto = resp.json()["content"][0]["text"].strip()
         print(f"[whisper] Claude respondeu: {len(texto)} chars")
 
-        # Tenta parsear JSON — busca { } diretamente, ignorando markdown fences
-        dados = None
-        _start = texto.find('{')
-        _end = texto.rfind('}')
-        print(f"[whisper] DEBUG find={{={_start} rfind}}={_end} len={len(texto)}")
-        if _start != -1 and _end > _start:
-            _cand = texto[_start:_end+1]
-            print(f"[whisper] DEBUG candidato {len(_cand)} chars: {repr(_cand[:80])}")
-            try:
-                dados = _json_w.loads(_cand)
-                print(f"[whisper] DEBUG parse ok tipo={type(dados)} keys={list(dados.keys()) if isinstance(dados, dict) else 'N/A'}")
-            except Exception as _je:
-                print(f"[whisper] Falha no parse JSON: {_je}. Trecho: {repr(_cand[:300])}")
-        if dados:
-            result = {
-                "summary":      dados.get("summary", ""),
-                "action_items": dados.get("action_items", ""),
-                "notes":        dados.get("decisions", ""),
-            }
-            print(f"[whisper] Parse OK: summary={len(result['summary'])} actions={len(result['action_items'])}")
-            return result
-        print(f"[whisper] Nao conseguiu parsear JSON. Texto: {texto[:300]}")
+        if SEPARADOR in texto:
+            partes = texto.split(SEPARADOR, 1)
+            ata = partes[0].strip()
+            acoes = partes[1].strip()
+        else:
+            ata = texto
+            acoes = ""
+
+        print(f"[whisper] Parse OK: ata={len(ata)} acoes={len(acoes)}")
+        return {"summary": ata, "action_items": acoes, "notes": ""}
+
     except Exception as e:
         print(f"[whisper] Erro ao gerar resumo IA: {e}")
 
