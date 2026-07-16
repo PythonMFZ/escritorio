@@ -351,25 +351,15 @@ Responda exatamente neste formato JSON:
         texto = resp.json()["content"][0]["text"]
         print(f"[whisper] Claude respondeu: {len(texto)} chars")
 
-        # Tenta parsear JSON
-        import re as _re_w
+        # Tenta parsear JSON — busca { } diretamente, ignorando markdown fences
         dados = None
-        # Remove bloco markdown ```json ... ``` se presente
-        _txt = _re_w.sub(r'^```(?:json)?\s*', '', texto.strip(), flags=_re_w.MULTILINE)
-        _txt = _re_w.sub(r'```\s*$', '', _txt.strip(), flags=_re_w.MULTILINE).strip()
-        # Tenta parse direto
-        try:
-            dados = _json_w.loads(_txt)
-        except Exception:
-            pass
-        # Fallback: extrai bloco JSON com regex
-        if not dados:
-            json_match = _re_w.search(r'\{[\s\S]*\}', _txt)
-            if json_match:
-                try:
-                    dados = _json_w.loads(json_match.group())
-                except Exception as _je:
-                    print(f"[whisper] Falha no parse JSON: {_je}. Primeiros 300 chars: {_txt[:300]}")
+        _start = texto.find('{')
+        _end = texto.rfind('}')
+        if _start != -1 and _end > _start:
+            try:
+                dados = _json_w.loads(texto[_start:_end+1])
+            except Exception as _je:
+                print(f"[whisper] Falha no parse JSON: {_je}. Trecho: {texto[_start:_start+300]}")
         if dados:
             result = {
                 "summary":      dados.get("summary", ""),
