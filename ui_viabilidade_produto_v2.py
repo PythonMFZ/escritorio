@@ -386,9 +386,12 @@ def _patch_produto_v2():
     )
     _NEW_RES_TIPS = (
         '    {% if r.unidades %}\n'
-        '    <h6 class="mb-2" style="color:#f97316;"><i class="bi bi-building me-1"></i>Unidades por Pavimento</h6>\n'
+        '    <div class="d-flex align-items-center justify-content-between mb-2">\n'
+        '      <h6 class="mb-0" style="color:#f97316;"><i class="bi bi-building me-1"></i>Unidades por Pavimento</h6>\n'
+        '      <button type="button" class="btn btn-sm btn-outline-success" onclick="exportarUnidadesExcel()" title="Exportar tabela para Excel"><i class="bi bi-file-earmark-excel me-1"></i>Excel</button>\n'
+        '    </div>\n'
         '    <div style="overflow-x:auto;border:1px solid var(--mc-border);border-radius:12px;margin-bottom:1.25rem;">\n'
-        '      <table style="width:100%;border-collapse:collapse;font-size:.84rem;">\n'
+        '      <table id="tabelaUnidadesPav" style="width:100%;border-collapse:collapse;font-size:.84rem;">\n'
         '        <thead><tr style="background:#f97316;color:#fff;">\n'
         '          <th style="padding:.45rem .75rem;text-align:left;">Pavimento</th>\n'
         '          <th style="padding:.45rem .75rem;text-align:left;">Unidade</th>\n'
@@ -531,6 +534,30 @@ def _patch_produto_v2():
         changed = True
     else:
         print("[produto_v2] AVISO: patch D (JS) não encontrou string alvo")
+
+    # ── E: JS — exportar tabela de unidades para Excel (CSV download) ────
+    _EXPORT_JS = (
+        "\n// ── Exportar Unidades por Pavimento ──\n"
+        "function exportarUnidadesExcel(){\n"
+        "  const tbl=document.getElementById('tabelaUnidadesPav');\n"
+        "  if(!tbl){alert('Tabela não encontrada');return;}\n"
+        "  const rows=Array.from(tbl.querySelectorAll('tr'));\n"
+        "  const csv=rows.map(r=>Array.from(r.querySelectorAll('th,td')).map(c=>{\n"
+        "    let v=c.innerText.trim().replace(/\\n/g,' ');\n"
+        "    if(v.includes(',')||v.includes('\"'))v='\"'+v.replace(/\"/g,'\"\"')+'\"';\n"
+        "    return v;\n"
+        "  }).join(',')).join('\\n');\n"
+        "  const bom='\\uFEFF';\n"
+        "  const blob=new Blob([bom+csv],{type:'text/csv;charset=utf-8;'});\n"
+        "  const a=document.createElement('a');\n"
+        "  a.href=URL.createObjectURL(blob);\n"
+        "  a.download='unidades_por_pavimento.csv';\n"
+        "  a.click();\n"
+        "}\n"
+    )
+    if _EXPORT_JS not in tpl:
+        tpl = tpl.replace("</script>", _EXPORT_JS + "\n</script>", 1)
+        changed = True
 
     # Sentinel
     tpl = tpl.replace("{% endblock %}", "{# _prodV3 #}\n{% endblock %}", 1)
