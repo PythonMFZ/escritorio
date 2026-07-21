@@ -487,6 +487,13 @@ _CF_CATALOGO = {
         "url": "/ferramentas/fluxo-caixa",
         "icone": "💵",
     },
+    "producao_kanban": {
+        "nome": "Controle de Produção",
+        "descricao": "Ordens de Produção (OP), Kanban personalizado com etapas e roteiro, materiais por OP e PCP — Planejamento × Controle da Produção.",
+        "nivel": "empresa",
+        "url": "/ferramentas/producao",
+        "icone": "🏭",
+    },
 }
 
 # ── API: status de features ────────────────────────────────────────────────────

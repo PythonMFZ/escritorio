@@ -1009,9 +1009,15 @@ def _producao_permitida(ctx, session) -> bool:
     if ctx.membership.role in ("admin", "equipe"):
         return True
     try:
-        client_id = ctx.membership.client_id
+        client_id = getattr(ctx.membership, "client_id", None)
         if not client_id:
             return False
+        # Usa o mesmo sistema de AssinaturaFeature dos outros módulos
+        try:
+            return _feature_ativa(session, ctx.company.id, client_id, "producao_kanban")
+        except NameError:
+            pass
+        # Fallback: verifica lista antiga de permissões
         allowed = get_client_allowed_features(session, company_id=ctx.company.id, client_id=client_id)
         return bool(allowed and "producao_kanban" in allowed)
     except Exception:
