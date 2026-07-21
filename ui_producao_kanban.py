@@ -2,12 +2,22 @@
 # Ordens de Produção, Roteiro, Materiais, Planejamento x Controle
 
 import json
+import secrets
 from datetime import date, datetime
 from typing import List, Optional
 
 from fastapi import Depends, Form, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from sqlmodel import Field, Session, SQLModel, select
+from sqlalchemy import case as _sa_case
+
+try:
+    import qrcode as _qrlib
+    import io as _qrio
+    import base64 as _qrb64
+    _QR_OK = True
+except ImportError:
+    _QR_OK = False
 
 
 # ── Modelos ───────────────────────────────────────────────────────────────────
@@ -42,6 +52,9 @@ class OrdemProducao(SQLModel, table=True):
     status: str = Field(default="aberta")
     responsavel: str = Field(default="")
     observacoes: str = Field(default="")
+    cor: str = Field(default="")
+    pedido: str = Field(default="")
+    token: str = Field(default_factory=lambda: secrets.token_urlsafe(16))
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
 
@@ -97,9 +110,12 @@ def _prod_migration():
     try:
         with engine.connect() as _conn:
             for _tbl, _col in [
-                ("producaoprocesso", "client_id INTEGER"),
-                ("ordemproducao", "client_id INTEGER"),
-                ("producaomaterialcatalogo", "client_id INTEGER"),
+                ("producaoprocesso",       "client_id INTEGER"),
+                ("ordemproducao",          "client_id INTEGER"),
+                ("producaomaterialcatalogo","client_id INTEGER"),
+                ("ordemproducao",          "cor TEXT DEFAULT ''"),
+                ("ordemproducao",          "pedido TEXT DEFAULT ''"),
+                ("ordemproducao",          "token TEXT DEFAULT ''"),
             ]:
                 try:
                     _conn.execute(__import__("sqlalchemy").text(
@@ -112,6 +128,22 @@ def _prod_migration():
         print(f"[producao] migration: {_e_mig}")
 
 _prod_migration()
+
+
+def _qr_png_b64(data: str) -> str:
+    """Gera QR Code como PNG base64. Retorna '' se lib não disponível."""
+    if not _QR_OK:
+        return ""
+    try:
+        qr = _qrlib.QRCode(version=1, box_size=8, border=3)
+        qr.add_data(data)
+        qr.make(fit=True)
+        img = qr.make_image(fill_color="black", back_color="white")
+        buf = _qrio.BytesIO()
+        img.save(buf, format="PNG")
+        return _qrb64.b64encode(buf.getvalue()).decode()
+    except Exception:
+        return ""
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -138,10 +170,12 @@ def _processos(session, company_id, client_id=None):
     return session.exec(q.order_by(ProducaoProcesso.ordem)).all()
 
 def _ops(session, company_id, client_id=None):
+    pri = _sa_case({"urgente": 0, "alta": 1, "normal": 2, "baixa": 3},
+                   value=OrdemProducao.prioridade, else_=99)
     q = select(OrdemProducao).where(OrdemProducao.company_id == company_id)
     if client_id:
         q = q.where(OrdemProducao.client_id == client_id)
-    return session.exec(q.order_by(OrdemProducao.updated_at.desc())).all()
+    return session.exec(q.order_by(pri, OrdemProducao.data_fim_plan)).all()
 
 def _roteiro(session, op_id):
     return session.exec(
@@ -280,8 +314,9 @@ _TPL_PRODUCAO = r"""
 
   <!-- ═══════════════ LISTA OPs ═══════════════ -->
   <div id="tab-ops" style="display:none;">
-    <div class="d-flex gap-2 mb-3">
-      <input type="text" id="filtroOP" class="form-control form-control-sm" placeholder="Buscar OP, produto..." oninput="filtrarOPs()" style="max-width:300px;">
+    <div class="d-flex gap-2 mb-3 flex-wrap">
+      <input type="text" id="filtroOP" class="form-control form-control-sm" placeholder="Buscar OP, produto..." oninput="filtrarOPs()" style="max-width:260px;">
+      <input type="text" id="filtroPedido" class="form-control form-control-sm" placeholder="Filtrar por Pedido Nº..." oninput="filtrarOPs()" style="max-width:200px;">
       <select id="filtroStatus" class="form-select form-select-sm" onchange="filtrarOPs()" style="max-width:160px;">
         <option value="">Todos status</option>
         <option value="aberta">Aberta</option>
@@ -297,6 +332,8 @@ _TPL_PRODUCAO = r"""
           <th style="padding:.5rem .75rem;">Produto</th>
           <th style="padding:.5rem .75rem;text-align:center;">Etapa atual</th>
           <th style="padding:.5rem .75rem;">Roteiro</th>
+          <th style="padding:.5rem .75rem;">Pedido</th>
+          <th style="padding:.5rem .75rem;">Cor</th>
           <th style="padding:.5rem .75rem;text-align:center;">Prioridade</th>
           <th style="padding:.5rem .75rem;text-align:right;">Qtd Plan.</th>
           <th style="padding:.5rem .75rem;text-align:right;">Qtd Prod.</th>
@@ -310,7 +347,7 @@ _TPL_PRODUCAO = r"""
           {% set proc_nome = processos_dict.get(op.processo_id, '—') %}
           {% set pct = [(op.quantidade_produzida / op.quantidade_planejada * 100)|round|int, 100]|min if op.quantidade_planejada > 0 else 0 %}
           {% set rids = roteiros.get(op.id, []) %}
-          <tr class="op-row" data-busca="{{ op.codigo }} {{ op.produto }} {{ op.responsavel }}" data-status="{{ op.status }}" style="border-bottom:1px solid #f1f5f9;">
+          <tr class="op-row" data-busca="{{ op.codigo }} {{ op.produto }} {{ op.responsavel }}" data-status="{{ op.status }}" data-pedido="{{ op.pedido|lower }}" style="border-bottom:1px solid #f1f5f9;">
             <td style="padding:.45rem .75rem;font-family:monospace;font-weight:600;color:#6366f1;">{{ op.codigo }}</td>
             <td style="padding:.45rem .75rem;font-weight:600;">{{ op.produto }}<br><small class="text-muted">{{ op.descricao[:40] if op.descricao else '' }}</small></td>
             <td style="padding:.45rem .75rem;text-align:center;"><span style="font-size:.75rem;padding:.15rem .5rem;border-radius:999px;background:#f1f5f9;">{{ proc_nome }}</span></td>
@@ -321,6 +358,8 @@ _TPL_PRODUCAO = r"""
               </div>
               {% else %}<span style="color:#94a3b8;font-size:.75rem;">—</span>{% endif %}
             </td>
+            <td style="padding:.45rem .75rem;font-size:.8rem;">{{ op.pedido or '—' }}</td>
+            <td style="padding:.45rem .75rem;font-size:.8rem;">{{ op.cor or '—' }}</td>
             <td style="padding:.45rem .75rem;text-align:center;"><span class="badge" style="background:{{ op.prioridade|_prioridade_cor }}20;color:{{ op.prioridade|_prioridade_cor }};">{{ op.prioridade|capitalize }}</span></td>
             <td style="padding:.45rem .75rem;text-align:right;">{{ op.quantidade_planejada|int }}</td>
             <td style="padding:.45rem .75rem;text-align:right;">{{ op.quantidade_produzida|int }}</td>
@@ -333,11 +372,12 @@ _TPL_PRODUCAO = r"""
             <td style="padding:.45rem .75rem;text-align:center;">
               <button class="btn btn-sm btn-outline-primary" onclick="abrirModalOP({{ op.id }})" title="Editar" style="font-size:.75rem;padding:.2rem .5rem;">&#9998; Editar</button>
               <button class="btn btn-sm btn-outline-info" onclick="abrirMateriais({{ op.id }},'{{ op.codigo }}')" title="Materiais" style="font-size:.75rem;padding:.2rem .5rem;">&#9744; Mat.</button>
+              <a href="/ferramentas/producao/op/{{ op.id }}/imprimir" target="_blank" class="btn btn-sm btn-outline-secondary" title="Imprimir OP" style="font-size:.75rem;padding:.2rem .5rem;">&#128438; PDF</a>
               <button class="btn btn-sm btn-outline-danger" onclick="confirmarExcluirOP({{ op.id }},'{{ op.codigo }}')" title="Excluir" style="font-size:.75rem;padding:.2rem .5rem;">&#128465;</button>
             </td>
           </tr>
           {% else %}
-          <tr><td colspan="11" style="padding:2rem;text-align:center;color:#94a3b8;">Nenhuma OP cadastrada.</td></tr>
+          <tr><td colspan="13" style="padding:2rem;text-align:center;color:#94a3b8;">Nenhuma OP cadastrada.</td></tr>
           {% endfor %}
         </tbody>
       </table>
@@ -523,6 +563,10 @@ _TPL_PRODUCAO = r"""
               <input type="text" name="produto" id="op_produto" class="form-control" placeholder="Nome do produto" required></div>
             <div class="col-md-4"><label class="form-label fw-semibold">Responsável</label>
               <input type="text" name="responsavel" id="op_responsavel" class="form-control"></div>
+            <div class="col-md-4"><label class="form-label fw-semibold">Pedido Nº</label>
+              <input type="text" name="pedido" id="op_pedido" class="form-control" placeholder="Ex: PED-001"></div>
+            <div class="col-md-4"><label class="form-label fw-semibold">Cor</label>
+              <input type="text" name="cor" id="op_cor" class="form-control" placeholder="Ex: Preto fosco"></div>
             <div class="col-12"><label class="form-label fw-semibold">Descrição</label>
               <textarea name="descricao" id="op_descricao" class="form-control" rows="2"></textarea></div>
             <div class="col-md-3"><label class="form-label fw-semibold">Prioridade</label>
@@ -825,7 +869,7 @@ function abrirModalOP(id){
   fetch('/ferramentas/producao/op/'+id+'/json').then(r=>r.json()).then(d=>{
     document.getElementById('modalOPTitulo').innerHTML='<i class="bi bi-pencil me-2"></i>Editar OP — '+d.codigo;
     form.action='/ferramentas/producao/op/'+id+'/salvar';
-    ['codigo','produto','descricao','prioridade','status','responsavel','observacoes'].forEach(f=>{
+    ['codigo','produto','descricao','prioridade','status','responsavel','observacoes','pedido','cor'].forEach(f=>{
       const el=document.getElementById('op_'+f); if(el) el.value=d[f]||'';
     });
     document.getElementById('op_qtd_plan').value=d.quantidade_planejada||0;
@@ -912,8 +956,11 @@ function confirmarExcluirMatCat(id,nome){
 function filtrarOPs(){
   const txt=(document.getElementById('filtroOP').value||'').toLowerCase();
   const st=document.getElementById('filtroStatus').value;
+  const ped=(document.getElementById('filtroPedido').value||'').toLowerCase();
   document.querySelectorAll('.op-row').forEach(tr=>{
-    const ok=((!txt||(tr.dataset.busca||'').toLowerCase().includes(txt))&&(!st||tr.dataset.status===st));
+    const ok=((!txt||(tr.dataset.busca||'').toLowerCase().includes(txt))
+             &&(!st||tr.dataset.status===st)
+             &&(!ped||(tr.dataset.pedido||'').includes(ped)));
     tr.style.display=ok?'':'none';
   });
 }
@@ -1028,8 +1075,178 @@ function excluirMaterial(mid,opId){
 </script>
 """
 
+_TPL_IMPRIMIR = r"""<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>OP {{ op.codigo }}</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;}
+body{font-family:Arial,sans-serif;font-size:13px;color:#111;background:#fff;padding:24px;}
+h1{font-size:18px;font-weight:700;margin-bottom:4px;}
+.sub{color:#555;font-size:12px;margin-bottom:16px;}
+table{width:100%;border-collapse:collapse;margin-bottom:16px;}
+th,td{border:1px solid #ccc;padding:5px 8px;text-align:left;}
+th{background:#f0f0f0;font-weight:700;}
+.badge{display:inline-block;padding:2px 8px;border-radius:99px;font-size:11px;font-weight:700;}
+.qr-wrap{text-align:right;float:right;margin-left:16px;}
+.qr-wrap img{width:120px;height:120px;}
+.qr-label{font-size:10px;color:#666;text-align:center;margin-top:4px;}
+.op-link{font-size:11px;color:#555;word-break:break-all;}
+@media print{body{padding:10px;} .no-print{display:none;}}
+</style>
+</head>
+<body>
+<div class="no-print" style="margin-bottom:12px;">
+  <button onclick="window.print()" style="padding:6px 16px;background:#6366f1;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:13px;">&#128438; Imprimir / Salvar PDF</button>
+</div>
+{% if qr_b64 %}
+<div class="qr-wrap">
+  <img src="data:image/png;base64,{{ qr_b64 }}" alt="QR Code OP">
+  <div class="qr-label">Digitalizar para operar</div>
+  <div class="op-link">{{ op_url }}</div>
+</div>
+{% endif %}
+<h1>Ordem de Produção — {{ op.codigo }}</h1>
+<div class="sub">Emitido em {{ hoje }}</div>
+<table>
+  <tr><th style="width:120px;">Produto</th><td colspan="3">{{ op.produto }}</td></tr>
+  {% if op.descricao %}<tr><th>Descrição</th><td colspan="3">{{ op.descricao }}</td></tr>{% endif %}
+  {% if op.pedido %}<tr><th>Pedido Nº</th><td>{{ op.pedido }}</td><th>Cor</th><td>{{ op.cor or '—' }}</td></tr>{% endif %}
+  <tr>
+    <th>Prioridade</th><td>{{ op.prioridade|capitalize }}</td>
+    <th>Status</th><td>{{ op.status|replace('_',' ')|title }}</td>
+  </tr>
+  <tr>
+    <th>Qtd Planejada</th><td>{{ op.quantidade_planejada|int }}</td>
+    <th>Qtd Produzida</th><td>{{ op.quantidade_produzida|int }}</td>
+  </tr>
+  <tr>
+    <th>Início Plan.</th><td>{{ op.data_inicio_plan.strftime('%d/%m/%Y') if op.data_inicio_plan else '—' }}</td>
+    <th>Fim Plan.</th><td>{{ op.data_fim_plan.strftime('%d/%m/%Y') if op.data_fim_plan else '—' }}</td>
+  </tr>
+  {% if op.responsavel %}<tr><th>Responsável</th><td colspan="3">{{ op.responsavel }}</td></tr>{% endif %}
+  {% if op.observacoes %}<tr><th>Observações</th><td colspan="3">{{ op.observacoes }}</td></tr>{% endif %}
+</table>
+{% if roteiro %}
+<h2 style="font-size:14px;font-weight:700;margin-bottom:8px;">Roteiro de Produção</h2>
+<table>
+  <thead><tr><th>#</th><th>Etapa</th><th>Tempo Est. (h)</th><th>Tempo Real (h)</th><th>Status</th></tr></thead>
+  <tbody>
+  {% for p in roteiro %}
+  <tr>
+    <td>{{ p.ordem }}</td>
+    <td>{{ p.proc_nome }}</td>
+    <td style="text-align:right;">{{ '%.1f'|format(p.tempo_estimado_h) if p.tempo_estimado_h else '—' }}</td>
+    <td style="text-align:right;">{{ '%.1f'|format(p.tempo_realizado_h) if p.tempo_realizado_h else '—' }}</td>
+    <td>{{ p.status|title }}</td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+{% if materiais %}
+<h2 style="font-size:14px;font-weight:700;margin-bottom:8px;">Materiais</h2>
+<table>
+  <thead><tr><th>Material</th><th>Unid.</th><th style="text-align:right;">Qtd Plan.</th><th style="text-align:right;">Qtd Cons.</th><th style="text-align:right;">Custo Unit.</th><th style="text-align:right;">Total</th></tr></thead>
+  <tbody>
+  {% for m in materiais %}
+  <tr>
+    <td>{{ m.nome }}</td><td>{{ m.unidade }}</td>
+    <td style="text-align:right;">{{ m.quantidade_planejada }}</td>
+    <td style="text-align:right;">{{ m.quantidade_consumida }}</td>
+    <td style="text-align:right;">R$ {{ '%.2f'|format(m.custo_unitario) }}</td>
+    <td style="text-align:right;">R$ {{ '%.2f'|format(m.quantidade_consumida * m.custo_unitario) }}</td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+</body>
+</html>
+"""
+
+_TPL_OPERADOR = r"""<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
+<title>OP {{ op.codigo }} — Operador</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;}
+body{font-family:Arial,sans-serif;background:#0f172a;color:#f1f5f9;min-height:100vh;padding:16px;}
+h1{font-size:20px;font-weight:700;margin-bottom:4px;}
+.sub{color:#94a3b8;font-size:13px;margin-bottom:20px;}
+.card{background:#1e293b;border-radius:12px;padding:16px;margin-bottom:12px;}
+.card h2{font-size:15px;font-weight:700;margin-bottom:4px;}
+.badge{display:inline-block;padding:3px 10px;border-radius:99px;font-size:12px;font-weight:700;}
+.badge-pend{background:#334155;color:#94a3b8;}
+.badge-and{background:#1e3a5f;color:#93c5fd;}
+.badge-ok{background:#166534;color:#4ade80;}
+.btn{display:block;width:100%;padding:14px;border:none;border-radius:10px;font-size:16px;font-weight:700;cursor:pointer;margin-top:10px;letter-spacing:.3px;}
+.btn-start{background:#6366f1;color:#fff;}
+.btn-stop{background:#dc2626;color:#fff;}
+.btn:disabled{opacity:.4;cursor:not-allowed;}
+.info-row{display:flex;justify-content:space-between;font-size:13px;color:#94a3b8;margin-bottom:6px;}
+.info-val{color:#f1f5f9;font-weight:600;}
+</style>
+</head>
+<body>
+<div style="max-width:480px;margin:0 auto;">
+  <h1>OP {{ op.codigo }}</h1>
+  <div class="sub">{{ op.produto }}{% if op.pedido %} · Pedido: {{ op.pedido }}{% endif %}{% if op.cor %} · Cor: {{ op.cor }}{% endif %}</div>
+  <div class="card">
+    <div class="info-row"><span>Prioridade</span><span class="info-val">{{ op.prioridade|capitalize }}</span></div>
+    <div class="info-row"><span>Qtd Plan.</span><span class="info-val">{{ op.quantidade_planejada|int }}</span></div>
+    <div class="info-row"><span>Qtd Prod.</span><span class="info-val">{{ op.quantidade_produzida|int }}</span></div>
+    {% if op.data_fim_plan %}<div class="info-row"><span>Prazo</span><span class="info-val">{{ op.data_fim_plan.strftime('%d/%m/%Y') }}</span></div>{% endif %}
+  </div>
+  {% for p in roteiro %}
+  <div class="card" id="card-{{ p.id }}">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+      <h2>{{ loop.index }}. {{ p.proc_nome }}</h2>
+      <span class="badge {% if p.status=='concluido' %}badge-ok{% elif p.status=='em_andamento' %}badge-and{% else %}badge-pend{% endif %}" id="badge-{{ p.id }}">
+        {{ p.status|title }}
+      </span>
+    </div>
+    {% if p.tempo_estimado_h %}<div class="info-row"><span>Tempo estimado</span><span class="info-val">{{ '%.1f'|format(p.tempo_estimado_h) }}h</span></div>{% endif %}
+    {% if p.data_entrada %}<div class="info-row"><span>Entrada</span><span class="info-val" id="entrada-{{ p.id }}">{{ p.data_entrada.strftime('%d/%m %H:%M') }}</span></div>{% endif %}
+    {% if p.status == 'pendente' %}
+    <button class="btn btn-start" onclick="iniciar({{ p.id }})">&#9654; Iniciar etapa</button>
+    {% elif p.status == 'em_andamento' %}
+    <button class="btn btn-stop" onclick="finalizar({{ p.id }})">&#9632; Finalizar etapa</button>
+    {% else %}
+    <button class="btn btn-start" disabled>&#10003; Concluído</button>
+    {% endif %}
+  </div>
+  {% else %}
+  <div class="card"><p style="color:#94a3b8;text-align:center;">Sem roteiro definido para esta OP.</p></div>
+  {% endfor %}
+</div>
+<script>
+const _tok='{{ op.token }}';
+function iniciar(pid){
+  fetch('/op/'+_tok+'/passo/'+pid+'/iniciar',{method:'POST'}).then(r=>r.json()).then(d=>{
+    if(d.ok) location.reload();
+    else alert(d.error||'Erro');
+  });
+}
+function finalizar(pid){
+  fetch('/op/'+_tok+'/passo/'+pid+'/finalizar',{method:'POST'}).then(r=>r.json()).then(d=>{
+    if(d.ok) location.reload();
+    else alert(d.error||'Erro');
+  });
+}
+</script>
+</body>
+</html>
+"""
+
 TEMPLATES["producao.html"] = _TPL_PRODUCAO
 TEMPLATES["producao_materiais.html"] = _TPL_MATERIAIS
+TEMPLATES["producao_imprimir.html"] = _TPL_IMPRIMIR
+TEMPLATES["producao_operador.html"] = _TPL_OPERADOR
 
 
 # ── Acesso ────────────────────────────────────────────────────────────────────
@@ -1171,6 +1388,8 @@ async def producao_op_salvar(request: Request, session: Session = Depends(get_se
         data_fim_real=_parse_date(form.get("data_fim_real")),
         responsavel=(form.get("responsavel") or "").strip(),
         observacoes=(form.get("observacoes") or "").strip(),
+        cor=(form.get("cor") or "").strip(),
+        pedido=(form.get("pedido") or "").strip(),
         updated_at=datetime.utcnow(),
     )
     session.add(op); session.commit(); session.refresh(op)
@@ -1204,6 +1423,8 @@ async def producao_op_editar(op_id: int, request: Request, session: Session = De
     op.data_fim_real = _parse_date(form.get("data_fim_real"))
     op.responsavel = (form.get("responsavel") or "").strip()
     op.observacoes = (form.get("observacoes") or "").strip()
+    op.cor = (form.get("cor") or "").strip()
+    op.pedido = (form.get("pedido") or "").strip()
     op.updated_at = datetime.utcnow()
     session.add(op); session.commit()
     _salvar_roteiro(session, op_id, form)
@@ -1233,6 +1454,7 @@ async def producao_op_json(op_id: int, request: Request, session: Session = Depe
         "data_inicio_real": op.data_inicio_real.isoformat() if op.data_inicio_real else "",
         "data_fim_real": op.data_fim_real.isoformat() if op.data_fim_real else "",
         "responsavel": op.responsavel, "observacoes": op.observacoes,
+        "cor": op.cor, "pedido": op.pedido, "token": op.token,
         "roteiro": [{"processo_id": p.processo_id, "ordem": p.ordem,
                      "tempo_estimado_h": p.tempo_estimado_h} for p in passos],
     })
@@ -1464,6 +1686,110 @@ async def producao_mat_cat_excluir(mc_id: int, request: Request, session: Sessio
     if not mc or mc.company_id != ctx.company.id:
         return JSONResponse({"error": "not found"}, status_code=404)
     session.delete(mc); session.commit()
+    return JSONResponse({"ok": True})
+
+
+# ── Imprimir OP ──────────────────────────────────────────────────────────────
+
+@app.get("/ferramentas/producao/op/{op_id}/imprimir", response_class=HTMLResponse)
+@require_login
+async def producao_op_imprimir(op_id: int, request: Request, session: Session = Depends(get_session)):
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        return RedirectResponse("/login", status_code=303)
+    op = session.get(OrdemProducao, op_id)
+    if not op or op.company_id != ctx.company.id:
+        return RedirectResponse("/ferramentas/producao", status_code=303)
+
+    passos = _roteiro(session, op_id)
+    roteiro = []
+    for p in passos:
+        proc = session.get(ProducaoProcesso, p.processo_id)
+        roteiro.append({
+            "id": p.id, "processo_id": p.processo_id,
+            "proc_nome": proc.nome if proc else "?",
+            "ordem": p.ordem,
+            "tempo_estimado_h": p.tempo_estimado_h,
+            "tempo_realizado_h": p.tempo_realizado_h,
+            "data_entrada": p.data_entrada,
+            "data_saida": p.data_saida,
+            "status": p.status,
+        })
+    materiais = session.exec(select(ProducaoMaterial).where(ProducaoMaterial.op_id == op_id)).all()
+
+    base_url = str(request.base_url).rstrip("/")
+    op_url = f"{base_url}/op/{op.token}"
+    qr_b64 = _qr_png_b64(op_url)
+
+    return render("producao_imprimir.html", request=request, context={
+        "op": op, "roteiro": roteiro, "materiais": materiais,
+        "qr_b64": qr_b64, "op_url": op_url,
+        "hoje": date.today().strftime("%d/%m/%Y"),
+    })
+
+
+# ── Página do Operador (sem login) ────────────────────────────────────────────
+
+@app.get("/op/{token}", response_class=HTMLResponse)
+async def operador_index(token: str, request: Request, session: Session = Depends(get_session)):
+    op = session.exec(select(OrdemProducao).where(OrdemProducao.token == token)).first()
+    if not op:
+        return HTMLResponse("<h2 style='font-family:sans-serif;padding:2rem;'>OP não encontrada ou link inválido.</h2>", status_code=404)
+
+    passos = _roteiro(session, op.id)
+    roteiro = []
+    for p in passos:
+        proc = session.get(ProducaoProcesso, p.processo_id)
+        roteiro.append({
+            "id": p.id, "processo_id": p.processo_id,
+            "proc_nome": proc.nome if proc else "?",
+            "ordem": p.ordem,
+            "tempo_estimado_h": p.tempo_estimado_h,
+            "tempo_realizado_h": p.tempo_realizado_h,
+            "data_entrada": p.data_entrada,
+            "data_saida": p.data_saida,
+            "status": p.status,
+        })
+
+    return render("producao_operador.html", request=request, context={
+        "op": op, "roteiro": roteiro,
+    })
+
+
+@app.post("/op/{token}/passo/{passo_id}/iniciar")
+async def operador_iniciar(token: str, passo_id: int, session: Session = Depends(get_session)):
+    op = session.exec(select(OrdemProducao).where(OrdemProducao.token == token)).first()
+    if not op:
+        return JSONResponse({"error": "OP não encontrada"}, status_code=404)
+    passo = session.get(ProducaoRoteiroPasso, passo_id)
+    if not passo or passo.op_id != op.id:
+        return JSONResponse({"error": "Passo não encontrado"}, status_code=404)
+    passo.status = "em_andamento"
+    if not passo.data_entrada:
+        passo.data_entrada = datetime.utcnow()
+    session.add(passo)
+    if op.status == "aberta":
+        op.status = "em_andamento"
+        session.add(op)
+    session.commit()
+    return JSONResponse({"ok": True})
+
+
+@app.post("/op/{token}/passo/{passo_id}/finalizar")
+async def operador_finalizar(token: str, passo_id: int, session: Session = Depends(get_session)):
+    op = session.exec(select(OrdemProducao).where(OrdemProducao.token == token)).first()
+    if not op:
+        return JSONResponse({"error": "OP não encontrada"}, status_code=404)
+    passo = session.get(ProducaoRoteiroPasso, passo_id)
+    if not passo or passo.op_id != op.id:
+        return JSONResponse({"error": "Passo não encontrado"}, status_code=404)
+    passo.status = "concluido"
+    passo.data_saida = datetime.utcnow()
+    if passo.data_entrada:
+        delta = (passo.data_saida - passo.data_entrada).total_seconds() / 3600
+        passo.tempo_realizado_h = round(delta, 2)
+    session.add(passo)
+    session.commit()
     return JSONResponse({"ok": True})
 
 
