@@ -13,9 +13,10 @@ from sqlmodel import Field, Session, SQLModel, select
 # ── Modelos ───────────────────────────────────────────────────────────────────
 
 class ProducaoProcesso(SQLModel, table=True):
-    """Etapa/coluna do Kanban — personalizável por empresa."""
+    """Etapa/coluna do Kanban — personalizável por cliente."""
     id: Optional[int] = Field(default=None, primary_key=True)
     company_id: int = Field(index=True)
+    client_id: Optional[int] = Field(default=None, index=True)
     nome: str
     ordem: int = Field(default=0)
     cor: str = Field(default="#6366f1")
@@ -26,6 +27,7 @@ class OrdemProducao(SQLModel, table=True):
     """Ordem de Produção (OP)."""
     id: Optional[int] = Field(default=None, primary_key=True)
     company_id: int = Field(index=True)
+    client_id: Optional[int] = Field(default=None, index=True)
     codigo: str
     produto: str
     descricao: str = Field(default="")
@@ -50,11 +52,11 @@ class ProducaoRoteiroPasso(SQLModel, table=True):
     op_id: int = Field(index=True, foreign_key="ordemproducao.id")
     processo_id: int = Field(foreign_key="producaoprocesso.id")
     ordem: int = Field(default=0)
-    tempo_estimado_h: float = Field(default=0)   # horas planejadas
-    tempo_realizado_h: float = Field(default=0)  # horas reais
+    tempo_estimado_h: float = Field(default=0)
+    tempo_realizado_h: float = Field(default=0)
     data_entrada: Optional[datetime] = Field(default=None)
     data_saida: Optional[datetime] = Field(default=None)
-    status: str = Field(default="pendente")      # pendente / em_andamento / concluido
+    status: str = Field(default="pendente")
 
 
 class ProducaoMaterial(SQLModel, table=True):
@@ -71,16 +73,17 @@ class ProducaoMaterial(SQLModel, table=True):
 
 
 class ProducaoMaterialCatalogo(SQLModel, table=True):
-    """Catálogo mestre de materiais da empresa (não vinculado a OPs)."""
+    """Catálogo mestre de materiais por cliente."""
     id: Optional[int] = Field(default=None, primary_key=True)
     company_id: int = Field(index=True)
+    client_id: Optional[int] = Field(default=None, index=True)
     nome: str
     unidade: str = Field(default="un")
     custo_unitario_padrao: float = Field(default=0)
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
 
-# Cria tabelas
+# Cria tabelas (idempotente — só cria se não existir)
 SQLModel.metadata.create_all(engine, tables=[
     ProducaoProcesso.__table__,
     OrdemProducao.__table__,
@@ -89,6 +92,27 @@ SQLModel.metadata.create_all(engine, tables=[
     ProducaoMaterialCatalogo.__table__,
 ])
 
+# Migração: adiciona client_id às tabelas existentes (ALTER TABLE seguro)
+def _prod_migration():
+    try:
+        with engine.connect() as _conn:
+            for _tbl, _col in [
+                ("producaoprocesso", "client_id INTEGER"),
+                ("ordemproducao", "client_id INTEGER"),
+                ("producaomaterialcatalogo", "client_id INTEGER"),
+            ]:
+                try:
+                    _conn.execute(__import__("sqlalchemy").text(
+                        f"ALTER TABLE {_tbl} ADD COLUMN {_col}"
+                    ))
+                    _conn.commit()
+                except Exception:
+                    pass  # coluna já existe
+    except Exception as _e_mig:
+        print(f"[producao] migration: {_e_mig}")
+
+_prod_migration()
+
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -96,23 +120,28 @@ _PRIORIDADE_COR = {
     "baixa": "#94a3b8", "normal": "#6366f1", "alta": "#f97316", "urgente": "#dc2626",
 }
 
-def _ctx_base(ctx):
+def _ctx_base(ctx, current_client=None):
     return {"current_user": ctx.user, "current_company": ctx.company,
-            "role": ctx.membership.role, "current_client": None}
+            "role": ctx.membership.role, "current_client": current_client}
 
-def _processos(session, company_id):
-    return session.exec(
-        select(ProducaoProcesso)
-        .where(ProducaoProcesso.company_id == company_id)
-        .order_by(ProducaoProcesso.ordem)
-    ).all()
+def _resolve_client(request, session, ctx):
+    """Retorna o cliente ativo, igual às outras ferramentas."""
+    try:
+        return _client_current_client(request, session, ctx)
+    except Exception:
+        return None
 
-def _ops(session, company_id):
-    return session.exec(
-        select(OrdemProducao)
-        .where(OrdemProducao.company_id == company_id)
-        .order_by(OrdemProducao.updated_at.desc())
-    ).all()
+def _processos(session, company_id, client_id=None):
+    q = select(ProducaoProcesso).where(ProducaoProcesso.company_id == company_id)
+    if client_id:
+        q = q.where(ProducaoProcesso.client_id == client_id)
+    return session.exec(q.order_by(ProducaoProcesso.ordem)).all()
+
+def _ops(session, company_id, client_id=None):
+    q = select(OrdemProducao).where(OrdemProducao.company_id == company_id)
+    if client_id:
+        q = q.where(OrdemProducao.client_id == client_id)
+    return session.exec(q.order_by(OrdemProducao.updated_at.desc())).all()
 
 def _roteiro(session, op_id):
     return session.exec(
@@ -1035,14 +1064,15 @@ async def producao_index(request: Request, session: Session = Depends(get_sessio
     if not _producao_permitida(ctx, session):
         return RedirectResponse("/ferramentas", status_code=303)
 
+    current_client = _resolve_client(request, session, ctx)
     cid = ctx.company.id
-    procs = _processos(session, cid)
-    all_ops = _ops(session, cid)
+    clid = current_client.id if current_client else None
+
+    procs = _processos(session, cid, clid)
+    all_ops = _ops(session, cid, clid)
     procs_dict = {p.id: p.nome for p in procs}
 
-    # Roteiros por OP: {op_id: [processo_id, ...]} para Kanban
     roteiros = {}
-    # Roteiro detalhado para PCP: {op_id: [passo+proc_nome, ...]}
     roteiro_detalhado = {}
     for op in all_ops:
         passos = _roteiro(session, op.id)
@@ -1063,18 +1093,16 @@ async def producao_index(request: Request, session: Session = Depends(get_sessio
             })
         roteiro_detalhado[op.id] = det
 
-    # roteiros_json para o JS
     import json as _json
     roteiros_json = _json.dumps({str(k): v for k, v in roteiros.items()})
 
-    mat_catalogo = session.exec(
-        select(ProducaoMaterialCatalogo)
-        .where(ProducaoMaterialCatalogo.company_id == cid)
-        .order_by(ProducaoMaterialCatalogo.nome)
-    ).all()
+    mat_q = select(ProducaoMaterialCatalogo).where(ProducaoMaterialCatalogo.company_id == cid)
+    if clid:
+        mat_q = mat_q.where(ProducaoMaterialCatalogo.client_id == clid)
+    mat_catalogo = session.exec(mat_q.order_by(ProducaoMaterialCatalogo.nome)).all()
 
     return render("producao.html", request=request, context={
-        **_ctx_base(ctx),
+        **_ctx_base(ctx, current_client),
         "processos": procs,
         "processos_dict": procs_dict,
         "ops": all_ops,
@@ -1124,9 +1152,11 @@ async def producao_op_salvar(request: Request, session: Session = Depends(get_se
     ctx = get_tenant_context(request, session)
     if not ctx:
         return RedirectResponse("/login", status_code=303)
+    current_client = _resolve_client(request, session, ctx)
     form = await request.form()
     op = OrdemProducao(
         company_id=ctx.company.id,
+        client_id=current_client.id if current_client else None,
         codigo=(form.get("codigo") or "").strip(),
         produto=(form.get("produto") or "").strip(),
         descricao=(form.get("descricao") or "").strip(),
@@ -1305,7 +1335,12 @@ async def producao_processo_salvar(request: Request, session: Session = Depends(
             proc.nome = nome.strip(); proc.cor = cor; proc.ordem = ordem
             session.add(proc)
     else:
-        session.add(ProducaoProcesso(company_id=ctx.company.id, nome=nome.strip(), cor=cor, ordem=ordem))
+        current_client = _resolve_client(request, session, ctx)
+        session.add(ProducaoProcesso(
+            company_id=ctx.company.id,
+            client_id=current_client.id if current_client else None,
+            nome=nome.strip(), cor=cor, ordem=ordem,
+        ))
     session.commit()
     return RedirectResponse("/ferramentas/producao", status_code=303)
 
@@ -1340,14 +1375,15 @@ async def producao_materiais_lista(op_id: int, request: Request, session: Sessio
     op = session.get(OrdemProducao, op_id)
     if not op or op.company_id != ctx.company.id:
         return HTMLResponse("", status_code=404)
+    current_client = _resolve_client(request, session, ctx)
+    clid = op.client_id or (current_client.id if current_client else None)
     mats = session.exec(select(ProducaoMaterial).where(ProducaoMaterial.op_id == op_id)).all()
-    catalogo = session.exec(
-        select(ProducaoMaterialCatalogo)
-        .where(ProducaoMaterialCatalogo.company_id == ctx.company.id)
-        .order_by(ProducaoMaterialCatalogo.nome)
-    ).all()
+    cat_q = select(ProducaoMaterialCatalogo).where(ProducaoMaterialCatalogo.company_id == ctx.company.id)
+    if clid:
+        cat_q = cat_q.where(ProducaoMaterialCatalogo.client_id == clid)
+    catalogo = session.exec(cat_q.order_by(ProducaoMaterialCatalogo.nome)).all()
     return render("producao_materiais.html", request=request, context={
-        **_ctx_base(ctx), "materiais": mats, "op_id": op_id, "catalogo": catalogo,
+        **_ctx_base(ctx, current_client), "materiais": mats, "op_id": op_id, "catalogo": catalogo,
     })
 
 @app.post("/ferramentas/producao/op/{op_id}/material/salvar")
@@ -1391,9 +1427,11 @@ async def producao_mat_cat_salvar(request: Request, session: Session = Depends(g
     ctx = get_tenant_context(request, session)
     if not ctx:
         return RedirectResponse("/login", status_code=303)
+    current_client = _resolve_client(request, session, ctx)
     form = await request.form()
     session.add(ProducaoMaterialCatalogo(
         company_id=ctx.company.id,
+        client_id=current_client.id if current_client else None,
         nome=(form.get("nome") or "").strip(),
         unidade=(form.get("unidade") or "un").strip(),
         custo_unitario_padrao=float(form.get("custo_unitario_padrao") or 0),
