@@ -629,9 +629,15 @@ _TPL_PRODUCAO = r"""
             </div>
           </div>
         </div>
-        <div class="modal-footer">
-          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
-          <button type="submit" class="btn btn-primary" style="background:#6366f1;border-color:#6366f1;"><i class="bi bi-check me-1"></i>Salvar</button>
+        <div class="modal-footer d-flex justify-content-between align-items-center flex-wrap gap-2">
+          <div id="op_modal_links" style="display:none;gap:.5rem;" class="d-flex flex-wrap gap-2">
+            <a id="op_btn_imprimir" href="#" target="_blank" class="btn btn-sm btn-outline-secondary">&#128438; Imprimir / PDF</a>
+            <a id="op_btn_operador" href="#" target="_blank" class="btn btn-sm btn-outline-success">&#128241; Página do Operador</a>
+          </div>
+          <div class="d-flex gap-2">
+            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
+            <button type="submit" class="btn btn-primary" style="background:#6366f1;border-color:#6366f1;"><i class="bi bi-check me-1"></i>Salvar</button>
+          </div>
         </div>
       </form>
     </div>
@@ -860,6 +866,7 @@ function abrirModalOP(id){
     form.action='/ferramentas/producao/op/salvar';
     form.reset();
     _resetRoteiro();
+    document.getElementById('op_modal_links').style.display='none';
     return new bootstrap.Modal(document.getElementById('modalOP')).show();
   }
   fetch('/ferramentas/producao/op/'+id+'/json').then(r=>r.json()).then(d=>{
@@ -874,6 +881,12 @@ function abrirModalOP(id){
       const map={dt_ini_plan:'data_inicio_plan',dt_fim_plan:'data_fim_plan',dt_ini_real:'data_inicio_real',dt_fim_real:'data_fim_real'};
       const el=document.getElementById('op_'+f); if(el) el.value=d[map[f]]||'';
     });
+    // atalhos de impressão e operador
+    document.getElementById('op_btn_imprimir').href='/ferramentas/producao/op/'+id+'/imprimir';
+    if(d.token){
+      document.getElementById('op_btn_operador').href='/op/'+d.token;
+      document.getElementById('op_modal_links').style.display='flex';
+    }
     _carregarRoteiro(d.roteiro||[]);
     new bootstrap.Modal(document.getElementById('modalOP')).show();
   });
