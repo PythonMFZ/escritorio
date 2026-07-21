@@ -629,9 +629,15 @@ _TPL_PRODUCAO = r"""
             </div>
           </div>
         </div>
-        <div class="modal-footer">
-          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
-          <button type="submit" class="btn btn-primary" style="background:#6366f1;border-color:#6366f1;"><i class="bi bi-check me-1"></i>Salvar</button>
+        <div class="modal-footer d-flex justify-content-between align-items-center flex-wrap gap-2">
+          <div id="op_modal_links" style="display:none;gap:.5rem;" class="d-flex flex-wrap gap-2">
+            <a id="op_btn_imprimir" href="#" target="_blank" class="btn btn-sm btn-outline-secondary">&#128438; Imprimir / PDF</a>
+            <a id="op_btn_operador" href="#" target="_blank" class="btn btn-sm btn-outline-success">&#128241; Página do Operador</a>
+          </div>
+          <div class="d-flex gap-2">
+            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
+            <button type="submit" class="btn btn-primary" style="background:#6366f1;border-color:#6366f1;"><i class="bi bi-check me-1"></i>Salvar</button>
+          </div>
         </div>
       </form>
     </div>
@@ -860,6 +866,7 @@ function abrirModalOP(id){
     form.action='/ferramentas/producao/op/salvar';
     form.reset();
     _resetRoteiro();
+    document.getElementById('op_modal_links').style.display='none';
     return new bootstrap.Modal(document.getElementById('modalOP')).show();
   }
   fetch('/ferramentas/producao/op/'+id+'/json').then(r=>r.json()).then(d=>{
@@ -874,6 +881,12 @@ function abrirModalOP(id){
       const map={dt_ini_plan:'data_inicio_plan',dt_fim_plan:'data_fim_plan',dt_ini_real:'data_inicio_real',dt_fim_real:'data_fim_real'};
       const el=document.getElementById('op_'+f); if(el) el.value=d[map[f]]||'';
     });
+    // atalhos de impressão e operador
+    document.getElementById('op_btn_imprimir').href='/ferramentas/producao/op/'+id+'/imprimir';
+    if(d.token){
+      document.getElementById('op_btn_operador').href='/op/'+d.token;
+      document.getElementById('op_modal_links').style.display='flex';
+    }
     _carregarRoteiro(d.roteiro||[]);
     new bootstrap.Modal(document.getElementById('modalOP')).show();
   });
@@ -1527,14 +1540,18 @@ async def producao_passo_apontar(passo_id: int, request: Request, session: Sessi
         return JSONResponse({"error": "forbidden"}, status_code=403)
     body = await request.json()
     passo.tempo_realizado_h = float(body.get("tempo_realizado_h") or 0)
-    passo.status = body.get("status", passo.status)
+    novo_status = body.get("status", passo.status)
+    passo.status = novo_status
     if body.get("data_entrada"):
         try: passo.data_entrada = datetime.fromisoformat(body["data_entrada"])
         except: pass
     if body.get("data_saida"):
         try: passo.data_saida = datetime.fromisoformat(body["data_saida"])
         except: pass
-    session.add(passo); session.commit()
+    session.add(passo)
+    if novo_status == "concluido":
+        _avancar_roteiro(session, op, passo)
+    session.commit()
     return JSONResponse({"ok": True})
 
 
@@ -1771,6 +1788,39 @@ async def operador_iniciar(token: str, passo_id: int, session: Session = Depends
     return JSONResponse({"ok": True})
 
 
+def _avancar_roteiro(session, op: OrdemProducao, passo_atual: ProducaoRoteiroPasso):
+    """Após concluir um passo: avança OP para o próximo processo e atualiza progresso."""
+    todos = session.exec(
+        select(ProducaoRoteiroPasso)
+        .where(ProducaoRoteiroPasso.op_id == op.id)
+        .order_by(ProducaoRoteiroPasso.ordem)
+    ).all()
+    if not todos:
+        return
+    idx = next((i for i, p in enumerate(todos) if p.id == passo_atual.id), None)
+    if idx is None:
+        return
+
+    # Atualiza progresso: conta passos concluídos (incluindo o atual que acabou de virar concluido)
+    concluidos = sum(1 for p in todos if p.status == "concluido" or p.id == passo_atual.id)
+    if op.quantidade_planejada and op.quantidade_planejada > 0:
+        op.quantidade_produzida = round(op.quantidade_planejada * concluidos / len(todos), 2)
+
+    proximo = todos[idx + 1] if idx + 1 < len(todos) else None
+    if proximo:
+        op.processo_id = proximo.processo_id
+        if proximo.status == "pendente":
+            proximo.status = "em_andamento"
+            proximo.data_entrada = datetime.utcnow()
+            session.add(proximo)
+    else:
+        # último passo — conclui a OP
+        op.status = "concluida"
+        op.data_fim_real = date.today()
+        op.quantidade_produzida = op.quantidade_planejada  # 100%
+    session.add(op)
+
+
 @app.post("/op/{token}/passo/{passo_id}/finalizar")
 async def operador_finalizar(token: str, passo_id: int, session: Session = Depends(get_session)):
     op = session.exec(select(OrdemProducao).where(OrdemProducao.token == token)).first()
@@ -1785,6 +1835,7 @@ async def operador_finalizar(token: str, passo_id: int, session: Session = Depen
         delta = (passo.data_saida - passo.data_entrada).total_seconds() / 3600
         passo.tempo_realizado_h = round(delta, 2)
     session.add(passo)
+    _avancar_roteiro(session, op, passo)
     session.commit()
     return JSONResponse({"ok": True})
 
