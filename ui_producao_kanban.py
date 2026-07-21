@@ -107,25 +107,21 @@ SQLModel.metadata.create_all(engine, tables=[
 
 # Migração: adiciona client_id às tabelas existentes (ALTER TABLE seguro)
 def _prod_migration():
-    try:
-        with engine.connect() as _conn:
-            for _tbl, _col in [
-                ("producaoprocesso",       "client_id INTEGER"),
-                ("ordemproducao",          "client_id INTEGER"),
-                ("producaomaterialcatalogo","client_id INTEGER"),
-                ("ordemproducao",          "cor TEXT DEFAULT ''"),
-                ("ordemproducao",          "pedido TEXT DEFAULT ''"),
-                ("ordemproducao",          "token TEXT DEFAULT ''"),
-            ]:
-                try:
-                    _conn.execute(__import__("sqlalchemy").text(
-                        f"ALTER TABLE {_tbl} ADD COLUMN {_col}"
-                    ))
-                    _conn.commit()
-                except Exception:
-                    pass  # coluna já existe
-    except Exception as _e_mig:
-        print(f"[producao] migration: {_e_mig}")
+    _sa_text = __import__("sqlalchemy").text
+    for _tbl, _col in [
+        ("producaoprocesso",        "client_id INTEGER"),
+        ("ordemproducao",           "client_id INTEGER"),
+        ("producaomaterialcatalogo","client_id INTEGER"),
+        ("ordemproducao",           "cor TEXT DEFAULT ''"),
+        ("ordemproducao",           "pedido TEXT DEFAULT ''"),
+        ("ordemproducao",           "token TEXT DEFAULT ''"),
+    ]:
+        try:
+            with engine.connect() as _conn:
+                _conn.execute(_sa_text(f"ALTER TABLE {_tbl} ADD COLUMN {_col}"))
+                _conn.commit()
+        except Exception:
+            pass  # coluna já existe — fresh connection evita estado abortado
 
 _prod_migration()
 
