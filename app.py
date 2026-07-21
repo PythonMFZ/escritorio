@@ -48931,6 +48931,13 @@ except Exception as _e_st_load:
     print(f"[tarefas_subtarefas] ⚠️ Falha ao carregar ui_tarefas_subtarefas.py: {_e_st_load}")
     _tb_st.print_exc()
 
+try:
+    exec(open('ui_producao_kanban.py').read())
+except Exception as _e_prod_load:
+    import traceback as _tb_prod
+    print(f"[producao] ⚠️ Falha ao carregar ui_producao_kanban.py: {_e_prod_load}")
+    _tb_prod.print_exc()
+
 
 # ============================================================================
 # MÓDULO: AGENDA NATIVA (substitui Microsoft Bookings)
