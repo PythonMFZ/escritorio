@@ -37225,7 +37225,7 @@ FEATURE_GROUPS = [
      "features": ["consultas", "creditos", "openfinance", "construrisk"]},
     {"key": "solucoes", "title": "Soluções Financeiras", "features": ["ofertas", "simulador", "propostas"]},
     {"key": "meu_projeto", "title": "Meu Projeto", "features": ["consultoria", "reunioes", "tarefas"]},
-    {"key": "ferramentas_conteudo", "title": "Ferramentas e Conteúdo", "features": ["ferramentas", "educacao", "construrisk", "gestao_obras"]},
+    {"key": "ferramentas_conteudo", "title": "Ferramentas e Conteúdo", "features": ["ferramentas", "educacao", "construrisk", "gestao_obras", "producao_kanban"]},
     {"key": "gestao_interna", "title": "Gestão Interna", "features": ["crm", "motor_ofertas", "credito", "financeiro_escritorio", "ui", "gestao", "familias", "servicos_internos", "parceiros", "members", "precificacao", "saude", "assinaturas", "pesquisas", "checkin_semanal", "uso_plataforma", "agenda_admin"]},
 ]
 FEATURE_KEYS["members"] = {"title": "Membros", "desc": "Gerenciar membros e permissoes.", "href": "/admin/members"}
@@ -37239,8 +37239,10 @@ FEATURE_VISIBLE_ROLES["checkin_semanal"] = {"admin", "equipe"}
 FEATURE_VISIBLE_ROLES["uso_plataforma"] = {"admin", "equipe"}
 FEATURE_KEYS["gestao_obras"] = {"title": "Gestao de Obras", "desc": "Cronograma fisico-financeiro.", "href": "/ferramentas/obras"}
 FEATURE_KEYS["construrisk"] = {"title": "ConstruRisk", "desc": "Dossie de analise de risco PF/PJ.", "href": "/construrisk"}
+FEATURE_KEYS["producao_kanban"] = {"title": "Controle de Produção", "desc": "OPs, Kanban e PCP — Planejamento × Controle.", "href": "/ferramentas/producao"}
 FEATURE_VISIBLE_ROLES["gestao_obras"] = {"admin", "equipe", "cliente"}
 FEATURE_VISIBLE_ROLES["construrisk"] = {"admin", "equipe", "cliente"}
+FEATURE_VISIBLE_ROLES["producao_kanban"] = {"admin", "equipe", "cliente"}
 FEATURE_KEYS["construrisk"] = {"title": "ConstruRisk", "desc": "Dossie de analise de risco PF/PJ.", "href": "/construrisk"}
 FEATURE_VISIBLE_ROLES["construrisk"] = {"admin", "equipe", "cliente"}
 FEATURE_KEYS["precificacao"] = {"title": "Precificacao", "desc": "Definir precos e creditos bonus.", "href": "/admin/precificacao"}
@@ -37343,44 +37345,6 @@ TEMPLATES["ferramentas.html"] = r"""
         <div class="fw-semibold">{{ current_client.name }}</div>
       </div>
     {% endif %}
-  </div>
-</div>
-
-<div class="row g-3 mb-3">
-  <div class="col-lg-6">
-    <div class="card p-4 h-100">
-      <div class="d-flex justify-content-between align-items-start gap-3 flex-wrap">
-        <div>
-          <h5 class="mb-1"><i class="bi bi-kanban me-2" style="color:#6366f1;"></i>Controle de Produção</h5>
-          <div class="muted">Ordens de Produção (OP), Kanban personalizado e PCP — Planejamento × Controle.</div>
-        </div>
-        <span class="badge text-bg-primary">Disponível</span>
-      </div>
-      <div class="row g-3 mt-1 mb-3">
-        <div class="col-md-4">
-          <div class="border rounded p-3 h-100">
-            <div class="muted small">Kanban</div>
-            <div class="fw-semibold">Etapas personalizáveis</div>
-          </div>
-        </div>
-        <div class="col-md-4">
-          <div class="border rounded p-3 h-100">
-            <div class="muted small">Materiais</div>
-            <div class="fw-semibold">Insumos por OP</div>
-          </div>
-        </div>
-        <div class="col-md-4">
-          <div class="border rounded p-3 h-100">
-            <div class="muted small">PCP</div>
-            <div class="fw-semibold">Datas e quantidades</div>
-          </div>
-        </div>
-      </div>
-      <div class="alert alert-info" style="font-size:.85rem;">
-        Cadastre OPs, configure as etapas do seu processo produtivo e acompanhe planejado vs realizado em tempo real.
-      </div>
-      <a class="btn btn-primary" href="/producao" style="background:#6366f1;border-color:#6366f1;"><i class="bi bi-kanban me-1"></i>Abrir Controle de Produção</a>
-    </div>
   </div>
 </div>
 
@@ -37557,6 +37521,54 @@ TEMPLATES["ferramentas.html"] = r"""
           Monte o cronograma físico-financeiro e acompanhe o avanço físico e financeiro da obra.
         </div>
         <a class="btn btn-primary" href="/ferramentas/obras">Abrir Gestão de Obras</a>
+      </div>
+    </div>
+
+    <div class="col-lg-6">
+      <div class="card p-4 h-100">
+        <div class="d-flex justify-content-between align-items-start gap-3 flex-wrap">
+          <div>
+            <h5 class="mb-1"><i class="bi bi-kanban me-2" style="color:#6366f1;"></i>Controle de Produção</h5>
+            <div class="muted">Ordens de Produção (OP), Kanban personalizado e PCP — Planejamento × Controle da Produção.</div>
+          </div>
+          <span class="badge {% if producao_enabled %}text-bg-success{% else %}text-bg-secondary{% endif %}">
+            {% if producao_enabled %}Liberada{% else %}Bloqueada{% endif %}
+          </span>
+        </div>
+        <div class="row g-3 mt-1 mb-3">
+          <div class="col-md-4">
+            <div class="border rounded p-3 h-100">
+              <div class="muted small">Kanban</div>
+              <div class="fw-semibold">Etapas personalizáveis</div>
+            </div>
+          </div>
+          <div class="col-md-4">
+            <div class="border rounded p-3 h-100">
+              <div class="muted small">Materiais</div>
+              <div class="fw-semibold">Insumos por OP</div>
+            </div>
+          </div>
+          <div class="col-md-4">
+            <div class="border rounded p-3 h-100">
+              <div class="muted small">PCP</div>
+              <div class="fw-semibold">Datas e quantidades</div>
+            </div>
+          </div>
+        </div>
+        {% if producao_enabled %}
+          <div class="alert alert-success" style="font-size:.85rem;">
+            Esta ferramenta está liberada para uso.
+          </div>
+        {% else %}
+          <div class="alert alert-warning" style="font-size:.85rem;">
+            Ferramenta não liberada. Solicite ao administrador da plataforma.
+          </div>
+        {% endif %}
+        <a class="btn {% if producao_enabled %}btn-primary{% else %}btn-outline-secondary disabled{% endif %}"
+           href="{% if producao_enabled %}/ferramentas/producao{% else %}#{% endif %}"
+           style="{% if producao_enabled %}background:#6366f1;border-color:#6366f1;{% endif %}">
+          <i class="bi bi-kanban me-1"></i>Abrir Controle de Produção
+        </a>
       </div>
     </div>
 
@@ -37746,6 +37758,7 @@ async def ferramentas_page(request: Request, session: Session = Depends(get_sess
     finance_tool = None
     obras_horas_enabled = False
 
+    producao_enabled = False
     if current_client:
         finance_tool = _tool_subscription_status_payload(
             session,
@@ -37760,8 +37773,12 @@ async def ferramentas_page(request: Request, session: Session = Depends(get_sess
                 client_id=int(current_client.id),
             )
             obras_horas_enabled = bool(client_allowed and "obras_horas" in client_allowed)
+            producao_enabled = bool(client_allowed and "producao_kanban" in client_allowed)
         except Exception:
             obras_horas_enabled = False
+    # Admin/equipe sempre pode acessar Controle de Produção
+    if ctx.membership.role in ("admin", "equipe"):
+        producao_enabled = True
 
     return render(
         "ferramentas.html",
@@ -37774,6 +37791,7 @@ async def ferramentas_page(request: Request, session: Session = Depends(get_sess
             "current_client": current_client,
             "finance_tool": finance_tool,
             "obras_horas_enabled": obras_horas_enabled,
+            "producao_enabled": producao_enabled,
         },
     )
 

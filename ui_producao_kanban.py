@@ -496,7 +496,7 @@ _TPL_PRODUCAO = r"""
         <h5 class="modal-title" id="modalProcTitulo"><i class="bi bi-gear me-2"></i>Etapa Kanban</h5>
         <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
       </div>
-      <form id="formProcesso" method="post" action="/producao/processo/salvar">
+      <form id="formProcesso" method="post" action="/ferramentas/producao/processo/salvar">
         <input type="hidden" name="processo_id" id="proc_id" value="">
         <div class="modal-body">
           <div class="mb-3">
@@ -563,7 +563,7 @@ function dragOP(e,id){ _dragOpId=id; e.dataTransfer.effectAllowed='move'; }
 function dropOP(e,processoId){
   e.preventDefault();
   if(!_dragOpId) return;
-  fetch('/producao/op/'+_dragOpId+'/mover', {
+  fetch('/ferramentas/producao/op/'+_dragOpId+'/mover', {
     method:'POST',
     headers:{'Content-Type':'application/json'},
     body:JSON.stringify({processo_id:processoId})
@@ -575,13 +575,13 @@ function abrirModalOP(id){
   const form=document.getElementById('formOP');
   if(!id){
     document.getElementById('modalOPTitulo').innerHTML='<i class="bi bi-kanban me-2"></i>Nova Ordem de Produção';
-    form.action='/producao/op/salvar';
+    form.action='/ferramentas/producao/op/salvar';
     form.reset();
     return new bootstrap.Modal(document.getElementById('modalOP')).show();
   }
-  fetch('/producao/op/'+id+'/json').then(r=>r.json()).then(d=>{
+  fetch('/ferramentas/producao/op/'+id+'/json').then(r=>r.json()).then(d=>{
     document.getElementById('modalOPTitulo').innerHTML='<i class="bi bi-pencil me-2"></i>Editar OP — '+d.codigo;
-    form.action='/producao/op/'+id+'/salvar';
+    form.action='/ferramentas/producao/op/'+id+'/salvar';
     ['codigo','produto','descricao','prioridade','status','responsavel','observacoes'].forEach(f=>{
       const el=document.getElementById('op_'+f);
       if(el) el.value=d[f]||'';
@@ -613,7 +613,7 @@ function abrirMateriais(opId,nome){
   document.getElementById('matOpNome').textContent=nome;
   document.getElementById('matBody').innerHTML='<div class="text-center py-4"><div class="spinner-border" style="color:#0891b2;"></div></div>';
   new bootstrap.Modal(document.getElementById('modalMateriais')).show();
-  fetch('/producao/op/'+opId+'/materiais').then(r=>r.text()).then(html=>{
+  fetch('/ferramentas/producao/op/'+opId+'/materiais').then(r=>r.text()).then(html=>{
     document.getElementById('matBody').innerHTML=html;
   });
 }
@@ -621,11 +621,11 @@ function abrirMateriais(opId,nome){
 // ── Confirmações ──
 function confirmarExcluirOP(id,cod){
   if(confirm('Excluir OP '+cod+'? Esta ação não pode ser desfeita.'))
-    fetch('/producao/op/'+id+'/excluir',{method:'POST'}).then(r=>{ if(r.ok) location.reload(); });
+    fetch('/ferramentas/producao/op/'+id+'/excluir',{method:'POST'}).then(r=>{ if(r.ok) location.reload(); });
 }
 function confirmarExcluirProcesso(id,nome){
   if(confirm('Excluir etapa "'+nome+'"? As OPs vinculadas ficam sem etapa.'))
-    fetch('/producao/processo/'+id+'/excluir',{method:'POST'}).then(r=>{ if(r.ok) location.reload(); });
+    fetch('/ferramentas/producao/processo/'+id+'/excluir',{method:'POST'}).then(r=>{ if(r.ok) location.reload(); });
 }
 
 // ── Filtro OPs ──
@@ -701,7 +701,7 @@ _TPL_MATERIAIS = r"""
 <script>
 function salvarMaterial(e,opId){
   e.preventDefault();
-  fetch('/producao/op/'+opId+'/material/salvar',{
+  fetch('/ferramentas/producao/op/'+opId+'/material/salvar',{
     method:'POST',
     headers:{'Content-Type':'application/json'},
     body:JSON.stringify({
@@ -715,7 +715,7 @@ function salvarMaterial(e,opId){
 }
 function excluirMaterial(mid,opId){
   if(confirm('Excluir este material?'))
-    fetch('/producao/material/'+mid+'/excluir',{method:'POST'}).then(r=>{ if(r.ok) abrirMateriais(opId,''); });
+    fetch('/ferramentas/producao/material/'+mid+'/excluir',{method:'POST'}).then(r=>{ if(r.ok) abrirMateriais(opId,''); });
 }
 </script>
 """
@@ -735,12 +735,28 @@ templates_env.filters["_prioridade_cor"] = _prioridade_cor
 
 # ── Rotas ─────────────────────────────────────────────────────────────────────
 
-@app.get("/producao", response_class=HTMLResponse)
+def _producao_permitida(ctx, session) -> bool:
+    if ctx.membership.role in ("admin", "equipe"):
+        return True
+    try:
+        from sqlmodel import select as _sel
+        client_id = ctx.membership.client_id
+        if not client_id:
+            return False
+        allowed = get_client_allowed_features(session, company_id=ctx.company.id, client_id=client_id)
+        return bool(allowed and "producao_kanban" in allowed)
+    except Exception:
+        return False
+
+
+@app.get("/ferramentas/producao", response_class=HTMLResponse)
 @require_login
 async def producao_index(request: Request, session: Session = Depends(get_session)):
     ctx = get_tenant_context(request, session)
     if not ctx:
         return RedirectResponse("/login", status_code=303)
+    if not _producao_permitida(ctx, session):
+        return RedirectResponse("/ferramentas", status_code=303)
     cid = ctx.company.id
     procs = _processos(session, cid)
     all_ops = _ops(session, cid)
@@ -757,7 +773,7 @@ async def producao_index(request: Request, session: Session = Depends(get_sessio
 
 # ── OP: salvar (novo) ─────────────────────────────────────────────────────────
 
-@app.post("/producao/op/salvar", response_class=HTMLResponse)
+@app.post("/ferramentas/producao/op/salvar", response_class=HTMLResponse)
 @require_login
 async def producao_op_salvar(
     request: Request,
@@ -805,12 +821,12 @@ async def producao_op_salvar(
     )
     session.add(op)
     session.commit()
-    return RedirectResponse("/producao", status_code=303)
+    return RedirectResponse("/ferramentas/producao", status_code=303)
 
 
 # ── OP: editar ────────────────────────────────────────────────────────────────
 
-@app.post("/producao/op/{op_id}/salvar", response_class=HTMLResponse)
+@app.post("/ferramentas/producao/op/{op_id}/salvar", response_class=HTMLResponse)
 @require_login
 async def producao_op_editar(
     op_id: int,
@@ -841,7 +857,7 @@ async def producao_op_editar(
 
     op = session.get(OrdemProducao, op_id)
     if not op or op.company_id != ctx.company.id:
-        return RedirectResponse("/producao", status_code=303)
+        return RedirectResponse("/ferramentas/producao", status_code=303)
 
     op.codigo = codigo.strip()
     op.produto = produto.strip()
@@ -860,12 +876,12 @@ async def producao_op_editar(
     op.updated_at = datetime.utcnow()
     session.add(op)
     session.commit()
-    return RedirectResponse("/producao", status_code=303)
+    return RedirectResponse("/ferramentas/producao", status_code=303)
 
 
 # ── OP: JSON (para modal) ─────────────────────────────────────────────────────
 
-@app.get("/producao/op/{op_id}/json")
+@app.get("/ferramentas/producao/op/{op_id}/json")
 @require_login
 async def producao_op_json(op_id: int, request: Request, session: Session = Depends(get_session)):
     ctx = get_tenant_context(request, session)
@@ -890,7 +906,7 @@ async def producao_op_json(op_id: int, request: Request, session: Session = Depe
 
 # ── OP: mover no Kanban ───────────────────────────────────────────────────────
 
-@app.post("/producao/op/{op_id}/mover")
+@app.post("/ferramentas/producao/op/{op_id}/mover")
 @require_login
 async def producao_op_mover(op_id: int, request: Request, session: Session = Depends(get_session)):
     ctx = get_tenant_context(request, session)
@@ -911,7 +927,7 @@ async def producao_op_mover(op_id: int, request: Request, session: Session = Dep
 
 # ── OP: excluir ──────────────────────────────────────────────────────────────
 
-@app.post("/producao/op/{op_id}/excluir")
+@app.post("/ferramentas/producao/op/{op_id}/excluir")
 @require_login
 async def producao_op_excluir(op_id: int, request: Request, session: Session = Depends(get_session)):
     ctx = get_tenant_context(request, session)
@@ -931,7 +947,7 @@ async def producao_op_excluir(op_id: int, request: Request, session: Session = D
 
 # ── Processo: salvar ──────────────────────────────────────────────────────────
 
-@app.post("/producao/processo/salvar", response_class=HTMLResponse)
+@app.post("/ferramentas/producao/processo/salvar", response_class=HTMLResponse)
 @require_login
 async def producao_processo_salvar(
     request: Request,
@@ -959,12 +975,12 @@ async def producao_processo_salvar(
         )
         session.add(proc)
     session.commit()
-    return RedirectResponse("/producao", status_code=303)
+    return RedirectResponse("/ferramentas/producao", status_code=303)
 
 
 # ── Processo: excluir ─────────────────────────────────────────────────────────
 
-@app.post("/producao/processo/{proc_id}/excluir")
+@app.post("/ferramentas/producao/processo/{proc_id}/excluir")
 @require_login
 async def producao_processo_excluir(proc_id: int, request: Request, session: Session = Depends(get_session)):
     ctx = get_tenant_context(request, session)
@@ -985,7 +1001,7 @@ async def producao_processo_excluir(proc_id: int, request: Request, session: Ses
 
 # ── Materiais: listar (partial HTML) ─────────────────────────────────────────
 
-@app.get("/producao/op/{op_id}/materiais", response_class=HTMLResponse)
+@app.get("/ferramentas/producao/op/{op_id}/materiais", response_class=HTMLResponse)
 @require_login
 async def producao_materiais_lista(op_id: int, request: Request, session: Session = Depends(get_session)):
     ctx = get_tenant_context(request, session)
@@ -1006,7 +1022,7 @@ async def producao_materiais_lista(op_id: int, request: Request, session: Sessio
 
 # ── Materiais: salvar ─────────────────────────────────────────────────────────
 
-@app.post("/producao/op/{op_id}/material/salvar")
+@app.post("/ferramentas/producao/op/{op_id}/material/salvar")
 @require_login
 async def producao_material_salvar(op_id: int, request: Request, session: Session = Depends(get_session)):
     ctx = get_tenant_context(request, session)
@@ -1031,7 +1047,7 @@ async def producao_material_salvar(op_id: int, request: Request, session: Sessio
 
 # ── Materiais: excluir ────────────────────────────────────────────────────────
 
-@app.post("/producao/material/{mat_id}/excluir")
+@app.post("/ferramentas/producao/material/{mat_id}/excluir")
 @require_login
 async def producao_material_excluir(mat_id: int, request: Request, session: Session = Depends(get_session)):
     ctx = get_tenant_context(request, session)
@@ -1044,4 +1060,4 @@ async def producao_material_excluir(mat_id: int, request: Request, session: Sess
     return JSONResponse({"ok": True})
 
 
-print("[producao] Módulo Controle de Produção carregado — /producao")
+print("[producao] Módulo Controle de Produção carregado — /ferramentas/producao")
