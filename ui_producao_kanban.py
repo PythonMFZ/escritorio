@@ -1224,6 +1224,12 @@ h1{font-size:20px;font-weight:700;margin-bottom:4px;}
     {% if p.status == 'pendente' %}
     <button class="btn btn-start" onclick="iniciar({{ p.id }})">&#9654; Iniciar etapa</button>
     {% elif p.status == 'em_andamento' %}
+    <div style="margin-top:12px;">
+      <label style="font-size:13px;color:#94a3b8;display:block;margin-bottom:6px;">Quantidade produzida nesta etapa</label>
+      <input type="number" id="qtd_{{ p.id }}" min="0" step="0.01"
+             placeholder="0" inputmode="decimal"
+             style="width:100%;padding:12px;border-radius:8px;border:1px solid #334155;background:#0f172a;color:#f1f5f9;font-size:16px;margin-bottom:4px;">
+    </div>
     <button class="btn btn-stop" onclick="finalizar({{ p.id }})">&#9632; Finalizar etapa</button>
     {% else %}
     <button class="btn btn-start" disabled>&#10003; Concluído</button>
@@ -1242,7 +1248,13 @@ function iniciar(pid){
   });
 }
 function finalizar(pid){
-  fetch('/op/'+_tok+'/passo/'+pid+'/finalizar',{method:'POST'}).then(r=>r.json()).then(d=>{
+  const qtdEl=document.getElementById('qtd_'+pid);
+  const qtd=qtdEl?parseFloat(qtdEl.value)||null:null;
+  fetch('/op/'+_tok+'/passo/'+pid+'/finalizar',{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({quantidade_produzida:qtd})
+  }).then(r=>r.json()).then(d=>{
     if(d.ok) location.reload();
     else alert(d.error||'Erro');
   });
@@ -1515,11 +1527,11 @@ async def producao_op_excluir(op_id: int, request: Request, session: Session = D
     op = session.get(OrdemProducao, op_id)
     if not op or op.company_id != ctx.company.id:
         return JSONResponse({"error": "not found"}, status_code=404)
-    for m in session.exec(select(ProducaoMaterial).where(ProducaoMaterial.op_id == op_id)).all():
-        session.delete(m)
-    for p in session.exec(select(ProducaoRoteiroPasso).where(ProducaoRoteiroPasso.op_id == op_id)).all():
-        session.delete(p)
-    session.delete(op); session.commit()
+    _t = __import__("sqlalchemy").text
+    with engine.begin() as _c:
+        _c.execute(_t("DELETE FROM producaomaterial WHERE op_id=:id"), {"id": op_id})
+        _c.execute(_t("DELETE FROM producaoroteiropasso WHERE op_id=:id"), {"id": op_id})
+        _c.execute(_t("DELETE FROM ordemproducao WHERE id=:id"), {"id": op_id})
     return JSONResponse({"ok": True})
 
 
@@ -1822,19 +1834,29 @@ def _avancar_roteiro(session, op: OrdemProducao, passo_atual: ProducaoRoteiroPas
 
 
 @app.post("/op/{token}/passo/{passo_id}/finalizar")
-async def operador_finalizar(token: str, passo_id: int, session: Session = Depends(get_session)):
+async def operador_finalizar(token: str, passo_id: int, request: Request, session: Session = Depends(get_session)):
     op = session.exec(select(OrdemProducao).where(OrdemProducao.token == token)).first()
     if not op:
         return JSONResponse({"error": "OP não encontrada"}, status_code=404)
     passo = session.get(ProducaoRoteiroPasso, passo_id)
     if not passo or passo.op_id != op.id:
         return JSONResponse({"error": "Passo não encontrado"}, status_code=404)
+    body = {}
+    try:
+        body = await request.json()
+    except Exception:
+        pass
     passo.status = "concluido"
     passo.data_saida = datetime.utcnow()
     if passo.data_entrada:
         delta = (passo.data_saida - passo.data_entrada).total_seconds() / 3600
         passo.tempo_realizado_h = round(delta, 2)
     session.add(passo)
+    # Se operador informou quantidade, usa ela diretamente; caso contrário avança proporcional
+    qtd_informada = body.get("quantidade_produzida")
+    if qtd_informada is not None and qtd_informada > 0:
+        op.quantidade_produzida = float(qtd_informada)
+        session.add(op)
     _avancar_roteiro(session, op, passo)
     session.commit()
     return JSONResponse({"ok": True})
