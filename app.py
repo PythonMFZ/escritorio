@@ -37346,6 +37346,44 @@ TEMPLATES["ferramentas.html"] = r"""
   </div>
 </div>
 
+<div class="row g-3 mb-3">
+  <div class="col-lg-6">
+    <div class="card p-4 h-100">
+      <div class="d-flex justify-content-between align-items-start gap-3 flex-wrap">
+        <div>
+          <h5 class="mb-1"><i class="bi bi-kanban me-2" style="color:#6366f1;"></i>Controle de Produção</h5>
+          <div class="muted">Ordens de Produção (OP), Kanban personalizado e PCP — Planejamento × Controle.</div>
+        </div>
+        <span class="badge text-bg-primary">Disponível</span>
+      </div>
+      <div class="row g-3 mt-1 mb-3">
+        <div class="col-md-4">
+          <div class="border rounded p-3 h-100">
+            <div class="muted small">Kanban</div>
+            <div class="fw-semibold">Etapas personalizáveis</div>
+          </div>
+        </div>
+        <div class="col-md-4">
+          <div class="border rounded p-3 h-100">
+            <div class="muted small">Materiais</div>
+            <div class="fw-semibold">Insumos por OP</div>
+          </div>
+        </div>
+        <div class="col-md-4">
+          <div class="border rounded p-3 h-100">
+            <div class="muted small">PCP</div>
+            <div class="fw-semibold">Datas e quantidades</div>
+          </div>
+        </div>
+      </div>
+      <div class="alert alert-info" style="font-size:.85rem;">
+        Cadastre OPs, configure as etapas do seu processo produtivo e acompanhe planejado vs realizado em tempo real.
+      </div>
+      <a class="btn btn-primary" href="/producao" style="background:#6366f1;border-color:#6366f1;"><i class="bi bi-kanban me-1"></i>Abrir Controle de Produção</a>
+    </div>
+  </div>
+</div>
+
 {% if not current_client %}
   <div class="alert alert-warning">Selecione um cliente para acessar as ferramentas.</div>
 {% else %}
@@ -37519,42 +37557,6 @@ TEMPLATES["ferramentas.html"] = r"""
           Monte o cronograma físico-financeiro e acompanhe o avanço físico e financeiro da obra.
         </div>
         <a class="btn btn-primary" href="/ferramentas/obras">Abrir Gestão de Obras</a>
-      </div>
-    </div>
-
-    <div class="col-lg-6">
-      <div class="card p-4 h-100">
-        <div class="d-flex justify-content-between align-items-start gap-3 flex-wrap">
-          <div>
-            <h5 class="mb-1"><i class="bi bi-kanban me-2" style="color:#6366f1;"></i>Controle de Produção</h5>
-            <div class="muted">Ordens de Produção (OP), Kanban personalizado e PCP — Planejamento × Controle.</div>
-          </div>
-          <span class="badge text-bg-primary">Disponível</span>
-        </div>
-        <div class="row g-3 mt-1 mb-3">
-          <div class="col-md-4">
-            <div class="border rounded p-3 h-100">
-              <div class="muted small">Kanban</div>
-              <div class="fw-semibold">Etapas personalizáveis</div>
-            </div>
-          </div>
-          <div class="col-md-4">
-            <div class="border rounded p-3 h-100">
-              <div class="muted small">Materiais</div>
-              <div class="fw-semibold">Insumos por OP</div>
-            </div>
-          </div>
-          <div class="col-md-4">
-            <div class="border rounded p-3 h-100">
-              <div class="muted small">PCP</div>
-              <div class="fw-semibold">Datas e quantidades</div>
-            </div>
-          </div>
-        </div>
-        <div class="alert alert-info" style="font-size:.85rem;">
-          Cadastre OPs, configure as etapas do seu processo produtivo e acompanhe planejado vs realizado em tempo real.
-        </div>
-        <a class="btn btn-primary" href="/producao" style="background:#6366f1;border-color:#6366f1;"><i class="bi bi-kanban me-1"></i>Abrir Controle de Produção</a>
       </div>
     </div>
 
