@@ -1540,14 +1540,18 @@ async def producao_passo_apontar(passo_id: int, request: Request, session: Sessi
         return JSONResponse({"error": "forbidden"}, status_code=403)
     body = await request.json()
     passo.tempo_realizado_h = float(body.get("tempo_realizado_h") or 0)
-    passo.status = body.get("status", passo.status)
+    novo_status = body.get("status", passo.status)
+    passo.status = novo_status
     if body.get("data_entrada"):
         try: passo.data_entrada = datetime.fromisoformat(body["data_entrada"])
         except: pass
     if body.get("data_saida"):
         try: passo.data_saida = datetime.fromisoformat(body["data_saida"])
         except: pass
-    session.add(passo); session.commit()
+    session.add(passo)
+    if novo_status == "concluido":
+        _avancar_roteiro(session, op, passo)
+    session.commit()
     return JSONResponse({"ok": True})
 
 
@@ -1784,6 +1788,30 @@ async def operador_iniciar(token: str, passo_id: int, session: Session = Depends
     return JSONResponse({"ok": True})
 
 
+def _avancar_roteiro(session, op: OrdemProducao, passo_atual: ProducaoRoteiroPasso):
+    """Após concluir um passo, move a OP para o próximo do roteiro (por ordem)."""
+    todos = session.exec(
+        select(ProducaoRoteiroPasso)
+        .where(ProducaoRoteiroPasso.op_id == op.id)
+        .order_by(ProducaoRoteiroPasso.ordem)
+    ).all()
+    idx = next((i for i, p in enumerate(todos) if p.id == passo_atual.id), None)
+    if idx is None:
+        return
+    proximo = todos[idx + 1] if idx + 1 < len(todos) else None
+    if proximo:
+        op.processo_id = proximo.processo_id
+        if proximo.status == "pendente":
+            proximo.status = "em_andamento"
+            proximo.data_entrada = datetime.utcnow()
+            session.add(proximo)
+    else:
+        # último passo — conclui a OP
+        op.status = "concluida"
+        op.data_fim_real = date.today()
+    session.add(op)
+
+
 @app.post("/op/{token}/passo/{passo_id}/finalizar")
 async def operador_finalizar(token: str, passo_id: int, session: Session = Depends(get_session)):
     op = session.exec(select(OrdemProducao).where(OrdemProducao.token == token)).first()
@@ -1798,6 +1826,7 @@ async def operador_finalizar(token: str, passo_id: int, session: Session = Depen
         delta = (passo.data_saida - passo.data_entrada).total_seconds() / 3600
         passo.tempo_realizado_h = round(delta, 2)
     session.add(passo)
+    _avancar_roteiro(session, op, passo)
     session.commit()
     return JSONResponse({"ok": True})
 
