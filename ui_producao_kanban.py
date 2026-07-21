@@ -1789,15 +1789,23 @@ async def operador_iniciar(token: str, passo_id: int, session: Session = Depends
 
 
 def _avancar_roteiro(session, op: OrdemProducao, passo_atual: ProducaoRoteiroPasso):
-    """Após concluir um passo, move a OP para o próximo do roteiro (por ordem)."""
+    """Após concluir um passo: avança OP para o próximo processo e atualiza progresso."""
     todos = session.exec(
         select(ProducaoRoteiroPasso)
         .where(ProducaoRoteiroPasso.op_id == op.id)
         .order_by(ProducaoRoteiroPasso.ordem)
     ).all()
+    if not todos:
+        return
     idx = next((i for i, p in enumerate(todos) if p.id == passo_atual.id), None)
     if idx is None:
         return
+
+    # Atualiza progresso: conta passos concluídos (incluindo o atual que acabou de virar concluido)
+    concluidos = sum(1 for p in todos if p.status == "concluido" or p.id == passo_atual.id)
+    if op.quantidade_planejada and op.quantidade_planejada > 0:
+        op.quantidade_produzida = round(op.quantidade_planejada * concluidos / len(todos), 2)
+
     proximo = todos[idx + 1] if idx + 1 < len(todos) else None
     if proximo:
         op.processo_id = proximo.processo_id
@@ -1809,6 +1817,7 @@ def _avancar_roteiro(session, op: OrdemProducao, passo_atual: ProducaoRoteiroPas
         # último passo — conclui a OP
         op.status = "concluida"
         op.data_fim_real = date.today()
+        op.quantidade_produzida = op.quantidade_planejada  # 100%
     session.add(op)
 
 
