@@ -43,6 +43,7 @@ _PRODUTOS_BASE = [
     {"codigo": "bsc_mensal",                  "nome": "BSC — Planejamento Estratégico", "descricao": "Balanced Scorecard com 4 perspectivas, KPIs e plano de ações", "categoria": "ferramenta", "modelo": "assinatura", "creditos": 0},
     {"codigo": "fluxo_caixa_mensal",          "nome": "Fluxo de Caixa",                "descricao": "Importação via Excel, projeção por dia/semana/mês com saldo e alertas", "categoria": "ferramenta", "modelo": "assinatura", "creditos": 0},
     {"codigo": "augur_mensal",                "nome": "Augur — Consultor IA",    "descricao": "Assinatura mensal de acesso ao Augur por usuário","categoria": "ia",        "modelo": "assinatura", "creditos": 99},
+    {"codigo": "producao_kanban",             "nome": "Controle de Produção",    "descricao": "OPs, Kanban personalizado e PCP — Planejamento × Controle", "categoria": "ferramenta", "modelo": "assinatura", "creditos": 0},
 ]
 
 def _get_preco(session, company_id, codigo, default=0):
