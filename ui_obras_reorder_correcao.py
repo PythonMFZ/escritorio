@@ -127,14 +127,27 @@ async def obras_aplicar_correcao(obra_id: int, request: Request,
 
 def _patch_obras_reorder_correcao():
     tpl = TEMPLATES.get("ferramenta_obras_cronograma.html", "")
-    if not tpl or "_reorderCorrecaoV3" in tpl:
+    if not tpl or "_reorderCorrecaoV4" in tpl:
         return
 
     _INJECT = """
 <script>
-// ── Reorder + Correção V2 ──────────────────────────────────────────────────
+// ── Reorder + Expand/Colapsar + Reajuste V4 ───────────────────────────────
 (function() {
-  // Modal HTML injetado no body
+
+  // ── Helpers ──────────────────────────────────────────────────────────────
+  function _getSubEtapas(etapaEl) {
+    // Retorna todos .cr-subetapa irmãos imediatos após a etapa (para quando acha outra .cr-etapa)
+    const subs = [];
+    let next = etapaEl.nextElementSibling;
+    while (next && next.classList.contains('cr-subetapa')) {
+      subs.push(next);
+      next = next.nextElementSibling;
+    }
+    return subs;
+  }
+
+  // ── Modal Reajuste ────────────────────────────────────────────────────────
   if (!document.getElementById('modalCorrecao')) {
     document.body.insertAdjacentHTML('beforeend', `
 <div class="modal fade" id="modalCorrecao" tabindex="-1">
@@ -172,14 +185,13 @@ def _patch_obras_reorder_correcao():
 </div>`);
   }
 
-  // Listener tipo
   const tipoSel = document.getElementById('correcaoTipo');
   if (tipoSel) tipoSel.addEventListener('change', function() {
     document.getElementById('correcaoLabel').textContent =
       this.value === 'pct' ? 'Percentual (%)' : 'Valor em R$';
   });
 
-  // Botão "Reajuste" antes do botão "Nova Fase"
+  // ── Botão Reajuste no cabeçalho ───────────────────────────────────────────
   const novaFaseBtn = document.querySelector('[onclick*="abrirNovaFase"]');
   if (novaFaseBtn && !document.getElementById('btnCorrecaoObra')) {
     const btn = document.createElement('button');
@@ -192,26 +204,16 @@ def _patch_obras_reorder_correcao():
     novaFaseBtn.parentNode.insertBefore(btn, novaFaseBtn);
   }
 
-  // Drag-and-drop nas etapas
+  // ── Drag-and-drop ─────────────────────────────────────────────────────────
   let _dragEtapa = null, _dragOverEtapa = null, _dragSubs = [];
-
-  function _getSubEtapas(etapaEl) {
-    // Coleta .cr-subetapa que são irmãos imediatos após a etapa (até a próxima .cr-etapa)
-    const subs = [];
-    let next = etapaEl.nextElementSibling;
-    while (next && next.classList.contains('cr-subetapa')) {
-      subs.push(next);
-      next = next.nextElementSibling;
-    }
-    return subs;
-  }
 
   function obrasDragStart(e) {
     _dragEtapa = e.currentTarget;
+    // Coleta sub-etapas mesmo se estiverem ocultas (expandir/colapsar)
     _dragSubs = _getSubEtapas(_dragEtapa);
     e.dataTransfer.effectAllowed = 'move';
-    e.currentTarget.style.opacity = '0.4';
-    _dragSubs.forEach(s => s.style.opacity = '0.4');
+    _dragEtapa.style.opacity = '0.4';
+    _dragSubs.forEach(s => { s.style.opacity = '0.4'; });
   }
   function obrasDragOver(e) {
     e.preventDefault();
@@ -224,7 +226,7 @@ def _patch_obras_reorder_correcao():
     }
   }
   function obrasDragEnd(e) {
-    e.currentTarget.style.opacity = '';
+    _dragEtapa && (_dragEtapa.style.opacity = '');
     _dragSubs.forEach(s => s.style.opacity = '');
     document.querySelectorAll('.cr-etapa').forEach(el => el.style.borderTop = '');
   }
@@ -236,38 +238,64 @@ def _patch_obras_reorder_correcao():
       alert('Mova etapas apenas dentro da mesma fase.'); return;
     }
     const parent = _dragOverEtapa.parentNode;
-    // Move a etapa
+    // Move a etapa pai
     parent.insertBefore(_dragEtapa, _dragOverEtapa);
     _dragEtapa.style.opacity = '';
-    // Move as sub-etapas logo após a etapa, na mesma ordem
-    let insertAfter = _dragEtapa;
+    // Move sub-etapas filhas logo em seguida, na ordem original
+    let anchor = _dragEtapa;
     _dragSubs.forEach(sub => {
-      insertAfter.parentNode.insertBefore(sub, insertAfter.nextSibling);
+      anchor.parentNode.insertBefore(sub, anchor.nextSibling);
       sub.style.opacity = '';
-      insertAfter = sub;
+      anchor = sub;
     });
     const etapaId = _dragEtapa.id.replace('etapa-row-', '');
-    const ids = [...parent.querySelectorAll('.cr-etapa')].map(el => parseInt(el.id.replace('etapa-row-', '')));
+    const ids = [...parent.querySelectorAll(':scope > .cr-etapa')].map(el => parseInt(el.id.replace('etapa-row-', '')));
     try {
       await fetch('/ferramentas/obras/etapa/' + etapaId + '/reordenar', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({ obra_id: OBRA_ID, ids: ids })
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ obra_id: OBRA_ID, ids })
       });
     } catch(err) { console.error('Erro ao reordenar etapa:', err); }
     _dragEtapa = null; _dragOverEtapa = null; _dragSubs = [];
   }
 
+  // ── Expand / Colapsar sub-etapas ─────────────────────────────────────────
+  function _toggleSubEtapas(etapaEl, btn) {
+    const subs = _getSubEtapas(etapaEl);
+    if (!subs.length) return;
+    const collapsed = subs[0].style.display === 'none';
+    subs.forEach(s => s.style.display = collapsed ? '' : 'none');
+    btn.innerHTML = collapsed ? '&#9660;' : '&#9654;';
+    btn.title = collapsed ? 'Recolher sub-etapas' : 'Expandir sub-etapas';
+  }
+
+  // ── Inicializa etapas ─────────────────────────────────────────────────────
   document.querySelectorAll('.cr-etapa').forEach(function(el) {
     el.draggable = true;
-    // Handle de arraste no primeiro div filho (coluna descrição)
     const firstDiv = el.querySelector(':scope > div');
     if (firstDiv && !firstDiv.querySelector('.dnd-handle')) {
+      const subs = _getSubEtapas(el);
+
+      // Botão expand/colapsar (só se tiver sub-etapas)
+      if (subs.length) {
+        const toggleBtn = document.createElement('span');
+        toggleBtn.className = 'sub-toggle';
+        toggleBtn.innerHTML = '&#9660;';
+        toggleBtn.title = 'Recolher sub-etapas';
+        toggleBtn.style.cssText = 'cursor:pointer;color:#6366f1;font-size:.75rem;user-select:none;display:inline-block;margin-right:.2rem;vertical-align:middle;';
+        toggleBtn.addEventListener('click', function(ev) {
+          ev.stopPropagation();
+          _toggleSubEtapas(el, toggleBtn);
+        });
+        firstDiv.insertBefore(toggleBtn, firstDiv.firstChild);
+      }
+
+      // Handle de arraste
       const h = document.createElement('span');
       h.className = 'dnd-handle';
-      h.innerHTML = '&#10783;';
+      h.innerHTML = '&#8942;';
       h.title = 'Arrastar para reordenar';
-      h.style.cssText = 'cursor:grab;color:#cbd5e1;font-size:1.1rem;user-select:none;display:inline-block;margin-right:.3rem;vertical-align:middle;';
+      h.style.cssText = 'cursor:grab;color:#cbd5e1;font-size:1rem;user-select:none;display:inline-block;margin-right:.3rem;vertical-align:middle;';
       firstDiv.insertBefore(h, firstDiv.firstChild);
     }
     el.addEventListener('dragstart', obrasDragStart);
@@ -275,6 +303,7 @@ def _patch_obras_reorder_correcao():
     el.addEventListener('drop', obrasDrop);
     el.addEventListener('dragend', obrasDragEnd);
   });
+
 })();
 
 function abrirModalCorrecao() {
@@ -286,8 +315,7 @@ async function salvarCorrecao() {
   const subs = document.getElementById('correcaoSubetapas').checked;
   if (isNaN(valor)) { alert('Informe o valor da corre\\u00e7\\u00e3o.'); return; }
   const r = await fetch('/ferramentas/obras/' + OBRA_ID + '/aplicar-correcao', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
+    method: 'POST', headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({ tipo, valor, aplicar_subetapas: subs })
   });
   const d = await r.json();
@@ -300,11 +328,11 @@ async function salvarCorrecao() {
 </script>
 """
 
-    tpl = tpl.replace("{% endblock %}", _INJECT + "\n{# _reorderCorrecaoV3 #}\n{% endblock %}", 1)
+    tpl = tpl.replace("{% endblock %}", _INJECT + "\n{# _reorderCorrecaoV4 #}\n{% endblock %}", 1)
     TEMPLATES["ferramenta_obras_cronograma.html"] = tpl
     if hasattr(templates_env.loader, "mapping"):
         templates_env.loader.mapping = TEMPLATES
-    print("[obras_reorder_correcao] Template patcheado V3 OK")
+    print("[obras_reorder_correcao] Template patcheado V4 OK")
 
 
 _patch_obras_reorder_correcao()
