@@ -287,7 +287,7 @@ async function salvarCorrecao() {
 }
 """
 
-@app.get("/ferramentas/obras/reorder.js")
+@app.get("/ferramentas/obras-reorder.js")
 async def obras_reorder_js():
     return _Response(content=_OBRAS_REORDER_JS, media_type="application/javascript")
 
@@ -312,7 +312,7 @@ def _patch_obras_reorder_correcao():
         tpl = tpl.replace('{# _reorderCorrecao' + _sv + ' #}', '')
 
     # Injeta <script src> antes do {% endblock %}
-    _TAG = '\n<script src="/ferramentas/obras/reorder.js"></script>\n'
+    _TAG = '\n<script src="/ferramentas/obras-reorder.js"></script>\n'
     tpl = tpl.replace("{% endblock %}", _TAG + "{# _reorderCorrecaoV7 #}\n{% endblock %}", 1)
 
     TEMPLATES["ferramenta_obras_cronograma.html"] = tpl
