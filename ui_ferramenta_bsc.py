@@ -71,6 +71,7 @@ class BSCIndicator(SQLModel, table=True):
     source_module:  Optional[str] = Field(default=None)   # "orcamento" | None
     source_metric:  Optional[str] = Field(default=None)   # "realizado" | "orcado" | "execucao_pct"
     source_config:  str           = Field(default="{}")   # JSON: {"account_id": 123}
+    aggregation:    str           = Field(default="soma") # "soma" | "ultimo"
     is_active:      bool  = Field(default=True)
     created_at:     datetime = Field(default_factory=utcnow)
     updated_at:     datetime = Field(default_factory=utcnow)
@@ -123,6 +124,7 @@ def _ensure_bsc_tables():
             _c.execute(_t("ALTER TABLE bscindicator ADD COLUMN IF NOT EXISTS source_metric VARCHAR"))
             _c.execute(_t("ALTER TABLE bscindicator ADD COLUMN IF NOT EXISTS source_config VARCHAR DEFAULT '{}'"))
             _c.execute(_t("ALTER TABLE bscplan ADD COLUMN IF NOT EXISTS client_id INTEGER"))
+            _c.execute(_t("ALTER TABLE bscindicator ADD COLUMN IF NOT EXISTS aggregation VARCHAR DEFAULT 'soma'"))
     except Exception:
         pass
 
@@ -135,10 +137,13 @@ except Exception:
 
 _BSC_MONTHS_PT = ["Jan","Fev","Mar","Abr","Mai","Jun","Jul","Ago","Set","Out","Nov","Dez"]
 
-def _bsc_current_value(indicator_id: int, values_by_ind: dict) -> float:
+def _bsc_current_value(indicator_id: int, values_by_ind: dict, aggregation: str = "soma") -> float:
     vals = values_by_ind.get(indicator_id, [])
     if not vals:
         return 0.0
+    if aggregation == "soma":
+        return sum(v["value"] for v in vals)
+    # "ultimo" — valor do mês mais recente
     latest = sorted(vals, key=lambda v: (v["year"], v["month"]), reverse=True)
     return latest[0]["value"]
 
@@ -246,7 +251,8 @@ def _bsc_load_dashboard(session, company_id: int, plan_id: int):
     # Build per-objective data
     inds_by_obj: dict = {}
     for ind in indicators:
-        cur = _bsc_current_value(ind.id, values_by_ind)
+        agg = getattr(ind, "aggregation", None) or "soma"
+        cur = _bsc_current_value(ind.id, values_by_ind, agg)
         # Override with live source value if linked
         resolved = _bsc_resolve_source(session, company_id, ind)
         if resolved is not None:
@@ -484,6 +490,7 @@ async def bsc_criar_indicador(request: Request, session: Session = Depends(get_s
         frequency=(body.get("frequency") or "mensal"),
         baseline_value=float(body.get("baseline_value") or 0),
         target_value=float(body.get("target_value") or 0),
+        aggregation=body.get("aggregation") or "soma",
         source_module=body.get("source_module") or None,
         source_metric=body.get("source_metric") or None,
         source_config=_src_cfg,
@@ -507,6 +514,7 @@ async def bsc_editar_indicador(ind_id: int, request: Request, session: Session =
     if "frequency"      in body: ind.frequency      = body["frequency"]
     if "target_value"   in body: ind.target_value   = float(body["target_value"] or 0)
     if "baseline_value" in body: ind.baseline_value = float(body["baseline_value"] or 0)
+    if "aggregation"    in body: ind.aggregation    = body["aggregation"] or "soma"
     if "source_module"  in body: ind.source_module  = body["source_module"] or None
     if "source_metric"  in body: ind.source_metric  = body["source_metric"] or None
     if "source_config"  in body:
@@ -967,6 +975,7 @@ TEMPLATES["bsc_dashboard.html"] = r"""
                             data-src-module="{{ ind.source_module or '' }}"
                             data-src-metric="{{ ind.source_metric or '' }}"
                             data-src-config='{{ ind.source_config or "{}" }}'
+                            data-aggregation="{{ ind.aggregation if ind.aggregation else 'soma' }}"
                             onclick="editarIndicador(this)">✏️</button>
                     <button class="btn btn-sm bsc-obj-btn btn-outline-primary"
                             onclick="atualizarValor({{ ind.id }}, '{{ ind.name|replace("'","\\'") }}', {{ ind.target_value }}, '{{ ind.unit }}')">↑</button>
@@ -1137,6 +1146,13 @@ TEMPLATES["bsc_dashboard.html"] = r"""
             <input id="iBase" type="number" step="any" class="form-control" value="0"></div>
           <div class="col-6"><label class="form-label fw-semibold">Meta</label>
             <input id="iMeta" type="number" step="any" class="form-control" value="100"></div>
+        </div>
+        <div class="mb-3">
+          <label class="form-label fw-semibold">Cálculo do Valor Atual</label>
+          <select id="iAggregation" class="form-select">
+            <option value="soma">&#8721; Soma de todos os meses (ex: Faturamento, Unidades vendidas)</option>
+            <option value="ultimo">&#10148; Último valor registrado (ex: %, NPS, Prazo médio)</option>
+          </select>
         </div>
         <!-- Fonte de dados automática -->
         <hr class="my-2">
@@ -1366,6 +1382,7 @@ function novoIndicador(objId) {
   document.getElementById('iFrequencia').value = 'mensal';
   document.getElementById('iBase').value = '0';
   document.getElementById('iMeta').value = '100';
+  document.getElementById('iAggregation').value = 'soma';
   document.getElementById('iSourceModule').value = '';
   document.getElementById('iSourceMetric').value = 'realizado';
   document.getElementById('iSourceAccountId').value = '';
@@ -1385,6 +1402,7 @@ function editarIndicador(btn) {
   document.getElementById('iFrequencia').value = d.freq;
   document.getElementById('iBase').value = d.base;
   document.getElementById('iMeta').value = d.meta;
+  document.getElementById('iAggregation').value = d.aggregation || 'soma';
   document.getElementById('iSourceModule').value = d.srcModule || '';
   document.getElementById('iSourceMetric').value = d.srcMetric || 'realizado';
   document.getElementById('iSourceAccountId').value = cfg.account_id || '';
@@ -1407,6 +1425,7 @@ async function salvarIndicador() {
     frequency: document.getElementById('iFrequencia').value,
     baseline_value: document.getElementById('iBase').value,
     target_value: document.getElementById('iMeta').value,
+    aggregation: document.getElementById('iAggregation').value,
     source_module: srcModule || null,
     source_metric: srcModule ? document.getElementById('iSourceMetric').value : null,
     source_config: JSON.stringify(srcCfg),
