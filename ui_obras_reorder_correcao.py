@@ -126,11 +126,24 @@ async def obras_aplicar_correcao(obra_id: int, request: Request,
 # V2: tudo injetado via JS para não depender de anchor HTML frágil
 
 def _patch_obras_reorder_correcao():
+    import re as _re
     tpl = TEMPLATES.get("ferramenta_obras_cronograma.html", "")
-    if not tpl or "_reorderCorrecaoV4" in tpl:
+    if not tpl:
+        return
+    if "_reorderCorrecaoV5" in tpl:
         return
 
-    _INJECT = """
+    # Remove injeções anteriores (qualquer versão) pelo marcador único
+    tpl = _re.sub(
+        r'<!-- _obrasReorderStart -->.*?<!-- _obrasReorderEnd -->',
+        '', tpl, flags=_re.DOTALL
+    )
+    # Remove sentinels antigos
+    for _sv in ['V1','V2','V3','V4']:
+        tpl = tpl.replace('{# _reorderCorrecao' + _sv + ' #}\n', '')
+        tpl = tpl.replace('{# _reorderCorrecao' + _sv + ' #}', '')
+
+    _INJECT = """<!-- _obrasReorderStart -->
 <script>
 // ── Reorder + Expand/Colapsar + Reajuste V4 ───────────────────────────────
 (function() {
@@ -326,13 +339,14 @@ async function salvarCorrecao() {
   } else { alert('Erro ao aplicar reajuste.'); }
 }
 </script>
+<!-- _obrasReorderEnd -->
 """
 
-    tpl = tpl.replace("{% endblock %}", _INJECT + "\n{# _reorderCorrecaoV4 #}\n{% endblock %}", 1)
+    tpl = tpl.replace("{% endblock %}", _INJECT + "\n{# _reorderCorrecaoV5 #}\n{% endblock %}", 1)
     TEMPLATES["ferramenta_obras_cronograma.html"] = tpl
     if hasattr(templates_env.loader, "mapping"):
         templates_env.loader.mapping = TEMPLATES
-    print("[obras_reorder_correcao] Template patcheado V4 OK")
+    print("[obras_reorder_correcao] Template patcheado V5 OK")
 
 
 _patch_obras_reorder_correcao()
