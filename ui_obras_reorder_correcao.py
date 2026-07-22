@@ -130,16 +130,26 @@ def _patch_obras_reorder_correcao():
     tpl = TEMPLATES.get("ferramenta_obras_cronograma.html", "")
     if not tpl:
         return
-    if "_reorderCorrecaoV5" in tpl:
+    if "_reorderCorrecaoV6" in tpl:
         return
 
-    # Remove injeções anteriores (qualquer versão) pelo marcador único
+    # Remove blocos com marcadores (V5)
     tpl = _re.sub(
         r'<!-- _obrasReorderStart -->.*?<!-- _obrasReorderEnd -->',
         '', tpl, flags=_re.DOTALL
     )
-    # Remove sentinels antigos
-    for _sv in ['V1','V2','V3','V4']:
+    # Remove blocos sem marcadores (V2/V3/V4) identificados pelo comentário JS
+    tpl = _re.sub(
+        r'<script>\s*// ── Reorder \+.*?</script>',
+        '', tpl, flags=_re.DOTALL
+    )
+    # Remove modal estático injetado pelo V1
+    tpl = _re.sub(
+        r'<!-- Modal Corre[çc][ãa]o -->.*?</div>\s*\n',
+        '', tpl, flags=_re.DOTALL
+    )
+    # Remove todos os sentinels antigos
+    for _sv in ['V1', 'V2', 'V3', 'V4', 'V5']:
         tpl = tpl.replace('{# _reorderCorrecao' + _sv + ' #}\n', '')
         tpl = tpl.replace('{# _reorderCorrecao' + _sv + ' #}', '')
 
@@ -342,11 +352,11 @@ async function salvarCorrecao() {
 <!-- _obrasReorderEnd -->
 """
 
-    tpl = tpl.replace("{% endblock %}", _INJECT + "\n{# _reorderCorrecaoV5 #}\n{% endblock %}", 1)
+    tpl = tpl.replace("{% endblock %}", _INJECT + "\n{# _reorderCorrecaoV6 #}\n{% endblock %}", 1)
     TEMPLATES["ferramenta_obras_cronograma.html"] = tpl
     if hasattr(templates_env.loader, "mapping"):
         templates_env.loader.mapping = TEMPLATES
-    print("[obras_reorder_correcao] Template patcheado V5 OK")
+    print("[obras_reorder_correcao] Template patcheado V6 OK")
 
 
 _patch_obras_reorder_correcao()
