@@ -127,7 +127,7 @@ async def obras_aplicar_correcao(obra_id: int, request: Request,
 
 def _patch_obras_reorder_correcao():
     tpl = TEMPLATES.get("ferramenta_obras_cronograma.html", "")
-    if not tpl or "_reorderCorrecaoV2" in tpl:
+    if not tpl or "_reorderCorrecaoV3" in tpl:
         return
 
     _INJECT = """
@@ -193,12 +193,25 @@ def _patch_obras_reorder_correcao():
   }
 
   // Drag-and-drop nas etapas
-  let _dragEtapa = null, _dragOverEtapa = null;
+  let _dragEtapa = null, _dragOverEtapa = null, _dragSubs = [];
+
+  function _getSubEtapas(etapaEl) {
+    // Coleta .cr-subetapa que são irmãos imediatos após a etapa (até a próxima .cr-etapa)
+    const subs = [];
+    let next = etapaEl.nextElementSibling;
+    while (next && next.classList.contains('cr-subetapa')) {
+      subs.push(next);
+      next = next.nextElementSibling;
+    }
+    return subs;
+  }
 
   function obrasDragStart(e) {
     _dragEtapa = e.currentTarget;
+    _dragSubs = _getSubEtapas(_dragEtapa);
     e.dataTransfer.effectAllowed = 'move';
     e.currentTarget.style.opacity = '0.4';
+    _dragSubs.forEach(s => s.style.opacity = '0.4');
   }
   function obrasDragOver(e) {
     e.preventDefault();
@@ -212,6 +225,7 @@ def _patch_obras_reorder_correcao():
   }
   function obrasDragEnd(e) {
     e.currentTarget.style.opacity = '';
+    _dragSubs.forEach(s => s.style.opacity = '');
     document.querySelectorAll('.cr-etapa').forEach(el => el.style.borderTop = '');
   }
   async function obrasDrop(e) {
@@ -222,8 +236,16 @@ def _patch_obras_reorder_correcao():
       alert('Mova etapas apenas dentro da mesma fase.'); return;
     }
     const parent = _dragOverEtapa.parentNode;
+    // Move a etapa
     parent.insertBefore(_dragEtapa, _dragOverEtapa);
     _dragEtapa.style.opacity = '';
+    // Move as sub-etapas logo após a etapa, na mesma ordem
+    let insertAfter = _dragEtapa;
+    _dragSubs.forEach(sub => {
+      insertAfter.parentNode.insertBefore(sub, insertAfter.nextSibling);
+      sub.style.opacity = '';
+      insertAfter = sub;
+    });
     const etapaId = _dragEtapa.id.replace('etapa-row-', '');
     const ids = [...parent.querySelectorAll('.cr-etapa')].map(el => parseInt(el.id.replace('etapa-row-', '')));
     try {
@@ -233,7 +255,7 @@ def _patch_obras_reorder_correcao():
         body: JSON.stringify({ obra_id: OBRA_ID, ids: ids })
       });
     } catch(err) { console.error('Erro ao reordenar etapa:', err); }
-    _dragEtapa = null; _dragOverEtapa = null;
+    _dragEtapa = null; _dragOverEtapa = null; _dragSubs = [];
   }
 
   document.querySelectorAll('.cr-etapa').forEach(function(el) {
@@ -278,11 +300,11 @@ async function salvarCorrecao() {
 </script>
 """
 
-    tpl = tpl.replace("{% endblock %}", _INJECT + "\n{# _reorderCorrecaoV2 #}\n{% endblock %}", 1)
+    tpl = tpl.replace("{% endblock %}", _INJECT + "\n{# _reorderCorrecaoV3 #}\n{% endblock %}", 1)
     TEMPLATES["ferramenta_obras_cronograma.html"] = tpl
     if hasattr(templates_env.loader, "mapping"):
         templates_env.loader.mapping = TEMPLATES
-    print("[obras_reorder_correcao] Template patcheado V2 OK")
+    print("[obras_reorder_correcao] Template patcheado V3 OK")
 
 
 _patch_obras_reorder_correcao()
