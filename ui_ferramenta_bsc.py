@@ -942,9 +942,19 @@ TEMPLATES["bsc_dashboard.html"] = r"""
               </div>
 
               {% if inds %}
-              <table class="table table-sm mb-3" style="font-size:.77rem;">
+              <div style="overflow-x:auto;">
+              <table class="table table-sm mb-3" style="font-size:.77rem;min-width:0;table-layout:fixed;width:100%;">
+                <colgroup>
+                  <col style="width:30%;">
+                  <col style="width:7%;">
+                  <col style="width:13%;">
+                  <col style="width:13%;">
+                  <col style="width:13%;">
+                  <col style="width:14%;">
+                  <col style="width:10%;">
+                </colgroup>
                 <thead class="table-light">
-                  <tr><th>Indicador</th><th>Un.</th><th>Base</th><th>Meta</th><th>Atual</th><th style="min-width:90px;">%</th><th></th></tr>
+                  <tr><th>Indicador</th><th>Un.</th><th>Base</th><th>Meta</th><th>Atual</th><th>%</th><th></th></tr>
                 </thead>
                 <tbody>
                 {% for ind, cur in inds %}
@@ -953,12 +963,14 @@ TEMPLATES["bsc_dashboard.html"] = r"""
                 {% if pct >= 90 %}{% set bc = "#198754" %}
                 {% elif pct >= 70 %}{% set bc = "#ffc107" %}
                 {% else %}{% set bc = "#dc3545" %}{% endif %}
+                {# Formata número: 2 decimais se float, inteiro se .0 #}
+                {% set cur_fmt = (cur|int)|string if cur == (cur|int) else ('%.2f'|format(cur)) %}
                 <tr>
-                  <td>{{ ind.name }}{% if ind.source_module %} <span class="badge bg-info text-dark" style="font-size:.62rem;">🔗 {{ ind.source_module }}</span>{% endif %}</td>
+                  <td style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="{{ ind.name }}">{{ ind.name }}{% if ind.source_module %} <span class="badge bg-info text-dark" style="font-size:.62rem;">🔗</span>{% endif %}</td>
                   <td class="muted">{{ ind.unit }}</td>
-                  <td class="muted">{{ ind.baseline_value }}</td>
-                  <td>{{ ind.target_value }}</td>
-                  <td class="fw-semibold">{{ cur }}</td>
+                  <td class="muted" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{{ ind.baseline_value|int if ind.baseline_value == (ind.baseline_value|int) else ('%.2f'|format(ind.baseline_value)) }}</td>
+                  <td style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{{ ind.target_value|int if ind.target_value == (ind.target_value|int) else ('%.2f'|format(ind.target_value)) }}</td>
+                  <td class="fw-semibold" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="{{ cur_fmt }}">{{ cur_fmt }}</td>
                   <td>
                     <div class="bsc-bar"><div class="bsc-fill" style="background:{{ bc }};width:{{ pct_capped }}%;"></div></div>
                     <div style="font-size:.68rem;color:{{ bc }};">{{ pct|round(1) }}%</div>
@@ -987,6 +999,7 @@ TEMPLATES["bsc_dashboard.html"] = r"""
                 {% endfor %}
                 </tbody>
               </table>
+              </div>
               {% else %}
               <div class="muted mb-3" style="font-size:.78rem;">Nenhum KPI. Adicione indicadores para medir este objetivo.</div>
               {% endif %}
