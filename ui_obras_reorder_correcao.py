@@ -33,7 +33,6 @@ async def obras_etapa_reordenar(etapa_id: int, request: Request,
     if not etapa or etapa.obra_id != body.get("obra_id"):
         return JSONResponse({"ok": False}, status_code=404)
 
-    # Recebe lista ordenada de ids da fase e reatribui ordem
     ids_ordenados = body.get("ids", [])
     for idx, eid in enumerate(ids_ordenados):
         e = session.get(ObraEtapa, int(eid))
@@ -62,7 +61,6 @@ async def obras_aplicar_correcao(obra_id: int, request: Request,
     valor = float(body.get("valor", 0))
     aplicar_subetapas = bool(body.get("aplicar_subetapas", True))
 
-    # Busca todas as etapas da obra que ainda não foram executadas (sem apontamento com fisico_pct > 0)
     fases = session.exec(
         select(ObraFase).where(ObraFase.obra_id == obra_id)
     ).all()
@@ -73,7 +71,6 @@ async def obras_aplicar_correcao(obra_id: int, request: Request,
 
     atualizadas = 0
     for etapa in etapas:
-        # Verifica se tem apontamento com progresso > 0
         apt = session.exec(
             select(ObraApontamento)
             .where(ObraApontamento.etapa_id == etapa.id)
@@ -82,9 +79,8 @@ async def obras_aplicar_correcao(obra_id: int, request: Request,
         ).first()
         fisico = apt.fisico_pct if apt else 0
         if fisico > 0:
-            continue  # etapa já iniciada — não altera
+            continue
 
-        # Salva orçamento original na primeira correção
         orig = getattr(etapa, "orcado_original_rs", None)
         if not orig or orig == 0:
             try:
@@ -92,7 +88,6 @@ async def obras_aplicar_correcao(obra_id: int, request: Request,
             except Exception:
                 pass
 
-        # Aplica correção sobre o valor original (para permitir re-aplicações)
         base = etapa.orcado_original_rs if (getattr(etapa, "orcado_original_rs", 0) or 0) > 0 else etapa.orcado_rs
         if tipo == "pct":
             etapa.orcado_rs = round(base * (1 + valor / 100), 2)
@@ -101,7 +96,6 @@ async def obras_aplicar_correcao(obra_id: int, request: Request,
         session.add(etapa)
         atualizadas += 1
 
-        # Sub-etapas
         if aplicar_subetapas:
             try:
                 subetapas = session.exec(
@@ -129,80 +123,44 @@ async def obras_aplicar_correcao(obra_id: int, request: Request,
 
 
 # ── Patch do template ─────────────────────────────────────────────────────────
+# V2: tudo injetado via JS para não depender de anchor HTML frágil
 
 def _patch_obras_reorder_correcao():
     tpl = TEMPLATES.get("ferramenta_obras_cronograma.html", "")
-    if not tpl or "_reorderCorrecaoV1" in tpl:
+    if not tpl or "_reorderCorrecaoV2" in tpl:
         return
 
-    # 1. Adiciona draggable + handle à linha de etapa
-    _OLD_ETAPA_DIV = '  <div class="cr-etapa" id="etapa-row-{{ e.id }}">\n    <div>'
-    _NEW_ETAPA_DIV = (
-        '  <div class="cr-etapa" id="etapa-row-{{ e.id }}" draggable="true"\n'
-        '       data-etapa-id="{{ e.id }}" data-fase-id="{{ fase.id }}"\n'
-        '       ondragstart="obrasDragStart(event)" ondragover="obrasDragOver(event)"\n'
-        '       ondrop="obrasDrop(event)" ondragend="obrasDragEnd(event)">\n'
-        '    <div style="display:flex;align-items:flex-start;gap:.4rem;">\n'
-        '      <span class="drag-handle" title="Arrastar para reordenar" '
-        'style="cursor:grab;color:#cbd5e1;font-size:1rem;padding-top:2px;user-select:none;">⠿</span>\n'
-        '      <div>'
-    )
-    if _OLD_ETAPA_DIV in tpl:
-        tpl = tpl.replace(_OLD_ETAPA_DIV, _NEW_ETAPA_DIV, 1)
-
-    # Fecha o div extra que abrimos
-    _OLD_CLOSE = (
-        '      {% if e.data_inicio or e.data_fim %}<div style="font-size:.7rem;color:var(--mc-muted);">{{ e.data_inicio }} → {{ e.data_fim }}</div>{% endif %}\n'
-        '      <div class="bar-sm"><div class="bar-sm-inner" style="width:{{ e.fisico_pct }}%;background:var(--mc-primary);"></div></div>\n'
-        '    </div>'
-    )
-    _NEW_CLOSE = (
-        '      {% if e.data_inicio or e.data_fim %}<div style="font-size:.7rem;color:var(--mc-muted);">{{ e.data_inicio }} → {{ e.data_fim }}</div>{% endif %}\n'
-        '      <div class="bar-sm"><div class="bar-sm-inner" style="width:{{ e.fisico_pct }}%;background:var(--mc-primary);"></div></div>\n'
-        '    </div></div>'
-    )
-    if _OLD_CLOSE in tpl:
-        tpl = tpl.replace(_OLD_CLOSE, _NEW_CLOSE, 1)
-
-    # 2. Adiciona botão "Correção" no cabeçalho da obra (próximo ao botão existente)
-    _OLD_HDR_BTN = '<button class="btn btn-sm btn-outline-secondary no-print" onclick="abrirNovaFase()">'
-    _NEW_HDR_BTN = (
-        '<button class="btn btn-sm btn-warning no-print" onclick="abrirModalCorrecao()" '
-        'style="font-size:.8rem;" title="Aplicar correção a todas as etapas futuras">\n'
-        '  📐 Correção\n'
-        '</button>\n'
-        '<button class="btn btn-sm btn-outline-secondary no-print" onclick="abrirNovaFase()">'
-    )
-    if _OLD_HDR_BTN in tpl:
-        tpl = tpl.replace(_OLD_HDR_BTN, _NEW_HDR_BTN, 1)
-
-    # 3. Adiciona modal de correção antes do </body> / {% endblock %}
-    _MODAL_CORRECAO = """
-<!-- Modal Correção -->
+    _INJECT = """
+<script>
+// ── Reorder + Correção V2 ──────────────────────────────────────────────────
+(function() {
+  // Modal HTML injetado no body
+  if (!document.getElementById('modalCorrecao')) {
+    document.body.insertAdjacentHTML('beforeend', `
 <div class="modal fade" id="modalCorrecao" tabindex="-1">
   <div class="modal-dialog modal-sm">
     <div class="modal-content">
       <div class="modal-header" style="background:#f97316;color:#fff;">
-        <h5 class="modal-title">📐 Aplicar Correção ao Orçamento</h5>
+        <h5 class="modal-title">&#128208; Reajuste de Or&#231;amento</h5>
         <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
       </div>
       <div class="modal-body">
-        <p style="font-size:.83rem;color:#64748b;">Aplica correção a todas as etapas <b>ainda não executadas</b> (físico = 0%). O valor original do primeiro orçamento fica salvo.</p>
+        <p style="font-size:.83rem;color:#64748b;">Aplica reajuste a todas as etapas <b>ainda n&#227;o executadas</b> (f&#237;sico = 0%). O valor original fica salvo para n&#227;o acumular em reaplicac&#807;&#245;es.</p>
         <div class="mb-3">
-          <label class="form-label fw-semibold">Tipo de correção</label>
+          <label class="form-label fw-semibold">Tipo</label>
           <select id="correcaoTipo" class="form-select">
-            <option value="pct">% sobre o orçamento original</option>
-            <option value="rs">R$ fixo sobre o orçamento original</option>
+            <option value="pct">% sobre o or&#231;amento original</option>
+            <option value="rs">R$ fixo sobre o or&#231;amento original</option>
           </select>
         </div>
         <div class="mb-3">
           <label class="form-label fw-semibold" id="correcaoLabel">Percentual (%)</label>
           <input type="number" id="correcaoValor" class="form-control" step="0.01" placeholder="Ex: 5 para +5%">
-          <div class="form-text">Use valor negativo para reduzir. Ex: -3 para -3%.</div>
+          <div class="form-text">Negativo para reduzir. Ex: -3 para -3%.</div>
         </div>
         <div class="form-check mb-2">
           <input class="form-check-input" type="checkbox" id="correcaoSubetapas" checked>
-          <label class="form-check-label" for="correcaoSubetapas">Aplicar também às sub-etapas</label>
+          <label class="form-check-label" for="correcaoSubetapas">Aplicar tamb&#233;m &#224;s sub-etapas</label>
         </div>
       </div>
       <div class="modal-footer">
@@ -211,59 +169,92 @@ def _patch_obras_reorder_correcao():
       </div>
     </div>
   </div>
-</div>
-"""
-    _OLD_ENDBLOCK = "{% endblock %}"
-    tpl = tpl.replace(_OLD_ENDBLOCK,
-                      _MODAL_CORRECAO + "\n" + _OLD_ENDBLOCK, 1)
+</div>`);
+  }
 
-    # 4. Adiciona JS de drag-and-drop e modal correção antes de </script>
-    _DND_JS = """
-// ── Drag-and-drop etapas ──
-let _dragEtapa = null, _dragOverEtapa = null;
-function obrasDragStart(e) {
-  _dragEtapa = e.currentTarget;
-  e.dataTransfer.effectAllowed = 'move';
-  e.currentTarget.style.opacity = '0.4';
-}
-function obrasDragOver(e) {
-  e.preventDefault();
-  e.dataTransfer.dropEffect = 'move';
-  const el = e.currentTarget;
-  if (el !== _dragEtapa && el.dataset.faseId === _dragEtapa?.dataset?.faseId) {
-    el.style.borderTop = '2px solid #6366f1';
-    _dragOverEtapa = el;
-  }
-}
-function obrasDragEnd(e) {
-  e.currentTarget.style.opacity = '';
-  document.querySelectorAll('.cr-etapa').forEach(el => el.style.borderTop = '');
-}
-async function obrasDrop(e) {
-  e.preventDefault();
-  document.querySelectorAll('.cr-etapa').forEach(el => el.style.borderTop = '');
-  if (!_dragEtapa || !_dragOverEtapa || _dragEtapa === _dragOverEtapa) return;
-  if (_dragEtapa.dataset.faseId !== _dragOverEtapa.dataset.faseId) {
-    alert('Mova etapas apenas dentro da mesma fase.'); return;
-  }
-  const parent = _dragOverEtapa.parentNode;
-  parent.insertBefore(_dragEtapa, _dragOverEtapa);
-  _dragEtapa.style.opacity = '';
-  // Coleta nova ordem
-  const ids = [...parent.querySelectorAll('.cr-etapa')].map(el => parseInt(el.dataset.etapaId));
-  await fetch('/ferramentas/obras/etapa/' + _dragEtapa.dataset.etapaId + '/reordenar', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({ obra_id: OBRA_ID, ids: ids })
+  // Listener tipo
+  const tipoSel = document.getElementById('correcaoTipo');
+  if (tipoSel) tipoSel.addEventListener('change', function() {
+    document.getElementById('correcaoLabel').textContent =
+      this.value === 'pct' ? 'Percentual (%)' : 'Valor em R$';
   });
-  _dragEtapa = null; _dragOverEtapa = null;
-}
 
-// ── Modal Correção ──
-document.getElementById('correcaoTipo')?.addEventListener('change', function() {
-  document.getElementById('correcaoLabel').textContent =
-    this.value === 'pct' ? 'Percentual (%)' : 'Valor em R$';
-});
+  // Botão "Reajuste" antes do botão "Nova Fase"
+  const novaFaseBtn = document.querySelector('[onclick*="abrirNovaFase"]');
+  if (novaFaseBtn && !document.getElementById('btnCorrecaoObra')) {
+    const btn = document.createElement('button');
+    btn.id = 'btnCorrecaoObra';
+    btn.className = 'btn btn-warning btn-sm no-print';
+    btn.style.fontSize = '.8rem';
+    btn.title = 'Reajustar or\\u00e7amento de etapas n\\u00e3o executadas';
+    btn.onclick = abrirModalCorrecao;
+    btn.innerHTML = '&#128208; Reajuste';
+    novaFaseBtn.parentNode.insertBefore(btn, novaFaseBtn);
+  }
+
+  // Drag-and-drop nas etapas
+  let _dragEtapa = null, _dragOverEtapa = null;
+
+  function obrasDragStart(e) {
+    _dragEtapa = e.currentTarget;
+    e.dataTransfer.effectAllowed = 'move';
+    e.currentTarget.style.opacity = '0.4';
+  }
+  function obrasDragOver(e) {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    const el = e.currentTarget;
+    if (el !== _dragEtapa) {
+      document.querySelectorAll('.cr-etapa').forEach(x => x.style.borderTop = '');
+      el.style.borderTop = '2px solid #6366f1';
+      _dragOverEtapa = el;
+    }
+  }
+  function obrasDragEnd(e) {
+    e.currentTarget.style.opacity = '';
+    document.querySelectorAll('.cr-etapa').forEach(el => el.style.borderTop = '');
+  }
+  async function obrasDrop(e) {
+    e.preventDefault();
+    document.querySelectorAll('.cr-etapa').forEach(el => el.style.borderTop = '');
+    if (!_dragEtapa || !_dragOverEtapa || _dragEtapa === _dragOverEtapa) return;
+    if (_dragEtapa.parentNode !== _dragOverEtapa.parentNode) {
+      alert('Mova etapas apenas dentro da mesma fase.'); return;
+    }
+    const parent = _dragOverEtapa.parentNode;
+    parent.insertBefore(_dragEtapa, _dragOverEtapa);
+    _dragEtapa.style.opacity = '';
+    const etapaId = _dragEtapa.id.replace('etapa-row-', '');
+    const ids = [...parent.querySelectorAll('.cr-etapa')].map(el => parseInt(el.id.replace('etapa-row-', '')));
+    try {
+      await fetch('/ferramentas/obras/etapa/' + etapaId + '/reordenar', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ obra_id: OBRA_ID, ids: ids })
+      });
+    } catch(err) { console.error('Erro ao reordenar etapa:', err); }
+    _dragEtapa = null; _dragOverEtapa = null;
+  }
+
+  document.querySelectorAll('.cr-etapa').forEach(function(el) {
+    el.draggable = true;
+    // Handle de arraste no primeiro div filho (coluna descrição)
+    const firstDiv = el.querySelector(':scope > div');
+    if (firstDiv && !firstDiv.querySelector('.dnd-handle')) {
+      const h = document.createElement('span');
+      h.className = 'dnd-handle';
+      h.innerHTML = '&#10783;';
+      h.title = 'Arrastar para reordenar';
+      h.style.cssText = 'cursor:grab;color:#cbd5e1;font-size:1.1rem;user-select:none;display:inline-block;margin-right:.3rem;vertical-align:middle;';
+      firstDiv.insertBefore(h, firstDiv.firstChild);
+    }
+    el.addEventListener('dragstart', obrasDragStart);
+    el.addEventListener('dragover', obrasDragOver);
+    el.addEventListener('drop', obrasDrop);
+    el.addEventListener('dragend', obrasDragEnd);
+  });
+})();
+
 function abrirModalCorrecao() {
   new bootstrap.Modal(document.getElementById('modalCorrecao')).show();
 }
@@ -271,7 +262,7 @@ async function salvarCorrecao() {
   const tipo = document.getElementById('correcaoTipo').value;
   const valor = parseFloat(document.getElementById('correcaoValor').value);
   const subs = document.getElementById('correcaoSubetapas').checked;
-  if (isNaN(valor)) { alert('Informe o valor da correção.'); return; }
+  if (isNaN(valor)) { alert('Informe o valor da corre\\u00e7\\u00e3o.'); return; }
   const r = await fetch('/ferramentas/obras/' + OBRA_ID + '/aplicar-correcao', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
@@ -282,19 +273,16 @@ async function salvarCorrecao() {
     bootstrap.Modal.getInstance(document.getElementById('modalCorrecao')).hide();
     alert(d.atualizadas + ' etapa(s) atualizadas. Recarregando...');
     location.reload();
-  } else { alert('Erro ao aplicar correção.'); }
+  } else { alert('Erro ao aplicar reajuste.'); }
 }
+</script>
 """
-    _OLD_SCRIPT_END = "</script>\n{% endblock %}"
-    if _OLD_SCRIPT_END in tpl:
-        tpl = tpl.replace(_OLD_SCRIPT_END, _DND_JS + "\n</script>\n{% endblock %}", 1)
 
-    # Sentinel
-    tpl = tpl.replace("{% endblock %}", "{# _reorderCorrecaoV1 #}\n{% endblock %}", 1)
+    tpl = tpl.replace("{% endblock %}", _INJECT + "\n{# _reorderCorrecaoV2 #}\n{% endblock %}", 1)
     TEMPLATES["ferramenta_obras_cronograma.html"] = tpl
     if hasattr(templates_env.loader, "mapping"):
         templates_env.loader.mapping = TEMPLATES
-    print("[obras_reorder_correcao] Template patcheado OK")
+    print("[obras_reorder_correcao] Template patcheado V2 OK")
 
 
 _patch_obras_reorder_correcao()
