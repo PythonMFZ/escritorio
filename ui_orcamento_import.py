@@ -181,7 +181,7 @@ async def orc_import_upload(request: Request, session: Session = Depends(get_ses
             "rows": rows,
             "filename": filename,
             "header_row_idx": header_row_idx,
-            "expires": _uimp_dt.utcnow() + _uimp_td(hours=2),
+            "expires": _uimp_dt.utcnow() + _uimp_td(hours=8),
             "company_id": ctx.company.id,
         }
 
