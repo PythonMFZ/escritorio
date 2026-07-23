@@ -419,8 +419,6 @@ def _orc_brl(v):
     """Formata número no padrão BRL: 1.900.389,00 ou (1.900.389,00) para negativos."""
     try:
         v = float(v or 0)
-        if v == 0:
-            return "—"
         # f"{x:,.2f}" → "1,900,389.00" → trocar separadores → "1.900.389,00"
         s = f"{abs(v):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
         return f"({s})" if v < 0 else s
@@ -536,9 +534,10 @@ async def orcamento_grid(plan_id: int, request: Request, session: Session = Depe
     cc = get_client_or_none(session, ctx.company.id, client_id)
 
     rows = _load_grid(session, ctx.company.id, plan_id, client_id)
-    # Base para Análise Vertical: preferência 02T (receita líquida), fallback 01
+    # Base para Análise Vertical: preferência 02T (receita líquida), fallback 01, fallback 1ª linha
     _av_row = next((r for r in rows if r["code"] == "02T"), None) or \
-              next((r for r in rows if r["code"] == "01"), None)
+              next((r for r in rows if r["code"] == "01"), None) or \
+              (rows[0] if rows else None)
     av_base_b = {m: (_av_row["months"][m]["b"] if _av_row else 0.0) for m in range(1, 13)}
     av_base_r = {m: (_av_row["months"][m]["r"] if _av_row else 0.0) for m in range(1, 13)}
     av_total_b = _av_row["total_b"] if _av_row else 0.0
@@ -1501,7 +1500,8 @@ TEMPLATES["orcamento_grid.html"] = r"""
           onblur="saveEntry(this)" onkeydown="if(event.key==='Enter'||event.key==='Tab'){this.blur();}">
         {% endif %}
       </td>
-      <td class="orc-av">{% if base_b %}{{ "%.1f%%"|format(mv.b / base_b * 100) }}{% else %}—{% endif %}</td>
+      {% set eff_base_b = base_b if base_b else base_r %}
+      <td class="orc-av">{% if eff_base_b %}{{ "%.1f%%"|format(mv.b / eff_base_b * 100) }}{% else %}—{% endif %}</td>
       <td class="orc-val orc-realizado">
         {% if row.is_totalizer or row.has_children %}<span>{{ mv.r | brl }}</span>
         {% else %}<input type="number" step="0.01"
@@ -1511,15 +1511,18 @@ TEMPLATES["orcamento_grid.html"] = r"""
           onblur="saveEntry(this)" onkeydown="if(event.key==='Enter'||event.key==='Tab'){this.blur();}">
         {% endif %}
       </td>
-      <td class="orc-av">{% if base_r %}{{ "%.1f%%"|format(mv.r / base_r * 100) }}{% else %}—{% endif %}</td>
+      {% set eff_base_r = base_r if base_r else base_b %}
+      <td class="orc-av">{% if eff_base_r %}{{ "%.1f%%"|format(mv.r / eff_base_r * 100) }}{% else %}—{% endif %}</td>
       <td class="orc-val {% if mv.b and mv.r < mv.b %}orc-var-neg{% elif mv.b and mv.r >= mv.b %}orc-var-pos{% endif %}">
         {% if mv.b %}{{ "%+.0f%%"|format((mv.r - mv.b) / mv.b * 100) }}{% else %}—{% endif %}
       </td>
       {% endfor %}
+      {% set eff_total_b = av_total_b if av_total_b else av_total_r %}
+      {% set eff_total_r = av_total_r if av_total_r else av_total_b %}
       <td class="orc-val orc-total-col">{{ row.total_b | brl }}</td>
-      <td class="orc-av orc-total-col">{% if av_total_b %}{{ "%.1f%%"|format(row.total_b / av_total_b * 100) }}{% else %}—{% endif %}</td>
+      <td class="orc-av orc-total-col">{% if eff_total_b %}{{ "%.1f%%"|format(row.total_b / eff_total_b * 100) }}{% else %}—{% endif %}</td>
       <td class="orc-val orc-total-col orc-realizado">{{ row.total_r | brl }}</td>
-      <td class="orc-av orc-total-col">{% if av_total_r %}{{ "%.1f%%"|format(row.total_r / av_total_r * 100) }}{% else %}—{% endif %}</td>
+      <td class="orc-av orc-total-col">{% if eff_total_r %}{{ "%.1f%%"|format(row.total_r / eff_total_r * 100) }}{% else %}—{% endif %}</td>
       <td class="orc-val orc-total-col {% if row.total_b and row.total_r < row.total_b %}orc-var-neg{% elif row.total_b and row.total_r >= row.total_b %}orc-var-pos{% endif %}">
         {% if row.total_b %}{{ "%+.0f%%"|format((row.total_r - row.total_b) / row.total_b * 100) }}{% else %}—{% endif %}
       </td>
