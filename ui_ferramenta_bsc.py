@@ -374,14 +374,16 @@ async def bsc_dashboard(plan_id: int, request: Request, session: Session = Depen
     objs_by_persp, inds_by_obj, acts_by_obj, values_by_ind, ach_by_obj = \
         _bsc_load_dashboard(session, ctx.company.id, plan_id)
 
-    # Budget accounts for source linking selector
+    # Budget accounts for source linking selector — filter by active client
     try:
-        budget_accounts = session.exec(
-            select(BudgetAccount)
-            .where(BudgetAccount.company_id == ctx.company.id,
-                   BudgetAccount.is_active == True)
-            .order_by(BudgetAccount.code)
-        ).all()
+        _client_id = get_active_client_id(request, session, ctx)
+        _acc_q = select(BudgetAccount).where(
+            BudgetAccount.company_id == ctx.company.id,
+            BudgetAccount.is_active == True,
+        )
+        if _client_id is not None:
+            _acc_q = _acc_q.where(BudgetAccount.client_id == _client_id)
+        budget_accounts = session.exec(_acc_q.order_by(BudgetAccount.code)).all()
     except Exception:
         budget_accounts = []
 
