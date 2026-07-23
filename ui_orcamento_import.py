@@ -8,9 +8,6 @@ import re       as _uimp_re
 import json     as _uimp_json
 from datetime   import datetime as _uimp_dt, timedelta as _uimp_td
 
-# ── Cache de uploads em memória (TTL 2h) ──────────────────────────────────────
-_ORC_UPLOAD_CACHE: dict = {}
-
 # ── Modelos ────────────────────────────────────────────────────────────────────
 
 class BudgetImportConfig(SQLModel, table=True):
@@ -36,12 +33,75 @@ class BudgetAccountMapping(SQLModel, table=True):
     budget_account_id: Optional[int] = Field(default=None)
     updated_at:        datetime      = Field(default_factory=utcnow)
 
+class BudgetUploadCache(SQLModel, table=True):
+    """Persiste uploads no banco para funcionar com múltiplos workers."""
+    __tablename__ = "budgetuploadcache"
+    __table_args__ = {"extend_existing": True}
+    id:         Optional[int] = Field(default=None, primary_key=True)
+    upload_key: str           = Field(index=True, unique=True)
+    company_id: int           = Field(index=True)
+    filename:   str           = Field(default="")
+    rows_json:  str           = Field(default="[]")   # JSON serializado
+    header_row_idx: int       = Field(default=0)
+    expires_at: datetime      = Field(default_factory=utcnow)
+    created_at: datetime      = Field(default_factory=utcnow)
+
 # ── Criação das tabelas ────────────────────────────────────────────────────────
 try:
-    for _tbl in (BudgetImportConfig.__table__, BudgetAccountMapping.__table__):
+    for _tbl in (BudgetImportConfig.__table__, BudgetAccountMapping.__table__,
+                 BudgetUploadCache.__table__):
         _tbl.create(engine, checkfirst=True)
 except Exception as _e:
     print(f"[orc-import] tabelas: {_e}")
+
+# ── Helpers de cache persistente ──────────────────────────────────────────────
+
+def _uimp_cache_save(session, company_id: int, upload_key: str,
+                     filename: str, rows: list, header_row_idx: int) -> None:
+    # Limpa entradas antigas desta empresa
+    old = session.exec(
+        select(BudgetUploadCache).where(
+            BudgetUploadCache.company_id == company_id,
+            BudgetUploadCache.expires_at < _uimp_dt.utcnow(),
+        )
+    ).all()
+    for o in old:
+        session.delete(o)
+    # Serializa rows: converte datetime/date para string
+    def _ser(v):
+        if isinstance(v, (_uimp_dt,)):
+            return v.isoformat()
+        from datetime import date as _d
+        if isinstance(v, _d):
+            return v.isoformat()
+        return v
+    rows_ser = [[_ser(c) for c in row] for row in rows]
+    entry = BudgetUploadCache(
+        upload_key=upload_key,
+        company_id=company_id,
+        filename=filename,
+        rows_json=_uimp_json.dumps(rows_ser, ensure_ascii=False),
+        header_row_idx=header_row_idx,
+        expires_at=_uimp_dt.utcnow() + _uimp_td(hours=8),
+    )
+    session.add(entry)
+    session.commit()
+
+def _uimp_cache_get(session, upload_key: str, company_id: int) -> "dict|None":
+    entry = session.exec(
+        select(BudgetUploadCache).where(
+            BudgetUploadCache.upload_key == upload_key,
+            BudgetUploadCache.company_id == company_id,
+        )
+    ).first()
+    if not entry or entry.expires_at < _uimp_dt.utcnow():
+        return None
+    return {
+        "rows": _uimp_json.loads(entry.rows_json),
+        "filename": entry.filename,
+        "header_row_idx": entry.header_row_idx,
+        "company_id": company_id,
+    }
 
 # ── Helpers de parsing ─────────────────────────────────────────────────────────
 
@@ -112,11 +172,6 @@ def _uimp_parse_file(file_bytes: bytes, filename: str) -> list:
         reader = _uimp_csv.reader(_uimp_io.StringIO(text), delimiter=delim)
         return [list(row) for row in reader]
 
-def _uimp_clean_cache():
-    now = _uimp_dt.utcnow()
-    for k in [k for k, v in _ORC_UPLOAD_CACHE.items() if v["expires"] < now]:
-        _ORC_UPLOAD_CACHE.pop(k, None)
-
 # ── Rotas ─────────────────────────────────────────────────────────────────────
 
 @app.get("/ferramentas/orcamento/importar", response_class=HTMLResponse)
@@ -176,14 +231,7 @@ async def orc_import_upload(request: Request, session: Session = Depends(get_ses
         ).first()
 
         upload_key = str(_uimp_uuid.uuid4())
-        _uimp_clean_cache()
-        _ORC_UPLOAD_CACHE[upload_key] = {
-            "rows": rows,
-            "filename": filename,
-            "header_row_idx": header_row_idx,
-            "expires": _uimp_dt.utcnow() + _uimp_td(hours=8),
-            "company_id": ctx.company.id,
-        }
+        _uimp_cache_save(session, ctx.company.id, upload_key, filename, rows, header_row_idx)
 
         return JSONResponse({
             "ok": True,
@@ -220,8 +268,8 @@ async def orc_import_analisar(request: Request, session: Session = Depends(get_s
     header_row_idx = int(body.get("header_row_idx") or 0)
     plan_id        = int(body.get("plan_id") or 0)
 
-    cached = _ORC_UPLOAD_CACHE.get(upload_key)
-    if not cached or cached["company_id"] != ctx.company.id:
+    cached = _uimp_cache_get(session, upload_key, ctx.company.id)
+    if not cached:
         return JSONResponse({"ok": False, "error": "Upload expirado. Faça o upload novamente."})
 
     # Resolve client_id do plano selecionado para filtrar contas corretamente
@@ -390,8 +438,8 @@ async def orc_import_executar(request: Request, session: Session = Depends(get_s
     header_row_idx = int(body.get("header_row_idx") or 0)
     mappings       = body.get("mappings", {})  # {external_key: account_id or null}
 
-    cached = _ORC_UPLOAD_CACHE.get(upload_key)
-    if not cached or cached["company_id"] != ctx.company.id:
+    cached = _uimp_cache_get(session, upload_key, ctx.company.id)
+    if not cached:
         return JSONResponse({"ok": False, "error": "Upload expirado. Faça o upload novamente."})
 
     plan = session.get(BudgetPlan, plan_id)
@@ -470,7 +518,13 @@ async def orc_import_executar(request: Request, session: Session = Depends(get_s
         upserted += 1
 
     session.commit()
-    _ORC_UPLOAD_CACHE.pop(upload_key, None)
+    # Remove o upload do cache após importação bem-sucedida
+    entry = session.exec(
+        select(BudgetUploadCache).where(BudgetUploadCache.upload_key == upload_key)
+    ).first()
+    if entry:
+        session.delete(entry)
+        session.commit()
 
     return JSONResponse({
         "ok": True,
