@@ -218,10 +218,18 @@ async def orc_import_analisar(request: Request, session: Session = Depends(get_s
     date_col       = int(body.get("date_col") or 1)
     value_col      = int(body.get("value_col") or 2)
     header_row_idx = int(body.get("header_row_idx") or 0)
+    plan_id        = int(body.get("plan_id") or 0)
 
     cached = _ORC_UPLOAD_CACHE.get(upload_key)
     if not cached or cached["company_id"] != ctx.company.id:
         return JSONResponse({"ok": False, "error": "Upload expirado. Faça o upload novamente."})
+
+    # Resolve client_id do plano selecionado para filtrar contas corretamente
+    plan_client_id = None
+    if plan_id:
+        plan = session.get(BudgetPlan, plan_id)
+        if plan and plan.company_id == ctx.company.id:
+            plan_client_id = plan.client_id
 
     rows      = cached["rows"]
     data_rows = [r for r in rows[header_row_idx + 1:] if any(c is not None for c in r)]
@@ -253,22 +261,34 @@ async def orc_import_analisar(request: Request, session: Session = Depends(get_s
         except Exception:
             pass
 
-    # Load non-totalizer accounts for auto-match + dropdown
-    accounts = session.exec(
-        select(BudgetAccount).where(
-            BudgetAccount.company_id == ctx.company.id,
-            BudgetAccount.is_active  == True,
-            BudgetAccount.is_totalizer == False,
-        )
-    ).all()
+    # Carrega contas do plano de contas do cliente específico
+    acc_query = select(BudgetAccount).where(
+        BudgetAccount.company_id   == ctx.company.id,
+        BudgetAccount.is_active    == True,
+        BudgetAccount.is_totalizer == False,
+    )
+    if plan_client_id is not None:
+        acc_query = acc_query.where(BudgetAccount.client_id == plan_client_id)
 
-    # Load saved mappings
-    saved_maps = {
-        m.external_key: m.budget_account_id
-        for m in session.exec(
-            select(BudgetAccountMapping).where(BudgetAccountMapping.company_id == ctx.company.id)
-        ).all()
-    }
+    accounts = session.exec(acc_query).all()
+
+    # Mapeamentos salvos — filtrados pelo client_id do plano
+    map_query = select(BudgetAccountMapping).where(
+        BudgetAccountMapping.company_id == ctx.company.id
+    )
+    if plan_client_id is not None:
+        # Filtra mapeamentos cujo budget_account_id pertence ao cliente correto
+        valid_acc_ids = {a.id for a in accounts}
+        saved_maps = {
+            m.external_key: m.budget_account_id
+            for m in session.exec(map_query).all()
+            if m.budget_account_id in valid_acc_ids
+        }
+    else:
+        saved_maps = {
+            m.external_key: m.budget_account_id
+            for m in session.exec(map_query).all()
+        }
 
     result_accounts = []
     for ext_key, stats in sorted(unique.items(), key=lambda x: -x[1]["count"]):
@@ -767,6 +787,7 @@ async function analisarColunas() {
         date_col:       _imp.date_col,
         value_col:      _imp.value_col,
         header_row_idx: _imp.header_row_idx,
+        plan_id:        _imp.plan_id,
       }),
     });
     var d = await r.json();
