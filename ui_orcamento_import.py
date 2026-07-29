@@ -551,7 +551,7 @@ TEMPLATES["orc_importar.html"] = r"""
 
   <!-- Steps indicator -->
   <div class="d-flex gap-0 mb-4" id="stepBar">
-    {% for label in ["1. Upload","2. Colunas","3. De:Para","4. Confirmar"] %}
+    {% for label in ["1. Upload","2. Colunas","3. Dimensões","4. De:Para","5. Confirmar"] %}
     <div class="px-3 py-1 border step-pill" id="pill{{ loop.index }}"
          style="font-size:.8rem;border-radius:{% if loop.first %}8px 0 0 8px{% elif loop.last %}0 8px 8px 0{% else %}0{% endif %};background:{% if loop.first %}#0d6efd;color:#fff{% else %}#f8f9fa;color:#6c757d{% endif %};">
       {{ label }}
@@ -620,14 +620,38 @@ TEMPLATES["orc_importar.html"] = r"""
           </div>
         </div>
 
-        <button class="btn btn-primary" onclick="analisarColunas()">Próximo → Mapeamento de Contas</button>
+        <button class="btn btn-primary" onclick="analisarColunas()">Próximo → Dimensões</button>
         <span id="analisarStatus" class="ms-2 text-muted small"></span>
       </div>
     </div>
   </div>
 
-  <!-- ── PASSO 3: De:Para ──────────────────────────────────────────────── -->
+  <!-- ── PASSO 3: Dimensões ───────────────────────────────────────────── -->
   <div id="passo3" style="display:none;">
+    <div class="card shadow-sm mb-3">
+      <div class="card-body">
+        <div class="d-flex justify-content-between align-items-start mb-3">
+          <div>
+            <div class="fw-semibold">🏷️ Dimensões da Importação</div>
+            <div class="text-muted small">Associe cada dimensão a uma coluna da planilha ou defina um valor fixo para todos os lançamentos.</div>
+          </div>
+          <button class="btn btn-sm btn-outline-secondary" onclick="voltarPasso(2)">← Voltar</button>
+        </div>
+
+        <div id="p3DimsContainer">
+          <div class="text-muted small py-3 text-center" id="p3Loading">Carregando dimensões...</div>
+        </div>
+
+        <div class="mt-3 d-flex gap-2">
+          <button class="btn btn-outline-secondary btn-sm" onclick="pularDimensoes()">Pular (sem dimensões)</button>
+          <button class="btn btn-primary" onclick="irParaDeParaStep()">Próximo → De:Para →</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── PASSO 4: De:Para ──────────────────────────────────────────────── -->
+  <div id="passo4" style="display:none;">
     <div class="card shadow-sm mb-3">
       <div class="card-body">
         <div class="d-flex justify-content-between align-items-start mb-2">
@@ -640,7 +664,7 @@ TEMPLATES["orc_importar.html"] = r"""
               &nbsp;· <span class="badge bg-warning text-dark">sem match</span> = defina abaixo
             </div>
           </div>
-          <button class="btn btn-sm btn-outline-secondary" onclick="voltarPasso(2)">← Voltar</button>
+          <button class="btn btn-sm btn-outline-secondary" onclick="voltarPasso(3)">← Voltar</button>
         </div>
 
         <div style="overflow-x:auto;max-height:420px;overflow-y:auto;">
@@ -667,13 +691,13 @@ TEMPLATES["orc_importar.html"] = r"""
     </div>
   </div>
 
-  <!-- ── PASSO 4: Preview + Confirmar ─────────────────────────────────── -->
-  <div id="passo4" style="display:none;">
+  <!-- ── PASSO 5: Preview + Confirmar ─────────────────────────────────── -->
+  <div id="passo5" style="display:none;">
     <div class="card shadow-sm mb-3">
       <div class="card-body">
         <div class="d-flex justify-content-between align-items-start mb-3">
           <div class="fw-semibold">✅ Confirmar Importação</div>
-          <button class="btn btn-sm btn-outline-secondary" onclick="voltarPasso(3)">← Voltar</button>
+          <button class="btn btn-sm btn-outline-secondary" onclick="voltarPasso(4)">← Voltar</button>
         </div>
 
         <div class="row g-2 mb-3" id="p4Summary"></div>
@@ -731,17 +755,22 @@ var _imp = {
   acc_options:    [],
   mappings:       {},   // ext_key → account_id or null
   years_seen:     [],
+  dim_mappings:   [],   // [{dim_id, dim_name, mode: 'col'|'fixed', col_idx, fixed_val_id}]
+  dimensions:     [],   // loaded from API
 };
 
 var _MONTHS_PT = ["","Jan","Fev","Mar","Abr","Mai","Jun","Jul","Ago","Set","Out","Nov","Dez"];
 
 // ── Step navigation ─────────────────────────────────────────────────────────
 function _setStep(n) {
-  [1,2,3,4].forEach(function(i) {
-    document.getElementById('passo'+i).style.display = (i===n) ? '' : 'none';
+  [1,2,3,4,5].forEach(function(i) {
+    var pEl = document.getElementById('passo'+i);
+    if (pEl) pEl.style.display = (i===n) ? '' : 'none';
     var pill = document.getElementById('pill'+i);
-    pill.style.background = i===n ? '#0d6efd' : (i<n ? '#198754' : '#f8f9fa');
-    pill.style.color = i<=n ? '#fff' : '#6c757d';
+    if (pill) {
+      pill.style.background = i===n ? '#0d6efd' : (i<n ? '#198754' : '#f8f9fa');
+      pill.style.color = i<=n ? '#fff' : '#6c757d';
+    }
   });
 }
 function voltarPasso(n) { _setStep(n); }
@@ -857,7 +886,7 @@ async function analisarColunas() {
       _imp.mappings[ua.external_key] = ua.matched_id || null;
     });
 
-    _renderPasso3(d);
+    await carregarDimensoes();
     _setStep(3);
     document.getElementById('analisarStatus').textContent = '';
   } catch(e) {
@@ -866,7 +895,99 @@ async function analisarColunas() {
   }
 }
 
-function _renderPasso3(d) {
+// ── PASSO 3: Dimensões ──────────────────────────────────────────────────────
+async function carregarDimensoes() {
+  document.getElementById('p3Loading').style.display = '';
+  try {
+    var r = await fetch('/api/orcamento/dimensoes/lista');
+    var d = await r.json();
+    _imp.dimensions = (d.ok && d.dimensions) ? d.dimensions : [];
+  } catch(e) {
+    _imp.dimensions = [];
+  }
+  _renderPasso3Dimensoes();
+}
+
+function _renderPasso3Dimensoes() {
+  var cont = document.getElementById('p3DimsContainer');
+  var dims = _imp.dimensions;
+
+  if (!dims || dims.length === 0) {
+    cont.innerHTML = '<div class="alert alert-info py-2" style="font-size:.84rem;">Nenhuma dimensão cadastrada. <a href="/ferramentas/orcamento/dimensoes" target="_blank">Cadastrar dimensões</a> ou clique em "Pular".</div>';
+    return;
+  }
+
+  // Reset dim_mappings to match loaded dimensions
+  var existing = {};
+  (_imp.dim_mappings || []).forEach(function(m) { existing[m.dim_id] = m; });
+  _imp.dim_mappings = dims.map(function(dim) {
+    return existing[dim.id] || {dim_id: dim.id, dim_name: dim.name, mode: 'fixed', col_idx: null, fixed_val_id: null};
+  });
+
+  var colOpts = '<option value="">— Nenhuma coluna —</option>' +
+    _imp.headers.map(function(h,i){ return '<option value="'+i+'">Col '+i+': '+_esc(h.substring(0,35))+'</option>'; }).join('');
+
+  var html = dims.map(function(dim, idx) {
+    var m = _imp.dim_mappings[idx];
+    var valOpts = '<option value="">— Sem valor fixo —</option>' +
+      (dim.values||[]).map(function(v){ return '<option value="'+v.id+'">'+_esc(v.name)+'</option>'; }).join('');
+
+    return '<div class="border rounded p-3 mb-2" style="background:#fafafa;">' +
+      '<div class="d-flex align-items-center gap-3 flex-wrap">' +
+      '<div><span class="badge" style="background:'+_esc(dim.color||'#6c757d')+';">'+_esc(dim.name)+'</span></div>' +
+      '<div class="d-flex align-items-center gap-2">' +
+      '<label class="form-check-label small me-1">Modo:</label>' +
+      '<select class="form-select form-select-sm" style="width:auto;" onchange="_dimModeChange('+idx+',this.value)">' +
+      '<option value="fixed"'+(m.mode==='fixed'?' selected':'')+'>Valor fixo</option>' +
+      '<option value="col"'+(m.mode==='col'?' selected':'')+'>Coluna da planilha</option>' +
+      '<option value="skip"'+(m.mode==='skip'?' selected':'')+'>Ignorar</option>' +
+      '</select>' +
+      '</div>' +
+      '<div id="dimFixed_'+idx+'" style="display:'+(m.mode==='fixed'?'':'none')+';">' +
+      '<select class="form-select form-select-sm" style="min-width:200px;" onchange="_dimFixedChange('+idx+',this.value)">' +
+      valOpts +
+      '</select>' +
+      '</div>' +
+      '<div id="dimCol_'+idx+'" style="display:'+(m.mode==='col'?'':'none')+';">' +
+      '<select class="form-select form-select-sm" style="min-width:200px;" onchange="_dimColChange('+idx+',this.value)">' +
+      colOpts +
+      '</select>' +
+      '</div>' +
+      '</div>' +
+      '</div>';
+  }).join('');
+
+  cont.innerHTML = html;
+
+  // Set saved values
+  dims.forEach(function(dim, idx) {
+    var m = _imp.dim_mappings[idx];
+    var fixedSel = cont.querySelectorAll('[id^="dimFixed_"] select')[idx];
+    var colSel   = cont.querySelectorAll('[id^="dimCol_"] select')[idx];
+    if (fixedSel && m.fixed_val_id) fixedSel.value = m.fixed_val_id;
+    if (colSel && m.col_idx !== null) colSel.value = m.col_idx;
+  });
+}
+
+function _dimModeChange(idx, mode) {
+  _imp.dim_mappings[idx].mode = mode;
+  document.getElementById('dimFixed_'+idx).style.display = mode==='fixed' ? '' : 'none';
+  document.getElementById('dimCol_'+idx).style.display   = mode==='col'   ? '' : 'none';
+}
+function _dimFixedChange(idx, val) { _imp.dim_mappings[idx].fixed_val_id = val ? parseInt(val) : null; }
+function _dimColChange(idx, val)   { _imp.dim_mappings[idx].col_idx = val !== '' ? parseInt(val) : null; }
+
+function pularDimensoes() {
+  _imp.dim_mappings = [];
+  irParaDeParaStep();
+}
+
+function irParaDeParaStep() {
+  _renderPasso4DePara(_imp);
+  _setStep(4);
+}
+
+function _renderPasso4DePara(d) {
   var auto    = d.unique_accounts.filter(function(u){ return u.match_source==='auto'; }).length;
   var saved   = d.unique_accounts.filter(function(u){ return u.match_source==='salvo'; }).length;
   var nomatch = d.unique_accounts.filter(function(u){ return !u.matched_id; }).length;
@@ -986,7 +1107,7 @@ function irParaConfirmacao() {
   }).join('');
   document.getElementById('p4Body').innerHTML = rows || '<tr><td colspan="3" class="text-muted text-center">Nenhuma conta mapeada.</td></tr>';
 
-  _setStep(4);
+  _setStep(5);
 }
 
 function _statCard(label, val, color) {
@@ -1014,6 +1135,7 @@ async function executarImport() {
         value_col:      _imp.value_col,
         header_row_idx: _imp.header_row_idx,
         mappings:       _imp.mappings,
+        dim_mappings:   _imp.dim_mappings,
       }),
     });
     var d = await r.json();
@@ -1025,7 +1147,7 @@ async function executarImport() {
     }
 
     // Show result
-    [1,2,3,4].forEach(function(i){document.getElementById('passo'+i).style.display='none';});
+    [1,2,3,4,5].forEach(function(i){var el=document.getElementById('passo'+i); if(el) el.style.display='none';});
     var res = document.getElementById('resultado');
     res.style.display = '';
     document.getElementById('resultadoBody').innerHTML =
