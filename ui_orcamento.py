@@ -807,7 +807,7 @@ async def orcamento_importar_excel(
             i_type = _col("tipo", "account_type", "type")
             i_tot = _col("totalizadora", "totalizador", "is_totalizer")
             i_form = _col("formula", "formula")
-            i_sign = _col("sinal", "sign")
+            i_sign = _col("sinal", "sign", "soma", "subtrai", "operacao", "operação")
             # planilhas sem cabeçalho nas colunas extras: assume Tipo logo após Nome,
             # e Totalizadora na coluna seguinte, se essas colunas tiverem algum dado.
             extra_cols = [j for j in range(len(row)) if j not in (c_code, c_name)]
@@ -816,6 +816,18 @@ async def orcamento_importar_excel(
                 i_type = extra_cols.pop(0)
             if i_tot is None and extra_cols:
                 i_tot = extra_cols.pop(0)
+            # Detecta coluna SOMA/SUBTRAI sem cabeçalho: varre as primeiras linhas de dados
+            # e procura coluna cujos valores sejam "SOMA" ou "SUBTRAI"
+            if i_sign is None:
+                for data_row in rows[ridx + 1: ridx + 10]:
+                    if data_row is None:
+                        continue
+                    for j, cell in enumerate(data_row):
+                        if str(cell or "").strip().upper() in ("SOMA", "SUBTRAI", "SUBTRAIR", "SUBTRAÇÃO"):
+                            i_sign = j
+                            break
+                    if i_sign is not None:
+                        break
             break
 
     if header_idx is None:
@@ -835,10 +847,18 @@ async def orcamento_importar_excel(
         acc_type = str(row[i_type] or "despesa").strip().lower() if i_type is not None and i_type < len(row) and row[i_type] else "despesa"
         is_tot = _orc_norm_bool(row[i_tot]) if i_tot is not None and i_tot < len(row) else False
         formula = str(row[i_form] or "").strip() if i_form is not None and i_form < len(row) and row[i_form] else ""
-        try:
-            sign = int(row[i_sign]) if i_sign is not None and i_sign < len(row) and row[i_sign] not in (None, "") else 1
-        except (TypeError, ValueError):
-            sign = 1
+        sign = 1
+        if i_sign is not None and i_sign < len(row) and row[i_sign] not in (None, ""):
+            _sv = str(row[i_sign]).strip().upper()
+            if _sv in ("SUBTRAI", "SUBTRAIR", "SUBTRAÇÃO", "-1", "-"):
+                sign = -1
+            elif _sv in ("SOMA", "SOMAR", "+1", "+", "1"):
+                sign = 1
+            else:
+                try:
+                    sign = int(float(_sv))
+                except (TypeError, ValueError):
+                    sign = 1
         items.append({"code": code, "name": name, "account_type": acc_type,
                        "is_totalizer": is_tot, "formula": formula, "sign": sign})
 
