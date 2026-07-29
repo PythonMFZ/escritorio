@@ -519,6 +519,7 @@ async def orcamento_contas(request: Request, session: Session = Depends(get_sess
 
 
 exec(open('ui_orcamento_import.py').read())
+exec(open('ui_orcamento_dimensoes.py').read())
 
 
 @app.get("/ferramentas/orcamento/{plan_id}", response_class=HTMLResponse)
@@ -983,9 +984,15 @@ TEMPLATES["orcamento_index.html"] = r"""
       {% if current_client %}Cliente: <strong>{{ current_client.name }}</strong>{% endif %}
     </div>
   </div>
-  <div class="d-flex gap-2">
+  <div class="d-flex gap-2 flex-wrap">
     <a href="/ferramentas/orcamento/contas" class="btn btn-outline-secondary btn-sm">
       <i class="bi bi-list-ul me-1"></i>Plano de Contas
+    </a>
+    <a href="/ferramentas/orcamento/dimensoes" class="btn btn-outline-secondary btn-sm">
+      🏷️ Dimensões
+    </a>
+    <a href="/ferramentas/orcamento/importar" class="btn btn-outline-secondary btn-sm">
+      📥 Importar Realizado
     </a>
     <button class="btn btn-primary btn-sm" onclick="novoPlano()">
       <i class="bi bi-plus-lg me-1"></i>Novo Plano
