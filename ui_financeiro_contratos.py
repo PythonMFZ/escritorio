@@ -259,7 +259,13 @@ def _ct_mp_gerar_boleto(cobranca: CobrancaMensal, contrato: ContratoCliente, ses
     primeiro   = nome_parts[0]
     sobrenome  = nome_parts[1] if len(nome_parts) > 1 else "."
 
-    venc_iso = f"{cobranca.data_vencimento}T23:59:00.000-03:00"
+    # Se a data de vencimento já passou, usa hoje + 3 dias úteis (MP rejeita datas no passado)
+    from datetime import date as _date_today, timedelta as _td
+    venc_date = _date_ct.fromisoformat(cobranca.data_vencimento)
+    hoje_date = _date_ct.today()
+    if venc_date <= hoje_date:
+        venc_date = hoje_date + _td(days=3)
+    venc_iso = f"{venc_date.isoformat()}T23:59:00.000-03:00"
 
     payload = {
         "transaction_amount": round(cobranca.valor_cents / 100, 2),
