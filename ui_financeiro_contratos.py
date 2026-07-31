@@ -429,7 +429,7 @@ def _ct_sync_entry(session, cobranca: CobrancaMensal, user_id: int = 1):
                 entry.status = novo_status
                 entry.settlement_date     = cobranca.data_pagamento or ""
                 entry.amount_realized_brl = (cobranca.valor_pago_cents or cobranca.valor_cents) / 100 if cobranca.status == "pago" else 0.0
-            entry.updated_by_user_id  = user_id
+                entry.updated_by_user_id  = user_id
 
         session.add(entry)
         session.commit()
