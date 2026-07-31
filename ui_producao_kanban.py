@@ -250,7 +250,7 @@ _TPL_PRODUCAO = r"""
             <span class="badge" style="font-size:.65rem;background:{{ op.prioridade|_prioridade_cor }}20;color:{{ op.prioridade|_prioridade_cor }};">{{ op.prioridade|upper }}</span>
           </div>
           <div style="font-weight:600;font-size:.85rem;margin-bottom:.25rem;">{{ op.produto }}</div>
-          {% if op.descricao %}<div style="font-size:.75rem;color:#64748b;margin-bottom:.3rem;">{{ op.descricao[:40] }}{% if op.descricao|length>40 %}…{% endif %}</div>{% endif %}
+          {% if op.descricao %}<div style="font-size:.75rem;color:#64748b;margin-bottom:.3rem;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;max-width:100%;">{{ op.descricao }}</div>{% endif %}
           {% if rids %}
           <div style="font-size:.7rem;color:#94a3b8;margin-bottom:.3rem;">
             <i class="bi bi-diagram-3 me-1"></i>
@@ -425,8 +425,8 @@ _TPL_PRODUCAO = r"""
           <thead><tr style="background:#f8fafc;border-bottom:1px solid var(--mc-border);">
             <th style="padding:.4rem .75rem;text-align:left;">Etapa</th>
             <th style="padding:.4rem .75rem;text-align:center;">Status</th>
-            <th style="padding:.4rem .75rem;text-align:right;background:#6366f110;">Tempo Est. (h)</th>
-            <th style="padding:.4rem .75rem;text-align:right;background:#16a34a10;">Tempo Real (h)</th>
+            <th style="padding:.4rem .75rem;text-align:right;background:#6366f110;">Tempo Est. (min)</th>
+            <th style="padding:.4rem .75rem;text-align:right;background:#16a34a10;">Tempo Real (min)</th>
             <th style="padding:.4rem .75rem;text-align:center;">Desvio</th>
             <th style="padding:.4rem .75rem;text-align:center;background:#16a34a10;">Entrada Real</th>
             <th style="padding:.4rem .75rem;text-align:center;background:#16a34a10;">Saída Real</th>
@@ -442,12 +442,13 @@ _TPL_PRODUCAO = r"""
                   {{ p.status|title }}
                 </span>
               </td>
-              <td style="padding:.4rem .75rem;text-align:right;background:#6366f108;">{{ '%.1f'|format(p.tempo_estimado_h) if p.tempo_estimado_h else '—' }}</td>
-              <td style="padding:.4rem .75rem;text-align:right;background:#16a34a08;font-weight:600;">{{ '%.1f'|format(p.tempo_realizado_h) if p.tempo_realizado_h else '—' }}</td>
+              <td style="padding:.4rem .75rem;text-align:right;background:#6366f108;">{{ (p.tempo_estimado_h * 60)|round|int if p.tempo_estimado_h else '—' }}</td>
+              <td style="padding:.4rem .75rem;text-align:right;background:#16a34a08;font-weight:600;">{{ (p.tempo_realizado_h * 60)|round|int if p.tempo_realizado_h else '—' }}</td>
               <td style="padding:.4rem .75rem;text-align:center;">
                 {% if dh is not none and p.tempo_realizado_h > 0 %}
-                <span style="font-weight:700;color:{% if dh<=0 %}#16a34a{% elif dh<=2 %}#f97316{% else %}#dc2626{% endif %};">
-                  {% if dh<=0 %}{{ '%.1f'|format(dh) }}h{% else %}+{{ '%.1f'|format(dh) }}h{% endif %}
+                {% set dm = (dh * 60)|round|int %}
+                <span style="font-weight:700;color:{% if dh<=0 %}#16a34a{% elif dh<=0.5 %}#f97316{% else %}#dc2626{% endif %};">
+                  {% if dh<=0 %}{{ dm }}min{% else %}+{{ dm }}min{% endif %}
                 </span>
                 {% else %}—{% endif %}
               </td>
@@ -465,11 +466,12 @@ _TPL_PRODUCAO = r"""
             {% set tot_real = rpassos|sum(attribute='tempo_realizado_h') %}
             <tr style="background:#f8fafc;font-weight:700;border-top:2px solid var(--mc-border);">
               <td style="padding:.4rem .75rem;" colspan="2">Total</td>
-              <td style="padding:.4rem .75rem;text-align:right;background:#6366f108;">{{ '%.1f'|format(tot_est) }}h</td>
-              <td style="padding:.4rem .75rem;text-align:right;background:#16a34a08;">{{ '%.1f'|format(tot_real) }}h</td>
+              <td style="padding:.4rem .75rem;text-align:right;background:#6366f108;">{{ (tot_est * 60)|round|int }}min</td>
+              <td style="padding:.4rem .75rem;text-align:right;background:#16a34a08;">{{ (tot_real * 60)|round|int }}min</td>
               <td style="padding:.4rem .75rem;text-align:center;">
                 {% set dh_tot = tot_real - tot_est %}
-                <span style="color:{% if dh_tot<=0 %}#16a34a{% else %}#dc2626{% endif %};">{% if dh_tot<=0 %}{{ '%.1f'|format(dh_tot) }}h{% else %}+{{ '%.1f'|format(dh_tot) }}h{% endif %}</span>
+                {% set dm_tot = (dh_tot * 60)|round|int %}
+                <span style="color:{% if dh_tot<=0 %}#16a34a{% else %}#dc2626{% endif %};">{% if dh_tot<=0 %}{{ dm_tot }}min{% else %}+{{ dm_tot }}min{% endif %}</span>
               </td>
               <td colspan="3"></td>
             </tr>
@@ -2061,10 +2063,7 @@ def _avancar_roteiro(session, op: OrdemProducao, passo_atual: ProducaoRoteiroPas
     proximo = todos[idx + 1] if idx + 1 < len(todos) else None
     if proximo:
         op.processo_id = proximo.processo_id
-        if proximo.status == "pendente":
-            proximo.status = "em_andamento"
-            proximo.data_entrada = datetime.utcnow()
-            session.add(proximo)
+        # Não inicia automaticamente — OP fica aguardando na fila da próxima etapa
     else:
         # último passo — conclui a OP
         op.status = "concluida"
