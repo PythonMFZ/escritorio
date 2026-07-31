@@ -1204,11 +1204,10 @@ function opAnexoEnviar(){
   if(prog){ prog.style.display=''; prog.textContent='Enviando '+file.name+'…'; }
   const fd = new FormData(); fd.append('file', file);
   fetch('/ferramentas/producao/op/'+_anexosOpId+'/anexo/upload', {method:'POST', body:fd})
-    .then(r=>r.json()).then(d=>{
-      if(d.ok){ _carregarAnexos(_anexosOpId); document.getElementById('op_anexo_file').value=''; }
-      else alert(d.error||'Erro ao enviar');
-      if(prog) prog.style.display='none';
-    }).catch(()=>{ if(prog){ prog.textContent='Erro ao enviar.'; } });
+    .then(r=>r.json().then(d=>({ok:r.ok,data:d}))).then(({ok,data})=>{
+      if(data.ok){ _carregarAnexos(_anexosOpId); document.getElementById('op_anexo_file').value=''; if(prog) prog.style.display='none'; }
+      else { if(prog){ prog.style.display=''; prog.textContent='Erro: '+(data.error||'desconhecido'); } alert(data.error||'Erro ao enviar'); }
+    }).catch(err=>{ if(prog){ prog.style.display=''; prog.textContent='Erro de conexão: '+err; } console.error(err); });
 }
 function opAnexoExcluir(id){
   if(!confirm('Remover anexo?')) return;
@@ -2032,39 +2031,51 @@ async def producao_op_anexos_json(op_id: int, request: Request, session: Session
 @app.post("/ferramentas/producao/op/{op_id}/anexo/upload")
 @require_login
 async def producao_op_anexo_upload(op_id: int, request: Request, session: Session = Depends(get_session)):
-    from fastapi import UploadFile, File
     import uuid as _uuid
-    ctx = get_tenant_context(request, session)
-    if not ctx:
-        return JSONResponse({"error": "unauthorized"}, status_code=401)
-    op = session.get(OrdemProducao, op_id)
-    if not op or op.company_id != ctx.company.id:
-        return JSONResponse({"error": "not found"}, status_code=404)
-    form = await request.form()
-    upload = form.get("file")
-    if not upload or not hasattr(upload, "filename"):
-        return JSONResponse({"error": "Nenhum arquivo enviado"}, status_code=400)
-    original = upload.filename or "arquivo"
-    ext = original.rsplit(".", 1)[-1].lower() if "." in original else ""
-    stored = f"prod_{op_id}_{_uuid.uuid4().hex}.{ext}" if ext else f"prod_{op_id}_{_uuid.uuid4().hex}"
-    upload_dir = UPLOAD_DIR / "producao"
-    upload_dir.mkdir(parents=True, exist_ok=True)
-    dest = upload_dir / stored
-    size = 0
-    content = await upload.read()
-    size = len(content)
-    if size > 20 * 1024 * 1024:
-        return JSONResponse({"error": "Arquivo muito grande (máx. 20 MB)"}, status_code=400)
-    dest.write_bytes(content)
-    anexo = ProducaoAnexo(
-        op_id=op_id, company_id=ctx.company.id,
-        original_filename=original,
-        stored_filename=f"producao/{stored}",
-        mime_type=upload.content_type or "application/octet-stream",
-        size_bytes=size,
-    )
-    session.add(anexo); session.commit()
-    return JSONResponse({"ok": True, "id": anexo.id})
+    import traceback as _tb
+    try:
+        ctx = get_tenant_context(request, session)
+        if not ctx:
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        op = session.get(OrdemProducao, op_id)
+        if not op or op.company_id != ctx.company.id:
+            return JSONResponse({"error": "OP não encontrada"}, status_code=404)
+
+        form = await request.form()
+        upload = form.get("file")
+        if upload is None or isinstance(upload, str) or not getattr(upload, "filename", None):
+            return JSONResponse({"error": "Nenhum arquivo enviado"}, status_code=400)
+
+        original = upload.filename
+        ext = original.rsplit(".", 1)[-1].lower() if "." in original else ""
+        stored_name = f"prod_{op_id}_{_uuid.uuid4().hex}.{ext}" if ext else f"prod_{op_id}_{_uuid.uuid4().hex}"
+
+        content = await upload.read()
+        size = len(content)
+        if size == 0:
+            return JSONResponse({"error": "Arquivo vazio"}, status_code=400)
+        if size > 20 * 1024 * 1024:
+            return JSONResponse({"error": "Arquivo muito grande (máx. 20 MB)"}, status_code=400)
+
+        upload_dir = UPLOAD_DIR / "producao"
+        upload_dir.mkdir(parents=True, exist_ok=True)
+        (upload_dir / stored_name).write_bytes(content)
+
+        mime = getattr(upload, "content_type", None) or "application/octet-stream"
+        anexo = ProducaoAnexo(
+            op_id=op_id,
+            company_id=ctx.company.id,
+            original_filename=original,
+            stored_filename=f"producao/{stored_name}",
+            mime_type=mime,
+            size_bytes=size,
+        )
+        session.add(anexo)
+        session.commit()
+        return JSONResponse({"ok": True, "id": anexo.id})
+    except Exception as _e:
+        print(f"[producao_anexo_upload] ERRO: {_tb.format_exc()}")
+        return JSONResponse({"error": f"Erro interno: {str(_e)}"}, status_code=500)
 
 
 @app.get("/ferramentas/producao/anexo/{anexo_id}/download")
