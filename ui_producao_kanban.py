@@ -5,6 +5,13 @@ import json
 import secrets
 from datetime import date, datetime
 from typing import List, Optional
+from zoneinfo import ZoneInfo
+
+_TZ_BR = ZoneInfo("America/Sao_Paulo")
+
+def _now_br() -> datetime:
+    """Retorna datetime atual no fuso de Brasília, sem tzinfo (naive), para salvar no banco."""
+    return datetime.now(_TZ_BR).replace(tzinfo=None)
 
 from fastapi import Depends, Form, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
@@ -1595,7 +1602,7 @@ async def producao_op_salvar(request: Request, session: Session = Depends(get_se
         observacoes=(form.get("observacoes") or "").strip(),
         cor=(form.get("cor") or "").strip(),
         pedido=(form.get("pedido") or "").strip(),
-        updated_at=datetime.utcnow(),
+        updated_at=_now_br(),
     )
     session.add(op); session.commit(); session.refresh(op)
     _salvar_roteiro(session, op.id, form)
@@ -1630,7 +1637,7 @@ async def producao_op_editar(op_id: int, request: Request, session: Session = De
     op.observacoes = (form.get("observacoes") or "").strip()
     op.cor = (form.get("cor") or "").strip()
     op.pedido = (form.get("pedido") or "").strip()
-    op.updated_at = datetime.utcnow()
+    op.updated_at = _now_br()
     session.add(op); session.commit()
     _salvar_roteiro(session, op_id, form)
     return RedirectResponse("/ferramentas/producao", status_code=303)
@@ -1692,10 +1699,10 @@ async def producao_op_mover(op_id: int, request: Request, session: Session = Dep
             .where(ProducaoRoteiroPasso.op_id == op_id, ProducaoRoteiroPasso.processo_id == int(pid))
         ).first()
         if passo and not passo.data_entrada:
-            passo.data_entrada = datetime.utcnow()
+            passo.data_entrada = _now_br()
             passo.status = "em_andamento"
             session.add(passo)
-    op.updated_at = datetime.utcnow()
+    op.updated_at = _now_br()
     session.add(op); session.commit()
     return JSONResponse({"ok": True})
 
@@ -1997,7 +2004,7 @@ async def operador_iniciar(token: str, passo_id: int, session: Session = Depends
         return JSONResponse({"error": "Passo não encontrado"}, status_code=404)
     passo.status = "em_andamento"
     if not passo.data_entrada:
-        passo.data_entrada = datetime.utcnow()
+        passo.data_entrada = _now_br()
     op.processo_id = passo.processo_id
     session.add(passo)
     if op.status == "aberta":
@@ -2017,7 +2024,7 @@ async def operador_pausar(token: str, passo_id: int, session: Session = Depends(
         return JSONResponse({"error": "Passo não encontrado"}, status_code=404)
     if passo.status != "em_andamento":
         return JSONResponse({"error": "Passo não está em andamento"}, status_code=400)
-    now = datetime.utcnow()
+    now = _now_br()
     if passo.data_entrada:
         elapsed = (now - passo.data_entrada).total_seconds() / 3600
         passo.tempo_realizado_h = round((passo.tempo_realizado_h or 0) + elapsed, 3)
@@ -2036,7 +2043,7 @@ async def operador_retomar(token: str, passo_id: int, session: Session = Depends
     if not passo or passo.op_id != op.id:
         return JSONResponse({"error": "Passo não encontrado"}, status_code=404)
     passo.status = "em_andamento"
-    passo.data_entrada = datetime.utcnow()
+    passo.data_entrada = _now_br()
     passo.data_saida = None
     session.add(passo); session.commit()
     return JSONResponse({"ok": True})
@@ -2086,7 +2093,7 @@ async def operador_finalizar(token: str, passo_id: int, request: Request, sessio
     except Exception:
         pass
     passo.status = "concluido"
-    passo.data_saida = datetime.utcnow()
+    passo.data_saida = _now_br()
     if passo.data_entrada:
         delta = (passo.data_saida - passo.data_entrada).total_seconds() / 3600
         passo.tempo_realizado_h = round((passo.tempo_realizado_h or 0) + delta, 2)
