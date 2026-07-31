@@ -11011,8 +11011,25 @@ TEMPLATES.update({
       <div class="list-group">
         {% for item in suppliers %}
           <div class="list-group-item">
-            <div class="fw-semibold">{{ item.name }}</div>
-            <div class="muted small">{{ item.document or "Sem documento" }}{% if item.email %} • {{ item.email }}{% endif %}</div>
+            <div class="d-flex justify-content-between align-items-start">
+              <div>
+                <div class="fw-semibold">{{ item.name }}</div>
+                <div class="muted small">{{ item.document or "Sem documento" }}{% if item.email %} • {{ item.email }}{% endif %}</div>
+              </div>
+              <div class="d-flex gap-1">
+                <button class="btn btn-xs btn-outline-secondary" onclick="toggleEdit('forn-{{ item.id }}')">✏️</button>
+                <form method="post" action="/admin/financeiro/cadastros/fornecedores/{{ item.id }}/excluir" onsubmit="return confirm('Excluir {{ item.name }}?')"><button class="btn btn-xs btn-outline-danger">🗑</button></form>
+              </div>
+            </div>
+            <div id="forn-{{ item.id }}" style="display:none" class="mt-2">
+              <form method="post" action="/admin/financeiro/cadastros/fornecedores/{{ item.id }}/editar" class="row g-1">
+                <div class="col-6"><input class="form-control form-control-sm" name="name" value="{{ item.name }}" required /></div>
+                <div class="col-6"><input class="form-control form-control-sm" name="document" value="{{ item.document or '' }}" placeholder="CNPJ/CPF" /></div>
+                <div class="col-6"><input class="form-control form-control-sm" name="email" value="{{ item.email or '' }}" placeholder="E-mail" /></div>
+                <div class="col-6"><input class="form-control form-control-sm" name="phone" value="{{ item.phone or '' }}" placeholder="Telefone" /></div>
+                <div class="col-12"><button class="btn btn-sm btn-primary">Salvar</button></div>
+              </form>
+            </div>
           </div>
         {% else %}
           <div class="muted">Nenhum fornecedor cadastrado.</div>
@@ -11035,8 +11052,24 @@ TEMPLATES.update({
       <div class="list-group">
         {% for item in cost_centers %}
           <div class="list-group-item">
-            <div class="fw-semibold">{{ item.code }} • {{ item.name }}</div>
-            <div class="muted small">{{ item.notes or "Sem observações" }}</div>
+            <div class="d-flex justify-content-between align-items-start">
+              <div>
+                <div class="fw-semibold">{{ item.code }} • {{ item.name }}</div>
+                <div class="muted small">{{ item.notes or "Sem observações" }}</div>
+              </div>
+              <div class="d-flex gap-1">
+                <button class="btn btn-xs btn-outline-secondary" onclick="toggleEdit('cc-{{ item.id }}')">✏️</button>
+                <form method="post" action="/admin/financeiro/cadastros/centros-custo/{{ item.id }}/excluir" onsubmit="return confirm('Excluir {{ item.name }}?')"><button class="btn btn-xs btn-outline-danger">🗑</button></form>
+              </div>
+            </div>
+            <div id="cc-{{ item.id }}" style="display:none" class="mt-2">
+              <form method="post" action="/admin/financeiro/cadastros/centros-custo/{{ item.id }}/editar" class="row g-1">
+                <div class="col-4"><input class="form-control form-control-sm" name="code" value="{{ item.code }}" required /></div>
+                <div class="col-8"><input class="form-control form-control-sm" name="name" value="{{ item.name }}" required /></div>
+                <div class="col-12"><textarea class="form-control form-control-sm" name="notes" rows="1">{{ item.notes or '' }}</textarea></div>
+                <div class="col-12"><button class="btn btn-sm btn-primary">Salvar</button></div>
+              </form>
+            </div>
           </div>
         {% else %}
           <div class="muted">Nenhum centro de custo cadastrado.</div>
@@ -11065,8 +11098,24 @@ TEMPLATES.update({
       <div class="list-group">
         {% for item in categories %}
           <div class="list-group-item">
-            <div class="fw-semibold">{{ item.name }}</div>
-            <div class="muted small">{{ item.category_kind }} • {{ item.dre_group or "Sem grupo DRE" }}</div>
+            <div class="d-flex justify-content-between align-items-start">
+              <div>
+                <div class="fw-semibold">{{ item.name }}</div>
+                <div class="muted small">{{ item.category_kind }} • {{ item.dre_group or "Sem grupo DRE" }}</div>
+              </div>
+              <div class="d-flex gap-1">
+                <button class="btn btn-xs btn-outline-secondary" onclick="toggleEdit('cat-{{ item.id }}')">✏️</button>
+                <form method="post" action="/admin/financeiro/cadastros/categorias/{{ item.id }}/excluir" onsubmit="return confirm('Excluir {{ item.name }}?')"><button class="btn btn-xs btn-outline-danger">🗑</button></form>
+              </div>
+            </div>
+            <div id="cat-{{ item.id }}" style="display:none" class="mt-2">
+              <form method="post" action="/admin/financeiro/cadastros/categorias/{{ item.id }}/editar" class="row g-1">
+                <div class="col-6"><input class="form-control form-control-sm" name="name" value="{{ item.name }}" required /></div>
+                <div class="col-3"><select class="form-select form-select-sm" name="category_kind"><option value="receita" {% if item.category_kind=='receita' %}selected{% endif %}>Receita</option><option value="despesa" {% if item.category_kind=='despesa' %}selected{% endif %}>Despesa</option></select></div>
+                <div class="col-3"><input class="form-control form-control-sm" name="dre_group" value="{{ item.dre_group or '' }}" placeholder="Grupo DRE" /></div>
+                <div class="col-12"><button class="btn btn-sm btn-primary">Salvar</button></div>
+              </form>
+            </div>
           </div>
         {% else %}
           <div class="muted">Nenhuma categoria cadastrada.</div>
@@ -11088,8 +11137,23 @@ TEMPLATES.update({
       <div class="list-group">
         {% for item in revenue_types %}
           <div class="list-group-item">
-            <div class="fw-semibold">{{ item.name }}</div>
-            <div class="muted small">{{ item.description or "Sem descrição" }}</div>
+            <div class="d-flex justify-content-between align-items-start">
+              <div>
+                <div class="fw-semibold">{{ item.name }}</div>
+                <div class="muted small">{{ item.description or "Sem descrição" }}</div>
+              </div>
+              <div class="d-flex gap-1">
+                <button class="btn btn-xs btn-outline-secondary" onclick="toggleEdit('rt-{{ item.id }}')">✏️</button>
+                <form method="post" action="/admin/financeiro/cadastros/tipos-receita/{{ item.id }}/excluir" onsubmit="return confirm('Excluir {{ item.name }}?')"><button class="btn btn-xs btn-outline-danger">🗑</button></form>
+              </div>
+            </div>
+            <div id="rt-{{ item.id }}" style="display:none" class="mt-2">
+              <form method="post" action="/admin/financeiro/cadastros/tipos-receita/{{ item.id }}/editar" class="row g-1">
+                <div class="col-6"><input class="form-control form-control-sm" name="name" value="{{ item.name }}" required /></div>
+                <div class="col-6"><input class="form-control form-control-sm" name="description" value="{{ item.description or '' }}" placeholder="Descrição" /></div>
+                <div class="col-12"><button class="btn btn-sm btn-primary">Salvar</button></div>
+              </form>
+            </div>
           </div>
         {% else %}
           <div class="muted">Nenhum tipo de receita cadastrado.</div>
@@ -11114,8 +11178,26 @@ TEMPLATES.update({
       <div class="list-group">
         {% for item in bank_accounts %}
           <div class="list-group-item">
-            <div class="fw-semibold">{{ item.name }}</div>
-            <div class="muted small">{{ item.bank_name or "Banco não informado" }}{% if item.account_number %} • Conta {{ item.account_number }}{% endif %} • Saldo inicial {{ item.initial_balance_brl|brl }}</div>
+            <div class="d-flex justify-content-between align-items-start">
+              <div>
+                <div class="fw-semibold">{{ item.name }}</div>
+                <div class="muted small">{{ item.bank_name or "Banco não informado" }}{% if item.account_number %} • Conta {{ item.account_number }}{% endif %} • Saldo inicial {{ item.initial_balance_brl|brl }}</div>
+              </div>
+              <div class="d-flex gap-1">
+                <button class="btn btn-xs btn-outline-secondary" onclick="toggleEdit('ba-{{ item.id }}')">✏️</button>
+                <form method="post" action="/admin/financeiro/cadastros/contas/{{ item.id }}/excluir" onsubmit="return confirm('Excluir {{ item.name }}?')"><button class="btn btn-xs btn-outline-danger">🗑</button></form>
+              </div>
+            </div>
+            <div id="ba-{{ item.id }}" style="display:none" class="mt-2">
+              <form method="post" action="/admin/financeiro/cadastros/contas/{{ item.id }}/editar" class="row g-1">
+                <div class="col-md-3"><input class="form-control form-control-sm" name="name" value="{{ item.name }}" required /></div>
+                <div class="col-md-3"><input class="form-control form-control-sm" name="bank_name" value="{{ item.bank_name or '' }}" placeholder="Banco" /></div>
+                <div class="col-md-2"><input class="form-control form-control-sm" name="branch_number" value="{{ item.branch_number or '' }}" placeholder="Agência" /></div>
+                <div class="col-md-2"><input class="form-control form-control-sm" name="account_number" value="{{ item.account_number or '' }}" placeholder="Conta" /></div>
+                <div class="col-md-2"><input class="form-control form-control-sm" name="initial_balance_brl" value="{{ item.initial_balance_brl }}" placeholder="Saldo inicial" /></div>
+                <div class="col-12"><button class="btn btn-sm btn-primary">Salvar</button></div>
+              </form>
+            </div>
           </div>
         {% else %}
           <div class="muted">Nenhuma conta bancária cadastrada.</div>
@@ -11124,6 +11206,12 @@ TEMPLATES.update({
     </div>
   </div>
 </div>
+<script>
+function toggleEdit(id) {
+  const el = document.getElementById(id);
+  if (el) el.style.display = el.style.display === 'none' ? 'block' : 'none';
+}
+</script>
 {% endblock %}
 """,
 })
@@ -19404,6 +19492,114 @@ async def office_finance_bank_account_create(
     )
     session.commit()
     set_flash(request, "Conta bancária cadastrada.")
+    return RedirectResponse("/admin/financeiro/cadastros", status_code=303)
+
+
+# ── Editar / Excluir cadastros ────────────────────────────────────────────────
+
+@app.post("/admin/financeiro/cadastros/fornecedores/{item_id}/editar")
+@require_role({"admin", "equipe"})
+async def office_finance_supplier_edit(item_id: int, request: Request, session: Session = Depends(get_session),
+        name: str = Form(""), document: str = Form(""), email: str = Form(""), phone: str = Form(""), notes: str = Form("")) -> Response:
+    ctx = get_tenant_context(request, session); assert ctx is not None
+    item = session.get(OfficeSupplier, item_id)
+    if item and item.company_id == ctx.company.id:
+        item.name = name.strip(); item.document = document.strip()
+        item.email = email.strip(); item.phone = phone.strip(); item.notes = notes.strip()
+        session.add(item); session.commit(); set_flash(request, "Fornecedor atualizado.")
+    return RedirectResponse("/admin/financeiro/cadastros", status_code=303)
+
+@app.post("/admin/financeiro/cadastros/fornecedores/{item_id}/excluir")
+@require_role({"admin", "equipe"})
+async def office_finance_supplier_delete(item_id: int, request: Request, session: Session = Depends(get_session)) -> Response:
+    ctx = get_tenant_context(request, session); assert ctx is not None
+    item = session.get(OfficeSupplier, item_id)
+    if item and item.company_id == ctx.company.id:
+        session.delete(item); session.commit(); set_flash(request, "Fornecedor excluído.")
+    return RedirectResponse("/admin/financeiro/cadastros", status_code=303)
+
+@app.post("/admin/financeiro/cadastros/centros-custo/{item_id}/editar")
+@require_role({"admin", "equipe"})
+async def office_finance_cost_center_edit(item_id: int, request: Request, session: Session = Depends(get_session),
+        code: str = Form(""), name: str = Form(""), notes: str = Form("")) -> Response:
+    ctx = get_tenant_context(request, session); assert ctx is not None
+    item = session.get(OfficeCostCenter, item_id)
+    if item and item.company_id == ctx.company.id:
+        item.code = code.strip().upper(); item.name = name.strip(); item.notes = notes.strip()
+        session.add(item); session.commit(); set_flash(request, "Centro de custo atualizado.")
+    return RedirectResponse("/admin/financeiro/cadastros", status_code=303)
+
+@app.post("/admin/financeiro/cadastros/centros-custo/{item_id}/excluir")
+@require_role({"admin", "equipe"})
+async def office_finance_cost_center_delete(item_id: int, request: Request, session: Session = Depends(get_session)) -> Response:
+    ctx = get_tenant_context(request, session); assert ctx is not None
+    item = session.get(OfficeCostCenter, item_id)
+    if item and item.company_id == ctx.company.id:
+        session.delete(item); session.commit(); set_flash(request, "Centro de custo excluído.")
+    return RedirectResponse("/admin/financeiro/cadastros", status_code=303)
+
+@app.post("/admin/financeiro/cadastros/categorias/{item_id}/editar")
+@require_role({"admin", "equipe"})
+async def office_finance_category_edit(item_id: int, request: Request, session: Session = Depends(get_session),
+        name: str = Form(""), category_kind: str = Form("despesa"), dre_group: str = Form(""), notes: str = Form("")) -> Response:
+    ctx = get_tenant_context(request, session); assert ctx is not None
+    item = session.get(OfficeCategory, item_id)
+    if item and item.company_id == ctx.company.id:
+        item.name = name.strip(); item.category_kind = category_kind.strip()
+        item.dre_group = dre_group.strip(); item.notes = notes.strip()
+        session.add(item); session.commit(); set_flash(request, "Categoria atualizada.")
+    return RedirectResponse("/admin/financeiro/cadastros", status_code=303)
+
+@app.post("/admin/financeiro/cadastros/categorias/{item_id}/excluir")
+@require_role({"admin", "equipe"})
+async def office_finance_category_delete(item_id: int, request: Request, session: Session = Depends(get_session)) -> Response:
+    ctx = get_tenant_context(request, session); assert ctx is not None
+    item = session.get(OfficeCategory, item_id)
+    if item and item.company_id == ctx.company.id:
+        session.delete(item); session.commit(); set_flash(request, "Categoria excluída.")
+    return RedirectResponse("/admin/financeiro/cadastros", status_code=303)
+
+@app.post("/admin/financeiro/cadastros/tipos-receita/{item_id}/editar")
+@require_role({"admin", "equipe"})
+async def office_finance_revenue_type_edit(item_id: int, request: Request, session: Session = Depends(get_session),
+        name: str = Form(""), description: str = Form("")) -> Response:
+    ctx = get_tenant_context(request, session); assert ctx is not None
+    item = session.get(OfficeRevenueType, item_id)
+    if item and item.company_id == ctx.company.id:
+        item.name = name.strip(); item.description = description.strip()
+        session.add(item); session.commit(); set_flash(request, "Tipo de receita atualizado.")
+    return RedirectResponse("/admin/financeiro/cadastros", status_code=303)
+
+@app.post("/admin/financeiro/cadastros/tipos-receita/{item_id}/excluir")
+@require_role({"admin", "equipe"})
+async def office_finance_revenue_type_delete(item_id: int, request: Request, session: Session = Depends(get_session)) -> Response:
+    ctx = get_tenant_context(request, session); assert ctx is not None
+    item = session.get(OfficeRevenueType, item_id)
+    if item and item.company_id == ctx.company.id:
+        session.delete(item); session.commit(); set_flash(request, "Tipo de receita excluído.")
+    return RedirectResponse("/admin/financeiro/cadastros", status_code=303)
+
+@app.post("/admin/financeiro/cadastros/contas/{item_id}/editar")
+@require_role({"admin", "equipe"})
+async def office_finance_bank_account_edit(item_id: int, request: Request, session: Session = Depends(get_session),
+        name: str = Form(""), bank_name: str = Form(""), branch_number: str = Form(""),
+        account_number: str = Form(""), initial_balance_brl: str = Form(""), notes: str = Form("")) -> Response:
+    ctx = get_tenant_context(request, session); assert ctx is not None
+    item = session.get(OfficeBankAccount, item_id)
+    if item and item.company_id == ctx.company.id:
+        item.name = name.strip(); item.bank_name = bank_name.strip()
+        item.branch_number = branch_number.strip(); item.account_number = account_number.strip()
+        item.initial_balance_brl = _parse_brl_amount(initial_balance_brl); item.notes = notes.strip()
+        session.add(item); session.commit(); set_flash(request, "Conta atualizada.")
+    return RedirectResponse("/admin/financeiro/cadastros", status_code=303)
+
+@app.post("/admin/financeiro/cadastros/contas/{item_id}/excluir")
+@require_role({"admin", "equipe"})
+async def office_finance_bank_account_delete(item_id: int, request: Request, session: Session = Depends(get_session)) -> Response:
+    ctx = get_tenant_context(request, session); assert ctx is not None
+    item = session.get(OfficeBankAccount, item_id)
+    if item and item.company_id == ctx.company.id:
+        session.delete(item); session.commit(); set_flash(request, "Conta excluída.")
     return RedirectResponse("/admin/financeiro/cadastros", status_code=303)
 
 
