@@ -2099,6 +2099,412 @@ async def producao_anexo_excluir(anexo_id: int, request: Request, session: Sessi
     return JSONResponse({"ok": True})
 
 
+# ── Kiosk de Produção ────────────────────────────────────────────────────────
+
+import os as _os
+
+_KIOSK_PIN = _os.getenv("KIOSK_PIN", "1234")
+_KIOSK_COOKIE = "kiosk_prod_ok"
+
+_TPL_KIOSK_LOGIN = r"""<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Produção — Acesso</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;}
+body{background:#0f172a;display:flex;align-items:center;justify-content:center;min-height:100vh;font-family:'Segoe UI',sans-serif;}
+.box{background:#1e293b;border-radius:16px;padding:2.5rem 2rem;width:320px;text-align:center;box-shadow:0 8px 32px #0008;}
+.logo{font-size:2.5rem;margin-bottom:.5rem;}
+h1{color:#f1f5f9;font-size:1.3rem;margin-bottom:.3rem;}
+p{color:#94a3b8;font-size:.85rem;margin-bottom:1.5rem;}
+input{width:100%;padding:.85rem;border-radius:10px;border:2px solid #334155;background:#0f172a;color:#f1f5f9;font-size:1.8rem;text-align:center;letter-spacing:.4rem;margin-bottom:1rem;}
+input:focus{outline:none;border-color:#6366f1;}
+button{width:100%;padding:.85rem;border-radius:10px;border:none;background:#6366f1;color:#fff;font-size:1.1rem;font-weight:700;cursor:pointer;}
+button:hover{background:#4f46e5;}
+.err{color:#f87171;font-size:.85rem;margin-top:.75rem;}
+</style>
+</head>
+<body>
+<div class="box">
+  <div class="logo">🏭</div>
+  <h1>Controle de Produção</h1>
+  <p>Digite o PIN para acessar</p>
+  <form method="post" action="/producao/kiosk/login">
+    <input type="password" name="pin" maxlength="8" autofocus inputmode="numeric" placeholder="••••">
+    <button type="submit">Entrar</button>
+    {% if erro %}<div class="err">PIN incorreto. Tente novamente.</div>{% endif %}
+  </form>
+</div>
+</body>
+</html>"""
+
+_TPL_KIOSK = r"""<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Produção — Kiosk</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;}
+body{background:#0f172a;font-family:'Segoe UI',sans-serif;color:#f1f5f9;min-height:100vh;}
+.top{display:flex;align-items:center;justify-content:space-between;padding:.75rem 1.5rem;background:#1e293b;border-bottom:1px solid #334155;}
+.top h1{font-size:1.1rem;font-weight:700;display:flex;align-items:center;gap:.5rem;}
+.top .right{display:flex;align-items:center;gap:1rem;}
+.top .timer-badge{font-size:.75rem;color:#94a3b8;background:#0f172a;border-radius:6px;padding:.25rem .6rem;}
+.top a{font-size:.8rem;color:#94a3b8;text-decoration:none;padding:.3rem .7rem;border:1px solid #334155;border-radius:6px;}
+.board{display:flex;gap:1rem;padding:1rem 1rem;overflow-x:auto;min-height:calc(100vh - 56px);}
+.col{background:#1e293b;border-radius:12px;min-width:270px;max-width:300px;flex:0 0 270px;display:flex;flex-direction:column;}
+.col-head{padding:.75rem 1rem;border-radius:12px 12px 0 0;display:flex;align-items:center;justify-content:space-between;}
+.col-head h2{font-size:.95rem;font-weight:700;}
+.col-badge{font-size:.75rem;font-weight:700;background:#0f172a55;border-radius:99px;padding:.15rem .5rem;}
+.col-body{padding:.6rem;display:flex;flex-direction:column;gap:.5rem;flex:1;}
+.card{background:#0f172a;border-radius:10px;padding:.85rem;cursor:pointer;border:2px solid transparent;transition:border-color .15s,transform .1s;}
+.card:hover{border-color:#6366f1;transform:translateY(-2px);}
+.card-code{font-size:.72rem;color:#94a3b8;font-family:monospace;margin-bottom:.25rem;}
+.card-produto{font-weight:700;font-size:.95rem;margin-bottom:.2rem;}
+.card-cliente{font-size:.75rem;color:#94a3b8;margin-bottom:.3rem;}
+.card-desc{font-size:.75rem;color:#64748b;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;margin-bottom:.35rem;}
+.card-footer{display:flex;align-items:center;justify-content:space-between;font-size:.7rem;color:#94a3b8;margin-top:.3rem;}
+.card-step{font-size:.72rem;font-weight:600;padding:.15rem .5rem;border-radius:6px;}
+.step-pend{background:#1e293b;color:#94a3b8;}
+.step-and{background:#eff6ff;color:#6366f1;}
+.step-paus{background:#fff7ed;color:#f97316;}
+.card-timer{font-size:.7rem;color:#f97316;font-weight:700;}
+.pri-urgente{border-left:4px solid #ef4444!important;}
+.pri-alta{border-left:4px solid #f97316!important;}
+/* Modal */
+.modal-bg{display:none;position:fixed;inset:0;background:#000a;z-index:100;align-items:center;justify-content:center;}
+.modal-bg.open{display:flex;}
+.modal{background:#1e293b;border-radius:16px;width:min(95vw,560px);max-height:90vh;overflow-y:auto;padding:1.5rem;position:relative;}
+.modal h2{font-size:1.1rem;font-weight:700;margin-bottom:.2rem;}
+.modal .sub{font-size:.8rem;color:#94a3b8;margin-bottom:1rem;}
+.modal .close{position:absolute;top:1rem;right:1rem;background:none;border:none;color:#94a3b8;font-size:1.4rem;cursor:pointer;}
+.step-card{background:#0f172a;border-radius:10px;padding:.85rem;margin-bottom:.6rem;}
+.step-card h3{font-size:.9rem;font-weight:700;margin-bottom:.3rem;}
+.step-info{display:flex;gap:1rem;font-size:.78rem;color:#94a3b8;margin-bottom:.7rem;flex-wrap:wrap;}
+.step-btns{display:flex;gap:.5rem;flex-wrap:wrap;}
+.btn{padding:.6rem 1.2rem;border-radius:8px;border:none;font-size:.88rem;font-weight:700;cursor:pointer;transition:opacity .15s;}
+.btn:hover{opacity:.85;}
+.btn-start{background:#6366f1;color:#fff;}
+.btn-stop{background:#16a34a;color:#fff;}
+.btn-pause{background:#f97316;color:#fff;}
+.btn-resume{background:#0891b2;color:#fff;}
+.btn-dis{background:#334155;color:#64748b;cursor:default;}
+.badge{display:inline-block;padding:.15rem .55rem;border-radius:99px;font-size:.72rem;font-weight:700;}
+.badge-pend{background:#1e293b;color:#94a3b8;border:1px solid #334155;}
+.badge-and{background:#eff6ff;color:#6366f1;}
+.badge-paus{background:#fff7ed;color:#f97316;}
+.badge-ok{background:#dcfce7;color:#16a34a;}
+.qtd-wrap{margin:.5rem 0;}
+.qtd-wrap label{font-size:.78rem;color:#94a3b8;display:block;margin-bottom:.3rem;}
+.qtd-wrap input{background:#1e293b;border:1px solid #334155;border-radius:8px;padding:.5rem .75rem;color:#f1f5f9;font-size:1rem;width:140px;}
+.refresh-bar{height:3px;background:#6366f1;width:100%;position:fixed;top:0;left:0;z-index:200;transform-origin:left;transition:transform 60s linear;}
+</style>
+</head>
+<body>
+<div class="refresh-bar" id="rbar"></div>
+<div class="top">
+  <h1>🏭 Produção — {{ company_nome }}</h1>
+  <div class="right">
+    <span class="timer-badge" id="refresh-clock">Atualiza em 60s</span>
+    <a href="/producao/kiosk/logout">Sair</a>
+  </div>
+</div>
+
+<div class="board">
+  {% for proc in processos %}
+  {% set col_ops = ops_por_proc.get(proc.id, []) %}
+  <div class="col">
+    <div class="col-head" style="background:{{ proc.cor }}22;border-bottom:2px solid {{ proc.cor }};">
+      <h2>{{ proc.nome }}</h2>
+      <span class="col-badge" style="color:{{ proc.cor }};">{{ col_ops|length }}</span>
+    </div>
+    <div class="col-body">
+      {% for op in col_ops %}
+      {% set step = step_atual.get(op.id) %}
+      <div class="card {% if op.prioridade=='urgente' %}pri-urgente{% elif op.prioridade=='alta' %}pri-alta{% endif %}"
+           onclick="abrirOP({{ op.id }})">
+        <div class="card-code">{{ op.codigo }}</div>
+        <div class="card-produto">{{ op.produto }}</div>
+        {% if op.cliente %}<div class="card-cliente">👤 {{ op.cliente }}</div>{% endif %}
+        {% if op.descricao %}<div class="card-desc">{{ op.descricao }}</div>{% endif %}
+        {% if step %}
+        <div class="card-step step-{{ step.status[:3] if step.status != 'em_andamento' else 'and' }}">
+          {{ step.proc_nome }} —
+          {% if step.status=='em_andamento' %}Em andamento
+          {% elif step.status=='pausado' %}Pausado
+          {% else %}{{ step.status|title }}{% endif %}
+        </div>
+        {% if step.status == 'em_andamento' and step.data_entrada %}
+        <div class="card-timer kc-timer" data-entrada="{{ step.data_entrada.isoformat() }}"></div>
+        {% endif %}
+        {% endif %}
+        <div class="card-footer">
+          <span>{% if op.data_fim_plan %}📅 {{ op.data_fim_plan.strftime('%d/%m') }}{% endif %}</span>
+          <span>{{ op.quantidade_produzida|int }}/{{ op.quantidade_planejada|int }}</span>
+        </div>
+      </div>
+      {% else %}
+      <div style="text-align:center;color:#334155;padding:2rem .5rem;font-size:.82rem;">Arraste OPs aqui</div>
+      {% endfor %}
+    </div>
+  </div>
+  {% endfor %}
+
+  <!-- OPs sem processo -->
+  {% if ops_sem_proc %}
+  <div class="col">
+    <div class="col-head" style="background:#33415522;border-bottom:2px solid #475569;">
+      <h2>📥 Fila / Entrada</h2>
+      <span class="col-badge" style="color:#94a3b8;">{{ ops_sem_proc|length }}</span>
+    </div>
+    <div class="col-body">
+      {% for op in ops_sem_proc %}
+      <div class="card" onclick="abrirOP({{ op.id }})">
+        <div class="card-code">{{ op.codigo }}</div>
+        <div class="card-produto">{{ op.produto }}</div>
+        {% if op.cliente %}<div class="card-cliente">👤 {{ op.cliente }}</div>{% endif %}
+        {% if op.descricao %}<div class="card-desc">{{ op.descricao }}</div>{% endif %}
+        <div class="card-footer">
+          <span>{% if op.data_fim_plan %}📅 {{ op.data_fim_plan.strftime('%d/%m') }}{% endif %}</span>
+          <span>{{ op.quantidade_produzida|int }}/{{ op.quantidade_planejada|int }}</span>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+</div>
+
+<!-- Modal OP -->
+<div class="modal-bg" id="opModal">
+  <div class="modal">
+    <button class="close" onclick="fecharModal()">✕</button>
+    <h2 id="m-titulo">—</h2>
+    <div class="sub" id="m-sub"></div>
+    <div id="m-steps"></div>
+  </div>
+</div>
+
+<script>
+const _OPS_DATA = {{ ops_json|safe }};
+
+function _fmtElapsed(iso){
+  const ms=Date.now()-new Date(iso.replace(' ','T')+'Z').getTime();
+  if(ms<0) return '0min';
+  const h=Math.floor(ms/3600000), m=Math.floor((ms%3600000)/60000);
+  return h>0?h+'h '+m+'min':m+'min';
+}
+(function(){
+  document.querySelectorAll('.kc-timer[data-entrada]').forEach(el=>{
+    const iso=el.dataset.entrada;
+    const upd=()=>{ el.textContent='⏱ '+_fmtElapsed(iso); };
+    upd(); setInterval(upd,10000);
+  });
+})();
+
+// Refresh countdown
+let _secs=60;
+const _clock=document.getElementById('refresh-clock');
+const _rbar=document.getElementById('rbar');
+_rbar.style.transform='scaleX(1)';
+setInterval(()=>{
+  _secs--;
+  if(_secs<=0){ location.reload(); return; }
+  _clock.textContent='Atualiza em '+_secs+'s';
+  _rbar.style.transform='scaleX('+(_secs/60)+')';
+},1000);
+
+// Modal
+let _curOpId=null;
+function abrirOP(opId){
+  const op=_OPS_DATA[opId]; if(!op) return;
+  _curOpId=opId;
+  document.getElementById('m-titulo').textContent=op.codigo+' — '+op.produto;
+  document.getElementById('m-sub').textContent=(op.cliente?'Cliente: '+op.cliente+' · ':'')+op.descricao;
+  document.getElementById('opModal').classList.add('open');
+  _renderSteps(op.roteiro);
+}
+function fecharModal(){
+  document.getElementById('opModal').classList.remove('open');
+  _curOpId=null;
+}
+document.getElementById('opModal').addEventListener('click',function(e){ if(e.target===this) fecharModal(); });
+
+function _badgeHtml(st){
+  const map={pendente:'pend',em_andamento:'and',pausado:'paus',concluido:'ok'};
+  const lbl={pendente:'Pendente',em_andamento:'Em andamento',pausado:'Pausado',concluido:'Concluído'};
+  return '<span class="badge badge-'+(map[st]||'pend')+'">'+(lbl[st]||st)+'</span>';
+}
+
+function _renderSteps(roteiro){
+  const cont=document.getElementById('m-steps');
+  if(!roteiro||!roteiro.length){ cont.innerHTML='<p style="color:#94a3b8;text-align:center;padding:1rem;">Sem roteiro definido.</p>'; return; }
+  let html='';
+  roteiro.forEach(p=>{
+    const est=p.tempo_estimado_h?Math.round(p.tempo_estimado_h*60)+'min':'—';
+    const real=p.tempo_realizado_h?Math.round(p.tempo_realizado_h*60)+'min':'—';
+    html+='<div class="step-card" id="sc-'+p.id+'">';
+    html+='<h3>'+p.ordem+'. '+p.proc_nome+' '+_badgeHtml(p.status)+'</h3>';
+    html+='<div class="step-info"><span>⏱ Est: '+est+'</span><span>✅ Real: '+real+'</span>';
+    if(p.data_entrada) html+='<span>Entrada: '+p.data_entrada.substring(0,16).replace('T',' ')+'</span>';
+    html+='</div>';
+    html+='<div class="step-btns" id="btns-'+p.id+'">';
+    if(p.status==='pendente'){
+      html+='<button class="btn btn-start" onclick="acao('+p.id+',\'iniciar\')">▶ Iniciar etapa</button>';
+    } else if(p.status==='em_andamento'){
+      html+='<div class="qtd-wrap"><label>Qtd produzida nesta etapa</label><input type="number" id="qtd-'+p.id+'" min="0" step="0.01" placeholder="0"></div>';
+      html+='<button class="btn btn-stop" onclick="acao('+p.id+',\'finalizar\')">■ Finalizar</button>';
+      html+='<button class="btn btn-pause" onclick="acao('+p.id+',\'pausar\')">⏸ Pausar</button>';
+    } else if(p.status==='pausado'){
+      html+='<button class="btn btn-resume" onclick="acao('+p.id+',\'retomar\')">▶ Retomar</button>';
+    } else {
+      html+='<button class="btn btn-dis" disabled>✓ Concluído</button>';
+    }
+    html+='</div></div>';
+  });
+  cont.innerHTML=html;
+}
+
+function acao(passoId, tipo){
+  const op=_OPS_DATA[_curOpId]; if(!op) return;
+  const token=op.token;
+  let url='/op/'+token+'/passo/'+passoId+'/'+tipo;
+  let body=null;
+  if(tipo==='finalizar'){
+    const qtdEl=document.getElementById('qtd-'+passoId);
+    const qtd=qtdEl?parseFloat(qtdEl.value)||null:null;
+    body=JSON.stringify({quantidade_produzida:qtd});
+  }
+  const opts={method:'POST'};
+  if(body){ opts.headers={'Content-Type':'application/json'}; opts.body=body; }
+  fetch(url,opts).then(r=>r.json()).then(d=>{
+    if(d.ok){ location.reload(); }
+    else { alert(d.error||'Erro'); }
+  }).catch(()=>alert('Erro de conexão'));
+}
+</script>
+</body>
+</html>"""
+
+
+@app.get("/producao/kiosk", response_class=HTMLResponse)
+async def kiosk_home(request: Request, session: Session = Depends(get_session)):
+    if request.cookies.get(_KIOSK_COOKIE) != "1":
+        from fastapi.templating import Jinja2Templates as _J2
+        from jinja2 import Environment, BaseLoader
+        tmpl = Environment(loader=BaseLoader()).from_string(_TPL_KIOSK_LOGIN)
+        return HTMLResponse(tmpl.render(erro=False))
+
+    # Pega a primeira company (multi-tenant: usa company_id=1 ou a única existente)
+    from sqlmodel import Session as _Sess
+    try:
+        company = session.exec(select(__import__("sqlmodel").SQLModel.metadata.tables.get("company") and None or None)).first()
+    except Exception:
+        company = None
+
+    # Busca company_id via query direta
+    from sqlalchemy import text as _text
+    try:
+        row = session.execute(_text("SELECT id, name FROM company ORDER BY id LIMIT 1")).first()
+        cid = row[0] if row else 1
+        company_nome = row[1] if row else "Produção"
+    except Exception:
+        cid = 1
+        company_nome = "Produção"
+
+    procs = session.exec(
+        select(ProducaoProcesso).where(ProducaoProcesso.company_id == cid).order_by(ProducaoProcesso.ordem)
+    ).all()
+
+    pri = _sa_case({"urgente": 0, "alta": 1, "normal": 2, "baixa": 3},
+                   value=OrdemProducao.prioridade, else_=99)
+    ops = session.exec(
+        select(OrdemProducao)
+        .where(OrdemProducao.company_id == cid)
+        .where(OrdemProducao.status.in_(["aberta", "em_andamento"]))
+        .order_by(pri, OrdemProducao.data_fim_plan)
+    ).all()
+
+    # Monta dados por processo
+    ops_por_proc = {}
+    ops_sem_proc = []
+    step_atual = {}
+    ops_json = {}
+
+    for op in ops:
+        passos = _roteiro(session, op.id)
+        roteiro_data = []
+        for p in passos:
+            proc = session.get(ProducaoProcesso, p.processo_id)
+            roteiro_data.append({
+                "id": p.id,
+                "proc_nome": proc.nome if proc else "?",
+                "processo_id": p.processo_id,
+                "ordem": p.ordem,
+                "status": p.status,
+                "tempo_estimado_h": p.tempo_estimado_h,
+                "tempo_realizado_h": p.tempo_realizado_h,
+                "data_entrada": p.data_entrada.isoformat() if p.data_entrada else None,
+                "data_saida": p.data_saida.isoformat() if p.data_saida else None,
+            })
+            if p.status in ("em_andamento", "pausado") and op.id not in step_atual:
+                step_atual[op.id] = {
+                    "proc_nome": proc.nome if proc else "?",
+                    "status": p.status,
+                    "data_entrada": p.data_entrada,
+                }
+
+        ops_json[op.id] = {
+            "id": op.id, "codigo": op.codigo, "produto": op.produto,
+            "cliente": op.cliente, "descricao": op.descricao,
+            "prioridade": op.prioridade, "token": op.token,
+            "quantidade_planejada": op.quantidade_planejada,
+            "quantidade_produzida": op.quantidade_produzida,
+            "roteiro": roteiro_data,
+        }
+
+        if op.processo_id:
+            ops_por_proc.setdefault(op.processo_id, []).append(op)
+        else:
+            ops_sem_proc.append(op)
+
+    import json as _json2
+    from jinja2 import Environment, BaseLoader
+    tmpl = Environment(loader=BaseLoader()).from_string(_TPL_KIOSK)
+    html = tmpl.render(
+        processos=procs,
+        ops_por_proc=ops_por_proc,
+        ops_sem_proc=ops_sem_proc,
+        step_atual=step_atual,
+        ops_json=_json2.dumps(ops_json),
+        company_nome=company_nome,
+    )
+    return HTMLResponse(html)
+
+
+@app.post("/producao/kiosk/login", response_class=HTMLResponse)
+async def kiosk_login(request: Request):
+    form = await request.form()
+    pin = (form.get("pin") or "").strip()
+    if pin == _KIOSK_PIN:
+        resp = RedirectResponse("/producao/kiosk", status_code=303)
+        resp.set_cookie(_KIOSK_COOKIE, "1", max_age=86400 * 30, httponly=True, samesite="lax")
+        return resp
+    from jinja2 import Environment, BaseLoader
+    tmpl = Environment(loader=BaseLoader()).from_string(_TPL_KIOSK_LOGIN)
+    return HTMLResponse(tmpl.render(erro=True))
+
+
+@app.get("/producao/kiosk/logout", response_class=HTMLResponse)
+async def kiosk_logout():
+    resp = RedirectResponse("/producao/kiosk", status_code=303)
+    resp.delete_cookie(_KIOSK_COOKIE)
+    return resp
+
+
 # ── Imprimir OP ──────────────────────────────────────────────────────────────
 
 @app.get("/ferramentas/producao/op/{op_id}/imprimir", response_class=HTMLResponse)
