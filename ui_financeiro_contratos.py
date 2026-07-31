@@ -422,10 +422,14 @@ def _ct_sync_entry(session, cobranca: CobrancaMensal, user_id: int = 1):
                 amount_realized_brl   = (cobranca.valor_pago_cents or cobranca.valor_cents) / 100 if cobranca.status == "pago" else 0.0,
             )
         else:
-            entry.status              = novo_status
-            entry.settlement_date     = cobranca.data_pagamento or ""
-            entry.amount_realized_brl = (cobranca.valor_pago_cents or cobranca.valor_cents) / 100 if cobranca.status == "pago" else 0.0
-            entry.updated_by_user_id  = user_id
+            already_conciliated = str(entry.status or "") in {"recebido", "pago", "parcial"}
+            # Não sobrescreve conciliação manual — só atualiza se não foi conciliado
+            # ou se a cobrança foi explicitamente marcada como paga/cancelada
+            if not already_conciliated or cobranca.status in ("pago", "cancelado"):
+                entry.status = novo_status
+                entry.settlement_date     = cobranca.data_pagamento or ""
+                entry.amount_realized_brl = (cobranca.valor_pago_cents or cobranca.valor_cents) / 100 if cobranca.status == "pago" else 0.0
+                entry.updated_by_user_id  = user_id
 
         session.add(entry)
         session.commit()
