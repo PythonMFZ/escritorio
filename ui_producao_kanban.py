@@ -57,6 +57,7 @@ class OrdemProducao(SQLModel, table=True):
     processo_id: Optional[int] = Field(default=None, foreign_key="producaoprocesso.id")
     prioridade: str = Field(default="normal")
     status: str = Field(default="aberta")
+    cliente: str = Field(default="")
     responsavel: str = Field(default="")
     observacoes: str = Field(default="")
     cor: str = Field(default="")
@@ -89,6 +90,20 @@ class ProducaoMaterial(SQLModel, table=True):
     quantidade_planejada: float = Field(default=0)
     quantidade_consumida: float = Field(default=0)
     custo_unitario: float = Field(default=0)
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class ProducaoAnexo(SQLModel, table=True):
+    """Anexos (desenhos, PDFs) vinculados a uma OP."""
+    __tablename__ = "producaoanexo"
+    __table_args__ = {"extend_existing": True}
+    id: Optional[int] = Field(default=None, primary_key=True)
+    op_id: int = Field(index=True)
+    company_id: int = Field(index=True)
+    original_filename: str
+    stored_filename: str
+    mime_type: str = Field(default="application/octet-stream")
+    size_bytes: int = Field(default=0)
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
 
@@ -570,14 +585,19 @@ _TPL_PRODUCAO = r"""
               <input type="text" name="codigo" id="op_codigo" class="form-control" placeholder="OP-001" required></div>
             <div class="col-md-5"><label class="form-label fw-semibold">Produto *</label>
               <input type="text" name="produto" id="op_produto" class="form-control" placeholder="Nome do produto" required></div>
+            <div class="col-md-4"><label class="form-label fw-semibold">Cliente</label>
+              <input type="text" name="cliente" id="op_cliente" class="form-control" placeholder="Nome do cliente"></div>
             <div class="col-md-4"><label class="form-label fw-semibold">Responsável</label>
               <input type="text" name="responsavel" id="op_responsavel" class="form-control"></div>
             <div class="col-md-4"><label class="form-label fw-semibold">Pedido Nº</label>
               <input type="text" name="pedido" id="op_pedido" class="form-control" placeholder="Ex: PED-001"></div>
             <div class="col-md-4"><label class="form-label fw-semibold">Cor</label>
               <input type="text" name="cor" id="op_cor" class="form-control" placeholder="Ex: Preto fosco"></div>
-            <div class="col-12"><label class="form-label fw-semibold">Descrição</label>
-              <textarea name="descricao" id="op_descricao" class="form-control" rows="2"></textarea></div>
+            <div class="col-12">
+              <label class="form-label fw-bold" style="color:#1e293b;font-size:1rem;">Descrição</label>
+              <textarea name="descricao" id="op_descricao" class="form-control fw-semibold" rows="3"
+                style="border:2px solid #6366f1;font-size:.97rem;background:#f5f3ff;"></textarea>
+            </div>
             <div class="col-md-3"><label class="form-label fw-semibold">Prioridade</label>
               <select name="prioridade" id="op_prioridade" class="form-select">
                 <option value="baixa">Baixa</option><option value="normal" selected>Normal</option>
@@ -674,6 +694,20 @@ _TPL_PRODUCAO = r"""
                     <button type="button" class="btn btn-sm w-100" style="background:#0891b2;color:#fff;" onclick="opMatAdicionar()">+</button>
                   </div>
                 </div>
+              </div>
+            </div>
+
+            <!-- ══ ANEXOS DA OP ══ -->
+            <div class="col-12" id="op-anexos-wrap" style="display:none;">
+              <hr>
+              <h6 style="color:#b45309;font-weight:700;margin-bottom:.5rem;"><i class="bi bi-paperclip me-2"></i>Anexos (Desenhos / Documentos)</h6>
+              <div id="op-anexos-lista" style="margin-bottom:.75rem;"></div>
+              <div style="background:#fffbeb;border:1px dashed #f59e0b;border-radius:8px;padding:.75rem;">
+                <label style="font-size:.8rem;font-weight:600;color:#92400e;display:block;margin-bottom:.4rem;">Adicionar arquivo (PDF, DXF, DWG, imagem — máx. 20 MB)</label>
+                <input type="file" id="op_anexo_file" class="form-control form-control-sm"
+                       accept=".pdf,.dxf,.dwg,.png,.jpg,.jpeg,.svg,.step,.stp"
+                       onchange="opAnexoEnviar()">
+                <div id="op-anexo-progress" style="display:none;margin-top:.4rem;font-size:.78rem;color:#92400e;"></div>
               </div>
             </div>
           </div>
@@ -917,13 +951,14 @@ function abrirModalOP(id){
     _resetRoteiro();
     document.getElementById('op_modal_links').style.display='none';
     document.getElementById('op-mat-wrap').style.display = 'none';
+    document.getElementById('op-anexos-wrap').style.display = 'none';
     _opMatOpId = null;
     return new bootstrap.Modal(document.getElementById('modalOP')).show();
   }
   fetch('/ferramentas/producao/op/'+id+'/json').then(r=>r.json()).then(d=>{
     document.getElementById('modalOPTitulo').innerHTML='<i class="bi bi-pencil me-2"></i>Editar OP — '+d.codigo;
     form.action='/ferramentas/producao/op/'+id+'/salvar';
-    ['codigo','produto','descricao','prioridade','status','responsavel','observacoes','pedido','cor'].forEach(f=>{
+    ['codigo','produto','cliente','descricao','prioridade','status','responsavel','observacoes','pedido','cor'].forEach(f=>{
       const el=document.getElementById('op_'+f); if(el) el.value=d[f]||'';
     });
     document.getElementById('op_qtd_plan').value=d.quantidade_planejada||0;
@@ -940,6 +975,7 @@ function abrirModalOP(id){
     }
     _carregarRoteiro(d.roteiro||[]);
     _carregarOpMat(id);
+    _carregarAnexos(id);
     new bootstrap.Modal(document.getElementById('modalOP')).show();
   });
 }
@@ -1134,6 +1170,48 @@ function salvarMaterial(e,opId){
 function excluirMaterial(mid,opId){
   if(confirm('Excluir material?'))
     fetch('/ferramentas/producao/material/'+mid+'/excluir',{method:'POST'}).then(r=>{ if(r.ok) location.reload(); });
+}
+
+// ── Anexos da OP ──
+let _anexosOpId = null;
+function _fmtBytes(b){ if(b<1024) return b+'B'; if(b<1048576) return (b/1024).toFixed(0)+'KB'; return (b/1048576).toFixed(1)+'MB'; }
+function _carregarAnexos(opId){
+  _anexosOpId = opId;
+  const wrap = document.getElementById('op-anexos-wrap');
+  if(wrap) wrap.style.display = '';
+  fetch('/ferramentas/producao/op/'+opId+'/anexos-json').then(r=>r.json()).then(data=>{
+    const lista = document.getElementById('op-anexos-lista'); if(!lista) return;
+    if(!data.anexos||!data.anexos.length){ lista.innerHTML='<p style="color:#92400e;font-size:.8rem;">Nenhum anexo.</p>'; return; }
+    let h='<div style="display:flex;flex-direction:column;gap:.4rem;">';
+    data.anexos.forEach(a=>{
+      const icon = a.mime_type&&a.mime_type.includes('image') ? '🖼️' : a.original_filename.match(/\.pdf$/i) ? '📄' : '📎';
+      h+=`<div style="display:flex;align-items:center;gap:.6rem;background:#fff;border:1px solid #fde68a;border-radius:6px;padding:.4rem .7rem;">
+        <span style="font-size:1.1rem;">${icon}</span>
+        <a href="/ferramentas/producao/anexo/${a.id}/download" target="_blank" style="flex:1;font-size:.83rem;font-weight:600;color:#92400e;word-break:break-all;">${a.original_filename}</a>
+        <span style="font-size:.72rem;color:#94a3b8;white-space:nowrap;">${_fmtBytes(a.size_bytes)}</span>
+        <button type="button" onclick="opAnexoExcluir(${a.id})" style="background:none;border:none;color:#ef4444;cursor:pointer;font-size:.85rem;padding:0 .2rem;">✕</button>
+      </div>`;
+    });
+    lista.innerHTML = h+'</div>';
+  }).catch(()=>{});
+}
+function opAnexoEnviar(){
+  const file = document.getElementById('op_anexo_file').files[0];
+  if(!file||!_anexosOpId) return;
+  const prog = document.getElementById('op-anexo-progress');
+  if(prog){ prog.style.display=''; prog.textContent='Enviando '+file.name+'…'; }
+  const fd = new FormData(); fd.append('file', file);
+  fetch('/ferramentas/producao/op/'+_anexosOpId+'/anexo/upload', {method:'POST', body:fd})
+    .then(r=>r.json()).then(d=>{
+      if(d.ok){ _carregarAnexos(_anexosOpId); document.getElementById('op_anexo_file').value=''; }
+      else alert(d.error||'Erro ao enviar');
+      if(prog) prog.style.display='none';
+    }).catch(()=>{ if(prog){ prog.textContent='Erro ao enviar.'; } });
+}
+function opAnexoExcluir(id){
+  if(!confirm('Remover anexo?')) return;
+  fetch('/ferramentas/producao/anexo/'+id+'/excluir',{method:'POST'})
+    .then(r=>r.json()).then(d=>{ if(d.ok&&_anexosOpId) _carregarAnexos(_anexosOpId); });
 }
 
 // ── Filtro OPs ──
@@ -1588,6 +1666,7 @@ async def producao_op_salvar(request: Request, session: Session = Depends(get_se
         client_id=current_client.id if current_client else None,
         codigo=(form.get("codigo") or "").strip(),
         produto=(form.get("produto") or "").strip(),
+        cliente=(form.get("cliente") or "").strip(),
         descricao=(form.get("descricao") or "").strip(),
         processo_id=int(form["processo_id"]) if form.get("processo_id") else None,
         prioridade=form.get("prioridade", "normal"),
@@ -1623,6 +1702,7 @@ async def producao_op_editar(op_id: int, request: Request, session: Session = De
     form = await request.form()
     op.codigo = (form.get("codigo") or "").strip()
     op.produto = (form.get("produto") or "").strip()
+    op.cliente = (form.get("cliente") or "").strip()
     op.descricao = (form.get("descricao") or "").strip()
     op.processo_id = int(form["processo_id"]) if form.get("processo_id") else None
     op.prioridade = form.get("prioridade", "normal")
@@ -1656,7 +1736,7 @@ async def producao_op_json(op_id: int, request: Request, session: Session = Depe
         return JSONResponse({"error": "not found"}, status_code=404)
     passos = _roteiro(session, op_id)
     return JSONResponse({
-        "id": op.id, "codigo": op.codigo, "produto": op.produto,
+        "id": op.id, "codigo": op.codigo, "produto": op.produto, "cliente": op.cliente,
         "descricao": op.descricao, "processo_id": op.processo_id,
         "prioridade": op.prioridade, "status": op.status,
         "quantidade_planejada": op.quantidade_planejada,
@@ -1924,6 +2004,96 @@ async def producao_mat_cat_excluir(mc_id: int, request: Request, session: Sessio
     if not mc or mc.company_id != ctx.company.id:
         return JSONResponse({"error": "not found"}, status_code=404)
     session.delete(mc); session.commit()
+    return JSONResponse({"ok": True})
+
+
+# ── Anexos da OP ─────────────────────────────────────────────────────────────
+
+@app.get("/ferramentas/producao/op/{op_id}/anexos-json")
+@require_login
+async def producao_op_anexos_json(op_id: int, request: Request, session: Session = Depends(get_session)):
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    op = session.get(OrdemProducao, op_id)
+    if not op or op.company_id != ctx.company.id:
+        return JSONResponse({"error": "not found"}, status_code=404)
+    anexos = session.exec(
+        select(ProducaoAnexo).where(ProducaoAnexo.op_id == op_id).order_by(ProducaoAnexo.created_at)
+    ).all()
+    return JSONResponse({"anexos": [
+        {"id": a.id, "original_filename": a.original_filename, "mime_type": a.mime_type, "size_bytes": a.size_bytes}
+        for a in anexos
+    ]})
+
+
+@app.post("/ferramentas/producao/op/{op_id}/anexo/upload")
+@require_login
+async def producao_op_anexo_upload(op_id: int, request: Request, session: Session = Depends(get_session)):
+    from fastapi import UploadFile, File
+    import uuid as _uuid
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    op = session.get(OrdemProducao, op_id)
+    if not op or op.company_id != ctx.company.id:
+        return JSONResponse({"error": "not found"}, status_code=404)
+    form = await request.form()
+    upload = form.get("file")
+    if not upload or not hasattr(upload, "filename"):
+        return JSONResponse({"error": "Nenhum arquivo enviado"}, status_code=400)
+    original = upload.filename or "arquivo"
+    ext = original.rsplit(".", 1)[-1].lower() if "." in original else ""
+    stored = f"prod_{op_id}_{_uuid.uuid4().hex}.{ext}" if ext else f"prod_{op_id}_{_uuid.uuid4().hex}"
+    upload_dir = UPLOAD_DIR / "producao"
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    dest = upload_dir / stored
+    size = 0
+    content = await upload.read()
+    size = len(content)
+    if size > 20 * 1024 * 1024:
+        return JSONResponse({"error": "Arquivo muito grande (máx. 20 MB)"}, status_code=400)
+    dest.write_bytes(content)
+    anexo = ProducaoAnexo(
+        op_id=op_id, company_id=ctx.company.id,
+        original_filename=original,
+        stored_filename=f"producao/{stored}",
+        mime_type=upload.content_type or "application/octet-stream",
+        size_bytes=size,
+    )
+    session.add(anexo); session.commit()
+    return JSONResponse({"ok": True, "id": anexo.id})
+
+
+@app.get("/ferramentas/producao/anexo/{anexo_id}/download")
+@require_login
+async def producao_anexo_download(anexo_id: int, request: Request, session: Session = Depends(get_session)):
+    from fastapi.responses import FileResponse
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        return RedirectResponse("/login", status_code=303)
+    anexo = session.get(ProducaoAnexo, anexo_id)
+    if not anexo or anexo.company_id != ctx.company.id:
+        return JSONResponse({"error": "not found"}, status_code=404)
+    path = UPLOAD_DIR / anexo.stored_filename
+    if not path.exists():
+        return JSONResponse({"error": "Arquivo não encontrado no servidor"}, status_code=404)
+    return FileResponse(str(path), filename=anexo.original_filename, media_type=anexo.mime_type)
+
+
+@app.post("/ferramentas/producao/anexo/{anexo_id}/excluir")
+@require_login
+async def producao_anexo_excluir(anexo_id: int, request: Request, session: Session = Depends(get_session)):
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    anexo = session.get(ProducaoAnexo, anexo_id)
+    if not anexo or anexo.company_id != ctx.company.id:
+        return JSONResponse({"error": "not found"}, status_code=404)
+    path = UPLOAD_DIR / anexo.stored_filename
+    if path.exists():
+        path.unlink(missing_ok=True)
+    session.delete(anexo); session.commit()
     return JSONResponse({"ok": True})
 
 
