@@ -124,10 +124,11 @@ SQLModel.metadata.create_all(engine, tables=[
     OrdemProducao.__table__,
     ProducaoRoteiroPasso.__table__,
     ProducaoMaterial.__table__,
+    ProducaoAnexo.__table__,
     ProducaoMaterialCatalogo.__table__,
 ])
 
-# Migração: adiciona client_id às tabelas existentes (ALTER TABLE seguro)
+# Migração: adiciona colunas/tabelas novas de forma segura (ALTER TABLE IF NOT EXISTS)
 def _prod_migration():
     _sa_text = __import__("sqlalchemy").text
     for _tbl, _col in [
@@ -137,6 +138,7 @@ def _prod_migration():
         ("ordemproducao",           "cor TEXT DEFAULT ''"),
         ("ordemproducao",           "pedido TEXT DEFAULT ''"),
         ("ordemproducao",           "token TEXT DEFAULT ''"),
+        ("ordemproducao",           "cliente TEXT DEFAULT ''"),
     ]:
         try:
             with engine.connect() as _conn:
