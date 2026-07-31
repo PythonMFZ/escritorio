@@ -234,6 +234,7 @@ _TPL_PRODUCAO = r"""
       <button class="btn btn-sm btn-outline-secondary" onclick="showTab('pcp')">&#9650; PCP</button>
       <button class="btn btn-sm btn-outline-secondary" onclick="showTab('materiais_cat')">&#9744; Materiais</button>
       <button class="btn btn-sm btn-outline-secondary" onclick="showTab('processos')">&#9881; Processos</button>
+      <button class="btn btn-sm btn-outline-secondary" onclick="copiarLinkKiosk()" title="Link do Kiosk para este cliente">🏭 Link Kiosk</button>
       <button class="btn btn-sm btn-primary" onclick="abrirModalOP(null)" style="background:#6366f1;border-color:#6366f1;">+ Nova OP</button>
     </div>
   </div>
@@ -1215,6 +1216,19 @@ function opAnexoExcluir(id){
     .then(r=>r.json()).then(d=>{ if(d.ok&&_anexosOpId) _carregarAnexos(_anexosOpId); });
 }
 
+// ── Link Kiosk ──
+function copiarLinkKiosk(){
+  fetch('/ferramentas/producao/kiosk-link').then(r=>r.json()).then(d=>{
+    if(d.url){
+      navigator.clipboard.writeText(d.url).then(()=>{
+        alert('Link copiado!\n\nURL: '+d.url+'\nPIN: '+d.pin+'\n\nColoque este PC em modo quiosque nesta URL.');
+      }).catch(()=>{
+        prompt('Copie o link do Kiosk (PIN: '+d.pin+'):', d.url);
+      });
+    }
+  });
+}
+
 // ── Filtro OPs ──
 function filtrarOPs(){
   const txt=(document.getElementById('filtroOP').value||'').toLowerCase();
@@ -2113,9 +2127,18 @@ async def producao_anexo_excluir(anexo_id: int, request: Request, session: Sessi
 # ── Kiosk de Produção ────────────────────────────────────────────────────────
 
 import os as _os
+import hmac as _hmac
+import hashlib as _hashlib
 
 _KIOSK_PIN = _os.getenv("KIOSK_PIN", "1234")
-_KIOSK_COOKIE = "kiosk_prod_ok"
+_KIOSK_COOKIE_PREFIX = "kiosk_ok_"  # + token
+
+
+def _kiosk_token(company_id: int, client_id) -> str:
+    """Token único e seguro por (company, client). Derivado de HMAC — não pode ser adivinhado."""
+    key = (APP_SECRET_KEY or "kiosk").encode()
+    msg = f"{company_id}:{client_id or 0}".encode()
+    return _hmac.new(key, msg, _hashlib.sha256).hexdigest()[:24]
 
 _TPL_KIOSK_LOGIN = r"""<!DOCTYPE html>
 <html lang="pt-BR">
@@ -2142,7 +2165,7 @@ button:hover{background:#4f46e5;}
   <div class="logo">🏭</div>
   <h1>Controle de Produção</h1>
   <p>Digite o PIN para acessar</p>
-  <form method="post" action="/producao/kiosk/login">
+  <form method="post" action="/producao/kiosk/{{ token }}/login">
     <input type="password" name="pin" maxlength="8" autofocus inputmode="numeric" placeholder="••••">
     <button type="submit">Entrar</button>
     {% if erro %}<div class="err">PIN incorreto. Tente novamente.</div>{% endif %}
@@ -2211,22 +2234,25 @@ body{background:#0f172a;font-family:'Segoe UI',sans-serif;color:#f1f5f9;min-heig
 .qtd-wrap{margin:.5rem 0;}
 .qtd-wrap label{font-size:.78rem;color:#94a3b8;display:block;margin-bottom:.3rem;}
 .qtd-wrap input{background:#1e293b;border:1px solid #334155;border-radius:8px;padding:.5rem .75rem;color:#f1f5f9;font-size:1rem;width:140px;}
+.op-desc-box{background:#0f172a;border-left:3px solid #6366f1;border-radius:0 8px 8px 0;padding:.6rem .9rem;margin-bottom:1rem;font-size:.9rem;color:#cbd5e1;line-height:1.5;white-space:pre-wrap;word-break:break-word;}
+.op-meta{display:flex;gap:1rem;flex-wrap:wrap;font-size:.78rem;color:#94a3b8;margin-bottom:.75rem;}
 .refresh-bar{height:3px;background:#6366f1;width:100%;position:fixed;top:0;left:0;z-index:200;transform-origin:left;transition:transform 60s linear;}
 </style>
 </head>
 <body>
 <div class="refresh-bar" id="rbar"></div>
 <div class="top">
-  <h1>🏭 Produção — {{ company_nome }}</h1>
+  <h1>🏭 {{ client_nome }}</h1>
   <div class="right">
     <span class="timer-badge" id="refresh-clock">Atualiza em 60s</span>
-    <a href="/producao/kiosk/logout">Sair</a>
+    <a href="/producao/kiosk/{{ token }}/logout">Sair</a>
   </div>
 </div>
 
 <div class="board">
   {% for proc in processos %}
   {% set col_ops = ops_por_proc.get(proc.id, []) %}
+  {% if col_ops %}
   <div class="col">
     <div class="col-head" style="background:{{ proc.cor }}22;border-bottom:2px solid {{ proc.cor }};">
       <h2>{{ proc.nome }}</h2>
@@ -2242,11 +2268,11 @@ body{background:#0f172a;font-family:'Segoe UI',sans-serif;color:#f1f5f9;min-heig
         {% if op.cliente %}<div class="card-cliente">👤 {{ op.cliente }}</div>{% endif %}
         {% if op.descricao %}<div class="card-desc">{{ op.descricao }}</div>{% endif %}
         {% if step %}
-        <div class="card-step step-{{ step.status[:3] if step.status != 'em_andamento' else 'and' }}">
+        <div class="card-step step-{{ 'and' if step.status=='em_andamento' else ('paus' if step.status=='pausado' else 'pend') }}">
           {{ step.proc_nome }} —
           {% if step.status=='em_andamento' %}Em andamento
           {% elif step.status=='pausado' %}Pausado
-          {% else %}{{ step.status|title }}{% endif %}
+          {% else %}Aguardando{% endif %}
         </div>
         {% if step.status == 'em_andamento' and step.data_entrada %}
         <div class="card-timer kc-timer" data-entrada="{{ step.data_entrada.isoformat() }}"></div>
@@ -2257,11 +2283,10 @@ body{background:#0f172a;font-family:'Segoe UI',sans-serif;color:#f1f5f9;min-heig
           <span>{{ op.quantidade_produzida|int }}/{{ op.quantidade_planejada|int }}</span>
         </div>
       </div>
-      {% else %}
-      <div style="text-align:center;color:#334155;padding:2rem .5rem;font-size:.82rem;">Arraste OPs aqui</div>
       {% endfor %}
     </div>
   </div>
+  {% endif %}
   {% endfor %}
 
   <!-- OPs sem processo -->
@@ -2294,7 +2319,8 @@ body{background:#0f172a;font-family:'Segoe UI',sans-serif;color:#f1f5f9;min-heig
   <div class="modal">
     <button class="close" onclick="fecharModal()">✕</button>
     <h2 id="m-titulo">—</h2>
-    <div class="sub" id="m-sub"></div>
+    <div class="op-meta" id="m-meta"></div>
+    <div class="op-desc-box" id="m-desc" style="display:none;"></div>
     <div id="m-steps"></div>
   </div>
 </div>
@@ -2334,7 +2360,20 @@ function abrirOP(opId){
   const op=_OPS_DATA[opId]; if(!op) return;
   _curOpId=opId;
   document.getElementById('m-titulo').textContent=op.codigo+' — '+op.produto;
-  document.getElementById('m-sub').textContent=(op.cliente?'Cliente: '+op.cliente+' · ':'')+op.descricao;
+  // Meta: cliente, prioridade, qtd
+  const meta=[];
+  if(op.cliente) meta.push('👤 '+op.cliente);
+  if(op.prioridade&&op.prioridade!=='normal') meta.push('⚡ '+op.prioridade.toUpperCase());
+  meta.push('📦 '+Math.round(op.quantidade_produzida||0)+'/'+Math.round(op.quantidade_planejada||0));
+  document.getElementById('m-meta').textContent=meta.join('  ·  ');
+  // Descrição destacada
+  const descEl=document.getElementById('m-desc');
+  if(op.descricao&&op.descricao.trim()){
+    descEl.textContent=op.descricao;
+    descEl.style.display='';
+  } else {
+    descEl.style.display='none';
+  }
   document.getElementById('opModal').classList.add('open');
   _renderSteps(op.roteiro);
 }
@@ -2401,49 +2440,72 @@ function acao(passoId, tipo){
 </html>"""
 
 
-@app.get("/producao/kiosk", response_class=HTMLResponse)
-async def kiosk_home(request: Request, session: Session = Depends(get_session)):
-    if request.cookies.get(_KIOSK_COOKIE) != "1":
-        from fastapi.templating import Jinja2Templates as _J2
-        from jinja2 import Environment, BaseLoader
-        tmpl = Environment(loader=BaseLoader()).from_string(_TPL_KIOSK_LOGIN)
-        return HTMLResponse(tmpl.render(erro=False))
-
-    # Pega a primeira company (multi-tenant: usa company_id=1 ou a única existente)
-    from sqlmodel import Session as _Sess
-    try:
-        company = session.exec(select(__import__("sqlmodel").SQLModel.metadata.tables.get("company") and None or None)).first()
-    except Exception:
-        company = None
-
-    # Busca company_id via query direta
+def _kiosk_render(session, token: str, erro: bool = False) -> HTMLResponse:
+    """Resolve token → (company_id, client_id) e renderiza login ou kanban."""
     from sqlalchemy import text as _text
+    from jinja2 import Environment, BaseLoader
+    import json as _json2
+
+    # Acha qual (company, client) corresponde ao token
     try:
-        row = session.execute(_text("SELECT id, name FROM company ORDER BY id LIMIT 1")).first()
-        cid = row[0] if row else 1
-        company_nome = row[1] if row else "Produção"
+        companies = session.execute(_text("SELECT id, name FROM company ORDER BY id")).fetchall()
     except Exception:
-        cid = 1
-        company_nome = "Produção"
+        companies = []
 
-    procs = session.exec(
-        select(ProducaoProcesso).where(ProducaoProcesso.company_id == cid).order_by(ProducaoProcesso.ordem)
-    ).all()
+    matched_cid = matched_clid = matched_cname = matched_clname = None
+    for crow in companies:
+        cid = crow[0]
+        # testa client_id=None (sem filtro de cliente)
+        if _kiosk_token(cid, None) == token:
+            matched_cid, matched_clid = cid, None
+            matched_cname = crow[1]
+            matched_clname = crow[1] + " — Produção"
+            break
+        # testa cada client
+        try:
+            clients = session.execute(_text("SELECT id, name FROM client WHERE company_id=:c"), {"c": cid}).fetchall()
+        except Exception:
+            clients = []
+        for clrow in clients:
+            if _kiosk_token(cid, clrow[0]) == token:
+                matched_cid, matched_clid = cid, clrow[0]
+                matched_cname = crow[1]
+                matched_clname = clrow[1]
+                break
+        if matched_cid is not None:
+            break
 
+    if matched_cid is None:
+        return HTMLResponse("<h1>Link inválido</h1>", status_code=404)
+
+    cookie_name = _KIOSK_COOKIE_PREFIX + token
+    # Se cookie não está OK → login
+    if erro or True:  # verificamos externamente
+        pass
+
+    cid, clid = matched_cid, matched_clid
+
+    # Processos filtrados pelo cliente
+    q_proc = select(ProducaoProcesso).where(ProducaoProcesso.company_id == cid)
+    if clid:
+        q_proc = q_proc.where(ProducaoProcesso.client_id == clid)
+    procs = session.exec(q_proc.order_by(ProducaoProcesso.ordem)).all()
+
+    # OPs ativas filtradas pelo cliente
     pri = _sa_case({"urgente": 0, "alta": 1, "normal": 2, "baixa": 3},
                    value=OrdemProducao.prioridade, else_=99)
-    ops = session.exec(
-        select(OrdemProducao)
-        .where(OrdemProducao.company_id == cid)
-        .where(OrdemProducao.status.in_(["aberta", "em_andamento"]))
-        .order_by(pri, OrdemProducao.data_fim_plan)
-    ).all()
+    q_ops = (select(OrdemProducao)
+             .where(OrdemProducao.company_id == cid)
+             .where(OrdemProducao.status.in_(["aberta", "em_andamento"]))
+             .order_by(pri, OrdemProducao.data_fim_plan))
+    if clid:
+        q_ops = q_ops.where(OrdemProducao.client_id == clid)
+    ops = session.exec(q_ops).all()
 
-    # Monta dados por processo
-    ops_por_proc = {}
-    ops_sem_proc = []
-    step_atual = {}
-    ops_json = {}
+    ops_por_proc: dict = {}
+    ops_sem_proc: list = []
+    step_atual: dict = {}
+    ops_json: dict = {}
 
     for op in ops:
         passos = _roteiro(session, op.id)
@@ -2451,10 +2513,8 @@ async def kiosk_home(request: Request, session: Session = Depends(get_session)):
         for p in passos:
             proc = session.get(ProducaoProcesso, p.processo_id)
             roteiro_data.append({
-                "id": p.id,
-                "proc_nome": proc.nome if proc else "?",
-                "processo_id": p.processo_id,
-                "ordem": p.ordem,
+                "id": p.id, "proc_nome": proc.nome if proc else "?",
+                "processo_id": p.processo_id, "ordem": p.ordem,
                 "status": p.status,
                 "tempo_estimado_h": p.tempo_estimado_h,
                 "tempo_realizado_h": p.tempo_realizado_h,
@@ -2467,7 +2527,6 @@ async def kiosk_home(request: Request, session: Session = Depends(get_session)):
                     "status": p.status,
                     "data_entrada": p.data_entrada,
                 }
-
         ops_json[op.id] = {
             "id": op.id, "codigo": op.codigo, "produto": op.produto,
             "cliente": op.cliente, "descricao": op.descricao,
@@ -2476,44 +2535,63 @@ async def kiosk_home(request: Request, session: Session = Depends(get_session)):
             "quantidade_produzida": op.quantidade_produzida,
             "roteiro": roteiro_data,
         }
-
         if op.processo_id:
             ops_por_proc.setdefault(op.processo_id, []).append(op)
         else:
             ops_sem_proc.append(op)
 
-    import json as _json2
-    from jinja2 import Environment, BaseLoader
     tmpl = Environment(loader=BaseLoader()).from_string(_TPL_KIOSK)
     html = tmpl.render(
-        processos=procs,
-        ops_por_proc=ops_por_proc,
-        ops_sem_proc=ops_sem_proc,
-        step_atual=step_atual,
-        ops_json=_json2.dumps(ops_json),
-        company_nome=company_nome,
+        processos=procs, ops_por_proc=ops_por_proc, ops_sem_proc=ops_sem_proc,
+        step_atual=step_atual, ops_json=_json2.dumps(ops_json),
+        client_nome=matched_clname, token=token,
     )
     return HTMLResponse(html)
 
 
-@app.post("/producao/kiosk/login", response_class=HTMLResponse)
-async def kiosk_login(request: Request):
+@app.get("/producao/kiosk/{token}", response_class=HTMLResponse)
+async def kiosk_home(token: str, request: Request, session: Session = Depends(get_session)):
+    from jinja2 import Environment, BaseLoader
+    cookie_name = _KIOSK_COOKIE_PREFIX + token
+    if request.cookies.get(cookie_name) != "1":
+        tmpl = Environment(loader=BaseLoader()).from_string(_TPL_KIOSK_LOGIN)
+        return HTMLResponse(tmpl.render(erro=False, token=token))
+    return _kiosk_render(session, token)
+
+
+@app.post("/producao/kiosk/{token}/login", response_class=HTMLResponse)
+async def kiosk_login(token: str, request: Request, session: Session = Depends(get_session)):
+    from jinja2 import Environment, BaseLoader
     form = await request.form()
     pin = (form.get("pin") or "").strip()
     if pin == _KIOSK_PIN:
-        resp = RedirectResponse("/producao/kiosk", status_code=303)
-        resp.set_cookie(_KIOSK_COOKIE, "1", max_age=86400 * 30, httponly=True, samesite="lax")
+        resp = RedirectResponse(f"/producao/kiosk/{token}", status_code=303)
+        cookie_name = _KIOSK_COOKIE_PREFIX + token
+        resp.set_cookie(cookie_name, "1", max_age=86400 * 30, httponly=True, samesite="lax")
         return resp
-    from jinja2 import Environment, BaseLoader
     tmpl = Environment(loader=BaseLoader()).from_string(_TPL_KIOSK_LOGIN)
-    return HTMLResponse(tmpl.render(erro=True))
+    return HTMLResponse(tmpl.render(erro=True, token=token))
 
 
-@app.get("/producao/kiosk/logout", response_class=HTMLResponse)
-async def kiosk_logout():
-    resp = RedirectResponse("/producao/kiosk", status_code=303)
-    resp.delete_cookie(_KIOSK_COOKIE)
+@app.get("/producao/kiosk/{token}/logout", response_class=HTMLResponse)
+async def kiosk_logout(token: str):
+    resp = RedirectResponse(f"/producao/kiosk/{token}", status_code=303)
+    resp.delete_cookie(_KIOSK_COOKIE_PREFIX + token)
     return resp
+
+
+# Rota para o gestor obter o link do kiosk do cliente atual
+@app.get("/ferramentas/producao/kiosk-link")
+@require_login
+async def producao_kiosk_link(request: Request, session: Session = Depends(get_session)):
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    current_client = _resolve_client(request, session, ctx)
+    clid = current_client.id if current_client else None
+    token = _kiosk_token(ctx.company.id, clid)
+    base = str(request.base_url).rstrip("/")
+    return JSONResponse({"url": f"{base}/producao/kiosk/{token}", "pin": _KIOSK_PIN})
 
 
 # ── Imprimir OP ──────────────────────────────────────────────────────────────
