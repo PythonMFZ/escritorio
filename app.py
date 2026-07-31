@@ -36214,6 +36214,45 @@ async def office_finance_conciliate_entry(
     return RedirectResponse("/admin/financeiro/conciliacao", status_code=303)
 
 
+@app.post("/admin/financeiro/conciliacao/{entry_id}/reabrir")
+@require_role({"admin", "equipe"})
+async def office_finance_reabrir_entry(
+        entry_id: int,
+        request: Request,
+        session: Session = Depends(get_session),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+    entry = session.get(OfficeFinancialEntry, int(entry_id))
+    if not entry or entry.company_id != ctx.company.id:
+        set_flash(request, "Lançamento não encontrado.")
+        return RedirectResponse("/admin/financeiro/conciliacao", status_code=303)
+
+    previous_status = str(entry.status or "")
+    entry.status = "aberto"
+    entry.amount_realized_brl = 0.0
+    entry.settlement_date = ""
+    entry.updated_by_user_id = ctx.user.id
+    entry.updated_at = utcnow()
+    session.add(entry)
+    session.flush()
+    session.add(
+        OfficeFinancialConciliationLog(
+            company_id=ctx.company.id,
+            entry_id=int(entry.id),
+            user_id=ctx.user.id,
+            previous_status=previous_status,
+            new_status="aberto",
+            settlement_date="",
+            amount_realized_brl=0.0,
+            notes="Reabertura manual",
+        )
+    )
+    session.commit()
+    set_flash(request, "Lançamento reaberto.")
+    return RedirectResponse("/admin/financeiro/conciliacao", status_code=303)
+
+
 @app.get("/admin/financeiro/dashboard-gerencial", response_class=HTMLResponse)
 @require_role({"admin", "equipe"})
 async def office_finance_management_dashboard(request: Request,
@@ -36750,6 +36789,11 @@ TEMPLATES.update({
                   <div class="col-md-8"><input class="form-control form-control-sm" name="notes" placeholder="Observação da baixa" /></div>
                   <div class="col-md-4 d-grid"><button class="btn btn-sm btn-primary">Conciliar</button></div>
                 </form>
+                {% if row.status in ('recebido', 'pago', 'parcial') %}
+                <form method="post" action="/admin/financeiro/conciliacao/{{ row.id }}/reabrir" class="mt-1" onsubmit="return confirm('Reabrir este lançamento?')">
+                  <button class="btn btn-sm btn-outline-secondary w-100">↩ Reabrir</button>
+                </form>
+                {% endif %}
               </td>
             </tr>
           {% endfor %}
