@@ -5,6 +5,13 @@ import json
 import secrets
 from datetime import date, datetime
 from typing import List, Optional
+from zoneinfo import ZoneInfo
+
+_TZ_BR = ZoneInfo("America/Sao_Paulo")
+
+def _now_br() -> datetime:
+    """Retorna datetime atual no fuso de Brasília, sem tzinfo (naive), para salvar no banco."""
+    return datetime.now(_TZ_BR).replace(tzinfo=None)
 
 from fastapi import Depends, Form, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
@@ -250,7 +257,7 @@ _TPL_PRODUCAO = r"""
             <span class="badge" style="font-size:.65rem;background:{{ op.prioridade|_prioridade_cor }}20;color:{{ op.prioridade|_prioridade_cor }};">{{ op.prioridade|upper }}</span>
           </div>
           <div style="font-weight:600;font-size:.85rem;margin-bottom:.25rem;">{{ op.produto }}</div>
-          {% if op.descricao %}<div style="font-size:.75rem;color:#64748b;margin-bottom:.3rem;">{{ op.descricao[:40] }}{% if op.descricao|length>40 %}…{% endif %}</div>{% endif %}
+          {% if op.descricao %}<div style="font-size:.75rem;color:#64748b;margin-bottom:.3rem;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;max-width:100%;">{{ op.descricao }}</div>{% endif %}
           {% if rids %}
           <div style="font-size:.7rem;color:#94a3b8;margin-bottom:.3rem;">
             <i class="bi bi-diagram-3 me-1"></i>
@@ -425,8 +432,8 @@ _TPL_PRODUCAO = r"""
           <thead><tr style="background:#f8fafc;border-bottom:1px solid var(--mc-border);">
             <th style="padding:.4rem .75rem;text-align:left;">Etapa</th>
             <th style="padding:.4rem .75rem;text-align:center;">Status</th>
-            <th style="padding:.4rem .75rem;text-align:right;background:#6366f110;">Tempo Est. (h)</th>
-            <th style="padding:.4rem .75rem;text-align:right;background:#16a34a10;">Tempo Real (h)</th>
+            <th style="padding:.4rem .75rem;text-align:right;background:#6366f110;">Tempo Est. (min)</th>
+            <th style="padding:.4rem .75rem;text-align:right;background:#16a34a10;">Tempo Real (min)</th>
             <th style="padding:.4rem .75rem;text-align:center;">Desvio</th>
             <th style="padding:.4rem .75rem;text-align:center;background:#16a34a10;">Entrada Real</th>
             <th style="padding:.4rem .75rem;text-align:center;background:#16a34a10;">Saída Real</th>
@@ -442,12 +449,13 @@ _TPL_PRODUCAO = r"""
                   {{ p.status|title }}
                 </span>
               </td>
-              <td style="padding:.4rem .75rem;text-align:right;background:#6366f108;">{{ '%.1f'|format(p.tempo_estimado_h) if p.tempo_estimado_h else '—' }}</td>
-              <td style="padding:.4rem .75rem;text-align:right;background:#16a34a08;font-weight:600;">{{ '%.1f'|format(p.tempo_realizado_h) if p.tempo_realizado_h else '—' }}</td>
+              <td style="padding:.4rem .75rem;text-align:right;background:#6366f108;">{{ (p.tempo_estimado_h * 60)|round|int if p.tempo_estimado_h else '—' }}</td>
+              <td style="padding:.4rem .75rem;text-align:right;background:#16a34a08;font-weight:600;">{{ (p.tempo_realizado_h * 60)|round|int if p.tempo_realizado_h else '—' }}</td>
               <td style="padding:.4rem .75rem;text-align:center;">
                 {% if dh is not none and p.tempo_realizado_h > 0 %}
-                <span style="font-weight:700;color:{% if dh<=0 %}#16a34a{% elif dh<=2 %}#f97316{% else %}#dc2626{% endif %};">
-                  {% if dh<=0 %}{{ '%.1f'|format(dh) }}h{% else %}+{{ '%.1f'|format(dh) }}h{% endif %}
+                {% set dm = (dh * 60)|round|int %}
+                <span style="font-weight:700;color:{% if dh<=0 %}#16a34a{% elif dh<=0.5 %}#f97316{% else %}#dc2626{% endif %};">
+                  {% if dh<=0 %}{{ dm }}min{% else %}+{{ dm }}min{% endif %}
                 </span>
                 {% else %}—{% endif %}
               </td>
@@ -465,11 +473,12 @@ _TPL_PRODUCAO = r"""
             {% set tot_real = rpassos|sum(attribute='tempo_realizado_h') %}
             <tr style="background:#f8fafc;font-weight:700;border-top:2px solid var(--mc-border);">
               <td style="padding:.4rem .75rem;" colspan="2">Total</td>
-              <td style="padding:.4rem .75rem;text-align:right;background:#6366f108;">{{ '%.1f'|format(tot_est) }}h</td>
-              <td style="padding:.4rem .75rem;text-align:right;background:#16a34a08;">{{ '%.1f'|format(tot_real) }}h</td>
+              <td style="padding:.4rem .75rem;text-align:right;background:#6366f108;">{{ (tot_est * 60)|round|int }}min</td>
+              <td style="padding:.4rem .75rem;text-align:right;background:#16a34a08;">{{ (tot_real * 60)|round|int }}min</td>
               <td style="padding:.4rem .75rem;text-align:center;">
                 {% set dh_tot = tot_real - tot_est %}
-                <span style="color:{% if dh_tot<=0 %}#16a34a{% else %}#dc2626{% endif %};">{% if dh_tot<=0 %}{{ '%.1f'|format(dh_tot) }}h{% else %}+{{ '%.1f'|format(dh_tot) }}h{% endif %}</span>
+                {% set dm_tot = (dh_tot * 60)|round|int %}
+                <span style="color:{% if dh_tot<=0 %}#16a34a{% else %}#dc2626{% endif %};">{% if dh_tot<=0 %}{{ dm_tot }}min{% else %}+{{ dm_tot }}min{% endif %}</span>
               </td>
               <td colspan="3"></td>
             </tr>
@@ -1593,7 +1602,7 @@ async def producao_op_salvar(request: Request, session: Session = Depends(get_se
         observacoes=(form.get("observacoes") or "").strip(),
         cor=(form.get("cor") or "").strip(),
         pedido=(form.get("pedido") or "").strip(),
-        updated_at=datetime.utcnow(),
+        updated_at=_now_br(),
     )
     session.add(op); session.commit(); session.refresh(op)
     _salvar_roteiro(session, op.id, form)
@@ -1628,7 +1637,7 @@ async def producao_op_editar(op_id: int, request: Request, session: Session = De
     op.observacoes = (form.get("observacoes") or "").strip()
     op.cor = (form.get("cor") or "").strip()
     op.pedido = (form.get("pedido") or "").strip()
-    op.updated_at = datetime.utcnow()
+    op.updated_at = _now_br()
     session.add(op); session.commit()
     _salvar_roteiro(session, op_id, form)
     return RedirectResponse("/ferramentas/producao", status_code=303)
@@ -1690,10 +1699,10 @@ async def producao_op_mover(op_id: int, request: Request, session: Session = Dep
             .where(ProducaoRoteiroPasso.op_id == op_id, ProducaoRoteiroPasso.processo_id == int(pid))
         ).first()
         if passo and not passo.data_entrada:
-            passo.data_entrada = datetime.utcnow()
+            passo.data_entrada = _now_br()
             passo.status = "em_andamento"
             session.add(passo)
-    op.updated_at = datetime.utcnow()
+    op.updated_at = _now_br()
     session.add(op); session.commit()
     return JSONResponse({"ok": True})
 
@@ -1995,7 +2004,7 @@ async def operador_iniciar(token: str, passo_id: int, session: Session = Depends
         return JSONResponse({"error": "Passo não encontrado"}, status_code=404)
     passo.status = "em_andamento"
     if not passo.data_entrada:
-        passo.data_entrada = datetime.utcnow()
+        passo.data_entrada = _now_br()
     op.processo_id = passo.processo_id
     session.add(passo)
     if op.status == "aberta":
@@ -2015,7 +2024,7 @@ async def operador_pausar(token: str, passo_id: int, session: Session = Depends(
         return JSONResponse({"error": "Passo não encontrado"}, status_code=404)
     if passo.status != "em_andamento":
         return JSONResponse({"error": "Passo não está em andamento"}, status_code=400)
-    now = datetime.utcnow()
+    now = _now_br()
     if passo.data_entrada:
         elapsed = (now - passo.data_entrada).total_seconds() / 3600
         passo.tempo_realizado_h = round((passo.tempo_realizado_h or 0) + elapsed, 3)
@@ -2034,7 +2043,7 @@ async def operador_retomar(token: str, passo_id: int, session: Session = Depends
     if not passo or passo.op_id != op.id:
         return JSONResponse({"error": "Passo não encontrado"}, status_code=404)
     passo.status = "em_andamento"
-    passo.data_entrada = datetime.utcnow()
+    passo.data_entrada = _now_br()
     passo.data_saida = None
     session.add(passo); session.commit()
     return JSONResponse({"ok": True})
@@ -2061,10 +2070,7 @@ def _avancar_roteiro(session, op: OrdemProducao, passo_atual: ProducaoRoteiroPas
     proximo = todos[idx + 1] if idx + 1 < len(todos) else None
     if proximo:
         op.processo_id = proximo.processo_id
-        if proximo.status == "pendente":
-            proximo.status = "em_andamento"
-            proximo.data_entrada = datetime.utcnow()
-            session.add(proximo)
+        # Não inicia automaticamente — OP fica aguardando na fila da próxima etapa
     else:
         # último passo — conclui a OP
         op.status = "concluida"
@@ -2087,7 +2093,7 @@ async def operador_finalizar(token: str, passo_id: int, request: Request, sessio
     except Exception:
         pass
     passo.status = "concluido"
-    passo.data_saida = datetime.utcnow()
+    passo.data_saida = _now_br()
     if passo.data_entrada:
         delta = (passo.data_saida - passo.data_entrada).total_seconds() / 3600
         passo.tempo_realizado_h = round((passo.tempo_realizado_h or 0) + delta, 2)
