@@ -242,6 +242,7 @@ _TPL_PRODUCAO = r"""
         {% set rids = roteiros.get(op.id, []) %}
         <div class="kanban-card"
              draggable="true"
+             data-op-id="{{ op.id }}"
              ondragstart="dragOP(event,{{ op.id }},{{ rids|tojson }})"
              onclick="abrirModalOP({{ op.id }})">
           <div class="d-flex justify-content-between align-items-start mb-1">
@@ -249,7 +250,7 @@ _TPL_PRODUCAO = r"""
             <span class="badge" style="font-size:.65rem;background:{{ op.prioridade|_prioridade_cor }}20;color:{{ op.prioridade|_prioridade_cor }};">{{ op.prioridade|upper }}</span>
           </div>
           <div style="font-weight:600;font-size:.85rem;margin-bottom:.25rem;">{{ op.produto }}</div>
-          {% if op.descricao %}<div style="font-size:.75rem;color:#64748b;margin-bottom:.3rem;">{{ op.descricao[:55] }}{% if op.descricao|length>55 %}…{% endif %}</div>{% endif %}
+          {% if op.descricao %}<div style="font-size:.75rem;color:#64748b;margin-bottom:.3rem;">{{ op.descricao[:40] }}{% if op.descricao|length>40 %}…{% endif %}</div>{% endif %}
           {% if rids %}
           <div style="font-size:.7rem;color:#94a3b8;margin-bottom:.3rem;">
             <i class="bi bi-diagram-3 me-1"></i>
@@ -266,6 +267,9 @@ _TPL_PRODUCAO = r"""
               <div style="height:4px;border-radius:2px;width:{{ pct }}%;background:{% if pct>=100 %}#16a34a{% elif pct>=50 %}#f97316{% else %}#6366f1{% endif %};"></div>
             </div>
           </div>
+          {% endif %}
+          {% if op.id|string in entradas_str %}
+          <div class="kc-timer" data-entrada="{{ entradas_str[op.id|string] }}" style="font-size:.68rem;color:#f97316;font-weight:700;margin-top:.25rem;"></div>
           {% endif %}
           <div class="d-flex gap-2 mt-1" style="font-size:.7rem;color:#94a3b8;">
             {% if op.data_fim_plan %}<span><i class="bi bi-calendar2 me-1"></i>{{ op.data_fim_plan.strftime('%d/%m') }}</span>{% endif %}
@@ -615,9 +619,9 @@ _TPL_PRODUCAO = r"""
                              class="form-control form-control-sm" style="width:70px;" min="1" value="{{ loop.index }}">
                     </div>
                     <div>
-                      <label style="font-size:.75rem;color:#64748b;">Tempo estimado (h)</label>
+                      <label style="font-size:.75rem;color:#64748b;">Tempo estimado (min)</label>
                       <input type="number" name="rot_tempo_{{ proc.id }}" id="rot_tempo_{{ proc.id }}"
-                             class="form-control form-control-sm" style="width:100px;" min="0" step="0.5" value="0" placeholder="0.0">
+                             class="form-control form-control-sm" style="width:100px;" min="0" step="1" value="0" placeholder="0">
                     </div>
                   </div>
                   <div id="rot-fields-disabled-{{ proc.id }}" style="flex:1;">
@@ -625,6 +629,42 @@ _TPL_PRODUCAO = r"""
                   </div>
                 </div>
                 {% endfor %}
+              </div>
+            </div>
+
+            <!-- ══ MATERIAIS DA OP ══ -->
+            <div class="col-12" id="op-mat-wrap" style="display:none;">
+              <hr>
+              <h6 style="color:#0891b2;font-weight:700;margin-bottom:.5rem;"><i class="bi bi-box-seam me-2"></i>Materiais</h6>
+              <div id="op-mat-lista" style="margin-bottom:.75rem;"></div>
+              <div style="background:#f8fafc;border:1px solid var(--mc-border);border-radius:8px;padding:.75rem;">
+                <div class="row g-2 align-items-end">
+                  <div class="col-md-4">
+                    <label style="font-size:.75rem;font-weight:600;">Catálogo</label>
+                    <select id="op_mat_cat" class="form-select form-select-sm" onchange="opMatDoCatalogo()">
+                      <option value="">— digitar manualmente —</option>
+                    </select>
+                  </div>
+                  <div class="col-md-3">
+                    <label style="font-size:.75rem;font-weight:600;">Material *</label>
+                    <input type="text" id="op_mat_nome" class="form-control form-control-sm" placeholder="Nome">
+                  </div>
+                  <div class="col-md-1">
+                    <label style="font-size:.75rem;font-weight:600;">Un.</label>
+                    <input type="text" id="op_mat_un" class="form-control form-control-sm" value="un">
+                  </div>
+                  <div class="col-md-1">
+                    <label style="font-size:.75rem;font-weight:600;">Qtd Plan.</label>
+                    <input type="number" id="op_mat_qtd" class="form-control form-control-sm" min="0" step="0.001" value="1">
+                  </div>
+                  <div class="col-md-2">
+                    <label style="font-size:.75rem;font-weight:600;">Custo Unit. R$</label>
+                    <input type="number" id="op_mat_custo" class="form-control form-control-sm" min="0" step="0.01" value="0">
+                  </div>
+                  <div class="col-md-1 d-flex align-items-end">
+                    <button type="button" class="btn btn-sm w-100" style="background:#0891b2;color:#fff;" onclick="opMatAdicionar()">+</button>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
@@ -854,7 +894,7 @@ function _carregarRoteiro(roteiroPassos){
     const ord=document.getElementById('rot_ordem_'+p.processo_id);
     if(ord) ord.value=p.ordem;
     const tmp=document.getElementById('rot_tempo_'+p.processo_id);
-    if(tmp) tmp.value=p.tempo_estimado_h||0;
+    if(tmp) tmp.value=Math.round((p.tempo_estimado_h||0)*60);
   });
 }
 
@@ -867,6 +907,8 @@ function abrirModalOP(id){
     form.reset();
     _resetRoteiro();
     document.getElementById('op_modal_links').style.display='none';
+    document.getElementById('op-mat-wrap').style.display = 'none';
+    _opMatOpId = null;
     return new bootstrap.Modal(document.getElementById('modalOP')).show();
   }
   fetch('/ferramentas/producao/op/'+id+'/json').then(r=>r.json()).then(d=>{
@@ -888,6 +930,7 @@ function abrirModalOP(id){
       document.getElementById('op_modal_links').style.display='flex';
     }
     _carregarRoteiro(d.roteiro||[]);
+    _carregarOpMat(id);
     new bootstrap.Modal(document.getElementById('modalOP')).show();
   });
 }
@@ -961,6 +1004,129 @@ function confirmarExcluirMatCat(id,nome){
     fetch('/ferramentas/producao/material_cat/'+id+'/excluir',{method:'POST'}).then(r=>{ if(r.ok) location.reload(); });
 }
 
+// ── Materials catalog from server ──
+const _entradaOPs = {{ entradas_por_op|safe }};
+
+// ── Elapsed time counters on Kanban ──
+function _fmtElapsed(isoStr){
+  const ms = Date.now() - new Date(isoStr+'Z').getTime();
+  const h = Math.floor(ms/3600000);
+  const m = Math.floor((ms%3600000)/60000);
+  return h>0 ? h+'h '+m+'min' : m+'min';
+}
+(function _startTimers(){
+  document.querySelectorAll('.kc-timer[data-entrada]').forEach(el=>{
+    const iso = el.dataset.entrada;
+    if(!iso) return;
+    el.textContent = '⏱ '+_fmtElapsed(iso);
+    setInterval(()=>{ el.textContent = '⏱ '+_fmtElapsed(iso); }, 30000);
+  });
+})();
+
+// ── Materials inside OP modal ──
+let _opMatOpId = null;
+let _opMatCatalogo = [];
+
+function _renderOpMat(data){
+  _opMatCatalogo = data.catalogo || [];
+  const sel = document.getElementById('op_mat_cat');
+  if(sel){
+    sel.innerHTML = '<option value="">— digitar manualmente —</option>';
+    _opMatCatalogo.forEach(c=>{
+      const o = document.createElement('option');
+      o.value = c.id; o.dataset.nome = c.nome; o.dataset.un = c.unidade; o.dataset.custo = c.custo_unitario_padrao;
+      o.textContent = c.nome + ' (' + c.unidade + ')';
+      sel.appendChild(o);
+    });
+  }
+  const lista = document.getElementById('op-mat-lista');
+  if(!lista) return;
+  if(!data.materiais || !data.materiais.length){
+    lista.innerHTML = '<p style="color:#94a3b8;font-size:.83rem;">Nenhum material adicionado.</p>';
+    return;
+  }
+  let html = '<table style="width:100%;font-size:.82rem;border-collapse:collapse;">';
+  html += '<thead><tr style="color:#94a3b8;font-size:.75rem;"><th style="padding:.3rem .5rem;text-align:left;">Material</th><th style="padding:.3rem .5rem;">Un.</th><th style="padding:.3rem .5rem;text-align:right;">Qtd Plan.</th><th style="padding:.3rem .5rem;text-align:right;">Custo Unit.</th><th style="padding:.3rem .5rem;"></th></tr></thead><tbody>';
+  data.materiais.forEach(m=>{
+    html += `<tr style="border-bottom:1px solid #f1f5f9;">
+      <td style="padding:.3rem .5rem;font-weight:600;">${m.nome}</td>
+      <td style="padding:.3rem .5rem;text-align:center;">${m.unidade}</td>
+      <td style="padding:.3rem .5rem;text-align:right;">${m.quantidade_planejada}</td>
+      <td style="padding:.3rem .5rem;text-align:right;">R$ ${parseFloat(m.custo_unitario).toFixed(2)}</td>
+      <td style="padding:.3rem .5rem;text-align:center;">
+        <button type="button" class="btn btn-sm btn-outline-danger" style="padding:.1rem .4rem;font-size:.72rem;" onclick="opMatExcluir(${m.id})">✕</button>
+      </td>
+    </tr>`;
+  });
+  html += '</tbody></table>';
+  lista.innerHTML = html;
+}
+
+function _carregarOpMat(opId){
+  _opMatOpId = opId;
+  document.getElementById('op-mat-wrap').style.display = '';
+  fetch('/ferramentas/producao/op/'+opId+'/materiais-json')
+    .then(r=>r.json()).then(_renderOpMat).catch(()=>{});
+}
+
+function opMatDoCatalogo(){
+  const sel = document.getElementById('op_mat_cat');
+  const opt = sel.options[sel.selectedIndex];
+  if(!opt.value) return;
+  document.getElementById('op_mat_nome').value = opt.dataset.nome || '';
+  document.getElementById('op_mat_un').value = opt.dataset.un || 'un';
+  document.getElementById('op_mat_custo').value = opt.dataset.custo || 0;
+}
+
+function opMatAdicionar(){
+  if(!_opMatOpId) return;
+  const nome = document.getElementById('op_mat_nome').value.trim();
+  if(!nome){ alert('Informe o nome do material.'); return; }
+  fetch('/ferramentas/producao/op/'+_opMatOpId+'/material/salvar',{
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({
+      nome, unidade: document.getElementById('op_mat_un').value || 'un',
+      quantidade_planejada: parseFloat(document.getElementById('op_mat_qtd').value)||0,
+      quantidade_consumida: 0,
+      custo_unitario: parseFloat(document.getElementById('op_mat_custo').value)||0,
+    })
+  }).then(r=>r.json()).then(d=>{
+    if(d.ok){ _carregarOpMat(_opMatOpId); document.getElementById('op_mat_nome').value=''; document.getElementById('op_mat_qtd').value='1'; document.getElementById('op_mat_cat').value=''; }
+  });
+}
+
+function opMatExcluir(matId){
+  if(!confirm('Remover material?')) return;
+  fetch('/ferramentas/producao/material/'+matId+'/excluir',{method:'POST'})
+    .then(r=>r.json()).then(d=>{ if(d.ok && _opMatOpId) _carregarOpMat(_opMatOpId); });
+}
+
+function preencherDoCatalogo(){
+  const sel=document.getElementById('mat_cat_sel');
+  if(!sel) return;
+  const opt=sel.options[sel.selectedIndex];
+  if(!opt.value) return;
+  document.getElementById('mat_nome').value=opt.dataset.nome||'';
+  document.getElementById('mat_unidade').value=opt.dataset.un||'un';
+  document.getElementById('mat_custo').value=opt.dataset.custo||0;
+}
+function salvarMaterial(e,opId){
+  e.preventDefault();
+  const nome = document.getElementById('mat_nome').value;
+  if(!nome) return;
+  fetch('/ferramentas/producao/op/'+opId+'/material/salvar',{
+    method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({nome, unidade:document.getElementById('mat_unidade').value,
+      quantidade_planejada:parseFloat(document.getElementById('mat_qtd_plan').value)||0,
+      quantidade_consumida:parseFloat(document.getElementById('mat_qtd_cons').value)||0,
+      custo_unitario:parseFloat(document.getElementById('mat_custo').value)||0})
+  }).then(r=>{ if(r.ok) location.reload(); });
+}
+function excluirMaterial(mid,opId){
+  if(confirm('Excluir material?'))
+    fetch('/ferramentas/producao/material/'+mid+'/excluir',{method:'POST'}).then(r=>{ if(r.ok) location.reload(); });
+}
+
 // ── Filtro OPs ──
 function filtrarOPs(){
   const txt=(document.getElementById('filtroOP').value||'').toLowerCase();
@@ -972,6 +1138,109 @@ function filtrarOPs(){
              &&(!ped||(tr.dataset.pedido||'').includes(ped)));
     tr.style.display=ok?'':'none';
   });
+}
+
+// ── Kanban elapsed-time counters ──
+const _entradaOPs = {{ entradas_por_op|safe }};
+function _fmtElapsed(isoStr){
+  const ms=Date.now()-new Date(isoStr.replace(' ','T')+'Z').getTime();
+  if(ms<0) return '0min';
+  const h=Math.floor(ms/3600000), m=Math.floor((ms%3600000)/60000);
+  return h>0 ? h+'h '+m+'min' : m+'min';
+}
+(function _startTimers(){
+  document.querySelectorAll('.kc-timer[data-entrada]').forEach(el=>{
+    const iso=el.dataset.entrada; if(!iso) return;
+    const upd=()=>{ el.textContent='⏱ '+_fmtElapsed(iso); };
+    upd(); setInterval(upd,30000);
+  });
+})();
+
+// ── Materials inside OP modal ──
+let _opMatOpId=null;
+function _renderOpMat(data){
+  const sel=document.getElementById('op_mat_cat');
+  if(sel){
+    sel.innerHTML='<option value="">— digitar manualmente —</option>';
+    (data.catalogo||[]).forEach(c=>{
+      const o=document.createElement('option');
+      o.value=c.id; o.dataset.nome=c.nome; o.dataset.un=c.unidade; o.dataset.custo=c.custo_unitario_padrao;
+      o.textContent=c.nome+' ('+c.unidade+')'; sel.appendChild(o);
+    });
+  }
+  const lista=document.getElementById('op-mat-lista'); if(!lista) return;
+  if(!data.materiais||!data.materiais.length){
+    lista.innerHTML='<p style="color:#94a3b8;font-size:.83rem;margin:0;">Nenhum material adicionado.</p>'; return;
+  }
+  let h='<table style="width:100%;font-size:.82rem;border-collapse:collapse;">';
+  h+='<thead><tr style="color:#94a3b8;font-size:.74rem;"><th style="padding:.25rem .4rem;">Material</th><th>Un.</th><th style="text-align:right;">Qtd</th><th style="text-align:right;">Custo</th><th></th></tr></thead><tbody>';
+  data.materiais.forEach(m=>{
+    h+=`<tr style="border-bottom:1px solid #f1f5f9;">
+      <td style="padding:.25rem .4rem;font-weight:600;">${m.nome}</td>
+      <td style="padding:.25rem .4rem;text-align:center;">${m.unidade}</td>
+      <td style="padding:.25rem .4rem;text-align:right;">${m.quantidade_planejada}</td>
+      <td style="padding:.25rem .4rem;text-align:right;">R$ ${parseFloat(m.custo_unitario).toFixed(2)}</td>
+      <td style="padding:.25rem .4rem;text-align:center;"><button type="button" class="btn btn-sm btn-outline-danger" style="padding:.1rem .35rem;font-size:.7rem;" onclick="opMatExcluir(${m.id})">✕</button></td>
+    </tr>`;
+  });
+  lista.innerHTML=h+'</tbody></table>';
+}
+function _carregarOpMat(opId){
+  _opMatOpId=opId;
+  document.getElementById('op-mat-wrap').style.display='';
+  fetch('/ferramentas/producao/op/'+opId+'/materiais-json').then(r=>r.json()).then(_renderOpMat).catch(()=>{});
+}
+function opMatDoCatalogo(){
+  const sel=document.getElementById('op_mat_cat');
+  const opt=sel.options[sel.selectedIndex];
+  if(!opt.value) return;
+  document.getElementById('op_mat_nome').value=opt.dataset.nome||'';
+  document.getElementById('op_mat_un').value=opt.dataset.un||'un';
+  document.getElementById('op_mat_custo').value=opt.dataset.custo||0;
+}
+function opMatAdicionar(){
+  if(!_opMatOpId) return;
+  const nome=document.getElementById('op_mat_nome').value.trim();
+  if(!nome){ alert('Informe o nome do material.'); return; }
+  fetch('/ferramentas/producao/op/'+_opMatOpId+'/material/salvar',{
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({nome, unidade:document.getElementById('op_mat_un').value||'un',
+      quantidade_planejada:parseFloat(document.getElementById('op_mat_qtd').value)||0,
+      quantidade_consumida:0,
+      custo_unitario:parseFloat(document.getElementById('op_mat_custo').value)||0})
+  }).then(r=>r.json()).then(d=>{
+    if(d.ok){ _carregarOpMat(_opMatOpId); document.getElementById('op_mat_nome').value=''; document.getElementById('op_mat_qtd').value='1'; document.getElementById('op_mat_cat').value=''; }
+  });
+}
+function opMatExcluir(matId){
+  if(!confirm('Remover material?')) return;
+  fetch('/ferramentas/producao/material/'+matId+'/excluir',{method:'POST'})
+    .then(r=>r.json()).then(d=>{ if(d.ok&&_opMatOpId) _carregarOpMat(_opMatOpId); });
+}
+
+// These functions are also used by _TPL_MATERIAIS partial (loaded via innerHTML—scripts there don't execute,
+// so we define them here in the main template to ensure they're available)
+function preencherDoCatalogo(){
+  const sel=document.getElementById('mat_cat_sel'); if(!sel) return;
+  const opt=sel.options[sel.selectedIndex]; if(!opt.value) return;
+  document.getElementById('mat_nome').value=opt.dataset.nome||'';
+  document.getElementById('mat_unidade').value=opt.dataset.un||'un';
+  document.getElementById('mat_custo').value=opt.dataset.custo||0;
+}
+function salvarMaterial(e,opId){
+  e.preventDefault();
+  const nome=document.getElementById('mat_nome').value; if(!nome) return;
+  fetch('/ferramentas/producao/op/'+opId+'/material/salvar',{
+    method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({nome, unidade:document.getElementById('mat_unidade').value,
+      quantidade_planejada:parseFloat(document.getElementById('mat_qtd_plan').value)||0,
+      quantidade_consumida:parseFloat(document.getElementById('mat_qtd_cons').value)||0,
+      custo_unitario:parseFloat(document.getElementById('mat_custo').value)||0})
+  }).then(r=>{ if(r.ok) location.reload(); });
+}
+function excluirMaterial(mid,opId){
+  if(confirm('Excluir material?'))
+    fetch('/ferramentas/producao/material/'+mid+'/excluir',{method:'POST'}).then(r=>{ if(r.ok) location.reload(); });
 }
 </script>
 {% endblock %}
@@ -1058,30 +1327,6 @@ _TPL_MATERIAIS = r"""
     </div>
   </form>
 </div>
-<script>
-function preencherDoCatalogo(){
-  const sel=document.getElementById('mat_cat_sel');
-  const opt=sel.options[sel.selectedIndex];
-  if(!opt.value) return;
-  document.getElementById('mat_nome').value=opt.dataset.nome||'';
-  document.getElementById('mat_unidade').value=opt.dataset.un||'un';
-  document.getElementById('mat_custo').value=opt.dataset.custo||0;
-}
-function salvarMaterial(e,opId){
-  e.preventDefault();
-  fetch('/ferramentas/producao/op/'+opId+'/material/salvar',{
-    method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({nome:document.getElementById('mat_nome').value,unidade:document.getElementById('mat_unidade').value,
-      quantidade_planejada:parseFloat(document.getElementById('mat_qtd_plan').value)||0,
-      quantidade_consumida:parseFloat(document.getElementById('mat_qtd_cons').value)||0,
-      custo_unitario:parseFloat(document.getElementById('mat_custo').value)||0})
-  }).then(r=>{ if(r.ok) location.reload(); });
-}
-function excluirMaterial(mid,opId){
-  if(confirm('Excluir material?'))
-    fetch('/ferramentas/producao/material/'+mid+'/excluir',{method:'POST'}).then(r=>{ if(r.ok) location.reload(); });
-}
-</script>
 """
 
 _TPL_IMPRIMIR = r"""<!DOCTYPE html>
@@ -1196,9 +1441,12 @@ h1{font-size:20px;font-weight:700;margin-bottom:4px;}
 .btn{display:block;width:100%;padding:14px;border:none;border-radius:10px;font-size:16px;font-weight:700;cursor:pointer;margin-top:10px;letter-spacing:.3px;}
 .btn-start{background:#6366f1;color:#fff;}
 .btn-stop{background:#dc2626;color:#fff;}
+.btn-pause{background:#f97316;color:#fff;}
+.btn-resume{background:#059669;color:#fff;}
 .btn:disabled{opacity:.4;cursor:not-allowed;}
 .info-row{display:flex;justify-content:space-between;font-size:13px;color:#94a3b8;margin-bottom:6px;}
 .info-val{color:#f1f5f9;font-weight:600;}
+.badge-paus{background:#7c2d12;color:#fed7aa;}
 </style>
 </head>
 <body>
@@ -1215,12 +1463,16 @@ h1{font-size:20px;font-weight:700;margin-bottom:4px;}
   <div class="card" id="card-{{ p.id }}">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
       <h2>{{ loop.index }}. {{ p.proc_nome }}</h2>
-      <span class="badge {% if p.status=='concluido' %}badge-ok{% elif p.status=='em_andamento' %}badge-and{% else %}badge-pend{% endif %}" id="badge-{{ p.id }}">
+      <span class="badge {% if p.status=='concluido' %}badge-ok{% elif p.status=='em_andamento' %}badge-and{% elif p.status=='pausado' %}badge-paus{% else %}badge-pend{% endif %}" id="badge-{{ p.id }}">
         {{ p.status|title }}
       </span>
     </div>
-    {% if p.tempo_estimado_h %}<div class="info-row"><span>Tempo estimado</span><span class="info-val">{{ '%.1f'|format(p.tempo_estimado_h) }}h</span></div>{% endif %}
-    {% if p.data_entrada %}<div class="info-row"><span>Entrada</span><span class="info-val" id="entrada-{{ p.id }}">{{ p.data_entrada.strftime('%d/%m %H:%M') }}</span></div>{% endif %}
+    {% if p.tempo_estimado_h %}<div class="info-row"><span>Tempo estimado</span><span class="info-val">{{ (p.tempo_estimado_h * 60)|round|int }}min</span></div>{% endif %}
+    {% if p.data_entrada %}<div class="info-row"><span>Entrada</span><span class="info-val">{{ p.data_entrada.strftime('%d/%m %H:%M') }}</span></div>{% endif %}
+    {% if p.status == 'em_andamento' and p.data_entrada %}
+    <input type="hidden" id="entrada-raw-{{ p.id }}" value="{{ p.data_entrada.isoformat() }}">
+    <div class="info-row"><span>Tempo acumulado</span><span class="info-val" id="timer-{{ p.id }}">...</span></div>
+    {% endif %}
     {% if p.status == 'pendente' %}
     <button class="btn btn-start" onclick="iniciar({{ p.id }})">&#9654; Iniciar etapa</button>
     {% elif p.status == 'em_andamento' %}
@@ -1231,6 +1483,9 @@ h1{font-size:20px;font-weight:700;margin-bottom:4px;}
              style="width:100%;padding:12px;border-radius:8px;border:1px solid #334155;background:#0f172a;color:#f1f5f9;font-size:16px;margin-bottom:4px;">
     </div>
     <button class="btn btn-stop" onclick="finalizar({{ p.id }})">&#9632; Finalizar etapa</button>
+    <button class="btn btn-pause" onclick="pausar({{ p.id }})" style="margin-top:8px;">⏸ Pausar</button>
+    {% elif p.status == 'pausado' %}
+    <button class="btn btn-resume" onclick="retomar({{ p.id }})">▶ Retomar</button>
     {% else %}
     <button class="btn btn-start" disabled>&#10003; Concluído</button>
     {% endif %}
@@ -1259,6 +1514,26 @@ function finalizar(pid){
     else alert(d.error||'Erro');
   });
 }
+function pausar(pid){
+  fetch('/op/'+_tok+'/passo/'+pid+'/pausar',{method:'POST'}).then(r=>r.json()).then(d=>{
+    if(d.ok) location.reload(); else alert(d.error||'Erro');
+  });
+}
+function retomar(pid){
+  fetch('/op/'+_tok+'/passo/'+pid+'/retomar',{method:'POST'}).then(r=>r.json()).then(d=>{
+    if(d.ok) location.reload(); else alert(d.error||'Erro');
+  });
+}
+(function(){
+  document.querySelectorAll('[id^="timer-"]').forEach(el=>{
+    const pid = el.id.replace('timer-','');
+    const entradaEl = document.getElementById('entrada-raw-'+pid);
+    if(!entradaEl) return;
+    const iso = entradaEl.value;
+    function upd(){ const ms=Date.now()-new Date(iso+'Z').getTime(); const h=Math.floor(ms/3600000); const m=Math.floor((ms%3600000)/60000); el.textContent=(h?h+'h ':'')+m+'min'; }
+    upd(); setInterval(upd,10000);
+  });
+})();
 </script>
 </body>
 </html>
@@ -1334,6 +1609,13 @@ async def producao_index(request: Request, session: Session = Depends(get_sessio
     import json as _json
     roteiros_json = _json.dumps({str(k): v for k, v in roteiros.items()})
 
+    entradas_por_op = {}
+    for op in all_ops:
+        for p in roteiro_detalhado.get(op.id, []):
+            if p["status"] == "em_andamento" and p["data_entrada"]:
+                entradas_por_op[op.id] = p["data_entrada"].isoformat()
+                break
+
     mat_q = select(ProducaoMaterialCatalogo).where(ProducaoMaterialCatalogo.company_id == cid)
     if clid:
         mat_q = mat_q.where(ProducaoMaterialCatalogo.client_id == clid)
@@ -1350,6 +1632,8 @@ async def producao_index(request: Request, session: Session = Depends(get_sessio
         "mat_catalogo": mat_catalogo,
         "hoje": date.today(),
         "_prioridade_cor": _prioridade_cor,
+        "entradas_por_op": _json.dumps({str(k): v for k, v in entradas_por_op.items()}),
+        "entradas_str": {str(k): v for k, v in entradas_por_op.items()},
     })
 
 
@@ -1374,7 +1658,7 @@ def _salvar_roteiro(session, op_id, form):
         except ValueError:
             continue
         ordem = int(form.get(f"rot_ordem_{pid}", 0) or 0)
-        tempo = float(form.get(f"rot_tempo_{pid}", 0) or 0)
+        tempo = float(form.get(f"rot_tempo_{pid}", 0) or 0) / 60  # minutes → hours
         passo = ProducaoRoteiroPasso(
             op_id=op_id, processo_id=pid, ordem=ordem, tempo_estimado_h=tempo
         )
@@ -1613,6 +1897,28 @@ async def producao_processo_excluir(proc_id: int, request: Request, session: Ses
 
 # ── Materiais ─────────────────────────────────────────────────────────────────
 
+@app.get("/ferramentas/producao/op/{op_id}/materiais-json")
+@require_login
+async def producao_materiais_json(op_id: int, request: Request, session: Session = Depends(get_session)):
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    op = session.get(OrdemProducao, op_id)
+    if not op or op.company_id != ctx.company.id:
+        return JSONResponse({"error": "not found"}, status_code=404)
+    mats = session.exec(select(ProducaoMaterial).where(ProducaoMaterial.op_id == op_id)).all()
+    cat_q = select(ProducaoMaterialCatalogo).where(ProducaoMaterialCatalogo.company_id == ctx.company.id)
+    catalogo = session.exec(cat_q.order_by(ProducaoMaterialCatalogo.nome)).all()
+    return JSONResponse({
+        "materiais": [{"id": m.id, "nome": m.nome, "unidade": m.unidade,
+                       "quantidade_planejada": m.quantidade_planejada,
+                       "quantidade_consumida": m.quantidade_consumida,
+                       "custo_unitario": m.custo_unitario} for m in mats],
+        "catalogo": [{"id": c.id, "nome": c.nome, "unidade": c.unidade,
+                      "custo_unitario_padrao": c.custo_unitario_padrao} for c in catalogo],
+    })
+
+
 @app.get("/ferramentas/producao/op/{op_id}/materiais", response_class=HTMLResponse)
 @require_login
 async def producao_materiais_lista(op_id: int, request: Request, session: Session = Depends(get_session)):
@@ -1792,11 +2098,47 @@ async def operador_iniciar(token: str, passo_id: int, session: Session = Depends
     passo.status = "em_andamento"
     if not passo.data_entrada:
         passo.data_entrada = datetime.utcnow()
+    op.processo_id = passo.processo_id
     session.add(passo)
     if op.status == "aberta":
         op.status = "em_andamento"
-        session.add(op)
+    session.add(op)
     session.commit()
+    return JSONResponse({"ok": True})
+
+
+@app.post("/op/{token}/passo/{passo_id}/pausar")
+async def operador_pausar(token: str, passo_id: int, session: Session = Depends(get_session)):
+    op = session.exec(select(OrdemProducao).where(OrdemProducao.token == token)).first()
+    if not op:
+        return JSONResponse({"error": "OP não encontrada"}, status_code=404)
+    passo = session.get(ProducaoRoteiroPasso, passo_id)
+    if not passo or passo.op_id != op.id:
+        return JSONResponse({"error": "Passo não encontrado"}, status_code=404)
+    if passo.status != "em_andamento":
+        return JSONResponse({"error": "Passo não está em andamento"}, status_code=400)
+    now = datetime.utcnow()
+    if passo.data_entrada:
+        elapsed = (now - passo.data_entrada).total_seconds() / 3600
+        passo.tempo_realizado_h = round((passo.tempo_realizado_h or 0) + elapsed, 3)
+    passo.data_saida = now
+    passo.status = "pausado"
+    session.add(passo); session.commit()
+    return JSONResponse({"ok": True})
+
+
+@app.post("/op/{token}/passo/{passo_id}/retomar")
+async def operador_retomar(token: str, passo_id: int, session: Session = Depends(get_session)):
+    op = session.exec(select(OrdemProducao).where(OrdemProducao.token == token)).first()
+    if not op:
+        return JSONResponse({"error": "OP não encontrada"}, status_code=404)
+    passo = session.get(ProducaoRoteiroPasso, passo_id)
+    if not passo or passo.op_id != op.id:
+        return JSONResponse({"error": "Passo não encontrado"}, status_code=404)
+    passo.status = "em_andamento"
+    passo.data_entrada = datetime.utcnow()
+    passo.data_saida = None
+    session.add(passo); session.commit()
     return JSONResponse({"ok": True})
 
 
@@ -1850,7 +2192,7 @@ async def operador_finalizar(token: str, passo_id: int, request: Request, sessio
     passo.data_saida = datetime.utcnow()
     if passo.data_entrada:
         delta = (passo.data_saida - passo.data_entrada).total_seconds() / 3600
-        passo.tempo_realizado_h = round(delta, 2)
+        passo.tempo_realizado_h = round((passo.tempo_realizado_h or 0) + delta, 2)
     session.add(passo)
     # Se operador informou quantidade, usa ela diretamente; caso contrário avança proporcional
     qtd_informada = body.get("quantidade_produzida")
