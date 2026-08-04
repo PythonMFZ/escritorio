@@ -833,7 +833,15 @@ async def _nf_enviar(xml_bytes: bytes, key_pem: bytes, cert_pem: bytes, chain_pe
             except Exception as _ex_parse:
                 print(f"[nfse] aviso: não foi possível parsear XML da resposta: {_ex_parse}")
 
-        return {"chave": chave, "numero": numero, "url": url_nf}
+        # Guarda o XML da NFS-e descomprimido para poder anexar no e-mail
+        nfse_xml_bytes = None
+        if nfse_b64:
+            try:
+                nfse_xml_bytes = _gzip_nf.decompress(_b64_nf.b64decode(nfse_b64))
+            except Exception:
+                pass
+
+        return {"chave": chave, "numero": numero, "url": url_nf, "nfse_xml": nfse_xml_bytes}
 
     finally:
         _os_nf.unlink(cert_path)
@@ -937,6 +945,7 @@ async def financeiro_cobrancas_emitir_nf(
         cobranca.nf_numero  = resultado.get("numero", "")
         cobranca.nf_chave   = resultado.get("chave",  "")
         cobranca.nf_url     = resultado.get("url",    "")
+        _nfse_xml_bytes     = resultado.get("nfse_xml")
         cobranca.updated_at = _dtl.utcnow()
         session.add(cobranca)
         session.commit()
@@ -947,27 +956,10 @@ async def financeiro_cobrancas_emitir_nf(
         try:
             email_dest = getattr(contrato, "email_cliente", "") or ""
             if email_dest:
-                danfe_bytes = None
-                # O DANFE real exige mTLS no endpoint da SNNFSE
-                _danfe_endpoint = _NF_URLS[_NF_AMB].rstrip("/") + f"/{cobranca.nf_chave}/danfe"
-                try:
-                    _key_d, _cert_d, _chain_d = _nf_load_cert()
-                    import tempfile as _tmp_d
-                    with _tmp_d.NamedTemporaryFile(suffix=".pem", delete=False) as _cf_d:
-                        _cf_d.write(_cert_d + (_chain_d or b"")); _cp_d = _cf_d.name
-                    with _tmp_d.NamedTemporaryFile(suffix=".pem", delete=False) as _kf_d:
-                        _kf_d.write(_key_d); _kp_d = _kf_d.name
-                    try:
-                        _r_pdf = _httpx_nf.get(_danfe_endpoint, cert=(_cp_d, _kp_d), timeout=20, follow_redirects=True)
-                        if _r_pdf.status_code == 200 and b"%PDF" in _r_pdf.content[:10]:
-                            danfe_bytes = _r_pdf.content
-                            print(f"[nfse] DANFE PDF baixado via mTLS ({len(danfe_bytes)} bytes)")
-                        else:
-                            print(f"[nfse] aviso: DANFE endpoint retornou {_r_pdf.status_code}, content-type={_r_pdf.headers.get('content-type','?')}")
-                    finally:
-                        _os_nf.unlink(_cp_d); _os_nf.unlink(_kp_d)
-                except Exception as _pe:
-                    print(f"[nfse] aviso: não foi possível baixar o DANFE: {_pe}")
+                # XML da NFS-e já vem na resposta da SNNFSE — usa como anexo oficial
+                danfe_bytes = _nfse_xml_bytes
+                if danfe_bytes:
+                    print(f"[nfse] XML NFS-e disponível para anexo ({len(danfe_bytes)} bytes)")
 
                 try:
                     valor_fmt = _ct_brl(cobranca.valor_cents)
@@ -986,7 +978,7 @@ async def financeiro_cobrancas_emitir_nf(
   {"<p><a href='" + cobranca.nf_url + "' style='background:#1a7a4a;color:#fff;padding:10px 20px;border-radius:6px;text-decoration:none;font-weight:bold'>📋 Ver NFS-e online</a></p>" if cobranca.nf_url else ""}
   <p style="color:#888;font-size:12px;margin-top:32px">Maffezzolli Capital — Consultoria Financeira</p>
 </div>"""
-                atts = ([{"filename": f"danfe_{nr}.pdf", "data": danfe_bytes, "mimetype": "application/pdf"}] if danfe_bytes else None)
+                atts = ([{"filename": f"nfse_{nr}.xml", "data": danfe_bytes, "mimetype": "application/xml"}] if danfe_bytes else None)
                 _smtp_send_email(
                     to_email=email_dest,
                     subject=f"NFS-e {cobranca.nome_contrato} — {cobranca.competencia}" + (f" — {valor_fmt}" if valor_fmt else ""),
@@ -994,7 +986,7 @@ async def financeiro_cobrancas_emitir_nf(
                     text_body=f"NFS-e emitida. Chave: {cobranca.nf_chave or cobranca.nf_numero}. Link: {cobranca.nf_url}",
                     attachments=atts,
                 )
-                print(f"[nfse] 📧 DANFE enviado para {email_dest} ({'com PDF' if danfe_bytes else 'sem PDF'})")
+                print(f"[nfse] 📧 NFS-e enviada para {email_dest} ({'com XML anexo' if danfe_bytes else 'sem anexo'})")
                 try:
                     _smtp_send_email(
                         to_email="rafael@maffezzollicapital.com.br",
