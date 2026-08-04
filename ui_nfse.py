@@ -981,6 +981,16 @@ async def financeiro_cobrancas_emitir_nf(
                     attachments=atts,
                 )
                 print(f"[nfse] 📧 DANFE enviado para {email_dest} ({'com PDF' if danfe_bytes else 'sem PDF'})")
+                try:
+                    _smtp_send_email(
+                        to_email="rafael@maffezzollicapital.com.br",
+                        subject=f"[Cópia] NFS-e {cobranca.nome_contrato} — {cobranca.competencia}" + (f" — {valor_fmt}" if valor_fmt else ""),
+                        html_body=html_nf,
+                        text_body=f"NFS-e emitida. Chave: {cobranca.nf_chave or cobranca.nf_numero}. Link: {cobranca.nf_url}",
+                        attachments=atts,
+                    )
+                except Exception:
+                    pass
         except Exception as _mail_err:
             print(f"[nfse] aviso: erro ao enviar e-mail DANFE: {_mail_err}")
 
