@@ -806,8 +806,12 @@ async def _nf_enviar(xml_bytes: bytes, key_pem: bytes, cert_pem: bytes, chain_pe
 
         nfse_b64 = resp_data.get("nfseXmlGZipB64", "")
         chave = resp_data.get("chaveAcesso", "")
-        numero = resp_data.get("numeroNFSe", "")
+        # idDps contém o número sequencial embutido nos últimos dígitos
+        numero = resp_data.get("numeroNFSe", "") or resp_data.get("numero", "")
         url_nf = resp_data.get("linkNFSe", "") or resp_data.get("urlNFSe", "")
+        # SNNFSE não retorna URL direta — constrói a partir da chave de acesso
+        if not url_nf and chave:
+            url_nf = f"https://www.nfse.gov.br/consultapublica/#/consulta-nfse/{chave}"
 
         # Se o XML da NFS-e estiver embutido, extrair dados adicionais
         if nfse_b64 and (not chave or not numero):
@@ -942,7 +946,7 @@ async def financeiro_cobrancas_emitir_nf(
         # Envia DANFE (PDF) por e-mail ao cliente
         try:
             email_dest = getattr(contrato, "email_cliente", "") or ""
-            if email_dest and cobranca.nf_url and cobranca.nf_url.startswith("http"):
+            if email_dest:
                 danfe_bytes = None
                 try:
                     resp_pdf = _httpx_nf.get(cobranca.nf_url, timeout=15, follow_redirects=True)
