@@ -948,10 +948,24 @@ async def financeiro_cobrancas_emitir_nf(
             email_dest = getattr(contrato, "email_cliente", "") or ""
             if email_dest:
                 danfe_bytes = None
+                # O DANFE real exige mTLS no endpoint da SNNFSE
+                _danfe_endpoint = _NF_URLS[_NF_AMB].rstrip("/") + f"/{cobranca.nf_chave}/danfe"
                 try:
-                    resp_pdf = _httpx_nf.get(cobranca.nf_url, timeout=15, follow_redirects=True)
-                    if resp_pdf.status_code == 200:
-                        danfe_bytes = resp_pdf.content
+                    _key_d, _cert_d, _chain_d = _nf_load_cert()
+                    import tempfile as _tmp_d
+                    with _tmp_d.NamedTemporaryFile(suffix=".pem", delete=False) as _cf_d:
+                        _cf_d.write(_cert_d + (_chain_d or b"")); _cp_d = _cf_d.name
+                    with _tmp_d.NamedTemporaryFile(suffix=".pem", delete=False) as _kf_d:
+                        _kf_d.write(_key_d); _kp_d = _kf_d.name
+                    try:
+                        _r_pdf = _httpx_nf.get(_danfe_endpoint, cert=(_cp_d, _kp_d), timeout=20, follow_redirects=True)
+                        if _r_pdf.status_code == 200 and b"%PDF" in _r_pdf.content[:10]:
+                            danfe_bytes = _r_pdf.content
+                            print(f"[nfse] DANFE PDF baixado via mTLS ({len(danfe_bytes)} bytes)")
+                        else:
+                            print(f"[nfse] aviso: DANFE endpoint retornou {_r_pdf.status_code}, content-type={_r_pdf.headers.get('content-type','?')}")
+                    finally:
+                        _os_nf.unlink(_cp_d); _os_nf.unlink(_kp_d)
                 except Exception as _pe:
                     print(f"[nfse] aviso: não foi possível baixar o DANFE: {_pe}")
 
