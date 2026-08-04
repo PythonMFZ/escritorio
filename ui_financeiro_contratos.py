@@ -265,7 +265,11 @@ def _ct_mp_gerar_boleto(cobranca: CobrancaMensal, contrato: ContratoCliente, ses
     hoje_date = _date_ct.today()
     if venc_date <= hoje_date:
         venc_date = hoje_date + _td(days=3)
-    venc_iso = f"{venc_date.isoformat()}T23:59:00.000-03:00"
+    # Mercado Pago cancela o boleto na data_of_expiration. Adicionamos 5 dias de
+    # tolerância para que o boleto permaneça ativo até o cliente pagar, mesmo com
+    # algum atraso pontual.
+    expira_date = venc_date + _td(days=5)
+    venc_iso = f"{expira_date.isoformat()}T23:59:00.000-03:00"
 
     payload = {
         "transaction_amount": round(cobranca.valor_cents / 100, 2),
@@ -1211,13 +1215,24 @@ async def webhook_mercadopago(request: _Req_ct, session=_Dep_ct(get_session)):
             return _JR_ct({"ok": True})
 
         status_mp = payment.get("status", "")
-        if status_mp != "approved":
-            return _JR_ct({"ok": True})
 
         # Localiza a cobrança pelo mp_payment_id
         cobranca = session.exec(
             _sel_ct(CobrancaMensal).where(CobrancaMensal.mp_payment_id == mp_id)
         ).first()
+
+        if status_mp == "cancelled" and cobranca and cobranca.status == "pendente":
+            # Boleto cancelado pelo MP (expirou). Registra mas não altera o status
+            # de cobrança — o boleto pode ser reemitido manualmente.
+            cobranca.observacao = f"Boleto cancelado pelo MP (id={mp_id}). Reemitir se necessário."
+            cobranca.updated_at = _dt_ct.utcnow()
+            session.add(cobranca)
+            session.commit()
+            print(f"[webhook_mp] ⚠️  Boleto cancelado MP {mp_id} — cobrança {cobranca.id} permanece pendente")
+            return _JR_ct({"ok": True})
+
+        if status_mp != "approved":
+            return _JR_ct({"ok": True})
 
         if cobranca and cobranca.status != "pago":
             valor_pago = int(round(payment.get("transaction_amount", 0) * 100))

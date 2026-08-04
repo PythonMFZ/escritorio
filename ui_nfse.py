@@ -938,6 +938,48 @@ async def financeiro_cobrancas_emitir_nf(
         session.commit()
 
         nr = cobranca.nf_numero or cobranca.nf_chave or "emitida"
+
+        # Envia DANFE (PDF) por e-mail ao cliente
+        try:
+            email_dest = getattr(contrato, "email_cliente", "") or ""
+            if email_dest and cobranca.nf_url and cobranca.nf_url.startswith("http"):
+                danfe_bytes = None
+                try:
+                    resp_pdf = _httpx_nf.get(cobranca.nf_url, timeout=15, follow_redirects=True)
+                    if resp_pdf.status_code == 200:
+                        danfe_bytes = resp_pdf.content
+                except Exception as _pe:
+                    print(f"[nfse] aviso: não foi possível baixar o DANFE: {_pe}")
+
+                try:
+                    valor_fmt = _ct_brl(cobranca.valor_cents)
+                except Exception:
+                    valor_fmt = f"R$ {cobranca.valor_cents / 100:.2f}".replace(".", ",")
+                html_nf = f"""
+<div style="font-family:sans-serif;max-width:600px;margin:0 auto">
+  <h2 style="color:#1a1a2e">Nota Fiscal de Serviço — {cobranca.nome_contrato}</h2>
+  <p>Olá, <strong>{cobranca.nome_cliente}</strong>!</p>
+  <p>Segue a Nota Fiscal de Serviço Eletrônica (NFS-e) referente à competência <strong>{cobranca.competencia}</strong>.</p>
+  <table style="width:100%;border-collapse:collapse;margin:16px 0">
+    {"<tr><td style='padding:8px;background:#f0f8f0;font-weight:bold'>Número NFS-e</td><td style='padding:8px'>" + cobranca.nf_numero + "</td></tr>" if cobranca.nf_numero else ""}
+    {"<tr><td style='padding:8px;background:#f0f8f0;font-weight:bold'>Valor</td><td style='padding:8px'>" + valor_fmt + "</td></tr>" if valor_fmt else ""}
+    {"<tr><td style='padding:8px;background:#f0f8f0;font-weight:bold'>Chave de acesso</td><td style='padding:8px;font-family:monospace;font-size:11px;word-break:break-all'>" + cobranca.nf_chave + "</td></tr>" if cobranca.nf_chave else ""}
+  </table>
+  {"<p><a href='" + cobranca.nf_url + "' style='background:#1a7a4a;color:#fff;padding:10px 20px;border-radius:6px;text-decoration:none;font-weight:bold'>📋 Ver NFS-e online</a></p>" if cobranca.nf_url else ""}
+  <p style="color:#888;font-size:12px;margin-top:32px">Maffezzolli Capital — Consultoria Financeira</p>
+</div>"""
+                atts = ([{"filename": f"danfe_{nr}.pdf", "data": danfe_bytes, "mimetype": "application/pdf"}] if danfe_bytes else None)
+                _smtp_send_email(
+                    to_email=email_dest,
+                    subject=f"NFS-e {cobranca.nome_contrato} — {cobranca.competencia}" + (f" — {valor_fmt}" if valor_fmt else ""),
+                    html_body=html_nf,
+                    text_body=f"NFS-e emitida. Chave: {cobranca.nf_chave or cobranca.nf_numero}. Link: {cobranca.nf_url}",
+                    attachments=atts,
+                )
+                print(f"[nfse] 📧 DANFE enviado para {email_dest} ({'com PDF' if danfe_bytes else 'sem PDF'})")
+        except Exception as _mail_err:
+            print(f"[nfse] aviso: erro ao enviar e-mail DANFE: {_mail_err}")
+
         return _RR_nf(
             f"/admin/financeiro/contratos/{cobranca.contrato_id}/cobrancas?ok=NF+{nr}+emitida+com+sucesso",
             status_code=302,

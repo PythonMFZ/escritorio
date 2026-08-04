@@ -361,25 +361,49 @@ SMTP_FROM = os.getenv("SMTP_FROM", "").strip() or SMTP_USERNAME
 SMTP_USE_SSL = (os.getenv("SMTP_USE_SSL", "").strip() == "1") or (SMTP_PORT == 465)
 
 
-def _smtp_send_email(*, to_email: str, subject: str, html_body: str, text_body: str = "") -> None:
+def _smtp_send_email(
+    *,
+    to_email: str,
+    subject: str,
+    html_body: str,
+    text_body: str = "",
+    attachments: Optional[list[dict]] = None,
+) -> None:
     """Envia e-mail via SMTP.
 
     Requer variáveis de ambiente:
       - SMTP_HOST, SMTP_PORT
       - SMTP_USERNAME, SMTP_PASSWORD (se necessário)
       - SMTP_FROM (opcional; padrão SMTP_USERNAME)
+
+    attachments: lista de dicts com chaves filename (str), data (bytes), mimetype (str, ex. 'application/pdf')
     """
     if not SMTP_HOST or not SMTP_FROM:
         raise RuntimeError("SMTP não configurado (SMTP_HOST/SMTP_FROM ausentes).")
 
-    msg = MIMEMultipart("alternative")
+    if attachments:
+        msg = MIMEMultipart("mixed")
+        alt = MIMEMultipart("alternative")
+        if text_body:
+            alt.attach(MIMEText(text_body, "plain", "utf-8"))
+        alt.attach(MIMEText(html_body, "html", "utf-8"))
+        msg.attach(alt)
+        for att in attachments:
+            main_type, sub_type = att.get("mimetype", "application/octet-stream").split("/", 1)
+            part = MIMEBase(main_type, sub_type)
+            part.set_payload(att["data"])
+            email_encoders.encode_base64(part)
+            part.add_header("Content-Disposition", "attachment", filename=att["filename"])
+            msg.attach(part)
+    else:
+        msg = MIMEMultipart("alternative")
+        if text_body:
+            msg.attach(MIMEText(text_body, "plain", "utf-8"))
+        msg.attach(MIMEText(html_body, "html", "utf-8"))
+
     msg["Subject"] = subject
     msg["From"] = SMTP_FROM
     msg["To"] = to_email
-
-    if text_body:
-        msg.attach(MIMEText(text_body, "plain", "utf-8"))
-    msg.attach(MIMEText(html_body, "html", "utf-8"))
 
     if SMTP_USE_SSL:
         with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, timeout=20) as s:
