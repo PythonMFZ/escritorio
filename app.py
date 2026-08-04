@@ -5526,9 +5526,6 @@ a:hover{ color:#00BFBF; }
     <div class="alert alert-info">{{ flash }}</div>
   {% endif %}
 
-  <!-- Banner (carrossel) -->
-  <div id="mc-banner" class="mb-3"></div>
-
   <div class="row g-3 mb-3">
     <div class="col-12 col-md-4">
       <div class="card p-3 h-100">
@@ -5551,23 +5548,10 @@ a:hover{ color:#00BFBF; }
   </div>
 
   <div class="row g-3">
-    <div class="col-12 col-lg-9">
+    <div class="col-12">
       {% block content %}{% endblock %}
       <div class="mt-5 muted small">
         <div>Uploads protegidos por login (download via rota).</div>
-      </div>
-    </div>
-
-    <div class="col-12 col-lg-3">
-      <div class="card p-3">
-        <div class="d-flex align-items-center justify-content-between">
-          <div class="fw-semibold">📰 Notícias (economia)</div>
-          {% if role == "admin" %}
-            <a class="small" href="/admin/ui">Configurar</a>
-          {% endif %}
-        </div>
-        <div class="muted small mt-1">Atualiza automaticamente.</div>
-        <div id="mc-news" class="mt-2"></div>
       </div>
     </div>
   </div>
@@ -5578,74 +5562,6 @@ a:hover{ color:#00BFBF; }
   const esc = (s) => String(s || "").replace(/[&<>"']/g, (c) => ({
     "&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"
   }[c]));
-
-  async function loadBanner(){
-    const holder = document.getElementById("mc-banner");
-    if (!holder) return;
-    try{
-      const res = await fetch("/api/ui/banner", { headers: { "Accept": "application/json" }, credentials: "same-origin" });
-      if (!res.ok) return;
-      const slides = await res.json();
-      if (!Array.isArray(slides) || slides.length === 0) { holder.innerHTML = ""; return; }
-
-      const cid = "mcCarousel";
-      const indicators = slides.map((_,i)=>`<button type="button" data-bs-target="#${cid}" data-bs-slide-to="${i}" ${i===0?'class="active" aria-current="true"':''} aria-label="Slide ${i+1}"></button>`).join("");
-      const items = slides.map((s,i)=>{
-        const img = esc(s.image_url);
-        const link = esc(s.link_path || "/");
-        const title = esc(s.title || "");
-        return `
-          <div class="carousel-item ${i===0?'active':''}">
-            <a href="${link}" style="display:block;">
-              <img src="${img}" class="d-block w-100" alt="${title}" style="border-radius:16px; max-height:240px; object-fit:cover;">
-            </a>
-            ${title ? `<div class="carousel-caption d-none d-md-block"><h6 class="bg-dark bg-opacity-50 d-inline-block px-2 py-1 rounded">${title}</h6></div>` : ``}
-          </div>`;
-      }).join("");
-
-      holder.innerHTML = `
-        <div id="${cid}" class="carousel slide" data-bs-ride="carousel">
-          <div class="carousel-indicators">${indicators}</div>
-          <div class="carousel-inner">${items}</div>
-          <button class="carousel-control-prev" type="button" data-bs-target="#${cid}" data-bs-slide="prev">
-            <span class="carousel-control-prev-icon" aria-hidden="true"></span>
-            <span class="visually-hidden">Anterior</span>
-          </button>
-          <button class="carousel-control-next" type="button" data-bs-target="#${cid}" data-bs-slide="next">
-            <span class="carousel-control-next-icon" aria-hidden="true"></span>
-            <span class="visually-hidden">Próximo</span>
-          </button>
-        </div>`;
-    }catch(e){
-    }
-  }
-
-  async function loadNews(){
-    const holder = document.getElementById("mc-news");
-    if (!holder) return;
-    holder.innerHTML = '<div class="muted small">Carregando…</div>';
-    try{
-      const res = await fetch("/api/ui/news?limit=10", { headers: { "Accept": "application/json" }, credentials: "same-origin" });
-      if (!res.ok) { holder.innerHTML = '<div class="muted small">Sem notícias no momento.</div>'; return; }
-      const items = await res.json();
-      if (!Array.isArray(items) || items.length === 0) { holder.innerHTML = '<div class="muted small">Sem notícias no momento.</div>'; return; }
-      holder.innerHTML = `
-        <div class="list-group list-group-flush">
-          ${items.map(it => `
-            <a class="list-group-item list-group-item-action small" href="${esc(it.url)}" target="_blank" rel="noopener">
-              <div class="fw-semibold">${esc(it.title)}</div>
-              <div class="muted" style="font-size:.8rem;">${esc(it.source || "")}${it.published ? " • " + esc(it.published) : ""}</div>
-            </a>`).join("")}
-        </div>`;
-    }catch(e){
-      holder.innerHTML = '<div class="muted small">Sem notícias no momento.</div>';
-    }
-  }
-
-  window.addEventListener("DOMContentLoaded", function(){
-    loadBanner();
-    loadNews();
-  });
 })();
 </script>
 <style>
