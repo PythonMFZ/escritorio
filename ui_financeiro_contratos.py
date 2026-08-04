@@ -135,9 +135,22 @@ def _ct_atualizar_vencidos(session):
         session.commit()
 
 
+def _ct_meses_entre(inicio: str, fim: str) -> list:
+    """Retorna lista de competências 'YYYY-MM' entre inicio e fim (inclusive)."""
+    from datetime import date as _d
+    y0, m0 = int(inicio[:4]), int(inicio[5:7])
+    y1, m1 = int(fim[:4]),    int(fim[5:7])
+    meses = []
+    while (y0, m0) <= (y1, m1):
+        meses.append(f"{y0:04d}-{m0:02d}")
+        m0 += 1
+        if m0 > 12:
+            m0 = 1; y0 += 1
+    return meses
+
+
 def _ct_gerar_cobrancas_mes(session, company_id: int, competencia: str = None):
-    if not competencia:
-        competencia = _ct_competencia_atual()
+    competencia_alvo = competencia or _ct_competencia_atual()
     contratos = session.exec(
         _sel_ct(ContratoCliente).where(
             ContratoCliente.company_id == company_id,
@@ -146,39 +159,40 @@ def _ct_gerar_cobrancas_mes(session, company_id: int, competencia: str = None):
     ).all()
     geradas = 0
     for contrato in contratos:
-        if contrato.data_inicio and contrato.data_inicio[:7] > competencia:
-            continue
-        if contrato.data_fim and contrato.data_fim[:7] < competencia:
-            continue
-        ja = session.exec(
-            _sel_ct(CobrancaMensal).where(
-                CobrancaMensal.contrato_id == contrato.id,
-                CobrancaMensal.competencia == competencia,
+        # Gera todas as competências desde o início do contrato até o mês alvo
+        inicio = (contrato.data_inicio or competencia_alvo)[:7]
+        fim    = competencia_alvo
+        if contrato.data_fim and contrato.data_fim[:7] < competencia_alvo:
+            fim = contrato.data_fim[:7]
+        for comp in _ct_meses_entre(inicio, fim):
+            ja = session.exec(
+                _sel_ct(CobrancaMensal).where(
+                    CobrancaMensal.contrato_id == contrato.id,
+                    CobrancaMensal.competencia == comp,
+                )
+            ).first()
+            if ja:
+                continue
+            cobranca = CobrancaMensal(
+                company_id      = company_id,
+                contrato_id     = contrato.id,
+                client_id       = contrato.client_id,
+                nome_cliente    = contrato.nome_cliente,
+                nome_contrato   = contrato.nome_contrato,
+                competencia     = comp,
+                data_vencimento = _ct_vencimento(contrato, comp),
+                valor_cents     = contrato.valor_cents,
+                status          = "pendente",
             )
-        ).first()
-        if ja:
-            continue
-        cobranca = CobrancaMensal(
-            company_id      = company_id,
-            contrato_id     = contrato.id,
-            client_id       = contrato.client_id,
-            nome_cliente    = contrato.nome_cliente,
-            nome_contrato   = contrato.nome_contrato,
-            competencia     = competencia,
-            data_vencimento = _ct_vencimento(contrato, competencia),
-            valor_cents     = contrato.valor_cents,
-            status          = "pendente",
-        )
-        session.add(cobranca)
-        geradas += 1
+            session.add(cobranca)
+            geradas += 1
     if geradas:
         session.commit()
         # Sincroniza com OfficeFinancialEntry para o dashboard
         for _c in session.exec(
             _sel_ct(CobrancaMensal).where(
-                CobrancaMensal.company_id  == company_id,
-                CobrancaMensal.competencia == competencia,
-                CobrancaMensal.status      == "pendente",
+                CobrancaMensal.company_id == company_id,
+                CobrancaMensal.status     == "pendente",
             )
         ).all():
             try:
