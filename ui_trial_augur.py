@@ -13,6 +13,7 @@
 import uuid as _uuid_tr
 import re   as _re_tr
 import os   as _os_tr
+import httpx as _httpx_tr
 from datetime import datetime as _dt_tr, timedelta as _td_tr
 from typing   import Optional as _Opt_tr
 from sqlmodel import Field as _F_tr, SQLModel as _SM_tr, select as _sel_tr, Session as _Sess_tr
@@ -92,6 +93,54 @@ def _trial_valido(lead: TrialLead) -> tuple[bool, str]:
     return True, ""
 
 
+# ── Domínios de e-mail descartáveis bloqueados ───────────────────────────────
+_BLOCKED_DOMAINS_TR = {
+    "mailinator.com", "guerrillamail.com", "tempmail.com", "throwaway.email",
+    "sharklasers.com", "guerrillamailblock.com", "grr.la", "guerrillamail.info",
+    "spam4.me", "yopmail.com", "trashmail.com", "dispostable.com",
+    "mailnull.com", "spamgourmet.com", "trashmail.me", "maildrop.cc",
+    "spamfree24.org", "spamhereplease.com", "spamthisplease.com",
+    "fakeinbox.com", "mailnesia.com", "mailnull.com", "spamgourmet.org",
+    "getairmail.com", "filzmail.com", "throwam.com", "tempr.email",
+    "discard.email", "discardmail.com", "spambox.us", "mytrashmail.com",
+    "mt2015.com", "spambog.com", "spamevader.com", "immenseignite.info",
+    "trbvm.com", "klzlk.com", "byom.de", "spamgob.com", "ezztt.com",
+    "0815.ru", "0clickemail.com", "10minutemail.com", "20minutemail.com",
+    "anonymbox.com", "binka.me", "bobmail.info", "bodhi.lawlita.com",
+    "bofthew.com", "brefmail.com", "broadbandninja.com", "chacuo.net",
+    "cool.fr.nf", "courriel.fr.nf", "courrieltemporaire.com", "crapmail.org",
+}
+
+def _is_blocked_email_domain(email: str) -> bool:
+    try:
+        domain = email.strip().lower().split("@", 1)[1]
+        return domain in _BLOCKED_DOMAINS_TR
+    except Exception:
+        return False
+
+
+# ── Verificação Cloudflare Turnstile ─────────────────────────────────────────
+_TURNSTILE_SECRET   = _os_tr.getenv("CLOUDFLARE_TURNSTILE_SECRET_KEY", "")
+_TURNSTILE_SITE_KEY = _os_tr.getenv("CLOUDFLARE_TURNSTILE_SITE_KEY", "")
+
+def _verify_turnstile(token: str, remote_ip: str = "") -> bool:
+    """Verifica token do Cloudflare Turnstile. Retorna True se válido."""
+    if not _TURNSTILE_SECRET:
+        return True  # sem chave configurada → não bloqueia (dev)
+    if not token:
+        return False
+    try:
+        resp = _httpx_tr.post(
+            "https://challenges.cloudflare.com/turnstile/v0/siteverify",
+            data={"secret": _TURNSTILE_SECRET, "response": token, "remoteip": remote_ip},
+            timeout=10.0,
+        )
+        return resp.json().get("success", False)
+    except Exception as _e_ts:
+        print(f"[turnstile] erro na verificação: {_e_ts}")
+        return True  # falha de rede → não bloqueia
+
+
 def _criar_crm_lead(session, lead: TrialLead) -> _Opt_tr[int]:
     """Cria um BusinessDeal no CRM para rastrear o lead. Retorna deal_id ou None."""
     try:
@@ -152,7 +201,7 @@ def _criar_crm_lead(session, lead: TrialLead) -> _Opt_tr[int]:
 
 # ── Página de cadastro ────────────────────────────────────────────────────────
 
-_CADASTRO_HTML = """<!DOCTYPE html>
+_CADASTRO_HTML_TPL = """<!DOCTYPE html>
 <html lang="pt-BR">
 <head>
   <meta charset="UTF-8">
@@ -160,6 +209,7 @@ _CADASTRO_HTML = """<!DOCTYPE html>
   <title>Diagnóstico Gratuito · Augur PME</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Syne:wght@700;800&family=Poppins:wght@300;400;500;600&display=swap" rel="stylesheet">
+  <script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
   <style>
     *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
     :root{--bg:#0A0A0A;--card:#141414;--border:#2a2a2a;--gold:#C9963A;--gold2:#E0A84B;--text:#F5F0E8;--muted:#888;}
@@ -219,12 +269,16 @@ _CADASTRO_HTML = """<!DOCTYPE html>
       <input type="tel" id="whatsapp" placeholder="(47) 99999-0000" required oninput="mascaraFone(this)">
     </div>
     <div class="err" id="errGeral">Ocorreu um erro. Tente novamente.</div>
+    <div id="turnstile-widget" style="margin-bottom:.75rem;"></div>
     <button type="submit" class="btn" id="btn">Acessar diagnóstico grátis</button>
     <div class="spinner" id="spin"></div>
   </form>
   <p class="note">Ao continuar, você concorda que a Maffezzolli Capital pode entrar em contato sobre seus serviços.</p>
 </div>
 <script>
+const TURNSTILE_SITE_KEY = '%%TURNSTILE_SITE_KEY%%';
+let _tsToken = '';
+
 function mascaraCNPJ(el){
   let v=el.value.replace(/\\D/g,'').slice(0,14);
   if(v.length>12) v=v.replace(/^(\d{2})(\d{3})(\d{3})(\d{4})(\d)/,'$1.$2.$3/$4-$5');
@@ -240,6 +294,17 @@ function mascaraFone(el){
   else if(v.length>2) v=v.replace(/^(\d{2})(\d)/,'($1) $2');
   el.value=v;
 }
+window.addEventListener('load', function(){
+  if(TURNSTILE_SITE_KEY && typeof turnstile !== 'undefined'){
+    turnstile.render('#turnstile-widget', {
+      sitekey: TURNSTILE_SITE_KEY,
+      callback: function(token){ _tsToken = token; },
+      'expired-callback': function(){ _tsToken = ''; },
+    });
+  } else {
+    document.getElementById('turnstile-widget').style.display='none';
+  }
+});
 async function enviar(e){
   e.preventDefault();
   document.querySelectorAll('.err').forEach(el=>el.style.display='none');
@@ -252,6 +317,7 @@ async function enviar(e){
     empresa:document.getElementById('empresa').value.trim(),
     cnpj:document.getElementById('cnpj').value,
     whatsapp:document.getElementById('whatsapp').value,
+    cf_turnstile_response: _tsToken,
   };
   try{
     const r=await fetch('/api/trial/cadastro',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
@@ -265,6 +331,7 @@ async function enviar(e){
       document.getElementById('errGeral').textContent=d.erro||'Erro inesperado.';
       document.getElementById('errGeral').style.display='block';
       btn.style.display='block'; spin.style.display='none';
+      if(typeof turnstile!=='undefined') turnstile.reset('#turnstile-widget');
     }
   }catch(err){
     document.getElementById('errGeral').style.display='block';
@@ -278,7 +345,8 @@ async function enviar(e){
 
 @app.get("/cadastro")
 async def trial_cadastro_page():
-    return _HTML_tr(_CADASTRO_HTML)
+    html = _CADASTRO_HTML_TPL.replace("%%TURNSTILE_SITE_KEY%%", _TURNSTILE_SITE_KEY)
+    return _HTML_tr(html)
 
 
 # ── Rota admin: acesso direto ao trial para testes ───────────────────────────
@@ -321,9 +389,21 @@ async def trial_cadastro(request: _Req_tr):
     empresa  = (body.get("empresa") or "").strip()
     cnpj_raw = _limpar_cnpj(body.get("cnpj") or "")
     wpp_raw  = _limpar_whatsapp(body.get("whatsapp") or "")
+    ts_token = (body.get("cf_turnstile_response") or "").strip()
+    remote_ip = request.headers.get("CF-Connecting-IP") or request.client.host or ""
 
     if not nome or not empresa or len(cnpj_raw) < 14 or len(wpp_raw) < 10:
         return _JSON_tr({"ok": False, "erro": "Preencha todos os campos corretamente."})
+
+    # Verifica Turnstile (bloqueia bots)
+    if not _verify_turnstile(ts_token, remote_ip):
+        print(f"[trial] Turnstile falhou: ip={remote_ip} email={email}")
+        return _JSON_tr({"ok": False, "erro": "Verificação de segurança falhou. Recarregue a página e tente novamente."})
+
+    # Bloqueia domínios de e-mail descartáveis
+    if _is_blocked_email_domain(email):
+        print(f"[trial] E-mail descartável bloqueado: {email} ip={remote_ip}")
+        return _JSON_tr({"ok": False, "erro": "Use um e-mail corporativo ou pessoal válido (Gmail, Outlook, etc.).")}
 
     with _Sess_tr(engine) as session:
         existente = session.exec(

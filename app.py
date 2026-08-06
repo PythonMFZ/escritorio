@@ -14280,9 +14280,11 @@ async def signup_page(request: Request, session: Session = Depends(get_session))
 
 
 def _stripe_has_active_subscription(email: str) -> bool:
-    """Verifica se o e-mail possui assinatura Stripe ativa. Retorna True se sim ou se Stripe não configurado."""
+    """Verifica se o e-mail possui assinatura Stripe ativa."""
     if not _stripe_enabled() or stripe is None:
-        return True  # sem Stripe configurado, permite acesso
+        # Stripe não configurado: bloqueia para não deixar porta aberta
+        print(f"[signup_gate] Stripe não configurado — bloqueando signup para {email}")
+        return False
     try:
         stripe.api_key = os.environ.get("STRIPE_SECRET_KEY", "")
         customers = stripe.Customer.search(query=f'email:"{email}"', limit=5)
@@ -14297,8 +14299,8 @@ def _stripe_has_active_subscription(email: str) -> bool:
                 return True
         return False
     except Exception as _e_stripe_chk:
-        print(f"[signup_gate] Stripe check erro: {_e_stripe_chk}")
-        return True  # em caso de erro na API, não bloqueia
+        print(f"[signup_gate] Stripe check erro: {_e_stripe_chk} — bloqueando signup para {email}")
+        return False  # em caso de erro na API, bloqueia por segurança
 
 
 @app.post("/signup")
