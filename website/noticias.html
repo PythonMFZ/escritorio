@@ -1,0 +1,449 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <!-- Google Analytics -->
+  <script async src="https://www.googletagmanager.com/gtag/js?id=G-34F5BVJVQJ"></script>
+  <script>
+    window.dataLayer = window.dataLayer || [];
+    function gtag(){dataLayer.push(arguments);}
+    gtag("js", new Date());
+    gtag("config", "G-34F5BVJVQJ");
+  </script>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Sala de Imprensa · Maffezzolli Capital</title>
+  <meta name="description" content="Análise e perspectiva sobre finanças corporativas, tecnologia financeira e o mercado de médias empresas no Sul do Brasil.">
+  <meta property="og:title" content="Sala de Imprensa · Maffezzolli Capital">
+  <meta property="og:description" content="IA proprietária, posicionamento de boutique e perfil do fundador — análise e perspectiva de finanças corporativas no Sul do Brasil.">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://maffezzollicapital.com.br/noticias.html">
+  <link rel="canonical" href="https://maffezzollicapital.com.br/noticias.html">
+  <link rel="stylesheet" href="css/style.css?v=2">
+  <style>
+    /* ── Press tokens (standalone, não sobrepõe style.css) ── */
+    .press-wrap {
+      --gold-pr:     #C9821A;
+      --gold-hi-pr:  #D9941C;
+      --ink-pr:      #1A1816;
+      --ink2-pr:     #4A453E;
+      --ink3-pr:     #8A837A;
+      --bg-pr:       #F4F1EB;
+      --border-pr:   #D4CCBC;
+      --col-rule-pr: #D4CCBC;
+      background: var(--bg-pr);
+      color: var(--ink-pr);
+      padding: 0 0 5rem;
+    }
+
+    /* ── Masthead ── */
+    .press-masthead {
+      border-bottom: 2.5px solid var(--ink-pr);
+      padding: 2.5rem 0 1.25rem;
+      max-width: 1060px;
+      margin: 0 auto;
+      padding-left: 1.5rem;
+      padding-right: 1.5rem;
+    }
+    .press-eyebrow {
+      font-family: 'Courier New', Courier, monospace;
+      font-size: .66rem;
+      letter-spacing: .2em;
+      text-transform: uppercase;
+      color: var(--gold-pr);
+      margin-bottom: .5rem;
+    }
+    .press-title {
+      font-family: Georgia, 'Times New Roman', serif;
+      font-size: clamp(1.9rem, 4vw, 3rem);
+      font-weight: 700;
+      letter-spacing: -.025em;
+      line-height: 1;
+      color: var(--ink-pr);
+    }
+    .press-meta {
+      display: flex;
+      gap: 2rem;
+      margin-top: .75rem;
+      font-family: 'Courier New', Courier, monospace;
+      font-size: .63rem;
+      letter-spacing: .13em;
+      text-transform: uppercase;
+      color: var(--ink3-pr);
+      flex-wrap: wrap;
+    }
+    .press-meta span::before { content: '— '; color: var(--gold-pr); }
+
+    /* ── Edition wrapper ── */
+    .press-edition {
+      max-width: 1060px;
+      margin: 0 auto;
+      padding: 0 1.5rem;
+    }
+
+    /* ── Featured ── */
+    .art-featured {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 3rem;
+      align-items: start;
+      padding: 2.5rem 0 2rem;
+      border-bottom: 1px solid var(--border-pr);
+    }
+    @media (max-width: 720px) { .art-featured { grid-template-columns: 1fr; gap: 1.5rem; } }
+
+    .art-left {
+      border-left: 3px solid var(--gold-pr);
+      padding-left: 1.25rem;
+    }
+    .art-right { padding-top: .2rem; }
+
+    /* ── Secondary grid ── */
+    .art-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0;
+      border-bottom: 1px solid var(--border-pr);
+    }
+    @media (max-width: 640px) { .art-grid { grid-template-columns: 1fr; } }
+
+    .art-secondary {
+      padding: 2rem 0;
+      padding-left: 1.25rem;
+      border-left: 3px solid var(--border-pr);
+    }
+    .art-secondary:first-child {
+      border-left: 3px solid var(--gold-pr);
+      padding-right: 2.5rem;
+    }
+    .art-secondary:last-child {
+      padding-left: 2.5rem;
+      border-left: 1px solid var(--border-pr);
+    }
+    @media (max-width: 640px) {
+      .art-secondary:first-child { padding-right: 0; }
+      .art-secondary:last-child  { padding-left: 1.25rem; border-left: 3px solid var(--border-pr); border-top: 1px solid var(--border-pr); }
+    }
+
+    /* ── Typography ── */
+    .art-cat {
+      font-family: 'Courier New', Courier, monospace;
+      font-size: .61rem;
+      letter-spacing: .22em;
+      text-transform: uppercase;
+      color: var(--gold-pr);
+      margin-bottom: .6rem;
+    }
+    .art-h {
+      font-family: Georgia, 'Times New Roman', serif;
+      font-weight: 700;
+      line-height: 1.2;
+      color: var(--ink-pr);
+      text-wrap: balance;
+      margin-bottom: .75rem;
+    }
+    .art-h-lg { font-size: clamp(1.35rem, 2.5vw, 1.9rem); }
+    .art-h-md { font-size: clamp(1.1rem, 2vw, 1.35rem); }
+
+    .art-deck {
+      font-family: Georgia, 'Times New Roman', serif;
+      font-size: .96rem;
+      font-style: italic;
+      color: var(--ink2-pr);
+      line-height: 1.55;
+      margin-bottom: 1rem;
+    }
+    .art-byline {
+      font-family: 'Courier New', Courier, monospace;
+      font-size: .61rem;
+      letter-spacing: .1em;
+      text-transform: uppercase;
+      color: var(--ink3-pr);
+      margin-bottom: 1.1rem;
+      display: flex;
+      gap: 1rem;
+      flex-wrap: wrap;
+    }
+    .art-byline-loc { color: var(--gold-pr); }
+
+    .art-body {
+      font-size: .91rem;
+      color: var(--ink2-pr);
+      line-height: 1.78;
+      display: none;
+    }
+    .art-body.open { display: block; }
+    .art-body p + p { margin-top: .9rem; }
+
+    .art-body-cols.open {
+      column-count: 2;
+      column-gap: 2rem;
+      column-rule: 1px solid var(--col-rule-pr);
+      text-align: justify;
+      hyphens: auto;
+    }
+    @media (max-width: 720px) { .art-body-cols.open { column-count: 1; text-align: left; } }
+
+    .art-body blockquote {
+      border-left: 2px solid var(--gold-pr);
+      padding: .5rem 0 .5rem 1rem;
+      margin: 1rem 0;
+      font-family: Georgia, 'Times New Roman', serif;
+      font-style: italic;
+      font-size: .95rem;
+      color: var(--ink-pr);
+      line-height: 1.6;
+      break-inside: avoid;
+    }
+    .art-source {
+      margin-top: 1.25rem;
+      padding-top: .75rem;
+      border-top: 1px solid var(--border-pr);
+      font-size: .77rem;
+      color: var(--ink3-pr);
+      font-family: 'Courier New', Courier, monospace;
+      letter-spacing: .05em;
+      break-inside: avoid;
+    }
+    .art-source strong {
+      color: var(--ink2-pr);
+      display: block;
+      margin-bottom: .2rem;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+      font-size: .63rem;
+    }
+
+    /* ── Read more ── */
+    .read-more {
+      display: inline-flex;
+      align-items: center;
+      gap: .4rem;
+      font-family: 'Courier New', Courier, monospace;
+      font-size: .63rem;
+      letter-spacing: .15em;
+      text-transform: uppercase;
+      color: var(--gold-pr);
+      background: none;
+      border: none;
+      cursor: pointer;
+      padding: 0;
+      margin-top: .3rem;
+      transition: color .2s;
+    }
+    .read-more:hover { color: var(--gold-hi-pr); }
+    .read-more:focus-visible { outline: 2px solid var(--gold-pr); outline-offset: 2px; }
+    .read-more svg { transition: transform .25s; flex-shrink: 0; }
+    .read-more.open svg { transform: rotate(180deg); }
+
+    /* ── Divider ── */
+    .press-divider {
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+      padding: 1.75rem 0 0;
+      border-top: 1px solid var(--border-pr);
+      font-family: 'Courier New', Courier, monospace;
+      font-size: .61rem;
+      letter-spacing: .18em;
+      text-transform: uppercase;
+      color: var(--ink3-pr);
+    }
+    .press-divider::after {
+      content: '';
+      flex: 1;
+      height: 1px;
+      background: var(--border-pr);
+    }
+  </style>
+</head>
+<body>
+
+<!-- ── NAV ── -->
+<nav>
+  <a href="/" class="nav-logo"><img src="img/logo.png" alt="Maffezzolli Capital" class="nav-logo-img"></a>
+  <div class="nav-links">
+    <a href="/">Home</a>
+    <a href="o-que-fazemos.html">O que fazemos</a>
+    <a href="quem-somos.html">Quem somos</a>
+    <a href="augur.html">Nossa Tecnologia</a>
+    <a href="augur-pme.html">Augur PME</a>
+    <a href="cases.html">Cases</a>
+    <a href="noticias.html" class="active">Notícias</a>
+    <a href="https://app.maffezzollicapital.com.br" target="_blank" rel="noopener">Plataforma</a>
+    <a href="https://wa.me/5547991359091" target="_blank" rel="noopener" class="nav-cta">Falar pelo WhatsApp</a>
+  </div>
+  <button class="hamburger" aria-label="Menu">
+    <span></span><span></span><span></span>
+  </button>
+</nav>
+
+<div class="mobile-menu">
+  <a href="/">Home</a>
+  <a href="o-que-fazemos.html">O que fazemos</a>
+  <a href="quem-somos.html">Quem somos</a>
+  <a href="augur.html">Nossa Tecnologia</a>
+  <a href="augur-pme.html">Augur PME</a>
+  <a href="cases.html">Cases</a>
+  <a href="noticias.html">Notícias</a>
+  <a href="https://app.maffezzollicapital.com.br" target="_blank" rel="noopener">Plataforma</a>
+  <a href="https://wa.me/5547991359091" target="_blank" rel="noopener" class="nav-cta">Falar pelo WhatsApp</a>
+</div>
+
+<!-- ── PRESS SECTION ── -->
+<div class="press-wrap">
+
+  <header class="press-masthead">
+    <div class="press-eyebrow">Maffezzolli Capital · Sala de Imprensa</div>
+    <div class="press-title">Análise &amp; Perspectiva</div>
+    <div class="press-meta">
+      <span>Edição 2026</span>
+      <span>Brusque, Santa Catarina</span>
+      <span>Finanças Corporativas · Sul do Brasil</span>
+    </div>
+  </header>
+
+  <main class="press-edition">
+
+    <!-- ── Artigo 1 — Featured ── -->
+    <article class="art-featured">
+      <div class="art-left">
+        <div class="art-cat">Tecnologia &amp; Inovação</div>
+        <h1 class="art-h art-h-lg">Boutique financeira do Sul do Brasil desenvolve IA própria para monitorar a saúde financeira de médias empresas</h1>
+        <div class="art-deck">Augur, plataforma da Maffezzolli Capital, une diagnóstico financeiro, análise de viabilidade e inteligência artificial em um só ambiente</div>
+        <div class="art-byline">
+          <span class="art-byline-loc">Brusque (SC)</span>
+          <span>Maffezzolli Capital</span>
+        </div>
+      </div>
+      <div class="art-right">
+        <button class="read-more" onclick="pressToggle(this,'pb-1')" aria-expanded="false">
+          Continuar lendo
+          <svg width="10" height="10" viewBox="0 0 10 10" fill="none" aria-hidden="true">
+            <path d="M2 3.5L5 6.5L8 3.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </button>
+        <div class="art-body art-body-cols" id="pb-1">
+          <p>Enquanto grande parte do mercado financeiro discute inteligência artificial em termos genéricos, a boutique catarinense Maffezzolli Capital decidiu construir a própria ferramenta. Batizada de Augur, a plataforma proprietária integra diagnóstico financeiro, análise de viabilidade de projetos, controle orçamentário e um assistente de inteligência artificial em um único ambiente, pensado especificamente para médias empresas do Sul do Brasil — um segmento que a empresa considera mal atendido pelas soluções bancárias tradicionais.</p>
+          <p>O módulo de diagnóstico financeiro processa indicadores como liquidez, DRE, necessidade de capital de giro (NCG) e ciclo financeiro, gerando um raio-x da empresa em minutos, com interpretação automática e alertas de risco. Já a frente de viabilidade foi construída para avaliar projetos e investimentos em diferentes setores — da indústria ao agronegócio, passando pela construção civil —, calculando indicadores como VGV, TIR, payback e exposição máxima de caixa com parâmetros do mercado regional.</p>
+          <p>O módulo de controle orçamentário acompanha, em tempo real, a execução física e financeira de projetos ao longo de sua implementação. O quarto módulo, batizado Augur IA, funciona como um consultor digital: interpreta os indicadores do cliente, responde perguntas sobre o negócio e mantém a empresa orientada entre uma reunião e outra com a equipe da boutique.</p>
+          <blockquote>"O Augur não nasceu para substituir o julgamento humano, e sim para ampliar a capacidade da nossa equipe de entender o cliente e propor soluções com mais velocidade e precisão. É o que nos permite entregar a médias empresas o mesmo nível de sofisticação analítica que só as grandes corporações costumam acessar."<br><br>— Rafael Maffezzolli, sócio-fundador e diretor executivo</blockquote>
+          <p>O acesso à plataforma é exclusivo para clientes da boutique, que atende empresas com faturamento entre R$&nbsp;10 milhões e R$&nbsp;150 milhões em Santa Catarina, Paraná e Rio Grande do Sul.</p>
+          <div class="art-source">
+            <strong>Sobre a Maffezzolli Capital</strong>
+            A Maffezzolli Capital é uma boutique financeira independente fundada em Brusque (SC), com atuação em reestruturação financeira, gestão estratégica, captação via mercado de capitais, investment banking e special situations/recuperação judicial para médias empresas do Sul do Brasil.
+          </div>
+        </div>
+      </div>
+    </article>
+
+    <!-- ── Divider ── -->
+    <div class="press-divider">Mais da Redação</div>
+
+    <div class="art-grid">
+
+      <!-- Artigo 2 -->
+      <article class="art-secondary">
+        <div class="art-cat">Posicionamento de Mercado</div>
+        <h2 class="art-h art-h-md">No Sul do Brasil, uma boutique financeira aposta na lacuna entre os grandes bancos e as consultorias generalistas</h2>
+        <div class="art-deck">Maffezzolli Capital atende empresas de R$&nbsp;10 milhões a R$&nbsp;150 milhões de faturamento — o público que, segundo a empresa, "é grande demais para os pequenos e pequeno demais para os grandes bancos"</div>
+        <div class="art-byline">
+          <span class="art-byline-loc">Brusque (SC)</span>
+          <span>Estratégia Corporativa</span>
+        </div>
+        <button class="read-more" onclick="pressToggle(this,'pb-2')" aria-expanded="false">
+          Continuar lendo
+          <svg width="10" height="10" viewBox="0 0 10 10" fill="none" aria-hidden="true">
+            <path d="M2 3.5L5 6.5L8 3.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </button>
+        <div class="art-body" id="pb-2">
+          <p>Médias empresas do Sul do Brasil costumam enfrentar um dilema recorrente: problemas financeiros complexos demais para uma consultoria generalista resolver, mas pequenos demais para chamar a atenção dos grandes bancos de investimento. É nesse espaço que a Maffezzolli Capital, boutique financeira fundada em Brusque, Santa Catarina, decidiu atuar.</p>
+          <p>A empresa se define como independente — sem vínculo com bancos ou fundos — e trabalha com cinco frentes principais: reestruturação financeira, gestão financeira estratégica (atuando como um CFO externo), captação via mercado de capitais (CRI, CRA, debêntures e outros instrumentos de crédito estruturado), investment banking (fusões, aquisições, entrada de sócios e sucessão familiar) e special situations, incluindo assessoria financeira em processos de recuperação judicial.</p>
+          <p>Entre os cases da boutique está a reestruturação de uma indústria têxtil do Sul do Brasil, com receita de R$&nbsp;136 milhões, que reduziu sua despesa financeira anual de R$&nbsp;21,5 milhões para uma faixa de R$&nbsp;6 a 8 milhões após uma operação estruturada — tornando-se lucrativa sem crescer a receita. Outro case é o suporte financeiro prestado ao administrador judicial do Grupo Forest, em Ponta Grossa (PR), em uma recuperação judicial com passivo superior a R$&nbsp;150 milhões sob análise técnica.</p>
+          <blockquote>"Nossa única lealdade é com o resultado do cliente. Isso muda completamente a natureza da recomendação: não é sobre o que é mais conveniente para um banco ou fundo, é sobre o que é certo para a empresa."<br><br>— Rafael Maffezzolli</blockquote>
+          <div class="art-source">
+            <strong>Sobre a Maffezzolli Capital</strong>
+            Boutique financeira independente fundada em Brusque (SC), com atuação em Santa Catarina, Paraná e Rio Grande do Sul. A empresa desenvolveu a plataforma proprietária Augur, que combina diagnóstico financeiro e inteligência artificial.
+          </div>
+        </div>
+      </article>
+
+      <!-- Artigo 3 -->
+      <article class="art-secondary">
+        <div class="art-cat">Perfil</div>
+        <h2 class="art-h art-h-md">Da engenharia de produção às salas de recuperação judicial: a trajetória de Rafael Maffezzolli</h2>
+        <div class="art-deck">Sócio-fundador e diretor executivo da Maffezzolli Capital construiu reputação regional em turnaround management antes de estruturar uma boutique financeira própria para médias empresas do Sul do Brasil</div>
+        <div class="art-byline">
+          <span class="art-byline-loc">Brusque (SC)</span>
+          <span>Perfil Executivo</span>
+        </div>
+        <button class="read-more" onclick="pressToggle(this,'pb-3')" aria-expanded="false">
+          Continuar lendo
+          <svg width="10" height="10" viewBox="0 0 10 10" fill="none" aria-hidden="true">
+            <path d="M2 3.5L5 6.5L8 3.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </button>
+        <div class="art-body" id="pb-3">
+          <p>Antes de fundar a Maffezzolli Capital, Rafael Maffezzolli seguiu um caminho pouco convencional para o mercado financeiro: formou-se engenheiro de produção e se especializou em controladoria, finanças corporativas, investment banking e direito empresarial e tributário. Foi a partir do turnaround management — a reestruturação de empresas em crise — que construiu sua reputação como referência regional em reestruturação financeira para médias empresas do Sul do Brasil.</p>
+          <p>É coautor do livro "Turnaround — 100 Segredos" e hoje lidera a assessoria em investment banking, captação via mercado de capitais, recuperação judicial e gestão financeira estratégica da boutique, com foco especial em incorporadoras e empresas industriais.</p>
+          <p>Maffezzolli fundou a boutique a partir de uma tese específica: médias empresas — aquelas com faturamento entre R$&nbsp;10 milhões e R$&nbsp;150 milhões — merecem o mesmo nível de sofisticação financeira que as grandes corporações acessam, mas sem os conflitos de interesse dos grandes bancos nem a superficialidade das consultorias generalistas.</p>
+          <blockquote>"Nascemos da convicção de que existe um público inteiro sendo mal atendido: grande demais para os pequenos, pequeno demais para os grandes bancos. É esse o espaço que ocupamos."<br><br>— Rafael Maffezzolli</blockquote>
+          <p>Hoje a boutique atua em cinco frentes — reestruturação financeira, gestão estratégica, mercado de capitais, investment banking e special situations — e desenvolveu internamente a Augur, plataforma proprietária de inteligência financeira com módulo de inteligência artificial.</p>
+          <div class="art-source">
+            <strong>Sobre a Maffezzolli Capital</strong>
+            Boutique financeira independente fundada em Brusque (SC), especializada em reestruturação, investment banking e captação via mercado de capitais para médias empresas de Santa Catarina, Paraná e Rio Grande do Sul.
+          </div>
+        </div>
+      </article>
+
+    </div><!-- /art-grid -->
+  </main>
+</div><!-- /press-wrap -->
+
+<!-- ── FOOTER ── -->
+<footer>
+  <div class="container">
+    <div class="footer-inner">
+      <div>
+        <div class="footer-brand">MAFFEZZOLLI<span>.</span>CAPITAL</div>
+        <div class="footer-tagline">Boutique Financeira Independente · Sul do Brasil</div>
+        <div class="footer-contact">
+          Avenida Lauro Müller · Centro · Brusque – SC<br>
+          +55 47 99135-9091 · contato@maffezzollicapital.com.br
+        </div>
+      </div>
+      <div class="footer-right">
+        <div class="footer-social">
+          <a href="https://instagram.com/maffezzollicapital" target="_blank" rel="noopener">Instagram</a>
+          <a href="https://linkedin.com/company/67193157" target="_blank" rel="noopener">LinkedIn</a>
+          <a href="https://youtube.com/@maffezzollicapital" target="_blank" rel="noopener">YouTube</a>
+        </div>
+        <div style="display:flex;gap:24px;justify-content:flex-end;flex-wrap:wrap;">
+          <a href="o-que-fazemos.html" style="font-family:var(--ff-mono);font-size:.65rem;letter-spacing:.12em;text-transform:uppercase;color:var(--gray);">O que fazemos</a>
+          <a href="quem-somos.html" style="font-family:var(--ff-mono);font-size:.65rem;letter-spacing:.12em;text-transform:uppercase;color:var(--gray);">Quem somos</a>
+          <a href="noticias.html" style="font-family:var(--ff-mono);font-size:.65rem;letter-spacing:.12em;text-transform:uppercase;color:var(--gray);">Notícias</a>
+          <a href="https://app.maffezzollicapital.com.br" target="_blank" rel="noopener" style="font-family:var(--ff-mono);font-size:.65rem;letter-spacing:.12em;text-transform:uppercase;color:var(--gray);">Plataforma</a>
+        </div>
+      </div>
+    </div>
+    <div class="footer-copy">© 2026 Maffezzolli Capital — Todos os direitos reservados.</div>
+  </div>
+</footer>
+
+<a href="https://wa.me/5547991359091" target="_blank" rel="noopener" class="whatsapp-float" aria-label="WhatsApp">
+  <svg width="26" height="26" viewBox="0 0 24 24" fill="currentColor"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z"/></svg>
+</a>
+
+<script src="js/main.js"></script>
+<script>
+function pressToggle(btn, id) {
+  var body = document.getElementById(id);
+  var isOpen = body.classList.contains('open');
+  body.classList.toggle('open', !isOpen);
+  btn.classList.toggle('open', !isOpen);
+  btn.setAttribute('aria-expanded', String(!isOpen));
+  btn.childNodes[0].textContent = isOpen ? 'Continuar lendo ' : 'Recolher ';
+}
+</script>
+</body>
+</html>
