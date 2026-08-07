@@ -403,7 +403,7 @@ async def trial_cadastro(request: _Req_tr):
     # Bloqueia domínios de e-mail descartáveis
     if _is_blocked_email_domain(email):
         print(f"[trial] E-mail descartável bloqueado: {email} ip={remote_ip}")
-        return _JSON_tr({"ok": False, "erro": "Use um e-mail corporativo ou pessoal válido (Gmail, Outlook, etc.).")}
+        return _JSON_tr({"ok": False, "erro": "Use um e-mail corporativo ou pessoal válido (Gmail, Outlook, etc.)."})
 
     with _Sess_tr(engine) as session:
         existente = session.exec(
