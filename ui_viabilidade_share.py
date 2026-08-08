@@ -414,8 +414,8 @@ async def viabilidade_share_publico(
     corr_pos_obra_share = float(dados_input.get("correcao_pos_obra", 1.04) or 1.04)
     tipologias_share = dados_input.get("tipologias") or []
     pavimentos_share = dados_input.get("pavimentos") or []
-    _env_share = templates_env.overlay(filters={"enumerate": lambda it: list(enumerate(it))})
-    html = _env_share.from_string(TEMPLATES["viabilidade_share.html"]).render(
+    templates_env.filters.setdefault("enumerate", lambda it: list(enumerate(it)))
+    html = templates_env.from_string(TEMPLATES["viabilidade_share.html"]).render(
         nome_projeto=estudo.nome_projeto,
         data=dt_fmt,
         tem_fin=tem_fin,
