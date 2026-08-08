@@ -557,9 +557,9 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Inter','Segoe UI',sans-serif;
       <div class="sp-kpi-s" id="kpi-margem-sub">Sobre VGV corrigido</div>
     </div>
     <div class="sp-kpi">
-      <div class="sp-kpi-l"><i class="bi bi-bar-chart-line me-1"></i>TIR VF</div>
+      <div class="sp-kpi-l"><i class="bi bi-bar-chart-line me-1"></i><span id="kpi-tir-lbl">TIR do Capital em Risco</span></div>
       <div class="sp-kpi-v" id="kpi-tir">—</div>
-      <div class="sp-kpi-s" id="kpi-tir-sub">Retorno (Corrigido)</div>
+      <div class="sp-kpi-s" id="kpi-tir-sub">Retorno sobre capital em risco</div>
     </div>
     <div class="sp-kpi">
       <div class="sp-kpi-l"><i class="bi bi-arrow-down-circle me-1"></i>Exposição Máxima</div>
@@ -1005,8 +1005,12 @@ function render() {
   } else {
     resultado = r.vf_resultado != null ? r.vf_resultado : r.resultado_bruto;
     margem    = r.vf_margem_vgv != null ? r.vf_margem_vgv : r.margem_vgv;
-    tir       = r.tir_vf_anual != null ? r.tir_vf_anual : r.tir_anual;
-    tirSub    = r.tir_vf_anual != null ? 'TIR VF — Corrigido' : 'Retorno interno do projeto';
+    // Prefer capital-at-risk TIR; fallback to standard VF TIR, then VP TIR
+    const tirCapR = r.tir_vf_cap_risco_anual != null ? r.tir_vf_cap_risco_anual
+                  : r.tir_cap_risco_anual    != null ? r.tir_cap_risco_anual : null;
+    tir    = tirCapR != null ? tirCapR : (r.tir_vf_anual != null ? r.tir_vf_anual : r.tir_anual);
+    tirSub = tirCapR != null ? 'TIR do Capital em Risco (VF)' : (r.tir_vf_anual != null ? 'TIR VF — Corrigido' : 'Retorno interno do projeto');
+    if (el('kpi-tir-lbl')) el('kpi-tir-lbl').textContent = tirCapR != null ? 'TIR do Capital em Risco' : 'TIR VF';
     exposicao = r.exposicao_maxima;
   }
 
