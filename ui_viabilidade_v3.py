@@ -259,7 +259,8 @@ def _calcular_v3(dados: dict) -> dict:
                 d_sen["tipologias"] = tips_adj
             try:
                 r_sen = _calcular_viabilidade_v2(d_sen)
-                row_tir.append(round(r_sen.get("tir_anual") or 0, 2))
+                tir_sen = r_sen.get("tir_cap_risco_anual") or r_sen.get("tir_anual") or 0
+                row_tir.append(round(tir_sen, 2))
                 row_margem.append(round(r_sen.get("margem_vgv") or 0, 2))
                 row_result.append(round(r_sen.get("resultado_bruto") or 0, 2))
             except Exception:
