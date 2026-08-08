@@ -150,7 +150,9 @@ def _compact_result(r: dict) -> dict:
         "vf_resultado":     r.get("vf_resultado"),
         "vf_margem_vgv":    r.get("vf_margem_vgv"),
         "vf_margem_custo":  r.get("vf_margem_custo"),
-        "tir_vf_anual":     r.get("tir_vf_anual"),
+        "tir_vf_anual":             r.get("tir_vf_anual"),
+        "tir_cap_risco_anual":      r.get("tir_cap_risco_anual"),
+        "tir_vf_cap_risco_anual":   r.get("tir_vf_cap_risco_anual"),
         "vpl_vf":           r.get("vpl_vf"),
         "exposicao_maxima":    r.get("exposicao_maxima"),
         "exposicao_maxima_vf": r.get("exposicao_maxima_vf"),
@@ -599,6 +601,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Inter','Segoe UI',sans-serif;
           <div class="bk-row"><span class="bk-lbl">Múltiplo do Capital</span><span id="ia-multiplo">—</span></div>
           <div class="bk-row"><span class="bk-lbl">Índice de Lucratividade (IL)</span><span id="ia-il">—</span></div>
           <div class="bk-row"><span class="bk-lbl">Ponto de Equilíbrio</span><span id="ia-pe">—</span></div>
+          <div class="bk-row"><span class="bk-lbl">TIR do Capital em Risco</span><span id="ia-tir-cap">—</span></div>
           <div class="bk-row"><span class="bk-lbl">Spread vs CDI</span><span id="ia-cdi">—</span></div>
         </div>
         <div>
@@ -1115,6 +1118,14 @@ function render() {
   if (ia.multiplo_capital != null) { setIA('ia-multiplo', `${parseFloat(ia.multiplo_capital).toFixed(2)}x`); iaColor('ia-multiplo', ia.multiplo_capital, 1.2, 1.0); }
   if (ia.indice_lucratividade != null) { setIA('ia-il', `${parseFloat(ia.indice_lucratividade).toFixed(2)}x`); iaColor('ia-il', ia.indice_lucratividade, 1.0, 0.9); }
   setIA('ia-pe',  ia.ponto_equilibrio_pct != null ? `${parseFloat(ia.ponto_equilibrio_pct).toFixed(1)}% do VGV` : '—');
+  // TIR do Capital em Risco — usa campo salvo ou recomputa com exposição máxima
+  const tirCapRisco = r.tir_vf_cap_risco_anual != null ? r.tir_vf_cap_risco_anual
+                    : r.tir_cap_risco_anual    != null ? r.tir_cap_risco_anual
+                    : (ia.tir_cap_risco        != null ? ia.tir_cap_risco : null);
+  if (tirCapRisco != null) {
+    setIA('ia-tir-cap', `${parseFloat(tirCapRisco).toFixed(2)}% a.a.`);
+    iaColor('ia-tir-cap', parseFloat(tirCapRisco), 20, 12);
+  }
   if (ia.spread_cdi != null) {
     setIA('ia-cdi', `${parseFloat(ia.spread_cdi).toFixed(2)}%`);
     iaColor('ia-cdi', ia.spread_cdi, 5, 0);
