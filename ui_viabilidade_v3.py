@@ -48,7 +48,8 @@ def _calcular_v3(dados: dict) -> dict:
     custo_total       = base["custo_total"]
     custo_obra_total  = base["custo_obra_total"]
     resultado_bruto   = base["resultado_bruto"]
-    tir_anual_base    = base.get("tir_anual") or 0.0
+    tir_anual_base      = base.get("tir_anual") or 0.0
+    tir_cap_risco_base  = base.get("tir_cap_risco_anual") or base.get("tir_vf_cap_risco_anual") or tir_anual_base
     vpl_base          = base.get("vpl") or 0.0
     unidades_total    = base["unidades_total"]
     unidades_permuta  = base["unidades_permuta"]
@@ -296,15 +297,17 @@ def _calcular_v3(dados: dict) -> dict:
     indice_lucratividade = (vpl_base + custo_total) / custo_total if custo_total > 0 else None
     multiplo_capital     = vgv_liquido / custo_total if custo_total > 0 else None
     ponto_equilibrio_pct = custo_total / vgv_liquido * 100 if vgv_liquido > 0 else None
-    spread_cdi_base      = tir_anual_base - float(dados.get("cdi_ref", 13.75) or 13.75)
+    cdi_ref              = float(dados.get("cdi_ref", 13.75) or 13.75)
+    spread_cdi_base      = tir_cap_risco_base - cdi_ref
 
     indicadores_adicionais = {
-        "vso_mensal":           round(vso_mensal, 2),
-        "payback_descontado":   payback_desc,
-        "indice_lucratividade": round(indice_lucratividade, 4) if indice_lucratividade else None,
-        "multiplo_capital":     round(multiplo_capital, 2) if multiplo_capital else None,
-        "ponto_equilibrio_pct": round(ponto_equilibrio_pct, 2) if ponto_equilibrio_pct else None,
-        "spread_cdi":           round(spread_cdi_base, 2),
+        "vso_mensal":               round(vso_mensal, 2),
+        "payback_descontado":       payback_desc,
+        "indice_lucratividade":     round(indice_lucratividade, 4) if indice_lucratividade else None,
+        "multiplo_capital":         round(multiplo_capital, 2) if multiplo_capital else None,
+        "ponto_equilibrio_pct":     round(ponto_equilibrio_pct, 2) if ponto_equilibrio_pct else None,
+        "tir_cap_risco":            round(tir_cap_risco_base, 2),
+        "spread_cdi":               round(spread_cdi_base, 2),
     }
 
     # DRE (Demonstrativo de Resultado)
@@ -1154,6 +1157,7 @@ TEMPLATES["ferramenta_viabilidade.html"] = r"""
           {% if ia.multiplo_capital %}<div class="bk-r"><span class="bk-l">Múltiplo do Capital</span><span style="color:{{ '#16a34a' if ia.multiplo_capital >= 1.2 else '#ca8a04' }};font-weight:600;">{{ "%.2f"|format(ia.multiplo_capital) }}x</span></div>{% endif %}
           {% if ia.indice_lucratividade %}<div class="bk-r"><span class="bk-l">Índice de Lucratividade (IL)</span><span style="color:{{ '#16a34a' if ia.indice_lucratividade >= 1 else '#dc2626' }};font-weight:600;">{{ "%.2f"|format(ia.indice_lucratividade) }}x</span></div>{% endif %}
           {% if ia.ponto_equilibrio_pct %}<div class="bk-r"><span class="bk-l">Ponto de Equilíbrio</span><span>{{ "%.1f"|format(ia.ponto_equilibrio_pct) }}% do VGV</span></div>{% endif %}
+          {% if ia.tir_cap_risco is not none %}<div class="bk-r"><span class="bk-l">TIR do Capital em Risco</span><span style="color:{{ '#16a34a' if ia.tir_cap_risco >= 20 else ('#ca8a04' if ia.tir_cap_risco >= 12 else '#dc2626') }};font-weight:600;">{{ "%.2f"|format(ia.tir_cap_risco) }}% a.a.</span></div>{% endif %}
           <div class="bk-r bk-t"><span>Spread vs CDI</span><span style="color:{{ '#16a34a' if ia.spread_cdi >= 5 else ('#ca8a04' if ia.spread_cdi >= 0 else '#dc2626') }};">{{ "%.2f"|format(ia.spread_cdi) }}%</span></div>
           {% endif %}
         </div>

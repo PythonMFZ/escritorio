@@ -403,6 +403,19 @@ def _calcular_viabilidade_v2(dados: dict) -> dict:
     tir_mensal = _tir(fluxo_raw)
     tir_anual  = ((1 + tir_mensal) ** 12 - 1) if tir_mensal is not None else None
 
+    # TIR do capital em risco: se o fluxo nunca vai negativo (TIR indefinida),
+    # usa a exposição máxima como "investimento" implícito no mês do pico e
+    # computa a TIR sobre o fluxo equity a partir daí.
+    tir_cap_risco_anual = tir_anual  # fallback: TIR normal quando há inversão de sinal
+    if tir_anual is None or abs(tir_anual) < 1e-6:
+        if exposicao_maxima < 0:
+            # Encontra o mês do pico de exposição
+            pico_mes = min(range(len(fluxo)), key=lambda i: fluxo[i]["saldo_acumulado"])
+            # Fluxo equity: -|exposicao| no mês pico, depois os saldos mensais normais
+            eq_flow = [exposicao_maxima] + [f["saldo_mes"] for f in fluxo[pico_mes + 1:]]
+            tir_eq_m = _tir(eq_flow)
+            tir_cap_risco_anual = ((1 + tir_eq_m) ** 12 - 1) if tir_eq_m is not None else None
+
     vpl = sum(f["saldo_mes"] / ((1 + tma_mensal) ** m)
               for m, f in enumerate(fluxo))
 
@@ -462,6 +475,15 @@ def _calcular_viabilidade_v2(dados: dict) -> dict:
     tir_vf_anual = ((1 + tir_vf_m) ** 12 - 1) if tir_vf_m is not None else None
     vpl_vf       = sum(v / (1 + tma_mensal) ** i for i, v in enumerate(vf_fluxo_raw))
 
+    # TIR do capital em risco — VF (mesmo método, sobre fluxo corrigido)
+    tir_vf_cap_risco_anual = tir_vf_anual
+    if tir_vf_anual is None or abs(tir_vf_anual) < 1e-6:
+        if exposicao_maxima_vf < 0:
+            pico_vf = min(range(len(vf_fluxo)), key=lambda i: vf_fluxo[i]["saldo_acumulado"])
+            eq_vf = [exposicao_maxima_vf] + [f["saldo_mes"] for f in vf_fluxo[pico_vf + 1:]]
+            tir_vf_eq_m = _tir(eq_vf)
+            tir_vf_cap_risco_anual = ((1 + tir_vf_eq_m) ** 12 - 1) if tir_vf_eq_m is not None else None
+
     # Payback
     payback = None
     for f in fluxo:
@@ -519,6 +541,7 @@ def _calcular_viabilidade_v2(dados: dict) -> dict:
         "exposicao_maxima": round(abs(exposicao_maxima), 2),
         "tir_mensal": round(tir_mensal * 100, 4) if tir_mensal is not None else None,
         "tir_anual": round(tir_anual * 100, 2) if tir_anual is not None else None,
+        "tir_cap_risco_anual": round(tir_cap_risco_anual * 100, 2) if tir_cap_risco_anual is not None else None,
         "vpl": round(vpl, 2),
         # VF (Valor Final) — corrigido pelo índice configurado
         "vf_vgv": round(vf_total_rec, 2),
@@ -528,6 +551,7 @@ def _calcular_viabilidade_v2(dados: dict) -> dict:
         "vf_margem_vgv": round(vf_margem_vgv * 100, 2),
         "vf_margem_custo": round(vf_margem_custo * 100, 2),
         "tir_vf_anual": round(tir_vf_anual * 100, 2) if tir_vf_anual is not None else None,
+        "tir_vf_cap_risco_anual": round(tir_vf_cap_risco_anual * 100, 2) if tir_vf_cap_risco_anual is not None else None,
         "vpl_vf": round(vpl_vf, 2),
         "dre_vf": [
             {"desc": "VGV Bruto Corrigido",         "valor": round(vf_total_rec + valor_permuta, 2),           "tipo": "receita"},
