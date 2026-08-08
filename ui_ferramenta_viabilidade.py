@@ -574,6 +574,9 @@ def _tir(fluxos: list, max_iter: int = 200) -> float | None:
 
 def _classificar(margem: float, tir: float | None) -> dict:
     tir = tir or 0
+    if margem >= 0.25:
+        return {"label": "Saudável", "color": "success", "icon": "✅",
+                "desc": "Margem acima de 25%. Empreendimento saudável e resiliente a variações de custo e velocidade de vendas."}
     if margem >= 0.20 and tir >= 0.20:
         return {"label": "Excelente", "color": "success", "icon": "✅",
                 "desc": "Margem e TIR acima dos benchmarks. Empreendimento altamente atrativo."}
