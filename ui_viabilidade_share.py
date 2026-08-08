@@ -181,6 +181,7 @@ def _compact_result(r: dict) -> dict:
         "vf_custo_obra":     r.get("vf_custo_obra"),
         "vf_custo_total":    r.get("vf_custo_total"),
         "vf_vgv":            r.get("vf_vgv"),
+        "payback_mes":       r.get("payback_mes"),
         # Produto tab
         "unidades_total":    r.get("unidades_total"),
         "unidades_permuta":  r.get("unidades_permuta"),
@@ -411,12 +412,17 @@ async def viabilidade_share_publico(
     fases_share = dados_input.get("fases") or []
     corr_obra_share     = float(dados_input.get("correcao_obra", 0.52) or 0.52)
     corr_pos_obra_share = float(dados_input.get("correcao_pos_obra", 1.04) or 1.04)
-    html = templates_env.from_string(TEMPLATES["viabilidade_share.html"]).render(
+    tipologias_share = dados_input.get("tipologias") or []
+    pavimentos_share = dados_input.get("pavimentos") or []
+    _env_share = templates_env.overlay(filters={"enumerate": lambda it: list(enumerate(it))})
+    html = _env_share.from_string(TEMPLATES["viabilidade_share.html"]).render(
         nome_projeto=estudo.nome_projeto,
         data=dt_fmt,
         tem_fin=tem_fin,
         cenarios_json=cenarios_json,
         fases=fases_share,
+        tipologias=tipologias_share,
+        pavimentos=pavimentos_share,
         corr_obra=corr_obra_share,
         corr_pos_obra=corr_pos_obra_share,
     )
@@ -568,6 +574,29 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Inter','Segoe UI',sans-serif;
       </div>
     </div>
 
+    {# ── Indicadores de Viabilidade ── #}
+    <div class="sp-card" style="margin-bottom:1.25rem;">
+      <h6><i class="bi bi-speedometer2 me-1"></i>Indicadores de Viabilidade</h6>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:0;">
+        <div>
+          <div class="bk-row"><span class="bk-lbl">Payback Simples</span><span id="ia-payback">—</span></div>
+          <div class="bk-row"><span class="bk-lbl">VSO Mensal</span><span id="ia-vso">—</span></div>
+          <div class="bk-row"><span class="bk-lbl">Payback Descontado</span><span id="ia-payback-desc">—</span></div>
+          <div class="bk-row"><span class="bk-lbl">Múltiplo do Capital</span><span id="ia-multiplo">—</span></div>
+          <div class="bk-row"><span class="bk-lbl">Índice de Lucratividade (IL)</span><span id="ia-il">—</span></div>
+          <div class="bk-row"><span class="bk-lbl">Ponto de Equilíbrio</span><span id="ia-pe">—</span></div>
+          <div class="bk-row"><span class="bk-lbl">Spread vs CDI</span><span id="ia-cdi">—</span></div>
+        </div>
+        <div>
+          <div class="bk-row"><span class="bk-lbl" style="color:#ea580c;font-weight:600;">Lucratividade VF</span><span id="ia-luc-vf" style="color:#ea580c;font-weight:700;">—</span></div>
+          <div class="bk-row"><span class="bk-lbl">VP das Receitas</span><span id="ia-vp-rec">—</span></div>
+          <div class="bk-row"><span class="bk-lbl">VP dos Custos</span><span id="ia-vp-cus">—</span></div>
+          <div class="bk-row"><span class="bk-lbl" style="color:#ea580c;font-weight:600;">VPL VF (Corrigido)</span><span id="ia-vpl-vf" style="color:#ea580c;font-weight:700;">—</span></div>
+          <div class="bk-row"><span class="bk-lbl">VPL VP (nominal)</span><span id="ia-vpl-vp">—</span></div>
+        </div>
+      </div>
+    </div>
+
     {% if tem_fin %}
     <div class="sp-fin">
       <h6><i class="bi bi-bank2 me-1"></i>Impacto do Financiamento — Antes vs. Depois</h6>
@@ -618,7 +647,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Inter','Segoe UI',sans-serif;
   {# ── ABA 4: Comercialização ── #}
   <div class="sp-sec" id="sptab-comercial">
     {% if fases %}
-    <div class="sp-card">
+    <div class="sp-card" style="margin-bottom:1.25rem;">
       <h6 style="margin-bottom:.75rem;"><i class="bi bi-tags me-1"></i>Estrutura de Comercialização</h6>
       <div style="font-size:.72rem;color:#64748b;margin-bottom:.75rem;">
         Correção durante obra: <strong>{{ corr_obra }}% a.m.</strong> &nbsp;·&nbsp; Pós-obra: <strong>{{ corr_pos_obra }}% a.m.</strong>
@@ -657,6 +686,86 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Inter','Segoe UI',sans-serif;
       </div>
     </div>
     {% endif %}
+
+    {# ── Unidades por Pavimento com parcelas ── #}
+    {% if pavimentos or tipologias %}
+    <div class="sp-card">
+      <h6><i class="bi bi-building me-1"></i>Unidades por Pavimento — Valores de Comercialização</h6>
+      <div style="font-size:.72rem;color:#64748b;margin-bottom:.85rem;">
+        Valores calculados com base na fase de maior meta de vendas.
+        <span id="units-fase-ref" style="color:#f97316;font-weight:600;"></span>
+      </div>
+      <div style="overflow-x:auto;">
+      <table id="units-table" style="width:100%;border-collapse:collapse;font-size:.78rem;">
+        <thead>
+          <tr style="background:#1e293b;color:#fff;font-size:.67rem;font-weight:700;text-transform:uppercase;letter-spacing:.05em;">
+            <th style="padding:.5rem .65rem;text-align:left;">Pav.</th>
+            <th style="padding:.5rem .65rem;text-align:left;">Unidade</th>
+            <th style="padding:.5rem .65rem;text-align:center;">Tipo</th>
+            <th style="padding:.5rem .65rem;text-align:center;">m²</th>
+            <th style="padding:.5rem .65rem;text-align:right;">Valor Total</th>
+            <th style="padding:.5rem .65rem;text-align:center;">Permuta</th>
+            <th style="padding:.5rem .65rem;text-align:right;background:#1e3a5f;">Entrada</th>
+            <th style="padding:.5rem .65rem;text-align:right;background:#1e3a5f;">Parc./mês</th>
+            <th style="padding:.5rem .65rem;text-align:right;background:#1e3a5f;">Reforço/un.</th>
+          </tr>
+        </thead>
+        <tbody id="units-tbody">
+          {% if pavimentos %}
+            {% for pav in pavimentos %}
+              {% for idx, un in pav.unidades|enumerate %}
+              <tr style="border-bottom:1px solid #f1f5f9;{% if loop.index is even %}background:#fafafa;{% endif %}"
+                  data-pav="{{ pav.nome }}"
+                  data-nome="{{ un.nome or (pav.nome ~ '0' ~ loop.index) }}"
+                  data-tipo="{{ un.tipo or 'Residencial' }}"
+                  data-m2="{{ un.metragem }}"
+                  data-preco="{{ un.preco_proprio or 0 }}"
+                  data-dif="{{ un.dif_proprio or 0 }}"
+                  data-perm="{{ '1' if un.permuta else '0' }}"
+                  data-andar="{{ pav.andar }}">
+                <td style="padding:.4rem .65rem;font-weight:600;color:#f97316;">{{ pav.andar }}</td>
+                <td style="padding:.4rem .65rem;font-weight:600;">{{ un.nome or (pav.nome ~ ' Un.' ~ loop.index) }}</td>
+                <td style="padding:.4rem .65rem;text-align:center;color:#64748b;">{{ un.tipo or 'Residencial' }}</td>
+                <td style="padding:.4rem .65rem;text-align:center;">{{ un.metragem }} m²</td>
+                <td style="padding:.4rem .65rem;text-align:right;font-variant-numeric:tabular-nums;font-weight:600;" class="unit-val">—</td>
+                <td style="padding:.4rem .65rem;text-align:center;">{% if un.permuta %}<span style="color:#dc2626;font-weight:700;">Sim</span>{% else %}—{% endif %}</td>
+                <td style="padding:.4rem .65rem;text-align:right;background:#f0f7ff;font-variant-numeric:tabular-nums;" class="unit-entrada">—</td>
+                <td style="padding:.4rem .65rem;text-align:right;background:#f0f7ff;font-variant-numeric:tabular-nums;" class="unit-parcela">—</td>
+                <td style="padding:.4rem .65rem;text-align:right;background:#f0f7ff;font-variant-numeric:tabular-nums;" class="unit-reforco">—</td>
+              </tr>
+              {% endfor %}
+            {% endfor %}
+          {% else %}
+            {% for t in tipologias %}
+            <tr style="border-bottom:1px solid #f1f5f9;{% if loop.index is even %}background:#fafafa;{% endif %}"
+                data-pav="{{ t.pavimento or ('Andar ' ~ t.andar_inicio) }}"
+                data-nome="{{ t.nome }}"
+                data-tipo="{{ t.tipo or 'Residencial' }}"
+                data-m2="{{ t.metragem }}"
+                data-preco="{{ t.preco_m2 }}"
+                data-dif="{{ t.dif_proprio or 0 }}"
+                data-perm="{{ '1' if t.permuta else '0' }}"
+                data-andar="{{ t.andar_inicio }}">
+              <td style="padding:.4rem .65rem;font-weight:600;color:#f97316;">{{ t.andar_inicio }}</td>
+              <td style="padding:.4rem .65rem;font-weight:600;">{{ t.nome }}</td>
+              <td style="padding:.4rem .65rem;text-align:center;color:#64748b;">{{ t.tipo or 'Residencial' }}</td>
+              <td style="padding:.4rem .65rem;text-align:center;">{{ t.metragem }} m²</td>
+              <td style="padding:.4rem .65rem;text-align:right;font-variant-numeric:tabular-nums;font-weight:600;" class="unit-val">—</td>
+              <td style="padding:.4rem .65rem;text-align:center;">{% if t.permuta %}<span style="color:#dc2626;font-weight:700;">Sim</span>{% else %}—{% endif %}</td>
+              <td style="padding:.4rem .65rem;text-align:right;background:#f0f7ff;font-variant-numeric:tabular-nums;" class="unit-entrada">—</td>
+              <td style="padding:.4rem .65rem;text-align:right;background:#f0f7ff;font-variant-numeric:tabular-nums;" class="unit-parcela">—</td>
+              <td style="padding:.4rem .65rem;text-align:right;background:#f0f7ff;font-variant-numeric:tabular-nums;" class="unit-reforco">—</td>
+            </tr>
+            {% endfor %}
+          {% endif %}
+        </tbody>
+      </table>
+      </div>
+      <div style="margin-top:.65rem;font-size:.68rem;color:#94a3b8;font-style:italic;">
+        * Valores de Entrada, Parcela/mês e Reforço calculados com a estrutura de comercialização da fase de maior meta. Parcela/mês = valor da fase de parcelas ÷ número de parcelas.
+      </div>
+    </div>
+    {% endif %}
   </div>
 
   {# ── ABA 5: Sensibilidade ── #}
@@ -688,7 +797,7 @@ function pct(v, suffix) {
   if (v === null || v === undefined) return '—';
   return parseFloat(v).toFixed(1) + '%' + (suffix || '');
 }
-function mgColor(v) { return v >= 20 ? '#16a34a' : v >= 15 ? '#ca8a04' : '#dc2626'; }
+function mgColor(v) { return v >= 25 ? '#16a34a' : v >= 15 ? '#ca8a04' : '#dc2626'; }
 function el(id) { return document.getElementById(id); }
 
 function setCenario(c) {
@@ -716,6 +825,58 @@ function spTab(name, btn) {
   if (sec) sec.classList.add('on');
   if (btn) btn.classList.add('on');
   if (name === 'fluxo') { const r = CENARIOS[curCenario]; if (r) renderChart(r.chart_labels, r.chart_pag, r.chart_rec, r.chart_exp); }
+  if (name === 'comercial') renderUnitsTable();
+}
+
+function renderUnitsTable() {
+  const r = CENARIOS[curCenario];
+  if (!r) return;
+  // Pick the fase with the largest meta (main selling phase) for payment structure
+  const fases = {{ fases | tojson }};
+  if (!fases || !fases.length) return;
+  const mainFase = fases.reduce((a, b) => (parseFloat(b.meta) > parseFloat(a.meta) ? b : a), fases[0]);
+  const faseName = mainFase.nome || 'Fase principal';
+  if (el('units-fase-ref')) el('units-fase-ref').textContent = `Estrutura: ${faseName}`;
+
+  const entradaPct  = parseFloat(mainFase.entrada_pct  || 10)  / 100;
+  const parcelasPct = parseFloat(mainFase.parcelas_pct || 80)  / 100;
+  const reforcosPct = parseFloat(mainFase.reforco_pct  || 0)   / 100;
+  const nParcelas   = parseInt(mainFase.n_parcelas || 1) || 1;
+  const nReforcos   = parseInt(mainFase.n_reforcos || 0) || 0;
+  const reajuste    = 1 + parseFloat(mainFase.reajuste || 0) / 100;
+
+  // Get base price from result
+  const vgvMedioM2 = parseFloat(r.vgv_medio_m2 || 0);
+
+  document.querySelectorAll('#units-tbody tr').forEach(row => {
+    const m2     = parseFloat(row.dataset.m2    || 0);
+    const preco  = parseFloat(row.dataset.preco || 0);  // preco_proprio (por m²) or 0
+    const dif    = parseFloat(row.dataset.dif   || 0);
+    const andar  = parseInt(row.dataset.andar   || 1);
+    const isPerm = row.dataset.perm === '1';
+
+    // Effective price/m²: use preco_proprio if set, else vgvMedioM2 + dif_proprio
+    let pm2 = preco > 0 ? preco : vgvMedioM2;
+    pm2 += dif;  // dif_proprio is absolute R$/m²
+    pm2 *= reajuste;
+    const valor = m2 * pm2;
+
+    const valEl  = row.querySelector('.unit-val');
+    const entEl  = row.querySelector('.unit-entrada');
+    const parEl  = row.querySelector('.unit-parcela');
+    const refEl  = row.querySelector('.unit-reforco');
+
+    if (valEl)  { valEl.textContent  = isPerm ? 'Permuta' : brl(valor); valEl.style.color = isPerm ? '#dc2626' : '#1e293b'; }
+    if (isPerm) {
+      if (entEl) entEl.textContent = '—';
+      if (parEl) parEl.textContent = '—';
+      if (refEl) refEl.textContent = '—';
+    } else {
+      if (entEl) { entEl.textContent = brl(valor * entradaPct); entEl.style.color = '#1e40af'; entEl.style.fontWeight = '600'; }
+      if (parEl) { const p = nParcelas > 0 ? valor * parcelasPct / nParcelas : 0; parEl.textContent = p > 0 ? brl(p) + '/mês' : '—'; parEl.style.color = '#16a34a'; }
+      if (refEl) { const rf = nReforcos > 0 ? valor * reforcosPct / nReforcos : 0; refEl.textContent = rf > 0 ? brl(rf) + (nReforcos > 1 ? ` ×${nReforcos}` : '') : '—'; refEl.style.color = '#ca8a04'; }
+    }
+  });
 }
 
 function renderDRE(dre) {
@@ -782,7 +943,7 @@ function render() {
   }
   if (el('kpi-margem')) {
     el('kpi-margem').textContent = pct(margem);
-    el('kpi-margem').style.color = (margem || 0) >= 20 ? '#f97316' : (margem || 0) >= 15 ? '#ca8a04' : '#dc2626';
+    el('kpi-margem').style.color = (margem || 0) >= 25 ? '#16a34a' : (margem || 0) >= 15 ? '#ca8a04' : '#dc2626';
     if (el('kpi-margem-sub') && r.vf_margem_vgv != null && !curFin)
       el('kpi-margem-sub').textContent = 'VP nominal: ' + pct(r.margem_vgv);
   }
@@ -793,11 +954,20 @@ function render() {
   }
   if (el('kpi-exposicao')) el('kpi-exposicao').textContent = brl(exposicao);
 
-  // Status badge
+  // Status badge — recomputed from margem so saved studies reflect new thresholds
   const cnBadge = {'realista':'badge-r','otimista':'badge-o','pessimista':'badge-p'}[curCenario];
-  const st = r.status || {};
+  function statusFromMargem(m) {
+    m = parseFloat(m) || 0;
+    if (m >= 25) return {icon:'✅', label:'Saudável', desc:'Margem acima de 25%. Empreendimento saudável e resiliente a variações.'};
+    if (m >= 20) return {icon:'✅', label:'Excelente', desc:'Margem e TIR acima dos benchmarks. Empreendimento altamente atrativo.'};
+    if (m >= 15) return {icon:'👍', label:'Viável',   desc:'Indicadores dentro do padrão de mercado. Empreendimento viável.'};
+    if (m >= 10) return {icon:'⚠️', label:'Atenção',  desc:'Margem apertada. Desvios de custo ou velocidade de vendas podem comprometer o resultado.'};
+    return {icon:'🔴', label:'Inviável', desc:'Margem abaixo do mínimo viável. Revisar premissas.'};
+  }
+  const vfMargem = r.vf_margem_vgv != null ? r.vf_margem_vgv : (r.margem_vgv || 0);
+  const st = statusFromMargem(vfMargem);
   if (el('sp-status-bar'))
-    el('sp-status-bar').innerHTML = `<span class="sp-badge ${cnBadge}">${st.icon||''} ${st.label||curCenario}</span>`;
+    el('sp-status-bar').innerHTML = `<span class="sp-badge ${cnBadge}">${st.icon} ${st.label}</span><span style="font-size:.78rem;color:#64748b;margin-left:.5rem;">${st.desc}</span>`;
 
   // DRE VP
   renderDRE(r.dre);
@@ -853,6 +1023,34 @@ function render() {
       `<div class="bk-row"><span class="bk-lbl">${l}</span><span style="${l.includes('Ganho')?'color:#f97316;font-weight:700':''}"> ${isPct ? v : brl(v)}</span></div>`
     ).join('');
   }
+
+  // Indicadores adicionais
+  const ia = r.indicadores_adicionais || {};
+  function setIA(id, val) { if(el(id)) el(id).textContent = val; }
+  function iaColor(id, v, threshHi, threshMid) {
+    const e = el(id); if(!e) return;
+    e.style.color = v >= threshHi ? '#16a34a' : v >= threshMid ? '#ca8a04' : '#dc2626';
+    e.style.fontWeight = '700';
+  }
+  setIA('ia-payback',      r.payback_mes ? `Mês ${r.payback_mes}` : '—');
+  setIA('ia-vso',          ia.vso_mensal != null ? `${parseFloat(ia.vso_mensal).toFixed(1)} un./mês` : '—');
+  setIA('ia-payback-desc', ia.payback_descontado ? `Mês ${ia.payback_descontado}` : '—');
+  if (ia.multiplo_capital != null) { setIA('ia-multiplo', `${parseFloat(ia.multiplo_capital).toFixed(2)}x`); iaColor('ia-multiplo', ia.multiplo_capital, 1.2, 1.0); }
+  if (ia.indice_lucratividade != null) { setIA('ia-il', `${parseFloat(ia.indice_lucratividade).toFixed(2)}x`); iaColor('ia-il', ia.indice_lucratividade, 1.0, 0.9); }
+  setIA('ia-pe',  ia.ponto_equilibrio_pct != null ? `${parseFloat(ia.ponto_equilibrio_pct).toFixed(1)}% do VGV` : '—');
+  if (ia.spread_cdi != null) {
+    setIA('ia-cdi', `${parseFloat(ia.spread_cdi).toFixed(2)}%`);
+    iaColor('ia-cdi', ia.spread_cdi, 5, 0);
+  }
+  // VF indicators
+  if (r.vf_margem_custo != null) {
+    setIA('ia-luc-vf', `${parseFloat(r.vf_margem_custo).toFixed(2)}%`);
+    iaColor('ia-luc-vf', r.vf_margem_custo, 25, 15);
+  }
+  setIA('ia-vp-rec',  r.vp_receitas != null ? brl(r.vp_receitas) : '—');
+  setIA('ia-vp-cus',  r.vp_custos   != null ? brl(r.vp_custos)   : '—');
+  if (r.vpl_vf != null)  { setIA('ia-vpl-vf',  brl(r.vpl_vf));  if(el('ia-vpl-vf'))  el('ia-vpl-vf').style.color  = r.vpl_vf >= 0  ? '#ea580c' : '#dc2626'; }
+  if (r.vpl != null)     { setIA('ia-vpl-vp',  brl(r.vpl));     if(el('ia-vpl-vp'))  el('ia-vpl-vp').style.color  = r.vpl >= 0    ? '#f97316' : '#dc2626'; }
 
   // Sensibilidade
   const sensib = el('sensib-body');
