@@ -191,6 +191,16 @@ def _compact_result(r: dict) -> dict:
         # Sensibilidade
         "sensibilidade":     r.get("sensibilidade"),
         "indicadores_adicionais": r.get("indicadores_adicionais"),
+        "fluxo":    [
+            {k: v for k, v in f.items() if k in ("mes","receita","comissao","tributos","custo_obra","saldo_mes","saldo_acumulado")}
+            for f in (r.get("fluxo") or [])
+            if f.get("receita") or f.get("custo_obra") or f.get("saldo_mes")
+        ],
+        "vf_fluxo": [
+            {k: v for k, v in f.items() if k in ("mes","receita","comissao","tributos","custo_obra","saldo_mes","saldo_acumulado")}
+            for f in (r.get("vf_fluxo") or [])
+            if f.get("receita") or f.get("custo_obra") or f.get("saldo_mes")
+        ],
         "financiamento": {
             "valor_financiado":  fin.get("valor_financiado"),
             "custo_fin_total":   fin.get("custo_fin_total"),
@@ -628,6 +638,25 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Inter','Segoe UI',sans-serif;
       <h6><i class="bi bi-activity me-1"></i>Fluxo de Caixa</h6>
       <canvas id="chartFluxo" style="max-height:380px;"></canvas>
     </div>
+    <div class="sp-card" style="margin-top:1rem;">
+      <h6 id="fluxo-table-title" style="margin-bottom:.75rem;"><i class="bi bi-table me-1"></i>Fluxo de Caixa Mensal</h6>
+      <div style="overflow-x:auto;">
+        <table style="width:100%;border-collapse:collapse;font-size:.78rem;">
+          <thead>
+            <tr style="background:#1e293b;color:#fff;font-weight:700;text-transform:uppercase;letter-spacing:.05em;font-size:.67rem;">
+              <th style="padding:.5rem .7rem;text-align:center;">Mês</th>
+              <th style="padding:.5rem .7rem;text-align:right;color:#4ade80;">Receita</th>
+              <th style="padding:.5rem .7rem;text-align:right;color:#f87171;">Comissão</th>
+              <th style="padding:.5rem .7rem;text-align:right;color:#f87171;">Tributos</th>
+              <th style="padding:.5rem .7rem;text-align:right;color:#f87171;">Custo Obra</th>
+              <th style="padding:.5rem .7rem;text-align:right;">Saldo Mês</th>
+              <th style="padding:.5rem .7rem;text-align:right;">Saldo Acum.</th>
+            </tr>
+          </thead>
+          <tbody id="fluxo-tbody"></tbody>
+        </table>
+      </div>
+    </div>
   </div>
 
   {# ── ABA 3: Custos e Despesas ── #}
@@ -703,6 +732,8 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Inter','Segoe UI',sans-serif;
             <th style="padding:.5rem .65rem;text-align:left;">Unidade</th>
             <th style="padding:.5rem .65rem;text-align:center;">Tipo</th>
             <th style="padding:.5rem .65rem;text-align:center;">m²</th>
+            <th style="padding:.5rem .65rem;text-align:right;">Dif./m²</th>
+            <th style="padding:.5rem .65rem;text-align:right;">R$/m²</th>
             <th style="padding:.5rem .65rem;text-align:right;">Valor Total</th>
             <th style="padding:.5rem .65rem;text-align:center;">Permuta</th>
             <th style="padding:.5rem .65rem;text-align:right;background:#1e3a5f;">Entrada</th>
@@ -727,6 +758,8 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Inter','Segoe UI',sans-serif;
                 <td style="padding:.4rem .65rem;font-weight:600;">{{ un.nome or (pav.nome ~ ' Un.' ~ loop.index) }}</td>
                 <td style="padding:.4rem .65rem;text-align:center;color:#64748b;">{{ un.tipo or 'Residencial' }}</td>
                 <td style="padding:.4rem .65rem;text-align:center;">{{ un.metragem }} m²</td>
+                <td style="padding:.4rem .65rem;text-align:right;font-variant-numeric:tabular-nums;color:#7c3aed;" class="unit-dif">—</td>
+                <td style="padding:.4rem .65rem;text-align:right;font-variant-numeric:tabular-nums;" class="unit-pm2">—</td>
                 <td style="padding:.4rem .65rem;text-align:right;font-variant-numeric:tabular-nums;font-weight:600;" class="unit-val">—</td>
                 <td style="padding:.4rem .65rem;text-align:center;">{% if un.permuta %}<span style="color:#dc2626;font-weight:700;">Sim</span>{% else %}—{% endif %}</td>
                 <td style="padding:.4rem .65rem;text-align:right;background:#f0f7ff;font-variant-numeric:tabular-nums;" class="unit-entrada">—</td>
@@ -750,6 +783,8 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Inter','Segoe UI',sans-serif;
               <td style="padding:.4rem .65rem;font-weight:600;">{{ t.nome }}</td>
               <td style="padding:.4rem .65rem;text-align:center;color:#64748b;">{{ t.tipo or 'Residencial' }}</td>
               <td style="padding:.4rem .65rem;text-align:center;">{{ t.metragem }} m²</td>
+              <td style="padding:.4rem .65rem;text-align:right;font-variant-numeric:tabular-nums;color:#7c3aed;" class="unit-dif">—</td>
+              <td style="padding:.4rem .65rem;text-align:right;font-variant-numeric:tabular-nums;" class="unit-pm2">—</td>
               <td style="padding:.4rem .65rem;text-align:right;font-variant-numeric:tabular-nums;font-weight:600;" class="unit-val">—</td>
               <td style="padding:.4rem .65rem;text-align:center;">{% if t.permuta %}<span style="color:#dc2626;font-weight:700;">Sim</span>{% else %}—{% endif %}</td>
               <td style="padding:.4rem .65rem;text-align:right;background:#f0f7ff;font-variant-numeric:tabular-nums;" class="unit-entrada">—</td>
@@ -824,7 +859,7 @@ function spTab(name, btn) {
   const sec = el('sptab-' + name);
   if (sec) sec.classList.add('on');
   if (btn) btn.classList.add('on');
-  if (name === 'fluxo') { const r = CENARIOS[curCenario]; if (r) renderChart(r.chart_labels, r.chart_pag, r.chart_rec, r.chart_exp); }
+  if (name === 'fluxo') { const r = CENARIOS[curCenario]; if (r) { renderChart(r.chart_labels, r.chart_pag, r.chart_rec, r.chart_exp); renderFluxoTable(); } }
   if (name === 'comercial') renderUnitsTable();
 }
 
@@ -865,7 +900,11 @@ function renderUnitsTable() {
     const entEl  = row.querySelector('.unit-entrada');
     const parEl  = row.querySelector('.unit-parcela');
     const refEl  = row.querySelector('.unit-reforco');
+    const difEl  = row.querySelector('.unit-dif');
+    const pm2El  = row.querySelector('.unit-pm2');
 
+    if (difEl) difEl.textContent = dif !== 0 ? (dif > 0 ? '+' : '') + brl(dif) : '—';
+    if (pm2El) pm2El.textContent = isPerm ? '—' : brl(pm2);
     if (valEl)  { valEl.textContent  = isPerm ? 'Permuta' : brl(valor); valEl.style.color = isPerm ? '#dc2626' : '#1e293b'; }
     if (isPerm) {
       if (entEl) entEl.textContent = '—';
@@ -887,6 +926,34 @@ function renderDRE(dre) {
       ? parseFloat(row.valor).toFixed(2) + '%'
       : brl(row.valor);
     return `<tr class="dre-row-${row.tipo}"><td>${row.desc}</td><td class="dre-val">${v}</td></tr>`;
+  }).join('');
+}
+
+function renderFluxoTable() {
+  const r = CENARIOS[curCenario];
+  if (!r) return;
+  const useVF = false;  // always show VP nominal (same as chart default)
+  const rows = useVF ? (r.vf_fluxo || []) : (r.fluxo || []);
+  const tbody = el('fluxo-tbody');
+  if (!tbody) return;
+  const title = el('fluxo-table-title');
+  if (title) title.innerHTML = '<i class="bi bi-table me-1"></i>Fluxo de Caixa Mensal — VP (Nominal)';
+  if (!rows.length) { tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;padding:1rem;color:#94a3b8;">Dados não disponíveis</td></tr>'; return; }
+  tbody.innerHTML = rows.map((f, i) => {
+    const saldo = f.saldo_mes || 0;
+    const acum  = f.saldo_acumulado || 0;
+    const bg    = i % 2 === 0 ? '' : 'background:#f8fafc;';
+    const sc    = saldo >= 0 ? '#16a34a' : '#dc2626';
+    const ac    = acum  >= 0 ? '#16a34a' : '#dc2626';
+    return `<tr style="border-bottom:1px solid #f1f5f9;${bg}font-variant-numeric:tabular-nums;">
+      <td style="padding:.35rem .7rem;text-align:center;font-weight:600;">${f.mes}</td>
+      <td style="padding:.35rem .7rem;text-align:right;color:#16a34a;">${brl(f.receita||0)}</td>
+      <td style="padding:.35rem .7rem;text-align:right;color:#dc2626;">${brl(f.comissao||0)}</td>
+      <td style="padding:.35rem .7rem;text-align:right;color:#dc2626;">${brl(f.tributos||0)}</td>
+      <td style="padding:.35rem .7rem;text-align:right;color:#dc2626;">${brl(f.custo_obra||0)}</td>
+      <td style="padding:.35rem .7rem;text-align:right;color:${sc};font-weight:600;">${brl(saldo)}</td>
+      <td style="padding:.35rem .7rem;text-align:right;color:${ac};font-weight:700;">${brl(acum)}</td>
+    </tr>`;
   }).join('');
 }
 
@@ -916,6 +983,7 @@ function renderChart(labels, pag, rec, exp) {
 function render() {
   const r = CENARIOS[curCenario];
   if (!r) return;
+  if (el('sptab-fluxo') && el('sptab-fluxo').classList.contains('on')) renderFluxoTable();
   const fin = r.financiamento;
 
   // KPI VF como primário; VP nominal como fallback/referência
@@ -954,18 +1022,20 @@ function render() {
   }
   if (el('kpi-exposicao')) el('kpi-exposicao').textContent = brl(exposicao);
 
-  // Status badge — recomputed from margem so saved studies reflect new thresholds
+  // Status badge — recomputed from margem+TIR to match _classificar() server logic
   const cnBadge = {'realista':'badge-r','otimista':'badge-o','pessimista':'badge-p'}[curCenario];
-  function statusFromMargem(m) {
+  function statusFromMargem(m, t) {
     m = parseFloat(m) || 0;
+    t = parseFloat(t) || 0;
     if (m >= 25) return {icon:'✅', label:'Saudável', desc:'Margem acima de 25%. Empreendimento saudável e resiliente a variações.'};
-    if (m >= 20) return {icon:'✅', label:'Excelente', desc:'Margem e TIR acima dos benchmarks. Empreendimento altamente atrativo.'};
-    if (m >= 15) return {icon:'👍', label:'Viável',   desc:'Indicadores dentro do padrão de mercado. Empreendimento viável.'};
+    if (m >= 20 && t >= 20) return {icon:'✅', label:'Excelente', desc:'Margem e TIR acima dos benchmarks. Empreendimento altamente atrativo.'};
+    if (m >= 15 && t >= 15) return {icon:'👍', label:'Viável',   desc:'Indicadores dentro do padrão de mercado. Empreendimento viável.'};
     if (m >= 10) return {icon:'⚠️', label:'Atenção',  desc:'Margem apertada. Desvios de custo ou velocidade de vendas podem comprometer o resultado.'};
     return {icon:'🔴', label:'Inviável', desc:'Margem abaixo do mínimo viável. Revisar premissas.'};
   }
   const vfMargem = r.vf_margem_vgv != null ? r.vf_margem_vgv : (r.margem_vgv || 0);
-  const st = statusFromMargem(vfMargem);
+  const vfTir    = ((r.tir_vf_anual != null ? r.tir_vf_anual : (r.tir_anual || 0)) * 100);
+  const st = statusFromMargem(vfMargem, vfTir);
   if (el('sp-status-bar'))
     el('sp-status-bar').innerHTML = `<span class="sp-badge ${cnBadge}">${st.icon} ${st.label}</span><span style="font-size:.78rem;color:#64748b;margin-left:.5rem;">${st.desc}</span>`;
 
@@ -1017,7 +1087,7 @@ function render() {
       ['Custo Total (VF)',              r.vf_custo_total],
       ['Resultado VF',                  r.vf_resultado],
       ['Margem VF',                     r.vf_margem_vgv != null ? pct(r.vf_margem_vgv) : null, true],
-      ['<strong style="color:#f97316">↑ Ganho VF vs VP</strong>', ganho],
+      ['<strong style="color:#f97316" title="Diferença entre o resultado corrigido pela inflação (VF) e o resultado nominal (VP) — representa o efeito da correção monetária no projeto.">↑ Correção Monetária (VF−VP)</strong>', ganho],
     ];
     cvf.innerHTML = rows.filter(([,v])=>v!=null).map(([l,v,isPct])=>
       `<div class="bk-row"><span class="bk-lbl">${l}</span><span style="${l.includes('Ganho')?'color:#f97316;font-weight:700':''}"> ${isPct ? v : brl(v)}</span></div>`
