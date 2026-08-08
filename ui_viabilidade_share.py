@@ -424,6 +424,8 @@ async def viabilidade_share_publico(
     corr_pos_obra_share = float(dados_input.get("correcao_pos_obra", 1.04) or 1.04)
     tipologias_share = dados_input.get("tipologias") or []
     pavimentos_share = dados_input.get("pavimentos") or []
+    dif_andar_share   = float(dados_input.get("diferencial_andar", 0.5) or 0.5) / 100
+    preco_base_share  = float(dados_input.get("preco_m2_base", 12500) or 12500)
     templates_env.filters.setdefault("enumerate", lambda it: list(enumerate(it)))
     html = templates_env.from_string(TEMPLATES["viabilidade_share.html"]).render(
         nome_projeto=estudo.nome_projeto,
@@ -435,6 +437,8 @@ async def viabilidade_share_publico(
         pavimentos=pavimentos_share,
         corr_obra=corr_obra_share,
         corr_pos_obra=corr_pos_obra_share,
+        dif_andar=dif_andar_share,
+        preco_m2_base=preco_base_share,
     )
     return HTMLResponse(html)
 
@@ -880,20 +884,23 @@ function renderUnitsTable() {
   const nReforcos   = parseInt(mainFase.n_reforcos || 0) || 0;
   const reajuste    = 1 + parseFloat(mainFase.reajuste || 0) / 100;
 
-  // Get base price from result
-  const vgvMedioM2 = parseFloat(r.vgv_medio_m2 || 0);
+  // Base price and per-floor differential from project config
+  const precoBase  = {{ preco_m2_base | tojson }};
+  const difAndar   = {{ dif_andar | tojson }};  // fraction per floor (e.g. 0.005 = 0.5%)
 
   document.querySelectorAll('#units-tbody tr').forEach(row => {
-    const m2     = parseFloat(row.dataset.m2    || 0);
-    const preco  = parseFloat(row.dataset.preco || 0);  // preco_proprio (por m²) or 0
-    const dif    = parseFloat(row.dataset.dif   || 0);
-    const andar  = parseInt(row.dataset.andar   || 1);
-    const isPerm = row.dataset.perm === '1';
+    const m2       = parseFloat(row.dataset.m2    || 0);
+    const precoP   = parseFloat(row.dataset.preco || 0);  // preco_proprio override
+    const difP     = parseFloat(row.dataset.dif   || 0);  // dif_proprio fraction
+    const andar    = parseInt(row.dataset.andar   || 1);
+    const isPerm   = row.dataset.perm === '1';
 
-    // Effective price/m²: use preco_proprio if set, else vgvMedioM2 + dif_proprio
-    let pm2 = preco > 0 ? preco : vgvMedioM2;
-    pm2 += dif;  // dif_proprio is absolute R$/m²
+    // Replicate server formula: preco_base * (1 + dif_andar*(andar-1)) * (1 + dif_proprio)
+    // If unit has preco_proprio set, use it as the base instead
+    const base = precoP > 0 ? precoP : precoBase;
+    let pm2 = base * (1 + difAndar * (andar - 1)) * (1 + difP);
     pm2 *= reajuste;
+    const dif = pm2 - base * reajuste;  // display: effective increment vs base
     const valor = m2 * pm2;
 
     const valEl  = row.querySelector('.unit-val');
