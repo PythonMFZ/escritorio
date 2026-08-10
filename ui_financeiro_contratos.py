@@ -424,6 +424,10 @@ def _ct_sync_entry(session, cobranca: CobrancaMensal, user_id: int = 1):
         }
         novo_status = status_map.get(cobranca.status, "aberto")
 
+        # Não (re)cria entry para cobranças canceladas sem entry existente
+        if entry is None and cobranca.status == "cancelado":
+            return
+
         if entry is None:
             entry = OfficeFinancialEntry(
                 company_id            = cobranca.company_id,
