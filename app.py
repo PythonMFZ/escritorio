@@ -10695,7 +10695,7 @@ TEMPLATES.update({
   <div class="row g-3 mt-2">
     <div class="col-md-3"><div class="border rounded p-3 h-100"><div class="muted small">Receber em aberto</div><div class="fw-semibold">{{ summary.open_receivables|brl }}</div></div></div>
     <div class="col-md-3"><div class="border rounded p-3 h-100"><div class="muted small">Pagar em aberto</div><div class="fw-semibold">{{ summary.open_payables|brl }}</div></div></div>
-    <div class="col-md-3"><div class="border rounded p-3 h-100"><div class="muted small">Saldo projetado 30 dias</div><div class="fw-semibold">{{ summary.projected_30d|brl }}</div></div></div>
+    <div class="col-md-3"><div class="border rounded p-3 h-100"><div class="muted small">Saldo líquido</div><div class="fw-semibold" style="color:{{ '#16a34a' if summary.saldo_liquido >= 0 else '#dc2626' }}">{{ summary.saldo_liquido|brl }}</div></div></div>
     <div class="col-md-3"><div class="border rounded p-3 h-100"><div class="muted small">Lançamentos filtrados</div><div class="fw-semibold">{{ summary.filtered_count }}</div></div></div>
   </div>
 
@@ -18712,6 +18712,7 @@ def _office_finance_rows(session: Session, company_id: int, *, q: str = "", entr
         if today_key <= due_key <= horizon_key and _office_is_open(entry):
             signal = 1.0 if entry.entry_kind == "receber" else -1.0
             projected_30d += signal * float(entry.amount_expected_brl or 0.0)
+        # unused — projected_30d kept for compat but summary uses saldo_liquido
 
         rows.append({
             "id": entry.id,
@@ -18733,6 +18734,7 @@ def _office_finance_rows(session: Session, company_id: int, *, q: str = "", entr
         "open_receivables": round(open_receivables, 2),
         "open_payables": round(open_payables, 2),
         "projected_30d": round(projected_30d, 2),
+        "saldo_liquido": round(open_receivables - open_payables, 2),
         "filtered_count": len(rows),
     }
     return rows, summary, clients
@@ -36547,7 +36549,7 @@ TEMPLATES.update({
   <div class="row g-3 mt-2">
     <div class="col-md-3"><div class="border rounded p-3 h-100"><div class="muted small">Receber em aberto</div><div class="fw-semibold">{{ summary.open_receivables|brl }}</div></div></div>
     <div class="col-md-3"><div class="border rounded p-3 h-100"><div class="muted small">Pagar em aberto</div><div class="fw-semibold">{{ summary.open_payables|brl }}</div></div></div>
-    <div class="col-md-3"><div class="border rounded p-3 h-100"><div class="muted small">Saldo projetado 30 dias</div><div class="fw-semibold">{{ summary.projected_30d|brl }}</div></div></div>
+    <div class="col-md-3"><div class="border rounded p-3 h-100"><div class="muted small">Saldo líquido</div><div class="fw-semibold" style="color:{{ '#16a34a' if summary.saldo_liquido >= 0 else '#dc2626' }}">{{ summary.saldo_liquido|brl }}</div></div></div>
     <div class="col-md-3"><div class="border rounded p-3 h-100"><div class="muted small">Lançamentos filtrados</div><div class="fw-semibold">{{ summary.filtered_count }}</div></div></div>
   </div>
 
