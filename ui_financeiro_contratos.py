@@ -448,6 +448,10 @@ def _ct_sync_entry(session, cobranca: CobrancaMensal, user_id: int = 1):
                 entry.settlement_date     = cobranca.data_pagamento or ""
                 entry.amount_realized_brl = (cobranca.valor_pago_cents or cobranca.valor_cents) / 100 if cobranca.status == "pago" else 0.0
                 entry.updated_by_user_id  = user_id
+            # Sempre atualiza valor previsto e descrição (independente de conciliação)
+            entry.amount_expected_brl = cobranca.valor_cents / 100
+            entry.description         = f"{cobranca.nome_contrato} — {cobranca.competencia}"
+            entry.due_date            = cobranca.data_vencimento
 
         session.add(entry)
         session.commit()
@@ -1057,6 +1061,16 @@ async def financeiro_cobranca_excluir(cobranca_id: int, request: _Req_ct, sessio
         return _RR_ct("/login", status_code=303)
     cobranca = session.get(CobrancaMensal, cobranca_id)
     if cobranca and cobranca.company_id == ctx.company.id:
+        # Remove o OfficeFinancialEntry vinculado para não reaparecer no dashboard
+        ref = f"contrato-{cobranca.contrato_id}-{cobranca.competencia}"
+        entry = session.exec(
+            _sel_ct(OfficeFinancialEntry).where(
+                OfficeFinancialEntry.company_id      == cobranca.company_id,
+                OfficeFinancialEntry.document_number == ref,
+            )
+        ).first()
+        if entry:
+            session.delete(entry)
         session.delete(cobranca)
         session.commit()
         set_flash(request, "Cobrança excluída.")
@@ -1108,6 +1122,15 @@ async def financeiro_contrato_excluir(contrato_id: int, request: _Req_ct, sessio
             _sel_ct(CobrancaMensal).where(CobrancaMensal.contrato_id == contrato_id)
         ).all()
         for cb in cobrancas:
+            ref = f"contrato-{cb.contrato_id}-{cb.competencia}"
+            entry = session.exec(
+                _sel_ct(OfficeFinancialEntry).where(
+                    OfficeFinancialEntry.company_id      == cb.company_id,
+                    OfficeFinancialEntry.document_number == ref,
+                )
+            ).first()
+            if entry:
+                session.delete(entry)
             session.delete(cb)
         session.delete(contrato)
         session.commit()
