@@ -18678,16 +18678,6 @@ def _office_finance_rows(session: Session, company_id: int, *, q: str = "", entr
     projected_30d = 0.0
 
     for entry in entries:
-        if entry.entry_kind == "receber" and _office_is_open(entry):
-            open_receivables += float(entry.amount_expected_brl or 0.0)
-        if entry.entry_kind == "pagar" and _office_is_open(entry):
-            open_payables += float(entry.amount_expected_brl or 0.0)
-
-        due_key = _office_date_key(entry.due_date)
-        if today_key <= due_key <= horizon_key and _office_is_open(entry):
-            signal = 1.0 if entry.entry_kind == "receber" else -1.0
-            projected_30d += signal * float(entry.amount_expected_brl or 0.0)
-
         counterparty = ""
         if entry.entry_kind == "receber" and entry.client_id:
             counterparty = getattr(client_by_id.get(int(entry.client_id)), "name", "") or ""
@@ -18711,6 +18701,17 @@ def _office_finance_rows(session: Session, company_id: int, *, q: str = "", entr
             continue
         if client_id and str(entry.client_id or "") != str(client_id):
             continue
+
+        # Totalizadoras calculadas apenas sobre as linhas que passam no filtro
+        if entry.entry_kind == "receber" and _office_is_open(entry):
+            open_receivables += float(entry.amount_expected_brl or 0.0)
+        if entry.entry_kind == "pagar" and _office_is_open(entry):
+            open_payables += float(entry.amount_expected_brl or 0.0)
+
+        due_key = _office_date_key(entry.due_date)
+        if today_key <= due_key <= horizon_key and _office_is_open(entry):
+            signal = 1.0 if entry.entry_kind == "receber" else -1.0
+            projected_30d += signal * float(entry.amount_expected_brl or 0.0)
 
         rows.append({
             "id": entry.id,
