@@ -330,71 +330,66 @@ async def p_remover_usuario_cliente(
     return _RR_p(f"/admin/clientes/{client_id}/usuarios", status_code=303)
 
 
-# ── Patch /cliente/reunioes para aplicar filtro de participantes ──────────────
+# ── Nova rota /cliente/reunioes com filtro de participantes ───────────────────
+# Registrada APÓS a original — o FastAPI usa a primeira rota que casa,
+# então removemos a original do router antes de adicionar a nova.
 
-_p_orig_cliente_reunioes = None
 try:
-    # Localizar a rota e substituir
-    for _route in app.routes:
-        if hasattr(_route, "path") and _route.path == "/cliente/reunioes":
-            _p_orig_handler = _route.endpoint
-            break
+    app.routes[:] = [r for r in app.routes
+                     if not (hasattr(r, "path") and r.path == "/cliente/reunioes")]
+except Exception:
+    pass
 
-    async def _p_cliente_reunioes_filtrado(request: Request, session: Session = Depends(get_session)):
-        ctx = get_tenant_context(request, session)
-        if not ctx:
-            return _RR_p("/login", status_code=303)
 
-        client_id = ctx.membership.client_id or -1
+@app.get("/cliente/reunioes", response_class=_HTML_p)
+@require_login
+async def p_cliente_reunioes_filtrado(request: Request, session: Session = Depends(get_session)):
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        return _RR_p("/login", status_code=303)
 
-        reunioes_filtradas = _p_reunioes_visiveis(
-            session, ctx.company.id, client_id, ctx.user.id, ctx.membership.role
-        )
+    client_id = ctx.membership.client_id or -1
 
-        acoes_abertas = session.exec(
+    reunioes_filtradas = _p_reunioes_visiveis(
+        session, ctx.company.id, client_id, ctx.user.id, ctx.membership.role
+    )
+
+    acoes_abertas = session.exec(
+        _sel_p(MeetingAcao)
+        .where(MeetingAcao.company_id == ctx.company.id)
+        .where(MeetingAcao.client_id == client_id)
+        .where(MeetingAcao.status.in_(["aberta", "em_andamento"]))
+        .order_by(MeetingAcao.prioridade, MeetingAcao.prazo)
+    ).all()
+
+    reunioes = []
+    for mt in reunioes_filtradas:
+        acoes_count = session.exec(
             _sel_p(MeetingAcao)
-            .where(MeetingAcao.company_id == ctx.company.id)
-            .where(MeetingAcao.client_id == client_id)
+            .where(MeetingAcao.meeting_id == mt.id)
             .where(MeetingAcao.status.in_(["aberta", "em_andamento"]))
-            .order_by(MeetingAcao.prioridade, MeetingAcao.prazo)
         ).all()
-
-        reunioes = []
-        for mt in reunioes_filtradas:
-            acoes_count = session.exec(
-                _sel_p(MeetingAcao)
-                .where(MeetingAcao.meeting_id == mt.id)
-                .where(MeetingAcao.status.in_(["aberta", "em_andamento"]))
-            ).all()
-            partics = _p_get_participantes(session, mt.id)
-            reunioes.append({
-                "id": mt.id,
-                "title": mt.title,
-                "meeting_date": mt.meeting_date,
-                "summary_text": mt.summary_text,
-                "acoes_count": len(acoes_count),
-                "participantes": partics,
-            })
-
-        active_client_id = get_active_client_id(request, session, ctx)
-        current_client = get_client_or_none(session, ctx.company.id, active_client_id)
-        return render("cliente_reunioes.html", request=request, context={
-            "current_user": ctx.user, "current_company": ctx.company,
-            "role": ctx.membership.role, "current_client": current_client,
-            "reunioes": reunioes, "acoes_abertas": acoes_abertas,
-            "flash": request.session.pop("flash", None),
+        partics = _p_get_participantes(session, mt.id)
+        reunioes.append({
+            "id": mt.id,
+            "title": mt.title,
+            "meeting_date": mt.meeting_date,
+            "summary_text": mt.summary_text,
+            "acoes_count": len(acoes_count),
+            "participantes": partics,
         })
 
-    # Substituir o endpoint da rota
-    for _route in app.routes:
-        if hasattr(_route, "path") and _route.path == "/cliente/reunioes":
-            _route.endpoint = _p_cliente_reunioes_filtrado
-            import inspect as _insp_p
-            _route.dependant = _insp_p.getmembers(_route)[0][1]  # força rebuild do dependant
-            break
-    print("[participantes] ✅ /cliente/reunioes patched com filtro de participantes.")
-except Exception as _e_p_patch:
-    print(f"[participantes] ⚠️ Patch /cliente/reunioes não aplicado: {_e_p_patch}")
+    active_client_id = get_active_client_id(request, session, ctx)
+    current_client = get_client_or_none(session, ctx.company.id, active_client_id)
+    return render("cliente_reunioes.html", request=request, context={
+        "current_user": ctx.user, "current_company": ctx.company,
+        "role": ctx.membership.role, "current_client": current_client,
+        "reunioes": reunioes, "acoes_abertas": acoes_abertas,
+        "flash": request.session.pop("flash", None),
+    })
+
+
+print("[participantes] ✅ /cliente/reunioes registrado com filtro de participantes.")
 
 
 # ── Templates ─────────────────────────────────────────────────────────────────
