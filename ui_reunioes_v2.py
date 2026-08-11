@@ -886,8 +886,52 @@ if hasattr(templates_env.loader, "mapping"):
 
 
 def _bsc_itens_atencao(session, company_id, filter_client_id=None):
-    """Retorna itens virtuais do BSC (KPIs amarelo/vermelho) para exibir na Central."""
+    """Retorna ações BSC reais + KPIs amarelo/vermelho para exibir na Central."""
     itens = []
+
+    # ── Ações reais do BSCAction (ui_ferramenta_bsc.py) ──────────────────────
+    try:
+        q_ac = _select_rv2(BSCAction).where(
+            BSCAction.company_id == company_id,
+            BSCAction.is_active == True,
+        )
+        for ac in session.exec(q_ac).all():
+            # Descobre o client_id via BSCObjective
+            try:
+                obj = session.get(BSCObjective, ac.objective_id)
+                plan = session.get(BSCPlan, obj.plan_id) if obj else None
+                cid = plan.client_id if plan else None
+            except Exception:
+                cid = None
+            if filter_client_id and cid != filter_client_id:
+                continue
+            c = session.get(Client, cid) if cid else None
+            status_map = {
+                "pendente":   ("pendente",    "Pendente"),
+                "em_andamento": ("em_andamento", "Em andamento"),
+                "concluida":  ("concluida",   "Concluída"),
+                "cancelada":  ("cancelada",   "Cancelada"),
+            }
+            st, st_label = status_map.get(ac.status, (ac.status, ac.status.capitalize()))
+            itens.append({
+                "tipo": "bsc",
+                "id": f"bscac_{ac.id}",
+                "titulo": ac.title or "—",
+                "descricao": ac.description or "",
+                "prioridade": ac.priority or "media",
+                "status": st,
+                "status_label": st_label,
+                "responsavel": ac.responsible or "—",
+                "prazo": ac.due_date or "—",
+                "origem_label": "BSC",
+                "origem_url": f"/ferramentas/bsc/{cid}" if cid else "/ferramentas/bsc",
+                "_client_name": c.name if c else (f"#{cid}" if cid else "—"),
+                "client_id": cid,
+            })
+    except Exception:
+        pass
+
+    # ── KPIs com semáforo amarelo/vermelho ───────────────────────────────────
     try:
         q = _select_rv2(BSCIndicador).where(BSCIndicador.company_id == company_id)
         if filter_client_id:
@@ -910,12 +954,12 @@ def _bsc_itens_atencao(session, company_id, filter_client_id=None):
             c = session.get(Client, ind.client_id)
             itens.append({
                 "tipo": "bsc",
-                "id": f"bsc_{ind.id}",
-                "titulo": ind.nome,
+                "id": f"bsckpi_{ind.id}",
+                "titulo": f"⚠ KPI: {ind.nome}",
                 "descricao": f"Meta: {ind.meta_valor} {ind.unidade} | Realizado: {ult.valor} {ind.unidade} ({ult.periodo})",
                 "prioridade": pri,
-                "status": sem,          # "amarelo" | "vermelho" — não é status de ação
-                "status_label": "⚠ KPI " + sem,
+                "status": sem,
+                "status_label": "KPI " + sem,
                 "responsavel": "—",
                 "prazo": "—",
                 "origem_label": "BSC",
@@ -987,12 +1031,14 @@ async def admin_acoes_central(request: Request, session: Session = Depends(get_s
     # KPIs globais (sem filtros)
     todas_acoes = session.exec(_select_rv2(MeetingAcao).where(MeetingAcao.company_id == ctx.company.id)).all()
     todos_bsc   = _bsc_itens_atencao(session, ctx.company.id)
+    todos_bsc_kpis = [i for i in todos_bsc if i["id"].startswith("bsckpi_")]
+    todos_bsc_acoes = [i for i in todos_bsc if i["id"].startswith("bscac_")]
     kpis = [
-        ("Ações abertas",    sum(1 for a in todas_acoes if a.status == "aberta"),                                          "#3b82f6"),
-        ("Em andamento",     sum(1 for a in todas_acoes if a.status == "em_andamento"),                                    "#f59e0b"),
-        ("Alta prioridade",  sum(1 for a in todas_acoes if a.prioridade == "alta" and a.status not in ("concluida","cancelada")), "#ef4444"),
-        ("KPIs atenção",     len(todos_bsc),                                                                               "#a855f7"),
-        ("Concluídas",       sum(1 for a in todas_acoes if a.status == "concluida"),                                       "#22c55e"),
+        ("Ações abertas",    sum(1 for a in todas_acoes if a.status == "aberta") + sum(1 for i in todos_bsc_acoes if i["status"] in ("pendente","em_andamento")), "#3b82f6"),
+        ("Em andamento",     sum(1 for a in todas_acoes if a.status == "em_andamento") + sum(1 for i in todos_bsc_acoes if i["status"] == "em_andamento"), "#f59e0b"),
+        ("Alta prioridade",  sum(1 for a in todas_acoes if a.prioridade == "alta" and a.status not in ("concluida","cancelada")) + sum(1 for i in todos_bsc_acoes if i["prioridade"] == "alta" and i["status"] not in ("concluida","cancelada")), "#ef4444"),
+        ("KPIs atenção",     len(todos_bsc_kpis),                                                                          "#a855f7"),
+        ("Concluídas",       sum(1 for a in todas_acoes if a.status == "concluida") + sum(1 for i in todos_bsc_acoes if i["status"] == "concluida"), "#22c55e"),
     ]
 
     cc = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
