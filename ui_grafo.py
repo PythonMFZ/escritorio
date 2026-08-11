@@ -432,20 +432,26 @@ cv.addEventListener("wheel",e=>{
 
 // ── Eventos touch ─────────────────────────────────────────────────────────
 let lastPinch=null, touchDragStart=null;
+function resetTouchState(){ drag=null; dragStart=null; touchDragStart=null; pan=null; lastPinch=null; }
 cv.addEventListener("touchstart",e=>{
-  if(e.touches.length===1){
-    const t=e.touches[0];
-    const r=cv.getBoundingClientRect();
-    const sx=t.clientX-r.left, sy=t.clientY-r.top;
-    const w=s2w(sx,sy);
-    const h=hit(w.x,w.y);
-    if(h){ drag=h; dragStart={sx,sy}; touchDragStart={sx,sy}; }
-    else { pan={mx:t.clientX,my:t.clientY,tx,ty}; }
+  if(e.touches.length>1){
+    // Multi-touch: cancela qualquer drag/tap pendente para evitar navegação acidental
+    drag=null; dragStart=null; touchDragStart=null; pan=null;
+    return;
   }
+  const t=e.touches[0];
+  const r=cv.getBoundingClientRect();
+  const sx=t.clientX-r.left, sy=t.clientY-r.top;
+  const w=s2w(sx,sy);
+  const h=hit(w.x,w.y);
+  if(h){ drag=h; dragStart={sx,sy}; touchDragStart={sx,sy}; }
+  else { pan={mx:t.clientX,my:t.clientY,tx,ty}; }
 },{passive:true});
 cv.addEventListener("touchmove",e=>{
   e.preventDefault();
   if(e.touches.length===2){
+    // Pinch: cancela drag/tap do primeiro toque
+    drag=null; dragStart=null; touchDragStart=null; pan=null;
     const d=Math.hypot(e.touches[0].clientX-e.touches[1].clientX,
                        e.touches[0].clientY-e.touches[1].clientY);
     if(lastPinch) sc=Math.max(0.08,Math.min(6,sc*(d/lastPinch)));
@@ -467,8 +473,9 @@ cv.addEventListener("touchend",e=>{
     const screenDist=Math.hypot(sx-touchDragStart.sx, sy-touchDragStart.sy);
     if(screenDist<10 && drag.url && drag.url!=="#") window.location.href=drag.url;
   }
-  drag=null; dragStart=null; touchDragStart=null; pan=null; lastPinch=null;
+  resetTouchState();
 },{passive:true});
+cv.addEventListener("touchcancel", resetTouchState, {passive:true});
 
 document.getElementById("btn-pause").addEventListener("click",()=>{
   paused=!paused; ticks=paused?MAX_TICKS+1:0;
