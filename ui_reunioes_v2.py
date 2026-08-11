@@ -325,6 +325,11 @@ TEMPLATES["cliente_reunioes.html"] = r"""
 {% endblock %}
 """
 
+# Propagar templates ao loader do Jinja2
+for _tpl_rv2_key in ("reunioes_pauta.html", "reunioes_acoes.html", "cliente_reunioes.html"):
+    if _tpl_rv2_key in TEMPLATES and hasattr(templates_env.loader, "mapping"):
+        templates_env.loader.mapping[_tpl_rv2_key] = TEMPLATES[_tpl_rv2_key]
+
 
 # ── Rotas — Pauta ─────────────────────────────────────────────────────────────
 
