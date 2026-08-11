@@ -645,4 +645,29 @@ def _enriquecer_com_api_data(session, company_id, client_id, client, client_data
 
 _enriquecer_client_data = _enriquecer_com_api_data  # type: ignore[name-defined]
 
+# ── Patch: adiciona card "Conectores de API" na página /integrations ──────────
+try:
+    import ui_cloud_storage as _cs_mod_ai  # type: ignore
+    _cs_card = r"""
+    <hr class="my-4">
+    <h6 class="mb-3 text-muted small text-uppercase fw-semibold">Conectores de API</h6>
+    <a href="/integrations/api-connector" class="drive-btn">
+      <span style="font-size:2rem;line-height:1;flex-shrink:0;">🔌</span>
+      <div>
+        <div class="fw-semibold">Conectores de API Genéricos</div>
+        <div class="text-muted small">Integre qualquer ERP ou sistema via REST API</div>
+      </div>
+      <i class="bi bi-chevron-right ms-auto text-muted"></i>
+    </a>
+"""
+    if "api-connector" not in _cs_mod_ai._CS_PAGE:
+        _cs_mod_ai._CS_PAGE = _cs_mod_ai._CS_PAGE.replace(
+            "{% if conns %}",
+            _cs_card + "\n  {% if conns %}",
+            1,
+        )
+        print("[api_integrador] ✅ Card Conectores de API injetado em /integrations.")
+except Exception as _e_cs_patch:
+    print(f"[api_integrador] ⚠️ patch /integrations: {_e_cs_patch}")
+
 print("[api_integrador] ✅ Integrador de APIs carregado.")
