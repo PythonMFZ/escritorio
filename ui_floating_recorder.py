@@ -13,7 +13,7 @@ _FLOAT_REC_HTML = r"""
 <!-- ── Gravador Flutuante ────────────────────────────────────────────────── -->
 <style>
 #frec-btn {
-  position: fixed; bottom: 80px; right: 20px; z-index: 9999;
+  position: fixed; bottom: 20px; left: 20px; z-index: 9999;
   width: 52px; height: 52px; border-radius: 50%;
   background: #E07020; border: none; cursor: pointer;
   box-shadow: 0 4px 16px rgba(0,0,0,.25);
@@ -29,7 +29,7 @@ _FLOAT_REC_HTML = r"""
 }
 
 #frec-panel {
-  position: fixed; bottom: 144px; right: 16px; z-index: 9999;
+  position: fixed; bottom: 84px; left: 16px; z-index: 9999;
   width: 300px; background: #fff; border-radius: 16px;
   box-shadow: 0 8px 32px rgba(0,0,0,.18); padding: 16px;
   display: none; flex-direction: column; gap: 10px;
