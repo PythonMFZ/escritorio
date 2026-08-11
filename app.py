@@ -5897,6 +5897,20 @@ a:hover{ color:#00BFBF; }
     </div>
   </div>
 
+  {% if role == "cliente" %}
+  <div class="col-12">
+    <div class="card p-4">
+      <div class="d-flex justify-content-between align-items-center mb-2">
+        <div>
+          <h5 class="mb-0">📋 Reuniões &amp; Ações</h5>
+          <div class="muted small">Acesse o histórico de reuniões e acompanhe as ações em aberto.</div>
+        </div>
+        <a class="btn btn-outline-primary btn-sm" href="/cliente/reunioes">Ver todas</a>
+      </div>
+    </div>
+  </div>
+  {% endif %}
+
   {% if smart_alerts %}
   <div class="col-12">
     <div class="card p-4">
@@ -43640,6 +43654,8 @@ TEMPLATES["meetings_detail.html"] = r"""
 
     <div class="d-flex gap-2 flex-wrap">
       <a class="btn btn-outline-secondary" href="/reunioes">Voltar</a>
+      <a class="btn btn-outline-info" href="/reunioes/{{ meeting.id }}/pauta">📋 Pauta</a>
+      <a class="btn btn-outline-warning" href="/reunioes/{{ meeting.id }}/acoes">⚡ Ações</a>
       {% if role in ["admin","equipe"] %}
         <form method="post" action="/reunioes/{{ meeting.id }}/checkin">
           <button class="btn btn-outline-success" type="submit">Check-in</button>
@@ -49012,6 +49028,7 @@ exec(open('ui_precificacao.py').read())
 exec(open('ui_monetizacao.py').read())
 exec(open('ui_planos_stripe.py').read())
 exec(open('ui_reunioes_whisper.py').read())
+exec(open('ui_reunioes_v2.py').read())
 exec(open('ui_backup_s3.py').read())
 exec(open('ui_fix_consultas_preco.py').read())
 exec(open('ui_construrisk.py').read())
