@@ -479,28 +479,5 @@ if hasattr(templates_env.loader, "mapping"):
     print("[cg] ✅ cliente_grafo.html propagado ao loader.")
 
 
-# ── Sidebar: adicionar "2º Cérebro" para role=cliente ─────────────────────────
-
-try:
-    _base_cg = TEMPLATES.get("base.html", "")
-    # Injeta link após o link de Ações na seção Gestão do cliente
-    _ACOES_LINK = '<a class="sb-link" href="/admin/acoes" data-sbpath="/admin/acoes" title="Ações">\n      <span class="sb-icon">⚡</span><span class="sb-label">Ações</span>\n    </a>'
-    _CEREBRO_LINK = '<a class="sb-link" href="/cliente/grafo" data-sbpath="/cliente/grafo" title="2º Cérebro">\n      <span class="sb-icon">🧠</span><span class="sb-label">2º Cérebro</span>\n    </a>'
-    if _ACOES_LINK in _base_cg and _CEREBRO_LINK not in _base_cg:
-        _base_cg = _base_cg.replace(
-            _ACOES_LINK,
-            _ACOES_LINK + "\n    " + _CEREBRO_LINK,
-            1,  # só a primeira ocorrência (bloco do cliente)
-        )
-        TEMPLATES["base.html"] = _base_cg
-        if hasattr(templates_env.loader, "mapping"):
-            templates_env.loader.mapping["base.html"] = _base_cg
-        print("[cg] ✅ Link '2º Cérebro' adicionado à sidebar do cliente.")
-    elif _CEREBRO_LINK in _base_cg:
-        print("[cg] ℹ️ Link já presente na sidebar.")
-    else:
-        print("[cg] ⚠️ Marcador de Ações não encontrado na sidebar — link não injetado.")
-except Exception as _e_cg_sb:
-    print(f"[cg] ⚠️ Sidebar patch: {_e_cg_sb}")
-
 print("[cg] ✅ Módulo 2º Cérebro do cliente carregado.")
+# Nota: o link "2º Cérebro" para role=cliente está definido diretamente em ui_sidebar.py
