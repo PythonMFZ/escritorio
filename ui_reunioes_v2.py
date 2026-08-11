@@ -160,10 +160,13 @@ TEMPLATES["reunioes_acoes.html"] = r"""
 {% extends "base.html" %}
 {% block content %}
 <div class="container py-4" style="max-width:900px">
-  <div class="d-flex align-items-center gap-2 mb-3">
+  <div class="d-flex align-items-center gap-2 mb-3 flex-wrap">
     <a href="/reunioes/{{ meeting.id }}" class="btn btn-sm btn-outline-secondary">← Reunião</a>
     <h5 class="mb-0">Ações — {{ meeting.title or 'Reunião' }}</h5>
     {% if meeting.meeting_date %}<span class="badge bg-secondary">{{ meeting.meeting_date }}</span>{% endif %}
+    {% if role in ['admin','equipe'] %}
+    <a href="/reunioes/{{ meeting.id }}/participantes" class="btn btn-sm btn-outline-secondary ms-auto">👥 Participantes</a>
+    {% endif %}
   </div>
 
   {% if flash %}<div class="alert alert-info py-2">{{ flash }}</div>{% endif %}
