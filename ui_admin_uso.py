@@ -322,3 +322,4 @@ for _fk in _new_features:
 print(f"[admin_uso] ROLE_DEFAULT_FEATURES admin inclui: {sorted(_new_features & ROLE_DEFAULT_FEATURES.get('admin', set()))}")
 
 exec(open('ui_orcamento.py').read())
+exec(open('ui_orcamento_v2.py').read())
