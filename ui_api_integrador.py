@@ -177,8 +177,18 @@ TEMPLATES["api_connector_list.html"] = r"""
 {% extends "base.html" %}
 {% block content %}
 <div class="container-fluid py-4">
-  <div class="d-flex justify-content-between align-items-center mb-4">
-    <h2 class="mb-0">Integrações de API</h2>
+  <div class="d-flex justify-content-between align-items-center mb-3">
+    <div>
+      <h2 class="mb-0">Integrações de API</h2>
+      {% if current_client %}
+      <div class="text-muted small mt-1">
+        <i class="bi bi-building me-1"></i>Mostrando integrações de <strong>{{ current_client.name }}</strong>
+        — <a href="/integrations/api-connector" onclick="sessionStorage.clear()">ver todas</a>
+      </div>
+      {% else %}
+      <div class="text-muted small mt-1">Todas as integrações da empresa · Selecione um cliente no menu para filtrar</div>
+      {% endif %}
+    </div>
     <a href="/integrations/api-connector/novo" class="btn btn-primary">
       <i class="bi bi-plus-lg me-1"></i>Nova integração
     </a>
@@ -302,9 +312,15 @@ TEMPLATES["api_connector_form.html"] = r"""
       <select name="client_id" class="form-select">
         <option value="">Empresa toda</option>
         {% for c in clients %}
-          <option value="{{ c.id }}" {% if intg and intg.client_id == c.id %}selected{% endif %}>{{ c.name }}</option>
+          <option value="{{ c.id }}"
+            {% if intg and intg.client_id == c.id %}selected
+            {% elif not intg and preselect_client_id and preselect_client_id == c.id %}selected
+            {% endif %}>{{ c.name }}</option>
         {% endfor %}
       </select>
+      {% if current_client and not intg %}
+      <div class="form-text"><i class="bi bi-info-circle me-1"></i>Pré-selecionado: <strong>{{ current_client.name }}</strong> (cliente ativo)</div>
+      {% endif %}
     </div>
 
     <div class="mb-3">
@@ -421,21 +437,23 @@ async def _ai_list(request: Request, session: _Ses_ai = _ai_sess_dep()):  # type
                                "current_client": None, "message": "Acesso restrito a administradores."},
                       status_code=403)
     flash = request.session.pop("flash", None)
-    integrations = session.exec(
-        _sel_ai(ApiIntegration).where(
-            ApiIntegration.company_id == ctx.company.id,
-            ApiIntegration.is_active == True,
-        ).order_by(ApiIntegration.id)
-    ).all()
+
+    # Filtra pelo cliente ativo selecionado no navbar
+    active_client_id = get_active_client_id(request, session, ctx)  # type: ignore[name-defined]
+    cc = get_client_or_none(session, ctx.company.id, active_client_id)  # type: ignore[name-defined]
+
+    q = _sel_ai(ApiIntegration).where(
+        ApiIntegration.company_id == ctx.company.id,
+        ApiIntegration.is_active == True,
+    )
+    if active_client_id:
+        q = q.where(ApiIntegration.client_id == active_client_id)
+    integrations = session.exec(q.order_by(ApiIntegration.id)).all()
+
+    clients_map = {c.id: c.name for c in _ai_build_clients(session, ctx.company.id)}
     rows = []
     for intg in integrations:
-        client_name = "Empresa toda"
-        if intg.client_id:
-            clients_list = _ai_build_clients(session, ctx.company.id)
-            for c in clients_list:
-                if c.id == intg.client_id:
-                    client_name = c.name
-                    break
+        client_name = clients_map.get(intg.client_id, "Empresa toda") if intg.client_id else "Empresa toda"
         last_snap = _ai_last_snapshot(session, intg.id)
         next_sync = None
         if last_snap and intg.sync_interval_hours > 0:
@@ -448,7 +466,8 @@ async def _ai_list(request: Request, session: _Ses_ai = _ai_sess_dep()):  # type
         rows.append({"intg": intg, "client_name": client_name, "last_snap": last_snap, "next_sync": next_sync})
     return render("api_connector_list.html", request=request,  # type: ignore[name-defined]
                   context={"current_user": ctx.user, "current_company": ctx.company,
-                           "current_client": None, "rows": rows, "flash": flash})
+                           "current_client": cc, "rows": rows, "flash": flash,
+                           "active_client_id": active_client_id})
 
 
 @app.get("/integrations/api-connector/novo")  # type: ignore[name-defined]
@@ -459,9 +478,12 @@ async def _ai_novo_get(request: Request, session: _Ses_ai = _ai_sess_dep()):  # 
         return RedirectResponse("/login", status_code=303)  # type: ignore[name-defined]
     flash = request.session.pop("flash", None)
     clients = _ai_build_clients(session, ctx.company.id)
+    active_client_id = get_active_client_id(request, session, ctx)  # type: ignore[name-defined]
+    cc = get_client_or_none(session, ctx.company.id, active_client_id)  # type: ignore[name-defined]
     return render("api_connector_form.html", request=request,  # type: ignore[name-defined]
                   context={"current_user": ctx.user, "current_company": ctx.company,
-                           "current_client": None, "intg": None, "clients": clients, "flash": flash})
+                           "current_client": cc, "intg": None, "clients": clients,
+                           "flash": flash, "preselect_client_id": active_client_id})
 
 
 @app.post("/integrations/api-connector/novo")  # type: ignore[name-defined]
