@@ -43642,15 +43642,8 @@ TEMPLATES["meetings_detail.html"] = r"""
       <h4 class="mb-1">{{ meeting.title or "Reunião" }}</h4>
       <div class="muted">
         {% if role in ["admin","equipe"] %}Cliente: <b>{{ client.name }}</b> • {% endif %}
-        {% if meeting.meeting_date %}Data: <b>{{ meeting.meeting_date|brdate }}</b> • {% endif %}
-        Status Notion: <b>{{ meeting.notion_status or "—" }}</b>
+        {% if meeting.meeting_date %}Data: <b>{{ meeting.meeting_date|brdate }}</b>{% endif %}
       </div>
-      {% if meeting.notion_url %}
-        <div class="small mt-1"><a href="{{ meeting.notion_url }}" target="_blank" rel="noopener">Abrir no Notion</a></div>
-      {% endif %}
-      {% if meeting.last_synced_at %}
-        <div class="muted small mt-1">Última sincronização: {{ meeting.last_synced_at|brdatetime }}</div>
-      {% endif %}
     </div>
 
     <div class="d-flex gap-2 flex-wrap">
@@ -43658,34 +43651,16 @@ TEMPLATES["meetings_detail.html"] = r"""
       <a class="btn btn-outline-info" href="/reunioes/{{ meeting.id }}/pauta">📋 Pauta</a>
       <a class="btn btn-outline-warning" href="/reunioes/{{ meeting.id }}/acoes">⚡ Ações</a>
       {% if role in ["admin","equipe"] %}
+        <a class="btn btn-outline-secondary" href="/reunioes/{{ meeting.id }}/participantes">👥 Participantes</a>
         <form method="post" action="/reunioes/{{ meeting.id }}/checkin">
           <button class="btn btn-outline-success" type="submit">Check-in</button>
         </form>
         <form method="post" action="/reunioes/{{ meeting.id }}/checkout">
           <button class="btn btn-outline-warning" type="submit">Check-out</button>
         </form>
-        <form method="post" action="/reunioes/{{ meeting.id }}/sync">
-          <button class="btn btn-outline-primary" type="submit">Sincronizar</button>
-        </form>
       {% endif %}
     </div>
   </div>
-
-  {% if role in ["admin","equipe"] %}
-    <div class="card p-3 mt-3">
-      <div class="fw-semibold mb-2">Vínculo com Notion</div>
-      <form method="post" action="/reunioes/{{ meeting.id }}/sync" class="row g-2 align-items-end">
-        <div class="col-lg-9">
-          <label class="form-label">Link ou ID da página do Notion</label>
-          <input class="form-control" name="notion_page" value="{{ meeting.notion_url or meeting.notion_page_id or '' }}" placeholder="Cole aqui o link/ID do Notion depois da reunião" />
-          <div class="form-text">Você pode colar o vínculo depois do check-out e sincronizar sem perder check-in, check-out e anotações.</div>
-        </div>
-        <div class="col-lg-3 d-grid">
-          <button class="btn btn-outline-primary" type="submit">Salvar vínculo / sincronizar</button>
-        </div>
-      </form>
-    </div>
-  {% endif %}
 
   <hr class="my-3"/>
 
