@@ -194,12 +194,6 @@ TEMPLATES["api_connector_list.html"] = r"""
     </a>
   </div>
 
-  {% if flash %}
-  <div class="alert alert-{{ 'success' if 'sucesso' in flash|lower else 'danger' }} alert-dismissible fade show" role="alert">
-    {{ flash }}<button type="button" class="btn-close" data-bs-dismiss="alert"></button>
-  </div>
-  {% endif %}
-
   <div class="card shadow-sm">
     <div class="card-body p-0">
       <div class="table-responsive">
@@ -442,12 +436,17 @@ async def _ai_list(request: Request, session: _Ses_ai = _ai_sess_dep()):  # type
     active_client_id = get_active_client_id(request, session, ctx)  # type: ignore[name-defined]
     cc = get_client_or_none(session, ctx.company.id, active_client_id)  # type: ignore[name-defined]
 
+    from sqlmodel import or_ as _or_ai
     q = _sel_ai(ApiIntegration).where(
         ApiIntegration.company_id == ctx.company.id,
         ApiIntegration.is_active == True,
     )
     if active_client_id:
-        q = q.where(ApiIntegration.client_id == active_client_id)
+        # Mostra integrações do cliente específico OU as de "Empresa toda" (client_id=None)
+        q = q.where(_or_ai(
+            ApiIntegration.client_id == active_client_id,
+            ApiIntegration.client_id == None,
+        ))
     integrations = session.exec(q.order_by(ApiIntegration.id)).all()
 
     clients_map = {c.id: c.name for c in _ai_build_clients(session, ctx.company.id)}
