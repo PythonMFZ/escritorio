@@ -110,33 +110,30 @@ def _mt_users_do_cliente(session, company_id, client_id):
         return []
 
 
-def _mt_users_disponiveis(session, company_id, client_id):
-    """Retorna users da company que NÃO estão ainda no client_id."""
+def _mt_find_user_by_email(session, company_id, email):
+    """Busca usuário pelo e-mail dentro da company (sem vínculo a outro cliente)."""
     try:
-        vinculados_ids = {
-            ms.user_id for ms in session.exec(
-                _sel_mt(Membership).where(
-                    Membership.company_id == company_id,
-                    Membership.client_id == client_id,
-                )
-            ).all()
-        }
-        todos = session.exec(
-            _sel_mt(Membership).where(Membership.company_id == company_id)
-        ).all()
-        vistos = set()
-        result = []
-        for ms in todos:
-            if ms.user_id in vinculados_ids or ms.user_id in vistos:
-                continue
-            vistos.add(ms.user_id)
-            u = session.get(User, ms.user_id)
-            if u:
-                result.append({"user_id": u.id, "name": u.name, "email": u.email})
-        return sorted(result, key=lambda x: x["name"].lower())
+        u = session.exec(_sel_mt(User).where(User.email == email.strip().lower())).first()
+        if not u:
+            return None, "not_found"
+        # Verifica se já tem membership na company
+        ms = session.exec(
+            _sel_mt(Membership).where(
+                Membership.company_id == company_id,
+                Membership.user_id == u.id,
+            )
+        ).first()
+        if not ms:
+            return None, "not_in_company"
+        # Verifica se está vinculado a OUTRO cliente
+        if ms.client_id and ms.client_id != 0:
+            other_client = session.get(Client, ms.client_id)
+            name = other_client.name if other_client else f"#{ms.client_id}"
+            return None, f"other_client:{name}"
+        return u, "ok"
     except Exception as e:
-        print(f"[mt] ⚠️ _mt_users_disponiveis: {e}")
-        return []
+        print(f"[mt] ⚠️ _mt_find_user_by_email: {e}")
+        return None, "error"
 
 
 def _mt_get_client_for_gestor(session, company_id, user_id):
@@ -164,15 +161,15 @@ def _mt_get_client_for_gestor(session, company_id, user_id):
         return None
 
 
-# ── Rota: admin adiciona user existente a um cliente ─────────────────────────
+# ── Rota: admin convida user por e-mail para um cliente ──────────────────────
 
-@app.post("/admin/clientes/{client_id}/usuarios/adicionar")
+@app.post("/admin/clientes/{client_id}/usuarios/convidar")
 @require_role({"admin", "equipe"})
-async def mt_adicionar_usuario(
+async def mt_convidar_usuario(
     request: _Req_mt,
     session: _Sess_mt = _Dep_mt(get_session),
     client_id: int = 0,
-    user_id: int = _Form_mt(0),
+    email: str = _Form_mt(""),
     role: str = _Form_mt("usuario"),
 ):
     ctx = get_tenant_context(request, session)
@@ -186,9 +183,18 @@ async def mt_adicionar_usuario(
     if role not in ("gestor", "usuario"):
         role = "usuario"
 
-    _mt_ensure_membership(session, ctx.company.id, client_id, user_id)
-    _mt_set_cliente_role(session, ctx.company.id, client_id, user_id, role)
-    set_flash(request, "Usuário adicionado ao cliente.")
+    u, status = _mt_find_user_by_email(session, ctx.company.id, email)
+    if status == "not_found":
+        set_flash(request, f"❌ Usuário '{email}' não encontrado no sistema.")
+    elif status == "not_in_company":
+        set_flash(request, f"❌ '{email}' não tem acesso a esta empresa.")
+    elif status.startswith("other_client:"):
+        name = status.split(":", 1)[1]
+        set_flash(request, f"❌ '{email}' já está vinculado ao cliente {name}.")
+    elif u:
+        _mt_ensure_membership(session, ctx.company.id, client_id, u.id)
+        _mt_set_cliente_role(session, ctx.company.id, client_id, u.id, role)
+        set_flash(request, f"✅ {u.name} adicionado como {role}.")
     return _RR_mt(f"/admin/clientes/{client_id}/usuarios", status_code=303)
 
 
@@ -213,14 +219,12 @@ async def mt_meu_time(request: _Req_mt, session: _Sess_mt = _Dep_mt(get_session)
     usuarios = _mt_users_do_cliente(session, ctx.company.id, client_id)
     # Remove o próprio gestor da lista gerenciável
     usuarios = [u for u in usuarios if u["user_id"] != ctx.user.id]
-    disponiveis = _mt_users_disponiveis(session, ctx.company.id, client_id)
 
     cc = get_client_or_none(session, ctx.company.id, client_id)
     return render("meu_time.html", request=request, context={
         "current_user": ctx.user, "current_company": ctx.company,
         "role": ctx.membership.role, "current_client": cc,
         "cliente": cliente, "usuarios": usuarios,
-        "disponiveis": disponiveis,
         "flash": request.session.pop("flash", None),
     })
 
@@ -249,12 +253,12 @@ async def mt_meu_time_set_role(
     return _RR_mt("/meu-time", status_code=303)
 
 
-@app.post("/meu-time/{user_id}/adicionar")
+@app.post("/meu-time/convidar")
 @require_login
-async def mt_meu_time_adicionar(
+async def mt_meu_time_convidar(
     request: _Req_mt,
     session: _Sess_mt = _Dep_mt(get_session),
-    user_id: int = 0,
+    email: str = _Form_mt(""),
     role: str = _Form_mt("usuario"),
 ):
     ctx = get_tenant_context(request, session)
@@ -268,9 +272,18 @@ async def mt_meu_time_adicionar(
     if role not in ("gestor", "usuario"):
         role = "usuario"
 
-    _mt_ensure_membership(session, ctx.company.id, client_id, user_id)
-    _mt_set_cliente_role(session, ctx.company.id, client_id, user_id, role)
-    set_flash(request, "Usuário adicionado ao seu time.")
+    u, status = _mt_find_user_by_email(session, ctx.company.id, email)
+    if status == "not_found":
+        set_flash(request, f"❌ Usuário '{email}' não encontrado. Peça ao admin para cadastrá-lo primeiro.")
+    elif status == "not_in_company":
+        set_flash(request, f"❌ '{email}' não tem acesso a esta empresa.")
+    elif status.startswith("other_client:"):
+        name = status.split(":", 1)[1]
+        set_flash(request, f"❌ '{email}' já está vinculado ao cliente {name}.")
+    elif u:
+        _mt_ensure_membership(session, ctx.company.id, client_id, u.id)
+        _mt_set_cliente_role(session, ctx.company.id, client_id, u.id, role)
+        set_flash(request, f"✅ {u.name} adicionado ao time como {role}.")
     return _RR_mt("/meu-time", status_code=303)
 
 
@@ -333,19 +346,13 @@ TEMPLATES["cliente_usuarios.html"] = r"""
 
 {% if flash %}<div class="alert alert-info py-2">{{ flash }}</div>{% endif %}
 
-<!-- Adicionar usuário existente -->
-{% if disponiveis %}
+<!-- Convidar por e-mail -->
 <div class="card p-3 mb-3">
-  <div class="fw-semibold small mb-2">➕ Adicionar usuário existente</div>
-  <form method="post" action="/admin/clientes/{{ cliente.id }}/usuarios/adicionar" class="d-flex gap-2 flex-wrap align-items-end">
+  <div class="fw-semibold small mb-2">✉️ Adicionar usuário por e-mail</div>
+  <form method="post" action="/admin/clientes/{{ cliente.id }}/usuarios/convidar" class="d-flex gap-2 flex-wrap align-items-end">
     <div>
-      <label class="form-label mb-1" style="font-size:.75rem;">Usuário</label>
-      <select name="user_id" class="form-select form-select-sm" required style="min-width:200px;">
-        <option value="">Selecione…</option>
-        {% for u in disponiveis %}
-        <option value="{{ u.user_id }}">{{ u.name }} ({{ u.email }})</option>
-        {% endfor %}
-      </select>
+      <label class="form-label mb-1" style="font-size:.75rem;">E-mail do usuário</label>
+      <input type="email" name="email" class="form-control form-control-sm" placeholder="usuario@email.com" required style="min-width:240px;">
     </div>
     <div>
       <label class="form-label mb-1" style="font-size:.75rem;">Papel</label>
@@ -356,8 +363,8 @@ TEMPLATES["cliente_usuarios.html"] = r"""
     </div>
     <button class="btn btn-primary btn-sm">Adicionar</button>
   </form>
+  <div class="muted mt-1" style="font-size:.72rem;">O usuário precisa já estar cadastrado no sistema. Use <a href="/admin/members">Membros</a> para criar novos.</div>
 </div>
-{% endif %}
 
 <!-- Lista de usuários vinculados -->
 {% if not usuarios %}
@@ -418,19 +425,13 @@ TEMPLATES["meu_time.html"] = r"""
 
 {% if flash %}<div class="alert alert-info py-2">{{ flash }}</div>{% endif %}
 
-<!-- Adicionar usuário -->
-{% if disponiveis %}
+<!-- Convidar por e-mail -->
 <div class="card p-3 mb-4">
-  <div class="fw-semibold small mb-2">➕ Adicionar pessoa ao time</div>
-  <form method="post" class="d-flex gap-2 flex-wrap align-items-end">
+  <div class="fw-semibold small mb-2">✉️ Adicionar pessoa ao time por e-mail</div>
+  <form method="post" action="/meu-time/convidar" class="d-flex gap-2 flex-wrap align-items-end">
     <div>
-      <label class="form-label mb-1" style="font-size:.75rem;">Pessoa</label>
-      <select name="user_id" class="form-select form-select-sm" style="min-width:200px;" required>
-        <option value="">Selecione…</option>
-        {% for u in disponiveis %}
-        <option value="{{ u.user_id }}">{{ u.name }} ({{ u.email }})</option>
-        {% endfor %}
-      </select>
+      <label class="form-label mb-1" style="font-size:.75rem;">E-mail do usuário</label>
+      <input type="email" name="email" class="form-control form-control-sm" placeholder="usuario@email.com" required style="min-width:240px;">
     </div>
     <div>
       <label class="form-label mb-1" style="font-size:.75rem;">Papel</label>
@@ -439,10 +440,10 @@ TEMPLATES["meu_time.html"] = r"""
         <option value="gestor">🔑 Gestor</option>
       </select>
     </div>
-    <button formaction="/meu-time/{{ 0 }}/adicionar" class="btn btn-primary btn-sm">Adicionar</button>
+    <button class="btn btn-primary btn-sm">Adicionar</button>
   </form>
+  <div class="muted mt-1" style="font-size:.72rem;">O usuário precisa já estar cadastrado no sistema. Peça ao administrador para criar novos usuários em <a href="/admin/members">Membros</a>.</div>
 </div>
-{% endif %}
 
 <!-- Time atual -->
 {% if not usuarios %}
@@ -507,13 +508,12 @@ try:
             return _RR_mt("/admin/clientes", status_code=303)
 
         usuarios = _mt_users_do_cliente(session, ctx.company.id, client_id)
-        disponiveis = _mt_users_disponiveis(session, ctx.company.id, client_id)
         cc = get_client_or_none(session, ctx.company.id,
                                 get_active_client_id(request, session, ctx))
         return render("cliente_usuarios.html", request=request, context={
             "current_user": ctx.user, "current_company": ctx.company,
             "role": ctx.membership.role, "current_client": cc,
-            "cliente": cliente, "usuarios": usuarios, "disponiveis": disponiveis,
+            "cliente": cliente, "usuarios": usuarios,
             "flash": request.session.pop("flash", None),
         })
 
