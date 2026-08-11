@@ -49068,6 +49068,7 @@ exec(open('ui_participantes.py').read())
 exec(open('ui_floating_recorder.py').read())
 exec(open('ui_limpar_notion.py').read())
 exec(open('ui_dashboard_gestao.py').read())
+exec(open('ui_sidebar.py').read())
 exec(open('ui_noticias_press.py').read())
 
 
