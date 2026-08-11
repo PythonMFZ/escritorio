@@ -645,28 +645,62 @@ def _enriquecer_com_api_data(session, company_id, client_id, client, client_data
 
 _enriquecer_client_data = _enriquecer_com_api_data  # type: ignore[name-defined]
 
-# ── Patch: adiciona card "Conectores de API" na página /integrations ──────────
+# ── Re-registra /integrations com card de Conectores de API ──────────────────
 try:
-    import ui_cloud_storage as _cs_mod_ai  # type: ignore
-    _cs_card = r"""
-    <hr class="my-4">
-    <h6 class="mb-3 text-muted small text-uppercase fw-semibold">Conectores de API</h6>
-    <a href="/integrations/api-connector" class="drive-btn">
-      <span style="font-size:2rem;line-height:1;flex-shrink:0;">🔌</span>
-      <div>
-        <div class="fw-semibold">Conectores de API Genéricos</div>
-        <div class="text-muted small">Integre qualquer ERP ou sistema via REST API</div>
-      </div>
-      <i class="bi bi-chevron-right ms-auto text-muted"></i>
-    </a>
+    from fastapi import Request as _Req_ai2
+    from fastapi.responses import HTMLResponse as _HTML_ai2
+
+    app.routes[:] = [r for r in app.routes  # type: ignore[name-defined]
+                     if not (hasattr(r, "path") and r.path == "/integrations"
+                             and hasattr(r, "methods") and "GET" in (r.methods or set()))]
+
+    _AI_EXTRA_CARD = r"""
+  <hr class="my-4">
+  <h6 class="mb-3 text-muted small text-uppercase fw-semibold">Conectores de API</h6>
+  <a href="/integrations/api-connector" class="drive-btn">
+    <span style="font-size:2rem;line-height:1;flex-shrink:0;">🔌</span>
+    <div>
+      <div class="fw-semibold">Conectores de API Genéricos</div>
+      <div class="text-muted small">Integre qualquer ERP ou sistema via REST API</div>
+    </div>
+    <i class="bi bi-chevron-right ms-auto text-muted"></i>
+  </a>
 """
-    if "api-connector" not in _cs_mod_ai._CS_PAGE:
-        _cs_mod_ai._CS_PAGE = _cs_mod_ai._CS_PAGE.replace(
-            "{% if conns %}",
-            _cs_card + "\n  {% if conns %}",
-            1,
+
+    @app.get("/integrations", response_class=_HTML_ai2)  # type: ignore[name-defined]
+    @require_login  # type: ignore[name-defined]
+    async def integrations_page_patched(request: _Req_ai2, session=_Dep_ai(get_session)):  # type: ignore[name-defined]
+        ctx = get_tenant_context(request, session)  # type: ignore[name-defined]
+        if not ctx:
+            from fastapi.responses import RedirectResponse as _RR2
+            return _RR2("/login", status_code=303)
+
+        flash = request.session.pop("flash", None)
+        role = ctx.membership.role if ctx.membership else "cliente"
+
+        q = _sel_ai(CloudStorageConnection).where(  # type: ignore[name-defined]
+            CloudStorageConnection.company_id == ctx.company.id,  # type: ignore[name-defined]
+            CloudStorageConnection.is_active == True,
         )
-        print("[api_integrador] ✅ Card Conectores de API injetado em /integrations.")
+        if role == "cliente":
+            q = q.where(CloudStorageConnection.created_by_user_id == ctx.user.id)  # type: ignore[name-defined]
+        conns = session.exec(q).all()
+        sel_counts = {c.id: len(_cs_parse_selections(c)) for c in conns}  # type: ignore[name-defined]
+
+        from jinja2 import Environment as _JEnv2
+        page = _CS_PAGE  # type: ignore[name-defined]
+        if "api-connector" not in page:
+            page = page.replace("{% if conns %}", _AI_EXTRA_CARD + "\n  {% if conns %}", 1)
+
+        env2 = _JEnv2()
+        html = env2.from_string(page).render(
+            flash=flash, conns=conns, sel_counts=sel_counts,
+            gdrive_ok=bool(_GDRIVE_CLIENT_ID),  # type: ignore[name-defined]
+            onedrive_ok=bool(_ONEDRIVE_CLIENT_ID),  # type: ignore[name-defined]
+        )
+        return _HTML_ai2(html)
+
+    print("[api_integrador] ✅ /integrations re-registrada com card Conectores de API.")
 except Exception as _e_cs_patch:
     print(f"[api_integrador] ⚠️ patch /integrations: {_e_cs_patch}")
 
