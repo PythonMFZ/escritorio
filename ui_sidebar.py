@@ -211,6 +211,16 @@ _SIDEBAR_HTML = r"""
   </div>
   {% endif %}
 
+  <!-- Meu Time (gestor de cliente) -->
+  {% if role == "cliente" %}
+  <div class="sb-section">
+    <div class="sb-section-label">Time</div>
+    <a class="sb-link" href="/meu-time" data-sbpath="/meu-time" title="Meu Time">
+      <span class="sb-icon">👥</span><span class="sb-label">Meu Time</span>
+    </a>
+  </div>
+  {% endif %}
+
   <!-- Rodapé com usuário -->
   <div class="sb-footer">
     <div class="sb-footer-text">
