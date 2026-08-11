@@ -49088,6 +49088,7 @@ exec(open('ui_creditos_features.py').read())
 exec(open('ui_admin_uso.py').read())
 exec(open('ui_grafo.py').read())
 exec(open('ui_bsc.py').read())
+exec(open('ui_augur_contexto.py').read())
 exec(open('ui_noticias_press.py').read())
 
 

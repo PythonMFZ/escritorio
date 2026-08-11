@@ -170,6 +170,11 @@ def _format_client_context(client_data: dict) -> str:
         lines.append("\n=== BSC / INDICADORES ESTRATÉGICOS ===")
         lines.append(bsc[:4000])
 
+    # ── Ações Corretivas (injetado por ui_augur_contexto.py) ─────────────────
+    ac = client_data.get("acoes_corretivas", "")
+    if ac:
+        lines.append("\n" + ac)
+
     # ── Fluxo de Caixa (injetado por ui_fluxo_caixa.py) ──────────────────────
     fc = client_data.get("fluxo_caixa_resumo", "")
     if fc:
