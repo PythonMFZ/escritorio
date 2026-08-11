@@ -45,8 +45,18 @@ _AUGUR_FLOAT_HTML = r"""
     title="Perguntar ao Augur"
     onmouseenter="this.style.transform='scale(1.08)'"
     onmouseleave="this.style.transform=''">
-    <img src="/static/augur_logo_v3.png" style="width:28px;height:28px;object-fit:contain;"
-         onerror="this.style.display='none';this.insertAdjacentText('afterend','🔮')">
+    <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+      <!-- Olho central — insight / visão estratégica -->
+      <ellipse cx="12" cy="12" rx="9" ry="5.5"/>
+      <circle cx="12" cy="12" r="2.4" fill="#fff" stroke="none"/>
+      <!-- Raios de luz — inteligência / augúrio -->
+      <line x1="12" y1="2" x2="12" y2="4.2"/>
+      <line x1="12" y1="19.8" x2="12" y2="22"/>
+      <line x1="20.5" y1="8.5" x2="18.7" y2="9.5"/>
+      <line x1="3.5" y1="14.5" x2="5.3" y2="13.5"/>
+      <line x1="20.5" y1="15.5" x2="18.7" y2="14.5"/>
+      <line x1="3.5" y1="8.5" x2="5.3" y2="9.5"/>
+    </svg>
   </button>
 
 </div>

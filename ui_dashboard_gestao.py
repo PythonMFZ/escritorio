@@ -59,7 +59,7 @@ ROLE_DEFAULT_FEATURES.setdefault("cliente", set()).add("acoes_cliente")
 # Remove grupos antigos que serão substituídos para evitar duplicatas
 FEATURE_GROUPS[:] = [
     g for g in FEATURE_GROUPS
-    if g.get("key") not in ("gestao_cliente_grupo", "reunioes_grupo")
+    if g.get("key") not in ("gestao_cliente_grupo", "gestao_staff_grupo", "reunioes_grupo")
 ]
 
 # Insere "Gestão" logo após "Meu Projeto" (ou no final se não existir)
@@ -68,16 +68,18 @@ _idx_meu_proj = next(
     len(FEATURE_GROUPS),
 )
 
+# Grupo para staff (admin/equipe) — sem features exclusivas de cliente
 FEATURE_GROUPS.insert(_idx_meu_proj + 1, {
-    "key": "gestao_cliente_grupo",
+    "key": "gestao_staff_grupo",
     "title": "Gestão",
-    "features": ["bsc", "bsc_cliente", "orcamento_gestao", "acoes_central", "acoes_cliente", "grafo"],
+    "features": ["bsc", "orcamento_gestao", "acoes_central", "grafo", "reunioes"],
 })
 
+# Grupo para cliente — sem features exclusivas de staff (sem duplicatas de título)
 FEATURE_GROUPS.insert(_idx_meu_proj + 2, {
-    "key": "reunioes_grupo",
-    "title": "Reuniões",
-    "features": ["reunioes", "reunioes_cliente"],
+    "key": "gestao_cliente_grupo",
+    "title": "Acesso Cliente",
+    "features": ["bsc_cliente", "orcamento_gestao", "acoes_cliente", "reunioes_cliente"],
 })
 
 # ── 3. Garante visibilidade do BSC (admin/equipe) para o grupo ───────────────
