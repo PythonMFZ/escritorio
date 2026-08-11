@@ -49071,6 +49071,7 @@ exec(open('ui_dashboard_gestao.py').read())
 exec(open('ui_sidebar.py').read())
 exec(open('ui_bsc_cliente_v2.py').read())
 exec(open('ui_multitenancy.py').read())
+exec(open('ui_members_role_patch.py').read())
 exec(open('ui_noticias_press.py').read())
 
 
