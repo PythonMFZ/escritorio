@@ -1,18 +1,8 @@
 # ui_grafo.py — Segundo Cérebro: grafo de conhecimento operacional
 # Exec'd no namespace do app.py
 #
-# Rota:  GET /admin/grafo          — visualização interativa (vis.js)
-# Rota:  GET /api/grafo/data       — JSON com nodes + edges para o frontend
-#
-# Nós:
-#   client    🟢  verde-água
-#   meeting   🔵  azul
-#   acao      🟠  laranja / vermelho (alta prioridade)
-#   budget    🟣  roxo
-#   user      🟡  amarelo
-#   desvio    🔴  vermelho
-#
-# Filtros: ?client_id=X  restringe ao universo de um cliente
+# Rota:  GET /admin/grafo        — visualização interativa (canvas nativo)
+# Rota:  GET /api/grafo/data     — JSON nodes + edges
 
 from fastapi.responses import JSONResponse as _JR_grafo
 
@@ -34,10 +24,8 @@ async def api_grafo_data(request: Request, session: Session = Depends(get_sessio
     seen_edges = set()
 
     def add_node(id_, label, group, title="", url="", size=18):
-        nodes.append({
-            "id": id_, "label": label, "group": group,
-            "title": title, "url": url, "size": size,
-        })
+        nodes.append({"id": id_, "label": label, "group": group,
+                      "title": title, "url": url, "size": size})
 
     def add_edge(src, dst, label=""):
         key = f"{src}|{dst}"
@@ -45,158 +33,108 @@ async def api_grafo_data(request: Request, session: Session = Depends(get_sessio
             seen_edges.add(key)
             edges.append({"from": src, "to": dst, "label": label})
 
-    # ── Clientes ─────────────────────────────────────────────────────────────
+    # Clientes
     try:
-        clientes = session.exec(
-            select(Client).where(Client.company_id == cid)
-        ).all()
+        clientes = session.exec(select(Client).where(Client.company_id == cid)).all()
         if filter_client_id:
             clientes = [c for c in clientes if c.id == filter_client_id]
-
         client_ids = {c.id for c in clientes}
         for c in clientes:
-            add_node(
-                f"client_{c.id}",
-                c.name or f"Cliente #{c.id}",
-                "client",
-                title=f"Cliente: {c.name}",
-                url=f"/client/switch?client_id={c.id}",
-                size=28,
-            )
+            add_node(f"client_{c.id}", (c.name or f"#{c.id}")[:20], "client",
+                     title=f"Cliente: {c.name}", url=f"/client/switch?client_id={c.id}", size=26)
     except Exception:
-        clientes = []
-        client_ids = set()
+        clientes = []; client_ids = set()
 
-    # ── Usuários / membros ────────────────────────────────────────────────────
+    # Membros
     user_ids_seen = set()
     try:
-        membros = session.exec(
-            select(Membership).where(Membership.company_id == cid)
-        ).all()
-        for m in membros:
+        for m in session.exec(select(Membership).where(Membership.company_id == cid)).all():
             u = session.get(User, m.user_id)
             if not u or m.user_id in user_ids_seen:
                 continue
             user_ids_seen.add(m.user_id)
-            add_node(
-                f"user_{m.user_id}",
-                (u.name or u.email or f"User #{m.user_id}")[:20],
-                "user",
-                title=f"{u.name or ''} ({m.role})\n{u.email or ''}",
-                url=f"/admin/members",
-            )
+            add_node(f"user_{m.user_id}", (u.name or u.email or f"#{m.user_id}")[:18], "user",
+                     title=f"{u.name or ''} ({m.role})\n{u.email or ''}", url="/admin/members")
     except Exception:
         pass
 
-    # ── Reuniões ──────────────────────────────────────────────────────────────
+    # Reuniões
     try:
-        q_meet = select(Meeting).where(Meeting.company_id == cid)
+        q = select(Meeting).where(Meeting.company_id == cid)
         if filter_client_id:
-            q_meet = q_meet.where(Meeting.client_id == filter_client_id)
-        meetings = session.exec(q_meet).all()
-
-        for mt in meetings:
-            if mt.client_id not in client_ids and not filter_client_id:
+            q = q.where(Meeting.client_id == filter_client_id)
+        for mt in session.exec(q).all():
+            if mt.client_id not in client_ids:
                 continue
-            label = (mt.title or "Reunião")[:22]
-            add_node(
-                f"meet_{mt.id}", label, "meeting",
-                title=f"Reunião: {mt.title}\nData: {mt.meeting_date or '—'}",
-                url=f"/reunioes/{mt.id}",
-            )
-            add_edge(f"client_{mt.client_id}", f"meet_{mt.id}", "reunião")
+            add_node(f"meet_{mt.id}", (mt.title or "Reunião")[:20], "meeting",
+                     title=f"Reunião: {mt.title}\nData: {mt.meeting_date or '—'}",
+                     url=f"/reunioes/{mt.id}")
+            add_edge(f"client_{mt.client_id}", f"meet_{mt.id}")
             if mt.created_by_user_id in user_ids_seen:
                 add_edge(f"user_{mt.created_by_user_id}", f"meet_{mt.id}", "criou")
     except Exception:
-        meetings = []
+        pass
 
-    # ── Ações corretivas (MeetingAcao) ────────────────────────────────────────
+    # Ações corretivas
     try:
-        q_ac = select(MeetingAcao).where(MeetingAcao.company_id == cid)
+        q = select(MeetingAcao).where(MeetingAcao.company_id == cid)
         if filter_client_id:
-            q_ac = q_ac.where(MeetingAcao.client_id == filter_client_id)
-        acoes = session.exec(q_ac).all()
-
-        for a in acoes:
+            q = q.where(MeetingAcao.client_id == filter_client_id)
+        for a in session.exec(q).all():
             grp = "acao_alta" if a.prioridade == "alta" else "acao"
-            short = (a.titulo or "Ação")[:22]
-            prazo_txt = f"\nPrazo: {a.prazo}" if a.prazo else ""
-            resp_txt = f"\nResp: {a.responsavel}" if a.responsavel else ""
-            add_node(
-                f"acao_{a.id}", short, grp,
-                title=f"[{a.prioridade.upper()}] {a.titulo}\nStatus: {a.status}{prazo_txt}{resp_txt}",
-                url=f"/reunioes/{a.meeting_id}/acoes",
-            )
+            prazo = f"\nPrazo: {a.prazo}" if a.prazo else ""
+            resp = f"\nResp: {a.responsavel}" if a.responsavel else ""
+            add_node(f"acao_{a.id}", (a.titulo or "Ação")[:20], grp,
+                     title=f"[{a.prioridade.upper()}] {a.titulo}\n{a.status}{prazo}{resp}",
+                     url=f"/reunioes/{a.meeting_id}/acoes", size=14)
             add_edge(f"meet_{a.meeting_id}", f"acao_{a.id}", a.status)
             if a.responsavel_user_id and a.responsavel_user_id in user_ids_seen:
-                add_edge(f"user_{a.responsavel_user_id}", f"acao_{a.id}", "responsável")
-            if a.client_id in client_ids:
-                add_edge(f"client_{a.client_id}", f"acao_{a.id}", "ação")
+                add_edge(f"user_{a.responsavel_user_id}", f"acao_{a.id}", "resp.")
     except Exception:
         pass
 
-    # ── Planos orçamentários ──────────────────────────────────────────────────
+    # Planos orçamentários
     try:
-        q_bp = select(BudgetPlan).where(BudgetPlan.company_id == cid, BudgetPlan.is_active == True)
+        q = select(BudgetPlan).where(BudgetPlan.company_id == cid, BudgetPlan.is_active == True)
         if filter_client_id:
-            q_bp = q_bp.where(BudgetPlan.client_id == filter_client_id)
-        plans = session.exec(q_bp).all()
-
-        for p in plans:
+            q = q.where(BudgetPlan.client_id == filter_client_id)
+        for p in session.exec(q).all():
             if p.client_id and p.client_id not in client_ids:
                 continue
-            add_node(
-                f"budget_{p.id}",
-                f"Orç. {p.year}",
-                "budget",
-                title=f"Orçamento: {p.name}\nAno: {p.year}",
-                url=f"/ferramentas/orcamento/{p.id}",
-                size=22,
-            )
+            add_node(f"budget_{p.id}", f"Orç.{p.year}", "budget",
+                     title=f"Orçamento: {p.name}\nAno: {p.year}",
+                     url=f"/ferramentas/orcamento/{p.id}", size=20)
             if p.client_id:
                 add_edge(f"client_{p.client_id}", f"budget_{p.id}", "orçamento")
     except Exception:
         pass
 
-    # ── Desvios orçamentários (BudgetAlert = contas com alerta configurado) ──
+    # Desvios
     try:
-        from sqlmodel import col as _col_grafo
-        alerts = session.exec(
-            select(BudgetAlert).where(BudgetAlert.company_id == cid)
-        ).all()
-        for al in alerts:
+        for al in session.exec(select(BudgetAlert).where(BudgetAlert.company_id == cid)).all():
             acc = session.get(BudgetAccount, al.account_id)
             if not acc:
                 continue
-            # Só inclui se conta pertence a um cliente filtrado (ou sem filtro)
             if filter_client_id and acc.client_id != filter_client_id:
                 continue
-            node_id = f"desvio_{al.id}"
-            add_node(
-                node_id,
-                f"⚠ {acc.name[:18]}",
-                "desvio",
-                title=f"Alerta: {acc.name}\nTol: {al.tolerance_pct}% | Crit: {al.critical_pct}%",
-                url=f"/ferramentas/orcamento/{acc.client_id or 0}/dashboard" if acc.client_id else "#",
-            )
-            # Conecta ao plano do cliente
+            add_node(f"desvio_{al.id}", f"⚠ {acc.name[:16]}", "desvio",
+                     title=f"Alerta: {acc.name}\nTol:{al.tolerance_pct}% Crit:{al.critical_pct}%",
+                     url="#", size=14)
             if acc.client_id:
-                plan_client = session.exec(
-                    select(BudgetPlan).where(
-                        BudgetPlan.company_id == cid,
-                        BudgetPlan.client_id == acc.client_id,
-                        BudgetPlan.is_active == True,
-                    )
-                ).first()
-                if plan_client:
-                    add_edge(f"budget_{plan_client.id}", node_id, "desvio")
+                pl = session.exec(select(BudgetPlan).where(
+                    BudgetPlan.company_id == cid,
+                    BudgetPlan.client_id == acc.client_id,
+                    BudgetPlan.is_active == True,
+                )).first()
+                if pl:
+                    add_edge(f"budget_{pl.id}", f"desvio_{al.id}", "desvio")
     except Exception:
         pass
 
     return _JR_grafo({"nodes": nodes, "edges": edges})
 
 
-# ── Página do grafo ───────────────────────────────────────────────────────────
+# ── Página ────────────────────────────────────────────────────────────────────
 
 @app.get("/admin/grafo", response_class=HTMLResponse)
 @require_login
@@ -204,22 +142,15 @@ async def admin_grafo_page(request: Request, session: Session = Depends(get_sess
     ctx = get_tenant_context(request, session)
     if not ctx or ctx.membership.role not in ("admin", "equipe"):
         return RedirectResponse("/", status_code=303)
-
     clientes = []
     try:
-        clientes = session.exec(
-            select(Client).where(Client.company_id == ctx.company.id)
-        ).all()
+        clientes = session.exec(select(Client).where(Client.company_id == ctx.company.id)).all()
     except Exception:
         pass
-
     cc = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
     return render("admin_grafo.html", request=request, context={
-        "current_user": ctx.user,
-        "current_company": ctx.company,
-        "role": ctx.membership.role,
-        "current_client": cc,
-        "clientes": clientes,
+        "current_user": ctx.user, "current_company": ctx.company,
+        "role": ctx.membership.role, "current_client": cc, "clientes": clientes,
     })
 
 
@@ -229,365 +160,281 @@ TEMPLATES["admin_grafo.html"] = r"""
 {% extends "base.html" %}
 {% block content %}
 <style>
-  #grafo-container {
-    width: 100%;
-    height: calc(100vh - 200px);
-    min-height: 500px;
-    background: #0d1117;
-    border-radius: 12px;
-    position: relative;
-    overflow: hidden;
+  #grafo-wrap {
+    width:100%; height:calc(100vh - 195px); min-height:480px;
+    background:#0d1117; border-radius:12px; position:relative; overflow:hidden;
   }
-  #grafo-canvas { width: 100%; height: 100%; }
+  #gc { width:100%; height:100%; display:block; cursor:grab; }
+  #gc:active { cursor:grabbing; }
   #grafo-legend {
-    position: absolute; top: 12px; left: 12px;
-    background: rgba(0,0,0,.7); border-radius: 8px;
-    padding: 10px 14px; color: #eee; font-size: .75rem;
-    backdrop-filter: blur(4px);
+    position:absolute; top:12px; left:12px;
+    background:rgba(0,0,0,.75); border-radius:8px;
+    padding:10px 14px; color:#ddd; font-size:.73rem; line-height:1.8;
+    backdrop-filter:blur(6px); user-select:none;
   }
-  #grafo-legend span { display:inline-block; width:10px; height:10px; border-radius:50%; margin-right:5px; }
-  #grafo-tooltip {
-    position: fixed; pointer-events: none;
-    background: rgba(0,0,0,.85); color: #fff;
-    border-radius: 8px; padding: 8px 12px;
-    font-size: .78rem; max-width: 240px;
-    line-height: 1.5; z-index: 9999;
-    display: none; white-space: pre-wrap;
-    box-shadow: 0 4px 20px rgba(0,0,0,.4);
+  #grafo-legend b { display:block; margin-bottom:2px; color:#fff; font-size:.8rem; }
+  #grafo-legend i { display:inline-block; width:10px; height:10px; border-radius:50%; margin-right:5px; vertical-align:middle; }
+  #tip {
+    position:fixed; pointer-events:none; display:none;
+    background:rgba(10,10,20,.9); color:#eee;
+    border-radius:8px; padding:8px 12px; font-size:.77rem;
+    max-width:220px; white-space:pre-wrap; z-index:9999;
+    box-shadow:0 4px 20px rgba(0,0,0,.5); line-height:1.5;
   }
-  .grafo-controls {
-    display: flex; gap: 8px; flex-wrap: wrap; align-items: center;
-  }
-  #grafo-stats { color: var(--mc-muted); font-size:.8rem; }
+  .grafo-bar { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-bottom:10px; }
+  #grafo-stats { color:#888; font-size:.78rem; }
 </style>
 
-<div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
-  <div>
-    <h4 class="mb-0">🧠 Segundo Cérebro</h4>
-    <div class="muted small">Grafo de conhecimento operacional — todos os nós e conexões da empresa</div>
-  </div>
-  <div class="grafo-controls">
-    <select id="filtro-cliente" class="form-select form-select-sm" style="max-width:220px;">
-      <option value="">Todos os clientes</option>
-      {% for c in clientes %}
-        <option value="{{ c.id }}">{{ c.name }}</option>
-      {% endfor %}
-    </select>
-    <button class="btn btn-sm btn-outline-secondary" onclick="grafoFitAll()">⊡ Centralizar</button>
-    <span id="grafo-stats">—</span>
-  </div>
+<div class="grafo-bar">
+  <h4 class="mb-0">🧠 Segundo Cérebro</h4>
+  <select id="sel-client" class="form-select form-select-sm" style="max-width:220px;">
+    <option value="">Todos os clientes</option>
+    {% for c in clientes %}<option value="{{ c.id }}">{{ c.name }}</option>{% endfor %}
+  </select>
+  <button class="btn btn-sm btn-outline-secondary" onclick="fitAll()">⊡ Centralizar</button>
+  <button class="btn btn-sm btn-outline-secondary" id="btn-pause">⏸ Pausar</button>
+  <span id="grafo-stats">carregando…</span>
 </div>
 
-<div id="grafo-container">
-  <canvas id="grafo-canvas"></canvas>
+<div id="grafo-wrap">
+  <canvas id="gc"></canvas>
   <div id="grafo-legend">
-    <div class="mb-1 fw-semibold" style="font-size:.8rem;">Legenda</div>
-    <div><span style="background:#4ade80"></span> Cliente</div>
-    <div><span style="background:#60a5fa"></span> Reunião</div>
-    <div><span style="background:#fb923c"></span> Ação</div>
-    <div><span style="background:#f87171"></span> Ação alta prioridade</div>
-    <div><span style="background:#a78bfa"></span> Orçamento</div>
-    <div><span style="background:#fbbf24"></span> Pessoa</div>
-    <div><span style="background:#f43f5e"></span> Desvio</div>
+    <b>Legenda</b>
+    <div><i style="background:#4ade80"></i>Cliente</div>
+    <div><i style="background:#60a5fa"></i>Reunião</div>
+    <div><i style="background:#fb923c"></i>Ação</div>
+    <div><i style="background:#f87171"></i>Ação alta prior.</div>
+    <div><i style="background:#a78bfa"></i>Orçamento</div>
+    <div><i style="background:#fbbf24"></i>Pessoa</div>
+    <div><i style="background:#f43f5e"></i>Desvio</div>
   </div>
 </div>
-<div id="grafo-tooltip"></div>
+<div id="tip"></div>
 
 <script>
-// ── Configuração de cores ──────────────────────────────────────────────────
-const COLORS = {
-  client:    { fill: "#4ade80", stroke: "#16a34a", text: "#052e16" },
-  meeting:   { fill: "#60a5fa", stroke: "#2563eb", text: "#1e3a5f" },
-  acao:      { fill: "#fb923c", stroke: "#ea580c", text: "#431407" },
-  acao_alta: { fill: "#f87171", stroke: "#dc2626", text: "#450a0a" },
-  budget:    { fill: "#a78bfa", stroke: "#7c3aed", text: "#2e1065" },
-  user:      { fill: "#fbbf24", stroke: "#d97706", text: "#451a03" },
-  desvio:    { fill: "#f43f5e", stroke: "#be123c", text: "#fff" },
+const PALETTE = {
+  client:    {f:"#4ade80",s:"#16a34a",t:"#052e16"},
+  meeting:   {f:"#60a5fa",s:"#2563eb",t:"#1e3a5f"},
+  acao:      {f:"#fb923c",s:"#ea580c",t:"#3b0a00"},
+  acao_alta: {f:"#f87171",s:"#dc2626",t:"#450a0a"},
+  budget:    {f:"#a78bfa",s:"#7c3aed",t:"#2e1065"},
+  user:      {f:"#fbbf24",s:"#d97706",t:"#451a03"},
+  desvio:    {f:"#f43f5e",s:"#be123c",t:"#fff"},
 };
 
-// ── Estado ────────────────────────────────────────────────────────────────
-let nodes = [], edges = [];
-let transform = { x: 0, y: 0, scale: 1 };
-let dragging = null, dragStart = null, panStart = null;
-let hoveredNode = null;
-const canvas = document.getElementById("grafo-canvas");
-const ctx2d = canvas.getContext("2d");
-const tooltip = document.getElementById("grafo-tooltip");
+const cv = document.getElementById("gc");
+const cx = cv.getContext("2d");
+const tip = document.getElementById("tip");
 
-// ── Física (force-directed) ───────────────────────────────────────────────
-const SPRING_LEN = 120, SPRING_K = 0.04;
-const REPULSION = 3500, DAMPING = 0.82, GRAVITY = 0.015;
+let nodes=[], edges=[], nmap={};
+let tx=0, ty=0, sc=1;
+let drag=null, pan=null, hov=null;
+let paused=false, ticks=0;
+const MAX_TICKS=600; // para física depois de estabilizar
 
-function applyForces() {
-  // Repulsão
-  for (let i = 0; i < nodes.length; i++) {
-    nodes[i].fx = 0; nodes[i].fy = 0;
-    for (let j = 0; j < nodes.length; j++) {
-      if (i === j) continue;
-      const dx = nodes[i].x - nodes[j].x;
-      const dy = nodes[i].y - nodes[j].y;
-      const dist = Math.sqrt(dx*dx + dy*dy) || 1;
-      const force = REPULSION / (dist * dist);
-      nodes[i].fx += (dx / dist) * force;
-      nodes[i].fy += (dy / dist) * force;
-    }
-  }
-  // Molas (arestas)
-  edges.forEach(e => {
-    const a = nodeMap[e.from], b = nodeMap[e.to];
-    if (!a || !b) return;
-    const dx = b.x - a.x, dy = b.y - a.y;
-    const dist = Math.sqrt(dx*dx + dy*dy) || 1;
-    const force = (dist - SPRING_LEN) * SPRING_K;
-    const fx = (dx / dist) * force, fy = (dy / dist) * force;
-    a.fx += fx; a.fy += fy;
-    b.fx -= fx; b.fy -= fy;
-  });
-  // Gravidade ao centro
-  nodes.forEach(n => {
-    n.fx -= n.x * GRAVITY;
-    n.fy -= n.y * GRAVITY;
-  });
-  // Integração
-  nodes.forEach(n => {
-    if (n === dragging) return;
-    n.vx = (n.vx + n.fx) * DAMPING;
-    n.vy = (n.vy + n.fy) * DAMPING;
-    n.x += n.vx;
-    n.y += n.vy;
-  });
+// ── Resize ────────────────────────────────────────────────────────────────
+function resize(){
+  cv.width=cv.offsetWidth; cv.height=cv.offsetHeight;
 }
-
-// ── Render ────────────────────────────────────────────────────────────────
-let nodeMap = {};
-
-function resize() {
-  canvas.width = canvas.offsetWidth;
-  canvas.height = canvas.offsetHeight;
-}
-
-function draw() {
-  resize();
-  ctx2d.clearRect(0, 0, canvas.width, canvas.height);
-  ctx2d.save();
-  ctx2d.translate(transform.x + canvas.width/2, transform.y + canvas.height/2);
-  ctx2d.scale(transform.scale, transform.scale);
-
-  // Arestas
-  ctx2d.lineWidth = 1;
-  edges.forEach(e => {
-    const a = nodeMap[e.from], b = nodeMap[e.to];
-    if (!a || !b) return;
-    ctx2d.beginPath();
-    ctx2d.strokeStyle = "rgba(150,150,170,0.35)";
-    ctx2d.moveTo(a.x, a.y);
-    ctx2d.lineTo(b.x, b.y);
-    ctx2d.stroke();
-    // Label da aresta
-    if (e.label && transform.scale > 0.6) {
-      const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
-      ctx2d.fillStyle = "rgba(180,180,200,0.7)";
-      ctx2d.font = "9px sans-serif";
-      ctx2d.textAlign = "center";
-      ctx2d.fillText(e.label, mx, my);
-    }
-  });
-
-  // Nós
-  nodes.forEach(n => {
-    const c = COLORS[n.group] || COLORS.user;
-    const r = (n.size || 18) * (n === hoveredNode ? 1.25 : 1);
-    // Halo no hover
-    if (n === hoveredNode) {
-      ctx2d.beginPath();
-      ctx2d.arc(n.x, n.y, r + 6, 0, Math.PI*2);
-      ctx2d.fillStyle = c.fill + "44";
-      ctx2d.fill();
-    }
-    // Círculo
-    ctx2d.beginPath();
-    ctx2d.arc(n.x, n.y, r, 0, Math.PI*2);
-    ctx2d.fillStyle = c.fill;
-    ctx2d.fill();
-    ctx2d.strokeStyle = c.stroke;
-    ctx2d.lineWidth = 1.5;
-    ctx2d.stroke();
-    // Label
-    if (transform.scale > 0.4) {
-      ctx2d.fillStyle = c.text;
-      ctx2d.font = `bold ${Math.max(9, 11 * transform.scale)}px sans-serif`;
-      ctx2d.textAlign = "center";
-      ctx2d.textBaseline = "middle";
-      ctx2d.fillText(n.label, n.x, n.y + r + 11);
-    }
-  });
-
-  ctx2d.restore();
-}
-
-// ── Loop de animação ──────────────────────────────────────────────────────
-let running = true;
-function loop() {
-  if (!running) return;
-  applyForces();
-  draw();
-  requestAnimationFrame(loop);
-}
+window.addEventListener("resize", resize);
 
 // ── Coordenadas ───────────────────────────────────────────────────────────
-function canvasToWorld(cx, cy) {
-  return {
-    x: (cx - canvas.width/2 - transform.x) / transform.scale,
-    y: (cy - canvas.height/2 - transform.y) / transform.scale,
-  };
-}
-
-function hitTest(wx, wy) {
-  let best = null, bestD = Infinity;
-  nodes.forEach(n => {
-    const r = n.size || 18;
-    const d = Math.hypot(wx - n.x, wy - n.y);
-    if (d < r + 4 && d < bestD) { bestD = d; best = n; }
+function w2s(wx,wy){ return {x: wx*sc+tx+cv.width/2, y: wy*sc+ty+cv.height/2}; }
+function s2w(sx,sy){ return {x:(sx-cv.width/2-tx)/sc, y:(sy-cv.height/2-ty)/sc}; }
+function hit(wx,wy){
+  let best=null,bd=Infinity;
+  nodes.forEach(n=>{
+    const r=(n.size||16)/sc*1.4; // generous hit area
+    const d=Math.hypot(wx-n.x,wy-n.y);
+    if(d<r && d<bd){bd=d;best=n;}
   });
   return best;
 }
 
-// ── Eventos mouse ─────────────────────────────────────────────────────────
-canvas.addEventListener("mousedown", e => {
-  const rect = canvas.getBoundingClientRect();
-  const cx = e.clientX - rect.left, cy = e.clientY - rect.top;
-  const w = canvasToWorld(cx, cy);
-  const hit = hitTest(w.x, w.y);
-  if (hit) {
-    dragging = hit;
-    dragStart = { mx: cx, my: cy, nx: hit.x, ny: hit.y };
-  } else {
-    panStart = { mx: cx, my: cy, tx: transform.x, ty: transform.y };
-  }
-});
+// ── Física ────────────────────────────────────────────────────────────────
+// Parâmetros ajustados para grafos grandes (292+ nós)
+function physics(){
+  const N=nodes.length;
+  if(!N) return;
 
-canvas.addEventListener("mousemove", e => {
-  const rect = canvas.getBoundingClientRect();
-  const cx = e.clientX - rect.left, cy = e.clientY - rect.top;
-  if (dragging && dragStart) {
-    const w = canvasToWorld(cx, cy);
-    dragging.x = w.x; dragging.y = w.y;
-    dragging.vx = 0; dragging.vy = 0;
-  } else if (panStart) {
-    transform.x = panStart.tx + (cx - panStart.mx);
-    transform.y = panStart.ty + (cy - panStart.my);
-  }
-  // Hover
-  const w2 = canvasToWorld(cx, cy);
-  const hit = hitTest(w2.x, w2.y);
-  hoveredNode = hit;
-  if (hit) {
-    canvas.style.cursor = "pointer";
-    tooltip.style.display = "block";
-    tooltip.style.left = (e.clientX + 14) + "px";
-    tooltip.style.top  = (e.clientY - 10) + "px";
-    tooltip.textContent = hit.title || hit.label;
-  } else {
-    canvas.style.cursor = panStart ? "grabbing" : "grab";
-    tooltip.style.display = "none";
-  }
-});
+  // Repulsão com quadtree simplificado (Barnes-Hut aproximado)
+  // Para N grande usamos factor menor
+  const REP = Math.min(4000, 800000/N);
+  const SPR_K=0.05, SPR_L=100, DAMP=0.75, GRAV=0.02;
+  const MAX_V=8; // limite de velocidade — evita explosão
 
-canvas.addEventListener("mouseup", e => {
-  if (dragging && dragStart) {
-    const rect = canvas.getBoundingClientRect();
-    const cx = e.clientX - rect.left, cy = e.clientY - rect.top;
-    const dx = Math.abs(cx - dragStart.mx), dy = Math.abs(cy - dragStart.my);
-    if (dx < 5 && dy < 5 && dragging.url && dragging.url !== "#") {
-      window.location.href = dragging.url;
+  nodes.forEach(n=>{ n.fx=0; n.fy=0; });
+
+  // Repulsão par a par (O(n²) — aceitável até ~400 nós com MAX_V)
+  for(let i=0;i<N;i++){
+    for(let j=i+1;j<N;j++){
+      const a=nodes[i], b=nodes[j];
+      const dx=a.x-b.x, dy=a.y-b.y;
+      const d2=dx*dx+dy*dy+1;
+      const f=REP/d2;
+      const fx=dx/Math.sqrt(d2)*f, fy=dy/Math.sqrt(d2)*f;
+      a.fx+=fx; a.fy+=fy;
+      b.fx-=fx; b.fy-=fy;
     }
   }
-  dragging = null; dragStart = null; panStart = null;
-  canvas.style.cursor = "grab";
-});
 
-canvas.addEventListener("wheel", e => {
-  e.preventDefault();
-  const factor = e.deltaY < 0 ? 1.12 : 0.88;
-  const rect = canvas.getBoundingClientRect();
-  const cx = e.clientX - rect.left - canvas.width/2 - transform.x;
-  const cy = e.clientY - rect.top  - canvas.height/2 - transform.y;
-  transform.x -= cx * (factor - 1);
-  transform.y -= cy * (factor - 1);
-  transform.scale = Math.max(0.1, Math.min(5, transform.scale * factor));
-}, { passive: false });
-
-// ── Touch ─────────────────────────────────────────────────────────────────
-let lastPinchDist = null;
-canvas.addEventListener("touchstart", e => {
-  if (e.touches.length === 1) {
-    const t = e.touches[0];
-    const rect = canvas.getBoundingClientRect();
-    const cx = t.clientX - rect.left, cy = t.clientY - rect.top;
-    const w = canvasToWorld(cx, cy);
-    const hit = hitTest(w.x, w.y);
-    if (hit) { dragging = hit; dragStart = { mx: cx, my: cy }; }
-    else panStart = { mx: cx, my: cy, tx: transform.x, ty: transform.y };
-  }
-}, { passive: true });
-canvas.addEventListener("touchmove", e => {
-  if (e.touches.length === 2) {
-    const d = Math.hypot(
-      e.touches[0].clientX - e.touches[1].clientX,
-      e.touches[0].clientY - e.touches[1].clientY
-    );
-    if (lastPinchDist) transform.scale = Math.max(0.1, Math.min(5, transform.scale * (d / lastPinchDist)));
-    lastPinchDist = d;
-  } else if (e.touches.length === 1) {
-    const t = e.touches[0];
-    const rect = canvas.getBoundingClientRect();
-    const cx = t.clientX - rect.left, cy = t.clientY - rect.top;
-    if (dragging && dragStart) {
-      const w = canvasToWorld(cx, cy);
-      dragging.x = w.x; dragging.y = w.y; dragging.vx = 0; dragging.vy = 0;
-    } else if (panStart) {
-      transform.x = panStart.tx + (cx - panStart.mx);
-      transform.y = panStart.ty + (cy - panStart.my);
-    }
-  }
-  e.preventDefault();
-}, { passive: false });
-canvas.addEventListener("touchend", () => {
-  dragging = null; dragStart = null; panStart = null; lastPinchDist = null;
-});
-
-// ── Centralizar ───────────────────────────────────────────────────────────
-function grafoFitAll() {
-  if (!nodes.length) return;
-  transform.x = 0; transform.y = 0; transform.scale = 1;
-}
-
-// ── Carregar dados ────────────────────────────────────────────────────────
-function loadGrafo(clientId) {
-  const url = "/api/grafo/data" + (clientId ? `?client_id=${clientId}` : "");
-  fetch(url).then(r => r.json()).then(data => {
-    nodes = data.nodes.map(n => ({
-      ...n,
-      x: (Math.random() - 0.5) * 600,
-      y: (Math.random() - 0.5) * 600,
-      vx: 0, vy: 0, fx: 0, fy: 0,
-    }));
-    edges = data.edges;
-    nodeMap = {};
-    nodes.forEach(n => nodeMap[n.id] = n);
-    document.getElementById("grafo-stats").textContent =
-      `${nodes.length} nós · ${edges.length} conexões`;
-    grafoFitAll();
+  // Molas
+  edges.forEach(e=>{
+    const a=nmap[e.from], b=nmap[e.to];
+    if(!a||!b) return;
+    const dx=b.x-a.x, dy=b.y-a.y;
+    const d=Math.sqrt(dx*dx+dy*dy)||1;
+    const f=(d-SPR_L)*SPR_K;
+    const fx=dx/d*f, fy=dy/d*f;
+    a.fx+=fx; a.fy+=fy;
+    b.fx-=fx; b.fy-=fy;
   });
+
+  // Gravidade + integração
+  nodes.forEach(n=>{
+    if(n===drag) return;
+    n.fx -= n.x*GRAV;
+    n.fy -= n.y*GRAV;
+    n.vx = (n.vx+n.fx)*DAMP;
+    n.vy = (n.vy+n.fy)*DAMP;
+    // Clamp velocidade
+    const spd=Math.hypot(n.vx,n.vy);
+    if(spd>MAX_V){ n.vx=n.vx/spd*MAX_V; n.vy=n.vy/spd*MAX_V; }
+    n.x+=n.vx; n.y+=n.vy;
+  });
+  ticks++;
+  if(ticks>MAX_TICKS){ paused=true; document.getElementById("btn-pause").textContent="▶ Retomar"; }
 }
 
-document.getElementById("filtro-cliente").addEventListener("change", function() {
-  loadGrafo(this.value);
-});
+// ── Render ────────────────────────────────────────────────────────────────
+function draw(){
+  resize();
+  cx.clearRect(0,0,cv.width,cv.height);
+  cx.save();
+  cx.translate(tx+cv.width/2, ty+cv.height/2);
+  cx.scale(sc,sc);
 
-canvas.style.cursor = "grab";
-loadGrafo("");
-loop();
+  // Arestas
+  cx.lineWidth=0.8/sc;
+  edges.forEach(e=>{
+    const a=nmap[e.from], b=nmap[e.to];
+    if(!a||!b) return;
+    cx.beginPath();
+    cx.strokeStyle="rgba(120,130,160,0.28)";
+    cx.moveTo(a.x,a.y); cx.lineTo(b.x,b.y);
+    cx.stroke();
+  });
+
+  // Nós
+  nodes.forEach(n=>{
+    const p=PALETTE[n.group]||PALETTE.user;
+    const r=(n.size||16)*(n===hov?1.3:1);
+    if(n===hov){
+      cx.beginPath(); cx.arc(n.x,n.y,r+7,0,Math.PI*2);
+      cx.fillStyle=p.f+"33"; cx.fill();
+    }
+    cx.beginPath(); cx.arc(n.x,n.y,r,0,Math.PI*2);
+    cx.fillStyle=p.f; cx.fill();
+    cx.strokeStyle=p.s; cx.lineWidth=1.2/sc; cx.stroke();
+
+    // Label (só se zoom suficiente)
+    if(sc>0.35){
+      const fs=Math.max(8,10);
+      cx.font=`${fs}px system-ui,sans-serif`;
+      cx.fillStyle="#ddd";
+      cx.textAlign="center"; cx.textBaseline="top";
+      cx.fillText(n.label, n.x, n.y+r+3);
+    }
+  });
+  cx.restore();
+}
+
+function loop(){
+  if(!paused) physics();
+  draw();
+  requestAnimationFrame(loop);
+}
+
+// ── fitAll ────────────────────────────────────────────────────────────────
+function fitAll(){
+  if(!nodes.length) return;
+  let minX=Infinity,maxX=-Infinity,minY=Infinity,maxY=-Infinity;
+  nodes.forEach(n=>{minX=Math.min(minX,n.x);maxX=Math.max(maxX,n.x);minY=Math.min(minY,n.y);maxY=Math.max(maxY,n.y);});
+  const pw=cv.width-80, ph=cv.height-80;
+  const gw=maxX-minX||1, gh=maxY-minY||1;
+  sc=Math.min(pw/gw, ph/gh, 2);
+  tx=-((minX+maxX)/2)*sc;
+  ty=-((minY+maxY)/2)*sc;
+}
+
+// ── Carregar ──────────────────────────────────────────────────────────────
+function load(cid){
+  fetch("/api/grafo/data"+(cid?`?client_id=${cid}`:``))
+    .then(r=>r.json()).then(data=>{
+      // Posição inicial em espiral para evitar sobreposição
+      nodes=data.nodes.map((n,i)=>{
+        const angle=i*2.399; // golden angle
+        const rad=Math.sqrt(i)*28;
+        return {...n, x:Math.cos(angle)*rad, y:Math.sin(angle)*rad, vx:0,vy:0,fx:0,fy:0};
+      });
+      edges=data.edges;
+      nmap={}; nodes.forEach(n=>nmap[n.id]=n);
+      ticks=0; paused=false;
+      document.getElementById("btn-pause").textContent="⏸ Pausar";
+      document.getElementById("grafo-stats").textContent=`${nodes.length} nós · ${edges.length} conexões`;
+      setTimeout(fitAll, 2000); // centraliza após 2s de física
+    });
+}
+
+// ── Eventos ───────────────────────────────────────────────────────────────
+cv.addEventListener("mousedown",e=>{
+  const r=cv.getBoundingClientRect();
+  const w=s2w(e.clientX-r.left, e.clientY-r.top);
+  const h=hit(w.x,w.y);
+  if(h){ drag=h; }
+  else { pan={mx:e.clientX,my:e.clientY,tx,ty}; }
+});
+cv.addEventListener("mousemove",e=>{
+  const r=cv.getBoundingClientRect();
+  const sx=e.clientX-r.left, sy=e.clientY-r.top;
+  const w=s2w(sx,sy);
+  if(drag){ drag.x=w.x; drag.y=w.y; drag.vx=0; drag.vy=0; }
+  else if(pan){ tx=pan.tx+(e.clientX-pan.mx); ty=pan.ty+(e.clientY-pan.my); }
+  const h=hit(w.x,w.y); hov=h;
+  if(h){
+    tip.style.display="block";
+    tip.style.left=(e.clientX+16)+"px"; tip.style.top=(e.clientY-10)+"px";
+    tip.textContent=h.title||h.label;
+  } else { tip.style.display="none"; }
+});
+cv.addEventListener("mouseup",e=>{
+  if(drag){
+    const r=cv.getBoundingClientRect();
+    const sx=e.clientX-r.left, sy=e.clientY-r.top;
+    const w=s2w(sx,sy);
+    const d=Math.hypot(w.x-drag.x, w.y-drag.y);
+    if(d<5 && drag.url && drag.url!=="#") window.location.href=drag.url;
+  }
+  drag=null; pan=null;
+});
+cv.addEventListener("mouseleave",()=>{ drag=null; pan=null; tip.style.display="none"; });
+cv.addEventListener("wheel",e=>{
+  e.preventDefault();
+  const r=cv.getBoundingClientRect();
+  const sx=e.clientX-r.left-cv.width/2-tx;
+  const sy=e.clientY-r.top-cv.height/2-ty;
+  const f=e.deltaY<0?1.1:0.91;
+  sc=Math.max(0.08,Math.min(6,sc*f));
+  tx-=sx*(f-1); ty-=sy*(f-1);
+},{passive:false});
+
+document.getElementById("btn-pause").addEventListener("click",()=>{
+  paused=!paused; ticks=paused?MAX_TICKS+1:0;
+  document.getElementById("btn-pause").textContent=paused?"▶ Retomar":"⏸ Pausar";
+});
+document.getElementById("sel-client").addEventListener("change",function(){ load(this.value); });
+
+resize(); load(""); loop();
 </script>
 {% endblock %}
 """
@@ -595,12 +442,25 @@ loop();
 if hasattr(templates_env.loader, "mapping"):
     templates_env.loader.mapping["admin_grafo.html"] = TEMPLATES["admin_grafo.html"]
 
-# Garante feature visível no menu para admin/equipe
+# ── Registrar no menu lateral ─────────────────────────────────────────────────
+# Precisa ser feito DEPOIS de app.py definir FEATURE_KEYS e ROLE_DEFAULT_FEATURES
 try:
+    FEATURE_KEYS["grafo"] = {
+        "title": "🧠 Segundo Cérebro",
+        "desc": "Grafo de conhecimento operacional — nós e conexões.",
+        "href": "/admin/grafo",
+    }
+    FEATURE_VISIBLE_ROLES["grafo"] = {"admin", "equipe"}
     ROLE_DEFAULT_FEATURES.setdefault("admin", set()).add("grafo")
     ROLE_DEFAULT_FEATURES.setdefault("equipe", set()).add("grafo")
-    FEATURE_VISIBLE_ROLES.setdefault("grafo", {"admin", "equipe"})
-except Exception:
-    pass
+    # Adiciona ao grupo Gestão Interna
+    for _grp in FEATURE_GROUPS:
+        if _grp.get("key") == "gestao_interna":
+            if "grafo" not in _grp.get("features", []):
+                _grp["features"].append("grafo")
+            break
+    print("[grafo] ✅ Feature 'grafo' registrada no menu.")
+except Exception as _eg:
+    print(f"[grafo] ⚠️ Erro ao registrar feature: {_eg}")
 
-print("[grafo] ✅ Segundo Cérebro — rota /admin/grafo carregada.")
+print("[grafo] ✅ Segundo Cérebro — /admin/grafo carregado.")
