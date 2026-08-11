@@ -4487,6 +4487,7 @@ FEATURE_KEYS: dict[str, dict[str, str]] = {
     "agenda": {"title": "Agenda", "desc": "Agendamentos (nativo).", "href": "/agenda"},
     "agenda_admin": {"title": "Agenda (Admin)", "desc": "Gerenciar agenda, equipe e disponibilidade.", "href": "/admin/agenda"},
     "educacao": {"title": "Educação", "desc": "Cursos e materiais.", "href": "/educacao"},
+    "grafo": {"title": "🧠 Segundo Cérebro", "desc": "Grafo de conhecimento operacional — nós e conexões.", "href": "/admin/grafo"},
 }
 
 # Open Finance (Pluggy)
@@ -49085,6 +49086,7 @@ exec(open('ui_augur_float.py').read())
 exec(open('ui_admin_assinaturas.py').read())
 exec(open('ui_creditos_features.py').read())
 exec(open('ui_admin_uso.py').read())
+exec(open('ui_grafo.py').read())
 exec(open('ui_noticias_press.py').read())
 
 
