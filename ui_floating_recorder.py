@@ -18,7 +18,7 @@ _FLOAT_REC_HTML = r"""
   background: #E07020; border: none; cursor: pointer;
   box-shadow: 0 4px 16px rgba(0,0,0,.25);
   display: flex; align-items: center; justify-content: center;
-  transition: background .2s, transform .15s;
+  transition: background .2s, transform .15s, left .22s cubic-bezier(.4,0,.2,1);
   color: #fff; font-size: 22px;
 }
 #frec-btn:hover { background: #C85F1B; transform: scale(1.07); }
@@ -26,6 +26,11 @@ _FLOAT_REC_HTML = r"""
 @keyframes frec-pulse {
   0%,100% { box-shadow: 0 0 0 0 rgba(220,38,38,.5); }
   50%      { box-shadow: 0 0 0 10px rgba(220,38,38,0); }
+}
+/* Desloca para fora da sidebar em desktop */
+@media (min-width: 992px) {
+  #frec-btn { left: calc(var(--sb-w, 220px) + 16px); }
+  body.sb-is-collapsed #frec-btn { left: calc(var(--sb-w-col, 56px) + 16px); }
 }
 
 #frec-panel {
