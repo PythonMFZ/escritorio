@@ -26,6 +26,7 @@ class ApiIntegration(_SM_ai, table=True):
     auth_key:            Optional[str] = _F_ai(default=None)
     auth_value:          Optional[str] = _F_ai(default=None)
     body_json:           Optional[str] = _F_ai(default=None)
+    extra_headers_json:  Optional[str] = _F_ai(default=None)  # JSON dict de headers extras
     data_label:          Optional[str] = _F_ai(default=None)
     sync_interval_hours: int           = _F_ai(default=24)
     is_active:           bool          = _F_ai(default=True)
@@ -51,12 +52,20 @@ _SM_ai.metadata.create_all(engine)  # type: ignore[name-defined]
 # ── HTTP helper ───────────────────────────────────────────────────────────────
 
 def _ai_do_request(intg: ApiIntegration) -> tuple:
+    import json as _json_ai
     headers: dict = {}
     auth = None
     if intg.auth_type == "api_key_header" and intg.auth_key:
         headers[intg.auth_key] = intg.auth_value or ""
     elif intg.auth_type == "basic_auth":
         auth = (intg.auth_key or "", intg.auth_value or "")
+    # Headers extras (ex: Content-Type: application/json)
+    if intg.extra_headers_json:
+        try:
+            for k, v in _json_ai.loads(intg.extra_headers_json).items():
+                headers[k] = str(v)
+        except Exception:
+            pass
 
     try:
         import httpx as _hx
@@ -361,6 +370,13 @@ TEMPLATES["api_connector_form.html"] = r"""
     </div>
 
     <div class="mb-3">
+      <label class="form-label fw-semibold">Headers adicionais <span class="text-muted fw-normal">(opcional)</span></label>
+      <textarea name="extra_headers_json" class="form-control font-monospace" rows="3"
+                placeholder='{"Content-Type": "application/json"}'>{{ intg.extra_headers_json if intg else '' }}</textarea>
+      <div class="form-text">JSON com headers extras enviados em toda requisição. Ex: <code>{"Content-Type": "application/json"}</code></div>
+    </div>
+
+    <div class="mb-3">
       <label class="form-label fw-semibold">Label no Augur</label>
       <input type="text" name="data_label" class="form-control"
              value="{{ intg.data_label if intg else '' }}"
@@ -497,6 +513,7 @@ async def _ai_novo_post(
     auth_key:             str = _Form_ai(""),
     auth_value:           str = _Form_ai(""),
     body_json:            str = _Form_ai(""),
+    extra_headers_json:   str = _Form_ai(""),
     data_label:           str = _Form_ai(""),
     sync_interval_hours:  int = _Form_ai(24),
     client_id:            str = _Form_ai(""),
@@ -515,6 +532,7 @@ async def _ai_novo_post(
             auth_key=auth_key.strip() or None,
             auth_value=auth_value or None,
             body_json=body_json.strip() or None,
+            extra_headers_json=extra_headers_json.strip() or None,
             data_label=data_label.strip() or None,
             sync_interval_hours=sync_interval_hours,
             is_active=True,
@@ -558,6 +576,7 @@ async def _ai_editar_post(
     auth_key:            str = _Form_ai(""),
     auth_value:          str = _Form_ai(""),
     body_json:           str = _Form_ai(""),
+    extra_headers_json:  str = _Form_ai(""),
     data_label:          str = _Form_ai(""),
     sync_interval_hours: int = _Form_ai(24),
     client_id:           str = _Form_ai(""),
@@ -578,6 +597,7 @@ async def _ai_editar_post(
         if auth_value:
             intg.auth_value = auth_value
         intg.body_json = body_json.strip() or None
+        intg.extra_headers_json = extra_headers_json.strip() or None
         intg.data_label = data_label.strip() or None
         intg.sync_interval_hours = sync_interval_hours
         intg.client_id = int(client_id) if client_id.strip() else None
