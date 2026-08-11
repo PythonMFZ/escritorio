@@ -165,6 +165,9 @@ _SIDEBAR_HTML = r"""
     <a class="sb-link" href="/admin/acoes" data-sbpath="/admin/acoes" title="Ações">
       <span class="sb-icon">⚡</span><span class="sb-label">Ações</span>
     </a>
+    <a class="sb-link" href="/cliente/grafo" data-sbpath="/cliente/grafo" title="2º Cérebro">
+      <span class="sb-icon">🧠</span><span class="sb-label">2º Cérebro</span>
+    </a>
   </div>
   {% endif %}
 
