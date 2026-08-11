@@ -653,4 +653,98 @@ except Exception as _e_rv2_patch:
     print(f"[reunioes_v2] ⚠️ Patch Augur não aplicado: {_e_rv2_patch}")
 
 
+# ── Patch dashboard: widget de ações abertas para admin/equipe ────────────────
+
+_RV2_WIDGET = r"""
+  {%- if role in ["admin","equipe"] and acoes_abertas_total is defined %}
+  <div class="col-12">
+    <div class="card p-3" style="border-left:4px solid #f0ad4e;">
+      <div class="d-flex justify-content-between align-items-center">
+        <div>
+          <div class="fw-semibold">⚡ Ações Corretivas em Aberto</div>
+          <div class="muted small">
+            {% if acoes_abertas_total == 0 %}
+              Nenhuma ação em aberto no momento.
+            {% else %}
+              <b>{{ acoes_abertas_total }}</b> ação(ões) em aberto
+              {%- if acoes_alta_prioridade > 0 %} — <span class="text-danger fw-semibold">{{ acoes_alta_prioridade }} alta prioridade</span>{% endif %}.
+            {% endif %}
+          </div>
+        </div>
+        <a class="btn btn-outline-warning btn-sm" href="/reunioes">Ver reuniões</a>
+      </div>
+      {% if acoes_abertas_lista %}
+      <div class="mt-2 d-flex flex-column gap-1">
+        {% for a in acoes_abertas_lista[:5] %}
+        <div class="d-flex align-items-center gap-2 small">
+          <span class="badge {% if a.prioridade == 'alta' %}bg-danger{% elif a.prioridade == 'media' %}bg-warning text-dark{% else %}bg-secondary{% endif %}" style="min-width:52px;">{{ a.prioridade }}</span>
+          <span class="flex-grow-1">{{ a.titulo }}</span>
+          {% if a.prazo %}<span class="muted">{{ a.prazo }}</span>{% endif %}
+        </div>
+        {% endfor %}
+        {% if acoes_abertas_total > 5 %}<div class="muted small">… e mais {{ acoes_abertas_total - 5 }} ação(ões).</div>{% endif %}
+      </div>
+      {% endif %}
+    </div>
+  </div>
+  {%- endif %}
+"""
+
+try:
+    _rv2_dash = TEMPLATES.get("dashboard.html", "")
+    _rv2_inject_after = '<div class="row g-3">'
+    if _rv2_inject_after in _rv2_dash and "acoes_abertas_total" not in _rv2_dash:
+        _rv2_dash = _rv2_dash.replace(
+            _rv2_inject_after,
+            _rv2_inject_after + "\n" + _RV2_WIDGET,
+            1,
+        )
+        TEMPLATES["dashboard.html"] = _rv2_dash
+        if hasattr(templates_env.loader, "mapping"):
+            templates_env.loader.mapping["dashboard.html"] = _rv2_dash
+        print("[reunioes_v2] ✅ Widget de ações abertas injetado no dashboard.")
+    else:
+        print("[reunioes_v2] ℹ️ Widget dashboard já presente ou template não encontrado.")
+except Exception as _e_rv2_dash:
+    print(f"[reunioes_v2] ⚠️ Erro ao injetar widget no dashboard: {_e_rv2_dash}")
+
+
+# ── Patch na rota do dashboard para passar acoes_abertas ─────────────────────
+
+_rv2_orig_dashboard = None
+try:
+    _rv2_orig_dashboard = app.routes
+    # Wrap the dashboard render via middleware-style approach:
+    # Instead of patching the route, we patch the render function for dashboard
+    _rv2_orig_render = render
+
+    def _rv2_render_with_acoes(template_name, request, context=None, **kwargs):
+        ctx_arg = context or {}
+        if template_name == "dashboard.html" and ctx_arg.get("role") in ("admin", "equipe"):
+            try:
+                from sqlmodel import Session as _SRV2
+                with _SRV2(engine) as _s_rv2:
+                    company_id = ctx_arg.get("current_company") and ctx_arg["current_company"].id
+                    if company_id:
+                        _acoes = _s_rv2.exec(
+                            _select_rv2(MeetingAcao).where(
+                                MeetingAcao.company_id == company_id,
+                                MeetingAcao.status.in_(["aberta", "em_andamento"])
+                            ).order_by(MeetingAcao.created_at.desc())
+                        ).all()
+                        ctx_arg["acoes_abertas_total"] = len(_acoes)
+                        ctx_arg["acoes_alta_prioridade"] = sum(1 for a in _acoes if a.prioridade == "alta")
+                        ctx_arg["acoes_abertas_lista"] = _acoes[:10]
+            except Exception as _e_rv2_acoes:
+                ctx_arg.setdefault("acoes_abertas_total", 0)
+                ctx_arg.setdefault("acoes_alta_prioridade", 0)
+                ctx_arg.setdefault("acoes_abertas_lista", [])
+        return _rv2_orig_render(template_name, request=request, context=ctx_arg, **kwargs)
+
+    render = _rv2_render_with_acoes
+    print("[reunioes_v2] ✅ Render do dashboard com ações abertas ativo.")
+except Exception as _e_rv2_render:
+    print(f"[reunioes_v2] ⚠️ Patch render dashboard não aplicado: {_e_rv2_render}")
+
+
 print("[reunioes_v2] ✅ Módulo de Reuniões v2 carregado.")
