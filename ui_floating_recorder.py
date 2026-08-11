@@ -52,10 +52,28 @@ _FLOAT_REC_HTML = r"""
 #frec-feedback { font-size: .78rem; color: #6b7280; }
 </style>
 
-<button id="frec-btn" title="Gravador de reunião" onclick="frecTogglePanel()">🎙</button>
+<button id="frec-btn" title="Gravador de reunião" onclick="frecTogglePanel()">
+  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Forma de onda de áudio -->
+    <line x1="2"  y1="12" x2="2"  y2="12"/>
+    <line x1="5"  y1="9"  x2="5"  y2="15"/>
+    <line x1="8"  y1="6"  x2="8"  y2="18"/>
+    <line x1="11" y1="4"  x2="11" y2="20"/>
+    <line x1="14" y1="7"  x2="14" y2="17"/>
+    <line x1="17" y1="10" x2="17" y2="14"/>
+    <line x1="20" y1="11" x2="20" y2="13"/>
+  </svg>
+</button>
 
 <div id="frec-panel">
-  <div style="font-weight:600; font-size:.9rem;">🎙 Gravar Reunião</div>
+  <div style="font-weight:600; font-size:.9rem;">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="vertical-align:-2px;margin-right:4px;">
+      <line x1="5" y1="9" x2="5" y2="15"/><line x1="8" y1="6" x2="8" y2="18"/>
+      <line x1="11" y1="4" x2="11" y2="20"/><line x1="14" y1="7" x2="14" y2="17"/>
+      <line x1="17" y1="10" x2="17" y2="14"/>
+    </svg>
+    Gravar Reunião
+  </div>
 
   <div id="frec-select-wrap">
     <label style="font-size:.75rem;color:#6b7280;">Reunião</label>

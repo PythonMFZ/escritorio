@@ -185,6 +185,16 @@ _SIDEBAR_HTML = r"""
     {% endif %}
   </div>
 
+  <!-- Negócios / CRM (apenas admin/equipe) -->
+  {% if role in ["admin", "equipe"] %}
+  <div class="sb-section">
+    <div class="sb-section-label">Negócios</div>
+    <a class="sb-link" href="/negocios" data-sbpath="/negocios" title="Pipeline">
+      <span class="sb-icon">💼</span><span class="sb-label">Pipeline CRM</span>
+    </a>
+  </div>
+  {% endif %}
+
   <!-- Projeto -->
   <div class="sb-section">
     <div class="sb-section-label">Projeto</div>
@@ -194,6 +204,11 @@ _SIDEBAR_HTML = r"""
     <a class="sb-link" href="/consultoria" data-sbpath="/consultoria" title="Consultoria">
       <span class="sb-icon">🤝</span><span class="sb-label">Consultoria</span>
     </a>
+    {% if role in ["admin", "equipe"] %}
+    <a class="sb-link" href="/ferramentas" data-sbpath="/ferramentas" title="Ferramentas">
+      <span class="sb-icon">🔧</span><span class="sb-label">Ferramentas</span>
+    </a>
+    {% endif %}
   </div>
 
   <!-- Administração -->
