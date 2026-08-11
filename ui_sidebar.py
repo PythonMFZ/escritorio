@@ -1,10 +1,5 @@
 # ============================================================================
-# ui_sidebar.py — Barra lateral de navegação fixa (esquerda) v2
-# ============================================================================
-# Melhorias v2:
-#   - Logo: apenas imagem, sem texto duplicado
-#   - Recolher/expandir: toggle ‹/› salvo em localStorage
-#   - Modo recolhido: 52px com ícones centralizados + tooltips nativos
+# ui_sidebar.py — Barra lateral de navegação fixa (esquerda) v3
 # ============================================================================
 
 _SIDEBAR_CSS = r"""
@@ -17,8 +12,6 @@ _SIDEBAR_CSS = r"""
   --sb-accent: #E07020;
   --sb-hover-bg: rgba(255,255,255,.07);
   --sb-active-bg: rgba(224,112,32,.14);
-  --sb-transition: width .22s cubic-bezier(.4,0,.2,1),
-                   padding .22s cubic-bezier(.4,0,.2,1);
 }
 
 /* ── Sidebar container ──────────────────────────────────────────────────── */
@@ -27,47 +20,49 @@ _SIDEBAR_CSS = r"""
   background: var(--sb-bg); z-index: 1040;
   display: flex; flex-direction: column;
   overflow-y: auto; overflow-x: hidden;
-  transition: var(--sb-transition), transform .24s cubic-bezier(.4,0,.2,1);
+  transition: width .22s cubic-bezier(.4,0,.2,1),
+              transform .24s cubic-bezier(.4,0,.2,1);
   scrollbar-width: thin; scrollbar-color: rgba(255,255,255,.1) transparent;
 }
 #app-sidebar::-webkit-scrollbar { width: 3px; }
 #app-sidebar::-webkit-scrollbar-thumb { background: rgba(255,255,255,.1); border-radius: 2px; }
 
-/* ── Collapsed state ─────────────────────────────────────────────────────── */
-#app-sidebar.sb-collapsed { width: var(--sb-w-col); }
-#app-sidebar.sb-collapsed .sb-label { display: none; }
-#app-sidebar.sb-collapsed .sb-section-label { display: none; }
-#app-sidebar.sb-collapsed .sb-link { padding: 10px; justify-content: center; }
-#app-sidebar.sb-collapsed .sb-icon { width: auto; font-size: 18px; }
-#app-sidebar.sb-collapsed .sb-logo { justify-content: center; padding: 12px 8px; }
-#app-sidebar.sb-collapsed .sb-logo-img-full { display: none; }
-#app-sidebar.sb-collapsed .sb-logo-icon { display: flex !important; }
-#app-sidebar.sb-collapsed .sb-footer { padding: 10px 6px; text-align: center; }
-#app-sidebar.sb-collapsed .sb-footer-text { display: none; }
-#app-sidebar.sb-collapsed .sb-collapse-btn { justify-content: center; }
-
 /* ── Logo block ──────────────────────────────────────────────────────────── */
 .sb-logo {
-  padding: 13px 14px 11px;
+  padding: 13px 10px 11px;
   border-bottom: 1px solid rgba(255,255,255,.08);
   display: flex; align-items: center; justify-content: space-between;
-  gap: 8px; flex-shrink: 0;
+  gap: 6px; flex-shrink: 0; min-height: 56px;
 }
-.sb-logo-img-full { height: 34px; width: auto; display: block; }
-.sb-logo-icon { height: 28px; width: auto; display: none; }
-
-/* ── Collapse toggle button ──────────────────────────────────────────────── */
-.sb-collapse-btn {
-  background: none; border: none; cursor: pointer;
-  color: rgba(255,255,255,.3); padding: 4px 6px;
-  border-radius: 6px; font-size: 14px; line-height: 1;
-  display: flex; align-items: center;
-  transition: color .14s, background .14s;
+/* Logo branca: filter inverte logo escuro para branco no fundo escuro */
+.sb-logo img {
+  height: 32px; width: auto; display: block;
+  filter: brightness(0) invert(1);
   flex-shrink: 0;
 }
-.sb-collapse-btn:hover { color: rgba(255,255,255,.7); background: rgba(255,255,255,.08); }
 
-/* ── Section ─────────────────────────────────────────────────────────────── */
+/* ── Collapse toggle button ──────────────────────────────────────────────── */
+#sb-collapse-btn {
+  background: none; border: none; cursor: pointer;
+  color: rgba(255,255,255,.35); padding: 5px 7px;
+  border-radius: 6px; font-size: 18px; line-height: 1;
+  flex-shrink: 0; transition: color .14s, background .14s;
+}
+#sb-collapse-btn:hover { color: rgba(255,255,255,.75); background: rgba(255,255,255,.08); }
+
+/* ── Collapsed state ─────────────────────────────────────────────────────── */
+#app-sidebar.sb-collapsed { width: var(--sb-w-col); }
+/* No modo recolhido: esconde logo, centraliza botão */
+#app-sidebar.sb-collapsed .sb-logo { justify-content: center; }
+#app-sidebar.sb-collapsed .sb-logo img { display: none; }
+#app-sidebar.sb-collapsed .sb-label { display: none; }
+#app-sidebar.sb-collapsed .sb-section-label { display: none; }
+#app-sidebar.sb-collapsed .sb-link { padding: 10px 0; justify-content: center; }
+#app-sidebar.sb-collapsed .sb-icon { width: auto; font-size: 18px; }
+#app-sidebar.sb-collapsed .sb-footer-text { display: none; }
+#app-sidebar.sb-collapsed .sb-footer { padding: 10px 6px; text-align: center; }
+
+/* ── Section / links ─────────────────────────────────────────────────────── */
 .sb-section { padding: 10px 0 2px; }
 .sb-section-label {
   padding: 0 16px 4px;
@@ -75,8 +70,6 @@ _SIDEBAR_CSS = r"""
   text-transform: uppercase; color: rgba(255,255,255,.28);
   white-space: nowrap; overflow: hidden;
 }
-
-/* ── Nav link ────────────────────────────────────────────────────────────── */
 .sb-link {
   display: flex; align-items: center; gap: 9px;
   padding: 8px 16px; color: var(--sb-txt); font-size: .85rem;
@@ -90,9 +83,7 @@ _SIDEBAR_CSS = r"""
   border-left-color: var(--sb-accent); font-weight: 600;
 }
 #app-sidebar.sb-collapsed .sb-link { border-left-color: transparent !important; }
-#app-sidebar.sb-collapsed .sb-link.active {
-  background: var(--sb-active-bg);
-}
+#app-sidebar.sb-collapsed .sb-link.active { background: var(--sb-active-bg); }
 .sb-icon { font-size: 15px; width: 20px; text-align: center; flex-shrink: 0; }
 .sb-label { overflow: hidden; }
 
@@ -100,17 +91,13 @@ _SIDEBAR_CSS = r"""
 .sb-footer {
   margin-top: auto; padding: 10px 16px 14px;
   border-top: 1px solid rgba(255,255,255,.08);
-  font-size: .74rem; color: rgba(255,255,255,.4);
-  flex-shrink: 0;
+  font-size: .74rem; color: rgba(255,255,255,.4); flex-shrink: 0;
 }
 .sb-footer .sb-user-name { color: rgba(255,255,255,.6); font-weight: 600; margin-bottom: 2px; }
 
-/* ── Desktop: push content right ─────────────────────────────────────────── */
+/* ── Desktop ─────────────────────────────────────────────────────────────── */
 @media (min-width: 992px) {
-  body {
-    padding-left: var(--sb-w) !important;
-    transition: padding-left .22s cubic-bezier(.4,0,.2,1);
-  }
+  body { padding-left: var(--sb-w) !important; transition: padding-left .22s cubic-bezier(.4,0,.2,1); }
   body.sb-is-collapsed { padding-left: var(--sb-w-col) !important; }
   .navbar-brand { display: none !important; }
   #sb-toggle { display: none !important; }
@@ -120,10 +107,9 @@ _SIDEBAR_CSS = r"""
 @media (max-width: 991px) {
   #app-sidebar { transform: translateX(calc(-1 * var(--sb-w))); width: var(--sb-w) !important; }
   #app-sidebar.sb-open { transform: translateX(0); box-shadow: 4px 0 28px rgba(0,0,0,.4); }
-  .sb-collapse-btn { display: none !important; }
+  #sb-collapse-btn { display: none !important; }
   #sb-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.5); z-index: 1039; }
   #sb-overlay.sb-open { display: block; }
-  /* Always show labels on mobile */
   .sb-label { display: block !important; }
   .sb-section-label { display: block !important; }
 }
@@ -135,13 +121,10 @@ _SIDEBAR_HTML = r"""
 
 <aside id="app-sidebar">
 
-  <!-- Logo + collapse toggle -->
+  <!-- Logo + botão recolher -->
   <div class="sb-logo">
-    <img class="sb-logo-img-full" src="/static/logo.png" alt="Maffezzolli Capital">
-    <img class="sb-logo-icon" src="/static/logo.png" alt="M" style="object-fit:contain;">
-    <button class="sb-collapse-btn" id="sb-collapse-btn" onclick="sbToggleCollapse()" title="Recolher/expandir menu" aria-label="Recolher menu">
-      &#8249;
-    </button>
+    <img src="/static/logo.png" alt="Maffezzolli Capital">
+    <button id="sb-collapse-btn" onclick="sbToggleCollapse()" title="Recolher / expandir">&#8249;</button>
   </div>
 
   {% if current_user %}
@@ -210,7 +193,7 @@ _SIDEBAR_HTML = r"""
     </a>
   </div>
 
-  <!-- Administração (admin/equipe) -->
+  <!-- Administração -->
   {% if role in ["admin", "equipe"] %}
   <div class="sb-section">
     <div class="sb-section-label">Administração</div>
@@ -235,7 +218,6 @@ _SIDEBAR_HTML = r"""
       <div>{{ current_company.name if current_company else "" }}</div>
       <a href="/logout" style="color:rgba(255,255,255,.3);font-size:.68rem;">Sair</a>
     </div>
-    <a href="/logout" class="sb-footer-logout" title="Sair" style="display:none;color:rgba(255,255,255,.35);font-size:16px;text-decoration:none;">⏻</a>
   </div>
 
   {% endif %}
@@ -245,9 +227,28 @@ _SIDEBAR_HTML = r"""
 (function(){
   var STORAGE_KEY = 'sb_collapsed';
   var sidebar = document.getElementById('app-sidebar');
-  var colBtn  = document.getElementById('sb-collapse-btn');
+  var btn     = document.getElementById('sb-collapse-btn');
 
-  // ── Ativa link correto ────────────────────────────────────────────────────
+  function setCollapsed(collapsed) {
+    sidebar.classList.toggle('sb-collapsed', collapsed);
+    document.body.classList.toggle('sb-is-collapsed', collapsed);
+    if (btn) btn.innerHTML = collapsed ? '&#8250;' : '&#8249;';
+    localStorage.setItem(STORAGE_KEY, collapsed ? '1' : '0');
+  }
+
+  // Restaura estado salvo sem animação
+  var saved = localStorage.getItem(STORAGE_KEY) === '1';
+  if (saved) {
+    sidebar.style.transition = 'none';
+    setCollapsed(true);
+    requestAnimationFrame(function(){ sidebar.style.transition = ''; });
+  }
+
+  window.sbToggleCollapse = function() {
+    setCollapsed(!sidebar.classList.contains('sb-collapsed'));
+  };
+
+  // Ativa link correto
   var path = window.location.pathname;
   document.querySelectorAll('#app-sidebar .sb-link').forEach(function(a){
     var p = a.getAttribute('data-sbpath');
@@ -256,35 +257,7 @@ _SIDEBAR_HTML = r"""
     if (match) a.classList.add('active');
   });
 
-  // ── Colapso ───────────────────────────────────────────────────────────────
-  function applyCollapse(collapsed, animate) {
-    if (!animate) sidebar.style.transition = 'none';
-    sidebar.classList.toggle('sb-collapsed', collapsed);
-    document.body.classList.toggle('sb-is-collapsed', collapsed);
-    if (colBtn) colBtn.innerHTML = collapsed ? '&#8250;' : '&#8249;';
-
-    // Ícone de logout no rodapé
-    var logoutText = sidebar.querySelector('.sb-footer-logout');
-    if (logoutText) logoutText.style.display = collapsed ? 'block' : 'none';
-
-    if (!animate) {
-      // Força reflow e restaura transição
-      sidebar.offsetHeight;
-      sidebar.style.transition = '';
-    }
-  }
-
-  // Restaura estado salvo (sem animação)
-  var saved = localStorage.getItem(STORAGE_KEY) === '1';
-  applyCollapse(saved, false);
-
-  window.sbToggleCollapse = function() {
-    var isNowCollapsed = !sidebar.classList.contains('sb-collapsed');
-    applyCollapse(isNowCollapsed, true);
-    localStorage.setItem(STORAGE_KEY, isNowCollapsed ? '1' : '0');
-  };
-
-  // ── Mobile open/close ─────────────────────────────────────────────────────
+  // Mobile
   window.sbOpen = function() {
     sidebar.classList.add('sb-open');
     document.getElementById('sb-overlay').classList.add('sb-open');
@@ -297,7 +270,6 @@ _SIDEBAR_HTML = r"""
 </script>
 """
 
-# Botão hambúrguer para mobile
 _SB_TOGGLE_BTN = '<button id="sb-toggle" class="btn btn-outline-secondary btn-sm me-2" onclick="sbOpen()" aria-label="Abrir menu" style="border-radius:8px;">☰</button>'
 
 # ── Patch base.html ──────────────────────────────────────────────────────────
@@ -305,29 +277,26 @@ _SB_TOGGLE_BTN = '<button id="sb-toggle" class="btn btn-outline-secondary btn-sm
 try:
     _base = TEMPLATES.get("base.html", "")
 
-    # Remove versão anterior se existir, para reaplicar
+    # Remove versão anterior se existir
     if "sb-styles" in _base:
         import re as _re_sb
-        # Remove bloco <style id="sb-styles">...</style>
-        _base = _re_sb.sub(r'<style id="sb-styles">.*?</style>', '', _base, flags=_re_sb.DOTALL)
-        # Remove bloco aside + overlay
-        _base = _re_sb.sub(r'<div id="sb-overlay".*?</aside>', '', _base, flags=_re_sb.DOTALL)
-        # Remove script de sidebar
-        _base = _re_sb.sub(r'\(function\(\)\{[^}]*sb-collapse-btn.*?\}\)\(\);', '', _base, flags=_re_sb.DOTALL)
-        # Remove botão hamburger antigo
+        _base = _re_sb.sub(r'<style id="sb-styles">.*?</style>\s*', '', _base, flags=_re_sb.DOTALL)
+        _base = _re_sb.sub(r'<div id="sb-overlay"[^>]*>.*?</aside>\s*', '', _base, flags=_re_sb.DOTALL)
+        # Remove script da sidebar (bloco IIFE que contém 'sb_collapsed')
+        _base = _re_sb.sub(r'<script>\s*\(function\(\)\{.*?sb_collapsed.*?\}\)\(\);\s*</script>', '', _base, flags=_re_sb.DOTALL)
         _base = _base.replace(_SB_TOGGLE_BTN, '')
 
-    # 1. Injeta CSS no <head>
+    # 1. CSS no <head>
     _base = _base.replace("</head>", _SIDEBAR_CSS + "\n  </head>", 1)
 
-    # 2. Injeta sidebar + overlay antes do <nav>
+    # 2. Sidebar antes do <nav>
     _base = _base.replace(
         '<nav class="navbar',
         _SIDEBAR_HTML + '\n    <nav class="navbar',
         1,
     )
 
-    # 3. Injeta botão hambúrguer no container da navbar
+    # 3. Botão hambúrguer mobile
     if _SB_TOGGLE_BTN not in _base:
         _base = _base.replace(
             '<div class="container py-2">',
@@ -338,9 +307,9 @@ try:
     TEMPLATES["base.html"] = _base
     if hasattr(templates_env.loader, "mapping"):
         templates_env.loader.mapping["base.html"] = _base
-    print("[sidebar] ✅ Sidebar v2 (colapsável) injetada no base.html.")
+    print("[sidebar] ✅ Sidebar v3 injetada no base.html.")
 
 except Exception as _e_sb:
     print(f"[sidebar] ⚠️ Erro ao injetar sidebar: {_e_sb}")
 
-print("[sidebar] ✅ Módulo de sidebar v2 carregado.")
+print("[sidebar] ✅ Módulo de sidebar v3 carregado.")
