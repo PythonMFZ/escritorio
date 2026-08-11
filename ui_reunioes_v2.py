@@ -761,25 +761,29 @@ TEMPLATES["admin_acoes.html"] = r"""
   .pri-media { color:#f59e0b; }
   .pri-baixa { color:#6b7280; }
   .st-badge  { font-size:.7rem; padding:2px 7px; border-radius:999px; border:1px solid; }
-  .st-aberta      { border-color:#60a5fa; color:#3b82f6; background:#eff6ff; }
-  .st-em_andamento{ border-color:#f59e0b; color:#d97706; background:#fffbeb; }
-  .st-concluida   { border-color:#22c55e; color:#16a34a; background:#f0fdf4; }
-  .st-cancelada   { border-color:#d1d5db; color:#6b7280; background:#f9fafb; }
+  .st-aberta       { border-color:#60a5fa; color:#3b82f6; background:#eff6ff; }
+  .st-em_andamento { border-color:#f59e0b; color:#d97706; background:#fffbeb; }
+  .st-concluida    { border-color:#22c55e; color:#16a34a; background:#f0fdf4; }
+  .st-cancelada    { border-color:#d1d5db; color:#6b7280; background:#f9fafb; }
+  .st-amarelo      { border-color:#f59e0b; color:#d97706; background:#fffbeb; }
+  .st-vermelho     { border-color:#ef4444; color:#ef4444; background:#fef2f2; }
+  .fonte-bsc       { border-left:3px solid #a855f7; }
+  .fonte-reuniao   { border-left:3px solid #3b82f6; }
 </style>
+
+{% set next_url = "/admin/acoes?status=" ~ filtro_status ~ "&prioridade=" ~ filtro_pri ~ "&client_id=" ~ filtro_client ~ "&fonte=" ~ filtro_fonte %}
 
 <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
   <div>
     <h4 class="mb-0">⚡ Central de Ações</h4>
-    <div class="muted small">Todas as ações corretivas da empresa — {{ total }} no total</div>
+    <div class="muted small">Ações corretivas + KPIs em atenção — {{ total }} item(ns)</div>
   </div>
   <div class="d-flex gap-2 flex-wrap align-items-center">
     <form method="get" class="d-flex gap-2 flex-wrap">
-      <select name="status" class="form-select form-select-sm" onchange="this.form.submit()">
-        <option value="" {% if not filtro_status %}selected{% endif %}>Todos os status</option>
-        <option value="aberta"       {% if filtro_status=="aberta" %}selected{% endif %}>Abertas</option>
-        <option value="em_andamento" {% if filtro_status=="em_andamento" %}selected{% endif %}>Em andamento</option>
-        <option value="concluida"    {% if filtro_status=="concluida" %}selected{% endif %}>Concluídas</option>
-        <option value="cancelada"    {% if filtro_status=="cancelada" %}selected{% endif %}>Canceladas</option>
+      <select name="fonte" class="form-select form-select-sm" onchange="this.form.submit()">
+        <option value=""        {% if not filtro_fonte %}selected{% endif %}>Todas as fontes</option>
+        <option value="reuniao" {% if filtro_fonte=="reuniao" %}selected{% endif %}>🔵 Reuniões</option>
+        <option value="bsc"     {% if filtro_fonte=="bsc" %}selected{% endif %}>🟣 BSC</option>
       </select>
       <select name="prioridade" class="form-select form-select-sm" onchange="this.form.submit()">
         <option value="" {% if not filtro_pri %}selected{% endif %}>Todas as prioridades</option>
@@ -793,6 +797,15 @@ TEMPLATES["admin_acoes.html"] = r"""
           <option value="{{ c.id }}" {% if filtro_client == c.id|string %}selected{% endif %}>{{ c.name }}</option>
         {% endfor %}
       </select>
+      {% if filtro_fonte == "reuniao" %}
+      <select name="status" class="form-select form-select-sm" onchange="this.form.submit()">
+        <option value="" {% if not filtro_status %}selected{% endif %}>Todos os status</option>
+        <option value="aberta"       {% if filtro_status=="aberta" %}selected{% endif %}>Abertas</option>
+        <option value="em_andamento" {% if filtro_status=="em_andamento" %}selected{% endif %}>Em andamento</option>
+        <option value="concluida"    {% if filtro_status=="concluida" %}selected{% endif %}>Concluídas</option>
+        <option value="cancelada"    {% if filtro_status=="cancelada" %}selected{% endif %}>Canceladas</option>
+      </select>
+      {% endif %}
     </form>
   </div>
 </div>
@@ -808,45 +821,51 @@ TEMPLATES["admin_acoes.html"] = r"""
 </div>
 
 {% if not acoes %}
-  <div class="alert alert-info">Nenhuma ação encontrada com os filtros selecionados.</div>
+  <div class="alert alert-info">Nenhum item encontrado com os filtros selecionados.</div>
 {% else %}
 <div class="card p-0 overflow-hidden">
   <div class="table-responsive">
   <table class="table table-hover mb-0">
     <thead class="table-light">
       <tr>
-        <th>Ação</th>
+        <th>Item</th>
         <th>Cliente</th>
         <th>Prioridade</th>
-        <th>Status</th>
+        <th>Status / Situação</th>
         <th>Responsável</th>
         <th>Prazo</th>
-        <th>Reunião</th>
+        <th>Origem</th>
         <th></th>
       </tr>
     </thead>
     <tbody>
       {% for a in acoes %}
-      <tr class="acao-row">
+      <tr class="acao-row fonte-{{ a.tipo }}">
         <td>
-          <div class="fw-semibold">{{ a.titulo or "—" }}</div>
-          {% if a.descricao %}<div class="muted" style="font-size:.72rem;">{{ a.descricao[:60] }}{% if a.descricao|length > 60 %}…{% endif %}</div>{% endif %}
+          <div class="fw-semibold">{{ a.titulo }}</div>
+          {% if a.descricao %}<div class="muted" style="font-size:.72rem;">{{ a.descricao[:70] }}{% if a.descricao|length > 70 %}…{% endif %}</div>{% endif %}
         </td>
         <td class="muted">{{ a._client_name }}</td>
         <td class="pri-{{ a.prioridade }}">{{ a.prioridade|capitalize }}</td>
-        <td><span class="st-badge st-{{ a.status }}">{{ a.status|replace("_"," ")|capitalize }}</span></td>
-        <td class="muted">{{ a.responsavel or "—" }}</td>
-        <td class="muted">{{ a.prazo or "—" }}</td>
-        <td><a href="/reunioes/{{ a.meeting_id }}" class="muted small">ver reunião</a></td>
+        <td><span class="st-badge st-{{ a.status }}">{{ a.status_label }}</span></td>
+        <td class="muted">{{ a.responsavel }}</td>
+        <td class="muted">{{ a.prazo }}</td>
         <td>
-          <form method="post" action="/acoes/{{ a.id }}/status" class="d-inline">
-            <input type="hidden" name="next" value="/admin/acoes{% if filtro_status or filtro_pri or filtro_client %}?status={{ filtro_status }}&prioridade={{ filtro_pri }}&client_id={{ filtro_client }}{% endif %}">
+          <a href="{{ a.origem_url }}" class="muted small">{{ a.origem_label }}</a>
+        </td>
+        <td>
+          {% if a.tipo == "reuniao" %}
+          <form method="post" action="/acoes/{{ a._acao_id }}/status" class="d-inline">
+            <input type="hidden" name="next" value="{{ next_url }}">
             <select name="status" class="form-select form-select-sm" style="font-size:.7rem;padding:2px 4px;" onchange="this.form.submit()">
               {% for s in ["aberta","em_andamento","concluida","cancelada"] %}
               <option value="{{ s }}" {% if s==a.status %}selected{% endif %}>{{ s|replace("_"," ")|capitalize }}</option>
               {% endfor %}
             </select>
           </form>
+          {% else %}
+          <a href="{{ a.origem_url }}" class="btn btn-outline-secondary btn-sm" style="font-size:.7rem;">Ver BSC</a>
+          {% endif %}
         </td>
       </tr>
       {% endfor %}
@@ -854,12 +873,59 @@ TEMPLATES["admin_acoes.html"] = r"""
   </table>
   </div>
 </div>
+<div class="muted small mt-2">
+  <span style="display:inline-block;width:10px;height:10px;background:#3b82f6;border-radius:2px;margin-right:4px;"></span>Azul = ação de reunião &nbsp;
+  <span style="display:inline-block;width:10px;height:10px;background:#a855f7;border-radius:2px;margin-right:4px;"></span>Roxo = KPI BSC em atenção
+</div>
 {% endif %}
 {% endblock %}
 """
 
 if hasattr(templates_env.loader, "mapping"):
     templates_env.loader.mapping["admin_acoes.html"] = TEMPLATES["admin_acoes.html"]
+
+
+def _bsc_itens_atencao(session, company_id, filter_client_id=None):
+    """Retorna itens virtuais do BSC (KPIs amarelo/vermelho) para exibir na Central."""
+    itens = []
+    try:
+        q = _select_rv2(BSCIndicador).where(BSCIndicador.company_id == company_id)
+        if filter_client_id:
+            q = q.where(BSCIndicador.client_id == filter_client_id)
+        for ind in session.exec(q).all():
+            ult = session.exec(
+                _select_rv2(BSCLancamento)
+                .where(BSCLancamento.indicador_id == ind.id)
+                .order_by(BSCLancamento.periodo.desc())
+            ).first()
+            if not ult:
+                continue
+            desvio = ((ind.meta_valor - ult.valor) / abs(ind.meta_valor)) * 100 if ind.meta_valor else 0
+            if ind.polaridade == "menor":
+                desvio = -desvio
+            if desvio <= ind.tol_amarelo:
+                continue  # verde, não mostra
+            sem = "vermelho" if desvio > ind.tol_vermelho else "amarelo"
+            pri = "alta" if sem == "vermelho" else "media"
+            c = session.get(Client, ind.client_id)
+            itens.append({
+                "tipo": "bsc",
+                "id": f"bsc_{ind.id}",
+                "titulo": ind.nome,
+                "descricao": f"Meta: {ind.meta_valor} {ind.unidade} | Realizado: {ult.valor} {ind.unidade} ({ult.periodo})",
+                "prioridade": pri,
+                "status": sem,          # "amarelo" | "vermelho" — não é status de ação
+                "status_label": "⚠ KPI " + sem,
+                "responsavel": "—",
+                "prazo": "—",
+                "origem_label": "BSC",
+                "origem_url": f"/ferramentas/bsc/{ind.client_id}",
+                "_client_name": c.name if c else f"#{ind.client_id}",
+                "client_id": ind.client_id,
+            })
+    except Exception:
+        pass
+    return itens
 
 
 @app.get("/admin/acoes", response_class=_HTML_rv2)
@@ -872,42 +938,70 @@ async def admin_acoes_central(request: Request, session: Session = Depends(get_s
     filtro_status  = request.query_params.get("status", "")
     filtro_pri     = request.query_params.get("prioridade", "")
     filtro_client  = request.query_params.get("client_id", "")
+    filtro_fonte   = request.query_params.get("fonte", "")   # "" | "reuniao" | "bsc"
 
+    fid = int(filtro_client) if filtro_client and filtro_client.isdigit() else None
+
+    # ── MeetingAcao ──────────────────────────────────────────────────────────
     q = _select_rv2(MeetingAcao).where(MeetingAcao.company_id == ctx.company.id)
-    if filtro_status:
+    if filtro_status and filtro_fonte != "bsc":
         q = q.where(MeetingAcao.status == filtro_status)
     if filtro_pri:
         q = q.where(MeetingAcao.prioridade == filtro_pri)
-    if filtro_client and filtro_client.isdigit():
-        q = q.where(MeetingAcao.client_id == int(filtro_client))
+    if fid:
+        q = q.where(MeetingAcao.client_id == fid)
     q = q.order_by(MeetingAcao.created_at.desc())
-    acoes_raw = session.exec(q).all()
 
-    # Enriquecer com nome do cliente
     acoes = []
-    for a in acoes_raw:
-        c = session.get(Client, a.client_id)
-        a._client_name = c.name if c else f"#{a.client_id}"
-        acoes.append(a)
+    if filtro_fonte != "bsc":
+        for a in session.exec(q).all():
+            c = session.get(Client, a.client_id)
+            acoes.append({
+                "tipo": "reuniao",
+                "id": str(a.id),
+                "titulo": a.titulo or "—",
+                "descricao": a.descricao or "",
+                "prioridade": a.prioridade,
+                "status": a.status,
+                "status_label": a.status.replace("_", " ").capitalize(),
+                "responsavel": a.responsavel or "—",
+                "prazo": a.prazo or "—",
+                "origem_label": "Reunião",
+                "origem_url": f"/reunioes/{a.meeting_id}/acoes",
+                "_client_name": c.name if c else f"#{a.client_id}",
+                "client_id": a.client_id,
+                "_acao_id": a.id,   # para o form de status
+            })
+
+    # ── Itens BSC (virtuais) ─────────────────────────────────────────────────
+    bsc_itens = []
+    if filtro_fonte != "reuniao":
+        bsc_itens = _bsc_itens_atencao(session, ctx.company.id, fid)
+        if filtro_pri:
+            bsc_itens = [i for i in bsc_itens if i["prioridade"] == filtro_pri]
+
+    todos_itens = acoes + bsc_itens
 
     clientes = session.exec(_select_rv2(Client).where(Client.company_id == ctx.company.id)).all()
 
-    # KPIs
-    todas = session.exec(_select_rv2(MeetingAcao).where(MeetingAcao.company_id == ctx.company.id)).all()
+    # KPIs globais (sem filtros)
+    todas_acoes = session.exec(_select_rv2(MeetingAcao).where(MeetingAcao.company_id == ctx.company.id)).all()
+    todos_bsc   = _bsc_itens_atencao(session, ctx.company.id)
     kpis = [
-        ("Total",        len(todas),                                                        "#6366f1"),
-        ("Abertas",      sum(1 for a in todas if a.status == "aberta"),                    "#3b82f6"),
-        ("Em andamento", sum(1 for a in todas if a.status == "em_andamento"),              "#f59e0b"),
-        ("Alta prioridade", sum(1 for a in todas if a.prioridade == "alta" and a.status not in ("concluida","cancelada")), "#ef4444"),
-        ("Concluídas",   sum(1 for a in todas if a.status == "concluida"),                 "#22c55e"),
+        ("Ações abertas",    sum(1 for a in todas_acoes if a.status == "aberta"),                                          "#3b82f6"),
+        ("Em andamento",     sum(1 for a in todas_acoes if a.status == "em_andamento"),                                    "#f59e0b"),
+        ("Alta prioridade",  sum(1 for a in todas_acoes if a.prioridade == "alta" and a.status not in ("concluida","cancelada")), "#ef4444"),
+        ("KPIs atenção",     len(todos_bsc),                                                                               "#a855f7"),
+        ("Concluídas",       sum(1 for a in todas_acoes if a.status == "concluida"),                                       "#22c55e"),
     ]
 
     cc = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
     return render("admin_acoes.html", request=request, context={
         "current_user": ctx.user, "current_company": ctx.company,
         "role": ctx.membership.role, "current_client": cc,
-        "acoes": acoes, "total": len(acoes_raw),
-        "filtro_status": filtro_status, "filtro_pri": filtro_pri, "filtro_client": filtro_client,
+        "acoes": todos_itens, "total": len(todos_itens),
+        "filtro_status": filtro_status, "filtro_pri": filtro_pri,
+        "filtro_client": filtro_client, "filtro_fonte": filtro_fonte,
         "clientes": clientes, "kpis": kpis,
     })
 
