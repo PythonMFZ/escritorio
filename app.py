@@ -49078,6 +49078,7 @@ exec(open('ui_cliente_nova_reuniao.py').read())
 exec(open('ui_cliente_reuniao_full.py').read())
 exec(open('ui_cliente_grafo.py').read())
 exec(open('ui_acoes_cliente.py').read())
+exec(open('ui_api_integrador.py').read())
 exec(open('ui_noticias_press.py').read())
 
 
