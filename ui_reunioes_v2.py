@@ -504,6 +504,7 @@ async def rv2_acao_status(
     session: Session = Depends(get_session),
     acao_id: int = 0,
     status: str = _Form_rv2("aberta"),
+    next: str = _Form_rv2(""),  # URL de retorno opcional (ex: /admin/acoes?status=aberta)
 ):
     ctx = get_tenant_context(request, session)
     assert ctx
@@ -514,7 +515,9 @@ async def rv2_acao_status(
             acao.updated_at = utcnow()
             session.add(acao)
             session.commit()
-    # Volta para a página de ações da reunião
+    # Redireciona para next se fornecido e seguro (apenas paths internos)
+    if next and next.startswith("/") and not next.startswith("//"):
+        return _RR_rv2(next, status_code=303)
     if acao:
         return _RR_rv2(f"/reunioes/{acao.meeting_id}/acoes", status_code=303)
     return _RR_rv2("/reunioes", status_code=303)
@@ -837,6 +840,7 @@ TEMPLATES["admin_acoes.html"] = r"""
         <td><a href="/reunioes/{{ a.meeting_id }}" class="muted small">ver reunião</a></td>
         <td>
           <form method="post" action="/acoes/{{ a.id }}/status" class="d-inline">
+            <input type="hidden" name="next" value="/admin/acoes{% if filtro_status or filtro_pri or filtro_client %}?status={{ filtro_status }}&prioridade={{ filtro_pri }}&client_id={{ filtro_client }}{% endif %}">
             <select name="status" class="form-select form-select-sm" style="font-size:.7rem;padding:2px 4px;" onchange="this.form.submit()">
               {% for s in ["aberta","em_andamento","concluida","cancelada"] %}
               <option value="{{ s }}" {% if s==a.status %}selected{% endif %}>{{ s|replace("_"," ")|capitalize }}</option>
