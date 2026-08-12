@@ -61,17 +61,31 @@ except Exception as _e_migr_ai:
 
 # ── HTTP helper ───────────────────────────────────────────────────────────────
 
-def _ai_do_single_request(url: str, method: str, headers: dict, auth, body_json: str | None) -> tuple:
-    """Faz uma única requisição HTTP. Retorna (ok, text)."""
+def _ai_do_single_request(url: str, method: str, headers: dict, auth, body_json: str | None,
+                           _retries: int = 3) -> tuple:
+    """Faz uma única requisição HTTP com retry em 429. Retorna (ok, text)."""
+    import time as _t
     try:
         import httpx as _hx
-        if method == "POST":
-            content = body_json.encode() if body_json else b""
-            resp = _hx.post(url, headers=headers, auth=auth, content=content, timeout=30)
-        else:
-            resp = _hx.get(url, headers=headers, auth=auth, timeout=30)
-        resp.raise_for_status()
-        return True, resp.text
+        for attempt in range(_retries):
+            try:
+                if method == "POST":
+                    content = body_json.encode() if body_json else b""
+                    resp = _hx.post(url, headers=headers, auth=auth, content=content, timeout=30)
+                else:
+                    resp = _hx.get(url, headers=headers, auth=auth, timeout=30)
+                if resp.status_code == 429:
+                    wait = int(resp.headers.get("Retry-After", 2 ** (attempt + 1)))
+                    _t.sleep(min(wait, 30))
+                    continue
+                resp.raise_for_status()
+                return True, resp.text
+            except _hx.HTTPStatusError as e:
+                if e.response.status_code == 429 and attempt < _retries - 1:
+                    _t.sleep(2 ** (attempt + 1))
+                    continue
+                return False, str(e)
+        return False, "429 Too Many Requests após retries"
     except ImportError:
         pass
     except Exception as e:
@@ -212,6 +226,7 @@ def _ai_enrich_sienge_receivables(records: list, base_url: str,
     """Para cada título a receber do Sienge, busca as parcelas e computa saldo devedor real."""
     import json as _jsi
     import re as _rsi
+    import time as _tsi
     # Detecta URL base do Sienge: .../accounts-receivable/receivable-bills[?...]
     match = _rsi.match(r"(.*?/accounts-receivable/receivable-bills)", base_url)
     if not match:
@@ -226,6 +241,7 @@ def _ai_enrich_sienge_receivables(records: list, base_url: str,
             continue
         inst_url = f"{bills_base}/{bill_id}/installments"
         ok_i, text_i = _ai_do_single_request(inst_url, "GET", headers, auth, None)
+        _tsi.sleep(0.8)  # throttle: Sienge tem rate limit (~1 req/s)
         if not ok_i:
             enriched.append(rec)
             continue
@@ -800,7 +816,7 @@ async def _ai_editar_post(
     return RedirectResponse("/integrations/api-connector", status_code=303)  # type: ignore[name-defined]
 
 
-@app.post("/integrations/api-connector/{intg_id}/sync")  # type: ignore[name-defined]
+@app.api_route("/integrations/api-connector/{intg_id}/sync", methods=["GET","POST"])  # type: ignore[name-defined]
 @require_login  # type: ignore[name-defined]
 async def _ai_sync(request: Request, intg_id: int, session: _Ses_ai = _ai_sess_dep()):  # type: ignore[name-defined]
     ctx = get_tenant_context(request, session)  # type: ignore[name-defined]
