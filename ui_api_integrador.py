@@ -349,11 +349,13 @@ def _ai_build_clients(session, company_id: int) -> list:
 
 # ── Background sync loop ──────────────────────────────────────────────────────
 
-async def _api_sync_loop():
-    await _asyncio_ai.sleep(60)
+def _api_sync_loop_blocking():
+    """Roda em thread separada — nunca bloqueia o event loop."""
+    import time as _t_sl
+    from sqlmodel import Session as _SyncSes
+    _t_sl.sleep(60)
     while True:
         try:
-            from sqlmodel import Session as _SyncSes
             with _SyncSes(engine) as _sess:  # type: ignore[name-defined]
                 integrations = _sess.exec(
                     _sel_ai(ApiIntegration).where(
@@ -376,12 +378,13 @@ async def _api_sync_loop():
                         print(f"[api_integrador] auto-sync intg={intg.id}: {e}")
         except Exception as e:
             print(f"[api_integrador] sync loop error: {e}")
-        await _asyncio_ai.sleep(1800)
+        _t_sl.sleep(1800)
 
 
 @app.on_event("startup")  # type: ignore[name-defined]
 async def _start_api_sync_loop():
-    _asyncio_ai.create_task(_api_sync_loop())
+    import threading as _thr_ai
+    _thr_ai.Thread(target=_api_sync_loop_blocking, daemon=True, name="api-sync-loop").start()
 
 
 # ── Templates ─────────────────────────────────────────────────────────────────
@@ -819,6 +822,8 @@ async def _ai_editar_post(
 @app.api_route("/integrations/api-connector/{intg_id}/sync", methods=["GET","POST"])  # type: ignore[name-defined]
 @require_login  # type: ignore[name-defined]
 async def _ai_sync(request: Request, intg_id: int, session: _Ses_ai = _ai_sess_dep()):  # type: ignore[name-defined]
+    import threading as _thr_sync
+    from sqlmodel import Session as _SyncSes2
     ctx = get_tenant_context(request, session)  # type: ignore[name-defined]
     if not ctx or ctx.membership.role not in ("admin", "equipe"):
         return RedirectResponse("/login", status_code=303)  # type: ignore[name-defined]
@@ -826,14 +831,18 @@ async def _ai_sync(request: Request, intg_id: int, session: _Ses_ai = _ai_sess_d
     if not intg or intg.company_id != ctx.company.id:
         set_flash(request, "Integração não encontrada.")  # type: ignore[name-defined]
         return RedirectResponse("/integrations/api-connector", status_code=303)  # type: ignore[name-defined]
-    try:
-        snap = _ai_sync_integration(session, intg)
-        if snap.status == "ok":
-            set_flash(request, "Sincronizado com sucesso.")  # type: ignore[name-defined]
-        else:
-            set_flash(request, f"Erro na sincronização: {snap.error_msg}")  # type: ignore[name-defined]
-    except Exception as e:
-        set_flash(request, f"Erro inesperado: {e}")  # type: ignore[name-defined]
+
+    def _run_sync():
+        try:
+            with _SyncSes2(engine) as _s:  # type: ignore[name-defined]
+                fresh = _s.get(ApiIntegration, intg_id)
+                if fresh:
+                    _ai_sync_integration(_s, fresh)
+        except Exception as e:
+            print(f"[api_integrador] sync manual intg={intg_id}: {e}")
+
+    _thr_sync.Thread(target=_run_sync, daemon=True, name=f"api-sync-{intg_id}").start()
+    set_flash(request, "Sincronização iniciada em background. Aguarde ~2 min e recarregue a página.")  # type: ignore[name-defined]
     return RedirectResponse("/integrations/api-connector", status_code=303)  # type: ignore[name-defined]
 
 
