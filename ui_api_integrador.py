@@ -988,45 +988,101 @@ def _ai_summarize_snap(label: str, synced_at: str, data_json: str) -> str:
     lines = [header, f"Total de registros: {total_regs}"]
 
     # ── Sienge bulk-data (/income e /outcome) ────────────────────────────────
-    # Esses endpoints retornam parcelas sem baixa — cada registro É uma parcela
-    is_sienge_bulk = any(k in sample for k in ("installmentValue", "currentBalance",
-                                                "outstandingBalance", "amountToPay"))
+    # Campos reais da API Sienge bulk: correctedBalanceAmount, balanceAmount,
+    # creditorName / customerName, companyName, projectName, dueDate
+    is_sienge_bulk = any(k in sample for k in (
+        "correctedBalanceAmount", "balanceAmount",   # outcome (a pagar)
+        "correctedBalance", "outstandingBalance",     # income (a receber)
+        "installmentValue", "currentBalance", "amountToPay",  # outros formatos
+    ))
     if is_sienge_bulk:
         def _fmt_r(v): return f"R$ {v:,.2f}".replace(",","X").replace(".",",").replace("X",".")
-        balance_key = next((k for k in ("currentBalance","outstandingBalance","amountToPay","installmentValue")
-                            if k in sample), None)
-        group_k = next((k for k in ("empreendimento","enterpriseName","obra","costCenter","companyId")
-                        if k in sample), None)
-        name_k  = next((k for k in ("clientName","nomePessoa","supplierName","documentNumber","nomeCliente")
-                        if k in sample), None)
+        # Chave de saldo — prioriza correctedBalanceAmount (com correção monetária)
+        balance_key = next((k for k in (
+            "correctedBalanceAmount", "correctedBalance",
+            "balanceAmount", "outstandingBalance",
+            "currentBalance", "amountToPay", "installmentValue",
+        ) if k in sample), None)
+        # Chave de empresa/projeto para agrupamento
+        company_k = "companyName" if "companyName" in sample else None
+        project_k = "projectName" if "projectName" in sample else None
+        # Chave de nome do credor/devedor
+        name_k = next((k for k in (
+            "creditorName", "customerName", "clientName",
+            "nomePessoa", "supplierName", "documentNumber",
+        ) if k in sample), None)
+
+        # Filtra apenas parcelas em aberto (saldo > 0)
         if balance_key:
             try:
-                total_bal = sum(float(r.get(balance_key) or 0) for r in records)
-                lines.append(f"Saldo total (parcelas em aberto): {_fmt_r(total_bal)}")
-                lines.append(f"  ↳ {total_regs} parcelas sem baixa")
+                unpaid = [r for r in records if float(r.get(balance_key) or 0) > 0]
+            except Exception:
+                unpaid = records
+        else:
+            unpaid = records
+
+        total_unpaid = len(unpaid)
+        total_bal = 0.0
+        if balance_key:
+            try:
+                total_bal = sum(float(r.get(balance_key) or 0) for r in unpaid)
             except Exception:
                 pass
-        if group_k and balance_key:
-            groups: dict = {}
-            for r in records:
-                g = str(r.get(group_k) or "Sem grupo")
-                try: groups[g] = groups.get(g, 0) + float(r.get(balance_key) or 0)
+
+        lines.append(f"Total de registros na API: {total_regs}")
+        lines.append(f"Parcelas em aberto (saldo > 0): {total_unpaid}")
+        if balance_key:
+            lines.append(f"Saldo total em aberto: {_fmt_r(total_bal)}")
+            lines.append(f"  ↳ Campo usado: {balance_key}")
+
+        # Agrupa por empresa
+        if company_k and balance_key:
+            by_company: dict = {}
+            for r in unpaid:
+                g = str(r.get(company_k) or "Sem empresa")
+                try: by_company[g] = by_company.get(g, 0) + float(r.get(balance_key) or 0)
                 except Exception: pass
-            lines.append(f"\nPor {group_k}:")
-            for g, v in sorted(groups.items(), key=lambda x: -x[1])[:20]:
+            lines.append("\nPor empresa:")
+            for g, v in sorted(by_company.items(), key=lambda x: -x[1]):
                 lines.append(f"  {g}: {_fmt_r(v)}")
-        lines.append(f"\nPrimeiros {min(30, total_regs)} registros:")
-        for r in records[:30]:
+
+        # Agrupa por projeto dentro de cada empresa
+        if project_k and balance_key:
+            by_project: dict = {}
+            for r in unpaid:
+                proj = str(r.get(project_k) or "Sem projeto")
+                comp = str(r.get(company_k) or "") if company_k else ""
+                g = f"{comp} › {proj}" if comp else proj
+                try: by_project[g] = by_project.get(g, 0) + float(r.get(balance_key) or 0)
+                except Exception: pass
+            lines.append("\nPor projeto:")
+            for g, v in sorted(by_project.items(), key=lambda x: -x[1])[:25]:
+                lines.append(f"  {g}: {_fmt_r(v)}")
+
+        # Maiores credores/devedores em aberto
+        if name_k and balance_key:
+            by_name: dict = {}
+            for r in unpaid:
+                n = str(r.get(name_k) or "?")[:50]
+                try: by_name[n] = by_name.get(n, 0) + float(r.get(balance_key) or 0)
+                except Exception: pass
+            lines.append(f"\nMaiores saldos por {name_k}:")
+            for n, v in sorted(by_name.items(), key=lambda x: -x[1])[:15]:
+                lines.append(f"  {n}: {_fmt_r(v)}")
+
+        lines.append(f"\nAmostra — primeiras 20 parcelas em aberto:")
+        for r in unpaid[:20]:
             parts = []
             if name_k and r.get(name_k): parts.append(str(r[name_k])[:40])
+            if company_k and r.get(company_k): parts.append(str(r[company_k])[:30])
+            if project_k and r.get(project_k): parts.append(str(r[project_k])[:30])
             if balance_key and r.get(balance_key) is not None:
                 try: parts.append(f"saldo={_fmt_r(float(r[balance_key]))}")
                 except Exception: pass
-            for extra in ("dueDate","issueDate","empreendimento","enterpriseName","documentNumber"):
-                if r.get(extra): parts.append(f"{extra}={r[extra]}")
+            if r.get("dueDate"): parts.append(f"venc={r['dueDate']}")
             lines.append("  • " + " | ".join(parts) if parts else f"  • {_j.dumps(r, ensure_ascii=False)[:120]}")
-        if total_regs > 30:
-            lines.append(f"  ... e mais {total_regs - 30} parcelas (totalizadas acima).")
+        if total_unpaid > 20:
+            lines.append(f"  ... e mais {total_unpaid - 20} parcelas em aberto (totalizadas acima).")
         return "\n".join(lines)
 
     # Tenta somar valores monetários e agrupar por campos relevantes
