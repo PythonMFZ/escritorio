@@ -93,6 +93,37 @@ async def api_grafo_data(request: Request, session: Session = Depends(get_sessio
     except Exception:
         pass
 
+    # BSCActions — ações do BSC / Central de Ações
+    try:
+        from ui_ferramenta_bsc import BSCAction as _BSCAction, BSCObjective as _BSCObj
+        q_bsc = select(_BSCAction).where(
+            _BSCAction.company_id == cid,
+            _BSCAction.is_active == True,
+        )
+        # Busca objectives para saber client_id via BSCPlan
+        from ui_ferramenta_bsc import BSCPlan as _BSCPlan
+        plan_client: dict = {}
+        for pl in session.exec(select(_BSCPlan).where(_BSCPlan.company_id == cid)).all():
+            # mapeia objective_id → client_id via plan
+            for obj in session.exec(select(_BSCObj).where(_BSCObj.plan_id == pl.id)).all():
+                plan_client[obj.id] = pl.client_id
+
+        for ba in session.exec(q_bsc).all():
+            cl_id = plan_client.get(ba.objective_id)
+            if filter_client_id and cl_id != filter_client_id:
+                continue
+            grp = "acao_alta" if ba.priority == "alta" else "acao"
+            prazo = f"\nPrazo: {ba.due_date}" if ba.due_date else ""
+            resp  = f"\nResp: {ba.responsible}" if ba.responsible else ""
+            add_node(f"bscacao_{ba.id}", (ba.title or "Ação")[:22], grp,
+                     title=f"[{ba.priority.upper()}] {ba.title}\n{ba.status}{prazo}{resp}",
+                     url=f"/ferramentas/bsc", size=14)
+            # Conecta ao cliente
+            if cl_id:
+                add_edge(f"client_{cl_id}", f"bscacao_{ba.id}", ba.status)
+    except Exception:
+        pass
+
     # Planos orçamentários
     try:
         q = select(BudgetPlan).where(BudgetPlan.company_id == cid, BudgetPlan.is_active == True)
