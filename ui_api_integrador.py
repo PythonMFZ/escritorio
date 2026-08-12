@@ -1071,6 +1071,32 @@ def _ai_summarize_snap(label: str, synced_at: str, data_json: str) -> str:
             for n, v in sorted(by_name.items(), key=lambda x: -x[1])[:15]:
                 lines.append(f"  {n}: {_fmt_r(v)}")
 
+        # Breakdown por período de vencimento — responde "quanto vence até dezembro 2026"
+        if balance_key:
+            from datetime import date as _dt_bal
+            hoje_str = _dt_bal.today().isoformat()
+            periodos = {
+                "Vencido (antes de hoje)":          ("0000-01-01", hoje_str),
+                "Ago–Dez 2026":                     ("2026-08-01", "2026-12-31"),
+                "Jan–Jul 2026 (já vencido em 2026)":("2026-01-01", "2026-07-31"),
+                "2027":                             ("2027-01-01", "2027-12-31"),
+                "2028 em diante":                   ("2028-01-01", "2100-12-31"),
+            }
+            lines.append("\nPor período de vencimento (dueDate):")
+            for label, (d_ini, d_fim) in periodos.items():
+                v_per = sum(
+                    float(r.get(balance_key) or 0) for r in unpaid
+                    if d_ini <= (r.get("dueDate") or "")[:10] <= d_fim
+                )
+                if v_per:
+                    lines.append(f"  {label}: {_fmt_r(v_per)}")
+            # Total até 31/12/2026
+            ate_dez26 = sum(
+                float(r.get(balance_key) or 0) for r in unpaid
+                if (r.get("dueDate") or "")[:10] <= "2026-12-31"
+            )
+            lines.append(f"\n  ► TOTAL A PAGAR/RECEBER ATÉ 31/12/2026: {_fmt_r(ate_dez26)}")
+
         lines.append(f"\nAmostra — primeiras 20 parcelas em aberto:")
         for r in unpaid[:20]:
             parts = []
