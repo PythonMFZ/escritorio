@@ -49081,6 +49081,7 @@ exec(open('ui_acoes_cliente.py').read())
 exec(open('ui_api_integrador.py').read())
 exec(open('ui_noticias_press.py').read())
 exec(open('ui_migrar_notion_chromadb.py').read())
+exec(open('ui_theme_toggle.py').read())
 
 
 exec(open('ui_fluxo_caixa.py').read())
