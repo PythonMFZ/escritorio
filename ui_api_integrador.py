@@ -61,31 +61,17 @@ except Exception as _e_migr_ai:
 
 # ── HTTP helper ───────────────────────────────────────────────────────────────
 
-def _ai_do_request(intg: ApiIntegration) -> tuple:
-    import json as _json_ai
-    headers: dict = {}
-    auth = None
-    if intg.auth_type == "api_key_header" and intg.auth_key:
-        headers[intg.auth_key] = intg.auth_value or ""
-    elif intg.auth_type == "basic_auth":
-        auth = (intg.auth_key or "", intg.auth_value or "")
-    # Headers extras (ex: Content-Type: application/json)
-    if intg.extra_headers_json:
-        try:
-            for k, v in _json_ai.loads(intg.extra_headers_json).items():
-                headers[k] = str(v)
-        except Exception:
-            pass
-
+def _ai_do_single_request(url: str, method: str, headers: dict, auth, body_json: str | None) -> tuple:
+    """Faz uma única requisição HTTP. Retorna (ok, text)."""
     try:
         import httpx as _hx
-        if intg.method == "POST":
-            content = intg.body_json.encode() if intg.body_json else b""
-            resp = _hx.post(intg.url, headers=headers, auth=auth, content=content, timeout=30)
+        if method == "POST":
+            content = body_json.encode() if body_json else b""
+            resp = _hx.post(url, headers=headers, auth=auth, content=content, timeout=30)
         else:
-            resp = _hx.get(intg.url, headers=headers, auth=auth, timeout=30)
+            resp = _hx.get(url, headers=headers, auth=auth, timeout=30)
         resp.raise_for_status()
-        return True, resp.text[:50000]
+        return True, resp.text
     except ImportError:
         pass
     except Exception as e:
@@ -93,22 +79,107 @@ def _ai_do_request(intg: ApiIntegration) -> tuple:
 
     import urllib.request as _ur
     import urllib.error   as _ue
-    req = _ur.Request(intg.url, method=intg.method)
+    req = _ur.Request(url, method=method)
     for k, v in headers.items():
         req.add_header(k, v)
     if auth:
         creds = _b64_ai.b64encode(f"{auth[0]}:{auth[1]}".encode()).decode()
         req.add_header("Authorization", f"Basic {creds}")
-    if intg.method == "POST" and intg.body_json:
+    if method == "POST" and body_json:
         req.add_header("Content-Type", "application/json")
-        req.data = intg.body_json.encode()
+        req.data = body_json.encode()
     try:
         with _ur.urlopen(req, timeout=30) as resp:
-            return True, resp.read().decode("utf-8", errors="replace")[:50000]
+            return True, resp.read().decode("utf-8", errors="replace")
     except _ue.HTTPError as e:
         return False, f"HTTP {e.code}: {e.reason}"
     except Exception as e:
         return False, str(e)
+
+
+def _ai_do_request(intg: ApiIntegration) -> tuple:
+    """Faz requisição com paginação automática para APIs que retornam listas paginadas."""
+    import json as _json_ai
+    from urllib.parse import urlparse, urlencode, parse_qs, urlunparse
+    headers: dict = {}
+    auth = None
+    if intg.auth_type == "api_key_header" and intg.auth_key:
+        headers[intg.auth_key] = intg.auth_value or ""
+    elif intg.auth_type == "basic_auth":
+        auth = (intg.auth_key or "", intg.auth_value or "")
+    if intg.extra_headers_json:
+        try:
+            for k, v in _json_ai.loads(intg.extra_headers_json).items():
+                headers[k] = str(v)
+        except Exception:
+            pass
+
+    # Primeira página
+    ok, text = _ai_do_single_request(intg.url, intg.method, headers, auth, intg.body_json)
+    if not ok:
+        return False, text
+
+    # Tenta detectar paginação no JSON
+    try:
+        obj = _json_ai.loads(text)
+    except Exception:
+        return True, text[:100000]
+
+    # Detecta se é resposta paginada
+    all_records = None
+    total_pages = None
+    records_key = None
+
+    if isinstance(obj, dict):
+        # Padrões comuns de paginação
+        total_pages = (obj.get("totalPages") or obj.get("total_pages") or
+                       obj.get("pageCount") or obj.get("last_page"))
+        total_count = (obj.get("totalElements") or obj.get("total") or
+                       obj.get("count") or obj.get("totalRecords"))
+        for k in ("content", "data", "results", "items", "registros",
+                  "titulos", "bills", "receivable_bills", "records"):
+            if isinstance(obj.get(k), list):
+                records_key = k
+                all_records = list(obj[k])
+                break
+
+        if all_records is not None and total_pages and int(total_pages) > 1:
+            # Busca páginas restantes (máx 50 para não sobrecarregar)
+            max_pages = min(int(total_pages), 50)
+            parsed = urlparse(intg.url)
+            qs = parse_qs(parsed.query, keep_blank_values=True)
+            # Tenta parâmetros comuns de paginação
+            page_param = next((p for p in ("page", "pagina", "offset", "start")
+                               if p in qs), "page")
+            current_page = int((qs.get(page_param) or ["0"])[0])
+            is_zero_based = current_page == 0
+
+            for p in range(current_page + 1, max_pages):
+                qs[page_param] = [str(p)]
+                new_query = urlencode({k: v[0] for k, v in qs.items()})
+                page_url = urlunparse(parsed._replace(query=new_query))
+                ok_p, text_p = _ai_do_single_request(page_url, intg.method, headers, auth, intg.body_json)
+                if not ok_p:
+                    break
+                try:
+                    obj_p = _json_ai.loads(text_p)
+                    page_records = obj_p.get(records_key, []) if isinstance(obj_p, dict) else []
+                    if not page_records:
+                        break
+                    all_records.extend(page_records)
+                except Exception:
+                    break
+
+            # Reconstrói objeto com todos os registros
+            merged = dict(obj)
+            merged[records_key] = all_records
+            return True, _json_ai.dumps(merged, ensure_ascii=False)
+
+    elif isinstance(obj, list):
+        # Resposta já é lista completa ou sem paginação detectável
+        return True, text[:200000]
+
+    return True, _json_ai.dumps(obj, ensure_ascii=False)[:200000]
 
 
 def _ai_sync_integration(session, intg: ApiIntegration) -> ApiIntegrationSnapshot:
