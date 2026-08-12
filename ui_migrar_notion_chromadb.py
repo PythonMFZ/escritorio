@@ -93,27 +93,44 @@ _mn_run_migration()
 
 # ── Substitui busca ChromaDB por SQL na função de contexto do Augur ───────────
 
-def _mn_search_casos_pg(pergunta: str, n: int = 4, company_id: int = _COMPANY_ID_MAFFEZZOLLI) -> list:
-    """Busca casos históricos no PostgreSQL usando palavras-chave da pergunta."""
-    from sqlmodel import Session as _MnSes2, select as _mn_sel2
+def _mn_search_casos_pg(pergunta: str, n: int = 4, company_id: int = _COMPANY_ID_MAFFEZZOLLI,
+                        client_id: int = None) -> list:
+    """Busca no PostgreSQL usando palavras-chave.
+
+    Retorna registros de:
+      - client_id=0  (conhecimento geral / casos históricos anônimos)
+      - client_id=<client_id>  (dados específicos do cliente, se fornecido)
+    Nunca mistura dados de clientes diferentes.
+    """
+    from sqlmodel import Session as _MnSes2, select as _mn_sel2, or_ as _or_mn
     import re as _re_mn
     palavras = [p for p in _re_mn.split(r'\W+', pergunta.lower()) if len(p) > 3][:8]
     if not palavras:
         palavras = [pergunta[:30]]
     try:
         with _MnSes2(engine) as s:  # type: ignore[name-defined]
+            # Filtro de client_id: sempre inclui global (0); se houver cliente específico, inclui também
+            if client_id:
+                cid_filter = _or_mn(
+                    BaseConhecimento.client_id == _CLIENT_ID_GLOBAL,  # type: ignore[name-defined]
+                    BaseConhecimento.client_id == client_id,
+                )
+            else:
+                cid_filter = (BaseConhecimento.client_id == _CLIENT_ID_GLOBAL)  # type: ignore[name-defined]
+
             todos = s.exec(
                 _mn_sel2(BaseConhecimento).where(  # type: ignore[name-defined]
                     BaseConhecimento.company_id == company_id,
-                    BaseConhecimento.client_id == _CLIENT_ID_GLOBAL,
-                    BaseConhecimento.tipo == _TIPO,
+                    cid_filter,
                 )
             ).all()
-            # Pontua por quantidade de palavras da pergunta presentes no texto
             scored = []
             for bc in todos:
-                texto_lower = (bc.conteudo_texto + " " + bc.nome).lower()
+                texto_lower = (bc.conteudo_texto + " " + bc.nome + " " + (bc.descricao or "")).lower()
                 score = sum(1 for p in palavras if p in texto_lower)
+                # Prioriza dados do cliente específico sobre conhecimento geral
+                if bc.client_id and bc.client_id != _CLIENT_ID_GLOBAL:
+                    score += 5
                 if score > 0:
                     scored.append((score, bc))
             scored.sort(key=lambda x: -x[0])
@@ -138,8 +155,9 @@ try:
             return {"response": "Augur não configurado.", "confidence": 0.0,
                     "error": True, "error_message": "API key ausente"}
 
-        # Busca casos similares no PostgreSQL
-        casos_pg = _mn_search_casos_pg(question, n=n_similar_cases)
+        # Busca casos similares no PostgreSQL (inclui dados específicos do cliente se disponível)
+        _cid_ask = client_data.get("client_id") or client_data.get("id")
+        casos_pg = _mn_search_casos_pg(question, n=n_similar_cases, client_id=_cid_ask)
 
         import ai_assistant.assistant as _aug_ast
         ctx = _aug_ast._format_client_context(client_data)
