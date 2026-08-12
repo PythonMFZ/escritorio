@@ -172,6 +172,77 @@ try:
         except Exception:
             pass
 
+        # ── Integrações de API / ERP ──────────────────────────────────────────
+        try:
+            from sqlmodel import or_ as _or_gf
+            _ApiInteg = globals().get("ApiIntegration")  # type: ignore[name-defined]
+            if _ApiInteg:
+                q = _sel_gf(_ApiInteg).where(
+                    _ApiInteg.company_id == cid,
+                    _ApiInteg.is_active == True,
+                )
+                if filter_client_id:
+                    q = q.where(_or_gf(
+                        _ApiInteg.client_id == filter_client_id,
+                        _ApiInteg.client_id == None,
+                    ))
+                for intg in session.exec(q).all():
+                    label = (intg.data_label or intg.name or "API")[:20]
+                    add_node(f"api_{intg.id}", label, "api_integ",
+                             title=f"Integração: {intg.name}\nURL: {intg.url[:60]}\nSync: {intg.sync_interval_hours}h",
+                             url="/integrations/api-connector", size=18)
+                    # Liga ao cliente se houver vínculo
+                    if intg.client_id and intg.client_id in client_ids:
+                        add_edge(f"client_{intg.client_id}", f"api_{intg.id}", "ERP")
+                    else:
+                        # "Empresa toda" — liga a todos os clientes visíveis
+                        for cid_ in client_ids:
+                            add_edge(f"client_{cid_}", f"api_{intg.id}", "ERP")
+        except Exception:
+            pass
+
+        # ── Arquivos do Drive (CloudStorageFile) ──────────────────────────────
+        try:
+            _CloudFile = globals().get("CloudStorageFile")  # type: ignore[name-defined]
+            if _CloudFile:
+                q = _sel_gf(_CloudFile).where(_CloudFile.company_id == cid)
+                if filter_client_id:
+                    q = q.where(_CloudFile.client_id == filter_client_id)
+                files = session.exec(q).all()
+                # Agrupa por extensão para não poluir com centenas de nós
+                from collections import Counter as _Counter_gf
+                ext_count: dict = {}
+                file_nodes: list = []
+                for f in files:
+                    if f.client_id not in client_ids:
+                        continue
+                    name = f.file_name or "arquivo"
+                    ext = name.rsplit(".", 1)[-1].lower() if "." in name else "file"
+                    # Mostra arquivos individualmente se ≤ 15, caso contrário agrupa
+                    file_nodes.append(f)
+                    ext_count[ext] = ext_count.get(ext, 0) + 1
+
+                if len(file_nodes) <= 15:
+                    for f in file_nodes:
+                        add_node(f"drive_{f.id}", (f.file_name or "arquivo")[:20], "drive_file",
+                                 title=f"Arquivo: {f.file_name}\nIndexado: {f.indexed_at[:10] if f.indexed_at else '—'}",
+                                 url="/integrations", size=13)
+                        if f.client_id in client_ids:
+                            add_edge(f"client_{f.client_id}", f"drive_{f.id}", "drive")
+                else:
+                    # Agrupa por tipo de arquivo
+                    for ext, count in ext_count.items():
+                        cid_list = {f.client_id for f in file_nodes if (f.file_name or "").endswith(f".{ext}")}
+                        node_id = f"drive_ext_{ext}"
+                        add_node(node_id, f"{ext.upper()} ({count})", "drive_file",
+                                 title=f"{count} arquivos .{ext} no Drive",
+                                 url="/integrations", size=14)
+                        for cid_ in cid_list:
+                            if cid_ in client_ids:
+                                add_edge(f"client_{cid_}", node_id, "drive")
+        except Exception:
+            pass
+
         return _JR_gf({"nodes": nodes, "edges": edges})
 
     print("[grafo_filter] ✅ /api/grafo/data com filtro de usuários por client_id.")
