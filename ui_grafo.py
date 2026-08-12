@@ -94,36 +94,31 @@ async def api_grafo_data(request: Request, session: Session = Depends(get_sessio
         pass
 
     # BSCActions — ações do BSC / Central de Ações
-    # Usa globals() porque ui_ferramenta_bsc.py é exec'd depois de ui_grafo.py
     try:
-        _BSCAction = globals().get('BSCAction')
-        _BSCObjective = globals().get('BSCObjective')
-        _BSCPlan = globals().get('BSCPlan')
-        if _BSCAction and _BSCPlan and _BSCObjective:
-            q_bsc = select(_BSCAction).where(
-                _BSCAction.company_id == cid,
-                _BSCAction.is_active == True,
-            )
-            plan_client: dict = {}
-            for pl in session.exec(select(_BSCPlan).where(_BSCPlan.company_id == cid)).all():
-                for obj in session.exec(select(_BSCObjective).where(_BSCObjective.plan_id == pl.id)).all():
-                    plan_client[obj.id] = pl.client_id
-
-            for ba in session.exec(q_bsc).all():
-                cl_id = plan_client.get(ba.objective_id)
-                # cl_id pode ser None para planos antigos sem client_id
-                if filter_client_id and cl_id is not None and cl_id != filter_client_id:
-                    continue
-                grp = "acao_alta" if ba.priority == "alta" else "acao"
-                prazo = f"\nPrazo: {ba.due_date}" if ba.due_date else ""
-                resp  = f"\nResp: {ba.responsible}" if ba.responsible else ""
-                add_node(f"bscacao_{ba.id}", (ba.title or "Ação")[:22], grp,
-                         title=f"[{ba.priority.upper()}] {ba.title}\n{ba.status}{prazo}{resp}",
-                         url=f"/ferramentas/bsc", size=14)
-                if cl_id:
-                    add_edge(f"client_{cl_id}", f"bscacao_{ba.id}", ba.status)
-    except Exception:
-        pass
+        from sqlalchemy import text as _txt_grafo
+        with engine.connect() as _gc:
+            _bsc_rows = _gc.execute(_txt_grafo(
+                "SELECT ba.id, ba.title, ba.priority, ba.status, ba.responsible, ba.due_date, "
+                "ba.objective_id, bp.client_id "
+                "FROM bscaction ba "
+                "JOIN bscobjective bo ON bo.id = ba.objective_id "
+                "JOIN bscplan bp ON bp.id = bo.plan_id "
+                "WHERE ba.company_id = :cid AND ba.is_active = true"
+            ), {"cid": cid}).fetchall()
+        for row in _bsc_rows:
+            _ba_id, _ba_title, _ba_pri, _ba_st, _ba_resp, _ba_due, _ba_obj, _cl_id = row
+            if filter_client_id and _cl_id is not None and int(_cl_id) != filter_client_id:
+                continue
+            grp = "acao_alta" if _ba_pri == "alta" else "acao"
+            prazo = f"\nPrazo: {_ba_due}" if _ba_due else ""
+            resp  = f"\nResp: {_ba_resp}" if _ba_resp else ""
+            add_node(f"bscacao_{_ba_id}", (_ba_title or "Ação")[:22], grp,
+                     title=f"[{(_ba_pri or '').upper()}] {_ba_title}\n{_ba_st}{prazo}{resp}",
+                     url="/ferramentas/bsc", size=14)
+            if _cl_id:
+                add_edge(f"client_{_cl_id}", f"bscacao_{_ba_id}", _ba_st)
+    except Exception as _e_bsc:
+        print(f"[grafo] BSCAction erro: {_e_bsc}")
 
     # Planos orçamentários
     try:

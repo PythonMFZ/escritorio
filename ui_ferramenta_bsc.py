@@ -1274,9 +1274,8 @@ TEMPLATES["bsc_dashboard.html"] = r"""
           <textarea id="aDesc" class="form-control" rows="2" placeholder="Detalhe da ação"></textarea></div>
         <div class="row g-2 mb-3">
           <div class="col-md-4"><label class="form-label fw-semibold">Responsável</label>
-            <select id="aResp" class="form-select">
-              <option value="">— sem responsável —</option>
-            </select></div>
+            <input id="aResp" class="form-control" placeholder="Nome ou área" list="aRespList" autocomplete="off">
+            <datalist id="aRespList"></datalist></div>
           <div class="col-md-4"><label class="form-label fw-semibold">Prazo</label>
             <input id="aPrazo" class="form-control" placeholder="DD/MM/AAAA"></div>
           <div class="col-md-4"><label class="form-label fw-semibold">Prioridade</label>
@@ -1315,17 +1314,15 @@ TEMPLATES["bsc_dashboard.html"] = r"""
 const ALL_VALUES = {{ values_json|safe }};
 const MONTHS_PT  = {{ months_pt|tojson }};
 
-// ── Membros para dropdown de responsável ──
-var _bscMembros = [];
+// ── Membros para autocomplete de responsável ──
 fetch('/admin/acoes/membros').then(r => r.json()).then(function(data) {
-  _bscMembros = data;
-  var sel = document.getElementById('aResp');
-  if (!sel) return;
-  sel.innerHTML = '<option value="">— sem responsável —</option>';
+  var dl = document.getElementById('aRespList');
+  if (!dl) return;
+  dl.innerHTML = '';
   data.forEach(function(m) {
     var o = document.createElement('option');
-    o.value = m.name; o.textContent = m.name;
-    sel.appendChild(o);
+    o.value = m.name;
+    dl.appendChild(o);
   });
 });
 
@@ -1556,13 +1553,7 @@ function editarAcao(id, titulo, desc, resp, prazo, status, prioridade, progresso
   document.getElementById('aAcaoId').value = id;
   document.getElementById('aTitulo').value = titulo;
   document.getElementById('aDesc').value = desc;
-  var selR = document.getElementById('aResp');
-  // Se resp não está na lista de membros, adiciona como opção temporária
-  if (resp && selR && !Array.from(selR.options).some(o => o.value === resp)) {
-    var o = document.createElement('option'); o.value = resp; o.textContent = resp;
-    selR.appendChild(o);
-  }
-  if (selR) selR.value = resp;
+  document.getElementById('aResp').value = resp;
   document.getElementById('aPrazo').value = prazo;
   document.getElementById('aStatus').value = status;
   document.getElementById('aPrioridade').value = prioridade;
