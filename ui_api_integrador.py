@@ -131,11 +131,6 @@ def _ai_do_request(intg: ApiIntegration) -> tuple:
     records_key = None
 
     if isinstance(obj, dict):
-        # Padrões comuns de paginação
-        total_pages = (obj.get("totalPages") or obj.get("total_pages") or
-                       obj.get("pageCount") or obj.get("last_page"))
-        total_count = (obj.get("totalElements") or obj.get("total") or
-                       obj.get("count") or obj.get("totalRecords"))
         for k in ("content", "data", "results", "items", "registros",
                   "titulos", "bills", "receivable_bills", "records"):
             if isinstance(obj.get(k), list):
@@ -143,21 +138,53 @@ def _ai_do_request(intg: ApiIntegration) -> tuple:
                 all_records = list(obj[k])
                 break
 
+        # ── Padrão Sienge: resultSetMetadata.count / offset / limit ───────────
+        rsmeta = obj.get("resultSetMetadata") or {}
+        total_count_meta = rsmeta.get("count", 0)
+        limit_meta       = rsmeta.get("limit", 100)
+        if all_records is not None and total_count_meta and limit_meta:
+            total_count_meta = int(total_count_meta)
+            limit_meta = int(limit_meta)
+            max_fetch = min(total_count_meta, 5000)  # segurança: máx 5000 registros
+            parsed = urlparse(intg.url)
+            qs = parse_qs(parsed.query, keep_blank_values=True)
+            offset = limit_meta
+            while offset < max_fetch:
+                qs["offset"] = [str(offset)]
+                qs["limit"]  = [str(limit_meta)]
+                page_url = urlunparse(parsed._replace(
+                    query=urlencode({k: v[0] for k, v in qs.items()})
+                ))
+                ok_p, text_p = _ai_do_single_request(page_url, intg.method, headers, auth, intg.body_json)
+                if not ok_p:
+                    break
+                try:
+                    obj_p = _json_ai.loads(text_p)
+                    page_records = obj_p.get(records_key, []) if isinstance(obj_p, dict) else []
+                    if not page_records:
+                        break
+                    all_records.extend(page_records)
+                    offset += limit_meta
+                except Exception:
+                    break
+            merged = dict(obj)
+            merged[records_key] = all_records
+            return True, _json_ai.dumps(merged, ensure_ascii=False)
+
+        # ── Outros padrões de paginação (totalPages) ──────────────────────────
+        total_pages = (obj.get("totalPages") or obj.get("total_pages") or
+                       obj.get("pageCount") or obj.get("last_page"))
         if all_records is not None and total_pages and int(total_pages) > 1:
-            # Busca páginas restantes (máx 50 para não sobrecarregar)
             max_pages = min(int(total_pages), 50)
             parsed = urlparse(intg.url)
             qs = parse_qs(parsed.query, keep_blank_values=True)
-            # Tenta parâmetros comuns de paginação
-            page_param = next((p for p in ("page", "pagina", "offset", "start")
-                               if p in qs), "page")
+            page_param = next((p for p in ("page", "pagina") if p in qs), "page")
             current_page = int((qs.get(page_param) or ["0"])[0])
-            is_zero_based = current_page == 0
-
             for p in range(current_page + 1, max_pages):
                 qs[page_param] = [str(p)]
-                new_query = urlencode({k: v[0] for k, v in qs.items()})
-                page_url = urlunparse(parsed._replace(query=new_query))
+                page_url = urlunparse(parsed._replace(
+                    query=urlencode({k: v[0] for k, v in qs.items()})
+                ))
                 ok_p, text_p = _ai_do_single_request(page_url, intg.method, headers, auth, intg.body_json)
                 if not ok_p:
                     break
@@ -169,8 +196,6 @@ def _ai_do_request(intg: ApiIntegration) -> tuple:
                     all_records.extend(page_records)
                 except Exception:
                     break
-
-            # Reconstrói objeto com todos os registros
             merged = dict(obj)
             merged[records_key] = all_records
             return True, _json_ai.dumps(merged, ensure_ascii=False)
@@ -794,13 +819,16 @@ def _ai_summarize_snap(label: str, synced_at: str, data_json: str) -> str:
     lines = [header, f"Total de registros: {total_regs}"]
 
     # Tenta somar valores monetários e agrupar por campos relevantes
-    _money_keys = ("valor", "value", "amount", "saldo", "balance", "total",
+    _money_keys = ("totalInvoiceAmount", "receivableBillValue",   # Sienge
+                   "valor", "value", "amount", "saldo", "balance", "total",
                    "valorParcela", "valorTitulo", "netAmount", "grossAmount",
                    "valorOriginal", "valorLiquido", "valorBruto")
-    _group_keys = ("empreendimento", "obra", "project", "empresa", "costCenter",
-                   "centrosCusto", "categoria", "category", "status", "tipo", "type")
-    _name_keys  = ("cliente", "client", "nome", "name", "sacado", "fornecedor",
-                   "vendor", "supplier", "nomePessoa", "nomeCliente")
+    _group_keys = ("empreendimento", "obra", "project", "companyId",  # Sienge companyId
+                   "empresa", "costCenter", "centrosCusto", "categoria",
+                   "category", "tipo", "type")
+    _name_keys  = ("documentNumber", "notes",                          # Sienge
+                   "cliente", "client", "nome", "name", "sacado",
+                   "fornecedor", "vendor", "supplier", "nomePessoa", "nomeCliente")
 
     # Encontra chaves presentes nos registros
     sample = records[0] if records else {}
@@ -839,8 +867,9 @@ def _ai_summarize_snap(label: str, synced_at: str, data_json: str) -> str:
                 parts.append(f"R$ {v:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
             except Exception:
                 parts.append(str(r[money_key]))
-        for extra in ("vencimento", "dueDate", "dataVencimento", "prazo", "status", "empreendimento"):
-            if r.get(extra):
+        for extra in ("issueDate", "defaulting", "vencimento", "dueDate",
+                      "dataVencimento", "prazo", "unityName", "originId"):
+            if r.get(extra) is not None and r.get(extra) != "" and r.get(extra) is not False:
                 parts.append(f"{extra}={r[extra]}")
         lines.append("  • " + " | ".join(parts) if parts else f"  • {_j.dumps(r, ensure_ascii=False)[:120]}")
 
