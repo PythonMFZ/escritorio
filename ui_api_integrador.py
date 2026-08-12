@@ -143,8 +143,7 @@ def _ai_build_clients(session, company_id: int) -> list:
     try:
         return session.exec(
             _sel_ai(_AI_CLIENT_MODEL)
-            .where(_AI_CLIENT_MODEL.company_id == company_id,
-                   _AI_CLIENT_MODEL.is_active == True)
+            .where(_AI_CLIENT_MODEL.company_id == company_id)
             .order_by(_AI_CLIENT_MODEL.name)
         ).all()
     except Exception as _e_cl:
