@@ -712,6 +712,36 @@ async def _ai_sync(request: Request, intg_id: int, session: _Ses_ai = _ai_sess_d
     return RedirectResponse("/integrations/api-connector", status_code=303)  # type: ignore[name-defined]
 
 
+@app.get("/integrations/api-connector/{intg_id}/debug")  # type: ignore[name-defined]
+@require_login  # type: ignore[name-defined]
+async def _ai_debug_snap(request: Request, intg_id: int, session: _Ses_ai = _ai_sess_dep()):  # type: ignore[name-defined]
+    from fastapi.responses import PlainTextResponse as _PTR_ai
+    ctx = get_tenant_context(request, session)  # type: ignore[name-defined]
+    if not ctx or ctx.membership.role != "admin":
+        return _PTR_ai("sem permissão", status_code=403)
+    intg = session.get(ApiIntegration, intg_id)
+    if not intg or intg.company_id != ctx.company.id:
+        return _PTR_ai("não encontrado", status_code=404)
+    snap = session.exec(
+        _sel_ai(ApiIntegrationSnapshot)
+        .where(ApiIntegrationSnapshot.integration_id == intg_id)
+        .order_by(ApiIntegrationSnapshot.id.desc())
+    ).first()
+    if not snap:
+        return _PTR_ai("nenhum snapshot")
+    import json as _j_dbg
+    try:
+        obj = _j_dbg.loads(snap.data_json)
+        preview = _j_dbg.dumps(obj, ensure_ascii=False, indent=2)[:3000]
+    except Exception:
+        preview = snap.data_json[:3000]
+    summary = _ai_summarize_snap(intg.data_label or intg.name, snap.synced_at, snap.data_json)
+    return _PTR_ai(
+        f"=== RAW JSON (primeiros 3000 chars) ===\n{preview}\n\n"
+        f"=== RESUMO GERADO PARA O AUGUR ===\n{summary[:3000]}"
+    )
+
+
 @app.post("/integrations/api-connector/{intg_id}/excluir")  # type: ignore[name-defined]
 @require_login  # type: ignore[name-defined]
 async def _ai_excluir(request: Request, intg_id: int, session: _Ses_ai = _ai_sess_dep()):  # type: ignore[name-defined]
