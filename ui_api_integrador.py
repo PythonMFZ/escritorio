@@ -48,6 +48,16 @@ class ApiIntegrationSnapshot(_SM_ai, table=True):
 
 _SM_ai.metadata.create_all(engine)  # type: ignore[name-defined]
 
+# Migration: add extra_headers_json if missing (existing tables not altered by create_all)
+try:
+    with engine.connect() as _conn_migr_ai:  # type: ignore[name-defined]
+        _conn_migr_ai.exec_driver_sql(
+            "ALTER TABLE apiintegration ADD COLUMN IF NOT EXISTS extra_headers_json TEXT"
+        )
+        _conn_migr_ai.commit()
+except Exception as _e_migr_ai:
+    pass  # already exists or unsupported
+
 
 # ── HTTP helper ───────────────────────────────────────────────────────────────
 
