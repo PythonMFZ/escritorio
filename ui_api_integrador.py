@@ -127,6 +127,73 @@ def _ai_do_single_request(url: str, method: str, headers: dict, auth, body_json:
         return False, str(e)
 
 
+def _ai_is_sienge_bulk(url: str) -> bool:
+    return "/public/api/bulk-data/v1/" in url
+
+
+def _ai_build_sienge_bulk_url(url: str) -> str:
+    """Corrige startDate (10 anos atrás) e correctionDate (hoje) para endpoints bulk do Sienge."""
+    from urllib.parse import urlparse, urlencode, parse_qs, urlunparse
+    from datetime import date as _d
+    hoje = _d.today()
+    start = hoje.replace(year=hoje.year - 10).isoformat()
+    parsed = urlparse(url)
+    qs = parse_qs(parsed.query, keep_blank_values=True)
+    qs["startDate"]     = [start]
+    qs["endDate"]       = ["2100-01-01"]
+    qs["correctionDate"] = [hoje.isoformat()]
+    if "correctionIndexerId" not in qs:
+        qs["correctionIndexerId"] = ["1"]
+    if "selectionType" not in qs:
+        qs["selectionType"] = ["D"]
+    return urlunparse(parsed._replace(query=urlencode({k: v[0] for k, v in qs.items()})))
+
+
+def _ai_do_sienge_bulk(base_url: str, headers: dict, auth) -> tuple:
+    """Busca todos os registros da Bulk Data API do Sienge (paginação por 'page' 0-indexed)."""
+    import json as _json_ai
+    import time as _t_bulk
+    from urllib.parse import urlparse, urlencode, parse_qs, urlunparse
+    result = []
+    page = 0
+    while True:
+        parsed = urlparse(base_url)
+        qs = parse_qs(parsed.query, keep_blank_values=True)
+        if page > 0:
+            qs["page"] = [str(page)]
+        url_p = urlunparse(parsed._replace(query=urlencode({k: v[0] for k, v in qs.items()})))
+        ok, text = _ai_do_single_request(url_p, "GET", headers, auth, None)
+        if not ok:
+            if result:
+                break  # retorna o que já temos
+            return False, text
+        try:
+            data = _json_ai.loads(text)
+        except Exception:
+            break
+        if page == 0:
+            keys = list(data.keys())[:12] if isinstance(data, dict) else f"list[{len(data)}]"
+            print(f"[api_integrador] sienge_bulk estrutura página 0: {keys}")
+        if isinstance(data, list):
+            result.extend(data)
+            break
+        items = (data.get("results") or data.get("data") or data.get("items")
+                 or data.get("records") or data.get("content") or [])
+        result.extend(items)
+        total_pages = (data.get("totalPages")
+                    or (data.get("resultSetMetadata") or {}).get("totalPages")
+                    or 1)
+        has_next = data.get("hasNextPage") or (data.get("last") is False)
+        if (isinstance(total_pages, int) and page + 1 < total_pages) or has_next:
+            page += 1
+            _t_bulk.sleep(2.0)
+            continue
+        break
+    print(f"[api_integrador] sienge_bulk total: {len(result)} registros")
+    import json as _json_ai2
+    return True, _json_ai2.dumps(result, ensure_ascii=False)
+
+
 def _ai_do_request(intg: ApiIntegration) -> tuple:
     """Faz requisição com paginação automática para APIs que retornam listas paginadas."""
     import json as _json_ai
@@ -143,6 +210,12 @@ def _ai_do_request(intg: ApiIntegration) -> tuple:
                 headers[k] = str(v)
         except Exception:
             pass
+
+    # ── Sienge Bulk Data API: tratamento especial ─────────────────────────────
+    if _ai_is_sienge_bulk(intg.url):
+        corrected_url = _ai_build_sienge_bulk_url(intg.url)
+        print(f"[api_integrador] sienge_bulk URL: {corrected_url[:120]}")
+        return _ai_do_sienge_bulk(corrected_url, headers, auth)
 
     # Primeira página
     ok, text = _ai_do_single_request(intg.url, intg.method, headers, auth, intg.body_json)
