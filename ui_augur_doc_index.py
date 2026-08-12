@@ -169,11 +169,12 @@ def _index_loop():
             with _SessDI(engine) as ses:
                 # IDs já indexados
                 indexed_ids = set(
-                    row[0] for row in ses.exec(
+                    (row if isinstance(row, int) else row[0])
+                    for row in ses.exec(
                         _selDI(BaseConhecimento.attachment_id)  # type: ignore[attr-defined]
                         .where(BaseConhecimento.attachment_id.isnot(None))  # type: ignore[attr-defined]
                     ).all()
-                    if row[0] is not None
+                    if row is not None and (row if isinstance(row, int) else row[0]) is not None
                 )
 
                 # Anexos ainda não indexados, tipos suportados, mais recentes primeiro
