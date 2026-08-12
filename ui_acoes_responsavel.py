@@ -58,7 +58,10 @@ except Exception as _e2:
 
 # ── Endpoint: atualiza responsável de BSCAction ───────────────────────────────
 try:
-    from ui_ferramenta_bsc import BSCAction as _BSCAction_ar
+    # BSCAction está no globals() porque ui_ferramenta_bsc.py é exec'd antes deste módulo
+    _BSCAction_ar = globals().get('BSCAction')  # type: ignore[name-defined]
+    if not _BSCAction_ar:
+        raise RuntimeError("BSCAction não encontrado no namespace global")
 
     @app.post("/admin/acoes/bsc/{acao_id}/responsavel")  # type: ignore[name-defined]
     @require_login  # type: ignore[name-defined]
