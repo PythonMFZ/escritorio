@@ -687,7 +687,7 @@ def _enriquecer_com_api_data(session, company_id, client_id, client, client_data
             ).first()
             if snap:
                 label = intg.data_label or intg.name
-                snippets.append(f"[{label} — {snap.synced_at[:10]}]\n{snap.data_json[:2000]}")
+                snippets.append(f"[{label} — {snap.synced_at[:10]}]\n{snap.data_json[:8000]}")
         if snippets:
             data["api_integrations"] = "\n\n".join(snippets)
     except Exception as e:

@@ -186,7 +186,7 @@ def _format_client_context(client_data: dict) -> str:
     if api_data:
         lines.append("\n=== DADOS DO ERP / SISTEMA INTEGRADO ===")
         lines.append("Dados sincronizados automaticamente do sistema de gestão do cliente.")
-        lines.append(api_data[:6000])
+        lines.append(api_data[:12000])
 
     # ── Base de conhecimento ──────────────────────────────────────────────────
     base_docs = client_data.get("base_conhecimento", [])
