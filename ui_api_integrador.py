@@ -986,6 +986,7 @@ def _ai_summarize_snap(label: str, synced_at: str, data_json: str) -> str:
 
     total_regs = len(records)
     lines = [header, f"Total de registros: {total_regs}"]
+    sample = records[0] if records else {}
 
     # ── Sienge bulk-data (/income e /outcome) ────────────────────────────────
     # Campos reais da API Sienge bulk: correctedBalanceAmount, balanceAmount,
