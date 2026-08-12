@@ -162,16 +162,18 @@ _RESP_SCRIPT = r"""
 
 try:
     _tpl_ar = TEMPLATES.get("admin_acoes.html", "")  # type: ignore[name-defined]
+    print(f"[acoes_resp] admin_acoes.html len={len(_tpl_ar)}, modalResp={'modalResp' in _tpl_ar}, a.responsavel={'{{ a.responsavel }}' in _tpl_ar}")
     if _tpl_ar and "modalResp" not in _tpl_ar:
         # Substitui o display do responsável por botão clicável
+        # Template usa {{ a.responsavel }} (variável 'a', não 'item')
         _tpl_ar = _tpl_ar.replace(
-            "{{ item.responsavel }}",
+            "{{ a.responsavel }}",
             """<button class="resp-btn"
-                 data-id="{{ item._acao_id or item.id }}"
-                 data-tipo="{{ item.tipo or 'bsc' }}"
-                 data-current="{{ item.responsavel or '' }}"
+                 data-id="{{ a._acao_id or a.id }}"
+                 data-tipo="{{ a.tipo or 'bsc' }}"
+                 data-current="{{ a.responsavel or '' }}"
                  title="Clique para atribuir responsável">
-                 {{ item.responsavel or '+ atribuir' }}
+                 {{ a.responsavel or '+ atribuir' }}
                </button>""",
         )
         # Injeta modal e script antes de </body>

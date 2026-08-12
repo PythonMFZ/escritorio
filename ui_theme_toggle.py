@@ -268,22 +268,44 @@ _DARK_CSS = """<style>
 
 try:
     _tpl = TEMPLATES.get("base.html", "")  # type: ignore[name-defined]
+    print(f"[theme_toggle] base.html len={len(_tpl)}, themeToggle={'themeToggle' in _tpl}")
     if _tpl and "themeToggle" not in _tpl:
         # 1. Injeta script de inicialização logo após <head>
         _tpl = _tpl.replace("<head>", "<head>\n" + _THEME_INIT, 1)
         # 2. Injeta CSS dark logo antes de </head>
         _tpl = _tpl.replace("</head>", _DARK_CSS + "\n  </head>", 1)
-        # 3. Injeta botão no navbar antes do botão Sair (última ocorrência)
-        _LOGOUT = '<a class="btn btn-outline-secondary btn-sm" href="/logout">Sair</a>'
-        if _LOGOUT in _tpl:
+        # 3. Injeta botão no navbar antes do botão Sair
+        # Tenta string exata; fallback para qualquer href="/logout"
+        _LOGOUT_EXACT = '<a class="btn btn-outline-secondary btn-sm" href="/logout">Sair</a>'
+        import re as _re_tt
+        if _LOGOUT_EXACT in _tpl:
             _tpl = _tpl.replace(
-                _LOGOUT,
-                _TOGGLE_BTN + "\n            " + _LOGOUT,
+                _LOGOUT_EXACT,
+                _TOGGLE_BTN + "\n            " + _LOGOUT_EXACT,
                 1,
             )
+            print("[theme_toggle] injetou via string exata")
+        elif 'href="/logout"' in _tpl:
+            _tpl = _re_tt.sub(
+                r'(<a [^>]*href="/logout"[^>]*>Sair</a>)',
+                _TOGGLE_BTN + r"\n            \1",
+                _tpl,
+                count=1,
+            )
+            print("[theme_toggle] injetou via regex logout")
+        else:
+            # Fallback: injeta antes de </nav>
+            _tpl = _tpl.replace("</nav>", _TOGGLE_BTN + "\n</nav>", 1)
+            print("[theme_toggle] injetou via </nav> fallback")
         TEMPLATES["base.html"] = _tpl  # type: ignore[name-defined]
         if hasattr(templates_env.loader, "mapping"):  # type: ignore[name-defined]
             templates_env.loader.mapping = TEMPLATES  # type: ignore[name-defined]
         print("[theme_toggle] ✅ Botão claro/escuro injetado no navbar")
+    elif not _tpl:
+        print("[theme_toggle] ⚠️ base.html não encontrado em TEMPLATES")
+    else:
+        print("[theme_toggle] ℹ️ themeToggle já presente, pulando injeção")
 except Exception as _e_tt:
+    import traceback as _tb_tt
     print(f"[theme_toggle] ⚠️ {_e_tt}")
+    _tb_tt.print_exc()
