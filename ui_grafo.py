@@ -269,11 +269,25 @@ function physics(){
   if(!N) return;
 
   if(ambient){
-    // ── Modo deriva: molas suaves + ruído Browniano ──────────────────────────
+    // ── Modo deriva: molas suaves + repulsão leve + ruído Browniano ──────────
     const SPR_K=0.008, SPR_L=120, DAMP=0.98, GRAV=0.003;
     const NOISE=0.12, MAX_V=1.2;
+    const REP_AMB=Math.min(1200, 300000/N); // repulsão leve — evita sobreposição
     nodes.forEach(n=>{ n.fx=0; n.fy=0; });
-    // Molas (sem repulsão pra poupar CPU e evitar explosão)
+    // Repulsão leve entre nós próximos (só pairs com dist < 180)
+    for(let i=0;i<N;i++){
+      for(let j=i+1;j<N;j++){
+        const a=nodes[i], b=nodes[j];
+        const dx=a.x-b.x, dy=a.y-b.y;
+        const d2=dx*dx+dy*dy+1;
+        if(d2>180*180) continue; // ignora pares distantes para poupar CPU
+        const f=REP_AMB/d2;
+        const d=Math.sqrt(d2);
+        const fx=dx/d*f, fy=dy/d*f;
+        a.fx+=fx; a.fy+=fy;
+        b.fx-=fx; b.fy-=fy;
+      }
+    }
     edges.forEach(e=>{
       const a=nmap[e.from], b=nmap[e.to];
       if(!a||!b) return;
