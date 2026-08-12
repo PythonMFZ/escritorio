@@ -870,7 +870,11 @@ async def _ai_debug_snap(request: Request, intg_id: int, session: _Ses_ai = _ai_
     except Exception:
         preview = snap.data_json[:3000]
     summary = _ai_summarize_snap(intg.data_label or intg.name, snap.synced_at, snap.data_json)
+    status_line = f"STATUS: {snap.status}"
+    if snap.error_msg:
+        status_line += f"\nERRO: {snap.error_msg}"
     return _PTR_ai(
+        f"{status_line}\n\n"
         f"=== RAW JSON (primeiros 3000 chars) ===\n{preview}\n\n"
         f"=== RESUMO GERADO PARA O AUGUR ===\n{summary[:3000]}"
     )
