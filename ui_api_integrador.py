@@ -139,15 +139,13 @@ def _ai_last_snapshot(session, integration_id: int) -> Optional[ApiIntegrationSn
 
 def _ai_build_clients(session, company_id: int) -> list:
     try:
-        import sys
-        ns = sys.modules.get("__main__") or {}
-        Client = getattr(ns, "Client", None)
-        if Client is None:
+        _Client = globals().get("Client")  # type: ignore[name-defined]
+        if _Client is None:
             return []
         return session.exec(
-            _sel_ai(Client)
-            .where(Client.company_id == company_id, Client.is_active == True)
-            .order_by(Client.name)
+            _sel_ai(_Client)
+            .where(_Client.company_id == company_id, _Client.is_active == True)
+            .order_by(_Client.name)
         ).all()
     except Exception:
         return []
