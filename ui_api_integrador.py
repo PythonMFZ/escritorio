@@ -871,8 +871,50 @@ def _ai_summarize_snap(label: str, synced_at: str, data_json: str) -> str:
     total_regs = len(records)
     lines = [header, f"Total de registros: {total_regs}"]
 
+    # ── Sienge bulk-data (/income e /outcome) ────────────────────────────────
+    # Esses endpoints retornam parcelas sem baixa — cada registro É uma parcela
+    is_sienge_bulk = any(k in sample for k in ("installmentValue", "currentBalance",
+                                                "outstandingBalance", "amountToPay"))
+    if is_sienge_bulk:
+        def _fmt_r(v): return f"R$ {v:,.2f}".replace(",","X").replace(".",",").replace("X",".")
+        balance_key = next((k for k in ("currentBalance","outstandingBalance","amountToPay","installmentValue")
+                            if k in sample), None)
+        group_k = next((k for k in ("empreendimento","enterpriseName","obra","costCenter","companyId")
+                        if k in sample), None)
+        name_k  = next((k for k in ("clientName","nomePessoa","supplierName","documentNumber","nomeCliente")
+                        if k in sample), None)
+        if balance_key:
+            try:
+                total_bal = sum(float(r.get(balance_key) or 0) for r in records)
+                lines.append(f"Saldo total (parcelas em aberto): {_fmt_r(total_bal)}")
+                lines.append(f"  ↳ {total_regs} parcelas sem baixa")
+            except Exception:
+                pass
+        if group_k and balance_key:
+            groups: dict = {}
+            for r in records:
+                g = str(r.get(group_k) or "Sem grupo")
+                try: groups[g] = groups.get(g, 0) + float(r.get(balance_key) or 0)
+                except Exception: pass
+            lines.append(f"\nPor {group_k}:")
+            for g, v in sorted(groups.items(), key=lambda x: -x[1])[:20]:
+                lines.append(f"  {g}: {_fmt_r(v)}")
+        lines.append(f"\nPrimeiros {min(30, total_regs)} registros:")
+        for r in records[:30]:
+            parts = []
+            if name_k and r.get(name_k): parts.append(str(r[name_k])[:40])
+            if balance_key and r.get(balance_key) is not None:
+                try: parts.append(f"saldo={_fmt_r(float(r[balance_key]))}")
+                except Exception: pass
+            for extra in ("dueDate","issueDate","empreendimento","enterpriseName","documentNumber"):
+                if r.get(extra): parts.append(f"{extra}={r[extra]}")
+            lines.append("  • " + " | ".join(parts) if parts else f"  • {_j.dumps(r, ensure_ascii=False)[:120]}")
+        if total_regs > 30:
+            lines.append(f"  ... e mais {total_regs - 30} parcelas (totalizadas acima).")
+        return "\n".join(lines)
+
     # Tenta somar valores monetários e agrupar por campos relevantes
-    _money_keys = ("totalInvoiceAmount",                             # Sienge a pagar
+    _money_keys = ("totalInvoiceAmount",                             # Sienge a pagar (bills)
                    "valor", "value", "amount", "saldo", "balance", "total",
                    "valorParcela", "valorTitulo", "netAmount", "grossAmount",
                    "valorOriginal", "valorLiquido", "valorBruto")
