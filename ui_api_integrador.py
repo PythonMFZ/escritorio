@@ -137,14 +137,18 @@ def _ai_last_snapshot(session, integration_id: int) -> Optional[ApiIntegrationSn
     ).first()
 
 
+_AI_CLIENT_MODEL = Client  # type: ignore[name-defined]  # captured at exec time
+
 def _ai_build_clients(session, company_id: int) -> list:
     try:
         return session.exec(
-            _sel_ai(Client)  # type: ignore[name-defined]
-            .where(Client.company_id == company_id, Client.is_active == True)  # type: ignore[name-defined]
-            .order_by(Client.name)  # type: ignore[name-defined]
+            _sel_ai(_AI_CLIENT_MODEL)
+            .where(_AI_CLIENT_MODEL.company_id == company_id,
+                   _AI_CLIENT_MODEL.is_active == True)
+            .order_by(_AI_CLIENT_MODEL.name)
         ).all()
-    except Exception:
+    except Exception as _e_cl:
+        print(f"[api_integrador] _ai_build_clients error: {_e_cl}")
         return []
 
 
@@ -563,9 +567,12 @@ async def _ai_editar_get(request: Request, intg_id: int, session: _Ses_ai = _ai_
         return RedirectResponse("/integrations/api-connector", status_code=303)  # type: ignore[name-defined]
     flash = request.session.pop("flash", None)
     clients = _ai_build_clients(session, ctx.company.id)
+    active_client_id = get_active_client_id(request, session, ctx)  # type: ignore[name-defined]
+    cc = get_client_or_none(session, ctx.company.id, active_client_id)  # type: ignore[name-defined]
     return render("api_connector_form.html", request=request,  # type: ignore[name-defined]
                   context={"current_user": ctx.user, "current_company": ctx.company,
-                           "current_client": None, "intg": intg, "clients": clients, "flash": flash})
+                           "current_client": cc, "intg": intg, "clients": clients,
+                           "flash": flash, "preselect_client_id": active_client_id})
 
 
 @app.post("/integrations/api-connector/{intg_id}/editar")  # type: ignore[name-defined]
