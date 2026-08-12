@@ -325,6 +325,41 @@ def _ai_sync_integration(session, intg: ApiIntegration) -> ApiIntegrationSnapsho
     session.add(snap)
     session.commit()
     session.refresh(snap)
+
+    # Persiste resumo no BaseConhecimento para o Augur (isolado por client_id)
+    if ok and intg.client_id is not None:
+        try:
+            from sqlmodel import select as _sel_bc
+            label = intg.data_label or intg.name
+            resumo = _ai_summarize_snap(label, now, result)
+            nome_bc = f"api:{intg.id}:{label[:80]}"
+            # Atualiza se já existe, senão cria
+            bc_ex = session.exec(
+                _sel_bc(BaseConhecimento).where(  # type: ignore[name-defined]
+                    BaseConhecimento.company_id == intg.company_id,
+                    BaseConhecimento.client_id  == intg.client_id,
+                    BaseConhecimento.nome       == nome_bc,
+                )
+            ).first()
+            if bc_ex:
+                bc_ex.conteudo_texto = resumo
+                bc_ex.created_at     = now[:10]
+                session.add(bc_ex)
+            else:
+                session.add(BaseConhecimento(  # type: ignore[name-defined]
+                    company_id     = intg.company_id,
+                    client_id      = intg.client_id,
+                    user_id        = 0,
+                    nome           = nome_bc,
+                    descricao      = label[:200],
+                    tipo           = "api_integracao",
+                    conteudo_texto = resumo,
+                    created_at     = now[:10],
+                ))
+            session.commit()
+        except Exception as _e_bc:
+            print(f"[api_integrador] BaseConhecimento sync erro: {_e_bc}")
+
     return snap
 
 
