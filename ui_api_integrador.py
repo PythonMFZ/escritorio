@@ -61,8 +61,20 @@ except Exception as _e_migr_ai:
 
 # ── HTTP helper ───────────────────────────────────────────────────────────────
 
+# Lock por integration_id — evita sync simultâneo da mesma integração
+import threading as _thr_ai_locks
+_AI_SYNC_LOCKS: dict = {}
+_AI_SYNC_LOCKS_LOCK = _thr_ai_locks.Lock()
+
+def _ai_get_sync_lock(intg_id: int):
+    with _AI_SYNC_LOCKS_LOCK:
+        if intg_id not in _AI_SYNC_LOCKS:
+            _AI_SYNC_LOCKS[intg_id] = _thr_ai_locks.Lock()
+        return _AI_SYNC_LOCKS[intg_id]
+
+
 def _ai_do_single_request(url: str, method: str, headers: dict, auth, body_json: str | None,
-                           _retries: int = 3) -> tuple:
+                           _retries: int = 5) -> tuple:
     """Faz uma única requisição HTTP com retry em 429. Retorna (ok, text)."""
     import time as _t
     try:
@@ -71,21 +83,25 @@ def _ai_do_single_request(url: str, method: str, headers: dict, auth, body_json:
             try:
                 if method == "POST":
                     content = body_json.encode() if body_json else b""
-                    resp = _hx.post(url, headers=headers, auth=auth, content=content, timeout=30)
+                    resp = _hx.post(url, headers=headers, auth=auth, content=content, timeout=60)
                 else:
-                    resp = _hx.get(url, headers=headers, auth=auth, timeout=30)
+                    resp = _hx.get(url, headers=headers, auth=auth, timeout=60)
                 if resp.status_code == 429:
-                    wait = int(resp.headers.get("Retry-After", 2 ** (attempt + 1)))
-                    _t.sleep(min(wait, 30))
+                    # Sienge rate limit: espera exponencial começando em 30s
+                    retry_after = resp.headers.get("Retry-After")
+                    wait = int(retry_after) if retry_after and retry_after.isdigit() else 30 * (attempt + 1)
+                    print(f"[api_integrador] 429 em {url[:60]} — aguardando {wait}s (tentativa {attempt+1}/{_retries})")
+                    _t.sleep(wait)
                     continue
                 resp.raise_for_status()
                 return True, resp.text
             except _hx.HTTPStatusError as e:
                 if e.response.status_code == 429 and attempt < _retries - 1:
-                    _t.sleep(2 ** (attempt + 1))
+                    wait = 30 * (attempt + 1)
+                    _t.sleep(wait)
                     continue
                 return False, str(e)
-        return False, "429 Too Many Requests após retries"
+        return False, f"429 Too Many Requests após {_retries} tentativas"
     except ImportError:
         pass
     except Exception as e:
@@ -833,6 +849,10 @@ async def _ai_sync(request: Request, intg_id: int, session: _Ses_ai = _ai_sess_d
         return RedirectResponse("/integrations/api-connector", status_code=303)  # type: ignore[name-defined]
 
     def _run_sync():
+        lock = _ai_get_sync_lock(intg_id)
+        if not lock.acquire(blocking=False):
+            print(f"[api_integrador] sync intg={intg_id} já em andamento, ignorando.")
+            return
         try:
             with _SyncSes2(engine) as _s:  # type: ignore[name-defined]
                 fresh = _s.get(ApiIntegration, intg_id)
@@ -840,9 +860,15 @@ async def _ai_sync(request: Request, intg_id: int, session: _Ses_ai = _ai_sess_d
                     _ai_sync_integration(_s, fresh)
         except Exception as e:
             print(f"[api_integrador] sync manual intg={intg_id}: {e}")
+        finally:
+            lock.release()
 
-    _thr_sync.Thread(target=_run_sync, daemon=True, name=f"api-sync-{intg_id}").start()
-    set_flash(request, "Sincronização iniciada em background. Aguarde ~2 min e recarregue a página.")  # type: ignore[name-defined]
+    lock_check = _ai_get_sync_lock(intg_id)
+    if not lock_check.locked():
+        _thr_sync.Thread(target=_run_sync, daemon=True, name=f"api-sync-{intg_id}").start()
+        set_flash(request, "Sincronização iniciada. Aguarde ~3 min (Sienge tem rate limit) e recarregue.")  # type: ignore[name-defined]
+    else:
+        set_flash(request, "Sincronização já em andamento para esta integração. Aguarde e recarregue.")  # type: ignore[name-defined]
     return RedirectResponse("/integrations/api-connector", status_code=303)  # type: ignore[name-defined]
 
 
