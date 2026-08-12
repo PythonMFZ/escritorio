@@ -134,6 +134,13 @@ def _format_client_context(client_data: dict) -> str:
             if resumo:
                 lines.append(resumo[:1500])
 
+    # ── Integrações de API / ERP (injetado por ui_api_integrador.py) ──────────
+    api_data = client_data.get("api_integrations", "")
+    if api_data:
+        lines.append("\n=== DADOS DO ERP / SISTEMA INTEGRADO ===")
+        lines.append("Dados sincronizados automaticamente do sistema de gestão do cliente.")
+        lines.append(api_data[:6000])
+
     return "\n".join(lines)
 
 
