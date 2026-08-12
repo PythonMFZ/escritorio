@@ -111,7 +111,8 @@ async def api_grafo_data(request: Request, session: Session = Depends(get_sessio
 
             for ba in session.exec(q_bsc).all():
                 cl_id = plan_client.get(ba.objective_id)
-                if filter_client_id and cl_id != filter_client_id:
+                # cl_id pode ser None para planos antigos sem client_id
+                if filter_client_id and cl_id is not None and cl_id != filter_client_id:
                     continue
                 grp = "acao_alta" if ba.priority == "alta" else "acao"
                 prazo = f"\nPrazo: {ba.due_date}" if ba.due_date else ""
