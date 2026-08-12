@@ -859,6 +859,49 @@ async def _ai_sync(request: Request, intg_id: int, session: _Ses_ai = _ai_sess_d
     return RedirectResponse("/integrations/api-connector", status_code=303)  # type: ignore[name-defined]
 
 
+@app.get("/integrations/api-connector/{intg_id}/rawtest")  # type: ignore[name-defined]
+@require_login  # type: ignore[name-defined]
+async def _ai_rawtest(request: Request, intg_id: int, session: _Ses_ai = _ai_sess_dep()):  # type: ignore[name-defined]
+    """Chama a API AO VIVO agora e mostra o resultado bruto — ignora snapshot."""
+    from fastapi.responses import PlainTextResponse as _PTR_rt
+    import json as _j_rt, asyncio as _aio_rt
+    ctx = get_tenant_context(request, session)  # type: ignore[name-defined]
+    if not ctx or ctx.membership.role != "admin":
+        return _PTR_rt("sem permissão", status_code=403)
+    intg = session.get(ApiIntegration, intg_id)
+    if not intg or intg.company_id != ctx.company.id:
+        return _PTR_rt("não encontrado", status_code=404)
+
+    loop = _aio_rt.get_event_loop()
+    ok, text = await loop.run_in_executor(None, lambda: _ai_do_request(intg))
+
+    report = [f"URL configurada: {intg.url}", f"Status: {'OK' if ok else 'ERRO'}"]
+    if not ok:
+        report.append(f"Erro: {text[:500]}")
+    else:
+        try:
+            obj = _j_rt.loads(text)
+            if isinstance(obj, list):
+                report.append(f"Registros retornados: {len(obj)}")
+                if obj:
+                    report.append(f"Chaves do 1º registro: {list(obj[0].keys())[:15]}")
+                    report.append(f"\nPrimeiro registro:\n{_j_rt.dumps(obj[0], ensure_ascii=False, indent=2)}")
+                    if len(obj) > 1:
+                        report.append(f"\nÚltimo registro:\n{_j_rt.dumps(obj[-1], ensure_ascii=False, indent=2)}")
+            elif isinstance(obj, dict):
+                report.append(f"Chaves raiz: {list(obj.keys())}")
+                for k in ("results","data","items","records","content"):
+                    if isinstance(obj.get(k), list):
+                        report.append(f"Lista em '{k}': {len(obj[k])} registros")
+                        break
+                report.append(f"\nJSON:\n{_j_rt.dumps(obj, ensure_ascii=False, indent=2)[:3000]}")
+        except Exception as e:
+            report.append(f"JSON inválido: {e}")
+            report.append(f"Raw: {text[:2000]}")
+
+    return _PTR_rt("\n".join(report))
+
+
 @app.get("/integrations/api-connector/{intg_id}/debug")  # type: ignore[name-defined]
 @require_login  # type: ignore[name-defined]
 async def _ai_debug_snap(request: Request, intg_id: int, session: _Ses_ai = _ai_sess_dep()):  # type: ignore[name-defined]
