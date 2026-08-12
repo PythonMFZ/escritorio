@@ -233,8 +233,8 @@ const tip = document.getElementById("tip");
 let nodes=[], edges=[], nmap={};
 let tx=0, ty=0, sc=1;
 let drag=null, pan=null, hov=null;
-let paused=false, ticks=0;
-const MAX_TICKS=600; // para física depois de estabilizar
+let paused=false, ticks=0, ambient=false;
+const MAX_TICKS=600; // ticks para estabilização inicial; depois entra em modo deriva
 
 // ── Resize ────────────────────────────────────────────────────────────────
 function resize(){
@@ -256,20 +256,57 @@ function hit(wx,wy){
 }
 
 // ── Física ────────────────────────────────────────────────────────────────
-// Parâmetros ajustados para grafos grandes (292+ nós)
+// Fase 1 (ticks < MAX_TICKS): estabilização com força total
+// Fase 2 (ambient): deriva suave perpétua — forças reduzidas + ruído Browniano
+let _ambientSeed = 0;
+function _rand(i){ // pseudo-aleatório determinístico por nó (sem Math.random no loop crítico)
+  _ambientSeed = (_ambientSeed*1664525 + 1013904223) & 0xffffffff;
+  return (_ambientSeed>>>0)/4294967296 - 0.5;
+}
+
 function physics(){
   const N=nodes.length;
   if(!N) return;
 
-  // Repulsão com quadtree simplificado (Barnes-Hut aproximado)
-  // Para N grande usamos factor menor
+  if(ambient){
+    // ── Modo deriva: molas suaves + ruído Browniano ──────────────────────────
+    const SPR_K=0.008, SPR_L=120, DAMP=0.98, GRAV=0.003;
+    const NOISE=0.12, MAX_V=1.2;
+    nodes.forEach(n=>{ n.fx=0; n.fy=0; });
+    // Molas (sem repulsão pra poupar CPU e evitar explosão)
+    edges.forEach(e=>{
+      const a=nmap[e.from], b=nmap[e.to];
+      if(!a||!b) return;
+      const dx=b.x-a.x, dy=b.y-a.y;
+      const d=Math.sqrt(dx*dx+dy*dy)||1;
+      const f=(d-SPR_L)*SPR_K;
+      const fx=dx/d*f, fy=dy/d*f;
+      a.fx+=fx; a.fy+=fy;
+      b.fx-=fx; b.fy-=fy;
+    });
+    nodes.forEach((n,i)=>{
+      if(n===drag) return;
+      n.fx -= n.x*GRAV;
+      n.fy -= n.y*GRAV;
+      // Ruído Browniano: força aleatória suave por nó
+      n.fx += _rand(i)*NOISE;
+      n.fy += _rand(i)*NOISE;
+      n.vx = (n.vx+n.fx)*DAMP;
+      n.vy = (n.vy+n.fy)*DAMP;
+      const spd=Math.hypot(n.vx,n.vy);
+      if(spd>MAX_V){ n.vx=n.vx/spd*MAX_V; n.vy=n.vy/spd*MAX_V; }
+      n.x+=n.vx; n.y+=n.vy;
+    });
+    return;
+  }
+
+  // ── Fase inicial: física completa até estabilizar ──────────────────────────
   const REP = Math.min(4000, 800000/N);
   const SPR_K=0.05, SPR_L=100, DAMP=0.75, GRAV=0.02;
-  const MAX_V=8; // limite de velocidade — evita explosão
+  const MAX_V=8;
 
   nodes.forEach(n=>{ n.fx=0; n.fy=0; });
 
-  // Repulsão par a par (O(n²) — aceitável até ~400 nós com MAX_V)
   for(let i=0;i<N;i++){
     for(let j=i+1;j<N;j++){
       const a=nodes[i], b=nodes[j];
@@ -282,7 +319,6 @@ function physics(){
     }
   }
 
-  // Molas
   edges.forEach(e=>{
     const a=nmap[e.from], b=nmap[e.to];
     if(!a||!b) return;
@@ -294,20 +330,22 @@ function physics(){
     b.fx-=fx; b.fy-=fy;
   });
 
-  // Gravidade + integração
   nodes.forEach(n=>{
     if(n===drag) return;
     n.fx -= n.x*GRAV;
     n.fy -= n.y*GRAV;
     n.vx = (n.vx+n.fx)*DAMP;
     n.vy = (n.vy+n.fy)*DAMP;
-    // Clamp velocidade
     const spd=Math.hypot(n.vx,n.vy);
     if(spd>MAX_V){ n.vx=n.vx/spd*MAX_V; n.vy=n.vy/spd*MAX_V; }
     n.x+=n.vx; n.y+=n.vy;
   });
   ticks++;
-  if(ticks>MAX_TICKS){ paused=true; document.getElementById("btn-pause").textContent="▶ Retomar"; }
+  if(ticks>MAX_TICKS){
+    ambient=true; // entra em modo deriva perpétua — nunca para
+    // Zera velocidades para a transição ser suave
+    nodes.forEach(n=>{ n.vx*=0.1; n.vy*=0.1; });
+  }
 }
 
 // ── Render ────────────────────────────────────────────────────────────────
@@ -359,6 +397,12 @@ function loop(){
   requestAnimationFrame(loop);
 }
 
+function _updatePauseBtn(){
+  const btn=document.getElementById("btn-pause");
+  if(paused) btn.textContent="▶ Retomar";
+  else btn.textContent = ambient ? "⏸ Pausar deriva" : "⏸ Pausar";
+}
+
 // ── fitAll ────────────────────────────────────────────────────────────────
 function fitAll(){
   if(!nodes.length) return;
@@ -383,8 +427,8 @@ function load(cid){
       });
       edges=data.edges;
       nmap={}; nodes.forEach(n=>nmap[n.id]=n);
-      ticks=0; paused=false;
-      document.getElementById("btn-pause").textContent="⏸ Pausar";
+      ticks=0; paused=false; ambient=false;
+      _updatePauseBtn();
       document.getElementById("grafo-stats").textContent=`${nodes.length} nós · ${edges.length} conexões`;
       setTimeout(fitAll, 2000); // centraliza após 2s de física
     });
@@ -482,8 +526,9 @@ cv.addEventListener("touchend",e=>{
 cv.addEventListener("touchcancel", resetTouchState, {passive:true});
 
 document.getElementById("btn-pause").addEventListener("click",()=>{
-  paused=!paused; ticks=paused?MAX_TICKS+1:0;
-  document.getElementById("btn-pause").textContent=paused?"▶ Retomar":"⏸ Pausar";
+  paused=!paused;
+  if(!paused && !ambient){ ticks=0; } // se retomando da pausa pré-ambient, recomeça física
+  _updatePauseBtn();
 });
 document.getElementById("sel-client").addEventListener("change",function(){ load(this.value); });
 
