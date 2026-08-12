@@ -663,6 +663,92 @@ async def _ai_excluir(request: Request, intg_id: int, session: _Ses_ai = _ai_ses
 
 # ── Augur enrichment chain ────────────────────────────────────────────────────
 
+def _ai_summarize_snap(label: str, synced_at: str, data_json: str) -> str:
+    """Converte JSON bruto do ERP em resumo legível para o Augur."""
+    import json as _j
+    date = synced_at[:10] if synced_at else "?"
+    header = f"[{label} — {date}]"
+    try:
+        obj = _j.loads(data_json)
+    except Exception:
+        return f"{header}\n{data_json[:3000]}"
+
+    # Tenta detectar lista de registros (padrão mais comum de ERP)
+    records = None
+    if isinstance(obj, list):
+        records = obj
+    elif isinstance(obj, dict):
+        # Procura chave que contém lista (ex: {"data": [...], "total": ...})
+        for k in ("data", "results", "items", "registros", "titulos", "bills",
+                  "receivable_bills", "content", "records"):
+            if isinstance(obj.get(k), list):
+                records = obj[k]
+                break
+
+    if records is None:
+        # Não é lista — devolve JSON formatado truncado
+        return f"{header}\n{_j.dumps(obj, ensure_ascii=False, indent=2)[:4000]}"
+
+    total_regs = len(records)
+    lines = [header, f"Total de registros: {total_regs}"]
+
+    # Tenta somar valores monetários e agrupar por campos relevantes
+    _money_keys = ("valor", "value", "amount", "saldo", "balance", "total",
+                   "valorParcela", "valorTitulo", "netAmount", "grossAmount",
+                   "valorOriginal", "valorLiquido", "valorBruto")
+    _group_keys = ("empreendimento", "obra", "project", "empresa", "costCenter",
+                   "centrosCusto", "categoria", "category", "status", "tipo", "type")
+    _name_keys  = ("cliente", "client", "nome", "name", "sacado", "fornecedor",
+                   "vendor", "supplier", "nomePessoa", "nomeCliente")
+
+    # Encontra chaves presentes nos registros
+    sample = records[0] if records else {}
+    money_key = next((k for k in _money_keys if k in sample), None)
+    group_key = next((k for k in _group_keys if k in sample), None)
+    name_key  = next((k for k in _name_keys  if k in sample), None)
+
+    if money_key:
+        try:
+            grand_total = sum(float(r.get(money_key) or 0) for r in records)
+            lines.append(f"Valor total: R$ {grand_total:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
+        except Exception:
+            pass
+
+    if group_key and money_key:
+        groups: dict = {}
+        for r in records:
+            g = str(r.get(group_key) or "Sem grupo")
+            try:
+                groups[g] = groups.get(g, 0) + float(r.get(money_key) or 0)
+            except Exception:
+                groups[g] = groups.get(g, 0)
+        lines.append(f"\nPor {group_key}:")
+        for g, v in sorted(groups.items(), key=lambda x: -x[1])[:20]:
+            lines.append(f"  {g}: R$ {v:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
+
+    # Lista primeiros 30 registros com campos chave
+    lines.append(f"\nPrimeiros {min(30, total_regs)} registros:")
+    for r in records[:30]:
+        parts = []
+        if name_key and r.get(name_key):
+            parts.append(str(r[name_key])[:40])
+        if money_key and r.get(money_key) is not None:
+            try:
+                v = float(r[money_key])
+                parts.append(f"R$ {v:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
+            except Exception:
+                parts.append(str(r[money_key]))
+        for extra in ("vencimento", "dueDate", "dataVencimento", "prazo", "status", "empreendimento"):
+            if r.get(extra):
+                parts.append(f"{extra}={r[extra]}")
+        lines.append("  • " + " | ".join(parts) if parts else f"  • {_j.dumps(r, ensure_ascii=False)[:120]}")
+
+    if total_regs > 30:
+        lines.append(f"  ... e mais {total_regs - 30} registros (totalizados acima).")
+
+    return "\n".join(lines)
+
+
 _prev_enr_api = _enriquecer_client_data  # type: ignore[name-defined]
 
 
@@ -687,7 +773,8 @@ def _enriquecer_com_api_data(session, company_id, client_id, client, client_data
             ).first()
             if snap:
                 label = intg.data_label or intg.name
-                snippets.append(f"[{label} — {snap.synced_at[:10]}]\n{snap.data_json[:2000]}")
+                snippet = _ai_summarize_snap(label, snap.synced_at, snap.data_json)
+                snippets.append(snippet)
         if snippets:
             data["api_integrations"] = "\n\n".join(snippets)
     except Exception as e:
