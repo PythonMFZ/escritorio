@@ -1071,31 +1071,66 @@ def _ai_summarize_snap(label: str, synced_at: str, data_json: str) -> str:
             for n, v in sorted(by_name.items(), key=lambda x: -x[1])[:15]:
                 lines.append(f"  {n}: {_fmt_r(v)}")
 
-        # Breakdown por período de vencimento — responde "quanto vence até dezembro 2026"
+        # Breakdown por ano de vencimento — acumulado até cada ano
         if balance_key:
             from datetime import date as _dt_bal
-            hoje_str = _dt_bal.today().isoformat()
-            periodos = {
-                "Vencido (antes de hoje)":          ("0000-01-01", hoje_str),
-                "Ago–Dez 2026":                     ("2026-08-01", "2026-12-31"),
-                "Jan–Jul 2026 (já vencido em 2026)":("2026-01-01", "2026-07-31"),
-                "2027":                             ("2027-01-01", "2027-12-31"),
-                "2028 em diante":                   ("2028-01-01", "2100-12-31"),
-            }
+            hoje = _dt_bal.today()
+            hoje_str = hoje.isoformat()
+            # Agrupa por ano
+            by_year: dict = {}
+            sem_data = 0.0
+            for r in unpaid:
+                due = (r.get("dueDate") or "")[:10]
+                if len(due) >= 4 and due[:4].isdigit():
+                    ano = int(due[:4])
+                    try: by_year[ano] = by_year.get(ano, 0) + float(r.get(balance_key) or 0)
+                    except Exception: pass
+                else:
+                    try: sem_data += float(r.get(balance_key) or 0)
+                    except Exception: pass
+
+            # Período fixo: Vencido / Jan-Jul do ano atual / Ago-Dez do ano atual / próximos anos
+            vencido = 0.0; jan_jul = 0.0; ago_dez = 0.0; futuro: dict = {}
+            for r in unpaid:
+                due = (r.get("dueDate") or "")[:10]
+                try:
+                    from datetime import date as _dt2
+                    d = _dt2.fromisoformat(due)
+                    if d < hoje:
+                        vencido += float(r.get(balance_key) or 0)
+                    elif d.year == hoje.year and d.month <= 7:
+                        jan_jul += float(r.get(balance_key) or 0)
+                    elif d.year == hoje.year:
+                        ago_dez += float(r.get(balance_key) or 0)
+                    else:
+                        futuro[d.year] = futuro.get(d.year, 0) + float(r.get(balance_key) or 0)
+                except Exception:
+                    pass
             lines.append("\nPor período de vencimento (dueDate):")
-            for label, (d_ini, d_fim) in periodos.items():
-                v_per = sum(
-                    float(r.get(balance_key) or 0) for r in unpaid
-                    if d_ini <= (r.get("dueDate") or "")[:10] <= d_fim
-                )
-                if v_per:
-                    lines.append(f"  {label}: {_fmt_r(v_per)}")
-            # Total até 31/12/2026
-            ate_dez26 = sum(
-                float(r.get(balance_key) or 0) for r in unpaid
-                if (r.get("dueDate") or "")[:10] <= "2026-12-31"
-            )
-            lines.append(f"\n  ► TOTAL A PAGAR/RECEBER ATÉ 31/12/2026: {_fmt_r(ate_dez26)}")
+            lines.append(f"  Vencido (antes de hoje):         {_fmt_r(vencido)}")
+            lines.append(f"  Jan–Jul {hoje.year} (vence este ano):  {_fmt_r(jan_jul)}")
+            lines.append(f"  Ago–Dez {hoje.year}:                   {_fmt_r(ago_dez)}")
+            for ano_f in sorted(futuro):
+                lines.append(f"  {ano_f}:                              {_fmt_r(futuro[ano_f])}")
+
+            lines.append("\nPor ano de vencimento (detalhe):")
+            acumulado = 0.0
+            for ano in sorted(by_year):
+                v = by_year[ano]
+                acumulado += v
+                marcador = " ← vencido" if ano < hoje.year else (" ← ano atual" if ano == hoje.year else "")
+                lines.append(f"  {ano}: {_fmt_r(v)}  (acumulado: {_fmt_r(acumulado)}){marcador}")
+            if sem_data:
+                lines.append(f"  Sem data: {_fmt_r(sem_data)}")
+
+            # Total acumulado até cada ano-chave
+            anos_chave = sorted(a for a in by_year if a >= hoje.year)
+            if anos_chave:
+                lines.append("\nAcumulado até fim de cada ano:")
+                acc = sum(v for a, v in by_year.items() if a < hoje.year)
+                for ano in anos_chave:
+                    acc += by_year.get(ano, 0)
+                    lines.append(f"  Até 31/12/{ano}: {_fmt_r(acc)}")
 
         lines.append(f"\nAmostra — primeiras 20 parcelas em aberto:")
         for r in unpaid[:20]:
