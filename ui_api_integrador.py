@@ -207,8 +207,92 @@ def _ai_do_request(intg: ApiIntegration) -> tuple:
     return True, _json_ai.dumps(obj, ensure_ascii=False)[:200000]
 
 
+def _ai_enrich_sienge_receivables(records: list, base_url: str,
+                                   headers: dict, auth) -> list:
+    """Para cada título a receber do Sienge, busca as parcelas e computa saldo devedor real."""
+    import json as _jsi
+    import re as _rsi
+    # Detecta URL base do Sienge: .../accounts-receivable/receivable-bills[?...]
+    match = _rsi.match(r"(.*?/accounts-receivable/receivable-bills)", base_url)
+    if not match:
+        return records
+    bills_base = match.group(1)
+
+    enriched = []
+    for rec in records[:200]:  # Máx 200 títulos para não sobrecarregar
+        bill_id = rec.get("id") or rec.get("receivableBillId") or rec.get("billId")
+        if not bill_id:
+            enriched.append(rec)
+            continue
+        inst_url = f"{bills_base}/{bill_id}/installments"
+        ok_i, text_i = _ai_do_single_request(inst_url, "GET", headers, auth, None)
+        if not ok_i:
+            enriched.append(rec)
+            continue
+        try:
+            data_i = _jsi.loads(text_i)
+            # A resposta pode ser lista direta ou {"results": [...]}
+            if isinstance(data_i, list):
+                installments = data_i
+            elif isinstance(data_i, dict):
+                installments = data_i.get("results") or data_i.get("data") or data_i.get("items") or []
+            else:
+                installments = []
+            # Saldo devedor = soma de currentBalance das parcelas não pagas
+            outstanding = 0.0
+            total_inst_value = 0.0
+            for inst in installments:
+                cb = inst.get("currentBalance") or inst.get("outstandingBalance") or inst.get("saldoAtual") or 0
+                iv = inst.get("installmentValue") or inst.get("valor") or inst.get("value") or 0
+                try:
+                    outstanding += float(cb)
+                    total_inst_value += float(iv)
+                except Exception:
+                    pass
+            new_rec = dict(rec)
+            new_rec["_outstanding_balance"] = outstanding
+            new_rec["_installments_count"] = len(installments)
+            new_rec["_installments_total"] = total_inst_value
+            enriched.append(new_rec)
+        except Exception:
+            enriched.append(rec)
+    # Records além de 200 (se houver) sem enriquecimento
+    enriched.extend(records[200:])
+    return enriched
+
+
 def _ai_sync_integration(session, intg: ApiIntegration) -> ApiIntegrationSnapshot:
     ok, result = _ai_do_request(intg)
+    # ── Enriquecimento Sienge: busca parcelas para obter saldo devedor real ──
+    if ok and "accounts-receivable/receivable-bills" in (intg.url or ""):
+        try:
+            import json as _jsi2
+            import re as _rsi2
+            obj2 = _jsi2.loads(result)
+            records_key2 = None
+            for k in ("results", "data", "items", "content", "receivable_bills"):
+                if isinstance(obj2.get(k), list):
+                    records_key2 = k
+                    break
+            if records_key2:
+                headers2: dict = {}
+                auth2 = None
+                if intg.auth_type == "api_key_header" and intg.auth_key:
+                    headers2[intg.auth_key] = intg.auth_value or ""
+                elif intg.auth_type == "basic_auth":
+                    auth2 = (intg.auth_key or "", intg.auth_value or "")
+                if intg.extra_headers_json:
+                    try:
+                        for k2, v2 in _jsi2.loads(intg.extra_headers_json).items():
+                            headers2[k2] = str(v2)
+                    except Exception:
+                        pass
+                enriched_records = _ai_enrich_sienge_receivables(
+                    obj2[records_key2], intg.url, headers2, auth2)
+                obj2[records_key2] = enriched_records
+                result = _jsi2.dumps(obj2, ensure_ascii=False)
+        except Exception:
+            pass
     now = datetime.now(timezone.utc).isoformat()
     snap = ApiIntegrationSnapshot(
         integration_id=intg.id,
@@ -819,7 +903,7 @@ def _ai_summarize_snap(label: str, synced_at: str, data_json: str) -> str:
     lines = [header, f"Total de registros: {total_regs}"]
 
     # Tenta somar valores monetários e agrupar por campos relevantes
-    _money_keys = ("totalInvoiceAmount", "receivableBillValue",   # Sienge
+    _money_keys = ("totalInvoiceAmount",                             # Sienge a pagar
                    "valor", "value", "amount", "saldo", "balance", "total",
                    "valorParcela", "valorTitulo", "netAmount", "grossAmount",
                    "valorOriginal", "valorLiquido", "valorBruto")
@@ -832,28 +916,46 @@ def _ai_summarize_snap(label: str, synced_at: str, data_json: str) -> str:
 
     # Encontra chaves presentes nos registros
     sample = records[0] if records else {}
+
+    # ── Sienge: saldo devedor real via parcelas enriquecidas ──────────────────
+    has_outstanding = "_outstanding_balance" in sample
+    if has_outstanding:
+        try:
+            total_outstanding = sum(float(r.get("_outstanding_balance") or 0) for r in records)
+            total_contract    = sum(float(r.get("receivableBillValue") or 0) for r in records)
+            total_inst        = sum(int(r.get("_installments_count") or 0) for r in records)
+            def _fmt(v): return f"R$ {v:,.2f}".replace(",","X").replace(".",",").replace("X",".")
+            lines.append(f"Saldo devedor (a receber): {_fmt(total_outstanding)}")
+            lines.append(f"  ↳ {total_regs} contratos ativos | {total_inst} parcelas")
+            lines.append(f"  ↳ Valor total dos contratos: {_fmt(total_contract)} (≠ saldo; é o valor integral firmado)")
+            lines.append("ATENÇÃO: Use 'Saldo devedor' como o valor a receber, não o valor total dos contratos.")
+        except Exception:
+            has_outstanding = False
+
     money_key = next((k for k in _money_keys if k in sample), None)
     group_key = next((k for k in _group_keys if k in sample), None)
     name_key  = next((k for k in _name_keys  if k in sample), None)
 
-    if money_key:
+    if not has_outstanding and money_key:
         try:
             grand_total = sum(float(r.get(money_key) or 0) for r in records)
-            lines.append(f"Valor total: R$ {grand_total:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
+            lines.append(f"Valor total ({money_key}): R$ {grand_total:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
         except Exception:
             pass
 
-    if group_key and money_key:
-        groups: dict = {}
-        for r in records:
-            g = str(r.get(group_key) or "Sem grupo")
-            try:
-                groups[g] = groups.get(g, 0) + float(r.get(money_key) or 0)
-            except Exception:
-                groups[g] = groups.get(g, 0)
-        lines.append(f"\nPor {group_key}:")
-        for g, v in sorted(groups.items(), key=lambda x: -x[1])[:20]:
-            lines.append(f"  {g}: R$ {v:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
+    if group_key:
+        use_key = "_outstanding_balance" if has_outstanding else money_key
+        if use_key:
+            groups: dict = {}
+            for r in records:
+                g = str(r.get(group_key) or "Sem grupo")
+                try:
+                    groups[g] = groups.get(g, 0) + float(r.get(use_key) or 0)
+                except Exception:
+                    groups[g] = groups.get(g, 0)
+            lines.append(f"\nPor {group_key} (saldo devedor):" if has_outstanding else f"\nPor {group_key}:")
+            for g, v in sorted(groups.items(), key=lambda x: -x[1])[:20]:
+                lines.append(f"  {g}: R$ {v:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
 
     # Lista primeiros 30 registros com campos chave
     lines.append(f"\nPrimeiros {min(30, total_regs)} registros:")
@@ -861,7 +963,18 @@ def _ai_summarize_snap(label: str, synced_at: str, data_json: str) -> str:
         parts = []
         if name_key and r.get(name_key):
             parts.append(str(r[name_key])[:40])
-        if money_key and r.get(money_key) is not None:
+        # Prioriza saldo devedor enriquecido, senão usa campo monetário padrão
+        if has_outstanding:
+            ob = r.get("_outstanding_balance")
+            ic = r.get("_installments_count")
+            if ob is not None:
+                try:
+                    parts.append(f"saldo={_fmt(float(ob))}")
+                    if ic:
+                        parts.append(f"parcelas={ic}")
+                except Exception:
+                    pass
+        elif money_key and r.get(money_key) is not None:
             try:
                 v = float(r[money_key])
                 parts.append(f"R$ {v:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
