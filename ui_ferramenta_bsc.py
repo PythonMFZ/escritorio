@@ -369,7 +369,13 @@ async def bsc_dashboard(plan_id: int, request: Request, session: Session = Depen
     plan = session.get(BSCPlan, plan_id)
     if not plan or plan.company_id != ctx.company.id:
         return RedirectResponse("/ferramentas/bsc", status_code=303)
-    cc = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
+    # Auto-set client_id on plan if not defined (planos criados antes da migração)
+    active_cid = get_active_client_id(request, session, ctx)
+    if plan.client_id is None and active_cid:
+        plan.client_id = active_cid
+        session.add(plan)
+        session.commit()
+    cc = get_client_or_none(session, ctx.company.id, active_cid)
 
     objs_by_persp, inds_by_obj, acts_by_obj, values_by_ind, ach_by_obj = \
         _bsc_load_dashboard(session, ctx.company.id, plan_id)
@@ -1268,7 +1274,9 @@ TEMPLATES["bsc_dashboard.html"] = r"""
           <textarea id="aDesc" class="form-control" rows="2" placeholder="Detalhe da ação"></textarea></div>
         <div class="row g-2 mb-3">
           <div class="col-md-4"><label class="form-label fw-semibold">Responsável</label>
-            <input id="aResp" class="form-control" placeholder="Nome ou área"></div>
+            <select id="aResp" class="form-select">
+              <option value="">— sem responsável —</option>
+            </select></div>
           <div class="col-md-4"><label class="form-label fw-semibold">Prazo</label>
             <input id="aPrazo" class="form-control" placeholder="DD/MM/AAAA"></div>
           <div class="col-md-4"><label class="form-label fw-semibold">Prioridade</label>
@@ -1306,6 +1314,20 @@ TEMPLATES["bsc_dashboard.html"] = r"""
 <script>
 const ALL_VALUES = {{ values_json|safe }};
 const MONTHS_PT  = {{ months_pt|tojson }};
+
+// ── Membros para dropdown de responsável ──
+var _bscMembros = [];
+fetch('/admin/acoes/membros').then(r => r.json()).then(function(data) {
+  _bscMembros = data;
+  var sel = document.getElementById('aResp');
+  if (!sel) return;
+  sel.innerHTML = '<option value="">— sem responsável —</option>';
+  data.forEach(function(m) {
+    var o = document.createElement('option');
+    o.value = m.name; o.textContent = m.name;
+    sel.appendChild(o);
+  });
+});
 
 // ── Bootstrap modals (lazy init) ──
 var _mPlano, _mObj, _mInd, _mValor, _mAcao;
@@ -1534,7 +1556,13 @@ function editarAcao(id, titulo, desc, resp, prazo, status, prioridade, progresso
   document.getElementById('aAcaoId').value = id;
   document.getElementById('aTitulo').value = titulo;
   document.getElementById('aDesc').value = desc;
-  document.getElementById('aResp').value = resp;
+  var selR = document.getElementById('aResp');
+  // Se resp não está na lista de membros, adiciona como opção temporária
+  if (resp && selR && !Array.from(selR.options).some(o => o.value === resp)) {
+    var o = document.createElement('option'); o.value = resp; o.textContent = resp;
+    selR.appendChild(o);
+  }
+  if (selR) selR.value = resp;
   document.getElementById('aPrazo').value = prazo;
   document.getElementById('aStatus').value = status;
   document.getElementById('aPrioridade').value = prioridade;
