@@ -13,12 +13,9 @@ _CLIENT_ID_GLOBAL        = 0  # client_id=0 = conhecimento geral da empresa (nã
 _TIPO = "caso_historico_notion"
 
 def _mn_build_texto(caso: dict) -> str:
-    """Monta texto estruturado legível para o Augur a partir do caso JSON."""
+    """Monta texto estruturado legível para o Augur — sem título, data ou nomes."""
     parts = []
-    if caso.get("titulo"):
-        parts.append(f"Título: {caso['titulo']}")
-    if caso.get("data"):
-        parts.append(f"Data: {caso['data']}")
+    # ⚠️ título e data omitidos intencionalmente — contêm nomes de clientes
     if caso.get("segmento"):
         parts.append(f"Segmento: {caso['segmento']} | Setor: {caso.get('setor','')}")
     if caso.get("problema_principal"):
@@ -64,7 +61,8 @@ def _mn_run_migration():
 
             novos = 0
             for caso in casos:
-                nome = (caso.get("titulo") or caso.get("caso_id") or "Reunião")[:200]
+                # Usa caso_id como nome — sem título (contém nome de cliente)
+                nome = (caso.get("caso_id") or f"caso_{casos.index(caso)+1:04d}")[:200]
                 if nome in existing_nomes:
                     continue
                 texto = _mn_build_texto(caso)
@@ -76,7 +74,7 @@ def _mn_run_migration():
                     descricao=(caso.get("problema_principal") or "")[:500],
                     tipo=_TIPO,
                     conteudo_texto=texto,
-                    created_at=(caso.get("data") or utcnow().isoformat()),  # type: ignore[name-defined]
+                    created_at=utcnow().isoformat(),  # type: ignore[name-defined]
                 )
                 s.add(bc)
                 novos += 1
