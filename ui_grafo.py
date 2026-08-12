@@ -207,6 +207,8 @@ TEMPLATES["admin_grafo.html"] = r"""
     <div><i style="background:#a78bfa"></i>Orçamento</div>
     <div><i style="background:#fbbf24"></i>Pessoa</div>
     <div><i style="background:#f43f5e"></i>Desvio</div>
+    <div><i style="background:#22d3ee"></i>Integração API</div>
+    <div><i style="background:#d1d5db"></i>Arquivo Drive</div>
   </div>
 </div>
 <div id="tip"></div>
@@ -220,6 +222,8 @@ const PALETTE = {
   budget:    {f:"#a78bfa",s:"#7c3aed",t:"#2e1065"},
   user:      {f:"#fbbf24",s:"#d97706",t:"#451a03"},
   desvio:    {f:"#f43f5e",s:"#be123c",t:"#fff"},
+  api_integ: {f:"#22d3ee",s:"#0891b2",t:"#083344"},
+  drive_file:{f:"#d1d5db",s:"#6b7280",t:"#111827"},
 };
 
 const cv = document.getElementById("gc");
