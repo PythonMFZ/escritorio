@@ -125,6 +125,8 @@ def _ensure_bsc_tables():
             _c.execute(_t("ALTER TABLE bscindicator ADD COLUMN IF NOT EXISTS source_config VARCHAR DEFAULT '{}'"))
             _c.execute(_t("ALTER TABLE bscplan ADD COLUMN IF NOT EXISTS client_id INTEGER"))
             _c.execute(_t("ALTER TABLE bscindicator ADD COLUMN IF NOT EXISTS aggregation VARCHAR DEFAULT 'soma'"))
+            _c.execute(_t("ALTER TABLE bscaction ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT true"))
+            _c.execute(_t("UPDATE bscaction SET is_active = true WHERE is_active IS NULL"))
     except Exception:
         pass
 

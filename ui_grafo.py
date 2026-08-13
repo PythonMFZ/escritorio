@@ -103,7 +103,7 @@ async def api_grafo_data(request: Request, session: Session = Depends(get_sessio
                 "FROM bscaction ba "
                 "JOIN bscobjective bo ON bo.id = ba.objective_id "
                 "JOIN bscplan bp ON bp.id = bo.plan_id "
-                "WHERE ba.company_id = :cid AND ba.is_active = true"
+                "WHERE ba.company_id = :cid AND COALESCE(ba.is_active, true) = true"
             ), {"cid": cid}).fetchall()
         for row in _bsc_rows:
             _ba_id, _ba_title, _ba_pri, _ba_st, _ba_resp, _ba_due, _ba_obj, _cl_id = row
