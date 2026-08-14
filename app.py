@@ -36243,6 +36243,9 @@ async def office_finance_conciliation_page(request: Request, session: Session = 
         return render("error.html", request=request, context={"message": "Não foi possível inicializar a Conciliação."},
                       status_code=500)
 
+    tab   = (request.query_params.get("tab") or "sistema").strip().lower()
+    batch = (request.query_params.get("batch") or "").strip()
+
     filters = {
         "entry_kind": (request.query_params.get("entry_kind") or "").strip().lower(),
         "bank_account_id": (request.query_params.get("bank_account_id") or "").strip(),
@@ -36258,6 +36261,61 @@ async def office_finance_conciliation_page(request: Request, session: Session = 
         only_open=only_open,
         month=filters["month"],
     )
+
+    # ── extrato bancário ──────────────────────────────────────────────────────
+    extrato_lines = []
+    extrato_pendente_count = 0
+    extrato_batches = []
+    try:
+        from sqlmodel import select as _sel_ep
+        _BankStatementLine = globals().get("BankStatementLine")
+        if _BankStatementLine is not None:
+            # lista de lotes disponíveis
+            all_batches_q = session.exec(
+                _sel_ep(_BankStatementLine).where(
+                    _BankStatementLine.company_id == ctx.company.id
+                ).order_by(_BankStatementLine.import_batch.desc())
+            ).all()
+            seen_b = set()
+            for _bl in all_batches_q:
+                if _bl.import_batch and _bl.import_batch not in seen_b:
+                    seen_b.add(_bl.import_batch)
+                    extrato_batches.append(_bl.import_batch)
+            extrato_batches = extrato_batches[:20]
+
+            # se batch selecionado, carrega as linhas
+            if batch:
+                raw_lines = session.exec(
+                    _sel_ep(_BankStatementLine).where(
+                        _BankStatementLine.company_id == ctx.company.id,
+                        _BankStatementLine.import_batch == batch,
+                    ).order_by(_BankStatementLine.release_date, _BankStatementLine.id)
+                ).all()
+                for _line in raw_lines:
+                    _match = None
+                    if _line.matched_entry_id:
+                        _match = session.get(OfficeFinancialEntry, _line.matched_entry_id)
+                    _line_dict = {
+                        "id": _line.id,
+                        "release_date": _line.release_date,
+                        "transaction_type": _line.transaction_type,
+                        "reference_id": _line.reference_id,
+                        "amount_cents": _line.amount_cents,
+                        "amount_brl": (
+                            f"R$ {abs(_line.amount_cents)/100:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+                            if _line.amount_cents >= 0
+                            else f"-R$ {abs(_line.amount_cents)/100:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+                        ),
+                        "partial_balance_cents": _line.partial_balance_cents,
+                        "status": _line.status,
+                        "matched_entry_id": _line.matched_entry_id,
+                        "match": _match,
+                    }
+                    extrato_lines.append(_line_dict)
+                extrato_pendente_count = sum(1 for l in extrato_lines if l["status"] == "pendente")
+    except Exception as _ep_ex:
+        print(f"[conciliacao_page] extrato load error: {_ep_ex}")
+
     current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
     return render(
         "office_finance_conciliation.html",
@@ -36268,6 +36326,11 @@ async def office_finance_conciliation_page(request: Request, session: Session = 
             "current_company": ctx.company,
             "current_client": current_client,
             "role": ctx.membership.role,
+            "tab": tab,
+            "batch": batch,
+            "extrato_lines": extrato_lines,
+            "extrato_pendente_count": extrato_pendente_count,
+            "extrato_batches": extrato_batches,
             "filters": filters,
             "rows": rows,
             "summary": summary,
@@ -36932,100 +36995,370 @@ TEMPLATES.update({
     "office_finance_conciliation.html": r"""
 {% extends "base.html" %}
 {% block content %}
-<div class="card p-4">
-  <div class="d-flex justify-content-between align-items-start flex-wrap gap-2">
+<style>
+.conc-nav { border-bottom:2px solid var(--bs-border-color); margin-bottom:0; }
+.conc-nav .nav-link { border:none; border-bottom:2px solid transparent; margin-bottom:-2px; padding:8px 18px; font-size:.88rem; color:var(--bs-secondary-color); border-radius:0; }
+.conc-nav .nav-link.active { color:var(--bs-primary); border-bottom-color:var(--bs-primary); font-weight:600; background:none; }
+.conc-nav .nav-link:hover { background:none; color:var(--bs-body-color); }
+
+/* Extrato: layout dois painéis */
+.extrato-pair { display:grid; grid-template-columns:1fr 24px 1fr; gap:0; align-items:start; border-bottom:1px solid var(--bs-border-color); padding:16px 0; }
+.extrato-pair:last-child { border-bottom:none; }
+.ext-bank-card  { background:var(--bs-tertiary-bg); border-radius:10px; padding:14px 16px; }
+.ext-bank-date  { font-size:.78rem; color:#999; }
+.ext-bank-desc  { font-size:.9rem; font-weight:500; margin:4px 0 2px; }
+.ext-bank-ref   { font-size:.72rem; color:#aaa; font-family:monospace; }
+.ext-bank-amt   { font-size:1.05rem; font-weight:700; margin-top:6px; }
+.ext-bank-amt.pos { color:#059669; }
+.ext-bank-amt.neg { color:#dc2626; }
+.ext-arrow      { display:flex; align-items:center; justify-content:center; color:#ccc; font-size:1.1rem; }
+.ext-match-card { border:1.5px solid var(--bs-border-color); border-radius:10px; padding:14px 16px; }
+.ext-match-card.has-match { border-color:#10b981; background:rgba(16,185,129,.04); }
+.ext-match-title { font-size:.72rem; text-transform:uppercase; letter-spacing:.05em; color:#999; margin-bottom:6px; font-weight:600; }
+.ext-badge-conciliado { display:inline-block; padding:2px 9px; border-radius:20px; font-size:.72rem; background:#d1fae5; color:#065f46; font-weight:600; }
+.ext-badge-ignorado   { display:inline-block; padding:2px 9px; border-radius:20px; font-size:.72rem; background:var(--bs-tertiary-bg); color:#999; }
+.ext-badge-match      { display:inline-block; padding:2px 9px; border-radius:20px; font-size:.72rem; background:#dbeafe; color:#1e40af; font-weight:600; }
+.ext-tab-count { display:inline-block; background:var(--bs-primary); color:#fff; border-radius:20px; font-size:.65rem; padding:1px 7px; margin-left:5px; vertical-align:middle; }
+
+/* Conciliação simples */
+.conc-stat-card { border-radius:10px; padding:16px 20px; }
+.conc-stat-label { font-size:.72rem; text-transform:uppercase; letter-spacing:.05em; color:#999; margin-bottom:4px; }
+.conc-stat-value { font-size:1.1rem; font-weight:700; }
+.conc-row-card { border:1px solid var(--bs-border-color); border-radius:10px; padding:16px; margin-bottom:12px; }
+.conc-row-card.overdue { border-color:#fca5a5; background:rgba(220,38,38,.03); }
+.conc-badge-r { display:inline-block;padding:2px 9px;border-radius:20px;font-size:.72rem;font-weight:600;background:#d1fae5;color:#065f46; }
+.conc-badge-p { display:inline-block;padding:2px 9px;border-radius:20px;font-size:.72rem;font-weight:600;background:#fee2e2;color:#991b1b; }
+</style>
+
+<div class="container-fluid px-4 py-3">
+
+  {# Cabeçalho #}
+  <div class="d-flex align-items-center justify-content-between mb-3 flex-wrap gap-2">
     <div>
-      <h4 class="mb-0">Conciliação Simples</h4>
-      <div class="muted">Baixa rápida de contas a pagar e receber, com valor realizado, data e conta bancária.</div>
+      <h5 class="mb-0 fw-bold">Conciliação Bancária</h5>
+      <div class="text-muted" style="font-size:.82rem">Baixa de lançamentos e importação de extrato bancário</div>
     </div>
-    <div class="d-flex gap-2 flex-wrap">
-      <a class="btn btn-outline-secondary" href="/admin/financeiro">Voltar</a>
-      <a class="btn btn-outline-primary" href="/admin/financeiro/dashboard-gerencial">Dashboard</a>
+    <div class="d-flex gap-2">
+      <a href="/admin/financeiro" class="btn btn-outline-secondary btn-sm">← Financeiro</a>
+      <a href="/admin/financeiro/dashboard-gerencial" class="btn btn-outline-secondary btn-sm">Dashboard</a>
     </div>
   </div>
 
-  <form class="row g-2 mt-2" method="get" action="/admin/financeiro/conciliacao">
-    <div class="col-md-2">
-      <label class="form-label">Tipo</label>
-      <select class="form-select" name="entry_kind">
-        <option value="">Todos</option>
-        <option value="receber" {% if filters.entry_kind == "receber" %}selected{% endif %}>Receber</option>
-        <option value="pagar" {% if filters.entry_kind == "pagar" %}selected{% endif %}>Pagar</option>
-      </select>
-    </div>
-    <div class="col-md-3">
-      <label class="form-label">Conta bancária</label>
-      <select class="form-select" name="bank_account_id">
-        <option value="">Todas</option>
-        {% for item in bank_accounts %}<option value="{{ item.id }}" {% if filters.bank_account_id == (item.id|string) %}selected{% endif %}>{{ item.name }}</option>{% endfor %}
-      </select>
-    </div>
-    <div class="col-md-2">
-      <label class="form-label">Mês</label>
-      <input class="form-control" type="month" name="month" value="{{ filters.month }}" />
-    </div>
-    <div class="col-md-2">
-      <label class="form-label">Visão</label>
-      <select class="form-select" name="view">
-        <option value="abertos" {% if filters.view == "abertos" %}selected{% endif %}>Apenas pendentes</option>
-        <option value="todos" {% if filters.view == "todos" %}selected{% endif %}>Todos</option>
-      </select>
-    </div>
-    <div class="col-md-3 d-grid align-items-end">
-      <button class="btn btn-outline-primary mt-md-4">Filtrar</button>
-    </div>
-  </form>
+  {# Tabs #}
+  <nav class="conc-nav mb-4">
+    <ul class="nav">
+      <li class="nav-item">
+        <a class="nav-link {% if tab != 'extrato' %}active{% endif %}"
+           href="/admin/financeiro/conciliacao?tab=sistema&{{ 'entry_kind=' ~ filters.entry_kind if filters.entry_kind }}&{{ 'month=' ~ filters.month if filters.month }}">
+          Lançamentos do sistema
+          {% if summary.pending_count %}<span class="ext-tab-count">{{ summary.pending_count }}</span>{% endif %}
+        </a>
+      </li>
+      <li class="nav-item">
+        <a class="nav-link {% if tab == 'extrato' %}active{% endif %}"
+           href="/admin/financeiro/conciliacao?tab=extrato{% if batch %}&batch={{ batch }}{% endif %}">
+          Extrato bancário
+          {% if extrato_pendente_count %}<span class="ext-tab-count">{{ extrato_pendente_count }}</span>{% endif %}
+        </a>
+      </li>
+    </ul>
+  </nav>
 
-  <div class="row g-3 mt-2">
-    <div class="col-md-4"><div class="border rounded p-3 h-100"><div class="muted small">Pendentes</div><div class="fw-semibold">{{ summary.pending_count }}</div></div></div>
-    <div class="col-md-4"><div class="border rounded p-3 h-100"><div class="muted small">Valor vencido em aberto</div><div class="fw-semibold">{{ summary.overdue_open_amount|brl }}</div></div></div>
-    <div class="col-md-4"><div class="border rounded p-3 h-100"><div class="muted small">Linhas</div><div class="fw-semibold">{{ summary.row_count }}</div></div></div>
+  {# ── Tab: SISTEMA ─────────────────────────────────────────────────────── #}
+  {% if tab != 'extrato' %}
+
+  {# Filtros #}
+  <div class="card p-3 mb-4">
+    <form method="get" action="/admin/financeiro/conciliacao" class="row g-2 align-items-end">
+      <input type="hidden" name="tab" value="sistema">
+      <div class="col-auto">
+        <select class="form-select form-select-sm" name="entry_kind" style="min-width:120px">
+          <option value="">Tipo</option>
+          <option value="receber" {% if filters.entry_kind == "receber" %}selected{% endif %}>A receber</option>
+          <option value="pagar"   {% if filters.entry_kind == "pagar"   %}selected{% endif %}>A pagar</option>
+        </select>
+      </div>
+      <div class="col-auto">
+        <select class="form-select form-select-sm" name="bank_account_id" style="min-width:160px">
+          <option value="">Todas as contas</option>
+          {% for item in bank_accounts %}<option value="{{ item.id }}" {% if filters.bank_account_id == (item.id|string) %}selected{% endif %}>{{ item.name }}</option>{% endfor %}
+        </select>
+      </div>
+      <div class="col-auto">
+        <input class="form-control form-control-sm" type="month" name="month" value="{{ filters.month }}" />
+      </div>
+      <div class="col-auto">
+        <select class="form-select form-select-sm" name="view">
+          <option value="abertos" {% if filters.view == "abertos" %}selected{% endif %}>Pendentes</option>
+          <option value="todos"   {% if filters.view == "todos"   %}selected{% endif %}>Todos</option>
+        </select>
+      </div>
+      <div class="col-auto">
+        <button class="btn btn-primary btn-sm">Filtrar</button>
+        <a href="/admin/financeiro/conciliacao?tab=sistema" class="btn btn-outline-secondary btn-sm ms-1">Limpar</a>
+      </div>
+    </form>
   </div>
-</div>
 
-<div class="card p-4 mt-3">
-  <h5 class="mb-0">Lançamentos para conciliar</h5>
+  {# Cards resumo #}
+  <div class="row g-3 mb-4">
+    <div class="col-6 col-md-4">
+      <div class="card conc-stat-card mb-0">
+        <div class="conc-stat-label">Pendentes</div>
+        <div class="conc-stat-value">{{ summary.pending_count }}</div>
+      </div>
+    </div>
+    <div class="col-6 col-md-4">
+      <div class="card conc-stat-card mb-0">
+        <div class="conc-stat-label">Valor vencido</div>
+        <div class="conc-stat-value" style="color:#dc2626">{{ summary.overdue_open_amount|brl }}</div>
+      </div>
+    </div>
+    <div class="col-6 col-md-4">
+      <div class="card conc-stat-card mb-0">
+        <div class="conc-stat-label">Lançamentos exibidos</div>
+        <div class="conc-stat-value">{{ summary.row_count }}</div>
+      </div>
+    </div>
+  </div>
+
+  {# Lista de lançamentos para baixar #}
   {% if rows %}
-    <div class="table-responsive mt-3">
-      <table class="table align-middle">
-        <thead><tr><th>Tipo</th><th>Descrição</th><th>Cliente / Fornecedor</th><th>Vencimento</th><th>Status</th><th>Previsto</th><th>Baixa</th></tr></thead>
-        <tbody>
-          {% for row in rows %}
-            <tr class="{% if row.is_overdue %}table-danger{% endif %}">
-              <td><span class="badge {% if row.entry_kind == 'receber' %}text-bg-success{% else %}text-bg-secondary{% endif %}">{{ row.entry_kind }}</span></td>
-              <td>{{ row.description }}</td>
-              <td>{{ row.counterparty or "—" }}</td>
-              <td>{{ row.due_date or "—" }}</td>
-              <td><span class="badge text-bg-light border">{{ row.status }}</span></td>
-              <td>{{ row.expected|brl }}</td>
-              <td style="min-width:340px">
-                <form method="post" action="/admin/financeiro/conciliacao/{{ row.id }}" class="row g-2">
-                  <div class="col-md-4"><input class="form-control form-control-sm" type="date" name="settlement_date" value="{{ row.settlement_date or row.due_date }}" /></div>
-                  <div class="col-md-4"><input class="form-control form-control-sm" name="amount_realized_brl" value="{{ row.realized if row.realized else row.expected }}" /></div>
-                  <div class="col-md-4">
-                    <select class="form-select form-select-sm" name="bank_account_id">
-                      <option value="">Conta</option>
-                      {% for item in bank_accounts %}<option value="{{ item.id }}" {% if row.bank_account_id == (item.id|string) %}selected{% endif %}>{{ item.name }}</option>{% endfor %}
-                    </select>
-                  </div>
-                  <div class="col-md-8"><input class="form-control form-control-sm" name="notes" placeholder="Observação da baixa" /></div>
-                  <div class="col-md-4 d-grid"><button class="btn btn-sm btn-primary">Conciliar</button></div>
-                </form>
-                {% if row.status in ('recebido', 'pago', 'parcial') %}
-                <form method="post" action="/admin/financeiro/conciliacao/{{ row.id }}/reabrir" class="mt-1" onsubmit="return confirm('Reabrir este lançamento?')">
-                  <button class="btn btn-sm btn-outline-secondary w-100">↩ Reabrir</button>
-                </form>
-                {% endif %}
-              </td>
-            </tr>
-          {% endfor %}
-        </tbody>
-      </table>
+  <div class="card mb-3" style="overflow:hidden;padding:20px">
+    {% for row in rows %}
+    <div class="conc-row-card {% if row.is_overdue %}overdue{% endif %}">
+      <div class="d-flex align-items-start justify-content-between gap-3 flex-wrap">
+        <div style="min-width:0;flex:1">
+          <div class="d-flex align-items-center gap-2 mb-1">
+            {% if row.entry_kind == 'receber' %}<span class="conc-badge-r">▲ receber</span>{% else %}<span class="conc-badge-p">▼ pagar</span>{% endif %}
+            <span class="fw-semibold" style="font-size:.92rem">{{ row.description }}</span>
+            {% if row.is_overdue %}<span style="font-size:.72rem;color:#dc2626;font-weight:600">⚠ vencido</span>{% endif %}
+          </div>
+          <div style="font-size:.78rem;color:#999">
+            {{ row.counterparty or "" }}{% if row.counterparty and row.due_date %} · {% endif %}
+            {% if row.due_date %}Venc. {{ row.due_date }}{% endif %}
+            {% if row.status != 'aberto' %} · <b>{{ row.status }}</b>{% endif %}
+          </div>
+        </div>
+        <div class="text-end" style="white-space:nowrap">
+          <div class="fw-bold" style="font-size:1rem;color:{% if row.entry_kind == 'receber' %}#059669{% else %}#dc2626{% endif %}">{{ row.expected|brl }}</div>
+          {% if row.realized and row.realized != row.expected %}
+          <div style="font-size:.78rem;color:#999">Realizado: {{ row.realized|brl }}</div>
+          {% endif %}
+        </div>
+      </div>
+      <div class="mt-3">
+        <form method="post" action="/admin/financeiro/conciliacao/{{ row.id }}" class="row g-2">
+          <div class="col-auto"><input class="form-control form-control-sm" type="date" name="settlement_date" value="{{ row.settlement_date or row.due_date }}" /></div>
+          <div class="col-auto"><input class="form-control form-control-sm" name="amount_realized_brl" value="{{ row.realized if row.realized else row.expected }}" style="width:110px" placeholder="Valor"/></div>
+          <div class="col-auto">
+            <select class="form-select form-select-sm" name="bank_account_id" style="min-width:150px">
+              <option value="">Conta bancária</option>
+              {% for item in bank_accounts %}<option value="{{ item.id }}" {% if row.bank_account_id == (item.id|string) %}selected{% endif %}>{{ item.name }}</option>{% endfor %}
+            </select>
+          </div>
+          <div class="col"><input class="form-control form-control-sm" name="notes" placeholder="Observação (opcional)" /></div>
+          <div class="col-auto"><button class="btn btn-primary btn-sm">✓ Conciliar</button></div>
+        </form>
+        {% if row.status in ('recebido', 'pago', 'parcial') %}
+        <form method="post" action="/admin/financeiro/conciliacao/{{ row.id }}/reabrir" class="mt-1" onsubmit="return confirm('Reabrir este lançamento?')">
+          <button class="btn btn-sm btn-outline-secondary">↩ Reabrir</button>
+        </form>
+        {% endif %}
+      </div>
     </div>
+    {% endfor %}
+  </div>
   {% else %}
-    <div class="muted mt-3">Nenhum lançamento encontrado para conciliar.</div>
+  <div class="card p-5 text-center text-muted">
+    <div style="font-size:2.5rem;margin-bottom:.5rem">✅</div>
+    <div>Nenhum lançamento pendente para os filtros selecionados.</div>
+  </div>
   {% endif %}
+
+  {# ── Tab: EXTRATO BANCÁRIO ────────────────────────────────────────────── #}
+  {% else %}
+
+  <div class="row g-3 mb-4">
+    {# Upload de novo extrato #}
+    <div class="col-md-6">
+      <div class="card p-4 mb-0 h-100">
+        <div class="fw-semibold mb-1" style="font-size:.92rem">📤 Importar extrato bancário</div>
+        <div class="text-muted mb-3" style="font-size:.8rem">Formatos suportados: CSV com separador ponto-e-vírgula (Nubank, Inter, Sicoob e similares)</div>
+        <form method="post" action="/admin/financeiro/conciliacao/importar-extrato" enctype="multipart/form-data">
+          <div class="d-flex gap-2 align-items-center flex-wrap">
+            <input type="file" name="arquivo" accept=".csv,.txt" class="form-control form-control-sm" style="max-width:300px" required />
+            <button class="btn btn-primary btn-sm">Importar</button>
+          </div>
+        </form>
+      </div>
+    </div>
+    {# Seletor de lote #}
+    <div class="col-md-6">
+      <div class="card p-4 mb-0 h-100">
+        <div class="fw-semibold mb-1" style="font-size:.92rem">📁 Lotes importados</div>
+        {% if extrato_batches %}
+        <div class="d-flex flex-column gap-1 mt-1">
+          {% for b in extrato_batches %}
+          <a href="/admin/financeiro/conciliacao?tab=extrato&batch={{ b }}"
+             class="btn btn-outline-secondary btn-sm text-start {% if b == batch %}active{% endif %}" style="font-size:.78rem;font-family:monospace">
+            {{ b[:8] }}-{{ b[8:14] }}
+          </a>
+          {% endfor %}
+        </div>
+        {% else %}
+        <div class="text-muted mt-1" style="font-size:.82rem">Nenhum extrato importado ainda.</div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+  {% if extrato_lines %}
+  {# Resumo do lote #}
+  <div class="d-flex gap-3 align-items-center mb-3 flex-wrap">
+    <div class="text-muted" style="font-size:.82rem">Lote: <b>{{ batch }}</b></div>
+    <div class="text-muted" style="font-size:.82rem">Total: <b>{{ extrato_lines|length }}</b> transações</div>
+    <div class="text-muted" style="font-size:.82rem">Pendentes: <b>{{ extrato_pendente_count }}</b></div>
+  </div>
+
+  {# Dois painéis: banco × sistema #}
+  <div class="card mb-3" style="overflow:hidden;padding:20px 24px">
+    <div style="display:grid;grid-template-columns:1fr 40px 1fr;gap:0;margin-bottom:10px;font-size:.72rem;text-transform:uppercase;letter-spacing:.05em;color:#999;font-weight:600">
+      <div>Lançamento do banco</div>
+      <div></div>
+      <div>Conciliar / Criar lançamento</div>
+    </div>
+
+    {% for line in extrato_lines %}
+    <div class="extrato-pair">
+      {# Painel esquerdo: transação bancária #}
+      <div class="ext-bank-card">
+        <div class="ext-bank-date">{{ line.release_date }}</div>
+        <div class="ext-bank-desc">{{ line.transaction_type }}</div>
+        {% if line.reference_id %}<div class="ext-bank-ref">Ref: {{ line.reference_id }}</div>{% endif %}
+        <div class="ext-bank-amt {% if line.amount_cents > 0 %}pos{% else %}neg{% endif %}">
+          {% if line.amount_cents < 0 %}-{% endif %}R$ {{ (line.amount_cents|abs / 100)|round(2) }}
+        </div>
+        {% if line.status == 'conciliado' %}
+        <div class="mt-2"><span class="ext-badge-conciliado">✓ conciliado</span></div>
+        {% elif line.status == 'ignorado' %}
+        <div class="mt-2"><span class="ext-badge-ignorado">ignorado</span></div>
+        {% endif %}
+      </div>
+
+      {# Seta #}
+      <div class="ext-arrow">→</div>
+
+      {# Painel direito: matching ou form de criação #}
+      <div class="ext-match-card {% if line.match %}has-match{% endif %}">
+        {% if line.status == 'conciliado' %}
+          <div class="ext-match-title">Conciliado</div>
+          <div class="text-muted small">Transação já foi conciliada.</div>
+        {% elif line.status == 'ignorado' %}
+          <div class="ext-match-title">Ignorado</div>
+          <div class="text-muted small">Transação marcada para ignorar.</div>
+        {% else %}
+          {% if line.match %}
+          <div class="ext-match-title">Lançamento sugerido <span class="ext-badge-match">match automático</span></div>
+          <div class="fw-semibold" style="font-size:.88rem">{{ line.match.description }}</div>
+          <div class="text-muted" style="font-size:.75rem">{{ line.match.entry_kind }} · venc. {{ line.match.due_date }} · {{ line.match.amount_expected_brl|brl }}</div>
+          <form method="post" action="/admin/financeiro/conciliacao/linha/{{ line.id }}/conciliar" class="mt-2 d-flex gap-2 align-items-center flex-wrap">
+            <input type="hidden" name="entry_id" value="{{ line.match.id }}">
+            <input type="hidden" name="batch" value="{{ batch }}">
+            <input type="date" name="settlement_date" value="{{ line.release_date }}" class="form-control form-control-sm" style="width:140px">
+            <button class="btn btn-success btn-sm">✓ Conciliar</button>
+          </form>
+          <div class="mt-2 d-flex gap-2">
+            <button class="btn btn-outline-secondary btn-sm" onclick="toggleNewForm({{ line.id }})">Criar novo</button>
+            <form method="post" action="/admin/financeiro/conciliacao/linha/{{ line.id }}/ignorar" style="margin:0">
+              <input type="hidden" name="batch" value="{{ batch }}">
+              <button type="submit" class="btn btn-outline-secondary btn-sm">Ignorar</button>
+            </form>
+          </div>
+          {% else %}
+          <div class="ext-match-title">Nenhum match encontrado — criar lançamento</div>
+          {% endif %}
+
+          {# Formulário de criação (sempre visível se sem match, colapsável se com match) #}
+          <div id="newForm{{ line.id }}" {% if line.match %}style="display:none"{% endif %}>
+            <form method="post" action="/admin/financeiro/conciliacao/linha/{{ line.id }}/conciliar" class="mt-2">
+              <input type="hidden" name="batch" value="{{ batch }}">
+              <div class="row g-2">
+                <div class="col-6">
+                  <label class="form-label" style="font-size:.72rem">Categoria</label>
+                  <select name="category_id" class="form-select form-select-sm">
+                    <option value="">Selecionar</option>
+                    {% for cat in categories %}<option value="{{ cat.id }}">{{ cat.name }}</option>{% endfor %}
+                  </select>
+                </div>
+                <div class="col-6">
+                  <label class="form-label" style="font-size:.72rem">Fornecedor</label>
+                  <select name="supplier_id" class="form-select form-select-sm">
+                    <option value="">Selecionar</option>
+                    {% for s in suppliers %}<option value="{{ s.id }}">{{ s.name }}</option>{% endfor %}
+                  </select>
+                </div>
+                <div class="col-6">
+                  <label class="form-label" style="font-size:.72rem">Centro de custo</label>
+                  <select name="cost_center_id" class="form-select form-select-sm">
+                    <option value="">Selecionar</option>
+                    {% for cc in cost_centers %}<option value="{{ cc.id }}">{{ cc.name }}</option>{% endfor %}
+                  </select>
+                </div>
+                <div class="col-6">
+                  <label class="form-label" style="font-size:.72rem">Data</label>
+                  <input type="date" name="settlement_date" value="{{ line.release_date }}" class="form-control form-control-sm">
+                </div>
+                <div class="col-12 d-flex gap-2">
+                  <button class="btn btn-primary btn-sm">+ Criar e conciliar</button>
+                  <form method="post" action="/admin/financeiro/conciliacao/linha/{{ line.id }}/ignorar" style="margin:0;display:inline">
+                    <input type="hidden" name="batch" value="{{ batch }}">
+                    <button type="submit" class="btn btn-outline-secondary btn-sm">Ignorar</button>
+                  </form>
+                </div>
+              </div>
+            </form>
+          </div>
+        {% endif %}
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+  {% elif batch %}
+  <div class="card p-5 text-center text-muted">
+    <div>Nenhuma transação encontrada para o lote <b>{{ batch }}</b>.</div>
+  </div>
+  {% else %}
+  <div class="card p-5 text-center text-muted">
+    <div style="font-size:2.5rem;margin-bottom:.5rem">🏦</div>
+    <div>Importe um extrato bancário para iniciar a conciliação.</div>
+    <div class="mt-2" style="font-size:.82rem">Formatos aceitos: CSV ponto-e-vírgula (padrão Open Finance)</div>
+  </div>
+  {% endif %}
+
+  {% endif %}{# end tab extrato #}
+
 </div>
+
+<script>
+function toggleNewForm(id) {
+  var el = document.getElementById('newForm' + id);
+  if (el) el.style.display = el.style.display === 'none' ? '' : 'none';
+}
+
+// Carrega lotes disponíveis
+fetch('/admin/financeiro/conciliacao/lotes')
+  .then(function(r){ return r.json(); })
+  .then(function(data){
+    var c = document.getElementById('lotesContainer');
+    if (!c) return;
+    if (!data || !data.length) { c.textContent = 'Nenhum extrato importado ainda.'; return; }
+    c.innerHTML = data.map(function(d){
+      return '<a href="/admin/financeiro/conciliacao?tab=extrato&batch=' + d.batch + '" class="d-block py-1 text-decoration-none" style="font-size:.82rem">📄 Lote ' + d.batch + '</a>';
+    }).join('');
+  })
+  .catch(function(){ var c=document.getElementById('lotesContainer'); if(c) c.textContent=''; });
+</script>
 {% endblock %}
 """,
     "office_finance_dashboard_advanced.html": r"""
@@ -49219,6 +49552,7 @@ exec(open('ui_acoes_responsavel.py').read())
 
 
 exec(open('ui_fluxo_caixa.py').read())
+exec(open('ui_conciliacao_extrato.py').read())
 exec(open('ui_financeiro_contratos.py').read())
 exec(open('ui_integracao_sienge.py').read())
 try:
