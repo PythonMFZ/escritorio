@@ -6168,15 +6168,15 @@ a:hover{ color:#00BFBF; }
 
               <div class="text-end d-flex flex-column gap-2 align-items-end">
                 {% if role == "admin" and row.membership.user_id != current_user.id %}
-                <form class="d-inline-flex align-items-center gap-1" method="post"
-                      action="/admin/members/{{ row.membership.id }}/change-role">
-                  <select name="new_role" class="form-select form-select-sm" style="width:auto;font-size:.78rem;">
+                <div class="d-inline-flex align-items-center gap-1">
+                  <select class="form-select form-select-sm fc-role-sel" style="width:auto;font-size:.78rem;"
+                          data-mid="{{ row.membership.id }}">
                     <option value="admin"   {% if row.membership.role == "admin"   %}selected{% endif %}>👑 admin</option>
                     <option value="equipe"  {% if row.membership.role == "equipe"  %}selected{% endif %}>🧑‍💼 equipe</option>
                     <option value="cliente" {% if row.membership.role == "cliente" %}selected{% endif %}>👤 cliente</option>
                   </select>
-                  <button class="btn btn-outline-secondary btn-sm" title="Alterar role">↻</button>
-                </form>
+                  <button class="btn btn-outline-secondary btn-sm fc-role-btn" data-mid="{{ row.membership.id }}" title="Alterar role">↻</button>
+                </div>
                 {% endif %}
                 {% if row.membership.role == "cliente" %}
                 <form class="d-inline" method="post" action="/admin/members/{{ row.membership.id }}/link-client">
@@ -6333,6 +6333,27 @@ a:hover{ color:#00BFBF; }
     </div>
   </div>
 </div>
+<script>
+document.addEventListener('click', function(e) {
+  var btn = e.target.closest('.fc-role-btn');
+  if (!btn) return;
+  var mid = btn.dataset.mid;
+  var sel = btn.parentElement.querySelector('.fc-role-sel');
+  if (!sel) return;
+  var nova = sel.value;
+  var fd = new FormData();
+  fd.append('role', nova);
+  btn.disabled = true;
+  btn.textContent = '…';
+  fetch('/admin/members/' + mid + '/change-role', {method: 'POST', body: fd})
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      if (d.ok) { location.reload(); }
+      else { alert('Erro: ' + (d.erro || 'Tente novamente')); btn.disabled = false; btn.textContent = '↻'; }
+    })
+    .catch(function() { alert('Erro de rede.'); btn.disabled = false; btn.textContent = '↻'; });
+});
+</script>
 {% endblock %}
 """,
     "empresa.html": r"""

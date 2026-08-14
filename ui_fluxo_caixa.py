@@ -383,60 +383,149 @@ def _build_fc_context(session, company_id: int, client_id: _Opt_fc[int]) -> dict
 TEMPLATES["fluxo_caixa_dashboard.html"] = r"""
 {% extends "base.html" %}
 {% block content %}
+<style>
+.fcd-card { border-radius:12px; }
+.fcd-today-card {
+  border-radius:12px; padding:20px 24px;
+  display:flex; flex-direction:column; gap:8px;
+}
+.fcd-today-label { font-size:.75rem; text-transform:uppercase; letter-spacing:.06em; color:#888; font-weight:500; }
+.fcd-today-sub   { font-size:.8rem; color:#aaa; margin-top:2px; }
+.fcd-today-value { font-size:1.4rem; font-weight:700; }
+.fcd-today-receber .fcd-today-value { color:#059669; }
+.fcd-today-pagar   .fcd-today-value { color:#dc2626; }
+.fcd-stat-card { border-radius:12px; padding:18px 22px; }
+.fcd-stat-label { font-size:.72rem; text-transform:uppercase; letter-spacing:.05em; color:#999; }
+.fcd-stat-value { font-size:1.15rem; font-weight:700; margin-top:4px; }
+.fcd-overdue-box { border-radius:12px; padding:20px 24px; text-align:center; }
+.fcd-overdue-label { font-size:.8rem; font-weight:500; color:#888; margin-bottom:6px; }
+.fcd-overdue-value { font-size:1.5rem; font-weight:700; }
+.fcd-overdue-receber .fcd-overdue-value { color:#059669; }
+.fcd-overdue-pagar   .fcd-overdue-value { color:#dc2626; }
+.fcd-filter-row input, .fcd-filter-row select, .fcd-filter-row button { font-size:.82rem; }
+.fcd-periodo-link { color:inherit; text-decoration:none; font-weight:500; }
+.fcd-periodo-link:hover { text-decoration:underline; }
+.fcd-critico-row { background:rgba(220,38,38,.06)!important; }
+[data-bs-theme="dark"] .fcd-critico-row { background:rgba(220,38,38,.12)!important; }
+</style>
+
 <div class="container-fluid px-4 py-3">
-  <div class="d-flex align-items-center justify-content-between mb-3">
-    <h4 class="mb-0">💰 Fluxo de Caixa</h4>
-    <div class="d-flex gap-2">
-      <a href="/ferramentas/fluxo-caixa/novo" class="btn btn-primary btn-sm">+ Lançamento</a>
-      <a href="/ferramentas/fluxo-caixa/importar" class="btn btn-outline-secondary btn-sm">Importar Excel</a>
-      <a href="/ferramentas/fluxo-caixa/importar-obra" class="btn btn-outline-secondary btn-sm">🏗 Importar de Obra</a>
-      <a href="/ferramentas/fluxo-caixa/importar-sienge" class="btn btn-outline-secondary btn-sm">🔗 Importar do Sienge</a>
-      <a href="/ferramentas/fluxo-caixa/importacoes" class="btn btn-outline-secondary btn-sm">Importações</a>
+
+  {# Cabeçalho #}
+  <div class="d-flex align-items-center justify-content-between mb-4">
+    <div>
+      <h5 class="mb-0 fw-bold">Fluxo de Caixa</h5>
+      <div class="text-muted small">Visão geral do período</div>
+    </div>
+    <div class="d-flex gap-2 flex-wrap">
+      <a href="/ferramentas/fluxo-caixa/novo" class="btn btn-primary btn-sm">+ Novo lançamento</a>
+      <div class="dropdown">
+        <button class="btn btn-outline-secondary btn-sm dropdown-toggle" data-bs-toggle="dropdown">Importar</button>
+        <ul class="dropdown-menu" style="font-size:.85rem">
+          <li><a class="dropdown-item" href="/ferramentas/fluxo-caixa/importar">📄 Excel genérico</a></li>
+          <li><a class="dropdown-item" href="/ferramentas/fluxo-caixa/importar-obra">🏗 Importar de Obra</a></li>
+          <li><a class="dropdown-item" href="/ferramentas/fluxo-caixa/importar-sienge">🔗 Importar do Sienge</a></li>
+          <li><hr class="dropdown-divider"></li>
+          <li><a class="dropdown-item" href="/ferramentas/fluxo-caixa/importacoes">Histórico de importações</a></li>
+        </ul>
+      </div>
       <a href="/ferramentas/fluxo-caixa/config" class="btn btn-outline-secondary btn-sm">⚙ Configurar</a>
+      <a href="/ferramentas/fluxo-caixa/lancamentos" class="btn btn-outline-secondary btn-sm">Extrato completo →</a>
     </div>
   </div>
 
-  {# Cards de resumo #}
+  {# Cards de hoje: A receber / A pagar #}
   <div class="row g-3 mb-4">
-    <div class="col-6 col-md-3">
-      <div class="card p-4 mb-0">
-        <div class="text-muted small mb-1">Caixa na Data Inicial</div>
-        <div class="fs-5 fw-bold" style="color:{{ 'var(--color-success,#198754)' if saldo_atual_cents >= 0 else '#dc3545' }}">
-          {{ saldo_atual_brl }}
-        </div>
+    <div class="col-12 col-md-3">
+      <div class="card fcd-stat-card mb-0">
+        <div class="fcd-stat-label">Saldo inicial</div>
+        <div class="fcd-stat-value" style="color:{{ '#059669' if saldo_atual_cents >= 0 else '#dc2626' }}">{{ saldo_atual_brl }}</div>
       </div>
     </div>
-    <div class="col-6 col-md-3">
-      <div class="card p-4 mb-0">
-        <div class="text-muted small mb-1">A Receber + Recebido</div>
-        <div class="fs-5 fw-bold" style="color:#198754">{{ entradas_prev_brl }}</div>
+    <div class="col-12 col-md-3">
+      <div class="card fcd-stat-card mb-0">
+        <div class="fcd-stat-label">Entradas (período)</div>
+        <div class="fcd-stat-value" style="color:#059669">{{ entradas_prev_brl }}</div>
       </div>
     </div>
-    <div class="col-6 col-md-3">
-      <div class="card p-4 mb-0">
-        <div class="text-muted small mb-1">A Pagar + Pago</div>
-        <div class="fs-5 fw-bold" style="color:#dc3545">{{ saidas_prev_brl }}</div>
+    <div class="col-12 col-md-3">
+      <div class="card fcd-stat-card mb-0">
+        <div class="fcd-stat-label">Saídas (período)</div>
+        <div class="fcd-stat-value" style="color:#dc2626">{{ saidas_prev_brl }}</div>
       </div>
     </div>
-    <div class="col-6 col-md-3">
-      <div class="card p-4 mb-0">
-        <div class="text-muted small mb-1">Saldo Projetado</div>
-        <div class="fs-5 fw-bold" style="color:{{ 'var(--color-success,#198754)' if saldo_proj_cents >= 0 else '#dc3545' }}">
-          {{ saldo_proj_brl }}
-        </div>
+    <div class="col-12 col-md-3">
+      <div class="card fcd-stat-card mb-0">
+        <div class="fcd-stat-label">Saldo projetado</div>
+        <div class="fcd-stat-value" style="color:{{ '#059669' if saldo_proj_cents >= 0 else '#dc2626' }}">{{ saldo_proj_brl }}</div>
       </div>
     </div>
   </div>
 
+  {# Alerta de atrasados #}
   {% if atrasados_qtd > 0 %}
-  <div class="alert alert-warning d-flex align-items-center gap-2 mb-3">
-    ⚠️ <strong>{{ atrasados_qtd }}</strong> lançamento(s) em aberto com vencimento já passado (atrasado), somando <strong>{{ atrasados_brl }}</strong>.
+  <div class="alert mb-4 d-flex align-items-center gap-3" style="background:#fef2f2;border:1px solid #fecaca;border-radius:10px;color:#991b1b">
+    <span style="font-size:1.2rem">⚠️</span>
+    <div>
+      <strong>{{ atrasados_qtd }}</strong> lançamento(s) em atraso —
+      total de <strong>{{ atrasados_brl }}</strong>.
+      <a href="/ferramentas/fluxo-caixa?modo=atrasados" class="ms-2" style="color:#991b1b;font-size:.85rem">Ver atrasados →</a>
+    </div>
   </div>
   {% endif %}
 
-  {# Filtros #}
-  <div class="card p-4 mb-3">
-    <form method="GET" action="/ferramentas/fluxo-caixa" class="row g-2 align-items-end">
+  {# Layout duas colunas: gráfico à esquerda, overdue à direita #}
+  <div class="row g-3 mb-4">
+
+    {# Gráfico de fluxo #}
+    <div class="col-lg-8">
+      <div class="card fcd-card p-4 mb-0 h-100">
+        <div class="d-flex align-items-center justify-content-between mb-3">
+          <div class="fw-semibold" style="font-size:.9rem">Fluxo de Caixa — {{ group_by|capitalize }}</div>
+          <form method="GET" action="/ferramentas/fluxo-caixa" class="d-inline fcd-filter-row">
+            <input type="hidden" name="data_inicio" value="{{ data_inicio }}">
+            <input type="hidden" name="data_fim" value="{{ data_fim }}">
+            <input type="hidden" name="modo" value="{{ modo }}">
+            <select name="group_by" class="form-select form-select-sm d-inline w-auto" onchange="this.form.submit()">
+              <option value="dia"    {% if group_by=='dia'    %}selected{% endif %}>Por dia</option>
+              <option value="semana" {% if group_by=='semana' %}selected{% endif %}>Por semana</option>
+              <option value="mes"    {% if group_by=='mes'    %}selected{% endif %}>Por mês</option>
+            </select>
+          </form>
+        </div>
+        <canvas id="fcdChart" style="max-height:240px"></canvas>
+      </div>
+    </div>
+
+    {# Sidebar: totais em atraso #}
+    <div class="col-lg-4">
+      <div class="d-flex flex-column gap-3 h-100">
+        <div class="card fcd-overdue-box fcd-overdue-receber mb-0 flex-grow-1 d-flex flex-column justify-content-center">
+          <div class="fcd-overdue-label">Todos recebimentos em atraso</div>
+          <div class="fcd-overdue-value">{{ receber_atrasado_brl }}</div>
+          <div class="mt-2">
+            <a href="/ferramentas/fluxo-caixa/lancamentos?status=atrasado&tipo=entrada" class="btn btn-outline-success btn-sm w-100" style="font-size:.78rem">
+              + Novo recebimento
+            </a>
+          </div>
+        </div>
+        <div class="card fcd-overdue-box fcd-overdue-pagar mb-0 flex-grow-1 d-flex flex-column justify-content-center">
+          <div class="fcd-overdue-label">Todos pagamentos em atraso</div>
+          <div class="fcd-overdue-value">{{ pagar_atrasado_brl }}</div>
+          <div class="mt-2">
+            <a href="/ferramentas/fluxo-caixa/lancamentos?status=atrasado&tipo=saida" class="btn btn-outline-danger btn-sm w-100" style="font-size:.78rem">
+              + Novo pagamento
+            </a>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  {# Filtros + tabela detalhada #}
+  <div class="card fcd-card p-3 mb-3">
+    <form method="GET" action="/ferramentas/fluxo-caixa" class="row g-2 align-items-end fcd-filter-row">
       <div class="col-auto">
         <label class="form-label small mb-1">De</label>
         <input type="date" name="data_inicio" value="{{ data_inicio }}" class="form-control form-control-sm">
@@ -448,20 +537,16 @@ TEMPLATES["fluxo_caixa_dashboard.html"] = r"""
       <div class="col-auto">
         <label class="form-label small mb-1 d-block">Empresa</label>
         <div class="dropdown">
-          <button type="button" class="btn btn-outline-secondary btn-sm dropdown-toggle" data-bs-toggle="dropdown" data-bs-auto-close="outside" style="min-width:160px">
-            {% if empresas_selecionadas %}{{ empresas_selecionadas|length }} selecionada(s){% else %}Todas{% endif %}
+          <button type="button" class="btn btn-outline-secondary btn-sm dropdown-toggle" data-bs-toggle="dropdown" data-bs-auto-close="outside" style="min-width:140px">
+            {% if empresas_selecionadas %}{{ empresas_selecionadas|length }} empresa(s){% else %}Todas{% endif %}
           </button>
-          <ul class="dropdown-menu p-2" style="max-height:260px;overflow:auto">
-            {% if not empresas_disponiveis %}
-            <li class="text-muted small px-2">Nenhuma empresa cadastrada</li>
-            {% endif %}
+          <ul class="dropdown-menu p-2" style="max-height:240px;overflow:auto;min-width:200px">
             {% for emp in empresas_disponiveis %}
-            <li>
-              <label class="dropdown-item d-flex align-items-center gap-2 mb-0">
-                <input type="checkbox" name="empresas" value="{{ emp }}" class="form-check-input m-0" {% if emp in empresas_selecionadas %}checked{% endif %}>
-                {{ emp }}
-              </label>
-            </li>
+            <li><label class="dropdown-item d-flex gap-2 mb-0">
+              <input type="checkbox" name="empresas" value="{{ emp }}" class="form-check-input m-0" {% if emp in empresas_selecionadas %}checked{% endif %}>{{ emp }}
+            </label></li>
+            {% else %}
+            <li class="text-muted small px-2">Sem empresas cadastradas</li>
             {% endfor %}
           </ul>
         </div>
@@ -469,41 +554,30 @@ TEMPLATES["fluxo_caixa_dashboard.html"] = r"""
       <div class="col-auto">
         <label class="form-label small mb-1 d-block">Centro de Custo</label>
         <div class="dropdown">
-          <button type="button" class="btn btn-outline-secondary btn-sm dropdown-toggle" data-bs-toggle="dropdown" data-bs-auto-close="outside" style="min-width:160px">
-            {% if centros_selecionados %}{{ centros_selecionados|length }} selecionado(s){% else %}Todos{% endif %}
+          <button type="button" class="btn btn-outline-secondary btn-sm dropdown-toggle" data-bs-toggle="dropdown" data-bs-auto-close="outside" style="min-width:140px">
+            {% if centros_selecionados %}{{ centros_selecionados|length }} centro(s){% else %}Todos{% endif %}
           </button>
-          <ul class="dropdown-menu p-2" style="max-height:260px;overflow:auto">
-            {% if not centros_disponiveis %}
-            <li class="text-muted small px-2">Nenhum centro de custo cadastrado</li>
-            {% endif %}
+          <ul class="dropdown-menu p-2" style="max-height:240px;overflow:auto;min-width:200px">
             {% for cc in centros_disponiveis %}
-            <li>
-              <label class="dropdown-item d-flex align-items-center gap-2 mb-0">
-                <input type="checkbox" name="centros" value="{{ cc }}" class="form-check-input m-0" {% if cc in centros_selecionados %}checked{% endif %}>
-                {{ cc }}
-              </label>
-            </li>
+            <li><label class="dropdown-item d-flex gap-2 mb-0">
+              <input type="checkbox" name="centros" value="{{ cc }}" class="form-check-input m-0" {% if cc in centros_selecionados %}checked{% endif %}>{{ cc }}
+            </label></li>
+            {% else %}
+            <li class="text-muted small px-2">Sem centros cadastrados</li>
             {% endfor %}
           </ul>
         </div>
       </div>
       <div class="col-auto">
         <label class="form-label small mb-1">Considerar</label>
-        <select name="modo" class="form-select form-select-sm" style="min-width:260px">
-          <option value="realizado"        {% if modo=='realizado'        %}selected{% endif %}>Só Realizado</option>
-          <option value="todos"            {% if modo=='todos'            %}selected{% endif %}>Todos (inclui atrasados)</option>
-          <option value="realizado_futuro" {% if modo=='realizado_futuro' %}selected{% endif %}>Realizado + A Realizar de hoje em diante (sem atrasados)</option>
-          <option value="atrasados"        {% if modo=='atrasados'        %}selected{% endif %}>Só Atrasados</option>
+        <select name="modo" class="form-select form-select-sm" style="min-width:230px">
+          <option value="todos"            {% if modo=='todos'            %}selected{% endif %}>Todos</option>
+          <option value="realizado"        {% if modo=='realizado'        %}selected{% endif %}>Só realizado</option>
+          <option value="realizado_futuro" {% if modo=='realizado_futuro' %}selected{% endif %}>Realizado + a realizar (sem atrasados)</option>
+          <option value="atrasados"        {% if modo=='atrasados'        %}selected{% endif %}>Só atrasados</option>
         </select>
       </div>
-      <div class="col-auto">
-        <label class="form-label small mb-1">Agrupar por</label>
-        <select name="group_by" class="form-select form-select-sm">
-          <option value="dia"    {% if group_by=='dia'    %}selected{% endif %}>Dia</option>
-          <option value="semana" {% if group_by=='semana' %}selected{% endif %}>Semana</option>
-          <option value="mes"    {% if group_by=='mes'    %}selected{% endif %}>Mês</option>
-        </select>
-      </div>
+      <input type="hidden" name="group_by" value="{{ group_by }}">
       <div class="col-auto">
         <button type="submit" class="btn btn-primary btn-sm">Filtrar</button>
         <a href="/ferramentas/fluxo-caixa" class="btn btn-outline-secondary btn-sm ms-1">Limpar</a>
@@ -511,107 +585,241 @@ TEMPLATES["fluxo_caixa_dashboard.html"] = r"""
     </form>
   </div>
 
-  {# Tabela de fluxo #}
-  <div class="card p-4 mb-3">
+  <div class="card fcd-card mb-3" style="overflow:hidden">
     <div class="table-responsive">
-      <table class="table table-sm align-middle mb-0">
-        <thead class="table-light">
+      <table class="table table-hover table-sm align-middle mb-0" style="font-size:.85rem">
+        <thead style="background:var(--bs-tertiary-bg);border-bottom:1px solid var(--bs-border-color)">
           <tr>
-            <th>Data</th>
-            <th class="text-end">A Receber</th>
-            <th class="text-end">Recebido</th>
-            <th class="text-end">A Receber + Recebido</th>
-            <th class="text-end">A Pagar</th>
-            <th class="text-end">Pago</th>
-            <th class="text-end">A Pagar + Pago</th>
-            <th class="text-end">Saldo Data</th>
-            <th class="text-end">Saldo Acumulado</th>
+            <th style="padding:9px 16px">Período</th>
+            <th class="text-end" style="padding:9px 12px">A Receber</th>
+            <th class="text-end" style="padding:9px 12px">Recebido</th>
+            <th class="text-end fw-semibold" style="padding:9px 12px">Total Entradas</th>
+            <th class="text-end" style="padding:9px 12px">A Pagar</th>
+            <th class="text-end" style="padding:9px 12px">Pago</th>
+            <th class="text-end fw-semibold" style="padding:9px 12px">Total Saídas</th>
+            <th class="text-end" style="padding:9px 12px">Saldo</th>
+            <th class="text-end fw-bold" style="padding:9px 16px">Acumulado</th>
           </tr>
         </thead>
         <tbody>
           {% for p in periodos %}
-          <tr {% if p.critico %}style="background:rgba(220,53,69,0.08)"{% endif %}>
-            <td>
-              <a href="/ferramentas/fluxo-caixa/lancamentos?data_inicio={{ p.data_inicio }}&data_fim={{ p.data_fim }}" class="text-decoration-none text-dark">
-                {{ p.label }}
-              </a>
-              {% if p.critico %}<span class="badge ms-1" style="background:#dc3545;font-size:0.65rem">ALERTA</span>{% endif %}
-              {% if p.tem_atrasado %}<span class="badge ms-1" style="background:#fd7e14;font-size:0.65rem" title="Há lançamentos em aberto com vencimento passado">ATRASADO</span>{% endif %}
+          <tr {% if p.critico %}class="fcd-critico-row"{% endif %}>
+            <td style="padding:9px 16px">
+              <a href="/ferramentas/fluxo-caixa/lancamentos?data_inicio={{ p.data_inicio }}&data_fim={{ p.data_fim }}"
+                 class="fcd-periodo-link">{{ p.label }}</a>
+              {% if p.critico %}<span class="badge ms-2" style="background:#dc2626;font-size:.62rem">ALERTA</span>{% endif %}
+              {% if p.tem_atrasado %}<span class="badge ms-1" style="background:#f97316;font-size:.62rem">ATRASADO</span>{% endif %}
             </td>
-            <td class="text-end" style="color:#198754">
-              {{ p.a_receber_brl }}
-              {% if p.atrasado_receber > 0 %}<div class="small" style="color:#fd7e14">⚠ atrasado: {{ p.atrasado_receber_brl }}</div>{% endif %}
-            </td>
-            <td class="text-end" style="color:#198754">{{ p.recebido_brl }}</td>
-            <td class="text-end fw-semibold" style="color:#198754">{{ p.total_receber_brl }}</td>
-            <td class="text-end" style="color:#dc3545">
-              {{ p.a_pagar_brl }}
-              {% if p.atrasado_pagar > 0 %}<div class="small" style="color:#fd7e14">⚠ atrasado: {{ p.atrasado_pagar_brl }}</div>{% endif %}
-            </td>
-            <td class="text-end" style="color:#dc3545">{{ p.pago_brl }}</td>
-            <td class="text-end fw-semibold" style="color:#dc3545">{{ p.total_pagar_brl }}</td>
-            <td class="text-end fw-semibold" style="color:{{ '#198754' if p.saldo_data >= 0 else '#dc3545' }}">
+            <td class="text-end" style="padding:9px 12px;color:#059669">{{ p.a_receber_brl }}</td>
+            <td class="text-end" style="padding:9px 12px;color:#059669">{{ p.recebido_brl }}</td>
+            <td class="text-end fw-semibold" style="padding:9px 12px;color:#059669">{{ p.total_receber_brl }}</td>
+            <td class="text-end" style="padding:9px 12px;color:#dc2626">{{ p.a_pagar_brl }}</td>
+            <td class="text-end" style="padding:9px 12px;color:#dc2626">{{ p.pago_brl }}</td>
+            <td class="text-end fw-semibold" style="padding:9px 12px;color:#dc2626">{{ p.total_pagar_brl }}</td>
+            <td class="text-end fw-semibold" style="padding:9px 12px;color:{{ '#059669' if p.saldo_data >= 0 else '#dc2626' }}">
               {{ p.saldo_data_brl }}
             </td>
-            <td class="text-end fw-bold" style="color:{{ '#198754' if p.saldo_acumulado >= 0 else '#dc3545' }}">
+            <td class="text-end fw-bold" style="padding:9px 16px;color:{{ '#059669' if p.saldo_acumulado >= 0 else '#dc2626' }}">
               {{ p.saldo_acumulado_brl }}
             </td>
           </tr>
           {% else %}
-          <tr><td colspan="9" class="text-center text-muted py-4">Nenhum lançamento encontrado para o período.</td></tr>
+          <tr><td colspan="9" class="text-center text-muted py-5">
+            <div style="font-size:2rem;margin-bottom:.5rem">📊</div>
+            Nenhum lançamento no período selecionado.
+          </td></tr>
           {% endfor %}
         </tbody>
       </table>
     </div>
-    <div class="mt-2 d-flex justify-content-end">
-      <a href="/ferramentas/fluxo-caixa/lancamentos?data_inicio={{ data_inicio }}&data_fim={{ data_fim }}" class="btn btn-outline-secondary btn-sm">
-        Ver todos os lançamentos →
-      </a>
+    <div class="px-3 py-2 border-top d-flex justify-content-end">
+      <a href="/ferramentas/fluxo-caixa/lancamentos?data_inicio={{ data_inicio }}&data_fim={{ data_fim }}"
+         class="btn btn-outline-secondary btn-sm" style="font-size:.82rem">Ver extrato completo →</a>
     </div>
   </div>
+
 </div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js" crossorigin="anonymous"></script>
+<script>
+(function(){
+  var labels   = {{ chart_labels   | tojson }};
+  var receber  = {{ chart_receber  | tojson }};
+  var pagar    = {{ chart_pagar    | tojson }};
+  var saldo    = {{ chart_saldo    | tojson }};
+
+  var isDark = document.documentElement.getAttribute('data-bs-theme') === 'dark'
+    || (!document.documentElement.hasAttribute('data-bs-theme') && window.matchMedia('(prefers-color-scheme: dark)').matches);
+  var gridColor  = isDark ? 'rgba(255,255,255,.08)' : 'rgba(0,0,0,.06)';
+  var labelColor = isDark ? '#9ca3af' : '#6b7280';
+
+  new Chart(document.getElementById('fcdChart'), {
+    type: 'bar',
+    data: {
+      labels: labels,
+      datasets: [
+        {
+          label: 'Recebimentos',
+          data: receber,
+          backgroundColor: 'rgba(5,150,105,.65)',
+          borderRadius: 4,
+          order: 2,
+        },
+        {
+          label: 'Pagamentos',
+          data: pagar.map(function(v){ return -v; }),
+          backgroundColor: 'rgba(220,38,38,.55)',
+          borderRadius: 4,
+          order: 2,
+        },
+        {
+          label: 'Saldo',
+          data: saldo,
+          type: 'line',
+          borderColor: '#3b82f6',
+          backgroundColor: 'rgba(59,130,246,.12)',
+          pointBackgroundColor: '#3b82f6',
+          pointRadius: 3,
+          tension: .35,
+          fill: true,
+          order: 1,
+          yAxisID: 'y',
+        }
+      ]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: true,
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: { labels: { color: labelColor, font: { size: 11 }, boxWidth: 12, padding: 16 } },
+        tooltip: {
+          callbacks: {
+            label: function(ctx) {
+              var v = ctx.raw < 0 ? -ctx.raw : ctx.raw;
+              return ctx.dataset.label + ': R$ ' + (v/100).toLocaleString('pt-BR',{minimumFractionDigits:2});
+            }
+          }
+        }
+      },
+      scales: {
+        x: { grid: { color: gridColor }, ticks: { color: labelColor, font: { size: 10 }, maxRotation: 45 } },
+        y: { grid: { color: gridColor }, ticks: { color: labelColor, font: { size: 10 },
+          callback: function(v){ return 'R$' + (v/100).toLocaleString('pt-BR',{notation:'compact'}); }
+        } }
+      }
+    }
+  });
+})();
+</script>
 {% endblock %}
 """
 
 TEMPLATES["fluxo_caixa_lancamentos.html"] = r"""
 {% extends "base.html" %}
 {% block content %}
+<style>
+.fc-tag {
+  display:inline-block; font-size:.7rem; padding:1px 7px; border-radius:20px;
+  background:var(--fc-tag-bg,rgba(0,0,0,.07)); color:var(--fc-tag-color,#555);
+  white-space:nowrap; margin-right:3px;
+}
+[data-bs-theme="dark"] .fc-tag { --fc-tag-bg:rgba(255,255,255,.1); --fc-tag-color:#bbb; }
+
+.fc-badge-recebido  { display:inline-block; padding:3px 10px; border-radius:20px; font-size:.75rem; font-weight:600; background:#d1fae5; color:#065f46; }
+.fc-badge-pago      { display:inline-block; padding:3px 10px; border-radius:20px; font-size:.75rem; font-weight:600; background:#d1fae5; color:#065f46; }
+.fc-badge-receber   { display:inline-block; padding:3px 10px; border-radius:20px; font-size:.75rem; font-weight:600; background:#e0f2fe; color:#075985; }
+.fc-badge-pagar     { display:inline-block; padding:3px 10px; border-radius:20px; font-size:.75rem; font-weight:600; background:#fef9c3; color:#713f12; }
+.fc-badge-atrasado  { display:inline-block; padding:3px 10px; border-radius:20px; font-size:.75rem; font-weight:600; background:#fee2e2; color:#991b1b; }
+.fc-badge-cancelado { display:inline-block; padding:3px 10px; border-radius:20px; font-size:.75rem; font-weight:600; background:rgba(0,0,0,.07); color:#888; }
+
+[data-bs-theme="dark"] .fc-badge-recebido  { background:#064e3b; color:#6ee7b7; }
+[data-bs-theme="dark"] .fc-badge-pago      { background:#064e3b; color:#6ee7b7; }
+[data-bs-theme="dark"] .fc-badge-receber   { background:#0c4a6e; color:#7dd3fc; }
+[data-bs-theme="dark"] .fc-badge-pagar     { background:#451a03; color:#fde68a; }
+[data-bs-theme="dark"] .fc-badge-atrasado  { background:#450a0a; color:#fca5a5; }
+[data-bs-theme="dark"] .fc-badge-cancelado { background:rgba(255,255,255,.07); color:#777; }
+
+.fc-summary-strip { border-radius:10px; }
+.fc-valor-entrada { color:#059669; font-weight:600; }
+.fc-valor-saida   { color:#dc2626; font-weight:600; }
+.fc-saldo-pos     { color:#059669; font-size:.82rem; }
+.fc-saldo-neg     { color:#dc2626; font-size:.82rem; }
+.fc-saldo-nd      { color:#aaa;    font-size:.82rem; }
+.fc-desc          { font-size:.9rem; }
+.fc-date-main     { font-size:.88rem; font-weight:500; }
+.fc-date-sub      { font-size:.75rem; color:#999; }
+.fc-actions-col   { white-space:nowrap; }
+</style>
+
 <div class="container-fluid px-4 py-3">
+  {# Cabeçalho #}
   <div class="d-flex align-items-center justify-content-between mb-3">
-    <h4 class="mb-0">Lançamentos — Fluxo de Caixa</h4>
+    <div>
+      <h5 class="mb-0 fw-bold">Extrato de Lançamentos</h5>
+      <div class="text-muted small">Fluxo de Caixa</div>
+    </div>
     <div class="d-flex gap-2">
-      <a href="/ferramentas/fluxo-caixa/novo" class="btn btn-primary btn-sm">+ Novo</a>
+      <a href="/ferramentas/fluxo-caixa/novo" class="btn btn-primary btn-sm">+ Novo lançamento</a>
       <a href="/ferramentas/fluxo-caixa/importacoes" class="btn btn-outline-secondary btn-sm">Importações</a>
       <a href="/ferramentas/fluxo-caixa" class="btn btn-outline-secondary btn-sm">← Dashboard</a>
     </div>
   </div>
 
+  {# Tira de totais #}
+  <div class="row g-3 mb-3">
+    <div class="col-auto">
+      <div class="card fc-summary-strip px-4 py-3 mb-0">
+        <div class="text-muted" style="font-size:.72rem;text-transform:uppercase;letter-spacing:.05em">Total de entradas</div>
+        <div class="fc-valor-entrada fs-6 mt-1">{{ total_entradas_brl }}</div>
+      </div>
+    </div>
+    <div class="col-auto">
+      <div class="card fc-summary-strip px-4 py-3 mb-0">
+        <div class="text-muted" style="font-size:.72rem;text-transform:uppercase;letter-spacing:.05em">Total de saídas</div>
+        <div class="fc-valor-saida fs-6 mt-1">{{ total_saidas_brl }}</div>
+      </div>
+    </div>
+    <div class="col-auto">
+      <div class="card fc-summary-strip px-4 py-3 mb-0">
+        <div class="text-muted" style="font-size:.72rem;text-transform:uppercase;letter-spacing:.05em">Registros</div>
+        <div class="fw-bold fs-6 mt-1">{{ total }}</div>
+      </div>
+    </div>
+  </div>
+
+  {# Filtros #}
   <div class="card p-3 mb-3">
     <form method="GET" class="row g-2 align-items-end">
       <div class="col-auto">
-        <input type="date" name="data_inicio" value="{{ data_inicio }}" class="form-control form-control-sm" placeholder="De">
+        <label class="form-label small mb-1">De</label>
+        <input type="date" name="data_inicio" value="{{ data_inicio }}" class="form-control form-control-sm">
       </div>
       <div class="col-auto">
-        <input type="date" name="data_fim" value="{{ data_fim }}" class="form-control form-control-sm" placeholder="Até">
+        <label class="form-label small mb-1">Até</label>
+        <input type="date" name="data_fim" value="{{ data_fim }}" class="form-control form-control-sm">
       </div>
       <div class="col-auto">
-        <select name="status" class="form-select form-select-sm">
-          <option value="">Todos</option>
-          <option value="previsto"  {% if status_filtro=='previsto'  %}selected{% endif %}>Em aberto (a pagar/receber)</option>
+        <label class="form-label small mb-1">Situação</label>
+        <select name="status" class="form-select form-select-sm" style="min-width:170px">
+          <option value="">Todas</option>
+          <option value="previsto"  {% if status_filtro=='previsto'  %}selected{% endif %}>Em aberto</option>
           <option value="atrasado"  {% if status_filtro=='atrasado'  %}selected{% endif %}>Atrasado</option>
           <option value="realizado" {% if status_filtro=='realizado' %}selected{% endif %}>Realizado</option>
           <option value="cancelado" {% if status_filtro=='cancelado' %}selected{% endif %}>Cancelado</option>
         </select>
       </div>
       <div class="col-auto">
+        <label class="form-label small mb-1">Tipo</label>
         <select name="tipo" class="form-select form-select-sm">
-          <option value="">Entrada/Saída</option>
+          <option value="">Todos</option>
           <option value="entrada" {% if tipo_filtro=='entrada' %}selected{% endif %}>Entrada</option>
           <option value="saida"   {% if tipo_filtro=='saida'   %}selected{% endif %}>Saída</option>
         </select>
       </div>
-      <div class="col-auto">
-        <input type="text" name="q" value="{{ q }}" class="form-control form-control-sm" placeholder="Buscar descrição…">
+      <div class="col">
+        <label class="form-label small mb-1">Buscar</label>
+        <input type="text" name="q" value="{{ q }}" class="form-control form-control-sm" placeholder="Descrição, empresa…">
       </div>
       <div class="col-auto">
         <button class="btn btn-primary btn-sm">Filtrar</button>
@@ -620,81 +828,137 @@ TEMPLATES["fluxo_caixa_lancamentos.html"] = r"""
     </form>
   </div>
 
-  <div class="card p-4">
+  {# Tabela #}
+  <div class="card mb-3" style="overflow:hidden">
     <div class="table-responsive">
-      <table class="table table-sm align-middle">
-        <thead class="table-light">
+      <table class="table table-hover align-middle mb-0" style="font-size:.88rem">
+        <thead style="background:var(--bs-tertiary-bg);border-bottom:1px solid var(--bs-border-color)">
           <tr>
-            <th>Data</th>
-            <th>Descrição</th>
-            <th>Empresa</th>
-            <th>Centro de Custo</th>
-            <th>Categoria</th>
-            <th>Tipo</th>
-            <th class="text-end">Valor</th>
-            <th>Status</th>
-            <th></th>
+            <th style="width:110px;padding:10px 16px">Data</th>
+            <th style="padding:10px 12px">Descrição</th>
+            <th style="width:130px;padding:10px 12px">Situação</th>
+            <th style="width:130px;text-align:right;padding:10px 16px">Valor (R$)</th>
+            <th style="width:140px;text-align:right;padding:10px 16px">Saldo (R$) <span class="text-muted" style="font-size:.7rem" title="Saldo acumulado dos lançamentos realizados no período">ⓘ</span></th>
+            <th style="width:80px;padding:10px 12px"></th>
           </tr>
         </thead>
         <tbody>
           {% for e in entries %}
           <tr>
-            <td class="text-nowrap">
-              {% if e.status == 'realizado' and e.data_pagamento %}
-                {{ e.data_pagamento_fmt }}
-                <div class="small text-muted" title="Vencimento: {{ e.data_vencimento_fmt }}">venc. {{ e.data_vencimento_fmt }}</div>
-              {% else %}
-                {{ e.data_vencimento_fmt }}
+            {# Data #}
+            <td style="padding:10px 16px">
+              <div class="fc-date-main">
+                {% if e.status == 'realizado' and e.data_pagamento %}
+                  {{ e.data_pagamento_fmt }}
+                {% else %}
+                  {{ e.data_vencimento_fmt }}
+                {% endif %}
+              </div>
+              {% if e.status == 'realizado' and e.data_pagamento and e.data_vencimento != e.data_pagamento %}
+              <div class="fc-date-sub">venc. {{ e.data_vencimento_fmt }}</div>
               {% endif %}
             </td>
-            <td>{{ e.descricao }}</td>
-            <td class="text-muted small">{{ e.empresa or '—' }}</td>
-            <td><span class="badge bg-secondary">{{ e.centro_custo }}</span></td>
-            <td class="text-muted small">{{ e.categoria }}</td>
-            <td>
-              {% if e.tipo == 'entrada' %}
-              <span class="badge" style="background:#198754">Entrada</span>
-              {% else %}
-              <span class="badge" style="background:#dc3545">Saída</span>
-              {% endif %}
+
+            {# Descrição + tags #}
+            <td style="padding:10px 12px">
+              <div class="fc-desc">{{ e.descricao }}</div>
+              <div class="mt-1">
+                {% if e.categoria and e.categoria != 'Outros' %}
+                <span class="fc-tag">{{ e.categoria }}</span>
+                {% endif %}
+                {% if e.empresa %}
+                <span class="fc-tag">{{ e.empresa }}</span>
+                {% endif %}
+                {% if e.centro_custo and e.centro_custo != 'Geral' %}
+                <span class="fc-tag">{{ e.centro_custo }}</span>
+                {% endif %}
+              </div>
             </td>
-            <td class="text-end fw-semibold" style="color:{{ '#198754' if e.tipo=='entrada' else '#dc3545' }}">
-              {{ e.valor_brl }}
-            </td>
-            <td>
+
+            {# Situação #}
+            <td style="padding:10px 12px">
               {% if e.status == 'realizado' %}
-              <span class="badge" style="background:#198754;font-size:.8rem">✅ Realizado</span>
+                {% if e.tipo == 'entrada' %}
+                <span class="fc-badge-recebido">Recebido</span>
+                {% else %}
+                <span class="fc-badge-pago">Pago</span>
+                {% endif %}
               {% elif e.status == 'cancelado' %}
-              <span class="badge bg-secondary">Cancelado</span>
+                <span class="fc-badge-cancelado">Cancelado</span>
               {% elif e.atrasado %}
-              <span class="badge" style="background:#dc3545;font-size:.8rem">⚠ Atrasado</span>
+                <span class="fc-badge-atrasado">Atrasado</span>
               {% else %}
-              <span class="badge" style="background:#fd7e14;font-size:.8rem">⏳ A pagar/receber</span>
+                {% if e.tipo == 'entrada' %}
+                <span class="fc-badge-receber">A receber</span>
+                {% else %}
+                <span class="fc-badge-pagar">A pagar</span>
+                {% endif %}
               {% endif %}
             </td>
-            <td class="text-nowrap">
-              <a href="/ferramentas/fluxo-caixa/{{ e.id }}/editar" class="btn btn-outline-secondary btn-sm py-0 px-2" title="Editar">✏</a>
-              {% if e.status == 'previsto' %}
-              <form method="POST" action="/ferramentas/fluxo-caixa/{{ e.id }}/realizar" style="display:inline">
-                <button class="btn btn-success btn-sm py-0 px-2" title="Marcar como realizado (pago/recebido)" style="font-size:.8rem">✓ Realizar</button>
-              </form>
+
+            {# Valor #}
+            <td style="text-align:right;padding:10px 16px">
+              {% if e.tipo == 'saida' %}
+              <span class="fc-valor-saida">-{{ e.valor_brl }}</span>
+              {% else %}
+              <span class="fc-valor-entrada">{{ e.valor_brl }}</span>
               {% endif %}
-              {% if e.status != 'cancelado' %}
-              <form method="POST" action="/ferramentas/fluxo-caixa/{{ e.id }}/excluir" style="display:inline"
-                    onsubmit="return confirm('Excluir este lançamento?')">
-                <button class="btn btn-outline-danger btn-sm py-0 px-1" title="Excluir">✕</button>
-              </form>
+            </td>
+
+            {# Saldo corrente #}
+            <td style="text-align:right;padding:10px 16px">
+              {% if e.saldo_brl == '—' %}
+              <span class="fc-saldo-nd">—</span>
+              {% elif e.saldo_cents is not none and e.saldo_cents < 0 %}
+              <span class="fc-saldo-neg">{{ e.saldo_brl }}</span>
+              {% else %}
+              <span class="fc-saldo-pos">{{ e.saldo_brl }}</span>
               {% endif %}
+            </td>
+
+            {# Ações dropdown #}
+            <td class="fc-actions-col" style="padding:10px 12px">
+              <div class="dropdown">
+                <button class="btn btn-outline-secondary btn-sm dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false" style="font-size:.8rem;padding:3px 10px">
+                  Ações
+                </button>
+                <ul class="dropdown-menu dropdown-menu-end shadow-sm" style="font-size:.85rem;min-width:150px">
+                  <li><a class="dropdown-item" href="/ferramentas/fluxo-caixa/{{ e.id }}/editar">✏ Editar</a></li>
+                  {% if e.status == 'previsto' %}
+                  <li>
+                    <form method="POST" action="/ferramentas/fluxo-caixa/{{ e.id }}/realizar" style="margin:0">
+                      <button type="submit" class="dropdown-item text-success">✓ Marcar como realizado</button>
+                    </form>
+                  </li>
+                  {% endif %}
+                  {% if e.status != 'cancelado' %}
+                  <li><hr class="dropdown-divider my-1"></li>
+                  <li>
+                    <form method="POST" action="/ferramentas/fluxo-caixa/{{ e.id }}/excluir" style="margin:0"
+                          onsubmit="return confirm('Excluir este lançamento?')">
+                      <button type="submit" class="dropdown-item text-danger">🗑 Excluir</button>
+                    </form>
+                  </li>
+                  {% endif %}
+                </ul>
+              </div>
             </td>
           </tr>
           {% else %}
-          <tr><td colspan="10" class="text-center text-muted py-4">Nenhum lançamento encontrado.</td></tr>
+          <tr>
+            <td colspan="6" class="text-center text-muted py-5">
+              <div style="font-size:2rem;margin-bottom:.5rem">📋</div>
+              Nenhum lançamento encontrado para os filtros selecionados.
+            </td>
+          </tr>
           {% endfor %}
         </tbody>
       </table>
     </div>
-    {% if total > entries|length %}
-    <div class="text-muted small mt-2">Exibindo {{ entries|length }} de {{ total }} lançamentos.</div>
+    {% if total > 200 %}
+    <div class="px-3 py-2 border-top text-muted small">
+      Exibindo {{ entries|length }} de {{ total }} lançamentos.
+    </div>
     {% endif %}
   </div>
 </div>
@@ -1095,25 +1359,41 @@ async def fc_dashboard(
     atrasados_c = sum(e.valor_cents if e.tipo=="entrada" else -e.valor_cents for e in atrasados)
     saldo_proj  = caixa_inicial_cents + (a_receber_c + recebido_c) - (a_pagar_c + pago_c)
 
+    # Dados para o gráfico
+    _chart_labels  = [p["label"] for p in periodos_raw]
+    _chart_receber = [p["total_receber"] for p in periodos_raw]
+    _chart_pagar   = [p["total_pagar"]   for p in periodos_raw]
+    _chart_saldo   = [p["saldo_acumulado"] for p in periodos_raw]
+
+    # Totais em atraso (entradas vs saídas separados)
+    _rec_atrasado  = sum(e.valor_cents for e in atrasados if e.tipo == "entrada")
+    _pag_atrasado  = sum(e.valor_cents for e in atrasados if e.tipo == "saida")
+
     return render("fluxo_caixa_dashboard.html", request=request, context={
-        "saldo_atual_cents":  caixa_inicial_cents,
-        "saldo_atual_brl":    _cents_to_brl(caixa_inicial_cents),
-        "entradas_prev_brl":  _cents_to_brl(a_receber_c + recebido_c),
-        "saidas_prev_brl":    _cents_to_brl(a_pagar_c + pago_c),
-        "saldo_proj_cents":   saldo_proj,
-        "saldo_proj_brl":     _cents_to_brl(saldo_proj),
-        "atrasados_qtd":      len(atrasados),
-        "atrasados_brl":      _cents_to_brl(abs(atrasados_c)),
-        "periodos":           periodos_raw,
-        "group_by":           group_by,
-        "modo":               modo,
-        "data_inicio":        _di,
-        "data_fim":           _df,
-        "centros_disponiveis":centros_disp,
-        "centros_selecionados":centros,
-        "empresas_disponiveis":empresas_disp,
+        "saldo_atual_cents":    caixa_inicial_cents,
+        "saldo_atual_brl":      _cents_to_brl(caixa_inicial_cents),
+        "entradas_prev_brl":    _cents_to_brl(a_receber_c + recebido_c),
+        "saidas_prev_brl":      _cents_to_brl(a_pagar_c + pago_c),
+        "saldo_proj_cents":     saldo_proj,
+        "saldo_proj_brl":       _cents_to_brl(saldo_proj),
+        "atrasados_qtd":        len(atrasados),
+        "atrasados_brl":        _cents_to_brl(abs(atrasados_c)),
+        "receber_atrasado_brl": _cents_to_brl(_rec_atrasado),
+        "pagar_atrasado_brl":   _cents_to_brl(_pag_atrasado),
+        "periodos":             periodos_raw,
+        "group_by":             group_by,
+        "modo":                 modo,
+        "data_inicio":          _di,
+        "data_fim":             _df,
+        "centros_disponiveis":  centros_disp,
+        "centros_selecionados": centros,
+        "empresas_disponiveis": empresas_disp,
         "empresas_selecionadas":empresas,
-        "page_title":         "Fluxo de Caixa",
+        "chart_labels":         _chart_labels,
+        "chart_receber":        _chart_receber,
+        "chart_pagar":          _chart_pagar,
+        "chart_saldo":          _chart_saldo,
+        "page_title":           "Fluxo de Caixa",
     })
 
 
@@ -1189,6 +1469,7 @@ async def fc_lista(
             "centro_custo": e.centro_custo,
             "categoria": e.categoria,
             "tipo": e.tipo,
+            "valor_cents": e.valor_cents,
             "valor_brl": _cents_to_brl(e.valor_cents),
             "status": e.status,
             "atrasado": _fc_is_atrasado(e),
@@ -1196,15 +1477,36 @@ async def fc_lista(
         }
         rows.append(d)
 
+    # Saldo corrente acumulado (apenas lançamentos realizados, ordem cronológica)
+    rows_asc = sorted(rows, key=lambda x: (x["data_vencimento"] or "", x["id"]))
+    saldo_acc = 0
+    for row in rows_asc:
+        if row["status"] == "cancelado":
+            row["saldo_brl"] = "—"
+            row["saldo_cents"] = None
+            continue
+        if row["status"] == "realizado":
+            saldo_acc += row["valor_cents"] if row["tipo"] == "entrada" else -row["valor_cents"]
+        row["saldo_cents"] = saldo_acc
+        row["saldo_brl"] = _cents_to_brl(saldo_acc)
+    # Re-sort descending for display
+    rows = sorted(rows, key=lambda x: (x["data_vencimento"] or "", x["id"]), reverse=True)
+
+    # Summary totals for the strip
+    total_entradas = sum(r["valor_cents"] for r in rows if r["tipo"] == "entrada" and r["status"] != "cancelado")
+    total_saidas   = sum(r["valor_cents"] for r in rows if r["tipo"] == "saida"   and r["status"] != "cancelado")
+
     return render("fluxo_caixa_lancamentos.html", request=request, context={
-        "entries":      rows,
-        "total":        len(rows),
-        "data_inicio":  data_inicio,
-        "data_fim":     data_fim,
-        "status_filtro":status,
-        "tipo_filtro":  tipo,
-        "q":            q,
-        "page_title":   "Lançamentos — Fluxo de Caixa",
+        "entries":           rows,
+        "total":             len(rows),
+        "data_inicio":       data_inicio,
+        "data_fim":          data_fim,
+        "status_filtro":     status,
+        "tipo_filtro":       tipo,
+        "q":                 q,
+        "total_entradas_brl": _cents_to_brl(total_entradas),
+        "total_saidas_brl":   _cents_to_brl(total_saidas),
+        "page_title":        "Lançamentos — Fluxo de Caixa",
     })
 
 
