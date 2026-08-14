@@ -195,6 +195,7 @@ try:
         settlement_date: str = _Form_ce(""),
         category_id: str = _Form_ce(""),
         supplier_id: str = _Form_ce(""),
+        client_id: str = _Form_ce(""),
         cost_center_id: str = _Form_ce(""),
         notes: str = _Form_ce(""),
         batch: str = _Form_ce(""),
@@ -220,6 +221,15 @@ try:
         else:
             # Cria novo lançamento a partir do extrato
             entry_kind = "receber" if line.amount_cents > 0 else "pagar"
+
+            # Valida IDs de cadastro contra o tenant atual
+            def _valid_id(raw: str, model):  # type: ignore[name-defined]
+                if not raw.strip().isdigit():
+                    return None
+                eid2 = int(raw)
+                obj = session.get(model, eid2)
+                return eid2 if (obj and getattr(obj, "company_id", None) == ctx.company.id) else None
+
             new_entry = OfficeFinancialEntry(  # type: ignore[name-defined]
                 company_id=ctx.company.id,
                 created_by_user_id=ctx.user.id,
@@ -231,9 +241,10 @@ try:
                 settlement_date=settlement_date or line.release_date,
                 amount_expected_brl=abs(line.amount_cents) / 100,
                 amount_realized_brl=abs(line.amount_cents) / 100,
-                category_id=int(category_id) if category_id.strip().isdigit() else None,
-                supplier_id=int(supplier_id) if supplier_id.strip().isdigit() else None,
-                cost_center_id=int(cost_center_id) if cost_center_id.strip().isdigit() else None,
+                category_id=_valid_id(category_id, OfficeCategory),  # type: ignore[name-defined]
+                client_id=_valid_id(client_id, Client),  # type: ignore[name-defined]
+                supplier_id=_valid_id(supplier_id, OfficeSupplier),  # type: ignore[name-defined]
+                cost_center_id=_valid_id(cost_center_id, OfficeCostCenter),  # type: ignore[name-defined]
                 notes=notes,
             )
             session.add(new_entry)

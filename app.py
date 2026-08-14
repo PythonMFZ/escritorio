@@ -37292,11 +37292,19 @@ TEMPLATES.update({
                   </select>
                 </div>
                 <div class="col-6">
+                  {% if line.amount_cents > 0 %}
+                  <label class="form-label" style="font-size:.72rem">Cliente</label>
+                  <select name="client_id" class="form-select form-select-sm">
+                    <option value="">Selecionar</option>
+                    {% for c in clients %}<option value="{{ c.id }}">{{ c.name }}</option>{% endfor %}
+                  </select>
+                  {% else %}
                   <label class="form-label" style="font-size:.72rem">Fornecedor</label>
                   <select name="supplier_id" class="form-select form-select-sm">
                     <option value="">Selecionar</option>
                     {% for s in suppliers %}<option value="{{ s.id }}">{{ s.name }}</option>{% endfor %}
                   </select>
+                  {% endif %}
                 </div>
                 <div class="col-6">
                   <label class="form-label" style="font-size:.72rem">Centro de custo</label>
