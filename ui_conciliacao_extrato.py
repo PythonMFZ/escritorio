@@ -32,25 +32,7 @@ class BankStatementLine(_SM_ce, table=True):  # type: ignore[name-defined]
 
 def _ce_ensure_table():
     try:
-        with engine.connect() as _c:  # type: ignore[name-defined]
-            _c.execute(_txt_ce("""
-                CREATE TABLE IF NOT EXISTS bank_statement_line (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    company_id INTEGER NOT NULL,
-                    import_batch TEXT DEFAULT '',
-                    release_date TEXT DEFAULT '',
-                    transaction_type TEXT DEFAULT '',
-                    reference_id TEXT DEFAULT '',
-                    amount_cents INTEGER DEFAULT 0,
-                    partial_balance_cents INTEGER DEFAULT 0,
-                    status TEXT DEFAULT 'pendente',
-                    matched_entry_id INTEGER DEFAULT NULL,
-                    created_at TEXT DEFAULT ''
-                )
-            """))
-            _c.execute(_txt_ce("CREATE INDEX IF NOT EXISTS ix_bsl_company ON bank_statement_line(company_id)"))
-            _c.execute(_txt_ce("CREATE INDEX IF NOT EXISTS ix_bsl_batch   ON bank_statement_line(import_batch)"))
-            _c.commit()
+        BankStatementLine.metadata.create_all(engine)  # type: ignore[name-defined]
         return True
     except Exception as _e:
         print(f"[ce] tabela bank_statement_line: {_e}")
