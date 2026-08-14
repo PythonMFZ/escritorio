@@ -36457,7 +36457,9 @@ async def office_finance_excluir_lote(
             deleted += 1
     session.commit()
     set_flash(request, f"{deleted} lançamento(s) excluído(s).")
-    return RedirectResponse("/admin/financeiro/conciliacao", status_code=303)
+    referer = request.headers.get("referer", "")
+    redirect_to = "/admin/financeiro/conciliacao" if "/conciliacao" in referer else "/admin/financeiro"
+    return RedirectResponse(redirect_to, status_code=303)
 
 
 @app.get("/admin/financeiro/dashboard-gerencial", response_class=HTMLResponse)
@@ -36758,7 +36760,8 @@ TEMPLATES.update({
     </form>
   </div>
 
-  {# Barra de seleção em lote #}
+  {# Barra de seleção em lote — apenas admin #}
+  {% if role == 'admin' %}
   <div id="ofdBatchBar" class="d-none mb-2 p-3 rounded d-flex align-items-center gap-3 flex-wrap" style="background:var(--bs-primary-bg-subtle);border:1px solid var(--bs-primary-border-subtle)">
     <span id="ofdBatchCount" class="fw-semibold" style="font-size:.88rem">0 selecionados</span>
     <span id="ofdBatchSum" class="text-muted" style="font-size:.82rem"></span>
@@ -36768,6 +36771,7 @@ TEMPLATES.update({
     </form>
     <button type="button" class="btn btn-outline-secondary btn-sm" onclick="ofdClearBatch()">Limpar seleção</button>
   </div>
+  {% endif %}
 
   {# Tabela de lançamentos #}
   <div class="card mb-3" style="overflow:hidden">
@@ -36790,7 +36794,7 @@ TEMPLATES.update({
         <tbody>
           {% for row in rows %}
           <tr>
-            <td><input type="checkbox" class="ofd-cb" value="{{ row.id }}" data-amount="{{ row.expected }}" data-kind="{{ row.entry_kind }}"></td>
+            <td><input type="checkbox" class="ofd-cb" value="{{ row.id }}" data-amount="{{ row.amount_expected_brl }}" data-kind="{{ row.entry_kind }}"></td>
             <td>
               {% if row.entry_kind == 'receber' %}
               <span class="ofd-badge-receber">▲ receber</span>
@@ -36861,6 +36865,43 @@ TEMPLATES.update({
   </div>
 
 </div>
+
+{% if role == 'admin' %}
+<script>
+function ofdUpdateBatch() {
+  var cbs = document.querySelectorAll('.ofd-cb:checked');
+  var bar = document.getElementById('ofdBatchBar');
+  if (!bar) return;
+  var ids = [], totalRec = 0, totalPag = 0;
+  cbs.forEach(function(cb) {
+    ids.push(cb.value);
+    var amt = parseFloat(cb.dataset.amount) || 0;
+    if (cb.dataset.kind === 'receber') totalRec += amt; else totalPag += amt;
+  });
+  if (ids.length === 0) { bar.classList.add('d-none'); return; }
+  bar.classList.remove('d-none');
+  document.getElementById('ofdBatchCount').textContent = ids.length + ' selecionado' + (ids.length > 1 ? 's' : '');
+  var parts = [];
+  if (totalRec) parts.push('Receber: R$ ' + totalRec.toFixed(2).replace('.', ','));
+  if (totalPag) parts.push('Pagar: R$ ' + totalPag.toFixed(2).replace('.', ','));
+  document.getElementById('ofdBatchSum').textContent = parts.join(' · ');
+  document.getElementById('ofdBatchIds').value = ids.join(',');
+}
+function ofdClearBatch() {
+  document.querySelectorAll('.ofd-cb').forEach(function(cb){ cb.checked = false; });
+  var sa = document.getElementById('ofdSelectAll'); if (sa) sa.checked = false;
+  ofdUpdateBatch();
+}
+document.addEventListener('change', function(e) {
+  if (e.target.classList.contains('ofd-cb')) { ofdUpdateBatch(); return; }
+  if (e.target.id === 'ofdSelectAll') {
+    document.querySelectorAll('.ofd-cb').forEach(function(cb){ cb.checked = e.target.checked; });
+    ofdUpdateBatch();
+  }
+});
+</script>
+{% endif %}
+
 {% endblock %}
 """,
     "office_finance_recurrences.html": r"""
@@ -37020,39 +37061,6 @@ TEMPLATES.update({
   }
   if (kind) { kind.addEventListener("change", refreshRecKind); refreshRecKind(); }
 })();
-
-// ── Seleção em lote ──────────────────────────────────────────────────────────
-function ofdUpdateBatch() {
-  var cbs = document.querySelectorAll('.ofd-cb:checked');
-  var bar = document.getElementById('ofdBatchBar');
-  if (!bar) return;
-  var ids = [], totalRec = 0, totalPag = 0;
-  cbs.forEach(function(cb) {
-    ids.push(cb.value);
-    var amt = parseFloat(cb.dataset.amount) || 0;
-    if (cb.dataset.kind === 'receber') totalRec += amt; else totalPag += amt;
-  });
-  if (ids.length === 0) { bar.classList.add('d-none'); return; }
-  bar.classList.remove('d-none');
-  document.getElementById('ofdBatchCount').textContent = ids.length + ' selecionado' + (ids.length > 1 ? 's' : '');
-  var parts = [];
-  if (totalRec) parts.push('Receber: R$ ' + totalRec.toFixed(2).replace('.', ','));
-  if (totalPag) parts.push('Pagar: R$ ' + totalPag.toFixed(2).replace('.', ','));
-  document.getElementById('ofdBatchSum').textContent = parts.join(' · ');
-  document.getElementById('ofdBatchIds').value = ids.join(',');
-}
-function ofdClearBatch() {
-  document.querySelectorAll('.ofd-cb').forEach(function(cb){ cb.checked = false; });
-  var sa = document.getElementById('ofdSelectAll'); if (sa) sa.checked = false;
-  ofdUpdateBatch();
-}
-document.addEventListener('change', function(e) {
-  if (e.target.classList.contains('ofd-cb')) { ofdUpdateBatch(); return; }
-  if (e.target.id === 'ofdSelectAll') {
-    document.querySelectorAll('.ofd-cb').forEach(function(cb){ cb.checked = e.target.checked; });
-    ofdUpdateBatch();
-  }
-});
 </script>
 {% endblock %}
 """,
