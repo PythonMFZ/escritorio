@@ -36540,130 +36540,229 @@ TEMPLATES.update({
 {% if filters.status %}{% set _ = export_qs.append('status=' ~ filters.status) %}{% endif %}
 {% if filters.month %}{% set _ = export_qs.append('month=' ~ filters.month) %}{% endif %}
 {% if filters.client_id %}{% set _ = export_qs.append('client_id=' ~ filters.client_id) %}{% endif %}
-<div class="card p-4">
-  <div class="d-flex justify-content-between align-items-start flex-wrap gap-2">
+<style>
+.ofd-nav { border-bottom: 2px solid var(--bs-border-color); margin-bottom: 0; padding-bottom: 0; }
+.ofd-nav .nav-link {
+  color: var(--bs-secondary-color);
+  border: none; border-bottom: 2px solid transparent;
+  margin-bottom: -2px; padding: 8px 16px; font-size: .875rem; border-radius: 0;
+}
+.ofd-nav .nav-link:hover { color: var(--bs-body-color); background: none; }
+.ofd-nav .nav-link.active { color: var(--bs-primary); border-bottom-color: var(--bs-primary); font-weight: 600; background: none; }
+.ofd-nav .nav-link.nav-cta { color: #fff; background: var(--bs-primary); border-radius: 6px; margin-left: 8px; margin-bottom: 4px; padding: 5px 14px; }
+.ofd-nav .nav-link.nav-cta:hover { opacity: .88; }
+
+.ofd-stat { border-radius: 10px; padding: 18px 22px; }
+.ofd-stat-label { font-size: .72rem; text-transform: uppercase; letter-spacing: .05em; color: #999; margin-bottom: 4px; }
+.ofd-stat-value { font-size: 1.25rem; font-weight: 700; }
+
+.ofd-badge-receber { display:inline-flex;align-items:center;gap:4px;padding:3px 10px;border-radius:20px;font-size:.75rem;font-weight:600;background:#d1fae5;color:#065f46; }
+.ofd-badge-pagar   { display:inline-flex;align-items:center;gap:4px;padding:3px 10px;border-radius:20px;font-size:.75rem;font-weight:600;background:#fee2e2;color:#991b1b; }
+[data-bs-theme="dark"] .ofd-badge-receber { background:#064e3b;color:#6ee7b7; }
+[data-bs-theme="dark"] .ofd-badge-pagar   { background:#450a0a;color:#fca5a5; }
+
+.ofd-status-recebido,.ofd-status-pago    { display:inline-block;padding:2px 9px;border-radius:20px;font-size:.72rem;font-weight:600;background:#d1fae5;color:#065f46; }
+.ofd-status-parcial  { display:inline-block;padding:2px 9px;border-radius:20px;font-size:.72rem;font-weight:600;background:#fef9c3;color:#713f12; }
+.ofd-status-vencido  { display:inline-block;padding:2px 9px;border-radius:20px;font-size:.72rem;font-weight:600;background:#fee2e2;color:#991b1b; }
+.ofd-status-default  { display:inline-block;padding:2px 9px;border-radius:20px;font-size:.72rem;font-weight:600;background:var(--bs-tertiary-bg);color:var(--bs-secondary-color); }
+[data-bs-theme="dark"] .ofd-status-recebido,[data-bs-theme="dark"] .ofd-status-pago { background:#064e3b;color:#6ee7b7; }
+[data-bs-theme="dark"] .ofd-status-parcial { background:#451a03;color:#fde68a; }
+[data-bs-theme="dark"] .ofd-status-vencido { background:#450a0a;color:#fca5a5; }
+
+.ofd-tag { display:inline-block;padding:1px 7px;border-radius:20px;font-size:.68rem;background:var(--bs-tertiary-bg);color:var(--bs-secondary-color);white-space:nowrap;margin-right:3px; }
+.ofd-valor-receber { color:#059669;font-weight:600; }
+.ofd-valor-pagar   { color:#dc2626;font-weight:600; }
+.ofd-table td { vertical-align: middle; }
+.ofd-table th { font-size: .78rem; text-transform: uppercase; letter-spacing: .04em; color: #999; font-weight: 500; border-bottom: 1px solid var(--bs-border-color); padding: 8px 14px; }
+.ofd-table td { padding: 10px 14px; border-bottom: 1px solid var(--bs-border-color); }
+.ofd-table tr:last-child td { border-bottom: none; }
+.ofd-table tr:hover td { background: var(--bs-tertiary-bg); }
+</style>
+
+<div class="container-fluid px-4 py-3">
+
+  {# Cabeçalho + navegação em tabs #}
+  <div class="d-flex align-items-center justify-content-between mb-3 flex-wrap gap-2">
     <div>
-      <h4 class="mb-0">Financeiro Interno do Escritório</h4>
-      <div class="muted">Base operacional do escritório com lançamentos, recorrências, conciliação e relatórios gerenciais.</div>
+      <h5 class="mb-0 fw-bold">Financeiro Interno</h5>
+      <div class="text-muted" style="font-size:.82rem">Lançamentos, recorrências, conciliação e relatórios</div>
     </div>
-    <div class="d-flex gap-2 flex-wrap">
-      <a class="btn btn-outline-secondary" href="/admin/financeiro/cadastros">Cadastros</a>
-      <a class="btn btn-outline-secondary" href="/admin/financeiro/recorrencias">Recorrências</a>
-      <a class="btn btn-outline-secondary" href="/admin/financeiro/conciliacao">Conciliação</a>
-      <a class="btn btn-outline-secondary" href="/admin/financeiro/contratos">Contratos</a>
-      <a class="btn btn-outline-primary" href="/admin/financeiro/dashboard-gerencial">Dashboard</a>
-      <a class="btn btn-outline-primary" href="/admin/financeiro/dre">DRE</a>
-      <a class="btn btn-outline-primary" href="/admin/financeiro/fluxo-caixa">Fluxo de caixa</a>
-      <a class="btn btn-primary" href="/admin/financeiro/novo">Novo lançamento</a>
+    <div class="d-flex gap-2">
+      <a href="/admin/financeiro/export/lancamentos.xlsx{% if export_qs %}?{{ export_qs|join('&') }}{% endif %}"
+         class="btn btn-outline-secondary btn-sm">↓ Exportar Excel</a>
+      <a href="/admin/financeiro/novo" class="btn btn-primary btn-sm">+ Novo lançamento</a>
     </div>
   </div>
 
-  <form class="row g-2 mt-2" method="get" action="/admin/financeiro">
-    <div class="col-md-3">
-      <input class="form-control" name="q" value="{{ filters.q }}" placeholder="Buscar descrição, documento, cliente..." />
-    </div>
-    <div class="col-md-2">
-      <select class="form-select" name="entry_kind">
-        <option value="">Tipo</option>
-        <option value="receber" {% if filters.entry_kind == "receber" %}selected{% endif %}>Receber</option>
-        <option value="pagar" {% if filters.entry_kind == "pagar" %}selected{% endif %}>Pagar</option>
-      </select>
-    </div>
-    <div class="col-md-2">
-      <select class="form-select" name="status">
-        <option value="">Status</option>
-        {% for st in statuses %}
-          <option value="{{ st }}" {% if filters.status == st %}selected{% endif %}>{{ st|capitalize }}</option>
-        {% endfor %}
-      </select>
-    </div>
-    <div class="col-md-2">
-      <input class="form-control" type="month" name="month" value="{{ filters.month }}" />
-    </div>
-    <div class="col-md-2">
-      <select class="form-select" name="client_id">
-        <option value="">Todos os clientes</option>
-        {% for c in clients %}
-          <option value="{{ c.id }}" {% if filters.client_id == (c.id|string) %}selected{% endif %}>{{ c.name }}</option>
-        {% endfor %}
-      </select>
-    </div>
-    <div class="col-md-1 d-grid">
-      <button class="btn btn-outline-primary">Filtrar</button>
-    </div>
-  </form>
+  <nav class="ofd-nav mb-4">
+    <ul class="nav">
+      <li class="nav-item"><a class="nav-link active" href="/admin/financeiro">Lançamentos</a></li>
+      <li class="nav-item"><a class="nav-link" href="/admin/financeiro/recorrencias">Recorrências</a></li>
+      <li class="nav-item"><a class="nav-link" href="/admin/financeiro/conciliacao">Conciliação</a></li>
+      <li class="nav-item"><a class="nav-link" href="/admin/financeiro/contratos">Contratos</a></li>
+      <li class="nav-item"><a class="nav-link" href="/admin/financeiro/dashboard-gerencial">Dashboard</a></li>
+      <li class="nav-item"><a class="nav-link" href="/admin/financeiro/dre">DRE</a></li>
+      <li class="nav-item"><a class="nav-link" href="/admin/financeiro/fluxo-caixa">Fluxo de caixa</a></li>
+      <li class="nav-item ms-auto"><a class="nav-link" href="/admin/financeiro/cadastros" style="font-size:.78rem;color:#aaa">⚙ Cadastros</a></li>
+    </ul>
+  </nav>
 
-  <div class="row g-3 mt-2">
-    <div class="col-md-3"><div class="border rounded p-3 h-100"><div class="muted small">Receber em aberto</div><div class="fw-semibold">{{ summary.open_receivables|brl }}</div></div></div>
-    <div class="col-md-3"><div class="border rounded p-3 h-100"><div class="muted small">Pagar em aberto</div><div class="fw-semibold">{{ summary.open_payables|brl }}</div></div></div>
-    <div class="col-md-3"><div class="border rounded p-3 h-100"><div class="muted small">Saldo líquido</div><div class="fw-semibold" style="color:{{ '#16a34a' if summary.saldo_liquido >= 0 else '#dc2626' }}">{{ summary.saldo_liquido|brl }}</div></div></div>
-    <div class="col-md-3"><div class="border rounded p-3 h-100"><div class="muted small">Lançamentos filtrados</div><div class="fw-semibold">{{ summary.filtered_count }}</div></div></div>
+  {# Cards de resumo #}
+  <div class="row g-3 mb-4">
+    <div class="col-6 col-md-3">
+      <div class="card ofd-stat mb-0">
+        <div class="ofd-stat-label">A receber</div>
+        <div class="ofd-stat-value" style="color:#059669">{{ summary.open_receivables|brl }}</div>
+      </div>
+    </div>
+    <div class="col-6 col-md-3">
+      <div class="card ofd-stat mb-0">
+        <div class="ofd-stat-label">A pagar</div>
+        <div class="ofd-stat-value" style="color:#dc2626">{{ summary.open_payables|brl }}</div>
+      </div>
+    </div>
+    <div class="col-6 col-md-3">
+      <div class="card ofd-stat mb-0">
+        <div class="ofd-stat-label">Saldo líquido</div>
+        <div class="ofd-stat-value" style="color:{{ '#059669' if summary.saldo_liquido >= 0 else '#dc2626' }}">{{ summary.saldo_liquido|brl }}</div>
+      </div>
+    </div>
+    <div class="col-6 col-md-3">
+      <div class="card ofd-stat mb-0">
+        <div class="ofd-stat-label">Lançamentos</div>
+        <div class="ofd-stat-value">{{ summary.filtered_count }}</div>
+      </div>
+    </div>
   </div>
 
-  <div class="alert alert-light border mt-3 mb-0 d-flex justify-content-between align-items-center flex-wrap gap-2">
-    <div>
-      <div class="fw-semibold mb-1">Entrega C</div>
-      <div class="small muted">Recorrências, conciliação simples, dashboard gerencial e exportação Excel implantados sem depender da Conta Azul.</div>
-    </div>
-    <a class="btn btn-sm btn-outline-primary" href="/admin/financeiro/export/lancamentos.xlsx{% if export_qs %}?{{ export_qs|join('&') }}{% endif %}">Exportar Excel</a>
+  {# Filtros compactos #}
+  <div class="card p-3 mb-3">
+    <form method="get" action="/admin/financeiro" class="row g-2 align-items-end">
+      <div class="col">
+        <input class="form-control form-control-sm" name="q" value="{{ filters.q }}" placeholder="Buscar descrição, documento, cliente…" />
+      </div>
+      <div class="col-auto">
+        <select class="form-select form-select-sm" name="entry_kind" style="min-width:110px">
+          <option value="">Tipo</option>
+          <option value="receber" {% if filters.entry_kind == "receber" %}selected{% endif %}>A receber</option>
+          <option value="pagar"   {% if filters.entry_kind == "pagar"   %}selected{% endif %}>A pagar</option>
+        </select>
+      </div>
+      <div class="col-auto">
+        <select class="form-select form-select-sm" name="status" style="min-width:110px">
+          <option value="">Status</option>
+          {% for st in statuses %}
+            <option value="{{ st }}" {% if filters.status == st %}selected{% endif %}>{{ st|capitalize }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-auto">
+        <input class="form-control form-control-sm" type="month" name="month" value="{{ filters.month }}" />
+      </div>
+      <div class="col-auto">
+        <select class="form-select form-select-sm" name="client_id" style="min-width:150px">
+          <option value="">Todos os clientes</option>
+          {% for c in clients %}
+            <option value="{{ c.id }}" {% if filters.client_id == (c.id|string) %}selected{% endif %}>{{ c.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-auto">
+        <button class="btn btn-primary btn-sm">Filtrar</button>
+        <a href="/admin/financeiro" class="btn btn-outline-secondary btn-sm ms-1">Limpar</a>
+      </div>
+    </form>
   </div>
-</div>
 
-<div class="card p-4 mt-3">
-  <div class="d-flex justify-content-between align-items-center">
-    <h5 class="mb-0">Lançamentos</h5>
-    <div class="muted small">{{ rows|length }} item(ns)</div>
-  </div>
-  {% if rows %}
-    <div class="table-responsive mt-3">
-      <table class="table align-middle">
+  {# Tabela de lançamentos #}
+  <div class="card mb-3" style="overflow:hidden">
+    {% if rows %}
+    <div class="table-responsive">
+      <table class="ofd-table" style="width:100%;border-collapse:collapse">
         <thead>
           <tr>
-            <th>Tipo</th>
+            <th style="width:110px">Tipo</th>
             <th>Descrição</th>
-            <th>Cliente / Fornecedor</th>
-            <th>Categoria</th>
-            <th>Centro de custo</th>
-            <th>Vencimento</th>
-            <th>Status</th>
-            <th class="text-end">Previsto</th>
-            <th class="text-end">Realizado</th>
-            <th></th>
+            <th style="width:160px">Contraparte</th>
+            <th style="width:100px">Vencimento</th>
+            <th style="width:110px">Situação</th>
+            <th style="width:110px;text-align:right">Previsto</th>
+            <th style="width:110px;text-align:right">Realizado</th>
+            <th style="width:80px"></th>
           </tr>
         </thead>
         <tbody>
           {% for row in rows %}
-            <tr class="{% if row.status in ['parcial'] %}table-warning{% elif row.status in ['recebido','pago'] %}table-success{% endif %}">
-              <td><span class="badge {% if row.entry_kind == 'receber' %}text-bg-success{% else %}text-bg-secondary{% endif %}">{{ row.entry_kind }}</span></td>
-              <td>
-                <div class="fw-semibold">{{ row.description }}</div>
-                <div class="muted small">
-                  {% if row.document_number %}Doc: {{ row.document_number }} • {% endif %}
-                  Competência: {{ row.competence_date or "—" }}
-                </div>
-              </td>
-              <td>{{ row.counterparty_name or "—" }}</td>
-              <td>{{ row.category_name or "—" }}</td>
-              <td>{{ row.cost_center_name or "—" }}</td>
-              <td>{{ row.due_date or "—" }}</td>
-              <td><span class="badge text-bg-light border">{{ row.status }}</span></td>
-              <td class="text-end">{{ row.amount_expected_brl|brl }}</td>
-              <td class="text-end">{{ row.amount_realized_brl|brl }}</td>
-              <td class="text-end d-flex gap-1 justify-content-end flex-wrap">
-                <a class="btn btn-sm btn-outline-secondary" href="/admin/financeiro/conciliacao">Conciliar</a>
-                <a class="btn btn-sm btn-outline-primary" href="/admin/financeiro/{{ row.id }}/editar">Editar</a>
-                <form method="post" action="/admin/financeiro/{{ row.id }}/excluir" style="display:inline" onsubmit="return confirm('Excluir este lançamento?');">
-                  <button class="btn btn-sm btn-outline-danger" type="submit">Excluir</button>
-                </form>
-              </td>
-            </tr>
+          <tr>
+            <td>
+              {% if row.entry_kind == 'receber' %}
+              <span class="ofd-badge-receber">▲ receber</span>
+              {% else %}
+              <span class="ofd-badge-pagar">▼ pagar</span>
+              {% endif %}
+            </td>
+            <td>
+              <div style="font-size:.88rem;font-weight:500">{{ row.description }}</div>
+              <div class="mt-1">
+                {% if row.category_name %}<span class="ofd-tag">{{ row.category_name }}</span>{% endif %}
+                {% if row.cost_center_name %}<span class="ofd-tag">{{ row.cost_center_name }}</span>{% endif %}
+                {% if row.document_number %}<span class="ofd-tag" style="font-family:monospace">{{ row.document_number }}</span>{% endif %}
+                {% if row.competence_date %}<span class="ofd-tag">{{ row.competence_date }}</span>{% endif %}
+              </div>
+            </td>
+            <td style="font-size:.85rem">{{ row.counterparty_name or "—" }}</td>
+            <td style="font-size:.85rem;white-space:nowrap">{{ row.due_date or "—" }}</td>
+            <td>
+              {% set st = row.status %}
+              {% if st in ['recebido','pago'] %}
+                <span class="ofd-status-recebido">{{ st }}</span>
+              {% elif st == 'parcial' %}
+                <span class="ofd-status-parcial">parcial</span>
+              {% elif st == 'vencido' %}
+                <span class="ofd-status-vencido">vencido</span>
+              {% else %}
+                <span class="ofd-status-default">{{ st }}</span>
+              {% endif %}
+            </td>
+            <td style="text-align:right">
+              <span class="{% if row.entry_kind == 'receber' %}ofd-valor-receber{% else %}ofd-valor-pagar{% endif %}">
+                {{ row.amount_expected_brl|brl }}
+              </span>
+            </td>
+            <td style="text-align:right;font-size:.85rem;color:#666">
+              {{ row.amount_realized_brl|brl if row.amount_realized_brl else "—" }}
+            </td>
+            <td style="text-align:right;white-space:nowrap">
+              <div class="dropdown">
+                <button class="btn btn-outline-secondary btn-sm dropdown-toggle" type="button" data-bs-toggle="dropdown"
+                        style="font-size:.78rem;padding:3px 9px">Ações</button>
+                <ul class="dropdown-menu dropdown-menu-end shadow-sm" style="font-size:.82rem;min-width:140px">
+                  <li><a class="dropdown-item" href="/admin/financeiro/{{ row.id }}/editar">✏ Editar</a></li>
+                  <li><a class="dropdown-item" href="/admin/financeiro/conciliacao">⇌ Conciliar</a></li>
+                  <li><hr class="dropdown-divider my-1"></li>
+                  <li>
+                    <form method="post" action="/admin/financeiro/{{ row.id }}/excluir" style="margin:0"
+                          onsubmit="return confirm('Excluir este lançamento?')">
+                      <button type="submit" class="dropdown-item text-danger">🗑 Excluir</button>
+                    </form>
+                  </li>
+                </ul>
+              </div>
+            </td>
+          </tr>
           {% endfor %}
         </tbody>
       </table>
     </div>
-  {% else %}
-    <div class="muted mt-3">Nenhum lançamento encontrado para os filtros informados.</div>
-  {% endif %}
+    {% else %}
+    <div class="text-center py-5 text-muted">
+      <div style="font-size:2.5rem;margin-bottom:.5rem">📋</div>
+      <div>Nenhum lançamento para os filtros selecionados.</div>
+      <a href="/admin/financeiro/novo" class="btn btn-primary btn-sm mt-3">+ Novo lançamento</a>
+    </div>
+    {% endif %}
+  </div>
+
 </div>
 {% endblock %}
 """,
