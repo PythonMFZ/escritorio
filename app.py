@@ -36339,7 +36339,7 @@ async def office_finance_conciliation_page(request: Request, session: Session = 
     )
 
 
-@app.post("/admin/financeiro/conciliacao/{entry_id}")
+@app.post("/admin/financeiro/conciliacao/{entry_id:int}")
 @require_role({"admin", "equipe"})
 async def office_finance_conciliate_entry(
         entry_id: int,
@@ -36400,7 +36400,7 @@ async def office_finance_conciliate_entry(
     return RedirectResponse("/admin/financeiro/conciliacao", status_code=303)
 
 
-@app.post("/admin/financeiro/conciliacao/{entry_id}/reabrir")
+@app.post("/admin/financeiro/conciliacao/{entry_id:int}/reabrir")
 @require_role({"admin", "equipe"})
 async def office_finance_reabrir_entry(
         entry_id: int,
