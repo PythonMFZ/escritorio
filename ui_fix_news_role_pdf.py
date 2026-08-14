@@ -140,7 +140,6 @@ async def member_change_role(
 
     role_antiga = m.role
     m.role = nova_role
-    m.updated_at = utcnow()
     session.add(m)
     session.commit()
 
