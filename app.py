@@ -36439,6 +36439,27 @@ async def office_finance_reabrir_entry(
     return RedirectResponse("/admin/financeiro/conciliacao", status_code=303)
 
 
+@app.post("/admin/financeiro/lancamentos/excluir-lote")
+@require_role({"admin"})
+async def office_finance_excluir_lote(
+        request: Request,
+        session: Session = Depends(get_session),
+        ids: str = Form(""),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+    id_list = [int(x) for x in ids.split(",") if x.strip().isdigit()]
+    deleted = 0
+    for eid in id_list:
+        entry = session.get(OfficeFinancialEntry, eid)
+        if entry and entry.company_id == ctx.company.id:
+            session.delete(entry)
+            deleted += 1
+    session.commit()
+    set_flash(request, f"{deleted} lançamento(s) excluído(s).")
+    return RedirectResponse("/admin/financeiro/conciliacao", status_code=303)
+
+
 @app.get("/admin/financeiro/dashboard-gerencial", response_class=HTMLResponse)
 @require_role({"admin", "equipe"})
 async def office_finance_management_dashboard(request: Request,
@@ -37124,12 +37145,27 @@ TEMPLATES.update({
 
   {# Lista de lançamentos para baixar #}
   {% if rows %}
+  {# Barra de seleção em lote #}
+  <div id="batchBar" class="d-none mb-2 p-3 rounded d-flex align-items-center gap-3 flex-wrap" style="background:var(--bs-primary-bg-subtle);border:1px solid var(--bs-primary-border-subtle)">
+    <span id="batchCount" class="fw-semibold" style="font-size:.88rem">0 selecionados</span>
+    <span id="batchSum" class="text-muted" style="font-size:.82rem"></span>
+    <form method="post" action="/admin/financeiro/lancamentos/excluir-lote" id="batchDeleteForm" class="d-inline" onsubmit="return confirm('Excluir os lançamentos selecionados? Esta ação não pode ser desfeita.')">
+      <input type="hidden" name="ids" id="batchIds" value="">
+      <button type="submit" class="btn btn-danger btn-sm">🗑 Excluir selecionados</button>
+    </form>
+    <button type="button" class="btn btn-outline-secondary btn-sm" onclick="clearBatch()">Limpar seleção</button>
+  </div>
+
   <div class="card mb-3" style="overflow:hidden;padding:20px">
+    <div class="d-flex align-items-center gap-2 mb-2" style="font-size:.78rem;color:#999">
+      <input type="checkbox" id="selectAll" title="Selecionar todos"> <label for="selectAll" style="cursor:pointer;margin:0">Selecionar todos</label>
+    </div>
     {% for row in rows %}
     <div class="conc-row-card {% if row.is_overdue %}overdue{% endif %}">
       <div class="d-flex align-items-start justify-content-between gap-3 flex-wrap">
         <div style="min-width:0;flex:1">
           <div class="d-flex align-items-center gap-2 mb-1">
+            <input type="checkbox" class="batch-cb" value="{{ row.id }}" data-amount="{{ row.expected }}" data-kind="{{ row.entry_kind }}">
             {% if row.entry_kind == 'receber' %}<span class="conc-badge-r">▲ receber</span>{% else %}<span class="conc-badge-p">▼ pagar</span>{% endif %}
             <span class="fw-semibold" style="font-size:.92rem">{{ row.description }}</span>
             {% if row.is_overdue %}<span style="font-size:.72rem;color:#dc2626;font-weight:600">⚠ vencido</span>{% endif %}
@@ -37343,14 +37379,15 @@ TEMPLATES.update({
                   <label class="form-label" style="font-size:.72rem">Data</label>
                   <input type="date" name="settlement_date" value="{{ line.release_date }}" class="form-control form-control-sm">
                 </div>
-                <div class="col-12 d-flex gap-2">
+                <div class="col-12">
                   <button class="btn btn-primary btn-sm">+ Criar e conciliar</button>
-                  <form method="post" action="/admin/financeiro/conciliacao/linha/{{ line.id }}/ignorar" style="margin:0;display:inline">
-                    <input type="hidden" name="batch" value="{{ batch }}">
-                    <button type="submit" class="btn btn-outline-secondary btn-sm">Ignorar</button>
-                  </form>
                 </div>
               </div>
+            </form>
+            {# Ignorar fora do form de criação para evitar nested form #}
+            <form method="post" action="/admin/financeiro/conciliacao/linha/{{ line.id }}/ignorar" class="mt-1">
+              <input type="hidden" name="batch" value="{{ batch }}">
+              <button type="submit" class="btn btn-outline-secondary btn-sm">Ignorar transação</button>
             </form>
           </div>
         {% endif %}
@@ -37379,6 +37416,42 @@ function toggleNewForm(id) {
   var el = document.getElementById('newForm' + id);
   if (el) el.style.display = el.style.display === 'none' ? '' : 'none';
 }
+
+// ── Seleção em lote ──────────────────────────────────────────────────────────
+function updateBatch() {
+  var cbs = document.querySelectorAll('.batch-cb:checked');
+  var bar = document.getElementById('batchBar');
+  var countEl = document.getElementById('batchCount');
+  var sumEl = document.getElementById('batchSum');
+  var idsEl = document.getElementById('batchIds');
+  if (!bar) return;
+  var ids = [], totalRec = 0, totalPag = 0;
+  cbs.forEach(function(cb) {
+    ids.push(cb.value);
+    var amt = parseFloat(cb.dataset.amount) || 0;
+    if (cb.dataset.kind === 'receber') totalRec += amt; else totalPag += amt;
+  });
+  if (ids.length === 0) { bar.classList.add('d-none'); return; }
+  bar.classList.remove('d-none');
+  countEl.textContent = ids.length + ' selecionado' + (ids.length > 1 ? 's' : '');
+  var parts = [];
+  if (totalRec) parts.push('Receber: R$ ' + totalRec.toFixed(2).replace('.',',').replace(/\B(?=(\d{3})+(?!\d))/g,'.'));
+  if (totalPag) parts.push('Pagar: R$ ' + totalPag.toFixed(2).replace('.',',').replace(/\B(?=(\d{3})+(?!\d))/g,'.'));
+  sumEl.textContent = parts.join(' · ');
+  idsEl.value = ids.join(',');
+}
+function clearBatch() {
+  document.querySelectorAll('.batch-cb').forEach(function(cb){ cb.checked = false; });
+  var sa = document.getElementById('selectAll'); if (sa) sa.checked = false;
+  updateBatch();
+}
+document.addEventListener('change', function(e) {
+  if (e.target.classList.contains('batch-cb')) { updateBatch(); return; }
+  if (e.target.id === 'selectAll') {
+    document.querySelectorAll('.batch-cb').forEach(function(cb){ cb.checked = e.target.checked; });
+    updateBatch();
+  }
+});
 
 function clearSearch(id) {
   var form = document.getElementById('ceSearchForm' + id);
