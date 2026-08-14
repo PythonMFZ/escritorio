@@ -318,8 +318,10 @@ try:
         assert ctx is not None
         line = session.get(BankStatementLine, line_id)
         if line and line.company_id == ctx.company.id:
-            # Reabre o lançamento vinculado se existir e ainda pertencer ao tenant
-            if line.matched_entry_id:
+            prior_status = line.status
+            # Só reabre o lançamento vinculado se a linha estava conciliada
+            # (ignorado nunca liquidou o lançamento — não reverter)
+            if prior_status == "conciliado" and line.matched_entry_id:
                 entry = session.get(OfficeFinancialEntry, line.matched_entry_id)  # type: ignore[name-defined]
                 if entry and entry.company_id == ctx.company.id and entry.status in ("recebido", "pago"):
                     entry.status = "aberto"
@@ -330,7 +332,8 @@ try:
             line.matched_entry_id = None
             session.add(line)
             session.commit()
-            set_flash(request, "Conciliação revertida.")  # type: ignore[name-defined]
+            msg = "Conciliação revertida." if prior_status == "conciliado" else "Linha reativada."
+            set_flash(request, msg)  # type: ignore[name-defined]
         return _RR_ce(f"/admin/financeiro/conciliacao?tab=extrato&batch={batch}", status_code=303)
 
     print("[ce] POST /admin/financeiro/conciliacao/linha/{id}/reverter registrado")
