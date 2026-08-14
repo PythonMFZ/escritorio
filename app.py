@@ -6166,7 +6166,18 @@ a:hover{ color:#00BFBF; }
                 </div>
               </div>
 
-              <div class="text-end">
+              <div class="text-end d-flex flex-column gap-2 align-items-end">
+                {% if role == "admin" and row.membership.user_id != current_user.id %}
+                <form class="d-inline-flex align-items-center gap-1" method="post"
+                      action="/admin/members/{{ row.membership.id }}/change-role">
+                  <select name="new_role" class="form-select form-select-sm" style="width:auto;font-size:.78rem;">
+                    <option value="admin"   {% if row.membership.role == "admin"   %}selected{% endif %}>👑 admin</option>
+                    <option value="equipe"  {% if row.membership.role == "equipe"  %}selected{% endif %}>🧑‍💼 equipe</option>
+                    <option value="cliente" {% if row.membership.role == "cliente" %}selected{% endif %}>👤 cliente</option>
+                  </select>
+                  <button class="btn btn-outline-secondary btn-sm" title="Alterar role">↻</button>
+                </form>
+                {% endif %}
                 {% if row.membership.role == "cliente" %}
                 <form class="d-inline" method="post" action="/admin/members/{{ row.membership.id }}/link-client">
                   <select class="form-select form-select-sm" name="client_id" style="min-width: 220px;">
@@ -6175,7 +6186,7 @@ a:hover{ color:#00BFBF; }
                       <option value="{{ c.id }}" {% if row.membership.client_id==c.id %}selected{% endif %}>{{ c.name }}</option>
                     {% endfor %}
                   </select>
-                  <button class="btn btn-sm btn-outline-primary mt-2 w-100">Vincular</button>
+                  <button class="btn btn-sm btn-outline-primary mt-2 w-100">Vincular cliente</button>
                 </form>
                 {% endif %}
               </div>
