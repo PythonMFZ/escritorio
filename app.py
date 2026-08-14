@@ -37252,11 +37252,23 @@ TEMPLATES.update({
       {# Painel direito: matching ou form de criação #}
       <div class="ext-match-card {% if line.match %}has-match{% endif %}">
         {% if line.status == 'conciliado' %}
-          <div class="ext-match-title">Conciliado</div>
-          <div class="text-muted small">Transação já foi conciliada.</div>
+          <div class="ext-match-title">✓ Conciliado</div>
+          {% if line.match %}
+          <div class="fw-semibold" style="font-size:.85rem">{{ line.match.description }}</div>
+          <div class="text-muted" style="font-size:.75rem">{{ line.match.entry_kind }} · venc. {{ line.match.due_date }} · {{ line.match.amount_expected_brl|brl }}</div>
+          {% else %}
+          <div class="text-muted small">Transação conciliada (lançamento não encontrado).</div>
+          {% endif %}
+          <form method="post" action="/admin/financeiro/conciliacao/linha/{{ line.id }}/reverter" class="mt-2" onsubmit="return confirm('Reverter conciliação desta transação?')">
+            <input type="hidden" name="batch" value="{{ batch }}">
+            <button class="btn btn-outline-danger btn-sm">↩ Reverter conciliação</button>
+          </form>
         {% elif line.status == 'ignorado' %}
           <div class="ext-match-title">Ignorado</div>
-          <div class="text-muted small">Transação marcada para ignorar.</div>
+          <form method="post" action="/admin/financeiro/conciliacao/linha/{{ line.id }}/reverter" class="mt-2">
+            <input type="hidden" name="batch" value="{{ batch }}">
+            <button class="btn btn-outline-secondary btn-sm">↩ Reativar</button>
+          </form>
         {% else %}
           {% if line.match %}
           <div class="ext-match-title">Lançamento sugerido <span class="ext-badge-match">match automático</span></div>
@@ -37276,7 +37288,21 @@ TEMPLATES.update({
             </form>
           </div>
           {% else %}
-          <div class="ext-match-title">Nenhum match encontrado — criar lançamento</div>
+          <div class="ext-match-title">Nenhum match automático</div>
+          {# Busca manual de lançamento existente #}
+          <div class="mb-2">
+            <input type="text" class="form-control form-control-sm ce-search-input" placeholder="🔍 Buscar lançamento existente…"
+                   data-line="{{ line.id }}" data-kind="{% if line.amount_cents > 0 %}receber{% else %}pagar{% endif %}"
+                   autocomplete="off" style="font-size:.8rem">
+            <div class="ce-search-results" id="ceSearchResults{{ line.id }}" style="display:none;border:1px solid var(--bs-border-color);border-radius:6px;background:var(--bs-body-bg);max-height:160px;overflow-y:auto;font-size:.8rem;z-index:10;position:relative"></div>
+          </div>
+          <form method="post" action="/admin/financeiro/conciliacao/linha/{{ line.id }}/conciliar" id="ceSearchForm{{ line.id }}" class="d-flex gap-2 align-items-center flex-wrap" style="display:none!important">
+            <input type="hidden" name="entry_id" id="ceEntryId{{ line.id }}" value="">
+            <input type="hidden" name="batch" value="{{ batch }}">
+            <input type="date" name="settlement_date" value="{{ line.release_date }}" class="form-control form-control-sm" style="width:140px">
+            <button class="btn btn-success btn-sm">✓ Vincular</button>
+            <button type="button" class="btn btn-outline-secondary btn-sm" onclick="clearSearch({{ line.id }})">✕</button>
+          </form>
           {% endif %}
 
           {# Formulário de criação (sempre visível se sem match, colapsável se com match) #}
@@ -37353,6 +37379,49 @@ function toggleNewForm(id) {
   var el = document.getElementById('newForm' + id);
   if (el) el.style.display = el.style.display === 'none' ? '' : 'none';
 }
+
+function clearSearch(id) {
+  var form = document.getElementById('ceSearchForm' + id);
+  var res  = document.getElementById('ceSearchResults' + id);
+  if (form) form.style.display = 'none';
+  if (res)  { res.innerHTML = ''; res.style.display = 'none'; }
+  var inp = document.querySelector('.ce-search-input[data-line="' + id + '"]');
+  if (inp) inp.value = '';
+}
+
+// Busca de lançamentos existentes
+document.addEventListener('input', function(e) {
+  var inp = e.target;
+  if (!inp.classList.contains('ce-search-input')) return;
+  var lineId = inp.dataset.line;
+  var kind   = inp.dataset.kind;
+  var q      = inp.value.trim();
+  var res    = document.getElementById('ceSearchResults' + lineId);
+  var form   = document.getElementById('ceSearchForm' + lineId);
+  if (!q) { res.style.display = 'none'; res.innerHTML = ''; if(form) form.style.display='none'; return; }
+  fetch('/admin/financeiro/conciliacao/buscar-lancamentos?q=' + encodeURIComponent(q) + '&kind=' + kind)
+    .then(function(r){ return r.json(); })
+    .then(function(data) {
+      if (!data.length) {
+        res.innerHTML = '<div style="padding:8px 12px;color:#999">Nenhum lançamento encontrado</div>';
+        res.style.display = 'block';
+        return;
+      }
+      res.innerHTML = data.map(function(d) {
+        return '<div class="ce-search-item" style="padding:7px 12px;cursor:pointer;border-bottom:1px solid var(--bs-border-color)" data-id="' + d.id + '" data-label="' + d.label.replace(/"/g,'&quot;') + '">' + d.label + '</div>';
+      }).join('');
+      res.style.display = 'block';
+      res.querySelectorAll('.ce-search-item').forEach(function(item) {
+        item.addEventListener('click', function() {
+          var eid = item.dataset.id;
+          inp.value = item.dataset.label;
+          res.style.display = 'none';
+          document.getElementById('ceEntryId' + lineId).value = eid;
+          if (form) form.style.removeProperty('display');
+        });
+      });
+    });
+});
 
 // Carrega lotes disponíveis
 fetch('/admin/financeiro/conciliacao/lotes')

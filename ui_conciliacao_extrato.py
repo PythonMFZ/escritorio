@@ -121,7 +121,7 @@ def _ce_auto_match(session, company_id: int, amount_cents: int, release_date: st
             _sel_ce(OfficeFinancialEntry).where(  # type: ignore[name-defined]
                 OfficeFinancialEntry.company_id == company_id,  # type: ignore[name-defined]
                 OfficeFinancialEntry.entry_kind == entry_kind,
-                OfficeFinancialEntry.status.in_(["aberto", "vencido"]),
+                OfficeFinancialEntry.status == "aberto",
                 OfficeFinancialEntry.due_date >= d_min,
                 OfficeFinancialEntry.due_date <= d_max,
             )
@@ -304,5 +304,75 @@ try:
     print("[ce] GET /admin/financeiro/conciliacao/lotes registrado")
 except Exception as _e4:
     print(f"[ce] lotes: {_e4}")
+
+try:
+    @app.post("/admin/financeiro/conciliacao/linha/{line_id}/reverter")  # type: ignore[name-defined]
+    @require_role({"admin", "equipe"})  # type: ignore[name-defined]
+    async def ce_reverter_linha(
+        request: _Req_ce,
+        session: _Sess_ce = _Dep_ce(get_session),  # type: ignore[name-defined]
+        line_id: int = 0,
+        batch: str = _Form_ce(""),
+    ):
+        ctx = get_tenant_context(request, session)  # type: ignore[name-defined]
+        assert ctx is not None
+        line = session.get(BankStatementLine, line_id)
+        if line and line.company_id == ctx.company.id:
+            # Reabre o lançamento vinculado se existir e ainda pertencer ao tenant
+            if line.matched_entry_id:
+                entry = session.get(OfficeFinancialEntry, line.matched_entry_id)  # type: ignore[name-defined]
+                if entry and entry.company_id == ctx.company.id and entry.status in ("recebido", "pago"):
+                    entry.status = "aberto"
+                    entry.settlement_date = ""
+                    entry.amount_realized_brl = 0.0
+                    session.add(entry)
+            line.status = "pendente"
+            line.matched_entry_id = None
+            session.add(line)
+            session.commit()
+            set_flash(request, "Conciliação revertida.")  # type: ignore[name-defined]
+        return _RR_ce(f"/admin/financeiro/conciliacao?tab=extrato&batch={batch}", status_code=303)
+
+    print("[ce] POST /admin/financeiro/conciliacao/linha/{id}/reverter registrado")
+except Exception as _e_rev:
+    print(f"[ce] reverter_linha: {_e_rev}")
+
+
+try:
+    @app.get("/admin/financeiro/conciliacao/buscar-lancamentos")  # type: ignore[name-defined]
+    @require_role({"admin", "equipe"})  # type: ignore[name-defined]
+    async def ce_buscar_lancamentos(
+        request: _Req_ce,
+        session: _Sess_ce = _Dep_ce(get_session),  # type: ignore[name-defined]
+    ):
+        ctx = get_tenant_context(request, session)  # type: ignore[name-defined]
+        assert ctx is not None
+        q = (request.query_params.get("q") or "").strip().lower()
+        kind = (request.query_params.get("kind") or "").strip().lower()  # receber | pagar
+        try:
+            query = _sel_ce(OfficeFinancialEntry).where(  # type: ignore[name-defined]
+                OfficeFinancialEntry.company_id == ctx.company.id,  # type: ignore[name-defined]
+                OfficeFinancialEntry.status == "aberto",
+            )
+            if kind in ("receber", "pagar"):
+                query = query.where(OfficeFinancialEntry.entry_kind == kind)  # type: ignore[name-defined]
+            query = query.order_by(OfficeFinancialEntry.due_date.desc()).limit(100)  # type: ignore[name-defined]
+            entries = session.exec(query).all()
+
+            results = []
+            for e in entries:
+                label = f"{e.description} — R$ {abs(e.amount_expected_brl or 0):,.2f} — venc. {e.due_date or '?'}"
+                if q and q not in label.lower():
+                    continue
+                results.append({"id": e.id, "label": label, "entry_kind": e.entry_kind})
+            return _JSON_ce(results[:30])
+        except Exception as _ex:
+            print(f"[ce] buscar_lancamentos: {_ex}")
+            return _JSON_ce([])
+
+    print("[ce] GET /admin/financeiro/conciliacao/buscar-lancamentos registrado")
+except Exception as _e5:
+    print(f"[ce] buscar_lancamentos: {_e5}")
+
 
 print("[ce] Modulo ui_conciliacao_extrato carregado")
