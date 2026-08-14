@@ -36457,7 +36457,9 @@ async def office_finance_excluir_lote(
             deleted += 1
     session.commit()
     set_flash(request, f"{deleted} lançamento(s) excluído(s).")
-    return RedirectResponse("/admin/financeiro/conciliacao", status_code=303)
+    referer = request.headers.get("referer", "")
+    redirect_to = "/admin/financeiro/conciliacao" if "/conciliacao" in referer else "/admin/financeiro"
+    return RedirectResponse(redirect_to, status_code=303)
 
 
 @app.get("/admin/financeiro/dashboard-gerencial", response_class=HTMLResponse)
@@ -36792,7 +36794,7 @@ TEMPLATES.update({
         <tbody>
           {% for row in rows %}
           <tr>
-            <td><input type="checkbox" class="ofd-cb" value="{{ row.id }}" data-amount="{{ row.expected }}" data-kind="{{ row.entry_kind }}"></td>
+            <td><input type="checkbox" class="ofd-cb" value="{{ row.id }}" data-amount="{{ row.amount_expected_brl }}" data-kind="{{ row.entry_kind }}"></td>
             <td>
               {% if row.entry_kind == 'receber' %}
               <span class="ofd-badge-receber">▲ receber</span>
