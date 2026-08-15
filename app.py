@@ -5716,38 +5716,45 @@ a:hover{ color:#00BFBF; }
     });
   }
 
+  function _pickMaleVoice(){
+    var voices = window.speechSynthesis.getVoices();
+    var femaleTerms = ['feminino','female','francisca','vitoria','luciana','camila','isabela','maria','leila','catarina','anna'];
+    var maleNames   = ['eddy','reed','raul','daniel','felipe','ricardo','antonio','carlos','oskar','luca','voz masculina'];
+    function isFemale(v){ var n=v.name.toLowerCase(); return femaleTerms.some(function(t){return n.includes(t);}); }
+    function isMale(v)  { var n=v.name.toLowerCase(); return maleNames.some(function(t){return n.includes(t);}); }
+    // 1. Explicitly named male, pt-BR
+    var v = voices.find(function(v){ return (v.lang==='pt-BR'||v.lang.startsWith('pt')) && isMale(v) && !isFemale(v); });
+    // 2. Any pt-BR that is not explicitly female
+    if(!v) v = voices.find(function(v){ return v.lang==='pt-BR' && !isFemale(v); });
+    // 3. Any pt that is not explicitly female
+    if(!v) v = voices.find(function(v){ return v.lang.startsWith('pt') && !isFemale(v); });
+    // 4. Any pt-BR
+    if(!v) v = voices.find(function(v){ return v.lang==='pt-BR'; });
+    return v || null;
+  }
+
   function speak(text, onDone){
     if(!window.speechSynthesis){ if(onDone) onDone(); return; }
     window.speechSynthesis.cancel();
-    // Clean text: remove markdown, collapse whitespace to avoid long pauses
     var clean = text
       .replace(/#{1,6}\s*/g,'').replace(/\*{1,2}([^*]+)\*{1,2}/g,'$1')
       .replace(/`[^`]*`/g,'').replace(/\n{2,}/g,'. ').replace(/\n/g,' ')
       .replace(/\s{2,}/g,' ').trim();
-    var utterance = new SpeechSynthesisUtterance(clean);
-    utterance.lang = 'pt-BR';
-    utterance.rate = 1.08;
-    utterance.pitch = 0.78;
-    var voices = window.speechSynthesis.getVoices();
-    // Priority: Google pt-BR > any named male > any pt-BR
-    var maleNames = ['google português','daniel','felipe','ricardo','antonio','carlos'];
-    var chosen = voices.find(function(v){
-      return v.lang === 'pt-BR' && v.name.toLowerCase().includes('google');
-    }) || voices.find(function(v){
-      var n = v.name.toLowerCase();
-      return (v.lang === 'pt-BR' || v.lang.startsWith('pt')) &&
-             maleNames.some(function(m){ return n.includes(m); });
-    }) || voices.find(function(v){ return v.lang === 'pt-BR'; })
-      || voices.find(function(v){ return v.lang.startsWith('pt'); });
-    if(chosen) utterance.voice = chosen;
-    utterance.onend = onDone;
-    utterance.onerror = onDone;
-    window.speechSynthesis.speak(utterance);
-  }
-
-  // Voices may load async
-  if(window.speechSynthesis && window.speechSynthesis.onvoiceschanged !== undefined){
-    window.speechSynthesis.onvoiceschanged = function(){};
+    function _doSpeak(){
+      var utterance = new SpeechSynthesisUtterance(clean);
+      utterance.lang  = 'pt-BR';
+      utterance.rate  = 1.0;
+      utterance.pitch = 0.5;
+      var v = _pickMaleVoice();
+      if(v) utterance.voice = v;
+      utterance.onend  = onDone;
+      utterance.onerror = onDone;
+      window.speechSynthesis.speak(utterance);
+    }
+    // Voices may not be loaded yet
+    var loaded = window.speechSynthesis.getVoices();
+    if(loaded.length){ _doSpeak(); }
+    else { window.speechSynthesis.onvoiceschanged = function(){ _doSpeak(); }; }
   }
 
   btn.addEventListener('click', startListening);
@@ -32535,6 +32542,19 @@ TEMPLATES["base.html"] = r"""
     });
   }
 
+  function _pickMaleVoice(){
+    var voices = window.speechSynthesis.getVoices();
+    var femaleTerms = ['feminino','female','francisca','vitoria','luciana','camila','isabela','maria','leila','catarina','anna'];
+    var maleNames   = ['eddy','reed','raul','daniel','felipe','ricardo','antonio','carlos','oskar','luca','voz masculina'];
+    function isFemale(v){ var n=v.name.toLowerCase(); return femaleTerms.some(function(t){return n.includes(t);}); }
+    function isMale(v)  { var n=v.name.toLowerCase(); return maleNames.some(function(t){return n.includes(t);}); }
+    var v = voices.find(function(v){ return (v.lang==='pt-BR'||v.lang.startsWith('pt')) && isMale(v) && !isFemale(v); });
+    if(!v) v = voices.find(function(v){ return v.lang==='pt-BR' && !isFemale(v); });
+    if(!v) v = voices.find(function(v){ return v.lang.startsWith('pt') && !isFemale(v); });
+    if(!v) v = voices.find(function(v){ return v.lang==='pt-BR'; });
+    return v || null;
+  }
+
   function speak(text, onDone){
     if(!window.speechSynthesis){ if(onDone) onDone(); return; }
     window.speechSynthesis.cancel();
@@ -32542,33 +32562,23 @@ TEMPLATES["base.html"] = r"""
       .replace(/#{1,6}\s*/g,'').replace(/\*{1,2}([^*]+)\*{1,2}/g,'$1')
       .replace(/`[^`]*`/g,'').replace(/\n{2,}/g,'. ').replace(/\n/g,' ')
       .replace(/\s{2,}/g,' ').trim();
-    var utterance = new SpeechSynthesisUtterance(clean);
-    utterance.lang = 'pt-BR';
-    utterance.rate = 1.06;
-    utterance.pitch = 0.5;
-    var voices = window.speechSynthesis.getVoices();
-    // Male voice priority: macOS Eddy/Reed > any named male > Google pt-BR > any pt
-    var maleNames = ['eddy','reed','daniel','felipe','ricardo','antonio','carlos','oskar','luca'];
-    var chosen = voices.find(function(v){
-      var n = v.name.toLowerCase();
-      return (v.lang === 'pt-BR' || v.lang.startsWith('pt')) &&
-             maleNames.some(function(m){ return n.includes(m); });
-    }) || voices.find(function(v){
-      return v.lang === 'pt-BR' && v.name.toLowerCase().includes('google');
-    }) || voices.find(function(v){ return v.lang === 'pt-BR'; })
-      || voices.find(function(v){ return v.lang.startsWith('pt'); });
-    if(chosen) utterance.voice = chosen;
-    utterance.onend = onDone;
-    utterance.onerror = onDone;
-    window.speechSynthesis.speak(utterance);
+    function _doSpeak(){
+      var utterance = new SpeechSynthesisUtterance(clean);
+      utterance.lang  = 'pt-BR';
+      utterance.rate  = 1.0;
+      utterance.pitch = 0.5;
+      var v = _pickMaleVoice();
+      if(v) utterance.voice = v;
+      utterance.onend  = onDone;
+      utterance.onerror = onDone;
+      window.speechSynthesis.speak(utterance);
+    }
+    var loaded = window.speechSynthesis.getVoices();
+    if(loaded.length){ _doSpeak(); }
+    else { window.speechSynthesis.onvoiceschanged = function(){ _doSpeak(); }; }
   }
 
-  // Load voices async (required on some browsers)
-  function pickAndSpeak(text, onDone){
-    var loaded = window.speechSynthesis.getVoices();
-    if(loaded.length){ speak(text, onDone); return; }
-    window.speechSynthesis.onvoiceschanged = function(){ speak(text, onDone); };
-  }
+  function pickAndSpeak(text, onDone){ speak(text, onDone); }
 
   btn.addEventListener('click', startListening);
   closeBtn.addEventListener('click', function(){
