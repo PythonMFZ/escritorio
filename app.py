@@ -192,6 +192,8 @@ CREDIT_CONSENT_MAX_DAYS = int(os.getenv("CREDIT_CONSENT_MAX_DAYS", "180"))
 
 CONTA_AZUL_CLIENT_ID = os.getenv("CONTA_AZUL_CLIENT_ID") or ""
 CONTA_AZUL_CLIENT_SECRET = os.getenv("CONTA_AZUL_CLIENT_SECRET") or ""
+
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY") or ""
 CONTA_AZUL_SCOPE = os.getenv("CONTA_AZUL_SCOPE") or "openid profile aws.cognito.signin.user.admin"
 CONTA_AZUL_AUTH_URL = os.getenv("CONTA_AZUL_AUTH_URL") or "https://auth.contaazul.com/login"
 CONTA_AZUL_TOKEN_URL = os.getenv("CONTA_AZUL_TOKEN_URL") or "https://auth.contaazul.com/oauth2/token"
@@ -5716,51 +5718,36 @@ a:hover{ color:#00BFBF; }
     });
   }
 
-  function _pickMaleVoice(){
-    var voices = window.speechSynthesis.getVoices();
-    var femaleTerms = ['feminino','female','francisca','vitoria','luciana','camila','isabela','maria','leila','catarina','anna'];
-    var maleNames   = ['eddy','reed','raul','daniel','felipe','ricardo','antonio','carlos','oskar','luca','voz masculina'];
-    function isFemale(v){ var n=v.name.toLowerCase(); return femaleTerms.some(function(t){return n.includes(t);}); }
-    function isMale(v)  { var n=v.name.toLowerCase(); return maleNames.some(function(t){return n.includes(t);}); }
-    // 1. Explicitly named male, pt-BR
-    var v = voices.find(function(v){ return (v.lang==='pt-BR'||v.lang.startsWith('pt')) && isMale(v) && !isFemale(v); });
-    // 2. Any pt-BR that is not explicitly female
-    if(!v) v = voices.find(function(v){ return v.lang==='pt-BR' && !isFemale(v); });
-    // 3. Any pt that is not explicitly female
-    if(!v) v = voices.find(function(v){ return v.lang.startsWith('pt') && !isFemale(v); });
-    // 4. Any pt-BR
-    if(!v) v = voices.find(function(v){ return v.lang==='pt-BR'; });
-    return v || null;
-  }
+  var _currentAudio = null;
 
   function speak(text, onDone){
-    if(!window.speechSynthesis){ if(onDone) onDone(); return; }
-    window.speechSynthesis.cancel();
+    if(_currentAudio){ _currentAudio.pause(); _currentAudio = null; }
     var clean = text
       .replace(/#{1,6}\s*/g,'').replace(/\*{1,2}([^*]+)\*{1,2}/g,'$1')
       .replace(/`[^`]*`/g,'').replace(/\n{2,}/g,'. ').replace(/\n/g,' ')
       .replace(/\s{2,}/g,' ').trim();
-    function _doSpeak(){
-      var utterance = new SpeechSynthesisUtterance(clean);
-      utterance.lang  = 'pt-BR';
-      utterance.rate  = 1.0;
-      utterance.pitch = 0.5;
-      var v = _pickMaleVoice();
-      if(v) utterance.voice = v;
-      utterance.onend  = onDone;
-      utterance.onerror = onDone;
-      window.speechSynthesis.speak(utterance);
-    }
-    // Voices may not be loaded yet
-    var loaded = window.speechSynthesis.getVoices();
-    if(loaded.length){ _doSpeak(); }
-    else { window.speechSynthesis.onvoiceschanged = function(){ _doSpeak(); }; }
+    fetch('/api/tts', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({text: clean})
+    }).then(function(r){
+      if(!r.ok){ if(onDone) onDone(); return; }
+      return r.blob();
+    }).then(function(blob){
+      if(!blob){ return; }
+      var url = URL.createObjectURL(blob);
+      var audio = new Audio(url);
+      _currentAudio = audio;
+      audio.onended = function(){ URL.revokeObjectURL(url); _currentAudio=null; if(onDone) onDone(); };
+      audio.onerror = function(){ URL.revokeObjectURL(url); _currentAudio=null; if(onDone) onDone(); };
+      audio.play();
+    }).catch(function(){ if(onDone) onDone(); });
   }
 
   btn.addEventListener('click', startListening);
   closeBtn.addEventListener('click', function(){
     stopListening();
-    if(window.speechSynthesis) window.speechSynthesis.cancel();
+    if(_currentAudio){ _currentAudio.pause(); _currentAudio = null; }
     closePanel();
     state = 'idle';
     btn.classList.remove('listening','speaking');
@@ -26547,6 +26534,31 @@ async def simulador_criar_proposta(
     return RedirectResponse(f"/propostas/{prop.id}", status_code=303)
 
 
+@app.post("/api/tts")
+@require_login
+async def api_tts(request: Request) -> Response:
+    if not OPENAI_API_KEY:
+        return JSONResponse({"error": "OPENAI_API_KEY não configurada"}, status_code=503)
+    try:
+        body = await request.json()
+        text = str(body.get("text") or "").strip()[:4096]
+        if not text:
+            return JSONResponse({"error": "texto vazio"}, status_code=400)
+        import httpx as _httpx
+        async with _httpx.AsyncClient(timeout=30) as cl:
+            r = await cl.post(
+                "https://api.openai.com/v1/audio/speech",
+                headers={"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"},
+                json={"model": "tts-1", "voice": "onyx", "input": text, "response_format": "mp3", "speed": 0.95},
+            )
+        if r.status_code != 200:
+            return JSONResponse({"error": f"OpenAI TTS error {r.status_code}"}, status_code=502)
+        return Response(content=r.content, media_type="audio/mpeg",
+                        headers={"Cache-Control": "no-store"})
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
 @app.get("/api/ui/banner", response_class=JSONResponse)
 @require_login
 async def api_ui_banner(request: Request, session: Session = Depends(get_session)) -> JSONResponse:
@@ -32542,40 +32554,30 @@ TEMPLATES["base.html"] = r"""
     });
   }
 
-  function _pickMaleVoice(){
-    var voices = window.speechSynthesis.getVoices();
-    var femaleTerms = ['feminino','female','francisca','vitoria','luciana','camila','isabela','maria','leila','catarina','anna'];
-    var maleNames   = ['eddy','reed','raul','daniel','felipe','ricardo','antonio','carlos','oskar','luca','voz masculina'];
-    function isFemale(v){ var n=v.name.toLowerCase(); return femaleTerms.some(function(t){return n.includes(t);}); }
-    function isMale(v)  { var n=v.name.toLowerCase(); return maleNames.some(function(t){return n.includes(t);}); }
-    var v = voices.find(function(v){ return (v.lang==='pt-BR'||v.lang.startsWith('pt')) && isMale(v) && !isFemale(v); });
-    if(!v) v = voices.find(function(v){ return v.lang==='pt-BR' && !isFemale(v); });
-    if(!v) v = voices.find(function(v){ return v.lang.startsWith('pt') && !isFemale(v); });
-    if(!v) v = voices.find(function(v){ return v.lang==='pt-BR'; });
-    return v || null;
-  }
+  var _currentAudio = null;
 
   function speak(text, onDone){
-    if(!window.speechSynthesis){ if(onDone) onDone(); return; }
-    window.speechSynthesis.cancel();
+    if(_currentAudio){ _currentAudio.pause(); _currentAudio = null; }
     var clean = text
       .replace(/#{1,6}\s*/g,'').replace(/\*{1,2}([^*]+)\*{1,2}/g,'$1')
       .replace(/`[^`]*`/g,'').replace(/\n{2,}/g,'. ').replace(/\n/g,' ')
       .replace(/\s{2,}/g,' ').trim();
-    function _doSpeak(){
-      var utterance = new SpeechSynthesisUtterance(clean);
-      utterance.lang  = 'pt-BR';
-      utterance.rate  = 1.0;
-      utterance.pitch = 0.5;
-      var v = _pickMaleVoice();
-      if(v) utterance.voice = v;
-      utterance.onend  = onDone;
-      utterance.onerror = onDone;
-      window.speechSynthesis.speak(utterance);
-    }
-    var loaded = window.speechSynthesis.getVoices();
-    if(loaded.length){ _doSpeak(); }
-    else { window.speechSynthesis.onvoiceschanged = function(){ _doSpeak(); }; }
+    fetch('/api/tts', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({text: clean})
+    }).then(function(r){
+      if(!r.ok){ if(onDone) onDone(); return; }
+      return r.blob();
+    }).then(function(blob){
+      if(!blob){ return; }
+      var url = URL.createObjectURL(blob);
+      var audio = new Audio(url);
+      _currentAudio = audio;
+      audio.onended = function(){ URL.revokeObjectURL(url); _currentAudio=null; if(onDone) onDone(); };
+      audio.onerror = function(){ URL.revokeObjectURL(url); _currentAudio=null; if(onDone) onDone(); };
+      audio.play();
+    }).catch(function(){ if(onDone) onDone(); });
   }
 
   function pickAndSpeak(text, onDone){ speak(text, onDone); }
