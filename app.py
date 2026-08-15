@@ -19167,13 +19167,20 @@ def _office_entry_apply_form(*, entry: OfficeFinancialEntry, company_id: int, cu
     amount_realized = _parse_brl_amount(form.get("amount_realized_brl")) if str(
         form.get("amount_realized_brl") or "").strip() else 0.0
 
-    client_id = _safe_int(form.get("client_id"))
-    supplier_id = _safe_int(form.get("supplier_id"))
-    cost_center_id = _safe_int(form.get("cost_center_id"))
-    category_id = _safe_int(form.get("category_id"))
-    revenue_type_id = _safe_int(form.get("revenue_type_id"))
-    internal_service_id = _safe_int(form.get("internal_service_id"))
-    bank_account_id = _safe_int(form.get("bank_account_id"))
+    def _fk(v):
+        try:
+            i = int(v)
+            return i if i > 0 else None
+        except Exception:
+            return None
+
+    client_id = _fk(form.get("client_id"))
+    supplier_id = _fk(form.get("supplier_id"))
+    cost_center_id = _fk(form.get("cost_center_id"))
+    category_id = _fk(form.get("category_id"))
+    revenue_type_id = _fk(form.get("revenue_type_id"))
+    internal_service_id = _fk(form.get("internal_service_id"))
+    bank_account_id = _fk(form.get("bank_account_id"))
 
     if entry_kind == "receber":
         if not client_id:
