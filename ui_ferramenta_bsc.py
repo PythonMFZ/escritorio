@@ -1602,7 +1602,11 @@ if hasattr(templates_env.loader, "mapping"):
 
 # ── Augur: injeta contexto BSC ────────────────────────────────────────────────
 try:
-    _orig_bsc_ctx = _enriquecer_client_data
+    # Guard: if already wrapped, unwrap to the original before re-wrapping
+    _candidate = _enriquecer_client_data
+    while getattr(_candidate, '_is_bsc_ctx_wrapper', False):
+        _candidate = _candidate._wrapped_original
+    _orig_bsc_ctx = _candidate
 
     def _bsc_ctx_enriquecer(session, company_id: int, client_id: int, client, client_data: dict) -> dict:
         client_data = _orig_bsc_ctx(session, company_id, client_id, client, client_data)
@@ -1636,6 +1640,8 @@ try:
             pass
         return client_data
 
+    _bsc_ctx_enriquecer._is_bsc_ctx_wrapper = True
+    _bsc_ctx_enriquecer._wrapped_original = _orig_bsc_ctx
     _enriquecer_client_data = _bsc_ctx_enriquecer
     print("[bsc] ✅ Contexto BSC injetado no Augur")
 except Exception as _e:
