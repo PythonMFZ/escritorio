@@ -273,17 +273,13 @@ def _ct_mp_gerar_boleto(cobranca: CobrancaMensal, contrato: ContratoCliente, ses
     primeiro   = nome_parts[0]
     sobrenome  = nome_parts[1] if len(nome_parts) > 1 else "."
 
-    # Se a data de vencimento já passou, usa hoje + 3 dias úteis (MP rejeita datas no passado)
+    # MP rejeita datas no passado — se vencido, usa amanhã
     from datetime import date as _date_today, timedelta as _td
     venc_date = _date_ct.fromisoformat(cobranca.data_vencimento)
     hoje_date = _date_ct.today()
-    if venc_date <= hoje_date:
-        venc_date = hoje_date + _td(days=3)
-    # Mercado Pago cancela o boleto na data_of_expiration. Adicionamos 5 dias de
-    # tolerância para que o boleto permaneça ativo até o cliente pagar, mesmo com
-    # algum atraso pontual.
-    expira_date = venc_date + _td(days=5)
-    venc_iso = f"{expira_date.isoformat()}T23:59:00.000-03:00"
+    if venc_date < hoje_date:
+        venc_date = hoje_date + _td(days=1)
+    venc_iso = f"{venc_date.isoformat()}T23:59:00.000-03:00"
 
     payload = {
         "transaction_amount": round(cobranca.valor_cents / 100, 2),
@@ -319,7 +315,7 @@ def _ct_mp_gerar_boleto(cobranca: CobrancaMensal, contrato: ContratoCliente, ses
 _ADMIN_EMAIL = "maffezzolli.eng@gmail.com"
 
 def _ct_enviar_email_boleto(cobranca: CobrancaMensal, contrato: ContratoCliente, session=None):
-    """Envia boleto por e-mail para o cliente e cópia para o escritório."""
+    """Envia boleto por e-mail + WhatsApp para o cliente e notifica a equipe."""
     cliente_obj = None
     if contrato.client_id and session:
         try:
@@ -328,7 +324,9 @@ def _ct_enviar_email_boleto(cobranca: CobrancaMensal, contrato: ContratoCliente,
             pass
 
     email_cliente = (cliente_obj.email if cliente_obj and cliente_obj.email else "") or contrato.email_cliente
-    if not email_cliente:
+    finance_email = (cliente_obj.finance_email if cliente_obj and getattr(cliente_obj, "finance_email", "") else "")
+    phone_cliente = (cliente_obj.phone if cliente_obj and getattr(cliente_obj, "phone", "") else "")
+    if not email_cliente and not finance_email:
         raise RuntimeError("Cliente sem e-mail cadastrado.")
 
     valor_fmt = _ct_brl(cobranca.valor_cents)
@@ -384,23 +382,61 @@ def _ct_enviar_email_boleto(cobranca: CobrancaMensal, contrato: ContratoCliente,
   <p style="color:#888;font-size:12px;margin-top:32px">Maffezzolli Capital — Consultoria Financeira</p>
 </div>"""
 
-    _smtp_send_email(
-        to_email=email_cliente,
-        subject=f"Boleto {cobranca.nome_contrato} — {cobranca.competencia} — {valor_fmt}",
-        html_body=html,
-        text_body=f"Boleto {cobranca.nome_contrato} venc. {cobranca.data_vencimento}: {cobranca.boleto_url}",
-    )
-    # Cópia para o escritório
+    # ── E-mail para o cliente ────────────────────────────────────────────────
+    destinatarios = list({e for e in [email_cliente, finance_email] if e})
+    for dest in destinatarios:
+        try:
+            _smtp_send_email(
+                to_email=dest,
+                subject=f"Boleto {cobranca.nome_contrato} — {cobranca.competencia} — {valor_fmt}",
+                html_body=html,
+                text_body=f"Boleto {cobranca.nome_contrato} venc. {cobranca.data_vencimento}: {cobranca.boleto_url}",
+            )
+            print(f"[boleto] 📧 email enviado para {dest}")
+        except Exception as _e_mail:
+            print(f"[boleto] ⚠️ erro email {dest}: {_e_mail}")
+
+    # ── Cópia interna (admin) ────────────────────────────────────────────────
     try:
         _smtp_send_email(
             to_email=_ADMIN_EMAIL,
-            subject=f"[Cópia] Boleto enviado — {cobranca.nome_cliente} — {cobranca.competencia}",
+            subject=f"[Boleto emitido] {cobranca.nome_cliente} — {cobranca.competencia} — {valor_fmt}",
             html_body=html,
             text_body=f"Boleto {cobranca.nome_cliente} {cobranca.competencia}: {cobranca.boleto_url}",
         )
     except Exception:
         pass
-    print(f"[boleto] 📧 email enviado para {email_cliente}")
+
+    # ── WhatsApp para o cliente ──────────────────────────────────────────────
+    if phone_cliente and session:
+        try:
+            import asyncio as _asyncio_ct
+            from sqlmodel import select as _sel_wa
+            _wa_cfg_cls = globals().get("WhatsAppChannelConfig")
+            if _wa_cfg_cls:
+                _wa_cfg = session.exec(
+                    _sel_wa(_wa_cfg_cls).where(_wa_cfg_cls.company_id == cobranca.company_id)
+                ).first()
+                if _wa_cfg and _wa_cfg.is_enabled:
+                    venc_br = "/".join(reversed(cobranca.data_vencimento.split("-")))
+                    wa_msg = (
+                        f"Olá, *{cobranca.nome_cliente}*! 👋\n\n"
+                        f"Seu boleto referente a *{cobranca.nome_contrato}* — {cobranca.competencia} "
+                        f"está disponível.\n\n"
+                        f"💰 *Valor:* {valor_fmt}\n"
+                        f"📅 *Vencimento:* {venc_br}\n\n"
+                        f"🔗 *Link para pagamento:*\n{cobranca.boleto_url}"
+                    )
+                    _try_fn = globals().get("_try_send_whatsapp_text")
+                    if _try_fn:
+                        loop = _asyncio_ct.new_event_loop()
+                        ok, err, _ = loop.run_until_complete(
+                            _try_fn(config=_wa_cfg, recipient_id=phone_cliente, body=wa_msg)
+                        )
+                        loop.close()
+                        print(f"[boleto] {'✅' if ok else '⚠️'} WhatsApp {phone_cliente}: {err or 'ok'}")
+        except Exception as _e_wa:
+            print(f"[boleto] ⚠️ WhatsApp erro: {_e_wa}")
 
 
 # ── Integração com OfficeFinancialEntry (dashboard) ───────────────────────────
