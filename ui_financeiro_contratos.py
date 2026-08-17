@@ -808,6 +808,19 @@ async def financeiro_cobrancas_painel(request: _Req_ct, session=_Dep_ct(get_sess
         else:
             boleto_btn = ""
 
+        # Botão Reenviar — disponível quando há boleto ou NF emitida
+        tem_boleto = bool(c.boleto_url)
+        tem_nf     = bool(getattr(c, "nf_numero", "") or getattr(c, "nf_url", ""))
+        if (tem_boleto or tem_nf) and c.status not in ("cancelado",):
+            reenviar_btn = (
+                f'<a href="/admin/financeiro/cobrancas/{c.id}/reenviar" '
+                f'class="btn btn-sm btn-outline-warning ms-1" '
+                f'onclick="return confirm(\'Reenviar boleto/NF por e-mail e WhatsApp?\')" '
+                f'title="Reenviar boleto e NF para o cliente">↩ Reenviar</a>'
+            )
+        else:
+            reenviar_btn = ""
+
         acoes_pagar    = '' if c.status == 'pago' else f'<button class="btn btn-sm btn-success" onclick="marcarPago({c.id}, {c.valor_cents})">✓ Pago</button>'
         acoes_cancelar = '' if c.status in ('cancelado','pago') else f'<a href="/admin/financeiro/cobrancas/{c.id}/cancelar-get" class="btn btn-sm btn-outline-secondary ms-1" onclick="return confirm(\'Cancelar cobrança?\')">✕ Cancelar</a>'
         acoes_excluir  = f'<a href="/admin/financeiro/cobrancas/{c.id}/excluir" class="btn btn-sm btn-outline-danger ms-1" onclick="return confirm(\'Excluir permanentemente?\')">🗑</a>'
@@ -834,7 +847,7 @@ async def financeiro_cobrancas_painel(request: _Req_ct, session=_Dep_ct(get_sess
           <td class="text-center">{c.data_vencimento}</td>
           <td class="text-center"><span class="badge {badge}">{c.status.capitalize()}</span></td>
           <td class="text-end text-success">{pago_str}</td>
-          <td class="text-center text-nowrap">{acoes_pagar}{boleto_btn}{nf_btn}{acoes_cancelar}{acoes_excluir}</td>
+          <td class="text-center text-nowrap">{acoes_pagar}{boleto_btn}{nf_btn}{reenviar_btn}{acoes_cancelar}{acoes_excluir}</td>
         </tr>"""
 
     msg_flash  = request.query_params.get("msg", "")
@@ -1267,6 +1280,32 @@ async def financeiro_cobranca_gerar_boleto_form(cobranca_id: int, request: _Req_
         return _RR_ct("/admin/financeiro/cobrancas", status_code=303)
 
 
+# ── Reenviar boleto + NF ao cliente ──────────────────────────────────────────
+
+@app.get("/admin/financeiro/cobrancas/{cobranca_id}/reenviar")
+@require_role({"admin", "equipe"})
+async def financeiro_cobranca_reenviar(cobranca_id: int, request: _Req_ct, session=_Dep_ct(get_session)):
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        return _RR_ct("/login", status_code=303)
+    cobranca = session.get(CobrancaMensal, cobranca_id)
+    if not cobranca or cobranca.company_id != ctx.company.id:
+        set_flash(request, "Cobrança não encontrada.")
+        return _RR_ct("/admin/financeiro/cobrancas", status_code=303)
+    contrato = session.get(ContratoCliente, cobranca.contrato_id)
+    if not contrato:
+        set_flash(request, "Contrato não encontrado.")
+        return _RR_ct("/admin/financeiro/cobrancas", status_code=303)
+    try:
+        _ct_enviar_email_boleto(cobranca, contrato, session)
+        set_flash(request, f"Boleto e NF reenviados para {cobranca.nome_cliente}.")
+    except Exception as _e:
+        set_flash(request, f"Erro ao reenviar: {_e}")
+    referer = request.headers.get("referer", "")
+    dest = referer if referer and "/admin/financeiro" in referer else "/admin/financeiro/cobrancas"
+    return _RR_ct(dest, status_code=303)
+
+
 # ── Webhook Mercado Pago — confirmação automática ─────────────────────────────
 
 @app.post("/webhooks/mercadopago")
@@ -1470,6 +1509,18 @@ def _ct_cobrancas_html(contrato, cobrancas):
         else:
             nf_cell = ""
 
+        tem_boleto_c = bool(c.boleto_url)
+        tem_nf_c     = bool(nf_num_v or nf_url_v)
+        if (tem_boleto_c or tem_nf_c) and c.status != "cancelado":
+            reenviar_cell = (
+                f'<a href="/admin/financeiro/cobrancas/{c.id}/reenviar" '
+                f'class="btn btn-sm btn-outline-warning" '
+                f'onclick="return confirm(\'Reenviar boleto/NF por e-mail e WhatsApp?\')" '
+                f'title="Reenviar ao cliente">↩ Reenviar</a>'
+            )
+        else:
+            reenviar_cell = ""
+
         rows += f"""
         <tr>
           <td>{c.competencia}</td>
@@ -1481,6 +1532,7 @@ def _ct_cobrancas_html(contrato, cobrancas):
           <td>{c.forma_pagamento or '—'}</td>
           <td class="text-center">{boleto_cell}</td>
           <td class="text-center">{nf_cell}</td>
+          <td class="text-center">{reenviar_cell}</td>
         </tr>"""
 
     total_pago = sum(c.valor_pago_cents or c.valor_cents for c in cobrancas if c.status == "pago")
@@ -1511,9 +1563,10 @@ def _ct_cobrancas_html(contrato, cobrancas):
           <th>Forma</th>
           <th class="text-center">Boleto</th>
           <th class="text-center">NFS-e</th>
+          <th class="text-center">Ações</th>
         </tr>
       </thead>
-      <tbody>{rows if rows else '<tr><td colspan="9" class="text-center text-muted py-4">Nenhuma cobrança gerada ainda</td></tr>'}</tbody>
+      <tbody>{rows if rows else '<tr><td colspan="10" class="text-center text-muted py-4">Nenhuma cobrança gerada ainda</td></tr>'}</tbody>
     </table>
   </div>
 </div>
