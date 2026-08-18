@@ -9292,10 +9292,10 @@ TEMPLATES.update({
             <table class="table table-sm align-middle">
               <thead>
                 <tr>
-                  <th>Data</th>
-                  <th>Total</th>
-                  <th>Processos</th>
-                  <th>Financeiro</th>
+                  <th>Nome / Data</th>
+                  <th>Score</th>
+                  <th>Proc.</th>
+                  <th>Fin.</th>
                   <th>NPS</th>
                   <th></th>
                 </tr>
@@ -9303,14 +9303,21 @@ TEMPLATES.update({
               <tbody>
                 {% for s in snapshots %}
                   <tr>
-                    <td class="mono">{{ s.created_at }}</td>
+                    <td>
+                      <div class="fw-semibold">{{ s.label if s.label else ("Score " ~ "%.0f"|format(s.score_total)) }}</div>
+                      <div class="text-muted small mono">{{ s.snapshot_date if s.snapshot_date else s.created_at }}</div>
+                    </td>
                     <td><b>{{ "%.1f"|format(s.score_total) }}</b></td>
                     <td>{{ "%.1f"|format(s.score_process) }}</td>
                     <td>{{ "%.1f"|format(s.score_financial) }}</td>
                     <td>{{ s.nps_score }}</td>
                     <td>
-                      <div class="d-flex gap-1">
+                      <div class="d-flex gap-1 flex-wrap">
                         <a class="btn btn-outline-secondary btn-sm" href="/perfil/avaliacao/{{ s.id }}">Ver</a>
+                        <button type="button" class="btn btn-outline-warning btn-sm"
+                          onclick="abrirRenomear({{ s.id }}, '{{ s.label|replace("'","") }}', '{{ (s.snapshot_date if s.snapshot_date else s.created_at)|string|slice(0,10) }}')">
+                          🏷 Renomear
+                        </button>
                         <form method="post" action="/perfil/avaliacao/{{ s.id }}/reabrir"
                               onsubmit="return confirm('Reabrir para edição?')" style="margin:0;">
                           <button type="submit" class="btn btn-outline-primary btn-sm">✏️ Editar</button>
@@ -9326,6 +9333,36 @@ TEMPLATES.update({
               </tbody>
             </table>
           </div>
+
+          {# Modal renomear #}
+          <div class="modal fade" id="modalRenomear" tabindex="-1">
+            <div class="modal-dialog modal-sm">
+              <form method="post" id="frmRenomear">
+                <div class="modal-content">
+                  <div class="modal-header py-2"><h6 class="modal-title mb-0">Renomear diagnóstico</h6>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+                  <div class="modal-body">
+                    <label class="form-label small">Nome</label>
+                    <input type="text" name="label" id="renomearLabel" class="form-control form-control-sm mb-2" maxlength="120" placeholder="Ex: Diagnóstico Jul/2026">
+                    <label class="form-label small">Data de referência</label>
+                    <input type="date" name="snapshot_date" id="renomearData" class="form-control form-control-sm">
+                  </div>
+                  <div class="modal-footer py-2">
+                    <button type="button" class="btn btn-sm btn-outline-secondary" data-bs-dismiss="modal">Cancelar</button>
+                    <button type="submit" class="btn btn-sm btn-warning">Salvar</button>
+                  </div>
+                </div>
+              </form>
+            </div>
+          </div>
+          <script>
+          function abrirRenomear(id, label, data){
+            document.getElementById('frmRenomear').action = '/perfil/avaliacao/' + id + '/renomear';
+            document.getElementById('renomearLabel').value = label;
+            document.getElementById('renomearData').value = data;
+            new bootstrap.Modal(document.getElementById('modalRenomear')).show();
+          }
+          </script>
         {% else %}
           <div class="muted">Sem avaliações ainda.</div>
         {% endif %}
@@ -48544,25 +48581,61 @@ _PERFIL_NEW_CARD = """<div class="card p-4 mb-3">
                        style="padding:.35rem .5rem; border-radius:8px; background:var(--mc-bg);">
                     <a href="/perfil/avaliacao/{{ s.id }}"
                        style="text-decoration:none; color:inherit; flex:1;">
-                      <span class="muted">{{ s.created_at.strftime("%d/%m/%Y") }}</span>
-                      <span class="fw-semibold ms-2">Score {{ "%.0f"|format(s.score_total) }}</span>
+                      <span class="muted">{{ s.snapshot_date if s.snapshot_date else s.created_at.strftime("%d/%m/%Y") }}</span>
+                      <span class="fw-semibold ms-2">{{ s.label if s.label else ("Score " ~ "%.0f"|format(s.score_total)) }}</span>
                     </a>
                     <div class="d-flex gap-1">
+                      <button type="button" class="btn btn-outline-warning btn-sm py-0 px-2"
+                              style="font-size:.72rem;"
+                              onclick="abrirRenomear({{ s.id }}, '{{ s.label|replace("'","") }}', '{{ (s.snapshot_date if s.snapshot_date else s.created_at.strftime("%Y-%m-%d")) }}')">
+                        🏷
+                      </button>
                       <form method="post" action="/perfil/avaliacao/{{ s.id }}/reabrir"
                             onsubmit="return confirm('Reabrir este diagnóstico para edição?')"
                             style="margin:0;">
                         <button type="submit" class="btn btn-outline-primary btn-sm py-0 px-2"
-                                style="font-size:.72rem;">✏️ Editar</button>
+                                style="font-size:.72rem;">✏️</button>
                       </form>
                       <form method="post" action="/perfil/avaliacao/{{ s.id }}/duplicar"
                             onsubmit="return confirm('Duplicar este diagnóstico?')"
                             style="margin:0;">
                         <button type="submit" class="btn btn-outline-secondary btn-sm py-0 px-2"
-                                style="font-size:.72rem;">⎘ Duplicar</button>
+                                style="font-size:.72rem;">⎘</button>
                       </form>
                     </div>
                   </div>
                 {% endfor %}
+              </div>
+              {# Modal renomear (dashboard card) #}
+              <div class="modal fade" id="modalRenomearDash" tabindex="-1">
+                <div class="modal-dialog modal-sm">
+                  <form method="post" id="frmRenomearDash">
+                    <div class="modal-content">
+                      <div class="modal-header py-2"><h6 class="modal-title mb-0">Renomear diagnóstico</h6>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+                      <div class="modal-body">
+                        <label class="form-label small">Nome</label>
+                        <input type="text" name="label" id="rdLabel" class="form-control form-control-sm mb-2" maxlength="120" placeholder="Ex: Diagnóstico Jul/2026">
+                        <label class="form-label small">Data de referência</label>
+                        <input type="date" name="snapshot_date" id="rdData" class="form-control form-control-sm">
+                      </div>
+                      <div class="modal-footer py-2">
+                        <button type="button" class="btn btn-sm btn-outline-secondary" data-bs-dismiss="modal">Cancelar</button>
+                        <button type="submit" class="btn btn-sm btn-warning">Salvar</button>
+                      </div>
+                    </div>
+                  </form>
+                </div>
+              </div>
+              <script>
+              function abrirRenomear(id,label,data){
+                document.getElementById('frmRenomearDash').action='/perfil/avaliacao/'+id+'/renomear';
+                document.getElementById('rdLabel').value=label;
+                document.getElementById('rdData').value=data;
+                new bootstrap.Modal(document.getElementById('modalRenomearDash')).show();
+              }
+              </script>
+              <div style="display:none">{# close workaround #}
               </div>
             {% else %}
               <div class="muted small">Nenhuma avaliação ainda.</div>
