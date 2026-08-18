@@ -894,7 +894,7 @@ function renderUnitsTable() {
   document.querySelectorAll('#units-tbody tr').forEach(row => {
     const m2       = parseFloat(row.dataset.m2    || 0);
     const precoP   = parseFloat(row.dataset.preco || 0);  // preco_proprio override
-    const difP     = parseFloat(row.dataset.dif   || 0);  // dif_proprio fraction
+    const difP     = parseFloat(row.dataset.dif   || 0) / 100;  // dif_proprio stored as % (e.g. 10 = +10%)
     const andar    = parseInt(row.dataset.andar   || 1);
     const isPerm   = row.dataset.perm === '1';
 
