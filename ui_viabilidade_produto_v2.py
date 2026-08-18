@@ -555,12 +555,15 @@ def _patch_produto_v2():
         "  a.click();\n"
         "}\n"
     )
-    if _EXPORT_JS not in tpl:
-        tpl = tpl.replace("</script>", _EXPORT_JS + "\n</script>", 1)
+    _EXPORT_JS_ANCHOR = "// ── Exportar Unidades por Pavimento ──"
+    if _EXPORT_JS_ANCHOR not in tpl:
+        # Inject before {% endblock %} to avoid </script> matching issues
+        tpl = tpl.replace("{% endblock %}", "<script>\n" + _EXPORT_JS + "</script>\n{% endblock %}", 1)
         changed = True
 
     # Sentinel
-    tpl = tpl.replace("{% endblock %}", "{# _prodV3 #}\n{% endblock %}", 1)
+    if "{# _prodV3 #}" not in tpl:
+        tpl = tpl.replace("{% endblock %}", "{# _prodV3 #}\n{% endblock %}", 1)
 
     if changed:
         TEMPLATES["ferramenta_viabilidade.html"] = tpl
