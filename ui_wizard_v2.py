@@ -539,6 +539,50 @@ async def perfil_snapshot_duplicar(request: Request, session: Session = Depends(
     return RedirectResponse("/perfil/wizard?etapa=1", status_code=303)
 
 
+# ── Migration: adiciona label + snapshot_date ao ClientSnapshot ──────────────
+try:
+    from sqlalchemy import text as _sa_text_wiz
+    with engine.connect() as _conn_wiz:
+        for _col, _def in [("label", "TEXT NOT NULL DEFAULT ''"), ("snapshot_date", "TEXT NOT NULL DEFAULT ''")]:
+            try:
+                _conn_wiz.execute(_sa_text_wiz(f"ALTER TABLE clientsnapshot ADD COLUMN {_col} {_def}"))
+                _conn_wiz.commit()
+            except Exception:
+                pass
+    print("[wizard_v2] ✅ colunas label/snapshot_date OK")
+except Exception as _e_wiz_m:
+    print(f"[wizard_v2] migration: {_e_wiz_m}")
+
+
+# ── Rota POST /perfil/avaliacao/{snapshot_id}/renomear ───────────────────────
+
+@app.post("/perfil/avaliacao/{snapshot_id}/renomear")
+@require_login
+async def perfil_snapshot_renomear(
+    request: Request,
+    session: Session = Depends(get_session),
+    snapshot_id: int = 0,
+    label: str = Form(""),
+    snapshot_date: str = Form(""),
+):
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        return RedirectResponse("/login", status_code=303)
+    snap = session.get(ClientSnapshot, int(snapshot_id))
+    if not snap or snap.company_id != ctx.company.id:
+        set_flash(request, "Avaliação não encontrada.")
+        return RedirectResponse("/perfil", status_code=303)
+    if label.strip():
+        setattr(snap, "label", label.strip()[:120])
+    if snapshot_date.strip():
+        setattr(snap, "snapshot_date", snapshot_date.strip())
+    session.add(snap)
+    session.commit()
+    set_flash(request, "Diagnóstico atualizado.")
+    referer = request.headers.get("referer", "/perfil")
+    return RedirectResponse(referer if "/perfil" in referer else "/perfil", status_code=303)
+
+
 # ── Rota POST /perfil/avaliacao/{snapshot_id}/excluir ────────────────────────
 
 @app.post("/perfil/avaliacao/{snapshot_id}/excluir")
