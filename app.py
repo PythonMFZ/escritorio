@@ -188,6 +188,7 @@ DIRECTDATA_TOKEN = os.getenv("DIRECTDATA_TOKEN")
 DIRECTDATA_SCR_URL = os.getenv("DIRECTDATA_SCR_URL") or "https://apiv3.directd.com.br/api/SCRBacenDetalhada"
 DIRECTDATA_ASYNC = os.getenv("DIRECTDATA_ASYNC", "1") == "1"
 DIRECTDATA_TIMEOUT_S = float(os.getenv("DIRECTDATA_TIMEOUT_S", "30"))
+DIRECTDATA_SALDO_ALERTA = int(os.getenv("DIRECTDATA_SALDO_ALERTA", "10"))  # alertar quando saldo <= N consultas
 CREDIT_CONSENT_MAX_DAYS = int(os.getenv("CREDIT_CONSENT_MAX_DAYS", "180"))
 
 CONTA_AZUL_CLIENT_ID = os.getenv("CONTA_AZUL_CLIENT_ID") or ""
@@ -24461,6 +24462,50 @@ async def _directdata_scr_request(*, document_type: str, document_value: str, co
     return resp.status_code, data if isinstance(data, dict) else None, msg
 
 
+def _directdata_verificar_saldo_e_alertar(meta: dict) -> None:
+    """Extrai créditos restantes do metaDados DirectData e alerta se baixo (fire-and-forget)."""
+    if not meta:
+        return
+    # DirectData retorna o saldo em campos variados dependendo da versão
+    saldo = None
+    for campo in ("creditosRestantes", "creditos_restantes", "saldoCreditos", "saldo", "quantidadeCreditos"):
+        v = meta.get(campo)
+        if v is not None:
+            try:
+                saldo = int(float(str(v)))
+                break
+            except Exception:
+                pass
+    if saldo is None:
+        return
+    if saldo > DIRECTDATA_SALDO_ALERTA:
+        return
+
+    # Monta alerta
+    msg = (f"⚠️ *Alerta DirectData*: saldo de consultas está em *{saldo}* "
+           f"(limite: {DIRECTDATA_SALDO_ALERTA}). Recarregue os créditos no painel DirectData.")
+
+    def _enviar():
+        try:
+            admin_phone = os.getenv("ADMIN_WHATSAPP_PHONE") or ""
+            if admin_phone:
+                import asyncio as _asyncio_dd
+                loop = _asyncio_dd.new_event_loop()
+                loop.run_until_complete(_try_send_whatsapp_text(admin_phone, msg))
+                loop.close()
+        except Exception:
+            pass
+        try:
+            admin_email = os.getenv("ADMIN_EMAIL") or ""
+            if admin_email:
+                _send_email(to=admin_email, subject="[DirectData] Saldo baixo de consultas", body=msg)
+        except Exception:
+            pass
+
+    import threading as _threading_dd
+    _threading_dd.Thread(target=_enviar, daemon=True).start()
+
+
 def _apply_directdata_response_to_report(report: "CreditReport", *, code: int, data: dict[str, Any] | None,
                                          msg: str) -> None:
     """Atualiza o CreditReport com a resposta Direct Data (sem commit)."""
@@ -24475,6 +24520,8 @@ def _apply_directdata_response_to_report(report: "CreditReport", *, code: int, d
 
     meta = data.get("metaDados") or {}
     ret = data.get("retorno") or {}
+
+    _directdata_verificar_saldo_e_alertar(meta)
 
     report.consulta_uid = str(meta.get("consultaUid") or report.consulta_uid)
     try:
