@@ -283,6 +283,42 @@ _SIDEBAR_HTML = r"""
   </div>
   {% endif %}
 
+  <!-- Escritório interno (apenas admin/equipe) -->
+  {% if role in ["admin", "equipe"] %}
+  <div class="sb-section">
+    <div class="sb-section-label">Escritório</div>
+    <a class="sb-link" href="/admin/financeiro" data-sbpath="/admin/financeiro" title="Financeiro Interno">
+      <span class="sb-icon">🏦</span><span class="sb-label">Financeiro Interno</span>
+    </a>
+    <a class="sb-link" href="/motor-ofertas" data-sbpath="/motor-ofertas" title="Motor de Ofertas">
+      <span class="sb-icon">⚙️</span><span class="sb-label">Motor de Ofertas</span>
+    </a>
+    <a class="sb-link" href="/admin/servicos-internos" data-sbpath="/admin/servicos-internos" title="Produtos Internos">
+      <span class="sb-icon">📦</span><span class="sb-label">Produtos Internos</span>
+    </a>
+    <a class="sb-link" href="/admin/parceiros" data-sbpath="/admin/parceiros" title="Parceiros">
+      <span class="sb-icon">🤝</span><span class="sb-label">Parceiros</span>
+    </a>
+    <a class="sb-link" href="/admin/agenda" data-sbpath="/admin/agenda" title="Agenda">
+      <span class="sb-icon">📆</span><span class="sb-label">Agenda</span>
+    </a>
+    {% if role == "admin" %}
+    <a class="sb-link" href="/admin/assinaturas" data-sbpath="/admin/assinaturas" title="Assinaturas">
+      <span class="sb-icon">💳</span><span class="sb-label">Assinaturas</span>
+    </a>
+    <a class="sb-link" href="/admin/pesquisas" data-sbpath="/admin/pesquisas" title="Pesquisas">
+      <span class="sb-icon">📊</span><span class="sb-label">Pesquisas</span>
+    </a>
+    <a class="sb-link" href="/admin/saude" data-sbpath="/admin/saude" title="Saúde do Sistema">
+      <span class="sb-icon">🩺</span><span class="sb-label">Saúde do Sistema</span>
+    </a>
+    <a class="sb-link" href="/admin/uso" data-sbpath="/admin/uso" title="Uso da Plataforma">
+      <span class="sb-icon">📈</span><span class="sb-label">Uso da Plataforma</span>
+    </a>
+    {% endif %}
+  </div>
+  {% endif %}
+
   <!-- Meu Time (gestor de cliente) -->
   {% if role == "cliente" %}
   <div class="sb-section">
