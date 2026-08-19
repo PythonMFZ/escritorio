@@ -251,8 +251,8 @@ _SIDEBAR_HTML = r"""
     <a class="sb-link" href="/admin/gestao" data-sbpath="/admin/gestao" title="Gestão Interna">
       <span class="sb-icon">⚙️</span><span class="sb-label">Gestão Interna</span>
     </a>
-    <a class="sb-link" href="/admin/financeiro" data-sbpath="/admin/financeiro" title="Atendimento Escritório">
-      <span class="sb-icon">🏦</span><span class="sb-label">Atendimento Escritório</span>
+    <a class="sb-link" href="/admin/whatsapp" data-sbpath="/admin/whatsapp" title="Atendimento Escritório">
+      <span class="sb-icon">💬</span><span class="sb-label">Atendimento Escritório</span>
     </a>
     <a class="sb-link" href="/admin/clientes" data-sbpath="/admin/clientes" title="Clientes">
       <span class="sb-icon">🏢</span><span class="sb-label">Clientes</span>
