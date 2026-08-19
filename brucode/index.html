@@ -8,9 +8,9 @@
   :root {
     --navy: #0C1A2E;
     --navy2: #162238;
-    --teal: #00B894;
-    --teal-dark: #009E82;
-    --blue: #3D5A80;
+    --teal: #2563EB;
+    --teal-dark: #1D4ED8;
+    --blue: #3B82F6;
     --white: #FFFFFF;
     --slate-bg: #F4F7FA;
     --border: #E2E8F0;
@@ -98,7 +98,7 @@
     position: absolute;
     inset: 0;
     background-image:
-      radial-gradient(circle at 60% 40%, rgba(0,184,148,0.08) 0%, transparent 55%),
+      radial-gradient(circle at 60% 40%, rgba(37,99,235,0.08) 0%, transparent 55%),
       linear-gradient(rgba(255,255,255,0.04) 1px, transparent 1px),
       linear-gradient(90deg, rgba(255,255,255,0.04) 1px, transparent 1px);
     background-size: auto, 48px 48px, 48px 48px;
@@ -209,7 +209,7 @@
     display: inline-flex;
     align-items: center;
     gap: 6px;
-    background: rgba(0,184,148,0.15);
+    background: rgba(37,99,235,0.15);
     color: var(--teal);
     font-size: 0.7rem;
     font-weight: 700;
@@ -218,7 +218,7 @@
     padding: 0.3rem 0.75rem;
     border-radius: 100px;
     margin-bottom: 1.25rem;
-    border: 1px solid rgba(0,184,148,0.25);
+    border: 1px solid rgba(37,99,235,0.25);
   }
 
   .panel-badge::before {
@@ -329,7 +329,7 @@
 
   .pillar-card:hover {
     box-shadow: 0 8px 24px rgba(0,0,0,0.06);
-    border-color: rgba(0,184,148,0.3);
+    border-color: rgba(37,99,235,0.3);
   }
 
   .pillar-num {
@@ -339,7 +339,7 @@
     color: var(--teal-dark);
     margin-bottom: 0.875rem;
     font-family: 'Inter', sans-serif;
-    background: rgba(0,184,148,0.08);
+    background: rgba(37,99,235,0.08);
     display: inline-block;
     padding: 0.2rem 0.5rem;
     border-radius: 4px;
@@ -382,13 +382,13 @@
   .produto-card:hover {
     box-shadow: 0 12px 32px rgba(0,0,0,0.08);
     transform: translateY(-3px);
-    border-color: rgba(0,184,148,0.35);
+    border-color: rgba(37,99,235,0.35);
   }
 
   .produto-icon {
     width: 44px;
     height: 44px;
-    background: rgba(0,184,148,0.08);
+    background: rgba(37,99,235,0.08);
     border-radius: 10px;
     display: flex;
     align-items: center;
@@ -450,7 +450,7 @@
     align-items: center;
     gap: 6px;
     color: var(--teal);
-    border: 1px solid rgba(0,184,148,0.4);
+    border: 1px solid rgba(37,99,235,0.4);
     padding: 0.55rem 1.1rem;
     border-radius: 8px;
     font-size: 0.83rem;
@@ -461,7 +461,7 @@
   }
 
   .btn-teal-outline:hover {
-    background: rgba(0,184,148,0.1);
+    background: rgba(37,99,235,0.1);
     border-color: var(--teal);
   }
 
@@ -485,7 +485,7 @@
 
   .servico-card:hover {
     box-shadow: 0 8px 24px rgba(0,0,0,0.06);
-    border-color: rgba(0,184,148,0.3);
+    border-color: rgba(37,99,235,0.3);
   }
 
   .servico-card.featured {
@@ -496,7 +496,7 @@
   .servico-icon {
     width: 40px;
     height: 40px;
-    background: rgba(0,184,148,0.08);
+    background: rgba(37,99,235,0.08);
     border-radius: 9px;
     display: flex;
     align-items: center;
@@ -506,7 +506,7 @@
   }
 
   .servico-card.featured .servico-icon {
-    background: rgba(0,184,148,0.15);
+    background: rgba(37,99,235,0.15);
     color: var(--teal);
   }
 
@@ -548,7 +548,7 @@
 
   .projetos-grid {
     display: grid;
-    grid-template-columns: repeat(2, 1fr);
+    grid-template-columns: repeat(3, 1fr);
     gap: 1.25rem;
   }
 
@@ -708,8 +708,8 @@
   }
 
   .accordion-item.open .accordion-toggle {
-    background: rgba(0,184,148,0.15);
-    border-color: rgba(0,184,148,0.35);
+    background: rgba(37,99,235,0.15);
+    border-color: rgba(37,99,235,0.35);
     color: var(--teal);
   }
 
@@ -880,11 +880,22 @@
 <!-- NAV -->
 <nav>
   <a href="#inicio" class="nav-logo">
-    <svg width="130" height="36" viewBox="0 0 130 36" fill="none" xmlns="http://www.w3.org/2000/svg">
-      <rect width="36" height="36" rx="8" fill="#00B894"/>
-      <text x="7" y="26" font-family="Barlow Condensed, sans-serif" font-size="22" font-weight="800" fill="#0C1A2E">BC</text>
-      <text x="44" y="24" font-family="Barlow Condensed, sans-serif" font-size="20" font-weight="800" fill="white" letter-spacing="1">BRUCODE</text>
-      <text x="44" y="33" font-family="Inter, sans-serif" font-size="7.5" font-weight="400" fill="rgba(255,255,255,0.45)" letter-spacing="2.5">TECHNOLOGIES</text>
+    <svg width="170" height="40" viewBox="0 0 170 40" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <!-- Circuit traces -->
+      <circle cx="8" cy="20" r="3" fill="none" stroke="rgba(255,255,255,0.7)" stroke-width="1.5"/>
+      <circle cx="8" cy="10" r="2" fill="none" stroke="rgba(255,255,255,0.5)" stroke-width="1.2"/>
+      <circle cx="8" cy="30" r="2" fill="none" stroke="rgba(255,255,255,0.5)" stroke-width="1.2"/>
+      <line x1="11" y1="20" x2="20" y2="20" stroke="rgba(255,255,255,0.7)" stroke-width="1.5"/>
+      <line x1="10" y1="10" x2="20" y2="10" stroke="rgba(255,255,255,0.5)" stroke-width="1.2"/>
+      <line x1="10" y1="30" x2="20" y2="30" stroke="rgba(255,255,255,0.5)" stroke-width="1.2"/>
+      <line x1="20" y1="10" x2="20" y2="30" stroke="rgba(255,255,255,0.5)" stroke-width="1.2"/>
+      <line x1="20" y1="15" x2="26" y2="15" stroke="rgba(255,255,255,0.4)" stroke-width="1"/>
+      <line x1="20" y1="25" x2="26" y2="25" stroke="rgba(255,255,255,0.4)" stroke-width="1"/>
+      <circle cx="26" cy="15" r="1.5" fill="rgba(255,255,255,0.5)"/>
+      <circle cx="26" cy="25" r="1.5" fill="rgba(255,255,255,0.5)"/>
+      <!-- Text -->
+      <text x="34" y="26" font-family="Barlow Condensed, sans-serif" font-size="22" font-weight="800" fill="white" letter-spacing="1">BRUCODE</text>
+      <text x="34" y="36" font-family="Inter, sans-serif" font-size="7" font-weight="500" fill="rgba(255,255,255,0.45)" letter-spacing="3">TECHNOLOGY</text>
     </svg>
   </a>
   <ul class="nav-links">
@@ -1024,7 +1035,7 @@
       <h3>Watersoft</h3>
       <p>Monitoramento de poços artesianos e estações de tratamento. Leitura remota de sensores, histórico de vazão, alarmes e dashboard operacional.</p>
     </div>
-    <div class="produto-cta-card" style="grid-column: span 3 / span 3; display: flex; flex-direction: row; align-items: center; justify-content: space-between; gap: 2rem; min-height: auto; padding: 1.5rem 2rem;">
+    <div class="produto-cta-card" style="grid-column: 1 / -1; display: flex; flex-direction: row; align-items: center; justify-content: space-between; gap: 2rem; min-height: auto; padding: 1.5rem 2rem;">
       <div>
         <h3 style="margin-bottom: 0.4rem;">Precisa de algo assim, para o seu setor?</h3>
         <p style="margin-bottom: 0;">Podemos adaptar qualquer produto ao seu processo, ou desenvolver do zero.</p>
@@ -1107,6 +1118,22 @@
           <span class="pill">Santa Catarina</span>
         </div>
         <a href="https://scconvenios.com.br" target="_blank" class="projeto-link">scconvenios.com.br →</a>
+      </div>
+    </div>
+
+    <div class="projeto-card">
+      <div class="projeto-header-bar" style="background: linear-gradient(90deg, #7C3AED, #A855F7);"></div>
+      <div class="projeto-body">
+        <div class="projeto-tag">Royalties · Web + App</div>
+        <h3>R10 Flow</h3>
+        <div class="projeto-sub">Gestão de royalties para marcas</div>
+        <p>Plataforma de controle e distribuição de royalties para redes de franquias e marcas licenciadas. Cálculo automatizado, relatórios por unidade, histórico de repasses e painel do licenciado com visibilidade em tempo real.</p>
+        <div class="projeto-pills">
+          <span class="pill">Gestão de royalties</span>
+          <span class="pill">Franquias</span>
+          <span class="pill">Licenciamento de marcas</span>
+          <span class="pill">Relatórios automáticos</span>
+        </div>
       </div>
     </div>
 
