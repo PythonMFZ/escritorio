@@ -24,21 +24,38 @@ if "educacao" not in FEATURE_STANDALONE:
     FEATURE_STANDALONE.append("educacao")
 
 # Ocultar barra de abas do dashboard (conteúdo migrado para a sidebar)
-_TAB_OPEN  = "{% if tabs %}"
-_TAB_CLOSE = "{% endif %}"
+# Usa contagem de profundidade para encontrar o {% endif %} correto que
+# fecha o bloco {% if tabs %}, ignorando {% if %} aninhados dentro dele.
 
 def _remove_tabs_block(tpl: str) -> str:
-    start = tpl.find(_TAB_OPEN)
+    marker = "{% if tabs %}"
+    start = tpl.find(marker)
     if start == -1:
         return tpl
-    end = tpl.find(_TAB_CLOSE, start)
-    if end == -1:
-        return tpl
-    end += len(_TAB_CLOSE)
-    return tpl[:start] + tpl[end:]
+
+    depth = 1
+    pos = start + len(marker)
+    while pos < len(tpl) and depth > 0:
+        next_if    = tpl.find("{%", pos)
+        if next_if == -1:
+            break
+        tag_end = tpl.find("%}", next_if)
+        if tag_end == -1:
+            break
+        tag_body = tpl[next_if + 2 : tag_end].strip()
+        if tag_body.startswith("if ") or tag_body == "if":
+            depth += 1
+        elif tag_body == "endif":
+            depth -= 1
+            if depth == 0:
+                end = tag_end + 2  # after "%}"
+                return tpl[:start] + tpl[end:]
+        pos = tag_end + 2
+
+    return tpl  # não encontrou o fechamento, não altera
 
 _dash_tpl = TEMPLATES.get("dashboard.html", "")
-if _dash_tpl and _TAB_OPEN in _dash_tpl:
+if _dash_tpl and "{% if tabs %}" in _dash_tpl:
     _dash_tpl = _remove_tabs_block(_dash_tpl)
     TEMPLATES["dashboard.html"] = _dash_tpl
     if hasattr(templates_env.loader, "mapping"):
