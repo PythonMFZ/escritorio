@@ -136,6 +136,65 @@ _SIDEBAR_HTML = r"""
     </a>
   </div>
 
+  <!-- Minha Empresa -->
+  <div class="sb-section">
+    <div class="sb-section-label">Minha Empresa</div>
+    <a class="sb-link" href="/empresa" data-sbpath="/empresa" title="Empresa">
+      <span class="sb-icon">🏢</span><span class="sb-label">Empresa</span>
+    </a>
+    <a class="sb-link" href="/financeiro" data-sbpath="/financeiro" title="Financeiro">
+      <span class="sb-icon">📄</span><span class="sb-label">Financeiro</span>
+    </a>
+    <a class="sb-link" href="/documentos" data-sbpath="/documentos" title="Documentos">
+      <span class="sb-icon">📁</span><span class="sb-label">Documentos</span>
+    </a>
+    <a class="sb-link" href="/planos" data-sbpath="/planos" title="Planos">
+      <span class="sb-icon">📦</span><span class="sb-label">Planos</span>
+    </a>
+    <a class="sb-link" href="/minha-assinatura" data-sbpath="/minha-assinatura" title="Assinatura">
+      <span class="sb-icon">⭐</span><span class="sb-label">Assinatura</span>
+    </a>
+  </div>
+
+  <!-- Diagnóstico -->
+  <div class="sb-section">
+    <div class="sb-section-label">Diagnóstico</div>
+    <a class="sb-link" href="/perfil" data-sbpath="/perfil" title="Diagnóstico Financeiro">
+      <span class="sb-icon">🩺</span><span class="sb-label">Diagnóstico Financeiro</span>
+    </a>
+    <a class="sb-link" href="/consultas" data-sbpath="/consultas" title="Consultas de Risco">
+      <span class="sb-icon">🔍</span><span class="sb-label">Consultas de Risco</span>
+    </a>
+    <a class="sb-link" href="/construrisk" data-sbpath="/construrisk" title="ConstruRisk">
+      <span class="sb-icon">🏗️</span><span class="sb-label">ConstruRisk</span>
+    </a>
+  </div>
+
+  <!-- Soluções -->
+  <div class="sb-section">
+    <div class="sb-section-label">Soluções</div>
+    <a class="sb-link" href="/ofertas" data-sbpath="/ofertas" title="Ofertas">
+      <span class="sb-icon">💡</span><span class="sb-label">Ofertas</span>
+    </a>
+    <a class="sb-link" href="/simulador" data-sbpath="/simulador" title="Simulador">
+      <span class="sb-icon">🧮</span><span class="sb-label">Simulador</span>
+    </a>
+    <a class="sb-link" href="/propostas" data-sbpath="/propostas" title="Propostas">
+      <span class="sb-icon">📋</span><span class="sb-label">Propostas</span>
+    </a>
+  </div>
+
+  <!-- Ferramentas -->
+  <div class="sb-section">
+    <div class="sb-section-label">Ferramentas</div>
+    <a class="sb-link" href="/ferramentas" data-sbpath="/ferramentas" title="Ferramentas">
+      <span class="sb-icon">🔧</span><span class="sb-label">Ferramentas</span>
+    </a>
+    <a class="sb-link" href="/educacao" data-sbpath="/educacao" title="Educação">
+      <span class="sb-icon">🎓</span><span class="sb-label">Educação</span>
+    </a>
+  </div>
+
   <!-- Gestão -->
   {% if role in ["admin", "equipe"] %}
   <div class="sb-section">
@@ -204,11 +263,6 @@ _SIDEBAR_HTML = r"""
     <a class="sb-link" href="/consultoria" data-sbpath="/consultoria" title="Consultoria">
       <span class="sb-icon">🤝</span><span class="sb-label">Consultoria</span>
     </a>
-    {% if role in ["admin", "equipe"] %}
-    <a class="sb-link" href="/ferramentas" data-sbpath="/ferramentas" title="Ferramentas">
-      <span class="sb-icon">🔧</span><span class="sb-label">Ferramentas</span>
-    </a>
-    {% endif %}
   </div>
 
   <!-- Administração -->

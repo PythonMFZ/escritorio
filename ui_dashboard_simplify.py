@@ -23,5 +23,27 @@ FEATURE_GROUPS[:] = [g for g in FEATURE_GROUPS if g.get("key") not in _REMOVE_KE
 if "educacao" not in FEATURE_STANDALONE:
     FEATURE_STANDALONE.append("educacao")
 
-print(f"[dashboard_simplify] ✅ Abas: {[g['key'] for g in FEATURE_GROUPS]}")
+# Ocultar barra de abas do dashboard (conteúdo migrado para a sidebar)
+_TAB_OPEN  = "{% if tabs %}"
+_TAB_CLOSE = "{% endif %}"
+
+def _remove_tabs_block(tpl: str) -> str:
+    start = tpl.find(_TAB_OPEN)
+    if start == -1:
+        return tpl
+    end = tpl.find(_TAB_CLOSE, start)
+    if end == -1:
+        return tpl
+    end += len(_TAB_CLOSE)
+    return tpl[:start] + tpl[end:]
+
+_dash_tpl = TEMPLATES.get("dashboard.html", "")
+if _dash_tpl and _TAB_OPEN in _dash_tpl:
+    _dash_tpl = _remove_tabs_block(_dash_tpl)
+    TEMPLATES["dashboard.html"] = _dash_tpl
+    if hasattr(templates_env.loader, "mapping"):
+        templates_env.loader.mapping["dashboard.html"] = _dash_tpl
+    print("[dashboard_simplify] ✅ Barra de abas removida do dashboard")
+
+print(f"[dashboard_simplify] ✅ Abas mantidas (permissões): {[g['key'] for g in FEATURE_GROUPS]}")
 print(f"[dashboard_simplify] ✅ Acesso rápido: {FEATURE_STANDALONE}")
