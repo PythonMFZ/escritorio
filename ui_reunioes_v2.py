@@ -117,7 +117,7 @@ TEMPLATES["reunioes_pauta.html"] = r"""
 
   {% if flash %}<div class="alert alert-info py-2">{{ flash }}</div>{% endif %}
 
-  {% if role in ['admin','equipe'] %}
+  {% if role in ['admin','equipe','cliente'] %}
   <form method="post" action="/reunioes/{{ meeting.id }}/pauta" class="mb-4">
     <div class="input-group">
       <input type="text" name="texto" class="form-control" placeholder="Novo item de pauta..." required maxlength="300">
@@ -136,7 +136,7 @@ TEMPLATES["reunioes_pauta.html"] = r"""
       <span {% if item.discutido %}style="text-decoration:line-through;opacity:.6"{% endif %}>
         {{ item.texto }}
       </span>
-      {% if role in ['admin','equipe'] %}
+      {% if role in ['admin','equipe','cliente'] %}
       <div class="d-flex gap-1 flex-shrink-0">
         <form method="post" action="/reunioes/{{ meeting.id }}/pauta/{{ item.id }}/toggle">
           <button class="btn btn-sm {% if item.discutido %}btn-outline-secondary{% else %}btn-outline-success{% endif %}" title="{% if item.discutido %}Marcar como pendente{% else %}Marcar como discutido{% endif %}">
@@ -164,14 +164,14 @@ TEMPLATES["reunioes_acoes.html"] = r"""
     <a href="/reunioes/{{ meeting.id }}" class="btn btn-sm btn-outline-secondary">← Reunião</a>
     <h5 class="mb-0">Ações — {{ meeting.title or 'Reunião' }}</h5>
     {% if meeting.meeting_date %}<span class="badge bg-secondary">{{ meeting.meeting_date }}</span>{% endif %}
-    {% if role in ['admin','equipe'] %}
+    {% if role in ['admin','equipe','cliente'] %}
     <a href="/reunioes/{{ meeting.id }}/participantes" class="btn btn-sm btn-outline-secondary ms-auto">👥 Participantes</a>
     {% endif %}
   </div>
 
   {% if flash %}<div class="alert alert-info py-2">{{ flash }}</div>{% endif %}
 
-  {% if role in ['admin','equipe'] %}
+  {% if role in ['admin','equipe','cliente'] %}
   <div class="card mb-4 p-3">
     <h6 class="mb-3">Nova ação corretiva</h6>
     <form method="post" action="/reunioes/{{ meeting.id }}/acoes">
@@ -232,7 +232,7 @@ TEMPLATES["reunioes_acoes.html"] = r"""
           </div>
         </div>
         <div class="d-flex gap-1 align-items-start flex-shrink-0">
-          {% if role in ['admin','equipe'] %}
+          {% if role in ['admin','equipe','cliente'] %}
           <form method="post" action="/acoes/{{ a.id }}/status" class="d-flex gap-1">
             <select name="status" class="form-select form-select-sm" style="width:auto" onchange="this.form.submit()">
               {% for s in ['aberta','em_andamento','concluida','cancelada'] %}
@@ -361,7 +361,7 @@ async def rv2_pauta_get(request: Request, session: Session = Depends(get_session
 
 
 @app.post("/reunioes/{meeting_id}/pauta")
-@require_role({"admin", "equipe"})
+@require_role({"admin", "equipe", "cliente"})
 async def rv2_pauta_post(request: Request, session: Session = Depends(get_session),
                          meeting_id: int = 0, texto: str = _Form_rv2("")):
     ctx = get_tenant_context(request, session)
@@ -384,7 +384,7 @@ async def rv2_pauta_post(request: Request, session: Session = Depends(get_sessio
 
 
 @app.post("/reunioes/{meeting_id}/pauta/{pauta_id}/toggle")
-@require_role({"admin", "equipe"})
+@require_role({"admin", "equipe", "cliente"})
 async def rv2_pauta_toggle(request: Request, session: Session = Depends(get_session),
                             meeting_id: int = 0, pauta_id: int = 0):
     ctx = get_tenant_context(request, session)
@@ -401,7 +401,7 @@ async def rv2_pauta_toggle(request: Request, session: Session = Depends(get_sess
 
 
 @app.post("/reunioes/{meeting_id}/pauta/{pauta_id}/delete")
-@require_role({"admin", "equipe"})
+@require_role({"admin", "equipe", "cliente"})
 async def rv2_pauta_delete(request: Request, session: Session = Depends(get_session),
                             meeting_id: int = 0, pauta_id: int = 0):
     ctx = get_tenant_context(request, session)
@@ -438,7 +438,7 @@ async def rv2_acoes_get(request: Request, session: Session = Depends(get_session
 
     # Membros da empresa para dropdown de responsável
     membros = []
-    if ctx.membership.role in {"admin", "equipe"}:
+    if ctx.membership.role in {"admin", "equipe", "cliente"}:
         mships = session.exec(_select_rv2(Membership).where(Membership.company_id == ctx.company.id)).all()
         for ms in mships:
             u = session.get(User, ms.user_id)
@@ -456,7 +456,7 @@ async def rv2_acoes_get(request: Request, session: Session = Depends(get_session
 
 
 @app.post("/reunioes/{meeting_id}/acoes")
-@require_role({"admin", "equipe"})
+@require_role({"admin", "equipe", "cliente"})
 async def rv2_acoes_post(
     request: Request,
     session: Session = Depends(get_session),
@@ -506,7 +506,7 @@ async def rv2_acoes_post(
 
 
 @app.post("/acoes/{acao_id}/status")
-@require_role({"admin", "equipe"})
+@require_role({"admin", "equipe", "cliente"})
 async def rv2_acao_status(
     request: Request,
     session: Session = Depends(get_session),
@@ -532,7 +532,7 @@ async def rv2_acao_status(
 
 
 @app.post("/acoes/{acao_id}/delete")
-@require_role({"admin", "equipe"})
+@require_role({"admin", "equipe", "cliente"})
 async def rv2_acao_delete(request: Request, session: Session = Depends(get_session), acao_id: int = 0):
     ctx = get_tenant_context(request, session)
     assert ctx
@@ -667,7 +667,7 @@ except Exception as _e_rv2_patch:
 # ── Patch dashboard: widget de ações abertas para admin/equipe ────────────────
 
 _RV2_WIDGET = r"""
-  {%- if role in ["admin","equipe"] and acoes_abertas_total is defined %}
+  {%- if role in ["admin","equipe","cliente"] and acoes_abertas_total is defined %}
   <div class="col-12">
     <div class="card p-3" style="border-left:4px solid #f0ad4e;">
       <div class="d-flex justify-content-between align-items-center">

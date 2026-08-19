@@ -678,7 +678,7 @@ async def orcamento_deletar_conta(acc_id: int, request: Request, session: Sessio
 @require_login
 async def orcamento_limpar_contas(request: Request, session: Session = Depends(get_session)):
     ctx = get_tenant_context(request, session)
-    if not ctx or ctx.membership.role not in ("admin", "equipe"):
+    if not ctx or ctx.membership.role not in ("admin", "equipe", "cliente"):
         return JSONResponse({"ok": False, "msg": "Sem permissão"}, status_code=403)
     client_id = get_active_client_id(request, session, ctx)
     from sqlalchemy import delete as _sa_delete
@@ -710,7 +710,7 @@ async def orcamento_reordenar(request: Request, session: Session = Depends(get_s
 @require_login
 async def orcamento_importar_modelo(request: Request, session: Session = Depends(get_session)):
     ctx = get_tenant_context(request, session)
-    if not ctx or ctx.membership.role not in ("admin", "equipe"):
+    if not ctx or ctx.membership.role not in ("admin", "equipe", "cliente"):
         return JSONResponse({"ok": False, "msg": "Sem permissão"}, status_code=403)
     client_id = get_active_client_id(request, session, ctx)
 
@@ -766,7 +766,7 @@ async def orcamento_importar_excel(
         modo: str = Form("mesclar"),
         session: Session = Depends(get_session)):
     ctx = get_tenant_context(request, session)
-    if not ctx or ctx.membership.role not in ("admin", "equipe"):
+    if not ctx or ctx.membership.role not in ("admin", "equipe", "cliente"):
         return JSONResponse({"ok": False, "msg": "Sem permissão"}, status_code=403)
     client_id = get_active_client_id(request, session, ctx)
 

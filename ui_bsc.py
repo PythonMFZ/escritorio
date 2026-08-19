@@ -159,7 +159,7 @@ def _bsc_score_cliente(session, company_id, client_id):
 @require_login
 async def bsc_lista(request: Request, session: Session = Depends(get_session)):
     ctx = get_tenant_context(request, session)
-    if not ctx or ctx.membership.role not in ("admin", "equipe"):
+    if not ctx or ctx.membership.role not in ("admin", "equipe", "cliente"):
         return RedirectResponse("/", status_code=303)
 
     clientes = session.exec(select(Client).where(Client.company_id == ctx.company.id)).all()
@@ -183,7 +183,7 @@ async def bsc_lista(request: Request, session: Session = Depends(get_session)):
 @require_login
 async def bsc_seed(client_id: int, request: Request, session: Session = Depends(get_session)):
     ctx = get_tenant_context(request, session)
-    if not ctx or ctx.membership.role not in ("admin", "equipe"):
+    if not ctx or ctx.membership.role not in ("admin", "equipe", "cliente"):
         return RedirectResponse("/", status_code=303)
     existentes = session.exec(select(BSCPerspectiva).where(
         BSCPerspectiva.company_id == ctx.company.id,
@@ -202,7 +202,7 @@ async def bsc_seed(client_id: int, request: Request, session: Session = Depends(
 @require_login
 async def bsc_painel(client_id: int, request: Request, session: Session = Depends(get_session)):
     ctx = get_tenant_context(request, session)
-    if not ctx or ctx.membership.role not in ("admin", "equipe"):
+    if not ctx or ctx.membership.role not in ("admin", "equipe", "cliente"):
         return RedirectResponse("/", status_code=303)
 
     cliente = session.get(Client, client_id)
@@ -271,7 +271,7 @@ async def bsc_criar_objetivo(
     descricao: str = Form(""), peso: float = Form(1.0),
 ):
     ctx = get_tenant_context(request, session)
-    if not ctx or ctx.membership.role not in ("admin", "equipe"):
+    if not ctx or ctx.membership.role not in ("admin", "equipe", "cliente"):
         return RedirectResponse("/", status_code=303)
     session.add(BSCObjetivo(
         company_id=ctx.company.id, client_id=client_id,
@@ -280,6 +280,8 @@ async def bsc_criar_objetivo(
     ))
     session.commit()
     set_flash(request, f"Objetivo '{titulo}' criado.")
+    if ctx.membership.role == "cliente":
+        return RedirectResponse("/cliente/bsc", status_code=303)
     return RedirectResponse(f"/ferramentas/bsc/{client_id}", status_code=303)
 
 
@@ -287,7 +289,7 @@ async def bsc_criar_objetivo(
 @require_login
 async def bsc_del_objetivo(obj_id: int, request: Request, session: Session = Depends(get_session)):
     ctx = get_tenant_context(request, session)
-    if not ctx or ctx.membership.role not in ("admin", "equipe"):
+    if not ctx or ctx.membership.role not in ("admin", "equipe", "cliente"):
         return RedirectResponse("/", status_code=303)
     obj = session.get(BSCObjetivo, obj_id)
     if obj and obj.company_id == ctx.company.id:
@@ -307,7 +309,7 @@ async def bsc_criar_indicador(
     tol_amarelo: float = Form(10.0), tol_vermelho: float = Form(25.0),
 ):
     ctx = get_tenant_context(request, session)
-    if not ctx or ctx.membership.role not in ("admin", "equipe"):
+    if not ctx or ctx.membership.role not in ("admin", "equipe", "cliente"):
         return RedirectResponse("/", status_code=303)
     session.add(BSCIndicador(
         company_id=ctx.company.id, client_id=client_id, objetivo_id=objetivo_id,
@@ -316,6 +318,8 @@ async def bsc_criar_indicador(
     ))
     session.commit()
     set_flash(request, f"Indicador '{nome}' criado.")
+    if ctx.membership.role == "cliente":
+        return RedirectResponse("/cliente/bsc", status_code=303)
     return RedirectResponse(f"/ferramentas/bsc/{client_id}", status_code=303)
 
 
@@ -323,7 +327,7 @@ async def bsc_criar_indicador(
 @require_login
 async def bsc_del_indicador(ind_id: int, request: Request, session: Session = Depends(get_session)):
     ctx = get_tenant_context(request, session)
-    if not ctx or ctx.membership.role not in ("admin", "equipe"):
+    if not ctx or ctx.membership.role not in ("admin", "equipe", "cliente"):
         return RedirectResponse("/", status_code=303)
     ind = session.get(BSCIndicador, ind_id)
     if ind and ind.company_id == ctx.company.id:
@@ -341,7 +345,7 @@ async def bsc_lancar(
     valor: float = Form(...), notas: str = Form(""),
 ):
     ctx = get_tenant_context(request, session)
-    if not ctx or ctx.membership.role not in ("admin", "equipe"):
+    if not ctx or ctx.membership.role not in ("admin", "equipe", "cliente"):
         return RedirectResponse("/", status_code=303)
     ind = session.get(BSCIndicador, indicador_id)
     if not ind or ind.company_id != ctx.company.id:
@@ -365,6 +369,8 @@ async def bsc_lancar(
         ))
     session.commit()
     set_flash(request, f"Valor registrado para {periodo}.")
+    if ctx.membership.role == "cliente":
+        return RedirectResponse("/cliente/bsc", status_code=303)
     return RedirectResponse(f"/ferramentas/bsc/{ind.client_id}", status_code=303)
 
 

@@ -134,7 +134,20 @@ TEMPLATES["cliente_bsc.html"] = r"""
           <div class="muted small py-2">Nenhum objetivo configurado.</div>
         {% endif %}
         {% for ob in bloco.objetivos %}
-        <div class="obj-title">{{ ob.obj.titulo }}</div>
+        <div class="obj-title d-flex justify-content-between align-items-center">
+          <span>{{ ob.obj.titulo }}</span>
+          <button class="btn btn-link btn-sm p-0 text-muted" style="font-size:.75rem"
+            onclick="bscToggleForm('ind-form-{{ ob.obj.id }}')">+ Indicador</button>
+        </div>
+        <div id="ind-form-{{ ob.obj.id }}" style="display:none;margin-bottom:.5rem;">
+          <form method="post" action="/ferramentas/bsc/{{ cliente.id }}/indicador" class="d-flex flex-wrap gap-1 mt-1">
+            <input type="hidden" name="objetivo_id" value="{{ ob.obj.id }}">
+            <input name="nome" placeholder="Nome do indicador" class="form-control form-control-sm" style="min-width:120px;flex:1" required>
+            <input name="unidade" placeholder="Unidade" class="form-control form-control-sm" style="width:70px">
+            <input name="meta_valor" placeholder="Meta" type="number" step="any" class="form-control form-control-sm" style="width:70px" required>
+            <button type="submit" class="btn btn-sm btn-primary">Salvar</button>
+          </form>
+        </div>
         {% for ii in ob.indicadores %}
         <div class="kpi-row">
           <div class="d-flex align-items-center gap-2">
@@ -146,6 +159,16 @@ TEMPLATES["cliente_bsc.html"] = r"""
             {% else %}
               <span class="kpi-meta">— sem dados</span>
             {% endif %}
+            <button class="btn btn-link btn-sm p-0 ms-auto text-muted" style="font-size:.7rem"
+              onclick="bscToggleForm('lanc-{{ ii.ind.id }}')">+ Valor</button>
+          </div>
+          <div id="lanc-{{ ii.ind.id }}" style="display:none;margin-top:.25rem;">
+            <form method="post" action="/api/bsc/lancamento" class="d-flex gap-1">
+              <input type="hidden" name="indicador_id" value="{{ ii.ind.id }}">
+              <input name="periodo" type="month" class="form-control form-control-sm" style="width:130px" required>
+              <input name="valor" type="number" step="any" placeholder="Valor" class="form-control form-control-sm" style="width:90px" required>
+              <button type="submit" class="btn btn-sm btn-success">OK</button>
+            </form>
           </div>
           {% if ii.realizado is not none %}
           <div class="prog-track">
@@ -164,6 +187,18 @@ TEMPLATES["cliente_bsc.html"] = r"""
         </div>
         {% endfor %}
         {% endfor %}
+        <!-- Novo objetivo -->
+        <div class="mt-2 pt-2 border-top">
+          <button class="btn btn-link btn-sm p-0 text-muted" style="font-size:.75rem"
+            onclick="bscToggleForm('obj-form-{{ p.id }}')">+ Objetivo</button>
+          <div id="obj-form-{{ p.id }}" style="display:none;margin-top:.4rem;">
+            <form method="post" action="/ferramentas/bsc/{{ cliente.id }}/objetivo" class="d-flex gap-1">
+              <input type="hidden" name="perspectiva_id" value="{{ p.id }}">
+              <input name="titulo" placeholder="Título do objetivo" class="form-control form-control-sm" style="flex:1" required>
+              <button type="submit" class="btn btn-sm btn-primary">Salvar</button>
+            </form>
+          </div>
+        </div>
       </div>
     </div>
   </div>
@@ -197,6 +232,12 @@ TEMPLATES["cliente_bsc.html"] = r"""
 {% endif %}
 
 {% endif %}
+<script>
+function bscToggleForm(id) {
+  var el = document.getElementById(id);
+  if (el) el.style.display = el.style.display === 'none' ? 'block' : 'none';
+}
+</script>
 {% endblock %}
 """
 
