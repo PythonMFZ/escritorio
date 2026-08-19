@@ -44415,10 +44415,10 @@ TEMPLATES["meetings_detail.html"] = r"""
     </div>
 
     <div class="d-flex gap-2 flex-wrap">
-      <a class="btn btn-outline-secondary" href="/reunioes">Voltar</a>
+      <a class="btn btn-outline-secondary" href="{% if role == 'cliente' %}/cliente/reunioes{% else %}/reunioes{% endif %}">Voltar</a>
       <a class="btn btn-outline-info" href="/reunioes/{{ meeting.id }}/pauta">📋 Pauta</a>
       <a class="btn btn-outline-warning" href="/reunioes/{{ meeting.id }}/acoes">⚡ Ações</a>
-      {% if role in ["admin","equipe"] %}
+      {% if role in ["admin","equipe","cliente"] %}
         <a class="btn btn-outline-secondary" href="/reunioes/{{ meeting.id }}/participantes">👥 Participantes</a>
         <form method="post" action="/reunioes/{{ meeting.id }}/checkin">
           <button class="btn btn-outline-success" type="submit">Check-in</button>
@@ -44474,7 +44474,7 @@ TEMPLATES["meetings_detail.html"] = r"""
     </div>
     {% endif %}
 
-    {% if meta.client_annotation_text or role in ["admin","equipe"] %}
+    {% if meta.client_annotation_text or role in ["admin","equipe","cliente"] %}
     <div class="col-lg-6">
       <div class="card p-3 h-100">
         <div class="d-flex justify-content-between align-items-start gap-2">
@@ -44500,6 +44500,20 @@ TEMPLATES["meetings_detail.html"] = r"""
         </div>
         <div class="col-lg-6">
           <label class="form-label">Anotações visíveis ao cliente</label>
+          <textarea class="form-control" name="client_annotation_text" rows="5">{{ meta.client_annotation_text or "" }}</textarea>
+        </div>
+      </div>
+      <div class="mt-3">
+        <button class="btn btn-primary">Salvar anotações</button>
+      </div>
+    </form>
+  </div>
+  {% elif role == "cliente" %}
+  <div class="card p-3 mb-3">
+    <h6 class="mb-2">Minhas anotações</h6>
+    <form method="post" action="/reunioes/{{ meeting.id }}/anotacoes">
+      <div class="row g-3">
+        <div class="col-12">
           <textarea class="form-control" name="client_annotation_text" rows="5">{{ meta.client_annotation_text or "" }}</textarea>
         </div>
       </div>
@@ -44801,7 +44815,7 @@ async def crm_mark_lost(
 
 
 @app.post("/reunioes/{meeting_id}/anotacoes")
-@require_role({"admin", "equipe"})
+@require_role({"admin", "equipe", "cliente"})
 async def meetings_save_annotations(
         request: Request,
         meeting_id: int,
@@ -44827,9 +44841,12 @@ async def meetings_save_annotations(
         else:
             internal_annotation_text = legacy_text
 
-    meta["internal_annotation_text"] = (internal_annotation_text or "").strip()
-    meta["client_annotation_text"] = (client_annotation_text or "").strip()
-    meta["visible_to_client"] = bool(meta["client_annotation_text"])
+    if ctx.membership.role == "cliente":
+        meta["client_annotation_text"] = (client_annotation_text or "").strip()
+    else:
+        meta["internal_annotation_text"] = (internal_annotation_text or "").strip()
+        meta["client_annotation_text"] = (client_annotation_text or "").strip()
+    meta["visible_to_client"] = bool(meta.get("client_annotation_text"))
 
     _meeting_meta_save(session, mt, meta)
     set_flash(request, "Anotações salvas.")
@@ -44837,7 +44854,7 @@ async def meetings_save_annotations(
 
 
 @app.post("/reunioes/{meeting_id}/checkin")
-@require_role({"admin", "equipe"})
+@require_role({"admin", "equipe", "cliente"})
 async def meetings_checkin(
         request: Request,
         meeting_id: int,
@@ -44858,7 +44875,7 @@ async def meetings_checkin(
 
 
 @app.post("/reunioes/{meeting_id}/checkout")
-@require_role({"admin", "equipe"})
+@require_role({"admin", "equipe", "cliente"})
 async def meetings_checkout(
         request: Request,
         meeting_id: int,

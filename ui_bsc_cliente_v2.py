@@ -262,9 +262,9 @@ try:
     @app.get("/cliente/bsc", response_class=_HTML_bscv2)
     @require_login
     async def cliente_bsc_v2(request: _Req_bscv2, session: _Sess_bscv2 = _Dep_bscv2(get_session)):
+        from fastapi.responses import RedirectResponse as _RR
         ctx = get_tenant_context(request, session)
         if not ctx:
-            from fastapi.responses import RedirectResponse as _RR
             return _RR("/login", status_code=303)
 
         client_id = None
@@ -281,6 +281,11 @@ try:
                     client_id = cl.id
         except Exception:
             pass
+
+        if client_id:
+            return _RR(f"/ferramentas/bsc/{client_id}", status_code=303)
+        # fallback: no client_id found
+        client_id = None  # reset for legacy path below
 
         base_ctx = {
             "current_user": ctx.user,
@@ -414,7 +419,7 @@ try:
                 ))
             session.commit()
 
-        return _RR_seed("/cliente/bsc", status_code=303)
+        return _RR_seed(f"/ferramentas/bsc/{client_id}", status_code=303)
 
 except Exception as _e_bscv2:
     print(f"[bsc_cliente_v2] ⚠️ Erro ao registrar rota: {_e_bscv2}")
