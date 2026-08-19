@@ -280,8 +280,6 @@ async def bsc_criar_objetivo(
     ))
     session.commit()
     set_flash(request, f"Objetivo '{titulo}' criado.")
-    if ctx.membership.role == "cliente":
-        return RedirectResponse("/cliente/bsc", status_code=303)
     return RedirectResponse(f"/ferramentas/bsc/{client_id}", status_code=303)
 
 
@@ -318,8 +316,6 @@ async def bsc_criar_indicador(
     ))
     session.commit()
     set_flash(request, f"Indicador '{nome}' criado.")
-    if ctx.membership.role == "cliente":
-        return RedirectResponse("/cliente/bsc", status_code=303)
     return RedirectResponse(f"/ferramentas/bsc/{client_id}", status_code=303)
 
 
@@ -369,8 +365,6 @@ async def bsc_lancar(
         ))
     session.commit()
     set_flash(request, f"Valor registrado para {periodo}.")
-    if ctx.membership.role == "cliente":
-        return RedirectResponse("/cliente/bsc", status_code=303)
     return RedirectResponse(f"/ferramentas/bsc/{ind.client_id}", status_code=303)
 
 
