@@ -139,8 +139,8 @@ _SIDEBAR_HTML = r"""
   <!-- Minha Empresa -->
   <div class="sb-section">
     <div class="sb-section-label">Minha Empresa</div>
-    <a class="sb-link" href="/empresa" data-sbpath="/empresa" title="Empresa">
-      <span class="sb-icon">🏢</span><span class="sb-label">Empresa</span>
+    <a class="sb-link" href="/empresa" data-sbpath="/empresa" title="Minha Empresa">
+      <span class="sb-icon">🏢</span><span class="sb-label">Minha Empresa</span>
     </a>
     <a class="sb-link" href="/financeiro" data-sbpath="/financeiro" title="Financeiro">
       <span class="sb-icon">📄</span><span class="sb-label">Financeiro</span>
@@ -156,31 +156,46 @@ _SIDEBAR_HTML = r"""
     </a>
   </div>
 
-  <!-- Diagnóstico -->
+  <!-- Gestão -->
   <div class="sb-section">
-    <div class="sb-section-label">Diagnóstico</div>
+    <div class="sb-section-label">Gestão</div>
     <a class="sb-link" href="/perfil" data-sbpath="/perfil" title="Diagnóstico Financeiro">
       <span class="sb-icon">🩺</span><span class="sb-label">Diagnóstico Financeiro</span>
     </a>
-    <a class="sb-link" href="/consultas" data-sbpath="/consultas" title="Consultas de Risco">
-      <span class="sb-icon">🔍</span><span class="sb-label">Consultas de Risco</span>
+    {% if role in ["admin", "equipe"] %}
+    <a class="sb-link" href="/ferramentas/bsc" data-sbpath="/ferramentas/bsc" title="BSC">
+      <span class="sb-icon">📊</span><span class="sb-label">BSC</span>
     </a>
-    <a class="sb-link" href="/construrisk" data-sbpath="/construrisk" title="ConstruRisk">
-      <span class="sb-icon">🏗️</span><span class="sb-label">ConstruRisk</span>
+    {% else %}
+    <a class="sb-link" href="/cliente/bsc" data-sbpath="/cliente/bsc" title="BSC">
+      <span class="sb-icon">📊</span><span class="sb-label">BSC</span>
     </a>
+    {% endif %}
+    <a class="sb-link" href="/ferramentas/orcamento" data-sbpath="/ferramentas/orcamento" title="Orçamento">
+      <span class="sb-icon">💰</span><span class="sb-label">Orçamento</span>
+    </a>
+    <a class="sb-link" href="/admin/acoes" data-sbpath="/admin/acoes" title="Ações">
+      <span class="sb-icon">⚡</span><span class="sb-label">Ações</span>
+    </a>
+    {% if role in ["admin", "equipe"] %}
+    <a class="sb-link" href="/admin/grafo" data-sbpath="/admin/grafo" title="2º Cérebro">
+      <span class="sb-icon">🧠</span><span class="sb-label">2. Cérebro</span>
+    </a>
+    {% else %}
+    <a class="sb-link" href="/cliente/grafo" data-sbpath="/cliente/grafo" title="2º Cérebro">
+      <span class="sb-icon">🧠</span><span class="sb-label">2. Cérebro</span>
+    </a>
+    {% endif %}
   </div>
 
-  <!-- Soluções -->
+  <!-- Projeto -->
   <div class="sb-section">
-    <div class="sb-section-label">Soluções</div>
-    <a class="sb-link" href="/ofertas" data-sbpath="/ofertas" title="Ofertas">
-      <span class="sb-icon">💡</span><span class="sb-label">Ofertas</span>
+    <div class="sb-section-label">Projeto</div>
+    <a class="sb-link" href="/tarefas" data-sbpath="/tarefas" title="Tarefas">
+      <span class="sb-icon">✅</span><span class="sb-label">Tarefas</span>
     </a>
-    <a class="sb-link" href="/simulador" data-sbpath="/simulador" title="Simulador">
-      <span class="sb-icon">🧮</span><span class="sb-label">Simulador</span>
-    </a>
-    <a class="sb-link" href="/propostas" data-sbpath="/propostas" title="Propostas">
-      <span class="sb-icon">📋</span><span class="sb-label">Propostas</span>
+    <a class="sb-link" href="/consultoria" data-sbpath="/consultoria" title="Consultoria">
+      <span class="sb-icon">🤝</span><span class="sb-label">Consultoria</span>
     </a>
   </div>
 
@@ -190,45 +205,13 @@ _SIDEBAR_HTML = r"""
     <a class="sb-link" href="/ferramentas" data-sbpath="/ferramentas" title="Ferramentas">
       <span class="sb-icon">🔧</span><span class="sb-label">Ferramentas</span>
     </a>
+    <a class="sb-link" href="/consultas" data-sbpath="/consultas" title="Consultas de Risco">
+      <span class="sb-icon">🔍</span><span class="sb-label">Consultas de Risco</span>
+    </a>
     <a class="sb-link" href="/educacao" data-sbpath="/educacao" title="Educação">
       <span class="sb-icon">🎓</span><span class="sb-label">Educação</span>
     </a>
   </div>
-
-  <!-- Gestão -->
-  {% if role in ["admin", "equipe"] %}
-  <div class="sb-section">
-    <div class="sb-section-label">Gestão</div>
-    <a class="sb-link" href="/ferramentas/bsc" data-sbpath="/ferramentas/bsc" title="BSC">
-      <span class="sb-icon">📊</span><span class="sb-label">BSC</span>
-    </a>
-    <a class="sb-link" href="/ferramentas/orcamento" data-sbpath="/ferramentas/orcamento" title="Orçamento">
-      <span class="sb-icon">💰</span><span class="sb-label">Orçamento</span>
-    </a>
-    <a class="sb-link" href="/admin/acoes" data-sbpath="/admin/acoes" title="Ações">
-      <span class="sb-icon">⚡</span><span class="sb-label">Ações</span>
-    </a>
-    <a class="sb-link" href="/admin/grafo" data-sbpath="/admin/grafo" title="2º Cérebro">
-      <span class="sb-icon">🧠</span><span class="sb-label">2º Cérebro</span>
-    </a>
-  </div>
-  {% elif role == "cliente" %}
-  <div class="sb-section">
-    <div class="sb-section-label">Gestão</div>
-    <a class="sb-link" href="/cliente/bsc" data-sbpath="/cliente/bsc" title="BSC">
-      <span class="sb-icon">📊</span><span class="sb-label">BSC</span>
-    </a>
-    <a class="sb-link" href="/ferramentas/orcamento" data-sbpath="/ferramentas/orcamento" title="Orçamento">
-      <span class="sb-icon">💰</span><span class="sb-label">Orçamento</span>
-    </a>
-    <a class="sb-link" href="/admin/acoes" data-sbpath="/admin/acoes" title="Ações">
-      <span class="sb-icon">⚡</span><span class="sb-label">Ações</span>
-    </a>
-    <a class="sb-link" href="/cliente/grafo" data-sbpath="/cliente/grafo" title="2º Cérebro">
-      <span class="sb-icon">🧠</span><span class="sb-label">2º Cérebro</span>
-    </a>
-  </div>
-  {% endif %}
 
   <!-- Reuniões -->
   <div class="sb-section">
@@ -244,31 +227,33 @@ _SIDEBAR_HTML = r"""
     {% endif %}
   </div>
 
-  <!-- Negócios / CRM (apenas admin/equipe) -->
+  <!-- Soluções de Crédito -->
+  <div class="sb-section">
+    <div class="sb-section-label">Soluções de Crédito</div>
+    <a class="sb-link" href="/ofertas" data-sbpath="/ofertas" title="Ofertas">
+      <span class="sb-icon">💡</span><span class="sb-label">Ofertas</span>
+    </a>
+    <a class="sb-link" href="/simulador" data-sbpath="/simulador" title="Simulador">
+      <span class="sb-icon">🧮</span><span class="sb-label">Simulador</span>
+    </a>
+    <a class="sb-link" href="/propostas" data-sbpath="/propostas" title="Propostas">
+      <span class="sb-icon">📋</span><span class="sb-label">Propostas</span>
+    </a>
+  </div>
+
+  <!-- Gestão Escritório (apenas admin/equipe) -->
   {% if role in ["admin", "equipe"] %}
   <div class="sb-section">
-    <div class="sb-section-label">Negócios</div>
-    <a class="sb-link" href="/negocios" data-sbpath="/negocios" title="Pipeline">
+    <div class="sb-section-label">Gestão Escritório</div>
+    <a class="sb-link" href="/negocios" data-sbpath="/negocios" title="Pipeline CRM">
       <span class="sb-icon">💼</span><span class="sb-label">Pipeline CRM</span>
     </a>
-  </div>
-  {% endif %}
-
-  <!-- Projeto -->
-  <div class="sb-section">
-    <div class="sb-section-label">Projeto</div>
-    <a class="sb-link" href="/tarefas" data-sbpath="/tarefas" title="Tarefas">
-      <span class="sb-icon">✅</span><span class="sb-label">Tarefas</span>
+    <a class="sb-link" href="/admin/gestao" data-sbpath="/admin/gestao" title="Gestão Interna">
+      <span class="sb-icon">⚙️</span><span class="sb-label">Gestão Interna</span>
     </a>
-    <a class="sb-link" href="/consultoria" data-sbpath="/consultoria" title="Consultoria">
-      <span class="sb-icon">🤝</span><span class="sb-label">Consultoria</span>
+    <a class="sb-link" href="/admin/financeiro" data-sbpath="/admin/financeiro" title="Atendimento Escritório">
+      <span class="sb-icon">🏦</span><span class="sb-label">Atendimento Escritório</span>
     </a>
-  </div>
-
-  <!-- Administração -->
-  {% if role in ["admin", "equipe"] %}
-  <div class="sb-section">
-    <div class="sb-section-label">Administração</div>
     <a class="sb-link" href="/admin/clientes" data-sbpath="/admin/clientes" title="Clientes">
       <span class="sb-icon">🏢</span><span class="sb-label">Clientes</span>
     </a>
@@ -279,47 +264,14 @@ _SIDEBAR_HTML = r"""
     <a class="sb-link" href="/integrations" data-sbpath="/integrations" title="Integrações">
       <span class="sb-icon">☁️</span><span class="sb-label">Integrações</span>
     </a>
-    {% endif %}
-  </div>
-  {% endif %}
-
-  <!-- Escritório interno (apenas admin/equipe) -->
-  {% if role in ["admin", "equipe"] %}
-  <div class="sb-section">
-    <div class="sb-section-label">Escritório</div>
-    <a class="sb-link" href="/admin/financeiro" data-sbpath="/admin/financeiro" title="Financeiro Interno">
-      <span class="sb-icon">🏦</span><span class="sb-label">Financeiro Interno</span>
-    </a>
-    <a class="sb-link" href="/motor-ofertas" data-sbpath="/motor-ofertas" title="Motor de Ofertas">
-      <span class="sb-icon">⚙️</span><span class="sb-label">Motor de Ofertas</span>
-    </a>
-    <a class="sb-link" href="/admin/servicos-internos" data-sbpath="/admin/servicos-internos" title="Produtos Internos">
-      <span class="sb-icon">📦</span><span class="sb-label">Produtos Internos</span>
-    </a>
-    <a class="sb-link" href="/admin/parceiros" data-sbpath="/admin/parceiros" title="Parceiros">
-      <span class="sb-icon">🤝</span><span class="sb-label">Parceiros</span>
-    </a>
-    <a class="sb-link" href="/admin/agenda" data-sbpath="/admin/agenda" title="Agenda">
-      <span class="sb-icon">📆</span><span class="sb-label">Agenda</span>
-    </a>
-    {% if role == "admin" %}
-    <a class="sb-link" href="/admin/assinaturas" data-sbpath="/admin/assinaturas" title="Assinaturas">
-      <span class="sb-icon">💳</span><span class="sb-label">Assinaturas</span>
-    </a>
-    <a class="sb-link" href="/admin/pesquisas" data-sbpath="/admin/pesquisas" title="Pesquisas">
-      <span class="sb-icon">📊</span><span class="sb-label">Pesquisas</span>
-    </a>
     <a class="sb-link" href="/admin/saude" data-sbpath="/admin/saude" title="Saúde do Sistema">
       <span class="sb-icon">🩺</span><span class="sb-label">Saúde do Sistema</span>
     </a>
-    <a class="sb-link" href="/admin/uso" data-sbpath="/admin/uso" title="Uso da Plataforma">
-      <span class="sb-icon">📈</span><span class="sb-label">Uso da Plataforma</span>
-    </a>
     {% endif %}
   </div>
   {% endif %}
 
-  <!-- Meu Time (gestor de cliente) -->
+  <!-- Meu Time (cliente) -->
   {% if role == "cliente" %}
   <div class="sb-section">
     <div class="sb-section-label">Time</div>
