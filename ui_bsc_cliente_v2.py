@@ -80,8 +80,11 @@ TEMPLATES["cliente_bsc.html"] = r"""
 {% if not painel %}
 <div class="bsc-empty">
   <div class="bsc-empty-icon">🎯</div>
-  <div class="fw-semibold mb-1">BSC não configurado</div>
-  <div class="small">Seu consultor ainda não criou o planejamento estratégico para sua empresa.</div>
+  <div class="fw-semibold mb-1">Planejamento estratégico não iniciado</div>
+  <div class="small mb-3">Crie seu BSC agora com as 4 perspectivas padrão e comece a monitorar seus indicadores.</div>
+  <form method="post" action="/cliente/bsc/seed">
+    <button type="submit" class="btn btn-primary">Criar meu planejamento</button>
+  </form>
 </div>
 {% else %}
 
@@ -319,6 +322,58 @@ try:
         })
 
     print("[bsc_cliente_v2] ✅ Rota /cliente/bsc v2 registrada com ações.")
+
+    # ── Rota seed para o próprio cliente ────────────────────────────────────
+    from fastapi.responses import RedirectResponse as _RR_seed
+    from fastapi import Form as _Form_seed
+
+    @app.post("/cliente/bsc/seed")
+    @require_login
+    async def cliente_bsc_seed(request: _Req_bscv2, session: _Sess_bscv2 = _Dep_bscv2(get_session)):
+        ctx = get_tenant_context(request, session)
+        if not ctx:
+            return _RR_seed("/login", status_code=303)
+
+        client_id = None
+        try:
+            client_id = get_active_client_id(request, session, ctx)
+            if not client_id and ctx.membership.role == "cliente":
+                cl = session.exec(
+                    _sel_bscv2(Client).where(
+                        Client.company_id == ctx.company.id,
+                        Client.user_id == ctx.user.id,
+                    )
+                ).first()
+                if cl:
+                    client_id = cl.id
+        except Exception:
+            pass
+
+        if not client_id:
+            return _RR_seed("/cliente/bsc", status_code=303)
+
+        # Cria perspectivas padrão se ainda não existirem
+        existentes = session.exec(
+            _sel_bscv2(BSCPerspectiva).where(
+                BSCPerspectiva.company_id == ctx.company.id,
+                BSCPerspectiva.client_id == client_id,
+            )
+        ).all()
+        if not existentes:
+            PERSPECTIVAS_PADRAO = [
+                {"nome": "Financeiro",         "icone": "💰", "cor": "#22c55e", "ordem": 1},
+                {"nome": "Clientes",           "icone": "🤝", "cor": "#3b82f6", "ordem": 2},
+                {"nome": "Processos Internos", "icone": "⚙️",  "cor": "#f59e0b", "ordem": 3},
+                {"nome": "Aprendizado & Crescimento", "icone": "🌱", "cor": "#8b5cf6", "ordem": 4},
+            ]
+            for p in PERSPECTIVAS_PADRAO:
+                session.add(BSCPerspectiva(
+                    company_id=ctx.company.id, client_id=client_id,
+                    nome=p["nome"], icone=p["icone"], cor=p["cor"], ordem=p["ordem"],
+                ))
+            session.commit()
+
+        return _RR_seed("/cliente/bsc", status_code=303)
 
 except Exception as _e_bscv2:
     print(f"[bsc_cliente_v2] ⚠️ Erro ao registrar rota: {_e_bscv2}")

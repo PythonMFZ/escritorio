@@ -1,0 +1,1245 @@
+<title>Brucode Technologies</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;600;700;800&family=Inter:wght@300;400;500;600&display=swap">
+
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --navy: #0C1A2E;
+    --navy2: #162238;
+    --teal: #2563EB;
+    --teal-dark: #1D4ED8;
+    --blue: #3B82F6;
+    --white: #FFFFFF;
+    --slate-bg: #F4F7FA;
+    --border: #E2E8F0;
+    --text: #1A2B3C;
+    --muted: #64748B;
+    --card-bg: #FFFFFF;
+  }
+
+  html { scroll-behavior: smooth; }
+
+  body {
+    font-family: 'Inter', sans-serif;
+    color: var(--text);
+    background: var(--white);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* ── NAV ── */
+  nav {
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    background: var(--navy);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 5vw;
+    height: 64px;
+    border-bottom: 1px solid rgba(255,255,255,0.06);
+  }
+
+  .nav-logo {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    text-decoration: none;
+  }
+
+  .nav-logo svg { flex-shrink: 0; }
+
+  .nav-links {
+    display: flex;
+    align-items: center;
+    gap: 2rem;
+    list-style: none;
+  }
+
+  .nav-links a {
+    color: rgba(255,255,255,0.65);
+    text-decoration: none;
+    font-size: 0.875rem;
+    font-weight: 500;
+    letter-spacing: 0.01em;
+    transition: color .2s;
+  }
+
+  .nav-links a:hover { color: var(--white); }
+
+  .nav-cta {
+    background: var(--teal);
+    color: var(--white) !important;
+    padding: 0.45rem 1.1rem;
+    border-radius: 6px;
+    font-weight: 600 !important;
+    transition: background .2s !important;
+  }
+
+  .nav-cta:hover { background: var(--teal-dark) !important; color: var(--white) !important; }
+
+  /* ── HERO ── */
+  #inicio {
+    background: var(--navy);
+    min-height: calc(100vh - 64px);
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    align-items: center;
+    gap: 4rem;
+    padding: 5rem 5vw 4rem;
+    position: relative;
+    overflow: hidden;
+  }
+
+  #inicio::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background-image:
+      radial-gradient(circle at 60% 40%, rgba(37,99,235,0.08) 0%, transparent 55%),
+      linear-gradient(rgba(255,255,255,0.04) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255,255,255,0.04) 1px, transparent 1px);
+    background-size: auto, 48px 48px, 48px 48px;
+    pointer-events: none;
+  }
+
+  .hero-content { position: relative; z-index: 1; }
+
+  .hero-eyebrow {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--teal);
+    margin-bottom: 1.25rem;
+  }
+
+  .hero-eyebrow::before {
+    content: '';
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--teal);
+  }
+
+  .hero-headline {
+    font-family: 'Barlow Condensed', sans-serif;
+    font-size: clamp(2.6rem, 5vw, 4rem);
+    font-weight: 800;
+    line-height: 1.05;
+    color: var(--white);
+    margin-bottom: 1.5rem;
+    text-wrap: balance;
+  }
+
+  .hero-headline span { color: var(--teal); }
+
+  .hero-desc {
+    font-size: 1rem;
+    line-height: 1.7;
+    color: rgba(255,255,255,0.6);
+    max-width: 480px;
+    margin-bottom: 2.25rem;
+  }
+
+  .hero-actions {
+    display: flex;
+    gap: 1rem;
+    flex-wrap: wrap;
+  }
+
+  .btn-primary {
+    background: var(--teal);
+    color: var(--white);
+    padding: 0.75rem 1.5rem;
+    border-radius: 8px;
+    font-size: 0.9rem;
+    font-weight: 600;
+    text-decoration: none;
+    transition: background .2s, transform .15s;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .btn-primary:hover { background: var(--teal-dark); transform: translateY(-1px); }
+
+  .btn-ghost {
+    background: transparent;
+    color: rgba(255,255,255,0.75);
+    border: 1px solid rgba(255,255,255,0.2);
+    padding: 0.75rem 1.5rem;
+    border-radius: 8px;
+    font-size: 0.9rem;
+    font-weight: 500;
+    text-decoration: none;
+    transition: border-color .2s, color .2s;
+  }
+
+  .btn-ghost:hover { border-color: rgba(255,255,255,0.5); color: var(--white); }
+
+  .hero-social {
+    margin-top: 2.5rem;
+    padding-top: 2rem;
+    border-top: 1px solid rgba(255,255,255,0.08);
+    font-size: 0.8rem;
+    color: rgba(255,255,255,0.4);
+  }
+
+  .hero-social strong { color: rgba(255,255,255,0.75); }
+
+  /* Hero panel */
+  .hero-panel {
+    position: relative;
+    z-index: 1;
+    background: rgba(255,255,255,0.04);
+    border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 16px;
+    padding: 2rem;
+    backdrop-filter: blur(4px);
+  }
+
+  .panel-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: rgba(37,99,235,0.15);
+    color: var(--teal);
+    font-size: 0.7rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    padding: 0.3rem 0.75rem;
+    border-radius: 100px;
+    margin-bottom: 1.25rem;
+    border: 1px solid rgba(37,99,235,0.25);
+  }
+
+  .panel-badge::before {
+    content: '';
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--teal);
+    animation: pulse 2s ease-in-out infinite;
+  }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.5; transform: scale(0.8); }
+  }
+
+  .panel-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 0.875rem 0;
+    border-bottom: 1px solid rgba(255,255,255,0.07);
+  }
+
+  .panel-item:last-child { border-bottom: none; }
+
+  .panel-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--teal);
+    margin-top: 5px;
+    flex-shrink: 0;
+  }
+
+  .panel-item-text strong {
+    display: block;
+    font-size: 0.875rem;
+    font-weight: 600;
+    color: rgba(255,255,255,0.9);
+    margin-bottom: 2px;
+  }
+
+  .panel-item-text span {
+    font-size: 0.78rem;
+    color: rgba(255,255,255,0.4);
+  }
+
+  /* ── SECTIONS SHARED ── */
+  section { padding: 5rem 5vw; }
+
+  .section-eyebrow {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.7rem;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--teal-dark);
+    margin-bottom: 1rem;
+  }
+
+  .section-eyebrow::before {
+    content: '';
+    display: inline-block;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--teal-dark);
+  }
+
+  .section-title {
+    font-family: 'Barlow Condensed', sans-serif;
+    font-size: clamp(1.8rem, 3.5vw, 2.6rem);
+    font-weight: 800;
+    line-height: 1.1;
+    color: var(--text);
+    margin-bottom: 1rem;
+    text-wrap: balance;
+  }
+
+  .section-desc {
+    font-size: 0.975rem;
+    line-height: 1.7;
+    color: var(--muted);
+    max-width: 560px;
+  }
+
+  /* ── SOBRE ── */
+  #sobre { background: var(--white); }
+
+  .sobre-header { margin-bottom: 3rem; }
+
+  .pillar-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 1.25rem;
+  }
+
+  .pillar-card {
+    background: var(--white);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 1.5rem;
+    transition: box-shadow .2s, border-color .2s;
+  }
+
+  .pillar-card:hover {
+    box-shadow: 0 8px 24px rgba(0,0,0,0.06);
+    border-color: rgba(37,99,235,0.3);
+  }
+
+  .pillar-num {
+    font-size: 0.7rem;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    color: var(--teal-dark);
+    margin-bottom: 0.875rem;
+    font-family: 'Inter', sans-serif;
+    background: rgba(37,99,235,0.08);
+    display: inline-block;
+    padding: 0.2rem 0.5rem;
+    border-radius: 4px;
+  }
+
+  .pillar-card h3 {
+    font-size: 1rem;
+    font-weight: 700;
+    color: var(--text);
+    margin-bottom: 0.6rem;
+  }
+
+  .pillar-card p {
+    font-size: 0.83rem;
+    line-height: 1.6;
+    color: var(--muted);
+  }
+
+  /* ── PRODUTOS ── */
+  #produtos { background: var(--slate-bg); }
+
+  .produtos-header { margin-bottom: 3rem; }
+
+  .produtos-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 1.25rem;
+    margin-bottom: 1.25rem;
+  }
+
+  .produto-card {
+    background: var(--white);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 1.75rem;
+    transition: box-shadow .25s, transform .2s, border-color .2s;
+    cursor: default;
+  }
+
+  .produto-card:hover {
+    box-shadow: 0 12px 32px rgba(0,0,0,0.08);
+    transform: translateY(-3px);
+    border-color: rgba(37,99,235,0.35);
+  }
+
+  .produto-icon {
+    width: 44px;
+    height: 44px;
+    background: rgba(37,99,235,0.08);
+    border-radius: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-bottom: 1.1rem;
+    color: var(--teal-dark);
+  }
+
+  .produto-cat {
+    font-size: 0.65rem;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 0.4rem;
+  }
+
+  .produto-card h3 {
+    font-family: 'Barlow Condensed', sans-serif;
+    font-size: 1.35rem;
+    font-weight: 700;
+    color: var(--text);
+    margin-bottom: 0.6rem;
+  }
+
+  .produto-card p {
+    font-size: 0.83rem;
+    line-height: 1.65;
+    color: var(--muted);
+  }
+
+  .produto-cta-card {
+    background: var(--navy);
+    border-radius: 14px;
+    padding: 1.75rem;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    min-height: 200px;
+    border: 1px solid rgba(255,255,255,0.06);
+  }
+
+  .produto-cta-card h3 {
+    font-size: 1.05rem;
+    font-weight: 700;
+    color: var(--white);
+    margin-bottom: 0.5rem;
+  }
+
+  .produto-cta-card p {
+    font-size: 0.82rem;
+    color: rgba(255,255,255,0.5);
+    line-height: 1.6;
+    margin-bottom: 1.25rem;
+  }
+
+  .btn-teal-outline {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--teal);
+    border: 1px solid rgba(37,99,235,0.4);
+    padding: 0.55rem 1.1rem;
+    border-radius: 8px;
+    font-size: 0.83rem;
+    font-weight: 600;
+    text-decoration: none;
+    transition: background .2s, border-color .2s;
+    align-self: flex-start;
+  }
+
+  .btn-teal-outline:hover {
+    background: rgba(37,99,235,0.1);
+    border-color: var(--teal);
+  }
+
+  /* ── SERVIÇOS ── */
+  #servicos { background: var(--white); }
+
+  .servicos-header { margin-bottom: 3rem; }
+
+  .servicos-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 1.25rem;
+  }
+
+  .servico-card {
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 1.75rem;
+    transition: box-shadow .2s, border-color .2s;
+  }
+
+  .servico-card:hover {
+    box-shadow: 0 8px 24px rgba(0,0,0,0.06);
+    border-color: rgba(37,99,235,0.3);
+  }
+
+  .servico-card.featured {
+    background: var(--navy);
+    border-color: transparent;
+  }
+
+  .servico-icon {
+    width: 40px;
+    height: 40px;
+    background: rgba(37,99,235,0.08);
+    border-radius: 9px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-bottom: 1rem;
+    color: var(--teal-dark);
+  }
+
+  .servico-card.featured .servico-icon {
+    background: rgba(37,99,235,0.15);
+    color: var(--teal);
+  }
+
+  .novidade-badge {
+    display: inline-block;
+    font-size: 0.65rem;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    background: var(--teal);
+    color: var(--navy);
+    padding: 0.2rem 0.5rem;
+    border-radius: 4px;
+    margin-bottom: 0.75rem;
+  }
+
+  .servico-card h3 {
+    font-size: 1.05rem;
+    font-weight: 700;
+    color: var(--text);
+    margin-bottom: 0.6rem;
+    line-height: 1.3;
+  }
+
+  .servico-card.featured h3 { color: var(--white); }
+
+  .servico-card p {
+    font-size: 0.83rem;
+    line-height: 1.65;
+    color: var(--muted);
+  }
+
+  .servico-card.featured p { color: rgba(255,255,255,0.55); }
+
+  /* ── PROJETOS ── */
+  #projetos { background: var(--slate-bg); }
+
+  .projetos-header { margin-bottom: 3rem; }
+
+  .projetos-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 1.25rem;
+  }
+
+  .projeto-card {
+    background: var(--white);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    overflow: hidden;
+    transition: box-shadow .25s, transform .2s;
+  }
+
+  .projeto-card:hover {
+    box-shadow: 0 12px 32px rgba(0,0,0,0.08);
+    transform: translateY(-3px);
+  }
+
+  .projeto-header-bar {
+    height: 6px;
+  }
+
+  .projeto-body {
+    padding: 1.75rem;
+  }
+
+  .projeto-tag {
+    font-size: 0.65rem;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 0.5rem;
+  }
+
+  .projeto-card h3 {
+    font-family: 'Barlow Condensed', sans-serif;
+    font-size: 1.5rem;
+    font-weight: 800;
+    color: var(--text);
+    margin-bottom: 0.2rem;
+  }
+
+  .projeto-sub {
+    font-size: 0.78rem;
+    font-style: italic;
+    color: var(--muted);
+    margin-bottom: 0.875rem;
+  }
+
+  .projeto-card p {
+    font-size: 0.83rem;
+    line-height: 1.65;
+    color: var(--muted);
+    margin-bottom: 1.25rem;
+  }
+
+  .projeto-pills {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+  }
+
+  .pill {
+    font-size: 0.7rem;
+    font-weight: 500;
+    padding: 0.25rem 0.6rem;
+    border-radius: 100px;
+    background: var(--slate-bg);
+    color: var(--muted);
+    border: 1px solid var(--border);
+  }
+
+  .projeto-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: var(--teal-dark);
+    text-decoration: none;
+    margin-top: 1rem;
+    transition: gap .2s;
+  }
+
+  .projeto-link:hover { gap: 8px; }
+
+  /* ── DIFERENCIAIS ── */
+  #diferenciais {
+    background: var(--navy);
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 4rem;
+    align-items: start;
+  }
+
+  .dif-section-eyebrow {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.7rem;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--teal);
+    margin-bottom: 1rem;
+  }
+
+  .dif-section-eyebrow::before {
+    content: '';
+    display: inline-block;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--teal);
+  }
+
+  .dif-title {
+    font-family: 'Barlow Condensed', sans-serif;
+    font-size: clamp(1.8rem, 3vw, 2.4rem);
+    font-weight: 800;
+    color: var(--white);
+    margin-bottom: 2rem;
+    text-wrap: balance;
+  }
+
+  .accordion-item {
+    border-bottom: 1px solid rgba(255,255,255,0.08);
+  }
+
+  .accordion-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 1.1rem 0;
+    cursor: pointer;
+    user-select: none;
+  }
+
+  .accordion-header h4 {
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: rgba(255,255,255,0.85);
+  }
+
+  .accordion-toggle {
+    width: 26px;
+    height: 26px;
+    border-radius: 50%;
+    border: 1px solid rgba(255,255,255,0.15);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: rgba(255,255,255,0.5);
+    transition: background .2s, border-color .2s;
+    flex-shrink: 0;
+    font-size: 1rem;
+    line-height: 1;
+  }
+
+  .accordion-item.open .accordion-toggle {
+    background: rgba(37,99,235,0.15);
+    border-color: rgba(37,99,235,0.35);
+    color: var(--teal);
+  }
+
+  .accordion-body {
+    display: none;
+    padding-bottom: 1rem;
+    font-size: 0.83rem;
+    line-height: 1.7;
+    color: rgba(255,255,255,0.45);
+  }
+
+  .accordion-item.open .accordion-body { display: block; }
+
+  /* Stats panel */
+  .stats-panel {
+    background: rgba(255,255,255,0.04);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 16px;
+    padding: 2rem;
+  }
+
+  .stat-item {
+    margin-bottom: 1.75rem;
+    padding-bottom: 1.75rem;
+    border-bottom: 1px solid rgba(255,255,255,0.06);
+  }
+
+  .stat-item:last-child { margin-bottom: 0; padding-bottom: 0; border-bottom: none; }
+
+  .stat-number {
+    font-family: 'Barlow Condensed', sans-serif;
+    font-size: 2.8rem;
+    font-weight: 800;
+    color: var(--teal);
+    line-height: 1;
+    margin-bottom: 0.3rem;
+  }
+
+  .stat-label {
+    font-size: 0.8rem;
+    color: rgba(255,255,255,0.45);
+    line-height: 1.4;
+  }
+
+  /* ── CTA ── */
+  #contato {
+    background: var(--navy2);
+    padding: 5rem 5vw;
+    text-align: center;
+    border-top: 1px solid rgba(255,255,255,0.05);
+  }
+
+  .cta-title {
+    font-family: 'Barlow Condensed', sans-serif;
+    font-size: clamp(2rem, 4vw, 3rem);
+    font-weight: 800;
+    color: var(--white);
+    margin-bottom: 0.75rem;
+    text-wrap: balance;
+  }
+
+  .cta-sub {
+    font-size: 0.95rem;
+    color: rgba(255,255,255,0.5);
+    margin-bottom: 2.25rem;
+  }
+
+  .cta-actions {
+    display: flex;
+    gap: 1rem;
+    justify-content: center;
+    flex-wrap: wrap;
+  }
+
+  .btn-whatsapp {
+    background: #25D366;
+    color: var(--white);
+    padding: 0.75rem 1.5rem;
+    border-radius: 8px;
+    font-size: 0.9rem;
+    font-weight: 600;
+    text-decoration: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    transition: opacity .2s;
+  }
+
+  .btn-whatsapp:hover { opacity: 0.9; }
+
+  /* ── FOOTER ── */
+  footer {
+    background: var(--navy);
+    border-top: 1px solid rgba(255,255,255,0.05);
+    padding: 2rem 5vw;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    flex-wrap: wrap;
+  }
+
+  .footer-copy {
+    font-size: 0.78rem;
+    color: rgba(255,255,255,0.3);
+  }
+
+  .footer-links {
+    display: flex;
+    gap: 1.5rem;
+    list-style: none;
+  }
+
+  .footer-links a {
+    font-size: 0.78rem;
+    color: rgba(255,255,255,0.35);
+    text-decoration: none;
+    transition: color .2s;
+  }
+
+  .footer-links a:hover { color: rgba(255,255,255,0.7); }
+
+  /* ── DARK MODE ── */
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --white: #0F1923;
+      --slate-bg: #0C1520;
+      --border: rgba(255,255,255,0.08);
+      --text: #E2E8F0;
+      --muted: #94A3B8;
+      --card-bg: #162030;
+    }
+
+    :root:not([data-theme="light"]) .pillar-card,
+    :root:not([data-theme="light"]) .produto-card,
+    :root:not([data-theme="light"]) .servico-card:not(.featured) {
+      background: #162030;
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --white: #0F1923;
+    --slate-bg: #0C1520;
+    --border: rgba(255,255,255,0.08);
+    --text: #E2E8F0;
+    --muted: #94A3B8;
+    --card-bg: #162030;
+  }
+
+  :root[data-theme="dark"] .pillar-card,
+  :root[data-theme="dark"] .produto-card,
+  :root[data-theme="dark"] .servico-card:not(.featured) {
+    background: #162030;
+  }
+
+  @media (max-width: 900px) {
+    #inicio, #diferenciais { grid-template-columns: 1fr; }
+    .pillar-grid, .produtos-grid, .servicos-grid, .projetos-grid { grid-template-columns: 1fr 1fr; }
+    .hero-panel { display: none; }
+  }
+
+  @media (max-width: 600px) {
+    .pillar-grid, .produtos-grid, .servicos-grid, .projetos-grid { grid-template-columns: 1fr; }
+    .nav-links { display: none; }
+  }
+</style>
+
+<!-- NAV -->
+<nav>
+  <a href="#inicio" class="nav-logo">
+    <svg width="170" height="40" viewBox="0 0 170 40" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <!-- Circuit traces -->
+      <circle cx="8" cy="20" r="3" fill="none" stroke="rgba(255,255,255,0.7)" stroke-width="1.5"/>
+      <circle cx="8" cy="10" r="2" fill="none" stroke="rgba(255,255,255,0.5)" stroke-width="1.2"/>
+      <circle cx="8" cy="30" r="2" fill="none" stroke="rgba(255,255,255,0.5)" stroke-width="1.2"/>
+      <line x1="11" y1="20" x2="20" y2="20" stroke="rgba(255,255,255,0.7)" stroke-width="1.5"/>
+      <line x1="10" y1="10" x2="20" y2="10" stroke="rgba(255,255,255,0.5)" stroke-width="1.2"/>
+      <line x1="10" y1="30" x2="20" y2="30" stroke="rgba(255,255,255,0.5)" stroke-width="1.2"/>
+      <line x1="20" y1="10" x2="20" y2="30" stroke="rgba(255,255,255,0.5)" stroke-width="1.2"/>
+      <line x1="20" y1="15" x2="26" y2="15" stroke="rgba(255,255,255,0.4)" stroke-width="1"/>
+      <line x1="20" y1="25" x2="26" y2="25" stroke="rgba(255,255,255,0.4)" stroke-width="1"/>
+      <circle cx="26" cy="15" r="1.5" fill="rgba(255,255,255,0.5)"/>
+      <circle cx="26" cy="25" r="1.5" fill="rgba(255,255,255,0.5)"/>
+      <!-- Text -->
+      <text x="34" y="26" font-family="Barlow Condensed, sans-serif" font-size="22" font-weight="800" fill="white" letter-spacing="1">BRUCODE</text>
+      <text x="34" y="36" font-family="Inter, sans-serif" font-size="7" font-weight="500" fill="rgba(255,255,255,0.45)" letter-spacing="3">TECHNOLOGY</text>
+    </svg>
+  </a>
+  <ul class="nav-links">
+    <li><a href="#sobre">Sobre</a></li>
+    <li><a href="#produtos">Produtos</a></li>
+    <li><a href="#servicos">Serviços</a></li>
+    <li><a href="#projetos">Projetos</a></li>
+    <li><a href="#diferenciais">Diferenciais</a></li>
+    <li><a href="https://wa.me/5547991359091" class="nav-cta">Fale conosco</a></li>
+  </ul>
+</nav>
+
+<!-- HERO -->
+<section id="inicio">
+  <div class="hero-content">
+    <div class="hero-eyebrow">Desenvolvimento de Software & Produtos Digitais</div>
+    <h1 class="hero-headline">
+      Da ideia ao<br><span>produto em produção.</span>
+    </h1>
+    <p class="hero-desc">
+      Desenvolvemos sistemas sob medida e produtos próprios para negócios que precisam de software que funciona de verdade — não de apresentação.
+    </p>
+    <div class="hero-actions">
+      <a href="https://wa.me/5547991359091" class="btn-primary">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347z"/><path d="M12 0C5.373 0 0 5.373 0 12c0 2.127.558 4.122 1.532 5.855L0 24l6.338-1.513A11.934 11.934 0 0012 24c6.627 0 12-5.373 12-12S18.627 0 12 0zm0 21.818a9.785 9.785 0 01-5.031-1.386l-.361-.214-3.762.897.942-3.665-.234-.374A9.786 9.786 0 012.182 12C2.182 6.575 6.575 2.182 12 2.182c5.424 0 9.818 4.393 9.818 9.818 0 5.424-4.394 9.818-9.818 9.818z"/></svg>
+        Fale conosco
+      </a>
+      <a href="#produtos" class="btn-ghost">Nossos produtos →</a>
+    </div>
+    <div class="hero-social">
+      Presente em Santa Catarina com projetos em <strong>indústria, saúde, eventos, energia e gestão</strong>
+    </div>
+  </div>
+
+  <div class="hero-panel">
+    <div class="panel-badge">em operação</div>
+    <div class="panel-item">
+      <div class="panel-dot"></div>
+      <div class="panel-item-text">
+        <strong>Manufatura 4.0</strong>
+        <span>Controle de produção em tempo real</span>
+      </div>
+    </div>
+    <div class="panel-item">
+      <div class="panel-dot"></div>
+      <div class="panel-item-text">
+        <strong>Fuelsoft</strong>
+        <span>Gerenciamento de tanques de combustível</span>
+      </div>
+    </div>
+    <div class="panel-item">
+      <div class="panel-dot"></div>
+      <div class="panel-item-text">
+        <strong>Watersoft</strong>
+        <span>Monitoramento de poços e ETAs</span>
+      </div>
+    </div>
+    <div class="panel-item">
+      <div class="panel-dot"></div>
+      <div class="panel-item-text">
+        <strong>Desenvolvimento sob medida</strong>
+        <span>Web, mobile e sistemas de gestão</span>
+      </div>
+    </div>
+    <div class="panel-item">
+      <div class="panel-dot"></div>
+      <div class="panel-item-text">
+        <strong>Suporte contínuo</strong>
+        <span>Acompanhamento pós-implantação</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- SOBRE -->
+<section id="sobre">
+  <div class="sobre-header">
+    <div class="section-eyebrow">Sobre nós</div>
+    <h2 class="section-title">Software que resolve problemas reais</h2>
+    <p class="section-desc">
+      Construímos produtos próprios e sistemas sob medida para negócios que precisam de tecnologia que funciona — não de demo. Já atuamos em indústria, saúde, eventos, energia e gestão.
+    </p>
+  </div>
+  <div class="pillar-grid">
+    <div class="pillar-card">
+      <div class="pillar-num">01</div>
+      <h3>Foco na solução</h3>
+      <p>Entendemos o problema antes de escrever a primeira linha. Software pensado para o seu contexto, não adaptado de uma fórmula genérica.</p>
+    </div>
+    <div class="pillar-card">
+      <div class="pillar-num">02</div>
+      <h3>Entrega real</h3>
+      <p>Software que opera em produção, não em demonstração. Foco em robustez, não em funcionalidades que ninguém usa.</p>
+    </div>
+    <div class="pillar-card">
+      <div class="pillar-num">03</div>
+      <h3>Produto próprio ou sob medida</h3>
+      <p>Temos produtos verticais prontos e desenvolvemos do zero — você escolhe o que faz mais sentido para o seu momento e orçamento.</p>
+    </div>
+    <div class="pillar-card">
+      <div class="pillar-num">04</div>
+      <h3>Suporte próximo</h3>
+      <p>Equipe local, comunicação direta. Sem filas de chamado que somem no vazio.</p>
+    </div>
+  </div>
+</section>
+
+<!-- PRODUTOS -->
+<section id="produtos">
+  <div class="produtos-header">
+    <div class="section-eyebrow">Produtos</div>
+    <h2 class="section-title">Produtos prontos para uso</h2>
+    <p class="section-desc">Soluções verticais desenvolvidas e mantidas pela Brucode — prontas para implantar, adaptáveis ao seu processo.</p>
+  </div>
+  <div class="produtos-grid">
+    <div class="produto-card">
+      <div class="produto-icon">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/><path d="M7 7h2v4H7zM11 9h2v2h-2zM15 5h2v6h-2z"/></svg>
+      </div>
+      <div class="produto-cat">Indústria</div>
+      <h3>Manufatura 4.0</h3>
+      <p>Controle de produção em tempo real. Ordens de produção, apontamento de horas, OEE e rastreabilidade de lotes integrados em uma plataforma web.</p>
+    </div>
+    <div class="produto-card">
+      <div class="produto-icon">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
+      </div>
+      <div class="produto-cat">Energia</div>
+      <h3>Fuelsoft</h3>
+      <p>Gerenciamento completo de tanques de combustível. Telemetria de nível, controle de abastecimento, alertas de estoque e relatórios de consumo por frota.</p>
+    </div>
+    <div class="produto-card">
+      <div class="produto-icon">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10 10-4.5 10-10S17.5 2 12 2z"/><path d="M12 6v6l4 2"/></svg>
+      </div>
+      <div class="produto-cat">Saneamento</div>
+      <h3>Watersoft</h3>
+      <p>Monitoramento de poços artesianos e estações de tratamento. Leitura remota de sensores, histórico de vazão, alarmes e dashboard operacional.</p>
+    </div>
+    <div class="produto-cta-card" style="grid-column: 1 / -1; display: flex; flex-direction: row; align-items: center; justify-content: space-between; gap: 2rem; min-height: auto; padding: 1.5rem 2rem;">
+      <div>
+        <h3 style="margin-bottom: 0.4rem;">Precisa de algo assim, para o seu setor?</h3>
+        <p style="margin-bottom: 0;">Podemos adaptar qualquer produto ao seu processo, ou desenvolver do zero.</p>
+      </div>
+      <a href="https://wa.me/5547991359091" class="btn-teal-outline" style="flex-shrink: 0;">Vamos conversar →</a>
+    </div>
+  </div>
+</section>
+
+<!-- SERVIÇOS -->
+<section id="servicos">
+  <div class="servicos-header">
+    <div class="section-eyebrow">Serviços</div>
+    <h2 class="section-title">Desenvolvimento sob medida: da ideia ao ar</h2>
+    <p class="section-desc">Quando o produto pronto não encaixa, construímos o seu — web, mobile, integração ou sistema completo de gestão.</p>
+  </div>
+  <div class="servicos-grid">
+    <div class="servico-card">
+      <div class="servico-icon">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
+      </div>
+      <h3>Sistemas web e mobile</h3>
+      <p>Aplicações web responsivas e apps mobile para qualquer segmento — e-commerce, gestão, marketplaces, portais, painéis administrativos. Em nuvem ou on-premise.</p>
+    </div>
+    <div class="servico-card featured">
+      <div class="servico-icon">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>
+      </div>
+      <div class="novidade-badge">Destaque</div>
+      <h3>Sob medida, do zero</h3>
+      <p>Levantamento de requisitos, arquitetura, desenvolvimento e implantação. Você foca no negócio — nós cuidamos da tecnologia do início ao fim.</p>
+    </div>
+    <div class="servico-card">
+      <div class="servico-icon">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 2v7.31"/><path d="M14 9.3V1.99"/><path d="M8.5 11.5H4V4.27"/><path d="M20 4.27V11.5h-4.5"/><path d="M10 9.3C5.85 10.19 3 13.32 3 17h18c0-3.68-2.85-6.81-7-7.7"/><path d="M12 17v5"/><path d="M9 22h6"/></svg>
+      </div>
+      <h3>Integrações & APIs</h3>
+      <p>Conectamos sistemas que não conversam — ERPs, gateways de pagamento, APIs de terceiros, automações e fluxos de dados. Seus processos funcionando como um só.</p>
+    </div>
+  </div>
+</section>
+
+<!-- PROJETOS -->
+<section id="projetos">
+  <div class="projetos-header">
+    <div class="section-eyebrow">Projetos</div>
+    <h2 class="section-title">Software entregue, rodando no mundo real</h2>
+    <p class="section-desc">Além dos produtos próprios, desenvolvemos plataformas completas sob medida para clientes com necessidades específicas.</p>
+  </div>
+  <div class="projetos-grid">
+
+    <div class="projeto-card">
+      <div class="projeto-header-bar" style="background: linear-gradient(90deg, #7BC443, #A8D94A);"></div>
+      <div class="projeto-body">
+        <div class="projeto-tag">Eventos · Web + App</div>
+        <h3>Ticketzup</h3>
+        <div class="projeto-sub">"O jogo começa aqui"</div>
+        <p>Plataforma completa de venda de ingressos e gestão de eventos. Organizadores criam e publicam eventos; público compra com segurança e descobre o que acontece na cidade. Sistema de check-in, controle de lotes e painel do produtor.</p>
+        <div class="projeto-pills">
+          <span class="pill">Venda de ingressos</span>
+          <span class="pill">Gestão de eventos</span>
+          <span class="pill">Check-in digital</span>
+          <span class="pill">Web + Mobile</span>
+        </div>
+        <a href="https://ticketzup.com" target="_blank" class="projeto-link">ticketzup.com →</a>
+      </div>
+    </div>
+
+    <div class="projeto-card">
+      <div class="projeto-header-bar" style="background: linear-gradient(90deg, #1B4F9E, #2D6DBF);"></div>
+      <div class="projeto-body">
+        <div class="projeto-tag">Saúde · Web + App</div>
+        <h3>SC Convênios</h3>
+        <div class="projeto-sub">Ampla cobertura em Santa Catarina</div>
+        <p>Plataforma de convênios de saúde com mais de 1.000 parceiros em SC — clínicas, farmácias, laboratórios e hospitais. O associado acessa descontos exclusivos via app; a rede de parceiros é gerenciada pelo sistema administrativo.</p>
+        <div class="projeto-pills">
+          <span class="pill">+1.000 parceiros</span>
+          <span class="pill">App associado</span>
+          <span class="pill">Gestão de planos</span>
+          <span class="pill">Santa Catarina</span>
+        </div>
+        <a href="https://scconvenios.com.br" target="_blank" class="projeto-link">scconvenios.com.br →</a>
+      </div>
+    </div>
+
+    <div class="projeto-card">
+      <div class="projeto-header-bar" style="background: linear-gradient(90deg, #7C3AED, #A855F7);"></div>
+      <div class="projeto-body">
+        <div class="projeto-tag">Royalties · Web + App</div>
+        <h3>R10 Flow</h3>
+        <div class="projeto-sub">Gestão de royalties para marcas</div>
+        <p>Plataforma de controle e distribuição de royalties para redes de franquias e marcas licenciadas. Cálculo automatizado, relatórios por unidade, histórico de repasses e painel do licenciado com visibilidade em tempo real.</p>
+        <div class="projeto-pills">
+          <span class="pill">Gestão de royalties</span>
+          <span class="pill">Franquias</span>
+          <span class="pill">Licenciamento de marcas</span>
+          <span class="pill">Relatórios automáticos</span>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</section>
+
+<!-- DIFERENCIAIS -->
+<section id="diferenciais">
+  <div>
+    <div class="dif-section-eyebrow">Diferenciais</div>
+    <h2 class="dif-title">Por que escolher a Brucode</h2>
+
+    <div class="accordion-item open">
+      <div class="accordion-header" onclick="toggleAcc(this)">
+        <h4>Entendemos o seu negócio antes de codar</h4>
+        <div class="accordion-toggle">−</div>
+      </div>
+      <div class="accordion-body">
+        Não chegamos com uma solução pronta procurando um problema para encaixar. Antes de qualquer linha de código, entendemos o fluxo, os gargalos e o que realmente precisa ser resolvido.
+      </div>
+    </div>
+    <div class="accordion-item">
+      <div class="accordion-header" onclick="toggleAcc(this)">
+        <h4>Produto próprio + customização</h4>
+        <div class="accordion-toggle">+</div>
+      </div>
+      <div class="accordion-body">
+        Quem tem produto próprio no mercado conhece os problemas fundo a fundo. Quando desenvolvemos para você, aplicamos experiência real — não só teoria de projeto.
+      </div>
+    </div>
+    <div class="accordion-item">
+      <div class="accordion-header" onclick="toggleAcc(this)">
+        <h4>Implantação assistida</h4>
+        <div class="accordion-toggle">+</div>
+      </div>
+      <div class="accordion-body">
+        Não entregamos o sistema e sumimos. Acompanhamos a implantação, treinamos a equipe e ficamos disponíveis no pós-lançamento para ajustes do mundo real.
+      </div>
+    </div>
+    <div class="accordion-item">
+      <div class="accordion-header" onclick="toggleAcc(this)">
+        <h4>Comunicação direta</h4>
+        <div class="accordion-toggle">+</div>
+      </div>
+      <div class="accordion-body">
+        Empresa local, time acessível. Sem intermediário de suporte nem fila de chamado. Você fala com quem desenvolveu.
+      </div>
+    </div>
+  </div>
+
+  <div class="stats-panel">
+    <div class="stat-item">
+      <div class="stat-number">3</div>
+      <div class="stat-label">Produtos próprios em operação<br>Manufatura 4.0 · Fuelsoft · Watersoft</div>
+    </div>
+    <div class="stat-item">
+      <div class="stat-number">SC</div>
+      <div class="stat-label">Base em Santa Catarina,<br>projetos em todo o Brasil</div>
+    </div>
+    <div class="stat-item">
+      <div class="stat-number">100%</div>
+      <div class="stat-label">Projetos entregues e em produção<br>em múltiplos segmentos</div>
+    </div>
+    <div class="stat-item">
+      <div class="stat-number">IoT</div>
+      <div class="stat-label">Integração com sensores e CLPs<br>para leitura em tempo real</div>
+    </div>
+  </div>
+</section>
+
+<!-- CTA -->
+<section id="contato">
+  <h2 class="cta-title">Tem um projeto em mente?</h2>
+  <p class="cta-sub">Conta para a gente. Sem formulário demorado — direto no WhatsApp.</p>
+  <div class="cta-actions">
+    <a href="https://wa.me/5547991359091" class="btn-whatsapp">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347z"/><path d="M12 0C5.373 0 0 5.373 0 12c0 2.127.558 4.122 1.532 5.855L0 24l6.338-1.513A11.934 11.934 0 0012 24c6.627 0 12-5.373 12-12S18.627 0 12 0zm0 21.818a9.785 9.785 0 01-5.031-1.386l-.361-.214-3.762.897.942-3.665-.234-.374A9.786 9.786 0 012.182 12C2.182 6.575 6.575 2.182 12 2.182c5.424 0 9.818 4.393 9.818 9.818 0 5.424-4.394 9.818-9.818 9.818z"/></svg>
+      (47) 9 9135-9091
+    </a>
+    <a href="mailto:contato@brucode.com.br" class="btn-ghost">contato@brucode.com.br</a>
+  </div>
+</section>
+
+<!-- FOOTER -->
+<footer>
+  <span class="footer-copy">© 2025 Brucode Technologies Ltda. Blumenau, SC.</span>
+  <ul class="footer-links">
+    <li><a href="#inicio">Início</a></li>
+    <li><a href="#produtos">Produtos</a></li>
+    <li><a href="#servicos">Serviços</a></li>
+    <li><a href="https://wa.me/5547991359091">WhatsApp</a></li>
+  </ul>
+</footer>
+
+<script>
+  function toggleAcc(header) {
+    const item = header.parentElement;
+    const toggle = header.querySelector('.accordion-toggle');
+    const isOpen = item.classList.contains('open');
+    document.querySelectorAll('.accordion-item').forEach(i => {
+      i.classList.remove('open');
+      i.querySelector('.accordion-toggle').textContent = '+';
+    });
+    if (!isOpen) {
+      item.classList.add('open');
+      toggle.textContent = '−';
+    }
+  }
+</script>
