@@ -103,7 +103,7 @@ def _dim_get_all(session, company_id: int, client_id=None) -> list:
                 BudgetDimensionValue.is_active    == True,
             ).order_by(BudgetDimensionValue.sort_order, BudgetDimensionValue.name)
         ).all()
-        result.append({"dim": d, "values": values})
+        result.append({"dim": d, "vals": values})
     return result
 
 
@@ -162,7 +162,7 @@ TEMPLATES["orc_dimensoes.html"] = r"""
   <div class="dim-hdr">
     <span>{{ item.dim.icon }}</span>
     <span id="dim-name-{{ item.dim.id }}">{{ item.dim.name }}</span>
-    <span class="badge bg-secondary ms-1" style="font-size:.65rem;">{{ item.values|length }} valores</span>
+    <span class="badge bg-secondary ms-1" style="font-size:.65rem;">{{ item.vals|length }} valores</span>
     <div class="ms-auto d-flex gap-1">
       <button class="btn btn-outline-secondary btn-dim" onclick="editarDimensao({{ item.dim.id }}, '{{ item.dim.name }}', '{{ item.dim.icon }}')">✏️ Editar</button>
       <button class="btn btn-outline-danger btn-dim" onclick="excluirDimensao({{ item.dim.id }})">🗑</button>
@@ -170,14 +170,14 @@ TEMPLATES["orc_dimensoes.html"] = r"""
   </div>
   <div class="dim-body">
     <div id="vals-{{ item.dim.id }}" class="mb-2">
-      {% for v in item.values %}
+      {% for v in item.vals %}
       <span class="val-chip" id="val-{{ v.id }}" style="background:{{ v.color }}22;border-color:{{ v.color }}55;color:{{ v.color }};">
         {% if v.code %}<code style="font-size:.7rem;opacity:.7;">{{ v.code }}</code>{% endif %}
         {{ v.name }}
         <span class="rm" onclick="excluirValor({{ v.id }}, {{ item.dim.id }})">✕</span>
       </span>
       {% endfor %}
-      {% if not item.values %}
+      {% if not item.vals %}
       <span class="text-muted small" id="empty-{{ item.dim.id }}">Nenhum valor. Adicione abaixo.</span>
       {% endif %}
     </div>
@@ -449,7 +449,7 @@ async def orc_dim_lista(request: Request, session: Session = Depends(get_session
             "icon": item["dim"].icon,
             "values": [
                 {"id": v.id, "name": v.name, "code": v.code, "color": v.color}
-                for v in item["values"]
+                for v in item["vals"]
             ],
         }
         for item in dims
