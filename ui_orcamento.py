@@ -365,7 +365,12 @@ def _load_grid(session, company_id: int, plan_id: int, client_id: Optional[int] 
         accounts_by_parent.setdefault(a.parent_id, []).append(a)
 
     # Lookup por código para fórmulas explícitas de totalizadores
-    accounts_by_code = {a.code: a for a in accounts}
+    # Normaliza: strip trailing dots para casar com componentes de fórmula (ex: "5." → "5")
+    accounts_by_code = {}
+    for a in accounts:
+        norm = (a.code or "").strip().rstrip(".")
+        accounts_by_code[norm] = a
+        accounts_by_code[a.code] = a  # mantém original também como fallback
 
     # Códigos folha: não têm nenhum filho por prefixo de código
     all_codes = {a.code for a in accounts}
