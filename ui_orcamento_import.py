@@ -109,15 +109,30 @@ def _uimp_normalize(s) -> str:
     s = str(s or "").strip().upper()
     return _uimp_re.sub(r"[.\-\s/]", "", s).lstrip("0")
 
+def _uimp_extract_code(ext_key: str) -> str:
+    """Extrai o código de contas do formato Conta Azul: '4.03.01.01 Salários' → '4.03.01.01'."""
+    m = _uimp_re.match(r"^(\d[\d.]+\d)\s", str(ext_key).strip())
+    return m.group(1) if m else ""
+
 def _uimp_auto_match(ext_key: str, accounts) -> "Optional[int]":
     norm  = _uimp_normalize(ext_key)
     lower = str(ext_key).strip().lower()
+    # Tenta extrair código no formato Conta Azul "X.XX.XX.XX Nome"
+    code_part = _uimp_extract_code(ext_key)
+    if code_part:
+        norm_code = _uimp_normalize(code_part)
+        for acc in accounts:
+            if _uimp_normalize(acc.code) == norm_code:
+                return acc.id
+    # Fallback: normalização completa do código
     for acc in accounts:
         if norm and _uimp_normalize(acc.code) == norm:
             return acc.id
+    # Fallback: match pelo nome exato
     for acc in accounts:
         if acc.name.strip().lower() == lower:
             return acc.id
+    # Fallback: substring do nome
     for acc in accounts:
         an = acc.name.strip().lower()
         if lower and len(lower) > 4 and (lower in an or an in lower):
@@ -157,20 +172,24 @@ def _uimp_parse_value(val) -> float:
 def _uimp_parse_file(file_bytes: bytes, filename: str) -> list:
     """Returns list of rows (each row = list of raw values)."""
     fn = filename.lower()
-    if fn.endswith(".xlsx") or fn.endswith(".xls"):
+    # Detecta XLSX por magic bytes (PK zip) — Conta Azul exporta .xls que são XLSX
+    is_xlsx_bytes = file_bytes[:4] == b"PK\x03\x04"
+    if fn.endswith(".xlsx") or fn.endswith(".xls") or is_xlsx_bytes:
         try:
             import openpyxl as _opxl
         except ImportError:
             raise ImportError("Instale openpyxl: pip install openpyxl")
-        wb = _opxl.load_workbook(_uimp_io.BytesIO(file_bytes), data_only=True)
-        ws = wb.active
-        return [list(row) for row in ws.iter_rows(values_only=True)]
-    else:
-        text = file_bytes.decode("utf-8-sig", errors="replace")
-        sample = text[:2000]
-        delim  = ";" if sample.count(";") > sample.count(",") else ","
-        reader = _uimp_csv.reader(_uimp_io.StringIO(text), delimiter=delim)
-        return [list(row) for row in reader]
+        try:
+            wb = _opxl.load_workbook(_uimp_io.BytesIO(file_bytes), data_only=True)
+            ws = wb.active
+            return [list(row) for row in ws.iter_rows(values_only=True)]
+        except Exception:
+            pass  # fallback para CSV abaixo
+    text = file_bytes.decode("utf-8-sig", errors="replace")
+    sample = text[:2000]
+    delim  = ";" if sample.count(";") > sample.count(",") else ","
+    reader = _uimp_csv.reader(_uimp_io.StringIO(text), delimiter=delim)
+    return [list(row) for row in reader]
 
 # ── Rotas ─────────────────────────────────────────────────────────────────────
 
@@ -485,7 +504,7 @@ async def orc_import_executar(request: Request, session: Session = Depends(get_s
                 skipped_no_date += 1
                 continue
 
-            val = _uimp_parse_value(row[value_col] if value_col < len(row) else 0)
+            val = abs(_uimp_parse_value(row[value_col] if value_col < len(row) else 0))
             key = (int(acc_id), month)
             aggregated[key] = aggregated.get(key, 0.0) + val
             processed += 1
