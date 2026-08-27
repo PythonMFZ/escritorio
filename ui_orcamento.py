@@ -322,9 +322,9 @@ def _calc_dre_totalizer(acc, accounts_by_code: dict, all_accounts: list,
     Totaliza usando fórmula da conta (acc.formula = "01+02") ou fallback no dict.
     Soma algébrica direta — valores já carregam sinal no DB.
     """
-    formula_str = (acc.formula or "").strip()
+    formula_str = (acc.formula or "").strip().lstrip("=")
     if formula_str:
-        components = [c.strip() for c in formula_str.split("+") if c.strip()]
+        components = [c.strip().rstrip(".") for c in formula_str.split("+") if c.strip()]
     else:
         components = _DRE_TOTALIZER_FORMULAS.get(acc.code)
     if not components:
