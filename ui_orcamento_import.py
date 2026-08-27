@@ -56,9 +56,12 @@ except Exception as _e:
 
 # ── Helpers de cache persistente ──────────────────────────────────────────────
 
+import base64 as _uimp_b64
+import zlib   as _uimp_zlib
+
 def _uimp_cache_save(session, company_id: int, upload_key: str,
-                     filename: str, rows: list, header_row_idx: int) -> None:
-    # Limpa entradas antigas desta empresa
+                     filename: str, file_bytes: bytes, header_row_idx: int) -> None:
+    """Guarda o arquivo bruto (comprimido) no cache — evita serializar 23k linhas como JSON."""
     old = session.exec(
         select(BudgetUploadCache).where(
             BudgetUploadCache.company_id == company_id,
@@ -67,20 +70,13 @@ def _uimp_cache_save(session, company_id: int, upload_key: str,
     ).all()
     for o in old:
         session.delete(o)
-    # Serializa rows: converte datetime/date para string
-    def _ser(v):
-        if isinstance(v, (_uimp_dt,)):
-            return v.isoformat()
-        from datetime import date as _d
-        if isinstance(v, _d):
-            return v.isoformat()
-        return v
-    rows_ser = [[_ser(c) for c in row] for row in rows]
+    compressed = _uimp_b64.b64encode(_uimp_zlib.compress(file_bytes, level=6)).decode()
+    payload = _uimp_json.dumps({"type": "bytes", "data": compressed}, ensure_ascii=False)
     entry = BudgetUploadCache(
         upload_key=upload_key,
         company_id=company_id,
         filename=filename,
-        rows_json=_uimp_json.dumps(rows_ser, ensure_ascii=False),
+        rows_json=payload,
         header_row_idx=header_row_idx,
         expires_at=_uimp_dt.utcnow() + _uimp_td(hours=8),
     )
@@ -96,8 +92,15 @@ def _uimp_cache_get(session, upload_key: str, company_id: int) -> "dict|None":
     ).first()
     if not entry or entry.expires_at < _uimp_dt.utcnow():
         return None
+    payload = _uimp_json.loads(entry.rows_json)
+    if isinstance(payload, dict) and payload.get("type") == "bytes":
+        file_bytes = _uimp_zlib.decompress(_uimp_b64.b64decode(payload["data"]))
+        rows = _uimp_parse_file(file_bytes, entry.filename)
+    else:
+        # compatibilidade com cache antigo (rows JSON)
+        rows = payload
     return {
-        "rows": _uimp_json.loads(entry.rows_json),
+        "rows": rows,
         "filename": entry.filename,
         "header_row_idx": entry.header_row_idx,
         "company_id": company_id,
@@ -250,7 +253,7 @@ async def orc_import_upload(request: Request, session: Session = Depends(get_ses
         ).first()
 
         upload_key = str(_uimp_uuid.uuid4())
-        _uimp_cache_save(session, ctx.company.id, upload_key, filename, rows, header_row_idx)
+        _uimp_cache_save(session, ctx.company.id, upload_key, filename, file_bytes, header_row_idx)
 
         return JSONResponse({
             "ok": True,
