@@ -558,6 +558,33 @@ async def orcamento_grid(plan_id: int, request: Request, session: Session = Depe
 
 # ── API endpoints ─────────────────────────────────────────────────────────────
 
+@app.post("/api/orcamento/limpar-realizado")
+@require_login
+async def orcamento_limpar_realizado(request: Request, session: Session = Depends(get_session)):
+    ctx = get_tenant_context(request, session)
+    if not ctx or ctx.membership.role not in ("admin", "owner"):
+        return JSONResponse({"ok": False}, status_code=403)
+    body    = await request.json()
+    plan_id = int(body.get("plan_id") or 0)
+    month   = body.get("month")  # None = todos os meses
+    plan    = session.get(BudgetPlan, plan_id)
+    if not plan or plan.company_id != ctx.company.id:
+        return JSONResponse({"ok": False}, status_code=404)
+    q = select(BudgetEntry).where(BudgetEntry.plan_id == plan_id)
+    if month is not None:
+        q = q.where(BudgetEntry.month == int(month))
+    entries = session.exec(q).all()
+    cleared = 0
+    for e in entries:
+        if e.value_realized != 0.0:
+            e.value_realized = 0.0
+            e.updated_at     = utcnow()
+            session.add(e)
+            cleared += 1
+    session.commit()
+    return JSONResponse({"ok": True, "cleared": cleared})
+
+
 @app.post("/api/orcamento/entry")
 @require_login
 async def orcamento_save_entry(request: Request, session: Session = Depends(get_session)):
@@ -1469,6 +1496,11 @@ TEMPLATES["orcamento_grid.html"] = r"""
     <a href="/ferramentas/orcamento/importar" class="btn btn-outline-success btn-sm">
       <i class="bi bi-file-earmark-arrow-up me-1"></i>Importar Realizado
     </a>
+    {% if role in ["admin","owner"] %}
+    <button class="btn btn-outline-danger btn-sm" onclick="limparRealizado()">
+      <i class="bi bi-eraser me-1"></i>Limpar Realizado
+    </button>
+    {% endif %}
     <button class="btn btn-outline-primary btn-sm" onclick="augurAnalisar()">
       <i class="bi bi-robot me-1"></i>Augur Analisar
     </button>
@@ -1583,6 +1615,21 @@ async function saveEntry(input) {
   if (d.ok) { input.style.background='#d1fae5'; setTimeout(()=>input.style.background='transparent',800); }
 }
 document.querySelectorAll('.orc-val input').forEach(i => { i.dataset.prev = i.value; });
+
+async function limparRealizado() {
+  if (!confirm('Zerar todos os valores de Realizado deste plano? Esta ação não pode ser desfeita.')) return;
+  const r = await fetch('/api/orcamento/limpar-realizado', {
+    method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({plan_id: {{ plan.id }}})
+  });
+  const d = await r.json();
+  if (d.ok) {
+    alert('Realizado zerado (' + d.cleared + ' entradas). A página será recarregada.');
+    location.reload();
+  } else {
+    alert('Erro ao limpar realizado.');
+  }
+}
 
 async function augurAnalisar() {
   const box = document.getElementById('augurBox');
