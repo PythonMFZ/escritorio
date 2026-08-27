@@ -97,7 +97,6 @@ def _uimp_cache_get(session, upload_key: str, company_id: int) -> "dict|None":
         file_bytes = _uimp_zlib.decompress(_uimp_b64.b64decode(payload["data"]))
         rows = _uimp_parse_file(file_bytes, entry.filename)
     else:
-        # compatibilidade com cache antigo (rows JSON)
         rows = payload
     return {
         "rows": rows,
@@ -105,6 +104,43 @@ def _uimp_cache_get(session, upload_key: str, company_id: int) -> "dict|None":
         "header_row_idx": entry.header_row_idx,
         "company_id": company_id,
     }
+
+
+def _uimp_cache_iter(session, upload_key: str, company_id: int):
+    """Retorna (meta_dict, row_generator) sem materializar todos os rows — streaming."""
+    entry = session.exec(
+        select(BudgetUploadCache).where(
+            BudgetUploadCache.upload_key == upload_key,
+            BudgetUploadCache.company_id == company_id,
+        )
+    ).first()
+    if not entry or entry.expires_at < _uimp_dt.utcnow():
+        return None, None
+    payload = _uimp_json.loads(entry.rows_json)
+    meta = {"filename": entry.filename, "header_row_idx": entry.header_row_idx}
+    if isinstance(payload, dict) and payload.get("type") == "bytes":
+        file_bytes = _uimp_zlib.decompress(_uimp_b64.b64decode(payload["data"]))
+        fn = entry.filename.lower()
+        is_xlsx = file_bytes[:4] == b"PK\x03\x04" or fn.endswith(".xlsx") or fn.endswith(".xls")
+        if is_xlsx:
+            try:
+                import openpyxl as _opxl
+                wb = _opxl.load_workbook(_uimp_io.BytesIO(file_bytes), data_only=True, read_only=True)
+                ws = wb.active
+                def _gen(ws=ws, wb=wb):
+                    try:
+                        for row in ws.iter_rows(values_only=True):
+                            yield list(row)
+                    finally:
+                        wb.close()
+                return meta, _gen()
+            except Exception:
+                pass
+        # fallback CSV
+        rows = _uimp_parse_file(file_bytes, entry.filename)
+        return meta, iter(rows)
+    else:
+        return meta, iter(payload)
 
 # ── Helpers de parsing ─────────────────────────────────────────────────────────
 
@@ -183,12 +219,55 @@ def _uimp_parse_file(file_bytes: bytes, filename: str) -> list:
         except ImportError:
             raise ImportError("Instale openpyxl: pip install openpyxl")
         try:
-            wb = _opxl.load_workbook(_uimp_io.BytesIO(file_bytes), data_only=True)
+            wb = _opxl.load_workbook(_uimp_io.BytesIO(file_bytes), data_only=True, read_only=True)
             ws = wb.active
-            return [list(row) for row in ws.iter_rows(values_only=True)]
+            rows = [list(row) for row in ws.iter_rows(values_only=True)]
+            wb.close()
+            return rows
         except Exception:
             pass  # fallback para CSV abaixo
     text = file_bytes.decode("utf-8-sig", errors="replace")
+
+
+def _uimp_xlsx_stream_count(file_bytes: bytes, filename: str):
+    """Returns (header_row_idx, total_data_rows, headers, sample_rows) via streaming — no full materialization."""
+    fn = filename.lower()
+    is_xlsx_bytes = file_bytes[:4] == b"PK\x03\x04"
+    if fn.endswith(".xlsx") or fn.endswith(".xls") or is_xlsx_bytes:
+        try:
+            import openpyxl as _opxl
+            wb = _opxl.load_workbook(_uimp_io.BytesIO(file_bytes), data_only=True, read_only=True)
+            ws = wb.active
+            header_row_idx = 0
+            headers = []
+            sample = []
+            total = 0
+            for i, row in enumerate(ws.iter_rows(values_only=True)):
+                cells = list(row)
+                if i < 10 and not headers:
+                    if any(c is not None and str(c).strip() for c in cells):
+                        header_row_idx = i
+                        headers = [str(c) if c is not None else f"Col {j}" for j, c in enumerate(cells)]
+                elif headers:
+                    if any(c is not None for c in cells):
+                        total += 1
+                        if len(sample) < 4:
+                            sample.append([str(c) if c is not None else "" for c in cells])
+            wb.close()
+            return header_row_idx, total, headers, sample
+        except Exception:
+            pass
+    # fallback: parse all (CSV)
+    rows = _uimp_parse_file(file_bytes, filename)
+    header_row_idx = 0
+    for i, row in enumerate(rows[:10]):
+        if any(c is not None and str(c).strip() for c in row):
+            header_row_idx = i
+            break
+    headers = [str(c) if c is not None else f"Col {j}" for j, c in enumerate(rows[header_row_idx] if rows else [])]
+    data_rows = [r for r in rows[header_row_idx + 1:] if any(c is not None for c in r)]
+    sample = [[str(c) if c is not None else "" for c in r] for r in data_rows[:4]]
+    return header_row_idx, len(data_rows), headers, sample
     sample = text[:2000]
     delim  = ";" if sample.count(";") > sample.count(",") else ","
     reader = _uimp_csv.reader(_uimp_io.StringIO(text), delimiter=delim)
@@ -232,21 +311,8 @@ async def orc_import_upload(request: Request, session: Session = Depends(get_ses
         file_bytes = await file_obj.read()
         filename   = getattr(file_obj, "filename", None) or "upload.xlsx"
 
-        rows = _uimp_parse_file(file_bytes, filename)
-
-        # Detect header row (first non-empty row)
-        header_row_idx = 0
-        for i, row in enumerate(rows[:10]):
-            if any(c is not None and str(c).strip() for c in row):
-                header_row_idx = i
-                break
-
-        raw_headers = rows[header_row_idx] if rows else []
-        headers = [str(c) if c is not None else f"Col {i}" for i, c in enumerate(raw_headers)]
-        data_rows = [r for r in rows[header_row_idx + 1:] if any(c is not None for c in r)]
-
-        # Sample: first 4 data rows (display only)
-        sample = [[str(c) if c is not None else "" for c in r] for r in data_rows[:4]]
+        # Streaming scan: detect header + count rows without loading all into memory
+        header_row_idx, total_data_rows, headers, sample = _uimp_xlsx_stream_count(file_bytes, filename)
 
         cfg = session.exec(
             select(BudgetImportConfig).where(BudgetImportConfig.company_id == ctx.company.id)
@@ -259,7 +325,7 @@ async def orc_import_upload(request: Request, session: Session = Depends(get_ses
             "ok": True,
             "upload_key": upload_key,
             "filename": filename,
-            "total_rows": len(data_rows),
+            "total_rows": total_data_rows,
             "total_cols": len(headers),
             "headers": headers,
             "sample": sample,
@@ -290,8 +356,8 @@ async def orc_import_analisar(request: Request, session: Session = Depends(get_s
     header_row_idx = int(body.get("header_row_idx") or 0)
     plan_id        = int(body.get("plan_id") or 0)
 
-    cached = _uimp_cache_get(session, upload_key, ctx.company.id)
-    if not cached:
+    meta, row_iter = _uimp_cache_iter(session, upload_key, ctx.company.id)
+    if row_iter is None:
         return JSONResponse({"ok": False, "error": "Upload expirado. Faça o upload novamente."})
 
     # Resolve client_id do plano selecionado para filtrar contas corretamente
@@ -301,15 +367,17 @@ async def orc_import_analisar(request: Request, session: Session = Depends(get_s
         if plan and plan.company_id == ctx.company.id:
             plan_client_id = plan.client_id
 
-    rows      = cached["rows"]
-    data_rows = [r for r in rows[header_row_idx + 1:] if any(c is not None for c in r)]
-
-    # Aggregate per external account key
+    # Aggregate per external account key — streaming, sem materializar todos os rows
     unique: dict = {}   # ext_key → {count, total, months: set}
     years_seen   = set()
     date_errors  = 0
+    skip_rows    = header_row_idx + 1
+    row_num      = 0
 
-    for row in data_rows:
+    for row in row_iter:
+        row_num += 1
+        if row_num <= skip_rows:
+            continue
         try:
             ext_key = str(row[account_col] if account_col < len(row) else "").strip()
             if not ext_key or ext_key.lower() == "none":
@@ -388,7 +456,7 @@ async def orc_import_analisar(request: Request, session: Session = Depends(get_s
         "unique_accounts": result_accounts,
         "acc_options": acc_options,
         "years_seen": sorted(years_seen),
-        "total_rows": len(data_rows),
+        "total_rows": sum(s["count"] for s in unique.values()),
         "date_errors": date_errors,
     })
 
@@ -460,16 +528,13 @@ async def orc_import_executar(request: Request, session: Session = Depends(get_s
     header_row_idx = int(body.get("header_row_idx") or 0)
     mappings       = body.get("mappings", {})  # {external_key: account_id or null}
 
-    cached = _uimp_cache_get(session, upload_key, ctx.company.id)
-    if not cached:
+    meta, row_iter = _uimp_cache_iter(session, upload_key, ctx.company.id)
+    if row_iter is None:
         return JSONResponse({"ok": False, "error": "Upload expirado. Faça o upload novamente."})
 
     plan = session.get(BudgetPlan, plan_id)
     if not plan or plan.company_id != ctx.company.id:
         return JSONResponse({"ok": False, "error": "Plano não encontrado."})
-
-    rows      = cached["rows"]
-    data_rows = [r for r in rows[header_row_idx + 1:] if any(c is not None for c in r)]
 
     # Also load DB mappings as fallback
     db_maps = {
@@ -479,13 +544,18 @@ async def orc_import_executar(request: Request, session: Session = Depends(get_s
         ).all()
     }
 
-    # Aggregate: (account_id, month) → sum of values
+    # Aggregate: (account_id, month) → sum of values — streaming
     aggregated: dict = {}
     skipped_no_map  = 0
     skipped_no_date = 0
     processed       = 0
+    skip_rows       = header_row_idx + 1
+    row_num         = 0
 
-    for row in data_rows:
+    for row in row_iter:
+        row_num += 1
+        if row_num <= skip_rows:
+            continue
         if not any(c is not None for c in row):
             continue
         try:
