@@ -1150,13 +1150,26 @@ async function executarImport() {
     [1,2,3,4,5].forEach(function(i){var el=document.getElementById('passo'+i); if(el) el.style.display='none';});
     var res = document.getElementById('resultado');
     res.style.display = '';
+    var ignoradas = d.skipped_no_map + d.skipped_no_date;
+    var warnHtml = '';
+    if (d.upserted === 0) {
+      warnHtml = '<div class="alert alert-danger mt-2 py-2" style="font-size:.83rem;">⚠️ Nenhum lançamento foi salvo. ' +
+        (d.skipped_no_map > 0 ? d.skipped_no_map + ' linhas ignoradas por falta de mapeamento (volte ao passo 4 e mapeie as contas). ' : '') +
+        (d.skipped_no_date > 0 ? d.skipped_no_date + ' linhas ignoradas por data inválida. ' : '') +
+        '</div>';
+    } else if (ignoradas > 0) {
+      warnHtml = '<div class="alert alert-warning mt-2 py-2" style="font-size:.83rem;">⚠️ ' + ignoradas + ' linha(s) ignorada(s): ' +
+        (d.skipped_no_map > 0 ? d.skipped_no_map + ' sem conta mapeada, ' : '') +
+        (d.skipped_no_date > 0 ? d.skipped_no_date + ' com data inválida' : '') +
+        '</div>';
+    }
     document.getElementById('resultadoBody').innerHTML =
       '<div class="row g-2 mt-1">' +
-      _statCard('Contas atualizadas', d.upserted, 'success') +
+      _statCard('Contas atualizadas', d.upserted, d.upserted > 0 ? 'success' : 'danger') +
       _statCard('Linhas processadas', d.processed_rows, 'primary') +
-      _statCard('Ignoradas', d.skipped_no_map + d.skipped_no_date, 'secondary') +
+      _statCard('Ignoradas', ignoradas, ignoradas > 0 ? 'warning' : 'secondary') +
       _statCard('Valor importado', 'R$ '+_fmt(d.total_value), 'success') +
-      '</div>';
+      '</div>' + warnHtml;
     document.getElementById('btnVerOrc').href = '/ferramentas/orcamento/' + _imp.plan_id;
 
   } catch(e) {

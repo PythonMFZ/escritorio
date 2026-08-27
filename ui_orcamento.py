@@ -531,7 +531,9 @@ async def orcamento_grid(plan_id: int, request: Request, session: Session = Depe
     plan = session.get(BudgetPlan, plan_id)
     if not plan or plan.company_id != ctx.company.id:
         return RedirectResponse("/ferramentas/orcamento", status_code=303)
-    client_id = get_active_client_id(request, session, ctx)
+    # Usa client_id do plano, não o cliente ativo na sessão
+    # Garante que as contas corretas são carregadas mesmo sem o cliente ativo
+    client_id = plan.client_id
     cc = get_client_or_none(session, ctx.company.id, client_id)
 
     rows = _load_grid(session, ctx.company.id, plan_id, client_id)
