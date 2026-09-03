@@ -19,12 +19,19 @@
 
 import os as _os2
 import sys
+import threading as _threading_w
 import json as _json_w
 import shutil as _shutil
 import tempfile as _tmpfile
 from pathlib import Path as _Path
 from datetime import datetime as _dt_w, timedelta as _td_w
 from fastapi import BackgroundTasks as _BG
+
+# Semáforo: apenas 1 transcrição simultânea para não exceder RAM do servidor
+_TRANSCRIPTION_LOCK = _threading_w.Semaphore(1)
+
+# Variável de ambiente para desabilitar whisper local (use no Render se só tiver API keys)
+_DISABLE_LOCAL_WHISPER = _os2.environ.get("DISABLE_LOCAL_WHISPER", "").lower() in ("1", "true", "yes")
 
 # ── Configuração de paths ─────────────────────────────────────────────────────
 
@@ -48,7 +55,7 @@ def _cleanup_orphan_wavs():
     try:
         removed = 0
         freed = 0
-        cutoff = _time_cl.time() - 1 * 86400  # 1 dia (eram 7, reduzido para economizar espaço)
+        cutoff = _time_cl.time() - 1 * 86400  # 1 dia
         for f in list(_AUDIO_DIR.glob("*")):
             try:
                 if f.stat().st_mtime < cutoff:
@@ -56,6 +63,27 @@ def _cleanup_orphan_wavs():
                     f.unlink()
                     removed += 1
                     freed += size
+            except Exception:
+                pass
+        # Limpa também WAVs/OGGs temporários de workers que foram mortos por OOM
+        for pattern in ("*.local16k.wav", "*.worker16k.wav"):
+            for f in list(_AUDIO_DIR.glob(pattern)):
+                try:
+                    size = f.stat().st_size
+                    f.unlink()
+                    removed += 1
+                    freed += size
+                except Exception:
+                    pass
+        # Limpa diretórios temporários do whisper (prefixo whisper_)
+        import tempfile as _tc
+        tmp_base = _Path(_tc.gettempdir())
+        for d in list(tmp_base.glob("whisper_*")):
+            try:
+                age = _time_cl.time() - d.stat().st_mtime
+                if age > 3600 and d.is_dir():  # mais de 1 hora = órfão
+                    _shutil.rmtree(d, ignore_errors=True)
+                    removed += 1
             except Exception:
                 pass
         if removed:
@@ -369,6 +397,22 @@ def _processar_audio_background(
     """
     print(f"[whisper] Iniciando transcrição da reunião {meeting_id}...")
 
+    acquired = _TRANSCRIPTION_LOCK.acquire(blocking=True, timeout=3600)  # espera até 1h
+    if not acquired:
+        print(f"[whisper] ❌ Timeout aguardando semáforo — transcrição descartada para reunião {meeting_id}")
+        return
+
+    try:
+        _processar_audio_background_inner(meeting_id, audio_path, company_id)
+    finally:
+        _TRANSCRIPTION_LOCK.release()
+
+
+def _processar_audio_background_inner(
+    meeting_id: int,
+    audio_path: str,
+    company_id: int,
+):
     from sqlmodel import Session as _SessW
     with _SessW(engine) as _sess:
         mt = _sess.get(Meeting, meeting_id)
@@ -439,8 +483,8 @@ def _processar_audio_background(
             if _tmp_dir_whisper:
                 _shutil.rmtree(_tmp_dir_whisper, ignore_errors=True)
 
-    # ── Fallback: faster-whisper local (apenas se sem API keys) ─────────────
-    if not transcricao and not openai_key and not groq_key and _Path(audio_path).exists():
+    # ── Fallback: faster-whisper local (apenas se sem API keys e não desabilitado) ─
+    if not transcricao and not openai_key and not groq_key and not _DISABLE_LOCAL_WHISPER and _Path(audio_path).exists():
         try:
             transcricao = _transcrever_local_faster_whisper(audio_path)
             if transcricao:
