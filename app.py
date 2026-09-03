@@ -13741,6 +13741,7 @@ async def consultoria_list(request: Request, session: Session = Depends(get_sess
 
 
 @app.get("/consultoria/novo", response_class=HTMLResponse)
+@require_login
 @require_role({"admin", "equipe"})
 async def consultoria_new_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
     ctx = get_tenant_context(request, session)
@@ -13773,6 +13774,7 @@ async def consultoria_new_page(request: Request, session: Session = Depends(get_
 
 
 @app.get("/consultoria/{project_id}/editar", response_class=HTMLResponse)
+@require_login
 @require_role({"admin", "equipe"})
 async def consultoria_edit_project_page(request: Request, session: Session = Depends(get_session),
                                         project_id: int = 0) -> HTMLResponse:
@@ -13801,6 +13803,7 @@ async def consultoria_edit_project_page(request: Request, session: Session = Dep
 
 
 @app.post("/consultoria/{project_id}/editar")
+@require_login
 @require_role({"admin", "equipe"})
 async def consultoria_edit_project_action(
         request: Request,
@@ -13844,6 +13847,7 @@ async def consultoria_edit_project_action(
 
 
 @app.post("/consultoria/{project_id}/excluir")
+@require_login
 @require_role({"admin", "equipe"})
 async def consultoria_delete_project(request: Request, session: Session = Depends(get_session),
                                      project_id: int = 0) -> Response:
@@ -13877,6 +13881,7 @@ async def consultoria_delete_project(request: Request, session: Session = Depend
 
 
 @app.get("/consultoria/stages/{stage_id}/editar", response_class=HTMLResponse)
+@require_login
 @require_role({"admin", "equipe"})
 async def consultoria_edit_stage_page(request: Request, session: Session = Depends(get_session),
                                       stage_id: int = 0) -> HTMLResponse:
@@ -13908,6 +13913,7 @@ async def consultoria_edit_stage_page(request: Request, session: Session = Depen
 
 
 @app.post("/consultoria/stages/{stage_id}/editar")
+@require_login
 @require_role({"admin", "equipe"})
 async def consultoria_edit_stage_action(
         request: Request,
@@ -13951,6 +13957,7 @@ async def consultoria_edit_stage_action(
 
 
 @app.post("/consultoria/stages/{stage_id}/excluir")
+@require_login
 @require_role({"admin", "equipe"})
 async def consultoria_delete_stage(request: Request, session: Session = Depends(get_session),
                                    stage_id: int = 0) -> Response:
@@ -13985,6 +13992,7 @@ async def consultoria_delete_stage(request: Request, session: Session = Depends(
 
 
 @app.get("/consultoria/steps/{step_id}/editar", response_class=HTMLResponse)
+@require_login
 @require_role({"admin", "equipe"})
 async def consultoria_edit_step_page(request: Request, session: Session = Depends(get_session),
                                      step_id: int = 0) -> HTMLResponse:
@@ -14017,6 +14025,7 @@ async def consultoria_edit_step_page(request: Request, session: Session = Depend
 
 
 @app.post("/consultoria/steps/{step_id}/editar")
+@require_login
 @require_role({"admin", "equipe"})
 async def consultoria_edit_step_action(
         request: Request,
@@ -14066,6 +14075,7 @@ async def consultoria_edit_step_action(
 
 
 @app.post("/consultoria/steps/{step_id}/excluir")
+@require_login
 @require_role({"admin", "equipe"})
 async def consultoria_delete_step(request: Request, session: Session = Depends(get_session),
                                   step_id: int = 0) -> Response:
@@ -14098,6 +14108,7 @@ async def consultoria_delete_step(request: Request, session: Session = Depends(g
 
 
 @app.post("/consultoria/novo")
+@require_login
 @require_role({"admin", "equipe"})
 async def consultoria_new_action(
         request: Request,
@@ -14204,6 +14215,7 @@ async def consultoria_detail(request: Request, session: Session = Depends(get_se
 
 
 @app.post("/consultoria/{project_id}/stages")
+@require_login
 @require_role({"admin", "equipe"})
 async def consultoria_add_stage(
         request: Request,
@@ -14239,6 +14251,7 @@ async def consultoria_add_stage(
 
 
 @app.post("/consultoria/stages/{stage_id}/steps")
+@require_login
 @require_role({"admin", "equipe"})
 async def consultoria_add_step(
         request: Request,
@@ -14689,6 +14702,7 @@ async def smart_alert_mark_read(request: Request, alert_id: int, session: Sessio
 # ----------------------------
 
 @app.get("/admin/familias", response_class=HTMLResponse)
+@require_login
 @require_role({"admin", "equipe"})
 async def admin_familias_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
     ctx = get_tenant_context(request, session)
@@ -14703,6 +14717,7 @@ async def admin_familias_page(request: Request, session: Session = Depends(get_s
 
 
 @app.get("/admin/servicos-internos", response_class=HTMLResponse)
+@require_login
 @require_role({"admin", "equipe"})
 async def admin_servicos_internos_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
     ctx = get_tenant_context(request, session)
@@ -14722,6 +14737,7 @@ async def admin_servicos_internos_page(request: Request, session: Session = Depe
 
 
 @app.post("/admin/servicos-internos/add")
+@require_login
 @require_role({"admin", "equipe"})
 async def admin_servicos_internos_add(request: Request, session: Session = Depends(get_session), area: str = Form(...),
                                       family_code: str = Form(...), name: str = Form(...), description: str = Form(""),
@@ -14745,6 +14761,7 @@ async def admin_servicos_internos_add(request: Request, session: Session = Depen
 
 
 @app.get("/admin/parceiros", response_class=HTMLResponse)
+@require_login
 @require_role({"admin", "equipe"})
 async def admin_parceiros_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
     ctx = get_tenant_context(request, session)
@@ -14767,6 +14784,7 @@ async def admin_parceiros_page(request: Request, session: Session = Depends(get_
 
 
 @app.post("/admin/parceiros/add")
+@require_login
 @require_role({"admin", "equipe"})
 async def admin_parceiros_add(request: Request, session: Session = Depends(get_session), name: str = Form(...),
                               partner_type: str = Form("financeiro"), contact_name: str = Form(""),
@@ -14793,6 +14811,7 @@ async def admin_parceiros_add(request: Request, session: Session = Depends(get_s
 
 
 @app.post("/admin/parceiros/products/add")
+@require_login
 @require_role({"admin", "equipe"})
 async def admin_partner_product_add(request: Request, session: Session = Depends(get_session),
                                     partner_id: int = Form(...), area: str = Form(...), family_code: str = Form(...),
@@ -14850,6 +14869,7 @@ async def admin_partner_product_add(request: Request, session: Session = Depends
 
 
 @app.post("/admin/parceiros/campaigns/add")
+@require_login
 @require_role({"admin", "equipe"})
 async def admin_partner_campaign_add(request: Request, session: Session = Depends(get_session),
                                      partner_product_id: int = Form(...), title: str = Form(...),
@@ -14881,6 +14901,7 @@ async def admin_partner_campaign_add(request: Request, session: Session = Depend
 
 
 @app.get("/motor-ofertas", response_class=HTMLResponse)
+@require_login
 @require_role({"admin", "equipe"})
 async def motor_ofertas_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
     ctx = get_tenant_context(request, session)
@@ -14901,6 +14922,7 @@ async def motor_ofertas_page(request: Request, session: Session = Depends(get_se
 
 
 @app.post("/motor-ofertas/gerar")
+@require_login
 @require_role({"admin", "equipe"})
 async def motor_ofertas_generate(request: Request, session: Session = Depends(get_session)) -> Response:
     ctx = get_tenant_context(request, session)
@@ -14991,6 +15013,7 @@ async def ofertas_page(request: Request, session: Session = Depends(get_session)
 
 
 @app.get("/client/switch", response_class=HTMLResponse)
+@require_login
 @require_role({"admin", "equipe"})
 async def client_switch_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
     ctx = get_tenant_context(request, session)
@@ -15049,6 +15072,7 @@ async def client_switch_page(request: Request, session: Session = Depends(get_se
 
 
 @app.post("/client/switch")
+@require_login
 @require_role({"admin", "equipe"})
 async def client_switch_action(
         request: Request,
@@ -15095,6 +15119,7 @@ def _expire_invite_if_needed(session: Session, inv: ClientInvite) -> None:
 
 
 @app.post("/client/invite")
+@require_login
 @require_role({"admin", "equipe"})
 async def client_invite_create(
         request: Request,
@@ -15434,6 +15459,7 @@ async def invite_signup_action(
 
 
 @app.get("/admin/members", response_class=HTMLResponse)
+@require_login
 @require_role({"admin", "equipe"})
 async def members_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
     ctx = get_tenant_context(request, session)
@@ -15493,6 +15519,7 @@ async def members_page(request: Request, session: Session = Depends(get_session)
 
 
 @app.post("/admin/members")
+@require_login
 @require_role({"admin", "equipe"})
 async def members_add_action(
         request: Request,
@@ -15576,6 +15603,7 @@ async def members_add_action(
 
 
 @app.post("/admin/members/{membership_id}/features")
+@require_login
 @require_role({"admin", "equipe"})
 async def member_features_update(
         request: Request,
@@ -15612,6 +15640,7 @@ async def member_features_update(
 
 
 @app.post("/admin/members/{membership_id}/link-client")
+@require_login
 @require_role({"admin", "equipe"})
 async def member_link_client(
         request: Request,
@@ -15649,6 +15678,7 @@ async def member_link_client(
 
 
 @app.post("/admin/members/{membership_id}/set-whatsapp")
+@require_login
 @require_role({"admin", "equipe"})
 async def member_set_whatsapp(
         request: Request,
@@ -15672,6 +15702,7 @@ async def member_set_whatsapp(
 
 
 @app.post("/admin/members/{membership_id}/remover")
+@require_login
 @require_role({"admin", "equipe"})
 async def member_remover(
         request: Request,
@@ -15769,6 +15800,7 @@ async def client_access_page(
 
 
 @app.post("/admin/clients/{client_id}/access")
+@require_login
 @require_role({"admin", "equipe"})
 async def client_access_save(
         request: Request,
@@ -16764,6 +16796,7 @@ async def pending_list(request: Request, session: Session = Depends(get_session)
 
 
 @app.get("/pendencias/cliente/novo", response_class=HTMLResponse)
+@require_login
 @require_role({"admin", "equipe"})
 async def pending_new_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
     ctx = get_tenant_context(request, session)
@@ -16790,6 +16823,7 @@ async def pending_new_page(request: Request, session: Session = Depends(get_sess
 
 
 @app.post("/pendencias/cliente/novo")
+@require_login
 @require_role({"admin", "equipe"})
 async def pending_new_action(
         request: Request,
@@ -16904,6 +16938,7 @@ async def pending_detail(request: Request, session: Session = Depends(get_sessio
 
 
 @app.post("/pendencias/{item_id}/status")
+@require_login
 @require_role({"admin", "equipe"})
 async def pending_update_status(
         request: Request,
@@ -16938,6 +16973,7 @@ async def pending_update_status(
 
 
 @app.post("/pendencias/{item_id}/anexar")
+@require_login
 @require_role({"admin", "equipe"})
 async def pending_attach_admin(
         request: Request,
@@ -16994,6 +17030,7 @@ async def pending_attach_admin(
 
 
 @app.post("/pendencias/{item_id}/cliente-upload")
+@require_login
 @require_role({"cliente"})
 async def pending_attach_client(
         request: Request,
@@ -17117,6 +17154,7 @@ async def docs_list(request: Request, session: Session = Depends(get_session)) -
 
 
 @app.get("/documentos/novo", response_class=HTMLResponse)
+@require_login
 @require_role({"admin", "equipe"})
 async def docs_new_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
     ctx = get_tenant_context(request, session)
@@ -17143,6 +17181,7 @@ async def docs_new_page(request: Request, session: Session = Depends(get_session
 
 
 @app.post("/documentos/novo")
+@require_login
 @require_role({"admin", "equipe"})
 async def docs_new_action(
         request: Request,
@@ -17270,6 +17309,7 @@ async def docs_detail(request: Request, session: Session = Depends(get_session),
 
 
 @app.post("/documentos/{doc_id}/status")
+@require_login
 @require_role({"admin", "equipe"})
 async def docs_update_status(
         request: Request, session: Session = Depends(get_session), doc_id: int = 0, status: str = Form(...)
@@ -17302,6 +17342,7 @@ async def docs_update_status(
 
 
 @app.post("/documentos/{doc_id}/anexar")
+@require_login
 @require_role({"admin", "equipe"})
 async def docs_attach_admin(
         request: Request,
@@ -17353,6 +17394,7 @@ async def docs_attach_admin(
 
 
 @app.post("/documentos/{doc_id}/cliente-upload")
+@require_login
 @require_role({"cliente"})
 async def docs_attach_client(
         request: Request,
@@ -17481,6 +17523,7 @@ async def props_list(request: Request, session: Session = Depends(get_session)) 
 
 
 @app.get("/propostas/nova", response_class=HTMLResponse)
+@require_login
 @require_role({"admin", "equipe"})
 async def props_new_staff_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
     ctx = get_tenant_context(request, session)
@@ -17507,6 +17550,7 @@ async def props_new_staff_page(request: Request, session: Session = Depends(get_
 
 
 @app.post("/propostas/nova")
+@require_login
 @require_role({"admin", "equipe"})
 async def props_new_staff_action(
         request: Request,
@@ -17583,6 +17627,7 @@ async def props_new_staff_action(
 
 
 @app.get("/propostas/solicitacao", response_class=HTMLResponse)
+@require_login
 @require_role({"cliente"})
 async def props_new_client_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
     ctx = get_tenant_context(request, session)
@@ -17607,6 +17652,7 @@ async def props_new_client_page(request: Request, session: Session = Depends(get
 
 
 @app.post("/propostas/solicitacao")
+@require_login
 @require_role({"cliente"})
 async def props_new_client_action(
         request: Request,
@@ -17726,6 +17772,7 @@ async def props_detail(request: Request, session: Session = Depends(get_session)
 
 
 @app.post("/propostas/{prop_id}/atualizar")
+@require_login
 @require_role({"admin", "equipe"})
 async def props_update_staff(
         request: Request,
@@ -17775,6 +17822,7 @@ async def props_update_staff(
 
 
 @app.post("/propostas/{prop_id}/excluir")
+@require_login
 @require_role({"admin", "equipe"})
 async def props_delete_staff(request: Request, session: Session = Depends(get_session), prop_id: int = 0) -> Response:
     ctx = get_tenant_context(request, session)
@@ -17806,6 +17854,7 @@ async def props_delete_staff(request: Request, session: Session = Depends(get_se
 
 
 @app.post("/propostas/{prop_id}/anexar")
+@require_login
 @require_role({"admin", "equipe"})
 async def props_attach_staff(
         request: Request,
@@ -17850,6 +17899,7 @@ async def props_attach_staff(
 
 
 @app.post("/propostas/{prop_id}/cliente-upload")
+@require_login
 @require_role({"cliente"})
 async def props_client_upload(
         request: Request,
@@ -17910,6 +17960,7 @@ async def props_client_upload(
 # ----------------------------
 
 @app.get("/integrations/contaazul", response_class=HTMLResponse)
+@require_login
 @require_role({"admin", "equipe"})
 async def contaazul_settings(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
     ctx = get_tenant_context(request, session)
@@ -17940,6 +17991,7 @@ async def contaazul_settings(request: Request, session: Session = Depends(get_se
 
 
 @app.get("/integrations/contaazul/diag")
+@require_login
 @require_role({"admin", "equipe"})
 async def contaazul_diag(request: Request, session: Session = Depends(get_session)) -> JSONResponse:
     """Diagnóstico rápido da integração Conta Azul (sem tocar em dados financeiros)."""
@@ -17979,6 +18031,7 @@ async def contaazul_diag(request: Request, session: Session = Depends(get_sessio
 
 
 @app.get("/integrations/contaazul/connect")
+@require_login
 @require_role({"admin", "equipe"})
 async def contaazul_connect(request: Request, session: Session = Depends(get_session)) -> Response:
     ctx = get_tenant_context(request, session)
@@ -18009,6 +18062,7 @@ async def contaazul_connect(request: Request, session: Session = Depends(get_ses
 
 
 @app.get("/integrations/contaazul/callback")
+@require_login
 @require_role({"admin", "equipe"})
 async def contaazul_callback(request: Request, session: Session = Depends(get_session)) -> Response:
     ctx = get_tenant_context(request, session)
@@ -18056,6 +18110,7 @@ async def contaazul_callback(request: Request, session: Session = Depends(get_se
 
 
 @app.post("/integrations/contaazul/disconnect")
+@require_login
 @require_role({"admin", "equipe"})
 async def contaazul_disconnect(request: Request, session: Session = Depends(get_session)) -> Response:
     ctx = get_tenant_context(request, session)
@@ -18069,6 +18124,7 @@ async def contaazul_disconnect(request: Request, session: Session = Depends(get_
 
 
 @app.post("/financeiro/contaazul/sync")
+@require_login
 @require_role({"admin", "equipe"})
 async def contaazul_sync_now(request: Request, background_tasks: BackgroundTasks,
                              session: Session = Depends(get_session)) -> Response:
@@ -18109,6 +18165,7 @@ async def contaazul_sync_now(request: Request, background_tasks: BackgroundTasks
 
 
 @app.post("/financeiro/contaazul/auto_vincular")
+@require_login
 @require_role({"admin", "equipe"})
 async def contaazul_auto_vincular(request: Request, session: Session = Depends(get_session)) -> Response:
     ctx = get_tenant_context(request, session)
@@ -18143,6 +18200,7 @@ async def contaazul_auto_vincular(request: Request, session: Session = Depends(g
 
 
 @app.post("/financeiro/contaazul/vincular")
+@require_login
 @require_role({"admin", "equipe"})
 async def contaazul_vincular_manual(
         request: Request,
@@ -18177,6 +18235,7 @@ async def contaazul_vincular_manual(
 
 
 @app.get("/financeiro/contaazul/test", response_class=JSONResponse)
+@require_login
 @require_role({"admin", "equipe"})
 async def contaazul_test_mapping(request: Request, session: Session = Depends(get_session)) -> JSONResponse:
     """Diagnóstico rápido do mapeamento e filtros do Conta Azul para o cliente selecionado.
@@ -19293,6 +19352,7 @@ def _office_entry_apply_form(*, entry: OfficeFinancialEntry, company_id: int, cu
 
 
 @app.get("/admin/financeiro", response_class=HTMLResponse)
+@require_login
 @require_role({"admin", "equipe"})
 async def office_finance_dashboard(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
     ctx = get_tenant_context(request, session)
@@ -19333,6 +19393,7 @@ async def office_finance_dashboard(request: Request, session: Session = Depends(
 
 
 @app.get("/admin/financeiro/cadastros", response_class=HTMLResponse)
+@require_login
 @require_role({"admin", "equipe"})
 async def office_finance_registry_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
     ctx = get_tenant_context(request, session)
@@ -19359,6 +19420,7 @@ async def office_finance_registry_page(request: Request, session: Session = Depe
 
 
 @app.post("/admin/financeiro/cadastros/fornecedores")
+@require_login
 @require_role({"admin", "equipe"})
 async def office_finance_supplier_create(
         request: Request,
@@ -19394,6 +19456,7 @@ async def office_finance_supplier_create(
 
 
 @app.post("/admin/financeiro/cadastros/centros-custo")
+@require_login
 @require_role({"admin", "equipe"})
 async def office_finance_cost_center_create(
         request: Request,
@@ -19422,6 +19485,7 @@ async def office_finance_cost_center_create(
 
 
 @app.post("/admin/financeiro/cadastros/categorias")
+@require_login
 @require_role({"admin", "equipe"})
 async def office_finance_category_create(
         request: Request,
@@ -19459,6 +19523,7 @@ async def office_finance_category_create(
 
 
 @app.post("/admin/financeiro/cadastros/tipos-receita")
+@require_login
 @require_role({"admin", "equipe"})
 async def office_finance_revenue_type_create(
         request: Request,
@@ -19486,6 +19551,7 @@ async def office_finance_revenue_type_create(
 
 
 @app.post("/admin/financeiro/cadastros/contas")
+@require_login
 @require_role({"admin", "equipe"})
 async def office_finance_bank_account_create(
         request: Request,
@@ -19529,6 +19595,7 @@ async def office_finance_bank_account_create(
 # ── Editar / Excluir cadastros ────────────────────────────────────────────────
 
 @app.post("/admin/financeiro/cadastros/fornecedores/{item_id}/editar")
+@require_login
 @require_role({"admin", "equipe"})
 async def office_finance_supplier_edit(item_id: int, request: Request, session: Session = Depends(get_session),
         name: str = Form(""), document: str = Form(""), email: str = Form(""), phone: str = Form(""), notes: str = Form("")) -> Response:
@@ -19541,6 +19608,7 @@ async def office_finance_supplier_edit(item_id: int, request: Request, session: 
     return RedirectResponse("/admin/financeiro/cadastros", status_code=303)
 
 @app.post("/admin/financeiro/cadastros/fornecedores/{item_id}/excluir")
+@require_login
 @require_role({"admin", "equipe"})
 async def office_finance_supplier_delete(item_id: int, request: Request, session: Session = Depends(get_session)) -> Response:
     ctx = get_tenant_context(request, session); assert ctx is not None
@@ -19550,6 +19618,7 @@ async def office_finance_supplier_delete(item_id: int, request: Request, session
     return RedirectResponse("/admin/financeiro/cadastros", status_code=303)
 
 @app.post("/admin/financeiro/cadastros/centros-custo/{item_id}/editar")
+@require_login
 @require_role({"admin", "equipe"})
 async def office_finance_cost_center_edit(item_id: int, request: Request, session: Session = Depends(get_session),
         code: str = Form(""), name: str = Form(""), notes: str = Form("")) -> Response:
@@ -19561,6 +19630,7 @@ async def office_finance_cost_center_edit(item_id: int, request: Request, sessio
     return RedirectResponse("/admin/financeiro/cadastros", status_code=303)
 
 @app.post("/admin/financeiro/cadastros/centros-custo/{item_id}/excluir")
+@require_login
 @require_role({"admin", "equipe"})
 async def office_finance_cost_center_delete(item_id: int, request: Request, session: Session = Depends(get_session)) -> Response:
     ctx = get_tenant_context(request, session); assert ctx is not None
@@ -19570,6 +19640,7 @@ async def office_finance_cost_center_delete(item_id: int, request: Request, sess
     return RedirectResponse("/admin/financeiro/cadastros", status_code=303)
 
 @app.post("/admin/financeiro/cadastros/categorias/{item_id}/editar")
+@require_login
 @require_role({"admin", "equipe"})
 async def office_finance_category_edit(item_id: int, request: Request, session: Session = Depends(get_session),
         name: str = Form(""), category_kind: str = Form("despesa"), dre_group: str = Form(""), notes: str = Form("")) -> Response:
@@ -19582,6 +19653,7 @@ async def office_finance_category_edit(item_id: int, request: Request, session: 
     return RedirectResponse("/admin/financeiro/cadastros", status_code=303)
 
 @app.post("/admin/financeiro/cadastros/categorias/{item_id}/excluir")
+@require_login
 @require_role({"admin", "equipe"})
 async def office_finance_category_delete(item_id: int, request: Request, session: Session = Depends(get_session)) -> Response:
     ctx = get_tenant_context(request, session); assert ctx is not None
@@ -19591,6 +19663,7 @@ async def office_finance_category_delete(item_id: int, request: Request, session
     return RedirectResponse("/admin/financeiro/cadastros", status_code=303)
 
 @app.post("/admin/financeiro/cadastros/tipos-receita/{item_id}/editar")
+@require_login
 @require_role({"admin", "equipe"})
 async def office_finance_revenue_type_edit(item_id: int, request: Request, session: Session = Depends(get_session),
         name: str = Form(""), description: str = Form("")) -> Response:
@@ -19602,6 +19675,7 @@ async def office_finance_revenue_type_edit(item_id: int, request: Request, sessi
     return RedirectResponse("/admin/financeiro/cadastros", status_code=303)
 
 @app.post("/admin/financeiro/cadastros/tipos-receita/{item_id}/excluir")
+@require_login
 @require_role({"admin", "equipe"})
 async def office_finance_revenue_type_delete(item_id: int, request: Request, session: Session = Depends(get_session)) -> Response:
     ctx = get_tenant_context(request, session); assert ctx is not None
@@ -19611,6 +19685,7 @@ async def office_finance_revenue_type_delete(item_id: int, request: Request, ses
     return RedirectResponse("/admin/financeiro/cadastros", status_code=303)
 
 @app.post("/admin/financeiro/cadastros/contas/{item_id}/editar")
+@require_login
 @require_role({"admin", "equipe"})
 async def office_finance_bank_account_edit(item_id: int, request: Request, session: Session = Depends(get_session),
         name: str = Form(""), bank_name: str = Form(""), branch_number: str = Form(""),
@@ -19625,6 +19700,7 @@ async def office_finance_bank_account_edit(item_id: int, request: Request, sessi
     return RedirectResponse("/admin/financeiro/cadastros", status_code=303)
 
 @app.post("/admin/financeiro/cadastros/contas/{item_id}/excluir")
+@require_login
 @require_role({"admin", "equipe"})
 async def office_finance_bank_account_delete(item_id: int, request: Request, session: Session = Depends(get_session)) -> Response:
     ctx = get_tenant_context(request, session); assert ctx is not None
@@ -19635,6 +19711,7 @@ async def office_finance_bank_account_delete(item_id: int, request: Request, ses
 
 
 @app.get("/admin/financeiro/novo", response_class=HTMLResponse)
+@require_login
 @require_role({"admin", "equipe"})
 async def office_finance_new_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
     ctx = get_tenant_context(request, session)
@@ -19663,6 +19740,7 @@ async def office_finance_new_page(request: Request, session: Session = Depends(g
 
 
 @app.post("/admin/financeiro/novo")
+@require_login
 @require_role({"admin", "equipe"})
 async def office_finance_new_action(request: Request, session: Session = Depends(get_session)) -> Response:
     ctx = get_tenant_context(request, session)
@@ -19683,6 +19761,7 @@ async def office_finance_new_action(request: Request, session: Session = Depends
 
 
 @app.get("/admin/financeiro/{entry_id}/editar", response_class=HTMLResponse)
+@require_login
 @require_role({"admin", "equipe"})
 async def office_finance_edit_page(request: Request, session: Session = Depends(get_session),
                                    entry_id: int = 0) -> HTMLResponse:
@@ -19713,6 +19792,7 @@ async def office_finance_edit_page(request: Request, session: Session = Depends(
 
 
 @app.post("/admin/financeiro/{entry_id}/editar")
+@require_login
 @require_role({"admin", "equipe"})
 async def office_finance_edit_action(request: Request, session: Session = Depends(get_session),
                                      entry_id: int = 0) -> Response:
@@ -19738,6 +19818,7 @@ async def office_finance_edit_action(request: Request, session: Session = Depend
 
 
 @app.post("/admin/financeiro/{entry_id}/excluir")
+@require_login
 @require_role({"admin", "equipe"})
 async def office_finance_delete_action(request: Request, session: Session = Depends(get_session),
                                        entry_id: int = 0) -> Response:
@@ -19772,6 +19853,7 @@ async def office_finance_delete_action(request: Request, session: Session = Depe
 
 
 @app.get("/admin/financeiro/dre", response_class=HTMLResponse)
+@require_login
 @require_role({"admin", "equipe"})
 async def office_finance_dre_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
     ctx = get_tenant_context(request, session)
@@ -19810,6 +19892,7 @@ async def office_finance_dre_page(request: Request, session: Session = Depends(g
 
 
 @app.get("/admin/financeiro/fluxo-caixa", response_class=HTMLResponse)
+@require_login
 @require_role({"admin", "equipe"})
 async def office_finance_cashflow_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
     ctx = get_tenant_context(request, session)
@@ -19960,6 +20043,7 @@ async def fin_list(request: Request, session: Session = Depends(get_session)) ->
 
 
 @app.get("/financeiro/contaazul/debug", response_class=HTMLResponse)
+@require_login
 @require_role({"admin", "equipe"})
 async def contaazul_debug_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
     """Página HTML simples para depurar NFS-e/NF-e sem depender do JSON na UI."""
@@ -20142,6 +20226,7 @@ async def contaazul_debug_page(request: Request, session: Session = Depends(get_
 
 
 @app.get("/financeiro/novo", response_class=HTMLResponse)
+@require_login
 @require_role({"admin", "equipe"})
 async def fin_new_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
     ctx = get_tenant_context(request, session)
@@ -20168,6 +20253,7 @@ async def fin_new_page(request: Request, session: Session = Depends(get_session)
 
 
 @app.post("/financeiro/novo")
+@require_login
 @require_role({"admin", "equipe"})
 async def fin_new_action(
         request: Request,
@@ -20274,6 +20360,7 @@ async def fin_detail(request: Request, session: Session = Depends(get_session), 
 
 
 @app.post("/financeiro/{inv_id}/anexar")
+@require_login
 @require_role({"admin", "equipe"})
 async def fin_attach(
         request: Request,
@@ -20733,6 +20820,7 @@ async def tasks_list(
 
 
 @app.get("/tarefas/relatorio-horas", response_class=HTMLResponse)
+@require_login
 @require_role({"admin", "equipe"})
 async def tasks_time_report(
         request: Request,
@@ -20873,6 +20961,7 @@ async def tasks_time_report(
 
 
 @app.get("/tarefas/nova", response_class=HTMLResponse)
+@require_login
 @require_role({"admin", "equipe"})
 async def tasks_new_page(
         request: Request,
@@ -20923,6 +21012,7 @@ async def tasks_new_page(
 
 
 @app.post("/tarefas/nova")
+@require_login
 @require_role({"admin", "equipe"})
 async def tasks_new_action(
         request: Request,
@@ -21169,6 +21259,7 @@ async def tasks_attach_file(
 
 
 @app.post("/tarefas/{task_id}/iniciar")
+@require_login
 @require_role({"admin", "equipe"})
 async def tasks_start_work(
         request: Request,
@@ -21233,6 +21324,7 @@ async def tasks_start_work(
 
 
 @app.post("/tarefas/{task_id}/parar")
+@require_login
 @require_role({"admin", "equipe"})
 async def tasks_stop_work(
         request: Request,
@@ -21270,6 +21362,7 @@ async def tasks_stop_work(
 
 
 @app.post("/tarefas/{task_id}/toggle")
+@require_login
 @require_role({"cliente"})
 async def tasks_toggle_client(request: Request, session: Session = Depends(get_session), task_id: int = 0) -> Response:
     ctx = get_tenant_context(request, session)
@@ -21298,6 +21391,7 @@ async def tasks_toggle_client(request: Request, session: Session = Depends(get_s
 
 
 @app.post("/tarefas/{task_id}/status")
+@require_login
 @require_role({"admin", "equipe"})
 async def tasks_set_status(request: Request, session: Session = Depends(get_session), task_id: int = 0,
                            status: str = Form(...)) -> Response:
@@ -21327,6 +21421,7 @@ async def tasks_set_status(request: Request, session: Session = Depends(get_sess
 
 
 @app.get("/tarefas/{task_id}/editar", response_class=HTMLResponse)
+@require_login
 @require_role({"admin", "equipe"})
 async def tasks_edit_page(request: Request, session: Session = Depends(get_session), task_id: int = 0) -> HTMLResponse:
     ctx = get_tenant_context(request, session)
@@ -21369,6 +21464,7 @@ async def tasks_edit_page(request: Request, session: Session = Depends(get_sessi
 
 
 @app.post("/tarefas/{task_id}/editar")
+@require_login
 @require_role({"admin", "equipe"})
 async def tasks_edit_action(
         request: Request,
@@ -21431,6 +21527,7 @@ async def tasks_edit_action(
 
 
 @app.post("/tarefas/{task_id}/excluir")
+@require_login
 @require_role({"admin", "equipe"})
 async def tasks_delete_action(
         request: Request,
@@ -21473,6 +21570,7 @@ async def tasks_delete_action(
 
 
 @app.post("/attachments/{attachment_id}/delete")
+@require_login
 @require_role({"admin", "equipe"})
 async def delete_attachment(
         request: Request,
@@ -21502,6 +21600,7 @@ async def delete_attachment(
 
 
 @app.get("/pendencias/cliente/nova", response_class=HTMLResponse)
+@require_login
 @require_role({"cliente"})
 async def pending_new_client_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
     ctx = get_tenant_context(request, session)
@@ -21528,6 +21627,7 @@ async def pending_new_client_page(request: Request, session: Session = Depends(g
 
 
 @app.post("/pendencias/cliente/nova")
+@require_login
 @require_role({"cliente"})
 async def pending_new_client_action(
         request: Request,
@@ -21609,6 +21709,7 @@ async def pending_new_client_action(
 
 
 @app.get("/documentos/cliente/enviar", response_class=HTMLResponse)
+@require_login
 @require_role({"cliente"})
 async def docs_send_client_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
     ctx = get_tenant_context(request, session)
@@ -21635,6 +21736,7 @@ async def docs_send_client_page(request: Request, session: Session = Depends(get
 
 
 @app.post("/documentos/cliente/enviar")
+@require_login
 @require_role({"cliente"})
 async def docs_send_client_action(
         request: Request,
@@ -21714,6 +21816,7 @@ async def docs_send_client_action(
 
 
 @app.get("/documentos/{doc_id}/editar", response_class=HTMLResponse)
+@require_login
 @require_role({"admin", "equipe"})
 async def docs_edit_page(request: Request, session: Session = Depends(get_session), doc_id: int = 0) -> HTMLResponse:
     ctx = get_tenant_context(request, session)
@@ -21745,6 +21848,7 @@ async def docs_edit_page(request: Request, session: Session = Depends(get_sessio
 
 
 @app.post("/documentos/{doc_id}/editar")
+@require_login
 @require_role({"admin", "equipe"})
 async def docs_edit_action(
         request: Request,
@@ -21779,6 +21883,7 @@ async def docs_edit_action(
 
 
 @app.post("/documentos/{doc_id}/excluir")
+@require_login
 @require_role({"admin", "equipe"})
 async def docs_delete_action(request: Request, session: Session = Depends(get_session), doc_id: int = 0) -> Response:
     ctx = get_tenant_context(request, session)
@@ -21811,6 +21916,7 @@ async def docs_delete_action(request: Request, session: Session = Depends(get_se
 
 
 @app.get("/pendencias/{item_id}/editar", response_class=HTMLResponse)
+@require_login
 @require_role({"admin", "equipe"})
 async def pending_edit_page(request: Request, session: Session = Depends(get_session),
                             item_id: int = 0) -> HTMLResponse:
@@ -21843,6 +21949,7 @@ async def pending_edit_page(request: Request, session: Session = Depends(get_ses
 
 
 @app.post("/pendencias/{item_id}/editar")
+@require_login
 @require_role({"admin", "equipe"})
 async def pending_edit_action(
         request: Request,
@@ -21879,6 +21986,7 @@ async def pending_edit_action(
 
 
 @app.post("/pendencias/{item_id}/excluir")
+@require_login
 @require_role({"admin", "equipe"})
 async def pending_delete_action(request: Request, session: Session = Depends(get_session),
                                 item_id: int = 0) -> Response:
@@ -21912,6 +22020,7 @@ async def pending_delete_action(request: Request, session: Session = Depends(get
 
 
 @app.get("/financeiro/{inv_id}/editar", response_class=HTMLResponse)
+@require_login
 @require_role({"admin", "equipe"})
 async def fin_edit_page(request: Request, session: Session = Depends(get_session), inv_id: int = 0) -> HTMLResponse:
     ctx = get_tenant_context(request, session)
@@ -21943,6 +22052,7 @@ async def fin_edit_page(request: Request, session: Session = Depends(get_session
 
 
 @app.post("/financeiro/{inv_id}/editar")
+@require_login
 @require_role({"admin", "equipe"})
 async def fin_edit_action(
         request: Request,
@@ -21981,6 +22091,7 @@ async def fin_edit_action(
 
 
 @app.post("/financeiro/{inv_id}/excluir")
+@require_login
 @require_role({"admin", "equipe"})
 async def fin_delete_action(request: Request, session: Session = Depends(get_session), inv_id: int = 0) -> Response:
     ctx = get_tenant_context(request, session)
@@ -22040,12 +22151,14 @@ def _owner_users_for_company(session: Session, company_id: int) -> list[dict[str
 
 
 @app.get("/crm")
+@require_login
 @require_role({"admin", "equipe"})
 async def crm_alias() -> Response:
     return RedirectResponse("/negocios", status_code=303)
 
 
 @app.get("/negocios", response_class=HTMLResponse)
+@require_login
 @require_role({"admin", "equipe"})
 async def crm_list(
         request: Request,
@@ -22136,6 +22249,7 @@ async def crm_list(
 
 
 @app.get("/negocios/novo", response_class=HTMLResponse)
+@require_login
 @require_role({"admin", "equipe"})
 async def crm_new_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
     ctx = get_tenant_context(request, session)
@@ -22170,6 +22284,7 @@ async def crm_new_page(request: Request, session: Session = Depends(get_session)
 
 
 @app.post("/negocios/novo")
+@require_login
 @require_role({"admin", "equipe"})
 async def crm_new_action(
         request: Request,
@@ -22301,6 +22416,7 @@ async def crm_new_action(
 
 
 @app.get("/negocios/{deal_id}", response_class=HTMLResponse)
+@require_login
 @require_role({"admin", "equipe"})
 async def crm_detail(request: Request, session: Session = Depends(get_session), deal_id: int = 0) -> HTMLResponse:
     ctx = get_tenant_context(request, session)
@@ -22350,6 +22466,7 @@ async def crm_detail(request: Request, session: Session = Depends(get_session), 
 
 
 @app.get("/negocios/{deal_id}/editar", response_class=HTMLResponse)
+@require_login
 @require_role({"admin", "equipe"})
 async def crm_edit_page(request: Request, session: Session = Depends(get_session), deal_id: int = 0) -> HTMLResponse:
     ctx = get_tenant_context(request, session)
@@ -22387,6 +22504,7 @@ async def crm_edit_page(request: Request, session: Session = Depends(get_session
 
 
 @app.post("/negocios/{deal_id}/editar")
+@require_login
 @require_role({"admin", "equipe"})
 async def crm_edit_action(
         request: Request,
@@ -22463,6 +22581,7 @@ async def crm_edit_action(
 
 
 @app.post("/negocios/{deal_id}/stage")
+@require_login
 @require_role({"admin", "equipe"})
 async def crm_update_stage(
         request: Request,
@@ -22496,6 +22615,7 @@ async def crm_update_stage(
 
 
 @app.post("/negocios/{deal_id}/next")
+@require_login
 @require_role({"admin", "equipe"})
 async def crm_update_next(
         request: Request,
@@ -22530,6 +22650,7 @@ async def crm_update_next(
 
 
 @app.post("/negocios/{deal_id}/nota")
+@require_login
 @require_role({"admin", "equipe"})
 async def crm_add_note(
         request: Request,
@@ -22563,6 +22684,7 @@ async def crm_add_note(
 
 
 @app.post("/negocios/{deal_id}/criar-proposta")
+@require_login
 @require_role({"admin", "equipe"})
 async def crm_create_proposal(request: Request, session: Session = Depends(get_session), deal_id: int = 0) -> Response:
     ctx = get_tenant_context(request, session)
@@ -22609,6 +22731,7 @@ async def crm_create_proposal(request: Request, session: Session = Depends(get_s
 
 
 @app.post("/negocios/{deal_id}/criar-projeto")
+@require_login
 @require_role({"admin", "equipe"})
 async def crm_create_project(request: Request, session: Session = Depends(get_session), deal_id: int = 0) -> Response:
     ctx = get_tenant_context(request, session)
@@ -22653,6 +22776,7 @@ async def crm_create_project(request: Request, session: Session = Depends(get_se
 
 
 @app.post("/negocios/{deal_id}/excluir")
+@require_login
 @require_role({"admin", "equipe"})
 async def crm_delete(request: Request, session: Session = Depends(get_session), deal_id: int = 0,
                      confirm: str = Form("")) -> Response:
@@ -22686,16 +22810,19 @@ async def crm_delete(request: Request, session: Session = Depends(get_session), 
 # ----------------------------
 
 @app.get("/documents")
+@require_login
 async def _alias_docs() -> Response:
     return RedirectResponse("/documentos", status_code=307)
 
 
 @app.get("/proposals")
+@require_login
 async def _alias_props() -> Response:
     return RedirectResponse("/propostas", status_code=307)
 
 
 @app.get("/finance")
+@require_login
 async def _alias_fin() -> Response:
     return RedirectResponse("/financeiro", status_code=307)
 
@@ -22784,6 +22911,7 @@ async def meetings_list(
 
 
 @app.get("/reunioes/nova", response_class=HTMLResponse)
+@require_login
 @require_role({"admin", "equipe"})
 async def meetings_new_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
     ctx = get_tenant_context(request, session)
@@ -22813,6 +22941,7 @@ async def meetings_new_page(request: Request, session: Session = Depends(get_ses
 
 
 @app.post("/reunioes/nova")
+@require_login
 @require_role({"admin", "equipe"})
 async def meetings_new_action(
         request: Request,
@@ -22926,6 +23055,7 @@ async def meetings_detail(request: Request, session: Session = Depends(get_sessi
 
 
 @app.post("/reunioes/{meeting_id}/sync")
+@require_login
 @require_role({"admin", "equipe"})
 async def meetings_sync(
         request: Request,
@@ -23003,6 +23133,7 @@ async def meetings_sync(
 
 
 @app.post("/reunioes/{meeting_id}/gerar_tarefas")
+@require_login
 @require_role({"admin", "equipe"})
 async def meetings_generate_tasks(
         request: Request,
@@ -23731,6 +23862,7 @@ async def edu_courses(request: Request, session: Session = Depends(get_session),
 
 
 @app.get("/educacao/cursos/novo", response_class=HTMLResponse)
+@require_login
 @require_role({"admin", "equipe"})
 async def edu_course_new_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
     ctx = get_tenant_context(request, session)
@@ -23749,6 +23881,7 @@ async def edu_course_new_page(request: Request, session: Session = Depends(get_s
 
 
 @app.post("/educacao/cursos/novo")
+@require_login
 @require_role({"admin", "equipe"})
 async def edu_course_new_action(
         request: Request,
@@ -23819,6 +23952,7 @@ async def edu_course_detail(request: Request, session: Session = Depends(get_ses
 
 
 @app.post("/educacao/cursos/{course_id}/modulos")
+@require_login
 @require_role({"admin", "equipe"})
 async def edu_course_add_module(request: Request, session: Session = Depends(get_session), course_id: int = 0,
                                 title: str = Form(...), description: str = Form("")) -> Response:
@@ -23847,6 +23981,7 @@ async def edu_course_add_module(request: Request, session: Session = Depends(get
 
 
 @app.get("/educacao/cursos/{course_id}/editar", response_class=HTMLResponse)
+@require_login
 @require_role({"admin", "equipe"})
 async def edu_course_edit_page(request: Request, session: Session = Depends(get_session),
                                course_id: int = 0) -> HTMLResponse:
@@ -23874,6 +24009,7 @@ async def edu_course_edit_page(request: Request, session: Session = Depends(get_
 
 
 @app.post("/educacao/cursos/{course_id}/editar")
+@require_login
 @require_role({"admin", "equipe"})
 async def edu_course_edit_action(request: Request, session: Session = Depends(get_session), course_id: int = 0,
                                  title: str = Form(...), category: str = Form(""), description: str = Form(""),
@@ -23916,6 +24052,7 @@ async def edu_course_edit_action(request: Request, session: Session = Depends(ge
 
 
 @app.post("/educacao/cursos/{course_id}/excluir")
+@require_login
 @require_role({"admin", "equipe"})
 async def edu_course_delete(request: Request, session: Session = Depends(get_session), course_id: int = 0) -> Response:
     ctx = get_tenant_context(request, session)
@@ -23976,6 +24113,7 @@ async def edu_module_detail(request: Request, session: Session = Depends(get_ses
 
 
 @app.post("/educacao/modulos/{module_id}/aulas")
+@require_login
 @require_role({"admin", "equipe"})
 async def edu_module_add_lesson(request: Request, session: Session = Depends(get_session), module_id: int = 0,
                                 title: str = Form(...), video_url: str = Form(""),
@@ -24012,6 +24150,7 @@ async def edu_module_add_lesson(request: Request, session: Session = Depends(get
 
 
 @app.post("/educacao/modulos/{module_id}/editar")
+@require_login
 @require_role({"admin", "equipe"})
 async def edu_module_edit(request: Request, session: Session = Depends(get_session), module_id: int = 0,
                           title: str = Form(...), description: str = Form("")) -> Response:
@@ -24038,6 +24177,7 @@ async def edu_module_edit(request: Request, session: Session = Depends(get_sessi
 
 
 @app.post("/educacao/modulos/{module_id}/excluir")
+@require_login
 @require_role({"admin", "equipe"})
 async def edu_module_delete(request: Request, session: Session = Depends(get_session), module_id: int = 0) -> Response:
     ctx = get_tenant_context(request, session)
@@ -24167,6 +24307,7 @@ async def edu_lesson_toggle_complete(request: Request, session: Session = Depend
 
 
 @app.post("/educacao/aulas/{lesson_id}/anexar")
+@require_login
 @require_role({"admin", "equipe"})
 async def edu_lesson_attach(request: Request, session: Session = Depends(get_session), lesson_id: int = 0,
                             file: UploadFile = File(...)) -> Response:
@@ -24213,6 +24354,7 @@ async def edu_lesson_attach(request: Request, session: Session = Depends(get_ses
 
 
 @app.post("/educacao/aulas/{lesson_id}/editar")
+@require_login
 @require_role({"admin", "equipe"})
 async def edu_lesson_edit(request: Request, session: Session = Depends(get_session), lesson_id: int = 0,
                           title: str = Form(...), video_url: str = Form(""), description: str = Form("")) -> Response:
@@ -24240,6 +24382,7 @@ async def edu_lesson_edit(request: Request, session: Session = Depends(get_sessi
 
 
 @app.post("/educacao/aulas/{lesson_id}/excluir")
+@require_login
 @require_role({"admin", "equipe"})
 async def edu_lesson_delete(request: Request, session: Session = Depends(get_session), lesson_id: int = 0) -> Response:
     ctx = get_tenant_context(request, session)
@@ -24884,6 +25027,7 @@ async def credit_upload_consent(
 
 
 @app.post("/credito/consent_link")
+@require_login
 @require_role({"admin", "equipe"})
 async def credit_generate_consent_link(
         request: Request,
@@ -25168,6 +25312,7 @@ async def consent_accept_submit(
 
 
 @app.post("/credito/consultar")
+@require_login
 @require_role({"admin", "equipe"})
 async def credit_consult(
         request: Request,
@@ -25258,6 +25403,7 @@ async def credit_report_detail(request: Request, session: Session = Depends(get_
 
 
 @app.post("/credito/{report_id}/atualizar")
+@require_login
 @require_role({"admin", "equipe"})
 async def credit_report_refresh(request: Request, background_tasks: BackgroundTasks,
                                 session: Session = Depends(get_session), report_id: int = 0) -> Response:
@@ -25323,6 +25469,7 @@ async def credit_report_refresh(request: Request, background_tasks: BackgroundTa
 
 
 @app.post("/credito/{report_id}/criar_negocio")
+@require_login
 @require_role({"admin", "equipe"})
 async def credit_report_create_deal(request: Request, session: Session = Depends(get_session),
                                     report_id: int = 0) -> Response:
@@ -25384,6 +25531,7 @@ async def credit_report_create_deal(request: Request, session: Session = Depends
 
 
 @app.post("/credito/{report_id}/gerar_tarefas")
+@require_login
 @require_role({"admin", "equipe"})
 async def credit_report_generate_tasks(request: Request, session: Session = Depends(get_session),
                                        report_id: int = 0) -> Response:
@@ -26659,6 +26807,7 @@ async def api_ui_news(request: Request, limit: int = 10, session: Session = Depe
 
 
 @app.get("/admin/ui", response_class=HTMLResponse)
+@require_login
 @require_role({"admin"})
 async def admin_ui_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
     ctx = get_tenant_context(request, session)
@@ -26695,6 +26844,7 @@ async def admin_ui_page(request: Request, session: Session = Depends(get_session
 
 
 @app.post("/admin/ui/banner/add")
+@require_login
 @require_role({"admin"})
 async def admin_ui_banner_add(
         request: Request,
@@ -26739,6 +26889,7 @@ async def admin_ui_banner_add(
 
 
 @app.post("/admin/ui/banner/{slide_id}/toggle")
+@require_login
 @require_role({"admin"})
 async def admin_ui_banner_toggle(slide_id: int, request: Request, session: Session = Depends(get_session)):
     ctx = get_tenant_context(request, session)
@@ -26754,6 +26905,7 @@ async def admin_ui_banner_toggle(slide_id: int, request: Request, session: Sessi
 
 
 @app.post("/admin/ui/banner/{slide_id}/delete")
+@require_login
 @require_role({"admin"})
 async def admin_ui_banner_delete(slide_id: int, request: Request, session: Session = Depends(get_session)):
     ctx = get_tenant_context(request, session)
@@ -26768,6 +26920,7 @@ async def admin_ui_banner_delete(slide_id: int, request: Request, session: Sessi
 
 
 @app.post("/admin/ui/feed/add")
+@require_login
 @require_role({"admin"})
 async def admin_ui_feed_add(
         request: Request,
@@ -26794,6 +26947,7 @@ async def admin_ui_feed_add(
 
 
 @app.post("/admin/ui/feed/{feed_id}/toggle")
+@require_login
 @require_role({"admin"})
 async def admin_ui_feed_toggle(feed_id: int, request: Request, session: Session = Depends(get_session)):
     ctx = get_tenant_context(request, session)
@@ -26809,6 +26963,7 @@ async def admin_ui_feed_toggle(feed_id: int, request: Request, session: Session 
 
 
 @app.post("/admin/ui/feed/{feed_id}/delete")
+@require_login
 @require_role({"admin"})
 async def admin_ui_feed_delete(feed_id: int, request: Request, session: Session = Depends(get_session)):
     ctx = get_tenant_context(request, session)
@@ -26973,6 +27128,7 @@ TEMPLATES.update({
 
 
 @app.get("/admin/gestao", response_class=HTMLResponse)
+@require_login
 @require_role({"admin"})
 async def admin_gestao(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
     ctx = get_tenant_context(request, session)
@@ -27076,6 +27232,7 @@ Optional[int]:
 
 
 @app.post("/admin/entity/{entity_type}/{entity_id}/toggle")
+@require_login
 @require_role({"admin"})
 async def admin_entity_toggle(request: Request, entity_type: str, entity_id: int,
                               session: Session = Depends(get_session)):
@@ -27110,6 +27267,7 @@ async def admin_entity_toggle(request: Request, entity_type: str, entity_id: int
 
 
 @app.post("/admin/entity/{entity_type}/{entity_id}/delete")
+@require_login
 @require_role({"admin"})
 async def admin_entity_delete(request: Request, entity_type: str, entity_id: int,
                               session: Session = Depends(get_session)):
@@ -27141,6 +27299,7 @@ async def admin_entity_delete(request: Request, entity_type: str, entity_id: int
 
 
 @app.post("/admin/entity/{entity_type}/{entity_id}/hard_delete")
+@require_login
 @require_role({"admin"})
 async def admin_entity_hard_delete(request: Request, entity_type: str, entity_id: int,
                                    session: Session = Depends(get_session)):
@@ -29322,6 +29481,7 @@ async def consultas_run_pdf(request: Request, session: Session = Depends(get_ses
 
 
 @app.get("/admin/consultas", response_class=HTMLResponse)
+@require_login
 @require_role({"admin", "equipe"})
 async def admin_consultas(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
     ctx = get_tenant_context(request, session)
@@ -29345,6 +29505,7 @@ async def admin_consultas(request: Request, session: Session = Depends(get_sessi
 
 
 @app.post("/admin/consultas/save")
+@require_login
 @require_role({"admin"})
 async def admin_consultas_save(
         request: Request,
@@ -29391,6 +29552,7 @@ async def admin_consultas_save(
 
 
 @app.post("/admin/consultas/toggle")
+@require_login
 @require_role({"admin"})
 async def admin_consultas_toggle(request: Request, session: Session = Depends(get_session),
                                  code: str = Form(...)) -> Response:
@@ -29518,6 +29680,7 @@ async def openfinance_home(request: Request, doc: str = "", email: str = "",
 
 
 @app.post("/openfinance/invite")
+@require_login
 @require_role({"admin", "equipe"})
 async def openfinance_invite(
         request: Request,
@@ -29959,6 +30122,7 @@ async def openfinance_sync(request: Request, doc: str = Form(...), session: Sess
 
 
 @app.post("/openfinance/offers/add")
+@require_login
 @require_role({"admin", "equipe"})
 async def openfinance_add_offer(
         request: Request,
@@ -31454,6 +31618,7 @@ def persist_offer_matches(session: Session, *, company_id: int, client_id: int, 
 
 
 @app.post("/motor-ofertas/review/{offer_id}")
+@require_login
 @require_role({"admin", "equipe"})
 async def motor_ofertas_review_save(
         request: Request,
@@ -34525,6 +34690,7 @@ async def notifications_mark_one(request: Request, notification_id: int,
 
 
 @app.get("/admin/gestao/analytics", response_class=HTMLResponse)
+@require_login
 @require_role({"admin"})
 async def admin_analytics_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
     ctx = get_tenant_context(request, session)
@@ -35571,6 +35737,7 @@ async def message_send_submit(
 
 
 @app.post("/mensagens/{conversation_id}/participantes")
+@require_login
 @require_role({"admin", "equipe"})
 async def message_add_participants(
         request: Request,
@@ -36208,6 +36375,7 @@ def _office_xlsx_response(*, filename: str, wb: Any) -> Response:
 
 
 @app.get("/admin/financeiro/recorrencias", response_class=HTMLResponse)
+@require_login
 @require_role({"admin", "equipe"})
 async def office_finance_recurrences_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
     ctx = get_tenant_context(request, session)
@@ -36236,6 +36404,7 @@ async def office_finance_recurrences_page(request: Request, session: Session = D
 
 
 @app.post("/admin/financeiro/recorrencias")
+@require_login
 @require_role({"admin", "equipe"})
 async def office_finance_recurrences_create(
         request: Request,
@@ -36316,6 +36485,7 @@ async def office_finance_recurrences_create(
 
 
 @app.post("/admin/financeiro/recorrencias/{recurrence_id}/toggle")
+@require_login
 @require_role({"admin", "equipe"})
 async def office_finance_recurrence_toggle(
         recurrence_id: int,
@@ -36338,6 +36508,7 @@ async def office_finance_recurrence_toggle(
 
 
 @app.get("/admin/financeiro/conciliacao", response_class=HTMLResponse)
+@require_login
 @require_role({"admin", "equipe"})
 async def office_finance_conciliation_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
     ctx = get_tenant_context(request, session)
@@ -36443,6 +36614,7 @@ async def office_finance_conciliation_page(request: Request, session: Session = 
 
 
 @app.post("/admin/financeiro/conciliacao/{entry_id:int}")
+@require_login
 @require_role({"admin", "equipe"})
 async def office_finance_conciliate_entry(
         entry_id: int,
@@ -36504,6 +36676,7 @@ async def office_finance_conciliate_entry(
 
 
 @app.post("/admin/financeiro/conciliacao/{entry_id:int}/reabrir")
+@require_login
 @require_role({"admin", "equipe"})
 async def office_finance_reabrir_entry(
         entry_id: int,
@@ -36543,6 +36716,7 @@ async def office_finance_reabrir_entry(
 
 
 @app.post("/admin/financeiro/lancamentos/excluir-lote")
+@require_login
 @require_role({"admin"})
 async def office_finance_excluir_lote(
         request: Request,
@@ -36566,6 +36740,7 @@ async def office_finance_excluir_lote(
 
 
 @app.get("/admin/financeiro/dashboard-gerencial", response_class=HTMLResponse)
+@require_login
 @require_role({"admin", "equipe"})
 async def office_finance_management_dashboard(request: Request,
                                               session: Session = Depends(get_session)) -> HTMLResponse:
@@ -36606,6 +36781,7 @@ async def office_finance_management_dashboard(request: Request,
 
 
 @app.get("/admin/financeiro/export/lancamentos.xlsx")
+@require_login
 @require_role({"admin", "equipe"})
 async def office_finance_export_entries_xlsx(request: Request, session: Session = Depends(get_session)) -> Response:
     ctx = get_tenant_context(request, session)
@@ -36649,6 +36825,7 @@ async def office_finance_export_entries_xlsx(request: Request, session: Session 
 
 
 @app.get("/admin/financeiro/export/dre.xlsx")
+@require_login
 @require_role({"admin", "equipe"})
 async def office_finance_export_dre_xlsx(request: Request, session: Session = Depends(get_session)) -> Response:
     ctx = get_tenant_context(request, session)
@@ -36680,6 +36857,7 @@ async def office_finance_export_dre_xlsx(request: Request, session: Session = De
 
 
 @app.get("/admin/financeiro/export/fluxo-caixa.xlsx")
+@require_login
 @require_role({"admin", "equipe"})
 async def office_finance_export_cashflow_xlsx(request: Request, session: Session = Depends(get_session)) -> Response:
     ctx = get_tenant_context(request, session)
@@ -42643,6 +42821,7 @@ TEMPLATES["whatsapp_thread_detail.html"] = r"""
 
 
 @app.get("/admin/whatsapp")
+@require_login
 @require_role({"admin", "equipe"})
 async def whatsapp_hub_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
     ctx = get_tenant_context(request, session)
@@ -42678,6 +42857,7 @@ async def whatsapp_hub_page(request: Request, session: Session = Depends(get_ses
 
 
 @app.get("/admin/whatsapp/config")
+@require_login
 @require_role({"admin", "equipe"})
 async def whatsapp_config_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
     ctx = get_tenant_context(request, session)
@@ -42694,6 +42874,7 @@ async def whatsapp_config_page(request: Request, session: Session = Depends(get_
 
 
 @app.post("/admin/whatsapp/config")
+@require_login
 @require_role({"admin", "equipe"})
 async def whatsapp_config_save(
         request: Request,
@@ -42722,6 +42903,7 @@ async def whatsapp_config_save(
 
 
 @app.get("/admin/whatsapp/filas")
+@require_login
 @require_role({"admin", "equipe"})
 async def whatsapp_queues_page(
         request: Request,
@@ -42774,6 +42956,7 @@ async def whatsapp_queues_page(
 
 
 @app.post("/admin/whatsapp/filas/salvar")
+@require_login
 @require_role({"admin", "equipe"})
 async def whatsapp_queues_save(
         request: Request,
@@ -42820,6 +43003,7 @@ async def whatsapp_queues_save(
 
 
 @app.get("/admin/whatsapp/caixa")
+@require_login
 @require_role({"admin", "equipe"})
 async def whatsapp_inbox_page(
         request: Request,
@@ -42900,6 +43084,7 @@ async def whatsapp_inbox_page(
 
 
 @app.get("/admin/whatsapp/conversas/nova")
+@require_login
 @require_role({"admin", "equipe"})
 async def whatsapp_thread_new_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
     ctx = get_tenant_context(request, session)
@@ -42926,6 +43111,7 @@ async def whatsapp_thread_new_page(request: Request, session: Session = Depends(
 
 
 @app.post("/admin/whatsapp/conversas/nova")
+@require_login
 @require_role({"admin", "equipe"})
 async def whatsapp_thread_new_submit(
         request: Request,
@@ -42995,6 +43181,7 @@ async def whatsapp_thread_new_submit(
 
 
 @app.get("/admin/whatsapp/conversas/{thread_id}")
+@require_login
 @require_role({"admin", "equipe"})
 async def whatsapp_thread_detail_page(
         request: Request,
@@ -43042,6 +43229,7 @@ async def whatsapp_thread_detail_page(
 
 
 @app.get("/admin/whatsapp/mensagens/{message_id}/anexo")
+@require_login
 @require_role({"admin", "equipe"})
 async def whatsapp_message_attachment_download(
         request: Request,
@@ -43062,6 +43250,7 @@ async def whatsapp_message_attachment_download(
 
 
 @app.post("/admin/whatsapp/conversas/{thread_id}/salvar")
+@require_login
 @require_role({"admin", "equipe"})
 async def whatsapp_thread_save(
         request: Request,
@@ -43117,6 +43306,7 @@ async def whatsapp_thread_save(
                 )
 
 @app.post("/admin/whatsapp/conversas/{thread_id}/salvar")
+@require_login
 @require_role({"admin", "equipe"})
 async def whatsapp_thread_save(
         request: Request,
@@ -43149,6 +43339,7 @@ async def whatsapp_thread_save(
 
 
 @app.post("/admin/whatsapp/conversas/{thread_id}/mensagens")
+@require_login
 @require_role({"admin", "equipe"})
 async def whatsapp_thread_add_message(
         request: Request,
@@ -44790,6 +44981,7 @@ if hasattr(templates_env.loader, "mapping"):
 
 
 @app.post("/negocios/{deal_id}/perdido")
+@require_login
 @require_role({"admin", "equipe"})
 async def crm_mark_lost(
         request: Request,
@@ -44815,6 +45007,7 @@ async def crm_mark_lost(
 
 
 @app.post("/reunioes/{meeting_id}/anotacoes")
+@require_login
 @require_role({"admin", "equipe", "cliente"})
 async def meetings_save_annotations(
         request: Request,
@@ -44854,6 +45047,7 @@ async def meetings_save_annotations(
 
 
 @app.post("/reunioes/{meeting_id}/checkin")
+@require_login
 @require_role({"admin", "equipe", "cliente"})
 async def meetings_checkin(
         request: Request,
@@ -44875,6 +45069,7 @@ async def meetings_checkin(
 
 
 @app.post("/reunioes/{meeting_id}/checkout")
+@require_login
 @require_role({"admin", "equipe", "cliente"})
 async def meetings_checkout(
         request: Request,
@@ -45594,6 +45789,7 @@ async def workforce_dashboard(request: Request, session: Session = Depends(get_s
 
 
 @app.post("/obras-horas/funcionarios")
+@require_login
 @require_role({"admin", "equipe"})
 async def workforce_employee_create(
     request: Request,
@@ -45624,6 +45820,7 @@ async def workforce_employee_create(
 
 
 @app.post("/obras-horas/projetos")
+@require_login
 @require_role({"admin", "equipe"})
 async def workforce_project_create(
     request: Request,
@@ -45705,6 +45902,7 @@ async def workforce_project_detail(
 
 
 @app.post("/obras-horas/projetos/{project_id}/alocacoes")
+@require_login
 @require_role({"admin", "equipe"})
 async def workforce_project_allocate(
     request: Request,
@@ -45751,6 +45949,7 @@ async def workforce_project_allocate(
 
 
 @app.post("/obras-horas/projetos/{project_id}/apontamentos")
+@require_login
 @require_role({"admin", "equipe"})
 async def workforce_time_entry_create(
     request: Request,
@@ -51173,6 +51372,7 @@ async def agenda_public_post(token: str, request: Request, session: Session = De
 # ── Admin: dashboard ───────────────────────────────────────────────────────────
 
 @app.get("/admin/agenda", response_class=HTMLResponse)
+@require_login
 @require_role({"admin", "equipe"})
 async def admin_agenda_page(request: Request, session: Session = Depends(get_session),
                              status_filter: str = "") -> HTMLResponse:
@@ -51220,6 +51420,7 @@ async def admin_agenda_page(request: Request, session: Session = Depends(get_ses
 
 
 @app.post("/admin/agenda/booking/{booking_id}/status")
+@require_login
 @require_role({"admin", "equipe"})
 async def admin_agenda_booking_status(booking_id: int, request: Request,
                                        session: Session = Depends(get_session)) -> Response:
@@ -51247,6 +51448,7 @@ _ALL_LOCAIS = [
 
 
 @app.get("/admin/agenda/servico/novo", response_class=HTMLResponse)
+@require_login
 @require_role({"admin"})
 async def admin_agenda_servico_novo_form(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
     ctx = get_tenant_context(request, session)
@@ -51263,6 +51465,7 @@ async def admin_agenda_servico_novo_form(request: Request, session: Session = De
 
 
 @app.post("/admin/agenda/servico/novo")
+@require_login
 @require_role({"admin"})
 async def admin_agenda_servico_novo_save(request: Request, session: Session = Depends(get_session)) -> Response:
     ctx = get_tenant_context(request, session)
@@ -51290,6 +51493,7 @@ async def admin_agenda_servico_novo_save(request: Request, session: Session = De
 
 
 @app.get("/admin/agenda/servico/{servico_id}/editar", response_class=HTMLResponse)
+@require_login
 @require_role({"admin"})
 async def admin_agenda_servico_editar_form(servico_id: int, request: Request,
                                             session: Session = Depends(get_session)) -> HTMLResponse:
@@ -51311,6 +51515,7 @@ async def admin_agenda_servico_editar_form(servico_id: int, request: Request,
 
 
 @app.post("/admin/agenda/servico/{servico_id}/editar")
+@require_login
 @require_role({"admin"})
 async def admin_agenda_servico_editar_save(servico_id: int, request: Request,
                                             session: Session = Depends(get_session)) -> Response:
@@ -51336,6 +51541,7 @@ async def admin_agenda_servico_editar_save(servico_id: int, request: Request,
 
 
 @app.post("/admin/agenda/servico/{servico_id}/excluir")
+@require_login
 @require_role({"admin"})
 async def admin_agenda_servico_excluir(servico_id: int, request: Request,
                                         session: Session = Depends(get_session)) -> Response:
@@ -51353,6 +51559,7 @@ async def admin_agenda_servico_excluir(servico_id: int, request: Request,
 # ── Admin: config ──────────────────────────────────────────────────────────────
 
 @app.get("/admin/agenda/config", response_class=HTMLResponse)
+@require_login
 @require_role({"admin"})
 async def admin_agenda_config_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
     ctx = get_tenant_context(request, session)
@@ -51371,6 +51578,7 @@ async def admin_agenda_config_page(request: Request, session: Session = Depends(
 
 
 @app.post("/admin/agenda/config")
+@require_login
 @require_role({"admin"})
 async def admin_agenda_config_save(request: Request, session: Session = Depends(get_session)) -> Response:
     ctx = get_tenant_context(request, session)
@@ -51390,6 +51598,7 @@ async def admin_agenda_config_save(request: Request, session: Session = Depends(
 # ── Admin: membros ─────────────────────────────────────────────────────────────
 
 @app.get("/admin/agenda/membro/novo", response_class=HTMLResponse)
+@require_login
 @require_role({"admin"})
 async def admin_agenda_membro_form(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
     ctx = get_tenant_context(request, session)
@@ -51410,6 +51619,7 @@ async def admin_agenda_membro_form(request: Request, session: Session = Depends(
 
 
 @app.post("/admin/agenda/membro/novo")
+@require_login
 @require_role({"admin"})
 async def admin_agenda_membro_save(request: Request, session: Session = Depends(get_session)) -> Response:
     ctx = get_tenant_context(request, session)
@@ -51435,6 +51645,7 @@ async def admin_agenda_membro_save(request: Request, session: Session = Depends(
 
 
 @app.post("/admin/agenda/membro/{membro_id}/excluir")
+@require_login
 @require_role({"admin"})
 async def admin_agenda_membro_excluir(membro_id: int, request: Request,
                                        session: Session = Depends(get_session)) -> Response:
@@ -51451,6 +51662,7 @@ async def admin_agenda_membro_excluir(membro_id: int, request: Request,
 
 
 @app.get("/admin/agenda/membro/{membro_id}/disponibilidade", response_class=HTMLResponse)
+@require_login
 @require_role({"admin"})
 async def admin_agenda_disp_page(membro_id: int, request: Request,
                                    session: Session = Depends(get_session)) -> HTMLResponse:
@@ -51478,6 +51690,7 @@ async def admin_agenda_disp_page(membro_id: int, request: Request,
 
 
 @app.post("/admin/agenda/membro/{membro_id}/disponibilidade")
+@require_login
 @require_role({"admin"})
 async def admin_agenda_disp_save(membro_id: int, request: Request,
                                    session: Session = Depends(get_session)) -> Response:
@@ -51576,6 +51789,7 @@ TEMPLATES["admin_agenda_cliente_limite.html"] = """
 
 
 @app.get("/admin/agenda/cliente/{client_id}/limite", response_class=HTMLResponse)
+@require_login
 @require_role({"admin"})
 async def admin_agenda_cliente_limite_page(client_id: int, request: Request,
                                             session: Session = Depends(get_session)) -> HTMLResponse:
@@ -51606,6 +51820,7 @@ async def admin_agenda_cliente_limite_page(client_id: int, request: Request,
 
 
 @app.post("/admin/agenda/cliente/{client_id}/limite")
+@require_login
 @require_role({"admin"})
 async def admin_agenda_cliente_limite_save(client_id: int, request: Request,
                                             session: Session = Depends(get_session)) -> Response:
@@ -51631,6 +51846,7 @@ async def admin_agenda_cliente_limite_save(client_id: int, request: Request,
 
 
 @app.post("/admin/agenda/cliente/{client_id}/limite/remover")
+@require_login
 @require_role({"admin"})
 async def admin_agenda_cliente_limite_remover(client_id: int, request: Request,
                                                session: Session = Depends(get_session)) -> Response:
@@ -51696,6 +51912,7 @@ TEMPLATES["admin_agenda_clientes.html"] = """
 
 
 @app.get("/admin/agenda/clientes", response_class=HTMLResponse)
+@require_login
 @require_role({"admin"})
 async def admin_agenda_clientes_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
     ctx = get_tenant_context(request, session)
@@ -51848,6 +52065,7 @@ _MEMBRO_COLORS = [
 
 
 @app.get("/admin/agenda/calendario", response_class=HTMLResponse)
+@require_login
 @require_role({"admin", "equipe"})
 async def admin_agenda_calendario(
     request: Request,
