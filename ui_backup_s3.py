@@ -93,39 +93,37 @@ def _run_backup() -> bool:
 
     print(f"[backup_s3] Iniciando backup → s3://{_BK_BUCKET}/{s3_key}")
 
-    tmp_sql = _Path_bk(_tmp_bk.gettempdir()) / f"backup_{timestamp}.sql"
     tmp_gz  = _Path_bk(_tmp_bk.gettempdir()) / filename
 
     try:
-        # ── pg_dump com parâmetros explícitos ────────────────────────────────
-        result = _sp_bk.run(
-            [
-                "pg_dump",
-                "--format=plain",
-                "--encoding=UTF8",
-                "--no-password",
-                f"--host={_pg_host}",
-                f"--port={_pg_port}",
-                f"--username={_pg_user}",
-                f"--dbname={_pg_db}",
-            ],
-            capture_output=True,
-            timeout=300,
-            env={**_os_bk.environ, "PGPASSWORD": _pg_pass},
-        )
-        if result.returncode != 0:
-            err = result.stderr.decode()[:300]
-            raise RuntimeError(f"pg_dump falhou (code {result.returncode}): {err}")
+        # ── pg_dump direto para disco (sem passar pela RAM) ───────────────────
+        with open(tmp_gz, "wb") as _gz_out:
+            with _sp_bk.Popen(
+                [
+                    "pg_dump",
+                    "--format=plain",
+                    "--encoding=UTF8",
+                    "--no-password",
+                    f"--host={_pg_host}",
+                    f"--port={_pg_port}",
+                    f"--username={_pg_user}",
+                    f"--dbname={_pg_db}",
+                ],
+                stdout=_sp_bk.PIPE,
+                stderr=_sp_bk.PIPE,
+                env={**_os_bk.environ, "PGPASSWORD": _pg_pass},
+            ) as _proc:
+                with _gzip_bk.open(_gz_out, "wb") as _gz_writer:
+                    _shutil_bk.copyfileobj(_proc.stdout, _gz_writer, length=1024 * 1024)
+                _proc.wait(timeout=300)
+                if _proc.returncode != 0:
+                    err = (_proc.stderr.read() or b"")[:300].decode(errors="replace")
+                    raise RuntimeError(f"pg_dump falhou (code {_proc.returncode}): {err}")
 
-        tmp_sql.write_bytes(result.stdout)
-        print(f"[backup_s3] pg_dump OK: {len(result.stdout)/1024/1024:.1f}MB")
+        sql_size_mb = tmp_gz.stat().st_size / 1024 / 1024
+        print(f"[backup_s3] pg_dump + gzip OK: {sql_size_mb:.1f}MB comprimido")
 
-        # ── Comprime ─────────────────────────────────────────────────────────
-        with open(tmp_sql, "rb") as f_in, _gzip_bk.open(tmp_gz, "wb") as f_out:
-            _shutil_bk.copyfileobj(f_in, f_out)
-
-        size_mb = tmp_gz.stat().st_size / 1024 / 1024
-        print(f"[backup_s3] Comprimido: {size_mb:.1f}MB → {filename}")
+        size_mb = sql_size_mb
 
         # ── Upload S3 ─────────────────────────────────────────────────────────
         s3.upload_file(
@@ -159,7 +157,6 @@ def _run_backup() -> bool:
         return False
 
     finally:
-        tmp_sql.unlink(missing_ok=True)
         tmp_gz.unlink(missing_ok=True)
 
 
