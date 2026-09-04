@@ -1306,6 +1306,184 @@ async def financeiro_cobranca_reenviar(cobranca_id: int, request: _Req_ct, sessi
     return _RR_ct(dest, status_code=303)
 
 
+# ── Recibo / Fatura (CobrancaMensal) ─────────────────────────────────────────
+
+def _ct_gerar_recibo_pdf(cobranca: "CobrancaMensal", contrato: "ContratoCliente") -> bytes:
+    """Gera um PDF de recibo/fatura para a CobrancaMensal."""
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib import colors
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib.units import cm
+    import io
+
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=A4, leftMargin=2*cm, rightMargin=2*cm,
+                            topMargin=2*cm, bottomMargin=2*cm)
+
+    styles = getSampleStyleSheet()
+    dark_blue = colors.HexColor("#1a1a2e")
+    green     = colors.HexColor("#1a7a4a")
+
+    header_style = ParagraphStyle("header", parent=styles["Normal"],
+                                  fontSize=22, textColor=colors.white, spaceAfter=4,
+                                  fontName="Helvetica-Bold")
+    sub_style    = ParagraphStyle("sub", parent=styles["Normal"],
+                                  fontSize=10, textColor=colors.white, spaceAfter=2)
+    label_style  = ParagraphStyle("lbl", parent=styles["Normal"],
+                                  fontSize=9, textColor=colors.grey)
+    value_style  = ParagraphStyle("val", parent=styles["Normal"],
+                                  fontSize=11, fontName="Helvetica-Bold")
+    body_style   = styles["Normal"]
+
+    valor_fmt = f"R$ {(cobranca.valor_cents or 0)/100:,.2f}".replace(",","X").replace(".",",").replace("X",".")
+
+    # ── Header ───────────────────────────────────────────────────────────────
+    header_table = Table([[
+        Paragraph("RECIBO / FATURA", header_style),
+        Paragraph(f"Competência: {cobranca.competencia}", sub_style),
+    ]], colWidths=[10*cm, 7*cm])
+    header_table.setStyle(TableStyle([
+        ("BACKGROUND", (0,0), (-1,-1), dark_blue),
+        ("VALIGN",     (0,0), (-1,-1), "MIDDLE"),
+        ("LEFTPADDING",(0,0), (-1,-1), 14),
+        ("RIGHTPADDING",(0,0),(-1,-1), 14),
+        ("TOPPADDING", (0,0), (-1,-1), 18),
+        ("BOTTOMPADDING",(0,0),(-1,-1), 18),
+    ]))
+
+    # ── Cliente ───────────────────────────────────────────────────────────────
+    email_cli = getattr(cobranca, "email_cliente", "") or ""
+    client_table = Table([
+        [Paragraph("CLIENTE", label_style),   Paragraph("CONTRATO", label_style)],
+        [Paragraph(cobranca.nome_cliente or "—", value_style),
+         Paragraph(cobranca.nome_contrato or "—", value_style)],
+        [Paragraph(email_cli, body_style), Paragraph("", body_style)],
+    ], colWidths=[9*cm, 8*cm])
+    client_table.setStyle(TableStyle([
+        ("BOX",        (0,0), (-1,-1), 0.5, colors.lightgrey),
+        ("INNERGRID",  (0,0), (-1,-1), 0.5, colors.lightgrey),
+        ("TOPPADDING", (0,0), (-1,-1), 6),
+        ("BOTTOMPADDING",(0,0),(-1,-1), 6),
+        ("LEFTPADDING",(0,0), (-1,-1), 10),
+    ]))
+
+    # ── Item ─────────────────────────────────────────────────────────────────
+    item_data = [
+        [Paragraph("<b>Descrição</b>", body_style),
+         Paragraph("<b>Vencimento</b>", body_style),
+         Paragraph("<b>Valor</b>", body_style)],
+        [Paragraph(f"Mensalidade — {cobranca.nome_contrato}", body_style),
+         Paragraph(cobranca.data_vencimento or "—", body_style),
+         Paragraph(valor_fmt, body_style)],
+    ]
+    item_table = Table(item_data, colWidths=[10*cm, 4*cm, 3*cm])
+    item_table.setStyle(TableStyle([
+        ("BACKGROUND",   (0,0), (-1,0), colors.HexColor("#f0f0f0")),
+        ("FONTNAME",     (0,0), (-1,0), "Helvetica-Bold"),
+        ("BOX",          (0,0), (-1,-1), 0.5, colors.lightgrey),
+        ("INNERGRID",    (0,0), (-1,-1), 0.5, colors.lightgrey),
+        ("TOPPADDING",   (0,0), (-1,-1), 7),
+        ("BOTTOMPADDING",(0,0), (-1,-1), 7),
+        ("LEFTPADDING",  (0,0), (-1,-1), 10),
+    ]))
+
+    # ── Total ─────────────────────────────────────────────────────────────────
+    total_table = Table([[
+        Paragraph("TOTAL", ParagraphStyle("tot_lbl", parent=styles["Normal"],
+                                          fontSize=12, textColor=colors.white)),
+        Paragraph(valor_fmt, ParagraphStyle("tot_val", parent=styles["Normal"],
+                                            fontSize=14, fontName="Helvetica-Bold",
+                                            textColor=colors.white)),
+    ]], colWidths=[13.5*cm, 3.5*cm])
+    total_table.setStyle(TableStyle([
+        ("BACKGROUND",   (0,0), (-1,-1), green),
+        ("TOPPADDING",   (0,0), (-1,-1), 10),
+        ("BOTTOMPADDING",(0,0), (-1,-1), 10),
+        ("LEFTPADDING",  (0,0), (-1,-1), 10),
+        ("RIGHTPADDING", (0,0), (-1,-1), 10),
+    ]))
+
+    status_label = {"pendente":"Pendente","pago":"Pago","vencido":"Vencido","cancelado":"Cancelado"}.get(
+        cobranca.status or "", cobranca.status or "")
+    footer_style = ParagraphStyle("footer", parent=body_style, fontSize=9,
+                                  textColor=colors.grey, alignment=1)
+
+    story = [
+        header_table, Spacer(1, 0.5*cm),
+        client_table, Spacer(1, 0.5*cm),
+        item_table,   Spacer(1, 0.3*cm),
+        total_table,  Spacer(1, 0.8*cm),
+        Paragraph(f"Status: {status_label}", footer_style),
+        Spacer(1, 0.2*cm),
+        Paragraph("Documento gerado pelo sistema Escritório.", footer_style),
+    ]
+    doc.build(story)
+    return buf.getvalue()
+
+
+@app.get("/admin/financeiro/cobrancas/{cobranca_id}/recibo.pdf")
+@require_login
+@require_role({"admin", "equipe"})
+async def financeiro_cobranca_recibo_pdf(cobranca_id: int, request: _Req_ct, session=_Dep_ct(get_session)):
+    from fastapi.responses import Response as _Resp_ct
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        return _RR_ct("/login", status_code=303)
+    cobranca = session.get(CobrancaMensal, cobranca_id)
+    if not cobranca or cobranca.company_id != ctx.company.id:
+        return _JR_ct({"erro": "Não encontrado."}, status_code=404)
+    contrato = session.get(ContratoCliente, cobranca.contrato_id)
+    pdf_bytes = _ct_gerar_recibo_pdf(cobranca, contrato)
+    fname = f"recibo_{cobranca.competencia}_{cobranca.nome_cliente}.pdf".replace(" ", "_")
+    return _Resp_ct(pdf_bytes, media_type="application/pdf",
+                    headers={"Content-Disposition": f'attachment; filename="{fname}"'})
+
+
+@app.post("/admin/financeiro/cobrancas/{cobranca_id}/enviar-recibo")
+@require_login
+@require_role({"admin", "equipe"})
+async def financeiro_cobranca_enviar_recibo(cobranca_id: int, request: _Req_ct, session=_Dep_ct(get_session)):
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        return _JR_ct({"ok": False, "erro": "Não autenticado."}, status_code=401)
+    cobranca = session.get(CobrancaMensal, cobranca_id)
+    if not cobranca or cobranca.company_id != ctx.company.id:
+        return _JR_ct({"ok": False, "erro": "Cobrança não encontrada."}, status_code=404)
+    contrato = session.get(ContratoCliente, cobranca.contrato_id)
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    email_dest = (body.get("email") or "").strip()
+    if not email_dest:
+        email_dest = (getattr(cobranca, "email_cliente", "") or "").strip()
+    if not email_dest and contrato:
+        email_dest = (contrato.email_cliente or "").strip()
+    if not email_dest:
+        return _JR_ct({"ok": False, "erro": "E-mail do cliente não informado."})
+
+    valor_fmt = f"R$ {(cobranca.valor_cents or 0)/100:,.2f}".replace(",","X").replace(".",",").replace("X",".")
+    pdf_bytes = _ct_gerar_recibo_pdf(cobranca, contrato)
+    fname = f"recibo_{cobranca.competencia}_{cobranca.nome_cliente}.pdf".replace(" ", "_")
+
+    html_body = f"""<p>Olá, {cobranca.nome_cliente}!</p>
+<p>Segue o recibo/fatura referente ao contrato <strong>{cobranca.nome_contrato}</strong> — competência {cobranca.competencia}.</p>
+<p>Valor: <strong>{valor_fmt}</strong> · Vencimento: {cobranca.data_vencimento}</p>
+<p>O recibo está em anexo neste e-mail.</p>"""
+    text_body = (f"Recibo {cobranca.nome_contrato} — {cobranca.competencia} — {valor_fmt}\n"
+                 f"Vencimento: {cobranca.data_vencimento}")
+
+    _smtp_send_email(
+        to_email=email_dest,
+        subject=f"Recibo {cobranca.nome_contrato} — {cobranca.competencia} — {valor_fmt}",
+        html_body=html_body,
+        text_body=text_body,
+        attachments=[(fname, pdf_bytes, "application/pdf")],
+    )
+    return _JR_ct({"ok": True, "msg": f"Recibo enviado para {email_dest}."})
+
+
 # ── Webhook Mercado Pago — confirmação automática ─────────────────────────────
 
 @app.post("/webhooks/mercadopago")
@@ -1521,6 +1699,20 @@ def _ct_cobrancas_html(contrato, cobrancas):
         else:
             reenviar_cell = ""
 
+        # Recibo — disponível para cobranças não canceladas
+        email_c = getattr(c, "email_cliente", "") or ""
+        if c.status != "cancelado":
+            recibo_cell = (
+                f'<a href="/admin/financeiro/cobrancas/{c.id}/recibo.pdf" '
+                f'class="btn btn-sm btn-outline-secondary me-1" target="_blank" '
+                f'title="Baixar recibo PDF">📄 PDF</a>'
+                f'<button class="btn btn-sm btn-outline-primary" '
+                f'onclick="enviarReciboCT({c.id}, \'{email_c}\')" '
+                f'title="Enviar recibo por e-mail">✉ E-mail</button>'
+            )
+        else:
+            recibo_cell = ""
+
         rows += f"""
         <tr>
           <td>{c.competencia}</td>
@@ -1532,6 +1724,7 @@ def _ct_cobrancas_html(contrato, cobrancas):
           <td>{c.forma_pagamento or '—'}</td>
           <td class="text-center">{boleto_cell}</td>
           <td class="text-center">{nf_cell}</td>
+          <td class="text-center">{recibo_cell}</td>
           <td class="text-center">{reenviar_cell}</td>
         </tr>"""
 
@@ -1545,6 +1738,32 @@ def _ct_cobrancas_html(contrato, cobrancas):
   </div>
   <a class="btn btn-outline-secondary" href="/admin/financeiro/contratos">← Contratos</a>
 </div>
+<div id="recibo-toast" class="alert d-none position-fixed bottom-0 end-0 m-3" style="z-index:9999"></div>
+<script>
+async function enviarReciboCT(id, emailPadrao) {{
+  const email = prompt("E-mail para envio do recibo:", emailPadrao || "");
+  if (!email) return;
+  const btn = event.target;
+  btn.disabled = true;
+  btn.textContent = "Enviando…";
+  try {{
+    const r = await fetch(`/admin/financeiro/cobrancas/${{id}}/enviar-recibo`, {{
+      method: "POST", headers: {{"Content-Type": "application/json"}},
+      body: JSON.stringify({{email}})
+    }});
+    const d = await r.json();
+    const toast = document.getElementById("recibo-toast");
+    toast.className = "alert position-fixed bottom-0 end-0 m-3 " + (d.ok ? "alert-success" : "alert-danger");
+    toast.textContent = d.msg || d.erro || "Erro desconhecido";
+    setTimeout(() => toast.className = "alert d-none position-fixed bottom-0 end-0 m-3", 4000);
+  }} catch(e) {{
+    alert("Erro: " + e);
+  }} finally {{
+    btn.disabled = false;
+    btn.textContent = "✉ E-mail";
+  }}
+}}
+</script>
 <div class="card mb-3 p-3">
   <div class="text-muted small mb-1">Total recebido</div>
   <div class="fw-bold fs-5 text-success">{_ct_brl(total_pago)}</div>
@@ -1563,10 +1782,11 @@ def _ct_cobrancas_html(contrato, cobrancas):
           <th>Forma</th>
           <th class="text-center">Boleto</th>
           <th class="text-center">NFS-e</th>
+          <th class="text-center">Recibo</th>
           <th class="text-center">Ações</th>
         </tr>
       </thead>
-      <tbody>{rows if rows else '<tr><td colspan="10" class="text-center text-muted py-4">Nenhuma cobrança gerada ainda</td></tr>'}</tbody>
+      <tbody>{rows if rows else '<tr><td colspan="11" class="text-center text-muted py-4">Nenhuma cobrança gerada ainda</td></tr>'}</tbody>
     </table>
   </div>
 </div>
