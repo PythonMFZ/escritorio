@@ -10978,6 +10978,28 @@ TEMPLATES.update({
       <a class="btn btn-outline-secondary" href="/admin/financeiro">Cancelar</a>
     </div>
   </form>
+
+  {% if entry and entry.entry_kind == "receber" and entry.client_id %}
+  <hr class="my-4">
+  <div id="recibo-section">
+    <h6 class="mb-3"><i class="bi bi-receipt me-1"></i>Recibo / Fatura</h6>
+    <div class="d-flex flex-wrap gap-2 align-items-center">
+      <a class="btn btn-outline-secondary btn-sm" href="/admin/financeiro/{{ entry.id }}/recibo.pdf" target="_blank">
+        <i class="bi bi-file-earmark-pdf me-1"></i>Baixar PDF
+      </a>
+      <div class="d-flex gap-2 align-items-center">
+        <input type="email" id="recibo-email" class="form-control form-control-sm"
+               style="width:260px"
+               placeholder="E-mail do cliente"
+               value="{{ client_email }}" />
+        <button class="btn btn-sm btn-primary" onclick="enviarRecibo()">
+          <i class="bi bi-send me-1"></i>Enviar por e-mail
+        </button>
+      </div>
+    </div>
+    <div id="recibo-feedback" class="mt-2 small"></div>
+  </div>
+  {% endif %}
 </div>
 
 <script>
@@ -10997,6 +11019,29 @@ TEMPLATES.update({
     refreshKind();
   }
 })();
+
+async function enviarRecibo() {
+  const emailInput = document.getElementById("recibo-email");
+  const feedback   = document.getElementById("recibo-feedback");
+  const email = (emailInput ? emailInput.value : "").trim();
+  if (!email) { feedback.innerHTML = '<span class="text-danger">Informe o e-mail.</span>'; return; }
+  feedback.innerHTML = '<span class="text-muted">Enviando...</span>';
+  try {
+    const r = await fetch("/admin/financeiro/{{ entry.id }}/enviar-recibo", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({email}),
+    });
+    const d = await r.json();
+    if (d.ok) {
+      feedback.innerHTML = '<span class="text-success"><i class="bi bi-check-circle me-1"></i>Recibo enviado para ' + d.email + '</span>';
+    } else {
+      feedback.innerHTML = '<span class="text-danger">Erro: ' + (d.error || "desconhecido") + '</span>';
+    }
+  } catch(e) {
+    feedback.innerHTML = '<span class="text-danger">Erro de conexão.</span>';
+  }
+}
 </script>
 {% endblock %}
 """,
@@ -19734,6 +19779,7 @@ async def office_finance_new_page(request: Request, session: Session = Depends(g
             "entry": None,
             "form": _office_entry_form_data(),
             "statuses": OFFICE_ENTRY_STATUSES,
+            "client_email": "",
             **catalog,
         },
     )
@@ -19774,6 +19820,9 @@ async def office_finance_edit_page(request: Request, session: Session = Depends(
 
     catalog = _office_catalog(session, ctx.company.id)
     current_client = get_client_or_none(session, ctx.company.id, get_active_client_id(request, session, ctx))
+    # E-mail do cliente vinculado ao lançamento (para pré-preencher campo de recibo)
+    entry_client = get_client_or_none(session, ctx.company.id, entry.client_id) if entry.client_id else None
+    client_email = (entry_client.finance_email or entry_client.email or "") if entry_client else ""
     return render(
         "office_finance_form.html",
         request=request,
@@ -19786,6 +19835,7 @@ async def office_finance_edit_page(request: Request, session: Session = Depends(
             "entry": entry,
             "form": _office_entry_form_data(entry),
             "statuses": OFFICE_ENTRY_STATUSES,
+            "client_email": client_email,
             **catalog,
         },
     )
@@ -19850,6 +19900,250 @@ async def office_finance_delete_action(request: Request, session: Session = Depe
     session.commit()
     set_flash(request, "Lançamento excluído.")
     return RedirectResponse("/admin/financeiro", status_code=303)
+
+
+# ── Recibo/Fatura do lançamento financeiro interno ────────────────────────────
+
+def _gerar_recibo_fatura_pdf(
+    *,
+    company: Any,
+    client: Any,
+    entry: OfficeFinancialEntry,
+    numero_recibo: str = "",
+) -> bytes:
+    """Gera PDF de recibo/fatura para um lançamento do financeiro interno."""
+    from io import BytesIO
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.units import mm
+    from reportlab.pdfgen import canvas as rl_canvas
+    from reportlab.lib import colors
+
+    buf = BytesIO()
+    c = rl_canvas.Canvas(buf, pagesize=A4)
+    w, h = A4
+    margin = 20 * mm
+
+    # ── Cabeçalho ──────────────────────────────────────────────────────────────
+    c.setFillColor(colors.HexColor("#1a2340"))
+    c.rect(0, h - 28 * mm, w, 28 * mm, fill=True, stroke=False)
+
+    c.setFillColor(colors.white)
+    c.setFont("Helvetica-Bold", 15)
+    c.drawString(margin, h - 12 * mm, company.name or "Escritório")
+    c.setFont("Helvetica", 9)
+    c.drawString(margin, h - 19 * mm, f"CNPJ: {company.cnpj or '—'}")
+
+    c.setFont("Helvetica-Bold", 18)
+    c.drawRightString(w - margin, h - 14 * mm, "RECIBO / FATURA")
+    c.setFont("Helvetica", 9)
+    if numero_recibo:
+        c.drawRightString(w - margin, h - 20 * mm, f"Nº {numero_recibo}")
+
+    # ── Dados do cliente ───────────────────────────────────────────────────────
+    y = h - 40 * mm
+    c.setFillColor(colors.HexColor("#f0f3f9"))
+    c.rect(margin, y - 22 * mm, w - 2 * margin, 22 * mm, fill=True, stroke=False)
+
+    c.setFillColor(colors.HexColor("#1a2340"))
+    c.setFont("Helvetica-Bold", 8)
+    c.drawString(margin + 4 * mm, y - 5 * mm, "CLIENTE")
+    c.setFont("Helvetica-Bold", 11)
+    c.drawString(margin + 4 * mm, y - 11 * mm, client.name if client else "—")
+    c.setFont("Helvetica", 9)
+    client_info = []
+    if client:
+        if client.cnpj:    client_info.append(f"CNPJ: {client.cnpj}")
+        if client.email:   client_info.append(client.email)
+        if client.address: client_info.append(client.address)
+    c.drawString(margin + 4 * mm, y - 17 * mm, "   |   ".join(client_info) or "—")
+
+    # ── Linha separadora ───────────────────────────────────────────────────────
+    y = y - 28 * mm
+    c.setStrokeColor(colors.HexColor("#d0d8e8"))
+    c.setLineWidth(0.5)
+    c.line(margin, y, w - margin, y)
+
+    # ── Tabela de itens ────────────────────────────────────────────────────────
+    y -= 8 * mm
+    col_desc = margin
+    col_comp = w - margin - 50 * mm
+    col_val  = w - margin - 22 * mm
+    col_w    = w - 2 * margin
+
+    # Cabeçalho da tabela
+    c.setFillColor(colors.HexColor("#1a2340"))
+    c.rect(margin, y - 6 * mm, col_w, 6 * mm, fill=True, stroke=False)
+    c.setFillColor(colors.white)
+    c.setFont("Helvetica-Bold", 8)
+    c.drawString(col_desc + 2 * mm, y - 4 * mm, "DESCRIÇÃO")
+    c.drawString(col_comp + 2 * mm, y - 4 * mm, "COMPETÊNCIA")
+    c.drawRightString(w - margin - 2 * mm, y - 4 * mm, "VALOR (R$)")
+    y -= 6 * mm
+
+    # Linha do lançamento
+    c.setFillColor(colors.HexColor("#f8fafc"))
+    c.rect(margin, y - 8 * mm, col_w, 8 * mm, fill=True, stroke=False)
+    c.setFillColor(colors.HexColor("#1a2340"))
+    c.setFont("Helvetica", 9)
+    desc = (entry.description or "—")[:80]
+    c.drawString(col_desc + 2 * mm, y - 5 * mm, desc)
+    c.drawString(col_comp + 2 * mm, y - 5 * mm, entry.competence_date or "—")
+    valor = entry.amount_expected_brl or 0.0
+    c.setFont("Helvetica-Bold", 9)
+    c.drawRightString(w - margin - 2 * mm, y - 5 * mm, f"R$ {valor:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
+    y -= 8 * mm
+
+    # Linha de total
+    c.setStrokeColor(colors.HexColor("#d0d8e8"))
+    c.line(margin, y, w - margin, y)
+    y -= 8 * mm
+    c.setFont("Helvetica-Bold", 11)
+    c.setFillColor(colors.HexColor("#1a2340"))
+    c.drawString(col_comp + 2 * mm, y - 3 * mm, "TOTAL A PAGAR:")
+    c.drawRightString(w - margin - 2 * mm, y - 3 * mm,
+                      f"R$ {valor:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
+    y -= 12 * mm
+
+    # ── Vencimento / Observações ───────────────────────────────────────────────
+    c.setFont("Helvetica", 9)
+    c.setFillColor(colors.HexColor("#444"))
+    if entry.due_date:
+        c.drawString(margin, y, f"Vencimento: {entry.due_date}")
+        y -= 6 * mm
+    if entry.document_number:
+        c.drawString(margin, y, f"Documento/Referência: {entry.document_number}")
+        y -= 6 * mm
+    if entry.notes:
+        c.drawString(margin, y, "Observações:")
+        y -= 5 * mm
+        c.setFont("Helvetica", 8)
+        for line in (entry.notes or "").split("\n")[:6]:
+            c.drawString(margin + 3 * mm, y, line[:100])
+            y -= 4.5 * mm
+
+    # ── Rodapé ─────────────────────────────────────────────────────────────────
+    c.setFillColor(colors.HexColor("#1a2340"))
+    c.rect(0, 0, w, 14 * mm, fill=True, stroke=False)
+    c.setFillColor(colors.white)
+    c.setFont("Helvetica", 7)
+    from datetime import date as _date_recibo
+    c.drawString(margin, 9 * mm, f"Emitido em {_date_recibo.today().strftime('%d/%m/%Y')}")
+    if company.email:
+        c.drawCentredString(w / 2, 9 * mm, company.email)
+    if company.phone:
+        c.drawRightString(w - margin, 9 * mm, company.phone)
+
+    c.showPage()
+    c.save()
+    return buf.getvalue()
+
+
+@app.get("/admin/financeiro/{entry_id}/recibo.pdf")
+@require_login
+@require_role({"admin", "equipe"})
+async def office_finance_recibo_pdf(
+    request: Request,
+    entry_id: int,
+    session: Session = Depends(get_session),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+    entry = session.get(OfficeFinancialEntry, entry_id)
+    if not entry or entry.company_id != ctx.company.id:
+        return JSONResponse({"ok": False, "error": "Não encontrado."}, status_code=404)
+
+    client = get_client_or_none(session, ctx.company.id, entry.client_id) if entry.client_id else None
+    numero = f"{entry.id:05d}"
+    pdf = _gerar_recibo_fatura_pdf(company=ctx.company, client=client, entry=entry, numero_recibo=numero)
+
+    filename = f"recibo_{numero}.pdf"
+    return Response(
+        content=pdf,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@app.post("/admin/financeiro/{entry_id}/enviar-recibo")
+@require_login
+@require_role({"admin", "equipe"})
+async def office_finance_enviar_recibo(
+    request: Request,
+    entry_id: int,
+    session: Session = Depends(get_session),
+) -> JSONResponse:
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+    entry = session.get(OfficeFinancialEntry, entry_id)
+    if not entry or entry.company_id != ctx.company.id:
+        return JSONResponse({"ok": False, "error": "Lançamento não encontrado."}, status_code=404)
+
+    if not entry.client_id:
+        return JSONResponse({"ok": False, "error": "Lançamento não tem cliente vinculado."})
+
+    client = get_client_or_none(session, ctx.company.id, entry.client_id)
+    if not client:
+        return JSONResponse({"ok": False, "error": "Cliente não encontrado."})
+
+    body = await request.json()
+    dest_email = (body.get("email") or "").strip() or client.finance_email or client.email or ""
+    if not dest_email:
+        return JSONResponse({"ok": False, "error": "Cliente não tem e-mail cadastrado."})
+
+    numero = f"{entry.id:05d}"
+    try:
+        pdf = _gerar_recibo_fatura_pdf(company=ctx.company, client=client, entry=entry, numero_recibo=numero)
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": f"Erro ao gerar PDF: {e}"})
+
+    valor_fmt = f"R$ {(entry.amount_expected_brl or 0):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    venc = entry.due_date or "—"
+    html_body = f"""
+<div style="font-family:Arial,sans-serif;max-width:600px;margin:auto">
+  <div style="background:#1a2340;padding:24px 32px;border-radius:8px 8px 0 0">
+    <h2 style="color:#fff;margin:0">{ctx.company.name}</h2>
+  </div>
+  <div style="border:1px solid #e0e6f0;border-top:none;padding:28px 32px;border-radius:0 0 8px 8px">
+    <p style="font-size:16px;color:#1a2340"><strong>Recibo / Fatura Nº {numero}</strong></p>
+    <p>Olá, <strong>{client.name}</strong>.</p>
+    <p>Segue em anexo o recibo/fatura referente ao serviço prestado:</p>
+    <table style="width:100%;border-collapse:collapse;margin:16px 0">
+      <tr style="background:#f0f3f9">
+        <td style="padding:10px 14px;font-weight:bold">Descrição</td>
+        <td style="padding:10px 14px">{entry.description or "—"}</td>
+      </tr>
+      <tr>
+        <td style="padding:10px 14px;font-weight:bold">Valor</td>
+        <td style="padding:10px 14px;font-size:18px;color:#1a2340"><strong>{valor_fmt}</strong></td>
+      </tr>
+      <tr style="background:#f0f3f9">
+        <td style="padding:10px 14px;font-weight:bold">Vencimento</td>
+        <td style="padding:10px 14px">{venc}</td>
+      </tr>
+      {"<tr><td style='padding:10px 14px;font-weight:bold'>Referência</td><td style='padding:10px 14px'>" + entry.document_number + "</td></tr>" if entry.document_number else ""}
+    </table>
+    <p style="color:#666;font-size:13px">O PDF completo está em anexo. Em caso de dúvidas, entre em contato.</p>
+    <p style="color:#666;font-size:13px">Atenciosamente,<br><strong>{ctx.company.name}</strong></p>
+  </div>
+</div>
+"""
+
+    try:
+        _smtp_send_email(
+            to_email=dest_email,
+            subject=f"Recibo/Fatura Nº {numero} — {ctx.company.name}",
+            html_body=html_body,
+            text_body=f"Recibo/Fatura Nº {numero}\nDescrição: {entry.description}\nValor: {valor_fmt}\nVencimento: {venc}",
+            attachments=[{
+                "filename": f"recibo_{numero}.pdf",
+                "data": pdf,
+                "mimetype": "application/pdf",
+            }],
+        )
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": f"Erro ao enviar e-mail: {e}"})
+
+    return JSONResponse({"ok": True, "email": dest_email})
 
 
 @app.get("/admin/financeiro/dre", response_class=HTMLResponse)
