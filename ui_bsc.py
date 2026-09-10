@@ -333,6 +333,32 @@ async def bsc_del_indicador(ind_id: int, request: Request, session: Session = De
     return RedirectResponse(f"/ferramentas/bsc/{client_id}", status_code=303)
 
 
+@app.post("/ferramentas/bsc/indicador/{ind_id}/editar")
+@require_login
+async def bsc_editar_indicador(
+    ind_id: int, request: Request, session: Session = Depends(get_session),
+    nome: str = Form(...), unidade: str = Form(""), meta_valor: float = Form(0.0),
+    polaridade: str = Form("maior"), frequencia: str = Form("mensal"),
+    tol_amarelo: float = Form(10.0), tol_vermelho: float = Form(25.0),
+):
+    ctx = get_tenant_context(request, session)
+    if not ctx or ctx.membership.role not in ("admin", "equipe", "cliente"):
+        return RedirectResponse("/", status_code=303)
+    ind = session.get(BSCIndicador, ind_id)
+    if ind and ind.company_id == ctx.company.id:
+        ind.nome = nome
+        ind.unidade = unidade
+        ind.meta_valor = meta_valor
+        ind.polaridade = polaridade
+        ind.frequencia = frequencia
+        ind.tol_amarelo = tol_amarelo
+        ind.tol_vermelho = tol_vermelho
+        session.add(ind)
+        session.commit()
+        client_id = ind.client_id
+    return RedirectResponse(f"/ferramentas/bsc/{client_id}", status_code=303)
+
+
 @app.post("/api/bsc/lancamento")
 @require_login
 async def bsc_lancar(
@@ -554,14 +580,22 @@ TEMPLATES["bsc_painel.html"] = r"""
           <div class="ind-row">
             <div class="d-flex align-items-center gap-2">
               <span class="sem-dot" style="background:{{ ii.cor }};"></span>
-              <span class="small flex-grow-1">{{ ii.ind.nome }}</span>
+              <span class="small flex-grow-1">{{ ii.ind.nome }}
+                <span style="font-size:.65rem;color:{% if ii.ind.polaridade=='menor' %}#3b82f6{% else %}#22c55e{% endif %};font-weight:600;"
+                      title="{% if ii.ind.polaridade=='menor' %}Menor é melhor{% else %}Maior é melhor{% endif %}">
+                  {% if ii.ind.polaridade=='menor' %}↓ reduzir{% else %}↑ aumentar{% endif %}
+                </span>
+              </span>
               <span class="muted" style="font-size:.72rem;">{{ ii.ind.unidade }}</span>
               {% if ii.realizado is not none %}
                 <span class="fw-semibold small">{{ ii.realizado|round(1) }}</span>
-                <span class="muted small">/ {{ ii.ind.meta_valor|round(1) }}</span>
+                <span class="muted small">/ meta {{ ii.ind.meta_valor|round(1) }}</span>
               {% else %}
                 <span class="muted small">sem dados</span>
               {% endif %}
+              <button class="btn btn-link btn-sm p-0" style="font-size:.65rem;color:#6b7280;"
+                      title="Editar indicador"
+                      onclick="abrirEditarInd({{ ii.ind.id }},'{{ ii.ind.nome|replace("'","\\'")|replace('"','\\"') }}','{{ ii.ind.unidade }}',{{ ii.ind.meta_valor }},'{{ ii.ind.polaridade }}','{{ ii.ind.frequencia }}',{{ ii.ind.tol_amarelo }},{{ ii.ind.tol_vermelho }})">✏</button>
               <form method="post" action="/ferramentas/bsc/indicador/{{ ii.ind.id }}/del"
                     onsubmit="return confirm('Remover indicador?')">
                 <button class="btn btn-link btn-sm text-danger p-0" style="font-size:.65rem;">✕</button>
@@ -693,6 +727,76 @@ TEMPLATES["bsc_painel.html"] = r"""
     </form>
   </div></div>
 </div>
+
+<!-- Modal: Editar Indicador -->
+<div class="modal fade modal-bsc" id="modalEditInd" tabindex="-1">
+  <div class="modal-dialog"><div class="modal-content">
+    <div class="modal-header"><h5 class="modal-title">✏ Editar Indicador (KPI)</h5>
+      <button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+    <form id="formEditInd" method="post" action="">
+    <div class="modal-body">
+      <div class="mb-3">
+        <label class="form-label">Nome do Indicador</label>
+        <input type="text" id="ei-nome" name="nome" class="form-control" required>
+      </div>
+      <div class="row g-2 mb-3">
+        <div class="col">
+          <label class="form-label">Unidade</label>
+          <input type="text" id="ei-unidade" name="unidade" class="form-control" placeholder="R$, %, un, dias…">
+        </div>
+        <div class="col">
+          <label class="form-label">Meta</label>
+          <input type="number" id="ei-meta" name="meta_valor" class="form-control" step="any">
+        </div>
+      </div>
+      <div class="row g-2 mb-3">
+        <div class="col">
+          <label class="form-label">Polaridade</label>
+          <select id="ei-polaridade" name="polaridade" class="form-select">
+            <option value="maior">Maior é melhor ↑</option>
+            <option value="menor">Menor é melhor ↓</option>
+          </select>
+        </div>
+        <div class="col">
+          <label class="form-label">Frequência</label>
+          <select id="ei-frequencia" name="frequencia" class="form-select">
+            <option value="mensal">Mensal</option>
+            <option value="trimestral">Trimestral</option>
+            <option value="anual">Anual</option>
+          </select>
+        </div>
+      </div>
+      <div class="row g-2">
+        <div class="col">
+          <label class="form-label">Tolerância amarelo (%)</label>
+          <input type="number" id="ei-tol-am" name="tol_amarelo" class="form-control">
+        </div>
+        <div class="col">
+          <label class="form-label">Tolerância vermelho (%)</label>
+          <input type="number" id="ei-tol-vm" name="tol_vermelho" class="form-control">
+        </div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancelar</button>
+      <button class="btn btn-primary">Salvar</button>
+    </div>
+    </form>
+  </div></div>
+</div>
+<script>
+function abrirEditarInd(id, nome, unidade, meta, polaridade, frequencia, tolAm, tolVm) {
+  document.getElementById('ei-nome').value = nome;
+  document.getElementById('ei-unidade').value = unidade;
+  document.getElementById('ei-meta').value = meta;
+  document.getElementById('ei-polaridade').value = polaridade;
+  document.getElementById('ei-frequencia').value = frequencia;
+  document.getElementById('ei-tol-am').value = tolAm;
+  document.getElementById('ei-tol-vm').value = tolVm;
+  document.getElementById('formEditInd').action = '/ferramentas/bsc/indicador/' + id + '/editar';
+  new bootstrap.Modal(document.getElementById('modalEditInd')).show();
+}
+</script>
 
 <!-- Modal: Lançar Valor -->
 <div class="modal fade modal-bsc" id="modalLanc" tabindex="-1">
