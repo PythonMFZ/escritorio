@@ -595,7 +595,15 @@ TEMPLATES["bsc_painel.html"] = r"""
               {% endif %}
               <button class="btn btn-link btn-sm p-0" style="font-size:.65rem;color:#6b7280;"
                       title="Editar indicador"
-                      onclick="abrirEditarInd({{ ii.ind.id }},'{{ ii.ind.nome|replace("'","\\'")|replace('"','\\"') }}','{{ ii.ind.unidade }}',{{ ii.ind.meta_valor }},'{{ ii.ind.polaridade }}','{{ ii.ind.frequencia }}',{{ ii.ind.tol_amarelo }},{{ ii.ind.tol_vermelho }})">✏</button>
+                      data-ind-id="{{ ii.ind.id }}"
+                      data-nome="{{ ii.ind.nome }}"
+                      data-unidade="{{ ii.ind.unidade }}"
+                      data-meta="{{ ii.ind.meta_valor }}"
+                      data-polaridade="{{ ii.ind.polaridade }}"
+                      data-frequencia="{{ ii.ind.frequencia }}"
+                      data-tol-am="{{ ii.ind.tol_amarelo }}"
+                      data-tol-vm="{{ ii.ind.tol_vermelho }}"
+                      onclick="abrirEditarIndBtn(this)">✏</button>
               <form method="post" action="/ferramentas/bsc/indicador/{{ ii.ind.id }}/del"
                     onsubmit="return confirm('Remover indicador?')">
                 <button class="btn btn-link btn-sm text-danger p-0" style="font-size:.65rem;">✕</button>
@@ -785,6 +793,10 @@ TEMPLATES["bsc_painel.html"] = r"""
   </div></div>
 </div>
 <script>
+function abrirEditarIndBtn(btn) {
+  var d = btn.dataset;
+  abrirEditarInd(d.indId, d.nome, d.unidade, d.meta, d.polaridade, d.frequencia, d.tolAm, d.tolVm);
+}
 function abrirEditarInd(id, nome, unidade, meta, polaridade, frequencia, tolAm, tolVm) {
   document.getElementById('ei-nome').value = nome;
   document.getElementById('ei-unidade').value = unidade;
