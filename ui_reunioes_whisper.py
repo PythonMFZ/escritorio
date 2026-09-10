@@ -365,7 +365,9 @@ Transcrição:
             },
             timeout=600,
         )
-        resp.raise_for_status()
+        if not resp.ok:
+            print(f"[whisper] Claude HTTP {resp.status_code}: {resp.text[:500]}")
+            resp.raise_for_status()
         texto = resp.json()["content"][0]["text"].strip()
         print(f"[whisper] Claude respondeu: {len(texto)} chars")
 
