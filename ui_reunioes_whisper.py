@@ -716,6 +716,9 @@ async def reuniao_resumo_manual(
     if not mt.transcript_text:
         return JSONResponse({"ok": False, "erro": "Sem transcrição para resumir."})
 
+    if not _os2.environ.get("ANTHROPIC_API_KEY", ""):
+        return JSONResponse({"ok": False, "erro": "ANTHROPIC_API_KEY não configurada no servidor."})
+
     transcript_text = mt.transcript_text
     meeting_title   = mt.title
 
@@ -745,8 +748,9 @@ async def reuniao_resumo_manual(
             try:
                 with _SW2(engine) as _s:
                     _mt = _s.get(Meeting, meeting_id)
-                    if _mt and _mt.notion_status == "summary_in_progress":
-                        _mt.notion_status = "notes_ready"
+                    if _mt:
+                        _mt.notion_status = "error"
+                        _mt.notes_text = f"Erro ao gerar resumo: {_e_bg}"
                         _s.add(_mt); _s.commit()
             except Exception:
                 pass
@@ -1116,24 +1120,22 @@ async function gerarResumo() {
     if (btn) { btn.disabled = false; btn.textContent = '🤖 Gerar resumo com IA'; }
     return;
   }
-  // Aguarda o status virar summary_in_progress, depois aguarda notes_ready
-  let sawInProgress = false;
+  // Aguarda notes_ready ou error — não depende de ver summary_in_progress
+  let _pollCount = 0;
   (function poll() {
     setTimeout(async function() {
+      _pollCount++;
       try {
         const rs = await fetch('/reunioes/{{ meeting.id }}/status');
         const ds = await rs.json();
-        if (ds.status === 'summary_in_progress') {
-          sawInProgress = true;
-          poll();
-        } else if (sawInProgress && (ds.status === 'notes_ready' || ds.status === 'error')) {
-          location.reload();
-        } else if (ds.status === 'error') {
+        if (ds.status === 'notes_ready' || ds.status === 'error') {
           location.reload();
         } else {
-          poll();
+          // continua polling até no máximo 3 minutos
+          if (_pollCount < 36) poll();
+          else location.reload();
         }
-      } catch(e) { poll(); }
+      } catch(e) { if (_pollCount < 36) poll(); }
     }, 5000);
   })();
 }
