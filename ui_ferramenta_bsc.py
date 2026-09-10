@@ -72,6 +72,7 @@ class BSCIndicator(SQLModel, table=True):
     source_metric:  Optional[str] = Field(default=None)   # "realizado" | "orcado" | "execucao_pct"
     source_config:  str           = Field(default="{}")   # JSON: {"account_id": 123}
     aggregation:    str           = Field(default="soma") # "soma" | "ultimo"
+    direction:      str           = Field(default="maior") # "maior" | "menor"
     is_active:      bool  = Field(default=True)
     created_at:     datetime = Field(default_factory=utcnow)
     updated_at:     datetime = Field(default_factory=utcnow)
@@ -125,6 +126,7 @@ def _ensure_bsc_tables():
             _c.execute(_t("ALTER TABLE bscindicator ADD COLUMN IF NOT EXISTS source_config VARCHAR DEFAULT '{}'"))
             _c.execute(_t("ALTER TABLE bscplan ADD COLUMN IF NOT EXISTS client_id INTEGER"))
             _c.execute(_t("ALTER TABLE bscindicator ADD COLUMN IF NOT EXISTS aggregation VARCHAR DEFAULT 'soma'"))
+            _c.execute(_t("ALTER TABLE bscindicator ADD COLUMN IF NOT EXISTS direction VARCHAR DEFAULT 'maior'"))
             _c.execute(_t("ALTER TABLE bscaction ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT true"))
             _c.execute(_t("UPDATE bscaction SET is_active = true WHERE is_active IS NULL"))
     except Exception:
@@ -155,7 +157,13 @@ def _bsc_achievement(indicators_with_vals: list) -> float | None:
     pcts = []
     for ind, cur in indicators_with_vals:
         if ind.target_value > 0:
-            pcts.append(min(cur / ind.target_value * 100, 150.0))
+            direction = getattr(ind, "direction", "maior")
+            if direction == "menor":
+                # menor é melhor: 100% se cur <= meta; acima de meta = pior
+                pct = (ind.target_value / cur * 100) if cur > 0 else 100.0
+            else:
+                pct = cur / ind.target_value * 100
+            pcts.append(min(pct, 150.0))
     if not pcts:
         return None
     return sum(pcts) / len(pcts)
@@ -501,6 +509,7 @@ async def bsc_criar_indicador(request: Request, session: Session = Depends(get_s
         baseline_value=float(body.get("baseline_value") or 0),
         target_value=float(body.get("target_value") or 0),
         aggregation=body.get("aggregation") or "soma",
+        direction=body.get("direction") or "maior",
         source_module=body.get("source_module") or None,
         source_metric=body.get("source_metric") or None,
         source_config=_src_cfg,
@@ -525,6 +534,7 @@ async def bsc_editar_indicador(ind_id: int, request: Request, session: Session =
     if "target_value"   in body: ind.target_value   = float(body["target_value"] or 0)
     if "baseline_value" in body: ind.baseline_value = float(body["baseline_value"] or 0)
     if "aggregation"    in body: ind.aggregation    = body["aggregation"] or "soma"
+    if "direction"      in body: ind.direction      = body["direction"] or "maior"
     if "source_module"  in body: ind.source_module  = body["source_module"] or None
     if "source_metric"  in body: ind.source_metric  = body["source_metric"] or None
     if "source_config"  in body:
@@ -968,7 +978,12 @@ TEMPLATES["bsc_dashboard.html"] = r"""
                 </thead>
                 <tbody>
                 {% for ind, cur in inds %}
-                {% set pct = (cur / ind.target_value * 100) if ind.target_value else 0 %}
+                {% set _dir = ind.direction if ind.direction else 'maior' %}
+                {% if _dir == 'menor' %}
+                  {% set pct = (ind.target_value / cur * 100) if (ind.target_value and cur > 0) else 0 %}
+                {% else %}
+                  {% set pct = (cur / ind.target_value * 100) if ind.target_value else 0 %}
+                {% endif %}
                 {% set pct_capped = [pct, 100]|min %}
                 {% if pct >= 90 %}{% set bc = "#198754" %}
                 {% elif pct >= 70 %}{% set bc = "#ffc107" %}
@@ -976,7 +991,10 @@ TEMPLATES["bsc_dashboard.html"] = r"""
                 {# Formata número: 2 decimais se float, inteiro se .0 #}
                 {% set cur_fmt = (cur|int)|string if cur == (cur|int) else ('%.2f'|format(cur)) %}
                 <tr>
-                  <td style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="{{ ind.name }}">{{ ind.name }}{% if ind.source_module %} <span class="badge bg-info text-dark" style="font-size:.62rem;">🔗</span>{% endif %}</td>
+                  <td style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="{{ ind.name }}">
+                    {{ ind.name }}{% if ind.source_module %} <span class="badge bg-info text-dark" style="font-size:.62rem;">🔗</span>{% endif %}
+                    <span style="font-size:.65rem;color:{% if _dir=='menor' %}#3b82f6{% else %}#198754{% endif %};font-weight:600;margin-left:4px;">{% if _dir=='menor' %}↓{% else %}↑{% endif %}</span>
+                  </td>
                   <td class="muted">{{ ind.unit }}</td>
                   <td class="muted" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{{ ind.baseline_value|int if ind.baseline_value == (ind.baseline_value|int) else ('%.2f'|format(ind.baseline_value)) }}</td>
                   <td style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{{ ind.target_value|int if ind.target_value == (ind.target_value|int) else ('%.2f'|format(ind.target_value)) }}</td>
@@ -994,6 +1012,7 @@ TEMPLATES["bsc_dashboard.html"] = r"""
                             data-freq="{{ ind.frequency }}"
                             data-base="{{ ind.baseline_value }}"
                             data-meta="{{ ind.target_value }}"
+                            data-direction="{{ _dir }}"
                             data-src-module="{{ ind.source_module or '' }}"
                             data-src-metric="{{ ind.source_metric or '' }}"
                             data-src-config='{{ ind.source_config or "{}" }}'
@@ -1169,6 +1188,13 @@ TEMPLATES["bsc_dashboard.html"] = r"""
             <input id="iBase" type="number" step="any" class="form-control" value="0"></div>
           <div class="col-6"><label class="form-label fw-semibold">Meta</label>
             <input id="iMeta" type="number" step="any" class="form-control" value="100"></div>
+        </div>
+        <div class="mb-3">
+          <label class="form-label fw-semibold">Direção da Meta</label>
+          <select id="iDirection" class="form-select">
+            <option value="maior">↑ Maior é melhor (ex: Faturamento, NPS, Margem)</option>
+            <option value="menor">↓ Menor é melhor (ex: Custo, Prazo, Inadimplência)</option>
+          </select>
         </div>
         <div class="mb-3">
           <label class="form-label fw-semibold">Cálculo do Valor Atual</label>
@@ -1419,6 +1445,7 @@ function novoIndicador(objId) {
   document.getElementById('iBase').value = '0';
   document.getElementById('iMeta').value = '100';
   document.getElementById('iAggregation').value = 'soma';
+  document.getElementById('iDirection').value = 'maior';
   document.getElementById('iSourceModule').value = '';
   document.getElementById('iSourceMetric').value = 'realizado';
   document.getElementById('iSourceAccountId').value = '';
@@ -1439,6 +1466,7 @@ function editarIndicador(btn) {
   document.getElementById('iBase').value = d.base;
   document.getElementById('iMeta').value = d.meta;
   document.getElementById('iAggregation').value = d.aggregation || 'soma';
+  document.getElementById('iDirection').value = d.direction || 'maior';
   document.getElementById('iSourceModule').value = d.srcModule || '';
   document.getElementById('iSourceMetric').value = d.srcMetric || 'realizado';
   document.getElementById('iSourceAccountId').value = cfg.account_id || '';
@@ -1462,6 +1490,7 @@ async function salvarIndicador() {
     baseline_value: document.getElementById('iBase').value,
     target_value: document.getElementById('iMeta').value,
     aggregation: document.getElementById('iAggregation').value,
+    direction: document.getElementById('iDirection').value,
     source_module: srcModule || null,
     source_metric: srcModule ? document.getElementById('iSourceMetric').value : null,
     source_config: JSON.stringify(srcCfg),
