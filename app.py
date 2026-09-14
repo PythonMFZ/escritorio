@@ -707,6 +707,8 @@ class ClientSnapshot(SQLModel, table=True):
     score_total: float = 0.0
 
     created_at: datetime = Field(default_factory=utcnow)
+    label: str = Field(default="")
+    snapshot_date: Optional[str] = Field(default=None)  # "YYYY-MM-DD"
 
 
 class SmartAlert(SQLModel, table=True):
@@ -2972,6 +2974,14 @@ def ensure_ui_tables() -> None:
             tables=[UiBannerSlide.__table__, UiNewsFeed.__table__, AdminEntityState.__table__],
             checkfirst=True,
         )
+    except Exception:
+        pass
+    # Adiciona colunas faltantes em ClientSnapshot sem migration Alembic
+    try:
+        from sqlalchemy import text as _t_ui
+        with engine.begin() as _c_ui:
+            _c_ui.execute(_t_ui("ALTER TABLE clientsnapshot ADD COLUMN IF NOT EXISTS label VARCHAR DEFAULT ''"))
+            _c_ui.execute(_t_ui("ALTER TABLE clientsnapshot ADD COLUMN IF NOT EXISTS snapshot_date VARCHAR"))
     except Exception:
         pass
 
