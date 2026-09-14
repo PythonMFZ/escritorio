@@ -19,7 +19,7 @@
     /* ── Simulator Layout ─────────────────────────────────────── */
     .sim-wrapper {
       min-height: 100vh;
-      background: var(--ink);
+      background: #FAFAF8;
       display: flex;
       flex-direction: column;
     }
@@ -27,11 +27,11 @@
     /* Progress bar */
     .sim-progress-rail {
       position: fixed;
-      top: 0;
+      top: 72px;
       left: 0;
       right: 0;
       height: 3px;
-      background: rgba(255,255,255,0.08);
+      background: #E8E5DF;
       z-index: 200;
     }
     .sim-progress-fill {
@@ -76,7 +76,7 @@
       font-family: var(--ff-brand);
       font-size: clamp(1.8rem, 4vw, 2.8rem);
       font-weight: 800;
-      color: var(--cream);
+      color: #0D0D0D;
       text-align: center;
       margin-bottom: 12px;
       line-height: 1.15;
@@ -117,8 +117,8 @@
     }
 
     .sim-card {
-      background: var(--bg2, #111);
-      border: 1.5px solid var(--border, rgba(255,255,255,0.08));
+      background: #FFFFFF;
+      border: 1.5px solid #E0DDD8;
       padding: 24px 16px;
       display: flex;
       flex-direction: column;
@@ -129,14 +129,18 @@
       user-select: none;
       text-align: center;
       position: relative;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.05);
     }
     .sim-card:hover {
       border-color: var(--gold);
-      background: rgba(224,112,32,0.06);
+      background: rgba(224,112,32,0.04);
+      transform: translateY(-2px);
+      box-shadow: 0 4px 16px rgba(224,112,32,0.12);
     }
     .sim-card.selected {
       border-color: var(--gold);
-      background: rgba(224,112,32,0.12);
+      background: rgba(224,112,32,0.08);
+      box-shadow: 0 4px 16px rgba(224,112,32,0.18);
     }
     .sim-card.selected::after {
       content: '✓';
@@ -155,7 +159,7 @@
       font-family: var(--ff-body);
       font-size: 0.82rem;
       font-weight: 500;
-      color: var(--cream);
+      color: #1A1A1A;
       line-height: 1.4;
     }
     .card-sub {
@@ -184,7 +188,7 @@
       appearance: none;
       width: 100%;
       height: 4px;
-      background: var(--border, rgba(255,255,255,0.12));
+      background: #D8D5CF;
       outline: none;
       border-radius: 2px;
       cursor: pointer;
@@ -196,7 +200,7 @@
       height: 22px;
       border-radius: 50%;
       background: var(--gold);
-      border: 3px solid var(--ink);
+      border: 3px solid #FAFAF8;
       box-shadow: 0 0 0 2px var(--gold);
       cursor: pointer;
     }
@@ -205,7 +209,7 @@
       height: 18px;
       border-radius: 50%;
       background: var(--gold);
-      border: 2px solid var(--ink);
+      border: 2px solid #FAFAF8;
       cursor: pointer;
     }
     .slider-range-labels {
@@ -225,8 +229,8 @@
     }
     .quick-btn {
       background: transparent;
-      border: 1px solid var(--border, rgba(255,255,255,0.12));
-      color: var(--gray);
+      border: 1px solid #D8D5CF;
+      color: #666;
       font-family: var(--ff-mono);
       font-size: 0.65rem;
       letter-spacing: 0.1em;
@@ -265,9 +269,9 @@
       color: var(--gray);
     }
     .form-field input {
-      background: var(--bg2, #111);
-      border: 1px solid var(--border, rgba(255,255,255,0.1));
-      color: var(--cream);
+      background: #FFFFFF;
+      border: 1px solid #D8D5CF;
+      color: #1A1A1A;
       font-family: var(--ff-body);
       font-size: 0.9rem;
       padding: 13px 14px;
@@ -308,8 +312,8 @@
     }
     .btn-back {
       background: transparent;
-      border: 1px solid var(--border, rgba(255,255,255,0.12));
-      color: var(--gray);
+      border: 1px solid #D8D5CF;
+      color: #666;
       font-family: var(--ff-mono);
       font-size: 0.65rem;
       letter-spacing: 0.14em;
@@ -319,13 +323,13 @@
       transition: border-color 0.18s, color 0.18s;
     }
     .btn-back:hover {
-      border-color: var(--gray);
-      color: var(--cream);
+      border-color: #888;
+      color: #1A1A1A;
     }
     .btn-next {
       background: var(--gold);
       border: none;
-      color: var(--ink);
+      color: #fff;
       font-family: var(--ff-mono);
       font-size: 0.7rem;
       font-weight: 700;
@@ -357,10 +361,11 @@
       .result-grid { grid-template-columns: 1fr; }
     }
     .result-card {
-      background: var(--bg2, #111);
-      border: 1px solid var(--border, rgba(255,255,255,0.08));
+      background: #FFFFFF;
+      border: 1px solid #E0DDD8;
       padding: 28px 24px;
       text-align: center;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.06);
     }
     .result-card-label {
       font-family: var(--ff-mono);
@@ -400,7 +405,7 @@
       align-items: flex-start;
       gap: 14px;
       padding: 16px 0;
-      border-bottom: 1px solid var(--border, rgba(255,255,255,0.06));
+      border-bottom: 1px solid #E8E5DF;
     }
     .credit-line-item:last-child { border-bottom: none; }
     .cli-dot {
@@ -415,7 +420,7 @@
       font-family: var(--ff-body);
       font-size: 0.9rem;
       font-weight: 500;
-      color: var(--cream);
+      color: #1A1A1A;
       margin-bottom: 4px;
     }
     .cli-desc {
