@@ -463,6 +463,18 @@
 
     /* Spacer for nav */
     .nav-spacer { height: 72px; }
+
+    /* BCB disclaimer */
+    .disclaimer {
+      font-size: 0.78rem;
+      color: var(--gray);
+      border-left: 3px solid var(--gold);
+      padding: 10px 14px;
+      margin-bottom: 24px;
+      line-height: 1.6;
+      background: rgba(255,255,255,0.03);
+      border-radius: 0 6px 6px 0;
+    }
   </style>
 </head>
 <body>
@@ -729,6 +741,8 @@
         </div>
       </div>
 
+      <div id="bc-disclaimer" class="disclaimer" style="display:none"></div>
+
       <div class="lines-list">
         <div class="lines-list-title">Linhas de crédito aplicáveis ao seu perfil</div>
         <div id="credit-lines-container"></div>
@@ -965,11 +979,31 @@
     goTo(7);
   });
 
+  // ── Live BC rates ────────────────────────────────────────────
+  let _bcRates = null;
+  let _bcMesRef = null;
+  (async () => {
+    try {
+      const r = await fetch('https://app.maffezzollicapital.com.br/api/taxas-bc');
+      if (r.ok) {
+        const d = await r.json();
+        if (d && d.taxas) {
+          _bcRates = d.taxas;
+          _bcMesRef = d.mes_ref;
+        }
+      }
+    } catch (_) { /* fall back to hardcoded */ }
+  })();
+
   // ── Rate logic ───────────────────────────────────────────────
   function computeResult() {
-    let base = 1.8;
-    if (state.finalidade === 'home-equity') base = 1.2;
-    else if (state.finalidade === 'antecipacao-recebiveis') base = 2.2;
+    // Base rates — use live BC rates when available, fallback to hardcoded
+    let base = (_bcRates && _bcRates['Capital de Giro']) ? _bcRates['Capital de Giro'].am : 1.8;
+    if (state.finalidade === 'home-equity') {
+      base = (_bcRates && _bcRates['Home Equity']) ? _bcRates['Home Equity'].am : 1.2;
+    } else if (state.finalidade === 'antecipacao-recebiveis') {
+      base = (_bcRates && _bcRates['Antecipação de Recebíveis']) ? _bcRates['Antecipação de Recebíveis'].am : 2.2;
+    }
 
     let adj = 0;
     if (state.porte === 'media' || state.porte === 'grande') adj -= 0.3;
@@ -1037,6 +1071,15 @@
     document.getElementById('res-parcela').textContent = fmtCurrency(result.pmtMid);
     document.getElementById('res-parcela-range').textContent =
       fmtCurrency(result.pmtLow) + ' – ' + fmtCurrency(result.pmtHigh);
+
+    // Show BCB disclaimer if live rates loaded
+    const disclaimerEl = document.getElementById('bc-disclaimer');
+    if (_bcRates && _bcMesRef) {
+      disclaimerEl.innerHTML = '📊 Taxas estimadas com base na média do mercado conforme dados do <strong>Banco Central do Brasil</strong> — referência ' + _bcMesRef + '. A taxa final depende de análise de crédito individual e pode variar.';
+      disclaimerEl.style.display = '';
+    } else {
+      disclaimerEl.style.display = 'none';
+    }
 
     const container = document.getElementById('credit-lines-container');
     container.innerHTML = '';

@@ -251,6 +251,9 @@ _SIDEBAR_HTML = r"""
     <a class="sb-link" href="/admin/negocios-venda" data-sbpath="/admin/negocios-venda" title="Negócios à Venda">
       <span class="sb-icon">🏢</span><span class="sb-label">Negócios à Venda</span>
     </a>
+    <a class="sb-link" href="/admin/taxas-bc" data-sbpath="/admin/taxas-bc" title="Taxas BC">
+      <span class="sb-icon">📊</span><span class="sb-label">Taxas BC</span>
+    </a>
     <a class="sb-link" href="/admin/gestao" data-sbpath="/admin/gestao" title="Gestão Interna">
       <span class="sb-icon">⚙️</span><span class="sb-label">Gestão Interna</span>
     </a>
