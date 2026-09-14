@@ -26,9 +26,8 @@ class NegocioVenda(_SM_nv, table=True):
 
 
 def _nv_ensure_tables():
-    with _Sess_nv(_engine) as _s:
-        _SM_nv.metadata.create_all(_engine, tables=[NegocioVenda.__table__])
-        # migration: adiciona coluna ordem se não existir
+    with _Sess_nv(engine) as _s:
+        _SM_nv.metadata.create_all(engine, tables=[NegocioVenda.__table__])
         try:
             _s.exec(_sel_nv(NegocioVenda).limit(1))
         except Exception:
@@ -236,7 +235,7 @@ templates_env.loader.mapping["admin_negocios_venda"] = _NV_TEMPLATE
 
 @app.get("/admin/negocios-venda")
 async def admin_negocios_lista(request: _Req_nv):
-    with _Sess_nv(_engine) as s:
+    with _Sess_nv(engine) as s:
         negocios = s.exec(_sel_nv(NegocioVenda).order_by(NegocioVenda.ordem, NegocioVenda.id)).all()
     return templates_env.TemplateResponse("admin_negocios_venda", {
         "request": request, "negocios": negocios, "setores": SETORES,
@@ -256,7 +255,7 @@ async def admin_negocios_novo(
     status:      str   = _Form_nv("disponivel"),
     ordem:       int   = _Form_nv(0),
 ):
-    with _Sess_nv(_engine) as s:
+    with _Sess_nv(engine) as s:
         n = NegocioVenda(
             nome=nome.strip(), setor=setor.strip(), descricao=descricao.strip(),
             faturamento=faturamento, ebitda=ebitda, localizacao=localizacao.strip(),
@@ -282,7 +281,7 @@ async def admin_negocios_editar(
     status:      str   = _Form_nv("disponivel"),
     ordem:       int   = _Form_nv(0),
 ):
-    with _Sess_nv(_engine) as s:
+    with _Sess_nv(engine) as s:
         n = s.get(NegocioVenda, nv_id)
         if n:
             n.nome = nome.strip(); n.setor = setor.strip()
@@ -295,7 +294,7 @@ async def admin_negocios_editar(
 
 @app.post("/admin/negocios-venda/{nv_id}/excluir")
 async def admin_negocios_excluir(nv_id: int, request: _Req_nv):
-    with _Sess_nv(_engine) as s:
+    with _Sess_nv(engine) as s:
         n = s.get(NegocioVenda, nv_id)
         if n:
             s.delete(n); s.commit()
@@ -318,7 +317,7 @@ async def api_negocios_options(request: _Req_nv):
 
 @app.get("/api/negocios")
 async def api_negocios(request: _Req_nv):
-    with _Sess_nv(_engine) as s:
+    with _Sess_nv(engine) as s:
         negocios = s.exec(
             _sel_nv(NegocioVenda)
             .where(NegocioVenda.status != "vendido")
