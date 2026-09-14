@@ -181,6 +181,71 @@
       "manchete": "BayWa revisa plano StaRUG: €700M viram dívida subordinada e prazo vai a 2030 — sem balanço auditado de 2025",
       "resumo": "Conglomerado bávaro e acionistas majoritários fecharam entendimento preliminar para revisar o plano aprovado em 2025, estendendo a dívida até 2030. Ausência de relatório auditado de 2025 deixa credores sem visibilidade sobre viabilidade real.",
       "arquivo": "monitor-insolvencia/post-14-baywa.html"
+    },
+    {
+      "id": "americanas-2026-08",
+      "edicao": "Ed. 15",
+      "data": "2026-08-05",
+      "pais": "Brasil",
+      "tipo": "Recuperação Judicial",
+      "empresa": "Americanas S.A.",
+      "marcas": "Americanas · Submarino · Shoptime",
+      "passivo": "R$ 43Bi",
+      "manchete": "Americanas aprova plano de RJ com haircut de 85% e conversão de dívida em equity",
+      "resumo": "Após 18 meses de negociação, assembleia de credores aprova plano que converte R$ 10bi em participação acionária e extingue R$ 33bi em dívidas. Novo conselho assume controle da varejista.",
+      "arquivo": "#"
+    },
+    {
+      "id": "light-2026-08",
+      "edicao": "Ed. 16",
+      "data": "2026-08-12",
+      "pais": "Brasil",
+      "tipo": "Recuperação Judicial",
+      "empresa": "Light S.A.",
+      "marcas": "Light Energia · Light Serviços",
+      "passivo": "R$ 11,3Bi",
+      "manchete": "Light encerra RJ após aprovação de plano com emissão de debêntures e venda de ativos",
+      "resumo": "Distribuidora fluminense conclui processo iniciado em 2023. Plano prevê emissão de R$ 4bi em debêntures, venda da unidade de geração e reestruturação tarifária aprovada pela ANEEL.",
+      "arquivo": "#"
+    },
+    {
+      "id": "agrogalaxy-2026-08",
+      "edicao": "Ed. 17",
+      "data": "2026-08-20",
+      "pais": "Brasil",
+      "tipo": "Recuperação Judicial",
+      "empresa": "AgroGalaxy Participações",
+      "marcas": "AgroGalaxy · Sementes Petrovina",
+      "passivo": "R$ 3,8Bi",
+      "manchete": "AgroGalaxy pede RJ com R$ 3,8bi em dívidas após estoques encalhados e crise no agro",
+      "resumo": "Distribuidora de insumos agrícolas com 200 lojas entra em RJ após safra 2025/26 abaixo do esperado elevar inadimplência de produtores rurais a níveis recordes. Caso amplia debate sobre risco sistêmico no agronegócio.",
+      "arquivo": "#"
+    },
+    {
+      "id": "rite-aid-2026-09",
+      "edicao": "Ed. 18",
+      "data": "2026-09-03",
+      "pais": "EUA",
+      "tipo": "Chapter 7",
+      "empresa": "Rite Aid Corporation",
+      "marcas": "Rite Aid",
+      "passivo": "US$ 8,6Bi",
+      "manchete": "Rite Aid converte Chapter 11 em liquidação total após fracasso nas negociações com credores",
+      "resumo": "Terceira maior rede de farmácias dos EUA encerra operações após não conseguir comprador para o negócio em funcionamento. Liquidação elimina 45.000 empregos e fecha 1.400 lojas remanescentes.",
+      "arquivo": "#"
+    },
+    {
+      "id": "oi-2026-09",
+      "edicao": "Ed. 19",
+      "data": "2026-09-10",
+      "pais": "Brasil",
+      "tipo": "Falência",
+      "empresa": "Oi S.A.",
+      "marcas": "Oi · Oi Fibra",
+      "passivo": "R$ 65Bi",
+      "manchete": "Justiça decreta falência da Oi após segunda RJ fracassar e empresa não cumprir plano",
+      "resumo": "Após vender ativos de telefonia móvel para TIM, Claro e Vivo em 2022, a operadora não conseguiu viabilizar o negócio de fibra. Segunda RJ aprovada em 2024 descumpriu metas de receita, levando à decretação de falência pela 4ª Vara Empresarial do RJ.",
+      "arquivo": "#"
     }
   ]
 }
