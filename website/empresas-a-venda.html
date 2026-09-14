@@ -78,6 +78,16 @@
       padding: 4px 10px;
       font-weight: 500;
     }
+    .badge-reservado {
+      font-family: var(--ff-mono);
+      font-size: 0.6rem;
+      letter-spacing: 0.2em;
+      text-transform: uppercase;
+      background: #888;
+      color: #fff;
+      padding: 4px 10px;
+      font-weight: 500;
+    }
     .empresa-setor {
       font-family: var(--ff-mono);
       font-size: 0.6rem;
@@ -378,92 +388,62 @@
     <h2 class="display display-lg">Negócios disponíveis</h2>
     <div class="gold-divider"></div>
 
-    <div class="empresas-grid">
-
-      <!-- Card 1 -->
-      <div class="empresa-card">
-        <div class="empresa-card-top">
-          <span class="badge-disponivel">Disponível</span>
-          <span class="empresa-setor">Indústria</span>
-        </div>
-        <div class="empresa-nome">Metálica Sul Componentes</div>
-        <p class="empresa-desc">Fabricante de componentes metálicos para o setor automotivo e de máquinas agrícolas. Carteira de clientes consolidada, contratos de fornecimento de longo prazo e ativos industriais em plena operação.</p>
-        <div class="empresa-metrics">
-          <div class="metric-row">
-            <span class="metric-label">Faturamento Anual</span>
-            <span class="metric-value">R$ 18,4M</span>
-          </div>
-          <div class="metric-row">
-            <span class="metric-label">EBITDA</span>
-            <span class="metric-value">R$ 2,9M</span>
-          </div>
-          <div class="metric-row">
-            <span class="metric-label">Localização</span>
-            <span class="metric-value">Joinville, SC</span>
-          </div>
-        </div>
-        <a href="https://wa.me/5547991359091?text=Tenho%20interesse%20na%20empresa%20Met%C3%A1lica%20Sul%20Componentes" target="_blank" rel="noopener" class="btn-empresa">
-          Solicitar informações →
-        </a>
-      </div>
-
-      <!-- Card 2 -->
-      <div class="empresa-card">
-        <div class="empresa-card-top">
-          <span class="badge-disponivel">Disponível</span>
-          <span class="empresa-setor">Varejo</span>
-        </div>
-        <div class="empresa-nome">Rede Conforto Casa</div>
-        <p class="empresa-desc">Rede regional de lojas de móveis e decoração com 4 unidades no litoral catarinense. Marca reconhecida, sistema de franquia em implantação e estoque gerenciado de forma eficiente.</p>
-        <div class="empresa-metrics">
-          <div class="metric-row">
-            <span class="metric-label">Faturamento Anual</span>
-            <span class="metric-value">R$ 11,2M</span>
-          </div>
-          <div class="metric-row">
-            <span class="metric-label">EBITDA</span>
-            <span class="metric-value">R$ 1,6M</span>
-          </div>
-          <div class="metric-row">
-            <span class="metric-label">Localização</span>
-            <span class="metric-value">Itajaí, SC</span>
-          </div>
-        </div>
-        <a href="https://wa.me/5547991359091?text=Tenho%20interesse%20na%20empresa%20Rede%20Conforto%20Casa" target="_blank" rel="noopener" class="btn-empresa">
-          Solicitar informações →
-        </a>
-      </div>
-
-      <!-- Card 3 -->
-      <div class="empresa-card">
-        <div class="empresa-card-top">
-          <span class="badge-disponivel">Disponível</span>
-          <span class="empresa-setor">Tecnologia</span>
-        </div>
-        <div class="empresa-nome">DataFlex Sistemas</div>
-        <p class="empresa-desc">Empresa de software B2B com plataforma SaaS para gestão de frotas e logística. Receita recorrente de 78%, base de 140 clientes ativos e equipe técnica qualificada incluída na transação.</p>
-        <div class="empresa-metrics">
-          <div class="metric-row">
-            <span class="metric-label">Faturamento Anual</span>
-            <span class="metric-value">R$ 4,8M</span>
-          </div>
-          <div class="metric-row">
-            <span class="metric-label">EBITDA</span>
-            <span class="metric-value">R$ 1,4M</span>
-          </div>
-          <div class="metric-row">
-            <span class="metric-label">Localização</span>
-            <span class="metric-value">Curitiba, PR</span>
-          </div>
-        </div>
-        <a href="https://wa.me/5547991359091?text=Tenho%20interesse%20na%20empresa%20DataFlex%20Sistemas" target="_blank" rel="noopener" class="btn-empresa">
-          Solicitar informações →
-        </a>
-      </div>
-
+    <div class="empresas-grid" id="empresasGrid">
+      <div style="color:var(--cream);opacity:.6;padding:2rem 0">Carregando negócios…</div>
     </div>
   </div>
 </section>
+
+<script>
+(function() {
+  var STATUS_LABEL = { disponivel: 'Disponível', reservado: 'Reservado' };
+  var STATUS_CLASS = { disponivel: 'badge-disponivel', reservado: 'badge-reservado' };
+
+  function fmtBRL(v) {
+    if (!v && v !== 0) return '—';
+    var n = parseFloat(v);
+    if (n >= 1e6) return 'R$ ' + (n / 1e6).toFixed(1).replace('.', ',') + 'M';
+    if (n >= 1e3) return 'R$ ' + (n / 1e3).toFixed(0) + 'K';
+    return 'R$ ' + n.toFixed(0);
+  }
+
+  function buildCard(n) {
+    var statusLbl = STATUS_LABEL[n.status] || n.status;
+    var statusCls = STATUS_CLASS[n.status] || 'badge-disponivel';
+    var msg = encodeURIComponent('Tenho interesse na empresa ' + n.nome);
+    var wpp = (n.whatsapp || '5547991359091').replace(/\D/g, '');
+    return '<div class="empresa-card">' +
+      '<div class="empresa-card-top">' +
+        '<span class="' + statusCls + '">' + statusLbl + '</span>' +
+        '<span class="empresa-setor">' + (n.setor || '') + '</span>' +
+      '</div>' +
+      '<div class="empresa-nome">' + n.nome + '</div>' +
+      (n.descricao ? '<p class="empresa-desc">' + n.descricao + '</p>' : '') +
+      '<div class="empresa-metrics">' +
+        '<div class="metric-row"><span class="metric-label">Faturamento Anual</span><span class="metric-value">' + fmtBRL(n.faturamento) + '</span></div>' +
+        '<div class="metric-row"><span class="metric-label">EBITDA</span><span class="metric-value">' + fmtBRL(n.ebitda) + '</span></div>' +
+        '<div class="metric-row"><span class="metric-label">Localização</span><span class="metric-value">' + (n.localizacao || '') + '</span></div>' +
+      '</div>' +
+      '<a href="https://wa.me/' + wpp + '?text=' + msg + '" target="_blank" rel="noopener" class="btn-empresa">Solicitar informações →</a>' +
+    '</div>';
+  }
+
+  fetch('https://app.maffezzollicapital.com.br/api/negocios')
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      var grid = document.getElementById('empresasGrid');
+      if (!data || !data.length) {
+        grid.innerHTML = '<p style="color:var(--cream);opacity:.6">Em breve novos negócios disponíveis.</p>';
+        return;
+      }
+      grid.innerHTML = data.map(buildCard).join('');
+    })
+    .catch(function() {
+      document.getElementById('empresasGrid').innerHTML =
+        '<p style="color:var(--cream);opacity:.6">Negócios disponíveis sob consulta. Entre em contato.</p>';
+    });
+})();
+</script>
 
 <!-- ── VALUATION CALCULATOR ──────────────────────────────────── -->
 <section class="calc-section grid-bg">
