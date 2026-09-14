@@ -5,7 +5,7 @@ import json as _json_nv
 from datetime import datetime as _dt_nv
 from typing import Optional as _Opt_nv, List as _List_nv
 from fastapi import Request as _Req_nv, Form as _Form_nv
-from fastapi.responses import JSONResponse as _JR_nv, RedirectResponse as _RR_nv, Response as _Resp_nv
+from fastapi.responses import JSONResponse as _JR_nv, RedirectResponse as _RR_nv, Response as _Resp_nv, HTMLResponse as _HR_nv
 from sqlmodel import SQLModel as _SM_nv, Field as _Field_nv, Session as _Sess_nv, select as _sel_nv
 
 # ── Modelo ─────────────────────────────────────────────────────────────────────
@@ -243,9 +243,10 @@ templates_env.loader.mapping["admin_negocios_venda"] = _NV_TEMPLATE
 async def admin_negocios_lista(request: _Req_nv):
     with _Sess_nv(engine) as s:
         negocios = s.exec(_sel_nv(NegocioVenda).order_by(NegocioVenda.ordem, NegocioVenda.id)).all()
-    return templates_env.TemplateResponse("admin_negocios_venda", {
-        "request": request, "negocios": negocios, "setores": SETORES,
-    })
+    html = templates_env.get_template("admin_negocios_venda").render(
+        request=request, negocios=negocios, setores=SETORES,
+    )
+    return _HR_nv(html)
 
 
 @app.post("/admin/negocios-venda/novo")
