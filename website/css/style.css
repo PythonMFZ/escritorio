@@ -56,10 +56,11 @@ body {
   color: #FAF7F2;
 }
 .page-hero .page-hero-title { color: #FAF7F2; }
-.page-hero .page-hero-sub   { color: #8B8B8B; }
+.page-hero .page-hero-sub   { color: #D8D4CE; }
 .page-hero .eyebrow          { color: #E07020; }
 .page-hero .display          { color: #FAF7F2; }
-.page-hero .hero-sub         { color: #8B8B8B; }
+.page-hero .hero-sub         { color: #D8D4CE; }
+.page-hero p                 { color: #D8D4CE; }
 
 .hero-video-fade {
   background: linear-gradient(to bottom, transparent, #0D0D0D) !important;
@@ -573,10 +574,11 @@ section {
   font-size: clamp(3rem, 6vw, 5.5rem);
   line-height: 1.08;
   max-width: 700px;
+  color: #FAF7F2;
 }
 .page-hero-sub {
   font-size: 1rem;
-  color: var(--gray);
+  color: #D8D4CE;
   max-width: 600px;
   margin-top: 24px;
   line-height: 1.85;
