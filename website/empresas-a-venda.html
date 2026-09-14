@@ -1,0 +1,711 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <!-- Google Analytics -->
+  <script async src="https://www.googletagmanager.com/gtag/js?id=G-34F5BVJVQJ"></script>
+  <script>
+    window.dataLayer = window.dataLayer || [];
+    function gtag(){dataLayer.push(arguments);}
+    gtag("js", new Date());
+    gtag("config", "G-34F5BVJVQJ");
+  </script>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Empresas à Venda — Maffezzolli Capital</title>
+  <meta name="description" content="Oportunidades selecionadas pela Maffezzolli Capital — negócios com potencial de crescimento e valuations transparentes.">
+  <link rel="canonical" href="https://maffezzollicapital.com.br/empresas-a-venda.html">
+  <link rel="stylesheet" href="css/style.css?v=2">
+  <style>
+    /* ── Page-specific overrides ──────────────────────────────── */
+    .page-hero {
+      padding: 140px 0 80px;
+      position: relative;
+    }
+    .page-hero .eyebrow { margin-bottom: 20px; }
+    .page-hero h1 {
+      font-family: var(--ff-brand);
+      font-size: clamp(2.4rem, 6vw, 4.2rem);
+      font-weight: 800;
+      line-height: 1.08;
+      color: var(--cream);
+      margin-bottom: 24px;
+      text-wrap: balance;
+    }
+    .page-hero .hero-sub {
+      font-family: var(--ff-body);
+      font-weight: 300;
+      font-size: clamp(1rem, 1.8vw, 1.2rem);
+      color: var(--gray);
+      max-width: 580px;
+      line-height: 1.7;
+    }
+
+    /* ── Business Cards Grid ─────────────────────────────────── */
+    .empresas-section {
+      padding: 64px 0 80px;
+    }
+    .empresas-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+      gap: 24px;
+      margin-top: 48px;
+    }
+    .empresa-card {
+      background: var(--bg2);
+      border: 1px solid var(--border);
+      padding: 32px;
+      display: flex;
+      flex-direction: column;
+      gap: 0;
+      transition: border-color 0.2s;
+    }
+    .empresa-card:hover {
+      border-color: rgba(224,112,32,0.5);
+    }
+    .empresa-card-top {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 20px;
+    }
+    .badge-disponivel {
+      font-family: var(--ff-mono);
+      font-size: 0.6rem;
+      letter-spacing: 0.2em;
+      text-transform: uppercase;
+      background: var(--gold);
+      color: #0D0D0D;
+      padding: 4px 10px;
+      font-weight: 500;
+    }
+    .empresa-setor {
+      font-family: var(--ff-mono);
+      font-size: 0.6rem;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--gray);
+      border: 1px solid var(--border-sub);
+      padding: 4px 10px;
+    }
+    .empresa-nome {
+      font-family: var(--ff-brand);
+      font-size: 1.4rem;
+      font-weight: 700;
+      color: var(--cream);
+      margin-bottom: 12px;
+      line-height: 1.2;
+    }
+    .empresa-desc {
+      font-family: var(--ff-body);
+      font-size: 0.875rem;
+      font-weight: 300;
+      color: var(--gray);
+      line-height: 1.65;
+      margin-bottom: 28px;
+      flex-grow: 1;
+    }
+    .empresa-metrics {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      padding: 20px 0;
+      border-top: 1px solid var(--border-sub);
+      border-bottom: 1px solid var(--border-sub);
+      margin-bottom: 24px;
+    }
+    .metric-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+    }
+    .metric-label {
+      font-family: var(--ff-mono);
+      font-size: 0.62rem;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: var(--gray);
+    }
+    .metric-value {
+      font-family: var(--ff-mono);
+      font-size: 0.85rem;
+      color: var(--cream);
+      font-variant-numeric: tabular-nums;
+    }
+    .btn-empresa {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      font-family: var(--ff-mono);
+      font-size: 0.7rem;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: var(--gold);
+      border: 1px solid var(--border);
+      padding: 14px 20px;
+      transition: background 0.2s, color 0.2s, border-color 0.2s;
+      cursor: pointer;
+      text-decoration: none;
+      align-self: flex-start;
+    }
+    .btn-empresa:hover {
+      background: var(--gold);
+      color: #0D0D0D;
+      border-color: var(--gold);
+    }
+
+    /* ── Valuation Calculator ────────────────────────────────── */
+    .calc-section {
+      padding: 80px 0 100px;
+      border-top: 1px solid var(--border-sub);
+    }
+    .calc-inner {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 48px;
+      margin-top: 48px;
+      align-items: start;
+    }
+    @media (max-width: 768px) {
+      .calc-inner { grid-template-columns: 1fr; }
+    }
+    .calc-form-wrap {
+      display: flex;
+      flex-direction: column;
+      gap: 0;
+    }
+    .form-group {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      margin-bottom: 20px;
+    }
+    .form-group label {
+      font-family: var(--ff-mono);
+      font-size: 0.65rem;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--gray);
+    }
+    .form-group input,
+    .form-group select {
+      background: var(--bg2);
+      border: 1px solid var(--border);
+      color: var(--cream);
+      font-family: var(--ff-body);
+      font-size: 0.9rem;
+      font-weight: 300;
+      padding: 14px 16px;
+      outline: none;
+      transition: border-color 0.2s;
+      -webkit-appearance: none;
+      appearance: none;
+      width: 100%;
+    }
+    .form-group input:focus,
+    .form-group select:focus {
+      border-color: var(--gold);
+    }
+    .form-group select {
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1l5 5 5-5' stroke='%23E07020' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");
+      background-repeat: no-repeat;
+      background-position: right 14px center;
+      padding-right: 40px;
+    }
+    .form-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+    }
+    @media (max-width: 480px) {
+      .form-row { grid-template-columns: 1fr; }
+    }
+    .btn-submit {
+      font-family: var(--ff-mono);
+      font-size: 0.7rem;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      background: var(--gold);
+      color: #0D0D0D;
+      border: none;
+      padding: 16px 32px;
+      cursor: pointer;
+      font-weight: 500;
+      transition: background 0.2s;
+      margin-top: 8px;
+      width: 100%;
+    }
+    .btn-submit:hover { background: var(--gold-light); }
+
+    /* ── Valuation Result Panel ──────────────────────────────── */
+    .result-panel {
+      position: sticky;
+      top: 100px;
+    }
+    .result-card {
+      background: var(--bg2);
+      border: 1px solid var(--border);
+      padding: 36px 32px;
+    }
+    .result-eyebrow {
+      font-family: var(--ff-mono);
+      font-size: 0.6rem;
+      letter-spacing: 0.22em;
+      text-transform: uppercase;
+      color: var(--gold);
+      margin-bottom: 16px;
+    }
+    .result-label {
+      font-family: var(--ff-mono);
+      font-size: 0.62rem;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: var(--gray);
+      margin-bottom: 8px;
+    }
+    .result-value {
+      font-family: var(--ff-brand);
+      font-size: clamp(1.6rem, 3vw, 2.2rem);
+      font-weight: 800;
+      color: var(--gold);
+      line-height: 1.1;
+      margin-bottom: 4px;
+      font-variant-numeric: tabular-nums;
+      min-height: 2.4em;
+      word-break: break-word;
+    }
+    .result-note {
+      font-family: var(--ff-body);
+      font-size: 0.78rem;
+      color: var(--gray);
+      line-height: 1.5;
+      margin-top: 16px;
+      padding-top: 16px;
+      border-top: 1px solid var(--border-sub);
+    }
+    .result-multiple-info {
+      margin-top: 20px;
+      padding-top: 16px;
+      border-top: 1px solid var(--border-sub);
+    }
+    .result-multiple-row {
+      display: flex;
+      justify-content: space-between;
+      padding: 6px 0;
+    }
+    .result-multiple-row span:first-child {
+      font-family: var(--ff-mono);
+      font-size: 0.62rem;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--gray);
+    }
+    .result-multiple-row span:last-child {
+      font-family: var(--ff-mono);
+      font-size: 0.75rem;
+      color: var(--cream);
+      font-variant-numeric: tabular-nums;
+    }
+    .result-multiple-row.active-multiple span {
+      color: var(--gold);
+    }
+
+    /* ── Success Message ─────────────────────────────────────── */
+    .success-msg {
+      display: none;
+      background: rgba(224,112,32,0.08);
+      border: 1px solid var(--border);
+      padding: 32px;
+      text-align: center;
+    }
+    .success-msg p {
+      font-family: var(--ff-body);
+      font-size: 1rem;
+      color: var(--cream);
+      line-height: 1.6;
+    }
+    .success-msg strong { color: var(--gold); }
+  </style>
+</head>
+<body>
+
+<!-- ── NAV ──────────────────────────────────────────────────── -->
+<nav>
+  <a href="/" class="nav-logo"><img src="img/logo.png" alt="Maffezzolli Capital" class="nav-logo-img"></a>
+  <div class="nav-links">
+    <a href="/">Home</a>
+    <a href="o-que-fazemos.html">O que fazemos</a>
+    <a href="quem-somos.html">Quem somos</a>
+    <a href="augur.html">Nossa Tecnologia</a>
+    <a href="empresas-a-venda.html" class="active">Empresas à Venda</a>
+    <a href="simulacao-credito.html">Simulação de Crédito</a>
+    <a href="cases.html">Cases</a>
+    <a href="noticias.html">Notícias</a>
+    <a href="https://app.maffezzollicapital.com.br" target="_blank" rel="noopener">Plataforma</a>
+    <a href="https://wa.me/5547991359091" target="_blank" rel="noopener" class="nav-cta">Falar pelo WhatsApp</a>
+  </div>
+  <button class="hamburger" aria-label="Menu">
+    <span></span><span></span><span></span>
+  </button>
+</nav>
+
+<div class="mobile-menu">
+  <a href="/">Home</a>
+  <a href="o-que-fazemos.html">O que fazemos</a>
+  <a href="quem-somos.html">Quem somos</a>
+  <a href="augur.html">Nossa Tecnologia</a>
+  <a href="empresas-a-venda.html" class="active">Empresas à Venda</a>
+  <a href="simulacao-credito.html">Simulação de Crédito</a>
+  <a href="cases.html">Cases</a>
+  <a href="noticias.html">Notícias</a>
+  <a href="https://app.maffezzollicapital.com.br" target="_blank" rel="noopener">Plataforma</a>
+  <a href="https://wa.me/5547991359091" target="_blank" rel="noopener" class="nav-cta">Falar pelo WhatsApp</a>
+</div>
+
+<!-- ── HERO ─────────────────────────────────────────────────── -->
+<section class="page-hero grid-bg">
+  <div class="vline"></div>
+  <div class="container">
+    <div class="eyebrow">M&amp;A · Oportunidades de Aquisição</div>
+    <h1>Empresas à Venda</h1>
+    <p class="hero-sub">Oportunidades selecionadas pela Maffezzolli Capital — negócios com potencial de crescimento e valuations transparentes.</p>
+  </div>
+</section>
+
+<!-- ── BUSINESS CARDS ────────────────────────────────────────── -->
+<section class="empresas-section grid-bg">
+  <div class="container">
+    <div class="eyebrow">Portfólio Atual</div>
+    <h2 class="display display-lg">Negócios disponíveis</h2>
+    <div class="gold-divider"></div>
+
+    <div class="empresas-grid">
+
+      <!-- Card 1 -->
+      <div class="empresa-card">
+        <div class="empresa-card-top">
+          <span class="badge-disponivel">Disponível</span>
+          <span class="empresa-setor">Indústria</span>
+        </div>
+        <div class="empresa-nome">Metálica Sul Componentes</div>
+        <p class="empresa-desc">Fabricante de componentes metálicos para o setor automotivo e de máquinas agrícolas. Carteira de clientes consolidada, contratos de fornecimento de longo prazo e ativos industriais em plena operação.</p>
+        <div class="empresa-metrics">
+          <div class="metric-row">
+            <span class="metric-label">Faturamento Anual</span>
+            <span class="metric-value">R$ 18,4M</span>
+          </div>
+          <div class="metric-row">
+            <span class="metric-label">EBITDA</span>
+            <span class="metric-value">R$ 2,9M</span>
+          </div>
+          <div class="metric-row">
+            <span class="metric-label">Localização</span>
+            <span class="metric-value">Joinville, SC</span>
+          </div>
+        </div>
+        <a href="https://wa.me/5547991359091?text=Tenho%20interesse%20na%20empresa%20Met%C3%A1lica%20Sul%20Componentes" target="_blank" rel="noopener" class="btn-empresa">
+          Solicitar informações →
+        </a>
+      </div>
+
+      <!-- Card 2 -->
+      <div class="empresa-card">
+        <div class="empresa-card-top">
+          <span class="badge-disponivel">Disponível</span>
+          <span class="empresa-setor">Varejo</span>
+        </div>
+        <div class="empresa-nome">Rede Conforto Casa</div>
+        <p class="empresa-desc">Rede regional de lojas de móveis e decoração com 4 unidades no litoral catarinense. Marca reconhecida, sistema de franquia em implantação e estoque gerenciado de forma eficiente.</p>
+        <div class="empresa-metrics">
+          <div class="metric-row">
+            <span class="metric-label">Faturamento Anual</span>
+            <span class="metric-value">R$ 11,2M</span>
+          </div>
+          <div class="metric-row">
+            <span class="metric-label">EBITDA</span>
+            <span class="metric-value">R$ 1,6M</span>
+          </div>
+          <div class="metric-row">
+            <span class="metric-label">Localização</span>
+            <span class="metric-value">Itajaí, SC</span>
+          </div>
+        </div>
+        <a href="https://wa.me/5547991359091?text=Tenho%20interesse%20na%20empresa%20Rede%20Conforto%20Casa" target="_blank" rel="noopener" class="btn-empresa">
+          Solicitar informações →
+        </a>
+      </div>
+
+      <!-- Card 3 -->
+      <div class="empresa-card">
+        <div class="empresa-card-top">
+          <span class="badge-disponivel">Disponível</span>
+          <span class="empresa-setor">Tecnologia</span>
+        </div>
+        <div class="empresa-nome">DataFlex Sistemas</div>
+        <p class="empresa-desc">Empresa de software B2B com plataforma SaaS para gestão de frotas e logística. Receita recorrente de 78%, base de 140 clientes ativos e equipe técnica qualificada incluída na transação.</p>
+        <div class="empresa-metrics">
+          <div class="metric-row">
+            <span class="metric-label">Faturamento Anual</span>
+            <span class="metric-value">R$ 4,8M</span>
+          </div>
+          <div class="metric-row">
+            <span class="metric-label">EBITDA</span>
+            <span class="metric-value">R$ 1,4M</span>
+          </div>
+          <div class="metric-row">
+            <span class="metric-label">Localização</span>
+            <span class="metric-value">Curitiba, PR</span>
+          </div>
+        </div>
+        <a href="https://wa.me/5547991359091?text=Tenho%20interesse%20na%20empresa%20DataFlex%20Sistemas" target="_blank" rel="noopener" class="btn-empresa">
+          Solicitar informações →
+        </a>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<!-- ── VALUATION CALCULATOR ──────────────────────────────────── -->
+<section class="calc-section grid-bg">
+  <div class="container">
+    <div class="eyebrow">Ferramenta Gratuita</div>
+    <h2 class="display display-lg">Calcule o valor estimado da sua empresa</h2>
+    <div class="gold-divider"></div>
+    <p style="font-family:var(--ff-body);font-weight:300;color:var(--gray);max-width:580px;font-size:.95rem;line-height:1.7;margin-top:8px;">
+      Preencha os dados e receba uma estimativa indicativa. Nossa equipe entrará em contato com uma análise detalhada.
+    </p>
+
+    <div class="calc-inner">
+
+      <!-- FORM -->
+      <div class="calc-form-wrap">
+        <div id="calc-form-container">
+          <form id="valuation-form" novalidate>
+            <div class="form-row">
+              <div class="form-group">
+                <label for="v-nome">Nome</label>
+                <input type="text" id="v-nome" name="nome" placeholder="Seu nome" required>
+              </div>
+              <div class="form-group">
+                <label for="v-empresa">Nome da empresa</label>
+                <input type="text" id="v-empresa" name="empresa" placeholder="Razão social ou fantasia" required>
+              </div>
+            </div>
+            <div class="form-row">
+              <div class="form-group">
+                <label for="v-email">E-mail</label>
+                <input type="email" id="v-email" name="email" placeholder="seu@email.com" required>
+              </div>
+              <div class="form-group">
+                <label for="v-whatsapp">WhatsApp</label>
+                <input type="tel" id="v-whatsapp" name="whatsapp" placeholder="(47) 99999-0000">
+              </div>
+            </div>
+            <div class="form-row">
+              <div class="form-group">
+                <label for="v-faturamento">Faturamento Anual (R$)</label>
+                <input type="number" id="v-faturamento" name="faturamento_anual" placeholder="Ex: 15000000" min="0">
+              </div>
+              <div class="form-group">
+                <label for="v-ebitda">EBITDA (R$)</label>
+                <input type="number" id="v-ebitda" name="ebitda" placeholder="Ex: 2500000" min="0">
+              </div>
+            </div>
+            <div class="form-row">
+              <div class="form-group">
+                <label for="v-setor">Setor</label>
+                <select id="v-setor" name="setor">
+                  <option value="">Selecione o setor</option>
+                  <option value="Indústria">Indústria</option>
+                  <option value="Varejo">Varejo</option>
+                  <option value="Serviços">Serviços</option>
+                  <option value="Tecnologia">Tecnologia</option>
+                  <option value="Agronegócio">Agronegócio</option>
+                  <option value="Saúde">Saúde</option>
+                  <option value="Construção Civil">Construção Civil</option>
+                  <option value="Outro">Outro</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label for="v-funcionarios">Número de funcionários</label>
+                <select id="v-funcionarios" name="funcionarios">
+                  <option value="">Selecione</option>
+                  <option value="1-10">1–10</option>
+                  <option value="11-50">11–50</option>
+                  <option value="51-200">51–200</option>
+                  <option value="201-500">201–500</option>
+                  <option value="500+">500+</option>
+                </select>
+              </div>
+            </div>
+            <button type="submit" class="btn-submit">Receber análise completa</button>
+          </form>
+        </div>
+        <div class="success-msg" id="valuation-success">
+          <p><strong>Obrigado!</strong> Nossa equipe entrará em contato em até 24 horas.</p>
+        </div>
+      </div>
+
+      <!-- RESULT PANEL -->
+      <div class="result-panel">
+        <div class="result-card">
+          <div class="result-eyebrow">Estimativa Indicativa</div>
+          <div class="result-label">Valuation estimado</div>
+          <div class="result-value" id="result-display">—</div>
+          <div class="result-note">
+            Estimativa calculada com base em múltiplos de EBITDA por setor. Este valor é indicativo e não substitui uma avaliação técnica formal.
+          </div>
+          <div class="result-multiple-info">
+            <div class="result-multiple-row" data-setor="Indústria">
+              <span>Indústria</span><span>5× EBITDA</span>
+            </div>
+            <div class="result-multiple-row" data-setor="Varejo">
+              <span>Varejo</span><span>4× EBITDA</span>
+            </div>
+            <div class="result-multiple-row" data-setor="Serviços">
+              <span>Serviços</span><span>5× EBITDA</span>
+            </div>
+            <div class="result-multiple-row" data-setor="Tecnologia">
+              <span>Tecnologia</span><span>8× EBITDA</span>
+            </div>
+            <div class="result-multiple-row" data-setor="Agronegócio">
+              <span>Agronegócio</span><span>6× EBITDA</span>
+            </div>
+            <div class="result-multiple-row" data-setor="Saúde">
+              <span>Saúde</span><span>7× EBITDA</span>
+            </div>
+            <div class="result-multiple-row" data-setor="Construção Civil">
+              <span>Construção Civil</span><span>4× EBITDA</span>
+            </div>
+            <div class="result-multiple-row" data-setor="Outro">
+              <span>Outro</span><span>4,5× EBITDA</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<!-- ── FOOTER ────────────────────────────────────────────────── -->
+<footer>
+  <div class="container">
+    <div class="footer-inner">
+      <div>
+        <div class="footer-brand">MAFFEZZOLLI<span>.</span>CAPITAL</div>
+        <div class="footer-tagline">Boutique Financeira Independente · Sul do Brasil</div>
+        <div class="footer-contact">
+          Avenida Lauro Müller · Centro · Brusque – SC<br>
+          +55 47 99135-9091 · contato@maffezzollicapital.com.br
+        </div>
+      </div>
+      <div class="footer-right">
+        <div class="footer-social">
+          <a href="https://instagram.com/maffezzollicapital" target="_blank" rel="noopener">Instagram</a>
+          <a href="https://linkedin.com/company/67193157" target="_blank" rel="noopener">LinkedIn</a>
+          <a href="https://youtube.com/@maffezzollicapital" target="_blank" rel="noopener">YouTube</a>
+        </div>
+        <div style="display:flex;gap:24px;justify-content:flex-end;flex-wrap:wrap;">
+          <a href="o-que-fazemos.html" style="font-family:var(--ff-mono);font-size:.65rem;letter-spacing:.12em;text-transform:uppercase;color:var(--gray);">O que fazemos</a>
+          <a href="quem-somos.html" style="font-family:var(--ff-mono);font-size:.65rem;letter-spacing:.12em;text-transform:uppercase;color:var(--gray);">Quem somos</a>
+          <a href="https://app.maffezzollicapital.com.br" target="_blank" rel="noopener" style="font-family:var(--ff-mono);font-size:.65rem;letter-spacing:.12em;text-transform:uppercase;color:var(--gray);">Plataforma</a>
+        </div>
+      </div>
+    </div>
+    <div class="footer-copy">© 2026 Maffezzolli Capital — Todos os direitos reservados.</div>
+  </div>
+</footer>
+
+<!-- ── WhatsApp Float ────────────────────────────────────────── -->
+<a href="https://wa.me/5547991359091" target="_blank" rel="noopener" class="whatsapp-float" aria-label="WhatsApp">
+  <svg width="26" height="26" viewBox="0 0 24 24" fill="currentColor"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z"/></svg>
+</a>
+
+<script src="js/main.js"></script>
+<script>
+(function () {
+  // ── Multiples per sector
+  const multiples = {
+    'Indústria': 5,
+    'Varejo': 4,
+    'Serviços': 5,
+    'Tecnologia': 8,
+    'Agronegócio': 6,
+    'Saúde': 7,
+    'Construção Civil': 4,
+    'Outro': 4.5,
+  };
+
+  const ebitdaInput = document.getElementById('v-ebitda');
+  const setorSelect = document.getElementById('v-setor');
+  const resultDisplay = document.getElementById('result-display');
+  const multipleRows = document.querySelectorAll('.result-multiple-row[data-setor]');
+
+  function fmt(n) {
+    if (n >= 1e6) return 'R$ ' + (n / 1e6).toLocaleString('pt-BR', { minimumFractionDigits: 1, maximumFractionDigits: 1 }) + 'M';
+    if (n >= 1e3) return 'R$ ' + (n / 1e3).toLocaleString('pt-BR', { minimumFractionDigits: 0, maximumFractionDigits: 0 }) + 'K';
+    return 'R$ ' + n.toLocaleString('pt-BR');
+  }
+
+  function updateResult() {
+    const ebitda = parseFloat(ebitdaInput.value) || 0;
+    const setor = setorSelect.value;
+    const mult = multiples[setor];
+
+    // Highlight active sector row
+    multipleRows.forEach(row => {
+      row.classList.toggle('active-multiple', row.dataset.setor === setor);
+    });
+
+    if (!ebitda || !mult) {
+      resultDisplay.textContent = '—';
+      return;
+    }
+
+    const low = ebitda * (mult - 1);
+    const high = ebitda * (mult + 1);
+    resultDisplay.textContent = fmt(low) + ' — ' + fmt(high);
+    resultDisplay.title = '(indicativo)';
+  }
+
+  ebitdaInput.addEventListener('input', updateResult);
+  setorSelect.addEventListener('change', updateResult);
+
+  // ── Form submission
+  document.getElementById('valuation-form').addEventListener('submit', async function (e) {
+    e.preventDefault();
+    const ebitda = parseFloat(ebitdaInput.value) || 0;
+    const setor = setorSelect.value;
+    const mult = multiples[setor] || 4.5;
+    const low = ebitda * (mult - 1);
+    const high = ebitda * (mult + 1);
+
+    const payload = {
+      nome: document.getElementById('v-nome').value,
+      email: document.getElementById('v-email').value,
+      whatsapp: document.getElementById('v-whatsapp').value,
+      empresa: document.getElementById('v-empresa').value,
+      faturamento_anual: parseFloat(document.getElementById('v-faturamento').value) || 0,
+      ebitda: ebitda,
+      setor: setor,
+      funcionarios: document.getElementById('v-funcionarios').value,
+      valuation_estimado: fmt(low) + ' — ' + fmt(high),
+    };
+
+    try {
+      await fetch('https://app.maffezzollicapital.com.br/api/lead/valuation', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+    } catch (_) { /* fail silently — show success regardless */ }
+
+    document.getElementById('calc-form-container').style.display = 'none';
+    const msg = document.getElementById('valuation-success');
+    msg.style.display = 'block';
+  });
+})();
+</script>
+</body>
+</html>
