@@ -87,25 +87,30 @@ _NV_TEMPLATE = r"""
       </thead>
       <tbody>
         {% for n in negocios %}
+        {% if n.status == "disponivel" %}{% set _sc = "success" %}{% elif n.status == "reservado" %}{% set _sc = "warning" %}{% else %}{% set _sc = "secondary" %}{% endif %}
+        {% if n.status == "disponivel" %}{% set _sl = "Disponível" %}{% elif n.status == "reservado" %}{% set _sl = "Reservado" %}{% else %}{% set _sl = "Vendido" %}{% endif %}
         <tr>
           <td class="text-muted small">{{ n.id }}</td>
           <td><strong>{{ n.nome }}</strong></td>
           <td><span class="badge bg-light text-dark border">{{ n.setor }}</span></td>
-          <td>{{ "R$ {:,.0f}".format(n.faturamento).replace(",","X").replace(".",",").replace("X",".") }}</td>
-          <td>{{ "R$ {:,.0f}".format(n.ebitda).replace(",","X").replace(".",",").replace("X",".") }}</td>
+          <td>{{ n.faturamento | int }}</td>
+          <td>{{ n.ebitda | int }}</td>
           <td>{{ n.localizacao }}</td>
+          <td><span class="badge bg-{{ _sc }}">{{ _sl }}</span></td>
           <td>
-            {% set lbl = {"disponivel": ("Disponível","success"), "reservado": ("Reservado","warning"), "vendido": ("Vendido","secondary")}[n.status] %}
-            <span class="badge bg-{{ lbl[1] }}">{{ lbl[0] }}</span>
-          </td>
-          <td>
-            <button class="btn btn-sm btn-outline-primary me-1"
-                    onclick="openEdit({{ n.id }}, {{ n.nome|tojson }}, {{ n.setor|tojson }},
-                             {{ n.descricao|tojson }}, {{ n.faturamento }}, {{ n.ebitda }},
-                             {{ n.localizacao|tojson }}, {{ n.whatsapp|tojson }},
-                             {{ n.status|tojson }}, {{ n.ordem }})">✏ Editar</button>
+            <button class="btn btn-sm btn-outline-primary me-1" onclick="openEdit(this)"
+                    data-id="{{ n.id }}"
+                    data-nome="{{ n.nome | e }}"
+                    data-setor="{{ n.setor | e }}"
+                    data-desc="{{ n.descricao | e }}"
+                    data-fat="{{ n.faturamento }}"
+                    data-ebt="{{ n.ebitda }}"
+                    data-loc="{{ n.localizacao | e }}"
+                    data-wpp="{{ n.whatsapp | e }}"
+                    data-status="{{ n.status }}"
+                    data-ordem="{{ n.ordem }}">✏ Editar</button>
             <form method="post" action="/admin/negocios-venda/{{ n.id }}/excluir" class="d-inline"
-                  onsubmit="return confirm('Excluir {{ n.nome }}?')">
+                  onsubmit="return confirm('Excluir este negócio?')">
               <button class="btn btn-sm btn-outline-danger">🗑</button>
             </form>
           </td>
@@ -209,18 +214,19 @@ function openNew() {
   document.getElementById('iOrdem').value = '0';
 }
 
-function openEdit(id, nome, setor, desc, fat, ebt, loc, wpp, status, ordem) {
+function openEdit(btn) {
+  var d = btn.dataset;
   document.getElementById('modalTitle').textContent = 'Editar Negócio';
-  document.getElementById('frmNegocio').action = '/admin/negocios-venda/' + id + '/editar';
-  document.getElementById('iNome').value = nome;
-  document.getElementById('iSetor').value = setor;
-  document.getElementById('iDesc').value = desc;
-  document.getElementById('iFat').value = fat;
-  document.getElementById('iEbt').value = ebt;
-  document.getElementById('iLoc').value = loc;
-  document.getElementById('iWpp').value = wpp;
-  document.getElementById('iStatus').value = status;
-  document.getElementById('iOrdem').value = ordem;
+  document.getElementById('frmNegocio').action = '/admin/negocios-venda/' + d.id + '/editar';
+  document.getElementById('iNome').value = d.nome;
+  document.getElementById('iSetor').value = d.setor;
+  document.getElementById('iDesc').value = d.desc;
+  document.getElementById('iFat').value = d.fat;
+  document.getElementById('iEbt').value = d.ebt;
+  document.getElementById('iLoc').value = d.loc;
+  document.getElementById('iWpp').value = d.wpp;
+  document.getElementById('iStatus').value = d.status;
+  document.getElementById('iOrdem').value = d.ordem;
   new bootstrap.Modal(document.getElementById('modalNegocio')).show();
 }
 </script>
