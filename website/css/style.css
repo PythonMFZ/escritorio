@@ -7,14 +7,15 @@
 
 /* ── Variables ─────────────────────────────────────────────── */
 :root {
-  --bg:         #0D0D0D;
-  --bg2:        #141414;
+  --bg:         #FFFFFF;
+  --bg2:        #F5F5F3;
+  --ink:        #0D0D0D;
   --gold:       #E07020;
   --gold-light: #F09040;
-  --cream:      #FAF7F2;
-  --gray:       #8B8B8B;
-  --border:     rgba(224,112,32,0.22);
-  --border-sub: rgba(224,112,32,0.09);
+  --cream:      #1A1A1A;   /* inverted: dark text on light bg */
+  --gray:       #666666;
+  --border:     rgba(224,112,32,0.28);
+  --border-sub: rgba(224,112,32,0.13);
   --ff-serif:   'Cormorant Garamond', Georgia, serif;
   --ff-mono:    'DM Mono', 'Courier New', monospace;
   --ff-brand:   'Syne', sans-serif;
@@ -32,6 +33,60 @@ body {
   line-height: 1.7;
   overflow-x: hidden;
 }
+
+/* ── Hero sections keep dark background ─────────────────────── */
+.hero-text,
+.hero-video-section,
+.hero-dark {
+  background: #0D0D0D;
+}
+/* text inside dark hero sections uses light colors */
+.hero-text .hero-headline,
+.hero-text .hero-sub,
+.hero-text .display,
+.hero-text .eyebrow,
+.hero-text p {
+  color: inherit;
+}
+.hero-text { color: #FAF7F2; }
+
+/* page-hero (inner pages) keeps dark background */
+.page-hero {
+  background: #0D0D0D;
+  color: #FAF7F2;
+}
+.page-hero .page-hero-title { color: #FAF7F2; }
+.page-hero .page-hero-sub   { color: #8B8B8B; }
+.page-hero .eyebrow          { color: #E07020; }
+.page-hero .display          { color: #FAF7F2; }
+.page-hero .hero-sub         { color: #8B8B8B; }
+
+.hero-video-fade {
+  background: linear-gradient(to bottom, transparent, #0D0D0D) !important;
+}
+
+/* btn-gold text stays dark on orange background */
+.btn-gold { color: #0D0D0D; }
+
+/* btn-outline on dark hero */
+.hero-text .btn-outline,
+.page-hero .btn-outline {
+  color: #FAF7F2;
+  border-color: rgba(224,112,32,0.5);
+}
+
+/* CTA section dark */
+.cta-section {
+  background: #0D0D0D;
+  color: #FAF7F2;
+}
+.cta-section .display-lg { color: #FAF7F2; }
+
+/* para-quem strip: slightly off-white */
+.para-quem { background: #F7F4EF; }
+
+/* servico-badge text color fix */
+.servico-badge { color: #fff; }
 a { color: inherit; text-decoration: none; }
 img { max-width: 100%; display: block; }
 ul { list-style: none; }
@@ -45,8 +100,8 @@ ul { list-style: none; }
   position: absolute;
   inset: 0;
   background-image:
-    linear-gradient(rgba(224,112,32,0.04) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(224,112,32,0.04) 1px, transparent 1px);
+    linear-gradient(rgba(224,112,32,0.07) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(224,112,32,0.07) 1px, transparent 1px);
   background-size: 72px 72px;
   pointer-events: none;
   z-index: 0;
@@ -260,7 +315,7 @@ nav.scrolled {
   position: absolute;
   bottom: 0; left: 0; right: 0;
   height: 160px;
-  background: linear-gradient(to bottom, transparent, var(--bg));
+  background: linear-gradient(to bottom, transparent, #0D0D0D);
   pointer-events: none;
 }
 
@@ -586,7 +641,7 @@ section {
 .servico-text p:last-child { margin-bottom: 0; }
 .servico-text em {
   font-style: italic;
-  color: rgba(250,247,242,0.6);
+  color: var(--gold-light);
 }
 
 /* ── QUEM SOMOS ─────────────────────────────────────────────── */
@@ -686,7 +741,8 @@ section {
 
 /* ── FOOTER ─────────────────────────────────────────────────── */
 footer {
-  border-top: 1px solid var(--border);
+  background: #0D0D0D;
+  border-top: 1px solid rgba(224,112,32,0.22);
   padding: 64px 0 48px;
 }
 .footer-inner {
@@ -701,7 +757,7 @@ footer {
   font-size: 1rem;
   letter-spacing: 0.22em;
   text-transform: uppercase;
-  color: var(--cream);
+  color: #FAF7F2;
   margin-bottom: 12px;
 }
 .footer-brand span { color: var(--gold); }
@@ -926,7 +982,7 @@ footer {
 
 .mn-card:hover {
   border-color: var(--border);
-  background: #181818;
+  background: #EDEAE4;
 }
 
 .mn-card-top {
@@ -1034,7 +1090,7 @@ footer {
 }
 .case-card:hover {
   border-color: var(--border);
-  background: #1a1a1a;
+  background: #EDEAE4;
 }
 .case-tag {
   font-family: var(--ff-mono);
