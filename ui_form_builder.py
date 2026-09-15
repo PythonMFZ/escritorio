@@ -84,6 +84,128 @@ _FB_MODELO_CRI = [
 ]
 
 
+_FB_MODELO_PRE_DIAG_CONSTRUTORA = [
+    # ── BLOCO 1: Identificação da empresa ──────────────────────────────────────
+    {"name": "_sec1", "label": "1. IDENTIFICAÇÃO DA EMPRESA", "type": "section"},
+    {"name": "razao_social",       "label": "Razão Social",                        "type": "text",   "required": True},
+    {"name": "cnpj",               "label": "CNPJ",                                "type": "text",   "required": True},
+    {"name": "nome_responsavel",   "label": "Nome do responsável / sócio",         "type": "text",   "required": True},
+    {"name": "cargo_responsavel",  "label": "Cargo",                               "type": "text",   "required": False},
+    {"name": "email",              "label": "E-mail",                              "type": "email",  "required": True},
+    {"name": "whatsapp",           "label": "WhatsApp",                            "type": "tel",    "required": True},
+    {"name": "cidade_uf",          "label": "Cidade / UF (sede)",                  "type": "text",   "required": True},
+    {"name": "anos_mercado",       "label": "Há quantos anos a empresa atua no mercado?", "type": "select",
+     "options": "Menos de 2 anos,2 a 5 anos,5 a 10 anos,10 a 20 anos,Mais de 20 anos", "required": True},
+    {"name": "obras_concluidas",   "label": "Quantas obras já entregou (aproximadamente)?", "type": "select",
+     "options": "Nenhuma (primeira obra),1 a 3,4 a 10,11 a 30,Mais de 30", "required": False},
+
+    # ── BLOCO 2: Perfil do negócio ─────────────────────────────────────────────
+    {"name": "_sec2", "label": "2. PERFIL DO NEGÓCIO", "type": "section"},
+    {"name": "tipo_empresa",       "label": "Como você define sua empresa?", "type": "checkbox",
+     "options": "Incorporadora,Construtora,Loteadora,Built to suit,Retrofit / revitalização,Outro", "required": True},
+    {"name": "ticket_medio",       "label": "Ticket médio dos empreendimentos (VGV por projeto)", "type": "select",
+     "options": "Até R$ 5 mi,R$ 5 mi a R$ 20 mi,R$ 20 mi a R$ 50 mi,R$ 50 mi a R$ 150 mi,Acima de R$ 150 mi", "required": False},
+    {"name": "segmento_produto",   "label": "Segmento principal dos produtos", "type": "checkbox",
+     "options": "Popular / MCMV,Econômico,Médio,Alto padrão,Comercial / Escritórios,Industrial / Galpão,Loteamento aberto,Loteamento fechado / Condomínio", "required": False},
+    {"name": "estados_atuacao",    "label": "Estados onde opera",             "type": "text",   "required": False,
+     "help": "Ex: SC, PR, SP"},
+    {"name": "obras_em_andamento", "label": "Quantas obras estão em andamento hoje?", "type": "select",
+     "options": "Nenhuma,1,2 a 3,4 a 6,Mais de 6", "required": False},
+
+    # ── BLOCO 3: Situação financeira ───────────────────────────────────────────
+    {"name": "_sec3", "label": "3. SITUAÇÃO FINANCEIRA", "type": "section"},
+    {"name": "faturamento_anual",  "label": "Faturamento anual (último exercício, R$)", "type": "number", "required": True,
+     "help": "Receita bruta reconhecida no ano. Caso não saiba o valor exato, coloque uma estimativa."},
+    {"name": "margem_ebitda",      "label": "Margem EBITDA estimada (%)",      "type": "select",
+     "options": "Negativa,0% a 5%,5% a 10%,10% a 15%,15% a 20%,Acima de 20%,Não sei", "required": False},
+    {"name": "divida_total",       "label": "Dívida total atual (R$)",         "type": "number", "required": False,
+     "help": "Soma de financiamentos bancários, CRI, debêntures, mútuo de sócios etc."},
+    {"name": "principais_credores","label": "Principais credores / bancos",    "type": "text",   "required": False,
+     "help": "Ex: Caixa Econômica, Bradesco, CRI via securitizadora X"},
+    {"name": "custo_medio_divida", "label": "Custo médio da dívida atual (% a.a.)", "type": "select",
+     "options": "Não sei,Até CDI + 2%,CDI + 2% a 4%,CDI + 4% a 6%,CDI + 6% a 8%,Acima de CDI + 8%,Prefixado - informarei nas observações", "required": False},
+    {"name": "inadimplencia_divida","label": "Há parcelas em atraso ou renegociação com bancos?", "type": "radio",
+     "options": "Não,Sim — em negociação,Sim — em atraso sem acordo", "required": False},
+    {"name": "possui_spe",         "label": "Os empreendimentos estão em SPEs separadas?", "type": "radio",
+     "options": "Sim, todas em SPE,Parcialmente,Não, tudo na holding/empresa principal", "required": False},
+
+    # ── BLOCO 4: Empreendimento / projeto foco ─────────────────────────────────
+    {"name": "_sec4", "label": "4. EMPREENDIMENTO / PROJETO EM FOCO", "type": "section",
+     "help": "Preencha sobre o projeto para o qual busca capital. Se forem vários, foque no principal."},
+    {"name": "nome_empreendimento","label": "Nome / identificação do empreendimento", "type": "text",   "required": False},
+    {"name": "tipo_empreendimento","label": "Tipo",                             "type": "select",
+     "options": "Residencial vertical,Residencial horizontal / loteamento,Comercial / Salas,Misto,Galpão / industrial,Built to suit,Retrofit,Outro", "required": False},
+    {"name": "cidade_empreend",    "label": "Cidade / UF do empreendimento",   "type": "text",   "required": False},
+    {"name": "vgv_total",          "label": "VGV total (R$)",                  "type": "number", "required": False},
+    {"name": "vso_pct",            "label": "% do VGV já vendido (VSO)",       "type": "number", "required": False,
+     "help": "Percentual de unidades vendidas sobre o total lançado. Ex: 65"},
+    {"name": "fase_atual",         "label": "Fase atual do empreendimento",    "type": "select",
+     "options": "Aquisição de terreno,Projeto / licenciamento,Lançamento comercial,Em obras (até 30%),Em obras (30% a 70%),Em obras (acima de 70%),Pronto / entregue,Habite-se obtido", "required": False},
+    {"name": "prazo_entrega",      "label": "Previsão de entrega",             "type": "text",   "required": False,
+     "help": "Mês/ano esperado para conclusão. Ex: 06/2027"},
+    {"name": "valor_recebiveis",   "label": "Valor dos recebíveis disponíveis (R$)", "type": "number", "required": False,
+     "help": "Contratos de compra e venda já assinados e cedíveis"},
+    {"name": "custo_obra_restante","label": "Custo de obra restante (R$)",     "type": "number", "required": False,
+     "help": "Quanto ainda precisa ser investido para concluir a obra"},
+
+    # ── BLOCO 5: Necessidade de capital ────────────────────────────────────────
+    {"name": "_sec5", "label": "5. NECESSIDADE DE CAPITAL", "type": "section"},
+    {"name": "valor_pretendido",   "label": "Valor de captação desejado (R$)", "type": "number", "required": True},
+    {"name": "prazo_meses",        "label": "Prazo desejado (meses)",          "type": "number", "required": False},
+    {"name": "finalidade",         "label": "Finalidade principal dos recursos", "type": "checkbox",
+     "options": "Custeio / andamento de obra,Aquisição de terreno,Capital de giro da empresa,Recomposição de caixa,Refinanciamento / troca de dívida cara,Lançamento comercial,Outro", "required": True},
+    {"name": "estrutura_preferida","label": "Estrutura preferida (se já tiver ideia)", "type": "checkbox",
+     "options": "CRI (Certificado de Recebíveis Imobiliários),Debêntures,CCB (Cédula de Crédito Bancário),Fundo de recebíveis (FIDC),Equity / sócio investidor,Capital de Giro bancário,Sem preferência — orientem-me", "required": False},
+    {"name": "garantias",          "label": "Garantias disponíveis",           "type": "checkbox",
+     "options": "Alienação fiduciária do terreno/imóvel,Cessão fiduciária de recebíveis (contratos assinados),Aval dos sócios,Outros imóveis da empresa / sócios,Penhor de cotas da SPE,Não tenho garantias formais — discutir", "required": False},
+    {"name": "urgencia",           "label": "Urgência para a captação",        "type": "radio",
+     "options": "Imediata (menos de 30 dias),Curto prazo (1 a 3 meses),Médio prazo (3 a 6 meses),Planejamento / sem pressa", "required": False},
+
+    # ── BLOCO 6: Histórico e relacionamento bancário ───────────────────────────
+    {"name": "_sec6", "label": "6. HISTÓRICO E RELACIONAMENTO", "type": "section"},
+    {"name": "ja_fez_cri",         "label": "Já realizou operação de CRI ou securitização antes?", "type": "radio",
+     "options": "Sim,Não,Está em processo", "required": False},
+    {"name": "rating_empresa",     "label": "A empresa possui rating de crédito?", "type": "radio",
+     "options": "Sim — informarei nas observações,Não,Não sei o que é", "required": False},
+    {"name": "auditoria",          "label": "As demonstrações financeiras são auditadas?", "type": "radio",
+     "options": "Sim, por firma de auditoria externa,Sim, internamente,Não,Somente ITR / ECF Receita Federal", "required": False},
+    {"name": "sistema_gestao",     "label": "Utiliza algum ERP / sistema de gestão?", "type": "text", "required": False,
+     "help": "Ex: Sienge, Totvs, SAP, Mega, Planilha própria"},
+    {"name": "ja_tentou_captacao", "label": "Já buscou captação antes para este projeto ou empresa?", "type": "radio",
+     "options": "Não,Sim — conseguiu,Sim — não conseguiu,Sim — em andamento", "required": False},
+    {"name": "motivo_nao_conseguiu","label": "Se não conseguiu, qual foi o principal motivo?", "type": "textarea", "required": False},
+
+    # ── BLOCO 7: Dor principal e expectativas ─────────────────────────────────
+    {"name": "_sec7", "label": "7. DOR PRINCIPAL E EXPECTATIVAS", "type": "section"},
+    {"name": "principal_desafio",  "label": "Qual é o seu maior desafio financeiro hoje?", "type": "checkbox",
+     "options": "Falta de capital para iniciar / continuar a obra,Custo da dívida muito alto,Banco recusou crédito,Prazo curto demais das linhas atuais,Concentração de dívida vencendo em curto prazo,Sócio quer sair / recompra de participação,Estrutura societária precisa de reorganização,Outro", "required": True},
+    {"name": "resultado_esperado", "label": "O que o sucesso desta operação representa para você?", "type": "textarea", "required": False,
+     "help": "Ex: 'concluir a obra e entregar no prazo', 'liberar caixa para lançar o próximo projeto', 'refinanciar dívida cara e melhorar margem'"},
+    {"name": "observacoes",        "label": "Informações adicionais / observações livres",  "type": "textarea", "required": False},
+]
+
+
+def _fb_get_or_create_modelo_pre_diag_construtora(session, company_id: int) -> "FormTemplate":
+    tpl = session.exec(
+        _sel_fb(FormTemplate).where(
+            FormTemplate.company_id == company_id,
+            FormTemplate.nome == "Pré-diagnóstico Construtora",
+        )
+    ).first()
+    if tpl:
+        return tpl
+    tpl = FormTemplate(
+        company_id=company_id,
+        nome="Pré-diagnóstico Construtora",
+        descricao="Levantamento completo de incorporadoras e construtoras: perfil, situação financeira, empreendimento em foco, necessidade de capital e expectativas.",
+        schema_json=_json_fb.dumps(_FB_MODELO_PRE_DIAG_CONSTRUTORA, ensure_ascii=False),
+    )
+    session.add(tpl)
+    session.commit()
+    session.refresh(tpl)
+    return tpl
+
+
 def _fb_get_or_create_modelo_cri(session, company_id: int) -> "FormTemplate":
     tpl = session.exec(
         _sel_fb(FormTemplate).where(
@@ -159,10 +281,18 @@ def _fb_render_public_form(tpl, submission, erro: str = "") -> str:
         pass
 
     for f in _fb_parse_schema(tpl):
+        ftype = f.get("type", "text")
         label = _html_fb.escape(f.get("label", f.get("name", "")))
-        req_mark = ' <span style="color:#dc2626;">*</span>' if f.get("required") else ""
         help_txt = f.get("help") or ""
         help_html = f'<div class="fb-help">{_html_fb.escape(help_txt)}</div>' if help_txt else ""
+
+        if ftype == "section":
+            campos_html.append(
+                f'<div class="fb-section"><span>{label}</span></div>{help_html}'
+            )
+            continue
+
+        req_mark = ' <span style="color:#dc2626;">*</span>' if f.get("required") else ""
         input_html = _fb_field_input_html(f, answers.get(f.get("name", "")))
         campos_html.append(
             f'<div class="fb-campo"><label>{label}{req_mark}</label>{input_html}{help_html}</div>'
@@ -188,6 +318,8 @@ def _fb_render_public_form(tpl, submission, erro: str = "") -> str:
   .fb-help{{font-size:.74rem;color:#64748b;margin-top:3px;}}
   .fb-group{{display:flex;flex-direction:column;gap:6px;margin-top:4px;}}
   .fb-check{{font-size:.86rem;font-weight:400;display:flex;align-items:center;gap:6px;}}
+  .fb-section{{margin:28px 0 10px;padding-bottom:6px;border-bottom:2px solid #0d3b66;color:#0d3b66;font-size:.78rem;font-weight:700;letter-spacing:.08em;}}
+  .fb-section span{{background:#fff;padding-right:10px;}}
   .fb-erro{{background:#fef2f2;color:#b91c1c;padding:10px 14px;border-radius:8px;font-size:.85rem;margin-bottom:16px;}}
   button{{background:#0d3b66;color:#fff;border:none;border-radius:8px;padding:12px 22px;font-size:.95rem;font-weight:600;cursor:pointer;}}
   button:hover{{background:#0a2c4e;}}
@@ -257,6 +389,9 @@ async def fb_admin_lista(request: Request, session: Session = Depends(get_sessio
       <div class="muted small">Modelos reaproveitáveis para enviar a clientes/leads e receber as respostas direto no CRM.</div>
     </div>
     <div class="d-flex gap-2">
+      <form method="post" action="/admin/formularios/seed-pre-diag-construtora">
+        <button class="btn btn-outline-secondary">🏗 Pré-diagnóstico Construtora</button>
+      </form>
       <form method="post" action="/admin/formularios/seed-cri">
         <button class="btn btn-outline-primary">+ Modelo CRI</button>
       </form>
@@ -276,6 +411,16 @@ async def fb_admin_lista(request: Request, session: Session = Depends(get_sessio
     return render("fb_admin_lista.html", request=request, context={
         "current_user": ctx.user, "current_company": ctx.company, "role": ctx.membership.role,
     })
+
+
+@app.post("/admin/formularios/seed-pre-diag-construtora")
+@require_login
+async def fb_admin_seed_pre_diag_construtora(request: Request, session: Session = Depends(get_session)):
+    ctx = get_tenant_context(request, session)
+    if not ctx or ctx.membership.role not in ("admin", "owner", "equipe"):
+        return RedirectResponse("/", status_code=303)
+    _fb_get_or_create_modelo_pre_diag_construtora(session, ctx.company.id)
+    return RedirectResponse("/admin/formularios", status_code=303)
 
 
 @app.post("/admin/formularios/seed-cri")
@@ -570,6 +715,8 @@ async def fb_public_post(token: str, request: Request, session: Session = Depend
     answers = {}
     faltando = []
     for f in schema:
+        if f.get("type") == "section":
+            continue
         name = f.get("name", "")
         if f.get("type") == "checkbox":
             vals = form.getlist(f"{name}[]")
