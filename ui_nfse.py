@@ -664,9 +664,10 @@ def _nf_build_dps(cobranca, contrato, n_dps: int, session=None) -> bytes:
 # ── Assinatura XML ────────────────────────────────────────────────────────────
 
 
-def _nf_sign_dps(dps_bytes: bytes, key_pem: bytes, cert_pem: bytes) -> bytes:
+def _nf_sign_xml(xml_bytes: bytes, key_pem: bytes, cert_pem: bytes, inf_tag: str = "infDPS") -> bytes:
     """
-    Assina infDPS via XMLDSig enveloped — RSA-SHA1 / C14N 1.0 (manual NFS-e v1.01).
+    Assina <inf_tag> via XMLDSig enveloped — RSA-SHA1 / C14N 1.0 (manual NFS-e v1.01).
+    Funciona para infDPS (emissão) e infCancNFSe (cancelamento).
 
     ATENÇÃO — bug do lxml: _et2.tostring(element, method="c14n") em SUBTREE
     adiciona xmlns="" em elementos a partir da profundidade 2, gerando digest/
@@ -687,22 +688,24 @@ def _nf_sign_dps(dps_bytes: bytes, key_pem: bytes, cert_pem: bytes) -> bytes:
     SHA1D  = "http://www.w3.org/2000/09/xmldsig#sha1"
     RSASHA = "http://www.w3.org/2000/09/xmldsig#rsa-sha1"
 
-    tree = _et2.fromstring(dps_bytes)
-    inf = tree.find(f"{{{_NF_NS}}}infDPS")
+    tree = _et2.fromstring(xml_bytes)
+    inf = tree.find(f"{{{_NF_NS}}}{inf_tag}")
     if inf is None:
-        raise ValueError("XML DPS inválido: tag infDPS não encontrada")
+        raise ValueError(f"XML NFS-e inválido: tag {inf_tag} não encontrada")
 
     ref_id = (inf.get("Id") or "").strip()
     if not ref_id:
-        raise ValueError("XML DPS inválido: atributo Id de infDPS ausente")
+        raise ValueError(f"XML NFS-e inválido: atributo Id de {inf_tag} ausente")
 
-    # 1. Digest SHA-1 do infDPS via C14N inclusivo.
-    #    Fix lxml: C14N do tree completo → extrair seção infDPS → injetar xmlns.
+    # 1. Digest SHA-1 do elemento via C14N inclusivo.
+    #    Fix lxml: C14N do tree completo → extrair seção → injetar xmlns.
+    tag_open  = f"<{inf_tag} ".encode()
+    tag_close = f"</{inf_tag}>".encode()
     _tree_c14n = _et2.tostring(tree, method="c14n", exclusive=False, with_comments=False)
-    _inf_start = _tree_c14n.index(b"<infDPS ")
-    _inf_end   = _tree_c14n.index(b"</infDPS>") + len(b"</infDPS>")
+    _inf_start = _tree_c14n.index(tag_open)
+    _inf_end   = _tree_c14n.index(tag_close) + len(tag_close)
     inf_c14n   = _tree_c14n[_inf_start:_inf_end].replace(
-        b"<infDPS ", f'<infDPS xmlns="{_NF_NS}" '.encode(), 1
+        tag_open, f'<{inf_tag} xmlns="{_NF_NS}" '.encode(), 1
     )
     digest = _b64s.b64encode(_hl.sha1(inf_c14n).digest()).decode()
 
@@ -753,8 +756,12 @@ def _nf_sign_dps(dps_bytes: bytes, key_pem: bytes, cert_pem: bytes) -> bytes:
     tree.append(sig_el)
 
     signed = _et2.tostring(tree, xml_declaration=True, encoding="UTF-8", pretty_print=False)
-    print(f"[nfse] assinatura local OK | ref={ref_id} | digest={digest}")
+    print(f"[nfse] assinatura local OK | tag={inf_tag} ref={ref_id} | digest={digest}")
     return signed
+
+
+def _nf_sign_dps(dps_bytes: bytes, key_pem: bytes, cert_pem: bytes) -> bytes:
+    return _nf_sign_xml(dps_bytes, key_pem, cert_pem, inf_tag="infDPS")
 
 
 # ── Envio via mTLS ────────────────────────────────────────────────────────────
@@ -1090,8 +1097,8 @@ async def nfse_cancelar(
 
         xml_bytes = _et_can.tostring(root, xml_declaration=True, encoding="UTF-8")
 
-        # ── Assina com a mesma função do DPS ─────────────────────────────────
-        signed = _nf_sign_dps(xml_bytes, key_pem, cert_pem)
+        # ── Assina infCancNFSe (tag diferente do infDPS) ─────────────────────
+        signed = _nf_sign_xml(xml_bytes, key_pem, cert_pem, inf_tag="infCancNFSe")
         print(f"[nfse] CancNFSe assinado len={len(signed)} chave={chave!r}")
 
         # ── Comprime e envia ─────────────────────────────────────────────────
