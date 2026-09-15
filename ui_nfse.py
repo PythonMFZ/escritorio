@@ -1069,13 +1069,40 @@ async def nfse_cancelar(
     motivo = (str(form_data.get("motivo") or "")).strip() or "Cancelamento solicitado pelo emitente"
 
     try:
-        # SNNFSE: POST /nfse/{chaveAcesso}/cancelamento
-        url_cancel = _NF_URLS[_NF_AMB].rstrip("/") + f"/{chave}/cancelamento"
-        print(f"[nfse] cancelar URL={url_cancel!r} chave={chave!r} len={len(chave)}")
-        key_pem, cert_pem, chain_pem = _nf_load_cert()
-        body_json = _json_can.dumps({"xJust": motivo[:255]})
+        import gzip as _gz_can
+        from lxml import etree as _et_can
 
-        # Salva cert em arquivos temporários (httpx requer arquivos)
+        key_pem, cert_pem, chain_pem = _nf_load_cert()
+
+        # ── Monta XML CancNFSe ────────────────────────────────────────────────
+        ns = _NF_NS
+        now_br = _dt_nf.now(_tz_nf(offset=_td_nf(hours=-3)))
+        dh_cancel = now_br.strftime("%Y-%m-%dT%H:%M:%S") + "-03:00"
+
+        root = _et_can.Element(f"{{{ns}}}CancNFSe", versao="1.00", nsmap={None: ns})
+        inf  = _et_can.SubElement(root, f"{{{ns}}}infCancNFSe", Id="CancNFSe" + chave)
+        _et_can.SubElement(inf, f"{{{ns}}}chNFSe").text  = chave
+        _et_can.SubElement(inf, f"{{{ns}}}dhCanc").text  = dh_cancel
+        _et_can.SubElement(inf, f"{{{ns}}}xJust").text   = motivo[:255]
+        _et_can.SubElement(inf, f"{{{ns}}}tpAmb").text   = _NF_tpAmb
+        prest = _et_can.SubElement(inf, f"{{{ns}}}CNPJ")
+        prest.text = _NF_CNPJ
+
+        xml_bytes = _et_can.tostring(root, xml_declaration=True, encoding="UTF-8")
+
+        # ── Assina com a mesma função do DPS ─────────────────────────────────
+        signed = _nf_sign_dps(xml_bytes, key_pem, cert_pem)
+        print(f"[nfse] CancNFSe assinado len={len(signed)} chave={chave!r}")
+
+        # ── Comprime e envia ─────────────────────────────────────────────────
+        compressed = _gz_can.compress(signed)
+        b64_xml    = _b64_nf.b64encode(compressed).decode("ascii")
+        body_json  = _json_can.dumps({"cancNFSeXmlGZipB64": b64_xml})
+
+        url_cancel = _NF_URLS[_NF_AMB].rstrip("/") + "/cancelamento"
+        print(f"[nfse] cancelar POST {url_cancel!r}")
+
+        # Salva cert em arquivos temporários
         cert_bundle = cert_pem + (chain_pem or b"")
         with _tmp_nf.NamedTemporaryFile(suffix=".pem", delete=False) as _cf:
             _cf.write(cert_bundle); cert_path_can = _cf.name
