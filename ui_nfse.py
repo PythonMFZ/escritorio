@@ -1069,9 +1069,9 @@ async def nfse_cancelar(
     motivo = (str(form_data.get("motivo") or "")).strip() or "Cancelamento solicitado pelo emitente"
 
     try:
-        # SNNFSE: DELETE /nfse/{chaveAcesso}  body JSON {"xJust": "..."}
         # SNNFSE: POST /nfse/{chaveAcesso}/cancelamento
         url_cancel = _NF_URLS[_NF_AMB].rstrip("/") + f"/{chave}/cancelamento"
+        print(f"[nfse] cancelar URL={url_cancel!r} chave={chave!r} len={len(chave)}")
         key_pem, cert_pem, chain_pem = _nf_load_cert()
         body_json = _json_can.dumps({"xJust": motivo[:255]})
 
