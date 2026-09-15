@@ -185,6 +185,128 @@ _FB_MODELO_PRE_DIAG_CONSTRUTORA = [
 ]
 
 
+_FB_MODELO_PRE_DIAG_TURNAROUND = [
+    # ── BLOCO 1: Identificação ────────────────────────────────────────────────
+    {"name": "_sec1", "label": "1. IDENTIFICAÇÃO DA EMPRESA", "type": "section"},
+    {"name": "razao_social",        "label": "Razão Social",                            "type": "text",    "required": True},
+    {"name": "cnpj",                "label": "CNPJ",                                    "type": "text",    "required": True},
+    {"name": "nome_responsavel",    "label": "Nome do responsável / sócio",             "type": "text",    "required": True},
+    {"name": "cargo_responsavel",   "label": "Cargo",                                   "type": "text",    "required": False},
+    {"name": "email",               "label": "E-mail",                                  "type": "email",   "required": True},
+    {"name": "whatsapp",            "label": "WhatsApp",                                "type": "tel",     "required": True},
+    {"name": "cidade_uf",           "label": "Cidade / UF (sede)",                      "type": "text",    "required": True},
+    {"name": "setor",               "label": "Setor / Segmento da empresa",             "type": "text",    "required": True,
+     "help": "Ex: Construção civil, Varejo, Indústria alimentícia, Serviços de saúde"},
+    {"name": "anos_mercado",        "label": "Há quantos anos a empresa está no mercado?", "type": "select",
+     "options": "Menos de 2 anos,2 a 5 anos,5 a 10 anos,10 a 20 anos,Mais de 20 anos", "required": True},
+    {"name": "num_funcionarios",    "label": "Número de funcionários (aproximado)",     "type": "select",
+     "options": "Até 10,11 a 50,51 a 200,201 a 500,Acima de 500", "required": False},
+
+    # ── BLOCO 2: Situação atual ───────────────────────────────────────────────
+    {"name": "_sec2", "label": "2. SITUAÇÃO ATUAL DA EMPRESA", "type": "section"},
+    {"name": "faturamento_anual",   "label": "Faturamento anual (último exercício, R$)", "type": "number", "required": True,
+     "help": "Receita bruta do último ano. Use estimativa se necessário."},
+    {"name": "evolucao_faturamento","label": "Como o faturamento evoluiu nos últimos 3 anos?", "type": "radio",
+     "options": "Cresceu significativamente,Cresceu levemente,Manteve estável,Caiu levemente,Caiu significativamente", "required": True},
+    {"name": "resultado_operacional","label": "A empresa está gerando resultado operacional positivo?", "type": "radio",
+     "options": "Sim, lucro operacional positivo,Estamos no zero a zero,Prejuízo operacional — mas controlável,Prejuízo operacional grave", "required": True},
+    {"name": "margem_ebitda",       "label": "Margem EBITDA estimada (%)", "type": "select",
+     "options": "Negativa,0% a 3%,3% a 8%,8% a 15%,Acima de 15%,Não sei calcular", "required": False},
+    {"name": "caixa_atual",         "label": "Situação de caixa / liquidez hoje", "type": "radio",
+     "options": "Caixa suficiente para 6+ meses,Caixa para 3 a 6 meses,Caixa para 1 a 3 meses,Caixa crítico (menos de 1 mês),Fluxo de caixa negativo — déficit recorrente", "required": True},
+    {"name": "inadimplencia_clientes","label": "Nível de inadimplência dos clientes", "type": "radio",
+     "options": "Baixo (abaixo de 3%),Moderado (3% a 8%),Alto (8% a 15%),Muito alto (acima de 15%),Não meço sistematicamente", "required": False},
+
+    # ── BLOCO 3: Endividamento ────────────────────────────────────────────────
+    {"name": "_sec3", "label": "3. ENDIVIDAMENTO E OBRIGAÇÕES FINANCEIRAS", "type": "section"},
+    {"name": "divida_total",        "label": "Dívida financeira total (R$)",            "type": "number", "required": False,
+     "help": "Soma de empréstimos, financiamentos, debêntures, mútuo de sócios, CRI/CRA etc."},
+    {"name": "relacao_divida_fat",  "label": "Relação Dívida / Faturamento anual", "type": "radio",
+     "options": "Até 0,5x (saudável),0,5x a 1x,1x a 2x,2x a 3x,Acima de 3x (muito alavancada),Não sei calcular", "required": False},
+    {"name": "parcelas_atraso",     "label": "Há parcelas de dívida em atraso ou renegociação?", "type": "radio",
+     "options": "Não,Sim — 1 a 2 credores em negociação,Sim — vários credores em atraso,Sim — com protestos ou ações judiciais em curso", "required": True},
+    {"name": "principais_credores", "label": "Principais credores / tipos de dívida",  "type": "text",   "required": False,
+     "help": "Ex: Banco do Brasil, Itaú, Caixa (BNDES), fornecedores, sócios"},
+    {"name": "passivo_trabalhista", "label": "Há passivo trabalhista relevante?", "type": "radio",
+     "options": "Não,Sim — valor estimado nas observações,Sim — em execução fiscal / penhora", "required": False},
+    {"name": "passivo_fiscal",      "label": "Há passivo fiscal / tributário relevante?", "type": "radio",
+     "options": "Não,Sim — em parcelamento (REFIS / PERT ou similar),Sim — em aberto sem acordo,Sim — com penhora ou execução", "required": False},
+    {"name": "recuperacao_judicial","label": "A empresa está ou já esteve em recuperação judicial?", "type": "radio",
+     "options": "Não,Estamos em RJ ativa,Já saímos da RJ,Estamos considerando pedir RJ,Não sei o que é — explicar", "required": True},
+
+    # ── BLOCO 4: Causas da crise ──────────────────────────────────────────────
+    {"name": "_sec4", "label": "4. CAUSAS E ORIGEM DA CRISE", "type": "section",
+     "help": "Esta seção é fundamental para o diagnóstico. Seja o mais honesto possível — as informações são confidenciais."},
+    {"name": "causas_principais",   "label": "Quais foram as principais causas da dificuldade atual?", "type": "checkbox",
+     "options": "Queda de receita / perda de clientes relevantes,Custos operacionais fora de controle,Endividamento excessivo / alavancagem,Expansão mal planejada (unidades, regiões, produtos),Gestão financeira inadequada (falta de fluxo de caixa, DRE),Conflito societário,Perda de pessoal-chave,Mudança adversa de mercado / concorrência,Crise macroeconômica (juros, câmbio, inflação),Problema operacional grave (produção, logística, qualidade),Fraude ou desvio interno,Pandemia / evento externo extraordinário,Outro", "required": True},
+    {"name": "tempo_crise",         "label": "Há quanto tempo a empresa está nessa situação crítica?", "type": "radio",
+     "options": "Menos de 6 meses,6 meses a 1 ano,1 a 2 anos,2 a 4 anos,Mais de 4 anos", "required": True},
+    {"name": "tentativas_anteriores","label": "Já tentou resolver a situação antes? Como?", "type": "textarea", "required": False,
+     "help": "Ex: cortou custos, renegociou dívidas, buscou sócio, contratou consultoria"},
+
+    # ── BLOCO 5: Estrutura de governança ─────────────────────────────────────
+    {"name": "_sec5", "label": "5. GOVERNANÇA E ESTRUTURA SOCIETÁRIA", "type": "section"},
+    {"name": "num_socios",          "label": "Número de sócios ativos",               "type": "select",
+     "options": "1 (empresa individual),2,3 a 5,6 a 10,Mais de 10", "required": False},
+    {"name": "alinhamento_socios",  "label": "Há alinhamento entre os sócios sobre o processo de reestruturação?", "type": "radio",
+     "options": "Sim, todos alinhados,Parcialmente — há discordâncias,Não — conflito aberto entre sócios,Não se aplica (sócio único)", "required": True},
+    {"name": "conselho",            "label": "A empresa possui conselho de administração ou consultivo?", "type": "radio",
+     "options": "Sim, atuante,Sim, mas pouco ativo,Não", "required": False},
+    {"name": "auditoria",           "label": "As demonstrações financeiras são auditadas?", "type": "radio",
+     "options": "Sim, por firma de auditoria externa,Somente internamente,Não auditadas,Somente obrigações fiscais (ECF/SPED)", "required": False},
+    {"name": "sistema_gestao",      "label": "Utiliza ERP / sistema de gestão?",      "type": "text",   "required": False,
+     "help": "Ex: SAP, Totvs, Oracle, Conta Azul, Omie, Planilha própria"},
+    {"name": "dfi_atualizado",      "label": "As informações financeiras (DRE, Balanço, Fluxo de Caixa) estão atualizadas?", "type": "radio",
+     "options": "Sim, atualizadas mensalmente,Sim, mas com defasagem (trimestrais/anuais),Parcialmente,Não — gestão financeira precisa de estruturação", "required": True},
+
+    # ── BLOCO 6: Ativos e potencial de recuperação ────────────────────────────
+    {"name": "_sec6", "label": "6. ATIVOS E POTENCIAL DE RECUPERAÇÃO", "type": "section"},
+    {"name": "ativos_relevantes",   "label": "A empresa possui ativos relevantes?", "type": "checkbox",
+     "options": "Imóveis próprios,Equipamentos e maquinário,Carteira de clientes ativa,Marca reconhecida / propriedade intelectual,Contratos de longo prazo em vigor,Recebíveis a vencer (duplicatas, contratos),Participação em outras empresas / investimentos,Não possui ativos relevantes", "required": False},
+    {"name": "unidades_negocio",    "label": "A empresa possui unidades ou divisões que são rentáveis?", "type": "radio",
+     "options": "Sim — parte do negócio é saudável,Não — o problema é generalizado,Não sei avaliar por divisão", "required": False,
+     "help": "Importante para avaliar possibilidade de desinvestimento ou foco em core business"},
+    {"name": "capacidade_geração",  "label": "A operação tem capacidade de gerar caixa se a dívida for reestruturada?", "type": "radio",
+     "options": "Sim, com certeza,Provavelmente sim,Incerto,Provavelmente não,Definitivamente não", "required": True},
+    {"name": "clientes_concentracao","label": "Os 3 maiores clientes representam qual % da receita?", "type": "radio",
+     "options": "Menos de 20%,20% a 40%,40% a 60%,60% a 80%,Mais de 80%", "required": False},
+
+    # ── BLOCO 7: Objetivos e expectativas ─────────────────────────────────────
+    {"name": "_sec7", "label": "7. OBJETIVOS E EXPECTATIVAS", "type": "section"},
+    {"name": "objetivo_principal",  "label": "Qual é o principal objetivo que você busca com a consultoria de turnaround?", "type": "checkbox",
+     "options": "Evitar falência ou liquidação,Reestruturar dívidas e melhorar fluxo de caixa,Reduzir custos e melhorar eficiência operacional,Reorganizar a estrutura societária,Atrair investidor ou novo sócio estratégico,Preparar empresa para venda,Obter novo crédito em melhores condições,Sair da recuperação judicial,Outro", "required": True},
+    {"name": "prazo_esperado",      "label": "Em que prazo espera ver resultados concretos?", "type": "radio",
+     "options": "Imediato — situação de emergência (menos de 60 dias),Curto prazo (3 a 6 meses),Médio prazo (6 a 18 meses),Longo prazo (acima de 18 meses)", "required": True},
+    {"name": "disponibilidade_mudancas","label": "Há disposição para mudanças profundas na operação ou gestão, se necessário?", "type": "radio",
+     "options": "Sim, estamos abertos a mudanças radicais se for preciso,Sim, com algumas restrições,Parcialmente — há resistência interna,Não — buscamos soluções conservadoras", "required": True},
+    {"name": "budget_consultoria",  "label": "Há orçamento disponível para honorários de consultoria?", "type": "radio",
+     "options": "Sim, orçamento definido,Sim, limitado — dependente do resultado,A definir conforme proposta,Não — necessitamos de modelo success fee", "required": False},
+    {"name": "principal_desafio",   "label": "Em uma frase, qual é o maior problema da empresa hoje?", "type": "textarea", "required": True},
+    {"name": "observacoes",         "label": "Informações adicionais ou contexto relevante",          "type": "textarea", "required": False},
+]
+
+
+def _fb_get_or_create_modelo_pre_diag_turnaround(session, company_id: int) -> "FormTemplate":
+    tpl = session.exec(
+        _sel_fb(FormTemplate).where(
+            FormTemplate.company_id == company_id,
+            FormTemplate.nome == "Pré-diagnóstico Turnaround",
+        )
+    ).first()
+    if tpl:
+        return tpl
+    tpl = FormTemplate(
+        company_id=company_id,
+        nome="Pré-diagnóstico Turnaround",
+        descricao="Levantamento completo para empresas em crise ou reestruturação: situação financeira, causas da crise, endividamento, governança, ativos e objetivos do processo de turnaround.",
+        schema_json=_json_fb.dumps(_FB_MODELO_PRE_DIAG_TURNAROUND, ensure_ascii=False),
+    )
+    session.add(tpl)
+    session.commit()
+    session.refresh(tpl)
+    return tpl
+
+
 def _fb_get_or_create_modelo_pre_diag_construtora(session, company_id: int) -> "FormTemplate":
     tpl = session.exec(
         _sel_fb(FormTemplate).where(
@@ -389,6 +511,9 @@ async def fb_admin_lista(request: Request, session: Session = Depends(get_sessio
       <div class="muted small">Modelos reaproveitáveis para enviar a clientes/leads e receber as respostas direto no CRM.</div>
     </div>
     <div class="d-flex gap-2">
+      <form method="post" action="/admin/formularios/seed-pre-diag-turnaround">
+        <button class="btn btn-outline-warning">🔄 Pré-diagnóstico Turnaround</button>
+      </form>
       <form method="post" action="/admin/formularios/seed-pre-diag-construtora">
         <button class="btn btn-outline-secondary">🏗 Pré-diagnóstico Construtora</button>
       </form>
@@ -411,6 +536,16 @@ async def fb_admin_lista(request: Request, session: Session = Depends(get_sessio
     return render("fb_admin_lista.html", request=request, context={
         "current_user": ctx.user, "current_company": ctx.company, "role": ctx.membership.role,
     })
+
+
+@app.post("/admin/formularios/seed-pre-diag-turnaround")
+@require_login
+async def fb_admin_seed_pre_diag_turnaround(request: Request, session: Session = Depends(get_session)):
+    ctx = get_tenant_context(request, session)
+    if not ctx or ctx.membership.role not in ("admin", "owner", "equipe"):
+        return RedirectResponse("/", status_code=303)
+    _fb_get_or_create_modelo_pre_diag_turnaround(session, ctx.company.id)
+    return RedirectResponse("/admin/formularios", status_code=303)
 
 
 @app.post("/admin/formularios/seed-pre-diag-construtora")
