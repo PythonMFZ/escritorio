@@ -1071,20 +1071,31 @@ async def nfse_cancelar(
     try:
         # SNNFSE: DELETE /nfse/{chaveAcesso}  body JSON {"xJust": "..."}
         url_cancel = _NF_URLS[_NF_AMB].rstrip("/") + f"/nfse/{chave}"
-        cert_path, key_path = _nf_load_cert()
+        key_pem, cert_pem, chain_pem = _nf_load_cert()
         body_json = _json_can.dumps({"xJust": motivo[:255]})
 
-        async with _httpx_nf.AsyncClient(
-            cert=(cert_path, key_path),
-            timeout=60,
-            verify=True,
-        ) as client:
-            resp = await client.request(
-                "DELETE",
-                url_cancel,
-                content=body_json.encode("utf-8"),
-                headers={"Content-Type": "application/json; charset=UTF-8"},
-            )
+        # Salva cert em arquivos temporários (httpx requer arquivos)
+        cert_bundle = cert_pem + (chain_pem or b"")
+        with _tmp_nf.NamedTemporaryFile(suffix=".pem", delete=False) as _cf:
+            _cf.write(cert_bundle); cert_path_can = _cf.name
+        with _tmp_nf.NamedTemporaryFile(suffix=".pem", delete=False) as _kf:
+            _kf.write(key_pem); key_path_can = _kf.name
+
+        try:
+            async with _httpx_nf.AsyncClient(
+                cert=(cert_path_can, key_path_can),
+                timeout=60,
+                verify=True,
+            ) as client:
+                resp = await client.request(
+                    "DELETE",
+                    url_cancel,
+                    content=body_json.encode("utf-8"),
+                    headers={"Content-Type": "application/json; charset=UTF-8"},
+                )
+        finally:
+            _os_nf.unlink(cert_path_can)
+            _os_nf.unlink(key_path_can)
 
         print(f"[nfse] cancelamento HTTP {resp.status_code} | body: {resp.text[:500]!r}")
 
