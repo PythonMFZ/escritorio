@@ -829,10 +829,18 @@ async def financeiro_cobrancas_painel(request: _Req_ct, session=_Dep_ct(get_sess
         nf_url_val  = getattr(c, "nf_url", "") or ""
         nf_num_val  = getattr(c, "nf_numero", "") or ""
         nf_chave_val = getattr(c, "nf_chave", "") or ""
+        _nf_cancelar_btn = (
+            f'<form method="post" action="/admin/financeiro/cobrancas/{c.id}/cancelar-nf" class="d-inline"'
+            f' onsubmit="var m=prompt(\'Motivo do cancelamento:\',\'Cancelamento solicitado pelo emitente\');'
+            f'if(!m)return false;this.querySelector(\'[name=motivo]\').value=m;return true;">'
+            f'<input type="hidden" name="motivo" value="">'
+            f'<button class="btn btn-sm btn-outline-danger ms-1" type="submit">✕ Cancelar NF</button>'
+            f'</form>'
+        )
         if nf_url_val and nf_url_val.startswith("http"):
-            nf_btn = f'<a href="{nf_url_val}" target="_blank" class="btn btn-sm btn-outline-success ms-1">📃 NF</a>'
+            nf_btn = f'<a href="{nf_url_val}" target="_blank" class="btn btn-sm btn-outline-success ms-1">📃 NF</a>' + _nf_cancelar_btn
         elif nf_num_val or nf_chave_val:
-            nf_btn = f'<a href="/admin/financeiro/cobrancas/{c.id}/nf-ver" class="btn btn-sm btn-outline-success ms-1">📃 NF</a>'
+            nf_btn = f'<a href="/admin/financeiro/cobrancas/{c.id}/nf-ver" class="btn btn-sm btn-outline-success ms-1">📃 NF</a>' + _nf_cancelar_btn
         elif c.status in ("pago", "pendente", "vencido"):
             nf_btn = f'<a href="/admin/financeiro/cobrancas/{c.id}/emitir-nf" class="btn btn-sm btn-outline-success ms-1" onclick="return confirm(\'Emitir NFS-e para esta cobrança?\')">📃 Emitir NF</a>'
         else:
@@ -1678,10 +1686,18 @@ def _ct_cobrancas_html(contrato, cobrancas):
         nf_url_v  = getattr(c, "nf_url",    "") or ""
         nf_num_v  = getattr(c, "nf_numero", "") or ""
         nf_chave_v = getattr(c, "nf_chave", "") or ""
+        _nf_cancel_cell = (
+            f'<form method="post" action="/admin/financeiro/cobrancas/{c.id}/cancelar-nf" class="d-inline"'
+            f' onsubmit="var m=prompt(\'Motivo do cancelamento:\',\'Cancelamento solicitado pelo emitente\');'
+            f'if(!m)return false;this.querySelector(\'[name=motivo]\').value=m;return true;">'
+            f'<input type="hidden" name="motivo" value="">'
+            f'<button class="btn btn-sm btn-outline-danger ms-1" type="submit">✕ Cancelar NF</button>'
+            f'</form>'
+        )
         if nf_url_v and nf_url_v.startswith("http"):
-            nf_cell = f'<a href="{nf_url_v}" target="_blank" class="btn btn-sm btn-outline-success">📃 NF</a>'
+            nf_cell = f'<a href="{nf_url_v}" target="_blank" class="btn btn-sm btn-outline-success">📃 NF</a>' + _nf_cancel_cell
         elif nf_num_v or nf_chave_v:
-            nf_cell = f'<a href="/admin/financeiro/cobrancas/{c.id}/nf-ver" class="btn btn-sm btn-outline-success">📃 NF</a>'
+            nf_cell = f'<a href="/admin/financeiro/cobrancas/{c.id}/nf-ver" class="btn btn-sm btn-outline-success">📃 NF</a>' + _nf_cancel_cell
         elif c.status in ("pago", "pendente", "vencido"):
             nf_cell = f'<a href="/admin/financeiro/cobrancas/{c.id}/emitir-nf" class="btn btn-sm btn-outline-success" onclick="return confirm(\'Emitir NFS-e?\')">Emitir NF</a>'
         else:

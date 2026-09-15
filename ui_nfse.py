@@ -1035,4 +1035,89 @@ async def financeiro_cobrancas_nf_ver(
     chave = getattr(cobranca, "nf_chave", "") or getattr(cobranca, "nf_numero", "") or "sem chave"
     return _HTML_nf(f"<p>NFS-e emitida. Chave de acesso: <code>{chave}</code></p>")
 
+
+# ── Cancelamento de NFS-e ─────────────────────────────────────────────────────
+
+@app.post("/admin/financeiro/cobrancas/{cob_id}/cancelar-nf")
+async def nfse_cancelar(
+    cob_id: int,
+    request: _Req_nf,
+    session=_Dep_nf(get_session),
+):
+    import json as _json_can
+    from urllib.parse import quote as _q_can
+
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        return _RR_nf("/login", status_code=303)
+
+    cobranca = session.get(CobrancaMensal, cob_id)
+    if not cobranca or cobranca.company_id != ctx.company.id:
+        return _RR_nf("/admin/financeiro/cobrancas", status_code=302)
+
+    chave = getattr(cobranca, "nf_chave", "") or ""
+    contrato_id = getattr(cobranca, "contrato_id", None) or ""
+
+    if not chave:
+        return _RR_nf(
+            f"/admin/financeiro/contratos/{contrato_id}/cobrancas"
+            "?erro=NFS-e+sem+chave+de+acesso%2C+não+é+possível+cancelar",
+            status_code=302,
+        )
+
+    form_data = await request.form()
+    motivo = (str(form_data.get("motivo") or "")).strip() or "Cancelamento solicitado pelo emitente"
+
+    try:
+        # SNNFSE: DELETE /nfse/{chaveAcesso}  body JSON {"xJust": "..."}
+        url_cancel = _NF_URLS[_NF_AMB].rstrip("/") + f"/nfse/{chave}"
+        cert_path, key_path = _nf_load_cert()
+        body_json = _json_can.dumps({"xJust": motivo[:255]})
+
+        async with _httpx_nf.AsyncClient(
+            cert=(cert_path, key_path),
+            timeout=60,
+            verify=True,
+        ) as client:
+            resp = await client.request(
+                "DELETE",
+                url_cancel,
+                content=body_json.encode("utf-8"),
+                headers={"Content-Type": "application/json; charset=UTF-8"},
+            )
+
+        print(f"[nfse] cancelamento HTTP {resp.status_code} | body: {resp.text[:500]!r}")
+
+        if resp.status_code in (200, 204):
+            cobranca.nf_chave  = ""
+            cobranca.nf_numero = ""
+            cobranca.nf_url    = ""
+            session.add(cobranca)
+            session.commit()
+            return _RR_nf(
+                f"/admin/financeiro/contratos/{contrato_id}/cobrancas?ok=NFS-e+cancelada+com+sucesso",
+                status_code=302,
+            )
+        else:
+            try:
+                err_body = resp.json()
+                msg = err_body.get("message") or err_body.get("xMotivo") or str(err_body)[:300]
+            except Exception:
+                msg = resp.text[:300]
+            return _RR_nf(
+                f"/admin/financeiro/contratos/{contrato_id}/cobrancas"
+                f"?erro=Erro+ao+cancelar:+{_q_can(str(msg)[:200])}",
+                status_code=302,
+            )
+
+    except Exception as _e_can:
+        import traceback as _tb_can
+        print(f"[nfse] erro cancelamento: {_e_can}\n{_tb_can.format_exc()[-800:]}")
+        return _RR_nf(
+            f"/admin/financeiro/contratos/{contrato_id}/cobrancas"
+            f"?erro=Erro+interno:+{_q_can(str(_e_can)[:200])}",
+            status_code=302,
+        )
+
+
 print("[nfse] ✅ Rotas NFS-e registradas com sucesso")
