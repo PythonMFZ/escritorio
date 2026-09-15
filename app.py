@@ -51379,13 +51379,25 @@ _AGENDA_PUBLIC_TPL = """<!DOCTYPE html>
         <label class="form-label">Notas / Pauta</label>
         <textarea class="form-control" name="notas" rows="2">{{ form.notas or '' }}</textarea>
       </div>
-      <button class="btn btn-primary w-100" type="submit">Confirmar agendamento</button>
+      <button class="btn btn-primary w-100" type="submit" id="btn-confirmar">Confirmar agendamento</button>
     </form>
     {% endif %}
   </div>
   <div class="text-center muted small mt-4">{{ company_name }} · Agendamento nativo</div>
 </div></div></div>
 <script>
+(function(){
+  const f = document.querySelector('form');
+  if(f){
+    f.addEventListener('submit', function(){
+      const btn = document.getElementById('btn-confirmar');
+      if(btn){
+        btn.disabled = true;
+        btn.textContent = 'Aguarde…';
+      }
+    });
+  }
+})();
 let _dur=60,_buf=0;
 function selSvc(el,id,dur,buf,locaisCSV){
   _dur=dur;_buf=buf;
