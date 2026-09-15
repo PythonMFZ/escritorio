@@ -1070,7 +1070,8 @@ async def nfse_cancelar(
 
     try:
         # SNNFSE: DELETE /nfse/{chaveAcesso}  body JSON {"xJust": "..."}
-        url_cancel = _NF_URLS[_NF_AMB].rstrip("/") + f"/{chave}"
+        # SNNFSE: POST /nfse/{chaveAcesso}/cancelamento
+        url_cancel = _NF_URLS[_NF_AMB].rstrip("/") + f"/{chave}/cancelamento"
         key_pem, cert_pem, chain_pem = _nf_load_cert()
         body_json = _json_can.dumps({"xJust": motivo[:255]})
 
@@ -1087,8 +1088,7 @@ async def nfse_cancelar(
                 timeout=60,
                 verify=True,
             ) as client:
-                resp = await client.request(
-                    "DELETE",
+                resp = await client.post(
                     url_cancel,
                     content=body_json.encode("utf-8"),
                     headers={"Content-Type": "application/json; charset=UTF-8"},
