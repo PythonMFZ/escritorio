@@ -1123,7 +1123,8 @@ async def nfse_cancelar(
                 timeout=60,
                 verify=True,
             ) as client:
-                resp = await client.delete(
+                resp = await client.request(
+                    "DELETE",
                     url_cancel,
                     content=body_json.encode("utf-8"),
                     headers={"Content-Type": "application/json; charset=UTF-8"},
