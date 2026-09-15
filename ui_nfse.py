@@ -1070,7 +1070,7 @@ async def nfse_cancelar(
 
     try:
         # SNNFSE: DELETE /nfse/{chaveAcesso}  body JSON {"xJust": "..."}
-        url_cancel = _NF_URLS[_NF_AMB].rstrip("/") + f"/nfse/{chave}"
+        url_cancel = _NF_URLS[_NF_AMB].rstrip("/") + f"/{chave}"
         key_pem, cert_pem, chain_pem = _nf_load_cert()
         body_json = _json_can.dumps({"xJust": motivo[:255]})
 
