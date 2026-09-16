@@ -153,12 +153,25 @@ async def _augur_whatsapp_reply(
             import traceback; traceback.print_exc()
             cmd_reply = None
 
+        # ── Lançamento financeiro via WhatsApp ───────────────────────────────
+        _fin_reply = None
+        try:
+            def _run_fin_handler():
+                with _WazSession(engine) as _db_fin:
+                    return augur_financeiro_handle(_db_fin, _coid, _cid, _mb)
+            _fin_reply = await loop.run_in_executor(None, _run_fin_handler)
+        except Exception as _fe:
+            print(f"[augur_whatsapp] financeiro handler erro: {_fe}")
+
         if _ck_reply:
             reply = _ck_reply
             print(f"[augur_whatsapp] check-in processado: {reply[:80]}")
         elif cmd_reply:
             reply = cmd_reply
             print(f"[augur_whatsapp] comando executado: {reply[:80]}")
+        elif _fin_reply:
+            reply = _fin_reply
+            print(f"[augur_whatsapp] lançamento financeiro: {reply[:80]}")
         else:
             # Normal Augur call
             from ai_assistant.assistant import ask as _augur_ask
