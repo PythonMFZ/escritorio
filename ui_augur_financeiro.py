@@ -111,21 +111,10 @@ def augur_financeiro_handle(session, company_id: int, client_id: int, message: s
     if not _fin_is_financial_message(message):
         return None
 
-    # ── Decide onde lançar: ClientFinancialEntry ou OfficeFinancialEntry ──────
-    # Se o cliente tiver a ferramenta ativa → ClientFinancialEntry (/ferramentas/financeiro)
-    # Caso contrário (staff testando, ferramenta não habilitada) → OfficeFinancialEntry (/admin/financeiro)
-    use_client_model = False
-    if client_id:
-        try:
-            status_payload = _tool_subscription_status_payload(
-                session,
-                company_id=company_id,
-                client_id=client_id,
-                tool_code=CLIENT_TOOL_FINANCE_CODE,
-            )
-            use_client_model = bool(status_payload.get("access_ok"))
-        except Exception as _ae:
-            print(f"[augur_fin] erro ao verificar acesso: {_ae}")
+    # ── Sempre usa ClientFinancialEntry quando há client_id ──────────────────
+    # (Financeiro Gerencial em /ferramentas/financeiro — visível pelo cliente)
+    # Só cai em OfficeFinancialEntry se não houver client_id na thread
+    use_client_model = bool(client_id)
 
     # ── Resolve sys_user_id (created_by_user_id obrigatório) ─────────────────
     memberships = session.exec(
@@ -136,7 +125,7 @@ def augur_financeiro_handle(session, company_id: int, client_id: int, message: s
     ).all()
     sys_user_id = memberships[0].user_id if memberships else 1
 
-    # ── Carrega categorias conforme o modelo ──────────────────────────────────
+    # ── Garante tabelas e carrega categorias ──────────────────────────────────
     if use_client_model:
         try:
             ensure_client_finance_tables()
