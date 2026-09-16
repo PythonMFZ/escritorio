@@ -10,7 +10,7 @@ from sqlmodel import Session as _SessFin, select as _sel_fin
 _ANTHROPIC_KEY_FIN = _os_fin.getenv("ANTHROPIC_API_KEY", "")
 _HAIKU_FIN = "claude-haiku-4-5-20251001"
 
-# Palavras-gatilho que indicam intenção financeira
+# Palavras-gatilho que indicam intenção financeira (sem chamar LLM)
 _FIN_TRIGGERS = [
     "lançar", "lancar", "lançamento", "lancamento",
     "registrar", "registrei", "registrou",
@@ -36,14 +36,10 @@ def _fin_extract_entry(message: str, categories: list[dict]) -> dict | None:
         return None
 
     today = _dt_fin.now(_tz_fin.utc).strftime("%d/%m/%Y")
-    cats_str = ""
-    if categories:
-        cats_str = "\n".join(
-            f'  - id={c["id"]} | "{c["name"]}" ({c["kind"]})'
-            for c in categories
-        )
-    else:
-        cats_str = "  (nenhuma categoria cadastrada)"
+    cats_str = (
+        "\n".join(f'  - id={c["id"]} | "{c["name"]}" ({c["kind"]})' for c in categories)
+        if categories else "  (nenhuma categoria cadastrada)"
+    )
 
     prompt = (
         f"Hoje é {today}.\n\n"
@@ -107,19 +103,44 @@ def _fin_parse_date(date_str: str) -> str:
 
 def augur_financeiro_handle(session, company_id: int, client_id: int, message: str) -> str | None:
     """
-    Tenta interpretar `message` como um lançamento financeiro.
-    Se detectar, cria o OfficeFinancialEntry e retorna mensagem de confirmação.
-    Retorna None se não for intenção financeira.
+    Tenta interpretar `message` como um lançamento financeiro do CLIENTE
+    (usa ClientFinancialEntry — o Financeiro Gerencial da ferramenta /ferramentas/financeiro).
+
+    Retorna mensagem de confirmação ou None se não for intenção financeira.
     """
     if not _fin_is_financial_message(message):
         return None
 
-    # Carrega categorias ativas da empresa
+    # ── Verifica se a ferramenta está ativa para este cliente ─────────────────
+    try:
+        status_payload = _tool_subscription_status_payload(
+            session,
+            company_id=company_id,
+            client_id=client_id,
+            tool_code=CLIENT_TOOL_FINANCE_CODE,
+        )
+        if not status_payload.get("access_ok"):
+            # Ferramenta não habilitada — deixa o Augur responder normalmente
+            print(f"[augur_fin] ferramenta não habilitada para client={client_id}")
+            return None
+    except Exception as _ae:
+        print(f"[augur_fin] erro ao verificar acesso: {_ae}")
+        return None
+
+    # ── Garante que as tabelas existem e cria defaults ────────────────────────
+    try:
+        ensure_client_finance_tables()
+        seed_client_finance_defaults(session, company_id=company_id, client_id=client_id)
+    except Exception as _te:
+        print(f"[augur_fin] erro ao garantir tabelas: {_te}")
+
+    # ── Carrega categorias ativas do cliente ──────────────────────────────────
     cats_raw = session.exec(
-        _sel_fin(OfficeCategory).where(
-            OfficeCategory.company_id == company_id,
-            OfficeCategory.is_active == True,
-        ).order_by(OfficeCategory.name)
+        _sel_fin(ClientFinanceCategory).where(
+            ClientFinanceCategory.company_id == company_id,
+            ClientFinanceCategory.client_id == client_id,
+            ClientFinanceCategory.is_active == True,
+        ).order_by(ClientFinanceCategory.name)
     ).all()
     categories = [{"id": c.id, "name": c.name, "kind": c.category_kind} for c in cats_raw]
 
@@ -135,35 +156,34 @@ def augur_financeiro_handle(session, company_id: int, client_id: int, message: s
     due_date    = _fin_parse_date(extracted.get("due_date") or "")
     category_id = extracted.get("category_id")
 
-    # Valida category_id contra os da empresa
+    # Valida category_id contra os do cliente
     valid_cat_ids = {c["id"] for c in categories}
     if category_id and int(category_id) not in valid_cat_ids:
         category_id = None
 
-    # Resolve um user_id genérico da empresa para created_by_user_id (obrigatório)
+    # Resolve sys_user_id (created_by_user_id obrigatório)
     memberships = session.exec(
         _sel_fin(Membership).where(
             Membership.company_id == company_id,
             Membership.role.in_(["owner", "admin"]),
         ).limit(1)
     ).all()
-    sys_user_id = memberships[0].user_id if memberships else 0
+    sys_user_id = memberships[0].user_id if memberships else 1
 
     today_iso = _dt_fin.now(_tz_fin.utc).strftime("%Y-%m-%d")
-
-    # Para "pagar" com status pago: settlement_date = due_date
     settlement_date = due_date if status == "pago" else ""
     amount_realized = amount if status == "pago" else 0.0
 
-    entry = OfficeFinancialEntry(
+    entry = ClientFinancialEntry(
         company_id=company_id,
+        client_id=client_id,
         created_by_user_id=sys_user_id,
         entry_kind=entry_kind,
         status=status,
         description=description,
         amount_expected_brl=amount,
         amount_realized_brl=amount_realized,
-        category_id=category_id if category_id else None,
+        category_id=int(category_id) if category_id else None,
         due_date=due_date,
         competence_date=today_iso,
         settlement_date=settlement_date,
@@ -171,30 +191,30 @@ def augur_financeiro_handle(session, company_id: int, client_id: int, message: s
         created_at=_dt_fin.now(_tz_fin.utc),
         updated_at=_dt_fin.now(_tz_fin.utc),
     )
-    # client_id só para receber (FK obrigatória de cliente)
-    if entry_kind == "receber" and client_id:
-        entry.client_id = client_id
-
     session.add(entry)
     session.commit()
     session.refresh(entry)
 
-    print(f"[augur_fin] lançamento criado id={entry.id} kind={entry_kind} valor={amount} empresa={company_id}")
+    print(f"[augur_fin] lançamento criado id={entry.id} kind={entry_kind} valor={amount} client={client_id} empresa={company_id}")
 
     # ── Monta resposta ────────────────────────────────────────────────────────
     tipo_emoji = "💸" if entry_kind == "pagar" else "💰"
     tipo_label = "Despesa" if entry_kind == "pagar" else "Receita"
     status_label = "Pago" if status == "pago" else "Em aberto"
+
     cat_name = ""
     if category_id:
         cat = next((c for c in categories if c["id"] == int(category_id)), None)
         if cat:
             cat_name = f"\n📂 Categoria: {cat['name']}"
     elif extracted.get("category_name"):
-        cat_name = f"\n📂 Categoria sugerida: {extracted['category_name']} (não cadastrada ainda)"
+        cat_name = f"\n📂 Categoria sugerida: {extracted['category_name']} _(ainda não cadastrada)_"
 
     valor_fmt = f"R$ {amount:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
-    venc_fmt  = _dt_fin.strptime(due_date, "%Y-%m-%d").strftime("%d/%m/%Y") if due_date else "-"
+    try:
+        venc_fmt = _dt_fin.strptime(due_date, "%Y-%m-%d").strftime("%d/%m/%Y")
+    except Exception:
+        venc_fmt = "-"
 
     return (
         f"{tipo_emoji} *{tipo_label} lançada com sucesso!*\n\n"
@@ -203,7 +223,7 @@ def augur_financeiro_handle(session, company_id: int, client_id: int, message: s
         f"📅 Vencimento: {venc_fmt}\n"
         f"✅ Status: {status_label}"
         f"{cat_name}\n\n"
-        f"_Você pode ver e editar em Ferramentas → Financeiro Gerencial._"
+        f"_Acesse Ferramentas → Financeiro para ver e editar._"
     )
 
 

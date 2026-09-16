@@ -120,40 +120,7 @@ async def _augur_whatsapp_reply(
         _mb  = message_body
         _tid = thread_id
 
-        # ── Check-in semanal: testa se é resposta a check-in antes de tudo ──
-        _ck_reply = None
-        try:
-            def _run_checkin():
-                with _WazSession(engine) as _db_ck:
-                    return checkin_processar_resposta(
-                        _db_ck, _coid, _cid, _tid, _mb
-                    )
-            _ck_reply = await loop.run_in_executor(None, _run_checkin)
-        except Exception as _ck_e:
-            print(f"[augur_whatsapp] checkin check: {_ck_e}")
-
-        # ── Command layer (task creation etc.) — runs in thread executor ──
-        def _run_command_layer():
-            with _WazSession(engine) as _db:
-                # Resolve real user_id from whatsapp_phone
-                _mu, _ = _match_user_by_whatsapp_phone(_db, company_id=_coid, phone_digits=_cp)
-                _uid = _mu.id if _mu else 0
-                return _augur_try_command(
-                    _db,
-                    company_id=_coid,
-                    user_id=_uid,
-                    client_id=_cid,
-                    message=_mb,
-                )
-
-        try:
-            cmd_reply = await loop.run_in_executor(None, _run_command_layer)
-        except Exception as _ce:
-            print(f"[augur_whatsapp] command layer erro: {_ce}")
-            import traceback; traceback.print_exc()
-            cmd_reply = None
-
-        # ── Lançamento financeiro via WhatsApp ───────────────────────────────
+        # ── 1. Lançamento financeiro — prioridade máxima (palavras específicas) ─
         _fin_reply = None
         try:
             def _run_fin_handler():
@@ -163,15 +130,48 @@ async def _augur_whatsapp_reply(
         except Exception as _fe:
             print(f"[augur_whatsapp] financeiro handler erro: {_fe}")
 
-        if _ck_reply:
+        # ── 2. Check-in semanal ───────────────────────────────────────────────
+        _ck_reply = None
+        if not _fin_reply:
+            try:
+                def _run_checkin():
+                    with _WazSession(engine) as _db_ck:
+                        return checkin_processar_resposta(
+                            _db_ck, _coid, _cid, _tid, _mb
+                        )
+                _ck_reply = await loop.run_in_executor(None, _run_checkin)
+            except Exception as _ck_e:
+                print(f"[augur_whatsapp] checkin check: {_ck_e}")
+
+        # ── 3. Command layer (task creation etc.) ────────────────────────────
+        cmd_reply = None
+        if not _fin_reply and not _ck_reply:
+            def _run_command_layer():
+                with _WazSession(engine) as _db:
+                    _mu, _ = _match_user_by_whatsapp_phone(_db, company_id=_coid, phone_digits=_cp)
+                    _uid = _mu.id if _mu else 0
+                    return _augur_try_command(
+                        _db,
+                        company_id=_coid,
+                        user_id=_uid,
+                        client_id=_cid,
+                        message=_mb,
+                    )
+            try:
+                cmd_reply = await loop.run_in_executor(None, _run_command_layer)
+            except Exception as _ce:
+                print(f"[augur_whatsapp] command layer erro: {_ce}")
+                import traceback; traceback.print_exc()
+
+        if _fin_reply:
+            reply = _fin_reply
+            print(f"[augur_whatsapp] lançamento financeiro: {reply[:80]}")
+        elif _ck_reply:
             reply = _ck_reply
             print(f"[augur_whatsapp] check-in processado: {reply[:80]}")
         elif cmd_reply:
             reply = cmd_reply
             print(f"[augur_whatsapp] comando executado: {reply[:80]}")
-        elif _fin_reply:
-            reply = _fin_reply
-            print(f"[augur_whatsapp] lançamento financeiro: {reply[:80]}")
         else:
             # Normal Augur call
             from ai_assistant.assistant import ask as _augur_ask
