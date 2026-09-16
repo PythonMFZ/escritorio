@@ -44641,7 +44641,12 @@ def _tool_subscription_status_payload(
     status_label = "Bloqueado"
     billed_this_month = sub.last_billed_period == _tool_period_label(now)
 
-    if not sub.is_active or sub.status in {"blocked", "cancelled"}:
+    if sub.is_active and int(sub.monthly_price_credits or 0) <= 0 and sub.status in {"active", "blocked"}:
+        # Gratuito ativado pelo novo sistema de features — libera independente do status legado
+        message = "Ferramenta liberada sem cobrança."
+        access_ok = True
+        status_label = "Ativa"
+    elif not sub.is_active or sub.status in {"blocked", "cancelled"}:
         message = "Ferramenta não liberada pela equipe."
         access_ok = False
         status_label = "Bloqueado"
