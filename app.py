@@ -20232,9 +20232,25 @@ async def fin_list(request: Request, session: Session = Depends(get_session)) ->
     _cb_q = _cb_q.order_by(CobrancaMensal.data_vencimento.desc()).limit(200)
     _cbs_raw = session.exec(_cb_q).all()
 
+    # Índice de OfficeFinancialEntry pagas por document_number (contrato-N-YYYY-MM)
+    # para sobrescrever o status do CobrancaMensal quando o lançamento foi quitado
+    _paid_refs: set[str] = set()
+    if _cbs_raw:
+        _refs = {f"contrato-{_cb.contrato_id}-{_cb.competencia}" for _cb in _cbs_raw}
+        _paid_entries = session.exec(
+            select(OfficeFinancialEntry.document_number).where(
+                OfficeFinancialEntry.company_id == ctx.company.id,
+                OfficeFinancialEntry.document_number.in_(list(_refs)),
+                OfficeFinancialEntry.status.in_(["pago", "recebido"]),
+            )
+        ).all()
+        _paid_refs = set(_paid_entries)
+
     cobrancas: list[dict] = []
     for _cb in _cbs_raw:
-        _sc = _STATUS_COLOR.get(_cb.status, "light border")
+        _ref = f"contrato-{_cb.contrato_id}-{_cb.competencia}"
+        _status = "pago" if _ref in _paid_refs else _cb.status
+        _sc = _STATUS_COLOR.get(_status, "light border")
         cobrancas.append({
             "id":             _cb.id,
             "competencia":    _cb.competencia,
@@ -20242,7 +20258,7 @@ async def fin_list(request: Request, session: Session = Depends(get_session)) ->
             "nome_cliente":   _cb.nome_cliente,
             "data_vencimento": _cb.data_vencimento,
             "valor_brl":      (_cb.valor_cents or 0) / 100,
-            "status":         _cb.status,
+            "status":         _status,
             "status_color":   _sc,
             "boleto_url":     _cb.boleto_url or "",
             "boleto_codigo":  _cb.boleto_codigo or "",
