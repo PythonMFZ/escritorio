@@ -20302,90 +20302,232 @@ async def fin_list(request: Request, session: Session = Depends(get_session)) ->
 # ── PDF da NFS-e de cobrança de contrato ─────────────────────────────────────
 
 def _gerar_nfse_cobranca_pdf(*, company: Any, client: Any, cb: Any) -> bytes:
-    """Gera PDF de comprovante de NFS-e para CobrancaMensal."""
+    """Gera DANFSe (Documento Auxiliar da NFS-e) fiel ao layout oficial."""
     from io import BytesIO
     from reportlab.lib.pagesizes import A4
     from reportlab.lib.units import mm
     from reportlab.pdfgen import canvas as _rl
-    from reportlab.lib import colors as _colors
+    from reportlab.lib import colors as _co
+
+    # ── Dados do emitente (exec'd no namespace do app) ─────────────────────
+    emit_cnpj  = globals().get("_NF_CNPJ",  "")
+    emit_im    = globals().get("_NF_IM",     "")
+    emit_razao = globals().get("_NF_RAZAO",  company.name or "")
+    emit_email = globals().get("_NF_EMAIL",  "")
+    emit_ctrib = globals().get("_NF_CTRIB_NAC", "170303")
+
+    # ── Dados do tomador ────────────────────────────────────────────────────
+    tom_nome  = (client.name if client else "") or "—"
+    tom_cnpj  = (getattr(client, "cnpj",    "") or "") if client else ""
+    tom_email = (getattr(client, "email",   "") or "") if client else ""
+    tom_end   = (getattr(client, "address", "") or "") if client else ""
+    tom_mun   = (getattr(client, "city",    "") or "") if client else ""
+    tom_cep   = (getattr(client, "zip_code","") or "") if client else ""
+    tom_fone  = (getattr(client, "phone",   "") or "") if client else ""
+
+    # ── Dados da NFS-e ──────────────────────────────────────────────────────
+    nf_chave  = getattr(cb, "nf_chave",    "") or ""
+    nf_num    = getattr(cb, "nf_numero",   "") or "—"
+    nf_comp   = getattr(cb, "competencia", "") or "—"
+    nf_desc   = getattr(cb, "nome_contrato","") or "Consultoria"
+    nf_venc   = getattr(cb, "data_vencimento","") or "—"
+    nf_valor  = (getattr(cb, "valor_cents", 0) or 0) / 100
+    nf_valor_s = f"R$ {nf_valor:,.2f}".replace(",","X").replace(".",",").replace("X",".")
+    descricao_servico = (
+        f"{nf_desc} — Competência {nf_comp}\n"
+        "Planejamento, coordenação, programação ou organização técnica, financeira ou administrativa. (LC 116/2003 — item 17.03)"
+    )
 
     buf = BytesIO()
-    c = _rl.Canvas(buf, pagesize=A4)
-    w, h = A4
-    mg = 20 * mm
+    c   = _rl.Canvas(buf, pagesize=A4)
+    pw, ph = A4
+    mg = 10 * mm
+    cw = pw - 2 * mg
 
-    # Cabeçalho azul
-    c.setFillColor(_colors.HexColor("#1a2340"))
-    c.rect(0, h - 30 * mm, w, 30 * mm, fill=True, stroke=False)
-    _co_cnpj = getattr(company, "cnpj", "") or ""
-    c.setFillColor(_colors.white)
-    c.setFont("Helvetica-Bold", 14)
-    c.drawString(mg, h - 12 * mm, (company.name or "Prestador"))
-    c.setFont("Helvetica", 8)
-    if _co_cnpj:
-        c.drawString(mg, h - 19 * mm, f"CNPJ: {_co_cnpj}")
-    c.setFont("Helvetica-Bold", 16)
-    c.drawRightString(w - mg, h - 13 * mm, "NFS-e")
+    # ── Cores ────────────────────────────────────────────────────────────────
+    GRN  = _co.HexColor("#006633")
+    LGRY = _co.HexColor("#f2f2f2")
+    DGRY = _co.HexColor("#222222")
+    MGRY = _co.HexColor("#555555")
+    BK   = _co.black
+    WH   = _co.white
+    lw   = 0.35
+
+    # ── Helpers ──────────────────────────────────────────────────────────────
+    def hline(y, x0=mg, x1=None, w2=lw):
+        c.setStrokeColor(BK); c.setLineWidth(w2)
+        c.line(x0, y, x1 or (pw-mg), y)
+
+    def cell(lbl, val, x, y, ww, hh=8*mm, bg=None, bold_val=False, lbl_sz=6, val_sz=8):
+        c.setStrokeColor(BK); c.setLineWidth(lw)
+        if bg:
+            c.setFillColor(bg); c.rect(x, y, ww, hh, fill=True, stroke=True)
+        else:
+            c.rect(x, y, ww, hh, fill=False, stroke=True)
+        c.setFillColor(MGRY); c.setFont("Helvetica", lbl_sz)
+        c.drawString(x+1.5*mm, y+hh-2.8*mm, lbl)
+        c.setFillColor(DGRY)
+        c.setFont("Helvetica-Bold" if bold_val else "Helvetica", val_sz)
+        c.drawString(x+1.5*mm, y+1.8*mm, str(val)[:100])
+
+    def sec_bar(title, y):
+        c.setFillColor(DGRY); c.setStrokeColor(BK); c.setLineWidth(lw)
+        c.rect(mg, y-5*mm, cw, 5*mm, fill=True, stroke=True)
+        c.setFillColor(WH); c.setFont("Helvetica-Bold", 7.5)
+        c.drawString(mg+2*mm, y-3.5*mm, title)
+        return y - 5*mm
+
+    # ════════════════════════════════════════════════════════════════════════
+    # CABEÇALHO
+    # ════════════════════════════════════════════════════════════════════════
+    y = ph - mg
+    logo_w = 52*mm; logo_h = 18*mm
+
+    # Logo verde NFS-e
+    c.setFillColor(GRN); c.setStrokeColor(BK); c.setLineWidth(lw)
+    c.rect(mg, y-logo_h, logo_w, logo_h, fill=True, stroke=True)
+    c.setFillColor(WH); c.setFont("Helvetica-Bold", 22)
+    c.drawString(mg+2*mm, y-13*mm, "NFSe")
+    c.setFont("Helvetica", 6.5)
+    c.drawString(mg+25*mm, y-8*mm,  "Nota Fiscal de")
+    c.drawString(mg+25*mm, y-12.5*mm, "Serviço eletrônica")
+
+    # Título central
+    tx = mg+logo_w; tw = cw-logo_w
+    c.setStrokeColor(BK); c.setLineWidth(lw)
+    c.rect(tx, y-logo_h, tw, logo_h, fill=False, stroke=True)
+    c.setFillColor(DGRY); c.setFont("Helvetica-Bold", 11)
+    c.drawCentredString(tx+tw/2, y-9*mm, "DANFSe v1.0")
     c.setFont("Helvetica", 9)
-    nf_num = getattr(cb, "nf_numero", "") or ""
-    if nf_num:
-        c.drawRightString(w - mg, h - 20 * mm, f"Nº {nf_num}")
+    c.drawCentredString(tx+tw/2, y-14*mm, "Documento Auxiliar da NFS-e")
+    y -= logo_h
 
-    # Faixa tomador
-    y = h - 42 * mm
-    c.setFillColor(_colors.HexColor("#f0f3f9"))
-    c.rect(mg, y - 24 * mm, w - 2 * mg, 24 * mm, fill=True, stroke=False)
-    c.setFillColor(_colors.HexColor("#1a2340"))
-    c.setFont("Helvetica-Bold", 7)
-    c.drawString(mg + 4 * mm, y - 6 * mm, "TOMADOR DO SERVIÇO")
-    c.setFont("Helvetica-Bold", 11)
-    c.drawString(mg + 4 * mm, y - 13 * mm, (client.name if client else "") or "—")
-    c.setFont("Helvetica", 8)
-    info = []
-    if client:
-        if getattr(client, "cnpj", ""): info.append(f"CNPJ: {client.cnpj}")
-        if getattr(client, "email", ""): info.append(client.email)
-    c.drawString(mg + 4 * mm, y - 19 * mm, "   |   ".join(info) or "—")
+    # ── Chave de acesso ──────────────────────────────────────────────────────
+    ch = 11*mm
+    c.setStrokeColor(BK); c.setLineWidth(lw)
+    c.rect(mg, y-ch, cw, ch, fill=False, stroke=True)
+    c.setFillColor(MGRY); c.setFont("Helvetica-Bold", 6.5)
+    c.drawString(mg+1.5*mm, y-3.5*mm, "Chave de Acesso da NFS-e")
+    chave_fmt = " ".join(nf_chave[i:i+4] for i in range(0, len(nf_chave), 4)) if nf_chave else "—"
+    c.setFillColor(DGRY); c.setFont("Helvetica", 7.5)
+    c.drawCentredString(mg+cw/2, y-8.5*mm, chave_fmt)
+    y -= ch
 
-    # Dados da NFS-e
-    y -= 30 * mm
-    c.setStrokeColor(_colors.HexColor("#d0d8e8"))
-    c.setLineWidth(0.5)
-    c.line(mg, y, w - mg, y)
+    # ── Número | Competência | Data emissão ──────────────────────────────────
+    rh = 9*mm
+    col1, col2, col3 = cw*0.22, cw*0.33, cw*0.45
+    cell("Número da NFS-e",                nf_num,  mg,           y-rh, col1, rh, bold_val=True, val_sz=10)
+    cell("Competência da NFS-e",           nf_comp, mg+col1,      y-rh, col2, rh)
+    cell("Data e Hora da emissão da NFS-e","—",     mg+col1+col2, y-rh, col3, rh)
+    y -= rh
 
-    rows = [
-        ("Competência", getattr(cb, "competencia", "") or "—"),
-        ("Serviço / Contrato", getattr(cb, "nome_contrato", "") or "—"),
-        ("Vencimento", getattr(cb, "data_vencimento", "") or "—"),
-        ("Valor", f"R$ {(getattr(cb, 'valor_cents', 0) or 0) / 100:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")),
-        ("Situação", (getattr(cb, "status", "") or "—").upper()),
-    ]
-    nf_chave = getattr(cb, "nf_chave", "") or ""
-    if nf_chave:
-        rows.append(("Chave de Acesso", nf_chave))
+    # ── Série | Local | Valor total ──────────────────────────────────────────
+    cs, cl, cv = cw*0.15, cw*0.45, cw*0.40
+    cell("Série da DPS",         "900",          mg,       y-rh, cs, rh, bg=LGRY)
+    cell("Local da Prestação",   "Brusque - SC", mg+cs,    y-rh, cl, rh, bg=LGRY)
+    cell("Valor Total da NFS-e", nf_valor_s,     mg+cs+cl, y-rh, cv, rh, bg=LGRY, bold_val=True, val_sz=10)
+    y -= rh + 1*mm
 
-    y -= 6 * mm
-    for i, (label, value) in enumerate(rows):
-        bg = _colors.HexColor("#f8f9fc") if i % 2 == 0 else _colors.white
-        c.setFillColor(bg)
-        c.rect(mg, y - 8 * mm, w - 2 * mg, 8 * mm, fill=True, stroke=False)
-        c.setFillColor(_colors.HexColor("#555e7a"))
-        c.setFont("Helvetica-Bold", 8)
-        c.drawString(mg + 4 * mm, y - 5 * mm, label)
-        c.setFillColor(_colors.HexColor("#1a2340"))
-        c.setFont("Helvetica", 9 if label != "Chave de Acesso" else 7)
-        c.drawString(mg + 55 * mm, y - 5 * mm, value)
-        y -= 8 * mm
+    # ════════════════════════════════════════════════════════════════════════
+    # EMITENTE
+    # ════════════════════════════════════════════════════════════════════════
+    y = sec_bar("EMITENTE DA NFS-e   —   Prestador do Serviço", y)
 
-    # Rodapé
-    y -= 10 * mm
-    c.setFillColor(_colors.HexColor("#d0d8e8"))
-    c.rect(0, 0, w, 14 * mm, fill=True, stroke=False)
-    c.setFillColor(_colors.HexColor("#555e7a"))
-    c.setFont("Helvetica", 7)
-    c.drawCentredString(w / 2, 9 * mm, "Documento gerado pelo sistema Maffezzolli Capital. A NFS-e foi emitida pelo Sistema Nacional de NF-e (SNNFSE).")
-    _rodape_cnpj = f" | CNPJ: {_co_cnpj}" if _co_cnpj else ""
-    c.drawCentredString(w / 2, 5 * mm, f"Emitente: {company.name or '—'}{_rodape_cnpj}")
+    cc, ci, ct_ = cw*0.34, cw*0.33, cw*0.33
+    cell("CNPJ / CPF / NIF",   emit_cnpj, mg,      y-rh, cc, rh)
+    cell("Inscrição Municipal", emit_im,   mg+cc,   y-rh, ci, rh)
+    cell("Telefone",            "—",       mg+cc+ci,y-rh, ct_,rh)
+    y -= rh
+
+    cn, ce = cw*0.60, cw*0.40
+    cell("Nome / Nome Empresarial", emit_razao, mg,    y-rh, cn, rh, bold_val=True)
+    cell("E-mail",                  emit_email, mg+cn, y-rh, ce, rh)
+    y -= rh
+
+    cell("Endereço",   "Rua XV de Novembro, 123 — Brusque/SC", mg,          y-rh, cw*0.55, rh, bg=LGRY)
+    cell("Município",  "Brusque",                               mg+cw*0.55,  y-rh, cw*0.25, rh, bg=LGRY)
+    cell("CEP",        "88350-000",                             mg+cw*0.80,  y-rh, cw*0.20, rh, bg=LGRY)
+    y -= rh
+
+    cell("Simples Nacional na Data de Competência", "Optante — Microempreendedor Individual (MEI)", mg,        y-rh, cw*0.50, rh)
+    cell("Regime de Apuração Tributária pelo SN",   "—",                                            mg+cw*0.50,y-rh, cw*0.50, rh)
+    y -= rh + 1*mm
+
+    # ════════════════════════════════════════════════════════════════════════
+    # TOMADOR
+    # ════════════════════════════════════════════════════════════════════════
+    y = sec_bar("TOMADOR DO SERVIÇO", y)
+
+    cell("CNPJ / CPF / NIF",   tom_cnpj, mg,      y-rh, cc, rh)
+    cell("Inscrição Municipal", "—",      mg+cc,   y-rh, ci, rh)
+    cell("Telefone",            tom_fone, mg+cc+ci,y-rh, ct_,rh)
+    y -= rh
+
+    cell("Nome / Nome Empresarial", tom_nome,  mg,    y-rh, cn, rh, bold_val=True)
+    cell("E-mail",                  tom_email, mg+cn, y-rh, ce, rh)
+    y -= rh
+
+    cell("Endereço",  tom_end, mg,          y-rh, cw*0.55, rh, bg=LGRY)
+    cell("Município", tom_mun, mg+cw*0.55,  y-rh, cw*0.25, rh, bg=LGRY)
+    cell("CEP",       tom_cep, mg+cw*0.80,  y-rh, cw*0.20, rh, bg=LGRY)
+    y -= rh
+
+    # Intermediário
+    c.setFillColor(LGRY); c.setStrokeColor(BK); c.setLineWidth(lw)
+    c.rect(mg, y-rh, cw, rh, fill=True, stroke=True)
+    c.setFillColor(MGRY); c.setFont("Helvetica", 7)
+    c.drawCentredString(mg+cw/2, y-rh/2-1.5*mm, "INTERMEDIÁRIO DO SERVIÇO NÃO IDENTIFICADO NA NFS-e")
+    y -= rh + 1*mm
+
+    # ════════════════════════════════════════════════════════════════════════
+    # SERVIÇO PRESTADO
+    # ════════════════════════════════════════════════════════════════════════
+    y = sec_bar("SERVIÇO PRESTADO", y)
+
+    ctn, ctm, clp, cpp = cw*0.25, cw*0.25, cw*0.25, cw*0.25
+    cell("Código de Tributação Nacional",  emit_ctrib,    mg,              y-rh, ctn, rh)
+    cell("Código de Tributação Municipal", "—",            mg+ctn,          y-rh, ctm, rh)
+    cell("Local da Prestação",             "Brusque - SC", mg+ctn+ctm,      y-rh, clp, rh)
+    cell("País da Prestação",              "Brasil",       mg+ctn+ctm+clp,  y-rh, cpp, rh)
+    y -= rh
+
+    # Descrição do serviço
+    dh = 22*mm
+    c.setStrokeColor(BK); c.setLineWidth(lw)
+    c.rect(mg, y-dh, cw, dh, fill=False, stroke=True)
+    c.setFillColor(MGRY); c.setFont("Helvetica-Bold", 6.5)
+    c.drawString(mg+1.5*mm, y-3.5*mm, "Descrição do Serviço")
+    c.setFillColor(DGRY); c.setFont("Helvetica", 8)
+    c.drawString(mg+2*mm, y-9*mm,  nf_desc)
+    c.setFont("Helvetica", 7.5)
+    c.drawString(mg+2*mm, y-14.5*mm,
+        "Planejamento, coordenação, programação ou organização técnica, financeira ou administrativa.")
+    c.drawString(mg+2*mm, y-19*mm,
+        f"LC 116/2003 — item 17.03   |   Competência: {nf_comp}   |   Vencimento: {nf_venc}")
+    y -= dh + 1*mm
+
+    # ════════════════════════════════════════════════════════════════════════
+    # VALORES
+    # ════════════════════════════════════════════════════════════════════════
+    y = sec_bar("VALORES", y)
+
+    cv4 = cw/4
+    cell("Base de Cálculo",       nf_valor_s, mg,       y-rh, cv4, rh)
+    cell("Alíquota ISS (%)",      "—",        mg+cv4,   y-rh, cv4, rh)
+    cell("Valor do ISS",          "—",        mg+2*cv4, y-rh, cv4, rh)
+    cell("Valor Total da NFS-e",  nf_valor_s, mg+3*cv4, y-rh, cv4, rh, bg=LGRY, bold_val=True, val_sz=10)
+    y -= rh + 2*mm
+
+    # ════════════════════════════════════════════════════════════════════════
+    # RODAPÉ
+    # ════════════════════════════════════════════════════════════════════════
+    c.setFillColor(LGRY); c.setStrokeColor(BK); c.setLineWidth(lw)
+    c.rect(mg, y-12*mm, cw, 12*mm, fill=True, stroke=True)
+    c.setFillColor(MGRY); c.setFont("Helvetica", 6.5)
+    c.drawCentredString(mg+cw/2, y-5*mm,
+        "A autenticidade desta NFS-e pode ser verificada pela consulta da chave de acesso no portal nacional (nfse.gov.br).")
+    c.drawCentredString(mg+cw/2, y-9*mm,
+        f"Emitente: {emit_razao}   |   CNPJ: {emit_cnpj}   |   Documento auxiliar gerado pelo sistema Maffezzolli Capital")
 
     c.save()
     return buf.getvalue()
