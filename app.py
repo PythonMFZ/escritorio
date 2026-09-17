@@ -19893,17 +19893,16 @@ async def office_finance_delete_action(request: Request, session: Session = Depe
     doc = entry.document_number or ""
     if doc.startswith("contrato-"):
         try:
-            from ui_financeiro_contratos import CobrancaMensal as _CM, _sel_ct
             _cb = session.exec(
-                _sel_ct(_CM).where(
-                    _CM.company_id == entry.company_id,
-                    _CM.contrato_id == int(doc.split("-")[1]),
-                    _CM.competencia == doc.split("-", 2)[2],
+                select(CobrancaMensal).where(
+                    CobrancaMensal.company_id == entry.company_id,
+                    CobrancaMensal.contrato_id == int(doc.split("-")[1]),
+                    CobrancaMensal.competencia == doc.split("-", 2)[2],
                 )
             ).first()
             if _cb and _cb.status not in ("pago",):
                 _cb.status = "cancelado"
-                session.add(_cb)
+                session.add(_cb)  # type: ignore[arg-type]
         except Exception as _e:
             print(f"[financeiro] cancel cobranca on entry delete: {_e}")
     session.delete(entry)

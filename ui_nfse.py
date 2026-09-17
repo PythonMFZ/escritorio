@@ -1092,7 +1092,11 @@ async def nfse_cancelar(
         _et_can.SubElement(inf, f"{{{ns}}}dhCanc").text = dh_cancel
         _et_can.SubElement(inf, f"{{{ns}}}xJust").text  = motivo[:255]
         _et_can.SubElement(inf, f"{{{ns}}}tpAmb").text  = _NF_tpAmb
-        # sem <prest> — o cert mTLS já identifica o prestador
+        # cOrgaoAutorizador = IBGE do município autorizador (obrigatório pelo XSD)
+        _et_can.SubElement(inf, f"{{{ns}}}cOrgaoAutorizador").text = _NF_IBGE
+        # cpfCnpjPrest identifica o prestador na solicitação
+        _prest_can = _et_can.SubElement(inf, f"{{{ns}}}cpfCnpjPrest")
+        _et_can.SubElement(_prest_can, f"{{{ns}}}CNPJ").text = _NF_CNPJ
 
         xml_bytes = _et_can.tostring(root, xml_declaration=True, encoding="UTF-8")
         print(f"[nfse] CancNFSe XML bruto:\n{xml_bytes.decode('utf-8')}")
