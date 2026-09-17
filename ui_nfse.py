@@ -1106,9 +1106,10 @@ async def nfse_cancelar(
         b64_xml    = _b64_nf.b64encode(compressed).decode("ascii")
         body_json  = _json_can.dumps({"cancNFSeXmlGZipB64": b64_xml})
 
-        # DELETE /nfse/{chave} — endpoint correto SNNFSE (sem sufixo /cancelamento)
-        url_cancel = _NF_URLS[_NF_AMB].rstrip("/") + "/" + chave
-        print(f"[nfse] cancelar DELETE {url_cancel!r}")
+        # POST /nfse — mesmo endpoint de emissão, body diferencia pelo campo
+        # cancNFSeXmlGZipB64 vs dpsXmlGZipB64
+        url_cancel = _NF_URLS[_NF_AMB].rstrip("/")
+        print(f"[nfse] cancelar POST {url_cancel!r}")
 
         # Salva cert em arquivos temporários
         cert_bundle = cert_pem + (chain_pem or b"")
@@ -1123,8 +1124,7 @@ async def nfse_cancelar(
                 timeout=60,
                 verify=True,
             ) as client:
-                resp = await client.request(
-                    "DELETE",
+                resp = await client.post(
                     url_cancel,
                     content=body_json.encode("utf-8"),
                     headers={"Content-Type": "application/json; charset=UTF-8"},
