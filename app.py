@@ -20434,9 +20434,9 @@ def _gerar_nfse_cobranca_pdf(*, company: Any, client: Any, cb: Any) -> bytes:
     y = sec_bar("EMITENTE DA NFS-e   —   Prestador do Serviço", y)
 
     cc, ci, ct_ = cw*0.34, cw*0.33, cw*0.33
-    cell("CNPJ / CPF / NIF",   emit_cnpj, mg,      y-rh, cc, rh)
-    cell("Inscrição Municipal", emit_im,   mg+cc,   y-rh, ci, rh)
-    cell("Telefone",            "—",       mg+cc+ci,y-rh, ct_,rh)
+    cell("CNPJ / CPF / NIF",   emit_cnpj,       mg,      y-rh, cc, rh)
+    cell("Inscrição Municipal", emit_im,         mg+cc,   y-rh, ci, rh)
+    cell("Telefone",            "(47) 9292-6022",mg+cc+ci,y-rh, ct_,rh)
     y -= rh
 
     cn, ce = cw*0.60, cw*0.40
@@ -20444,9 +20444,9 @@ def _gerar_nfse_cobranca_pdf(*, company: Any, client: Any, cb: Any) -> bytes:
     cell("E-mail",                  emit_email, mg+cn, y-rh, ce, rh)
     y -= rh
 
-    cell("Endereço",   "Rua XV de Novembro, 123 — Brusque/SC", mg,          y-rh, cw*0.55, rh, bg=LGRY)
-    cell("Município",  "Brusque",                               mg+cw*0.55,  y-rh, cw*0.25, rh, bg=LGRY)
-    cell("CEP",        "88350-000",                             mg+cw*0.80,  y-rh, cw*0.20, rh, bg=LGRY)
+    cell("Endereço",   "R. Itajaí, 1224 — Bairro Limoeiro", mg,          y-rh, cw*0.55, rh, bg=LGRY)
+    cell("Município",  "Brusque - SC",                       mg+cw*0.55,  y-rh, cw*0.25, rh, bg=LGRY)
+    cell("CEP",        "88.352-495",                         mg+cw*0.80,  y-rh, cw*0.20, rh, bg=LGRY)
     y -= rh
 
     cell("Simples Nacional na Data de Competência", "Optante — Microempreendedor Individual (MEI)", mg,        y-rh, cw*0.50, rh)
