@@ -369,6 +369,7 @@ async def wizard_finalizar_v2(request: Request, session: Session = Depends(get_s
         score_process=score_proc,
         score_financial=score_fin,
         score_total=score_tot,
+        snapshot_date=utcnow().strftime("%Y-%m-%d"),
     )
     session.add(snap)
 
