@@ -1088,12 +1088,13 @@ async def nfse_cancelar(
 
         root = _et_can.Element(f"{{{ns}}}CancNFSe", versao="1.00", nsmap={None: ns})
         inf  = _et_can.SubElement(root, f"{{{ns}}}infCancNFSe", Id="CancNFSe" + chave)
-        _et_can.SubElement(inf, f"{{{ns}}}chNFSe").text  = chave
-        _et_can.SubElement(inf, f"{{{ns}}}dhCanc").text  = dh_cancel
-        _et_can.SubElement(inf, f"{{{ns}}}xJust").text   = motivo[:255]
-        _et_can.SubElement(inf, f"{{{ns}}}tpAmb").text   = _NF_tpAmb
-        prest = _et_can.SubElement(inf, f"{{{ns}}}CNPJ")
-        prest.text = _NF_CNPJ
+        _et_can.SubElement(inf, f"{{{ns}}}chNFSe").text = chave
+        _et_can.SubElement(inf, f"{{{ns}}}dhCanc").text = dh_cancel
+        _et_can.SubElement(inf, f"{{{ns}}}xJust").text  = motivo[:255]
+        _et_can.SubElement(inf, f"{{{ns}}}tpAmb").text  = _NF_tpAmb
+        # CNPJ do prestador dentro de <prest>, igual ao DPS
+        prest_el = _et_can.SubElement(inf, f"{{{ns}}}prest")
+        _et_can.SubElement(prest_el, f"{{{ns}}}CNPJ").text = _NF_CNPJ
 
         xml_bytes = _et_can.tostring(root, xml_declaration=True, encoding="UTF-8")
 
