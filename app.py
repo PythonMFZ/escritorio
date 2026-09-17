@@ -7512,19 +7512,19 @@ document.addEventListener('click', function(e) {
                   📄 Boleto
                 </a>
               {% endif %}
-              {% if cb.nf_pdf_url %}
+              {% if cb.nf_chave %}
                 <a class="btn btn-sm btn-outline-success"
-                   href="{{ cb.nf_pdf_url }}" target="_blank" rel="noopener">
+                   href="/financeiro/cobranca/{{ cb.id }}/nfse.pdf" target="_blank" rel="noopener">
                   🧾 PDF NFS-e
                 </a>
+              {% elif cb.nf_numero %}
+                <span class="badge text-bg-light border align-self-center">NFS-e emitida nº {{ cb.nf_numero }}</span>
               {% endif %}
               {% if cb.nf_url %}
                 <a class="btn btn-sm btn-outline-secondary"
                    href="{{ cb.nf_url }}" target="_blank" rel="noopener">
-                  🔗 Portal NFS-e
+                  🔗 Portal
                 </a>
-              {% elif cb.nf_numero and not cb.nf_pdf_url %}
-                <span class="badge text-bg-light border align-self-center">NFS-e emitida nº {{ cb.nf_numero }}</span>
               {% endif %}
               {% if cb.boleto_codigo %}
                 <span class="badge text-bg-light border align-self-center font-monospace" style="font-size:.72rem">{{ cb.boleto_codigo }}</span>
@@ -7775,19 +7775,19 @@ TEMPLATES.update({
                   📄 Boleto
                 </a>
               {% endif %}
-              {% if cb.nf_pdf_url %}
+              {% if cb.nf_chave %}
                 <a class="btn btn-sm btn-outline-success"
-                   href="{{ cb.nf_pdf_url }}" target="_blank" rel="noopener">
+                   href="/financeiro/cobranca/{{ cb.id }}/nfse.pdf" target="_blank" rel="noopener">
                   🧾 PDF NFS-e
                 </a>
+              {% elif cb.nf_numero %}
+                <span class="badge text-bg-light border align-self-center">NFS-e emitida nº {{ cb.nf_numero }}</span>
               {% endif %}
               {% if cb.nf_url %}
                 <a class="btn btn-sm btn-outline-secondary"
                    href="{{ cb.nf_url }}" target="_blank" rel="noopener">
-                  🔗 Portal NFS-e
+                  🔗 Portal
                 </a>
-              {% elif cb.nf_numero and not cb.nf_pdf_url %}
-                <span class="badge text-bg-light border align-self-center">NFS-e emitida nº {{ cb.nf_numero }}</span>
               {% endif %}
               {% if cb.boleto_codigo %}
                 <span class="badge text-bg-light border align-self-center font-monospace" style="font-size:.72rem">{{ cb.boleto_codigo }}</span>
@@ -20296,6 +20296,132 @@ async def fin_list(request: Request, session: Session = Depends(get_session)) ->
             "items":           items,
             "cobrancas":       cobrancas,
         },
+    )
+
+
+# ── PDF da NFS-e de cobrança de contrato ─────────────────────────────────────
+
+def _gerar_nfse_cobranca_pdf(*, company: Any, client: Any, cb: Any) -> bytes:
+    """Gera PDF de comprovante de NFS-e para CobrancaMensal."""
+    from io import BytesIO
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.units import mm
+    from reportlab.pdfgen import canvas as _rl
+    from reportlab.lib import colors as _colors
+
+    buf = BytesIO()
+    c = _rl.Canvas(buf, pagesize=A4)
+    w, h = A4
+    mg = 20 * mm
+
+    # Cabeçalho azul
+    c.setFillColor(_colors.HexColor("#1a2340"))
+    c.rect(0, h - 30 * mm, w, 30 * mm, fill=True, stroke=False)
+    c.setFillColor(_colors.white)
+    c.setFont("Helvetica-Bold", 14)
+    c.drawString(mg, h - 12 * mm, company.name or "Prestador")
+    c.setFont("Helvetica", 8)
+    c.drawString(mg, h - 19 * mm, f"CNPJ: {company.cnpj or '—'}")
+    c.setFont("Helvetica-Bold", 16)
+    c.drawRightString(w - mg, h - 13 * mm, "NFS-e")
+    c.setFont("Helvetica", 9)
+    nf_num = getattr(cb, "nf_numero", "") or ""
+    if nf_num:
+        c.drawRightString(w - mg, h - 20 * mm, f"Nº {nf_num}")
+
+    # Faixa tomador
+    y = h - 42 * mm
+    c.setFillColor(_colors.HexColor("#f0f3f9"))
+    c.rect(mg, y - 24 * mm, w - 2 * mg, 24 * mm, fill=True, stroke=False)
+    c.setFillColor(_colors.HexColor("#1a2340"))
+    c.setFont("Helvetica-Bold", 7)
+    c.drawString(mg + 4 * mm, y - 6 * mm, "TOMADOR DO SERVIÇO")
+    c.setFont("Helvetica-Bold", 11)
+    c.drawString(mg + 4 * mm, y - 13 * mm, (client.name if client else "") or "—")
+    c.setFont("Helvetica", 8)
+    info = []
+    if client:
+        if getattr(client, "cnpj", ""): info.append(f"CNPJ: {client.cnpj}")
+        if getattr(client, "email", ""): info.append(client.email)
+    c.drawString(mg + 4 * mm, y - 19 * mm, "   |   ".join(info) or "—")
+
+    # Dados da NFS-e
+    y -= 30 * mm
+    c.setStrokeColor(_colors.HexColor("#d0d8e8"))
+    c.setLineWidth(0.5)
+    c.line(mg, y, w - mg, y)
+
+    rows = [
+        ("Competência", getattr(cb, "competencia", "") or "—"),
+        ("Serviço / Contrato", getattr(cb, "nome_contrato", "") or "—"),
+        ("Vencimento", getattr(cb, "data_vencimento", "") or "—"),
+        ("Valor", f"R$ {(getattr(cb, 'valor_cents', 0) or 0) / 100:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")),
+        ("Situação", (getattr(cb, "status", "") or "—").upper()),
+    ]
+    nf_chave = getattr(cb, "nf_chave", "") or ""
+    if nf_chave:
+        rows.append(("Chave de Acesso", nf_chave))
+
+    y -= 6 * mm
+    for i, (label, value) in enumerate(rows):
+        bg = _colors.HexColor("#f8f9fc") if i % 2 == 0 else _colors.white
+        c.setFillColor(bg)
+        c.rect(mg, y - 8 * mm, w - 2 * mg, 8 * mm, fill=True, stroke=False)
+        c.setFillColor(_colors.HexColor("#555e7a"))
+        c.setFont("Helvetica-Bold", 8)
+        c.drawString(mg + 4 * mm, y - 5 * mm, label)
+        c.setFillColor(_colors.HexColor("#1a2340"))
+        c.setFont("Helvetica", 9 if label != "Chave de Acesso" else 7)
+        c.drawString(mg + 55 * mm, y - 5 * mm, value)
+        y -= 8 * mm
+
+    # Rodapé
+    y -= 10 * mm
+    c.setFillColor(_colors.HexColor("#d0d8e8"))
+    c.rect(0, 0, w, 14 * mm, fill=True, stroke=False)
+    c.setFillColor(_colors.HexColor("#555e7a"))
+    c.setFont("Helvetica", 7)
+    c.drawCentredString(w / 2, 9 * mm, "Documento gerado pelo sistema Maffezzolli Capital. A NFS-e foi emitida pelo Sistema Nacional de NF-e (SNNFSE).")
+    c.drawCentredString(w / 2, 5 * mm, f"Emitente: {company.name or '—'} | CNPJ: {company.cnpj or '—'}")
+
+    c.save()
+    return buf.getvalue()
+
+
+@app.get("/financeiro/cobranca/{cb_id}/nfse.pdf")
+@require_login
+async def fin_cobranca_nfse_pdf(
+    cb_id: int,
+    request: Request,
+    session: Session = Depends(get_session),
+) -> Response:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        return RedirectResponse("/login", status_code=303)
+
+    cb = session.get(CobrancaMensal, cb_id)
+    if not cb or cb.company_id != ctx.company.id:
+        return Response("Cobrança não encontrada.", status_code=404)
+
+    # Cliente autorizado: admin/equipe ou o próprio cliente do contrato
+    role = ctx.membership.role
+    if role == "cliente":
+        client_id = ctx.membership.client_id
+        if not client_id or cb.client_id != client_id:
+            return Response("Acesso negado.", status_code=403)
+
+    client = session.get(Client, cb.client_id) if cb.client_id else None
+    pdf_bytes = _gerar_nfse_cobranca_pdf(
+        company=ctx.company,
+        client=client,
+        cb=cb,
+    )
+    nf_num = cb.nf_numero or str(cb_id)
+    filename = f"NFS-e-{nf_num}-{cb.competencia or cb_id}.pdf"
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'inline; filename="{filename}"'},
     )
 
 
