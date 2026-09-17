@@ -20317,11 +20317,13 @@ def _gerar_nfse_cobranca_pdf(*, company: Any, client: Any, cb: Any) -> bytes:
     # Cabeçalho azul
     c.setFillColor(_colors.HexColor("#1a2340"))
     c.rect(0, h - 30 * mm, w, 30 * mm, fill=True, stroke=False)
+    _co_cnpj = getattr(company, "cnpj", "") or ""
     c.setFillColor(_colors.white)
     c.setFont("Helvetica-Bold", 14)
-    c.drawString(mg, h - 12 * mm, company.name or "Prestador")
+    c.drawString(mg, h - 12 * mm, (company.name or "Prestador"))
     c.setFont("Helvetica", 8)
-    c.drawString(mg, h - 19 * mm, f"CNPJ: {company.cnpj or '—'}")
+    if _co_cnpj:
+        c.drawString(mg, h - 19 * mm, f"CNPJ: {_co_cnpj}")
     c.setFont("Helvetica-Bold", 16)
     c.drawRightString(w - mg, h - 13 * mm, "NFS-e")
     c.setFont("Helvetica", 9)
@@ -20382,7 +20384,8 @@ def _gerar_nfse_cobranca_pdf(*, company: Any, client: Any, cb: Any) -> bytes:
     c.setFillColor(_colors.HexColor("#555e7a"))
     c.setFont("Helvetica", 7)
     c.drawCentredString(w / 2, 9 * mm, "Documento gerado pelo sistema Maffezzolli Capital. A NFS-e foi emitida pelo Sistema Nacional de NF-e (SNNFSE).")
-    c.drawCentredString(w / 2, 5 * mm, f"Emitente: {company.name or '—'} | CNPJ: {company.cnpj or '—'}")
+    _rodape_cnpj = f" | CNPJ: {_co_cnpj}" if _co_cnpj else ""
+    c.drawCentredString(w / 2, 5 * mm, f"Emitente: {company.name or '—'}{_rodape_cnpj}")
 
     c.save()
     return buf.getvalue()
