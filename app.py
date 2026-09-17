@@ -7473,33 +7473,68 @@ document.addEventListener('click', function(e) {
   <div class="d-flex justify-content-between align-items-center">
     <div>
       <h4 class="mb-0">Financeiro</h4>
-      <div class="muted">Notas/Boletos de honorários (manual) + sincronizado do Conta Azul.</div>
+      <div class="muted">Honorários, boletos e notas fiscais emitidas pelo escritório.</div>
     </div>
     <div class="d-flex gap-2">
       {% if role in ["admin","equipe"] %}
-        <a class="btn btn-outline-secondary" href="/integrations/contaazul">Conta Azul</a>
-        {% if ca_connected %}
-          <form method="post" action="/financeiro/contaazul/sync">
-            <button class="btn btn-outline-primary" type="submit">Sincronizar</button>
-          </form>
-        {% endif %}
-        <a class="btn btn-primary" href="/financeiro/novo">Nova cobrança</a>
+        <a class="btn btn-primary" href="/financeiro/novo">Nova cobrança avulsa</a>
       {% endif %}
     </div>
   </div>
 
-  {% if ca_configured and role in ["admin","equipe"] and not ca_connected %}
-    <div class="alert alert-warning mt-3">
-      Conta Azul não conectado. Vá em <a href="/integrations/contaazul">Integrações / Conta Azul</a>.
-    </div>
-  {% endif %}
-
-  {% if ca_last_sync %}
-    <div class="muted small mt-2">Conta Azul: última sync em {{ ca_last_sync }}</div>
-  {% endif %}
-
+  {# ── Cobranças dos contratos ──────────────────────────────────────── #}
   <hr class="my-3"/>
-  <h6 class="mb-2">Cobranças (manual)</h6>
+  <h6 class="mb-2">Cobranças dos contratos</h6>
+  {% if cobrancas %}
+    <div class="list-group">
+      {% for cb in cobrancas %}
+        <div class="list-group-item">
+          <div class="d-flex justify-content-between align-items-start">
+            <div>
+              <div class="fw-semibold">
+                {{ cb.nome_contrato or "Contrato" }}
+                {% if cb.competencia %}<span class="text-muted fw-normal">— {{ cb.competencia }}</span>{% endif %}
+              </div>
+              <div class="muted small mt-1">
+                {% if role in ["admin","equipe"] and cb.nome_cliente %}{{ cb.nome_cliente }} • {% endif %}
+                R$ {{ "%.2f"|format(cb.valor_brl) }}
+                {% if cb.data_vencimento %} • Venc: {{ cb.data_vencimento }}{% endif %}
+                {% if cb.nf_numero %} • NFS-e nº {{ cb.nf_numero }}{% endif %}
+              </div>
+            </div>
+            <span class="badge text-bg-{{ cb.status_color }} ms-2 mt-1">{{ cb.status }}</span>
+          </div>
+          {% if cb.boleto_url or cb.nf_url or cb.nf_chave %}
+            <div class="d-flex flex-wrap gap-2 mt-2">
+              {% if cb.boleto_url %}
+                <a class="btn btn-sm btn-outline-primary"
+                   href="{{ cb.boleto_url }}" target="_blank" rel="noopener">
+                  📄 Boleto
+                </a>
+              {% endif %}
+              {% if cb.nf_url %}
+                <a class="btn btn-sm btn-outline-success"
+                   href="{{ cb.nf_url }}" target="_blank" rel="noopener">
+                  📃 NFS-e
+                </a>
+              {% elif cb.nf_numero %}
+                <span class="badge text-bg-light border align-self-center">NFS-e emitida nº {{ cb.nf_numero }}</span>
+              {% endif %}
+              {% if cb.boleto_codigo %}
+                <span class="badge text-bg-light border align-self-center font-monospace" style="font-size:.72rem">{{ cb.boleto_codigo }}</span>
+              {% endif %}
+            </div>
+          {% endif %}
+        </div>
+      {% endfor %}
+    </div>
+  {% else %}
+    <div class="muted">Nenhuma cobrança de contrato encontrada.</div>
+  {% endif %}
+
+  {# ── Cobranças avulsas (FinanceInvoice) ──────────────────────────── #}
+  <hr class="my-4"/>
+  <h6 class="mb-2">Cobranças avulsas</h6>
   {% if items %}
     <div class="list-group">
       {% for it in items %}
@@ -7509,88 +7544,16 @@ document.addEventListener('click', function(e) {
             <span class="badge text-bg-light border">{{ it.status }}</span>
           </div>
           <div class="muted small">
-            {% if role in ["admin","equipe"] %}Cliente: {{ it.client_name }} • {% endif %}
-            Valor: R$ {{ "%.2f"|format(it.amount_brl) }} •
-            {% if it.due_date %}Venc: {{ it.due_date }} • {% endif %}
-            {{ it.created_at }}
+            {% if role in ["admin","equipe"] and it.client_name %}{{ it.client_name }} • {% endif %}
+            R$ {{ "%.2f"|format(it.amount_brl) }}
+            {% if it.due_date %} • Venc: {{ it.due_date }}{% endif %}
+            • {{ it.created_at }}
           </div>
         </a>
       {% endfor %}
     </div>
   {% else %}
-    <div class="muted">Sem cobranças manuais.</div>
-  {% endif %}
-
-  <hr class="my-4"/>
-  <h6 class="mb-2">Conta Azul: Boletos / Contas a receber</h6>
-  {% if ca_receivables %}
-    <div class="list-group">
-      {% for r in ca_receivables %}
-        <div class="list-group-item">
-          <div class="d-flex justify-content-between">
-            <div class="fw-semibold">{{ r.description }}</div>
-            <span class="badge text-bg-light border">{{ r.status }}</span>
-          </div>
-          <div class="muted small mt-1">
-            Valor: R$ {{ "%.2f"|format(r.amount_total or 0) }} • Aberto: R$ {{ "%.2f"|format(r.amount_open or 0) }}
-            {% if r.due_date %} • Venc: {{ r.due_date }}{% endif %}
-            {% if r.invoice_type or r.invoice_number %} • {{ r.invoice_type }} {{ r.invoice_number }}{% endif %}
-            {% if r.boleto_status %} • Boleto: {{ r.boleto_status }}{% endif %}
-          </div>
-          <div class="d-flex flex-wrap gap-2 mt-2">
-            {% if r.payment_url %}
-              <a class="btn btn-sm btn-outline-primary"
-                 href="/financeiro/contaazul/receivable/{{ r.id }}/boleto"
-                 target="_blank" rel="noopener">Boleto</a>
-            {% else %}
-              <span class="badge text-bg-light border">Sem boleto</span>
-            {% endif %}
-            <a class="btn btn-sm btn-outline-secondary"
-               href="/financeiro/contaazul/receivable/{{ r.id }}/fatura.pdf"
-               target="_blank" rel="noopener">Resumo cobrança</a>
-          </div>
-        </div>
-      {% endfor %}
-    </div>
-  {% else %}
-    <div class="muted">Sem itens sincronizados.</div>
-  {% endif %}
-
-  <hr class="my-4"/>
-  <h6 class="mb-2">Conta Azul: Notas fiscais</h6>
-  {% if ca_invoices %}
-    <div class="list-group">
-      {% for n in ca_invoices %}
-        <div class="list-group-item">
-          <div class="d-flex justify-content-between">
-            <div class="fw-semibold">{{ n.invoice_type }} {{ n.number }}</div>
-            <span class="badge text-bg-light border">{{ n.status }}</span>
-          </div>
-          <div class="muted small mt-1">
-            {% if n.issue_date %}Emissão/Competência: {{ n.issue_date }} • {% endif %}
-            {% if n.amount %}Valor: R$ {{ "%.2f"|format(n.amount) }} • {% endif %}
-            ID: {{ n.external_id }}
-          </div>
-          <div class="d-flex flex-wrap gap-2 mt-2">
-            {% if (n.invoice_type or "").upper() == "NFSE" %}
-              <a class="btn btn-sm btn-outline-secondary"
-                 href="/financeiro/contaazul/invoice/{{ n.id }}/pdf"
-                 target="_blank" rel="noopener">NFS-e PDF</a>
-              <a class="btn btn-sm btn-outline-secondary"
-                 href="/financeiro/contaazul/invoice/{{ n.id }}/sale-pdf"
-                 target="_blank" rel="noopener">Venda / Fatura</a>
-            {% endif %}
-            {% if (n.invoice_type or "").upper() == "NFE" %}
-              <a class="btn btn-sm btn-outline-secondary"
-                 href="/financeiro/contaazul/invoice/{{ n.id }}/xml"
-                 target="_blank" rel="noopener">NF XML</a>
-            {% endif %}
-          </div>
-        </div>
-      {% endfor %}
-    </div>
-  {% else %}
-    <div class="muted">Sem notas sincronizadas.</div>
+    <div class="muted">Sem cobranças avulsas.</div>
   {% endif %}
 </div>
 {% endblock %}
@@ -7767,33 +7730,68 @@ TEMPLATES.update({
   <div class="d-flex justify-content-between align-items-center">
     <div>
       <h4 class="mb-0">Financeiro</h4>
-      <div class="muted">Notas/Boletos de honorários (manual) + sincronizado do Conta Azul.</div>
+      <div class="muted">Honorários, boletos e notas fiscais emitidas pelo escritório.</div>
     </div>
     <div class="d-flex gap-2">
       {% if role in ["admin","equipe"] %}
-        <a class="btn btn-outline-secondary" href="/integrations/contaazul">Conta Azul</a>
-        {% if ca_connected %}
-          <form method="post" action="/financeiro/contaazul/sync">
-            <button class="btn btn-outline-primary" type="submit">Sincronizar</button>
-          </form>
-        {% endif %}
-        <a class="btn btn-primary" href="/financeiro/novo">Nova cobrança</a>
+        <a class="btn btn-primary" href="/financeiro/novo">Nova cobrança avulsa</a>
       {% endif %}
     </div>
   </div>
 
-  {% if ca_configured and role in ["admin","equipe"] and not ca_connected %}
-    <div class="alert alert-warning mt-3">
-      Conta Azul não conectado. Vá em <a href="/integrations/contaazul">Integrações / Conta Azul</a>.
-    </div>
-  {% endif %}
-
-  {% if ca_last_sync %}
-    <div class="muted small mt-2">Conta Azul: última sync em {{ ca_last_sync }}</div>
-  {% endif %}
-
+  {# ── Cobranças dos contratos ──────────────────────────────────────── #}
   <hr class="my-3"/>
-  <h6 class="mb-2">Cobranças (manual)</h6>
+  <h6 class="mb-2">Cobranças dos contratos</h6>
+  {% if cobrancas %}
+    <div class="list-group">
+      {% for cb in cobrancas %}
+        <div class="list-group-item">
+          <div class="d-flex justify-content-between align-items-start">
+            <div>
+              <div class="fw-semibold">
+                {{ cb.nome_contrato or "Contrato" }}
+                {% if cb.competencia %}<span class="text-muted fw-normal">— {{ cb.competencia }}</span>{% endif %}
+              </div>
+              <div class="muted small mt-1">
+                {% if role in ["admin","equipe"] and cb.nome_cliente %}{{ cb.nome_cliente }} • {% endif %}
+                R$ {{ "%.2f"|format(cb.valor_brl) }}
+                {% if cb.data_vencimento %} • Venc: {{ cb.data_vencimento }}{% endif %}
+                {% if cb.nf_numero %} • NFS-e nº {{ cb.nf_numero }}{% endif %}
+              </div>
+            </div>
+            <span class="badge text-bg-{{ cb.status_color }} ms-2 mt-1">{{ cb.status }}</span>
+          </div>
+          {% if cb.boleto_url or cb.nf_url or cb.nf_chave %}
+            <div class="d-flex flex-wrap gap-2 mt-2">
+              {% if cb.boleto_url %}
+                <a class="btn btn-sm btn-outline-primary"
+                   href="{{ cb.boleto_url }}" target="_blank" rel="noopener">
+                  📄 Boleto
+                </a>
+              {% endif %}
+              {% if cb.nf_url %}
+                <a class="btn btn-sm btn-outline-success"
+                   href="{{ cb.nf_url }}" target="_blank" rel="noopener">
+                  📃 NFS-e
+                </a>
+              {% elif cb.nf_numero %}
+                <span class="badge text-bg-light border align-self-center">NFS-e emitida nº {{ cb.nf_numero }}</span>
+              {% endif %}
+              {% if cb.boleto_codigo %}
+                <span class="badge text-bg-light border align-self-center font-monospace" style="font-size:.72rem">{{ cb.boleto_codigo }}</span>
+              {% endif %}
+            </div>
+          {% endif %}
+        </div>
+      {% endfor %}
+    </div>
+  {% else %}
+    <div class="muted">Nenhuma cobrança de contrato encontrada.</div>
+  {% endif %}
+
+  {# ── Cobranças avulsas (FinanceInvoice) ──────────────────────────── #}
+  <hr class="my-4"/>
+  <h6 class="mb-2">Cobranças avulsas</h6>
   {% if items %}
     <div class="list-group">
       {% for it in items %}
@@ -7803,88 +7801,16 @@ TEMPLATES.update({
             <span class="badge text-bg-light border">{{ it.status }}</span>
           </div>
           <div class="muted small">
-            {% if role in ["admin","equipe"] %}Cliente: {{ it.client_name }} • {% endif %}
-            Valor: R$ {{ "%.2f"|format(it.amount_brl) }} •
-            {% if it.due_date %}Venc: {{ it.due_date }} • {% endif %}
-            {{ it.created_at }}
+            {% if role in ["admin","equipe"] and it.client_name %}{{ it.client_name }} • {% endif %}
+            R$ {{ "%.2f"|format(it.amount_brl) }}
+            {% if it.due_date %} • Venc: {{ it.due_date }}{% endif %}
+            • {{ it.created_at }}
           </div>
         </a>
       {% endfor %}
     </div>
   {% else %}
-    <div class="muted">Sem cobranças manuais.</div>
-  {% endif %}
-
-  <hr class="my-4"/>
-  <h6 class="mb-2">Conta Azul: Boletos / Contas a receber</h6>
-  {% if ca_receivables %}
-    <div class="list-group">
-      {% for r in ca_receivables %}
-        <div class="list-group-item">
-          <div class="d-flex justify-content-between">
-            <div class="fw-semibold">{{ r.description }}</div>
-            <span class="badge text-bg-light border">{{ r.status }}</span>
-          </div>
-          <div class="muted small mt-1">
-            Valor: R$ {{ "%.2f"|format(r.amount_total or 0) }} • Aberto: R$ {{ "%.2f"|format(r.amount_open or 0) }}
-            {% if r.due_date %} • Venc: {{ r.due_date }}{% endif %}
-            {% if r.invoice_type or r.invoice_number %} • {{ r.invoice_type }} {{ r.invoice_number }}{% endif %}
-            {% if r.boleto_status %} • Boleto: {{ r.boleto_status }}{% endif %}
-          </div>
-          <div class="d-flex flex-wrap gap-2 mt-2">
-            {% if r.payment_url %}
-              <a class="btn btn-sm btn-outline-primary"
-                 href="/financeiro/contaazul/receivable/{{ r.id }}/boleto"
-                 target="_blank" rel="noopener">Boleto</a>
-            {% else %}
-              <span class="badge text-bg-light border">Sem boleto</span>
-            {% endif %}
-            <a class="btn btn-sm btn-outline-secondary"
-               href="/financeiro/contaazul/receivable/{{ r.id }}/fatura.pdf"
-               target="_blank" rel="noopener">Resumo cobrança</a>
-          </div>
-        </div>
-      {% endfor %}
-    </div>
-  {% else %}
-    <div class="muted">Sem itens sincronizados.</div>
-  {% endif %}
-
-  <hr class="my-4"/>
-  <h6 class="mb-2">Conta Azul: Notas fiscais</h6>
-  {% if ca_invoices %}
-    <div class="list-group">
-      {% for n in ca_invoices %}
-        <div class="list-group-item">
-          <div class="d-flex justify-content-between">
-            <div class="fw-semibold">{{ n.invoice_type }} {{ n.number }}</div>
-            <span class="badge text-bg-light border">{{ n.status }}</span>
-          </div>
-          <div class="muted small mt-1">
-            {% if n.issue_date %}Emissão/Competência: {{ n.issue_date }} • {% endif %}
-            {% if n.amount %}Valor: R$ {{ "%.2f"|format(n.amount) }} • {% endif %}
-            ID: {{ n.external_id }}
-          </div>
-          <div class="d-flex flex-wrap gap-2 mt-2">
-            {% if (n.invoice_type or "").upper() == "NFSE" %}
-              <a class="btn btn-sm btn-outline-secondary"
-                 href="/financeiro/contaazul/invoice/{{ n.id }}/pdf"
-                 target="_blank" rel="noopener">NFS-e PDF</a>
-              <a class="btn btn-sm btn-outline-secondary"
-                 href="/financeiro/contaazul/invoice/{{ n.id }}/sale-pdf"
-                 target="_blank" rel="noopener">Venda / Fatura</a>
-            {% endif %}
-            {% if (n.invoice_type or "").upper() == "NFE" %}
-              <a class="btn btn-sm btn-outline-secondary"
-                 href="/financeiro/contaazul/invoice/{{ n.id }}/xml"
-                 target="_blank" rel="noopener">NF XML</a>
-            {% endif %}
-          </div>
-        </div>
-      {% endfor %}
-    </div>
-  {% else %}
-    <div class="muted">Sem notas sincronizadas.</div>
+    <div class="muted">Sem cobranças avulsas.</div>
   {% endif %}
 </div>
 {% endblock %}
@@ -20287,60 +20213,54 @@ async def fin_list(request: Request, session: Session = Depends(get_session)) ->
         )
 
     # ----------------------------
-    # Conta Azul
+    # Cobranças dos contratos (CobrancaMensal)
     # ----------------------------
-    ca_configured = _contaazul_configured()
-    ca_connected = False
-    ca_last_sync = ""
-    ca_person_id = ""
-    ca_client_doc = _digits_only(current_client.cnpj) if current_client else ""
-    ca_client_email = ((current_client.finance_email or current_client.email or "").strip() if current_client else "")
+    _STATUS_COLOR = {
+        "pago":      "success",
+        "pendente":  "warning",
+        "cancelado": "secondary",
+        "vencido":   "danger",
+        "enviado":   "info",
+    }
 
-    ca_invoices: list[ContaAzulInvoice] = []
-    ca_receivables: list[ContaAzulReceivable] = []
+    _cb_q = select(CobrancaMensal).where(CobrancaMensal.company_id == ctx.company.id)
+    if current_client:
+        _cb_q = _cb_q.where(CobrancaMensal.client_id == current_client.id)
+    elif role == "cliente":
+        _cb_q = _cb_q.where(CobrancaMensal.client_id == -1)
 
-    if ca_configured and ensure_contaazul_tables():
-        auth = _contaazul_get_auth(session, ctx.company.id)
-        ca_connected = bool(auth and auth.refresh_token)
-        if auth and auth.last_sync_at:
-            ca_last_sync = _as_aware_utc(auth.last_sync_at).strftime("%Y-%m-%d %H:%M")
+    _cb_q = _cb_q.order_by(CobrancaMensal.data_vencimento.desc()).limit(200)
+    _cbs_raw = session.exec(_cb_q).all()
 
-        if current_client:
-            ca_person_id = _contaazul_get_mapped_person_id(session, company_id=ctx.company.id,
-                                                           client_id=current_client.id)
-
-            ca_invoices = session.exec(
-                select(ContaAzulInvoice)
-                .where(ContaAzulInvoice.company_id == ctx.company.id, ContaAzulInvoice.client_id == current_client.id)
-                .order_by(ContaAzulInvoice.issue_date.desc())
-                .limit(200)
-            ).all()
-
-            ca_receivables = session.exec(
-                select(ContaAzulReceivable)
-                .where(ContaAzulReceivable.company_id == ctx.company.id,
-                       ContaAzulReceivable.client_id == current_client.id)
-                .order_by(ContaAzulReceivable.due_date.asc())
-                .limit(200)
-            ).all()
+    cobrancas: list[dict] = []
+    for _cb in _cbs_raw:
+        _sc = _STATUS_COLOR.get(_cb.status, "light border")
+        cobrancas.append({
+            "id":             _cb.id,
+            "competencia":    _cb.competencia,
+            "nome_contrato":  _cb.nome_contrato,
+            "nome_cliente":   _cb.nome_cliente,
+            "data_vencimento": _cb.data_vencimento,
+            "valor_brl":      (_cb.valor_cents or 0) / 100,
+            "status":         _cb.status,
+            "status_color":   _sc,
+            "boleto_url":     _cb.boleto_url or "",
+            "boleto_codigo":  _cb.boleto_codigo or "",
+            "nf_numero":      _cb.nf_numero or "",
+            "nf_url":         _cb.nf_url or "",
+            "nf_chave":       _cb.nf_chave or "",
+        })
 
     return render(
         "fin_list.html",
         request=request,
         context={
-            "current_user": ctx.user,
+            "current_user":    ctx.user,
             "current_company": ctx.company,
-            "role": role,
-            "current_client": current_client,
-            "items": items,
-            "ca_configured": ca_configured,
-            "ca_connected": ca_connected,
-            "ca_last_sync": ca_last_sync,
-            "ca_person_id": ca_person_id,
-            "ca_client_doc": ca_client_doc,
-            "ca_client_email": ca_client_email,
-            "ca_invoices": ca_invoices,
-            "ca_receivables": ca_receivables,
+            "role":            role,
+            "current_client":  current_client,
+            "items":           items,
+            "cobrancas":       cobrancas,
         },
     )
 
