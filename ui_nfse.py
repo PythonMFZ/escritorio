@@ -1092,11 +1092,10 @@ async def nfse_cancelar(
         _et_can.SubElement(inf, f"{{{ns}}}dhCanc").text = dh_cancel
         _et_can.SubElement(inf, f"{{{ns}}}xJust").text  = motivo[:255]
         _et_can.SubElement(inf, f"{{{ns}}}tpAmb").text  = _NF_tpAmb
-        # CNPJ do prestador dentro de <prest>, igual ao DPS
-        prest_el = _et_can.SubElement(inf, f"{{{ns}}}prest")
-        _et_can.SubElement(prest_el, f"{{{ns}}}CNPJ").text = _NF_CNPJ
+        # sem <prest> — o cert mTLS já identifica o prestador
 
         xml_bytes = _et_can.tostring(root, xml_declaration=True, encoding="UTF-8")
+        print(f"[nfse] CancNFSe XML bruto:\n{xml_bytes.decode('utf-8')}")
 
         # ── Assina infCancNFSe (tag diferente do infDPS) ─────────────────────
         signed = _nf_sign_xml(xml_bytes, key_pem, cert_pem, inf_tag="infCancNFSe")
