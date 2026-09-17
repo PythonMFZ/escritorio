@@ -7504,7 +7504,7 @@ document.addEventListener('click', function(e) {
             </div>
             <span class="badge text-bg-{{ cb.status_color }} ms-2 mt-1">{{ cb.status }}</span>
           </div>
-          {% if cb.boleto_url or cb.nf_url or cb.nf_chave %}
+          {% if cb.boleto_url or cb.nf_url or cb.nf_chave or cb.nf_pdf_url %}
             <div class="d-flex flex-wrap gap-2 mt-2">
               {% if cb.boleto_url %}
                 <a class="btn btn-sm btn-outline-primary"
@@ -7512,12 +7512,18 @@ document.addEventListener('click', function(e) {
                   📄 Boleto
                 </a>
               {% endif %}
-              {% if cb.nf_url %}
+              {% if cb.nf_pdf_url %}
                 <a class="btn btn-sm btn-outline-success"
-                   href="{{ cb.nf_url }}" target="_blank" rel="noopener">
-                  📃 NFS-e
+                   href="{{ cb.nf_pdf_url }}" target="_blank" rel="noopener">
+                  🧾 PDF NFS-e
                 </a>
-              {% elif cb.nf_numero %}
+              {% endif %}
+              {% if cb.nf_url %}
+                <a class="btn btn-sm btn-outline-secondary"
+                   href="{{ cb.nf_url }}" target="_blank" rel="noopener">
+                  🔗 Portal NFS-e
+                </a>
+              {% elif cb.nf_numero and not cb.nf_pdf_url %}
                 <span class="badge text-bg-light border align-self-center">NFS-e emitida nº {{ cb.nf_numero }}</span>
               {% endif %}
               {% if cb.boleto_codigo %}
@@ -7761,7 +7767,7 @@ TEMPLATES.update({
             </div>
             <span class="badge text-bg-{{ cb.status_color }} ms-2 mt-1">{{ cb.status }}</span>
           </div>
-          {% if cb.boleto_url or cb.nf_url or cb.nf_chave %}
+          {% if cb.boleto_url or cb.nf_url or cb.nf_chave or cb.nf_pdf_url %}
             <div class="d-flex flex-wrap gap-2 mt-2">
               {% if cb.boleto_url %}
                 <a class="btn btn-sm btn-outline-primary"
@@ -7769,12 +7775,18 @@ TEMPLATES.update({
                   📄 Boleto
                 </a>
               {% endif %}
-              {% if cb.nf_url %}
+              {% if cb.nf_pdf_url %}
                 <a class="btn btn-sm btn-outline-success"
-                   href="{{ cb.nf_url }}" target="_blank" rel="noopener">
-                  📃 NFS-e
+                   href="{{ cb.nf_pdf_url }}" target="_blank" rel="noopener">
+                  🧾 PDF NFS-e
                 </a>
-              {% elif cb.nf_numero %}
+              {% endif %}
+              {% if cb.nf_url %}
+                <a class="btn btn-sm btn-outline-secondary"
+                   href="{{ cb.nf_url }}" target="_blank" rel="noopener">
+                  🔗 Portal NFS-e
+                </a>
+              {% elif cb.nf_numero and not cb.nf_pdf_url %}
                 <span class="badge text-bg-light border align-self-center">NFS-e emitida nº {{ cb.nf_numero }}</span>
               {% endif %}
               {% if cb.boleto_codigo %}
@@ -20251,6 +20263,11 @@ async def fin_list(request: Request, session: Session = Depends(get_session)) ->
         _ref = f"contrato-{_cb.contrato_id}-{_cb.competencia}"
         _status = "pago" if _ref in _paid_refs else _cb.status
         _sc = _STATUS_COLOR.get(_status, "light border")
+        _nf_chave = _cb.nf_chave or ""
+        _nf_pdf_url = (
+            NACIONAL_NFSE_DANFSE_URL.format(chave=_nf_chave)
+            if _nf_chave else ""
+        )
         cobrancas.append({
             "id":             _cb.id,
             "competencia":    _cb.competencia,
@@ -20264,7 +20281,8 @@ async def fin_list(request: Request, session: Session = Depends(get_session)) ->
             "boleto_codigo":  _cb.boleto_codigo or "",
             "nf_numero":      _cb.nf_numero or "",
             "nf_url":         _cb.nf_url or "",
-            "nf_chave":       _cb.nf_chave or "",
+            "nf_chave":       _nf_chave,
+            "nf_pdf_url":     _nf_pdf_url,
         })
 
     return render(
