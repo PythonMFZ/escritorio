@@ -20449,8 +20449,8 @@ def _gerar_nfse_cobranca_pdf(*, company: Any, client: Any, cb: Any) -> bytes:
     cell("CEP",        "88.352-495",                         mg+cw*0.80,  y-rh, cw*0.20, rh, bg=LGRY)
     y -= rh
 
-    cell("Simples Nacional na Data de Competência", "Optante — Microempreendedor Individual (MEI)", mg,        y-rh, cw*0.50, rh)
-    cell("Regime de Apuração Tributária pelo SN",   "—",                                            mg+cw*0.50,y-rh, cw*0.50, rh)
+    cell("Simples Nacional na Data de Competência", "Optante",          mg,        y-rh, cw*0.50, rh)
+    cell("Regime de Apuração Tributária pelo SN",   "Simples Nacional", mg+cw*0.50,y-rh, cw*0.50, rh)
     y -= rh + 1*mm
 
     # ════════════════════════════════════════════════════════════════════════
