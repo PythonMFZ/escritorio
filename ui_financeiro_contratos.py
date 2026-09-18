@@ -214,6 +214,8 @@ def _mp_request(method: str, path: str, body: dict = None) -> dict:
     with _httpx_ct.Client(timeout=20) as client:
         if method == "GET":
             resp = client.get(url, headers=headers)
+        elif method == "PUT":
+            resp = client.put(url, headers=headers, json=body)
         else:
             resp = client.post(url, headers=headers, json=body)
 
@@ -308,6 +310,11 @@ def _ct_mp_gerar_boleto(cobranca: CobrancaMensal, contrato: ContratoCliente, ses
         "boleto_url":    result.get("transaction_details", {}).get("external_resource_url", ""),
         "boleto_codigo": barcode.get("content", ""),
     }
+
+
+def _ct_mp_cancelar_boleto(mp_payment_id: str) -> dict:
+    """Cancela um boleto no Mercado Pago via PUT /v1/payments/{id} status=cancelled."""
+    return _mp_request("PUT", f"/v1/payments/{mp_payment_id}", {"status": "cancelled"})
 
 
 # ── Email boleto ─────────────────────────────────────────────────────────────
@@ -800,9 +807,17 @@ async def financeiro_cobrancas_painel(request: _Req_ct, session=_Dep_ct(get_sess
         badge    = {"pendente":"bg-warning text-dark","pago":"bg-success","vencido":"bg-danger","cancelado":"bg-secondary"}.get(c.status,"bg-secondary")
         pago_str = _ct_brl(c.valor_pago_cents or c.valor_cents) if c.status == "pago" else "—"
 
-        # Botão boleto: se já tem URL, exibe link; senão exibe botão gerar
+        # Botão boleto: se já tem URL, exibe link + cancelar; senão exibe botão gerar
         if c.boleto_url:
-            boleto_btn = f'<a class="btn btn-sm btn-outline-info ms-1" href="{c.boleto_url}" target="_blank">📄 Boleto</a>'
+            _cancelar_boleto_btn = ""
+            if c.status not in ("cancelado", "pago") and getattr(c, "mp_payment_id", ""):
+                _cancelar_boleto_btn = (
+                    f'<form method="post" action="/admin/financeiro/cobrancas/{c.id}/cancelar-boleto"'
+                    f' class="d-inline" onsubmit="return confirm(\'Cancelar boleto no Mercado Pago?\');">'
+                    f'<button class="btn btn-sm btn-outline-danger ms-1" type="submit">✕ Boleto</button>'
+                    f'</form>'
+                )
+            boleto_btn = f'<a class="btn btn-sm btn-outline-info ms-1" href="{c.boleto_url}" target="_blank">📄 Boleto</a>{_cancelar_boleto_btn}'
         elif c.status in ("pendente", "vencido"):
             boleto_btn = f'<a href="/admin/financeiro/cobrancas/{c.id}/boleto-gerar" class="btn btn-sm btn-outline-info ms-1">Gerar boleto</a>'
         else:
@@ -1286,6 +1301,36 @@ async def financeiro_cobranca_gerar_boleto_form(cobranca_id: int, request: _Req_
         print(f"[boleto] erro cobranca {cobranca_id}: {_e}")
         set_flash(request, f"Erro ao gerar boleto: {_e}")
         return _RR_ct("/admin/financeiro/cobrancas", status_code=303)
+
+
+# ── Cancelar boleto no Mercado Pago ──────────────────────────────────────────
+
+@app.post("/admin/financeiro/cobrancas/{cobranca_id}/cancelar-boleto")
+@require_role({"admin", "equipe"})
+async def financeiro_cobranca_cancelar_boleto(cobranca_id: int, request: _Req_ct, session=_Dep_ct(get_session)):
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        return _RR_ct("/login", status_code=303)
+    cobranca = session.get(CobrancaMensal, cobranca_id)
+    if not cobranca or cobranca.company_id != ctx.company.id:
+        set_flash(request, "Cobrança não encontrada.")
+        return _RR_ct("/admin/financeiro/cobrancas", status_code=303)
+    mp_id = getattr(cobranca, "mp_payment_id", "") or ""
+    if not mp_id:
+        set_flash(request, "Esta cobrança não possui ID de pagamento no Mercado Pago.")
+        return _RR_ct("/admin/financeiro/cobrancas", status_code=303)
+    try:
+        _ct_mp_cancelar_boleto(mp_id)
+        cobranca.status     = "cancelado"
+        cobranca.boleto_url = ""
+        cobranca.updated_at = _dt_ct.utcnow()
+        session.add(cobranca)
+        session.commit()
+        set_flash(request, f"Boleto cancelado no Mercado Pago (id {mp_id}).")
+    except Exception as _e:
+        print(f"[cancelar-boleto] erro cobranca {cobranca_id}: {_e}")
+        set_flash(request, f"Erro ao cancelar boleto no MP: {_e}")
+    return _RR_ct("/admin/financeiro/cobrancas", status_code=303)
 
 
 # ── Reenviar boleto + NF ao cliente ──────────────────────────────────────────
