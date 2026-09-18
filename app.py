@@ -52733,3 +52733,54 @@ async def admin_agenda_calendario(
         "flash": request.session.pop("flash", None),
     })
 
+
+
+# ── Exportar clientes ────────────────────────────────────────────────────────
+@app.get("/clientes/exportar.xlsx")
+@require_login
+@require_role({"admin", "equipe"})
+async def exportar_clientes_xlsx(
+        request: Request,
+        session: Session = Depends(get_session),
+) -> Response:
+    import io
+    import openpyxl
+    ctx = get_tenant_context(request, session)
+    assert ctx is not None
+
+    clientes = session.exec(
+        select(Client).where(Client.company_id == ctx.company.id).order_by(Client.name.asc())
+    ).all()
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Clientes"
+
+    headers = ["Nome / Razão Social", "UF", "CNPJ", "Telefone"]
+    ws.append(headers)
+
+    # Estilo cabeçalho
+    from openpyxl.styles import Font, PatternFill
+    header_fill = PatternFill("solid", fgColor="1B5E20")
+    for cell in ws[1]:
+        cell.font = Font(bold=True, color="FFFFFF")
+        cell.fill = header_fill
+
+    for c in clientes:
+        ws.append([c.name, c.state or "", c.cnpj or "", c.phone or ""])
+
+    # Ajusta largura das colunas
+    ws.column_dimensions["A"].width = 45
+    ws.column_dimensions["B"].width = 8
+    ws.column_dimensions["C"].width = 20
+    ws.column_dimensions["D"].width = 20
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+
+    return Response(
+        content=buf.read(),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": "attachment; filename=clientes.xlsx"},
+    )
