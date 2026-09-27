@@ -45,12 +45,17 @@ except Exception as _e_orc2:
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
-def _orc2_semaforo(desvio_pct: float, tol: float, crit: float) -> str:
-    """Retorna 'verde', 'amarelo' ou 'vermelho' baseado no desvio."""
-    a = abs(desvio_pct)
-    if a >= crit:
+def _orc2_semaforo(desvio_pct: float, tol: float, crit: float, account_type: str = "despesa") -> str:
+    """Retorna 'verde', 'amarelo' ou 'vermelho' baseado no desvio e tipo da conta.
+    Receita: desvio positivo (realizado > orçado) = bom.
+    Custo/despesa: desvio positivo (realizado > orçado) = ruim.
+    """
+    is_cost = account_type in ("despesa", "custo", "passivo")
+    # Para custos, invertemos o sinal: gastar mais que o orçado é negativo
+    pct = -desvio_pct if is_cost else desvio_pct
+    if pct <= -crit:
         return "vermelho"
-    if a >= tol:
+    if pct <= -tol:
         return "amarelo"
     return "verde"
 
@@ -79,7 +84,8 @@ def _orc2_load_dashboard(session, company_id: int, plan_id: int, client_id):
         al = alert_by_acc.get(row["id"])
         tol = al.tolerance_pct if al else 10.0
         crit = al.critical_pct if al else 20.0
-        semaforo = _orc2_semaforo(desvio_pct, tol, crit) if tb != 0 else "cinza"
+        acc_type = row.get("type", "despesa")
+        semaforo = _orc2_semaforo(desvio_pct, tol, crit, acc_type) if tb != 0 else "cinza"
 
         # Dados mensais para gráfico
         meses_b = [row["months"][m]["b"] for m in range(1, 13)]
@@ -94,6 +100,7 @@ def _orc2_load_dashboard(session, company_id: int, plan_id: int, client_id):
             "critical_pct": crit,
             "meses_b": meses_b,
             "meses_r": meses_r,
+            "account_type": acc_type,
         })
 
     return result
@@ -232,7 +239,8 @@ TEMPLATES["orcamento_dashboard.html"] = r"""
           data-total-r="{{ row.total_r }}"
           data-semaforo="{{ row.semaforo }}"
           data-tol="{{ row.tolerance_pct }}"
-          data-crit="{{ row.critical_pct }}">
+          data-crit="{{ row.critical_pct }}"
+          data-type="{{ row.account_type }}">
         <td>
           <span class="sem-dot orc-dot dot-{{ row.semaforo }}"></span>
           <span class="text-muted" style="font-size:.72rem">{{ row.code }}</span>
@@ -240,7 +248,10 @@ TEMPLATES["orcamento_dashboard.html"] = r"""
         </td>
         <td class="text-end orc-b">{{ row.total_b | brl }}</td>
         <td class="text-end orc-r">{{ row.total_r | brl }}</td>
-        <td class="text-end orc-dabs {% if row.desvio_abs > 0 %}text-success{% elif row.desvio_abs < 0 %}text-danger{% endif %}">
+        {% set is_cost = row.account_type in ('despesa','custo','passivo') %}
+        {% set desvio_bom = (row.desvio_abs > 0 and not is_cost) or (row.desvio_abs < 0 and is_cost) %}
+        {% set desvio_mau = (row.desvio_abs < 0 and not is_cost) or (row.desvio_abs > 0 and is_cost) %}
+        <td class="text-end orc-dabs {% if desvio_bom %}text-success{% elif desvio_mau %}text-danger{% endif %}">
           {{ row.desvio_abs | brl }}
         </td>
         <td class="text-end orc-dpct sem-{{ row.semaforo }}">
@@ -393,10 +404,11 @@ function brl(v) {
   return 'R$ ' + Math.abs(v).toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2});
 }
 
-function semaforo(pct, tol, crit) {
-  var a = Math.abs(pct);
-  if (a >= crit) return 'vermelho';
-  if (a >= tol)  return 'amarelo';
+function semaforo(pct, tol, crit, accType) {
+  var isCost = (accType === 'despesa' || accType === 'custo' || accType === 'passivo');
+  var p = isCost ? -pct : pct;
+  if (p <= -crit) return 'vermelho';
+  if (p <= -tol)  return 'amarelo';
   return 'verde';
 }
 
@@ -405,8 +417,10 @@ function aplicarFiltroMes(mesIdx) {
   document.querySelectorAll('tr.orc-row').forEach(function(tr) {
     var mb = JSON.parse(tr.dataset.mesesB);
     var mr = JSON.parse(tr.dataset.mesesR);
-    var tol  = parseFloat(tr.dataset.tol);
-    var crit = parseFloat(tr.dataset.crit);
+    var tol     = parseFloat(tr.dataset.tol);
+    var crit    = parseFloat(tr.dataset.crit);
+    var accType = tr.dataset.type || 'despesa';
+    var isCost  = (accType === 'despesa' || accType === 'custo' || accType === 'passivo');
     var b, r;
     if (mesIdx === '') {
       b = parseFloat(tr.dataset.totalB);
@@ -418,13 +432,15 @@ function aplicarFiltroMes(mesIdx) {
     }
     var dabs = r - b;
     var dpct = b !== 0 ? (dabs / Math.abs(b) * 100) : 0;
-    var sem  = (b === 0 && r === 0) ? 'cinza' : (b !== 0 ? semaforo(dpct, tol, crit) : 'cinza');
+    var sem  = (b === 0 && r === 0) ? 'cinza' : (b !== 0 ? semaforo(dpct, tol, crit, accType) : 'cinza');
 
     tr.querySelector('.orc-b').textContent    = brl(b);
     tr.querySelector('.orc-r').textContent    = brl(r);
     var dAbsEl = tr.querySelector('.orc-dabs');
     dAbsEl.textContent = brl(dabs);
-    dAbsEl.className   = 'text-end orc-dabs ' + (dabs > 0 ? 'text-success' : dabs < 0 ? 'text-danger' : '');
+    var desvBom = (dabs > 0 && !isCost) || (dabs < 0 && isCost);
+    var desvMau = (dabs < 0 && !isCost) || (dabs > 0 && isCost);
+    dAbsEl.className   = 'text-end orc-dabs ' + (desvBom ? 'text-success' : desvMau ? 'text-danger' : '');
     var dPctEl = tr.querySelector('.orc-dpct');
     dPctEl.textContent = b !== 0 ? dpct.toFixed(1) + '%' : '—';
     dPctEl.className   = 'text-end orc-dpct sem-' + sem;
