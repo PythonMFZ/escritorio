@@ -47,11 +47,10 @@ except Exception as _e_orc2:
 
 def _orc2_semaforo(desvio_pct: float, tol: float, crit: float, account_type: str = "despesa") -> str:
     """Retorna 'verde', 'amarelo' ou 'vermelho' baseado no desvio e tipo da conta.
-    Receita: desvio positivo (realizado > orçado) = bom.
-    Custo/despesa: desvio positivo (realizado > orçado) = ruim.
+    Receita / resultado: desvio positivo (realizado > orçado) = bom.
+    Custo / despesa / passivo: desvio positivo (realizado > orçado) = ruim.
     """
     is_cost = account_type in ("despesa", "custo", "passivo")
-    # Para custos, invertemos o sinal: gastar mais que o orçado é negativo
     pct = -desvio_pct if is_cost else desvio_pct
     if pct <= -crit:
         return "vermelho"
@@ -119,7 +118,7 @@ def _orc2_resumo_executivo(rows: list) -> dict:
                 "orcado": tb,
                 "realizado": tr,
                 "variacao_pct": round(var, 1),
-                "semaforo": _orc2_semaforo(var, 10, 20),
+                "semaforo": _orc2_semaforo(var, 10, 20, row.get("account_type", "resultado")),
             }
     return kpis
 
@@ -248,7 +247,7 @@ TEMPLATES["orcamento_dashboard.html"] = r"""
         </td>
         <td class="text-end orc-b">{{ row.total_b | brl }}</td>
         <td class="text-end orc-r">{{ row.total_r | brl }}</td>
-        {% set is_cost = row.account_type in ('despesa','custo','passivo') %}
+        {% set is_cost = row.account_type in ('despesa','custo','passivo') %}{# receita/resultado = positivo é bom #}
         {% set desvio_bom = (row.desvio_abs > 0 and not is_cost) or (row.desvio_abs < 0 and is_cost) %}
         {% set desvio_mau = (row.desvio_abs < 0 and not is_cost) or (row.desvio_abs > 0 and is_cost) %}
         <td class="text-end orc-dabs {% if desvio_bom %}text-success{% elif desvio_mau %}text-danger{% endif %}">
@@ -405,6 +404,7 @@ function brl(v) {
 }
 
 function semaforo(pct, tol, crit, accType) {
+  // custo/despesa/passivo: gastar mais = ruim; receita/resultado: ganhar mais = bom
   var isCost = (accType === 'despesa' || accType === 'custo' || accType === 'passivo');
   var p = isCost ? -pct : pct;
   if (p <= -crit) return 'vermelho';
