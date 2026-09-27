@@ -142,7 +142,22 @@ TEMPLATES["orcamento_dashboard.html"] = r"""
       Desvios do orçamento com semáforo automático
     </div>
   </div>
-  <div class="d-flex gap-2 flex-wrap">
+  <div class="d-flex gap-2 flex-wrap align-items-center">
+    <select id="mesFiltro" class="form-select form-select-sm" style="max-width:160px" onchange="aplicarFiltroMes(this.value)">
+      <option value="">Ano todo</option>
+      <option value="0">Janeiro</option>
+      <option value="1">Fevereiro</option>
+      <option value="2">Março</option>
+      <option value="3">Abril</option>
+      <option value="4">Maio</option>
+      <option value="5">Junho</option>
+      <option value="6">Julho</option>
+      <option value="7">Agosto</option>
+      <option value="8">Setembro</option>
+      <option value="9">Outubro</option>
+      <option value="10">Novembro</option>
+      <option value="11">Dezembro</option>
+    </select>
     <a href="/ferramentas/orcamento/{{ plan.id }}" class="btn btn-outline-secondary btn-sm">← Planilha</a>
     {% if role in ['admin','equipe'] %}
     <a href="/ferramentas/orcamento/{{ plan.id }}/dashboard?config=1" class="btn btn-outline-secondary btn-sm">⚙ Tolerâncias</a>
@@ -210,21 +225,28 @@ TEMPLATES["orcamento_dashboard.html"] = r"""
     <tbody>
       {% for row in rows %}
       {% if row.total_b != 0 or row.total_r != 0 %}
-      <tr {% if row.is_totalizer %}class="table-primary fw-bold"{% elif row.has_children %}class="table-light"{% endif %}>
+      <tr class="orc-row {% if row.is_totalizer %}table-primary fw-bold{% elif row.has_children %}table-light{% endif %}"
+          data-meses-b="{{ row.meses_b | tojson | e }}"
+          data-meses-r="{{ row.meses_r | tojson | e }}"
+          data-total-b="{{ row.total_b }}"
+          data-total-r="{{ row.total_r }}"
+          data-semaforo="{{ row.semaforo }}"
+          data-tol="{{ row.tolerance_pct }}"
+          data-crit="{{ row.critical_pct }}">
         <td>
-          <span class="sem-dot dot-{{ row.semaforo }}"></span>
+          <span class="sem-dot orc-dot dot-{{ row.semaforo }}"></span>
           <span class="text-muted" style="font-size:.72rem">{{ row.code }}</span>
           {{ '  ' * row.depth }}{{ row.name }}
         </td>
-        <td class="text-end">{{ row.total_b | brl }}</td>
-        <td class="text-end">{{ row.total_r | brl }}</td>
-        <td class="text-end {% if row.desvio_abs > 0 %}text-success{% elif row.desvio_abs < 0 %}text-danger{% endif %}">
+        <td class="text-end orc-b">{{ row.total_b | brl }}</td>
+        <td class="text-end orc-r">{{ row.total_r | brl }}</td>
+        <td class="text-end orc-dabs {% if row.desvio_abs > 0 %}text-success{% elif row.desvio_abs < 0 %}text-danger{% endif %}">
           {{ row.desvio_abs | brl }}
         </td>
-        <td class="text-end sem-{{ row.semaforo }}">
+        <td class="text-end orc-dpct sem-{{ row.semaforo }}">
           {% if row.total_b != 0 %}{{ row.desvio_pct }}%{% else %}—{% endif %}
         </td>
-        <td class="text-center">
+        <td class="text-center orc-sem">
           {% if row.semaforo == 'vermelho' %}🔴
           {% elif row.semaforo == 'amarelo' %}🟡
           {% elif row.semaforo == 'verde' %}🟢
@@ -361,6 +383,77 @@ function abrirAcao(planId, accId, accName, desvioPct) {
     'Corrigir desvio em "' + accName + '" (' + desvioPct + '%)';
   new bootstrap.Modal(document.getElementById('modalAcao')).show();
 }
+
+var _MESES_PT = ["Janeiro","Fevereiro","Março","Abril","Maio","Junho","Julho","Agosto","Setembro","Outubro","Novembro","Dezembro"];
+var _semCores  = {vermelho:'text-danger',amarelo:'text-warning',verde:'text-success',cinza:'text-secondary'};
+var _dotCores  = {vermelho:'dot-vermelho',amarelo:'dot-amarelo',verde:'dot-verde',cinza:'dot-cinza'};
+var _semEmoji  = {vermelho:'🔴',amarelo:'🟡',verde:'🟢',cinza:'⚪'};
+
+function brl(v) {
+  return 'R$ ' + Math.abs(v).toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2});
+}
+
+function semaforo(pct, tol, crit) {
+  var a = Math.abs(pct);
+  if (a >= crit) return 'vermelho';
+  if (a >= tol)  return 'amarelo';
+  return 'verde';
+}
+
+function aplicarFiltroMes(mesIdx) {
+  var nVerm=0, nAmar=0, nVerd=0;
+  document.querySelectorAll('tr.orc-row').forEach(function(tr) {
+    var mb = JSON.parse(tr.dataset.mesesB);
+    var mr = JSON.parse(tr.dataset.mesesR);
+    var tol  = parseFloat(tr.dataset.tol);
+    var crit = parseFloat(tr.dataset.crit);
+    var b, r;
+    if (mesIdx === '') {
+      b = parseFloat(tr.dataset.totalB);
+      r = parseFloat(tr.dataset.totalR);
+    } else {
+      var m = parseInt(mesIdx);
+      b = mb[m] || 0;
+      r = mr[m] || 0;
+    }
+    var dabs = r - b;
+    var dpct = b !== 0 ? (dabs / Math.abs(b) * 100) : 0;
+    var sem  = (b === 0 && r === 0) ? 'cinza' : (b !== 0 ? semaforo(dpct, tol, crit) : 'cinza');
+
+    tr.querySelector('.orc-b').textContent    = brl(b);
+    tr.querySelector('.orc-r').textContent    = brl(r);
+    var dAbsEl = tr.querySelector('.orc-dabs');
+    dAbsEl.textContent = brl(dabs);
+    dAbsEl.className   = 'text-end orc-dabs ' + (dabs > 0 ? 'text-success' : dabs < 0 ? 'text-danger' : '');
+    var dPctEl = tr.querySelector('.orc-dpct');
+    dPctEl.textContent = b !== 0 ? dpct.toFixed(1) + '%' : '—';
+    dPctEl.className   = 'text-end orc-dpct sem-' + sem;
+    tr.querySelector('.orc-sem').textContent  = _semEmoji[sem] || '⚪';
+    var dot = tr.querySelector('.orc-dot');
+    dot.className = 'sem-dot orc-dot ' + (_dotCores[sem] || 'dot-cinza');
+
+    if (b !== 0 || r !== 0) {
+      if (sem === 'vermelho') nVerm++;
+      else if (sem === 'amarelo') nAmar++;
+      else if (sem === 'verde') nVerd++;
+    }
+  });
+
+  // Atualiza contadores
+  var cards = document.querySelectorAll('.fs-2.fw-bold');
+  if (cards[0]) cards[0].textContent = nVerm;
+  if (cards[1]) cards[1].textContent = nAmar;
+  if (cards[2]) cards[2].textContent = nVerd;
+}
+
+// Pré-seleciona mês atual
+(function(){
+  var sel = document.getElementById('mesFiltro');
+  if (!sel) return;
+  var mesAtual = new Date().getMonth();
+  sel.value = String(mesAtual);
+  aplicarFiltroMes(String(mesAtual));
+})();
 </script>
 {% endblock %}
 """
