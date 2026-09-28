@@ -123,13 +123,18 @@ def _orc2_load_dashboard(session, company_id: int, plan_id: int, client_id):
             "account_sign": acc_sign,
         })
 
-    # Análise Vertical: base = primeiro row de receita (código começa com "1", depth=0)
-    av_base_b = next((r["total_b"] for r in result if r.get("depth") == 0 and
-                      (r.get("account_type") or "") not in ("despesa","custo","passivo") and
-                      r["total_b"] > 0), 0.0)
-    av_base_r = next((r["total_r"] for r in result if r.get("depth") == 0 and
-                      (r.get("account_type") or "") not in ("despesa","custo","passivo") and
-                      r["total_r"] > 0), 0.0)
+    # Análise Vertical: base = primeiro row de receita no topo da DRE.
+    # Usa código começando com "1" (plano de contas padrão) ou maior total_b em depth=0.
+    _av_base_row = next(
+        (r for r in result if r.get("depth") == 0 and
+         str(r.get("code", "")).startswith("1") and r["total_b"] > 0),
+        None,
+    ) or next(
+        (r for r in result if r.get("depth") == 0 and r["total_b"] > 0),
+        None,
+    )
+    av_base_b = _av_base_row["total_b"] if _av_base_row else 0.0
+    av_base_r = _av_base_row["total_r"] if _av_base_row else 0.0
     for r in result:
         r["av_b"] = round(r["total_b"] / av_base_b * 100, 1) if av_base_b else None
         r["av_r"] = round(r["total_r"] / av_base_r * 100, 1) if av_base_r else None
@@ -643,10 +648,12 @@ async def orc2_dashboard(request: Request, session: Session = Depends(get_sessio
 
     rows = _orc2_load_dashboard(session, ctx.company.id, plan_id, client_id)
 
-    # Base para Análise Vertical: primeira conta de receita no topo (depth=0, não despesa)
-    _av_row = next((r for r in rows if r.get("depth") == 0 and
-                    r.get("account_type") not in ("despesa", "custo", "passivo") and
-                    r["total_b"] > 0), None)
+    # Base para Análise Vertical: mesma lógica de _orc2_load_dashboard
+    _av_row = next(
+        (r for r in rows if r.get("depth") == 0 and
+         str(r.get("code", "")).startswith("1") and r["total_b"] > 0),
+        None,
+    ) or next((r for r in rows if r.get("depth") == 0 and r["total_b"] > 0), None)
     av_base_b = _av_row["total_b"] if _av_row else 0.0
     av_base_r = _av_row["total_r"] if _av_row else 0.0
 
