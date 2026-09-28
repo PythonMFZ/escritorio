@@ -81,15 +81,18 @@ def _ensure_orcamento_tables():
             if "duplicate" not in str(_e).lower() and "already exists" not in str(_e).lower():
                 print(f"[orcamento] migração {_tbl}.{_col}: {_e}")
 
-    # Backfill: contas antigas (client_id NULL) eram compartilhadas por toda a empresa.
-    # Atribui ao primeiro cliente da empresa para não perder o plano já cadastrado;
-    # os demais clientes passam a ter plano de contas próprio, vazio, a partir daqui.
+    # Backfill: contas e planos antigos (client_id NULL) eram compartilhados por toda a empresa.
+    # Atribui ao primeiro cliente da empresa para não perder o plano já cadastrado.
     try:
         with engine.begin() as _c:
-            rows = _c.exec_driver_sql(
-                "SELECT DISTINCT company_id FROM budgetaccount WHERE client_id IS NULL"
-            ).fetchall()
-            for (_cid,) in rows:
+            companies = set()
+            for tbl in ("budgetaccount", "budgetplan"):
+                rows_null = _c.exec_driver_sql(
+                    f"SELECT DISTINCT company_id FROM {tbl} WHERE client_id IS NULL"
+                ).fetchall()
+                for (_cid,) in rows_null:
+                    companies.add(_cid)
+            for _cid in companies:
                 first_client = _c.exec_driver_sql(
                     f"SELECT id FROM client WHERE company_id = {_cid} ORDER BY id LIMIT 1"
                 ).fetchone()
@@ -98,8 +101,12 @@ def _ensure_orcamento_tables():
                         f"UPDATE budgetaccount SET client_id = {first_client[0]} "
                         f"WHERE company_id = {_cid} AND client_id IS NULL"
                     )
+                    _c.exec_driver_sql(
+                        f"UPDATE budgetplan SET client_id = {first_client[0]} "
+                        f"WHERE company_id = {_cid} AND client_id IS NULL"
+                    )
     except Exception as _e:
-        print(f"[orcamento] backfill budgetaccount.client_id: {_e}")
+        print(f"[orcamento] backfill client_id: {_e}")
 
 try:
     _ensure_orcamento_tables()
