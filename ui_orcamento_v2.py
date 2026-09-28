@@ -208,7 +208,7 @@ TEMPLATES["orcamento_dashboard.html"] = r"""
   <div class="mb-2">
     <select id="chartSelect" class="form-select form-select-sm" style="max-width:320px">
       {% for r in chart_rows %}
-      <option value="{{ loop.index0 }}">{{ r.code }} — {{ r.name }}</option>
+      <option value="{{ r.id }}">{{ r.code }} — {{ r.name }}</option>
       {% endfor %}
     </select>
   </div>
@@ -363,8 +363,8 @@ var _chartRows = {{ rows_json | safe }};
 var _months = ["Jan","Fev","Mar","Abr","Mai","Jun","Jul","Ago","Set","Out","Nov","Dez"];
 var _chart = null;
 
-function renderChart(idx) {
-  var row = _chartRows[idx];
+function renderChart(accId) {
+  var row = _chartRows.find(function(r){ return r.id == accId; });
   if (!row) return;
   var ctx = document.getElementById('orc2Chart');
   if (!ctx) return;
@@ -388,7 +388,7 @@ function renderChart(idx) {
 
 var sel = document.getElementById('chartSelect');
 if (sel) {
-  renderChart(0);
+  renderChart(parseInt(sel.value));
   sel.addEventListener('change', function(){ renderChart(parseInt(this.value)); });
 }
 
