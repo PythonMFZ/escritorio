@@ -45,12 +45,14 @@ except Exception as _e_orc2:
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
-def _orc2_semaforo(desvio_pct: float, tol: float, crit: float, account_type: str = "despesa") -> str:
+def _orc2_semaforo(desvio_pct: float, tol: float, crit: float,
+                   account_type: str = "despesa", sign: int = -1) -> str:
     """Retorna 'verde', 'amarelo' ou 'vermelho' baseado no desvio e tipo da conta.
-    Receita / resultado: desvio positivo (realizado > orçado) = bom.
-    Custo / despesa / passivo: desvio positivo (realizado > orçado) = ruim.
+    Usa sign=-1 (conta de custo/despesa) ou account_type para determinar direção.
+    Custo/despesa: gastar mais que o orçado é ruim (desvio positivo = vermelho).
+    Receita/resultado: ganhar mais que o orçado é bom (desvio positivo = verde).
     """
-    is_cost = account_type in ("despesa", "custo", "passivo")
+    is_cost = (sign == -1) or (account_type in ("despesa", "custo", "passivo"))
     pct = -desvio_pct if is_cost else desvio_pct
     if pct <= -crit:
         return "vermelho"
@@ -83,8 +85,9 @@ def _orc2_load_dashboard(session, company_id: int, plan_id: int, client_id):
         al = alert_by_acc.get(row["id"])
         tol = al.tolerance_pct if al else 10.0
         crit = al.critical_pct if al else 20.0
-        acc_type = row.get("type", "despesa")
-        semaforo = _orc2_semaforo(desvio_pct, tol, crit, acc_type) if tb != 0 else "cinza"
+        acc_type = row.get("type") or "despesa"
+        acc_sign = row.get("sign", -1)
+        semaforo = _orc2_semaforo(desvio_pct, tol, crit, acc_type, acc_sign) if tb != 0 else "cinza"
 
         # Dados mensais para gráfico
         meses_b = [row["months"][m]["b"] for m in range(1, 13)]
@@ -100,6 +103,7 @@ def _orc2_load_dashboard(session, company_id: int, plan_id: int, client_id):
             "meses_b": meses_b,
             "meses_r": meses_r,
             "account_type": acc_type,
+            "account_sign": acc_sign,
         })
 
     return result
@@ -239,7 +243,8 @@ TEMPLATES["orcamento_dashboard.html"] = r"""
           data-semaforo="{{ row.semaforo }}"
           data-tol="{{ row.tolerance_pct }}"
           data-crit="{{ row.critical_pct }}"
-          data-type="{{ row.account_type }}">
+          data-type="{{ row.account_type }}"
+          data-sign="{{ row.account_sign }}">
         <td>
           <span class="sem-dot orc-dot dot-{{ row.semaforo }}"></span>
           <span class="text-muted" style="font-size:.72rem">{{ row.code }}</span>
@@ -247,7 +252,7 @@ TEMPLATES["orcamento_dashboard.html"] = r"""
         </td>
         <td class="text-end orc-b">{{ row.total_b | brl }}</td>
         <td class="text-end orc-r">{{ row.total_r | brl }}</td>
-        {% set is_cost = row.account_type in ('despesa','custo','passivo') %}{# receita/resultado = positivo é bom #}
+        {% set is_cost = (row.account_sign == -1) or (row.account_type in ('despesa','custo','passivo')) %}
         {% set desvio_bom = (row.desvio_abs > 0 and not is_cost) or (row.desvio_abs < 0 and is_cost) %}
         {% set desvio_mau = (row.desvio_abs < 0 and not is_cost) or (row.desvio_abs > 0 and is_cost) %}
         <td class="text-end orc-dabs {% if desvio_bom %}text-success{% elif desvio_mau %}text-danger{% endif %}">
@@ -420,7 +425,8 @@ function aplicarFiltroMes(mesIdx) {
     var tol     = parseFloat(tr.dataset.tol);
     var crit    = parseFloat(tr.dataset.crit);
     var accType = tr.dataset.type || 'despesa';
-    var isCost  = (accType === 'despesa' || accType === 'custo' || accType === 'passivo');
+    var accSign = parseInt(tr.dataset.sign || '-1');
+    var isCost  = (accSign === -1) || (accType === 'despesa' || accType === 'custo' || accType === 'passivo');
     var b, r;
     if (mesIdx === '') {
       b = parseFloat(tr.dataset.totalB);

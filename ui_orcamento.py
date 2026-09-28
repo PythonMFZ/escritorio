@@ -409,7 +409,8 @@ def _load_grid(session, company_id: int, plan_id: int, client_id: Optional[int] 
         total_r = sum(months[m]["r"] for m in range(1, 13))
         rows.append({
             "id": acc.id, "code": acc.code, "name": acc.name,
-            "type": acc.account_type, "is_totalizer": acc.is_totalizer,
+            "type": acc.account_type, "sign": acc.sign,
+            "is_totalizer": acc.is_totalizer,
             "has_children": has_children,
             "depth": depth, "months": months,
             "total_b": round(total_b, 2), "total_r": round(total_r, 2),
