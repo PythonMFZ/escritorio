@@ -48,12 +48,18 @@ except Exception as _e_orc2:
 def _orc2_semaforo(desvio_pct: float, tol: float, crit: float,
                    account_type: str = "despesa", sign: int = -1) -> str:
     """Retorna 'verde', 'amarelo' ou 'vermelho' baseado no desvio e tipo da conta.
-    Usa sign=-1 (conta de custo/despesa) ou account_type para determinar direção.
-    Custo/despesa: gastar mais que o orçado é ruim (desvio positivo = vermelho).
-    Receita/resultado: ganhar mais que o orçado é bom (desvio positivo = verde).
+
+    Receita: qualquer desvio negativo (orçado > realizado) = vermelho — sem tolerância.
+    Custo/despesa: usa tol/crit normalmente (gasta mais = ruim).
     """
     is_cost = (sign == -1) or (account_type in ("despesa", "custo", "passivo"))
-    pct = -desvio_pct if is_cost else desvio_pct
+    if not is_cost:
+        # Receita/resultado: negativo = abaixo do orçado = sempre vermelho
+        if desvio_pct < 0:
+            return "vermelho"
+        return "verde"
+    # Custo: positivo = acima do orçado = ruim
+    pct = -desvio_pct  # inverte: positivo = acima do orçado
     if pct <= -crit:
         return "vermelho"
     if pct <= -tol:
@@ -116,6 +122,17 @@ def _orc2_load_dashboard(session, company_id: int, plan_id: int, client_id):
             "account_type": acc_type,
             "account_sign": acc_sign,
         })
+
+    # Análise Vertical: base = primeiro row de receita (código começa com "1", depth=0)
+    av_base_b = next((r["total_b"] for r in result if r.get("depth") == 0 and
+                      (r.get("account_type") or "") not in ("despesa","custo","passivo") and
+                      r["total_b"] > 0), 0.0)
+    av_base_r = next((r["total_r"] for r in result if r.get("depth") == 0 and
+                      (r.get("account_type") or "") not in ("despesa","custo","passivo") and
+                      r["total_r"] > 0), 0.0)
+    for r in result:
+        r["av_b"] = round(r["total_b"] / av_base_b * 100, 1) if av_base_b else None
+        r["av_r"] = round(r["total_r"] / av_base_r * 100, 1) if av_base_r else None
 
     return result
 
@@ -229,12 +246,17 @@ TEMPLATES["orcamento_dashboard.html"] = r"""
 
 {# ── Tabela de desvios ── #}
 <div class="card p-0 overflow-hidden">
-  <table class="table table-sm mb-0" style="font-size:.82rem">
+  <table class="table table-sm mb-0" style="font-size:.82rem"
+         id="orc2Table"
+         data-av-base-b="{{ av_base_b }}"
+         data-av-base-r="{{ av_base_r }}">
     <thead class="table-light">
       <tr>
         <th style="min-width:220px">Conta</th>
         <th class="text-end">Orçado</th>
+        <th class="text-end text-muted" style="font-size:.75rem">AV%</th>
         <th class="text-end">Realizado</th>
+        <th class="text-end text-muted" style="font-size:.75rem">AV%</th>
         <th class="text-end">Desvio R$</th>
         <th class="text-end">Desvio %</th>
         <th class="text-center">Status</th>
@@ -262,7 +284,13 @@ TEMPLATES["orcamento_dashboard.html"] = r"""
           {{ '  ' * row.depth }}{{ row.name }}
         </td>
         <td class="text-end orc-b">{{ row.total_b | brl }}</td>
+        <td class="text-end text-muted orc-avb" style="font-size:.75rem">
+          {% if row.av_b is not none %}{{ row.av_b }}%{% else %}—{% endif %}
+        </td>
         <td class="text-end orc-r">{{ row.total_r | brl }}</td>
+        <td class="text-end text-muted orc-avr" style="font-size:.75rem">
+          {% if row.av_r is not none %}{{ row.av_r }}%{% else %}—{% endif %}
+        </td>
         {% set is_cost = (row.account_sign == -1) or (row.account_type in ('despesa','custo','passivo')) %}
         {% set desvio_bom = (row.desvio_abs > 0 and not is_cost) or (row.desvio_abs < 0 and is_cost) %}
         {% set desvio_mau = (row.desvio_abs < 0 and not is_cost) or (row.desvio_abs > 0 and is_cost) %}
@@ -420,10 +448,14 @@ function brl(v) {
 }
 
 function semaforo(pct, tol, crit, accType, accSign) {
-  // custo/despesa/passivo: gastar mais = ruim; receita/resultado: ganhar mais = bom
-  // accSign === -1 sobrepõe accType (mesma lógica do Python)
+  // accSign===-1 OU type em despesa/custo/passivo = conta de custo
   var isCost = (accSign === -1) || (accType === 'despesa' || accType === 'custo' || accType === 'passivo');
-  var p = isCost ? -pct : pct;
+  if (!isCost) {
+    // Receita: qualquer desvio negativo = vermelho, sem tolerância
+    return pct < 0 ? 'vermelho' : 'verde';
+  }
+  // Custo: usa tol/crit — positivo = acima do orçado = ruim
+  var p = -pct;
   if (p <= -crit) return 'vermelho';
   if (p <= -tol)  return 'amarelo';
   return 'verde';
@@ -474,6 +506,15 @@ function aplicarFiltroMes(mesIdx) {
     tr.querySelector('.orc-sem').textContent  = _semEmoji[sem] || '⚪';
     var dot = tr.querySelector('.orc-dot');
     dot.className = 'sem-dot orc-dot ' + (_dotCores[sem] || 'dot-cinza');
+
+    // Análise vertical (AV%)
+    var tbl = document.getElementById('orc2Table');
+    var avbb = tbl ? parseFloat(tbl.dataset.avBaseB) : 0;
+    var avbr = tbl ? parseFloat(tbl.dataset.avBaseR) : 0;
+    var avbEl = tr.querySelector('.orc-avb');
+    var avrEl = tr.querySelector('.orc-avr');
+    if (avbEl) avbEl.textContent = avbb > 0 ? (b / avbb * 100).toFixed(1) + '%' : '—';
+    if (avrEl) avrEl.textContent = avbr > 0 ? (r / avbr * 100).toFixed(1) + '%' : '—';
 
     if (b !== 0 || r !== 0) {
       if (sem === 'vermelho') nVerm++;
@@ -602,6 +643,13 @@ async def orc2_dashboard(request: Request, session: Session = Depends(get_sessio
 
     rows = _orc2_load_dashboard(session, ctx.company.id, plan_id, client_id)
 
+    # Base para Análise Vertical: primeira conta de receita no topo (depth=0, não despesa)
+    _av_row = next((r for r in rows if r.get("depth") == 0 and
+                    r.get("account_type") not in ("despesa", "custo", "passivo") and
+                    r["total_b"] > 0), None)
+    av_base_b = _av_row["total_b"] if _av_row else 0.0
+    av_base_r = _av_row["total_r"] if _av_row else 0.0
+
     # Reuniões recentes para vincular ação
     reunioes = []
     if client_id:
@@ -617,6 +665,7 @@ async def orc2_dashboard(request: Request, session: Session = Depends(get_sessio
         "current_user": ctx.user, "current_company": ctx.company,
         "role": ctx.membership.role, "current_client": cc,
         "plan": plan, "rows": rows,
+        "av_base_b": av_base_b, "av_base_r": av_base_r,
         "rows_json": _json_orc2.dumps(rows, default=str),
         "reunioes": reunioes,
         "config": bool(config),
