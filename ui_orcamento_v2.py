@@ -79,8 +79,17 @@ def _orc2_load_dashboard(session, company_id: int, plan_id: int, client_id):
         tr = row["total_r"]
         if tb == 0 and tr == 0:
             continue
-        desvio_abs = tr - tb
-        desvio_pct = ((tr - tb) / abs(tb) * 100) if tb else 0.0
+
+        # _subtree_sum_by_code multiplica pelo sign da conta (ex: despesas com sign=-1
+        # ficam negativas). Normalizamos para que o desvio reflita a direção econômica:
+        # "realizado > orçado" em módulo → positivo, independente do sinal contábil.
+        # Isso evita a dupla inversão em _orc2_semaforo para contas com sign=-1.
+        sign_factor = -1 if tb < 0 else 1
+        tb_disp = abs(tb)   # para exibição e cálculo de desvio
+        tr_disp = tr * sign_factor  # mesmo sinal que tb_disp (positivo quando não inverte)
+
+        desvio_abs = tr_disp - tb_disp
+        desvio_pct = ((desvio_abs / tb_disp) * 100) if tb_disp else 0.0
 
         al = alert_by_acc.get(row["id"])
         tol = al.tolerance_pct if al else 10.0
@@ -89,12 +98,14 @@ def _orc2_load_dashboard(session, company_id: int, plan_id: int, client_id):
         acc_sign = row.get("sign", -1)
         semaforo = _orc2_semaforo(desvio_pct, tol, crit, acc_type, acc_sign) if tb != 0 else "cinza"
 
-        # Dados mensais para gráfico
-        meses_b = [row["months"][m]["b"] for m in range(1, 13)]
-        meses_r = [row["months"][m]["r"] for m in range(1, 13)]
+        # Dados mensais para gráfico (também normalizados)
+        meses_b = [abs(row["months"][m]["b"]) if tb < 0 else row["months"][m]["b"] for m in range(1, 13)]
+        meses_r = [row["months"][m]["r"] * sign_factor for m in range(1, 13)]
 
         result.append({
             **row,
+            "total_b": round(tb_disp, 2),
+            "total_r": round(tr_disp, 2),
             "desvio_abs": round(desvio_abs, 2),
             "desvio_pct": round(desvio_pct, 1),
             "semaforo": semaforo,
