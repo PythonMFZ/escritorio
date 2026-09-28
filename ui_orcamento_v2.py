@@ -408,9 +408,10 @@ function brl(v) {
   return 'R$ ' + Math.abs(v).toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2});
 }
 
-function semaforo(pct, tol, crit, accType) {
+function semaforo(pct, tol, crit, accType, accSign) {
   // custo/despesa/passivo: gastar mais = ruim; receita/resultado: ganhar mais = bom
-  var isCost = (accType === 'despesa' || accType === 'custo' || accType === 'passivo');
+  // accSign === -1 sobrepõe accType (mesma lógica do Python)
+  var isCost = (accSign === -1) || (accType === 'despesa' || accType === 'custo' || accType === 'passivo');
   var p = isCost ? -pct : pct;
   if (p <= -crit) return 'vermelho';
   if (p <= -tol)  return 'amarelo';
@@ -438,7 +439,16 @@ function aplicarFiltroMes(mesIdx) {
     }
     var dabs = r - b;
     var dpct = b !== 0 ? (dabs / Math.abs(b) * 100) : 0;
-    var sem  = (b === 0 && r === 0) ? 'cinza' : (b !== 0 ? semaforo(dpct, tol, crit, accType) : 'cinza');
+    // quando b=0 num mês (sem orçamento) usa o semáforo anual calculado no servidor
+    var sem;
+    if (b === 0 && r === 0) {
+      sem = 'cinza';
+    } else if (b !== 0) {
+      sem = semaforo(dpct, tol, crit, accType, accSign);
+    } else {
+      // realizado existe mas orçado = 0 no mês → usa semáforo do servidor (anual)
+      sem = tr.dataset.semaforo || 'cinza';
+    }
 
     tr.querySelector('.orc-b').textContent    = brl(b);
     tr.querySelector('.orc-r').textContent    = brl(r);
