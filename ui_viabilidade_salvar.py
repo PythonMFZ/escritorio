@@ -108,10 +108,31 @@ async def viabilidade_salvar(
         print(f"[viab_salvar] 400: JSON inválido — {_je}")
         return JSONResponse({"ok": False, "erro": "JSON inválido."}, status_code=400)
 
-    dados_json    = body.get("dados_json", "{}")
+    dados_json     = body.get("dados_json", "{}")
     resultado_json = body.get("resultado_json", "{}")
-    nome          = body.get("nome", "Análise sem nome")[:120]
+    nome           = body.get("nome", "Análise sem nome")[:120]
+    analise_id     = body.get("analise_id")  # presente quando editando existente
 
+    # ── Modo edição: atualiza registro existente ──────────────────────────────
+    if analise_id:
+        analise = session.get(ViabilidadeAnalise, int(analise_id))
+        if not analise or analise.company_id != ctx.company.id:
+            return JSONResponse({"ok": False, "erro": "Análise não encontrada."}, status_code=404)
+        analise.nome           = nome
+        analise.dados_json     = dados_json
+        analise.resultado_json = resultado_json
+        session.add(analise)
+        session.commit()
+        session.refresh(analise)
+        return JSONResponse({
+            "ok": True,
+            "id": analise.id,
+            "token": analise.token,
+            "link": f"/ferramentas/viabilidade/ver/{analise.token}",
+            "atualizado": True,
+        })
+
+    # ── Modo criação: insere novo registro ────────────────────────────────────
     total = _contar_analises(session, ctx.company.id, client.id)
 
     # Freemium: cobra se já usou as 3 grátis
@@ -137,7 +158,6 @@ async def viabilidade_salvar(
     session.commit()
     session.refresh(analise)
 
-    gratuitas_usadas = min(total + 1, VIABILIDADE_GRATIS_MAX)
     gratis_restantes = max(0, VIABILIDADE_GRATIS_MAX - (total + 1))
 
     return JSONResponse({
@@ -148,6 +168,7 @@ async def viabilidade_salvar(
         "gratis_restantes": gratis_restantes,
         "cobrado": total >= VIABILIDADE_GRATIS_MAX,
         "creditos_cobrados": VIABILIDADE_CREDITOS if total >= VIABILIDADE_GRATIS_MAX else 0,
+        "atualizado": False,
     })
 
 
@@ -280,6 +301,84 @@ async def viabilidade_base(
     })
 
 
+# ── GET /ferramentas/viabilidade/abrir/{id} (edita o próprio registro) ───────
+
+@app.get("/ferramentas/viabilidade/abrir/{analise_id}", response_class=HTMLResponse)
+@require_login
+async def viabilidade_abrir(
+    analise_id: int,
+    request: Request,
+    session: Session = Depends(get_session),
+) -> HTMLResponse:
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+
+    analise = session.get(ViabilidadeAnalise, analise_id)
+    if not analise or analise.company_id != ctx.company.id:
+        return RedirectResponse("/ferramentas/viabilidade/historico", status_code=303)
+
+    try:
+        dados = _json2.loads(analise.dados_json)
+    except Exception:
+        dados = {}
+
+    cc = get_client_or_none(session, ctx.company.id,
+                            get_active_client_id(request, session, ctx))
+
+    try:
+        if "usar_financiamento" in dados:
+            resultado = _calcular_v3(dados)
+        else:
+            resultado = _calcular_viabilidade_v2(dados)
+    except Exception:
+        resultado = {}
+
+    return render("ferramenta_viabilidade.html", request=request, context={
+        "current_user":    ctx.user,
+        "current_company": ctx.company,
+        "role":            ctx.membership.role,
+        "current_client":  cc,
+        "resultado":       resultado,
+        "dados":           dados,
+        "editar_id":       analise.id,
+        "editar_nome":     analise.nome,
+    })
+
+
+# ── POST /ferramentas/viabilidade/duplicar/{id} ───────────────────────────────
+
+@app.post("/ferramentas/viabilidade/duplicar/{analise_id}")
+@require_login
+async def viabilidade_duplicar(
+    analise_id: int,
+    request: Request,
+    session: Session = Depends(get_session),
+):
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        return JSONResponse({"ok": False}, status_code=401)
+
+    analise = session.get(ViabilidadeAnalise, analise_id)
+    if not analise or analise.company_id != ctx.company.id:
+        return JSONResponse({"ok": False, "erro": "Não encontrada."}, status_code=404)
+
+    copia = ViabilidadeAnalise(
+        company_id=analise.company_id,
+        client_id=analise.client_id,
+        nome=f"{analise.nome} (cópia)",
+        dados_json=analise.dados_json,
+        resultado_json=analise.resultado_json,
+        created_at=str(utcnow()),
+    )
+    session.add(copia)
+    session.commit()
+    session.refresh(copia)
+    return JSONResponse({"ok": True, "id": copia.id,
+                         "redirect": f"/ferramentas/viabilidade/abrir/{copia.id}"})
+
+
 # ── DELETE /ferramentas/viabilidade/apagar/{id} ──────────────────────────────
 
 @app.post("/ferramentas/viabilidade/apagar/{analise_id}")
@@ -385,14 +484,18 @@ TEMPLATES["viabilidade_historico.html"] = r"""
          class="btn btn-sm btn-outline-primary">
         <i class="bi bi-eye me-1"></i> Ver
       </a>
+      <a href="/ferramentas/viabilidade/abrir/{{ a.id }}"
+         class="btn btn-sm btn-outline-secondary">
+        <i class="bi bi-pencil me-1"></i> Editar
+      </a>
+      <button class="btn btn-sm btn-outline-secondary"
+              onclick="duplicarAnalise({{ a.id }}, this)">
+        <i class="bi bi-copy me-1"></i> Duplicar
+      </button>
       <button class="btn btn-sm btn-outline-secondary"
               onclick="copiarLink('/ferramentas/viabilidade/ver/{{ a.token }}', this)">
-        <i class="bi bi-link-45deg me-1"></i> Copiar link
+        <i class="bi bi-link-45deg"></i>
       </button>
-      <a href="/ferramentas/viabilidade/base/{{ a.id }}"
-         class="btn btn-sm btn-outline-secondary">
-        <i class="bi bi-pencil me-1"></i> Usar como base
-      </a>
       <button class="btn btn-sm btn-outline-danger"
               onclick="apagarAnalise({{ a.id }})">
         <i class="bi bi-trash"></i>
@@ -423,6 +526,21 @@ async function apagarAnalise(id) {
     if (el) el.remove();
   } else {
     alert('Erro ao apagar: ' + (d.erro || 'tente novamente'));
+  }
+}
+
+async function duplicarAnalise(id, btn) {
+  const orig = btn.innerHTML;
+  btn.disabled = true;
+  btn.innerHTML = '<i class="bi bi-hourglass-split me-1"></i> Duplicando...';
+  const r = await fetch('/ferramentas/viabilidade/duplicar/' + id, { method: 'POST' });
+  const d = await r.json();
+  if (d.ok && d.redirect) {
+    window.location.href = d.redirect;
+  } else {
+    btn.disabled = false;
+    btn.innerHTML = orig;
+    alert('Erro ao duplicar: ' + (d.erro || 'tente novamente'));
   }
 }
 </script>
@@ -617,7 +735,9 @@ TEMPLATES["viabilidade_publica.html"] = r"""
 _SALVAR_SCRIPT = r"""
 <script>
 (function(){
-  // Injeta botões de salvar e histórico no resultado
+  var _vbEditarId = document.getElementById('vbEditarId') ? document.getElementById('vbEditarId').value : null;
+  var _isEdicao = !!_vbEditarId;
+
   document.addEventListener('DOMContentLoaded', function() {
     const acoes = document.querySelector('#tab-resultado .d-flex.gap-2');
     if (!acoes) return;
@@ -626,7 +746,9 @@ _SALVAR_SCRIPT = r"""
     btnSalvar.type = 'button';
     btnSalvar.className = 'btn btn-primary';
     btnSalvar.id = 'btnSalvar';
-    btnSalvar.innerHTML = '<i class="bi bi-bookmark-plus me-1"></i> Salvar análise';
+    btnSalvar.innerHTML = _isEdicao
+      ? '<i class="bi bi-floppy me-1"></i> Salvar alterações'
+      : '<i class="bi bi-bookmark-plus me-1"></i> Salvar análise';
     btnSalvar.onclick = salvarAnalise;
 
     const btnHistorico = document.createElement('a');
@@ -644,38 +766,36 @@ _SALVAR_SCRIPT = r"""
     btn.disabled = true;
     btn.innerHTML = '<i class="bi bi-hourglass-split me-1"></i> Salvando...';
 
-    // Coleta dados do form
     const form = document.getElementById('vbForm');
     const fd = new FormData(form);
     const dados = {};
     for (let [k,v] of fd.entries()) dados[k] = v;
 
-    // Coleta resultado do textarea hidden
     const resEl = document.getElementById('vbResultadoJson');
     const resultadoStr = resEl ? resEl.textContent.trim() : '{}';
 
-    // Valida JSON antes de enviar
     try { JSON.parse(resultadoStr); } catch(e) {
-      btn.innerHTML = '<i class="bi bi-bookmark-plus me-1"></i> Salvar análise';
+      btn.innerHTML = _isEdicao ? '<i class="bi bi-floppy me-1"></i> Salvar alterações' : '<i class="bi bi-bookmark-plus me-1"></i> Salvar análise';
       btn.disabled = false;
       alert('Erro ao capturar resultado. Recalcule e tente novamente.');
       return;
     }
 
-    const nome = dados.nome_projeto || prompt('Nome desta análise:', 'Análise sem nome') || 'Análise sem nome';
+    const nomeEl = document.getElementById('vbEditarNome');
+    const nomeDefault = nomeEl ? nomeEl.value : (dados.nome_projeto || 'Análise sem nome');
+    const nome = _isEdicao
+      ? nomeDefault
+      : (dados.nome_projeto || prompt('Nome desta análise:', 'Análise sem nome') || 'Análise sem nome');
+
+    const payload = { nome, dados_json: JSON.stringify(dados), resultado_json: resultadoStr };
+    if (_isEdicao) payload.analise_id = parseInt(_vbEditarId);
 
     try {
       const r = await fetch('/ferramentas/viabilidade/salvar', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({
-          nome: nome,
-          dados_json: JSON.stringify(dados),
-          resultado_json: resultadoStr,
-        }),
+        body: JSON.stringify(payload),
       });
-
-      if (!r.ok) { throw new Error('HTTP ' + r.status); }
 
       const d = await r.json();
 
@@ -683,22 +803,40 @@ _SALVAR_SCRIPT = r"""
         btn.innerHTML = '<i class="bi bi-check2 me-1"></i> Salvo!';
         btn.className = 'btn btn-success';
 
-        // Mostra link de compartilhamento
+        // Remove aviso anterior se existir
+        const prev = document.getElementById('vbSalvoMsg');
+        if (prev) prev.remove();
+
         const linkDiv = document.createElement('div');
+        linkDiv.id = 'vbSalvoMsg';
         linkDiv.className = 'alert alert-success mt-2';
         linkDiv.style.fontSize = '.85rem';
-        linkDiv.innerHTML = `
-          <strong>✅ Análise salva!</strong>
-          ${d.cobrado ? `<span class="text-muted ms-2">(${d.creditos_cobrados} créditos debitados)</span>` : `<span class="text-muted ms-2">(${d.gratis_restantes} gratuita${d.gratis_restantes !== 1 ? 's' : ''} restante${d.gratis_restantes !== 1 ? 's' : ''})</span>`}
-          <div class="d-flex gap-2 align-items-center mt-2 flex-wrap">
-            <input type="text" id="linkSalvo" value="${window.location.origin}${d.link}"
-                   readonly style="border:1px solid #ccc;border-radius:6px;padding:.3rem .65rem;font-size:.8rem;flex:1;min-width:200px;">
-            <button class="btn btn-sm btn-success" onclick="navigator.clipboard.writeText(document.getElementById('linkSalvo').value).then(()=>{this.textContent='Copiado!'})">
-              <i class="bi bi-clipboard"></i> Copiar link
-            </button>
-            <a href="/ferramentas/viabilidade/historico" class="btn btn-sm btn-outline-success">Ver histórico</a>
-          </div>
-        `;
+
+        if (d.atualizado) {
+          linkDiv.innerHTML = `
+            <strong>✅ Alterações salvas!</strong>
+            <div class="d-flex gap-2 align-items-center mt-2 flex-wrap">
+              <a href="/ferramentas/viabilidade/ver/${d.token}" target="_blank" class="btn btn-sm btn-success">
+                <i class="bi bi-eye me-1"></i> Ver análise
+              </a>
+              <button class="btn btn-sm btn-outline-success" onclick="navigator.clipboard.writeText('${window.location.origin}/ferramentas/viabilidade/ver/${d.token}').then(()=>{this.textContent='Copiado!'})">
+                <i class="bi bi-clipboard"></i> Copiar link
+              </button>
+              <a href="/ferramentas/viabilidade/historico" class="btn btn-sm btn-outline-secondary">Ver histórico</a>
+            </div>`;
+        } else {
+          linkDiv.innerHTML = `
+            <strong>✅ Análise salva!</strong>
+            ${d.cobrado ? `<span class="text-muted ms-2">(${d.creditos_cobrados} créditos debitados)</span>` : `<span class="text-muted ms-2">(${d.gratis_restantes} gratuita${d.gratis_restantes !== 1 ? 's' : ''} restante${d.gratis_restantes !== 1 ? 's' : ''})</span>`}
+            <div class="d-flex gap-2 align-items-center mt-2 flex-wrap">
+              <input type="text" id="linkSalvo" value="${window.location.origin}${d.link}"
+                     readonly style="border:1px solid #ccc;border-radius:6px;padding:.3rem .65rem;font-size:.8rem;flex:1;min-width:200px;">
+              <button class="btn btn-sm btn-success" onclick="navigator.clipboard.writeText(document.getElementById('linkSalvo').value).then(()=>{this.textContent='Copiado!'})">
+                <i class="bi bi-clipboard"></i> Copiar link
+              </button>
+              <a href="/ferramentas/viabilidade/historico" class="btn btn-sm btn-outline-success">Ver histórico</a>
+            </div>`;
+        }
         const acoes = document.querySelector('#tab-resultado .d-flex.gap-2');
         if (acoes) acoes.parentNode.insertBefore(linkDiv, acoes.nextSibling);
 
@@ -713,12 +851,12 @@ _SALVAR_SCRIPT = r"""
         const acoes = document.querySelector('#tab-resultado .d-flex.gap-2');
         if (acoes) acoes.parentNode.insertBefore(msg, acoes.nextSibling);
       } else {
-        btn.innerHTML = '<i class="bi bi-bookmark-plus me-1"></i> Salvar análise';
+        btn.innerHTML = _isEdicao ? '<i class="bi bi-floppy me-1"></i> Salvar alterações' : '<i class="bi bi-bookmark-plus me-1"></i> Salvar análise';
         btn.disabled = false;
         alert('Erro: ' + (d.erro || 'tente novamente'));
       }
     } catch(e) {
-      btn.innerHTML = '<i class="bi bi-bookmark-plus me-1"></i> Salvar análise';
+      btn.innerHTML = _isEdicao ? '<i class="bi bi-floppy me-1"></i> Salvar alterações' : '<i class="bi bi-bookmark-plus me-1"></i> Salvar análise';
       btn.disabled = false;
       btn.className = 'btn btn-primary';
       alert('Erro de conexão. Tente novamente.');
@@ -734,7 +872,9 @@ if _vb_tmpl and "salvarAnalise" not in _vb_tmpl:
     # Usa textarea hidden para evitar problemas com aspas no value
     _vb_tmpl = _vb_tmpl.replace(
         "</form>",
-        "{% if resultado %}<textarea id=\"vbResultadoJson\" style=\"display:none;\">{{ resultado|tojson }}</textarea>{% endif %}\n</form>\n" + _SALVAR_SCRIPT,
+        "{% if resultado %}<textarea id=\"vbResultadoJson\" style=\"display:none;\">{{ resultado|tojson }}</textarea>{% endif %}\n"
+        "{% if editar_id %}<input type=\"hidden\" id=\"vbEditarId\" value=\"{{ editar_id }}\"><input type=\"hidden\" id=\"vbEditarNome\" value=\"{{ editar_nome|e }}\">{% endif %}\n"
+        "</form>\n" + _SALVAR_SCRIPT,
         1,
     )
     TEMPLATES["ferramenta_viabilidade.html"] = _vb_tmpl
