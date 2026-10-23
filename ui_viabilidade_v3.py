@@ -531,6 +531,7 @@ async def ferramenta_viabilidade_post_v3(
     dados["cenario"] = cenario
 
     resultado = _calcular_v3(dados)
+    _editar_id = dados.get("estudo_id") or dados.get("editar_id")
     return render("ferramenta_viabilidade.html", request=request, context={
         "current_user":    ctx.user,
         "current_company": ctx.company,
@@ -538,6 +539,7 @@ async def ferramenta_viabilidade_post_v3(
         "current_client":  cc,
         "resultado":       resultado,
         "dados":           dados,
+        "editar_id":       int(_editar_id) if _editar_id else None,
     })
 
 
