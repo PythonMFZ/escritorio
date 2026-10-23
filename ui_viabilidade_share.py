@@ -242,12 +242,28 @@ async def viabilidade_salvar_v1(
     form = await request.form()
     dados = _parse_form_viabilidade(dict(form))
     nome_projeto = (dados.get("nome_projeto") or "Sem nome").strip() or "Sem nome"
+    estudo_id = form.get("estudo_id")
     try:
         r_real = _calc_cenario_viab(dados, "realista")
         r_otim = _calc_cenario_viab(dados, "otimista")
         r_pess = _calc_cenario_viab(dados, "pessimista")
     except Exception as ex:
         return _JRS({"ok": False, "error": f"Erro no cálculo: {ex}"})
+    # ── Modo update: atualiza estudo existente ────────────────────────────────
+    if estudo_id:
+        estudo = session.get(EstudoViabilidade, int(estudo_id))
+        if estudo and estudo.company_id == ctx.company.id:
+            estudo.nome_projeto = nome_projeto
+            estudo.dados_input_json = _json_s.dumps(dados, default=str)
+            estudo.resultado_realista_json = _json_s.dumps(_compact_result(r_real), default=str)
+            estudo.resultado_otimista_json = _json_s.dumps(_compact_result(r_otim), default=str)
+            estudo.resultado_pessimista_json = _json_s.dumps(_compact_result(r_pess), default=str)
+            session.add(estudo)
+            session.commit()
+            session.refresh(estudo)
+            return _JRS({"ok": True, "id": estudo.id, "token": estudo.share_token,
+                         "url": f"/viabilidade/share/{estudo.share_token}", "atualizado": True})
+    # ── Modo criação: insere novo estudo ──────────────────────────────────────
     _active_client_id = get_active_client_id(request, session, ctx)
     token = str(_uuid_s.uuid4())
     estudo = EstudoViabilidade(
@@ -343,6 +359,44 @@ async def viabilidade_excluir_v1(
     return _JRS({"ok": True})
 
 
+# ── Rota: duplicar estudo ─────────────────────────────────────────────────────
+
+app.router.routes = [r for r in app.router.routes if not (
+    hasattr(r, "path") and r.path == "/ferramentas/viabilidade/duplicar/{estudo_id}"
+)]
+
+@app.post("/ferramentas/viabilidade/duplicar/{estudo_id}")
+@require_login
+async def viabilidade_duplicar_v1(
+    estudo_id: int,
+    request: Request, session: Session = Depends(get_session)
+):
+    from fastapi.responses import JSONResponse as _JRS
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        return _JRS({"ok": False}, status_code=401)
+    estudo = session.get(EstudoViabilidade, estudo_id)
+    if not estudo or estudo.company_id != ctx.company.id:
+        return _JRS({"ok": False, "erro": "Não encontrado"}, status_code=404)
+    copia = EstudoViabilidade(
+        company_id=estudo.company_id,
+        client_id=estudo.client_id,
+        nome_projeto=f"{estudo.nome_projeto} (cópia)",
+        dados_input_json=estudo.dados_input_json,
+        resultado_realista_json=estudo.resultado_realista_json,
+        resultado_otimista_json=estudo.resultado_otimista_json,
+        resultado_pessimista_json=estudo.resultado_pessimista_json,
+        share_token=str(_uuid_s.uuid4()),
+        criado_em=_datetime_s.utcnow().isoformat(),
+        criado_por_id=getattr(ctx.user, "id", None),
+    )
+    session.add(copia)
+    session.commit()
+    session.refresh(copia)
+    return _JRS({"ok": True, "id": copia.id,
+                 "redirect": f"/ferramentas/viabilidade/abrir/{copia.id}"})
+
+
 # ── Rota: reabrir ─────────────────────────────────────────────────────────────
 
 app.router.routes = [r for r in app.router.routes if not (
@@ -384,6 +438,8 @@ async def viabilidade_abrir_v1(
         "resultado":       resultado,
         "dados":           dados,
         "share_token":     estudo.share_token,
+        "editar_id":       estudo.id,
+        "editar_nome":     estudo.dados_input_json and _json_s.loads(estudo.dados_input_json).get("nome_projeto", "Análise sem nome") or "Análise sem nome",
     })
 
 
@@ -1256,18 +1312,24 @@ _js_extras = r"""
 async function salvarEstudo(){
   const form=document.getElementById('vbForm');
   const btn=document.getElementById('btnSalvar');
+  const editarId=document.getElementById('_vbEstudoId');
+  const isEdicao=!!editarId;
   if(btn){btn.disabled=true;btn.innerHTML='<i class="bi bi-hourglass-split me-1"></i>Salvando...';}
   try{
-    const resp=await fetch('/ferramentas/viabilidade/salvar',{method:'POST',body:new FormData(form)});
+    const fd=new FormData(form);
+    if(editarId) fd.append('estudo_id', editarId.value);
+    const resp=await fetch('/ferramentas/viabilidade/salvar',{method:'POST',body:fd});
     const data=await resp.json();
     if(data.ok){
       const url=window.location.origin+data.url;
       document.getElementById('shareUrlInput').value=url;
       document.getElementById('shareUrlLink').href=url;
       document.getElementById('shareModal').style.display='flex';
+      if(isEdicao&&btn){btn.innerHTML='<i class="bi bi-check2 me-1"></i>Salvo!';}
     }else{alert('Erro ao salvar: '+(data.error||'Tente novamente'));}
   }catch(e){alert('Erro de conexão ao salvar.');}
-  if(btn){btn.disabled=false;btn.innerHTML='<i class="bi bi-share me-1"></i>Salvar &amp; Compartilhar';}
+  if(btn&&!document.getElementById('_vbEstudoId')){btn.disabled=false;btn.innerHTML='<i class="bi bi-share me-1"></i>Salvar &amp; Compartilhar';}
+  else if(btn){btn.disabled=false;}
 }
 function copyShareUrl(){
   const inp=document.getElementById('shareUrlInput');
@@ -1304,7 +1366,9 @@ async function loadHistorico(){
           <a href="${e.share_url}" target="_blank" class="btn btn-sm btn-outline-secondary" style="font-size:.8rem;">
             <i class="bi bi-share me-1"></i>Ver link</a>
           <a href="${e.open_url}" class="btn btn-sm" style="background:#f97316;color:#fff;border:none;font-size:.8rem;">
-            <i class="bi bi-folder2-open me-1"></i>Abrir</a>
+            <i class="bi bi-pencil me-1"></i>Editar</a>
+          <button onclick="duplicarEstudo(${e.id},this)" class="btn btn-sm btn-outline-secondary" style="font-size:.8rem;" title="Duplicar estudo">
+            <i class="bi bi-copy me-1"></i>Duplicar</button>
           <a href="/ferramentas/mapa-unidades" onclick="ativarEmpStudo(event,${e.id})" class="btn btn-sm btn-outline-primary" style="font-size:.8rem;" title="Criar empreendimento a partir deste estudo">
             <i class="bi bi-buildings me-1"></i>Mapa</a>
           <button onclick="excluirEstudo(${e.id})" class="btn btn-sm btn-outline-danger" style="font-size:.8rem;" title="Excluir estudo">
@@ -1315,6 +1379,17 @@ async function loadHistorico(){
   }catch(e){
     el.innerHTML='<div class="text-muted small text-center py-3 text-danger"><i class="bi bi-exclamation-circle me-1"></i>Erro ao carregar histórico.</div>';
   }
+}
+async function duplicarEstudo(id, btn){
+  const orig=btn.innerHTML;
+  btn.disabled=true;
+  btn.innerHTML='<i class="bi bi-hourglass-split me-1"></i>Duplicando...';
+  try{
+    const resp=await fetch('/ferramentas/viabilidade/duplicar/'+id,{method:'POST'});
+    const data=await resp.json();
+    if(data.ok&&data.redirect){window.location.href=data.redirect;}
+    else{btn.disabled=false;btn.innerHTML=orig;alert('Erro: '+(data.erro||'tente novamente'));}
+  }catch(e){btn.disabled=false;btn.innerHTML=orig;alert('Erro de conexão.');}
 }
 async function excluirEstudo(id){
   if(!confirm('Excluir este estudo? Esta ação não pode ser desfeita.'))return;
@@ -1346,6 +1421,14 @@ _vb_tmpl = _vb_tmpl.replace(
     "function rmFase(i){const el=document.getElementById('fase-'+i);if(el)el.remove();}" + _js_extras,
     1
 )
+
+# Injeta campo oculto para modo edição (editar_id passado pelo contexto da rota /abrir/)
+if "{% if editar_id %}" not in _vb_tmpl:
+    _vb_tmpl = _vb_tmpl.replace(
+        "</form>",
+        "{% if editar_id %}<input type=\"hidden\" id=\"_vbEstudoId\" value=\"{{ editar_id }}\">{% endif %}\n</form>",
+        1,
+    )
 
 TEMPLATES["ferramenta_viabilidade.html"] = _vb_tmpl
 

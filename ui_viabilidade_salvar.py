@@ -301,82 +301,6 @@ async def viabilidade_base(
     })
 
 
-# ── GET /ferramentas/viabilidade/abrir/{id} (edita o próprio registro) ───────
-
-@app.get("/ferramentas/viabilidade/abrir/{analise_id}", response_class=HTMLResponse)
-@require_login
-async def viabilidade_abrir(
-    analise_id: int,
-    request: Request,
-    session: Session = Depends(get_session),
-) -> HTMLResponse:
-    ctx = get_tenant_context(request, session)
-    if not ctx:
-        request.session.clear()
-        return RedirectResponse("/login", status_code=303)
-
-    analise = session.get(ViabilidadeAnalise, analise_id)
-    if not analise or analise.company_id != ctx.company.id:
-        return RedirectResponse("/ferramentas/viabilidade/historico", status_code=303)
-
-    try:
-        dados = _json2.loads(analise.dados_json)
-    except Exception:
-        dados = {}
-
-    cc = get_client_or_none(session, ctx.company.id,
-                            get_active_client_id(request, session, ctx))
-
-    try:
-        if "usar_financiamento" in dados:
-            resultado = _calcular_v3(dados)
-        else:
-            resultado = _calcular_viabilidade_v2(dados)
-    except Exception:
-        resultado = {}
-
-    return render("ferramenta_viabilidade.html", request=request, context={
-        "current_user":    ctx.user,
-        "current_company": ctx.company,
-        "role":            ctx.membership.role,
-        "current_client":  cc,
-        "resultado":       resultado,
-        "dados":           dados,
-        "editar_id":       analise.id,
-        "editar_nome":     analise.nome,
-    })
-
-
-# ── POST /ferramentas/viabilidade/duplicar/{id} ───────────────────────────────
-
-@app.post("/ferramentas/viabilidade/duplicar/{analise_id}")
-@require_login
-async def viabilidade_duplicar(
-    analise_id: int,
-    request: Request,
-    session: Session = Depends(get_session),
-):
-    ctx = get_tenant_context(request, session)
-    if not ctx:
-        return JSONResponse({"ok": False}, status_code=401)
-
-    analise = session.get(ViabilidadeAnalise, analise_id)
-    if not analise or analise.company_id != ctx.company.id:
-        return JSONResponse({"ok": False, "erro": "Não encontrada."}, status_code=404)
-
-    copia = ViabilidadeAnalise(
-        company_id=analise.company_id,
-        client_id=analise.client_id,
-        nome=f"{analise.nome} (cópia)",
-        dados_json=analise.dados_json,
-        resultado_json=analise.resultado_json,
-        created_at=str(utcnow()),
-    )
-    session.add(copia)
-    session.commit()
-    session.refresh(copia)
-    return JSONResponse({"ok": True, "id": copia.id,
-                         "redirect": f"/ferramentas/viabilidade/abrir/{copia.id}"})
 
 
 # ── DELETE /ferramentas/viabilidade/apagar/{id} ──────────────────────────────
@@ -730,8 +654,7 @@ TEMPLATES["viabilidade_publica.html"] = r"""
 </html>
 """
 
-# ── Injeta botão "Salvar" e "Ver histórico" no template de resultado ──────────
-# Adiciona script de salvamento ao template existente
+# ── Script de salvamento (não usado — ui_viabilidade_share.py gerencia o save) ──
 _SALVAR_SCRIPT = r"""
 <script>
 (function(){
@@ -865,26 +788,6 @@ _SALVAR_SCRIPT = r"""
 })();
 </script>
 """
-
-# Injeta script no template de viabilidade (sempre reinjeta para garantir versão atual)
-import re as _re_vb
-_vb_tmpl = TEMPLATES.get("ferramenta_viabilidade.html", "")
-if _vb_tmpl:
-    # Remove injeção anterior (textarea + script antigo) para evitar duplicata
-    _vb_tmpl = _re_vb.sub(
-        r'{% if resultado %}<textarea id="vbResultadoJson".*?</script>\n',
-        '',
-        _vb_tmpl,
-        flags=_re_vb.DOTALL,
-    )
-    # Injeta versão atual antes do </form>
-    _inject = (
-        "{% if resultado %}<textarea id=\"vbResultadoJson\" style=\"display:none;\">{{ resultado|tojson }}</textarea>{% endif %}\n"
-        "{% if editar_id %}<input type=\"hidden\" id=\"vbEditarId\" value=\"{{ editar_id }}\"><input type=\"hidden\" id=\"vbEditarNome\" value=\"{{ editar_nome|e }}\">{% endif %}\n"
-        "</form>\n" + _SALVAR_SCRIPT
-    )
-    _vb_tmpl = _vb_tmpl.replace("</form>", _inject, 1)
-    TEMPLATES["ferramenta_viabilidade.html"] = _vb_tmpl
 
 if hasattr(templates_env.loader, "mapping"):
     templates_env.loader.mapping = TEMPLATES
