@@ -866,17 +866,24 @@ _SALVAR_SCRIPT = r"""
 </script>
 """
 
-# Injeta script no template de viabilidade
+# Injeta script no template de viabilidade (sempre reinjeta para garantir versão atual)
+import re as _re_vb
 _vb_tmpl = TEMPLATES.get("ferramenta_viabilidade.html", "")
-if _vb_tmpl and "salvarAnalise" not in _vb_tmpl:
-    # Usa textarea hidden para evitar problemas com aspas no value
-    _vb_tmpl = _vb_tmpl.replace(
-        "</form>",
+if _vb_tmpl:
+    # Remove injeção anterior (textarea + script antigo) para evitar duplicata
+    _vb_tmpl = _re_vb.sub(
+        r'{% if resultado %}<textarea id="vbResultadoJson".*?</script>\n',
+        '',
+        _vb_tmpl,
+        flags=_re_vb.DOTALL,
+    )
+    # Injeta versão atual antes do </form>
+    _inject = (
         "{% if resultado %}<textarea id=\"vbResultadoJson\" style=\"display:none;\">{{ resultado|tojson }}</textarea>{% endif %}\n"
         "{% if editar_id %}<input type=\"hidden\" id=\"vbEditarId\" value=\"{{ editar_id }}\"><input type=\"hidden\" id=\"vbEditarNome\" value=\"{{ editar_nome|e }}\">{% endif %}\n"
-        "</form>\n" + _SALVAR_SCRIPT,
-        1,
+        "</form>\n" + _SALVAR_SCRIPT
     )
+    _vb_tmpl = _vb_tmpl.replace("</form>", _inject, 1)
     TEMPLATES["ferramenta_viabilidade.html"] = _vb_tmpl
 
 if hasattr(templates_env.loader, "mapping"):
