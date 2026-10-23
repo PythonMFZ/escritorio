@@ -97,12 +97,15 @@ async def viabilidade_salvar(
         client = session.exec(
             select(Client).where(Client.company_id == ctx.company.id).limit(1)
         ).first()
+        print(f"[viab_salvar] fallback client: {client}")
     if not client:
+        print(f"[viab_salvar] 400: nenhum cliente — company_id={ctx.company.id}")
         return JSONResponse({"ok": False, "erro": "Nenhum cliente cadastrado nesta empresa."}, status_code=400)
 
     try:
         body = await request.json()
-    except Exception:
+    except Exception as _je:
+        print(f"[viab_salvar] 400: JSON inválido — {_je}")
         return JSONResponse({"ok": False, "erro": "JSON inválido."}, status_code=400)
 
     dados_json    = body.get("dados_json", "{}")
