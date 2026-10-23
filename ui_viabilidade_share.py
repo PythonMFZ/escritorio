@@ -397,6 +397,44 @@ async def viabilidade_duplicar_v1(
                  "redirect": f"/ferramentas/viabilidade/abrir/{copia.id}"})
 
 
+# ── Rota: atualizar estudo existente (modo edição) ───────────────────────────
+
+app.router.routes = [r for r in app.router.routes if not (
+    hasattr(r, "path") and r.path == "/ferramentas/viabilidade/atualizar/{estudo_id}"
+)]
+
+@app.post("/ferramentas/viabilidade/atualizar/{estudo_id}")
+@require_login
+async def viabilidade_atualizar_v1(
+    estudo_id: int,
+    request: Request, session: Session = Depends(get_session)
+):
+    from fastapi.responses import JSONResponse as _JRS
+    ctx = get_tenant_context(request, session)
+    if not ctx:
+        return _JRS({"ok": False, "erro": "Não autenticado"}, status_code=401)
+    estudo = session.get(EstudoViabilidade, estudo_id)
+    if not estudo or estudo.company_id != ctx.company.id:
+        return _JRS({"ok": False, "erro": "Não encontrado"}, status_code=404)
+    form = await request.form()
+    dados = _parse_form_viabilidade(dict(form))
+    nome_projeto = (dados.get("nome_projeto") or estudo.nome_projeto or "Sem nome").strip()
+    try:
+        r_real = _calc_cenario_viab(dados, "realista")
+        r_otim = _calc_cenario_viab(dados, "otimista")
+        r_pess = _calc_cenario_viab(dados, "pessimista")
+    except Exception as ex:
+        return _JRS({"ok": False, "erro": f"Erro no cálculo: {ex}"})
+    estudo.nome_projeto = nome_projeto
+    estudo.dados_input_json = _json_s.dumps(dados, default=str)
+    estudo.resultado_realista_json  = _json_s.dumps(_compact_result(r_real), default=str)
+    estudo.resultado_otimista_json  = _json_s.dumps(_compact_result(r_otim), default=str)
+    estudo.resultado_pessimista_json = _json_s.dumps(_compact_result(r_pess), default=str)
+    session.add(estudo)
+    session.commit()
+    return _JRS({"ok": True, "id": estudo.id, "nome": nome_projeto})
+
+
 # ── Rota: reabrir ─────────────────────────────────────────────────────────────
 
 app.router.routes = [r for r in app.router.routes if not (
@@ -1309,27 +1347,60 @@ _vb_tmpl = _vb_tmpl.replace(
 
 # 5) Adiciona funções JS (salvarEstudo, copyShareUrl, loadHistorico) antes do </script> final
 _js_extras = r"""
+// Injeta botão "Salvar" dedicado quando estiver em modo edição
+document.addEventListener('DOMContentLoaded', function(){
+  var editarId = document.getElementById('_vbEstudoId');
+  if (!editarId) return;
+  var btnSalvarC = document.getElementById('btnSalvar');
+  if (!btnSalvarC) return;
+  var btnEditar = document.createElement('button');
+  btnEditar.type = 'button';
+  btnEditar.id = 'btnSalvarEdicao';
+  btnEditar.className = 'btn btn-primary';
+  btnEditar.innerHTML = '<i class="bi bi-floppy me-1"></i>Salvar';
+  btnEditar.onclick = salvarEdicao;
+  btnSalvarC.parentNode.insertBefore(btnEditar, btnSalvarC);
+});
+
+async function salvarEdicao(){
+  var editarId = document.getElementById('_vbEstudoId');
+  if (!editarId) return;
+  var btn = document.getElementById('btnSalvarEdicao');
+  if (btn){btn.disabled=true; btn.innerHTML='<i class="bi bi-hourglass-split me-1"></i>Salvando...';}
+  var form = document.getElementById('vbForm');
+  try{
+    var resp = await fetch('/ferramentas/viabilidade/atualizar/'+editarId.value, {method:'POST', body:new FormData(form)});
+    var data = await resp.json();
+    if(data.ok){
+      if(btn){btn.innerHTML='<i class="bi bi-check2 me-1"></i>Salvo!'; btn.className='btn btn-success';}
+      setTimeout(function(){
+        if(btn){btn.innerHTML='<i class="bi bi-floppy me-1"></i>Salvar'; btn.className='btn btn-primary'; btn.disabled=false;}
+      }, 2500);
+    } else {
+      alert('Erro ao salvar: '+(data.erro||'Tente novamente'));
+      if(btn){btn.disabled=false; btn.innerHTML='<i class="bi bi-floppy me-1"></i>Salvar';}
+    }
+  }catch(e){
+    alert('Erro de conexão ao salvar.');
+    if(btn){btn.disabled=false; btn.innerHTML='<i class="bi bi-floppy me-1"></i>Salvar';}
+  }
+}
+
 async function salvarEstudo(){
   const form=document.getElementById('vbForm');
   const btn=document.getElementById('btnSalvar');
-  const editarId=document.getElementById('_vbEstudoId');
-  const isEdicao=!!editarId;
   if(btn){btn.disabled=true;btn.innerHTML='<i class="bi bi-hourglass-split me-1"></i>Salvando...';}
   try{
-    const fd=new FormData(form);
-    if(editarId) fd.append('estudo_id', editarId.value);
-    const resp=await fetch('/ferramentas/viabilidade/salvar',{method:'POST',body:fd});
+    const resp=await fetch('/ferramentas/viabilidade/salvar',{method:'POST',body:new FormData(form)});
     const data=await resp.json();
     if(data.ok){
       const url=window.location.origin+data.url;
       document.getElementById('shareUrlInput').value=url;
       document.getElementById('shareUrlLink').href=url;
       document.getElementById('shareModal').style.display='flex';
-      if(isEdicao&&btn){btn.innerHTML='<i class="bi bi-check2 me-1"></i>Salvo!';}
     }else{alert('Erro ao salvar: '+(data.error||'Tente novamente'));}
   }catch(e){alert('Erro de conexão ao salvar.');}
-  if(btn&&!document.getElementById('_vbEstudoId')){btn.disabled=false;btn.innerHTML='<i class="bi bi-share me-1"></i>Salvar &amp; Compartilhar';}
-  else if(btn){btn.disabled=false;}
+  if(btn){btn.disabled=false;btn.innerHTML='<i class="bi bi-share me-1"></i>Salvar &amp; Compartilhar';}
 }
 function copyShareUrl(){
   const inp=document.getElementById('shareUrlInput');
