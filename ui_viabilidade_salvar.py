@@ -93,7 +93,12 @@ async def viabilidade_salvar(
     client = get_client_or_none(session, ctx.company.id,
                                 get_active_client_id(request, session, ctx))
     if not client:
-        return JSONResponse({"ok": False, "erro": "Nenhum cliente ativo."}, status_code=400)
+        # Fallback: usa qualquer cliente da empresa (viabilidade não depende de cliente específico)
+        client = session.exec(
+            select(Client).where(Client.company_id == ctx.company.id).limit(1)
+        ).first()
+    if not client:
+        return JSONResponse({"ok": False, "erro": "Nenhum cliente cadastrado nesta empresa."}, status_code=400)
 
     try:
         body = await request.json()
