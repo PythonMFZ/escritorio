@@ -435,6 +435,34 @@ async def viabilidade_atualizar_v1(
     return _JRS({"ok": True, "id": estudo.id, "nome": nome_projeto})
 
 
+# ── Rota: debug JSON de estudo (temporário) ───────────────────────────────────
+
+@app.get("/ferramentas/viabilidade/debug-dados/{estudo_id}")
+@require_login
+async def viabilidade_debug_dados(estudo_id: int, request: Request, session: Session = Depends(get_session)):
+    from fastapi.responses import JSONResponse as _JRS
+    ctx = get_tenant_context(request, session)
+    if not ctx or ctx.membership.role not in ("admin", "owner"):
+        return _JRS({"erro": "sem permissão"}, status_code=403)
+    estudo = session.get(EstudoViabilidade, estudo_id)
+    if not estudo or estudo.company_id != ctx.company.id:
+        return _JRS({"erro": "não encontrado"}, status_code=404)
+    raw = _json_s.loads(estudo.dados_input_json)
+    pav_keys = [k for k in raw if k.startswith("pav_nome_")]
+    un_keys  = [k for k in raw if k.startswith("un_met_")]
+    tip_keys = [k for k in raw if k.startswith("tip_nome_")]
+    return _JRS({
+        "has_pavimentos": "pavimentos" in raw,
+        "pavimentos_count": len(raw.get("pavimentos") or []),
+        "has_tipologias": "tipologias" in raw,
+        "tipologias_count": len(raw.get("tipologias") or []),
+        "raw_pav_nome_keys": pav_keys[:10],
+        "raw_un_met_keys": un_keys[:10],
+        "raw_tip_nome_keys": tip_keys[:5],
+        "pavimentos": raw.get("pavimentos", []),
+        "tipologias_sample": (raw.get("tipologias") or [])[:3],
+    })
+
 # ── Rota: reabrir ─────────────────────────────────────────────────────────────
 
 app.router.routes = [r for r in app.router.routes if not (
