@@ -460,10 +460,25 @@ async def viabilidade_abrir_v1(
     cc = get_client_or_none(session, ctx.company.id, _cli_id_ab)
     try:
         dados = _json_s.loads(estudo.dados_input_json)
-        # Re-parseia para reconstituir tipologias a partir das chaves brutas do form
-        # (necessário para estudos salvos antes do fix ou com UI de pavimentos)
-        if not dados.get("tipologias"):
-            dados = _parse_form_viabilidade(dados)
+        # Reconstrói tipologias/pavimentos se ausentes (estudos salvos antes do fix)
+        if not dados.get("tipologias") or not dados.get("pavimentos"):
+            # Se tem chaves brutas do form (pav_nome_* ou tip_nome_*), parseia
+            if any(k.startswith("pav_nome_") or k.startswith("tip_nome_") for k in dados):
+                dados = _parse_form_viabilidade(dados)
+            # Se tem tipologias como lista mas não tem pavimentos, reconstrói pavimentos
+            elif dados.get("tipologias") and not dados.get("pavimentos"):
+                _pav_map = {}
+                for _t in dados["tipologias"]:
+                    _pnome = _t.get("pavimento") or f"Pavimento {_t.get('andar_inicio',1)}"
+                    if _pnome not in _pav_map:
+                        _pav_map[_pnome] = {"nome": _pnome, "andar": int(_t.get("andar_inicio", 1)), "unidades": []}
+                    _pav_map[_pnome]["unidades"].append({
+                        "nome": _t.get("nome",""), "tipo": _t.get("tipo","Residencial"),
+                        "metragem": _t.get("metragem",0),
+                        "preco_proprio": _t.get("preco_m2") if _t.get("preco_m2") else None,
+                        "dif_proprio": _t.get("dif_proprio",0), "permuta": _t.get("permuta",False),
+                    })
+                dados["pavimentos"] = list(_pav_map.values())
         dados["cenario"] = "realista"
         resultado = _calc_cenario_viab(dados, "realista")
     except Exception:
