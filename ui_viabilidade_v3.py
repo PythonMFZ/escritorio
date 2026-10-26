@@ -847,7 +847,27 @@ TEMPLATES["ferramenta_viabilidade.html"] = r"""
   <div class="vb-row">
     <div><div class="vb-lbl">Preço base (R$/m²)</div><div class="pw"><span class="pre">R$</span><input class="vb-inp pl" type="number" name="preco_m2_base" step="100" min="0" placeholder="12.500" value="{{ dados.preco_m2_base or '12500' }}"></div></div>
     <div><div class="vb-lbl">Diferencial por andar (%)</div><div class="pw"><span class="suf">%</span><input class="vb-inp pr" type="number" name="diferencial_andar" step="0.1" min="0" max="5" placeholder="0.5" value="{{ dados.diferencial_andar or '0.5' }}"></div><div class="vb-hint">Incremento no preço/m² a cada andar</div></div>
+    <div style="display:flex;align-items:flex-end;padding-bottom:.2rem;">
+      <button type="button" class="btn btn-outline-secondary btn-sm" onclick="atualizarPrecoBase()" title="Recalcula o Preço/m² de todas as tipologias com base no Preço Base e no Diferencial por Andar">
+        <i class="bi bi-arrow-repeat me-1"></i>Atualizar pelo preço base
+      </button>
+    </div>
   </div>
+  <script>
+  function atualizarPrecoBase(){
+    var base = parseFloat(document.querySelector('[name=preco_m2_base]').value) || 12500;
+    var dif  = parseFloat(document.querySelector('[name=diferencial_andar]').value) || 0;
+    var rows = document.querySelectorAll('#tipCont .tip-row');
+    rows.forEach(function(row){
+      var andarEl = row.querySelector('[name^=tip_andar_]');
+      var precoEl = row.querySelector('[name^=tip_preco_]');
+      if(!precoEl) return;
+      var andar = andarEl ? (parseInt(andarEl.value) || 1) : 1;
+      var preco = base * (1 + (andar - 1) * dif / 100);
+      precoEl.value = Math.round(preco);
+    });
+  }
+  </script>
   <div class="vb-sep">Tipologias</div>
   <div class="tip-hdr">
     <span>Nome / Descrição</span><span>Tipo</span><span>Metragem (m²)</span><span>Qtd</span><span>Preço/m²</span><span>Andar ini.</span><span>Permuta</span><span></span>
