@@ -141,6 +141,7 @@ async def ferramenta_viabilidade_post_prodv2(
             t["preco_m2"] = float(t.get("preco_m2", 0) or 0) * mult
     dados["cenario"] = cenario
 
+    _editar_id = dados.get("estudo_id") or dados.get("editar_id")
     resultado = _calcular_v3(dados)
     return render("ferramenta_viabilidade.html", request=request, context={
         "current_user":    ctx.user,
@@ -149,6 +150,7 @@ async def ferramenta_viabilidade_post_prodv2(
         "current_client":  cc,
         "resultado":       resultado,
         "dados":           dados,
+        "editar_id":       int(_editar_id) if _editar_id else None,
     })
 
 

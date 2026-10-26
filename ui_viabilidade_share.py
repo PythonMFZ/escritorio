@@ -1494,10 +1494,14 @@ _vb_tmpl = _vb_tmpl.replace(
 )
 
 # Injeta campo oculto para modo edição (editar_id passado pelo contexto da rota /abrir/)
+# Remove versão antiga sem name= se presente
+if "{% if editar_id %}" in _vb_tmpl and 'name="estudo_id"' not in _vb_tmpl:
+    import re as _re_sh
+    _vb_tmpl = _re_sh.sub(r'\{%\s*if editar_id\s*%\}.*?\{%\s*endif\s*%\}\n?', '', _vb_tmpl)
 if "{% if editar_id %}" not in _vb_tmpl:
     _vb_tmpl = _vb_tmpl.replace(
         "</form>",
-        "{% if editar_id %}<input type=\"hidden\" id=\"_vbEstudoId\" value=\"{{ editar_id }}\">{% endif %}\n</form>",
+        "{% if editar_id %}<input type=\"hidden\" id=\"_vbEstudoId\" name=\"estudo_id\" value=\"{{ editar_id }}\">{% endif %}\n</form>",
         1,
     )
 
