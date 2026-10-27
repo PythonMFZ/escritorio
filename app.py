@@ -50812,12 +50812,26 @@ _LOCAL_LABELS = {
 def _agenda_build_ics(*, uid: str, summary: str, description: str, dtstart: str,
                        dtend: str, organizer_email: str, attendee_emails: list) -> str:
     nl = "\r\n"
+    # VTIMEZONE block for America/Sao_Paulo (UTC-3, sem horário de verão desde 2019)
+    vtimezone = (
+        "BEGIN:VTIMEZONE" + nl +
+        "TZID:America/Sao_Paulo" + nl +
+        "BEGIN:STANDARD" + nl +
+        "DTSTART:19700101T000000" + nl +
+        "TZOFFSETFROM:-0300" + nl +
+        "TZOFFSETTO:-0300" + nl +
+        "TZNAME:BRT" + nl +
+        "END:STANDARD" + nl +
+        "END:VTIMEZONE"
+    )
     lines = [
         "BEGIN:VCALENDAR", "VERSION:2.0",
         "PRODID:-//Maffezzolli Capital//Agenda//PT", "METHOD:REQUEST",
+        vtimezone,
         "BEGIN:VEVENT", "UID:" + uid, "SUMMARY:" + summary,
         "DESCRIPTION:" + description.replace("\n", "\\n"),
-        "DTSTART:" + dtstart, "DTEND:" + dtend,
+        "DTSTART;TZID=America/Sao_Paulo:" + dtstart,
+        "DTEND;TZID=America/Sao_Paulo:" + dtend,
         "ORGANIZER:mailto:" + organizer_email,
     ]
     for ae in attendee_emails:
