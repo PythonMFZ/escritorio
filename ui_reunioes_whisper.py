@@ -464,10 +464,34 @@ def _processar_audio_background(
     acquired = _TRANSCRIPTION_LOCK.acquire(blocking=True, timeout=3600)  # espera até 1h
     if not acquired:
         print(f"[whisper] ❌ Timeout aguardando semáforo — transcrição descartada para reunião {meeting_id}")
+        # Marca como erro para não ficar preso em transcription_in_progress
+        try:
+            from sqlmodel import Session as _SessWTO
+            with _SessWTO(engine) as _s:
+                _mt = _s.get(Meeting, meeting_id)
+                if _mt and _mt.notion_status == "transcription_in_progress":
+                    _mt.notion_status = "error"
+                    _mt.notes_text = "Timeout: outro áudio estava sendo processado. Tente novamente."
+                    _s.add(_mt); _s.commit()
+        except Exception:
+            pass
         return
 
     try:
         _processar_audio_background_inner(meeting_id, audio_path, company_id)
+    except Exception as _top_e:
+        # Captura qualquer crash não tratado e marca o status como erro
+        print(f"[whisper] ❌ Exceção não tratada na reunião {meeting_id}: {_top_e}")
+        try:
+            from sqlmodel import Session as _SessWE
+            with _SessWE(engine) as _s:
+                _mt = _s.get(Meeting, meeting_id)
+                if _mt and _mt.notion_status not in ("notes_ready", "error"):
+                    _mt.notion_status = "error"
+                    _mt.notes_text = f"Erro inesperado na transcrição: {_top_e}"
+                    _s.add(_mt); _s.commit()
+        except Exception:
+            pass
     finally:
         _TRANSCRIPTION_LOCK.release()
 
@@ -1503,6 +1527,36 @@ try:
             print(f"[whisper] ⚠️  {len(_presas)} reunião(ões) presa(s) resetada(s) no startup.")
 except Exception as _ew:
     print(f"[whisper] Startup reset: {_ew}")
+
+
+# ── Watchdog: reseta reuniões presas há mais de 45 min (sem depender de restart) ──
+
+def _watchdog_reunioes_presas():
+    import time as _time_wd
+    _time_wd.sleep(60)  # aguarda o app estabilizar
+    while True:
+        try:
+            _limite = _dt_w.utcnow() - _td_w(minutes=45)
+            from sqlmodel import Session as _SessWD
+            with _SessWD(engine) as _swd:
+                _presas_wd = _swd.exec(
+                    select(Meeting).where(
+                        Meeting.notion_status.in_(["transcription_in_progress", "summary_in_progress"]),
+                        Meeting.updated_at < _limite,
+                    )
+                ).all()
+                for _mwd in _presas_wd:
+                    _mwd.notion_status = "transcription_not_started"
+                    _mwd.updated_at = _dt_w.utcnow()
+                    _swd.add(_mwd)
+                if _presas_wd:
+                    _swd.commit()
+                    print(f"[whisper-watchdog] ⚠️  {len(_presas_wd)} reunião(ões) resetada(s) por timeout de 45 min.")
+        except Exception as _ewd:
+            print(f"[whisper-watchdog] erro: {_ewd}")
+        _time_wd.sleep(300)  # verifica a cada 5 minutos
+
+_threading_w.Thread(target=_watchdog_reunioes_presas, daemon=True, name="whisper-watchdog").start()
 
 
 print("[whisper] Patch de transcrição carregado.")
