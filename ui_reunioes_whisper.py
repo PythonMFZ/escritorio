@@ -49,6 +49,68 @@ except Exception:
 _WHISPER_MODEL_NAME = _os2.environ.get("WHISPER_MODEL", "tiny")
 _whisper_model_cache = {}  # cache do modelo carregado
 
+# ── S3 backup de áudios ───────────────────────────────────────────────────────
+# Reutiliza as mesmas credenciais do ui_backup_s3.py (AWS_ACCESS_KEY_ID etc.)
+_AUDIO_S3_BUCKET = _os2.environ.get("APP_S3_BUCKET_NAME", "maffezzolli-escritorio-db-backups")
+_AUDIO_S3_PREFIX = "audio-reunioes"
+_AUDIO_S3_REGION = _os2.environ.get("AWS_REGION", "us-east-2")
+
+
+def _s3_audio_client():
+    try:
+        import boto3 as _b3
+        return _b3.client(
+            "s3", region_name=_AUDIO_S3_REGION,
+            aws_access_key_id=_os2.environ.get("AWS_ACCESS_KEY_ID"),
+            aws_secret_access_key=_os2.environ.get("AWS_SECRET_ACCESS_KEY"),
+        )
+    except Exception as _e:
+        print(f"[whisper-s3] boto3 indisponível: {_e}")
+        return None
+
+
+def _s3_upload_audio(local_path: str, meeting_id: int) -> str | None:
+    """Envia áudio para S3. Retorna a S3 key ou None se falhar."""
+    s3 = _s3_audio_client()
+    if not s3:
+        return None
+    fname = _Path(local_path).name
+    key = f"{_AUDIO_S3_PREFIX}/meeting_{meeting_id}/{fname}"
+    try:
+        s3.upload_file(local_path, _AUDIO_S3_BUCKET, key,
+                       ExtraArgs={"StorageClass": "STANDARD_IA"})
+        print(f"[whisper-s3] ✅ Upload OK: s3://{_AUDIO_S3_BUCKET}/{key}")
+        return key
+    except Exception as _e:
+        print(f"[whisper-s3] ❌ Upload falhou: {_e}")
+        return None
+
+
+def _s3_download_audio(s3_key: str, dest_path: str) -> bool:
+    """Baixa áudio do S3 para dest_path. Retorna True se OK."""
+    s3 = _s3_audio_client()
+    if not s3:
+        return False
+    try:
+        s3.download_file(_AUDIO_S3_BUCKET, s3_key, dest_path)
+        print(f"[whisper-s3] ✅ Download OK: {s3_key} → {dest_path}")
+        return True
+    except Exception as _e:
+        print(f"[whisper-s3] ❌ Download falhou: {_e}")
+        return False
+
+
+def _s3_delete_audio(s3_key: str) -> None:
+    """Remove áudio do S3 após transcrição bem-sucedida."""
+    s3 = _s3_audio_client()
+    if not s3:
+        return
+    try:
+        s3.delete_object(Bucket=_AUDIO_S3_BUCKET, Key=s3_key)
+        print(f"[whisper-s3] 🗑️  Removido: {s3_key}")
+    except Exception as _e:
+        print(f"[whisper-s3] Remoção falhou: {_e}")
+
 # Limpeza de WAVs temporários órfãos e MP3s antigos (> 7 dias) no startup
 def _cleanup_orphan_wavs():
     import time as _time_cl
@@ -402,10 +464,34 @@ def _processar_audio_background(
     acquired = _TRANSCRIPTION_LOCK.acquire(blocking=True, timeout=3600)  # espera até 1h
     if not acquired:
         print(f"[whisper] ❌ Timeout aguardando semáforo — transcrição descartada para reunião {meeting_id}")
+        # Marca como erro para não ficar preso em transcription_in_progress
+        try:
+            from sqlmodel import Session as _SessWTO
+            with _SessWTO(engine) as _s:
+                _mt = _s.get(Meeting, meeting_id)
+                if _mt and _mt.notion_status == "transcription_in_progress":
+                    _mt.notion_status = "error"
+                    _mt.notes_text = "Timeout: outro áudio estava sendo processado. Tente novamente."
+                    _s.add(_mt); _s.commit()
+        except Exception:
+            pass
         return
 
     try:
         _processar_audio_background_inner(meeting_id, audio_path, company_id)
+    except Exception as _top_e:
+        # Captura qualquer crash não tratado e marca o status como erro
+        print(f"[whisper] ❌ Exceção não tratada na reunião {meeting_id}: {_top_e}")
+        try:
+            from sqlmodel import Session as _SessWE
+            with _SessWE(engine) as _s:
+                _mt = _s.get(Meeting, meeting_id)
+                if _mt and _mt.notion_status not in ("notes_ready", "error"):
+                    _mt.notion_status = "error"
+                    _mt.notes_text = f"Erro inesperado na transcrição: {_top_e}"
+                    _s.add(_mt); _s.commit()
+        except Exception:
+            pass
     finally:
         _TRANSCRIPTION_LOCK.release()
 
@@ -416,6 +502,30 @@ def _processar_audio_background_inner(
     company_id: int,
 ):
     from sqlmodel import Session as _SessW
+
+    # Se o arquivo local sumiu (reinicialização do servidor), tenta recuperar do S3
+    if not _Path(audio_path).exists():
+        with _SessW(engine) as _sess_chk:
+            _mt_chk = _sess_chk.get(Meeting, meeting_id)
+            if _mt_chk:
+                try:
+                    _rj_chk = _json_w.loads(_mt_chk.raw_json or "{}")
+                    _s3k = _rj_chk.get("audio_s3_key")
+                except Exception:
+                    _s3k = None
+                if _s3k:
+                    print(f"[whisper-s3] Arquivo local ausente — baixando S3: {_s3k}")
+                    _Path(audio_path).parent.mkdir(parents=True, exist_ok=True)
+                    if not _s3_download_audio(_s3k, audio_path):
+                        print(f"[whisper-s3] Falha ao baixar do S3 — transcrição cancelada.")
+                        _mt_chk.notion_status = "error"
+                        _mt_chk.notes_text = "Arquivo de áudio perdido e não foi possível recuperar do backup S3."
+                        _sess_chk.add(_mt_chk); _sess_chk.commit()
+                        return
+                else:
+                    print(f"[whisper] Arquivo {audio_path} não encontrado e sem backup S3.")
+                    return
+
     with _SessW(engine) as _sess:
         mt = _sess.get(Meeting, meeting_id)
         if not mt:
@@ -551,6 +661,17 @@ def _processar_audio_background_inner(
             _mt.updated_at        = _dt_w.utcnow()
             _s.add(_mt); _s.commit()
             print(f"[whisper] Reunião {meeting_id} processada com sucesso.")
+            # Apaga backup S3 agora que a transcrição está salva no banco
+            try:
+                _rj_done = _json_w.loads(_mt.raw_json or "{}")
+                _s3k_done = _rj_done.get("audio_s3_key")
+                if _s3k_done:
+                    _s3_delete_audio(_s3k_done)
+                    _rj_done.pop("audio_s3_key", None)
+                    _mt.raw_json = _json_w.dumps(_rj_done)
+                    _s.add(_mt); _s.commit()
+            except Exception as _es3:
+                print(f"[whisper-s3] Erro ao limpar S3: {_es3}")
 
     try:
         _Path(audio_path).unlink(missing_ok=True)
@@ -639,7 +760,16 @@ async def reuniao_upload_audio(
         except Exception:
             audio_path = raw_path
 
-    # Atualiza status
+    # Backup S3 antes de processar — garante que o áudio sobrevive a reinicializações
+    _s3_key = _s3_upload_audio(str(audio_path), meeting_id)
+
+    # Atualiza status e salva s3_key no raw_json
+    try:
+        _rj = _json_w.loads(mt.raw_json or "{}")
+    except Exception:
+        _rj = {}
+    _rj["audio_s3_key"] = _s3_key  # None se S3 indisponível
+    mt.raw_json = _json_w.dumps(_rj)
     mt.notion_status = "transcription_not_started"
     mt.source = "whisper"
     mt.updated_at = _dt_w.utcnow()
@@ -654,9 +784,10 @@ async def reuniao_upload_audio(
         company_id=ctx.company.id,
     )
 
+    _s3_msg = " Backup S3 OK." if _s3_key else " (S3 indisponível — sem backup)."
     return JSONResponse({
         "ok": True,
-        "msg": f"Áudio recebido ({_written/1024/1024:.1f}MB). Transcrição iniciada em background — atualize a página em alguns minutos.",
+        "msg": f"Áudio recebido ({_written/1024/1024:.1f}MB). Transcrição iniciada em background — atualize a página em alguns minutos.{_s3_msg}",
     })
 
 
@@ -847,14 +978,34 @@ _WHISPER_PANEL = r"""
   </div>
 
   {% if meeting.notion_status in ['transcription_in_progress', 'summary_in_progress'] %}
-  <div class="d-flex gap-2 align-items-center mb-2">
+  <div class="d-flex gap-2 align-items-center mb-2 flex-wrap">
     <form method="post" action="/reunioes/{{ meeting.id }}/reset-transcricao" class="d-inline">
       <button type="submit" class="btn btn-outline-warning btn-sm">
         🔄 Tentar novamente
       </button>
     </form>
+    {% set _rj = meeting.raw_json | default('{}') %}
+    {% if 'audio_s3_key' in _rj %}
+    <button type="button" class="btn btn-outline-primary btn-sm"
+      onclick="reprocessarS3({{ meeting.id }})">
+      ☁️ Reprocessar do backup S3
+    </button>
+    {% endif %}
     <span class="text-muted small">Preso? Clique para reiniciar a transcrição.</span>
   </div>
+  {% endif %}
+
+  {% if meeting.notion_status == 'transcription_not_started' %}
+  {% set _rj2 = meeting.raw_json | default('{}') %}
+  {% if 'audio_s3_key' in _rj2 %}
+  <div class="d-flex gap-2 align-items-center mb-2">
+    <button type="button" class="btn btn-outline-primary btn-sm"
+      onclick="reprocessarS3({{ meeting.id }})">
+      ☁️ Reprocessar do backup S3
+    </button>
+    <span class="text-muted small">Áudio em backup — clique para retranscrever sem precisar reenviar.</span>
+  </div>
+  {% endif %}
   {% endif %}
 
   {% if meeting.notion_status not in ['notes_ready', 'transcription_in_progress', 'summary_in_progress'] %}
@@ -1154,6 +1305,16 @@ async function gerarResumo() {
   }, 15000);
 })();
 {% endif %}
+
+async function reprocessarS3(meetingId) {
+  if (!confirm('Reprocessar transcrição a partir do backup S3?')) return;
+  try {
+    const r = await fetch(`/reunioes/${meetingId}/reprocessar-audio`, {method: 'POST'});
+    const d = await r.json();
+    if (d.ok) { alert('Reprocessamento iniciado! A página vai atualizar automaticamente.'); location.reload(); }
+    else { alert('Erro: ' + (d.erro || d.error || 'tente novamente')); }
+  } catch(e) { alert('Erro de conexão.'); }
+}
 </script>
 """
 
@@ -1250,6 +1411,50 @@ async def reuniao_debug_transcricao(
     })
 
 
+# ── Rota POST /reunioes/{id}/reprocessar-audio ───────────────────────────────
+
+@app.post("/reunioes/{meeting_id}/reprocessar-audio")
+@require_login
+async def reuniao_reprocessar_audio(
+    meeting_id: int,
+    request: Request,
+    background_tasks: _BG,
+    session: Session = Depends(get_session),
+):
+    """Baixa o áudio do S3 e reinicia a transcrição (para jobs que travaram)."""
+    from fastapi.responses import JSONResponse as _JRS
+    ctx = get_tenant_context(request, session)
+    if not ctx or ctx.membership.role not in ("admin", "owner", "equipe"):
+        return _JRS({"ok": False, "erro": "sem permissão"}, status_code=403)
+    mt = session.get(Meeting, meeting_id)
+    if not mt or mt.company_id != ctx.company.id:
+        return _JRS({"ok": False, "erro": "não encontrado"}, status_code=404)
+    try:
+        rj = _json_w.loads(mt.raw_json or "{}")
+    except Exception:
+        rj = {}
+    s3_key = rj.get("audio_s3_key")
+    if not s3_key:
+        return _JRS({"ok": False, "erro": "Nenhum backup de áudio encontrado no S3 para esta reunião."})
+    # Monta caminho local
+    fname = s3_key.split("/")[-1]
+    audio_path = str(_AUDIO_DIR / fname)
+    if not _Path(audio_path).exists():
+        ok = _s3_download_audio(s3_key, audio_path)
+        if not ok:
+            return _JRS({"ok": False, "erro": "Falha ao baixar áudio do S3. Verifique credenciais AWS."})
+    mt.notion_status = "transcription_not_started"
+    mt.updated_at = _dt_w.utcnow()
+    session.add(mt); session.commit()
+    background_tasks.add_task(
+        _processar_audio_background,
+        meeting_id=meeting_id,
+        audio_path=audio_path,
+        company_id=ctx.company.id,
+    )
+    return _JRS({"ok": True, "msg": "Reprocessamento iniciado a partir do backup S3."})
+
+
 # ── Rota POST /reunioes/{id}/restaurar-transcricao ───────────────────────────
 
 @app.post("/reunioes/{meeting_id}/restaurar-transcricao")
@@ -1322,6 +1527,36 @@ try:
             print(f"[whisper] ⚠️  {len(_presas)} reunião(ões) presa(s) resetada(s) no startup.")
 except Exception as _ew:
     print(f"[whisper] Startup reset: {_ew}")
+
+
+# ── Watchdog: reseta reuniões presas há mais de 45 min (sem depender de restart) ──
+
+def _watchdog_reunioes_presas():
+    import time as _time_wd
+    _time_wd.sleep(60)  # aguarda o app estabilizar
+    while True:
+        try:
+            _limite = _dt_w.utcnow() - _td_w(minutes=45)
+            from sqlmodel import Session as _SessWD
+            with _SessWD(engine) as _swd:
+                _presas_wd = _swd.exec(
+                    select(Meeting).where(
+                        Meeting.notion_status.in_(["transcription_in_progress", "summary_in_progress"]),
+                        Meeting.updated_at < _limite,
+                    )
+                ).all()
+                for _mwd in _presas_wd:
+                    _mwd.notion_status = "transcription_not_started"
+                    _mwd.updated_at = _dt_w.utcnow()
+                    _swd.add(_mwd)
+                if _presas_wd:
+                    _swd.commit()
+                    print(f"[whisper-watchdog] ⚠️  {len(_presas_wd)} reunião(ões) resetada(s) por timeout de 45 min.")
+        except Exception as _ewd:
+            print(f"[whisper-watchdog] erro: {_ewd}")
+        _time_wd.sleep(300)  # verifica a cada 5 minutos
+
+_threading_w.Thread(target=_watchdog_reunioes_presas, daemon=True, name="whisper-watchdog").start()
 
 
 print("[whisper] Patch de transcrição carregado.")
