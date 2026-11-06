@@ -1171,6 +1171,57 @@ if hasattr(templates_env.loader, "mapping"):
     templates_env.loader.mapping = TEMPLATES
 
 
+# ── Rota GET /admin/audio-tmp — lista arquivos de áudio temporários ──────────
+
+@app.get("/admin/audio-tmp")
+@require_login
+async def admin_audio_tmp(request: Request, session: Session = Depends(get_session)):
+    from fastapi.responses import HTMLResponse as _HtmlR
+    ctx = get_tenant_context(request, session)
+    if not ctx or ctx.membership.role not in ("admin", "owner"):
+        return _HtmlR("<p>Sem permissão.</p>", status_code=403)
+    _base = _Path(_os2.environ.get("AUDIO_UPLOAD_DIR", "/tmp/reunioes"))
+    files = []
+    if _base.exists():
+        for f in sorted(_base.iterdir(), key=lambda x: x.stat().st_mtime, reverse=True):
+            if f.is_file():
+                files.append({
+                    "name": f.name,
+                    "size_mb": round(f.stat().st_size / 1024 / 1024, 2),
+                    "mtime": _dt_w.utcfromtimestamp(f.stat().st_mtime).strftime("%Y-%m-%d %H:%M UTC"),
+                })
+    rows = "".join(
+        f"<tr><td>{x['name']}</td><td>{x['size_mb']} MB</td><td>{x['mtime']}</td>"
+        f"<td><a href='/admin/audio-tmp/download/{x['name']}' target='_blank'>⬇ Baixar</a></td></tr>"
+        for x in files
+    )
+    html = f"""<!doctype html><html><body>
+    <h2>Áudios temporários em {_base}</h2>
+    <p>{len(files)} arquivo(s) encontrado(s).</p>
+    <table border=1 cellpadding=6>
+    <tr><th>Arquivo</th><th>Tamanho</th><th>Modificado</th><th>Ação</th></tr>
+    {rows or '<tr><td colspan=4>Nenhum arquivo.</td></tr>'}
+    </table></body></html>"""
+    return _HtmlR(html)
+
+
+@app.get("/admin/audio-tmp/download/{filename}")
+@require_login
+async def admin_audio_tmp_download(filename: str, request: Request, session: Session = Depends(get_session)):
+    from fastapi.responses import FileResponse as _FileR
+    ctx = get_tenant_context(request, session)
+    if not ctx or ctx.membership.role not in ("admin", "owner"):
+        return _HtmlR("<p>Sem permissão.</p>", status_code=403)
+    # Sanitize filename - no path traversal
+    if "/" in filename or "\\" in filename or ".." in filename:
+        return _HtmlR("<p>Inválido.</p>", status_code=400)
+    _base = _Path(_os2.environ.get("AUDIO_UPLOAD_DIR", "/tmp/reunioes"))
+    fpath = _base / filename
+    if not fpath.exists() or not fpath.is_file():
+        return _HtmlR("<p>Arquivo não encontrado.</p>", status_code=404)
+    return _FileR(str(fpath), filename=filename)
+
+
 # ── Rota GET /reunioes/{id}/debug-transcricao ────────────────────────────────
 
 @app.get("/reunioes/{meeting_id}/debug-transcricao")
