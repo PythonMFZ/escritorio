@@ -1171,6 +1171,60 @@ if hasattr(templates_env.loader, "mapping"):
     templates_env.loader.mapping = TEMPLATES
 
 
+# ── Rota GET /reunioes/{id}/debug-transcricao ────────────────────────────────
+
+@app.get("/reunioes/{meeting_id}/debug-transcricao")
+@require_login
+async def reuniao_debug_transcricao(
+    meeting_id: int,
+    request: Request,
+    session: Session = Depends(get_session),
+):
+    from fastapi.responses import JSONResponse as _JRS
+    ctx = get_tenant_context(request, session)
+    if not ctx or ctx.membership.role not in ("admin", "owner"):
+        return _JRS({"erro": "sem permissão"}, status_code=403)
+    mt = session.get(Meeting, meeting_id)
+    if not mt or mt.company_id != ctx.company.id:
+        return _JRS({"erro": "não encontrado"}, status_code=404)
+    return _JRS({
+        "id": mt.id,
+        "title": mt.title,
+        "notion_status": mt.notion_status,
+        "transcript_text_len": len(mt.transcript_text or ""),
+        "summary_text_len": len(mt.summary_text or ""),
+        "notes_text_len": len(mt.notes_text or ""),
+        "transcript_preview": (mt.transcript_text or "")[:500],
+        "summary_preview": (mt.summary_text or "")[:300],
+    })
+
+
+# ── Rota POST /reunioes/{id}/restaurar-transcricao ───────────────────────────
+
+@app.post("/reunioes/{meeting_id}/restaurar-transcricao")
+@require_login
+async def reuniao_restaurar_transcricao(
+    meeting_id: int,
+    request: Request,
+    session: Session = Depends(get_session),
+):
+    """Se transcript_text já existe no banco, restaura status para notes_ready."""
+    from fastapi.responses import JSONResponse as _JRS
+    ctx = get_tenant_context(request, session)
+    if not ctx or ctx.membership.role not in ("admin", "owner", "equipe"):
+        return _JRS({"ok": False, "erro": "sem permissão"}, status_code=403)
+    mt = session.get(Meeting, meeting_id)
+    if not mt or mt.company_id != ctx.company.id:
+        return _JRS({"ok": False, "erro": "não encontrado"}, status_code=404)
+    if mt.transcript_text and len(mt.transcript_text.strip()) > 20:
+        mt.notion_status = "notes_ready"
+        mt.updated_at = _dt_w.utcnow()
+        session.add(mt)
+        session.commit()
+        return _JRS({"ok": True, "msg": "Transcrição restaurada!", "chars": len(mt.transcript_text)})
+    return _JRS({"ok": False, "msg": "Sem transcrição salva — áudio precisa ser reprocessado", "chars": len(mt.transcript_text or "")})
+
+
 # ── Rota POST /reunioes/{id}/reset-transcricao ────────────────────────────────
 
 @app.post("/reunioes/{meeting_id}/reset-transcricao")
