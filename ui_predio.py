@@ -220,8 +220,10 @@ _PREDIO_ANDARES = [
     {"key": "recepcao", "nome": "Recepção", "rotulo": "Térreo", "agentes": [
         {"key": "recepcionista", "nome": "Recepcionista", "papeis": _PR_TODOS, "ativo": True,
          "atribuicoes": "Recebe cada demanda, decide o andar certo e explica por quê."},
-        {"key": "atendimento", "nome": "Atendimento", "papeis": _PR_TODOS, "ativo": False,
-         "atribuicoes": "Primeira resposta a e-mail e WhatsApp de clientes, agenda reuniões."},
+        {"key": "atendimento", "nome": "Atendimento", "papeis": _PR_TODOS, "ativo": True,
+         "atribuicoes": "Supervisiona o WhatsApp do escritório: quem espera resposta, rascunhos de resposta e reuniões a agendar.",
+         "ferramentas": ["atd_caixa", "atd_conversa", "atd_propor_resposta", "agenda_horarios",
+                         "agenda_propor_reuniao", "cli_panorama"]},
     ]},
     {"key": "operacoes", "nome": "Operações e Conhecimento", "rotulo": "Subsolo", "agentes": [
         {"key": "revisor", "nome": "Revisor de Qualidade", "papeis": _PR_TODOS, "ativo": True,
@@ -1062,6 +1064,169 @@ def _pr_t_cob_propor_email(s, cid, cliente, assunto, corpo):
             "observacao": "O destinatário é o e-mail cadastrado do cliente. Nada foi enviado ainda."}
 
 
+# ── Atendimento: caixa do WhatsApp e agenda ───────────────────────────────────
+
+def _pr_janela_24h(thread) -> bool:
+    return bool(thread.last_inbound_at and _dt_pr.utcnow() - thread.last_inbound_at < _td_pr(hours=24))
+
+
+def _pr_t_atd_caixa(s, cid, horas):
+    horas = max(1, min(int(horas or 72), 720))
+    corte = _dt_pr.utcnow() - _td_pr(hours=horas)
+    nomes = _pr_clientes(s, cid)
+    usuarios = _pr_usuarios(s, cid)
+    filas = {q.code: q.label for q in s.exec(_sel_pr(WhatsAppQueue).where(WhatsAppQueue.company_id == cid)).all()}
+    linhas = []
+    for th in s.exec(_sel_pr(WhatsAppThread).where(
+            WhatsAppThread.company_id == cid, WhatsAppThread.status != "resolvido",
+            WhatsAppThread.last_message_at >= corte)).all():
+        ultimas = s.exec(_sel_pr(WhatsAppThreadMessage).where(
+            WhatsAppThreadMessage.thread_id == th.id, WhatsAppThreadMessage.direction != "internal_note")
+            .order_by(WhatsAppThreadMessage.created_at.desc()).limit(6)).all()
+        if not ultimas:
+            continue
+        ultima_do_cliente = next((m for m in ultimas if m.direction == "inbound"), None)
+        ultima_nossa = next((m for m in ultimas if m.direction == "outbound"), None)
+        esperando = ultimas[0].direction == "inbound"
+        so_augur = bool(ultima_nossa and (ultima_nossa.sender_name or "") == "Augur" and not ultima_nossa.created_by_user_id)
+        espera_h = round((_dt_pr.utcnow() - th.last_inbound_at).total_seconds() / 3600, 1) if th.last_inbound_at else None
+        linhas.append({
+            "thread_id": th.id, "contato": th.contact_name or th.group_name or th.contact_phone,
+            "cliente": nomes.get(th.client_id, "não cadastrado (prospect)"), "grupo": th.is_group,
+            "fila": filas.get(th.topic_code, th.topic_code), "status": th.status,
+            "responsavel": usuarios.get(th.assigned_user_id, "sem responsável"),
+            "aguardando_resposta": esperando, "ultima_resposta_foi_do_augur": so_augur,
+            "horas_desde_ultima_mensagem_do_cliente": espera_h,
+            "dentro_da_janela_24h": _pr_janela_24h(th),
+            "ultima_mensagem_do_cliente": (ultima_do_cliente.body or "")[:300] if ultima_do_cliente else "",
+        })
+    linhas.sort(key=lambda x: (not x["aguardando_resposta"], -(x["horas_desde_ultima_mensagem_do_cliente"] or 0)))
+    return {"janela": f"últimas {horas} horas", "conversas_abertas": len(linhas),
+            "aguardando_resposta": sum(1 for x in linhas if x["aguardando_resposta"]), "conversas": linhas[:30]}
+
+
+def _pr_t_atd_conversa(s, cid, thread_id, quantidade):
+    th = s.get(WhatsAppThread, int(thread_id))
+    if not th or th.company_id != cid:
+        return {"erro": "Conversa não encontrada."}
+    qtd = max(1, min(int(quantidade or 20), 60))
+    msgs = s.exec(_sel_pr(WhatsAppThreadMessage).where(WhatsAppThreadMessage.thread_id == th.id)
+                  .order_by(WhatsAppThreadMessage.created_at.desc()).limit(qtd)).all()
+    return {
+        "thread_id": th.id, "contato": th.contact_name or th.group_name, "cliente": _pr_clientes(s, cid).get(th.client_id, ""),
+        "status": th.status, "dentro_da_janela_24h": _pr_janela_24h(th),
+        "mensagens": [{"quando": _pr_quando(m.created_at), "de": "cliente" if m.direction == "inbound" else (
+                          "nota interna" if m.direction == "internal_note" else (m.sender_name or "equipe")),
+                       "texto": (m.body or "")[:2000]} for m in reversed(msgs)],
+    }
+
+
+def _pr_t_atd_propor_resposta(s, cid, thread_id, mensagem):
+    th = s.get(WhatsAppThread, int(thread_id))
+    if not th or th.company_id != cid:
+        return {"ok": False, "erro": "Conversa não encontrada."}
+    if not _pr_janela_24h(th):
+        return {"ok": False, "erro": "Fora da janela de 24h do WhatsApp: a Meta só aceita modelo aprovado. "
+                                     "Sugira à equipe responder pela tela de Atendimento com um modelo."}
+    texto = (mensagem or "").strip()
+    if len(texto) < 5:
+        return {"ok": False, "erro": "Mensagem vazia."}
+    pendente = s.exec(_sel_pr(PredioAcao).where(PredioAcao.company_id == cid, PredioAcao.tipo == "whatsapp_resposta",
+                                                PredioAcao.status == "pendente",
+                                                PredioAcao.payload_json == _json_pr.dumps({"thread_id": th.id}))).first()
+    if pendente:
+        return {"ok": False, "mensagem": f"Já existe uma resposta para essa conversa aguardando aprovação (#{pendente.id})."}
+    contato = th.contact_name or th.group_name or th.contact_phone
+    acao = _pr_registrar_proposta(
+        s, cid, tipo="whatsapp_resposta", client_id=th.client_id, titulo=f"Resposta no WhatsApp para {contato}",
+        destinatario=f"{contato} · WhatsApp {'(grupo)' if th.is_group else th.contact_phone}",
+        corpo=texto[:4000], payload_json=_json_pr.dumps({"thread_id": th.id}),
+    )
+    return {"ok": True, "proposta_id": acao.id, "status": "aguardando aprovação da equipe",
+            "observacao": "Nada foi enviado. A janela de 24h é conferida de novo na aprovação."}
+
+
+def _pr_servico(s, cid, nome: str):
+    servicos = s.exec(_sel_pr(AgendaServico).where(AgendaServico.company_id == cid, AgendaServico.ativo == True)  # noqa: E712
+                      .order_by(AgendaServico.ordem)).all()
+    if not servicos:
+        return None, []
+    alvo = _pr_norm(nome)
+    if alvo:
+        for sv in servicos:
+            if alvo in _pr_norm(sv.nome):
+                return sv, servicos
+    return servicos[0], servicos
+
+
+def _pr_membros(s, cid, nome: str) -> list:
+    membros = s.exec(_sel_pr(AgendaMembro).where(AgendaMembro.company_id == cid, AgendaMembro.ativo == True)).all()  # noqa: E712
+    alvo = _pr_norm(nome)
+    return [m for m in membros if alvo in _pr_norm(m.nome)] if alvo else membros
+
+
+def _pr_t_agenda_horarios(s, cid, dias, membro, servico):
+    dias = max(1, min(int(dias or 7), 21))
+    sv, servicos = _pr_servico(s, cid, servico)
+    if not sv:
+        return {"erro": "A agenda não tem serviços ativos configurados."}
+    membros = _pr_membros(s, cid, membro)
+    if not membros:
+        return {"erro": f"Nenhum membro da agenda corresponde a '{membro}'."}
+    hoje = _pr_hoje()
+    agora_min = _pr_agora_brt().hour * 60 + _pr_agora_brt().minute
+    saida = []
+    for m in membros:
+        livres = []
+        for n in range(dias):
+            d = hoje + _td_pr(days=n)
+            slots = _agenda_slots_livres(s, m.id, d.isoformat(), sv.duracao_min, sv.buffer_min)
+            if n == 0:
+                slots = [h for h in slots if _to_min(h) > agora_min + 60]
+            if slots:
+                livres.append({"data": _pr_fmt_data(d), "dia_semana": _DIAS_SEMANA_PT[d.weekday()], "horarios": slots[:10]})
+        saida.append({"membro": m.nome, "dias_com_horario": livres})
+    return {"servico": sv.nome, "duracao_min": sv.duracao_min, "servicos_disponiveis": [x.nome for x in servicos],
+            "locais": _LOCAL_LABELS, "agenda": saida}
+
+
+def _pr_t_agenda_propor(s, cid, cliente, membro, servico, data, hora, local, notas):
+    c, cands = _pr_resolver_cliente(s, cid, cliente)
+    if not c:
+        return _pr_nao_achei(cliente, cands)
+    email = (c.email or c.finance_email or "").strip()
+    if not email:
+        return {"ok": False, "erro": f"{c.name} não tem e-mail cadastrado para receber o convite."}
+    membros = _pr_membros(s, cid, membro)
+    if len(membros) != 1:
+        return {"ok": False, "erro": "Indique um único membro da agenda.", "membros": [m.nome for m in _pr_membros(s, cid, "")]}
+    m = membros[0]
+    sv, _ = _pr_servico(s, cid, servico)
+    if not sv:
+        return {"ok": False, "erro": "A agenda não tem serviços ativos configurados."}
+    d = _pr_data(data)
+    if not d or d < _pr_hoje():
+        return {"ok": False, "erro": "Data inválida ou no passado (use DD/MM/AAAA)."}
+    if local not in _LOCAL_LABELS:
+        return {"ok": False, "erro": f"Local inválido. Use um destes: {list(_LOCAL_LABELS)}"}
+    livres = _agenda_slots_livres(s, m.id, d.isoformat(), sv.duracao_min, sv.buffer_min)
+    if hora not in livres:
+        return {"ok": False, "erro": f"{hora} não está livre para {m.nome} em {_pr_fmt_data(d)}.", "horarios_livres": livres[:10]}
+    fim = _to_min(hora) + sv.duracao_min
+    hora_fim = "%02d:%02d" % (fim // 60, fim % 60)
+    acao = _pr_registrar_proposta(
+        s, cid, tipo="agendar_reuniao", client_id=c.id,
+        titulo=f"Reunião com {c.name} em {_pr_fmt_data(d)} às {hora}",
+        destinatario=email,
+        corpo=(f"Cliente: {c.name}\nCom: {m.nome}\nServiço: {sv.nome}\nData: {_pr_fmt_data(d)}, {hora}–{hora_fim}\n"
+               f"Local: {_LOCAL_LABELS[local]}\nConvite para: {email}" + (f"\nNotas: {notas.strip()}" if (notas or '').strip() else "")),
+        payload_json=_json_pr.dumps({"membro_id": m.id, "servico_id": sv.id, "data": d.isoformat(), "hora": hora,
+                                     "hora_fim": hora_fim, "local": local, "notas": (notas or "").strip()[:500]}),
+    )
+    return {"ok": True, "proposta_id": acao.id, "status": "aguardando aprovação da equipe",
+            "observacao": "Nada foi agendado ainda. O horário é conferido de novo na aprovação."}
+
+
 def _pr_schema(props: dict) -> dict:
     return {"type": "object", "properties": props, "required": list(props), "additionalProperties": False}
 
@@ -1109,6 +1274,40 @@ _PR_TOOLS = {
         "fn": _pr_t_clientes_sem_contato, "rotulo": "Procurou clientes sem contato",
         "description": "Clientes sem reunião registrada há X dias ou mais, priorizando quem tem contrato ativo.",
         "props": {"dias": {"type": "integer", "description": "Dias mínimos sem reunião (ex.: 30)."}}},
+    "atd_caixa": {
+        "fn": _pr_t_atd_caixa, "rotulo": "Revisou a caixa do WhatsApp",
+        "description": "Conversas abertas do WhatsApp do escritório: quem está esperando resposta, há quanto tempo, se a "
+                       "última resposta foi automática do Augur, fila, responsável e se ainda está na janela de 24h.",
+        "props": {"horas": {"type": "integer", "description": "Janela em horas (ex.: 72)."}}},
+    "atd_conversa": {
+        "fn": _pr_t_atd_conversa, "rotulo": "Leu a conversa",
+        "description": "Últimas mensagens de uma conversa do WhatsApp (use o thread_id de atd_caixa).",
+        "props": {"thread_id": {"type": "integer", "description": "Identificador da conversa."},
+                  "quantidade": {"type": "integer", "description": "Quantas mensagens trazer (1 a 60)."}}},
+    "atd_propor_resposta": {
+        "fn": _pr_t_atd_propor_resposta, "rotulo": "Propôs uma resposta no WhatsApp",
+        "description": "Cria uma PROPOSTA de resposta para uma conversa do WhatsApp. O destinatário é o contato da "
+                       "conversa. Só funciona dentro da janela de 24h. Nada é enviado agora: alguém da equipe aprova.",
+        "props": {"thread_id": {"type": "integer", "description": "Identificador da conversa."},
+                  "mensagem": {"type": "string", "description": "Texto da resposta, curto e cordial."}}},
+    "agenda_horarios": {
+        "fn": _pr_t_agenda_horarios, "rotulo": "Consultou horários livres",
+        "description": "Horários livres na agenda do escritório nos próximos dias, por membro, para um serviço.",
+        "props": {"dias": {"type": "integer", "description": "Quantos dias à frente (1 a 21)."},
+                  "membro": {"type": "string", "description": "Nome do membro da agenda (vazio = todos)."},
+                  "servico": {"type": "string", "description": "Nome do serviço (vazio = o primeiro ativo)."}}},
+    "agenda_propor_reuniao": {
+        "fn": _pr_t_agenda_propor, "rotulo": "Propôs agendar uma reunião",
+        "description": "Cria uma PROPOSTA de reunião com um cliente cadastrado num horário livre. O convite vai para o "
+                       "e-mail cadastrado do cliente. Nada é agendado agora: alguém da equipe aprova.",
+        "props": {"cliente": {"type": "string", "description": "Nome do cliente (pode ser parcial)."},
+                  "membro": {"type": "string", "description": "Nome do membro da agenda que vai atender."},
+                  "servico": {"type": "string", "description": "Nome do serviço (vazio = o primeiro ativo)."},
+                  "data": {"type": "string", "description": "Data no formato DD/MM/AAAA."},
+                  "hora": {"type": "string", "description": "Horário livre no formato HH:MM, como veio de agenda_horarios."},
+                  "local": {"type": "string", "enum": ["nosso_escritorio", "cliente", "online"],
+                            "description": "Onde será a reunião."},
+                  "notas": {"type": "string", "description": "Observações para a reunião (pode ser vazio)."}}},
     "fat_competencia": {
         "fn": _pr_t_fat_competencia, "rotulo": "Conferiu o faturamento do mês",
         "description": "Faturamento de uma competência: cobranças já geradas (status, vencimento, NFS-e, boleto), "
@@ -1209,6 +1408,15 @@ _PR_INSTRUCOES = {
         "clareza, tom profissional, português correto e formatação consistente. Responda com: veredito "
         "(**Pronto para enviar** ou **Ajustes necessários**), os problemas por gravidade com o trecho e a correção "
         "sugerida e, se houver ajustes, a versão revisada completa."
+    ),
+    "atendimento": (
+        "Você supervisiona o atendimento do escritório no WhatsApp. O Augur já responde sozinho as dúvidas de clientes "
+        "cadastrados; você cuida do que precisa de uma pessoa: pedidos que o Augur não resolve (reunião, documento, "
+        "decisão, reclamação), mensagens sem resposta e conversas paradas. Para cada caso diga quem é, o que quer, a "
+        "urgência e quem da equipe deve responder. Quando fizer sentido, proponha uma resposta curta e cordial em "
+        "nome do escritório (só dentro da janela de 24h). Para marcar reunião, consulte os horários livres e proponha "
+        "o agendamento; o convite vai por e-mail depois da aprovação. Prospects (contatos não cadastrados) não podem "
+        "ter reunião agendada por você: indique que alguém da equipe faça o contato."
     ),
     "faturamento": (
         "Você cuida do faturamento mensal do escritório. Para a competência pedida (padrão: mês atual), confira "
@@ -1771,11 +1979,10 @@ def _pr_chamado_view(ch: PredioChamado, ctx=None) -> dict:
     ag = _PREDIO_AGENTES.get(ch.agente_key, {})
     passos = _pr_json_lista(ch.passos_json)
     with _Sess_pr(engine) as s_ac:
-        acoes = [_pr_acao_view(a) for a in s_ac.exec(
-            _sel_pr(PredioAcao).where(PredioAcao.chamado_id == ch.id).order_by(PredioAcao.id)).all()]
+        acoes = [dict(_pr_acao_view(a), pode_decidir=bool(ctx) and _pr_pode_decidir(ctx.membership.role, a.tipo))
+                 for a in s_ac.exec(_sel_pr(PredioAcao).where(PredioAcao.chamado_id == ch.id).order_by(PredioAcao.id)).all()]
     return {
         "acoes": acoes,
-        "pode_aprovar": bool(ctx) and ctx.membership.role == "admin",
         "turnos": _pr_turnos(ch, passos),
         "pode_continuar": bool(ctx) and _pr_pode_continuar(ctx, ch),
         "tipo": ch.tipo or "chamado",
@@ -1855,7 +2062,7 @@ async def predio_home(request: Request, session: Session = Depends(get_session))
         "em_reuniao": em_reuniao,
         "pendentes": [_pr_acao_view(a) for a in session.exec(
             _sel_pr(PredioAcao).where(PredioAcao.company_id == ctx.company.id, PredioAcao.status == "pendente")
-            .order_by(PredioAcao.criado_em.desc()).limit(20)).all()] if papel == "admin" else [],
+            .order_by(PredioAcao.criado_em.desc()).limit(40)).all() if _pr_pode_decidir(papel, a.tipo)][:20],
     })
 
 
@@ -1940,7 +2147,56 @@ def _pr_executar_acao(s, acao: PredioAcao) -> str:
         comp = _json_pr.loads(acao.payload_json or "{}").get("competencia") or _pr_hoje().strftime("%Y-%m")
         geradas = _ct_gerar_cobrancas_mes(s, acao.company_id, comp)
         return f"{geradas} cobrança(s) gerada(s) até {comp}."
+    if acao.tipo == "whatsapp_resposta":
+        import asyncio as _aio_pr
+        th = s.get(WhatsAppThread, int(_json_pr.loads(acao.payload_json or "{}").get("thread_id") or 0))
+        if not th or th.company_id != acao.company_id:
+            raise _PrErro("Conversa não encontrada.")
+        if not _pr_janela_24h(th):
+            raise _PrErro("A janela de 24h do WhatsApp fechou; responda pela tela de Atendimento com um modelo.")
+        destino = (th.external_thread_id or "").strip() if th.is_group else _only_digits(th.contact_phone)
+        if not destino:
+            raise _PrErro("Conversa sem destinatário configurado.")
+        config = _get_or_create_whatsapp_config(s, company_id=acao.company_id)
+        ok, err, ext_id = _aio_pr.run(_try_send_whatsapp_text(
+            config=config, recipient_id=destino, recipient_type="group" if th.is_group else "individual", body=acao.corpo))
+        if not ok:
+            raise _PrErro(err or "Falha no envio pelo WhatsApp.")
+        aprovador = s.get(User, acao.decidido_por_user_id) if acao.decidido_por_user_id else None
+        _whatsapp_add_message(s, thread=th, direction="outbound", body=acao.corpo,
+                              sender_name=aprovador.name if aprovador else "Equipe",
+                              created_by_user_id=acao.decidido_por_user_id, delivery_status="sent",
+                              external_message_id=ext_id or "")
+        return "Resposta enviada pelo WhatsApp e registrada na conversa."
+    if acao.tipo == "agendar_reuniao":
+        p = _json_pr.loads(acao.payload_json or "{}")
+        sv = s.get(AgendaServico, p.get("servico_id"))
+        if not sv:
+            raise _PrErro("Serviço da agenda não encontrado.")
+        if p["hora"] not in _agenda_slots_livres(s, p["membro_id"], p["data"], sv.duracao_min, sv.buffer_min):
+            raise _PrErro("Esse horário não está mais livre. Peça ao Atendimento outro horário.")
+        cliente = s.get(Client, acao.client_id) if acao.client_id else None
+        booking = AgendaBooking(
+            company_id=acao.company_id, servico_id=sv.id, membro_id=p["membro_id"],
+            client_id=acao.client_id, solicitante_nome=cliente.name if cliente else "",
+            solicitante_email=acao.destinatario, data=p["data"], hora_inicio=p["hora"], hora_fim=p["hora_fim"],
+            local=p["local"], notas=p.get("notas", ""), status="confirmado", origem="predio",
+        )
+        s.add(booking)
+        s.commit()
+        s.refresh(booking)
+        empresa = s.get(Company, acao.company_id)
+        if empresa:
+            _agenda_dispatch_notifications(s, booking, empresa)
+        return f"Reunião agendada e convite enviado para {acao.destinatario}."
     raise _PrErro("Tipo de ação desconhecido.")
+
+
+_PR_TIPOS_EQUIPE = {"whatsapp_resposta", "agendar_reuniao"}  # demais tipos (dinheiro) só admin aprova
+
+
+def _pr_pode_decidir(papel: str, tipo: str) -> bool:
+    return papel == "admin" or (papel == "equipe" and tipo in _PR_TIPOS_EQUIPE)
 
 
 def _pr_reivindicar_acao(acao_id: int, company_id: int, novo_status: str) -> bool:
@@ -1961,16 +2217,16 @@ def _pr_voltar_da_acao(acao: _Opt_pr[PredioAcao]) -> RedirectResponse:
 @require_login
 async def predio_aprovar_acao(acao_id: int, request: Request, session: Session = Depends(get_session)):
     ctx = _pr_ctx(request, session)
-    if not ctx or ctx.membership.role != "admin":
+    if not ctx:
         return RedirectResponse("/predio", status_code=303)
     acao = session.get(PredioAcao, acao_id)
-    if not acao or acao.company_id != ctx.company.id:
+    if not acao or acao.company_id != ctx.company.id or not _pr_pode_decidir(ctx.membership.role, acao.tipo):
         return RedirectResponse("/predio", status_code=303)
     form = await request.form()
-    if acao.tipo == "email_cobranca" and acao.status == "pendente":
+    if acao.tipo in ("email_cobranca", "whatsapp_resposta") and acao.status == "pendente":
         assunto = str(form.get("assunto") or "").strip()[:200]
         corpo = str(form.get("corpo") or "").strip()[:8000]
-        if assunto:
+        if assunto and acao.tipo == "email_cobranca":
             acao.assunto = assunto
         if corpo:
             acao.corpo = corpo
@@ -1978,6 +2234,9 @@ async def predio_aprovar_acao(acao_id: int, request: Request, session: Session =
         session.commit()
     if not _pr_reivindicar_acao(acao_id, ctx.company.id, "executando"):
         return _pr_voltar_da_acao(acao)
+    acao.decidido_por_user_id = ctx.user.id
+    session.add(acao)
+    session.commit()
     from starlette.concurrency import run_in_threadpool as _rtp_pr
 
     def _rodar() -> tuple:
@@ -2001,10 +2260,10 @@ async def predio_aprovar_acao(acao_id: int, request: Request, session: Session =
 @require_login
 async def predio_rejeitar_acao(acao_id: int, request: Request, session: Session = Depends(get_session)):
     ctx = _pr_ctx(request, session)
-    if not ctx or ctx.membership.role != "admin":
+    if not ctx:
         return RedirectResponse("/predio", status_code=303)
     acao = session.get(PredioAcao, acao_id)
-    if not acao or acao.company_id != ctx.company.id:
+    if not acao or acao.company_id != ctx.company.id or not _pr_pode_decidir(ctx.membership.role, acao.tipo):
         return RedirectResponse("/predio", status_code=303)
     if _pr_reivindicar_acao(acao_id, ctx.company.id, "rejeitada"):
         session.refresh(acao)
@@ -2863,34 +3122,40 @@ TEMPLATES["predio_chamado.html"] = r"""
     f.addEventListener('submit',function(){ b.disabled=true; });
     return f;
   }
-  function desenharAcoes(acoes, podeAprovar){
+  var TIPOS = {
+    email_cobranca:    {para:'Para: {d} (e-mail cadastrado do cliente)', assunto:true, corpo:true, linhas:10, botao:'Aprovar e enviar'},
+    whatsapp_resposta: {para:'Para: {d}', corpo:true, linhas:5, botao:'Aprovar e enviar pelo WhatsApp'},
+    agendar_reuniao:   {botao:'Aprovar e agendar'},
+    gerar_cobrancas:   {botao:'Aprovar e gerar'}
+  };
+  function campo(form, rotulo, tag, nome, id, valor, linhas){
+    var lb=el('label','form-label small fw-semibold mb-1',rotulo); lb.htmlFor=id;
+    var c=el(tag,'form-control form-control-sm mb-2'); c.name=nome; c.id=id; c.value=valor;
+    if(linhas) c.rows=linhas; else c.maxLength=200;
+    var botao=form.lastChild; form.insertBefore(lb,botao); form.insertBefore(c,botao);
+  }
+  function desenharAcoes(acoes){
     var box=document.getElementById('acoes'); box.innerHTML='';
     if(!acoes.length) return;
     box.appendChild(el('h2','h6 fw-bold mb-0','Propostas do agente'));
     acoes.forEach(function(a){
+      var cfg=TIPOS[a.tipo]||{botao:'Aprovar'};
       var card=el('div','card pc-card p-3 p-md-4 pc-acao');
       var topo=el('div','d-flex justify-content-between align-items-start gap-2 flex-wrap mb-2');
       topo.appendChild(el('strong',null,a.titulo));
       var pill=el('span','pc-pill '+({pendente:'andamento',executada:'concluido',erro:'erro',rejeitada:'sem_agente',executando:'andamento'}[a.status]||''), a.status_label);
       topo.appendChild(pill); card.appendChild(topo);
-      var pendente=a.status==='pendente' && podeAprovar;
-      if(a.tipo==='email_cobranca'){
-        card.appendChild(el('div','pc-meta mb-2','Para: '+a.destinatario+' (e-mail cadastrado do cliente)'));
-        if(pendente){
-          var f=formAcao(a,'aprovar','Aprovar e enviar','btn-primary');
-          var lb1=el('label','form-label small fw-semibold mb-1','Assunto'); lb1.htmlFor='pcAss'+a.id;
-          var ass=el('input','form-control form-control-sm mb-2'); ass.name='assunto'; ass.id='pcAss'+a.id; ass.value=a.assunto; ass.maxLength=200;
-          var lb2=el('label','form-label small fw-semibold mb-1','Mensagem'); lb2.htmlFor='pcCorpo'+a.id;
-          var corpo=el('textarea','form-control form-control-sm mb-2'); corpo.name='corpo'; corpo.id='pcCorpo'+a.id; corpo.rows=10; corpo.value=a.corpo;
-          f.insertBefore(corpo,f.firstChild); f.insertBefore(lb2,corpo); f.insertBefore(ass,lb2); f.insertBefore(lb1,ass);
-          card.appendChild(f);
-        } else {
-          card.appendChild(el('div','fw-semibold small mb-1',a.assunto));
-          card.appendChild(el('div','pc-pedido',a.corpo));
-        }
+      var pendente=a.status==='pendente' && a.pode_decidir;
+      if(cfg.para) card.appendChild(el('div','pc-meta mb-2',cfg.para.replace('{d}',a.destinatario)));
+      if(pendente && (cfg.assunto || cfg.corpo)){
+        var f=formAcao(a,'aprovar',cfg.botao,'btn-primary');
+        if(cfg.assunto) campo(f,'Assunto','input','assunto','pcAss'+a.id,a.assunto);
+        if(cfg.corpo) campo(f,'Mensagem','textarea','corpo','pcCorpo'+a.id,a.corpo,cfg.linhas);
+        card.appendChild(f);
       } else {
+        if(cfg.assunto && a.assunto) card.appendChild(el('div','fw-semibold small mb-1',a.assunto));
         card.appendChild(el('div','pc-pedido',a.corpo));
-        if(pendente) card.appendChild(formAcao(a,'aprovar','Aprovar e gerar','btn-primary mt-3'));
+        if(pendente) card.appendChild(formAcao(a,'aprovar',cfg.botao,'btn-primary mt-3'));
       }
       if(pendente){
         var linha=el('div','d-flex gap-2 align-items-center mt-2');
@@ -2972,7 +3237,7 @@ TEMPLATES["predio_chamado.html"] = r"""
       d.turnos.forEach(function(t,i){ c.appendChild(turno(t,i,d.agente)); });
     }
     var novaAc=JSON.stringify(d.acoes);
-    if(novaAc!==assinaturaAcoes){ assinaturaAcoes=novaAc; desenharAcoes(d.acoes, d.pode_aprovar); }
+    if(novaAc!==assinaturaAcoes){ assinaturaAcoes=novaAc; desenharAcoes(d.acoes); }
     document.getElementById('pcForm').hidden=!d.pode_continuar;
   }
   aplicar(dados);
