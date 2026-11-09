@@ -89,9 +89,31 @@ class PredioAcao(_SM_pr, table=True):
     criado_em: _dt_pr = _F_pr(default_factory=lambda: _dt_pr.utcnow(), index=True)
 
 
+from sqlalchemy import Column as _Col_pr, LargeBinary as _LB_pr
+
+
+class PredioAnexo(_SM_pr, table=True):
+    """Arquivo enviado num chamado. PDF/imagem guardam o binário (o Claude lê direto);
+    Word/planilha/texto guardam o texto extraído."""
+    __tablename__ = "predio_anexo"
+    __table_args__ = {"extend_existing": True}
+    id: _Opt_pr[int] = _F_pr(default=None, primary_key=True)
+    company_id: int = _F_pr(index=True)
+    chamado_id: int = _F_pr(index=True)
+    turno: int = _F_pr(default=0)
+    nome: str = _F_pr(default="")
+    mime: str = _F_pr(default="")
+    tamanho: int = _F_pr(default=0)
+    tipo: str = _F_pr(default="")  # pdf | imagem | texto
+    texto: str = _F_pr(default="")
+    conteudo: _Opt_pr[bytes] = _F_pr(default=None, sa_column=_Col_pr(_LB_pr, nullable=True))
+    criado_em: _dt_pr = _F_pr(default_factory=lambda: _dt_pr.utcnow())
+
+
 try:
     _SM_pr.metadata.create_all(
-        engine, tables=[PredioChamado.__table__, PredioConfig.__table__, PredioAcao.__table__], checkfirst=True
+        engine, tables=[PredioChamado.__table__, PredioConfig.__table__, PredioAcao.__table__,
+                        PredioAnexo.__table__], checkfirst=True
     )
 except Exception as _e_pr_tab:
     print(f"[predio] create_all: {_e_pr_tab}")
@@ -132,7 +154,7 @@ _PREDIO_ANDARES = [
          "atribuicoes": "Briefing semanal dos sócios, prioridades e pendências entre andares.",
          "ferramentas": ["ops_tarefas_atrasadas", "ops_pendencias_abertas", "ops_agenda", "ops_clientes_sem_contato",
                          "com_pipeline", "fin_resumo_caixa", "fin_inadimplencia", "fin_contratos", "cli_carteira",
-                         "cli_panorama", "ops_propor_tarefa"]},
+                         "cli_panorama", "ops_propor_tarefa", "atd_caixa", "sis_pendencias"]},
         {"key": "estrategia", "nome": "Estratégia", "papeis": _PR_ADMIN, "ativo": False,
          "atribuicoes": "Metas do escritório (receita, carteira, margem) e acompanhamento do BSC interno."},
     ]},
@@ -229,11 +251,13 @@ _PREDIO_ANDARES = [
     {"key": "operacoes", "nome": "Operações e Conhecimento", "rotulo": "Subsolo", "agentes": [
         {"key": "revisor", "nome": "Revisor de Qualidade", "papeis": _PR_TODOS, "ativo": True,
          "atribuicoes": "Revisa entregas antes de irem ao cliente: números, coerência, clareza e tom.",
-         "ferramentas": ["cli_panorama", "reu_listar", "reu_conteudo"]},
-        {"key": "conhecimento", "nome": "Gestor de Conhecimento", "papeis": _PR_TODOS, "ativo": False,
-         "atribuicoes": "Alimenta o 2º Cérebro com modelos, cases e decisões."},
-        {"key": "sistemas", "nome": "Sistemas", "papeis": _PR_TODOS, "ativo": False,
-         "atribuicoes": "Backups, integrações e saúde do sistema."},
+         "ferramentas": ["cli_panorama", "reu_listar", "reu_conteudo", "conh_buscar", "conh_ler"]},
+        {"key": "conhecimento", "nome": "Gestor de Conhecimento", "papeis": _PR_TODOS, "ativo": True,
+         "atribuicoes": "Memória do escritório: encontra cases, decisões e modelos e registra o que vale reaproveitar.",
+         "ferramentas": ["conh_buscar", "conh_ler", "conh_propor_registro", "reu_listar", "reu_conteudo", "cli_panorama"]},
+        {"key": "sistemas", "nome": "Sistemas", "papeis": _PR_ADMIN, "ativo": True,
+         "atribuicoes": "Saúde da plataforma: serviços, backup, chamados e transcrições travadas; propõe correções.",
+         "ferramentas": ["sis_saude", "sis_pendencias", "sis_propor_backup", "sis_propor_destravar_transcricao"]},
     ]},
 ]
 
@@ -1697,6 +1721,212 @@ def _pr_wa_agenda(company_id: int, client_id: int, thread_id: int, mensagem: str
         return _pr_wa_oferecer(s, company_id, cliente, thread_id, texto)
 
 
+# ── Sistemas: saúde da plataforma ─────────────────────────────────────────────
+
+def _pr_ultimo_backup() -> dict:
+    cliente_s3 = globals().get("_get_s3_client")
+    if not cliente_s3:
+        return {"status": "módulo de backup indisponível"}
+    try:
+        s3 = cliente_s3()
+        objetos, token = [], None
+        while True:
+            kw = {"Bucket": _BK_BUCKET, "Prefix": _BK_PREFIX + "/"}
+            if token:
+                kw["ContinuationToken"] = token
+            pag = s3.list_objects_v2(**kw)
+            objetos += pag.get("Contents", [])
+            if not pag.get("IsTruncated"):
+                break
+            token = pag.get("NextContinuationToken")
+        if not objetos:
+            return {"status": "nenhum backup encontrado no S3", "ok": False}
+        ult = max(objetos, key=lambda o: o["LastModified"])
+        horas = round((_dt_pr.now(ult["LastModified"].tzinfo) - ult["LastModified"]).total_seconds() / 3600, 1)
+        return {"ok": horas <= 30, "ultimo_arquivo": ult["Key"].split("/")[-1], "horas_atras": horas,
+                "tamanho_mb": round(ult["Size"] / 1024 / 1024, 1), "backups_guardados": len(objetos),
+                "observacao": "O backup roda todo dia às 03:00 UTC; mais de 30h sem backup indica falha."}
+    except Exception as e:
+        return {"ok": False, "status": f"não foi possível consultar o S3: {str(e)[:150]}"}
+
+
+def _pr_t_sis_saude(s, cid):
+    servicos = {}
+    for nome, fn in (("Claude (Anthropic)", "_check_anthropic"), ("DirectData", "_check_directdata"),
+                     ("Notion", "_check_notion")):
+        f = globals().get(fn)
+        if f:
+            try:
+                servicos[nome] = f()
+            except Exception as e:
+                servicos[nome] = {"ok": False, "status": str(e)[:120]}
+    saida = {"servicos_externos": servicos, "backup": _pr_ultimo_backup()}
+    for chave, fn in (("banco_de_dados", "_get_uso_banco"), ("custos_do_mes", "_estimar_custos_mes")):
+        f = globals().get(fn)
+        if f:
+            try:
+                saida[chave] = f(s)
+            except Exception as e:
+                saida[chave] = {"erro": str(e)[:120]}
+    cfg = s.exec(_sel_pr(WhatsAppChannelConfig).where(WhatsAppChannelConfig.company_id == cid)).first()
+    saida["whatsapp"] = {"canal_ativo": bool(cfg and cfg.is_enabled)}
+    return saida
+
+
+def _pr_t_sis_pendencias(s, cid):
+    agora = _dt_pr.utcnow()
+    travados = [{"chamado_id": c.id, "titulo": c.titulo or c.pedido[:60], "parado_ha_min": int((agora - c.updated_at).total_seconds() // 60)}
+                for c in s.exec(_sel_pr(PredioChamado).where(
+                    PredioChamado.company_id == cid, PredioChamado.status.in_(["na_fila", "roteando", "trabalhando"]),
+                    PredioChamado.updated_at < agora - _PR_TRAVADO_APOS)).all()]
+    com_erro = [{"chamado_id": c.id, "titulo": c.titulo or c.pedido[:60], "erro": (c.erro or "")[:160]}
+                for c in s.exec(_sel_pr(PredioChamado).where(
+                    PredioChamado.company_id == cid, PredioChamado.status == "erro",
+                    PredioChamado.updated_at >= agora - _td_pr(days=7)).order_by(PredioChamado.updated_at.desc()).limit(10)).all()]
+    props_paradas = [{"proposta_id": a.id, "titulo": a.titulo, "aguardando_ha_horas": int((agora - a.criado_em).total_seconds() // 3600)}
+                     for a in s.exec(_sel_pr(PredioAcao).where(PredioAcao.company_id == cid, PredioAcao.status == "pendente",
+                                                               PredioAcao.criado_em < agora - _td_pr(hours=24))).all()]
+    props_erro = [{"proposta_id": a.id, "titulo": a.titulo, "erro": (a.resultado or "")[:160]}
+                  for a in s.exec(_sel_pr(PredioAcao).where(PredioAcao.company_id == cid, PredioAcao.status == "erro",
+                                                            PredioAcao.criado_em >= agora - _td_pr(days=7))).all()]
+    nomes = _pr_clientes(s, cid)
+    transc_presas = [{"reuniao_id": m.id, "titulo": m.title, "cliente": nomes.get(m.client_id, ""), "status": m.notion_status}
+                     for m in s.exec(_sel_pr(Meeting).where(
+                         Meeting.company_id == cid, Meeting.notion_status.in_(["transcription_in_progress", "summary_in_progress"]),
+                         Meeting.updated_at < agora - _td_pr(minutes=45))).all()]
+    transc_erro = [{"reuniao_id": m.id, "titulo": m.title, "cliente": nomes.get(m.client_id, ""),
+                    "detalhe": (m.notes_text or "")[:160]}
+                   for m in s.exec(_sel_pr(Meeting).where(Meeting.company_id == cid, Meeting.notion_status == "error",
+                                                          Meeting.updated_at >= agora - _td_pr(days=7))).all()]
+    wa_falhas = [{"quando": _pr_quando(m.created_at), "texto": (m.body or "")[:100]}
+                 for m in s.exec(_sel_pr(WhatsAppThreadMessage).where(
+                     WhatsAppThreadMessage.company_id == cid, WhatsAppThreadMessage.delivery_status == "failed",
+                     WhatsAppThreadMessage.created_at >= agora - _td_pr(hours=24))).all()]
+    return {"chamados_travados": travados, "chamados_com_erro_7d": com_erro,
+            "propostas_esperando_aprovacao_ha_mais_de_24h": props_paradas, "propostas_com_erro_7d": props_erro,
+            "transcricoes_presas": transc_presas, "transcricoes_com_erro_7d": transc_erro,
+            "whatsapp_mensagens_que_falharam_24h": wa_falhas[:10]}
+
+
+def _pr_t_sis_propor_backup(s, cid):
+    pendente = s.exec(_sel_pr(PredioAcao).where(PredioAcao.company_id == cid, PredioAcao.tipo == "rodar_backup",
+                                                PredioAcao.status == "pendente")).first()
+    if pendente:
+        return {"ok": False, "mensagem": f"Já existe uma proposta de backup aguardando aprovação (#{pendente.id})."}
+    acao = _pr_registrar_proposta(s, cid, tipo="rodar_backup", titulo="Rodar um backup do banco agora",
+                                  corpo="Gera um backup completo do banco e envia ao S3 (em streaming, sem pesar na memória).")
+    return {"ok": True, "proposta_id": acao.id, "status": "aguardando aprovação de um admin"}
+
+
+def _pr_t_sis_propor_destravar(s, cid, reuniao_id):
+    m = s.get(Meeting, int(reuniao_id))
+    if not m or m.company_id != cid:
+        return {"ok": False, "erro": "Reunião não encontrada."}
+    if m.notion_status not in ("transcription_in_progress", "summary_in_progress", "error", "transcription_not_started"):
+        return {"ok": False, "erro": f"A transcrição dessa reunião não está presa (status: {m.notion_status or 'sem áudio'})."}
+    try:
+        tem_backup = bool(_json_pr.loads(m.raw_json or "{}").get("audio_s3_key"))
+    except ValueError:
+        tem_backup = False
+    acao = _pr_registrar_proposta(
+        s, cid, tipo="destravar_transcricao", client_id=m.client_id, titulo=f"Destravar a transcrição de \"{m.title}\"",
+        corpo=("O áudio tem backup no S3: a transcrição será refeita a partir dele." if tem_backup else
+               "Não há backup do áudio: a reunião volta para \"aguardando áudio\" e alguém precisa reenviar o arquivo."),
+        payload_json=_json_pr.dumps({"reuniao_id": m.id}))
+    return {"ok": True, "proposta_id": acao.id, "status": "aguardando aprovação de um admin", "audio_com_backup": tem_backup}
+
+
+# ── Gestor de Conhecimento ────────────────────────────────────────────────────
+
+def _pr_trecho(texto: str, termos: list, tam: int = 260) -> str:
+    base = texto or ""
+    baixo = _pr_norm(base)
+    pos = min([baixo.find(t) for t in termos if baixo.find(t) >= 0] or [0])
+    ini = max(0, pos - tam // 3)
+    return ("…" if ini else "") + base[ini:ini + tam].replace("\n", " ") + ("…" if ini + tam < len(base) else "")
+
+
+def _pr_relevancia(titulo: str, texto_norm: str, termos: list) -> int:
+    t = _pr_norm(titulo)
+    return sum(10 for x in termos if x in t) + sum(min(texto_norm.count(x), 5) for x in termos)
+
+
+def _pr_padrao_sem_acento(termo: str) -> str:
+    """Padrão LIKE que casa com ou sem acento: vogais e 'c' viram coringa de um caractere."""
+    return "%" + "".join("_" if ch in "aeiouc" else ch for ch in termo) + "%"
+
+
+def _pr_t_conh_buscar(s, cid, termo, cliente):
+    termos = [t for t in _pr_norm(termo).split() if len(t) >= 3][:6]
+    if not termos:
+        return {"erro": "Informe palavras com pelo menos 3 letras."}
+    filtro = None
+    if (cliente or "").strip():
+        filtro, cands = _pr_resolver_cliente(s, cid, cliente)
+        if not filtro:
+            return _pr_nao_achei(cliente, cands)
+    nomes = _pr_clientes(s, cid)
+    achados = []
+    BC = globals().get("BaseConhecimento")
+    if BC is not None:
+        q = _sel_pr(BC).where(BC.company_id == cid)
+        if filtro:
+            q = q.where(BC.client_id.in_([filtro.id, 0]))
+        padrao = _pr_padrao_sem_acento(termos[0])
+        q = q.where((BC.nome.ilike(padrao)) | (BC.descricao.ilike(padrao)) | (BC.conteudo_texto.ilike(padrao)))
+        for b in s.exec(q.limit(200)).all():
+            alvo = _pr_norm(" ".join((b.nome or "", b.descricao or "", b.conteudo_texto or "")))
+            if all(t in alvo for t in termos):
+                achados.append({"_rel": _pr_relevancia(b.nome, alvo, termos), "fonte": "base", "id": b.id, "titulo": b.nome, "tipo": b.tipo,
+                                "cliente": nomes.get(b.client_id, "interno (escritório)"), "data": (b.created_at or "")[:10],
+                                "trecho": _pr_trecho(b.conteudo_texto or b.descricao, termos)})
+    q = _sel_pr(Meeting).where(Meeting.company_id == cid)
+    if filtro:
+        q = q.where(Meeting.client_id == filtro.id)
+    padrao = _pr_padrao_sem_acento(termos[0])
+    q = q.where((Meeting.title.ilike(padrao)) | (Meeting.summary_text.ilike(padrao)) | (Meeting.notes_text.ilike(padrao)))
+    for m in s.exec(q.order_by(Meeting.created_at.desc()).limit(200)).all():
+        texto = " ".join((m.title or "", m.summary_text or "", m.notes_text or ""))
+        if all(t in _pr_norm(texto) for t in termos):
+            achados.append({"_rel": _pr_relevancia(m.title, _pr_norm(texto), termos), "fonte": "reuniao", "id": m.id,
+                            "titulo": m.title, "tipo": "reunião",
+                            "cliente": nomes.get(m.client_id, ""), "data": m.meeting_date or _pr_fmt_data(m.created_at.date() if m.created_at else None),
+                            "trecho": _pr_trecho(m.summary_text or m.notes_text, termos)})
+    achados.sort(key=lambda x: -x.pop("_rel"))
+    return {"termos": termos, "resultados": len(achados), "itens": achados[:15],
+            "observacao": "Ordenado por relevância; refine os termos se o que procura não estiver entre os primeiros."}
+
+
+def _pr_t_conh_ler(s, cid, fonte, item_id):
+    if fonte == "reuniao":
+        return _pr_t_reuniao_conteudo(s, cid, item_id)
+    BC = globals().get("BaseConhecimento")
+    b = s.get(BC, int(item_id)) if BC is not None else None
+    if not b or b.company_id != cid:
+        return {"erro": "Item não encontrado."}
+    return {"id": b.id, "titulo": b.nome, "tipo": b.tipo, "descricao": b.descricao,
+            "cliente": _pr_clientes(s, cid).get(b.client_id, "interno (escritório)"),
+            "conteudo": (b.conteudo_texto or "")[:30000], "cortado": len(b.conteudo_texto or "") > 30000}
+
+
+def _pr_t_conh_propor_registro(s, cid, titulo, tipo, conteudo, cliente):
+    if globals().get("BaseConhecimento") is None:
+        return {"ok": False, "erro": "Base de conhecimento indisponível."}
+    if len((titulo or "").strip()) < 3 or len((conteudo or "").strip()) < 20:
+        return {"ok": False, "erro": "Título e conteúdo são obrigatórios."}
+    client_id, onde = None, "interno do escritório (o Augur dos clientes não usa)"
+    if (cliente or "").strip():
+        c, cands = _pr_resolver_cliente(s, cid, cliente)
+        if not c:
+            return _pr_nao_achei(cliente, cands)
+        client_id, onde = c.id, f"vinculado a {c.name} (o Augur desse cliente passa a usar nas respostas a ele)"
+    acao = _pr_registrar_proposta(
+        s, cid, tipo="registrar_conhecimento", client_id=client_id, titulo=f"Registrar conhecimento: {titulo.strip()[:80]}",
+        destinatario=f"Tipo: {tipo} · {onde}", assunto=titulo.strip()[:200], corpo=conteudo.strip()[:20000],
+        payload_json=_json_pr.dumps({"tipo": tipo}))
+    return {"ok": True, "proposta_id": acao.id, "status": "aguardando aprovação", "onde": onde}
+
+
 def _pr_schema(props: dict) -> dict:
     return {"type": "object", "properties": props, "required": list(props), "additionalProperties": False}
 
@@ -1778,6 +2008,45 @@ _PR_TOOLS = {
                   "local": {"type": "string", "enum": ["nosso_escritorio", "cliente", "online"],
                             "description": "Onde será a reunião."},
                   "notas": {"type": "string", "description": "Observações para a reunião (pode ser vazio)."}}},
+    "sis_saude": {
+        "fn": _pr_t_sis_saude, "rotulo": "Verificou a saúde da plataforma",
+        "description": "Situação dos serviços externos (Claude, DirectData, Notion), último backup no S3, uso do banco, "
+                       "custos estimados do mês e canal do WhatsApp.",
+        "props": {}},
+    "sis_pendencias": {
+        "fn": _pr_t_sis_pendencias, "rotulo": "Levantou as pendências técnicas",
+        "description": "Chamados do prédio travados ou com erro, propostas paradas ou que falharam, transcrições presas ou "
+                       "com erro e mensagens de WhatsApp que falharam.",
+        "props": {}},
+    "sis_propor_backup": {
+        "fn": _pr_t_sis_propor_backup, "rotulo": "Propôs rodar um backup",
+        "description": "Cria uma PROPOSTA para rodar um backup do banco agora. Só roda depois da aprovação de um admin.",
+        "props": {}},
+    "sis_propor_destravar_transcricao": {
+        "fn": _pr_t_sis_propor_destravar, "rotulo": "Propôs destravar uma transcrição",
+        "description": "Cria uma PROPOSTA para destravar a transcrição de uma reunião (refaz a partir do backup do áudio "
+                       "no S3, se houver). Só roda depois da aprovação de um admin.",
+        "props": {"reuniao_id": {"type": "integer", "description": "Identificador da reunião (de sis_pendencias)."}}},
+    "conh_buscar": {
+        "fn": _pr_t_conh_buscar, "rotulo": "Buscou na base de conhecimento",
+        "description": "Busca por palavras na base de conhecimento do escritório (documentos indexados, cases, decisões, "
+                       "modelos) e nas reuniões. Devolve fonte, data e trecho de cada resultado.",
+        "props": {"termo": {"type": "string", "description": "Palavras-chave da busca."},
+                  "cliente": {"type": "string", "description": "Restringir a um cliente (vazio = todos)."}}},
+    "conh_ler": {
+        "fn": _pr_t_conh_ler, "rotulo": "Leu um item da base",
+        "description": "Conteúdo completo de um resultado de conh_buscar.",
+        "props": {"fonte": {"type": "string", "enum": ["base", "reuniao"], "description": "Fonte do item."},
+                  "item_id": {"type": "integer", "description": "Identificador do item."}}},
+    "conh_propor_registro": {
+        "fn": _pr_t_conh_propor_registro, "rotulo": "Propôs registrar conhecimento",
+        "description": "Cria uma PROPOSTA para registrar um case, decisão, modelo, lição ou procedimento na base de "
+                       "conhecimento. Cliente vazio = conhecimento interno do escritório. Só é gravado depois da aprovação.",
+        "props": {"titulo": {"type": "string", "description": "Título curto e buscável."},
+                  "tipo": {"type": "string", "enum": ["case", "decisao", "modelo", "licao", "procedimento"],
+                           "description": "Tipo de conhecimento."},
+                  "conteudo": {"type": "string", "description": "Texto reutilizável: contexto, o que foi feito/decidido, resultado, quando usar."},
+                  "cliente": {"type": "string", "description": "Cliente ao qual vincular (vazio = interno)."}}},
     "agenda_reunioes": {
         "fn": _pr_t_agenda_reunioes, "rotulo": "Listou as reuniões marcadas",
         "description": "Reuniões marcadas na agenda nos próximos dias, com o booking_id de cada uma (use para remarcar "
@@ -1904,7 +2173,8 @@ _PR_INSTRUCOES = {
         "Você não envia nada: entregue os textos prontos para a equipe revisar e enviar."
     ),
     "revisor": (
-        "Você revisa entregas antes de irem ao cliente. O texto a revisar vem no pedido. Verifique: números, datas e "
+        "Você revisa entregas antes de irem ao cliente. O conteúdo a revisar vem no pedido ou nos arquivos anexados "
+        "(PDF, Word, planilha ou imagem); confira também as contas das planilhas. Verifique: números, datas e "
         "nomes coerentes entre si e com os dados do sistema (consulte o cliente quando ele for identificável), "
         "clareza, tom profissional, português correto e formatação consistente. Responda com: veredito "
         "(**Pronto para enviar** ou **Ajustes necessários**), os problemas por gravidade com o trecho e a correção "
@@ -1921,6 +2191,18 @@ _PR_INSTRUCOES = {
         "Quando a equipe pedir uma alteração na agenda (remarcar, trocar quem atende, cancelar), localize a reunião com "
         "agenda_reunioes, confira os horários livres e proponha a alteração; se faltar informação (qual reunião, que "
         "horário), pergunte em vez de supor. Quando algo precisar de acompanhamento, proponha uma tarefa."
+    ),
+    "sistemas": (
+        "Você cuida da saúde técnica da plataforma. Relate em linguagem simples, para quem não é técnico, começando "
+        "pelo que afeta clientes ou dados (backup, WhatsApp, transcrições). Proponha correções só quando houver uma ação "
+        "clara. Não invente causas: se não for possível saber pelos dados, diga o que verificar (por exemplo, os logs "
+        "do Render)."
+    ),
+    "conhecimento": (
+        "Você é a memória do escritório. Ao buscar, cite a fonte de cada informação (documento ou reunião, cliente e "
+        "data). Ao propor um registro, escreva de forma reutilizável: contexto, o que foi feito ou decidido, resultado e "
+        "quando usar de novo. Use cliente vazio (interno) por padrão: vincular a um cliente faz o Augur desse cliente "
+        "usar a informação nas respostas a ele, então só vincule o que pode ser compartilhado com o cliente."
     ),
     "faturamento": (
         "Você cuida do faturamento mensal do escritório. Para a competência pedida (padrão: mês atual), confira "
@@ -1975,6 +2257,149 @@ def _pr_catalogo_texto(papel: str) -> str:
             disp = "DISPONÍVEL" if _pr_pode_usar(a, papel) else "indisponível"
             linhas.append(f"  - {a['key']} ({a['nome']}, {disp}): {a['atribuicoes']}")
     return "\n".join(linhas)
+
+
+# ── Anexos: extração, gravação e montagem das mensagens ───────────────────────
+
+_PR_ANEXO_MAX_BYTES = 10 * 1024 * 1024
+_PR_ANEXO_MAX_ARQUIVOS = 5
+_PR_TEXTO_MAX_CHARS = 150_000
+_PR_IMAGEM_MIMES = {"image/png": "image/png", "image/jpeg": "image/jpeg", "image/jpg": "image/jpeg",
+                    "image/webp": "image/webp", "image/gif": "image/gif"}
+
+
+def _pr_extrair_planilha(nome: str, dados: bytes) -> str:
+    import io as _io_x
+    partes, total = [], 0
+    if nome.lower().endswith(".xls"):
+        import xlrd as _xlrd_x
+        livro = _xlrd_x.open_workbook(file_contents=dados)
+
+        def _linhas_xls(aba):
+            return (aba.row_values(r) for r in range(aba.nrows))
+        abas = [(sh.name, _linhas_xls(sh)) for sh in livro.sheets()]
+    else:
+        import openpyxl as _opx_x
+        livro = _opx_x.load_workbook(_io_x.BytesIO(dados), read_only=True, data_only=True)
+        abas = [(ws.title, ws.iter_rows(values_only=True)) for ws in livro.worksheets]
+    import csv as _csv_x
+    for titulo, linhas in abas:
+        buf = _io_x.StringIO()
+        w = _csv_x.writer(buf, delimiter=";")
+        n = 0
+        for linha in linhas:
+            if linha is None or all(v in (None, "") for v in linha):
+                continue
+            w.writerow(["" if v is None else v for v in linha])
+            n += 1
+            if buf.tell() > _PR_TEXTO_MAX_CHARS:
+                break
+        texto = buf.getvalue()
+        partes.append(f"### Aba \"{titulo}\" ({n} linhas)\n{texto}")
+        total += len(texto)
+        if total > _PR_TEXTO_MAX_CHARS:
+            partes.append("_(planilha cortada: limite de tamanho atingido)_")
+            break
+    return "\n\n".join(partes)
+
+
+def _pr_extrair_docx(dados: bytes) -> str:
+    import io as _io_x
+    import docx as _docx_x
+    doc = _docx_x.Document(_io_x.BytesIO(dados))
+    partes = [p.text for p in doc.paragraphs if p.text.strip()]
+    for t in doc.tables:
+        partes.append("\n".join(" | ".join(c.text.strip() for c in row.cells) for row in t.rows))
+    return "\n".join(partes)
+
+
+def _pr_preparar_anexo(nome: str, mime: str, dados: bytes) -> dict:
+    """Classifica o arquivo e extrai o que o Claude precisa. Lança _PrErro para formatos não suportados."""
+    n = (nome or "arquivo").lower()
+    if n.endswith(".pdf") or mime == "application/pdf":
+        return {"tipo": "pdf", "mime": "application/pdf", "conteudo": dados, "texto": ""}
+    if mime in _PR_IMAGEM_MIMES or n.endswith((".png", ".jpg", ".jpeg", ".webp", ".gif")):
+        ext = n.rsplit(".", 1)[-1]
+        m = _PR_IMAGEM_MIMES.get(mime) or {"png": "image/png", "webp": "image/webp", "gif": "image/gif"}.get(ext, "image/jpeg")
+        return {"tipo": "imagem", "mime": m, "conteudo": dados, "texto": ""}
+    if n.endswith((".xlsx", ".xlsm", ".xls")):
+        return {"tipo": "texto", "mime": mime, "conteudo": None, "texto": _pr_extrair_planilha(n, dados)}
+    if n.endswith(".docx"):
+        return {"tipo": "texto", "mime": mime, "conteudo": None, "texto": _pr_extrair_docx(dados)[:_PR_TEXTO_MAX_CHARS]}
+    if n.endswith((".csv", ".txt", ".md", ".json")):
+        for cod in ("utf-8", "latin-1"):
+            try:
+                return {"tipo": "texto", "mime": mime, "conteudo": None, "texto": dados.decode(cod)[:_PR_TEXTO_MAX_CHARS]}
+            except UnicodeDecodeError:
+                pass
+    raise _PrErro(f"Formato não suportado: {nome}. Use PDF, Word (.docx), Excel, CSV, TXT ou imagem.")
+
+
+async def _pr_salvar_anexos(session, form, campo: str, company_id: int, chamado_id: int, turno: int) -> list:
+    """Lê os arquivos do formulário e grava. Devolve a lista de erros (arquivo ignorado e motivo)."""
+    erros = []
+    arquivos = [f for f in form.getlist(campo) if getattr(f, "filename", "")][:_PR_ANEXO_MAX_ARQUIVOS]
+    for arq in arquivos:
+        dados = await arq.read(_PR_ANEXO_MAX_BYTES + 1)
+        if len(dados) > _PR_ANEXO_MAX_BYTES:
+            erros.append(f"{arq.filename}: maior que 10 MB")
+            continue
+        try:
+            info = _pr_preparar_anexo(arq.filename, (arq.content_type or "").lower(), dados)
+        except _PrErro as e:
+            erros.append(str(e))
+            continue
+        except Exception as e:
+            erros.append(f"{arq.filename}: não foi possível ler ({e.__class__.__name__})")
+            continue
+        session.add(PredioAnexo(company_id=company_id, chamado_id=chamado_id, turno=turno, nome=arq.filename[:200],
+                                mime=info["mime"] or (arq.content_type or ""), tamanho=len(dados), tipo=info["tipo"],
+                                texto=info["texto"], conteudo=dados))
+    session.commit()
+    return erros
+
+
+def _pr_conteudo_com_anexos(chamado_id: int, turno: int, texto: str):
+    """Mensagem do usuário: referências aos anexos do turno + o texto. As referências viram blocos
+    reais só na hora de chamar a API (o histórico salvo fica leve)."""
+    with _Sess_pr(engine) as s:
+        ids = [a.id for a in s.exec(_sel_pr(PredioAnexo).where(PredioAnexo.chamado_id == chamado_id,
+                                                               PredioAnexo.turno == turno).order_by(PredioAnexo.id)).all()]
+    if not ids:
+        return texto
+    return [{"type": "anexo_ref", "id": i} for i in ids] + [{"type": "text", "text": texto}]
+
+
+def _pr_hidratar(messages: list, cache: dict) -> list:
+    import base64 as _b64_h
+    saida = []
+    for m in messages:
+        conteudo = m.get("content")
+        if not isinstance(conteudo, list) or not any(isinstance(b, dict) and b.get("type") == "anexo_ref" for b in conteudo):
+            saida.append(m)
+            continue
+        blocos = []
+        for b in conteudo:
+            if not (isinstance(b, dict) and b.get("type") == "anexo_ref"):
+                blocos.append(b)
+                continue
+            if b["id"] not in cache:
+                with _Sess_pr(engine) as s:
+                    a = s.get(PredioAnexo, b["id"])
+                    if not a:
+                        cache[b["id"]] = {"type": "text", "text": "(anexo removido)"}
+                    elif a.tipo == "pdf":
+                        cache[b["id"]] = {"type": "document", "title": a.nome[:200], "source": {
+                            "type": "base64", "media_type": "application/pdf",
+                            "data": _b64_h.standard_b64encode(a.conteudo or b"").decode()}}
+                    elif a.tipo == "imagem":
+                        cache[b["id"]] = {"type": "image", "source": {
+                            "type": "base64", "media_type": a.mime, "data": _b64_h.standard_b64encode(a.conteudo or b"").decode()}}
+                    else:
+                        cache[b["id"]] = {"type": "text", "text": f"=== Arquivo anexado: {a.nome} ===\n{a.texto}"}
+            blocos.append(cache[b["id"]])
+        saida.append({**m, "content": blocos})
+    return saida
 
 
 # ── Execução ──────────────────────────────────────────────────────────────────
@@ -2092,14 +2517,16 @@ def _pr_rodar_agente(chamado_id: int, agente: dict, messages: list, company_id: 
     tools = [_PR_TOOLS[n]["schema"] for n in agente["ferramentas"]]
     system = _pr_system_prompt(agente, empresa)
     messages = list(messages)
+    anexos_cache: dict = {}
     for _ in range(15):
         resp = client.beta.messages.create(
             model=_PR_MODEL,
             max_tokens=16000,
             system=system,
             tools=tools,
-            messages=messages,
+            messages=_pr_hidratar(messages, anexos_cache),
             output_config={"effort": "high"},
+            cache_control={"type": "ephemeral"},
             betas=_PR_BETAS,
             fallbacks="default",
         )
@@ -2220,7 +2647,8 @@ def _pr_processar(chamado_id: int) -> None:
             if not _pr_pode_usar(agente, papel):
                 raise _PrErro("Este agente não está disponível para o seu perfil.")
             _pr_atualizar(chamado_id, status="trabalhando")
-            texto, mensagens = _pr_rodar_agente(chamado_id, agente, [{"role": "user", "content": pedido}], cid, empresa)
+            texto, mensagens = _pr_rodar_agente(
+                chamado_id, agente, [{"role": "user", "content": _pr_conteudo_com_anexos(chamado_id, 0, pedido)}], cid, empresa)
             _pr_atualizar(chamado_id, status="concluido", resultado=texto, concluido_em=_dt_pr.utcnow(),
                           mensagens_json=_json_pr.dumps(mensagens, ensure_ascii=False, default=str))
         except Exception as e:
@@ -2264,7 +2692,8 @@ def _pr_continuar(chamado_id: int) -> None:
             if not _pr_pode_usar(agente, papel):
                 raise _PrErro("Este agente não está disponível para o seu perfil.")
             texto, mensagens = _pr_rodar_agente(
-                chamado_id, agente, mensagens + [{"role": "user", "content": pergunta}], cid, empresa, turno)
+                chamado_id, agente, mensagens + [{"role": "user", "content": _pr_conteudo_com_anexos(chamado_id, turno, pergunta)}],
+                cid, empresa, turno)
             conversa[-1]["resposta"] = texto
             _pr_atualizar(chamado_id, status="concluido", concluido_em=_dt_pr.utcnow(), erro="",
                           conversa_json=_json_pr.dumps(conversa, ensure_ascii=False),
@@ -2466,6 +2895,18 @@ def _pr_pode_continuar(ctx, ch: PredioChamado) -> bool:
     )
 
 
+def _pr_anexar_lista(turnos: list, chamado_id: int) -> list:
+    with _Sess_pr(engine) as s:
+        linhas = s.exec(_sel_pr(PredioAnexo.id, PredioAnexo.nome, PredioAnexo.tamanho, PredioAnexo.turno)
+                        .where(PredioAnexo.chamado_id == chamado_id).order_by(PredioAnexo.id)).all()
+    for t in turnos:
+        t["anexos"] = []
+    for aid, nome, tam, turno in linhas:
+        if 0 <= turno < len(turnos):
+            turnos[turno]["anexos"].append({"id": aid, "nome": nome, "kb": max(1, round((tam or 0) / 1024))})
+    return turnos
+
+
 def _pr_turnos(ch: PredioChamado, passos: list) -> list:
     conversa = _pr_json_lista(ch.conversa_json)
     em_andamento = ch.status in ("na_fila", "roteando", "trabalhando")
@@ -2504,7 +2945,7 @@ def _pr_chamado_view(ch: PredioChamado, ctx=None) -> dict:
                  for a in s_ac.exec(_sel_pr(PredioAcao).where(PredioAcao.chamado_id == ch.id).order_by(PredioAcao.id)).all()]
     return {
         "acoes": acoes,
-        "turnos": _pr_turnos(ch, passos),
+        "turnos": _pr_anexar_lista(_pr_turnos(ch, passos), ch.id),
         "pode_continuar": bool(ctx) and _pr_pode_continuar(ctx, ch),
         "travado": _pr_travado(ch),
         "pode_tentar_de_novo": bool(ctx) and _pr_pode_tentar_de_novo(ctx, ch),
@@ -2615,8 +3056,15 @@ async def predio_criar_chamado(request: Request, session: Session = Depends(get_
     session.add(ch)
     session.commit()
     session.refresh(ch)
+    _pr_registrar_erros_anexo(ch.id, await _pr_salvar_anexos(session, form, "anexos", ctx.company.id, ch.id, 0), 0)
     _pr_disparar(ch.id)
     return RedirectResponse(f"/predio/chamados/{ch.id}", status_code=303)
+
+
+def _pr_registrar_erros_anexo(chamado_id: int, erros: list, turno: int) -> None:
+    for e in erros:
+        _pr_add_passo(chamado_id, {"ferramenta": "anexo", "rotulo": f"Anexo ignorado — {e}", "entrada": {},
+                                   "ok": False, "em": _pr_agora_brt().strftime("%H:%M:%S"), "turno": turno})
 
 
 @app.post("/predio/reunioes")
@@ -2753,11 +3201,51 @@ def _pr_executar_acao(s, acao: PredioAcao) -> str:
             except Exception as e:
                 print(f"[predio] aviso de tarefa: {e}")
         return f"Tarefa #{tarefa.id} criada."
+    if acao.tipo == "registrar_conhecimento":
+        BC = globals().get("BaseConhecimento")
+        if BC is None:
+            raise _PrErro("Base de conhecimento indisponível.")
+        tipo = _json_pr.loads(acao.payload_json or "{}").get("tipo", "case")
+        item = BC(company_id=acao.company_id, client_id=acao.client_id or 0, user_id=acao.decidido_por_user_id or 0,
+                  nome=acao.assunto, descricao=f"Registrado pelo Gestor de Conhecimento ({tipo})", tipo=tipo,
+                  conteudo_texto=acao.corpo, created_at=_dt_pr.utcnow().isoformat())
+        s.add(item)
+        s.commit()
+        s.refresh(item)
+        return f"Registrado na base de conhecimento (#{item.id})."
+    if acao.tipo == "rodar_backup":
+        rodar = globals().get("_run_backup")
+        if not rodar:
+            raise _PrErro("Módulo de backup indisponível.")
+        _thr_pr.Thread(target=rodar, daemon=True, name="predio-backup").start()
+        return "Backup iniciado em segundo plano. Em alguns minutos, peça ao Sistemas para verificar a saúde."
+    if acao.tipo == "destravar_transcricao":
+        m = s.get(Meeting, int(_json_pr.loads(acao.payload_json or "{}").get("reuniao_id") or 0))
+        if not m or m.company_id != acao.company_id:
+            raise _PrErro("Reunião não encontrada.")
+        try:
+            chave = _json_pr.loads(m.raw_json or "{}").get("audio_s3_key")
+        except ValueError:
+            chave = None
+        m.notion_status = "transcription_not_started"
+        m.updated_at = _dt_pr.utcnow()
+        s.add(m)
+        s.commit()
+        baixar, processar = globals().get("_s3_download_audio"), globals().get("_processar_audio_background")
+        if chave and baixar and processar:
+            caminho = str(_AUDIO_DIR / chave.split("/")[-1])
+            if not baixar(chave, caminho):
+                return "Status liberado, mas não foi possível baixar o áudio do S3. Reenvie o arquivo na reunião."
+            _thr_pr.Thread(target=processar, kwargs={"meeting_id": m.id, "audio_path": caminho,
+                                                     "company_id": m.company_id}, daemon=True).start()
+            return "Transcrição reiniciada a partir do backup do áudio."
+        return "Status liberado. Não há backup do áudio: reenvie o arquivo na tela da reunião."
     raise _PrErro("Tipo de ação desconhecido.")
 
 
-# demais tipos (dinheiro) só admin aprova
-_PR_TIPOS_EQUIPE = {"whatsapp_resposta", "agendar_reuniao", "remarcar_reuniao", "cancelar_reuniao", "criar_tarefa"}
+# demais tipos (dinheiro e sistema) só admin aprova
+_PR_TIPOS_EQUIPE = {"whatsapp_resposta", "agendar_reuniao", "remarcar_reuniao", "cancelar_reuniao", "criar_tarefa",
+                    "registrar_conhecimento"}
 
 
 def _pr_pode_decidir(papel: str, tipo: str) -> bool:
@@ -2788,10 +3276,11 @@ async def predio_aprovar_acao(acao_id: int, request: Request, session: Session =
     if not acao or acao.company_id != ctx.company.id or not _pr_pode_decidir(ctx.membership.role, acao.tipo):
         return RedirectResponse("/predio", status_code=303)
     form = await request.form()
-    if acao.tipo in ("email_cobranca", "whatsapp_resposta", "cancelar_reuniao", "criar_tarefa") and acao.status == "pendente":
+    if acao.tipo in ("email_cobranca", "whatsapp_resposta", "cancelar_reuniao", "criar_tarefa",
+                     "registrar_conhecimento") and acao.status == "pendente":
         assunto = str(form.get("assunto") or "").strip()[:200]
         corpo = str(form.get("corpo") or "").strip()[:8000]
-        if assunto and acao.tipo in ("email_cobranca", "criar_tarefa"):
+        if assunto and acao.tipo in ("email_cobranca", "criar_tarefa", "registrar_conhecimento"):
             acao.assunto = assunto
         if corpo:
             acao.corpo = corpo
@@ -2851,6 +3340,21 @@ async def predio_ver_chamado(chamado_id: int, request: Request, session: Session
         **_pr_base_ctx(request, session, ctx),
         "ch": _pr_chamado_view(ch, ctx),
     })
+
+
+@app.get("/predio/anexos/{anexo_id}")
+@require_login
+async def predio_baixar_anexo(anexo_id: int, request: Request, session: Session = Depends(get_session)):
+    ctx = _pr_ctx(request, session)
+    if not ctx:
+        return RedirectResponse("/", status_code=303)
+    a = session.get(PredioAnexo, anexo_id)
+    ch = session.get(PredioChamado, a.chamado_id) if a else None
+    if not a or not _pr_pode_ver(ctx, ch) or a.conteudo is None:
+        return RedirectResponse("/predio", status_code=303)
+    from urllib.parse import quote as _quote_pr
+    return Response(content=a.conteudo, media_type=a.mime or "application/octet-stream",
+                    headers={"Content-Disposition": f"attachment; filename*=UTF-8''{_quote_pr(a.nome)}"})
 
 
 @app.post("/predio/chamados/{chamado_id}/tentar-de-novo")
@@ -2914,6 +3418,8 @@ async def predio_continuar_chamado(chamado_id: int, request: Request, session: S
         ch.updated_at = _dt_pr.utcnow()
         session.add(ch)
         session.commit()
+        _pr_registrar_erros_anexo(ch.id, await _pr_salvar_anexos(
+            session, form, "anexos", ctx.company.id, ch.id, len(conversa)), len(conversa))
         _pr_disparar(ch.id, continuar=True)
     return RedirectResponse(f"/predio/chamados/{chamado_id}#fim", status_code=303)
 
@@ -3168,7 +3674,7 @@ TEMPLATES["predio.html"] = r"""
       <h2 class="h6 fw-bold mb-1">Nova demanda</h2>
       {% if disponiveis %}
       <p class="small text-body-secondary mb-3">Descreva o que você precisa. A Recepção encaminha ao agente certo, ou escolha você mesmo.</p>
-      <form method="post" action="/predio/chamados" class="d-flex flex-column gap-2" onsubmit="this.querySelector('button').disabled=true;">
+      <form method="post" action="/predio/chamados" enctype="multipart/form-data" class="d-flex flex-column gap-2" onsubmit="this.querySelector('button').disabled=true;">
         <textarea class="form-control" name="pedido" id="pdPedido" rows="4" maxlength="4000" required
           placeholder="Ex.: Quais clientes concentram mais receita e quem está devendo?"></textarea>
         <select class="form-select" name="agente" id="pdAgente" aria-label="Agente">
@@ -3177,6 +3683,8 @@ TEMPLATES["predio.html"] = r"""
           <option value="{{ a.key }}" {% if agente_pre == a.key %}selected{% endif %}>{{ a.nome }} — {{ a.andar }}</option>
           {% endfor %}
         </select>
+        <label class="small text-body-secondary mb-0" for="pdAnexos">Anexos (opcional): PDF, Word, Excel, CSV ou imagem · até 5 arquivos de 10 MB</label>
+        <input class="form-control form-control-sm" type="file" name="anexos" id="pdAnexos" multiple accept=".pdf,.docx,.xlsx,.xlsm,.xls,.csv,.txt,.md,.json,.png,.jpg,.jpeg,.webp,.gif">
         <button type="submit" class="btn btn-primary">Enviar ao prédio</button>
       </form>
       {% else %}
@@ -3664,6 +4172,8 @@ TEMPLATES["predio_chamado.html"] = r"""
   [data-bs-theme="dark"] .pc-pill.sem_agente{color:#94a3b8;}
   [data-bs-theme="dark"] .pc-pill.andamento{color:#fdba74;}
   .pc-pedido{white-space:pre-wrap;font-size:.92rem;background:var(--bs-tertiary-bg);border-radius:10px;padding:.8rem 1rem;}
+  .pc-anexos{display:flex;flex-wrap:wrap;gap:.4rem .9rem;font-size:.82rem;}
+  .pc-anexos a{text-decoration:none;}
   .pc-quem{font-size:.7rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--bs-secondary-color);margin-bottom:.35rem;}
   .pc-contrib{border-left:3px solid var(--mc-primary,#f97316);padding:.1rem 0 .1rem 1rem;margin-bottom:1.1rem;}
   .pc-retry{display:flex;gap:.75rem;align-items:center;justify-content:space-between;flex-wrap:wrap;
@@ -3711,12 +4221,13 @@ TEMPLATES["predio_chamado.html"] = r"""
   <div id="acoes" class="d-flex flex-column gap-3 mt-3"></div>
 
   <div id="fim"></div>
-  <form method="post" action="/predio/chamados/{{ ch.id }}/mensagens" id="pcForm"
+  <form method="post" action="/predio/chamados/{{ ch.id }}/mensagens" enctype="multipart/form-data" id="pcForm"
         class="card pc-card p-3 mt-3" {% if not ch.pode_continuar %}hidden{% endif %}
         onsubmit="this.querySelector('button').disabled=true;">
     <label for="pcMensagem" class="form-label small fw-semibold mb-1">Continuar com {{ ch.agente }}</label>
     <textarea class="form-control mb-2" id="pcMensagem" name="mensagem" rows="3" maxlength="4000" required
       placeholder="Ex.: Cruze esses clientes com tarefas atrasadas e cobranças vencidas."></textarea>
+    <input class="form-control form-control-sm mb-2" type="file" name="anexos" multiple accept=".pdf,.docx,.xlsx,.xlsm,.xls,.csv,.txt,.md,.json,.png,.jpg,.jpeg,.webp,.gif" aria-label="Anexos">
     <div class="d-flex justify-content-between align-items-center gap-2 flex-wrap">
       <span class="pc-meta">O agente lembra de toda a conversa e do que já consultou.</span>
       <button type="submit" class="btn btn-primary btn-sm">Enviar</button>
@@ -3743,6 +4254,9 @@ TEMPLATES["predio_chamado.html"] = r"""
     remarcar_reuniao:  {botao:'Aprovar e remarcar'},
     cancelar_reuniao:  {para:'Aviso de cancelamento para: {d}', corpo:true, linhas:4, rotuloCorpo:'Mensagem ao cliente', botao:'Aprovar e cancelar'},
     criar_tarefa:      {para:'{d}', assunto:true, rotuloAssunto:'Título da tarefa', corpo:true, linhas:5, rotuloCorpo:'Descrição', botao:'Aprovar e criar tarefa'},
+    registrar_conhecimento: {para:'{d}', assunto:true, rotuloAssunto:'Título', corpo:true, linhas:8, rotuloCorpo:'Conteúdo', botao:'Aprovar e registrar'},
+    rodar_backup:      {botao:'Aprovar e rodar backup'},
+    destravar_transcricao: {botao:'Aprovar e destravar'},
     gerar_cobrancas:   {botao:'Aprovar e gerar'}
   };
   function campo(form, rotulo, tag, nome, id, valor, linhas){
@@ -3811,6 +4325,11 @@ TEMPLATES["predio_chamado.html"] = r"""
     var reuniao=!!t.contribuicoes;
     card.appendChild(el('div','pc-quem', reuniao ? 'Pauta' : (i===0 ? 'Pedido' : 'Você')));
     card.appendChild(el('div','pc-pedido mb-3', t.pergunta));
+    if(t.anexos && t.anexos.length){
+      var ax=el('div','pc-anexos mb-3');
+      t.anexos.forEach(function(a){ var l=el('a',null,'📎 '+a.nome+' ('+a.kb+' KB)'); l.href='/predio/anexos/'+a.id; ax.appendChild(l); });
+      card.appendChild(ax);
+    }
     if(reuniao){
       t.contribuicoes.forEach(function(c){
         var bloco=el('div','pc-contrib');
