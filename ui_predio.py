@@ -172,7 +172,7 @@ _PREDIO_ANDARES = [
          "atribuicoes": "Briefing semanal dos sócios, prioridades e pendências entre andares.",
          "ferramentas": ["ops_tarefas_atrasadas", "ops_pendencias_abertas", "ops_agenda", "ops_clientes_sem_contato",
                          "com_pipeline", "fin_resumo_caixa", "fin_inadimplencia", "fin_contratos", "cli_carteira",
-                         "cli_panorama", "ops_propor_tarefa", "atd_caixa", "sis_pendencias"]},
+                         "cli_panorama", "ops_propor_tarefa", "atd_caixa", "sis_pendencias", "cos_delegar"]},
         {"key": "estrategia", "nome": "Estratégia", "papeis": _PR_ADMIN, "ativo": False,
          "atribuicoes": "Metas do escritório (receita, carteira, margem) e acompanhamento do BSC interno."},
     ]},
@@ -1953,6 +1953,44 @@ def _pr_t_conh_propor_registro(s, cid, titulo, tipo, conteudo, cliente):
     return {"ok": True, "proposta_id": acao.id, "status": "aguardando aprovação", "onde": onde}
 
 
+def _pr_t_cos_delegar(s, cid, agente, tarefa):
+    """Chief of Staff passa uma tarefa a outro agente, que trabalha neste mesmo chamado e devolve o resultado."""
+    if getattr(_PR_EXEC, "delegado", False):
+        return {"ok": False, "erro": "Um agente que recebeu uma tarefa delegada não pode delegar de novo."}
+    alvo = _PREDIO_AGENTES.get(agente)
+    if not alvo or agente in ("recepcionista", "chief_of_staff"):
+        return {"ok": False, "erro": f"Agente {agente} não existe ou não recebe tarefas delegadas."}
+    if len((tarefa or "").strip()) < 10:
+        return {"ok": False, "erro": "Descreva a tarefa com o contexto necessário."}
+    chamado_id = getattr(_PR_EXEC, "chamado_id", None)
+    turno = getattr(_PR_EXEC, "turno", 0)
+    ch = s.get(PredioChamado, chamado_id) if chamado_id else None
+    if not ch or ch.company_id != cid:
+        return {"ok": False, "erro": "Chamado não encontrado."}
+    if not _pr_pode_usar(alvo, ch.papel_solicitante):
+        motivo = "ainda não está ativo" if not alvo.get("ativo") else "não está disponível para o seu perfil"
+        return {"ok": False, "erro": f"{alvo['nome']} {motivo}."}
+    empresa_obj = s.get(Company, cid)
+    empresa = empresa_obj.name if empresa_obj else "empresa"
+    antes = set(s.exec(_sel_pr(PredioAcao.id).where(PredioAcao.chamado_id == chamado_id)).all())
+    pedido = (f"Tarefa passada pelo Chief of Staff, a pedido de um sócio:\n\n{tarefa.strip()}\n\n"
+              "Faça o que foi pedido com as suas ferramentas. Se precisar de uma ação (e-mail, tarefa, agendamento, "
+              "publicação), crie a proposta: ela vai para aprovação. Termine com um resumo curto do que fez.")
+    conteudo = _pr_conteudo_com_anexos(chamado_id, turno if isinstance(turno, int) else 0, pedido)
+    _PR_EXEC.delegado = True
+    try:
+        texto, _ = _pr_rodar_agente(chamado_id, alvo, [{"role": "user", "content": conteudo}], cid, empresa, turno)
+    finally:
+        _PR_EXEC.delegado = False
+        _PR_EXEC.agente_key, _PR_EXEC.turno = "chief_of_staff", turno
+    with _Sess_pr(engine) as s2:
+        novas = s2.exec(_sel_pr(PredioAcao).where(PredioAcao.chamado_id == chamado_id,
+                                                  PredioAcao.agente_key == agente)).all()
+        propostas = [{"proposta_id": a.id, "titulo": a.titulo, "status": "aguardando aprovação"}
+                     for a in novas if a.id not in antes]
+    return {"ok": True, "agente": alvo["nome"], "resposta": texto, "propostas_criadas": propostas}
+
+
 def _pr_schema(props: dict) -> dict:
     return {"type": "object", "properties": props, "required": list(props), "additionalProperties": False}
 
@@ -2150,6 +2188,14 @@ _PR_TOOLS = {
         "fn": _pr_t_pipeline, "rotulo": "Consultou o pipeline comercial",
         "description": "Negócios em aberto no CRM por etapa, valor total e ponderado, e próximos passos atrasados.",
         "props": {}},
+    "cos_delegar": {
+        "fn": _pr_t_cos_delegar, "rotulo": "Delegou uma tarefa",
+        "description": "Passa uma tarefa a outro agente do prédio, que trabalha neste chamado com as ferramentas dele e "
+                       "devolve o que fez e as propostas que criou (que seguem para aprovação). A tarefa deve ser "
+                       "autossuficiente: o agente não vê esta conversa, só a tarefa e os arquivos anexados nesta mensagem.",
+        "props": {"agente": {"type": "string", "description": "Chave do agente que vai executar.",
+                             "enum": [k for k in _PREDIO_AGENTES if k not in ("recepcionista", "chief_of_staff")]},
+                  "tarefa": {"type": "string", "description": "O que fazer, com todo o contexto necessário."}}},
 }
 
 # Pesquisa e leitura na web (ferramentas do servidor da Anthropic), só para agentes com "web": True
@@ -2197,7 +2243,14 @@ _PR_INSTRUCOES = {
     "chief_of_staff": (
         "Você é o braço direito dos sócios. Seu trabalho é olhar o escritório inteiro e dizer o que precisa de atenção, "
         "na ordem certa. Priorize o que tem dinheiro ou relacionamento com cliente em jogo. Quando citar um problema, "
-        "diga quem deveria resolver (responsável da tarefa, quem cuida do cliente) e qual o próximo passo."
+        "diga quem deveria resolver (responsável da tarefa, quem cuida do cliente) e qual o próximo passo.\n"
+        "Quando o sócio der uma ordem (por exemplo, depois de uma reunião: \"cobre a GSW, marque a reunião com a "
+        "Alfa e atualize o site\"), distribua o trabalho: para cada parte, use cos_delegar com o agente certo e uma "
+        "tarefa completa e autossuficiente (cliente, o que fazer, prazo, o que foi decidido na reunião). Tarefas "
+        "independentes podem ser delegadas ao mesmo tempo. Não delegue o que você mesmo resolve com as suas "
+        "ferramentas. Se a ordem for ambígua (qual cliente, qual valor), pergunte antes de delegar. No fim, "
+        "responda com: o que cada agente fez, as propostas que aguardam aprovação (abaixo, em Propostas do agente) "
+        "e o que não foi possível fazer, com o motivo."
     ),
     "gestor_carteira": (
         "Você acompanha a carteira de clientes do escritório. Diga quem precisa de atenção, por quê e qual o próximo "
@@ -2491,8 +2544,11 @@ def _pr_atualizar(chamado_id: int, **campos) -> None:
         s.commit()
 
 
+_PR_PASSOS_LOCK = _thr_pr.Lock()  # agentes delegados em paralelo gravam passos no mesmo chamado
+
+
 def _pr_add_passo(chamado_id: int, passo: dict) -> None:
-    with _Sess_pr(engine) as s:
+    with _PR_PASSOS_LOCK, _Sess_pr(engine) as s:
         ch = s.get(PredioChamado, chamado_id)
         if not ch:
             return
@@ -2581,12 +2637,15 @@ def _pr_rodar_agente(chamado_id: int, agente: dict, messages: list, company_id: 
         for b in resp.content:
             if b.type == "server_tool_use":
                 alvo = (b.input or {}).get("query") or (b.input or {}).get("url") or ""
-                _pr_add_passo(chamado_id, {
+                passo_web = {
                     "ferramenta": b.name,
                     "rotulo": ("Pesquisou na web: " if b.name == "web_search" else "Leu a página: ") + str(alvo)[:120],
                     "entrada": dict(b.input or {}), "ok": True, "em": _pr_agora_brt().strftime("%H:%M:%S"),
                     "turno": turno, "autor": agente["key"],
-                })
+                }
+                if getattr(_PR_EXEC, "delegado", False):
+                    passo_web["autor_nome"] = agente["nome"]
+                _pr_add_passo(chamado_id, passo_web)
         if resp.stop_reason == "pause_turn":
             continue
         usos = [b for b in resp.content if b.type == "tool_use"]
@@ -2595,34 +2654,49 @@ def _pr_rodar_agente(chamado_id: int, agente: dict, messages: list, company_id: 
             if resp.stop_reason == "max_tokens":
                 texto += "\n\n_(A resposta foi cortada por limite de tamanho.)_"
             return (texto or "O agente terminou sem uma resposta escrita."), messages
-        resultados = []
-        for uso in usos:
+        delegado = bool(getattr(_PR_EXEC, "delegado", False))
+
+        def _executar(uso):
             spec = _PR_TOOLS.get(uso.name)
             entrada = dict(uso.input or {})
             ok = True
+            passo = {"ferramenta": uso.name, "rotulo": spec["rotulo"] if spec else uso.name, "entrada": entrada,
+                     "turno": turno, "autor": agente["key"]}
+            if delegado:
+                passo["autor_nome"] = agente["nome"]
+            if uso.name == "cos_delegar" and spec and _PREDIO_AGENTES.get(entrada.get("agente"), {}).get("ativo"):
+                # registra antes: os passos do agente delegado aparecem logo abaixo
+                alvo = _PREDIO_AGENTES.get(entrada.get("agente"), {}).get("nome", entrada.get("agente"))
+                _pr_add_passo(chamado_id, dict(passo, rotulo=f"Passou para {alvo}: {str(entrada.get('tarefa', ''))[:110]}",
+                                               ok=True, em=_pr_agora_brt().strftime("%H:%M:%S")))
             if not spec or uso.name not in permitidas:
                 conteudo, ok = f"Ferramenta {uso.name} não disponível para este agente.", False
             else:
                 try:
-                    _PR_EXEC.chamado_id, _PR_EXEC.agente_key = chamado_id, agente["key"]
+                    # _PR_EXEC é por thread: as delegações em paralelo precisam do contexto também
+                    _PR_EXEC.chamado_id, _PR_EXEC.agente_key, _PR_EXEC.turno = chamado_id, agente["key"], turno
+                    _PR_EXEC.delegado = delegado
                     with _Sess_pr(engine) as s:
                         dado = spec["fn"](s, company_id, **entrada)
                     conteudo = _json_pr.dumps(dado, ensure_ascii=False, default=str)
+                    if uso.name == "cos_delegar" and isinstance(dado, dict) and dado.get("ok") is False:
+                        passo["rotulo"] = f"Não foi possível delegar: {dado.get('erro', '')}"[:160]
+                        _pr_add_passo(chamado_id, dict(passo, ok=False, em=_pr_agora_brt().strftime("%H:%M:%S")))
                 except Exception as e_tool:
                     conteudo, ok = f"Erro ao consultar os dados: {e_tool}", False
             bloco = {"type": "tool_result", "tool_use_id": uso.id, "content": conteudo}
             if not ok:
                 bloco["is_error"] = True
-            resultados.append(bloco)
-            _pr_add_passo(chamado_id, {
-                "ferramenta": uso.name,
-                "rotulo": spec["rotulo"] if spec else uso.name,
-                "entrada": entrada,
-                "ok": ok,
-                "em": _pr_agora_brt().strftime("%H:%M:%S"),
-                "turno": turno,
-                "autor": agente["key"],
-            })
+            if uso.name != "cos_delegar" or not ok:
+                _pr_add_passo(chamado_id, dict(passo, ok=ok, em=_pr_agora_brt().strftime("%H:%M:%S")))
+            return bloco
+
+        if sum(1 for u in usos if u.name == "cos_delegar") > 1:
+            from concurrent.futures import ThreadPoolExecutor as _TPE_pr
+            with _TPE_pr(max_workers=4) as ex:
+                resultados = list(ex.map(_executar, usos))
+        else:
+            resultados = [_executar(u) for u in usos]
         messages.append({"role": "user", "content": resultados})
     raise _PrErro("O agente atingiu o limite de etapas sem concluir. Tente reformular de forma mais específica.")
 
@@ -4282,6 +4356,8 @@ TEMPLATES["predio_chamado.html"] = r"""
   .pc-passos{list-style:none;padding:0;margin:0;font-size:.82rem;}
   .pc-passos li{display:flex;gap:.6rem;padding:.3rem 0;color:var(--bs-secondary-color);font-variant-numeric:tabular-nums;}
   .pc-passos li b{color:var(--bs-body-color);font-weight:600;}
+  .pc-passos li.pc-passo-delegado{padding-left:1.1rem;border-left:2px solid var(--bs-border-color);margin-left:.35rem;}
+  .pc-passos li.pc-passo-delegado i{font-style:normal;color:var(--bs-secondary-color);white-space:nowrap;}
   .pc-result{font-size:.93rem;line-height:1.6;}
   .pc-result h1,.pc-result h2,.pc-result h3{font-size:1.02rem;font-weight:700;margin:1.2rem 0 .5rem;text-wrap:balance;}
   .pc-result table{width:100%;font-size:.84rem;margin:.6rem 0 1rem;border-collapse:collapse;font-variant-numeric:tabular-nums;}
@@ -4324,9 +4400,11 @@ TEMPLATES["predio_chamado.html"] = r"""
   <form method="post" action="/predio/chamados/{{ ch.id }}/mensagens" enctype="multipart/form-data" id="pcForm"
         class="card pc-card p-3 mt-3" {% if not ch.pode_continuar %}hidden{% endif %}
         onsubmit="this.querySelector('button').disabled=true;">
-    <label for="pcMensagem" class="form-label small fw-semibold mb-1">Continuar com {{ ch.agente }}</label>
+    {% set cos = ch.agente == 'Chief of Staff' %}
+    <label for="pcMensagem" class="form-label small fw-semibold mb-1">{{ 'Dar uma ordem ao Chief of Staff' if cos else 'Continuar com ' ~ ch.agente }}</label>
     <textarea class="form-control mb-2" id="pcMensagem" name="mensagem" rows="3" maxlength="4000" required
-      placeholder="Ex.: Cruze esses clientes com tarefas atrasadas e cobranças vencidas."></textarea>
+      placeholder="{{ 'Ex.: Cobre a GSW pelos títulos atrasados, marque a reunião com a Alfa na semana que vem e crie as tarefas que decidimos.' if cos else 'Ex.: Cruze esses clientes com tarefas atrasadas e cobranças vencidas.' }}"></textarea>
+    {% if cos %}<p class="pc-meta mb-2">Ele distribui o trabalho entre os agentes, acompanha e devolve um resumo. Tudo o que for e-mail, mensagem, agendamento ou publicação vem para a sua aprovação.</p>{% endif %}
     <input class="form-control form-control-sm mb-2" type="file" name="anexos" multiple accept=".pdf,.docx,.xlsx,.xlsm,.xls,.csv,.txt,.md,.json,.png,.jpg,.jpeg,.webp,.gif" aria-label="Anexos">
     <div class="d-flex justify-content-between align-items-center gap-2 flex-wrap">
       <span class="pc-meta">O agente lembra de toda a conversa e do que já consultou.</span>
@@ -4359,7 +4437,9 @@ TEMPLATES["predio_chamado.html"] = r"""
     destravar_transcricao: {botao:'Aprovar e destravar'},
     gerar_cobrancas:   {botao:'Aprovar e gerar'},
     email_agencia:     {para:'Para: {d}', assunto:true, corpo:true, linhas:10, botao:'Aprovar e enviar à agência'},
-    publicar_site:     {para:'{d}', previa:true, botao:'Aprovar e publicar no site'}
+    publicar_site:     {para:'{d}', previa:true, botao:'Aprovar e publicar no site'},
+    criar_negocio:     {para:'{d}', botao:'Aprovar e criar no CRM'},
+    registrar_proposta:{para:'{d}', botao:'Aprovar e registrar no CRM'}
   };
   function campo(form, rotulo, tag, nome, id, valor, linhas){
     var lb=el('label','form-label small fw-semibold mb-1',rotulo); lb.htmlFor=id;
@@ -4422,6 +4502,7 @@ TEMPLATES["predio_chamado.html"] = r"""
     var ul=el('ul','pc-passos mb-3');
     passos.forEach(function(p){
       var li=el('li'); li.appendChild(el('span',null,p.em||''));
+      if(p.autor_nome){ li.className='pc-passo-delegado'; li.appendChild(el('i',null,p.autor_nome+' · ')); }
       li.appendChild(el('b',null,(p.ok?'':'⚠ ')+(p.rotulo||p.ferramenta))); ul.appendChild(li);
     });
     return ul;
