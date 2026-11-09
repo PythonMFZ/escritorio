@@ -26,6 +26,7 @@ _ONEDRIVE_CLIENT_ID     = _os_cs.getenv("ONEDRIVE_CLIENT_ID", "")
 _ONEDRIVE_CLIENT_SECRET = _os_cs.getenv("ONEDRIVE_CLIENT_SECRET", "")
 _APP_BASE_URL = _os_cs.getenv("APP_BASE_URL", "https://app.maffezzollicapital.com.br")
 _SYNC_INTERVAL_S = int(_os_cs.getenv("CLOUD_SYNC_INTERVAL_S", "1800"))  # 30 min
+_SYNC_MAX_BYTES = int(_os_cs.getenv("CLOUD_SYNC_MAX_MB", "20")) * 1024 * 1024  # arquivos maiores são ignorados
 
 
 # ── Models ────────────────────────────────────────────────────────────────────
@@ -265,13 +266,14 @@ def _gdrive_list_files(token: str, folder_id: str) -> list[dict]:
     q += ")"
     r = _httpx_cs.get(
         "https://www.googleapis.com/drive/v3/files",
-        params={"q": q, "fields": "files(id,name,mimeType,modifiedTime,md5Checksum)", "pageSize": 200},
+        params={"q": q, "fields": "files(id,name,mimeType,modifiedTime,md5Checksum,size)", "pageSize": 200},
         headers={"Authorization": f"Bearer {token}"},
         timeout=20,
     )
     files = r.json().get("files", [])
     return [{"id": f["id"], "name": f["name"], "mimeType": f.get("mimeType",""),
-             "modifiedTime": f.get("modifiedTime",""), "md5Checksum": f.get("md5Checksum","")}
+             "modifiedTime": f.get("modifiedTime",""), "md5Checksum": f.get("md5Checksum",""),
+             "size": int(f.get("size") or 0)}
             for f in files]
 
 
@@ -336,14 +338,14 @@ def _onedrive_list_files(token: str, folder_id: str) -> list[dict]:
         url = f"https://graph.microsoft.com/v1.0/me/drive/items/{folder_id}/children"
     r = _httpx_cs.get(
         url,
-        params={"$select": "id,name,file,lastModifiedDateTime,@microsoft.graph.downloadUrl", "$top": 200},
+        params={"$select": "id,name,file,size,lastModifiedDateTime,@microsoft.graph.downloadUrl", "$top": 200},
         headers={"Authorization": f"Bearer {token}"},
         timeout=20,
     )
     return [
         {"id": i["id"], "name": i["name"], "mimeType": i.get("file",{}).get("mimeType",""),
          "modifiedTime": i.get("lastModifiedDateTime",""),
-         "downloadUrl": i.get("@microsoft.graph.downloadUrl","")}
+         "downloadUrl": i.get("@microsoft.graph.downloadUrl",""), "size": int(i.get("size") or 0)}
         for i in r.json().get("value", [])
         if "file" in i and any(i["name"].lower().endswith(ext) for ext in _ONEDRIVE_SUPPORTED_EXT)
     ]
@@ -429,8 +431,34 @@ def _cs_sync_one_file(session, conn, token, file_info: dict, client_id: int) -> 
         )
     ).first()
 
-    if existing and existing.file_hash == fingerprint:
-        return False  # unchanged
+    if existing and existing.file_hash in (fingerprint, f"falhou:{fingerprint}"):
+        return False  # unchanged (ou já falhou nesta versão)
+
+    def _marcar(estado: str):
+        nonlocal existing
+        if existing is None:
+            existing = CloudStorageFile(connection_id=conn.id, company_id=conn.company_id, client_id=client_id,
+                                        file_id=file_id, file_name=file_name)
+        existing.file_hash = f"{estado}:{fingerprint}"
+        existing.indexed_at = _dt_cs.utcnow().isoformat()
+        session.add(existing)
+        session.commit()
+        session.refresh(existing)
+
+    # Uma tentativa anterior desta mesma versão não terminou: o servidor caiu no meio (ex.: falta de memória).
+    # Não tenta de novo — senão cada reinício cai no mesmo arquivo.
+    if existing and existing.file_hash == f"tentando:{fingerprint}":
+        print(f"[cs] {file_name}: a última tentativa derrubou o processo — arquivo ignorado até mudar")
+        _marcar("falhou")
+        return False
+    tamanho = int(file_info.get("size") or 0)
+    if tamanho > _SYNC_MAX_BYTES:
+        print(f"[cs] {file_name}: {tamanho // 1024 // 1024} MB — acima do limite de "
+              f"{_SYNC_MAX_BYTES // 1024 // 1024} MB, ignorado")
+        _marcar("falhou")
+        return False
+    _marcar("tentando")
+    print(f"[cs] baixando {file_name} ({tamanho // 1024} KB)" if tamanho else f"[cs] baixando {file_name}")
 
     try:
         if conn.provider == "gdrive":
@@ -440,15 +468,21 @@ def _cs_sync_one_file(session, conn, token, file_info: dict, client_id: int) -> 
             file_bytes = _onedrive_download(token, file_id, dl_url)
     except Exception as _e:
         print(f"[cs] erro ao baixar {file_name}: {_e}")
+        existing.file_hash = ""  # erro de rede: tenta de novo no próximo ciclo
+        session.add(existing)
+        session.commit()
         return False
 
-    if not file_bytes:
+    if not file_bytes or len(file_bytes) > _SYNC_MAX_BYTES:
+        _marcar("falhou")
         return False
 
     mime = file_info.get("mimeType", "")
     content = _cs_extract_content(file_bytes, file_name, mime)
+    del file_bytes
     if not content:
         print(f"[cs] sem conteúdo extraído de {file_name}")
+        _marcar("falhou")
         return False
 
     try:
@@ -482,6 +516,7 @@ def _cs_sync_one_file(session, conn, token, file_info: dict, client_id: int) -> 
             existing.file_hash   = fingerprint
             existing.modified_at = mod_time
             existing.indexed_at  = _dt_cs.utcnow().isoformat()
+            existing.doc_id      = doc_id
             session.add(existing)
         else:
             session.add(CloudStorageFile(
@@ -554,7 +589,27 @@ def _cs_sync_connection(session, conn: CloudStorageConnection) -> int:
     return indexed
 
 
+_CS_LOCK_PATH = _os_cs.path.join(__import__("tempfile").gettempdir(), "cloud_sync.lock")
+
+
 def _cs_sync_all():
+    # Só um processo sincroniza por vez (o gunicorn roda 2 workers, cada um com o seu loop):
+    # dois processos abrindo a mesma planilha grande ao mesmo tempo dobravam o pico de memória.
+    import fcntl as _fcntl_cs
+    trava = open(_CS_LOCK_PATH, "w")
+    try:
+        _fcntl_cs.flock(trava, _fcntl_cs.LOCK_EX | _fcntl_cs.LOCK_NB)
+    except BlockingIOError:
+        trava.close()
+        return
+    try:
+        _cs_sync_all_inner()
+    finally:
+        _fcntl_cs.flock(trava, _fcntl_cs.LOCK_UN)
+        trava.close()
+
+
+def _cs_sync_all_inner():
     with _Sess_cs(engine) as session:
         conns = session.exec(
             _sel_cs(CloudStorageConnection).where(CloudStorageConnection.is_active == True)

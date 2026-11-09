@@ -2414,12 +2414,13 @@ def _pr_extrair_planilha(nome: str, dados: bytes) -> str:
         livro = _xlrd_x.open_workbook(file_contents=dados)
 
         def _linhas_xls(aba):
-            return (aba.row_values(r) for r in range(aba.nrows))
+            return (aba.row_values(r, 0, min(aba.ncols, 80)) for r in range(min(aba.nrows, 50_000)))
         abas = [(sh.name, _linhas_xls(sh)) for sh in livro.sheets()]
     else:
         import openpyxl as _opx_x
         livro = _opx_x.load_workbook(_io_x.BytesIO(dados), read_only=True, data_only=True)
-        abas = [(ws.title, ws.iter_rows(values_only=True)) for ws in livro.worksheets]
+        # max_col/max_row: formatação aplicada à coluna inteira gera 1 milhão de linhas vazias
+        abas = [(ws.title, ws.iter_rows(values_only=True, max_col=80, max_row=50_000)) for ws in livro.worksheets]
     import csv as _csv_x
     for titulo, linhas in abas:
         buf = _io_x.StringIO()
@@ -2993,6 +2994,36 @@ def _pr_batimento() -> None:
 
 
 _thr_pr.Thread(target=_pr_batimento, daemon=True, name="predio-batimento").start()
+
+
+def _pr_rss_mb() -> int:
+    try:
+        with open("/proc/self/status") as f:
+            return int(f.read().split("VmRSS:")[1].split()[0]) // 1024
+    except Exception:
+        return 0
+
+
+def _pr_alarme_memoria() -> None:
+    """A cada 20s, se este processo passar de 1,2 GB, registra nos logs o que está rodando — para achar quem
+    consome memória antes de o Render matar a instância (o limite é 4 GB para os 2 processos)."""
+    import os as _os_mem
+    ultimo = 0
+    while True:
+        _time_pr.sleep(20)
+        mb = _pr_rss_mb()
+        if mb >= 1200 and mb - ultimo >= 200:
+            with _PR_ATIVOS_LOCK:
+                chamados = sorted(_PR_ATIVOS)
+            threads = sorted({t.name for t in _thr_pr.enumerate() if not t.name.startswith(("AnyIO", "ThreadPool"))})
+            print(f"[memoria] ⚠ processo {_os_mem.getpid()} usando {mb} MB · chamados do prédio: {chamados or 'nenhum'} "
+                  f"· threads: {', '.join(threads)}")
+            ultimo = mb
+        elif mb < ultimo - 300:
+            ultimo = mb
+
+
+_thr_pr.Thread(target=_pr_alarme_memoria, daemon=True, name="alarme-memoria").start()
 
 
 def _pr_criar_briefing(s, company_id: int, user_id: int, roteamento: str) -> PredioChamado:

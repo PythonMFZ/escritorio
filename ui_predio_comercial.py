@@ -509,6 +509,45 @@ def _cm_t_referencias(s, cid, termo):
                           "use como base e deixe claro ao sócio de onde veio cada número."}
 
 
+# ── Formulários respondidos (pré-diagnóstico etc.) ────────────────────────────
+
+def _cm_t_formularios(s, cid, cliente):
+    FS, FT = globals().get("FormSubmission"), globals().get("FormTemplate")
+    if FS is None or FT is None:
+        return {"erro": "Banco de Formulários indisponível."}
+    q = _sel_pr(FS).where(FS.company_id == cid, FS.status == "respondido")
+    alvo = None
+    if (cliente or "").strip():
+        alvo, cands = _pr_resolver_cliente(s, cid, cliente)
+        if not alvo:
+            return _pr_nao_achei(cliente, cands)
+        negocios = list(s.exec(_sel_pr(BusinessDeal.id).where(BusinessDeal.company_id == cid,
+                                                               BusinessDeal.client_id == alvo.id)).all())
+        q = q.where((FS.client_id == alvo.id) | (FS.deal_id.in_(negocios or [-1])))
+    nomes = _pr_clientes(s, cid)
+    saida = []
+    for sub in s.exec(q.order_by(FS.responded_at.desc()).limit(10)).all():
+        tpl = s.get(FT, sub.template_id)
+        try:
+            campos = {c.get("name"): c.get("label") or c.get("name") for c in _json_pr.loads(tpl.schema_json or "[]")} if tpl else {}
+        except ValueError:
+            campos = {}
+        try:
+            respostas = _json_pr.loads(sub.answers_json or "{}")
+        except ValueError:
+            respostas = {}
+        cli = nomes.get(sub.client_id, "")
+        if not cli and sub.deal_id:
+            d = s.get(BusinessDeal, sub.deal_id)
+            cli = nomes.get(d.client_id, "") if d else ""
+        saida.append({"formulario": tpl.nome if tpl else f"#{sub.template_id}", "cliente": cli,
+                      "negocio_id": sub.deal_id, "respondido_em": _pr_quando(sub.responded_at),
+                      "respostas": [{"pergunta": campos.get(k, k), "resposta": str(v)[:3000]}
+                                    for k, v in respostas.items()][:150]})
+    return {"formularios": saida, "total": len(saida),
+            "observacao": "Respostas enviadas pelo cliente/lead pelos formulários do escritório (ex.: pré-diagnóstico)."}
+
+
 # ── Sucesso do cliente ────────────────────────────────────────────────────────
 
 def _cm_t_saude(s, cid):
@@ -753,6 +792,11 @@ _CM_FERRAMENTAS = {
                        "para 'Proposta Enviada'. O sócio aprova quando enviar a proposta ao cliente.",
         "props": {"negocio_id": {"type": "integer"}, "anexo_id": {"type": "integer", "description": "anexo_id do PDF."},
                   "titulo": _CM_S, "valor_total": {"type": "number", "description": "Valor total em reais (para o CRM)."}}},
+    "com_formularios": {
+        "fn": _cm_t_formularios, "rotulo": "Leu os formulários respondidos",
+        "description": "Formulários respondidos pelo cliente ou lead (ex.: pré-diagnóstico do Banco de Formulários), com "
+                       "as perguntas e respostas. Vazio = os 10 mais recentes de todos.",
+        "props": {"cliente": {"type": "string", "description": "Nome do cliente/lead (vazio = todos)."}}},
     "com_saude_clientes": {
         "fn": _cm_t_saude, "rotulo": "Avaliou a saúde dos clientes",
         "description": "Clientes com contrato ativo: renovações em até 120 dias e risco de cancelamento (tarefas e ações "
@@ -770,8 +814,8 @@ _PR_TIPOS_EQUIPE.update({"criar_negocio", "registrar_proposta"})
 _CM_AGENTES = {
     "prospeccao": {
         "web": True, "papeis": _PR_TODOS,
-        "ferramentas": ["com_leads", "com_negocios", "com_pipeline", "cli_panorama", "conh_buscar", "conh_ler",
-                        "com_propor_negocio", "ops_propor_tarefa"],
+        "ferramentas": ["com_leads", "com_negocios", "com_formularios", "com_pipeline", "cli_panorama", "conh_buscar",
+                        "conh_ler", "com_propor_negocio", "ops_propor_tarefa"],
         "instrucoes": (
             "Você é a prospecção da M. Capital, boutique financeira que atende empresas de R$ 10 a 150 milhões de "
             "faturamento no Sul do Brasil (reestruturação, gestão financeira/CFO externo, mercado de capitais — CRI, "
@@ -790,8 +834,8 @@ _CM_AGENTES = {
             "estimativa.")},
     "propostas": {
         "web": True, "papeis": _PR_ADMIN,
-        "ferramentas": ["com_negocios", "com_referencias_honorarios", "cli_panorama", "reu_listar", "reu_conteudo",
-                        "conh_buscar", "conh_ler", "com_gerar_proposta", "com_propor_registrar_proposta"],
+        "ferramentas": ["com_negocios", "com_formularios", "com_referencias_honorarios", "cli_panorama", "reu_listar",
+                        "reu_conteudo", "conh_buscar", "conh_ler", "com_gerar_proposta", "com_propor_registrar_proposta"],
         "instrucoes": (
             "Você monta as propostas comerciais da M. Capital no padrão da casa (o mesmo da proposta JVC): capa; "
             "1. Contexto e Diagnóstico Preliminar (gaps críticos e pontos positivos, contexto estratégico); 2. Escopo "
@@ -801,7 +845,8 @@ _CM_AGENTES = {
             "Condições Comerciais (estrutura do contrato, pagamento, reajuste pelo IPCA, extras não incluídos, "
             "confidencialidade); 7. Por que a M. Capital; 8. Aceite.\n"
             "Como trabalhar:\n"
-            "- Base: a demanda do negócio no CRM, o pré-diagnóstico ou a reunião (reu_conteudo), arquivos anexados e "
+            "- Base: a demanda do negócio no CRM, o pré-diagnóstico respondido (com_formularios), a reunião "
+            "(reu_conteudo), arquivos anexados e "
             "a pesquisa sobre a empresa. Use os fatos do cliente; não invente números dele.\n"
             "- Honorários dependem do tipo de negócio e da demanda: se o sócio não informou, consulte "
             "com_referencias_honorarios, sugira valores e explique a base (\"contratos parecidos: R$ X a Y\"). Deixe "
