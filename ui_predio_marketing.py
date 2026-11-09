@@ -14,7 +14,8 @@
 #   O site é estático (pasta website/ deste repositório, publicada pelo Render).
 #   Na aprovação, a plataforma faz um commit pela API do GitHub e o Render
 #   publica sozinho. Variáveis: SITE_GITHUB_TOKEN (obrigatória para publicar),
-#   SITE_GITHUB_REPO (padrão PythonMFZ/escritorio), SITE_GITHUB_BRANCH (main).
+#   SITE_GITHUB_REPO (padrão PythonMFZ/escritorio), SITE_GITHUB_BRANCH (main) e
+#   SITE_GITHUB_DIR (pasta do site no repositório; padrão website, vazio = raiz).
 #
 # ROTAS (admin)
 #   GET  /predio/acoes/{id}/previa     — prévia da página que será publicada
@@ -31,7 +32,6 @@ import unicodedata as _ud_mk
 import xml.etree.ElementTree as _ET_mk
 
 _MK_SITE_URL = "https://maffezzollicapital.com.br"
-_MK_PREFIXO = "website/"
 _MK_MESES = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"]
 _MK_MESES_LONGOS = ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto", "setembro",
                     "outubro", "novembro", "dezembro"]
@@ -43,6 +43,12 @@ def _mk_repo() -> str:
 
 def _mk_branch() -> str:
     return _os_mk.environ.get("SITE_GITHUB_BRANCH", "main")
+
+
+def _mk_prefixo() -> str:
+    """Pasta do site dentro do repositório (SITE_GITHUB_DIR; padrão 'website'; vazio = raiz)."""
+    pasta = _os_mk.environ.get("SITE_GITHUB_DIR", "website").strip().strip("/")
+    return f"{pasta}/" if pasta else ""
 
 
 def _mk_token() -> str:
@@ -81,21 +87,32 @@ def _mk_gh(metodo: str, caminho: str, **kw):
     r = _httpx_mk.request(metodo, f"https://api.github.com/repos/{_mk_repo()}{caminho}", timeout=30,
                           headers={"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json",
                                    "X-GitHub-Api-Version": "2022-11-28"}, **kw)
-    if r.status_code == 404 and metodo == "GET":
-        return None
+    if r.status_code == 404 and metodo == "GET" and caminho.startswith("/contents/"):
+        return None  # arquivo ainda não existe no site
     if r.status_code >= 400:
         try:
             msg = r.json().get("message", "")
         except ValueError:
             msg = r.text[:200]
-        raise _PrErro(f"GitHub respondeu {r.status_code}: {msg}")
+        repo = _mk_repo()
+        dica = {
+            401: "o token do GitHub (SITE_GITHUB_TOKEN) é inválido ou expirou: gere um novo e atualize no Render",
+            403: (f"o token não tem permissão de escrita: no GitHub, edite o token e dê acesso ao repositório {repo} "
+                  "com 'Contents: Read and write'"),
+            404: (f"o token não enxerga o repositório {repo}: no GitHub, edite o token, em 'Repository access' "
+                  f"escolha o repositório e confira se o dono do token (Resource owner) é {repo.split('/')[0]}"),
+        }.get(r.status_code, "")
+        if r.status_code == 422 and "protected" in msg.lower():
+            dica = (f"a branch {_mk_branch()} está protegida e não aceita commit direto: libere o token nas regras "
+                    "da branch ou use SITE_GITHUB_BRANCH com outra branch publicada pelo Render")
+        raise _PrErro(f"GitHub respondeu {r.status_code} ({msg})" + (f" — {dica}." if dica else "."))
     return r.json()
 
 
 def _mk_ler(rel: str):
     """Conteúdo atual de website/<rel>: do GitHub quando há token, senão da cópia local."""
     if _mk_token():
-        dado = _mk_gh("GET", f"/contents/{_MK_PREFIXO}{rel}", params={"ref": _mk_branch()})
+        dado = _mk_gh("GET", f"/contents/{_mk_prefixo()}{rel}", params={"ref": _mk_branch()})
         if dado is None:
             return None
         return _b64_mk.b64decode(dado.get("content") or "").decode("utf-8")
@@ -117,7 +134,7 @@ def _mk_commit(arquivos: dict, mensagem: str) -> str:
     itens = []
     for rel, conteudo in arquivos.items():
         blob = _mk_gh("POST", "/git/blobs", json={"content": conteudo, "encoding": "utf-8"})
-        itens.append({"path": _MK_PREFIXO + rel, "mode": "100644", "type": "blob", "sha": blob["sha"]})
+        itens.append({"path": _mk_prefixo() + rel, "mode": "100644", "type": "blob", "sha": blob["sha"]})
     arvore = _mk_gh("POST", "/git/trees", json={"base_tree": arvore_base, "tree": itens})
     commit = _mk_gh("POST", "/git/commits", json={"message": mensagem, "tree": arvore["sha"], "parents": [base]})
     _mk_gh("PATCH", f"/git/refs/heads/{branch}", json={"sha": commit["sha"], "force": False})
@@ -133,7 +150,7 @@ def _mk_publicar(montar, mensagem: str) -> str:
         try:
             return _mk_commit(arquivos, mensagem)
         except _PrErro as e:
-            if "422" not in str(e):
+            if "fast forward" not in str(e).lower():  # só repete quando outro commit entrou no meio
                 raise
             ultimo = e
     raise ultimo
