@@ -876,11 +876,14 @@ def _pr_t_panorama(s, cid, cliente):
     projetos = [_pr_progresso_projeto(s, pj) for pj in s.exec(_sel_pr(ConsultingProject).where(
         ConsultingProject.company_id == cid, ConsultingProject.client_id == c.id, ConsultingProject.status != "concluido")).all()]
     reunioes = []
-    for m in s.exec(_sel_pr(Meeting).where(Meeting.company_id == cid, Meeting.client_id == c.id)
-                    .order_by(Meeting.created_at.desc()).limit(5)).all():
-        reunioes.append({"reuniao_id": m.id, "titulo": m.title,
-                         "data": m.meeting_date or _pr_fmt_data(m.created_at.date() if m.created_at else None),
-                         "resumo": (m.summary_text or m.notes_text or "")[:600]})
+    for mid, titulo, mdata, criado, resumo, notas in s.exec(
+            _sel_pr(Meeting.id, Meeting.title, Meeting.meeting_date, Meeting.created_at,
+                    _func_pr.substr(Meeting.summary_text, 1, 600), _func_pr.substr(Meeting.notes_text, 1, 600))
+            .where(Meeting.company_id == cid, Meeting.client_id == c.id)
+            .order_by(Meeting.created_at.desc()).limit(5)).all():
+        reunioes.append({"reuniao_id": mid, "titulo": titulo,
+                         "data": mdata or _pr_fmt_data(criado.date() if criado else None),
+                         "resumo": (resumo or notas or "")[:600]})
     agenda = [{"data": _pr_fmt_data(_pr_data(b.data)), "hora": b.hora_inicio, "status": b.status}
               for b in s.exec(_sel_pr(AgendaBooking).where(AgendaBooking.company_id == cid, AgendaBooking.client_id == c.id,
                                                            AgendaBooking.status != "cancelado")).all()
@@ -921,12 +924,15 @@ def _pr_t_reunioes(s, cid, cliente, quantidade):
         return _pr_nao_achei(cliente, cands)
     qtd = max(1, min(int(quantidade or 10), 30))
     linhas = []
-    for m in s.exec(_sel_pr(Meeting).where(Meeting.company_id == cid, Meeting.client_id == c.id)
-                    .order_by(Meeting.created_at.desc()).limit(qtd)).all():
-        linhas.append({"reuniao_id": m.id, "titulo": m.title,
-                       "data": m.meeting_date or _pr_fmt_data(m.created_at.date() if m.created_at else None),
-                       "tem_transcricao": bool((m.transcript_text or "").strip()),
-                       "tem_resumo": bool((m.summary_text or "").strip())})
+    for mid, titulo, mdata, criado, n_transc, n_resumo in s.exec(
+            _sel_pr(Meeting.id, Meeting.title, Meeting.meeting_date, Meeting.created_at,
+                    _func_pr.length(_func_pr.trim(_func_pr.coalesce(Meeting.transcript_text, ""))),
+                    _func_pr.length(_func_pr.trim(_func_pr.coalesce(Meeting.summary_text, ""))))
+            .where(Meeting.company_id == cid, Meeting.client_id == c.id)
+            .order_by(Meeting.created_at.desc()).limit(qtd)).all():
+        linhas.append({"reuniao_id": mid, "titulo": titulo,
+                       "data": mdata or _pr_fmt_data(criado.date() if criado else None),
+                       "tem_transcricao": bool(n_transc), "tem_resumo": bool(n_resumo)})
     return {"cliente": c.name, "reunioes": linhas}
 
 
@@ -1818,14 +1824,15 @@ def _pr_t_sis_pendencias(s, cid):
                   for a in s.exec(_sel_pr(PredioAcao).where(PredioAcao.company_id == cid, PredioAcao.status == "erro",
                                                             PredioAcao.criado_em >= agora - _td_pr(days=7))).all()]
     nomes = _pr_clientes(s, cid)
-    transc_presas = [{"reuniao_id": m.id, "titulo": m.title, "cliente": nomes.get(m.client_id, ""), "status": m.notion_status}
-                     for m in s.exec(_sel_pr(Meeting).where(
+    transc_presas = [{"reuniao_id": mid, "titulo": titulo, "cliente": nomes.get(cli, ""), "status": st}
+                     for mid, titulo, cli, st in s.exec(_sel_pr(Meeting.id, Meeting.title, Meeting.client_id, Meeting.notion_status).where(
                          Meeting.company_id == cid, Meeting.notion_status.in_(["transcription_in_progress", "summary_in_progress"]),
                          Meeting.updated_at < agora - _td_pr(minutes=45))).all()]
-    transc_erro = [{"reuniao_id": m.id, "titulo": m.title, "cliente": nomes.get(m.client_id, ""),
-                    "detalhe": (m.notes_text or "")[:160]}
-                   for m in s.exec(_sel_pr(Meeting).where(Meeting.company_id == cid, Meeting.notion_status == "error",
-                                                          Meeting.updated_at >= agora - _td_pr(days=7))).all()]
+    transc_erro = [{"reuniao_id": mid, "titulo": titulo, "cliente": nomes.get(cli, ""), "detalhe": detalhe or ""}
+                   for mid, titulo, cli, detalhe in s.exec(
+                       _sel_pr(Meeting.id, Meeting.title, Meeting.client_id, _func_pr.substr(Meeting.notes_text, 1, 160))
+                       .where(Meeting.company_id == cid, Meeting.notion_status == "error",
+                              Meeting.updated_at >= agora - _td_pr(days=7))).all()]
     wa_falhas = [{"quando": _pr_quando(m.created_at), "texto": (m.body or "")[:100]}
                  for m in s.exec(_sel_pr(WhatsAppThreadMessage).where(
                      WhatsAppThreadMessage.company_id == cid, WhatsAppThreadMessage.delivery_status == "failed",
@@ -1884,6 +1891,9 @@ def _pr_padrao_sem_acento(termo: str) -> str:
     return "%" + "".join("_" if ch in "aeiouc" else ch for ch in termo) + "%"
 
 
+_PR_TEXTO_BUSCA = 120_000  # caracteres por item lidos para montar o trecho (documentos inteiros podem ter MBs)
+
+
 def _pr_t_conh_buscar(s, cid, termo, cliente):
     termos = [t for t in _pr_norm(termo).split() if len(t) >= 3][:6]
     if not termos:
@@ -1894,34 +1904,45 @@ def _pr_t_conh_buscar(s, cid, termo, cliente):
         if not filtro:
             return _pr_nao_achei(cliente, cands)
     nomes = _pr_clientes(s, cid)
+    padroes = [_pr_padrao_sem_acento(t) for t in termos]
     achados = []
+    # Todas as palavras são filtradas no banco e só colunas curtas vêm para a memória: a base tem documentos
+    # e transcrições enormes, e carregá-los inteiros (200 por busca, vários agentes ao mesmo tempo) estourava a RAM.
     BC = globals().get("BaseConhecimento")
     if BC is not None:
-        q = _sel_pr(BC).where(BC.company_id == cid)
+        q = _sel_pr(BC.id, BC.nome, BC.tipo, BC.client_id, BC.created_at, _func_pr.substr(BC.descricao, 1, 1000)) \
+            .where(BC.company_id == cid)
         if filtro:
             q = q.where(BC.client_id.in_([filtro.id, 0]))
-        padrao = _pr_padrao_sem_acento(termos[0])
-        q = q.where((BC.nome.ilike(padrao)) | (BC.descricao.ilike(padrao)) | (BC.conteudo_texto.ilike(padrao)))
-        for b in s.exec(q.limit(200)).all():
-            alvo = _pr_norm(" ".join((b.nome or "", b.descricao or "", b.conteudo_texto or "")))
-            if all(t in alvo for t in termos):
-                achados.append({"_rel": _pr_relevancia(b.nome, alvo, termos), "fonte": "base", "id": b.id, "titulo": b.nome, "tipo": b.tipo,
-                                "cliente": nomes.get(b.client_id, "interno (escritório)"), "data": (b.created_at or "")[:10],
-                                "trecho": _pr_trecho(b.conteudo_texto or b.descricao, termos)})
-    q = _sel_pr(Meeting).where(Meeting.company_id == cid)
+        for p in padroes:
+            q = q.where((BC.nome.ilike(p)) | (BC.descricao.ilike(p)) | (BC.conteudo_texto.ilike(p)))
+        for bid, nome, tipo, cli, criado, desc in s.exec(q.order_by(BC.id.desc()).limit(80)).all():
+            achados.append({"_rel": _pr_relevancia(nome, _pr_norm(f"{nome or ''} {desc or ''}"), termos), "fonte": "base",
+                            "id": bid, "titulo": nome, "tipo": tipo, "cliente": nomes.get(cli, "interno (escritório)"),
+                            "data": (criado or "")[:10], "_desc": desc})
+    q = _sel_pr(Meeting.id, Meeting.title, Meeting.client_id, Meeting.meeting_date, Meeting.created_at,
+                _func_pr.substr(Meeting.summary_text, 1, 1000)).where(Meeting.company_id == cid)
     if filtro:
         q = q.where(Meeting.client_id == filtro.id)
-    padrao = _pr_padrao_sem_acento(termos[0])
-    q = q.where((Meeting.title.ilike(padrao)) | (Meeting.summary_text.ilike(padrao)) | (Meeting.notes_text.ilike(padrao)))
-    for m in s.exec(q.order_by(Meeting.created_at.desc()).limit(200)).all():
-        texto = " ".join((m.title or "", m.summary_text or "", m.notes_text or ""))
-        if all(t in _pr_norm(texto) for t in termos):
-            achados.append({"_rel": _pr_relevancia(m.title, _pr_norm(texto), termos), "fonte": "reuniao", "id": m.id,
-                            "titulo": m.title, "tipo": "reunião",
-                            "cliente": nomes.get(m.client_id, ""), "data": m.meeting_date or _pr_fmt_data(m.created_at.date() if m.created_at else None),
-                            "trecho": _pr_trecho(m.summary_text or m.notes_text, termos)})
+    for p in padroes:
+        q = q.where((Meeting.title.ilike(p)) | (Meeting.summary_text.ilike(p)) | (Meeting.notes_text.ilike(p)))
+    for mid, titulo, cli, mdata, criado, resumo in s.exec(q.order_by(Meeting.created_at.desc()).limit(80)).all():
+        achados.append({"_rel": _pr_relevancia(titulo, _pr_norm(f"{titulo or ''} {resumo or ''}"), termos), "fonte": "reuniao",
+                        "id": mid, "titulo": titulo, "tipo": "reunião", "cliente": nomes.get(cli, ""),
+                        "data": mdata or _pr_fmt_data(criado.date() if criado else None), "_desc": resumo})
     achados.sort(key=lambda x: -x.pop("_rel"))
-    return {"termos": termos, "resultados": len(achados), "itens": achados[:15],
+    itens = achados[:15]
+    for it in itens:  # trecho só para os 15 que vão na resposta, lendo um pedaço limitado do texto
+        if it["fonte"] == "base":
+            texto = s.exec(_sel_pr(_func_pr.substr(BC.conteudo_texto, 1, _PR_TEXTO_BUSCA)).where(BC.id == it["id"])).first()
+        else:
+            texto = s.exec(_sel_pr(_func_pr.substr(_func_pr.coalesce(Meeting.summary_text, "") + " "
+                                                   + _func_pr.coalesce(Meeting.notes_text, ""), 1, _PR_TEXTO_BUSCA))
+                           .where(Meeting.id == it["id"])).first()
+        it["trecho"] = _pr_trecho(texto or it["_desc"], termos)
+    for it in achados:
+        it.pop("_desc", None)
+    return {"termos": termos, "resultados": len(achados), "itens": itens,
             "observacao": "Ordenado por relevância; refine os termos se o que procura não estiver entre os primeiros."}
 
 
@@ -3487,10 +3508,11 @@ def _pr_pode_decidir(papel: str, tipo: str) -> bool:
 
 
 def _pr_reivindicar_acao(acao_id: int, company_id: int, novo_status: str) -> bool:
-    """Troca pendente -> novo_status de forma atômica; só um clique (ou worker) vence."""
+    """Troca pendente (ou falhou) -> novo_status de forma atômica; só um clique (ou worker) vence.
+    Uma ação que falhou (ex.: faltava configurar algo) pode ser aprovada de novo."""
     with engine.begin() as conn:
         res = conn.execute(_sqltext_pr(
-            "UPDATE predio_acao SET status = :novo WHERE id = :id AND company_id = :cid AND status = 'pendente'"
+            "UPDATE predio_acao SET status = :novo WHERE id = :id AND company_id = :cid AND status IN ('pendente', 'erro')"
         ), {"novo": novo_status, "id": acao_id, "cid": company_id})
         return res.rowcount == 1
 
@@ -3511,7 +3533,7 @@ async def predio_aprovar_acao(acao_id: int, request: Request, session: Session =
         return RedirectResponse("/predio", status_code=303)
     form = await request.form()
     if acao.tipo in ("email_cobranca", "whatsapp_resposta", "cancelar_reuniao", "criar_tarefa",
-                     "registrar_conhecimento", "email_agencia") and acao.status == "pendente":
+                     "registrar_conhecimento", "email_agencia") and acao.status in ("pendente", "erro"):
         assunto = str(form.get("assunto") or "").strip()[:200]
         corpo = str(form.get("corpo") or "").strip()[:20000]
         if assunto and acao.tipo in ("email_cobranca", "criar_tarefa", "registrar_conhecimento", "email_agencia"):
@@ -3536,6 +3558,8 @@ async def predio_aprovar_acao(acao_id: int, request: Request, session: Session =
                 return "erro", (str(e) or e.__class__.__name__)[:500]
 
     status, resultado = await _rtp_pr(_rodar)
+    if status == "erro":
+        print(f"[predio] ação #{acao_id} ({acao.tipo}) falhou: {resultado}")
     session.refresh(acao)
     acao.status, acao.resultado = status, resultado
     acao.decidido_por_user_id, acao.decidido_em = ctx.user.id, _dt_pr.utcnow()
@@ -4549,7 +4573,8 @@ TEMPLATES["predio_chamado.html"] = r"""
       topo.appendChild(el('strong',null,a.titulo));
       var pill=el('span','pc-pill '+({pendente:'andamento',executada:'concluido',erro:'erro',rejeitada:'sem_agente',executando:'andamento'}[a.status]||''), a.status_label);
       topo.appendChild(pill); card.appendChild(topo);
-      var pendente=a.status==='pendente' && a.pode_decidir;
+      var pendente=(a.status==='pendente' || a.status==='erro') && a.pode_decidir;
+      if(a.status==='erro') cfg=Object.assign({}, cfg, {botao:'Tentar de novo'});
       if(cfg.para) card.appendChild(el('div','pc-meta mb-2',cfg.para.replace('{d}',a.destinatario)));
       if(cfg.previa){
         var pv=el('a','btn btn-sm btn-outline-primary mb-2','Ver prévia da página ↗');

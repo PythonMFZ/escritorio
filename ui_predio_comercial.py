@@ -431,14 +431,15 @@ def _cm_t_leads(s, cid, dias):
                               "detalhes": f"Usou {l.messages_used} de {l.messages_limit} mensagens; "
                                           f"{'convertido' if l.converted else 'não convertido'}",
                               "ja_no_cadastro": _cm_ja_cadastrado(idx, l.cnpj, l.empresa)})
-    if WP is not None:
-        for l in s.exec(_sel_pr(WP)).all():
-            d = _pr_data(l.created_at)
+    if WP is not None:  # sem history_json (pode ser grande)
+        for criado, nome, empresa, cnpj, fone, estado, msgs in s.exec(
+                _sel_pr(WP.created_at, WP.nome, WP.empresa, WP.cnpj, WP.phone, WP.state, WP.msgs_used)).all():
+            d = _pr_data(criado)
             if d and d >= corte:
-                leads.append({"origem": "WhatsApp (contato novo)", "data": _pr_fmt_data(d), "nome": l.nome,
-                              "empresa": l.empresa, "cnpj": l.cnpj, "email": "", "whatsapp": l.phone,
-                              "detalhes": f"Etapa da conversa: {l.state}; {l.msgs_used} mensagens",
-                              "ja_no_cadastro": _cm_ja_cadastrado(idx, l.cnpj, l.empresa)})
+                leads.append({"origem": "WhatsApp (contato novo)", "data": _pr_fmt_data(d), "nome": nome,
+                              "empresa": empresa, "cnpj": cnpj, "email": "", "whatsapp": fone,
+                              "detalhes": f"Etapa da conversa: {estado}; {msgs} mensagens",
+                              "ja_no_cadastro": _cm_ja_cadastrado(idx, cnpj, empresa)})
     leads.sort(key=lambda x: _pr_data(x["data"]) or corte, reverse=True)
     return {"periodo_dias": dias, "total": len(leads), "novos_fora_do_cadastro": sum(1 for x in leads if not x["ja_no_cadastro"]),
             "leads": leads[:60]}
