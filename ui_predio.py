@@ -56,6 +56,7 @@ class PredioChamado(_SM_pr, table=True):
     created_at: _dt_pr = _F_pr(default_factory=lambda: _dt_pr.utcnow(), index=True)
     updated_at: _dt_pr = _F_pr(default_factory=lambda: _dt_pr.utcnow())
     concluido_em: _Opt_pr[_dt_pr] = _F_pr(default=None)
+    retomadas: int = _F_pr(default=0)  # quantas vezes foi retomado após reinício do servidor
 
 
 class PredioConfig(_SM_pr, table=True):
@@ -130,14 +131,15 @@ def _pr_migrar_colunas() -> None:
     except Exception as e:
         print(f"[predio] inspeção de colunas: {e}")
         return
-    colunas = {"mensagens_json": "'[]'", "conversa_json": "'[]'", "tipo": "'chamado'",
-               "participantes_json": "'[]'", "contribuicoes_json": "'[]'"}
-    for nome, padrao in colunas.items():
+    colunas = {"mensagens_json": "TEXT DEFAULT '[]'", "conversa_json": "TEXT DEFAULT '[]'",
+               "tipo": "TEXT DEFAULT 'chamado'", "participantes_json": "TEXT DEFAULT '[]'",
+               "contribuicoes_json": "TEXT DEFAULT '[]'", "retomadas": "INTEGER DEFAULT 0"}
+    for nome, tipo_sql in colunas.items():
         if nome in existentes:
             continue
         try:
             with engine.begin() as conn:
-                conn.execute(_sqltext_pr(f"ALTER TABLE predio_chamado ADD COLUMN {nome} TEXT DEFAULT {padrao}"))
+                conn.execute(_sqltext_pr(f"ALTER TABLE predio_chamado ADD COLUMN {nome} {tipo_sql}"))
         except Exception as e:
             # outro worker do gunicorn pode ter criado a coluna ao mesmo tempo
             print(f"[predio] coluna {nome}: {e}")
@@ -1977,6 +1979,7 @@ def _pr_t_cos_delegar(s, cid, agente, tarefa):
               "Faça o que foi pedido com as suas ferramentas. Se precisar de uma ação (e-mail, tarefa, agendamento, "
               "publicação), crie a proposta: ela vai para aprovação. Termine com um resumo curto do que fez.")
     conteudo = _pr_conteudo_com_anexos(chamado_id, turno if isinstance(turno, int) else 0, pedido)
+    s.rollback()  # devolve a conexão ao pool: o agente delegado pode levar minutos
     _PR_EXEC.delegado = True
     try:
         texto, _ = _pr_rodar_agente(chamado_id, alvo, [{"role": "user", "content": conteudo}], cid, empresa, turno)
@@ -2854,8 +2857,15 @@ def _pr_processar_reuniao(chamado_id: int) -> None:
                 empresa = empresa_obj.name if empresa_obj else "empresa"
             _pr_atualizar(chamado_id, status="trabalhando")
             nomes = ", ".join(_PREDIO_AGENTES[k]["nome"] for k in participantes if k in _PREDIO_AGENTES)
+            # retomada após reinício: quem já contribuiu não fala de novo
+            with _Sess_pr(engine) as s:
+                feitas = {c.get("autor"): c for c in _pr_json_lista(s.get(PredioChamado, chamado_id).contribuicoes_json)
+                          if c.get("texto")}
             contribuicoes = []
             for i, key in enumerate(participantes):
+                if key in feitas:
+                    contribuicoes.append(feitas[key])
+                    continue
                 agente = _PREDIO_AGENTES.get(key)
                 item = {"autor": key, "nome": agente["nome"] if agente else key, "texto": "", "erro": ""}
                 try:
@@ -2897,9 +2907,50 @@ def _pr_processar_reuniao(chamado_id: int) -> None:
             print(f"[predio] notificar {chamado_id}: {e_not}")
 
 
+# Chamados rodando NESTE processo. Um batimento atualiza updated_at deles a cada 30s; se o servidor
+# reinicia (deploy, falta de memória), o batimento para e o agendador retoma o chamado sozinho.
+_PR_ATIVOS: set = set()
+_PR_ATIVOS_LOCK = _thr_pr.Lock()
+_PR_BATIMENTO_S = 30
+_PR_ORFAO_APOS = _td_pr(minutes=3)
+_PR_MAX_RETOMADAS = 2
+
+
 def _pr_disparar(chamado_id: int, continuar: bool = False, reuniao: bool = False) -> None:
     alvo = _pr_continuar if continuar else (_pr_processar_reuniao if reuniao else _pr_processar)
-    _thr_pr.Thread(target=alvo, args=(chamado_id,), daemon=True, name=f"predio-{chamado_id}").start()
+
+    def _rodar():
+        with _PR_ATIVOS_LOCK:
+            _PR_ATIVOS.add(chamado_id)
+        try:
+            alvo(chamado_id)
+        finally:
+            with _PR_ATIVOS_LOCK:
+                _PR_ATIVOS.discard(chamado_id)
+
+    with _PR_ATIVOS_LOCK:
+        _PR_ATIVOS.add(chamado_id)  # já conta como vivo enquanto espera o semáforo
+    _thr_pr.Thread(target=_rodar, daemon=True, name=f"predio-{chamado_id}").start()
+
+
+def _pr_batimento() -> None:
+    while True:
+        _time_pr.sleep(_PR_BATIMENTO_S)
+        with _PR_ATIVOS_LOCK:
+            ids = list(_PR_ATIVOS)
+        if not ids:
+            continue
+        try:
+            with engine.begin() as conn:
+                for i in ids:
+                    conn.execute(_sqltext_pr(
+                        "UPDATE predio_chamado SET updated_at = :agora WHERE id = :id "
+                        "AND status IN ('na_fila', 'roteando', 'trabalhando')"), {"agora": _dt_pr.utcnow(), "id": i})
+        except Exception as e:
+            print(f"[predio] batimento: {e}")
+
+
+_thr_pr.Thread(target=_pr_batimento, daemon=True, name="predio-batimento").start()
 
 
 def _pr_criar_briefing(s, company_id: int, user_id: int, roteamento: str) -> PredioChamado:
@@ -2918,19 +2969,56 @@ def _pr_criar_briefing(s, company_id: int, user_id: int, roteamento: str) -> Pre
 # ── Agendador: briefing de segunda + chamados interrompidos ───────────────────
 
 def _pr_resetar_travados() -> None:
-    corte = _dt_pr.utcnow() - _td_pr(minutes=30)
+    """Retoma chamados cujo processamento morreu (sem batimento há 3 min: o servidor reiniciou).
+    Cada chamado é reivindicado com UPDATE condicional, então só um worker retoma."""
+    corte = _dt_pr.utcnow() - _PR_ORFAO_APOS
     with _Sess_pr(engine) as s:
-        travados = s.exec(_sel_pr(PredioChamado).where(
+        orfaos = s.exec(_sel_pr(PredioChamado.id).where(
             PredioChamado.status.in_(["na_fila", "roteando", "trabalhando"]),
             PredioChamado.updated_at < corte,
         )).all()
-        for ch in travados:
-            ch.status = "erro"
-            ch.erro = "O processamento foi interrompido (o servidor reiniciou). Envie a demanda de novo."
-            ch.updated_at = _dt_pr.utcnow()
+    for cid_ in orfaos:
+        with _PR_ATIVOS_LOCK:
+            if cid_ in _PR_ATIVOS:
+                continue
+        with engine.begin() as conn:
+            res = conn.execute(_sqltext_pr(
+                "UPDATE predio_chamado SET updated_at = :agora, retomadas = COALESCE(retomadas, 0) + 1 "
+                "WHERE id = :id AND updated_at < :corte AND status IN ('na_fila', 'roteando', 'trabalhando')"
+            ), {"agora": _dt_pr.utcnow(), "id": cid_, "corte": corte})
+        if res.rowcount != 1:
+            continue
+        with _Sess_pr(engine) as s:
+            ch = s.get(PredioChamado, cid_)
+            if (ch.retomadas or 0) > _PR_MAX_RETOMADAS:
+                ch.status, ch.concluido_em = "erro", _dt_pr.utcnow()
+                ch.erro = ("O processamento foi interrompido várias vezes (o servidor reiniciou). "
+                           "Use 'Tentar de novo' ou envie a demanda novamente.")
+                s.add(ch)
+                s.commit()
+                continue
+            conversa = _pr_json_lista(ch.conversa_json)
+            modo = {}
+            if ch.tipo == "reuniao":
+                modo = {"reuniao": True}
+            elif conversa and not conversa[-1].get("resposta"):
+                turno = len(conversa)
+                ch.passos_json = _json_pr.dumps([p for p in _pr_json_lista(ch.passos_json)
+                                                 if str(p.get("turno", 0)) != str(turno)], ensure_ascii=False)
+                modo = {"continuar": True}
+            else:
+                ch.resultado, ch.passos_json, ch.mensagens_json = "", "[]", "[]"
+                if ch.roteamento == "recepcao":
+                    ch.agente_key = ""
+            turno_aviso = len(conversa) if modo.get("continuar") else 0
+            ch.passos_json = _json_pr.dumps(_pr_json_lista(ch.passos_json) + [{
+                "ferramenta": "retomada", "rotulo": "⟳ Retomado automaticamente: o servidor reiniciou no meio do trabalho",
+                "entrada": {}, "ok": True, "em": _pr_agora_brt().strftime("%H:%M:%S"), "turno": turno_aviso,
+                "autor": ch.agente_key}], ensure_ascii=False)
             s.add(ch)
-        if travados:
             s.commit()
+        print(f"[predio] chamado {cid_} interrompido por reinício — retomando ({modo or 'do início'})")
+        _pr_disparar(cid_, **modo)
 
 
 def _pr_briefings_semanais() -> None:
@@ -2958,14 +3046,17 @@ def _pr_briefings_semanais() -> None:
 
 
 def _pr_agendador() -> None:
-    _time_pr.sleep(90)
+    _time_pr.sleep(60)
+    ciclo = 0
     while True:
         try:
             _pr_resetar_travados()
-            _pr_briefings_semanais()
+            if ciclo % 10 == 0:
+                _pr_briefings_semanais()
         except Exception as e:
             print(f"[predio] agendador: {e}")
-        _time_pr.sleep(600)
+        ciclo += 1
+        _time_pr.sleep(60)
 
 
 _thr_pr.Thread(target=_pr_agendador, daemon=True, name="predio-agendador").start()
