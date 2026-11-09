@@ -52798,3 +52798,6 @@ async def exportar_clientes_xlsx(
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": "attachment; filename=clientes.xlsx"},
     )
+
+
+exec(open('ui_predio.py').read())

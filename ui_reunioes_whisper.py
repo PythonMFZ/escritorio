@@ -47,7 +47,20 @@ except Exception:
     _AUDIO_DIR.mkdir(parents=True, exist_ok=True)
 
 _WHISPER_MODEL_NAME = _os2.environ.get("WHISPER_MODEL", "tiny")
-_whisper_model_cache = {}  # cache do modelo carregado
+_whisper_model_cache = {}  # cache do modelo — limpo após uso para liberar RAM
+
+
+def _unload_whisper_model():
+    """Libera o modelo whisper da RAM após a transcrição."""
+    global _whisper_model_cache
+    if _whisper_model_cache:
+        _whisper_model_cache.clear()
+        try:
+            import gc as _gc
+            _gc.collect()
+        except Exception:
+            pass
+        print("[whisper] Modelo descarregado da RAM.")
 
 # ── S3 backup de áudios ───────────────────────────────────────────────────────
 # Reutiliza as mesmas credenciais do ui_backup_s3.py (AWS_ACCESS_KEY_ID etc.)
@@ -604,6 +617,8 @@ def _processar_audio_background_inner(
         except Exception as _le:
             _erro_real = str(_le)
             print(f"[whisper] Transcrição local falhou: {_le}")
+        finally:
+            _unload_whisper_model()  # libera RAM imediatamente após uso local
 
     # ── Arquivo não encontrado ───────────────────────────────────────────────
     if not _Path(audio_path).exists() and not transcricao:
