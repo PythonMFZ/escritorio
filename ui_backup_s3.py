@@ -13,8 +13,8 @@
 #   APP_S3_BUCKET_NAME (maffezzolli-escritorio-db-backups)
 
 import os       as _os_bk
-import gzip     as _gzip_bk
-import shutil   as _shutil_bk
+import fcntl    as _fcntl_bk
+import zlib     as _zlib_bk
 import tempfile as _tmp_bk
 import threading as _thread_bk
 import time     as _time_bk
@@ -40,6 +40,35 @@ _bk_state = {
     "last_size_mb": 0.0,
     "last_error":  "",
 }
+
+
+_BK_LOCK = _Path_bk(_tmp_bk.gettempdir()) / "backup_s3.lock"
+
+
+class _GzipDoPipe:
+    """Arquivo somente-leitura que entrega o stdout do pg_dump já em gzip, em pedaços."""
+
+    def __init__(self, fonte):
+        self.fonte = fonte
+        self.z = _zlib_bk.compressobj(6, _zlib_bk.DEFLATED, 31)  # wbits=31 → formato gzip
+        self.buf = bytearray()
+        self.fim = False
+        self.bytes_saida = 0
+
+    def read(self, n=-1):
+        if n is None or n < 0:
+            n = 16 * 1024 * 1024
+        while len(self.buf) < n and not self.fim:
+            bloco = self.fonte.read(1024 * 1024)
+            if bloco:
+                self.buf += self.z.compress(bloco)
+            else:
+                self.buf += self.z.flush()
+                self.fim = True
+        saida = bytes(self.buf[:n])
+        del self.buf[:n]
+        self.bytes_saida += len(saida)
+        return saida
 
 
 # ── Funções de backup ─────────────────────────────────────────────────────────
@@ -86,6 +115,16 @@ def _run_backup() -> bool:
     if not s3:
         return False
 
+    # Só um backup por vez na instância: o gunicorn roda vários workers e cada um
+    # tem o próprio agendador. Quem não conseguir a trava simplesmente desiste.
+    trava = open(_BK_LOCK, "w")
+    try:
+        _fcntl_bk.flock(trava, _fcntl_bk.LOCK_EX | _fcntl_bk.LOCK_NB)
+    except BlockingIOError:
+        trava.close()
+        print("[backup_s3] Outro processo já está fazendo o backup — ignorando.")
+        return False
+
     now       = _dt_bk.now(_tz_bk.utc)
     timestamp = now.strftime("%Y%m%d_%H%M%S")
     filename  = f"backup_{timestamp}.sql.gz"
@@ -93,11 +132,12 @@ def _run_backup() -> bool:
 
     print(f"[backup_s3] Iniciando backup → s3://{_BK_BUCKET}/{s3_key}")
 
-    tmp_gz  = _Path_bk(_tmp_bk.gettempdir()) / filename
-
     try:
-        # ── pg_dump direto para disco (sem passar pela RAM) ───────────────────
-        with open(tmp_gz, "wb") as _gz_out:
+        # ── pg_dump → gzip → S3 em streaming (sem arquivo temporário) ─────────
+        # Em container, /tmp pode contar como memória; um dump inteiro ali (vezes
+        # o número de workers) derrubava a instância por falta de memória.
+        from boto3.s3.transfer import TransferConfig as _TransferConfig_bk
+        with _tmp_bk.TemporaryFile() as _stderr_f:
             with _sp_bk.Popen(
                 [
                     "pg_dump",
@@ -110,29 +150,28 @@ def _run_backup() -> bool:
                     f"--dbname={_pg_db}",
                 ],
                 stdout=_sp_bk.PIPE,
-                stderr=_sp_bk.PIPE,
+                stderr=_stderr_f,
                 env={**_os_bk.environ, "PGPASSWORD": _pg_pass},
             ) as _proc:
-                with _gzip_bk.open(_gz_out, "wb") as _gz_writer:
-                    _shutil_bk.copyfileobj(_proc.stdout, _gz_writer, length=1024 * 1024)
-                _proc.wait(timeout=300)
-                if _proc.returncode != 0:
-                    err = (_proc.stderr.read() or b"")[:300].decode(errors="replace")
-                    raise RuntimeError(f"pg_dump falhou (code {_proc.returncode}): {err}")
+                fluxo = _GzipDoPipe(_proc.stdout)
+                s3.upload_fileobj(
+                    fluxo, _BK_BUCKET, s3_key,
+                    ExtraArgs={"StorageClass": "STANDARD_IA"},
+                    Config=_TransferConfig_bk(multipart_chunksize=16 * 1024 * 1024,
+                                              max_concurrency=1, use_threads=False),
+                )
+                _proc.wait(timeout=600)
+            if _proc.returncode != 0:
+                _stderr_f.seek(0)
+                err = _stderr_f.read(300).decode(errors="replace")
+                try:
+                    s3.delete_object(Bucket=_BK_BUCKET, Key=s3_key)  # não deixa backup incompleto no bucket
+                except Exception:
+                    pass
+                raise RuntimeError(f"pg_dump falhou (code {_proc.returncode}): {err}")
 
-        sql_size_mb = tmp_gz.stat().st_size / 1024 / 1024
-        print(f"[backup_s3] pg_dump + gzip OK: {sql_size_mb:.1f}MB comprimido")
-
-        size_mb = sql_size_mb
-
-        # ── Upload S3 ─────────────────────────────────────────────────────────
-        s3.upload_file(
-            str(tmp_gz),
-            _BK_BUCKET,
-            s3_key,
-            ExtraArgs={"StorageClass": "STANDARD_IA"},
-        )
-        print(f"[backup_s3] ✅ Upload OK: s3://{_BK_BUCKET}/{s3_key}")
+        size_mb = fluxo.bytes_saida / 1024 / 1024
+        print(f"[backup_s3] ✅ Upload OK: s3://{_BK_BUCKET}/{s3_key} ({size_mb:.1f}MB comprimido)")
 
         _bk_state.update({
             "last_run":     now,
@@ -157,7 +196,8 @@ def _run_backup() -> bool:
         return False
 
     finally:
-        tmp_gz.unlink(missing_ok=True)
+        _fcntl_bk.flock(trava, _fcntl_bk.LOCK_UN)
+        trava.close()
 
 
 def _cleanup_old_backups(s3, now: _dt_bk):
@@ -184,11 +224,9 @@ def _backup_loop():
     """Aguarda 03:00 UTC e dispara o backup diariamente."""
     print("[backup_s3] Scheduler iniciado — backup diário às 03:00 UTC.")
 
-    # Roda um backup imediato na primeira inicialização se nunca rodou
-    _time_bk.sleep(30)  # aguarda o app estabilizar
-    print("[backup_s3] Rodando backup inicial de verificação...")
-    _run_backup()
-
+    # Sem backup no boot: cada deploy/reinício disparava um dump completo em cada
+    # worker, o que esgotava a memória e reiniciava a instância em ciclo.
+    # Para testar, use POST /admin/backup/rodar-agora.
     while True:
         try:
             now = _dt_bk.now(_tz_bk.utc)
