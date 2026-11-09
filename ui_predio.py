@@ -2192,6 +2192,23 @@ def _pr_pode_ver(ctx, ch: PredioChamado) -> bool:
     return bool(ag and ctx.membership.role in ag["papeis"])
 
 
+_PR_TRAVADO_APOS = _td_pr(minutes=10)
+
+
+def _pr_travado(ch: PredioChamado) -> bool:
+    """Em andamento sem nenhuma atualização há 10 min: o processo provavelmente morreu (restart)."""
+    return ch.status in ("na_fila", "roteando", "trabalhando") and bool(
+        ch.updated_at and _dt_pr.utcnow() - ch.updated_at > _PR_TRAVADO_APOS)
+
+
+def _pr_pode_tentar_de_novo(ctx, ch: PredioChamado) -> bool:
+    if ch.roteamento == "whatsapp" or not (ch.status == "erro" or _pr_travado(ch)):
+        return False
+    if ch.agente_key:
+        return _pr_pode_usar(_PREDIO_AGENTES.get(ch.agente_key), ctx.membership.role)
+    return bool(_pr_agentes_disponiveis(ctx.membership.role))
+
+
 def _pr_pode_continuar(ctx, ch: PredioChamado) -> bool:
     return bool(
         ch.resultado
@@ -2240,6 +2257,8 @@ def _pr_chamado_view(ch: PredioChamado, ctx=None) -> dict:
         "acoes": acoes,
         "turnos": _pr_turnos(ch, passos),
         "pode_continuar": bool(ctx) and _pr_pode_continuar(ctx, ch),
+        "travado": _pr_travado(ch),
+        "pode_tentar_de_novo": bool(ctx) and _pr_pode_tentar_de_novo(ctx, ch),
         "tipo": ch.tipo or "chamado",
         "participantes": [_PREDIO_AGENTES.get(k, {}).get("nome", k) for k in _pr_json_lista(ch.participantes_json)],
         "id": ch.id,
@@ -2541,6 +2560,46 @@ async def predio_ver_chamado(chamado_id: int, request: Request, session: Session
         **_pr_base_ctx(request, session, ctx),
         "ch": _pr_chamado_view(ch, ctx),
     })
+
+
+@app.post("/predio/chamados/{chamado_id}/tentar-de-novo")
+@require_login
+async def predio_tentar_de_novo(chamado_id: int, request: Request, session: Session = Depends(get_session)):
+    ctx = _pr_ctx(request, session)
+    if not ctx:
+        return RedirectResponse("/", status_code=303)
+    ch = session.get(PredioChamado, chamado_id)
+    if not _pr_pode_ver(ctx, ch) or not _pr_pode_tentar_de_novo(ctx, ch):
+        return RedirectResponse(f"/predio/chamados/{chamado_id}" if ch else "/predio", status_code=303)
+    # Reivindica de forma atômica: só um clique (ou aba) consegue reiniciar o mesmo chamado
+    with engine.begin() as conn:
+        res = conn.execute(_sqltext_pr(
+            "UPDATE predio_chamado SET status = 'trabalhando', erro = '', updated_at = :agora "
+            "WHERE id = :id AND (status = 'erro' OR (status IN ('na_fila', 'roteando', 'trabalhando') AND updated_at < :corte))"
+        ), {"agora": _dt_pr.utcnow(), "id": chamado_id, "corte": _dt_pr.utcnow() - _PR_TRAVADO_APOS})
+    if res.rowcount != 1:
+        return RedirectResponse(f"/predio/chamados/{chamado_id}", status_code=303)
+    session.refresh(ch)
+    conversa = _pr_json_lista(ch.conversa_json)
+    if ch.tipo == "reuniao":
+        ch.contribuicoes_json, ch.passos_json, ch.resultado = "[]", "[]", ""
+        modo = {"reuniao": True}
+    elif conversa and not conversa[-1].get("resposta"):
+        conversa[-1]["erro"] = ""
+        ch.conversa_json = _json_pr.dumps(conversa, ensure_ascii=False)
+        ch.passos_json = _json_pr.dumps([p for p in _pr_json_lista(ch.passos_json)
+                                         if str(p.get("turno", 0)) != str(len(conversa))], ensure_ascii=False)
+        modo = {"continuar": True}
+    else:
+        ch.resultado, ch.passos_json, ch.mensagens_json = "", "[]", "[]"
+        if ch.roteamento == "recepcao":
+            ch.agente_key = ""
+        modo = {}
+    ch.concluido_em = None
+    session.add(ch)
+    session.commit()
+    _pr_disparar(ch.id, **modo)
+    return RedirectResponse(f"/predio/chamados/{chamado_id}", status_code=303)
 
 
 @app.post("/predio/chamados/{chamado_id}/mensagens")
@@ -3316,6 +3375,9 @@ TEMPLATES["predio_chamado.html"] = r"""
   .pc-pedido{white-space:pre-wrap;font-size:.92rem;background:var(--bs-tertiary-bg);border-radius:10px;padding:.8rem 1rem;}
   .pc-quem{font-size:.7rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--bs-secondary-color);margin-bottom:.35rem;}
   .pc-contrib{border-left:3px solid var(--mc-primary,#f97316);padding:.1rem 0 .1rem 1rem;margin-bottom:1.1rem;}
+  .pc-retry{display:flex;gap:.75rem;align-items:center;justify-content:space-between;flex-wrap:wrap;
+    background:var(--bs-warning-bg-subtle);color:var(--bs-warning-text-emphasis);border-radius:10px;padding:.6rem .8rem;}
+  .pc-retry[hidden]{display:none;}
   .pc-passos{list-style:none;padding:0;margin:0;font-size:.82rem;}
   .pc-passos li{display:flex;gap:.6rem;padding:.3rem 0;color:var(--bs-secondary-color);font-variant-numeric:tabular-nums;}
   .pc-passos li b{color:var(--bs-body-color);font-weight:600;}
@@ -3345,6 +3407,12 @@ TEMPLATES["predio_chamado.html"] = r"""
       </span>
     </div>
     <div class="pc-meta" id="pcMotivo">{% if ch.motivo %}Encaminhamento: {{ ch.motivo }}{% endif %}</div>
+    <form method="post" action="/predio/chamados/{{ ch.id }}/tentar-de-novo" id="pcRetry"
+          class="pc-retry mt-3" {% if not ch.pode_tentar_de_novo %}hidden{% endif %}
+          onsubmit="this.querySelector('button').disabled=true;">
+      <span class="small" id="pcRetryTexto">{{ 'Este chamado parou de responder (o servidor provavelmente reiniciou durante o processamento).' if ch.travado else 'Este chamado terminou com erro.' }}</span>
+      <button type="submit" class="btn btn-sm btn-primary">Tentar de novo</button>
+    </form>
   </div>
 
   <div id="pcConversa" class="d-flex flex-column gap-3"></div>
@@ -3494,6 +3562,10 @@ TEMPLATES["predio_chamado.html"] = r"""
     var novaAc=JSON.stringify(d.acoes);
     if(novaAc!==assinaturaAcoes){ assinaturaAcoes=novaAc; desenharAcoes(d.acoes); }
     document.getElementById('pcForm').hidden=!d.pode_continuar;
+    document.getElementById('pcRetry').hidden=!d.pode_tentar_de_novo;
+    document.getElementById('pcRetryTexto').textContent = d.travado
+      ? 'Este chamado parou de responder (o servidor provavelmente reiniciou durante o processamento).'
+      : 'Este chamado terminou com erro.';
   }
   aplicar(dados);
   if(location.hash==='#acoes' && dados.acoes.length){
