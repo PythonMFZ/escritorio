@@ -132,7 +132,7 @@ _PREDIO_ANDARES = [
          "atribuicoes": "Briefing semanal dos sócios, prioridades e pendências entre andares.",
          "ferramentas": ["ops_tarefas_atrasadas", "ops_pendencias_abertas", "ops_agenda", "ops_clientes_sem_contato",
                          "com_pipeline", "fin_resumo_caixa", "fin_inadimplencia", "fin_contratos", "cli_carteira",
-                         "cli_panorama"]},
+                         "cli_panorama", "ops_propor_tarefa"]},
         {"key": "estrategia", "nome": "Estratégia", "papeis": _PR_ADMIN, "ativo": False,
          "atribuicoes": "Metas do escritório (receita, carteira, margem) e acompanhamento do BSC interno."},
     ]},
@@ -170,14 +170,14 @@ _PREDIO_ANDARES = [
         {"key": "gestor_carteira", "nome": "Gestor de Carteira", "papeis": _PR_TODOS, "ativo": True,
          "atribuicoes": "Painel por cliente: prazos, pendências e saúde da conta; aponta quem precisa de atenção.",
          "ferramentas": ["cli_carteira", "cli_panorama", "reu_listar", "ops_tarefas_atrasadas",
-                         "ops_pendencias_abertas", "ops_agenda", "ops_clientes_sem_contato"]},
+                         "ops_pendencias_abertas", "ops_agenda", "ops_clientes_sem_contato", "ops_propor_tarefa"]},
         {"key": "analista_financeiro", "nome": "Analista Financeiro", "papeis": _PR_TODOS, "ativo": False,
          "atribuicoes": "Diagnóstico, DRE, fluxo de caixa e indicadores do cliente."},
         {"key": "orcamento_bsc", "nome": "Orçamento e BSC", "papeis": _PR_TODOS, "ativo": False,
          "atribuicoes": "Monta e acompanha orçamento e KPIs, propõe ações corretivas."},
         {"key": "secretario_reunioes", "nome": "Secretário de Reuniões", "papeis": _PR_TODOS, "ativo": True,
          "atribuicoes": "Pauta antes, ata, ações e rascunho de follow-up depois de cada reunião.",
-         "ferramentas": ["reu_listar", "reu_conteudo", "cli_panorama", "ops_agenda"]},
+         "ferramentas": ["reu_listar", "reu_conteudo", "cli_panorama", "ops_agenda", "ops_propor_tarefa"]},
         {"key": "relatorio_mensal", "nome": "Relatório Mensal", "papeis": _PR_TODOS, "ativo": False,
          "atribuicoes": "Consolida o mês de cada cliente num relatório executivo."},
     ]},
@@ -223,7 +223,8 @@ _PREDIO_ANDARES = [
         {"key": "atendimento", "nome": "Atendimento", "papeis": _PR_TODOS, "ativo": True,
          "atribuicoes": "Supervisiona o WhatsApp do escritório: quem espera resposta, rascunhos de resposta e reuniões a agendar.",
          "ferramentas": ["atd_caixa", "atd_conversa", "atd_propor_resposta", "agenda_horarios",
-                         "agenda_propor_reuniao", "cli_panorama"]},
+                         "agenda_propor_reuniao", "agenda_reunioes", "agenda_propor_remarcar",
+                         "agenda_propor_cancelar", "ops_propor_tarefa", "cli_panorama"]},
     ]},
     {"key": "operacoes", "nome": "Operações e Conhecimento", "rotulo": "Subsolo", "agentes": [
         {"key": "revisor", "nome": "Revisor de Qualidade", "papeis": _PR_TODOS, "ativo": True,
@@ -1227,6 +1228,220 @@ def _pr_t_agenda_propor(s, cid, cliente, membro, servico, data, hora, local, not
             "observacao": "Nada foi agendado ainda. O horário é conferido de novo na aprovação."}
 
 
+# ── Alterações na agenda e tarefas (sempre via proposta + aprovação) ──────────
+
+def _pr_t_agenda_reunioes(s, cid, dias, cliente):
+    dias = max(1, min(int(dias or 30), 120))
+    hoje = _pr_hoje()
+    limite = hoje + _td_pr(days=dias)
+    filtro = None
+    if (cliente or "").strip():
+        filtro, cands = _pr_resolver_cliente(s, cid, cliente)
+        if not filtro:
+            return _pr_nao_achei(cliente, cands)
+    membros = {m.id: m.nome for m in s.exec(_sel_pr(AgendaMembro).where(AgendaMembro.company_id == cid)).all()}
+    servicos = {x.id: x.nome for x in s.exec(_sel_pr(AgendaServico).where(AgendaServico.company_id == cid)).all()}
+    nomes = _pr_clientes(s, cid)
+    linhas = []
+    q = _sel_pr(AgendaBooking).where(AgendaBooking.company_id == cid, AgendaBooking.status != "cancelado")
+    if filtro:
+        q = q.where(AgendaBooking.client_id == filtro.id)
+    for b in s.exec(q).all():
+        d = _pr_data(b.data)
+        if not d or not (hoje <= d <= limite):
+            continue
+        linhas.append({"booking_id": b.id, "data": _pr_fmt_data(d), "dia_semana": _DIAS_SEMANA_PT[d.weekday()],
+                       "hora": f"{b.hora_inicio}–{b.hora_fim}", "cliente": nomes.get(b.client_id, "") or b.solicitante_nome,
+                       "com": membros.get(b.membro_id, ""), "servico": servicos.get(b.servico_id, ""),
+                       "local": _LOCAL_LABELS.get(b.local, b.local), "status": b.status, "_o": (d, b.hora_inicio)})
+    linhas.sort(key=lambda x: x.pop("_o"))
+    return {"periodo": f"{_pr_fmt_data(hoje)} a {_pr_fmt_data(limite)}", "reunioes": linhas[:60]}
+
+
+def _pr_horario_livre_sem(s, booking, membro_id: int, data_iso: str, hora: str) -> bool:
+    """Confere se o horário está livre ignorando a própria reunião (para remarcar no mesmo dia)."""
+    sv = s.get(AgendaServico, booking.servico_id) if booking.servico_id else None
+    duracao, buffer = (sv.duracao_min, sv.buffer_min) if sv else (60, 0)
+    status_original = booking.status
+    booking.status = "cancelado"
+    s.add(booking)
+    s.flush()
+    try:
+        return hora in _agenda_slots_livres(s, membro_id, data_iso, duracao, buffer)
+    finally:
+        booking.status = status_original
+        s.add(booking)
+        s.flush()
+
+
+def _pr_booking(s, cid, booking_id):
+    b = s.get(AgendaBooking, int(booking_id))
+    if not b or b.company_id != cid or b.status == "cancelado":
+        return None
+    return b
+
+
+def _pr_t_agenda_propor_remarcar(s, cid, booking_id, data, hora, membro):
+    b = _pr_booking(s, cid, booking_id)
+    if not b:
+        return {"ok": False, "erro": "Reunião não encontrada (ou já cancelada)."}
+    if (membro or "").strip():
+        ms = _pr_membros(s, cid, membro)
+        if len(ms) != 1:
+            return {"ok": False, "erro": "Indique um único membro da agenda.", "membros": [m.nome for m in _pr_membros(s, cid, "")]}
+        membro_id = ms[0].id
+    else:
+        membro_id = b.membro_id
+    d = _pr_data(data)
+    if not d or d < _pr_hoje():
+        return {"ok": False, "erro": "Data inválida ou no passado (use DD/MM/AAAA)."}
+    if not _pr_horario_livre_sem(s, b, membro_id, d.isoformat(), hora):
+        sv = s.get(AgendaServico, b.servico_id) if b.servico_id else None
+        livres = _agenda_slots_livres(s, membro_id, d.isoformat(), sv.duracao_min if sv else 60, sv.buffer_min if sv else 0)
+        return {"ok": False, "erro": f"{hora} não está livre em {_pr_fmt_data(d)}.", "horarios_livres": livres[:10]}
+    duracao = _to_min(b.hora_fim) - _to_min(b.hora_inicio) if b.hora_fim else 60
+    fim = _to_min(hora) + duracao
+    hora_fim = "%02d:%02d" % (fim // 60, fim % 60)
+    nome_membro = (s.get(AgendaMembro, membro_id).nome if membro_id else "")
+    de = f"{_pr_fmt_data(_pr_data(b.data))} {b.hora_inicio}"
+    para = f"{_pr_fmt_data(d)} {hora}"
+    acao = _pr_registrar_proposta(
+        s, cid, tipo="remarcar_reuniao", client_id=b.client_id,
+        titulo=f"Remarcar reunião de {b.solicitante_nome}: {de} → {para}",
+        destinatario=b.solicitante_email,
+        corpo=f"Cliente: {b.solicitante_nome}\nDe: {de}\nPara: {para}–{hora_fim}\nCom: {nome_membro}\n"
+              f"Convite atualizado para: {b.solicitante_email or '(sem e-mail)'}",
+        payload_json=_json_pr.dumps({"booking_id": b.id, "membro_id": membro_id, "data": d.isoformat(),
+                                     "hora": hora, "hora_fim": hora_fim}),
+    )
+    return {"ok": True, "proposta_id": acao.id, "status": "aguardando aprovação",
+            "observacao": "Nada foi alterado ainda. O horário é conferido de novo na aprovação."}
+
+
+def _pr_t_agenda_propor_cancelar(s, cid, booking_id, mensagem):
+    b = _pr_booking(s, cid, booking_id)
+    if not b:
+        return {"ok": False, "erro": "Reunião não encontrada (ou já cancelada)."}
+    texto = (mensagem or "").strip() or "Precisamos cancelar a reunião marcada. Em breve entraremos em contato para combinar uma nova data."
+    acao = _pr_registrar_proposta(
+        s, cid, tipo="cancelar_reuniao", client_id=b.client_id,
+        titulo=f"Cancelar reunião de {b.solicitante_nome} em {_pr_fmt_data(_pr_data(b.data))} {b.hora_inicio}",
+        destinatario=b.solicitante_email, corpo=texto[:2000],
+        payload_json=_json_pr.dumps({"booking_id": b.id}),
+    )
+    return {"ok": True, "proposta_id": acao.id, "status": "aguardando aprovação",
+            "observacao": "Nada foi cancelado ainda. A mensagem vai para o cliente junto com o cancelamento do convite."}
+
+
+def _pr_equipe(s, cid) -> list:
+    return s.exec(_sel_pr(User).join(Membership, Membership.user_id == User.id).where(
+        Membership.company_id == cid, Membership.role.in_(["admin", "equipe"]))).all()
+
+
+def _pr_t_propor_tarefa(s, cid, cliente, titulo, descricao, responsavel, prazo, prioridade):
+    c, cands = _pr_resolver_cliente(s, cid, cliente)
+    if not c:
+        return _pr_nao_achei(cliente, cands)
+    if len((titulo or "").strip()) < 3:
+        return {"ok": False, "erro": "Título obrigatório."}
+    resp_id, resp_nome = None, "sem responsável"
+    if (responsavel or "").strip():
+        alvo = _pr_norm(responsavel)
+        achados = [u for u in _pr_equipe(s, cid) if alvo in _pr_norm(u.name)]
+        if len(achados) != 1:
+            return {"ok": False, "erro": f"Responsável '{responsavel}' não identificado na equipe.",
+                    "equipe": [u.name for u in _pr_equipe(s, cid)]}
+        resp_id, resp_nome = achados[0].id, achados[0].name
+    venc = _pr_data(prazo) if (prazo or "").strip() else None
+    if (prazo or "").strip() and not venc:
+        return {"ok": False, "erro": "Prazo inválido (use DD/MM/AAAA)."}
+    acao = _pr_registrar_proposta(
+        s, cid, tipo="criar_tarefa", client_id=c.id, titulo=f"Nova tarefa para {c.name}: {titulo.strip()[:80]}",
+        destinatario=f"{c.name} · responsável: {resp_nome} · prazo: {_pr_fmt_data(venc) or 'sem prazo'} · prioridade: {prioridade}",
+        assunto=titulo.strip()[:200], corpo=(descricao or "").strip()[:4000],
+        payload_json=_json_pr.dumps({"responsavel_id": resp_id, "prazo": _pr_fmt_data(venc), "prioridade": prioridade}),
+    )
+    return {"ok": True, "proposta_id": acao.id, "status": "aguardando aprovação", "observacao": "A tarefa ainda não foi criada."}
+
+
+_PR_VTIMEZONE = ("BEGIN:VTIMEZONE\r\nTZID:America/Sao_Paulo\r\nBEGIN:STANDARD\r\nDTSTART:19700101T000000\r\n"
+                 "TZOFFSETFROM:-0300\r\nTZOFFSETTO:-0300\r\nTZNAME:BRT\r\nEND:STANDARD\r\nEND:VTIMEZONE")
+
+
+def _pr_ics(b, empresa_nome: str, metodo: str, convidados: list) -> str:
+    """Convite com o mesmo UID da reunião e SEQUENCE crescente, para o calendário atualizar/cancelar o evento."""
+    organizador = SMTP_FROM or "contato@maffezzollicapital.com.br"
+    linhas = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//Maffezzolli Capital//Agenda//PT", f"METHOD:{metodo}",
+              _PR_VTIMEZONE, "BEGIN:VEVENT", f"UID:{b.ics_uid}", f"SEQUENCE:{int(_time_pr.time())}",
+              f"SUMMARY:Reunião — {empresa_nome}",
+              f"DTSTART;TZID=America/Sao_Paulo:{_agenda_dtstr(b.data, b.hora_inicio)}",
+              f"DTEND;TZID=America/Sao_Paulo:{_agenda_dtstr(b.data, b.hora_fim or b.hora_inicio)}",
+              f"STATUS:{'CANCELLED' if metodo == 'CANCEL' else 'CONFIRMED'}", f"ORGANIZER:mailto:{organizador}"]
+    linhas += [f"ATTENDEE;RSVP=TRUE:mailto:{e}" for e in convidados]
+    linhas += ["END:VEVENT", "END:VCALENDAR"]
+    return "\r\n".join(linhas)
+
+
+def _pr_enviar_convite(destino: str, assunto: str, html: str, ics: str, metodo: str) -> None:
+    if not SMTP_HOST or not SMTP_FROM:
+        raise _PrErro("SMTP não configurado.")
+    msg = MIMEMultipart("mixed")
+    msg["Subject"], msg["From"], msg["To"] = assunto, SMTP_FROM, destino
+    alt = MIMEMultipart("alternative")
+    alt.attach(MIMEText(html, "html", "utf-8"))
+    msg.attach(alt)
+    parte = MIMEBase("text", "calendar", method=metodo, charset="utf-8")
+    parte.set_payload(ics.encode("utf-8"))
+    email_encoders.encode_base64(parte)
+    parte.add_header("Content-Disposition", "attachment", filename="reuniao.ics")
+    msg.attach(parte)
+    if SMTP_USE_SSL:
+        with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, timeout=20) as srv:
+            if SMTP_USERNAME and SMTP_PASSWORD:
+                srv.login(SMTP_USERNAME, SMTP_PASSWORD)
+            srv.sendmail(SMTP_FROM, [destino], msg.as_string())
+    else:
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=20) as srv:
+            srv.ehlo()
+            try:
+                srv.starttls()
+                srv.ehlo()
+            except Exception:
+                pass
+            if SMTP_USERNAME and SMTP_PASSWORD:
+                srv.login(SMTP_USERNAME, SMTP_PASSWORD)
+            srv.sendmail(SMTP_FROM, [destino], msg.as_string())
+
+
+def _pr_avisar_reuniao(s, b, metodo: str, mensagem: str = "") -> str:
+    """Envia o convite atualizado (REQUEST) ou o cancelamento (CANCEL) ao cliente e ao membro."""
+    import html as _html_av
+    empresa = s.get(Company, b.company_id)
+    nome_emp = empresa.name if empresa else "o escritório"
+    membro = s.get(AgendaMembro, b.membro_id) if b.membro_id else None
+    convidados = [e for e in (b.solicitante_email, membro.email if membro else "") if e]
+    ics = _pr_ics(b, nome_emp, metodo, convidados)
+    data_fmt = _pr_fmt_data(_pr_data(b.data))
+    if metodo == "CANCEL":
+        assunto = f"Reunião cancelada — {data_fmt} · {b.hora_inicio}"
+        corpo = (f"<p>A reunião de {data_fmt} às {b.hora_inicio} com {_html_av.escape(nome_emp)} foi cancelada.</p>"
+                 + (f"<p>{_html_av.escape(mensagem).replace(chr(10), '<br>')}</p>" if mensagem else ""))
+    else:
+        assunto = f"Reunião remarcada — {data_fmt} · {b.hora_inicio}"
+        corpo = (f"<p>A reunião com {_html_av.escape(nome_emp)} foi remarcada para <strong>{data_fmt}, "
+                 f"{b.hora_inicio}–{b.hora_fim}</strong>"
+                 + (f" com {_html_av.escape(membro.nome)}" if membro else "") + ".</p>")
+    falhas = []
+    for e in convidados:
+        try:
+            _pr_enviar_convite(e, assunto, corpo, ics, metodo)
+        except Exception as ex:
+            falhas.append(f"{e} ({ex})")
+    if not convidados:
+        return " Ninguém com e-mail para avisar."
+    return f" Não foi possível avisar: {', '.join(falhas)}." if falhas else f" Aviso enviado para {', '.join(convidados)}."
+
+
 # ── Atendimento no WhatsApp: o Augur passa a vez e o agendamento é direto ─────
 
 class PredioAgendaWA(_SM_pr, table=True):
@@ -1563,6 +1778,36 @@ _PR_TOOLS = {
                   "local": {"type": "string", "enum": ["nosso_escritorio", "cliente", "online"],
                             "description": "Onde será a reunião."},
                   "notas": {"type": "string", "description": "Observações para a reunião (pode ser vazio)."}}},
+    "agenda_reunioes": {
+        "fn": _pr_t_agenda_reunioes, "rotulo": "Listou as reuniões marcadas",
+        "description": "Reuniões marcadas na agenda nos próximos dias, com o booking_id de cada uma (use para remarcar "
+                       "ou cancelar).",
+        "props": {"dias": {"type": "integer", "description": "Quantos dias à frente (1 a 120)."},
+                  "cliente": {"type": "string", "description": "Filtrar por cliente (vazio = todos)."}}},
+    "agenda_propor_remarcar": {
+        "fn": _pr_t_agenda_propor_remarcar, "rotulo": "Propôs remarcar uma reunião",
+        "description": "Cria uma PROPOSTA para remarcar uma reunião para outro dia/horário (e opcionalmente outro membro). "
+                       "Na aprovação, o cliente recebe o convite atualizado. Nada muda agora.",
+        "props": {"booking_id": {"type": "integer", "description": "Identificador da reunião (de agenda_reunioes)."},
+                  "data": {"type": "string", "description": "Nova data DD/MM/AAAA."},
+                  "hora": {"type": "string", "description": "Novo horário HH:MM (livre na agenda)."},
+                  "membro": {"type": "string", "description": "Novo membro da agenda (vazio = o mesmo)."}}},
+    "agenda_propor_cancelar": {
+        "fn": _pr_t_agenda_propor_cancelar, "rotulo": "Propôs cancelar uma reunião",
+        "description": "Cria uma PROPOSTA para cancelar uma reunião. Na aprovação, o convite é cancelado no calendário "
+                       "do cliente junto com a mensagem. Nada muda agora.",
+        "props": {"booking_id": {"type": "integer", "description": "Identificador da reunião (de agenda_reunioes)."},
+                  "mensagem": {"type": "string", "description": "Mensagem curta e cordial ao cliente (vazio = padrão)."}}},
+    "ops_propor_tarefa": {
+        "fn": _pr_t_propor_tarefa, "rotulo": "Propôs uma tarefa",
+        "description": "Cria uma PROPOSTA de tarefa para um cliente, com responsável da equipe, prazo e prioridade. "
+                       "A tarefa só é criada depois da aprovação.",
+        "props": {"cliente": {"type": "string", "description": "Nome do cliente (pode ser parcial)."},
+                  "titulo": {"type": "string", "description": "Título curto da tarefa."},
+                  "descricao": {"type": "string", "description": "O que precisa ser feito (pode ser vazio)."},
+                  "responsavel": {"type": "string", "description": "Nome de alguém da equipe (vazio = sem responsável)."},
+                  "prazo": {"type": "string", "description": "Prazo DD/MM/AAAA (vazio = sem prazo)."},
+                  "prioridade": {"type": "string", "enum": ["alta", "media", "baixa"], "description": "Prioridade."}}},
     "fat_competencia": {
         "fn": _pr_t_fat_competencia, "rotulo": "Conferiu o faturamento do mês",
         "description": "Faturamento de uma competência: cobranças já geradas (status, vencimento, NFS-e, boleto), "
@@ -1654,7 +1899,8 @@ _PR_INSTRUCOES = {
         "- Antes (pauta): objetivo da reunião, pendências do cliente, ações em aberto, decisões a tomar e tempo sugerido "
         "por tópico, a partir do histórico e do panorama do cliente.\n"
         "- Depois (ata): resumo, decisões, ações com responsável e prazo, e um rascunho de e-mail de follow-up ao "
-        "cliente, cordial e profissional. Leia a transcrição com reu_conteudo.\n"
+        "cliente, cordial e profissional. Leia a transcrição com reu_conteudo. Quando o usuário pedir, transforme as "
+        "ações da ata em tarefas com ops_propor_tarefa.\n"
         "Você não envia nada: entregue os textos prontos para a equipe revisar e enviar."
     ),
     "revisor": (
@@ -1671,7 +1917,10 @@ _PR_INSTRUCOES = {
         "urgência e quem da equipe deve responder. Quando fizer sentido, proponha uma resposta curta e cordial em "
         "nome do escritório (só dentro da janela de 24h). Para marcar reunião, consulte os horários livres e proponha "
         "o agendamento; o convite vai por e-mail depois da aprovação. Prospects (contatos não cadastrados) não podem "
-        "ter reunião agendada por você: indique que alguém da equipe faça o contato."
+        "ter reunião agendada por você: indique que alguém da equipe faça o contato.\n"
+        "Quando a equipe pedir uma alteração na agenda (remarcar, trocar quem atende, cancelar), localize a reunião com "
+        "agenda_reunioes, confira os horários livres e proponha a alteração; se faltar informação (qual reunião, que "
+        "horário), pergunte em vez de supor. Quando algo precisar de acompanhamento, proponha uma tarefa."
     ),
     "faturamento": (
         "Você cuida do faturamento mensal do escritório. Para a competência pedida (padrão: mês atual), confira "
@@ -2463,10 +2712,52 @@ def _pr_executar_acao(s, acao: PredioAcao) -> str:
         if empresa:
             _agenda_dispatch_notifications(s, booking, empresa)
         return f"Reunião agendada e convite enviado para {acao.destinatario}."
+    if acao.tipo == "remarcar_reuniao":
+        p = _json_pr.loads(acao.payload_json or "{}")
+        b = _pr_booking(s, acao.company_id, p.get("booking_id") or 0)
+        if not b:
+            raise _PrErro("A reunião não existe mais ou já foi cancelada.")
+        if not _pr_horario_livre_sem(s, b, p["membro_id"], p["data"], p["hora"]):
+            raise _PrErro("O novo horário não está mais livre. Peça ao Atendimento outra opção.")
+        b.membro_id, b.data, b.hora_inicio, b.hora_fim = p["membro_id"], p["data"], p["hora"], p["hora_fim"]
+        b.status = "confirmado"
+        s.add(b)
+        s.commit()
+        s.refresh(b)
+        return f"Reunião remarcada para {_pr_fmt_data(_pr_data(b.data))} às {b.hora_inicio}." + _pr_avisar_reuniao(s, b, "REQUEST")
+    if acao.tipo == "cancelar_reuniao":
+        b = _pr_booking(s, acao.company_id, _json_pr.loads(acao.payload_json or "{}").get("booking_id") or 0)
+        if not b:
+            raise _PrErro("A reunião não existe mais ou já foi cancelada.")
+        b.status = "cancelado"
+        s.add(b)
+        s.commit()
+        s.refresh(b)
+        return "Reunião cancelada." + _pr_avisar_reuniao(s, b, "CANCEL", acao.corpo)
+    if acao.tipo == "criar_tarefa":
+        p = _json_pr.loads(acao.payload_json or "{}")
+        tarefa = Task(company_id=acao.company_id, client_id=acao.client_id,
+                      created_by_user_id=acao.decidido_por_user_id or 0, assignee_user_id=p.get("responsavel_id"),
+                      title=acao.assunto, description=acao.corpo,
+                      priority=p.get("prioridade") if p.get("prioridade") in ("alta", "media", "baixa") else "media",
+                      due_date=p.get("prazo") or "")
+        s.add(tarefa)
+        s.commit()
+        s.refresh(tarefa)
+        if tarefa.assignee_user_id and tarefa.assignee_user_id != acao.decidido_por_user_id:
+            try:
+                create_user_notification(s, company_id=acao.company_id, client_id=acao.client_id,
+                                         user_id=tarefa.assignee_user_id, kind="tarefa",
+                                         title=f"Nova tarefa: {tarefa.title}"[:200], href=f"/tarefas/{tarefa.id}")
+                s.commit()
+            except Exception as e:
+                print(f"[predio] aviso de tarefa: {e}")
+        return f"Tarefa #{tarefa.id} criada."
     raise _PrErro("Tipo de ação desconhecido.")
 
 
-_PR_TIPOS_EQUIPE = {"whatsapp_resposta", "agendar_reuniao"}  # demais tipos (dinheiro) só admin aprova
+# demais tipos (dinheiro) só admin aprova
+_PR_TIPOS_EQUIPE = {"whatsapp_resposta", "agendar_reuniao", "remarcar_reuniao", "cancelar_reuniao", "criar_tarefa"}
 
 
 def _pr_pode_decidir(papel: str, tipo: str) -> bool:
@@ -2497,10 +2788,10 @@ async def predio_aprovar_acao(acao_id: int, request: Request, session: Session =
     if not acao or acao.company_id != ctx.company.id or not _pr_pode_decidir(ctx.membership.role, acao.tipo):
         return RedirectResponse("/predio", status_code=303)
     form = await request.form()
-    if acao.tipo in ("email_cobranca", "whatsapp_resposta") and acao.status == "pendente":
+    if acao.tipo in ("email_cobranca", "whatsapp_resposta", "cancelar_reuniao", "criar_tarefa") and acao.status == "pendente":
         assunto = str(form.get("assunto") or "").strip()[:200]
         corpo = str(form.get("corpo") or "").strip()[:8000]
-        if assunto and acao.tipo == "email_cobranca":
+        if assunto and acao.tipo in ("email_cobranca", "criar_tarefa"):
             acao.assunto = assunto
         if corpo:
             acao.corpo = corpo
@@ -3449,6 +3740,9 @@ TEMPLATES["predio_chamado.html"] = r"""
     email_cobranca:    {para:'Para: {d} (e-mail cadastrado do cliente)', assunto:true, corpo:true, linhas:10, botao:'Aprovar e enviar'},
     whatsapp_resposta: {para:'Para: {d}', corpo:true, linhas:5, botao:'Aprovar e enviar pelo WhatsApp'},
     agendar_reuniao:   {botao:'Aprovar e agendar'},
+    remarcar_reuniao:  {botao:'Aprovar e remarcar'},
+    cancelar_reuniao:  {para:'Aviso de cancelamento para: {d}', corpo:true, linhas:4, rotuloCorpo:'Mensagem ao cliente', botao:'Aprovar e cancelar'},
+    criar_tarefa:      {para:'{d}', assunto:true, rotuloAssunto:'Título da tarefa', corpo:true, linhas:5, rotuloCorpo:'Descrição', botao:'Aprovar e criar tarefa'},
     gerar_cobrancas:   {botao:'Aprovar e gerar'}
   };
   function campo(form, rotulo, tag, nome, id, valor, linhas){
@@ -3472,8 +3766,8 @@ TEMPLATES["predio_chamado.html"] = r"""
       if(cfg.para) card.appendChild(el('div','pc-meta mb-2',cfg.para.replace('{d}',a.destinatario)));
       if(pendente && (cfg.assunto || cfg.corpo)){
         var f=formAcao(a,'aprovar',cfg.botao,'btn-primary');
-        if(cfg.assunto) campo(f,'Assunto','input','assunto','pcAss'+a.id,a.assunto);
-        if(cfg.corpo) campo(f,'Mensagem','textarea','corpo','pcCorpo'+a.id,a.corpo,cfg.linhas);
+        if(cfg.assunto) campo(f,cfg.rotuloAssunto||'Assunto','input','assunto','pcAss'+a.id,a.assunto);
+        if(cfg.corpo) campo(f,cfg.rotuloCorpo||'Mensagem','textarea','corpo','pcCorpo'+a.id,a.corpo,cfg.linhas);
         card.appendChild(f);
       } else {
         if(cfg.assunto && a.assunto) card.appendChild(el('div','fw-semibold small mb-1',a.assunto));
