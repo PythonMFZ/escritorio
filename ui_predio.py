@@ -2230,20 +2230,40 @@ _PR_TOOLS_WEB = [
 ]
 
 
+def _pr_esquema_grande(schema: dict) -> bool:
+    """Schemas com listas de objetos ou enums longos deixam a gramática do modo estrito grande demais
+    (a API recusa com 'compiled grammar is too large'); esses ficam sem strict e são validados no código."""
+    def visitar(no) -> bool:
+        if not isinstance(no, dict):
+            return False
+        if len(no.get("enum") or []) > 12:
+            return True
+        if no.get("type") == "array" and (no.get("items") or {}).get("type") == "object":
+            return True
+        return any(visitar(v) for v in (no.get("properties") or {}).values()) or visitar(no.get("items"))
+    return visitar(schema)
+
+
+def _pr_completar_entrada(spec: dict, entrada: dict) -> dict:
+    """Ferramenta sem strict: preenche campos que o modelo omitiu com vazio do tipo certo e descarta
+    campos que a ferramenta não conhece."""
+    vazio = {"string": "", "integer": 0, "number": 0, "boolean": False, "array": [], "object": {}}
+    props = spec.get("props") or {}
+    return {k: entrada.get(k, vazio.get(v.get("type"), "")) for k, v in props.items()}
+
+
 def _pr_registrar_ferramenta(nome: str, spec: dict) -> None:
     """Registra uma ferramenta (usado também pelos módulos que estendem o prédio)."""
-    spec["schema"] = {"name": nome, "description": spec["description"],
-                      "input_schema": spec.get("input_schema") or _pr_schema(spec["props"]), "strict": True}
+    schema = spec.get("input_schema") or _pr_schema(spec["props"])
+    spec["strict"] = not _pr_esquema_grande(schema)
+    spec["schema"] = {"name": nome, "description": spec["description"], "input_schema": schema}
+    if spec["strict"]:
+        spec["schema"]["strict"] = True
     _PR_TOOLS[nome] = spec
 
 
-for _nome_pr, _spec_pr in _PR_TOOLS.items():
-    _spec_pr["schema"] = {
-        "name": _nome_pr,
-        "description": _spec_pr["description"],
-        "input_schema": _pr_schema(_spec_pr["props"]),
-        "strict": True,
-    }
+for _nome_pr, _spec_pr in list(_PR_TOOLS.items()):
+    _pr_registrar_ferramenta(_nome_pr, _spec_pr)
 
 # Financeiro do escritório é só para admin: um agente aberto à equipe nunca recebe ferramenta fin_*
 for _ag_chk in _PREDIO_AGENTES.values():
@@ -2701,7 +2721,8 @@ def _pr_rodar_agente(chamado_id: int, agente: dict, messages: list, company_id: 
                     _PR_EXEC.chamado_id, _PR_EXEC.agente_key, _PR_EXEC.turno = chamado_id, agente["key"], turno
                     _PR_EXEC.delegado = delegado
                     with _Sess_pr(engine) as s:
-                        dado = spec["fn"](s, company_id, **entrada)
+                        dado = spec["fn"](s, company_id, **(entrada if spec.get("strict", True)
+                                                            else _pr_completar_entrada(spec, entrada)))
                     conteudo = _json_pr.dumps(dado, ensure_ascii=False, default=str)
                     if uso.name == "cos_delegar" and isinstance(dado, dict) and dado.get("ok") is False:
                         passo["rotulo"] = f"Não foi possível delegar: {dado.get('erro', '')}"[:160]
