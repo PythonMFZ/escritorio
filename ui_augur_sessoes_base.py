@@ -524,46 +524,67 @@ def _bc_extract_excel(file_bytes: bytes, fname: str = "") -> str:
             return ""
         return "\t".join(cells).rstrip("\t")
 
-    lines = []
+    # Limites: planilhas com centenas de milhares de linhas (ou formatação aplicada à coluna inteira,
+    # que o Excel guarda como 1 milhão de linhas) viravam gigabytes de texto na memória.
+    _MAX_CHARS, _MAX_LINHAS_ABA, _MAX_COLS = 200_000, 20_000, 60
+    lines, total = [], 0
 
     # .xlsx via openpyxl — try for any non-.xls file (xlsx, no-ext, unknown)
     if not fname.endswith(".xls") or fname.endswith(".xlsx") or not fname:
         try:
             import openpyxl
             wb = openpyxl.load_workbook(io.BytesIO(file_bytes), read_only=True, data_only=True)
-            for ws in wb.worksheets:
-                if _should_skip(ws.title):
-                    continue
-                sheet_lines = [f"[Aba: {ws.title}]"]
-                for row in ws.iter_rows(values_only=True):
-                    txt = _row_text(row)
-                    if txt:
-                        sheet_lines.append(txt)
-                if len(sheet_lines) > 1:
-                    lines.extend(sheet_lines)
-            wb.close()
+            try:
+                for ws in wb.worksheets:
+                    if _should_skip(ws.title) or total >= _MAX_CHARS:
+                        continue
+                    sheet_lines = [f"[Aba: {ws.title}]"]
+                    for i, row in enumerate(ws.iter_rows(values_only=True, max_col=_MAX_COLS)):
+                        if i >= _MAX_LINHAS_ABA or total >= _MAX_CHARS:
+                            break
+                        txt = _row_text(row)
+                        if txt:
+                            sheet_lines.append(txt)
+                            total += len(txt) + 1
+                    if len(sheet_lines) > 1:
+                        lines.extend(sheet_lines)
+            finally:
+                wb.close()
             if lines:
-                return "\n".join(lines)[:200_000]
+                return "\n".join(lines)[:_MAX_CHARS]
         except Exception as _e:
             print(f"[bc_upload] openpyxl erro: {_e}")
 
-    # .xls (old binary format) via xlrd
+    # .xls (old binary format) via xlrd — carrega o arquivo inteiro; limita o tamanho
+    if len(file_bytes) > 15 * 1024 * 1024:
+        print(f"[bc_upload] .xls grande demais ({len(file_bytes) // 1024 // 1024} MB) — ignorado")
+        return ""
     try:
         import xlrd
-        wb = xlrd.open_workbook(file_contents=file_bytes)
-        for ws in wb.sheets():
-            if _should_skip(ws.name):
-                continue
-            sheet_lines = [f"[Aba: {ws.name}]"]
-            for row_idx in range(ws.nrows):
-                cells = [str(ws.cell_value(row_idx, c)) for c in range(ws.ncols)]
-                txt = "\t".join(cells).rstrip()
-                meaningful = [c for c in cells if c.strip() and c.strip() not in ("0", "0.0")]
-                if meaningful:
-                    sheet_lines.append(txt)
-            if len(sheet_lines) > 1:
-                lines.extend(sheet_lines)
-        return "\n".join(lines)[:200_000]
+        wb = xlrd.open_workbook(file_contents=file_bytes, on_demand=True)
+        try:
+            for idx in range(wb.nsheets):
+                ws = wb.sheet_by_index(idx)
+                if _should_skip(ws.name) or total >= _MAX_CHARS:
+                    wb.unload_sheet(idx)
+                    continue
+                sheet_lines = [f"[Aba: {ws.name}]"]
+                ncols = min(ws.ncols, _MAX_COLS)
+                for row_idx in range(min(ws.nrows, _MAX_LINHAS_ABA)):
+                    if total >= _MAX_CHARS:
+                        break
+                    cells = [str(ws.cell_value(row_idx, c)) for c in range(ncols)]
+                    txt = "\t".join(cells).rstrip()
+                    meaningful = [c for c in cells if c.strip() and c.strip() not in ("0", "0.0")]
+                    if meaningful:
+                        sheet_lines.append(txt)
+                        total += len(txt) + 1
+                if len(sheet_lines) > 1:
+                    lines.extend(sheet_lines)
+                wb.unload_sheet(idx)
+        finally:
+            wb.release_resources()
+        return "\n".join(lines)[:_MAX_CHARS]
     except Exception as _e:
         print(f"[bc_upload] xlrd erro: {_e}")
 
