@@ -1770,6 +1770,9 @@ def _pr_t_sis_saude(s, cid):
                 saida[chave] = {"erro": str(e)[:120]}
     cfg = s.exec(_sel_pr(WhatsAppChannelConfig).where(WhatsAppChannelConfig.company_id == cid)).first()
     saida["whatsapp"] = {"canal_ativo": bool(cfg and cfg.is_enabled)}
+    servico = globals().get("_whisper_servico_configurado", lambda: "")()
+    saida["transcricao_de_audio"] = {"servico": servico or "NENHUM — transcrições vão falhar; configure GROQ_API_KEY",
+                                     "ok": bool(servico)}
     return saida
 
 

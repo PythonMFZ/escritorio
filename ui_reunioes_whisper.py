@@ -32,6 +32,21 @@ _TRANSCRIPTION_LOCK = _threading_w.Semaphore(1)
 
 # Variável de ambiente para desabilitar whisper local (use no Render se só tiver API keys)
 _DISABLE_LOCAL_WHISPER = _os2.environ.get("DISABLE_LOCAL_WHISPER", "").lower() in ("1", "true", "yes")
+# O Whisper local carrega o modelo na memória do próprio servidor web e já derrubou a instância
+# (4GB) várias vezes. Agora só roda se for ligado explicitamente; o padrão é usar Groq/OpenAI.
+_LOCAL_WHISPER_ATIVO = (_os2.environ.get("ENABLE_LOCAL_WHISPER", "").lower() in ("1", "true", "yes")
+                        and not _DISABLE_LOCAL_WHISPER)
+
+
+def _whisper_servico_configurado() -> str:
+    if _os2.environ.get("GROQ_API_KEY"):
+        return "Groq"
+    if _os2.environ.get("OPENAI_API_KEY"):
+        return "OpenAI"
+    return "Whisper local" if _LOCAL_WHISPER_ATIVO else ""
+
+
+print(f"[whisper] Transcrição via: {_whisper_servico_configurado() or 'NENHUM SERVIÇO — configure GROQ_API_KEY no Render'}")
 
 # ── Configuração de paths ─────────────────────────────────────────────────────
 
@@ -609,7 +624,7 @@ def _processar_audio_background_inner(
                 _shutil.rmtree(_tmp_dir_whisper, ignore_errors=True)
 
     # ── Fallback: faster-whisper local (apenas se sem API keys e não desabilitado) ─
-    if not transcricao and not openai_key and not groq_key and not _DISABLE_LOCAL_WHISPER and _Path(audio_path).exists():
+    if not transcricao and not openai_key and not groq_key and _LOCAL_WHISPER_ATIVO and _Path(audio_path).exists():
         try:
             transcricao = _transcrever_local_faster_whisper(audio_path)
             if transcricao:
@@ -638,10 +653,17 @@ def _processar_audio_background_inner(
             if _mt:
                 _mt.notion_status = "error"
                 _detalhe = f" Detalhe: {_erro_real}" if _erro_real else ""
-                _mt.notes_text = (
-                    "Não foi possível transcrever o áudio (modelo local indisponível e "
-                    "nenhum fallback configurado). Tente um arquivo MP3/M4A." + _detalhe
-                )
+                if not _whisper_servico_configurado():
+                    _mt.notes_text = (
+                        "Nenhum serviço de transcrição configurado. Cadastre GROQ_API_KEY (gratuita em "
+                        "console.groq.com) ou OPENAI_API_KEY nas variáveis de ambiente do Render. O áudio ficou "
+                        "guardado: depois de configurar, use \"Reprocessar do backup S3\" nesta reunião."
+                    )
+                else:
+                    _mt.notes_text = (
+                        "Não foi possível transcrever o áudio. O áudio ficou guardado: tente \"Reprocessar do "
+                        "backup S3\" nesta reunião ou envie um arquivo MP3/M4A." + _detalhe
+                    )
                 _s.add(_mt); _s.commit()
         try:
             _Path(audio_path).unlink(missing_ok=True)
@@ -1010,7 +1032,7 @@ _WHISPER_PANEL = r"""
   </div>
   {% endif %}
 
-  {% if meeting.notion_status == 'transcription_not_started' %}
+  {% if meeting.notion_status in ['transcription_not_started', 'error'] %}
   {% set _rj2 = meeting.raw_json | default('{}') %}
   {% if 'audio_s3_key' in _rj2 %}
   <div class="d-flex gap-2 align-items-center mb-2">
