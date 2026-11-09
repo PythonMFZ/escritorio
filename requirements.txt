@@ -26,3 +26,4 @@ signxml>=4.0.0
 cryptography>=42.0.0
 imageio-ffmpeg>=0.4.9
 qrcode[pil]
+anthropic==2.6.0

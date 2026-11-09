@@ -245,6 +245,9 @@ _SIDEBAR_HTML = r"""
   {% if role in ["admin", "equipe"] %}
   <div class="sb-section">
     <div class="sb-section-label">Gestão Escritório</div>
+    <a class="sb-link" href="/predio" data-sbpath="/predio" title="Prédio de Agentes">
+      <span class="sb-icon">🏢</span><span class="sb-label">Prédio de Agentes</span>
+    </a>
     <a class="sb-link" href="/negocios" data-sbpath="/negocios" title="Pipeline CRM">
       <span class="sb-icon">💼</span><span class="sb-label">Pipeline CRM</span>
     </a>
