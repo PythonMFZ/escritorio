@@ -52802,3 +52802,4 @@ async def exportar_clientes_xlsx(
 
 exec(open('ui_predio.py').read())
 exec(open('ui_predio_marketing.py').read())
+exec(open('ui_predio_comercial.py').read())
