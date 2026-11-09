@@ -47,6 +47,8 @@ class PredioChamado(_SM_pr, table=True):
     status: str = _F_pr(default="na_fila", index=True)
     resultado: str = _F_pr(default="")
     passos_json: str = _F_pr(default="[]")
+    mensagens_json: str = _F_pr(default="[]")  # histórico completo enviado à API (append-only)
+    conversa_json: str = _F_pr(default="[]")   # perguntas de continuação: [{pergunta, resposta, erro, em}]
     erro: str = _F_pr(default="")
     created_at: _dt_pr = _F_pr(default_factory=lambda: _dt_pr.utcnow(), index=True)
     updated_at: _dt_pr = _F_pr(default_factory=lambda: _dt_pr.utcnow())
@@ -68,6 +70,27 @@ try:
     )
 except Exception as _e_pr_tab:
     print(f"[predio] create_all: {_e_pr_tab}")
+
+
+def _pr_migrar_colunas() -> None:
+    from sqlalchemy import inspect as _insp_pr
+    try:
+        existentes = {c["name"] for c in _insp_pr(engine).get_columns("predio_chamado")}
+    except Exception as e:
+        print(f"[predio] inspeção de colunas: {e}")
+        return
+    for nome in ("mensagens_json", "conversa_json"):
+        if nome in existentes:
+            continue
+        try:
+            with engine.begin() as conn:
+                conn.execute(_sqltext_pr(f"ALTER TABLE predio_chamado ADD COLUMN {nome} TEXT DEFAULT '[]'"))
+        except Exception as e:
+            # outro worker do gunicorn pode ter criado a coluna ao mesmo tempo
+            print(f"[predio] coluna {nome}: {e}")
+
+
+_pr_migrar_colunas()
 
 
 # ── Andares e agentes ─────────────────────────────────────────────────────────
@@ -822,12 +845,15 @@ def _pr_rotear(pedido: str, papel: str) -> dict:
         raise _PrErro("A Recepção devolveu uma resposta inválida. Tente de novo.")
 
 
-def _pr_rodar_agente(chamado_id: int, agente: dict, pedido: str, company_id: int, empresa: str) -> str:
+def _pr_rodar_agente(chamado_id: int, agente: dict, messages: list, company_id: int, empresa: str,
+                     turno: int = 0) -> tuple:
+    """Roda o loop de ferramentas sobre `messages` (que termina numa pergunta do usuário).
+    Retorna (texto_final, messages) com tudo o que foi trocado anexado, sem editar o histórico."""
     client = _pr_client()
     permitidas = set(agente["ferramentas"])
     tools = [_PR_TOOLS[n]["schema"] for n in agente["ferramentas"]]
     system = _pr_system_prompt(agente, empresa)
-    messages = [{"role": "user", "content": pedido}]
+    messages = list(messages)
     for _ in range(15):
         resp = client.beta.messages.create(
             model=_PR_MODEL,
@@ -841,7 +867,7 @@ def _pr_rodar_agente(chamado_id: int, agente: dict, pedido: str, company_id: int
         )
         if resp.stop_reason == "refusal":
             raise _PrErro("O modelo recusou esta demanda.")
-        messages.append({"role": "assistant", "content": resp.content})
+        messages.append({"role": "assistant", "content": [b.to_dict() for b in resp.content]})
         if resp.stop_reason == "pause_turn":
             continue
         usos = [b for b in resp.content if b.type == "tool_use"]
@@ -849,7 +875,7 @@ def _pr_rodar_agente(chamado_id: int, agente: dict, pedido: str, company_id: int
             texto = "\n\n".join(b.text for b in resp.content if b.type == "text").strip()
             if resp.stop_reason == "max_tokens":
                 texto += "\n\n_(A resposta foi cortada por limite de tamanho.)_"
-            return texto or "O agente terminou sem uma resposta escrita."
+            return (texto or "O agente terminou sem uma resposta escrita."), messages
         resultados = []
         for uso in usos:
             spec = _PR_TOOLS.get(uso.name)
@@ -874,9 +900,10 @@ def _pr_rodar_agente(chamado_id: int, agente: dict, pedido: str, company_id: int
                 "entrada": entrada,
                 "ok": ok,
                 "em": _pr_agora_brt().strftime("%H:%M:%S"),
+                "turno": turno,
             })
         messages.append({"role": "user", "content": resultados})
-    return "O agente atingiu o limite de etapas sem concluir. Tente reformular a demanda de forma mais específica."
+    raise _PrErro("O agente atingiu o limite de etapas sem concluir. Tente reformular de forma mais específica.")
 
 
 def _pr_notificar(chamado_id: int) -> None:
@@ -950,8 +977,9 @@ def _pr_processar(chamado_id: int) -> None:
             if not _pr_pode_usar(agente, papel):
                 raise _PrErro("Este agente não está disponível para o seu perfil.")
             _pr_atualizar(chamado_id, status="trabalhando")
-            texto = _pr_rodar_agente(chamado_id, agente, pedido, cid, empresa)
-            _pr_atualizar(chamado_id, status="concluido", resultado=texto, concluido_em=_dt_pr.utcnow())
+            texto, mensagens = _pr_rodar_agente(chamado_id, agente, [{"role": "user", "content": pedido}], cid, empresa)
+            _pr_atualizar(chamado_id, status="concluido", resultado=texto, concluido_em=_dt_pr.utcnow(),
+                          mensagens_json=_json_pr.dumps(mensagens, ensure_ascii=False, default=str))
         except Exception as e:
             print(f"[predio] chamado {chamado_id}: {e}")
             _pr_atualizar(chamado_id, status="erro", erro=_pr_msg_erro(e)[:1000], concluido_em=_dt_pr.utcnow())
@@ -961,8 +989,54 @@ def _pr_processar(chamado_id: int) -> None:
             print(f"[predio] notificar {chamado_id}: {e_not}")
 
 
-def _pr_disparar(chamado_id: int) -> None:
-    _thr_pr.Thread(target=_pr_processar, args=(chamado_id,), daemon=True, name=f"predio-{chamado_id}").start()
+def _pr_json_lista(valor: str) -> list:
+    try:
+        dado = _json_pr.loads(valor or "[]")
+        return dado if isinstance(dado, list) else []
+    except ValueError:
+        return []
+
+
+def _pr_continuar(chamado_id: int) -> None:
+    with _PR_SEMAFORO:
+        turno = 0
+        conversa: list = []
+        try:
+            with _Sess_pr(engine) as s:
+                ch = s.get(PredioChamado, chamado_id)
+                if not ch:
+                    return
+                conversa = _pr_json_lista(ch.conversa_json)
+                mensagens = _pr_json_lista(ch.mensagens_json)
+                if not mensagens:
+                    # chamados anteriores ao histórico completo: retoma pelo texto da 1ª resposta
+                    mensagens = [{"role": "user", "content": ch.pedido},
+                                 {"role": "assistant", "content": ch.resultado or "(sem resposta)"}]
+                agente = _PREDIO_AGENTES.get(ch.agente_key)
+                papel, cid = ch.papel_solicitante, ch.company_id
+                empresa_obj = s.get(Company, cid)
+                empresa = empresa_obj.name if empresa_obj else "empresa"
+            turno = len(conversa)
+            pergunta = conversa[-1]["pergunta"]
+            if not _pr_pode_usar(agente, papel):
+                raise _PrErro("Este agente não está disponível para o seu perfil.")
+            texto, mensagens = _pr_rodar_agente(
+                chamado_id, agente, mensagens + [{"role": "user", "content": pergunta}], cid, empresa, turno)
+            conversa[-1]["resposta"] = texto
+            _pr_atualizar(chamado_id, status="concluido", concluido_em=_dt_pr.utcnow(), erro="",
+                          conversa_json=_json_pr.dumps(conversa, ensure_ascii=False),
+                          mensagens_json=_json_pr.dumps(mensagens, ensure_ascii=False, default=str))
+        except Exception as e:
+            print(f"[predio] continuação do chamado {chamado_id}: {e}")
+            if conversa:
+                conversa[-1]["erro"] = _pr_msg_erro(e)[:1000]
+            _pr_atualizar(chamado_id, status="erro", erro=_pr_msg_erro(e)[:1000],
+                          conversa_json=_json_pr.dumps(conversa, ensure_ascii=False))
+
+
+def _pr_disparar(chamado_id: int, continuar: bool = False) -> None:
+    alvo = _pr_continuar if continuar else _pr_processar
+    _thr_pr.Thread(target=alvo, args=(chamado_id,), daemon=True, name=f"predio-{chamado_id}").start()
 
 
 def _pr_criar_briefing(s, company_id: int, user_id: int, roteamento: str) -> PredioChamado:
@@ -1062,13 +1136,37 @@ def _pr_pode_ver(ctx, ch: PredioChamado) -> bool:
     return bool(ag and ctx.membership.role in ag["papeis"])
 
 
-def _pr_chamado_view(ch: PredioChamado) -> dict:
+def _pr_pode_continuar(ctx, ch: PredioChamado) -> bool:
+    return bool(
+        ch.resultado
+        and ch.status in ("concluido", "erro")
+        and _pr_pode_usar(_PREDIO_AGENTES.get(ch.agente_key), ctx.membership.role)
+    )
+
+
+def _pr_turnos(ch: PredioChamado, passos: list) -> list:
+    conversa = _pr_json_lista(ch.conversa_json)
+    em_andamento = ch.status in ("na_fila", "roteando", "trabalhando")
+    perguntas = [{"pergunta": ch.pedido, "resposta": ch.resultado,
+                  "erro": ch.erro if (ch.status == "erro" and not conversa) else ""}]
+    for t in conversa:
+        perguntas.append({"pergunta": t.get("pergunta", ""), "resposta": t.get("resposta", ""),
+                          "erro": t.get("erro", "")})
+    ultimo = perguntas[-1]
+    if not em_andamento and not ultimo["resposta"] and not ultimo["erro"] and ch.status == "erro":
+        ultimo["erro"] = ch.erro
+    for i, t in enumerate(perguntas):
+        t["passos"] = [p for p in passos if int(p.get("turno", 0)) == i]
+        t["aguardando"] = em_andamento and i == len(perguntas) - 1
+    return perguntas
+
+
+def _pr_chamado_view(ch: PredioChamado, ctx=None) -> dict:
     ag = _PREDIO_AGENTES.get(ch.agente_key, {})
-    try:
-        passos = _json_pr.loads(ch.passos_json or "[]")
-    except ValueError:
-        passos = []
+    passos = _pr_json_lista(ch.passos_json)
     return {
+        "turnos": _pr_turnos(ch, passos),
+        "pode_continuar": bool(ctx) and _pr_pode_continuar(ctx, ch),
         "id": ch.id,
         "titulo": ch.titulo or (ch.pedido[:70] + ("…" if len(ch.pedido) > 70 else "")),
         "pedido": ch.pedido,
@@ -1179,8 +1277,33 @@ async def predio_ver_chamado(chamado_id: int, request: Request, session: Session
         return RedirectResponse("/predio", status_code=303)
     return render("predio_chamado.html", request=request, context={
         **_pr_base_ctx(request, session, ctx),
-        "ch": _pr_chamado_view(ch),
+        "ch": _pr_chamado_view(ch, ctx),
     })
+
+
+@app.post("/predio/chamados/{chamado_id}/mensagens")
+@require_login
+async def predio_continuar_chamado(chamado_id: int, request: Request, session: Session = Depends(get_session)):
+    ctx = _pr_ctx(request, session)
+    if not ctx:
+        return RedirectResponse("/", status_code=303)
+    ch = session.get(PredioChamado, chamado_id)
+    if not _pr_pode_ver(ctx, ch):
+        return RedirectResponse("/predio", status_code=303)
+    form = await request.form()
+    pergunta = str(form.get("mensagem") or "").strip()[:4000]
+    if pergunta and _pr_pode_continuar(ctx, ch):
+        conversa = _pr_json_lista(ch.conversa_json)
+        conversa.append({"pergunta": pergunta, "resposta": "", "erro": "",
+                         "em": _pr_agora_brt().strftime("%d/%m %H:%M"), "autor_id": ctx.user.id})
+        ch.conversa_json = _json_pr.dumps(conversa, ensure_ascii=False)
+        ch.status = "trabalhando"
+        ch.erro = ""
+        ch.updated_at = _dt_pr.utcnow()
+        session.add(ch)
+        session.commit()
+        _pr_disparar(ch.id, continuar=True)
+    return RedirectResponse(f"/predio/chamados/{chamado_id}#fim", status_code=303)
 
 
 @app.get("/predio/chamados/{chamado_id}/status")
@@ -1192,7 +1315,7 @@ async def predio_status_chamado(chamado_id: int, request: Request, session: Sess
     ch = session.get(PredioChamado, chamado_id)
     if not _pr_pode_ver(ctx, ch):
         return JSONResponse({"erro": "não encontrado"}, status_code=404)
-    return JSONResponse(_pr_chamado_view(ch))
+    return JSONResponse(_pr_chamado_view(ch, ctx))
 
 
 @app.post("/predio/briefing/gerar")
@@ -1421,6 +1544,7 @@ TEMPLATES["predio_chamado.html"] = r"""
   [data-bs-theme="dark"] .pc-pill.sem_agente{color:#94a3b8;}
   [data-bs-theme="dark"] .pc-pill.andamento{color:#fdba74;}
   .pc-pedido{white-space:pre-wrap;font-size:.92rem;background:var(--bs-tertiary-bg);border-radius:10px;padding:.8rem 1rem;}
+  .pc-quem{font-size:.7rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--bs-secondary-color);margin-bottom:.35rem;}
   .pc-passos{list-style:none;padding:0;margin:0;font-size:.82rem;}
   .pc-passos li{display:flex;gap:.6rem;padding:.3rem 0;color:var(--bs-secondary-color);font-variant-numeric:tabular-nums;}
   .pc-passos li b{color:var(--bs-body-color);font-weight:600;}
@@ -1449,22 +1573,23 @@ TEMPLATES["predio_chamado.html"] = r"""
         {% if ch.em_andamento %}<span class="pc-spin" aria-hidden="true"></span> {% endif %}{{ ch.status_label }}
       </span>
     </div>
-    <div class="pc-pedido mb-2">{{ ch.pedido }}</div>
     <div class="pc-meta" id="pcMotivo">{% if ch.motivo %}Encaminhamento: {{ ch.motivo }}{% endif %}</div>
   </div>
 
-  <div class="card pc-card p-3 p-md-4 mb-3" id="pcPassosCard" {% if not ch.passos %}hidden{% endif %}>
-    <h2 class="h6 fw-bold mb-2">O que o agente consultou</h2>
-    <ul class="pc-passos" id="pcPassos"></ul>
-  </div>
+  <div id="pcConversa" class="d-flex flex-column gap-3"></div>
 
-  <div class="card pc-card p-3 p-md-4">
-    <div id="pcAguarde" class="text-body-secondary small" {% if not ch.em_andamento %}hidden{% endif %}>
-      <span class="pc-spin" aria-hidden="true"></span> O agente está trabalhando. Esta página atualiza sozinha.
+  <div id="fim"></div>
+  <form method="post" action="/predio/chamados/{{ ch.id }}/mensagens" id="pcForm"
+        class="card pc-card p-3 mt-3" {% if not ch.pode_continuar %}hidden{% endif %}
+        onsubmit="this.querySelector('button').disabled=true;">
+    <label for="pcMensagem" class="form-label small fw-semibold mb-1">Continuar com {{ ch.agente }}</label>
+    <textarea class="form-control mb-2" id="pcMensagem" name="mensagem" rows="3" maxlength="4000" required
+      placeholder="Ex.: Cruze esses clientes com tarefas atrasadas e cobranças vencidas."></textarea>
+    <div class="d-flex justify-content-between align-items-center gap-2 flex-wrap">
+      <span class="pc-meta">O agente lembra de toda a conversa e do que já consultou.</span>
+      <button type="submit" class="btn btn-primary btn-sm">Enviar</button>
     </div>
-    <div id="pcErro" class="alert alert-danger mb-0" {% if ch.status != 'erro' %}hidden{% endif %}>{{ ch.erro }}</div>
-    <div id="pcResultado" class="pc-result"></div>
-  </div>
+  </form>
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js"></script>
@@ -1472,26 +1597,40 @@ TEMPLATES["predio_chamado.html"] = r"""
 <script>
 (function(){
   var dados = {{ ch|tojson }};
-  function render(md){
-    var el=document.getElementById('pcResultado');
-    if(!md){ el.innerHTML=''; return; }
+  var assinatura = '';
+  function el(tag, cls, txt){ var e=document.createElement(tag); if(cls) e.className=cls; if(txt!=null) e.textContent=txt; return e; }
+  function markdown(alvo, md){
     if(window.marked && window.DOMPurify){
-      el.innerHTML=DOMPurify.sanitize(marked.parse(md));
-      el.querySelectorAll('table').forEach(function(t){
-        var w=document.createElement('div'); w.className='pc-table-scroll';
-        t.parentNode.insertBefore(w,t); w.appendChild(t);
+      alvo.innerHTML=DOMPurify.sanitize(marked.parse(md));
+      alvo.querySelectorAll('table').forEach(function(t){
+        var w=el('div','pc-table-scroll'); t.parentNode.insertBefore(w,t); w.appendChild(t);
       });
-    } else { el.style.whiteSpace='pre-wrap'; el.textContent=md; }
+    } else { alvo.style.whiteSpace='pre-wrap'; alvo.textContent=md; }
   }
-  function passos(lista){
-    var ul=document.getElementById('pcPassos'); ul.innerHTML='';
-    (lista||[]).forEach(function(p){
-      var li=document.createElement('li');
-      var hora=document.createElement('span'); hora.textContent=p.em||'';
-      var txt=document.createElement('b'); txt.textContent=(p.ok?'':'⚠ ')+(p.rotulo||p.ferramenta);
-      li.appendChild(hora); li.appendChild(txt); ul.appendChild(li);
-    });
-    document.getElementById('pcPassosCard').hidden=!(lista&&lista.length);
+  function turno(t, i, agente){
+    var card=el('div','card pc-card p-3 p-md-4');
+    card.appendChild(el('div','pc-quem', i===0 ? 'Pedido' : 'Você'));
+    card.appendChild(el('div','pc-pedido mb-3', t.pergunta));
+    if(t.passos.length){
+      var ul=el('ul','pc-passos mb-3');
+      t.passos.forEach(function(p){
+        var li=el('li'); li.appendChild(el('span',null,p.em||''));
+        li.appendChild(el('b',null,(p.ok?'':'⚠ ')+(p.rotulo||p.ferramenta))); ul.appendChild(li);
+      });
+      card.appendChild(ul);
+    }
+    if(t.resposta){
+      card.appendChild(el('div','pc-quem',agente));
+      var r=el('div','pc-result'); markdown(r,t.resposta); card.appendChild(r);
+    } else if(t.erro){
+      card.appendChild(el('div','alert alert-danger mb-0',t.erro));
+    } else if(t.aguardando){
+      var w=el('div','text-body-secondary small');
+      w.innerHTML='<span class="pc-spin" aria-hidden="true"></span> ';
+      w.appendChild(document.createTextNode(agente+' está trabalhando. Esta página atualiza sozinha.'));
+      card.appendChild(w);
+    }
+    return card;
   }
   function aplicar(d){
     document.getElementById('pcTitulo').textContent=d.titulo;
@@ -1500,11 +1639,19 @@ TEMPLATES["predio_chamado.html"] = r"""
     var st=document.getElementById('pcStatus');
     st.className='pc-pill '+(d.em_andamento?'andamento':d.status);
     st.textContent=d.status_label;
-    document.getElementById('pcAguarde').hidden=!d.em_andamento;
-    var er=document.getElementById('pcErro'); er.hidden=d.status!=='erro'; er.textContent=d.erro||'';
-    passos(d.passos); render(d.resultado);
+    var nova=JSON.stringify([d.turnos,d.status]);
+    if(nova!==assinatura){
+      assinatura=nova;
+      var c=document.getElementById('pcConversa'); c.innerHTML='';
+      d.turnos.forEach(function(t,i){ c.appendChild(turno(t,i,d.agente)); });
+    }
+    document.getElementById('pcForm').hidden=!d.pode_continuar;
   }
   aplicar(dados);
+  if(location.hash==='#fim' || dados.turnos.length>1){
+    var ult=document.getElementById('pcConversa').lastElementChild;
+    if(ult) ult.scrollIntoView({block:'start'});
+  }
   if(dados.em_andamento){
     var t=setInterval(async function(){
       try{
