@@ -65,6 +65,10 @@ class PredioConfig(_SM_pr, table=True):
     company_id: int = _F_pr(index=True, unique=True)
     briefing_semanal: bool = _F_pr(default=False)
     ultimo_briefing_em: _Opt_pr[_dt_pr] = _F_pr(default=None)
+    agencia_nome: str = _F_pr(default="")
+    agencia_email: str = _F_pr(default="")
+    site_mensal: bool = _F_pr(default=False)
+    ultimo_site_em: _Opt_pr[_dt_pr] = _F_pr(default=None)
 
 
 class PredioAcao(_SM_pr, table=True):
@@ -136,6 +140,20 @@ def _pr_migrar_colunas() -> None:
                 conn.execute(_sqltext_pr(f"ALTER TABLE predio_chamado ADD COLUMN {nome} TEXT DEFAULT {padrao}"))
         except Exception as e:
             # outro worker do gunicorn pode ter criado a coluna ao mesmo tempo
+            print(f"[predio] coluna {nome}: {e}")
+    try:
+        existentes_cfg = {c["name"] for c in _insp_pr(engine).get_columns("predio_config")}
+    except Exception as e:
+        print(f"[predio] inspeção de colunas: {e}")
+        return
+    for nome, tipo in {"agencia_nome": "TEXT DEFAULT ''", "agencia_email": "TEXT DEFAULT ''",
+                       "site_mensal": "BOOLEAN DEFAULT FALSE", "ultimo_site_em": "TIMESTAMP"}.items():
+        if nome in existentes_cfg:
+            continue
+        try:
+            with engine.begin() as conn:
+                conn.execute(_sqltext_pr(f"ALTER TABLE predio_config ADD COLUMN {nome} {tipo}"))
+        except Exception as e:
             print(f"[predio] coluna {nome}: {e}")
 
 
@@ -233,11 +251,16 @@ _PREDIO_ANDARES = [
         {"key": "sucesso_cliente", "nome": "Sucesso do Cliente", "papeis": _PR_TODOS, "ativo": False,
          "atribuicoes": "Renovações, sinais de cancelamento e oportunidades de venda adicional."},
     ]},
+    # ferramentas e ativação vêm de ui_predio_marketing.py
     {"key": "marketing", "nome": "Marketing", "rotulo": "1º andar", "agentes": [
-        {"key": "conteudo", "nome": "Conteúdo", "papeis": _PR_TODOS, "ativo": False,
-         "atribuicoes": "Posts, newsletter e artigos a partir de cases anonimizados."},
         {"key": "inteligencia_mercado", "nome": "Inteligência de Mercado", "papeis": _PR_TODOS, "ativo": False,
-         "atribuicoes": "Juros, crédito e mercado imobiliário: resumo semanal para a equipe."},
+         "atribuicoes": "Juros, inflação, crédito, insolvências e mercado imobiliário: boletim com o que muda para os clientes."},
+        {"key": "conteudo", "nome": "Conteúdo", "papeis": _PR_TODOS, "ativo": False,
+         "atribuicoes": "Textos de posts, artigos e newsletter a partir de cases anonimizados e do mercado."},
+        {"key": "agencia_redes", "nome": "Agência e Redes", "papeis": _PR_TODOS, "ativo": False,
+         "atribuicoes": "Calendário bimestral com briefings para a agência e análise do desempenho das redes."},
+        {"key": "editor_site", "nome": "Editor do Site", "papeis": _PR_TODOS, "ativo": False,
+         "atribuicoes": "Atualiza todo mês o Monitor de Insolvência e as Notícias do site (publica com aprovação)."},
     ]},
     {"key": "recepcao", "nome": "Recepção", "rotulo": "Térreo", "agentes": [
         {"key": "recepcionista", "nome": "Recepcionista", "papeis": _PR_TODOS, "ativo": True,
@@ -2129,6 +2152,21 @@ _PR_TOOLS = {
         "props": {}},
 }
 
+# Pesquisa e leitura na web (ferramentas do servidor da Anthropic), só para agentes com "web": True
+_PR_TOOLS_WEB = [
+    {"type": "web_search_20260209", "name": "web_search", "max_uses": 12,
+     "user_location": {"type": "approximate", "country": "BR", "timezone": "America/Sao_Paulo"}},
+    {"type": "web_fetch_20260209", "name": "web_fetch", "max_uses": 10, "max_content_tokens": 20000},
+]
+
+
+def _pr_registrar_ferramenta(nome: str, spec: dict) -> None:
+    """Registra uma ferramenta (usado também pelos módulos que estendem o prédio)."""
+    spec["schema"] = {"name": nome, "description": spec["description"],
+                      "input_schema": spec.get("input_schema") or _pr_schema(spec["props"]), "strict": True}
+    _PR_TOOLS[nome] = spec
+
+
 for _nome_pr, _spec_pr in _PR_TOOLS.items():
     _spec_pr["schema"] = {
         "name": _nome_pr,
@@ -2367,7 +2405,8 @@ def _pr_conteudo_com_anexos(chamado_id: int, turno: int, texto: str):
     reais só na hora de chamar a API (o histórico salvo fica leve)."""
     with _Sess_pr(engine) as s:
         ids = [a.id for a in s.exec(_sel_pr(PredioAnexo).where(PredioAnexo.chamado_id == chamado_id,
-                                                               PredioAnexo.turno == turno).order_by(PredioAnexo.id)).all()]
+                                                               PredioAnexo.turno == turno,
+                                                               PredioAnexo.tipo != "gerado").order_by(PredioAnexo.id)).all()]
     if not ids:
         return texto
     return [{"type": "anexo_ref", "id": i} for i in ids] + [{"type": "text", "text": texto}]
@@ -2518,10 +2557,13 @@ def _pr_rodar_agente(chamado_id: int, agente: dict, messages: list, company_id: 
     client = _pr_client()
     permitidas = set(agente["ferramentas"])
     tools = [_PR_TOOLS[n]["schema"] for n in agente["ferramentas"]]
+    if agente.get("web"):
+        tools += _PR_TOOLS_WEB
     system = _pr_system_prompt(agente, empresa)
     messages = list(messages)
     anexos_cache: dict = {}
-    for _ in range(15):
+    _PR_EXEC.turno = turno
+    for _ in range(30 if agente.get("web") else 15):
         resp = client.beta.messages.create(
             model=_PR_MODEL,
             max_tokens=16000,
@@ -2536,6 +2578,15 @@ def _pr_rodar_agente(chamado_id: int, agente: dict, messages: list, company_id: 
         if resp.stop_reason == "refusal":
             raise _PrErro("O modelo recusou esta demanda.")
         messages.append({"role": "assistant", "content": [b.to_dict() for b in resp.content]})
+        for b in resp.content:
+            if b.type == "server_tool_use":
+                alvo = (b.input or {}).get("query") or (b.input or {}).get("url") or ""
+                _pr_add_passo(chamado_id, {
+                    "ferramenta": b.name,
+                    "rotulo": ("Pesquisou na web: " if b.name == "web_search" else "Leu a página: ") + str(alvo)[:120],
+                    "entrada": dict(b.input or {}), "ok": True, "em": _pr_agora_brt().strftime("%H:%M:%S"),
+                    "turno": turno, "autor": agente["key"],
+                })
         if resp.stop_reason == "pause_turn":
             continue
         usos = [b for b in resp.content if b.type == "tool_use"]
@@ -2602,6 +2653,7 @@ def _pr_notificar(chamado_id: int) -> None:
                 print(f"[predio] notificação: {e_n}")
         s.commit()
         if ch.roteamento == "agenda" and ok:
+            import html as _html_notif_pr
             base = PUBLIC_BASE_URL or "https://app.maffezzollicapital.com.br"
             for uid in dict.fromkeys(destinos):
                 u = s.get(User, uid)
@@ -2610,10 +2662,10 @@ def _pr_notificar(chamado_id: int) -> None:
                 try:
                     _smtp_send_email(
                         to_email=u.email,
-                        subject=ch.titulo or "Briefing semanal",
-                        html_body=(f"<p>O briefing semanal está pronto.</p>"
-                                   f"<p><a href=\"{base}{href}\">Abrir o briefing no prédio</a></p>"),
-                        text_body=f"O briefing semanal está pronto: {base}{href}",
+                        subject=titulo[:200],
+                        html_body=(f"<p>{_html_notif_pr.escape(titulo)}.</p>"
+                                   f"<p><a href=\"{base}{href}\">Abrir no prédio</a></p>"),
+                        text_body=f"{titulo}: {base}{href}",
                     )
                 except Exception as e_m:
                     print(f"[predio] e-mail briefing: {e_m}")
@@ -2900,13 +2952,15 @@ def _pr_pode_continuar(ctx, ch: PredioChamado) -> bool:
 
 def _pr_anexar_lista(turnos: list, chamado_id: int) -> list:
     with _Sess_pr(engine) as s:
-        linhas = s.exec(_sel_pr(PredioAnexo.id, PredioAnexo.nome, PredioAnexo.tamanho, PredioAnexo.turno)
+        linhas = s.exec(_sel_pr(PredioAnexo.id, PredioAnexo.nome, PredioAnexo.tamanho, PredioAnexo.turno,
+                                PredioAnexo.tipo)
                         .where(PredioAnexo.chamado_id == chamado_id).order_by(PredioAnexo.id)).all()
     for t in turnos:
-        t["anexos"] = []
-    for aid, nome, tam, turno in linhas:
+        t["anexos"], t["gerados"] = [], []
+    for aid, nome, tam, turno, tipo in linhas:
         if 0 <= turno < len(turnos):
-            turnos[turno]["anexos"].append({"id": aid, "nome": nome, "kb": max(1, round((tam or 0) / 1024))})
+            turnos[turno]["gerados" if tipo == "gerado" else "anexos"].append(
+                {"id": aid, "nome": nome, "kb": max(1, round((tam or 0) / 1024))})
     return turnos
 
 
@@ -3023,6 +3077,7 @@ async def predio_home(request: Request, session: Session = Depends(get_session))
         "disponiveis": [{"key": a["key"], "nome": a["nome"], "andar": a["andar_nome"]} for a in disponiveis],
         "recentes": [_pr_chamado_view(c) for c in recentes],
         "briefing_semanal": bool(cfg and cfg.briefing_semanal),
+        "mkt": globals().get("_mk_config_view", lambda c: None)(cfg),
         "total_agentes": len(_PREDIO_AGENTES),
         "total_ativos": sum(1 for a in _PREDIO_AGENTES.values() if a["ativo"]),
         "agente_pre": request.query_params.get("agente", "") if request.query_params.get("agente", "") in _PREDIO_AGENTES else "",
@@ -3104,7 +3159,12 @@ _PR_ACAO_STATUS = {"pendente": "Aguardando aprovação", "executando": "Executan
 
 
 def _pr_acao_view(a: PredioAcao) -> dict:
+    try:
+        anexos = _json_pr.loads(a.payload_json or "{}").get("anexos") or []
+    except (ValueError, AttributeError):
+        anexos = []
     return {"id": a.id, "tipo": a.tipo, "titulo": a.titulo, "destinatario": a.destinatario, "assunto": a.assunto,
+            "anexos": [x for x in anexos if isinstance(x, dict)],
             "corpo": a.corpo, "status": a.status, "status_label": _PR_ACAO_STATUS.get(a.status, a.status),
             "resultado": a.resultado, "agente": _PREDIO_AGENTES.get(a.agente_key, {}).get("nome", ""),
             "chamado_id": a.chamado_id, "criado": _pr_quando(a.criado_em), "decidido": _pr_quando(a.decidido_em)}
@@ -3243,12 +3303,18 @@ def _pr_executar_acao(s, acao: PredioAcao) -> str:
                                                      "company_id": m.company_id}, daemon=True).start()
             return "Transcrição reiniciada a partir do backup do áudio."
         return "Status liberado. Não há backup do áudio: reenvie o arquivo na tela da reunião."
+    extra = _PR_EXECUTORES_EXTRA.get(acao.tipo)
+    if extra:
+        return extra(s, acao)
     raise _PrErro("Tipo de ação desconhecido.")
 
 
-# demais tipos (dinheiro e sistema) só admin aprova
+# executores registrados por módulos que estendem o prédio (ex.: ui_predio_marketing.py)
+_PR_EXECUTORES_EXTRA: dict = {}
+
+# demais tipos (dinheiro, sistema e publicação no site) só admin aprova
 _PR_TIPOS_EQUIPE = {"whatsapp_resposta", "agendar_reuniao", "remarcar_reuniao", "cancelar_reuniao", "criar_tarefa",
-                    "registrar_conhecimento"}
+                    "registrar_conhecimento", "email_agencia"}
 
 
 def _pr_pode_decidir(papel: str, tipo: str) -> bool:
@@ -3280,10 +3346,10 @@ async def predio_aprovar_acao(acao_id: int, request: Request, session: Session =
         return RedirectResponse("/predio", status_code=303)
     form = await request.form()
     if acao.tipo in ("email_cobranca", "whatsapp_resposta", "cancelar_reuniao", "criar_tarefa",
-                     "registrar_conhecimento") and acao.status == "pendente":
+                     "registrar_conhecimento", "email_agencia") and acao.status == "pendente":
         assunto = str(form.get("assunto") or "").strip()[:200]
-        corpo = str(form.get("corpo") or "").strip()[:8000]
-        if assunto and acao.tipo in ("email_cobranca", "criar_tarefa", "registrar_conhecimento"):
+        corpo = str(form.get("corpo") or "").strip()[:20000]
+        if assunto and acao.tipo in ("email_cobranca", "criar_tarefa", "registrar_conhecimento", "email_agencia"):
             acao.assunto = assunto
         if corpo:
             acao.corpo = corpo
@@ -3732,6 +3798,37 @@ TEMPLATES["predio.html"] = r"""
       </div>
       {% if briefing_semanal %}<p class="small text-body-secondary mt-2 mb-0">Os administradores recebem notificação e e-mail quando o briefing fica pronto.</p>{% endif %}
     </div>
+    {% if mkt %}
+    <div class="card p-3" id="marketing">
+      <h2 class="h6 fw-bold mb-1">Marketing</h2>
+      <p class="small text-body-secondary mb-3">Site atualizado todo mês pelo Editor do Site e envio de briefings à agência. Nada é publicado ou enviado sem aprovação.</p>
+      <div class="d-flex flex-wrap gap-2 align-items-center mb-3">
+        <form method="post" action="/predio/marketing/site-agora" onsubmit="this.querySelector('button').disabled=true;">
+          <button type="submit" class="btn btn-outline-primary btn-sm">Atualizar o site agora</button>
+        </form>
+        <form method="post" action="/predio/marketing/config">
+          <input type="hidden" name="campo" value="site_mensal">
+          <input type="hidden" name="site_mensal" value="{{ '0' if mkt.site_mensal else '1' }}">
+          <button type="submit" class="btn btn-sm {{ 'btn-success' if mkt.site_mensal else 'btn-outline-secondary' }}">
+            {{ 'Todo dia 1º às 9h: ligado' if mkt.site_mensal else 'Ligar atualização mensal' }}
+          </button>
+        </form>
+      </div>
+      <form method="post" action="/predio/marketing/config" class="row g-2 align-items-end">
+        <input type="hidden" name="campo" value="agencia">
+        <div class="col-12 col-md-5">
+          <label class="form-label small fw-semibold mb-1" for="mkAgNome">Agência</label>
+          <input class="form-control form-control-sm" id="mkAgNome" name="agencia_nome" maxlength="120" value="{{ mkt.agencia_nome }}" placeholder="Nome da agência">
+        </div>
+        <div class="col-12 col-md-5">
+          <label class="form-label small fw-semibold mb-1" for="mkAgEmail">E-mail da agência</label>
+          <input class="form-control form-control-sm" id="mkAgEmail" name="agencia_email" type="email" maxlength="200" value="{{ mkt.agencia_email }}" placeholder="contato@agencia.com.br">
+        </div>
+        <div class="col-12 col-md-2"><button type="submit" class="btn btn-outline-primary btn-sm w-100">Salvar</button></div>
+      </form>
+      {% if not mkt.github_ok %}<p class="small text-warning-emphasis mt-2 mb-0">Para publicar no site, cadastre SITE_GITHUB_TOKEN no Render (token do GitHub com permissão de escrita no repositório do site).</p>{% endif %}
+    </div>
+    {% endif %}
     {% endif %}
 
     <div class="card p-3">
@@ -4260,7 +4357,9 @@ TEMPLATES["predio_chamado.html"] = r"""
     registrar_conhecimento: {para:'{d}', assunto:true, rotuloAssunto:'Título', corpo:true, linhas:8, rotuloCorpo:'Conteúdo', botao:'Aprovar e registrar'},
     rodar_backup:      {botao:'Aprovar e rodar backup'},
     destravar_transcricao: {botao:'Aprovar e destravar'},
-    gerar_cobrancas:   {botao:'Aprovar e gerar'}
+    gerar_cobrancas:   {botao:'Aprovar e gerar'},
+    email_agencia:     {para:'Para: {d}', assunto:true, corpo:true, linhas:10, botao:'Aprovar e enviar à agência'},
+    publicar_site:     {para:'{d}', previa:true, botao:'Aprovar e publicar no site'}
   };
   function campo(form, rotulo, tag, nome, id, valor, linhas){
     var lb=el('label','form-label small fw-semibold mb-1',rotulo); lb.htmlFor=id;
@@ -4281,6 +4380,15 @@ TEMPLATES["predio_chamado.html"] = r"""
       topo.appendChild(pill); card.appendChild(topo);
       var pendente=a.status==='pendente' && a.pode_decidir;
       if(cfg.para) card.appendChild(el('div','pc-meta mb-2',cfg.para.replace('{d}',a.destinatario)));
+      if(cfg.previa){
+        var pv=el('a','btn btn-sm btn-outline-primary mb-2','Ver prévia da página ↗');
+        pv.href='/predio/acoes/'+a.id+'/previa'; pv.target='_blank'; pv.rel='noopener'; card.appendChild(pv);
+      }
+      if(a.anexos && a.anexos.length){
+        var axa=el('div','pc-anexos mb-2');
+        a.anexos.forEach(function(x){ var l=el('a',null,'📎 '+x.nome); l.href='/predio/anexos/'+x.id; axa.appendChild(l); });
+        card.appendChild(axa);
+      }
       if(pendente && (cfg.assunto || cfg.corpo)){
         var f=formAcao(a,'aprovar',cfg.botao,'btn-primary');
         if(cfg.assunto) campo(f,cfg.rotuloAssunto||'Assunto','input','assunto','pcAss'+a.id,a.assunto);
@@ -4357,6 +4465,12 @@ TEMPLATES["predio_chamado.html"] = r"""
       card.appendChild(el('div','alert alert-danger mb-0',t.erro));
     } else if(t.aguardando){
       card.appendChild(esperando(agente+' está trabalhando. Esta página atualiza sozinha.'));
+    }
+    if(t.gerados && t.gerados.length){
+      card.appendChild(el('div','pc-quem mt-3','Arquivos gerados'));
+      var gx=el('div','pc-anexos');
+      t.gerados.forEach(function(a){ var l=el('a',null,'📄 '+a.nome+' ('+a.kb+' KB)'); l.href='/predio/anexos/'+a.id; gx.appendChild(l); });
+      card.appendChild(gx);
     }
     return card;
   }
