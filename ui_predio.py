@@ -239,11 +239,14 @@ _PREDIO_ANDARES = [
         {"key": "obras", "nome": "Acompanhamento de Obras", "papeis": _PR_TODOS, "ativo": False,
          "atribuicoes": "Físico x financeiro, medições e alertas de desvio."},
     ]},
+    # ferramentas e ativação vêm de ui_predio_ma.py
     {"key": "ma", "nome": "M&A e Valuation", "rotulo": "3º andar", "agentes": [
         {"key": "valuation", "nome": "Valuation", "papeis": _PR_TODOS, "ativo": False,
-         "atribuicoes": "DCF e múltiplos, laudo preliminar."},
+         "atribuicoes": "DCF e múltiplos calculados com premissas explícitas, sensibilidade e laudo preliminar em PDF e Excel."},
         {"key": "data_room", "nome": "Data Room", "papeis": _PR_TODOS, "ativo": False,
-         "atribuicoes": "Organiza documentos e checklist de due diligence."},
+         "atribuicoes": "Checklist de due diligence por tipo de operação, o que o cliente já enviou, o que falta e o pedido de documentos."},
+        {"key": "originacao_ma", "nome": "Originação M&A", "papeis": _PR_TODOS, "ativo": False,
+         "atribuicoes": "Sell-side: teaser anônimo, compradores estratégicos e financeiros e vitrine de Empresas à Venda do site."},
     ]},
     {"key": "comercial", "nome": "Comercial", "rotulo": "2º andar", "agentes": [
         {"key": "prospeccao", "nome": "Prospecção", "papeis": _PR_TODOS, "ativo": False,
@@ -1308,7 +1311,8 @@ def _pr_t_agenda_reunioes(s, cid, dias, cliente):
         linhas.append({"booking_id": b.id, "data": _pr_fmt_data(d), "dia_semana": _DIAS_SEMANA_PT[d.weekday()],
                        "hora": f"{b.hora_inicio}–{b.hora_fim}", "cliente": nomes.get(b.client_id, "") or b.solicitante_nome,
                        "com": membros.get(b.membro_id, ""), "servico": servicos.get(b.servico_id, ""),
-                       "local": _LOCAL_LABELS.get(b.local, b.local), "status": b.status, "_o": (d, b.hora_inicio)})
+                       "local": _LOCAL_LABELS.get(b.local, b.local), "link_online": getattr(b, "link_online", "") or "",
+                       "status": b.status, "_o": (d, b.hora_inicio)})
     linhas.sort(key=lambda x: x.pop("_o"))
     return {"periodo": f"{_pr_fmt_data(hoje)} a {_pr_fmt_data(limite)}", "reunioes": linhas[:60]}
 
@@ -1432,6 +1436,9 @@ def _pr_ics(b, empresa_nome: str, metodo: str, convidados: list) -> str:
               f"DTSTART;TZID=America/Sao_Paulo:{_agenda_dtstr(b.data, b.hora_inicio)}",
               f"DTEND;TZID=America/Sao_Paulo:{_agenda_dtstr(b.data, b.hora_fim or b.hora_inicio)}",
               f"STATUS:{'CANCELLED' if metodo == 'CANCEL' else 'CONFIRMED'}", f"ORGANIZER:mailto:{organizador}"]
+    if getattr(b, "link_online", ""):
+        linhas += [f"LOCATION:{b.link_online}", f"URL:{b.link_online}",
+                   f"DESCRIPTION:Link da reunião: {b.link_online}"]
     linhas += [f"ATTENDEE;RSVP=TRUE:mailto:{e}" for e in convidados]
     linhas += ["END:VEVENT", "END:VCALENDAR"]
     return "\r\n".join(linhas)
@@ -1485,7 +1492,9 @@ def _pr_avisar_reuniao(s, b, metodo: str, mensagem: str = "") -> str:
         assunto = f"Reunião remarcada — {data_fmt} · {b.hora_inicio}"
         corpo = (f"<p>A reunião com {_html_av.escape(nome_emp)} foi remarcada para <strong>{data_fmt}, "
                  f"{b.hora_inicio}–{b.hora_fim}</strong>"
-                 + (f" com {_html_av.escape(membro.nome)}" if membro else "") + ".</p>")
+                 + (f" com {_html_av.escape(membro.nome)}" if membro else "") + ".</p>"
+                 + (f"<p>Link da reunião: <a href=\"{_html_av.escape(b.link_online)}\">{_html_av.escape(b.link_online)}</a></p>"
+                    if getattr(b, "link_online", "") else ""))
     falhas = []
     for e in convidados:
         try:
@@ -1724,8 +1733,11 @@ def _pr_wa_escolha(s, cid, cliente, oferta, mensagem):
     oferta.atualizado_em = _dt_pr.utcnow()
     s.add(oferta)
     s.commit()
+    s.refresh(booking)
+    link = getattr(booking, "link_online", "") or ""
     resposta = (f"Pronto! Reunião marcada para {_pr_opcao_texto(o)} ({_LOCAL_LABELS.get(local, local).lower()}). "
-                f"O convite foi enviado para {_pr_mascarar_email(email)}. Até lá! — Atendimento")
+                + (f"Link para entrar: {link} . " if link else "")
+                + f"O convite foi enviado para {_pr_mascarar_email(email)}. Até lá! — Atendimento")
     ch_id = _pr_log_wa(s, cid, oferta.chamado_id, cliente, mensagem, resposta)
     _pr_wa_avisar_equipe(s, cid, cliente.id, f"Reunião marcada pelo WhatsApp: {cliente.name} — {_pr_opcao_texto(o)}", ch_id)
     return resposta
@@ -2324,7 +2336,8 @@ _PR_INSTRUCOES = {
         "decisão, reclamação), mensagens sem resposta e conversas paradas. Para cada caso diga quem é, o que quer, a "
         "urgência e quem da equipe deve responder. Quando fizer sentido, proponha uma resposta curta e cordial em "
         "nome do escritório (só dentro da janela de 24h). Para marcar reunião, consulte os horários livres e proponha "
-        "o agendamento; o convite vai por e-mail depois da aprovação. Prospects (contatos não cadastrados) não podem "
+        "o agendamento; o convite vai por e-mail depois da aprovação. Reunião online ganha link de videochamada "
+        "automaticamente (Google Meet quando o Google Agenda está conectado) — não invente link. Prospects (contatos não cadastrados) não podem "
         "ter reunião agendada por você: indique que alguém da equipe faça o contato.\n"
         "Quando a equipe pedir uma alteração na agenda (remarcar, trocar quem atende, cancelar), localize a reunião com "
         "agenda_reunioes, confira os horários livres e proponha a alteração; se faltar informação (qual reunião, que "
@@ -3316,6 +3329,7 @@ async def predio_home(request: Request, session: Session = Depends(get_session))
         "recentes": [_pr_chamado_view(c) for c in recentes],
         "briefing_semanal": bool(cfg and cfg.briefing_semanal),
         "mkt": globals().get("_mk_config_view", lambda c: None)(cfg),
+        "meet": globals().get("_meet_config_view", lambda c: None)(ctx.company.id) if papel == "admin" else None,
         "total_agentes": len(_PREDIO_AGENTES),
         "total_ativos": sum(1 for a in _PREDIO_AGENTES.values() if a["ativo"]),
         "agente_pre": request.query_params.get("agente", "") if request.query_params.get("agente", "") in _PREDIO_AGENTES else "",
@@ -3460,7 +3474,9 @@ def _pr_executar_acao(s, acao: PredioAcao) -> str:
         empresa = s.get(Company, acao.company_id)
         if empresa:
             _agenda_dispatch_notifications(s, booking, empresa)
-        return f"Reunião agendada e convite enviado para {acao.destinatario}."
+        s.refresh(booking)
+        return (f"Reunião agendada e convite enviado para {acao.destinatario}."
+                + (f" Link da reunião: {booking.link_online}" if getattr(booking, "link_online", "") else ""))
     if acao.tipo == "remarcar_reuniao":
         p = _json_pr.loads(acao.payload_json or "{}")
         b = _pr_booking(s, acao.company_id, p.get("booking_id") or 0)
@@ -3473,6 +3489,8 @@ def _pr_executar_acao(s, acao: PredioAcao) -> str:
         s.add(b)
         s.commit()
         s.refresh(b)
+        if globals().get("_meet_ao_remarcar"):
+            _meet_ao_remarcar(s, b)  # move o evento no Google Agenda (o link do Meet continua o mesmo)
         return f"Reunião remarcada para {_pr_fmt_data(_pr_data(b.data))} às {b.hora_inicio}." + _pr_avisar_reuniao(s, b, "REQUEST")
     if acao.tipo == "cancelar_reuniao":
         b = _pr_booking(s, acao.company_id, _json_pr.loads(acao.payload_json or "{}").get("booking_id") or 0)
@@ -3482,6 +3500,8 @@ def _pr_executar_acao(s, acao: PredioAcao) -> str:
         s.add(b)
         s.commit()
         s.refresh(b)
+        if globals().get("_meet_ao_cancelar"):
+            _meet_ao_cancelar(s, b)
         return "Reunião cancelada." + _pr_avisar_reuniao(s, b, "CANCEL", acao.corpo)
     if acao.tipo == "criar_tarefa":
         p = _json_pr.loads(acao.payload_json or "{}")
@@ -4039,6 +4059,23 @@ TEMPLATES["predio.html"] = r"""
       </div>
       {% if briefing_semanal %}<p class="small text-body-secondary mt-2 mb-0">Os administradores recebem notificação e e-mail quando o briefing fica pronto.</p>{% endif %}
     </div>
+    {% if meet %}
+    <div class="card p-3" id="reunioes-online">
+      <h2 class="h6 fw-bold mb-1">Reuniões online</h2>
+      {% if meet.conectado %}
+      <p class="small mb-2">Google Agenda conectado como <strong>{{ meet.email or 'conta Google' }}</strong>: cada reunião online ganha um link do Google Meet próprio, criado nessa agenda.</p>
+      <form method="post" action="/agenda/google/desconectar"><button type="submit" class="btn btn-outline-secondary btn-sm">Desconectar</button></form>
+      {% else %}
+      <p class="small text-body-secondary mb-2">Conecte o Google Agenda do escritório para que cada reunião online tenha link do Google Meet. Sem conexão, o link é uma sala gratuita do Jitsi Meet.</p>
+      {% if meet.configurado %}
+      <a class="btn btn-outline-primary btn-sm" href="/agenda/google/conectar">Conectar Google Agenda</a>
+      <p class="small text-body-secondary mt-2 mb-0">No Google Cloud, a Google Calendar API precisa estar ativa e este endereço cadastrado como redirecionamento: <code>{{ meet.redirect }}</code></p>
+      {% else %}
+      <p class="small text-warning-emphasis mb-0">Para conectar, cadastre GOOGLE_CLIENT_ID e GOOGLE_CLIENT_SECRET no Render (credencial OAuth do Google Cloud com a Google Calendar API ativa).</p>
+      {% endif %}
+      {% endif %}
+    </div>
+    {% endif %}
     {% if mkt %}
     <div class="card p-3" id="marketing">
       <h2 class="h6 fw-bold mb-1">Marketing</h2>
@@ -4606,7 +4643,9 @@ TEMPLATES["predio_chamado.html"] = r"""
     email_agencia:     {para:'Para: {d}', assunto:true, corpo:true, linhas:10, botao:'Aprovar e enviar à agência'},
     publicar_site:     {para:'{d}', previa:true, botao:'Aprovar e publicar no site'},
     criar_negocio:     {para:'{d}', botao:'Aprovar e criar no CRM'},
-    registrar_proposta:{para:'{d}', botao:'Aprovar e registrar no CRM'}
+    registrar_proposta:{para:'{d}', botao:'Aprovar e registrar no CRM'},
+    solicitar_documentos:{para:'{d}', botao:'Aprovar e pedir ao cliente'},
+    publicar_vitrine:  {para:'{d}', botao:'Aprovar e publicar no site'}
   };
   function campo(form, rotulo, tag, nome, id, valor, linhas){
     var lb=el('label','form-label small fw-semibold mb-1',rotulo); lb.htmlFor=id;

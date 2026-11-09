@@ -50758,6 +50758,8 @@ class AgendaBooking(SQLModel, table=True):
     ics_uid: str = Field(default_factory=lambda: str(uuid.uuid4()))
     origem: str = Field(default="cliente", index=True)
     criado_em: datetime = Field(default_factory=utcnow)
+    link_online: str = ""        # link da videochamada (Google Meet ou Jitsi) quando local = online
+    google_event_id: str = ""    # evento criado no Google Agenda do escritório (para remarcar/cancelar)
 
 
 def _ensure_agenda_tables() -> None:
@@ -50810,7 +50812,7 @@ _LOCAL_LABELS = {
 
 
 def _agenda_build_ics(*, uid: str, summary: str, description: str, dtstart: str,
-                       dtend: str, organizer_email: str, attendee_emails: list) -> str:
+                       dtend: str, organizer_email: str, attendee_emails: list, location: str = "") -> str:
     nl = "\r\n"
     # VTIMEZONE block for America/Sao_Paulo (UTC-3, sem horário de verão desde 2019)
     vtimezone = (
@@ -50834,6 +50836,8 @@ def _agenda_build_ics(*, uid: str, summary: str, description: str, dtstart: str,
         "DTEND;TZID=America/Sao_Paulo:" + dtend,
         "ORGANIZER:mailto:" + organizer_email,
     ]
+    if location:
+        lines += ["LOCATION:" + location] + (["URL:" + location] if location.startswith("http") else [])
     for ae in attendee_emails:
         lines.append("ATTENDEE;RSVP=TRUE:mailto:" + ae)
     lines += ["END:VEVENT", "END:VCALENDAR"]
@@ -50883,6 +50887,13 @@ def _agenda_send_email(*, to_email: str, to_name: str, subject: str, html_body: 
 
 
 def _agenda_dispatch_notifications(session: Session, booking: AgendaBooking, company: Company) -> None:
+    # reunião online: garante o link da videochamada antes de montar convite e e-mails (ui_agenda_meet.py)
+    _garantir = globals().get("_meet_garantir_link")
+    if _garantir:
+        try:
+            _garantir(session, booking, company)
+        except Exception as _e_meet:
+            print("[agenda] link online:", _e_meet)
     membro = session.get(AgendaMembro, booking.membro_id) if booking.membro_id else None
     servico = session.get(AgendaServico, booking.servico_id) if booking.servico_id else None
     local_label = _LOCAL_LABELS.get(booking.local, booking.local)
@@ -50904,17 +50915,23 @@ def _agenda_dispatch_notifications(session: Session, booking: AgendaBooking, com
         "Responsável: " + mbr_nome,
         "Notas: " + (booking.notas or "—"),
     ]
+    link_online = getattr(booking, "link_online", "") or ""
+    if link_online:
+        desc_parts.insert(4, "Link da reunião: " + link_online)
     description = "\n".join(desc_parts)
     ics = _agenda_build_ics(
         uid=booking.ics_uid, summary=summary, description=description,
         dtstart=dtstart, dtend=dtend, organizer_email=organizer,
-        attendee_emails=attendees,
+        attendee_emails=attendees, location=link_online or local_label,
     )
     row_style = "padding:4px 12px 4px 0;color:#666"
     rows = (
         "<tr><td style='" + row_style + "'>Serviço</td><td><strong>" + svc_nome + "</strong></td></tr>"
         "<tr><td style='" + row_style + "'>Data</td><td><strong>" + data_fmt + " · " + booking.hora_inicio + "–" + booking.hora_fim + "</strong></td></tr>"
         "<tr><td style='" + row_style + "'>Local</td><td>" + local_label + "</td></tr>"
+        + ("<tr><td style='" + row_style + "'>Link</td><td><a href='" + link_online + "'><strong>Entrar na reunião</strong></a>"
+           "<br><span style='color:#666;font-size:12px'>" + link_online + "</span></td></tr>" if link_online else "")
+        +
         "<tr><td style='" + row_style + "'>Responsável</td><td>" + mbr_nome + "</td></tr>"
         "<tr><td style='" + row_style + "'>Solicitante</td><td>" + booking.solicitante_nome + "</td></tr>"
         + ("<tr><td style='" + row_style + "'>Notas</td><td>" + booking.notas + "</td></tr>" if booking.notas else "")
@@ -51997,6 +52014,11 @@ async def admin_agenda_booking_status(booking_id: int, request: Request,
         booking.status = new_status
         session.add(booking)
         session.commit()
+        if new_status == "cancelado" and globals().get("_meet_ao_cancelar"):
+            try:
+                _meet_ao_cancelar(session, booking)  # remove o evento do Google Agenda, se houver
+            except Exception as _e_gm:
+                print("[agenda] cancelar no Google:", _e_gm)
         set_flash(request, "Reunião marcada como '%s'." % new_status)
     return RedirectResponse("/admin/agenda", status_code=303)
 
@@ -52803,3 +52825,5 @@ async def exportar_clientes_xlsx(
 exec(open('ui_predio.py').read())
 exec(open('ui_predio_marketing.py').read())
 exec(open('ui_predio_comercial.py').read())
+exec(open('ui_predio_ma.py').read())
+exec(open('ui_agenda_meet.py').read())
