@@ -120,19 +120,33 @@ async def _augur_whatsapp_reply(
         _mb  = message_body
         _tid = thread_id
 
+        # ── 0. Agendamento — o Augur passa a vez ao Atendimento do Prédio ─────
+        # Vem antes de tudo: com uma oferta de horários em aberto, um "2" do cliente é a escolha do horário.
+        _agenda_reply = None
+        _sender = "Augur"
+        _agenda_handler = globals().get("_pr_wa_agenda")
+        if _agenda_handler:
+            try:
+                _agenda_reply = await loop.run_in_executor(None, lambda: _agenda_handler(_coid, _cid, _tid, _mb))
+            except Exception as _ag_e:
+                print(f"[augur_whatsapp] atendimento/agenda erro: {_ag_e}")
+        if _agenda_reply:
+            _sender = "Atendimento"
+
         # ── 1. Lançamento financeiro — prioridade máxima (palavras específicas) ─
         _fin_reply = None
-        try:
-            def _run_fin_handler():
-                with _WazSession(engine) as _db_fin:
-                    return augur_financeiro_handle(_db_fin, _coid, _cid, _mb)
-            _fin_reply = await loop.run_in_executor(None, _run_fin_handler)
-        except Exception as _fe:
-            print(f"[augur_whatsapp] financeiro handler erro: {_fe}")
+        if not _agenda_reply:
+            try:
+                def _run_fin_handler():
+                    with _WazSession(engine) as _db_fin:
+                        return augur_financeiro_handle(_db_fin, _coid, _cid, _mb)
+                _fin_reply = await loop.run_in_executor(None, _run_fin_handler)
+            except Exception as _fe:
+                print(f"[augur_whatsapp] financeiro handler erro: {_fe}")
 
         # ── 2. Check-in semanal ───────────────────────────────────────────────
         _ck_reply = None
-        if not _fin_reply:
+        if not _fin_reply and not _agenda_reply:
             try:
                 def _run_checkin():
                     with _WazSession(engine) as _db_ck:
@@ -145,7 +159,7 @@ async def _augur_whatsapp_reply(
 
         # ── 3. Command layer (task creation etc.) ────────────────────────────
         cmd_reply = None
-        if not _fin_reply and not _ck_reply:
+        if not _fin_reply and not _ck_reply and not _agenda_reply:
             def _run_command_layer():
                 with _WazSession(engine) as _db:
                     _mu, _ = _match_user_by_whatsapp_phone(_db, company_id=_coid, phone_digits=_cp)
@@ -163,7 +177,10 @@ async def _augur_whatsapp_reply(
                 print(f"[augur_whatsapp] command layer erro: {_ce}")
                 import traceback; traceback.print_exc()
 
-        if _fin_reply:
+        if _agenda_reply:
+            reply = _agenda_reply
+            print(f"[augur_whatsapp] atendimento/agenda: {reply[:80]}")
+        elif _fin_reply:
             reply = _fin_reply
             print(f"[augur_whatsapp] lançamento financeiro: {reply[:80]}")
         elif _ck_reply:
@@ -221,7 +238,7 @@ async def _augur_whatsapp_reply(
                     thread=thread,
                     direction="outbound",
                     body=reply,
-                    sender_name="Augur",
+                    sender_name=_sender,
                     created_by_user_id=None,
                     delivery_status="sent",
                     external_message_id=ext_id or "",
