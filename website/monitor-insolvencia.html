@@ -125,7 +125,13 @@
     return `${parseInt(d)} ${months[parseInt(m) - 1]} ${y}`;
   }
 
-  function buildCard(item) {
+  function esc(v) {
+    return String(v == null ? '' : v).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  }
+
+  function buildCard(raw) {
+    const item = {};
+    Object.keys(raw).forEach(k => { item[k] = esc(raw[k]); });
     const tagPais = `<span class="mn-tag mn-tag--destaque">${item.pais}</span>`;
     const tagTipo = `<span class="mn-tag">${item.tipo}</span>`;
 
@@ -133,7 +139,7 @@
       <a href="${item.arquivo}" target="_blank" rel="noopener" class="mn-card">
         <div class="mn-card-top">
           <div class="mn-tags">${tagPais}${tagTipo}</div>
-          <span class="mn-data">${formatDate(item.data)}</span>
+          <span class="mn-data">${formatDate(raw.data || '')}</span>
         </div>
         <div class="mn-empresa">${item.empresa}</div>
         <div class="mn-manchete">${item.manchete}</div>
