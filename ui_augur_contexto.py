@@ -7,7 +7,7 @@
 #   (orcamento_resumo já coberto por ui_orcamento.py)
 # ============================================================================
 
-from datetime import datetime as _dt_ac
+from datetime import datetime as _dt_ac, timedelta as _td_ac
 from sqlmodel import select as _sel_ac
 
 # ── helpers internos ──────────────────────────────────────────────────────────
@@ -109,7 +109,6 @@ def _ac_build_acoes_context(session, company_id: int, client_id: int) -> str:
                 MeetingAcao.client_id == client_id,
                 MeetingAcao.status.in_(["aberta", "em_andamento"])
             )
-            .order_by(MeetingAcao.prazo)
         ).all()
     except Exception:
         return ""
@@ -117,27 +116,38 @@ def _ac_build_acoes_context(session, company_id: int, client_id: int) -> str:
     if not acoes:
         return ""
 
-    hoje = _dt_ac.utcnow().date()
+    def _prazo(a):
+        # MeetingAcao.prazo é DD/MM/AAAA; aceita AAAA-MM-DD por segurança
+        bruto = str(a.prazo or "").strip()[:10]
+        for fmt in ("%d/%m/%Y", "%Y-%m-%d"):
+            try:
+                return _dt_ac.strptime(bruto, fmt).date()
+            except ValueError:
+                pass
+        return None
+
+    hoje = (_dt_ac.utcnow() - _td_ac(hours=3)).date()
+    acoes = sorted(acoes, key=lambda a: _prazo(a) or _dt_ac.max.date())
     lines = [f"=== AÇÕES CORRETIVAS EM ABERTO ({len(acoes)}) ==="]
     for a in acoes:
         pri_emoji = {"alta": "🔴", "media": "🟡", "baixa": "🟢"}.get(a.prioridade or "", "⚪")
         status_label = "Aberta" if a.status == "aberta" else "Em andamento"
         prazo_str = ""
-        if a.prazo:
-            try:
-                prazo_d = _dt_ac.strptime(str(a.prazo)[:10], "%Y-%m-%d").date()
-                delta = (prazo_d - hoje).days
-                if delta < 0:
-                    prazo_str = f" ⚠️ ATRASADA {-delta}d"
-                elif delta == 0:
-                    prazo_str = " ⚠️ VENCE HOJE"
-                else:
-                    prazo_str = f" (prazo: {prazo_d.strftime('%d/%m/%Y')})"
-            except Exception:
-                prazo_str = f" (prazo: {a.prazo})"
-        owner_str = f" | resp: {a.owner}" if a.owner else ""
+        prazo_d = _prazo(a)
+        if prazo_d:
+            delta = (prazo_d - hoje).days
+            if delta < 0:
+                prazo_str = f" ⚠️ ATRASADA {-delta}d"
+            elif delta == 0:
+                prazo_str = " ⚠️ VENCE HOJE"
+            else:
+                prazo_str = f" (prazo: {prazo_d.strftime('%d/%m/%Y')})"
+        elif a.prazo:
+            prazo_str = f" (prazo: {a.prazo})"
+        texto = (a.titulo or a.descricao or "").strip()[:120]
+        owner_str = f" | resp: {a.responsavel}" if a.responsavel else ""
         lines.append(
-            f"  {pri_emoji} [{status_label}] {a.descricao[:120]}{prazo_str}{owner_str}"
+            f"  {pri_emoji} [{status_label}] {texto}{prazo_str}{owner_str}"
         )
 
     return "\n".join(lines)
