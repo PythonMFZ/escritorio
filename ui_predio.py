@@ -81,6 +81,7 @@ class PredioConfig(_SM_pr, table=True):
     ultimo_site_em: _Opt_pr[_dt_pr] = _F_pr(default=None)
     rh_revisao_mensal: bool = _F_pr(default=False)
     ultimo_rh_em: _Opt_pr[_dt_pr] = _F_pr(default=None)
+    modelos_json: str = _F_pr(default="{}")  # {agente_key: {"modelo": "opus|sonnet|haiku", "esforco": "high|medium|low"}}
 
 
 class PredioAcao(_SM_pr, table=True):
@@ -161,7 +162,8 @@ def _pr_migrar_colunas() -> None:
         return
     for nome, tipo in {"agencia_nome": "TEXT DEFAULT ''", "agencia_email": "TEXT DEFAULT ''",
                        "site_mensal": "BOOLEAN DEFAULT FALSE", "ultimo_site_em": "TIMESTAMP",
-                       "rh_revisao_mensal": "BOOLEAN DEFAULT FALSE", "ultimo_rh_em": "TIMESTAMP"}.items():
+                       "rh_revisao_mensal": "BOOLEAN DEFAULT FALSE", "ultimo_rh_em": "TIMESTAMP",
+                       "modelos_json": "TEXT DEFAULT '{}'"}.items():
         if nome in existentes_cfg:
             continue
         try:
@@ -1559,11 +1561,40 @@ except Exception as _e_pr_wa:
 _PR_WA_GATILHOS = ("reuni", "agend", "marcar", "horario", "disponib", "encontro", "call", "videochamada", "conversar com voce")
 
 
-def _pr_claude_json(system: str, conteudo: str, schema: dict) -> dict:
-    resp = _pr_client().beta.messages.create(
-        model=_PR_MODEL, max_tokens=4000, system=system,
+def _pr_perfil(agente_key: str, company_id=None) -> tuple:
+    """(modelo, esforço) do agente: implementado em ui_predio_custos.py."""
+    return _PR_MODEL, "high"
+
+
+def _pr_registrar_uso(company_id, chamado_id, agente_key: str, tipo: str, modelo: str, resp) -> None:
+    """Grava tokens e custo de uma chamada à API: implementado em ui_predio_custos.py."""
+
+
+def _pr_api(company_id, chamado_id, agente_key: str, tipo: str, **kw):
+    """Chama a API, registra o uso e, se um modelo mais barato recusar algum parâmetro (400), refaz com o padrão."""
+    import anthropic as _an_pr
+    try:
+        resp = _pr_client().beta.messages.create(**kw)
+    except _an_pr.BadRequestError as e:
+        if kw.get("model") == _PR_MODEL:
+            raise
+        print(f"[predio] {kw.get('model')} recusou o pedido ({str(e)[:160]}); refazendo com {_PR_MODEL}")
+        kw["model"] = _PR_MODEL
+        resp = _pr_client().beta.messages.create(**kw)
+    try:
+        _pr_registrar_uso(company_id, chamado_id, agente_key, tipo, getattr(resp, "model", None) or kw.get("model"), resp)
+    except Exception as e_uso:
+        print(f"[predio] registro de uso: {e_uso}")
+    return resp
+
+
+def _pr_claude_json(system: str, conteudo: str, schema: dict, company_id=None) -> dict:
+    modelo, esforco = _pr_perfil("extracao", company_id)
+    resp = _pr_api(
+        company_id, None, "atendimento", "extracao",
+        model=modelo, max_tokens=4000, system=system,
         messages=[{"role": "user", "content": conteudo}],
-        output_config={"effort": "low", "format": {"type": "json_schema", "schema": schema}},
+        output_config={"effort": esforco, "format": {"type": "json_schema", "schema": schema}},
         betas=_PR_BETAS, fallbacks="default",
     )
     if resp.stop_reason == "refusal":
@@ -1675,6 +1706,7 @@ def _pr_wa_oferecer(s, cid, cliente, thread_id, mensagem, oferta=None):
          "properties": {"quer_agendar": {"type": "boolean"},
                         "escolhidos": {"type": "array", "items": {"type": "string", "enum": [str(i) for i in range(len(cands))]}},
                         "introducao": {"type": "string"}}},
+        company_id=cid,
     )
     if not decisao.get("quer_agendar") and not oferta:
         return None
@@ -1725,6 +1757,7 @@ def _pr_wa_escolha(s, cid, cliente, oferta, mensagem):
             {"type": "object", "additionalProperties": False, "required": ["escolha"],
              "properties": {"escolha": {"type": "string",
                                         "enum": [str(n) for n in range(1, len(opcoes) + 1)] + ["nenhuma", "outro_assunto"]}}},
+            company_id=cid,
         ).get("escolha", "outro_assunto")
     if escolha == "outro_assunto":
         return None
@@ -2264,9 +2297,9 @@ _PR_TOOLS = {
 
 # Pesquisa e leitura na web (ferramentas do servidor da Anthropic), só para agentes com "web": True
 _PR_TOOLS_WEB = [
-    {"type": "web_search_20260209", "name": "web_search", "max_uses": 12,
+    {"type": "web_search_20260209", "name": "web_search", "max_uses": 6,
      "user_location": {"type": "approximate", "country": "BR", "timezone": "America/Sao_Paulo"}},
-    {"type": "web_fetch_20260209", "name": "web_fetch", "max_uses": 6, "max_content_tokens": 20000},
+    {"type": "web_fetch_20260209", "name": "web_fetch", "max_uses": 4, "max_content_tokens": 10000},
 ]
 
 
@@ -2697,7 +2730,7 @@ def _pr_add_passo(chamado_id: int, passo: dict) -> None:
         s.commit()
 
 
-def _pr_rotear(pedido: str, papel: str) -> dict:
+def _pr_rotear(pedido: str, papel: str, company_id=None, chamado_id=None) -> dict:
     disponiveis = [a["key"] for a in _pr_agentes_disponiveis(papel)]
     todos = [k for k in _PREDIO_AGENTES if k != "recepcionista"]
     schema = {
@@ -2722,12 +2755,14 @@ def _pr_rotear(pedido: str, papel: str) -> dict:
         "não está ativo.\n\n"
         f"Agentes do prédio:\n{_pr_catalogo_texto(papel)}"
     )
-    resp = _pr_client().beta.messages.create(
-        model=_PR_MODEL,
+    modelo, esforco = _pr_perfil("recepcionista", company_id)
+    resp = _pr_api(
+        company_id, chamado_id, "recepcionista", "recepcao",
+        model=modelo,
         max_tokens=8000,
         system=system,
         messages=[{"role": "user", "content": pedido}],
-        output_config={"effort": "low", "format": {"type": "json_schema", "schema": schema}},
+        output_config={"effort": esforco, "format": {"type": "json_schema", "schema": schema}},
         betas=_PR_BETAS,
         fallbacks="default",
     )
@@ -2744,7 +2779,6 @@ def _pr_rodar_agente(chamado_id: int, agente: dict, messages: list, company_id: 
                      turno=0) -> tuple:
     """Roda o loop de ferramentas sobre `messages` (que termina numa pergunta do usuário).
     Retorna (texto_final, messages) com tudo o que foi trocado anexado, sem editar o histórico."""
-    client = _pr_client()
     permitidas = set(agente["ferramentas"])
     tools, sem_strict = _pr_montar_tools(agente["ferramentas"])
     if agente.get("web"):
@@ -2753,14 +2787,16 @@ def _pr_rodar_agente(chamado_id: int, agente: dict, messages: list, company_id: 
     messages = list(messages)
     anexos_cache: dict = {}
     _PR_EXEC.turno = turno
+    modelo, esforco = _pr_perfil(agente["key"], company_id)
     for _ in range(30 if agente.get("web") else 15):
-        resp = client.beta.messages.create(
-            model=_PR_MODEL,
+        resp = _pr_api(
+            company_id, chamado_id, agente["key"], "agente",
+            model=modelo,
             max_tokens=16000,
             system=system,
             tools=tools,
             messages=_pr_hidratar(messages, anexos_cache),
-            output_config={"effort": "high"},
+            output_config={"effort": esforco},
             cache_control={"type": "ephemeral"},
             betas=_PR_BETAS,
             fallbacks="default",
@@ -2900,7 +2936,7 @@ def _pr_processar(chamado_id: int) -> None:
 
             if not agente_key:
                 _pr_atualizar(chamado_id, status="roteando")
-                rota = _pr_rotear(pedido, papel)
+                rota = _pr_rotear(pedido, papel, cid, chamado_id)
                 if rota.get("agente") == "nenhum" or rota.get("agente") not in _PREDIO_AGENTES:
                     ideal = _PREDIO_AGENTES.get(rota.get("andar_ideal", ""), {})
                     _pr_atualizar(chamado_id, status="sem_agente", titulo=rota.get("titulo", "")[:200],
@@ -3415,6 +3451,7 @@ async def predio_home(request: Request, session: Session = Depends(get_session))
         "briefing_semanal": bool(cfg and cfg.briefing_semanal),
         "mkt": globals().get("_mk_config_view", lambda c: None)(cfg),
         "rh": globals().get("_rh_config_view", lambda c: None)(ctx.company.id) if papel == "admin" else None,
+        "custos": globals().get("_cu_resumo_home", lambda c: None)(ctx.company.id) if papel == "admin" else None,
         "meet": globals().get("_meet_config_view", lambda c: None)(ctx.company.id) if papel == "admin" else None,
         "total_agentes": len(_PREDIO_AGENTES),
         "total_ativos": sum(1 for a in _PREDIO_AGENTES.values() if a["ativo"]),
