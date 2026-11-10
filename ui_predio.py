@@ -184,8 +184,8 @@ _PREDIO_ANDARES = [
          "ferramentas": ["ops_tarefas_atrasadas", "ops_pendencias_abertas", "ops_agenda", "ops_clientes_sem_contato",
                          "com_pipeline", "fin_resumo_caixa", "fin_inadimplencia", "fin_contratos", "cli_carteira",
                          "cli_panorama", "ops_propor_tarefa", "atd_caixa", "sis_pendencias", "cos_delegar"]},
-        {"key": "estrategia", "nome": "Estratégia", "papeis": _PR_ADMIN, "ativo": False,
-         "atribuicoes": "Metas do escritório (receita, carteira, margem) e acompanhamento do BSC interno."},
+        {"key": "estrategia", "nome": "Estratégia", "papeis": _PR_ADMIN, "ativo": False,  # ativado em ui_predio_estrategia.py
+         "atribuicoes": "Indicadores do escritório mês a mês, BSC interno com metas, lançamento mensal e ações estratégicas."},
     ]},
     {"key": "financeiro", "nome": "Financeiro interno", "rotulo": "9º andar", "agentes": [
         {"key": "controller", "nome": "Controller", "papeis": _PR_ADMIN, "ativo": True,
@@ -4679,7 +4679,10 @@ TEMPLATES["predio_chamado.html"] = r"""
     lgpd_anonimizar:   {para:'{d}', botao:'Aprovar e anonimizar (irreversível)'},
     lancar_conta_pagar:{para:'{d}', botao:'Aprovar e lançar'},
     baixar_conta_pagar:{para:'{d}', botao:'Aprovar e baixar'},
-    conciliar_extrato: {para:'{d}', botao:'Aprovar e conciliar'}
+    conciliar_extrato: {para:'{d}', botao:'Aprovar e conciliar'},
+    criar_meta_bsc:    {para:'{d}', botao:'Aprovar e criar a meta'},
+    lancar_valores_bsc:{para:'{d}', botao:'Aprovar e lançar no BSC'},
+    criar_acao_bsc:    {para:'{d}', botao:'Aprovar e criar a ação'}
   };
   function campo(form, rotulo, tag, nome, id, valor, linhas){
     var lb=el('label','form-label small fw-semibold mb-1',rotulo); lb.htmlFor=id;
