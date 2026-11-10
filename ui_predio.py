@@ -217,20 +217,21 @@ _PREDIO_ANDARES = [
         {"key": "lgpd", "nome": "Privacidade (LGPD)", "papeis": _PR_TODOS, "ativo": False,
          "atribuicoes": "Consentimentos, pedidos de titulares e retenção de dados."},
     ]},
+    # Analista Financeiro, Orçamento e BSC e Relatório Mensal: ferramentas e ativação em ui_predio_consultoria.py
     {"key": "consultoria", "nome": "Consultoria e Entrega", "rotulo": "6º andar", "agentes": [
         {"key": "gestor_carteira", "nome": "Gestor de Carteira", "papeis": _PR_TODOS, "ativo": True,
          "atribuicoes": "Painel por cliente: prazos, pendências e saúde da conta; aponta quem precisa de atenção.",
          "ferramentas": ["cli_carteira", "cli_panorama", "reu_listar", "ops_tarefas_atrasadas",
                          "ops_pendencias_abertas", "ops_agenda", "ops_clientes_sem_contato", "ops_propor_tarefa"]},
         {"key": "analista_financeiro", "nome": "Analista Financeiro", "papeis": _PR_TODOS, "ativo": False,
-         "atribuicoes": "Diagnóstico, DRE, fluxo de caixa e indicadores do cliente."},
+         "atribuicoes": "Analisa DRE, balanço, balancetes e fluxo de caixa do cliente com indicadores calculados e recomendações."},
         {"key": "orcamento_bsc", "nome": "Orçamento e BSC", "papeis": _PR_TODOS, "ativo": False,
-         "atribuicoes": "Monta e acompanha orçamento e KPIs, propõe ações corretivas."},
+         "atribuicoes": "Orçado x realizado com semáforo, BSC fora da meta e ações corretivas com responsável e prazo."},
         {"key": "secretario_reunioes", "nome": "Secretário de Reuniões", "papeis": _PR_TODOS, "ativo": True,
          "atribuicoes": "Pauta antes, ata, ações e rascunho de follow-up depois de cada reunião.",
          "ferramentas": ["reu_listar", "reu_conteudo", "cli_panorama", "ops_agenda", "ops_propor_tarefa"]},
         {"key": "relatorio_mensal", "nome": "Relatório Mensal", "papeis": _PR_TODOS, "ativo": False,
-         "atribuicoes": "Consolida o mês de cada cliente num relatório executivo."},
+         "atribuicoes": "Relatório do mês em Word: executivo ou RMA da recuperação judicial, seguindo o modelo do escritório."},
     ]},
     # ferramentas e ativação vêm de ui_predio_credito.py
     {"key": "credito", "nome": "Crédito e Mercado de Capitais", "rotulo": "5º andar", "agentes": [
