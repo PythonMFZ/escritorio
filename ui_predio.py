@@ -198,8 +198,8 @@ _PREDIO_ANDARES = [
         {"key": "cobranca", "nome": "Cobrança", "papeis": _PR_ADMIN, "ativo": True,
          "atribuicoes": "Identifica inadimplentes e propõe e-mails de cobrança no tom certo para cada atraso.",
          "ferramentas": ["fin_inadimplencia", "cob_historico_cliente", "cob_propor_email", "fin_contratos"]},
-        {"key": "contas_pagar", "nome": "Contas a Pagar", "papeis": _PR_ADMIN, "ativo": False,
-         "atribuicoes": "Agenda pagamentos e alerta vencimentos."},
+        {"key": "contas_pagar", "nome": "Contas a Pagar", "papeis": _PR_ADMIN, "ativo": False,  # ativado em ui_predio_financeiro.py
+         "atribuicoes": "Agenda de pagamentos, lança contas a partir de boletos e notas, baixa e concilia o extrato (com aprovação)."},
     ]},
     {"key": "pessoas", "nome": "Pessoas", "rotulo": "8º andar", "agentes": [
         {"key": "capacidade", "nome": "Capacidade", "papeis": _PR_ADMIN, "ativo": False,
@@ -4676,7 +4676,10 @@ TEMPLATES["predio_chamado.html"] = r"""
     publicar_vitrine:  {para:'{d}', botao:'Aprovar e publicar no site'},
     email_parceiro:    {para:'Para: {d} (contato cadastrado do parceiro)', assunto:true, corpo:true, linhas:10, botao:'Aprovar e enviar ao parceiro'},
     registrar_contrato:{para:'{d}', botao:'Aprovar e cadastrar o contrato'},
-    lgpd_anonimizar:   {para:'{d}', botao:'Aprovar e anonimizar (irreversível)'}
+    lgpd_anonimizar:   {para:'{d}', botao:'Aprovar e anonimizar (irreversível)'},
+    lancar_conta_pagar:{para:'{d}', botao:'Aprovar e lançar'},
+    baixar_conta_pagar:{para:'{d}', botao:'Aprovar e baixar'},
+    conciliar_extrato: {para:'{d}', botao:'Aprovar e conciliar'}
   };
   function campo(form, rotulo, tag, nome, id, valor, linhas){
     var lb=el('label','form-label small fw-semibold mb-1',rotulo); lb.htmlFor=id;
