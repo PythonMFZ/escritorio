@@ -2288,8 +2288,44 @@ def _pr_completar_entrada(spec: dict, entrada: dict) -> dict:
     """Ferramenta sem strict: preenche campos que o modelo omitiu com vazio do tipo certo e descarta
     campos que a ferramenta não conhece."""
     vazio = {"string": "", "integer": 0, "number": 0, "boolean": False, "array": [], "object": {}}
-    props = spec.get("props") or {}
+    props = spec.get("props") or (spec.get("schema", {}).get("input_schema", {}).get("properties") or {})
+    if not props:
+        return dict(entrada or {})
     return {k: entrada.get(k, vazio.get(v.get("type"), "")) for k, v in props.items()}
+
+
+_PR_STRICT_ORCAMENTO = 40  # campos somados das ferramentas strict de um pedido (acima disso a gramática estoura)
+
+
+def _pr_campos(schema: dict) -> int:
+    n = 0
+    for v in (schema.get("properties") or {}).values():
+        n += 1 + (_pr_campos(v) if isinstance(v, dict) else 0)
+        if isinstance(v, dict) and isinstance(v.get("items"), dict):
+            n += _pr_campos(v["items"])
+    return n
+
+
+def _pr_montar_tools(nomes: list) -> tuple:
+    """Schemas das ferramentas do agente. A API recusa ('compiled grammar is too large') quando a soma das
+    ferramentas strict é grande: mantém strict as menores até o orçamento e manda as demais sem strict
+    (validadas no código). Devolve (tools, nomes enviados sem strict)."""
+    strict = sorted((n for n in nomes if _PR_TOOLS[n].get("strict")),
+                    key=lambda n: _pr_campos(_PR_TOOLS[n]["schema"]["input_schema"]))
+    manter, soma = set(), 0
+    for n in strict:
+        c = _pr_campos(_PR_TOOLS[n]["schema"]["input_schema"])
+        if soma + c <= _PR_STRICT_ORCAMENTO:
+            manter.add(n)
+            soma += c
+    soltas = {n for n in strict if n not in manter}
+    tools = []
+    for n in nomes:
+        sc = _PR_TOOLS[n]["schema"]
+        if n in soltas:
+            sc = {k: v for k, v in sc.items() if k != "strict"}
+        tools.append(sc)
+    return tools, soltas
 
 
 def _pr_registrar_ferramenta(nome: str, spec: dict) -> None:
@@ -2710,7 +2746,7 @@ def _pr_rodar_agente(chamado_id: int, agente: dict, messages: list, company_id: 
     Retorna (texto_final, messages) com tudo o que foi trocado anexado, sem editar o histórico."""
     client = _pr_client()
     permitidas = set(agente["ferramentas"])
-    tools = [_PR_TOOLS[n]["schema"] for n in agente["ferramentas"]]
+    tools, sem_strict = _pr_montar_tools(agente["ferramentas"])
     if agente.get("web"):
         tools += _PR_TOOLS_WEB
     system = _pr_system_prompt(agente, empresa, company_id)
@@ -2780,7 +2816,7 @@ def _pr_rodar_agente(chamado_id: int, agente: dict, messages: list, company_id: 
                     _PR_EXEC.chamado_id, _PR_EXEC.agente_key, _PR_EXEC.turno = chamado_id, agente["key"], turno
                     _PR_EXEC.delegado = delegado
                     with _Sess_pr(engine) as s:
-                        dado = spec["fn"](s, company_id, **(entrada if spec.get("strict", True)
+                        dado = spec["fn"](s, company_id, **(entrada if spec.get("strict", True) and uso.name not in sem_strict
                                                             else _pr_completar_entrada(spec, entrada)))
                     conteudo = _json_pr.dumps(dado, ensure_ascii=False, default=str)
                     if uso.name == "cos_delegar" and isinstance(dado, dict) and dado.get("ok") is False:
