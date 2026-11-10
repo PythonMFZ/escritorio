@@ -107,9 +107,13 @@ try:
         # Salva temporariamente
         save_path = _AUDIO_DIR_CRF / f"meeting_{meeting_id}_{ctx.user.id}.{ext}"
         try:
-            content = await audio_file.read()
+            # grava em blocos: uma gravação longa não é carregada inteira na memória
             with open(save_path, "wb") as f:
-                f.write(content)
+                while True:
+                    bloco = await audio_file.read(1024 * 1024)
+                    if not bloco:
+                        break
+                    f.write(bloco)
         except Exception as e:
             return _JR({"ok": False, "erro": f"Erro ao salvar arquivo: {e}"})
 
