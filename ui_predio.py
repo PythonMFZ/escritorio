@@ -232,13 +232,14 @@ _PREDIO_ANDARES = [
         {"key": "relatorio_mensal", "nome": "Relatório Mensal", "papeis": _PR_TODOS, "ativo": False,
          "atribuicoes": "Consolida o mês de cada cliente num relatório executivo."},
     ]},
+    # ferramentas e ativação vêm de ui_predio_credito.py
     {"key": "credito", "nome": "Crédito e Mercado de Capitais", "rotulo": "5º andar", "agentes": [
         {"key": "estruturador", "nome": "Estruturador", "papeis": _PR_TODOS, "ativo": False,
-         "atribuicoes": "Desenha operações (CRI, CRA, debêntures, crédito bancário) e monta o book."},
+         "atribuicoes": "Desenha a operação (bancária, CRI, CRA, debênture, FIDC), compara estruturas com CET e DSCR calculados e monta o book de crédito."},
         {"key": "analista_risco", "nome": "Analista de Risco", "papeis": _PR_TODOS, "ativo": False,
-         "atribuicoes": "Consultas de risco, crédito do tomador e garantias."},
+         "atribuicoes": "Parecer do tomador: SCR, dossiês do ConstruRisk, capacidade de pagamento, garantias, rating interno e covenants."},
         {"key": "relacao_investidores", "nome": "Relação com Investidores", "papeis": _PR_TODOS, "ativo": False,
-         "atribuicoes": "Securitizadoras, bancos e fundos; acompanhamento de cada operação."},
+         "atribuicoes": "Bancos, securitizadoras e fundos: quem abordar em cada operação, acompanhamento e envio do book (com aprovação)."},
     ]},
     {"key": "imobiliario", "nome": "Imobiliário", "rotulo": "4º andar", "agentes": [
         {"key": "viabilidade", "nome": "Viabilidade", "papeis": _PR_TODOS, "ativo": False,
@@ -3630,10 +3631,10 @@ async def predio_aprovar_acao(acao_id: int, request: Request, session: Session =
         return RedirectResponse("/predio", status_code=303)
     form = await request.form()
     if acao.tipo in ("email_cobranca", "whatsapp_resposta", "cancelar_reuniao", "criar_tarefa",
-                     "registrar_conhecimento", "email_agencia") and acao.status in ("pendente", "erro"):
+                     "registrar_conhecimento", "email_agencia", "email_parceiro") and acao.status in ("pendente", "erro"):
         assunto = str(form.get("assunto") or "").strip()[:200]
         corpo = str(form.get("corpo") or "").strip()[:20000]
-        if assunto and acao.tipo in ("email_cobranca", "criar_tarefa", "registrar_conhecimento", "email_agencia"):
+        if assunto and acao.tipo in ("email_cobranca", "criar_tarefa", "registrar_conhecimento", "email_agencia", "email_parceiro"):
             acao.assunto = assunto
         if corpo:
             acao.corpo = corpo
@@ -4670,7 +4671,8 @@ TEMPLATES["predio_chamado.html"] = r"""
     criar_negocio:     {para:'{d}', botao:'Aprovar e criar no CRM'},
     registrar_proposta:{para:'{d}', botao:'Aprovar e registrar no CRM'},
     solicitar_documentos:{para:'{d}', botao:'Aprovar e pedir ao cliente'},
-    publicar_vitrine:  {para:'{d}', botao:'Aprovar e publicar no site'}
+    publicar_vitrine:  {para:'{d}', botao:'Aprovar e publicar no site'},
+    email_parceiro:    {para:'Para: {d} (contato cadastrado do parceiro)', assunto:true, corpo:true, linhas:10, botao:'Aprovar e enviar ao parceiro'}
   };
   function campo(form, rotulo, tag, nome, id, valor, linhas){
     var lb=el('label','form-label small fw-semibold mb-1',rotulo); lb.htmlFor=id;
