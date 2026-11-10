@@ -79,6 +79,8 @@ class PredioConfig(_SM_pr, table=True):
     agencia_email: str = _F_pr(default="")
     site_mensal: bool = _F_pr(default=False)
     ultimo_site_em: _Opt_pr[_dt_pr] = _F_pr(default=None)
+    rh_revisao_mensal: bool = _F_pr(default=False)
+    ultimo_rh_em: _Opt_pr[_dt_pr] = _F_pr(default=None)
 
 
 class PredioAcao(_SM_pr, table=True):
@@ -158,7 +160,8 @@ def _pr_migrar_colunas() -> None:
         print(f"[predio] inspeção de colunas: {e}")
         return
     for nome, tipo in {"agencia_nome": "TEXT DEFAULT ''", "agencia_email": "TEXT DEFAULT ''",
-                       "site_mensal": "BOOLEAN DEFAULT FALSE", "ultimo_site_em": "TIMESTAMP"}.items():
+                       "site_mensal": "BOOLEAN DEFAULT FALSE", "ultimo_site_em": "TIMESTAMP",
+                       "rh_revisao_mensal": "BOOLEAN DEFAULT FALSE", "ultimo_rh_em": "TIMESTAMP"}.items():
         if nome in existentes_cfg:
             continue
         try:
@@ -201,13 +204,14 @@ _PREDIO_ANDARES = [
         {"key": "contas_pagar", "nome": "Contas a Pagar", "papeis": _PR_ADMIN, "ativo": False,  # ativado em ui_predio_financeiro.py
          "atribuicoes": "Agenda de pagamentos, lança contas a partir de boletos e notas, baixa e concilia o extrato (com aprovação)."},
     ]},
+    # ferramentas e ativação vêm de ui_predio_pessoas.py (RH das pessoas E dos agentes)
     {"key": "pessoas", "nome": "Pessoas", "rotulo": "8º andar", "agentes": [
         {"key": "capacidade", "nome": "Capacidade", "papeis": _PR_ADMIN, "ativo": False,
-         "atribuicoes": "Horas por cliente x contrato e sobrecarga da equipe."},
+         "atribuicoes": "Carga da equipe (horas, tarefas, atrasos) e dos agentes (uso, erros, aprovações); aponta sobrecarga e gargalos."},
         {"key": "recrutamento", "nome": "Recrutamento", "papeis": _PR_ADMIN, "ativo": False,
-         "atribuicoes": "Descrição de vagas e triagem de currículos."},
+         "atribuicoes": "Lê a demanda que o prédio não atende e propõe contratar agentes novos (ou desligar os sem uso); vagas e triagem de currículos para pessoas."},
         {"key": "treinamento", "nome": "Treinamento", "papeis": _PR_ADMIN, "ativo": False,
-         "atribuicoes": "Onboarding de consultores e trilhas na Educação."},
+         "atribuicoes": "Aprimora os agentes com lições aprendidas do histórico (erros, rejeições, perguntas de continuação); trilhas de onboarding na Educação."},
     ]},
     # ferramentas e ativação vêm de ui_predio_juridico.py
     {"key": "juridico", "nome": "Jurídico e Compliance", "rotulo": "7º andar", "agentes": [
@@ -308,6 +312,15 @@ for _andar_pr in _PREDIO_ANDARES:
         _ag_pr["andar_key"] = _andar_pr["key"]
         _ag_pr["andar_nome"] = _andar_pr["nome"]
         _PREDIO_AGENTES[_ag_pr["key"]] = _ag_pr
+
+
+def _pr_sincronizar_agentes(forcar: bool = False) -> None:
+    """Carrega agentes contratados e lições aprendidas do banco (implementado em ui_predio_pessoas.py)."""
+
+
+def _pr_licoes_texto(agente_key: str, company_id) -> str:
+    """Lições aprendidas aprovadas para o agente (implementado em ui_predio_pessoas.py)."""
+    return ""
 
 
 def _pr_pode_usar(agente: dict, papel: str) -> bool:
@@ -2390,13 +2403,14 @@ _PR_INSTRUCOES = {
 }
 
 
-def _pr_system_prompt(agente: dict, empresa: str) -> str:
+def _pr_system_prompt(agente: dict, empresa: str, company_id=None) -> str:
     agora = _pr_agora_brt()
     return (
         f"Você é o agente {agente['nome']}, do andar {agente['andar_nome']}, no prédio de agentes da {empresa}, "
         f"uma boutique financeira. Hoje é {agora.strftime('%d/%m/%Y')} (horário de Brasília).\n\n"
         f"Suas atribuições: {agente['atribuicoes']}\n\n"
-        f"{_PR_INSTRUCOES.get(agente['key'], '')}\n\n"
+        f"{_PR_INSTRUCOES.get(agente['key']) or agente.get('instrucoes', '')}\n\n"
+        f"{_pr_licoes_texto(agente['key'], company_id)}"
         "Regras:\n"
         "- Use as ferramentas para buscar os dados reais do sistema. Nunca invente números, nomes ou datas.\n"
         "- Se um dado não existir ou vier vazio, diga isso claramente em vez de supor.\n"
@@ -2696,7 +2710,7 @@ def _pr_rodar_agente(chamado_id: int, agente: dict, messages: list, company_id: 
     tools = [_PR_TOOLS[n]["schema"] for n in agente["ferramentas"]]
     if agente.get("web"):
         tools += _PR_TOOLS_WEB
-    system = _pr_system_prompt(agente, empresa)
+    system = _pr_system_prompt(agente, empresa, company_id)
     messages = list(messages)
     anexos_cache: dict = {}
     _PR_EXEC.turno = turno
@@ -2835,6 +2849,7 @@ def _pr_notificar(chamado_id: int) -> None:
 def _pr_processar(chamado_id: int) -> None:
     with _PR_SEMAFORO:
         try:
+            _pr_sincronizar_agentes()
             with _Sess_pr(engine) as s:
                 ch = s.get(PredioChamado, chamado_id, options=_PR_LEVE)
                 if not ch:
@@ -2889,6 +2904,7 @@ def _pr_continuar(chamado_id: int) -> None:
         turno = 0
         conversa: list = []
         try:
+            _pr_sincronizar_agentes()
             with _Sess_pr(engine) as s:
                 ch = s.get(PredioChamado, chamado_id, options=_PR_LEVE)
                 if not ch:
@@ -2931,6 +2947,7 @@ def _pr_facilitador(participantes: list, papel: str) -> str:
 def _pr_processar_reuniao(chamado_id: int) -> None:
     with _PR_SEMAFORO:
         try:
+            _pr_sincronizar_agentes()
             with _Sess_pr(engine) as s:
                 ch = s.get(PredioChamado, chamado_id, options=_PR_LEVE)
                 if not ch:
@@ -3320,6 +3337,7 @@ async def predio_home(request: Request, session: Session = Depends(get_session))
     ctx = _pr_ctx(request, session)
     if not ctx:
         return RedirectResponse("/", status_code=303)
+    _pr_sincronizar_agentes()
     papel = ctx.membership.role
     q = _sel_pr(PredioChamado).options(*_PR_LEVE).where(PredioChamado.company_id == ctx.company.id)
     if papel != "admin":
@@ -3357,6 +3375,7 @@ async def predio_home(request: Request, session: Session = Depends(get_session))
         "recentes": [_pr_chamado_view(c) for c in recentes],
         "briefing_semanal": bool(cfg and cfg.briefing_semanal),
         "mkt": globals().get("_mk_config_view", lambda c: None)(cfg),
+        "rh": globals().get("_rh_config_view", lambda c: None)(ctx.company.id) if papel == "admin" else None,
         "meet": globals().get("_meet_config_view", lambda c: None)(ctx.company.id) if papel == "admin" else None,
         "total_agentes": len(_PREDIO_AGENTES),
         "total_ativos": sum(1 for a in _PREDIO_AGENTES.values() if a["ativo"]),
@@ -3375,6 +3394,7 @@ async def predio_criar_chamado(request: Request, session: Session = Depends(get_
     if not ctx:
         return RedirectResponse("/", status_code=303)
     form = await request.form()
+    _pr_sincronizar_agentes()
     pedido = str(form.get("pedido") or "").strip()[:4000]
     agente_key = str(form.get("agente") or "auto").strip()
     if not pedido:
@@ -3412,6 +3432,7 @@ async def predio_convocar_reuniao(request: Request, session: Session = Depends(g
     if not ctx:
         return RedirectResponse("/", status_code=303)
     form = await request.form()
+    _pr_sincronizar_agentes()
     pauta = str(form.get("pauta") or "").strip()[:4000]
     papel = ctx.membership.role
     participantes = []
@@ -3677,9 +3698,13 @@ async def predio_rejeitar_acao(acao_id: int, request: Request, session: Session 
     acao = session.get(PredioAcao, acao_id)
     if not acao or acao.company_id != ctx.company.id or not _pr_pode_decidir(ctx.membership.role, acao.tipo):
         return RedirectResponse("/predio", status_code=303)
+    form = await request.form()
+    motivo = " ".join(str(form.get("motivo") or "").split())[:500]
     if _pr_reivindicar_acao(acao_id, ctx.company.id, "rejeitada"):
         session.refresh(acao)
         acao.decidido_por_user_id, acao.decidido_em = ctx.user.id, _dt_pr.utcnow()
+        if motivo:  # o Treinamento usa o motivo para aprimorar o agente
+            acao.resultado = f"Motivo da rejeição: {motivo}"
         session.add(acao)
         session.commit()
     return _pr_voltar_da_acao(acao)
@@ -4682,7 +4707,11 @@ TEMPLATES["predio_chamado.html"] = r"""
     conciliar_extrato: {para:'{d}', botao:'Aprovar e conciliar'},
     criar_meta_bsc:    {para:'{d}', botao:'Aprovar e criar a meta'},
     lancar_valores_bsc:{para:'{d}', botao:'Aprovar e lançar no BSC'},
-    criar_acao_bsc:    {para:'{d}', botao:'Aprovar e criar a ação'}
+    criar_acao_bsc:    {para:'{d}', botao:'Aprovar e criar a ação'},
+    contratar_agente:  {para:'{d}', botao:'Aprovar e contratar o agente'},
+    desligar_agente:   {para:'{d}', botao:'Aprovar e desligar o agente'},
+    aprimorar_agente:  {para:'{d}', botao:'Aprovar e aplicar as lições'},
+    criar_trilha:      {para:'{d}', botao:'Aprovar e criar a trilha'}
   };
   function campo(form, rotulo, tag, nome, id, valor, linhas){
     var lb=el('label','form-label small fw-semibold mb-1',rotulo); lb.htmlFor=id;
@@ -4725,7 +4754,11 @@ TEMPLATES["predio_chamado.html"] = r"""
       }
       if(pendente){
         var linha=el('div','d-flex gap-2 align-items-center mt-2');
-        linha.appendChild(formAcao(a,'rejeitar','Rejeitar','btn-outline-secondary'));
+        var fr=formAcao(a,'rejeitar','Rejeitar','btn-outline-secondary'); fr.className='d-flex gap-2 align-items-center';
+        var mot=el('input','form-control form-control-sm'); mot.name='motivo'; mot.maxLength=500;
+        mot.placeholder='Motivo (opcional: ensina o agente)'; mot.setAttribute('aria-label','Motivo da rejeição');
+        fr.insertBefore(mot, fr.firstChild);
+        linha.appendChild(fr);
         linha.appendChild(el('span','pc-meta','Nada é enviado ou gerado sem a sua aprovação.'));
         card.appendChild(linha);
       }
