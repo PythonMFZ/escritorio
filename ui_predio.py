@@ -997,12 +997,14 @@ def _pr_modelos_cobranca():
 
 
 def _pr_competencia(valor: str) -> str:
-    v = (valor or "").strip()[:7]
-    try:
-        _dt_pr.strptime(v, "%Y-%m")
-        return v
-    except ValueError:
-        return _pr_hoje().strftime("%Y-%m")
+    """AAAA-MM ou MM/AAAA; vazio ou inválido = mês atual."""
+    v = (valor or "").strip()
+    for fmt, tam in (("%Y-%m", 7), ("%m/%Y", 7)):
+        try:
+            return _dt_pr.strptime(v[:tam], fmt).strftime("%Y-%m")
+        except ValueError:
+            pass
+    return _pr_hoje().strftime("%Y-%m")
 
 
 def _pr_email_financeiro(s, cid: int, cliente) -> str:
@@ -1034,11 +1036,12 @@ def _pr_t_fat_competencia(s, cid, competencia):
         nome = nomes.get(ct.client_id, ct.nome_cliente)
         for m in meses:
             if m not in existentes:
-                faltando.append({"cliente": nome, "contrato": ct.nome_contrato, "competencia": m,
+                faltando.append({"contrato_id": ct.id, "cliente": nome, "contrato": ct.nome_contrato, "competencia": m,
                                  "valor": round((ct.valor_cents or 0) / 100, 2)})
         atual = existentes.get(comp)
         if atual:
-            item = {"cliente": nome, "contrato": ct.nome_contrato, "valor": round((atual.valor_cents or 0) / 100, 2),
+            item = {"cobranca_id": atual.id, "contrato_id": ct.id, "cliente": nome, "contrato": ct.nome_contrato,
+                    "valor": round((atual.valor_cents or 0) / 100, 2),
                     "vencimento": _pr_fmt_data(_pr_data(atual.data_vencimento)), "status": atual.status,
                     "nfse_emitida": bool(atual.nf_numero or atual.nf_chave), "boleto_gerado": bool(atual.boleto_url)}
             faturadas.append(item)
@@ -1052,7 +1055,7 @@ def _pr_t_fat_competencia(s, cid, competencia):
         "cobrancas_a_gerar": faltando,
         "total_a_gerar": round(sum(f["valor"] for f in faltando), 2),
         "sem_nfse_emitida": sem_nf,
-        "observacao": "A geração inclui meses anteriores que ficaram sem cobrança. A NFS-e é emitida na tela de NFS-e do sistema.",
+        "observacao": "A geração inclui meses anteriores que ficaram sem cobrança.",
     }
 
 
@@ -4711,7 +4714,10 @@ TEMPLATES["predio_chamado.html"] = r"""
     contratar_agente:  {para:'{d}', botao:'Aprovar e contratar o agente'},
     desligar_agente:   {para:'{d}', botao:'Aprovar e desligar o agente'},
     aprimorar_agente:  {para:'{d}', botao:'Aprovar e aplicar as lições'},
-    criar_trilha:      {para:'{d}', botao:'Aprovar e criar a trilha'}
+    criar_trilha:      {para:'{d}', botao:'Aprovar e criar a trilha'},
+    emitir_faturamento:{para:'{d}', botao:'Aprovar, emitir e enviar'},
+    alterar_contrato:  {para:'{d}', botao:'Aprovar e alterar o contrato'},
+    status_contrato:   {para:'{d}', botao:'Aprovar'}
   };
   function campo(form, rotulo, tag, nome, id, valor, linhas){
     var lb=el('label','form-label small fw-semibold mb-1',rotulo); lb.htmlFor=id;
