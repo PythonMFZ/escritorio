@@ -4717,7 +4717,10 @@ TEMPLATES["predio_chamado.html"] = r"""
     criar_trilha:      {para:'{d}', botao:'Aprovar e criar a trilha'},
     emitir_faturamento:{para:'{d}', botao:'Aprovar, emitir e enviar'},
     alterar_contrato:  {para:'{d}', botao:'Aprovar e alterar o contrato'},
-    status_contrato:   {para:'{d}', botao:'Aprovar'}
+    status_contrato:   {para:'{d}', botao:'Aprovar'},
+    baixar_titulo:     {para:'{d}', botao:'Aprovar e dar baixa'},
+    alterar_titulo:    {para:'{d}', botao:'Aprovar e alterar o título'},
+    cancelar_titulo:   {para:'{d}', botao:'Aprovar e cancelar o título'}
   };
   function campo(form, rotulo, tag, nome, id, valor, linhas){
     var lb=el('label','form-label small fw-semibold mb-1',rotulo); lb.htmlFor=id;
