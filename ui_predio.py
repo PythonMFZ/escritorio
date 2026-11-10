@@ -209,13 +209,14 @@ _PREDIO_ANDARES = [
         {"key": "treinamento", "nome": "Treinamento", "papeis": _PR_ADMIN, "ativo": False,
          "atribuicoes": "Onboarding de consultores e trilhas na Educação."},
     ]},
+    # ferramentas e ativação vêm de ui_predio_juridico.py
     {"key": "juridico", "nome": "Jurídico e Compliance", "rotulo": "7º andar", "agentes": [
-        {"key": "contratos", "nome": "Contratos", "papeis": _PR_TODOS, "ativo": False,
-         "atribuicoes": "Minutas a partir de modelos, prazos e renovações."},
+        {"key": "contratos", "nome": "Contratos", "papeis": _PR_ADMIN, "ativo": False,
+         "atribuicoes": "Carteira de contratos e vencimentos, minuta em Word e cadastro do contrato assinado no financeiro."},
         {"key": "compliance", "nome": "Compliance", "papeis": _PR_TODOS, "ativo": False,
-         "atribuicoes": "KYC de cliente novo, PLD e conflitos de interesse."},
-        {"key": "lgpd", "nome": "Privacidade (LGPD)", "papeis": _PR_TODOS, "ativo": False,
-         "atribuicoes": "Consentimentos, pedidos de titulares e retenção de dados."},
+         "atribuicoes": "KYC e PLD do cliente novo, checagem de conflito de interesse e parecer de aceitação."},
+        {"key": "lgpd", "nome": "Privacidade (LGPD)", "papeis": _PR_ADMIN, "ativo": False,
+         "atribuicoes": "Pedidos de titulares, onde estão os dados de uma pessoa, retenção e anonimização com aprovação."},
     ]},
     # Analista Financeiro, Orçamento e BSC e Relatório Mensal: ferramentas e ativação em ui_predio_consultoria.py
     {"key": "consultoria", "nome": "Consultoria e Entrega", "rotulo": "6º andar", "agentes": [
@@ -4673,7 +4674,9 @@ TEMPLATES["predio_chamado.html"] = r"""
     registrar_proposta:{para:'{d}', botao:'Aprovar e registrar no CRM'},
     solicitar_documentos:{para:'{d}', botao:'Aprovar e pedir ao cliente'},
     publicar_vitrine:  {para:'{d}', botao:'Aprovar e publicar no site'},
-    email_parceiro:    {para:'Para: {d} (contato cadastrado do parceiro)', assunto:true, corpo:true, linhas:10, botao:'Aprovar e enviar ao parceiro'}
+    email_parceiro:    {para:'Para: {d} (contato cadastrado do parceiro)', assunto:true, corpo:true, linhas:10, botao:'Aprovar e enviar ao parceiro'},
+    registrar_contrato:{para:'{d}', botao:'Aprovar e cadastrar o contrato'},
+    lgpd_anonimizar:   {para:'{d}', botao:'Aprovar e anonimizar (irreversível)'}
   };
   function campo(form, rotulo, tag, nome, id, valor, linhas){
     var lb=el('label','form-label small fw-semibold mb-1',rotulo); lb.htmlFor=id;
