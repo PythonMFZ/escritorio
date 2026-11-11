@@ -117,6 +117,29 @@ try:
         except Exception as e:
             return _JR({"ok": False, "erro": f"Erro ao salvar arquivo: {e}"})
 
+        # Backup no S3 antes de transcrever: se o servidor reiniciar no meio, o vigia retoma daqui
+        _s3_key = None
+        try:
+            from starlette.concurrency import run_in_threadpool as _rtp_crf
+            _s3_key = await _rtp_crf(_s3_upload_audio, str(save_path), meeting_id)
+        except Exception as _e_s3:
+            print(f"[crf] backup S3 do áudio da reunião {meeting_id}: {_e_s3}")
+        try:
+            import json as _json_crf
+            try:
+                _rj = _json_crf.loads(mt.raw_json or "{}")
+            except Exception:
+                _rj = {}
+            _rj["audio_s3_key"] = _s3_key
+            _rj["retomadas_transcricao"] = 0
+            mt.raw_json = _json_crf.dumps(_rj)
+            mt.notion_status = "transcription_not_started"
+            mt.updated_at = datetime.utcnow()
+            session.add(mt)
+            session.commit()
+        except Exception as _e_rj:
+            print(f"[crf] status da reunião {meeting_id}: {_e_rj}")
+
         # Dispara transcrição em background (reutiliza função do whisper module)
         try:
             background_tasks.add_task(
@@ -125,7 +148,8 @@ try:
                 audio_path=str(save_path),
                 company_id=ctx.company.id,
             )
-            return _JR({"ok": True, "msg": "Áudio recebido. Transcrevendo em segundo plano — atualize a página em alguns minutos."})
+            return _JR({"ok": True, "msg": "Áudio recebido" + (" e guardado com backup" if _s3_key else "")
+                        + ". Transcrevendo em segundo plano — atualize a página em alguns minutos."})
         except Exception as e:
             return _JR({"ok": False, "erro": f"Erro ao enfileirar transcrição: {e}"})
 
