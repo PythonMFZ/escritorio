@@ -505,6 +505,23 @@ def _processar_audio_background(
             pass
         return
 
+    # Batimento: enquanto transcreve, renova updated_at a cada 2 min. Se o servidor reiniciar,
+    # o batimento para e o vigia retoma a transcrição a partir do backup no S3.
+    _hb_parar = _threading_w.Event()
+
+    def _hb():
+        from sqlalchemy import text as _txt_hb
+        while not _hb_parar.wait(120):
+            try:
+                with engine.begin() as _c_hb:
+                    _c_hb.execute(_txt_hb(
+                        "UPDATE meeting SET updated_at = :agora WHERE id = :id "
+                        "AND notion_status IN ('transcription_in_progress', 'summary_in_progress')"),
+                        {"agora": _dt_w.utcnow(), "id": meeting_id})
+            except Exception as _e_hb:
+                print(f"[whisper] batimento da reunião {meeting_id}: {_e_hb}")
+    _threading_w.Thread(target=_hb, daemon=True, name=f"whisper-hb-{meeting_id}").start()
+
     try:
         _processar_audio_background_inner(meeting_id, audio_path, company_id)
     except Exception as _top_e:
@@ -521,6 +538,7 @@ def _processar_audio_background(
         except Exception:
             pass
     finally:
+        _hb_parar.set()
         _TRANSCRIPTION_LOCK.release()
 
 
@@ -1568,30 +1586,73 @@ except Exception as _ew:
 
 # ── Watchdog: reseta reuniões presas há mais de 45 min (sem depender de restart) ──
 
+_WD_PRESA_APOS_MIN = 10   # sem batimento há 10 min = o servidor reiniciou no meio da transcrição
+_WD_MAX_RETOMADAS = 2
+
+
 def _watchdog_reunioes_presas():
+    """Reunião em transcrição sem batimento: retoma a partir do backup no S3 (até 2 vezes por reunião).
+    Sem backup, marca erro com a orientação de reenviar o áudio (antes ela só voltava a 'não iniciada')."""
     import time as _time_wd
     _time_wd.sleep(60)  # aguarda o app estabilizar
     while True:
+        _wd_verificar()
+        _time_wd.sleep(120)  # verifica a cada 2 minutos
+
+
+def _wd_verificar() -> None:
+    from sqlalchemy import text as _txt_wd
+    if True:
         try:
-            _limite = _dt_w.utcnow() - _td_w(minutes=45)
+            _limite = _dt_w.utcnow() - _td_w(minutes=_WD_PRESA_APOS_MIN)
             from sqlmodel import Session as _SessWD
             with _SessWD(engine) as _swd:
                 _presas_wd = _swd.exec(
-                    select(Meeting).where(
+                    select(Meeting.id, Meeting.notion_status, Meeting.company_id).where(
                         Meeting.notion_status.in_(["transcription_in_progress", "summary_in_progress"]),
                         Meeting.updated_at < _limite,
                     )
                 ).all()
-                for _mwd in _presas_wd:
-                    _mwd.notion_status = "transcription_not_started"
-                    _mwd.updated_at = _dt_w.utcnow()
-                    _swd.add(_mwd)
-                if _presas_wd:
-                    _swd.commit()
-                    print(f"[whisper-watchdog] ⚠️  {len(_presas_wd)} reunião(ões) resetada(s) por timeout de 45 min.")
+            for _mid, _st, _cid in _presas_wd:
+                # só um worker do gunicorn reivindica cada reunião
+                with engine.begin() as _c_wd:
+                    _res = _c_wd.execute(_txt_wd(
+                        "UPDATE meeting SET notion_status = 'transcription_not_started', updated_at = :agora "
+                        "WHERE id = :id AND notion_status = :st AND updated_at < :limite"),
+                        {"agora": _dt_w.utcnow(), "id": _mid, "st": _st, "limite": _limite})
+                if _res.rowcount != 1:
+                    continue
+                with _SessWD(engine) as _swd:
+                    _mt = _swd.get(Meeting, _mid)
+                    try:
+                        _rj = _json_w.loads(_mt.raw_json or "{}")
+                    except Exception:
+                        _rj = {}
+                    _s3k = _rj.get("audio_s3_key")
+                    _n = int(_rj.get("retomadas_transcricao") or 0)
+                    if _s3k and _n < _WD_MAX_RETOMADAS:
+                        _rj["retomadas_transcricao"] = _n + 1
+                        _mt.raw_json = _json_w.dumps(_rj)
+                        _swd.add(_mt)
+                        _swd.commit()
+                        _ext = _Path(_s3k).suffix or ".webm"
+                        _destino = str(_Path(_os2.environ.get("AUDIO_UPLOAD_DIR", "/tmp/reunioes")) / f"retomada_{_mid}{_ext}")
+                        print(f"[whisper-watchdog] reunião {_mid} parada sem batimento — retomando do S3 ({_n + 1}/{_WD_MAX_RETOMADAS})")
+                        _threading_w.Thread(target=_processar_audio_background, daemon=True,
+                                            kwargs={"meeting_id": _mid, "audio_path": _destino, "company_id": _cid},
+                                            name=f"whisper-retomada-{_mid}").start()
+                    else:
+                        _mt.notion_status = "error"
+                        _mt.notes_text = ("A transcrição foi interrompida (o servidor reiniciou) e "
+                                          + ("já foi retomada sem sucesso." if _s3k else "o áudio não tinha backup.")
+                                          + " Reenvie a gravação para esta reunião.")
+                        _mt.updated_at = _dt_w.utcnow()
+                        _swd.add(_mt)
+                        _swd.commit()
+                        print(f"[whisper-watchdog] ⚠️  reunião {_mid} interrompida sem como retomar — marcada como erro.")
         except Exception as _ewd:
             print(f"[whisper-watchdog] erro: {_ewd}")
-        _time_wd.sleep(300)  # verifica a cada 5 minutos
+
 
 _threading_w.Thread(target=_watchdog_reunioes_presas, daemon=True, name="whisper-watchdog").start()
 

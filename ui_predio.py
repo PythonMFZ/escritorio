@@ -24,7 +24,7 @@ from datetime import datetime as _dt_pr, timedelta as _td_pr
 from typing import Optional as _Opt_pr
 
 from sqlmodel import Field as _F_pr, SQLModel as _SM_pr, Session as _Sess_pr, select as _sel_pr
-from sqlalchemy import func as _func_pr, text as _sqltext_pr
+from sqlalchemy import func as _func_pr, or_ as _sqlor_pr, text as _sqltext_pr
 
 _PR_MODEL = "claude-opus-5-5"
 _PR_BETAS = ["server-side-fallback-2026-07-01"]
@@ -3257,6 +3257,7 @@ def _pr_agendador() -> None:
     while True:
         try:
             _pr_resetar_travados()
+            _pr_resetar_acoes_interrompidas()
             if ciclo % 10 == 0:
                 _pr_briefings_semanais()
         except Exception as e:
@@ -3741,28 +3742,70 @@ async def predio_aprovar_acao(acao_id: int, request: Request, session: Session =
         session.commit()
     if not _pr_reivindicar_acao(acao_id, ctx.company.id, "executando"):
         return _pr_voltar_da_acao(acao)
-    acao.decidido_por_user_id = ctx.user.id
-    session.add(acao)
-    session.commit()
-    from starlette.concurrency import run_in_threadpool as _rtp_pr
-
-    def _rodar() -> tuple:
-        with _Sess_pr(engine) as s:
-            a = s.get(PredioAcao, acao_id)
-            try:
-                return "executada", _pr_executar_acao(s, a)
-            except Exception as e:
-                return "erro", (str(e) or e.__class__.__name__)[:500]
-
-    status, resultado = await _rtp_pr(_rodar)
-    if status == "erro":
-        print(f"[predio] ação #{acao_id} ({acao.tipo}) falhou: {resultado}")
-    session.refresh(acao)
-    acao.status, acao.resultado = status, resultado
+    # decidido_em marca o INÍCIO da execução: o agendador usa para achar execuções interrompidas por reinício
     acao.decidido_por_user_id, acao.decidido_em = ctx.user.id, _dt_pr.utcnow()
     session.add(acao)
     session.commit()
+    if acao.tipo in _PR_TIPOS_EM_SEGUNDO_PLANO:
+        # execuções longas (emissão de NF e boleto) não prendem a requisição: a tela acompanha o status
+        _thr_pr.Thread(target=_pr_executar_e_registrar, args=(acao_id, ctx.user.id), daemon=True,
+                       name=f"predio-acao-{acao_id}").start()
+        return _pr_voltar_da_acao(acao)
+    from starlette.concurrency import run_in_threadpool as _rtp_pr
+    await _rtp_pr(_pr_executar_e_registrar, acao_id, ctx.user.id)
+    session.refresh(acao)
     return _pr_voltar_da_acao(acao)
+
+
+# Tipos executados fora da requisição (podem levar minutos)
+_PR_TIPOS_EM_SEGUNDO_PLANO = {"emitir_faturamento"}
+_PR_ACOES_ATIVAS: set = set()           # ações executando NESTE processo
+_PR_ACAO_INTERROMPIDA_APOS = _td_pr(minutes=15)
+
+
+def _pr_executar_e_registrar(acao_id: int, user_id: int) -> None:
+    with _PR_ATIVOS_LOCK:
+        _PR_ACOES_ATIVAS.add(acao_id)
+    try:
+        with _Sess_pr(engine) as s:
+            a = s.get(PredioAcao, acao_id)
+            try:
+                status, resultado = "executada", _pr_executar_acao(s, a)
+            except Exception as e:
+                s.rollback()
+                status, resultado = "erro", (str(e) or e.__class__.__name__)[:1500]
+                print(f"[predio] ação #{acao_id} ({a.tipo}) falhou: {resultado[:300]}")
+            a = s.get(PredioAcao, acao_id)
+            a.status, a.resultado = status, resultado
+            a.decidido_por_user_id, a.decidido_em = user_id, _dt_pr.utcnow()
+            s.add(a)
+            s.commit()
+    finally:
+        with _PR_ATIVOS_LOCK:
+            _PR_ACOES_ATIVAS.discard(acao_id)
+
+
+def _pr_resetar_acoes_interrompidas() -> None:
+    """Ação presa em 'executando' há 15 min (o servidor reiniciou no meio): vira 'Falhou' com orientação,
+    liberando o 'Tentar de novo'. Executores como a emissão de NF/boleto não refazem o que já saiu."""
+    corte = _dt_pr.utcnow() - _PR_ACAO_INTERROMPIDA_APOS
+    with _Sess_pr(engine) as s:
+        presas = s.exec(_sel_pr(PredioAcao.id).where(
+            PredioAcao.status == "executando",
+            _sqlor_pr(PredioAcao.decidido_em < corte,
+                      (PredioAcao.decidido_em == None) & (PredioAcao.criado_em < corte)))).all()  # noqa: E711
+    for aid in presas:
+        with _PR_ATIVOS_LOCK:
+            if aid in _PR_ACOES_ATIVAS:
+                continue
+        with engine.begin() as conn:
+            res = conn.execute(_sqltext_pr(
+                "UPDATE predio_acao SET status = 'erro', resultado = :msg WHERE id = :id AND status = 'executando'"),
+                {"id": aid, "msg": "A execução foi interrompida (o servidor reiniciou no meio). Confira o que já foi "
+                                   "feito antes de tentar de novo — no faturamento, veja a cobrança em Financeiro › "
+                                   "Cobranças: NF e boleto que já saíram não são emitidos de novo."})
+        if res.rowcount:
+            print(f"[predio] ação #{aid} interrompida por reinício — marcada como falha para nova tentativa")
 
 
 @app.post("/predio/acoes/{acao_id}/rejeitar")
@@ -4944,13 +4987,14 @@ TEMPLATES["predio_chamado.html"] = r"""
     var ult=document.getElementById('pcConversa').lastElementChild;
     if(ult) ult.scrollIntoView({block:'start'});
   }
-  if(dados.em_andamento){
+  function ocupado(d){ return d.em_andamento || (d.acoes||[]).some(function(a){ return a.status==='executando'; }); }
+  if(ocupado(dados)){
     var t=setInterval(async function(){
       try{
         var r=await fetch('/predio/chamados/'+dados.id+'/status');
         if(!r.ok) return;
         var d=await r.json(); aplicar(d);
-        if(!d.em_andamento) clearInterval(t);
+        if(!ocupado(d)) clearInterval(t);
       }catch(e){}
     },3000);
   }

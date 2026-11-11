@@ -50,6 +50,10 @@ _FLOAT_REC_HTML = r"""
 #frec-dot { font-size: 12px; animation: frec-blink 1s infinite; }
 @keyframes frec-blink { 0%,100%{opacity:1} 50%{opacity:0} }
 #frec-feedback { font-size: .78rem; color: #6b7280; }
+#frec-btn.frec-tem-pendente::after {
+  content: ""; position: absolute; top: 2px; right: 2px; width: 12px; height: 12px;
+  border-radius: 50%; background: #f59e0b; border: 2px solid #fff;
+}
 </style>
 
 <button id="frec-btn" title="Gravador de reunião" onclick="frecTogglePanel()">
@@ -90,6 +94,8 @@ _FLOAT_REC_HTML = r"""
 
   <div id="frec-feedback"></div>
 
+  <div id="frec-pendentes" style="display:none;gap:6px;"></div>
+
   <div class="d-flex gap-2">
     <button id="frec-start-btn" class="btn btn-danger btn-sm flex-grow-1" onclick="frecIniciar()">
       ● Iniciar
@@ -103,18 +109,78 @@ _FLOAT_REC_HTML = r"""
 
 <script>
 (function(){
-  var _mr = null, _chunks = [], _timer = null, _secs = 0, _stream = null;
-  var _panelOpen = false;
+  // Gravador resistente a queda: cada pedaço do áudio vai para o IndexedDB deste navegador enquanto grava.
+  // O envio é repetido sozinho se o servidor estiver fora (ex.: deploy) e só apaga a cópia local depois
+  // que o servidor confirma. O que não foi enviado aparece em "Gravações não enviadas" (Reenviar/Baixar).
+  var _mr = null, _chunks = [], _timer = null, _secs = 0, _stream = null, _seq = 0;
+  var _panelOpen = false, _rec = null, _enviando = false, _memoria = {};
+  var DB = 'mc_gravacoes';
+
+  function idb() {
+    return new Promise(function(res, rej) {
+      try {
+        var r = indexedDB.open(DB, 1);
+        r.onupgradeneeded = function() {
+          var d = r.result;
+          if (!d.objectStoreNames.contains('pedacos')) d.createObjectStore('pedacos', { autoIncrement: true }).createIndex('rec', 'rec');
+          if (!d.objectStoreNames.contains('gravacoes')) d.createObjectStore('gravacoes', { keyPath: 'id' });
+        };
+        r.onsuccess = function() { res(r.result); };
+        r.onerror = function() { rej(r.error); };
+      } catch (e) { rej(e); }
+    });
+  }
+  function op(stores, modo, fn) {
+    return idb().then(function(d) {
+      return new Promise(function(res, rej) {
+        var t = d.transaction(stores, modo), out = {};
+        fn(t, out);
+        t.oncomplete = function() { res(out.v); };
+        t.onerror = function() { rej(t.error); };
+        t.onabort = function() { rej(t.error); };
+      });
+    });
+  }
+  function salvarMeta(m) { return op(['gravacoes'], 'readwrite', function(t) { t.objectStore('gravacoes').put(m); }).catch(function(){}); }
+  function salvarPedaco(rec, seq, blob) {
+    return op(['pedacos'], 'readwrite', function(t) { t.objectStore('pedacos').add({ rec: rec, seq: seq, blob: blob }); }).catch(function(){});
+  }
+  function lerPedacos(rec) {
+    return op(['pedacos'], 'readonly', function(t, out) {
+      var q = t.objectStore('pedacos').index('rec').getAll(rec);
+      q.onsuccess = function() { out.v = (q.result || []).sort(function(a, b) { return a.seq - b.seq; }).map(function(x) { return x.blob; }); };
+    }).catch(function() { return []; });
+  }
+  function listarGravacoes() {
+    return op(['gravacoes'], 'readonly', function(t, out) {
+      var q = t.objectStore('gravacoes').getAll();
+      q.onsuccess = function() { out.v = q.result || []; };
+    }).catch(function() { return []; });
+  }
+  function apagar(rec) {
+    delete _memoria[rec];
+    return op(['pedacos', 'gravacoes'], 'readwrite', function(t) {
+      t.objectStore('gravacoes').delete(rec);
+      var c = t.objectStore('pedacos').index('rec').openCursor(IDBKeyRange.only(rec));
+      c.onsuccess = function() { var cur = c.result; if (cur) { cur.delete(); cur.continue(); } };
+    }).catch(function(){});
+  }
+  async function blobDe(rec, mime) {
+    var partes = await lerPedacos(rec);
+    if (!partes || !partes.length) partes = _memoria[rec] || [];
+    return new Blob(partes, { type: mime || 'audio/webm' });
+  }
 
   function frecTogglePanel() {
     _panelOpen = !_panelOpen;
     document.getElementById('frec-panel').classList.toggle('open', _panelOpen);
-    if (_panelOpen) frecCarregarReunioes();
+    if (_panelOpen) { frecCarregarReunioes(); atualizarPendentes(); }
   }
   window.frecTogglePanel = frecTogglePanel;
 
   async function frecCarregarReunioes() {
     var sel = document.getElementById('frec-meeting-sel');
+    if (_mr && _mr.state !== 'inactive') return;
     try {
       var r = await fetch('/api/reunioes/recentes');
       if (!r.ok) throw new Error('status ' + r.status);
@@ -132,21 +198,36 @@ _FLOAT_REC_HTML = r"""
   }
 
   async function frecIniciar() {
-    var mid = document.getElementById('frec-meeting-sel').value;
+    var sel = document.getElementById('frec-meeting-sel');
+    var mid = sel.value;
     if (!mid) { frecSetFeedback('Selecione uma reunião primeiro.'); return; }
     try {
       _stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     } catch(e) {
       frecSetFeedback('Sem acesso ao microfone: ' + e.message); return;
     }
-    _chunks = []; _secs = 0;
-    var mime = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
-      ? 'audio/webm;codecs=opus'
-      : 'audio/webm';
+    _chunks = []; _secs = 0; _seq = 0;
+    var mime = MediaRecorder.isTypeSupported('audio/webm;codecs=opus') ? 'audio/webm;codecs=opus' : 'audio/webm';
+    var rec = 'g' + Date.now();
+    _rec = rec;
+    _memoria[rec] = _chunks;
+    var meta = { id: rec, mid: mid, titulo: (sel.options[sel.selectedIndex] || {}).text || ('Reunião #' + mid), mime: mime,
+                 inicio: Date.now(), atualizado: Date.now(), segundos: 0, status: 'gravando' };
+    salvarMeta(meta);
     _mr = new MediaRecorder(_stream, { mimeType: mime });
-    _mr.ondataavailable = function(e){ if(e.data.size>0) _chunks.push(e.data); };
-    _mr.onstop = function(){ frecEnviar(mid, mime); };
-    _mr.start(1000);
+    _mr.ondataavailable = function(e) {
+      if (e.data.size > 0) {
+        _chunks.push(e.data);
+        salvarPedaco(rec, _seq++, e.data);
+        meta.atualizado = Date.now(); meta.segundos = _secs;
+        salvarMeta(meta);
+      }
+    };
+    _mr.onstop = function() {
+      meta.status = 'parada'; meta.segundos = _secs; meta.atualizado = Date.now();
+      salvarMeta(meta).then(function() { frecEnviar(rec, 0); });
+    };
+    _mr.start(5000);
 
     document.getElementById('frec-start-btn').style.display = 'none';
     document.getElementById('frec-stop-btn').style.display = '';
@@ -154,7 +235,7 @@ _FLOAT_REC_HTML = r"""
     document.getElementById('frec-timer-bar').classList.add('active');
     document.getElementById('frec-btn').classList.add('recording');
     document.getElementById('frec-btn').textContent = '⏹';
-    frecSetFeedback('');
+    frecSetFeedback('A gravação fica salva neste navegador enquanto grava. Não feche nem recarregue esta aba.');
 
     _timer = setInterval(function(){
       _secs++;
@@ -177,29 +258,121 @@ _FLOAT_REC_HTML = r"""
   }
   window.frecParar = frecParar;
 
-  async function frecEnviar(mid, mime) {
-    var ext = mime.includes('ogg') ? 'ogg' : 'webm';
-    var blob = new Blob(_chunks, { type: mime });
+  var ESPERAS = [5, 10, 20, 30, 60, 60, 60, 60, 120, 120];
+
+  function liberarInicio() {
+    document.getElementById('frec-start-btn').style.display = '';
+    document.getElementById('frec-select-wrap').style.display = '';
+  }
+
+  async function frecEnviar(rec, tentativa) {
+    var lista = await listarGravacoes();
+    var meta = lista.filter(function(m) { return m.id === rec; })[0];
+    if (!meta) { meta = { id: rec, mid: document.getElementById('frec-meeting-sel').value, mime: 'audio/webm' }; }
+    _enviando = true;
+    var blob = await blobDe(rec, meta.mime);
+    if (!blob.size) {
+      _enviando = false; liberarInicio();
+      frecSetFeedback('❌ A gravação ficou vazia (o microfone não captou áudio).');
+      apagar(rec); atualizarPendentes();
+      return;
+    }
+    var ext = (meta.mime || '').indexOf('ogg') >= 0 ? 'ogg' : 'webm';
     var fd = new FormData();
     fd.append('audio', blob, 'gravacao.' + ext);
+    var d = null, status = 0;
     try {
-      var r = await fetch('/reunioes/' + mid + '/upload-audio', { method: 'POST', body: fd });
-      var d = await r.json();
-      if (d.ok) {
+      var r = await fetch('/reunioes/' + meta.mid + '/upload-audio', { method: 'POST', body: fd });
+      status = r.status;
+      try { d = await r.json(); } catch (e2) { d = null; }
+      if (r.ok && d && d.ok) {
+        await apagar(rec);
+        _enviando = false; liberarInicio();
         frecSetFeedback('✅ ' + (d.msg || 'Enviado! Transcrevendo…'));
-        document.getElementById('frec-start-btn').style.display = '';
-        document.getElementById('frec-select-wrap').style.display = '';
-      } else {
-        frecSetFeedback('❌ ' + (d.erro || 'Erro ao enviar.'));
-        document.getElementById('frec-start-btn').style.display = '';
-        document.getElementById('frec-select-wrap').style.display = '';
+        atualizarPendentes();
+        return;
       }
-    } catch(e) {
-      frecSetFeedback('❌ Erro de conexão.');
-      document.getElementById('frec-start-btn').style.display = '';
-      document.getElementById('frec-select-wrap').style.display = '';
+      if (d && d.erro && status < 500 && status !== 429) {
+        _enviando = false; liberarInicio();
+        frecSetFeedback('❌ ' + d.erro + ' A gravação continua guardada neste navegador.');
+        atualizarPendentes();
+        return;
+      }
+      throw new Error(status ? 'servidor respondeu ' + status : 'sem resposta');
+    } catch (e) {
+      if (tentativa < ESPERAS.length) {
+        var espera = ESPERAS[tentativa];
+        frecSetFeedback('Servidor indisponível (' + e.message + '). A gravação está salva. Nova tentativa em ' + espera +
+                        ' s (' + (tentativa + 1) + '/' + ESPERAS.length + ')… Não feche esta aba.');
+        setTimeout(function() { frecEnviar(rec, tentativa + 1); }, espera * 1000);
+      } else {
+        _enviando = false; liberarInicio();
+        frecSetFeedback('❌ Não foi possível enviar agora. A gravação ficou guardada neste navegador: use Reenviar abaixo.');
+        atualizarPendentes();
+      }
     }
   }
+
+  function fmtDur(s) { s = s || 0; return String(Math.floor(s / 60)).padStart(2, '0') + ':' + String(s % 60).padStart(2, '0'); }
+
+  async function atualizarPendentes() {
+    var box = document.getElementById('frec-pendentes');
+    if (!box) return;
+    var agora = Date.now();
+    var lista = (await listarGravacoes()).filter(function(m) {
+      if (m.id === _rec && (_enviando || (_mr && _mr.state !== 'inactive'))) return false;
+      return !(m.status === 'gravando' && agora - (m.atualizado || 0) < 30000);  // gravando em outra aba
+    });
+    var btn = document.getElementById('frec-btn');
+    btn.classList.toggle('frec-tem-pendente', lista.length > 0);
+    box.innerHTML = '';
+    box.style.display = lista.length ? 'grid' : 'none';
+    if (!lista.length) return;
+    var h = document.createElement('div');
+    h.style.cssText = 'font-weight:600;font-size:.8rem;color:#b45309;';
+    h.textContent = 'Gravações não enviadas (' + lista.length + ')';
+    box.appendChild(h);
+    lista.sort(function(a, b) { return b.inicio - a.inicio; }).forEach(function(m) {
+      var item = document.createElement('div');
+      item.style.cssText = 'border:1px solid #fde68a;background:#fffbeb;border-radius:8px;padding:6px 8px;display:grid;gap:4px;';
+      var dt = new Date(m.inicio || Date.now());
+      var t = document.createElement('div');
+      t.style.fontSize = '.78rem';
+      t.textContent = (m.titulo || ('Reunião #' + m.mid)) + ' · ' + dt.toLocaleDateString('pt-BR') + ' ' +
+                      dt.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) + ' · ' + fmtDur(m.segundos) +
+                      (m.status === 'gravando' ? ' (interrompida)' : '');
+      item.appendChild(t);
+      var acoes = document.createElement('div');
+      acoes.className = 'd-flex gap-1';
+      function botao(rot, cls, fn) {
+        var b = document.createElement('button'); b.type = 'button'; b.className = 'btn btn-sm ' + cls; b.textContent = rot;
+        b.addEventListener('click', fn); acoes.appendChild(b); return b;
+      }
+      botao('Reenviar', 'btn-primary', function() {
+        if (_enviando) { frecSetFeedback('Aguarde o envio em andamento terminar.'); return; }
+        m.status = 'parada'; salvarMeta(m).then(function() { frecSetFeedback('Enviando…'); frecEnviar(m.id, 0); atualizarPendentes(); });
+      });
+      botao('Baixar', 'btn-outline-secondary', async function() {
+        var blob = await blobDe(m.id, m.mime);
+        var a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = 'gravacao-reuniao-' + m.mid + '-' + dt.toISOString().slice(0, 16).replace(/[:T]/g, '-') + '.webm';
+        document.body.appendChild(a); a.click(); a.remove();
+      });
+      var desc = botao('Descartar', 'btn-outline-danger', function() {
+        if (desc.dataset.confirma !== '1') { desc.dataset.confirma = '1'; desc.textContent = 'Confirmar descarte'; return; }
+        apagar(m.id).then(atualizarPendentes);
+      });
+      item.appendChild(acoes);
+      box.appendChild(item);
+    });
+  }
+
+  window.addEventListener('beforeunload', function(e) {
+    if ((_mr && _mr.state !== 'inactive') || _enviando) { e.preventDefault(); e.returnValue = ''; }
+  });
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', atualizarPendentes);
+  else atualizarPendentes();
 
   function frecSetFeedback(msg) {
     document.getElementById('frec-feedback').textContent = msg;
