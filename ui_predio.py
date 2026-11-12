@@ -3266,7 +3266,7 @@ def _pr_agendador() -> None:
         _time_pr.sleep(60)
 
 
-_thr_pr.Thread(target=_pr_agendador, daemon=True, name="predio-agendador").start()
+_thr_pr.Thread(target=_so_no_lider(_pr_agendador), daemon=True, name="predio-agendador").start()
 
 
 # ── Rotas ─────────────────────────────────────────────────────────────────────

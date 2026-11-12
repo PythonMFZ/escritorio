@@ -244,7 +244,7 @@ def _backup_loop():
             _time_bk.sleep(3600)
 
 
-_thread_bk.Thread(target=_backup_loop, daemon=True, name="backup-s3").start()
+_thread_bk.Thread(target=_so_no_lider(_backup_loop), daemon=True, name="backup-s3").start()
 
 
 # ── Rota de status (admin) ────────────────────────────────────────────────────

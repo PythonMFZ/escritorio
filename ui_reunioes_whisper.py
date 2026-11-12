@@ -1654,7 +1654,7 @@ def _wd_verificar() -> None:
             print(f"[whisper-watchdog] erro: {_ewd}")
 
 
-_threading_w.Thread(target=_watchdog_reunioes_presas, daemon=True, name="whisper-watchdog").start()
+_threading_w.Thread(target=_so_no_lider(_watchdog_reunioes_presas), daemon=True, name="whisper-watchdog").start()
 
 
 print("[whisper] Patch de transcrição carregado.")

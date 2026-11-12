@@ -847,7 +847,7 @@ def _rh_agendador() -> None:
         _time_pr.sleep(900)
 
 
-_thr_pr.Thread(target=_rh_agendador, daemon=True, name="predio-pessoas").start()
+_thr_pr.Thread(target=_so_no_lider(_rh_agendador), daemon=True, name="predio-pessoas").start()
 
 
 # ── Rotas e card da home ─────────────────────────────────────────────────────

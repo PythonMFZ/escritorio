@@ -422,7 +422,7 @@ def _api_sync_loop_blocking():
 @app.on_event("startup")  # type: ignore[name-defined]
 async def _start_api_sync_loop():
     import threading as _thr_ai
-    _thr_ai.Thread(target=_api_sync_loop_blocking, daemon=True, name="api-sync-loop").start()
+    _thr_ai.Thread(target=_so_no_lider(_api_sync_loop_blocking), daemon=True, name="api-sync-loop").start()
 
 
 # ── Templates ─────────────────────────────────────────────────────────────────

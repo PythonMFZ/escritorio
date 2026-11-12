@@ -194,5 +194,5 @@ def _index_loop():
         time.sleep(_INDEX_INTERVAL)
 
 
-threading.Thread(target=_index_loop, daemon=True, name="augur-doc-indexer").start()
+threading.Thread(target=_so_no_lider(_index_loop), daemon=True, name="augur-doc-indexer").start()
 print("[augur_index] ✅ Indexador de documentos Augur iniciado (intervalo: {}s)".format(_INDEX_INTERVAL))
