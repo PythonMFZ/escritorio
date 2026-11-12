@@ -79,6 +79,20 @@ _AU_DEFS = {
         "nome": "Relatório mensal dos clientes", "agente": "relatorio_mensal",
         "quando": "Todo mês, no dia escolhido, às 9h — um por cliente com contrato ativo",
         "faz": "Rascunho em Word do relatório do mês anterior (executivo, ou RMA em recuperação judicial) para revisar e enviar."},
+    "renovacoes": {
+        "nome": "Renovações e vendas adicionais", "agente": "sucesso_cliente",
+        "quando": "Todo mês, no dia escolhido, às 9h",
+        "faz": "Contratos que vencem em 90 dias com a conversa de renovação preparada (tarefa para quem cuida) e "
+               "oportunidades de venda adicional tiradas das reuniões."},
+    "lead_site": {
+        "nome": "Lead do site", "agente": "chief_of_staff",
+        "quando": "Assim que chega um lead pelo site (simulação de crédito, calculadora de valuation, teste do Augur)",
+        "faz": "A Prospecção pesquisa a empresa e classifica; para os quentes ou mornos, a Propostas deixa um "
+               "rascunho de proposta pronto."},
+    "cliente_novo": {
+        "nome": "Cliente novo", "agente": "compliance",
+        "quando": "Assim que um cliente novo é cadastrado",
+        "faz": "KYC e checagem de conflito de interesse, com parecer de aceitação."},
     "contas_pagar_semanal": {
         "nome": "Contas a pagar da semana", "agente": "contas_pagar",
         "quando": "Toda segunda, às 8h",
@@ -404,6 +418,152 @@ def _au_registrar_sem_chamado_simples(cid: int, chave: str, resumo: str) -> None
         s.commit()
 
 
+# ── Renovações e vendas adicionais ───────────────────────────────────────────
+
+def _au_renovacoes(cid: int, r, forcar: bool = False) -> bool:
+    agora = _pr_agora_brt()
+    dia = max(1, min(int(_au_cfg(r).get("dia") or 3), 28))
+    mes = agora.strftime("%Y-%m")
+    if not forcar and (agora.day < dia or (agora.day == dia and agora.hour < 9)):
+        return False
+    ref = mes if not forcar else f"manual-{_dt_pr.utcnow().isoformat()}"
+    if not _au_reivindicar(cid, "renovacoes", ref):
+        return False
+    hoje = agora.date()
+    lista = []
+    CC = globals().get("ContratoCliente")
+    if CC is not None:
+        with _Sess_pr(engine) as s:
+            nomes = _pr_clientes(s, cid)
+            for k in s.exec(_sel_pr(CC).where(CC.company_id == cid, CC.status == "ativo")).all():
+                fim_ = _pr_data(k.data_fim)
+                if fim_ and hoje <= fim_ <= hoje + _td_pr(days=90):
+                    lista.append(f"- {nomes.get(k.client_id, k.nome_cliente)} — {k.nome_contrato}: termina em "
+                                 f"{_pr_fmt_data(fim_)} ({(fim_ - hoje).days} dias), R$ {(k.valor_cents or 0) / 100:,.2f}/mês"
+                                 .replace(",", "X").replace(".", ",").replace("X", "."))
+    pedido = ("Revisão mensal da carteira (automática).\n"
+              + ("CONTRATOS QUE TERMINAM EM ATÉ 90 DIAS:\n" + "\n".join(lista) + "\n\n" if lista else
+                 "Nenhum contrato termina nos próximos 90 dias.\n\n")
+              + "1. Para cada contrato acima: veja o que foi entregue (reuniões, BSC, panorama) e prepare a conversa de "
+                "renovação — o que mostrar, o que propor (reajuste, ampliação de escopo) e o risco de não renovar. "
+                "Proponha UMA tarefa por cliente (ops_propor_tarefa) para quem cuida dele, com prazo 30 dias antes do "
+                "término. Se já houver tarefa ou negócio de renovação aberto (com_negocios), não repita.\n"
+                "2. Venda adicional: nas reuniões dos últimos 60 dias dos clientes ativos, procure dores que outro "
+                "serviço resolve e aponte as 3 melhores oportunidades com o trecho que as sustenta; proponha o negócio "
+                "no CRM só quando a oportunidade estiver clara.\n"
+                "3. Sinais de risco de cancelamento (com_saude_clientes), com o próximo passo.\n"
+                "Termine com um quadro: cliente, situação, ação proposta.")
+    _au_disparar(cid, "renovacoes", ref, f"Renovações e vendas — {agora.strftime('%m/%Y')}", pedido,
+                 f"{len(lista)} contrato(s) vencendo em 90 dias")
+    return True
+
+
+# ── Lead do site ─────────────────────────────────────────────────────────────
+
+_AU_LEADS = (("credito", "LeadCredito", "Site — simulação de crédito"),
+             ("valuation", "LeadValuation", "Site — calculadora de valuation"),
+             ("trial", "TrialLead", "Teste grátis do Augur PME"))
+
+
+def _au_leads_base(s, cid) -> dict:
+    """Maior id de cada fonte de lead no momento em que a automação é ligada (não processa o passado)."""
+    out = {}
+    for k, modelo, _ in _AU_LEADS:
+        M = globals().get(modelo)
+        if M is not None:
+            out[f"lead_{k}"] = int(s.exec(_sel_pr(_func_pr.coalesce(_func_pr.max(M.id), 0))).one() or 0)
+    return out
+
+
+def _au_lead_texto(k, l) -> str:
+    g = lambda a: str(getattr(l, a, "") or "").strip()
+    linhas = [f"Nome: {g('nome')}", f"Empresa: {g('empresa')}", f"CNPJ: {g('cnpj') or '—'}",
+              f"E-mail: {g('email') or '—'}", f"WhatsApp: {g('whatsapp') or '—'}"]
+    if k == "credito":
+        linhas += [f"Finalidade: {g('finalidade')}", f"Valor pedido: R$ {g('valor')}", f"Prazo: {g('prazo')} meses",
+                   f"Faturamento informado: R$ {g('faturamento')}", f"Garantias: {g('garantias')}"]
+    elif k == "valuation":
+        linhas += [f"Setor: {g('setor')}", f"Faturamento anual: {g('faturamento')}", f"EBITDA: {g('ebitda')}",
+                   f"Funcionários: {g('funcionarios')}", f"Valuation estimado pela calculadora: {g('valuation')}"]
+    return "\n".join(linhas)
+
+
+def _au_lead_site(cid: int, r, forcar: bool = False) -> int:
+    cfg = _au_cfg(r)
+    n = 0
+    for k, modelo, origem in _AU_LEADS:
+        M = globals().get(modelo)
+        if M is None:
+            continue
+        base = int(cfg.get(f"lead_{k}") or 0)
+        with _Sess_pr(engine) as s:
+            q = _sel_pr(M).where(M.id > base) if not forcar else _sel_pr(M).order_by(M.id.desc()).limit(1)
+            novos = s.exec(q.order_by(M.id) if not forcar else q).all()
+            itens = [(l.id, _au_lead_texto(k, l), (getattr(l, "empresa", "") or getattr(l, "nome", "") or "").strip()) for l in novos]
+        for lid, texto, quem in itens[:5]:
+            ref = f"{k}-{lid}" if not forcar else f"manual-{_dt_pr.utcnow().isoformat()}-{k}-{lid}"
+            if not _au_reivindicar(cid, "lead_site", ref):
+                continue
+            pedido = (f"Lead novo pelo {origem}:\n{texto}\n\n"
+                      "Conduza assim, com cos_delegar:\n"
+                      "1. Passe à Prospecção ('prospeccao'): verificar se já é cliente ou está no CRM, pesquisar a empresa "
+                      "na web (porte, setor, notícias, sinais de aperto ou de oportunidade), classificar (Quente, Morno "
+                      "ou Fora do perfil) e sugerir a abordagem e a primeira mensagem. Inclua todos os dados do lead.\n"
+                      "2. Se vier Quente ou Morno, passe à Propostas ('propostas') um RASCUNHO de proposta para "
+                      "revisão (com_gerar_proposta), com a pesquisa e a demanda do lead; honorários como sugestão.\n"
+                      "3. Responda com: classificação, resumo da empresa, abordagem sugerida e o que revisar na "
+                      "proposta. Ninguém faz contato com o lead: só preparamos para a equipe.")
+            _au_disparar(cid, "lead_site", ref, f"Lead do site: {quem or 'sem nome'}", pedido, f"{origem}: {quem}")
+            n += 1
+        if itens and not forcar:
+            cfg[f"lead_{k}"] = max(base, max(i[0] for i in itens[:5]))
+    if not forcar and n:
+        with _Sess_pr(engine) as s:
+            reg_ = _au_reg(s, cid, "lead_site")
+            atual = _au_cfg(reg_)
+            atual.update({k_: v for k_, v in cfg.items() if k_.startswith("lead_")})
+            reg_.config_json = _json_pr.dumps(atual)
+            s.add(reg_)
+            s.commit()
+    if forcar and not n:
+        _au_registrar_sem_chamado_simples(cid, "lead_site", "Nenhum lead gravado ainda.")
+    return n
+
+
+# ── Cliente novo ─────────────────────────────────────────────────────────────
+
+def _au_clientes_base(s, cid) -> dict:
+    return {"cliente_id": int(s.exec(_sel_pr(_func_pr.coalesce(_func_pr.max(Client.id), 0)).where(Client.company_id == cid)).one() or 0)}
+
+
+def _au_cliente_novo(cid: int, r, forcar: bool = False) -> int:
+    base = int(_au_cfg(r).get("cliente_id") or 0)
+    with _Sess_pr(engine) as s:
+        q = _sel_pr(Client).where(Client.company_id == cid)
+        q = q.where(Client.id > base).order_by(Client.id) if not forcar else q.order_by(Client.id.desc()).limit(1)
+        novos = [(c.id, c.name, c.cnpj or "") for c in s.exec(q).all()]
+        feitas = set(s.exec(_sel_pr(PredioAutomacaoEvento.ref).where(PredioAutomacaoEvento.company_id == cid,
+                                                                     PredioAutomacaoEvento.chave == "cliente_novo")).all())
+    n = 0
+    for clid, nome, cnpj in novos[:5]:
+        ref = f"cliente-{clid}"
+        if ref in feitas or not _au_reivindicar(cid, "cliente_novo", ref):
+            continue
+        pedido = (f"Cliente novo cadastrado: {nome}" + (f", CNPJ {cnpj}" if cnpj else " (sem CNPJ no cadastro)") + ".\n"
+                  "Faça o KYC e a checagem de conflito de interesse antes de o escritório seguir com o trabalho:\n"
+                  "1. Conflitos (comp_conflitos) com o nome e o CNPJ da empresa e dos sócios que encontrar.\n"
+                  "2. Checklist de KYC/PLD (comp_checklist_kyc) e o que já existe de dossiê e SCR (cred_dossies, cred_scr).\n"
+                  "3. Pesquisa pública na web: situação cadastral, sócios, processos relevantes, notícias negativas, "
+                  "PEP e listas restritivas, citando a fonte.\n"
+                  "4. Parecer de aceitação: aprovar, aprovar com ressalvas ou não aceitar, com o motivo, e os documentos "
+                  "a pedir ao cliente (proponha a tarefa de coleta, se faltar algo).")
+        _au_disparar(cid, "cliente_novo", ref, f"KYC: {nome}", pedido, nome)
+        n += 1
+    if forcar and not n:
+        _au_registrar_sem_chamado_simples(cid, "cliente_novo", "Nenhum cliente novo sem KYC.")
+    return n
+
+
 # ── 4. Contas a pagar da semana ──────────────────────────────────────────────
 
 def _au_contas_pagar(cid: int, r, forcar: bool = False) -> bool:
@@ -426,8 +586,10 @@ def _au_contas_pagar(cid: int, r, forcar: bool = False) -> bool:
 
 _AU_RODAR = {"pos_reuniao": _au_pos_reuniao, "faturamento_mensal": _au_faturamento,
              "cobranca_atrasos": _au_cobranca, "contas_pagar_semanal": _au_contas_pagar,
-             "briefing_reuniao": _au_briefing, "relatorio_mensal": _au_relatorio}
-_AU_COM_DIA = {"faturamento_mensal": 1, "relatorio_mensal": 5}
+             "briefing_reuniao": _au_briefing, "relatorio_mensal": _au_relatorio,
+             "renovacoes": _au_renovacoes, "lead_site": _au_lead_site, "cliente_novo": _au_cliente_novo}
+_AU_COM_DIA = {"faturamento_mensal": 1, "relatorio_mensal": 5, "renovacoes": 3}
+_AU_AO_LIGAR = {"lead_site": _au_leads_base, "cliente_novo": _au_clientes_base}  # marco inicial: não processa o passado
 
 
 def _au_ciclo() -> None:
@@ -578,6 +740,10 @@ async def predio_automacao_alternar(chave: str, request: Request, session: Sessi
         r.ativo = not r.ativo
         if r.ativo:
             r.ativado_em = _dt_pr.utcnow()
+            if chave in _AU_AO_LIGAR:
+                cfg = _au_cfg(r)
+                cfg.update(_AU_AO_LIGAR[chave](session, ctx.company.id))
+                r.config_json = _json_pr.dumps(cfg)
         session.add(r)
         session.commit()
     return RedirectResponse("/predio#automacoes", status_code=303)

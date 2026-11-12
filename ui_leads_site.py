@@ -28,9 +28,26 @@ class LeadCredito(_SM_ls, table=True):
     ip:          str = _Field_ls(default="")
     criado_em:   str = _Field_ls(default="")
 
+class LeadValuation(_SM_ls, table=True):
+    """Lead da calculadora de valuation do site (antes só ia por e-mail)."""
+    __table_args__ = {"extend_existing": True}
+    id:           _Opt_ls[int] = _Field_ls(default=None, primary_key=True)
+    nome:         str = _Field_ls(default="")
+    email:        str = _Field_ls(default="")
+    whatsapp:     str = _Field_ls(default="")
+    empresa:      str = _Field_ls(default="")
+    setor:        str = _Field_ls(default="")
+    faturamento:  str = _Field_ls(default="")
+    ebitda:       str = _Field_ls(default="")
+    funcionarios: str = _Field_ls(default="")
+    valuation:    str = _Field_ls(default="")
+    ip:           str = _Field_ls(default="")
+    criado_em:    str = _Field_ls(default="")
+
+
 def _ls_ensure_tables():
     with _Sess_ls(engine) as _s:
-        _SM_ls.metadata.create_all(engine, tables=[LeadCredito.__table__])
+        _SM_ls.metadata.create_all(engine, tables=[LeadCredito.__table__, LeadValuation.__table__])
         try:
             _s.exec(_sel_ls(LeadCredito).limit(1))
         except Exception:
@@ -118,6 +135,14 @@ async def lead_valuation(request: _Req_ls):
       <tr><td><b>IP:</b></td><td>{ip}</td></tr>
     </table>
     """
+    try:
+        with _Sess_ls(engine) as _s:
+            _s.add(LeadValuation(nome=nome[:200], email=email[:200], whatsapp=whatsapp[:60], empresa=empresa[:200],
+                                 setor=setor[:120], faturamento=str(faturamento)[:60], ebitda=str(ebitda)[:60],
+                                 funcionarios=funcionarios[:60], valuation=valuation[:120], ip=ip[:100], criado_em=ts))
+            _s.commit()
+    except Exception as _e:
+        print(f"[leads_site] Erro ao salvar lead de valuation: {_e}")
     _ls_notify_email(f"[Lead Valuation] {empresa} — {nome}", html)
 
     resp = _JR_ls({"ok": True})

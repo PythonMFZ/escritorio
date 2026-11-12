@@ -204,5 +204,61 @@ c.post("/predio/automacoes/relatorio_mensal/config", data={"dia": "8"})
 check(reg("relatorio_mensal").config_json and json.loads(reg("relatorio_mensal").config_json)["dia"] == 8, "dia configurável")
 home = c.get("/predio").text
 check("Briefing antes da reunião" in home and "Relatório mensal dos clientes" in home and home.count("Rodar agora") >= 6, "card com as 6 automações")
+
+print("[9] Renovações e vendas adicionais")
+A._pr_agora_brt = lambda: datetime(2026, 12, 2, 12, 0)
+c.post("/predio/automacoes/renovacoes/alternar")
+A._au_renovacoes(cid, reg("renovacoes"))
+check(not chamados("sucesso_cliente"), "antes do dia 3 não roda")
+with Session(A.engine) as s:
+    s.add(A.ContratoCliente(company_id=cid, client_id=ALFA, nome_contrato="CFO externo", valor_cents=1500000, status="ativo",
+                            data_inicio="2026-01-01", data_fim="2027-02-15"))
+    s.add(A.ContratoCliente(company_id=cid, client_id=GSW, nome_contrato="Longo", valor_cents=1, status="ativo",
+                            data_inicio="2026-01-01", data_fim="2027-12-31"))
+    s.commit()
+A._pr_agora_brt = lambda: datetime(2026, 12, 3, 9, 10)
+A._au_renovacoes(cid, reg("renovacoes")); A._au_renovacoes(cid, reg("renovacoes"))
+rn = chamados("sucesso_cliente")
+check(len(rn) == 1 and "CFO externo" in rn[0].pedido and "15/02/2027" in rn[0].pedido and "Longo" not in rn[0].pedido,
+      "uma vez no mês, com os contratos que vencem em 90 dias")
+
+print("[10] Lead do site")
+with Session(A.engine) as s:
+    s.add(A.LeadCredito(nome="Velho", empresa="Antiga SA", criado_em="2026-11-01 10:00")); s.commit()
+c.post("/predio/automacoes/lead_site/alternar")
+check(json.loads(reg("lead_site").config_json).get("lead_credito", 0) >= 1, "marco inicial gravado ao ligar")
+A._au_lead_site(cid, reg("lead_site"))
+check(not chamados("chief_of_staff"), "lead anterior à ativação não é processado")
+r = c.post("/api/lead/valuation", json={"nome": "Joana", "email": "joana@metal.com", "empresa": "Metalúrgica Sul",
+                                        "setor": "Indústria", "faturamento_anual": 40000000, "ebitda": 6000000,
+                                        "valuation_estimado": "R$ 30 mi"})
+with Session(A.engine) as s:
+    s.add(A.LeadCredito(nome="Pedro", empresa="Construtora Norte", cnpj="11222333000144", finalidade="Capital de giro",
+                        valor=2000000, criado_em="2026-12-03 10:00"))
+    s.commit()
+check(r.status_code == 200, "lead de valuation agora é gravado")
+A._au_lead_site(cid, reg("lead_site")); A._au_lead_site(cid, reg("lead_site"))
+ld = chamados("chief_of_staff")
+check(len(ld) == 2 and any("Metalúrgica Sul" in x.pedido and "valuation" in x.pedido.lower() for x in ld)
+      and any("Construtora Norte" in x.pedido and "Capital de giro" in x.pedido for x in ld), "um chamado por lead novo, sem repetir")
+check(all("cos_delegar" in x.pedido and "'prospeccao'" in x.pedido and "'propostas'" in x.pedido for x in ld),
+      "Chief of Staff passa à Prospecção e à Propostas")
+with Session(A.engine) as s:
+    leads = A._cm_t_leads(s, cid, 30)["leads"]
+check(any(l["origem"] == "Site — calculadora de valuation" for l in leads), "com_leads mostra os leads de valuation")
+
+print("[11] Cliente novo")
+c.post("/predio/automacoes/cliente_novo/alternar")
+A._au_cliente_novo(cid, reg("cliente_novo"))
+check(not chamados("compliance"), "clientes antigos não passam pelo KYC automático")
+with Session(A.engine) as s:
+    n1 = A.Client(company_id=cid, name="Nova Indústria Ltda", cnpj="99888777000166"); s.add(n1); s.commit()
+A._au_cliente_novo(cid, reg("cliente_novo")); A._au_cliente_novo(cid, reg("cliente_novo"))
+kyc = chamados("compliance")
+check(len(kyc) == 1 and "Nova Indústria" in kyc[0].pedido and "99888777000166" in kyc[0].pedido and "comp_conflitos" in kyc[0].pedido,
+      "KYC do cliente novo, uma vez")
+home = c.get("/predio").text
+check(all(x in home for x in ("Renovações e vendas adicionais", "Lead do site", "Cliente novo")) and home.count("Rodar agora") >= 9,
+      "card com as 9 automações")
 time.sleep(1.5)
 fim()
