@@ -1451,6 +1451,6 @@ async def integrations_page(request: _Req_cs, session=_Dep_cs(get_session)):
 @app.on_event("startup")
 def _startup_cloud_storage():
     _ensure_cs_tables()
-    t = _thread_cs.Thread(target=_cs_background_loop, daemon=True)
+    t = _thread_cs.Thread(target=_so_no_lider(_cs_background_loop), daemon=True)
     t.start()
     print("[cs] conector de armazenamento em nuvem iniciado")

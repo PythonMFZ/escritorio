@@ -438,7 +438,7 @@ def _cf_scheduler_loop():
             except Exception as _e_sl:
                 print(f"[creditos_features] loop: {_e_sl}")
 
-_thCF.Thread(target=_cf_scheduler_loop, daemon=True, name="cf_renovacao").start()
+_thCF.Thread(target=_so_no_lider(_cf_scheduler_loop), daemon=True, name="cf_renovacao").start()
 
 # ── Catálogo de features ───────────────────────────────────────────────────────
 # Mapeamento de feature_codigo → metadados para exibição na UI

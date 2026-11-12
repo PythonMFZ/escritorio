@@ -784,7 +784,7 @@ def _sg_scheduler_loop():
             print(f"[sienge] Scheduler erro: {_e_sch}")
         _time_sg.sleep(55)
 
-_thread_sg.Thread(target=_sg_scheduler_loop, daemon=True, name="sienge-scheduler").start()
+_thread_sg.Thread(target=_so_no_lider(_sg_scheduler_loop), daemon=True, name="sienge-scheduler").start()
 
 
 # ── Templates HTML ────────────────────────────────────────────────────────────

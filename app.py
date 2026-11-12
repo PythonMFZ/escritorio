@@ -249,6 +249,50 @@ _MAX_PASSWORD_BYTES = 1024
 _MAX_UPLOAD_BYTES = 20 * 1024 * 1024  # 20MB (ajuste se quiser)
 
 
+# ── Rotinas de fundo em um processo só ────────────────────────────────────────
+# O gunicorn roda mais de um worker; cada um importa o app inteiro. Sem isto, toda rotina
+# de fundo (agendadores, indexador, sincronização da nuvem, backup) rodaria em dobro,
+# gastando memória e repetindo trabalho. O "líder" é o processo que segura um flock no
+# arquivo abaixo; se ele morrer, o sistema libera o lock e outro worker assume em até 30 s.
+import fcntl as _fcntl_lider
+import threading as _threading_lider
+
+_LIDER_ARQUIVO = os.getenv("ROTINAS_LOCK_FILE", "/tmp/escritorio-rotinas.lock")
+_LIDER_ESTADO = {"fd": None}
+_LIDER_LOCK = _threading_lider.Lock()
+
+
+def _processo_lider() -> bool:
+    """True se este processo é o que roda as rotinas de fundo (tenta assumir se ninguém for)."""
+    with _LIDER_LOCK:
+        if _LIDER_ESTADO["fd"] is not None:
+            return True
+        try:
+            fd = os.open(_LIDER_ARQUIVO, os.O_CREAT | os.O_RDWR, 0o644)
+        except OSError:
+            return True  # sem como coordenar: roda (comportamento antigo)
+        try:
+            _fcntl_lider.flock(fd, _fcntl_lider.LOCK_EX | _fcntl_lider.LOCK_NB)
+        except OSError:
+            os.close(fd)
+            return False
+        _LIDER_ESTADO["fd"] = fd
+        print(f"[rotinas] processo {os.getpid()} assumiu as rotinas de fundo")
+        return True
+
+
+def _so_no_lider(fn):
+    """Envolve o laço de uma rotina de fundo: só começa a rodar quando este processo é o líder."""
+    import time as _time_lider
+
+    def _esperar_e_rodar(*a, **kw):
+        while not _processo_lider():
+            _time_lider.sleep(30)
+        return fn(*a, **kw)
+    _esperar_e_rodar.__name__ = getattr(fn, "__name__", "rotina")
+    return _esperar_e_rodar
+
+
 def utcnow() -> datetime:
     return datetime.now(timezone.utc)
 

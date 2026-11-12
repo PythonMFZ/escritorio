@@ -1106,7 +1106,7 @@ def _mk_agendador() -> None:
         _time_pr.sleep(900)
 
 
-_thr_pr.Thread(target=_mk_agendador, daemon=True, name="predio-marketing").start()
+_thr_pr.Thread(target=_so_no_lider(_mk_agendador), daemon=True, name="predio-marketing").start()
 
 
 # ── Rotas ─────────────────────────────────────────────────────────────────────

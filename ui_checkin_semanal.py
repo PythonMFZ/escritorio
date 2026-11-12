@@ -664,7 +664,7 @@ def _ck_scheduler_loop():
         _time_ck.sleep(60)
 
 
-_thread_ck.Thread(target=_ck_scheduler_loop, daemon=True, name="checkin-semanal").start()
+_thread_ck.Thread(target=_so_no_lider(_ck_scheduler_loop), daemon=True, name="checkin-semanal").start()
 
 
 # ── Rotas admin ───────────────────────────────────────────────────────────────
