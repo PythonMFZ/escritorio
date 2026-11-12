@@ -62,7 +62,7 @@ _AU_DEFS = {
     "pos_reuniao": {
         "nome": "Depois de cada reunião", "agente": "secretario_reunioes",
         "quando": "Assim que a transcrição fica pronta",
-        "faz": "Ata, tarefas combinadas (com responsável e prazo) e e-mail de follow-up ao cliente, para você aprovar."},
+        "faz": "Ata, tarefas combinadas (com responsável e prazo) e e-mail de follow-up aos participantes da reunião, para você aprovar."},
     "faturamento_mensal": {
         "nome": "Faturamento do mês", "agente": "faturamento",
         "quando": "Todo mês, no dia escolhido, às 9h",
@@ -171,7 +171,7 @@ def _au_pedido_reuniao(s, cid, m) -> str:
             "2. Escreva a ata: participantes, assuntos tratados, decisões, pendências do cliente e do escritório, "
             "próximos passos com responsável e prazo.\n"
             "3. Proponha cada tarefa combinada com ops_propor_tarefa (responsável e prazo; prazo em DD/MM/AAAA).\n"
-            f"4. Proponha o e-mail de follow-up ao cliente com reu_propor_followup (reuniao_id {m.id}): cordial, "
+            f"4. Proponha o e-mail de follow-up aos participantes com reu_propor_followup (reuniao_id {m.id}): cordial, "
             "objetivo, com o resumo das decisões, o que cada lado ficou de fazer e a próxima data, se houver. "
             "Nada de informação interna do escritório (honorários de outros clientes, opiniões sobre o cliente).\n"
             "Se a reunião for interna (sem cliente) ou a transcrição estiver vazia/inaudível, faça só a ata e diga isso.")
@@ -338,38 +338,65 @@ def _au_t_propor_followup(s, cid, reuniao_id, assunto, corpo):
     if not m or m.company_id != cid:
         return {"ok": False, "erro": "Reunião não encontrada."}
     c = s.get(Client, m.client_id) if m.client_id else None
-    if not c:
-        return {"ok": False, "erro": "Reunião sem cliente vinculado: não há para quem mandar o follow-up."}
-    destino = (c.email or "").strip() or _pr_email_financeiro(s, cid, c)
-    if not destino:
-        return {"ok": False, "erro": f"{c.name} não tem e-mail cadastrado: deixe o texto no chat para o sócio enviar."}
+    participantes = _au_participantes(s, m.id)
+    if not participantes:
+        return {"ok": False, "erro": "A reunião não tem participantes com e-mail cadastrados (Reunião › Participantes). "
+                                     "Deixe o texto do follow-up no chat e avise o sócio para cadastrar os participantes."}
+    destino = ", ".join(e for _, e in participantes)
     if not (assunto or "").strip() or len((corpo or "").strip()) < 40:
         return {"ok": False, "erro": "Assunto e corpo do e-mail são obrigatórios."}
     pend = s.exec(_sel_pr(PredioAcao).where(PredioAcao.company_id == cid, PredioAcao.tipo == "email_followup",
-                                            PredioAcao.status == "pendente", PredioAcao.client_id == c.id)).all()
+                                            PredioAcao.status == "pendente")).all()
     for p in pend:
         if _json_pr.loads(p.payload_json or "{}").get("reuniao_id") == m.id:
             return {"ok": False, "erro": f"Já existe um follow-up desta reunião aguardando aprovação (#{p.id})."}
     acao = _pr_registrar_proposta(
-        s, cid, tipo="email_followup", client_id=c.id, titulo=f"Follow-up da reunião: {c.name}",
+        s, cid, tipo="email_followup", client_id=c.id if c else None,
+        titulo=f"Follow-up da reunião: {m.title or (c.name if c else '#' + str(m.id))}",
         destinatario=destino, assunto=assunto.strip()[:200], corpo=corpo.strip()[:8000],
         payload_json=_json_pr.dumps({"reuniao_id": m.id}))
     return {"ok": True, "proposta_id": acao.id, "status": "aguardando aprovação",
-            "observacao": "Vai para o e-mail cadastrado do cliente depois que um sócio aprovar (dá para editar antes)."}
+            "destinatarios": [n for n, _ in participantes],
+            "observacao": "Vai para os participantes cadastrados na reunião depois que um sócio aprovar (dá para editar antes)."}
+
+
+def _au_participantes(s, meeting_id: int) -> list:
+    """(nome, e-mail) dos participantes cadastrados na reunião."""
+    P = globals().get("MeetingParticipante")
+    if P is None:
+        return []
+    import re as _re_au
+    out = []
+    for nome, email in s.exec(_sel_pr(User.name, User.email).join(P, P.user_id == User.id).where(P.meeting_id == meeting_id)).all():
+        e = (email or "").strip()
+        if _re_au.fullmatch(r"[^@\s,;]+@[^@\s,;]+\.[^@\s,;]+", e) and e.lower() not in {x.lower() for _, x in out}:
+            out.append((nome or e, e))
+    return out
 
 
 def _au_exec_followup(s, acao) -> str:
     import html as _html_au
     corpo_html = ("<div style=\"font-family:Arial,sans-serif;font-size:14px;line-height:1.6;color:#1f2933\">"
                   + _html_au.escape(acao.corpo).replace("\n", "<br>") + "</div>")
-    _smtp_send_email(to_email=acao.destinatario, subject=acao.assunto, html_body=corpo_html, text_body=acao.corpo)
-    return f"Follow-up enviado para {acao.destinatario}."
+    destinos = [e.strip() for e in (acao.destinatario or "").split(",") if e.strip()]
+    if not destinos:
+        raise _PrErro("Sem destinatários.")
+    enviados, falhas = [], []
+    for e in destinos:  # um e-mail por participante (sem expor a lista para todos)
+        try:
+            _smtp_send_email(to_email=e, subject=acao.assunto, html_body=corpo_html, text_body=acao.corpo)
+            enviados.append(e)
+        except Exception as ex:
+            falhas.append(f"{e} ({str(ex)[:60]})")
+    if falhas and not enviados:
+        raise _PrErro("Falhou para todos: " + "; ".join(falhas))
+    return f"Follow-up enviado para {', '.join(enviados)}." + (f" Falhou: {'; '.join(falhas)}." if falhas else "")
 
 
 _pr_registrar_ferramenta("reu_propor_followup", {
     "fn": _au_t_propor_followup, "rotulo": "Propôs o e-mail de follow-up",
-    "description": "Cria uma PROPOSTA de e-mail de follow-up da reunião para o cliente (e-mail do cadastro). O sócio "
-                   "revisa, edita e aprova antes do envio.",
+    "description": "Cria uma PROPOSTA de e-mail de follow-up da reunião para os PARTICIPANTES cadastrados nela (um "
+                   "e-mail para cada). O sócio revisa, edita e aprova antes do envio.",
     "props": {"reuniao_id": {"type": "integer"}, "assunto": {"type": "string"}, "corpo": {"type": "string"}}})
 _PR_EXECUTORES_EXTRA["email_followup"] = _au_exec_followup
 
