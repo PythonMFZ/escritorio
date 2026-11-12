@@ -4837,7 +4837,7 @@ TEMPLATES["predio_chamado.html"] = r"""
     alterar_contrato:  {para:'{d}', botao:'Aprovar e alterar o contrato'},
     status_contrato:   {para:'{d}', botao:'Aprovar'},
     baixar_titulo:     {para:'{d}', botao:'Aprovar e dar baixa'},
-    email_followup:    {para:'Para: {d} (e-mail cadastrado do cliente)', assunto:true, corpo:true, linhas:10, botao:'Aprovar e enviar'},
+    email_followup:    {para:'Para os participantes da reunião: {d}', assunto:true, corpo:true, linhas:10, botao:'Aprovar e enviar'},
     alterar_titulo:    {para:'{d}', botao:'Aprovar e alterar o título'},
     cancelar_titulo:   {para:'{d}', botao:'Aprovar e cancelar o título'}
   };
