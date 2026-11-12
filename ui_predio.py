@@ -3453,6 +3453,7 @@ async def predio_home(request: Request, session: Session = Depends(get_session))
         "mkt": globals().get("_mk_config_view", lambda c: None)(cfg),
         "rh": globals().get("_rh_config_view", lambda c: None)(ctx.company.id) if papel == "admin" else None,
         "custos": globals().get("_cu_resumo_home", lambda c: None)(ctx.company.id) if papel == "admin" else None,
+        "automacoes": globals().get("_au_view", lambda c: None)(ctx.company.id) if papel == "admin" else None,
         "meet": globals().get("_meet_config_view", lambda c: None)(ctx.company.id) if papel == "admin" else None,
         "total_agentes": len(_PREDIO_AGENTES),
         "total_ativos": sum(1 for a in _PREDIO_AGENTES.values() if a["ativo"]),
@@ -3731,10 +3732,11 @@ async def predio_aprovar_acao(acao_id: int, request: Request, session: Session =
         return RedirectResponse("/predio", status_code=303)
     form = await request.form()
     if acao.tipo in ("email_cobranca", "whatsapp_resposta", "cancelar_reuniao", "criar_tarefa",
-                     "registrar_conhecimento", "email_agencia", "email_parceiro") and acao.status in ("pendente", "erro"):
+                     "registrar_conhecimento", "email_agencia", "email_parceiro", "email_followup") and acao.status in ("pendente", "erro"):
         assunto = str(form.get("assunto") or "").strip()[:200]
         corpo = str(form.get("corpo") or "").strip()[:20000]
-        if assunto and acao.tipo in ("email_cobranca", "criar_tarefa", "registrar_conhecimento", "email_agencia", "email_parceiro"):
+        if assunto and acao.tipo in ("email_cobranca", "criar_tarefa", "registrar_conhecimento", "email_agencia", "email_parceiro",
+                                     "email_followup"):
             acao.assunto = assunto
         if corpo:
             acao.corpo = corpo
@@ -4835,6 +4837,7 @@ TEMPLATES["predio_chamado.html"] = r"""
     alterar_contrato:  {para:'{d}', botao:'Aprovar e alterar o contrato'},
     status_contrato:   {para:'{d}', botao:'Aprovar'},
     baixar_titulo:     {para:'{d}', botao:'Aprovar e dar baixa'},
+    email_followup:    {para:'Para: {d} (e-mail cadastrado do cliente)', assunto:true, corpo:true, linhas:10, botao:'Aprovar e enviar'},
     alterar_titulo:    {para:'{d}', botao:'Aprovar e alterar o título'},
     cancelar_titulo:   {para:'{d}', botao:'Aprovar e cancelar o título'}
   };
