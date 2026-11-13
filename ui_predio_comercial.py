@@ -422,6 +422,16 @@ def _cm_t_leads(s, cid, dias):
                               "detalhes": f"Finalidade: {l.finalidade}; valor pedido {_cm_brl(l.valor)}; prazo {l.prazo} meses; "
                                           f"faturamento informado {_cm_brl(l.faturamento)}; garantias: {l.garantias}",
                               "ja_no_cadastro": _cm_ja_cadastrado(idx, l.cnpj, l.empresa)})
+    LV = globals().get("LeadValuation")
+    if LV is not None:
+        for l in s.exec(_sel_pr(LV)).all():
+            d = _pr_data(l.criado_em)
+            if d and d >= corte:
+                leads.append({"origem": "Site — calculadora de valuation", "data": _pr_fmt_data(d), "nome": l.nome,
+                              "empresa": l.empresa, "cnpj": "", "email": l.email, "whatsapp": l.whatsapp,
+                              "detalhes": f"Setor: {l.setor}; faturamento anual {l.faturamento}; EBITDA {l.ebitda}; "
+                                          f"{l.funcionarios} funcionários; valuation estimado {l.valuation}",
+                              "ja_no_cadastro": _cm_ja_cadastrado(idx, "", l.empresa)})
     if TL is not None:
         for l in s.exec(_sel_pr(TL)).all():
             d = _pr_data(l.created_at)
