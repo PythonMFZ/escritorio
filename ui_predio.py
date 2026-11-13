@@ -249,6 +249,7 @@ _PREDIO_ANDARES = [
         {"key": "relacao_investidores", "nome": "Relação com Investidores", "papeis": _PR_TODOS, "ativo": False,
          "atribuicoes": "Bancos, securitizadoras e fundos: quem abordar em cada operação, acompanhamento e envio do book (com aprovação)."},
     ]},
+    # ferramentas e ativação vêm de ui_predio_imobiliario.py
     {"key": "imobiliario", "nome": "Imobiliário", "rotulo": "4º andar", "agentes": [
         {"key": "viabilidade", "nome": "Viabilidade", "papeis": _PR_TODOS, "ativo": False,
          "atribuicoes": "Monta e compara estudos de viabilidade a partir de um briefing."},

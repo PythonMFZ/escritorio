@@ -257,8 +257,33 @@ A._au_cliente_novo(cid, reg("cliente_novo")); A._au_cliente_novo(cid, reg("clien
 kyc = chamados("compliance")
 check(len(kyc) == 1 and "Nova Indústria" in kyc[0].pedido and "99888777000166" in kyc[0].pedido and "comp_conflitos" in kyc[0].pedido,
       "KYC do cliente novo, uma vez")
+print("[12] Marketing")
+c.post("/predio/automacoes/boletim_mercado/alternar")
+c.post("/predio/automacoes/calendario_bimestral/alternar")
+A._pr_agora_brt = lambda: datetime(2026, 12, 15, 6, 30)  # terça
+A._au_boletim(cid, reg("boletim_mercado"))
+A._pr_agora_brt = lambda: datetime(2026, 12, 14, 6, 30)  # segunda, antes das 7h
+A._au_boletim(cid, reg("boletim_mercado"))
+check(not chamados("inteligencia_mercado"), "boletim: só segunda a partir das 7h")
+A._pr_agora_brt = lambda: datetime(2026, 12, 14, 7, 5)
+A._au_boletim(cid, reg("boletim_mercado")); A._au_boletim(cid, reg("boletim_mercado"))
+bo = chamados("inteligencia_mercado")
+check(len(bo) == 1 and "mkt_noticias" in bo[0].pedido, "boletim uma vez por semana")
+A._pr_agora_brt = lambda: datetime(2026, 11, 20, 10, 0)  # novembro (ímpar): não é véspera de bimestre
+A._au_calendario(cid, reg("calendario_bimestral"))
+A._pr_agora_brt = lambda: datetime(2026, 12, 10, 10, 0)  # dezembro, antes do dia 15
+A._au_calendario(cid, reg("calendario_bimestral"))
+check(not chamados("agencia_redes"), "calendário: só no mês anterior ao bimestre, a partir do dia escolhido")
+A._pr_agora_brt = lambda: datetime(2026, 12, 15, 9, 0)
+A._au_calendario(cid, reg("calendario_bimestral")); A._au_calendario(cid, reg("calendario_bimestral"))
+cal = chamados("agencia_redes")
+check(len(cal) == 1 and "jan–fev/2027" in cal[0].titulo and "mkt_gerar_calendario" in cal[0].pedido
+      and "mkt_propor_envio_agencia" in cal[0].pedido, "calendário de jan–fev/2027, uma vez")
+A._pr_agora_brt = lambda: datetime(2027, 3, 5, 10, 0)  # março (ímpar): rodar agora prepara o próximo (mai–jun)
+c.post("/predio/automacoes/calendario_bimestral/rodar")
+check(any("mai–jun/2027" in x.titulo for x in chamados("agencia_redes")), "rodar agora em mês ímpar prepara o bimestre seguinte")
 home = c.get("/predio").text
-check(all(x in home for x in ("Renovações e vendas adicionais", "Lead do site", "Cliente novo")) and home.count("Rodar agora") >= 9,
-      "card com as 9 automações")
+check(all(x in home for x in ("Renovações e vendas adicionais", "Lead do site", "Cliente novo", "Boletim de mercado",
+                              "Calendário de posts")) and home.count("Rodar agora") >= 11, "card com as 11 automações")
 time.sleep(1.5)
 fim()

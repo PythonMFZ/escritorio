@@ -74,7 +74,8 @@ _CU_PADRAO = {
     # analíticos e de risco: Opus com esforço alto
     **{k: ("opus", "high") for k in (
         "valuation", "analista_financeiro", "estruturador", "analista_risco", "contratos", "propostas", "estrategia",
-        "compliance")},
+        "compliance", "viabilidade")},
+    "produto_vendas": ("sonnet", "high"), "obras": ("sonnet", "medium"),
 }
 _CU_PADRAO_DEMAIS = ("opus", "medium")  # o restante (Chief of Staff, Controller, Relatório Mensal...)
 _CU_CFG: dict = {}                       # company_id -> (lido_em, overrides)
