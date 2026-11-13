@@ -93,6 +93,14 @@ _AU_DEFS = {
         "nome": "Cliente novo", "agente": "compliance",
         "quando": "Assim que um cliente novo é cadastrado",
         "faz": "KYC e checagem de conflito de interesse, com parecer de aceitação."},
+    "boletim_mercado": {
+        "nome": "Boletim de mercado da semana", "agente": "inteligencia_mercado",
+        "quando": "Toda segunda, às 7h",
+        "faz": "Juros, inflação, crédito e recuperações judiciais da semana, com o que muda para os clientes."},
+    "calendario_bimestral": {
+        "nome": "Calendário de posts do bimestre", "agente": "agencia_redes",
+        "quando": "No dia escolhido do mês anterior a cada bimestre (dez, fev, abr, jun, ago, out), às 9h",
+        "faz": "3 posts por semana do próximo bimestre com os briefings completos e a proposta de envio à agência."},
     "contas_pagar_semanal": {
         "nome": "Contas a pagar da semana", "agente": "contas_pagar",
         "quando": "Toda segunda, às 8h",
@@ -564,6 +572,58 @@ def _au_cliente_novo(cid: int, r, forcar: bool = False) -> int:
     return n
 
 
+# ── Marketing ────────────────────────────────────────────────────────────────
+
+def _au_boletim(cid: int, r, forcar: bool = False) -> bool:
+    agora = _pr_agora_brt()
+    if not forcar and (agora.weekday() != 0 or agora.hour < 7):
+        return False
+    ano, semana, _ = agora.isocalendar()
+    ref = f"{ano}-S{semana:02d}" if not forcar else f"manual-{_dt_pr.utcnow().isoformat()}"
+    if not _au_reivindicar(cid, "boletim_mercado", ref):
+        return False
+    pedido = ("Boletim de mercado da semana (automático), para os sócios e a equipe.\n"
+              "1. Juros e inflação: Selic, curva de juros, IPCA/IGP-M recentes e próximas datas (Copom, IPCA).\n"
+              "2. Crédito: spreads, inadimplência, condições de bancos e do mercado de capitais (CRI, CRA, debêntures).\n"
+              "3. Insolvência: pedidos de recuperação judicial e falências recentes, com destaque para o Sul e para "
+              "construção, indústria e varejo (mkt_noticias e mkt_indicadores; complete com pesquisa e fonte).\n"
+              "4. O que isso muda para os clientes: 3 a 5 recomendações práticas (renegociar, travar taxa, reforçar caixa).\n"
+              "5. Duas ideias de post para as redes a partir do boletim.\n"
+              "Curto, com fontes e datas; nada inventado.")
+    _au_disparar(cid, "boletim_mercado", ref, f"Boletim de mercado — semana {semana}", pedido, f"Semana {semana}/{ano}")
+    return True
+
+
+_AU_MESES = ["jan", "fev", "mar", "abr", "mai", "jun", "jul", "ago", "set", "out", "nov", "dez"]
+
+
+def _au_calendario(cid: int, r, forcar: bool = False) -> bool:
+    """Bimestres começam em meses ímpares (jan, mar, ...): roda no mês par anterior, no dia escolhido."""
+    agora = _pr_agora_brt()
+    dia = max(1, min(int(_au_cfg(r).get("dia") or 15), 28))
+    mes = agora.month
+    if not forcar and (mes % 2 == 1 or agora.day < dia or (agora.day == dia and agora.hour < 9)):
+        return False
+    inicio = mes + 1 if mes % 2 == 0 else mes + 2     # próximo bimestre
+    ano_bim = agora.year + (1 if inicio > 12 else 0)
+    inicio = inicio - 12 if inicio > 12 else inicio
+    m1, m2 = _AU_MESES[inicio - 1], _AU_MESES[inicio]
+    rotulo = f"{m1}–{m2}/{ano_bim}"
+    ref = f"{ano_bim}-{m1}" if not forcar else f"manual-{_dt_pr.utcnow().isoformat()}"
+    if not _au_reivindicar(cid, "calendario_bimestral", ref):
+        return False
+    pedido = (f"Calendário de posts do bimestre {rotulo} (automático).\n"
+              "- 3 posts por semana (segunda, quarta e sexta) em todas as semanas do bimestre, equilibrando os pilares "
+              "(educação financeira, mercado e conjuntura, cases anonimizados e bastidores, institucional).\n"
+              "- Considere as datas do período (Copom, IPCA, datas do setor) e os temas quentes do boletim de mercado "
+              "(conh_buscar) e das notícias (mkt_noticias).\n"
+              "- Cada post com briefing completo para a agência; gere a planilha com mkt_gerar_calendario e confira as "
+              "semanas fora de 3 posts.\n"
+              "- Proponha o envio à agência (mkt_propor_envio_agencia) com a planilha: vai para aprovação.")
+    _au_disparar(cid, "calendario_bimestral", ref, f"Calendário de posts — {rotulo}", pedido, f"Bimestre {rotulo}")
+    return True
+
+
 # ── 4. Contas a pagar da semana ──────────────────────────────────────────────
 
 def _au_contas_pagar(cid: int, r, forcar: bool = False) -> bool:
@@ -587,8 +647,9 @@ def _au_contas_pagar(cid: int, r, forcar: bool = False) -> bool:
 _AU_RODAR = {"pos_reuniao": _au_pos_reuniao, "faturamento_mensal": _au_faturamento,
              "cobranca_atrasos": _au_cobranca, "contas_pagar_semanal": _au_contas_pagar,
              "briefing_reuniao": _au_briefing, "relatorio_mensal": _au_relatorio,
-             "renovacoes": _au_renovacoes, "lead_site": _au_lead_site, "cliente_novo": _au_cliente_novo}
-_AU_COM_DIA = {"faturamento_mensal": 1, "relatorio_mensal": 5, "renovacoes": 3}
+             "renovacoes": _au_renovacoes, "lead_site": _au_lead_site, "cliente_novo": _au_cliente_novo,
+             "boletim_mercado": _au_boletim, "calendario_bimestral": _au_calendario}
+_AU_COM_DIA = {"faturamento_mensal": 1, "relatorio_mensal": 5, "renovacoes": 3, "calendario_bimestral": 15}
 _AU_AO_LIGAR = {"lead_site": _au_leads_base, "cliente_novo": _au_clientes_base}  # marco inicial: não processa o passado
 
 
